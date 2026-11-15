@@ -29,7 +29,7 @@ fn two_turns(name: &str) -> (Cockpit, Fake, ThreadId) {
     let (mut cockpit, fake) = cockpit(name);
     *fake.rewindable.borrow_mut() = true;
     let thread = cockpit.open(Provider::Claude, main_choice()).unwrap();
-    cockpit.send(thread, "one".into());
+    let _ = cockpit.send(thread, "one".into());
     live(&fake)
         .send(SessionEvent::Init {
             session_id: "sess-1".into(),
@@ -39,7 +39,7 @@ fn two_turns(name: &str) -> (Cockpit, Fake, ThreadId) {
     live(&fake).send(text("first")).unwrap();
     live(&fake).send(ended()).unwrap();
     cockpit.pump();
-    cockpit.send(thread, "two".into());
+    let _ = cockpit.send(thread, "two".into());
     live(&fake).send(text("second")).unwrap();
     live(&fake).send(ended()).unwrap();
     cockpit.pump();
@@ -96,7 +96,7 @@ fn a_rewind_of_code_says_what_came_back() {
 fn a_rewind_never_races_a_running_turn() {
     let (mut cockpit, fake, thread) = two_turns("rewind-mid-turn");
     let first = prompts(&cockpit, thread)[0].1.clone().unwrap();
-    cockpit.send(thread, "three".into());
+    let _ = cockpit.send(thread, "three".into());
     live(&fake).send(text("thi")).unwrap();
     cockpit.pump();
     let refused = cockpit.rewind(thread, &first, false, false).unwrap_err();
@@ -173,7 +173,7 @@ fn a_whole_fork_opens_focused_with_its_draft() {
 fn a_whole_fork_is_asked_while_a_turn_runs() {
     let (mut cockpit, fake, thread) = two_turns("rewind-fork-midturn");
     let second = prompts(&cockpit, thread)[1].1.clone().unwrap();
-    cockpit.send(thread, "three".into());
+    let _ = cockpit.send(thread, "three".into());
     live(&fake).send(text("working")).unwrap();
     cockpit.pump();
     assert_eq!(

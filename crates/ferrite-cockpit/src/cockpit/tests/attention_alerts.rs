@@ -36,7 +36,7 @@ fn a_window_crossing_its_threshold_toasts_once(cx: &mut TestAppContext) {
 #[gpui::test]
 fn cmd_i_holds_the_list_until_escape_gives_the_keys_back(cx: &mut TestAppContext) {
     let (mut core, fake) = cockpit("needs-you-escape", 1);
-    core.send(core.threads()[0], "keep working".into());
+    let _ = core.send(core.threads()[0], "keep working".into());
     bind_production_keys(cx);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     tick(cx);
@@ -69,7 +69,7 @@ fn the_list_scrolls_to_and_opens_its_last_card(cx: &mut TestAppContext) {
     const THREADS: usize = 24;
     let (mut core, fake) = cockpit("needs-you-scroll", THREADS);
     for index in 0..THREADS {
-        core.send(core.threads()[index], "go".into());
+        let _ = core.send(core.threads()[index], "go".into());
         fake.streams.borrow()[index]
             .send(SessionEvent::TurnEnded {
                 outcome: ferrite_core::TurnOutcome::Completed,
@@ -783,7 +783,7 @@ fn the_list_empty_over_working_then_a_decision_parks_from_the_keyboard(cx: &mut 
     let (mut core, fake) = cockpit("inbox-empty-working", 3);
     let threads = core.threads();
     for thread in &threads {
-        core.send(*thread, "go".into());
+        let _ = core.send(*thread, "go".into());
     }
     bind_production_keys(cx);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
@@ -978,7 +978,7 @@ fn main_completion_waits_for_working_descendants_before_inbox(cx: &mut TestAppCo
 fn inbox_completion_keeps_keyboard_park_on_the_selected_thread(cx: &mut TestAppContext) {
     let (mut core, fake) = cockpit("inbox-cursor-identity", 3);
     let threads = core.threads();
-    core.send(threads[0], "go".into());
+    let _ = core.send(threads[0], "go".into());
     bind_production_keys(cx);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     tick(cx);
@@ -1074,7 +1074,7 @@ fn working_shelf_starts_folded_and_opens_to_cards(cx: &mut TestAppContext) {
     let (mut core, _) = cockpit("working-shelf", 2);
     let thread = core.threads()[0];
     let other = core.threads()[1];
-    core.send(thread, "work".into());
+    let _ = core.send(thread, "work".into());
     bind_production_keys(cx);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     tick(cx);

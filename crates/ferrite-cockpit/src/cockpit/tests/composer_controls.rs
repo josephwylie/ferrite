@@ -167,7 +167,7 @@ fn composer_keys_target_the_focused_pane_only(cx: &mut TestAppContext) {
 fn composer_escape_stops_a_running_turn_with_text_in_the_line(cx: &mut TestAppContext) {
     let (mut core, fake) = cockpit("composer-escape-queue", 1);
     let thread = core.threads()[0];
-    core.send(thread, "first".into());
+    let _ = core.send(thread, "first".into());
     bind_production_keys(cx);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     cx.simulate_resize(gpui::size(px(1000.), px(800.)));
@@ -242,7 +242,7 @@ fn composer_busy_tuning_choices_explain_and_preserve_selection(cx: &mut TestAppC
             .position(|row| !row.inert && !row.active)
             .unwrap();
         // A click from the menu's previous frame also observes current busy state.
-        view.cockpit.send(thread, "work".into());
+        let _ = view.cockpit.send(thread, "work".into());
         view.cockpit.apply_input(
             thread,
             ferrite_core::transcript::Input::Event(SessionEvent::RunState {
@@ -428,8 +428,8 @@ fn compact_queue_scrolls_without_covering_context_or_composer_actions(cx: &mut T
     let (mut core, fake) = cockpit("composer-bounded-queue", 4);
     let thread = core.threads()[0];
     let other = core.threads()[1];
-    core.send(thread, "Working".into());
-    core.send(other, "Other work".into());
+    let _ = core.send(thread, "Working".into());
+    let _ = core.send(other, "Other work".into());
     for index in 0..8 {
         assert!(core.queue(thread, format!("Queued follow-up {index}")));
         assert!(core.queue(other, format!("Other follow-up {index}")));
@@ -740,7 +740,7 @@ fn the_model_gives_way_before_the_permission_mode(cx: &mut TestAppContext) {
 fn the_queued_row_drops_and_the_send_circle_sends_or_stops(cx: &mut TestAppContext) {
     let (mut core, fake) = cockpit("toolbar-send", 1);
     let thread = core.threads()[0];
-    core.send(thread, "Working".into());
+    let _ = core.send(thread, "Working".into());
     assert!(core.queue(thread, "First follow-up".into()));
     assert!(core.queue(thread, "Second follow-up".into()));
     bind_production_keys(cx);
@@ -810,7 +810,7 @@ fn the_queued_row_drops_and_the_send_circle_sends_or_stops(cx: &mut TestAppConte
 fn the_queue_strip_edits_and_sends_now(cx: &mut TestAppContext) {
     let (mut core, fake) = cockpit("queue-strip-acts", 1);
     let thread = core.threads()[0];
-    core.send(thread, "Working".into());
+    let _ = core.send(thread, "Working".into());
     assert!(core.queue(thread, "Held follow-up".into()));
     bind_production_keys(cx);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
@@ -950,7 +950,7 @@ fn the_focused_group_pane_shows_its_queue_and_backspace_drops_it(cx: &mut TestAp
 fn a_sent_prompt_shows_stop_before_its_first_event(cx: &mut TestAppContext) {
     let (mut core, _fake) = cockpit("stop-on-send", 1);
     let thread = core.threads()[0];
-    core.send(thread, "Go".into());
+    let _ = core.send(thread, "Go".into());
     let (_view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     cx.simulate_resize(gpui::size(px(1200.), px(800.)));
     tick(cx);
@@ -967,7 +967,7 @@ fn a_sent_prompt_shows_stop_before_its_first_event(cx: &mut TestAppContext) {
 fn a_running_turn_with_text_shows_stop_beside_send(cx: &mut TestAppContext) {
     let (mut core, fake) = cockpit("stop-beside-send", 1);
     let thread = core.threads()[0];
-    core.send(thread, "Go".into());
+    let _ = core.send(thread, "Go".into());
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     cx.simulate_resize(gpui::size(px(1200.), px(800.)));
     tick(cx);

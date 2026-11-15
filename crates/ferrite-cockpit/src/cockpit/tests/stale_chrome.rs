@@ -32,7 +32,7 @@ fn board<'a>(name: &str, working: &[usize], cx: &'a mut TestAppContext) -> Board
     let group = group_all(&mut core);
     let threads = core.threads().to_vec();
     for index in working {
-        core.send(threads[*index], "Keep going".into());
+        let _ = core.send(threads[*index], "Keep going".into());
     }
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     cx.simulate_resize(gpui::size(px(1600.), px(1000.)));

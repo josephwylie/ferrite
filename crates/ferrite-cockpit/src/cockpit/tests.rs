@@ -255,6 +255,9 @@ struct Fake {
     /// While set, spawn refuses — how a test fails a bootstrap (#29).
     fail: Rc<RefCell<bool>>,
     fail_send: Rc<RefCell<bool>>,
+    /// The next start waits on this, then fails with the words it hears:
+    /// a Session that is still starting while prompts are held for it.
+    start_gate: Rc<RefCell<Option<Receiver<String>>>>,
     sent: Rc<RefCell<Vec<String>>>,
     /// Every Decision answer that went out, with the Decision's id.
     answered: Rc<RefCell<Vec<(String, DecisionAnswer)>>>,
@@ -290,6 +293,19 @@ impl Spawner for Fake {
 
     fn discover_models(&mut self) -> Option<Receiver<(Provider, Vec<ferrite_core::ModelInfo>)>> {
         self.model_discovery.borrow_mut().take()
+    }
+
+    fn start(
+        &mut self,
+        request: ferrite_core::cockpit::SpawnRequest,
+    ) -> std::io::Result<ferrite_core::session::SessionLifecycle> {
+        let Some(gate) = self.start_gate.borrow_mut().take() else {
+            return self.spawn(request).map(ferrite_core::session::SessionLifecycle::ready);
+        };
+        ferrite_core::session::SessionLifecycle::background(move || {
+            let words = gate.recv().unwrap_or_else(|_| "the gate closed".into());
+            Err(std::io::Error::other(words))
+        })
     }
 
     fn spawn(

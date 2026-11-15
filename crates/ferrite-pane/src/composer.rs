@@ -566,23 +566,26 @@ impl Composer {
         draft
     }
 
-    /// Put a `SentDraft` back whole. What the operator has typed since stays:
-    /// the restored words come first, its attachments beside the new ones.
-    pub fn restore(&mut self, draft: SentDraft, cx: &mut Context<Self>) {
+    /// Put a `SentDraft` back whole beside what the operator has typed
+    /// since: the restored words go ahead of the new ones when `prepend`,
+    /// after them otherwise. Attachments already on the shelf are not added
+    /// twice.
+    pub fn restore(&mut self, draft: SentDraft, prepend: bool, cx: &mut Context<Self>) {
         let typed = self.line.text().to_string();
-        let line = match (draft.line.is_empty(), typed.is_empty()) {
-            (_, true) => draft.line,
-            (true, false) => typed,
-            (false, false) => format!("{}\n\n{typed}", draft.line),
+        let line = match (draft.line.is_empty(), typed.is_empty(), prepend) {
+            (_, true, _) => draft.line,
+            (true, false, _) => typed,
+            (false, false, true) => format!("{}\n\n{typed}", draft.line),
+            (false, false, false) => format!("{typed}\n\n{}", draft.line),
         };
         self.line.set(line);
-        let mut files = draft.files;
-        files.retain(|file| !self.files.contains(file));
-        self.files.splice(0..0, files);
-        self.replies.splice(0..0, draft.replies);
-        self.browser_annotations.splice(0..0, draft.annotations);
+        merge(&mut self.files, draft.files, prepend);
+        merge(&mut self.replies, draft.replies, prepend);
+        merge(&mut self.browser_annotations, draft.annotations, prepend);
         for comment in draft.review {
-            self.review.add(comment);
+            if !self.review.iter().any(|kept| kept == &comment) {
+                self.review.add(comment);
+            }
         }
         for chip in draft.chips {
             if !self.chips.contains(&chip) {
@@ -2205,6 +2208,17 @@ pub mod testing {
 
     pub fn face(id: EntityId, cx: &App) -> Option<SharedString> {
         cx.try_global::<Faces>()?.0.get(&id).cloned()
+    }
+}
+
+/// `restored` joins `kept`, minus what `kept` already holds: ahead of it when
+/// `prepend`, else after.
+fn merge<T: PartialEq>(kept: &mut Vec<T>, mut restored: Vec<T>, prepend: bool) {
+    restored.retain(|item| !kept.contains(item));
+    if prepend {
+        kept.splice(0..0, restored);
+    } else {
+        kept.extend(restored);
     }
 }
 

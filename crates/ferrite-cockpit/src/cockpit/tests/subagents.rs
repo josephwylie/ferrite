@@ -648,7 +648,7 @@ fn escape_on_a_subagent_stops_only_that_subagent_or_goes_back(cx: &mut TestAppCo
     use ferrite_core::activity::{ActivityEvent, AgentInfo, AgentKey, AgentStatus, Subject};
     let (mut core, fake) = cockpit("escape-subagent", 1);
     let thread = core.threads()[0];
-    core.send(thread, "keep working".into());
+    let _ = core.send(thread, "keep working".into());
     bind_production_keys(cx);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     let running = AgentKey::new(Provider::Claude, "native", "running");

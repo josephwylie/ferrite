@@ -92,7 +92,7 @@ fn the_rails_one_toast_clears_every_pane_head_and_goes_on_landing(cx: &mut TestA
     })
     .unwrap();
     let group = core.groups().of(threads[0]).unwrap().id;
-    core.send(threads[2], "task".into());
+    let _ = core.send(threads[2], "task".into());
     core.pump();
     core.enter_group(group).unwrap();
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));

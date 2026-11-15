@@ -306,6 +306,7 @@ impl PaneUpdate {
 /// What became of a prompt the operator sent, as far as the Engine can
 /// tell at once. The caller keeps the whole draft until it knows.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[must_use = "a refused or unconfirmed send leaves the draft with the caller"]
 pub enum Admission {
     /// On the wire: the Session has it.
     Delivered,
@@ -1912,7 +1913,11 @@ impl Engine {
             .map(|state| std::mem::take(&mut state.awaiting.prompts))
             .unwrap_or_default();
         for held in awaiting {
-            self.send(thread, held.text);
+            if let Admission::Refused(_) = self.send(thread, held.text.clone()) {
+                if let Some(state) = self.threads.get_mut(&thread) {
+                    state.native_queue.recovered.push((held.text, false));
+                }
+            }
         }
         Ok(())
     }

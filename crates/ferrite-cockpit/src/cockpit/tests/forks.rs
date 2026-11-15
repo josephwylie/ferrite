@@ -167,7 +167,7 @@ fn the_menu_and_the_palette_fork_and_rewind(cx: &mut TestAppContext) {
 
     // A sent prompt goes out under its id: the palette's Rewind opens its
     // menu.
-    view.update(cx, |view, _| view.cockpit.send(thread, "again".into()));
+    let _ = view.update(cx, |view, _| view.cockpit.send(thread, "again".into()));
     fake.streams.borrow()[0]
         .send(SessionEvent::TurnEnded {
             outcome: ferrite_core::TurnOutcome::Completed,
@@ -269,7 +269,7 @@ fn right_clicking_an_answer_or_a_prompt_opens_the_message_menu(cx: &mut TestAppC
     assert!(cx.debug_bounds("answer-chapter").is_some(), "pinned");
 
     // A prompt: the same menu with its own rows.
-    view.update(cx, |view, _| view.cockpit.send(thread, "again".into()));
+    let _ = view.update(cx, |view, _| view.cockpit.send(thread, "again".into()));
     fake.streams.borrow()[0]
         .send(SessionEvent::TextDelta {
             text: "bravo\n\n".into(),

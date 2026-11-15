@@ -306,7 +306,7 @@ impl RssSampler for OverBudget {
 #[test]
 fn child_completion_cannot_release_mains_prompt_or_pending_decision() {
     let mut h = Harness::new();
-    h.cockpit.send(h.thread, "main prompt".to_owned());
+    let _ = h.cockpit.send(h.thread, "main prompt".to_owned());
     h.control.emit(
         0,
         SessionEvent::TextDelta {
@@ -380,7 +380,7 @@ fn child_completion_cannot_release_mains_prompt_or_pending_decision() {
 #[test]
 fn autonomous_background_completion_does_not_retire_mains_live_work() {
     let mut h = Harness::new();
-    h.cockpit.send(h.thread, "main prompt".to_owned());
+    let _ = h.cockpit.send(h.thread, "main prompt".to_owned());
     h.control.emit(
         0,
         SessionEvent::TextDelta {
@@ -423,7 +423,7 @@ fn autonomous_background_completion_does_not_retire_mains_live_work() {
 #[test]
 fn an_autonomous_reply_after_main_finished_does_not_leave_main_permanently_busy() {
     let mut h = Harness::new();
-    h.cockpit.send(h.thread, "main prompt".to_owned());
+    let _ = h.cockpit.send(h.thread, "main prompt".to_owned());
     h.control.emit(0, ended());
     h.cockpit.pump();
     assert!(!h.cockpit.thread(h.thread).unwrap().busy());
@@ -742,7 +742,7 @@ fn a_child_turn_end_retires_only_that_childs_pending_decisions() {
 #[test]
 fn cancellation_retires_only_its_request_and_clears_waiting_after_the_last_one() {
     let mut h = Harness::new();
-    h.cockpit.send(h.thread, "main prompt".to_owned());
+    let _ = h.cockpit.send(h.thread, "main prompt".to_owned());
     h.control.emit(
         0,
         SessionEvent::TextDelta {
@@ -888,7 +888,7 @@ enum Replacement {
 
 fn stale_request_after_replacement(replacement: Replacement) {
     let mut h = Harness::new();
-    h.cockpit.send(h.thread, "main prompt".to_owned());
+    let _ = h.cockpit.send(h.thread, "main prompt".to_owned());
     h.control.emit(
         0,
         SessionEvent::TextDelta {

@@ -953,7 +953,7 @@ fn keyboard_reaches_code_actions_after_disclosures_and_returns_to_the_draft(
     }
     let (mut core, fake) = cockpit("code-actions-keyboard", 1);
     let thread = core.threads()[0];
-    core.send(thread, "prior prompt".into());
+    let _ = core.send(thread, "prior prompt".into());
     bind_production_keys(cx);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new_thinking(core, cx));
     cx.simulate_resize(gpui::size(px(1000.), px(900.)));
@@ -1265,7 +1265,7 @@ fn a_working_thread_asks_for_frames_and_stops_when_it_ends(cx: &mut TestAppConte
     ferrite_ui::motion::testing::drive();
     let (mut core, fake) = cockpit("motion-working", 1);
     let thread = core.threads()[0];
-    core.send(thread, "Inspect progress".into());
+    let _ = core.send(thread, "Inspect progress".into());
     let (_view, cx) = add_unfocused_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     cx.simulate_resize(gpui::size(px(1000.), px(700.)));
     fake.streams.borrow()[0]
@@ -1310,7 +1310,7 @@ fn a_loop_frame_leaves_the_cached_transcript_untouched(cx: &mut TestAppContext) 
     ferrite_ui::motion::testing::drive();
     let (mut core, fake) = cockpit("motion-tick-isolation", 1);
     let thread = core.threads()[0];
-    core.send(thread, "Inspect progress".into());
+    let _ = core.send(thread, "Inspect progress".into());
     long_transcripts(&fake);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     cx.simulate_resize(gpui::size(px(1400.), px(900.)));
@@ -1347,7 +1347,7 @@ fn a_live_appended_row_fades_in_and_then_rests(cx: &mut TestAppContext) {
     ferrite_ui::motion::testing::drive();
     let (mut core, fake) = cockpit("motion-arrival", 1);
     let thread = core.threads()[0];
-    core.send(thread, "Inspect progress".into());
+    let _ = core.send(thread, "Inspect progress".into());
     long_transcripts(&fake);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     cx.simulate_resize(gpui::size(px(1400.), px(900.)));
@@ -1397,7 +1397,7 @@ fn an_answer_arriving_whole_at_its_turn_end_plays_its_whole_fade(cx: &mut TestAp
     ferrite_ui::motion::testing::drive();
     let (mut core, fake) = cockpit("motion-whole-answer", 1);
     let thread = core.threads()[0];
-    core.send(thread, "Say hello".into());
+    let _ = core.send(thread, "Say hello".into());
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     cx.simulate_resize(gpui::size(px(1400.), px(900.)));
     tick(cx);
@@ -1448,7 +1448,7 @@ fn working_and_unread_panes_cost_at_most_one_pulse_tick_rate(cx: &mut TestAppCon
     let (mut core, fake) = cockpit("motion-breath-budget", 4);
     let threads = core.threads().to_vec();
     for thread in &threads {
-        core.send(*thread, "Inspect progress".into());
+        let _ = core.send(*thread, "Inspect progress".into());
     }
     let (_view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     cx.simulate_resize(gpui::size(px(1440.), px(900.)));
@@ -1835,7 +1835,7 @@ fn a_working_board_renders_the_cockpit_only_when_a_loop_steps(cx: &mut TestAppCo
     let group = group_all(&mut core);
     let threads = core.threads().to_vec();
     for thread in &threads[..2] {
-        core.send(*thread, "Inspect progress".into());
+        let _ = core.send(*thread, "Inspect progress".into());
     }
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     cx.simulate_resize(gpui::size(px(1440.), px(900.)));
@@ -2061,7 +2061,7 @@ fn reduced_motion_still_advances_a_working_clock(cx: &mut TestAppContext) {
     ferrite_ui::motion::testing::drive();
     let (mut core, fake) = cockpit("reduced-working-clock", 1);
     let thread = core.threads()[0];
-    core.send(thread, "Inspect progress".into());
+    let _ = core.send(thread, "Inspect progress".into());
     let (_view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     cx.update(|_, cx| cx.set_reduce_motion(true));
     cx.simulate_resize(gpui::size(px(1000.), px(700.)));
@@ -2105,7 +2105,7 @@ fn a_hovered_link_keeps_its_underline_while_its_transcript_streams(cx: &mut Test
     std::fs::create_dir_all(file.parent().unwrap()).unwrap();
     std::fs::write(&file, "guide\n").unwrap();
     let thread = core.threads()[0];
-    core.send(thread, "Read the guide".into());
+    let _ = core.send(thread, "Read the guide".into());
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     hold_nav_open(&view, cx);
     cx.simulate_resize(gpui::size(px(1200.), px(700.)));
@@ -2181,7 +2181,7 @@ fn group_board<'a>(
     let group = group_all(&mut core);
     let threads = core.threads().to_vec();
     for index in working {
-        core.send(threads[*index], "Keep going".into());
+        let _ = core.send(threads[*index], "Keep going".into());
     }
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     cx.simulate_resize(gpui::size(px(1600.), px(1000.)));
@@ -2571,7 +2571,7 @@ fn needs_you_toast_comes_and_goes(
     })
     .unwrap();
     let group = core.groups().of(threads[0]).unwrap().id;
-    core.send(threads[2], "task".into());
+    let _ = core.send(threads[2], "task".into());
     core.pump();
     core.enter_group(group).unwrap();
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));

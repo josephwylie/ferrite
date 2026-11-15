@@ -519,7 +519,7 @@ fn the_first_prompt_fixes_the_provider_but_the_model_picker_stays_open(cx: &mut 
 #[gpui::test]
 fn escape_in_an_open_picker_never_interrupts_the_agent(cx: &mut TestAppContext) {
     let (mut core, fake) = cockpit("picker-escape", 1);
-    core.send(core.threads()[0], "keep working".into());
+    let _ = core.send(core.threads()[0], "keep working".into());
     bind_production_keys(cx);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     cx.simulate_resize(gpui::size(px(1000.), px(700.)));

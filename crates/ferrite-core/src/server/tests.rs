@@ -1400,7 +1400,7 @@ fn a_window_attached_over_the_socket_drives_the_servers_threads() {
     assert!(window
         .visible()
         .contains(&crate::roster::PaneIdentity::Thread(thread)));
-    window.send(thread, "go".into());
+    let _ = window.send(thread, "go".into());
     provider.send(text("on it")).unwrap();
     pump_until(&mut window, |window| shows(window, thread, "on it"));
     let project = window.register_project(&harness.dir).unwrap();
@@ -1656,7 +1656,7 @@ fn spoken(engine: &mut Engine, thread: ThreadId, agent: &Sender<SessionEvent>) {
             model: "claude-model".into(),
         })
         .unwrap();
-    engine.send(thread, "first".into());
+    let _ = engine.send(thread, "first".into());
     pump_engine_until(engine, "the Init never landed", |engine| {
         engine.thread(thread).unwrap().provider_session() == Some("claude-1")
     });
@@ -1705,7 +1705,7 @@ fn threads_the_operator_parked_stay_parked_at_the_next_boot() {
     let mut first = engine(&store, spawner);
     let older = open_in(&mut first, &dir);
     let newer = open_in(&mut first, &dir);
-    first.send(older, "worked here last".into());
+    let _ = first.send(older, "worked here last".into());
     first.park(older).unwrap();
     first.park(newer).unwrap();
     drop(first);
@@ -1863,7 +1863,7 @@ fn a_restored_thread_starts_its_agent_on_send_without_a_trace() {
         "{before:?}"
     );
 
-    next.send(thread, "carry on".into());
+    let _ = next.send(thread, "carry on".into());
     next.pump();
     assert_eq!(
         *started.lock().unwrap(),
@@ -1945,7 +1945,7 @@ fn an_agent_settled_its_span_stops_without_a_trace() {
     assert_eq!(seen(&engine), before);
 
     started.lock().unwrap().clear();
-    engine.send(thread, "carry on".into());
+    let _ = engine.send(thread, "carry on".into());
     engine.pump();
     assert_eq!(
         *started.lock().unwrap(),
@@ -2097,7 +2097,7 @@ fn a_choice_made_without_an_agent_is_the_next_agents() {
     assert!(started.lock().unwrap().is_empty(), "no agent started");
     let view = engine.thread(thread).unwrap();
     assert_eq!((view.model(), view.effort()), (Some("opus"), Some("high")));
-    engine.send(thread, "carry on".into());
+    let _ = engine.send(thread, "carry on".into());
     engine.pump();
     assert_eq!(
         *started.lock().unwrap(),
@@ -2124,7 +2124,7 @@ fn a_choice_made_without_an_agent_is_the_next_agents() {
     engine.pump();
     assert!(started.lock().unwrap().is_empty(), "no agent started");
     assert_eq!(engine.thread(thread).unwrap().provider(), Provider::Codex);
-    engine.send(thread, "carry on".into());
+    let _ = engine.send(thread, "carry on".into());
     engine.pump();
     assert_eq!(*started.lock().unwrap(), vec![Start::bare(Provider::Codex)]);
 }
@@ -2151,7 +2151,7 @@ fn a_choice_made_while_the_agent_starts_unseen_is_kept() {
 fn escape_while_the_agent_starts_gives_the_prompt_back() {
     let (spawner, started, _gate) = spawn_gated();
     let (mut engine, thread) = restored("restored-escape", spawner);
-    engine.send(thread, "go".into());
+    let _ = engine.send(thread, "go".into());
     started
         .recv_timeout(Duration::from_secs(5))
         .expect("the send started the agent");
@@ -2272,7 +2272,7 @@ fn writing_to_a_restored_thread_starts_its_agent_unseen() {
         "and invalidates nothing a window holds"
     );
 
-    engine.send(thread, "go".into());
+    let _ = engine.send(thread, "go".into());
     assert!(
         engine.thread(thread).unwrap().starting(),
         "a prompt waiting on it shows it starting"
@@ -2395,7 +2395,7 @@ fn prompts_queued_while_the_agent_starts_wait_for_it() {
             installed: Installed::default(),
         }),
     );
-    engine.send(thread, "first".into());
+    let _ = engine.send(thread, "first".into());
     assert!(engine.thread(thread).unwrap().starting());
     assert!(engine.queue(thread, "second".into()), "queued, not refused");
     assert_eq!(
@@ -2434,7 +2434,7 @@ fn prompts_wait_for_a_provider_that_cannot_queue_yet() {
             installed: Installed::default(),
         }),
     );
-    engine.send(thread, "first".into());
+    let _ = engine.send(thread, "first".into());
     assert!(engine.queue(thread, "second".into()));
     assert!(engine.queue(thread, "third".into()));
 
@@ -2611,7 +2611,7 @@ fn a_thread_parked_again_is_read_again() {
     assert_eq!(next_parked(&mut engine)[0].turns, Some(0));
 
     engine.revive(thread).unwrap();
-    engine.send(thread, "again".into());
+    let _ = engine.send(thread, "again".into());
     engine.park(thread).unwrap();
     assert_eq!(next_parked(&mut engine)[0].turns, Some(1));
 }
@@ -2758,7 +2758,7 @@ fn a_window_on_a_machine_drives_its_threads_through_the_bridge() {
         .sessions
         .recv_timeout(Duration::from_secs(5))
         .unwrap();
-    window.send(thread, "go".into());
+    let _ = window.send(thread, "go".into());
     provider.send(text("on it")).unwrap();
     pump_until(&mut window, |window| shows(window, thread, "on it"));
     assert!(said(&sent).contains(&"watch".to_string()));
@@ -2802,7 +2802,7 @@ fn a_machine_off_screen_streams_status_and_never_a_transcript() {
     until(&mut status, &|rows| {
         rows.iter().any(|row| row.thread == thread)
     });
-    window.send(thread, "go".into());
+    let _ = window.send(thread, "go".into());
     provider.send(text("on it")).unwrap();
     until(&mut status, &|rows| rows.iter().any(|row| row.working));
     provider.send(decision()).unwrap();
@@ -4368,7 +4368,7 @@ fn a_window_mirrors_only_the_threads_it_draws() {
     let mut other = attach(&harness.address);
     let (thread, provider) = open(&mut other, &harness);
     let mut window = cockpit(&harness);
-    window.send(thread, "go".into());
+    let _ = window.send(thread, "go".into());
     provider.send(text("on it\n\n")).unwrap();
     turn_ends(&provider);
 
@@ -4412,7 +4412,7 @@ fn a_thread_at_work_stays_mirrored_off_screen() {
     let (thread, provider) = open(&mut other, &harness);
     let mut window = cockpit(&harness);
     window.draws_transcripts([thread]);
-    window.send(thread, "go".into());
+    let _ = window.send(thread, "go".into());
     provider.send(text("on it\n\n")).unwrap();
     pump_until(&mut window, |window| shows(window, thread, "on it"));
     pump_until(&mut window, |window| {

@@ -667,7 +667,7 @@ fn retry_re_sends_the_failed_turns_prompt(cx: &mut TestAppContext) {
     let (view, fake, cx, _group) = board_of("frame-retry", 2, cx);
     let thread = view.read_with(cx, |view, _| view.panes[1].thread().unwrap());
     view.update(cx, |view, cx| {
-        view.cockpit.send(thread, "build the range sheet".into());
+        let _ = view.cockpit.send(thread, "build the range sheet".into());
         cx.notify();
     });
     tick(cx);
@@ -704,7 +704,7 @@ fn a_session_closed_mid_turn_leaves_the_strip_without_retry(cx: &mut TestAppCont
     let (view, fake, cx, _group) = board_of("frame-closed-mid-turn", 2, cx);
     let thread = view.read_with(cx, |view, _| view.panes[1].thread().unwrap());
     view.update(cx, |view, cx| {
-        view.cockpit.send(thread, "build the range sheet".into());
+        let _ = view.cockpit.send(thread, "build the range sheet".into());
         cx.notify();
     });
     tick(cx);
@@ -745,7 +745,7 @@ fn a_short_transcript_reads_from_the_top(cx: &mut TestAppContext) {
             2,
         );
         let thread = core.threads()[0];
-        core.send(thread, "Explain the board".into());
+        let _ = core.send(thread, "Explain the board".into());
         if grouped {
             let group = group_all(&mut core);
             core.enter_group(group).unwrap();

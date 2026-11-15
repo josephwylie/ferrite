@@ -104,7 +104,7 @@ fn group_question_stays_between_its_thread_header_and_growing_composer(cx: &mut 
 fn keyboard_disclosure_target_is_visible_across_three_targets_and_reverse(cx: &mut TestAppContext) {
     let (mut core, fake) = cockpit("polish-disclosure-target", 1);
     let thread = core.threads()[0];
-    core.send(thread, "Inspect output".into());
+    let _ = core.send(thread, "Inspect output".into());
     bind_production_keys(cx);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     cx.simulate_resize(gpui::size(px(1000.), px(800.)));
@@ -263,7 +263,7 @@ fn group_question_uses_measured_space_and_restores_inline_form(cx: &mut TestAppC
 fn clicking_a_disclosure_opens_it_without_a_keyboard_ring(cx: &mut TestAppContext) {
     let (mut core, fake) = cockpit("polish-disclosure-click", 1);
     let thread = core.threads()[0];
-    core.send(thread, "Inspect output".into());
+    let _ = core.send(thread, "Inspect output".into());
     bind_production_keys(cx);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     cx.simulate_resize(gpui::size(px(1000.), px(800.)));
@@ -350,7 +350,7 @@ fn clicking_a_disclosure_opens_it_without_a_keyboard_ring(cx: &mut TestAppContex
 fn tab_walks_a_group_and_enter_opens_it(cx: &mut TestAppContext) {
     let (mut core, fake) = cockpit("polish-group-keys", 1);
     let thread = core.threads()[0];
-    core.send(thread, "Inspect output".into());
+    let _ = core.send(thread, "Inspect output".into());
     bind_production_keys(cx);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     cx.simulate_resize(gpui::size(px(1000.), px(800.)));

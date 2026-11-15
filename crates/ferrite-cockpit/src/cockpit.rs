@@ -302,9 +302,6 @@ pub(crate) struct CockpitPane {
     pub(crate) preview_tab: panel::preview::PreviewTab,
     /// The Review beside this Pane on the board (`beside.rs`).
     pub(crate) review: beside::ReviewSlot,
-    /// Drafts sent while the Session was starting, kept whole until it takes
-    /// the prompt or hands it back (`sends.rs`).
-    pub(crate) held_sends: Vec<ferrite_pane::composer::SentDraft>,
 }
 
 impl CockpitPane {
@@ -314,7 +311,6 @@ impl CockpitPane {
             request_forms: Default::default(),
             preview_tab: Default::default(),
             review: beside::ReviewSlot::new(cx),
-            held_sends: Vec::new(),
         }
     }
 }
@@ -402,6 +398,9 @@ pub struct CockpitView {
     selection: TranscriptText,
     /// Each Thread's side chat, the right pane's other body.
     side_chats: side_chat::SideChats,
+    /// Drafts sent while a Session was starting, kept whole until it takes
+    /// the prompt or hands it back.
+    held_sends: sends::HeldSends,
     tools: tools::Tools,
     agent_drills: agent_pane::AgentDrills,
     native_copy: Option<String>,
@@ -1517,6 +1516,7 @@ impl CockpitView {
             branch_refresh_queued: false,
             selection: TranscriptText::default(),
             side_chats: Default::default(),
+            held_sends: Default::default(),
             tools: Default::default(),
             agent_drills: Default::default(),
             native_copy: None,
@@ -2224,7 +2224,7 @@ impl CockpitView {
             ferrite_pane::transcript::TranscriptEvent::Send(words) => {
                 self.focus_pane(index);
                 if let Some(thread) = self.panes[index].thread() {
-                    self.cockpit.send(thread, words.clone());
+                    let _ = self.cockpit.send(thread, words.clone());
                 }
                 cx.notify();
             }
@@ -2411,11 +2411,15 @@ impl CockpitView {
         self.apply_thread_rules(&frame, cx);
         self.land(cx);
         self.ring_alerts(cx);
+        self.settle_held_sends();
         for index in 0..self.panes.len() {
             if let Some(thread) = self.panes[index].thread() {
+                for draft in self.lost_sends(thread) {
+                    self.put_back_send(index, draft, true, cx);
+                }
                 while let Some((held, prepend)) = self.cockpit.take_retrieved_prompt(thread) {
-                    if let Some(draft) = self.held_draft(index, &held) {
-                        self.put_back_send(index, draft, cx);
+                    if let Some(draft) = self.held_draft(thread, &held) {
+                        self.put_back_send(index, draft, prepend, cx);
                         continue;
                     }
                     self.panes[index].composer.update(cx, |composer, cx| {
@@ -5665,7 +5669,7 @@ impl CockpitView {
         {
             let queued = self.cockpit.queue(thread, text.clone());
             if !queued {
-                self.put_back_send(focused, draft, cx);
+                self.put_back_send(focused, draft, true, cx);
             }
             queued
         } else {

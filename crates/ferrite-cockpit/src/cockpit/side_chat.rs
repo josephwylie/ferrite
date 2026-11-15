@@ -34,6 +34,7 @@ use std::collections::VecDeque;
 use super::*;
 
 use ferrite_core::activity::Subject;
+use ferrite_core::cockpit::Admission;
 use ferrite_core::workspace::WorkspaceBinding;
 use ferrite_pane::composer::Role;
 use ferrite_core::replies::Reply;
@@ -362,18 +363,22 @@ impl CockpitView {
         if field.read(cx).text().trim().is_empty() {
             return;
         }
-        let text = field
-            .update(cx, |field, cx| field.take(cx))
-            .trim()
-            .to_string();
-        if self
+        let draft = field.update(cx, |field, cx| field.take_draft(cx));
+        let text = draft.prompt().trim().to_string();
+        let admitted = if self
             .cockpit
             .thread(thread)
             .is_some_and(|open| open.needs_queue())
         {
-            self.cockpit.queue(thread, text);
+            self.cockpit.queue(thread, text)
         } else {
-            self.cockpit.send(thread, text);
+            matches!(
+                self.cockpit.send(thread, text),
+                Admission::Delivered | Admission::Held
+            )
+        };
+        if !admitted {
+            field.update(cx, |field, cx| field.restore(draft, true, cx));
         }
         if let Some(entity) = self.side_transcript(owner) {
             entity.update(cx, |transcript, cx| transcript.scroll_to_bottom(cx));

@@ -241,7 +241,7 @@ fn a_working_card_counts_its_run_and_recedes(cx: &mut TestAppContext) {
     let clock = hold_wall_clock();
     let (mut core, _) = cockpit("nav-card-working", 2);
     let threads = sorted_threads(&core);
-    core.send(threads[0], "work".into());
+    let _ = core.send(threads[0], "work".into());
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     hide_panel(&view, cx);
     cx.simulate_resize(gpui::size(px(1000.), px(700.)));

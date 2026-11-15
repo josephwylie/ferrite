@@ -62,8 +62,8 @@ fn disabled_placeholder_suggestions_are_hidden_and_tab_does_not_accept_them(
 fn history_arrows_only_replace_the_composer_and_restore_the_exact_draft(cx: &mut TestAppContext) {
     let (mut core, fake) = cockpit("prompt-history-view", 1);
     let thread = core.threads()[0];
-    core.send(thread, "one".into());
-    core.send(thread, "two".into());
+    let _ = core.send(thread, "one".into());
+    let _ = core.send(thread, "two".into());
     fake.streams.borrow()[0]
         .send(SessionEvent::TurnEnded {
             outcome: ferrite_core::TurnOutcome::Completed,
@@ -130,8 +130,8 @@ fn history_arrows_only_replace_the_composer_and_restore_the_exact_draft(cx: &mut
 fn recalling_a_slash_prompt_does_not_open_its_menu_until_a_real_edit(cx: &mut TestAppContext) {
     let (mut core, _) = cockpit("prompt-history-slash", 1);
     let thread = core.threads()[0];
-    core.send(thread, "older".into());
-    core.send(thread, "/".into());
+    let _ = core.send(thread, "older".into());
+    let _ = core.send(thread, "/".into());
     bind_production_keys(cx);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     tick(cx);
@@ -165,7 +165,7 @@ fn recalling_a_slash_prompt_does_not_open_its_menu_until_a_real_edit(cx: &mut Te
 fn menu_and_decision_states_disarm_history_before_their_arrows_dispatch(cx: &mut TestAppContext) {
     let (mut core, fake) = cockpit("prompt-history-precedence", 1);
     let thread = core.threads()[0];
-    core.send(thread, "history".into());
+    let _ = core.send(thread, "history".into());
     bind_production_keys(cx);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     tick(cx);

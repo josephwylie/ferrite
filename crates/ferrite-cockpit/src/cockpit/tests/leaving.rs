@@ -14,7 +14,7 @@ fn closing_while_an_agent_works_asks_first(cx: &mut TestAppContext) {
         "nothing to interrupt, nothing asked"
     );
 
-    view.update(cx, |view, _| {
+    let _ = view.update(cx, |view, _| {
         view.cockpit.send(thread, "Run the checks".into())
     });
     fake.streams.borrow()[0]

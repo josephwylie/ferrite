@@ -33,7 +33,7 @@ fn short_reasoning_has_no_empty_disclosure(cx: &mut TestAppContext) {
 fn the_prompt_being_read_copies_and_resends_from_commands(cx: &mut TestAppContext) {
     let (mut core, fake) = cockpit("sent-prompt-actions", 1);
     let thread = core.threads()[0];
-    core.send(thread, "Run the focused checks".into());
+    let _ = core.send(thread, "Run the focused checks".into());
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     cx.simulate_resize(gpui::size(px(1000.), px(700.)));
     fake.streams.borrow()[0]
@@ -247,7 +247,7 @@ fn the_prompt_echo_reads_at_the_answer_size_at_every_reading_size(cx: &mut TestA
     use ferrite_core::settings::ReadingSize;
     let (mut core, fake) = cockpit("echo-reading-size", 1);
     let thread = core.threads()[0];
-    core.send(thread, "Check the build".into());
+    let _ = core.send(thread, "Check the build".into());
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     cx.simulate_resize(gpui::size(px(1000.), px(700.)));
     fake.streams.borrow()[0]
@@ -305,7 +305,7 @@ fn the_prompt_echo_reads_at_the_answer_size_at_every_reading_size(cx: &mut TestA
 fn transcript_rows_share_one_content_edge_and_the_gap_table(cx: &mut TestAppContext) {
     let (mut core, fake) = cockpit("transcript-spacing", 1);
     let thread = core.threads()[0];
-    core.send(thread, "Check the build".into());
+    let _ = core.send(thread, "Check the build".into());
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     for index in 0..2 {
         fake.streams.borrow()[0]
@@ -838,7 +838,7 @@ fn native_progress_follows_the_tail_and_metadata_refreshes_the_wall(cx: &mut Tes
     use ferrite_core::progress::{Phase, ProgressEvent};
     let (mut core, fake) = cockpit("native-progress", 1);
     let thread = core.threads()[0];
-    core.send(thread, "Inspect progress".into());
+    let _ = core.send(thread, "Inspect progress".into());
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new_thinking(core, cx));
     cx.simulate_resize(gpui::size(px(1000.), px(700.)));
     for index in 0..70 {
@@ -1036,7 +1036,7 @@ fn edited_files_are_in_the_panel_and_one_click_away(cx: &mut TestAppContext) {
 fn keyboard_cycles_tool_controls_and_enter_toggles_without_submitting(cx: &mut TestAppContext) {
     let (mut core, fake) = cockpit("tool-disclosure-keyboard", 1);
     let thread = core.threads()[0];
-    core.send(thread, "prior prompt".into());
+    let _ = core.send(thread, "prior prompt".into());
     bind_production_keys(cx);
     let (root, cx) = cx.add_window_view(|window, cx| {
         let view = cx.new(|cx| CockpitView::new(core, cx));
@@ -1314,7 +1314,7 @@ fn the_live_row_opens_the_work_it_stands_for(cx: &mut TestAppContext) {
 fn a_turn_heads_with_working_for_and_settles_into_its_fold(cx: &mut TestAppContext) {
     let (mut core, fake) = cockpit("turn-fold", 1);
     let thread = core.threads()[0];
-    core.send(thread, "Edit the file".into());
+    let _ = core.send(thread, "Edit the file".into());
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     hide_panel(&view, cx);
     cx.simulate_resize(gpui::size(px(1000.), px(700.)));
@@ -1359,7 +1359,7 @@ fn a_turn_heads_with_working_for_and_settles_into_its_fold(cx: &mut TestAppConte
     assert!(call.top() > fold.bottom() && call.bottom() < cx.debug_bounds("transcript-answer").unwrap().top());
     // The open state is the turn's: a next turn projects the rows again
     // and leaves it open.
-    view.update(cx, |view, _| view.cockpit.send(thread, "And again".into()));
+    let _ = view.update(cx, |view, _| view.cockpit.send(thread, "And again".into()));
     send(SessionEvent::TextDelta {
         text: "Again.\n\n".into(),
     });
@@ -1388,7 +1388,7 @@ fn a_turn_heads_with_working_for_and_settles_into_its_fold(cx: &mut TestAppConte
 fn a_hovered_fold_shows_its_turns_start_time(cx: &mut TestAppContext) {
     let (mut core, fake) = cockpit("turn-fold-time", 1);
     let thread = core.threads()[0];
-    core.send(thread, "Run it".into());
+    let _ = core.send(thread, "Run it".into());
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     hide_panel(&view, cx);
     cx.simulate_resize(gpui::size(px(1000.), px(700.)));
@@ -1426,7 +1426,7 @@ fn a_hovered_fold_shows_its_turns_start_time(cx: &mut TestAppContext) {
 fn a_long_prompt_clamps_under_show_full_message(cx: &mut TestAppContext) {
     let (mut core, _fake) = cockpit("long-prompt", 1);
     let thread = core.threads()[0];
-    core.send(thread, (0..12).map(|n| format!("Line {n}\n")).collect());
+    let _ = core.send(thread, (0..12).map(|n| format!("Line {n}\n")).collect());
     let (_view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     cx.simulate_resize(gpui::size(px(1000.), px(700.)));
     tick(cx);

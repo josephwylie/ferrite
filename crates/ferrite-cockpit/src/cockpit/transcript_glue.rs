@@ -372,7 +372,7 @@ impl CockpitView {
         {
             self.cockpit.queue(thread, prompt);
         } else {
-            self.cockpit.send(thread, prompt);
+            let _ = self.cockpit.send(thread, prompt);
             self.scroll_transcript_to_new_prompt(index, cx);
         }
         self.facts.acted(&self.cockpit, thread);
