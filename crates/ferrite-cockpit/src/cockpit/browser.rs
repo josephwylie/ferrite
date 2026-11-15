@@ -17,7 +17,7 @@ use std::{
     rc::Rc,
 };
 
-gpui::actions!(browser, [Go, CancelAnnotation]);
+gpui::actions!(browser, [Go, CancelAnnotation, CancelNewTab]);
 
 #[derive(Default)]
 pub(super) struct Browsers {
@@ -1328,8 +1328,8 @@ impl CockpitView {
         thread: Option<ThreadId>,
         cx: &mut Context<Self>,
     ) -> AnyElement {
+        use ferrite_ui::{components::Tip as _, icons, theme::*};
         use gpui::component::Disableable as _;
-        use ferrite_ui::{icons, theme::*};
         let Some(thread) = thread else {
             return div()
                 .p(px(16.))
@@ -1361,6 +1361,7 @@ impl CockpitView {
                 .unwrap_or_else(|| tab.url.clone());
             div()
                 .id(("browser-tab", id.0))
+                .debug_selector(move || format!("browser-tab-{}", id.0))
                 .flex()
                 .items_center()
                 .min_w_0()
@@ -1460,12 +1461,22 @@ impl CockpitView {
             && !loading
             && active.is_some_and(|tab| browser.pages.contains_key(&tab.id));
         let address_empty = browser.address.read(cx).text().is_empty();
+        let annotate_why = if annotatable {
+            None
+        } else if loading {
+            Some("Available when the page finishes loading")
+        } else {
+            Some("Open a page to annotate it")
+        };
         toolbar = toolbar
             .child(
                 ferrite_ui::components::button("browser-annotate")
                     .debug_selector(|| "browser-annotate".into())
                     .tab_stop(true)
                     .disabled(!annotatable)
+                    .when_some(annotate_why, |button, why| {
+                        button.opacity(0.35).tip(why)
+                    })
                     .child("Annotate")
                     .on_click(cx.listener(move |this, _, window, cx| {
                         this.begin_browser_annotation(thread, window, cx);
@@ -1491,11 +1502,23 @@ impl CockpitView {
                             div()
                                 .absolute()
                                 .left(px(SPACE_2))
-                                .text_color(rgb(INK_SUBTLE))
+                                .text_color(rgb(PLACEHOLDER_INK))
                                 .child("Search or enter address"),
                         )
                     })
-                    .on_action(cx.listener(move |this, _: &Go, _, cx| this.browser_go(thread, cx))),
+                    .on_action(cx.listener(move |this, _: &Go, _, cx| this.browser_go(thread, cx)))
+                    .on_action(cx.listener(move |this, _: &CancelNewTab, _, cx| {
+                        let Some(browser) = this.browsers.threads.get_mut(&thread) else {
+                            return;
+                        };
+                        if !browser.new_tab {
+                            cx.propagate();
+                            return;
+                        }
+                        browser.new_tab = false;
+                        browser.address_shown = None;
+                        cx.notify();
+                    })),
             )
             .child(
                 ferrite_pane::preview::head_door("browser-go", "browser-go".into(), icons::FORWARD)
@@ -1545,7 +1568,7 @@ impl CockpitView {
             .and_then(|tab| browser.pages.get(&tab.id))
             .map(|page| page.web.clone());
         let notice = match failure {
-            Some(error) => Some(error.clone()),
+            Some(error) => Some(format!("{error}\nEdit the address or reload to try again.")),
             None if body.is_none() => Some("Enter a website address above to browse.".to_owned()),
             None => None,
         };
@@ -1556,15 +1579,28 @@ impl CockpitView {
             .flex_1()
             .min_h_0()
             .overflow_hidden()
-            .when(browser.state.tabs.len() > 1, |chrome| {
+            .when(browser.state.tabs.len() > 1 || browser.new_tab, |chrome| {
                 chrome.child(
                     div()
                         .id("browser-tabs")
+                        .debug_selector(|| "browser-tabs".into())
                         .flex()
                         .flex_shrink_0()
                         .items_center()
                         .overflow_x_scroll()
-                        .children(tabs),
+                        .children(tabs)
+                        .when(browser.new_tab, |strip| {
+                            strip.child(
+                                div()
+                                    .flex_shrink_0()
+                                    .px(px(8.))
+                                    .py(px(4.))
+                                    .text_size(px(FS_LABEL))
+                                    .font_weight(W_LABEL)
+                                    .text_color(rgb(INK_STRONG))
+                                    .child("New tab"),
+                            )
+                        }),
                 )
             })
             .child(toolbar)

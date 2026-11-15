@@ -93,14 +93,70 @@ fn browser_chrome_keeps_its_geometry_through_loading_empty_and_failure(cx: &mut 
 
     cx.simulate_click(ready[6].center(), gpui::Modifiers::none());
     tick(cx);
+    let strip = cx.debug_bounds("browser-tabs").unwrap().size.height;
     assert_eq!(
         controls(cx),
-        ready,
-        "the empty address entry keeps the toolbar"
+        ready.map(|mut bounds| {
+            bounds.origin.y += strip;
+            bounds
+        }),
+        "the pending tab's strip shifts the toolbar as one"
     );
     assert!(
         cx.debug_bounds("browser-notice").is_some(),
         "an empty entry says what to do"
     );
     assert!(cx.debug_bounds("reader-head").is_none());
+}
+
+#[gpui::test]
+fn a_pending_new_tab_can_be_left_by_its_page_tab_or_escape(cx: &mut TestAppContext) {
+    use ferrite_pane::visual::{engine::Visuals, web::fake::FakeEngine};
+    let (core, thread, _) = browser_core("bnt-back");
+    bind_production_keys(cx);
+    let engine = std::rc::Rc::new(FakeEngine::new());
+    cx.update(|cx| Visuals::install(engine.clone(), cx));
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(1600.), px(900.)));
+    until(cx, |cx| {
+        engine.live_views() == 1 && cx.debug_bounds("browser-preview").is_some()
+    });
+    until(cx, |cx| {
+        view.update(cx, |view, _| {
+            !view.cockpit.browser_attach(thread).unwrap().tabs[0].loading
+        })
+    });
+    let page = view.update(cx, |view, _| {
+        view.cockpit.browser_attach(thread).unwrap().tabs[0].id
+    });
+    let page_tab: &'static str = Box::leak(format!("browser-tab-{}", page.0).into_boxed_str());
+    assert!(cx.debug_bounds("browser-notice").is_none());
+
+    let new_tab = cx.debug_bounds("browser-new-tab").unwrap();
+    cx.simulate_click(new_tab.center(), gpui::Modifiers::none());
+    tick(cx);
+    assert!(
+        cx.debug_bounds("browser-notice").is_some(),
+        "a new tab hides the page"
+    );
+    let tab = cx
+        .debug_bounds(page_tab)
+        .expect("the page keeps a tab while a new tab is pending");
+    cx.simulate_click(tab.center(), gpui::Modifiers::none());
+    tick(cx);
+    assert!(
+        cx.debug_bounds("browser-notice").is_none(),
+        "the page tab brings the page back"
+    );
+
+    cx.simulate_click(new_tab.center(), gpui::Modifiers::none());
+    tick(cx);
+    assert!(cx.debug_bounds("browser-notice").is_some());
+    cx.simulate_keystrokes("escape");
+    tick(cx);
+    assert!(
+        cx.debug_bounds("browser-notice").is_none(),
+        "Escape in the address leaves the new tab"
+    );
+    assert!(cx.debug_bounds("browser-tabs").is_none());
 }

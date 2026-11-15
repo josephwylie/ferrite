@@ -448,53 +448,58 @@ impl CockpitView {
             }
             None => body.into_any_element(),
         };
-        let page = document.page().map(|page| page.source().clone());
-        let title = match &page {
-            Some(page) => page.title(),
-            None => self.preview_title(pane, &document),
-        };
-        let label = match page {
-            Some(_) => self.page_title_menu(owner, title.clone(), cx),
-            None => head_title(title.clone())
-                .children(document.line().map(|line| head_suffix(format!(":{line}")))),
-        };
-        // A file (not a command's output, which no file holds, nor a page,
-        // whose menu does it) can have its path copied, as the head reads
-        // it, and open in its own app.
-        let file = match &document.body {
-            Body::BrowserAnnotation {
-                annotation,
-                image: Some(image),
-            } => Some((image.clone(), annotation.original().display().to_string())),
-            _ => (document.name.is_none() && document.page().is_none())
-                .then(|| (document.path.clone(), title.clone())),
-        };
-        let doors = file
-            .map(|(original, shown)| {
-                [
-                    div()
-                        .debug_selector(|| "preview-copy-path".into())
-                        .child(
-                            ferrite_ui::components::copy_button("preview-copy-path", shown)
-                                .tooltip_text("Copy path")
-                                .door(ICON_BUTTON, ICON_BUTTON_GLYPH, R_CONTROL),
+        // The browser's page strip is its own head, under the panel's
+        // Browser tab.
+        let head = (!matches!(document.body, Body::Browser)).then(|| {
+            let page = document.page().map(|page| page.source().clone());
+            let title = match &page {
+                Some(page) => page.title(),
+                None => self.preview_title(pane, &document),
+            };
+            let label = match page {
+                Some(_) => self.page_title_menu(owner, title.clone(), cx),
+                None => head_title(title.clone())
+                    .children(document.line().map(|line| head_suffix(format!(":{line}")))),
+            };
+            // A file (not a command's output, which no file holds, nor a page,
+            // whose menu does it) can have its path copied, as the head reads
+            // it, and open in its own app.
+            let file = match &document.body {
+                Body::BrowserAnnotation {
+                    annotation,
+                    image: Some(image),
+                } => Some((image.clone(), annotation.original().display().to_string())),
+                _ => (document.name.is_none() && document.page().is_none())
+                    .then(|| (document.path.clone(), title.clone())),
+            };
+            let doors = file
+                .map(|(original, shown)| {
+                    [
+                        div()
+                            .debug_selector(|| "preview-copy-path".into())
+                            .child(
+                                ferrite_ui::components::copy_button("preview-copy-path", shown)
+                                    .tooltip_text("Copy path")
+                                    .door(ICON_BUTTON, ICON_BUTTON_GLYPH, R_CONTROL),
+                            )
+                            .into_any_element(),
+                        head_door(
+                            "open-original-image",
+                            "preview-original".into(),
+                            ferrite_ui::icons::EXTERNAL,
                         )
+                        .tooltip(ferrite_ui::menu::tooltip("Open in its app"))
+                        .on_click(move |_, window, cx| {
+                            cx.stop_propagation();
+                            ferrite_pane::preview::open_original(&original, window, cx);
+                        })
                         .into_any_element(),
-                    head_door(
-                        "open-original-image",
-                        "preview-original".into(),
-                        ferrite_ui::icons::EXTERNAL,
-                    )
-                    .tooltip(ferrite_ui::menu::tooltip("Open in its app"))
-                    .on_click(move |_, window, cx| {
-                        cx.stop_propagation();
-                        ferrite_pane::preview::open_original(&original, window, cx);
-                    })
-                    .into_any_element(),
-                ]
-            })
-            .into_iter()
-            .flatten();
+                    ]
+                })
+                .into_iter()
+                .flatten();
+            reading_head(label, doors)
+        });
         div()
             .debug_selector(|| "panel-preview".into())
             .track_focus(pane.preview.focus_handle())
@@ -510,11 +515,7 @@ impl CockpitView {
             .whitespace_normal()
             .text_size(px(FS_UI))
             .line_height(px(LH_UI))
-            // The browser's page strip is its own head, under the panel's
-            // Browser tab.
-            .when(!matches!(document.body, Body::Browser), |card| {
-                card.child(reading_head(label, doors))
-            })
+            .children(head)
             .child(body)
             .child(pane::card_ring(paint::CARD_RING))
             .on_action(cx.listener(move |view, _: &Close, _, cx| {
