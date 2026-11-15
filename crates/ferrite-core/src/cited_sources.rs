@@ -91,16 +91,6 @@ impl CitedSources {
         changed
     }
 
-    /// Only `live` Threads keep sources: the rest were deleted while no one
-    /// was looking. Says whether any went.
-    pub fn retain_threads(&mut self, live: &[ThreadId]) -> bool {
-        let before = self.threads.len();
-        self.threads.retain(|thread, _| live.contains(thread));
-        let dropped = self.threads.len() != before;
-        self.revision += u64::from(dropped);
-        dropped
-    }
-
     /// `thread` is deleted: its sources go. Says whether it had any.
     pub fn forget(&mut self, thread: ThreadId) -> bool {
         let had = self.threads.remove(&thread).is_some();
@@ -174,25 +164,6 @@ mod tests {
         let kept = sources.of(thread).unwrap();
         assert_eq!(kept.len(), CitedSources::PER_THREAD);
         assert!(!kept.contains_key("quote 0") && kept.contains_key("quote 204"));
-    }
-
-    #[test]
-    fn threads_that_no_longer_exist_lose_their_sources() {
-        let (kept, gone) = (ThreadId::new(1), ThreadId::new(2));
-        let mut sources = CitedSources::default();
-        sources.record(kept, &[cited("a", 1)]);
-        sources.record(
-            gone,
-            &[Reply::new("b", "").cited_from(Source {
-                thread: gone,
-                block: block(2),
-            })],
-        );
-        let before = sources.revision();
-        assert!(sources.retain_threads(&[kept]));
-        assert!(sources.of(gone).is_none() && sources.of(kept).is_some());
-        assert!(sources.revision() > before);
-        assert!(!sources.retain_threads(&[kept]));
     }
 
     #[test]

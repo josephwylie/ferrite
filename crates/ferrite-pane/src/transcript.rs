@@ -1110,6 +1110,7 @@ impl TranscriptView {
     /// sent prompt's hold, a band jump still sizing its room. The room
     /// already under the rows stays, used up as they arrive.
     fn revoke_automatic_movement(&mut self) {
+        self.cite_landing.set(None);
         self.scroll.cancel_ease();
         self.scroll.release_reading_place();
         self.drop_pending_reveal();
@@ -3320,6 +3321,10 @@ impl Render for TranscriptView {
                         cite_landing.set(None);
                     } else {
                         cite_landing.set(Some((row, Some(pinned_h.get()))));
+                        let weak = weak.clone();
+                        window.defer(cx, move |_, cx| {
+                            let _ = weak.update(cx, |_, cx| cx.notify());
+                        });
                     }
                 }
                 // Ask once per position: a layout that keeps moving the band

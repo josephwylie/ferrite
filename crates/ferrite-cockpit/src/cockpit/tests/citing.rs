@@ -599,6 +599,27 @@ fn go_to_source_lands_the_answers_top_below_the_pinned_band(cx: &mut TestAppCont
     );
 }
 
+/// A wheel straight after Go to source belongs to the operator: the
+/// landing never pulls the row back under the band.
+#[gpui::test]
+fn a_wheel_right_after_go_to_source_is_not_undone(cx: &mut TestAppContext) {
+    let (transcript, block, cx) = cited_answer("cite-then-wheel", 40, cx);
+    open_chip(cx, 0);
+    click(cx, "cite-source");
+    let viewport = transcript.read_with(cx, |transcript, _| transcript.scroll().bounds());
+    cx.simulate_event(gpui::ScrollWheelEvent {
+        position: viewport.center(),
+        delta: gpui::ScrollDelta::Pixels(gpui::point(px(0.), px(-150.))),
+        ..Default::default()
+    });
+    cx.run_until_parked();
+    for _ in 0..4 {
+        tick(cx);
+    }
+    let (top, floor, _) = row_against_band(&transcript, block, cx);
+    assert!(top < floor, "the wheel moved the row {top:?} up past the band's foot {floor:?}");
+}
+
 /// A cited answer whose top is already readable stays where it is.
 #[gpui::test]
 fn go_to_source_leaves_a_readable_answer_in_place(cx: &mut TestAppContext) {
