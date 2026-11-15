@@ -202,6 +202,8 @@ pub struct Driver {
     cx: HeadlessAppContext,
     window: AnyWindowHandle,
     view: Entity<CockpitView>,
+    /// The real instant the executor's clock last caught up to.
+    synced: std::time::Instant,
 }
 
 /// What a shot saved: its size in pixels, and how many to a logical one.
@@ -240,6 +242,7 @@ impl Driver {
             cx,
             window: window.into(),
             view: view.expect("the window built its Cockpit"),
+            synced: std::time::Instant::now(),
         }
     }
 
@@ -262,10 +265,15 @@ impl Driver {
 
     /// One slice of real time, mirrored on the executor's clock: the pump
     /// runs and the frames the last draw asked for are delivered. The
-    /// window draws only if something in it changed, as on screen.
+    /// window draws only if something in it changed, as on screen. The
+    /// executor catches up on all the real time since its last pass, the
+    /// time spent drawing and shooting too, so a timer set for a clock's
+    /// next reading fires when the clock reads it.
     pub fn pass(&mut self, ms: u64) {
         std::thread::sleep(Duration::from_millis(ms));
-        self.cx.advance_clock(Duration::from_millis(ms));
+        let now = std::time::Instant::now();
+        self.cx.advance_clock(now - self.synced);
+        self.synced = now;
         self.cx.run_until_parked();
         self.cx
             .update_window(self.window, |_, window, cx| {
