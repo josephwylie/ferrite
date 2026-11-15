@@ -178,9 +178,9 @@ impl TranscriptView {
                     if all { "Collapse all" } else { "Expand all" },
                     false,
                 )
-                .on_click(cx.listener(move |_, _: &gpui::ClickEvent, _, cx| {
+                .on_click(cx.listener(move |view, _: &gpui::ClickEvent, _, cx| {
                     cx.stop_propagation();
-                    cx.emit(TranscriptEvent::ToggleDisclosure(toggle.clone()));
+                    view.toggle_disclosure(toggle.clone(), cx);
                 })),
             )
             .child(
@@ -247,8 +247,8 @@ impl TranscriptView {
                             ))
                             .child(icon(icons::FOLDER, theme::CHANGES_GLYPH, theme::INK_SUBTLE))
                             .child(name_cell(name.clone()))
-                            .on_click(cx.listener(move |_, _: &gpui::ClickEvent, _, cx| {
-                                cx.emit(TranscriptEvent::ToggleDisclosure(id.clone()));
+                            .on_click(cx.listener(move |view, _: &gpui::ClickEvent, _, cx| {
+                                view.toggle_disclosure(id.clone(), cx);
                             }))
                             .into_any_element(),
                     );

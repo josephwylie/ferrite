@@ -114,6 +114,10 @@ enum Navigate {
     At { index: usize, into: f32 },
     /// A Find hit's row: where it lies if it is in view, else its top.
     Reveal { row: usize },
+    /// The reader opened or shut something in place: the view stays where
+    /// it is, so the control they pressed stays under the pointer, even at
+    /// the followed tail.
+    Hold,
     /// The prompt a send just added, to the top with room under it for its
     /// answer: eased, or at once.
     Prompt { eased: bool },
@@ -1083,6 +1087,7 @@ impl TranscriptView {
         let reduced = ferrite_ui::motion::reduced_motion(cx);
         match to {
             Navigate::Reader => return,
+            Navigate::Hold => self.scroll.list_state().pause_following_tail(),
             Navigate::Page { down } => {
                 self.runway.set(Runway::default());
                 self.scroll.scroll_page(down, px(self.grid().line));
@@ -1169,6 +1174,11 @@ impl TranscriptView {
 
     pub fn scroll_to_bottom(&mut self, cx: &mut Context<Self>) {
         self.navigate(Navigate::Tail { eased: false }, cx);
+    }
+
+    fn toggle_disclosure(&mut self, id: DisclosureId, cx: &mut Context<Self>) {
+        self.navigate(Navigate::Hold, cx);
+        cx.emit(TranscriptEvent::ToggleDisclosure(id));
     }
 
     /// PageUp and PageDown (a page, a line of the last kept in view), Home
@@ -1411,9 +1421,7 @@ impl TranscriptView {
         Some(LineDisclosure {
             open: self.tool_state(&call) == DisclosureState::Expanded,
             toggle: Rc::new(move |_, cx| {
-                view.update(cx, |_, cx| {
-                    cx.emit(TranscriptEvent::ToggleDisclosure(call.clone()));
-                })
+                view.update(cx, |view, cx| view.toggle_disclosure(call.clone(), cx))
             }),
         })
     }
@@ -1431,7 +1439,7 @@ impl TranscriptView {
             Rc::new(move |_, cx| {
                 view.update(cx, |view, cx| {
                     view.clear_output_selection(cx);
-                    cx.emit(TranscriptEvent::ToggleDisclosure(id.clone()));
+                    view.toggle_disclosure(id.clone(), cx);
                 })
             })
         });
@@ -2021,7 +2029,7 @@ impl TranscriptView {
             gpui::base::TextSelection::clear(window, cx);
             view.update(cx, |view, cx| {
                 view.clear_output_selection(cx);
-                cx.emit(TranscriptEvent::ToggleDisclosure(clicked.clone()));
+                view.toggle_disclosure(clicked.clone(), cx);
             });
         });
         #[cfg(any(test, feature = "test-support"))]
@@ -2090,9 +2098,7 @@ impl TranscriptView {
             .child(if open { "Show less" } else { "Show full message" })
             .when_some(view, |button, view| {
                 button.on_click(move |_, _, cx| {
-                    view.update(cx, |_, cx| {
-                        cx.emit(TranscriptEvent::ToggleDisclosure(clamp.clone()))
-                    })
+                    view.update(cx, |view, cx| view.toggle_disclosure(clamp.clone(), cx))
                 })
             })
             .into_any_element()

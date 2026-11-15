@@ -857,3 +857,70 @@ fn expanding_completed_work_keeps_the_clicked_heading(cx: &mut TestAppContext) {
     }
     panic!("no fold came to mid-view");
 }
+
+/// At the followed tail too: opening the last turn's work stops following,
+/// and the heading the reader pressed stays where it stood.
+#[gpui::test]
+fn expanding_work_at_the_followed_tail_keeps_the_clicked_heading(cx: &mut TestAppContext) {
+    let (mut core, fake) = cockpit("fold-tail", 1);
+    let thread = core.threads()[0];
+    let (view, cx) = {
+        core.send(thread, "turn 0".into());
+        add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx))
+    };
+    hide_panel(&view, cx);
+    cx.simulate_resize(gpui::size(px(1000.), px(700.)));
+    for turn in 0..3 {
+        if turn > 0 {
+            view.update(cx, |view, _| view.cockpit.send(thread, format!("turn {turn}")));
+        }
+        let stream = fake.streams.borrow().len() - 1;
+        let send = |event| fake.streams.borrow()[stream].send(event).unwrap();
+        for tool in 0..8 {
+            send(SessionEvent::ToolStarted {
+                id: format!("tail-tool-{turn}-{tool}"),
+                name: "Read".into(),
+                input: serde_json::json!({"file_path": format!("/workspace/{tool}.rs")}),
+            });
+            send(SessionEvent::ToolCompleted {
+                id: format!("tail-tool-{turn}-{tool}"),
+                output: "12 lines".into(),
+                is_error: false,
+                result: ferrite_core::ToolResult::Opaque,
+            });
+        }
+        let lines = if turn == 2 { 2 } else { 14 };
+        send(SessionEvent::TextDelta {
+            text: (0..lines).map(|n| format!("Turn {turn} line {n}\n\n")).collect(),
+        });
+        send(SessionEvent::TurnEnded {
+            outcome: ferrite_core::TurnOutcome::Completed,
+            cost_usd: None,
+        });
+        tick(cx);
+    }
+    for _ in 0..8 {
+        at(16, cx);
+    }
+    let scroll = scroll(&view, cx);
+    assert!(scroll.is_following_tail(), "the premise: the reader follows the tail");
+    let shown = scroll.bounds();
+    let fold = cx.debug_bounds("turn-fold").expect("the last turn's fold");
+    assert!(
+        fold.top() > shown.top() + shown.size.height / 4. && fold.bottom() < shown.bottom(),
+        "the premise: the fold is in view, clear of the pinned band: {fold:?} in {shown:?}"
+    );
+    let words = cx.debug_bounds("turn-fold-words").expect("the fold's words");
+    cx.simulate_click(words.center(), gpui::Modifiers::none());
+    for _ in 0..4 {
+        at(16, cx);
+    }
+    assert!(cx.debug_bounds("turn-fold-open").is_some(), "the press opened the work");
+    let after = cx.debug_bounds("turn-fold").expect("the heading is still drawn").top();
+    assert!(
+        (after - fold.top()).abs() <= px(0.5),
+        "the heading stays put: {:?} → {after:?}",
+        fold.top()
+    );
+    assert!(!scroll.is_following_tail(), "the reader's press stopped following");
+}
