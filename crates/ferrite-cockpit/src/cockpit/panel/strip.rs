@@ -629,7 +629,7 @@ impl CockpitView {
             self.surfaces_mut(thread).set_open(true);
         }
         let window = self.panel.window_w;
-        let left = window - self.panel_column_w() + ferrite_ui::theme::SURFACE_HEAD_PAD_L;
+        let left = window - self.panel_target_w() + ferrite_ui::theme::SURFACE_HEAD_PAD_L;
         let at = gpui::point(px(left), px(ferrite_ui::theme::WIN_CHROME_H));
         self.open_context_menu_at(MenuTarget::SurfaceMenu(thread), at, gpui::Anchor::TopLeft, None, cx);
     }

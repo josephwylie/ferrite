@@ -30,7 +30,7 @@
 //! | slim row action | [`SLIM_ACTION`] 150ms standard | under the pointer a slim row's time fades out and its Revive or Wake fades in; its badge comes up from 40% greyscale |
 //! | undo notice | [`UNDO_NOTICE`] 200ms Tailwind `ease-out` | the foot's `Parked, Undo ⌘Z` fades in, and out before it goes |
 //! | thread-state line | [`LINE_IN`] 150ms Tailwind `ease-out`, opacity only | the background-work line at the transcript's foot fades in when work begins; it goes at once |
-//! | sidebar (cmd-B) | none | the column snaps between its width and the rail: no ride, no fade, no per-frame relayout of the board |
+//! | sidebar (cmd-B), right panel | [`COLUMN`] 200ms `ease-out` | the nav column and the Panel's column slide open and shut (`cockpit::columns`): the board follows the drawn width every frame, a reversal turns around from the width on screen, and what is sliding out takes no input. A drag, a maximize and a width floor change still land at once; reduced motion lands every one |
 //! | nav card recede | [`RECEDE`] 150ms standard, opacity only | a receded working Thread card (70%) comes up to full under the pointer or the nav's keyboard cursor and goes back as it leaves; its fill and its hover strip snap; reduced motion snaps it too |
 //! | right panel | none | the Panel (`cockpit/panel.rs`) snaps open and shut and between its own width and a preview's, as Claude's does |
 //! | (Ferrite's) slot slide | [`SLOT_OPEN`] 240ms / [`SLOT_CLOSE`] 200ms, [`EASE_SNAP`] | the Review beside its Pane, in the reader slot (`cockpit/beside.rs`): a [`Reveal`] on its split's share (`Tree::reveal`) slides it in from its far edge while the Pane narrows, every frame, its content laid out at its resting size and clipped so it never re-wraps; closing slides it out, a little quicker, and only then is the slot removed; a flip mid-slide turns around; a seam drag lands it |
@@ -256,7 +256,7 @@ impl MotionSpec {
 
     /// How long it takes to land, its delay included.
     pub fn duration(&self) -> Duration {
-        Duration::from_millis(self.delay_ms + self.duration_ms)
+        Duration::from_millis(self.delay_ms + self.duration_ms).mul_f32(time_scale())
     }
 
     /// Eased progress for a raw timeline fraction (of the move, after the
@@ -273,9 +273,29 @@ impl MotionSpec {
         if self.duration_ms == 0 {
             return if elapsed >= self.duration() { 1.0 } else { 0.0 };
         }
-        let moving = elapsed.saturating_sub(Duration::from_millis(self.delay_ms));
-        self.progress(moving.as_secs_f32() / (self.duration_ms as f32 / 1000.0))
+        let delay = Duration::from_millis(self.delay_ms).mul_f32(time_scale());
+        let moving = elapsed.saturating_sub(delay);
+        self.progress(moving.as_secs_f32() / (self.duration_ms as f32 / 1000.0 * time_scale()))
     }
+}
+
+/// How much longer every spec takes: `FERRITE_MOTION_SCALE=20` slows a 200ms
+/// slide to 4s, so a headless capture (whose clock jumps in 60ms steps) can
+/// land on its intermediate frames. Debug builds only; 1 otherwise.
+fn time_scale() -> f32 {
+    #[cfg(debug_assertions)]
+    {
+        static SCALE: std::sync::OnceLock<f32> = std::sync::OnceLock::new();
+        return *SCALE.get_or_init(|| {
+            std::env::var("FERRITE_MOTION_SCALE")
+                .ok()
+                .and_then(|value| value.trim().parse::<f32>().ok())
+                .filter(|scale| *scale >= 1.0)
+                .unwrap_or(1.0)
+        });
+    }
+    #[cfg(not(debug_assertions))]
+    1.0
 }
 
 const fn spec(duration_ms: u64, curve: CubicBezier) -> MotionSpec {
@@ -353,6 +373,8 @@ pub const SWITCH: MotionSpec = spec(theme::MOTION_SWITCH_MS, EASE_OVERSHOOT);
 /// The model picker rail's pill sliding between providers (T3's
 /// `transition-[top] duration-200 ease-out`).
 pub const RAIL_SLIDE: MotionSpec = spec(theme::MOTION_DUR_BASE_MS, EASE_OUT);
+/// The nav column and the right panel's column opening and shutting.
+pub const COLUMN: MotionSpec = spec(theme::MOTION_DUR_BASE_MS, EASE_OUT);
 /// A scrollbar thumb fading out and widening.
 pub const SCROLLBAR_FADE: MotionSpec = spec(theme::MOTION_SCROLLBAR_FADE_MS, EASE_STANDARD);
 /// A board slot sliding in beside its owner, and out again a little

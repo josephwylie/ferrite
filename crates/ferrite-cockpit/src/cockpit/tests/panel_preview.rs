@@ -108,11 +108,15 @@ fn a_file_at_a_line_opens_wide_and_closes_back_to_the_sections(cx: &mut TestAppC
         cx.debug_bounds("panel-sections").is_some(),
         "back to the sections"
     );
-    assert_eq!(panel_w(cx), Some(wide), "narrowing back is the operator's");
+    assert_eq!(
+        panel_w(cx),
+        Some(ferrite_ui::theme::PANEL_W),
+        "the preview's floor was never the operator's width"
+    );
 }
 
 /// `Overview` picked while a preview is open keeps the preview's tab, and
-/// the Panel's width; its tab brings the document back.
+/// the Panel at the operator's width; its tab brings the document back.
 #[gpui::test]
 fn another_tab_keeps_the_preview_for_later(cx: &mut TestAppContext) {
     let (view, _fake, cx) = window("preview-tabs", 1, cx);
@@ -122,7 +126,7 @@ fn another_tab_keeps_the_preview_for_later(cx: &mut TestAppContext) {
     let overview = cx.debug_bounds("panel-tab-Overview").unwrap();
     cx.simulate_click(overview.center(), gpui::Modifiers::none());
     tick(cx);
-    assert_eq!(panel_w(cx), Some(wide));
+    assert_eq!(panel_w(cx), Some(ferrite_ui::theme::PANEL_W));
     assert!(cx.debug_bounds("panel-preview").is_none());
     let tab = cx.debug_bounds("panel-tab-File-lines.rs").expect("its tab stays");
     cx.simulate_click(tab.center(), gpui::Modifiers::none());

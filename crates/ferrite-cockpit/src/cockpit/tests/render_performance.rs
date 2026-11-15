@@ -1523,45 +1523,6 @@ fn working_and_unread_panes_cost_at_most_one_pulse_tick_rate(cx: &mut TestAppCon
     );
 }
 
-fn board_left(cx: &mut gpui::VisualTestContext) -> f32 {
-    f32::from(cx.debug_bounds("board").expect("the board").left())
-}
-
-#[gpui::test]
-fn the_nav_collapse_snaps_without_frames(cx: &mut TestAppContext) {
-    ferrite_ui::motion::testing::drive();
-    let (core, _fake) = cockpit("motion-nav", 2);
-    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
-    cx.simulate_resize(gpui::size(px(1440.), px(900.)));
-    tick(cx);
-    settle(cx);
-    assert!((board_left(cx) - nav::COLUMN_WIDTH).abs() <= 0.5, "open");
-    for (collapsed, left) in [(true, 0.0), (false, nav::COLUMN_WIDTH)] {
-        view.update(cx, |view, cx| view.set_nav_collapsed(collapsed, cx));
-        cx.run_until_parked();
-        assert!(
-            (board_left(cx) - left).abs() <= 0.5,
-            "collapsed {collapsed}: at its edge at once"
-        );
-        assert_eq!(display_frames(cx), 0, "and asks for nothing");
-    }
-}
-
-#[gpui::test]
-fn reduced_motion_snaps_the_nav_collapse(cx: &mut TestAppContext) {
-    ferrite_ui::motion::testing::drive();
-    let (core, _fake) = cockpit("motion-nav-reduced", 1);
-    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
-    cx.simulate_resize(gpui::size(px(1440.), px(900.)));
-    cx.update(|_, cx| cx.set_reduce_motion(true));
-    tick(cx);
-    settle(cx);
-    view.update(cx, |view, cx| view.set_nav_collapsed(true, cx));
-    cx.run_until_parked();
-    assert!(board_left(cx).abs() <= 0.5);
-    assert_eq!(display_frames(cx), 0);
-}
-
 /// A Solo window of one Thread at 1600 wide whose settings are its own
 /// (the panel's toggle saves them), settled on its first paint.
 fn panel_window<'a>(
@@ -1590,41 +1551,10 @@ fn solo_card_right(view: &gpui::Entity<CockpitView>, cx: &mut gpui::VisualTestCo
     card.x + card.w
 }
 
-/// ⌥⌘B snaps the panel's column open and shut, as Claude's does
-/// (`motion-measured.md`): the board gives up or takes back the width on
-/// the next frame, the toggle never moves, and no frame is asked for.
-#[gpui::test]
-fn the_panel_snaps_in_and_out_without_frames(cx: &mut TestAppContext) {
-    use ferrite_ui::theme::PANEL_W;
-    ferrite_ui::motion::testing::drive();
-    let (view, cx) = panel_window("motion-panel", cx);
-    assert_eq!(panel_width(cx), Some(PANEL_W), "first paint");
-    assert!(cx.debug_bounds("panel-toggle").is_some(), "the rail's door");
-
-    view.update(cx, |view, cx| view.toggle_panel_now(cx));
-    cx.run_until_parked();
-    assert_eq!(panel_width(cx), None, "gone at once");
-    assert_eq!(
-        solo_card_right(&view, cx),
-        1600.,
-        "flush to the window's edge"
-    );
-    assert!(cx.debug_bounds("panel-toggle").is_some(), "still there");
-    assert_eq!(display_frames(cx), 0, "no ride asks for frames");
-
-    view.update(cx, |view, cx| view.toggle_panel_now(cx));
-    cx.run_until_parked();
-    assert_eq!(panel_width(cx), Some(PANEL_W), "back at once");
-    assert_eq!(solo_card_right(&view, cx), 1600. - PANEL_W);
-    assert!(cx.debug_bounds("panel-toggle").is_some(), "still there");
-    assert_eq!(display_frames(cx), 0);
-}
-
 /// Focus moving to a draft, which has no panel, takes the panel and the
 /// toggle away at once.
 #[gpui::test]
 fn the_panel_goes_at_once_when_focus_moves_to_a_draft(cx: &mut TestAppContext) {
-    ferrite_ui::motion::testing::drive();
     let (view, cx) = panel_window("motion-panel-draft", cx);
     view.update(cx, |view, cx| {
         view.open_draft_with_provider(DraftTarget::Main, Provider::Claude, cx)
@@ -1670,7 +1600,11 @@ fn a_preview_snaps_the_panel_wide(cx: &mut TestAppContext) {
 
     view.update(cx, |view, cx| view.close_preview(0, cx));
     cx.run_until_parked();
-    assert_eq!(panel_width(cx), Some(wide), "the width kept");
+    assert_eq!(
+        panel_width(cx),
+        Some(ferrite_ui::theme::PANEL_W),
+        "the compact width back: the preview's floor was never saved"
+    );
     assert!(
         cx.debug_bounds("panel-sections").is_some(),
         "the sections, at once"
@@ -1686,7 +1620,6 @@ fn a_preview_snaps_the_panel_wide(cx: &mut TestAppContext) {
 /// lets the preview go and leaves the Panel on its Overview.
 #[gpui::test]
 fn a_preview_opens_a_hidden_panel(cx: &mut TestAppContext) {
-    ferrite_ui::motion::testing::drive();
     let (view, cx) = panel_window("motion-panel-preview-hidden", cx);
     view.update(cx, |view, cx| view.toggle_panel_now(cx));
     cx.run_until_parked();

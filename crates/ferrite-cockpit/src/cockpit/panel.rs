@@ -19,12 +19,12 @@
 //! empty board has none. There are no other size rules: hidden, the board
 //! takes its width; shown, the board gives it up, however narrow.
 //!
-//! Its width is one per Thread, dragged from the column's left edge and
-//! never under the shown kind's floor (`floor_w`), which showing it widens
-//! the Panel to; maximized, it takes all the content area but
-//! `DOCK_THREAD_MIN_W` of the board. It snaps between widths, and open and
-//! shut, as T3's and Claude's do: no ride, no fade, so nothing lays the
-//! board out again frame by frame (`motion-measured.md`).
+//! Its width is one per Thread: the operator's, dragged from the column's
+//! left edge, saved as dragged. It draws at least the shown kind's floor
+//! (`floor_w`), which is the tool's and never saved, so a visit to Files
+//! leaves an Overview as compact as it was; maximized, it takes all the
+//! content area but `DOCK_THREAD_MIN_W` of the board. It slides open and
+//! shut (`columns.rs`); a drag, a maximize and a floor change snap.
 //!
 //! The title bar keeps one tool, the Panel's toggle (`view_head`), at the
 //! window's right edge; the head row ends short of it.
@@ -362,9 +362,9 @@ impl CockpitView {
     }
 
     /// Once per frame, before anything measures the board: tend the
-    /// previews (`tend_previews`), disarm a Merge no longer in view, widen
-    /// the shown Panel to its Surface's floor, give its Surface what it
-    /// needs to draw, and write the tabs if they changed.
+    /// previews (`tend_previews`), disarm a Merge no longer in view, give
+    /// the shown Surface what it needs to draw, and write the tabs if they
+    /// changed.
     pub(super) fn tend_panel(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.tend_previews(window, cx);
         self.disarm_unseen_merge();
@@ -374,13 +374,7 @@ impl CockpitView {
             .and_then(|index| self.panes[index].thread())
         {
             self.panel.scrolls.entry(thread).or_default();
-            let window_w = self.panel.window_w;
             let active = self.active_surface(thread);
-            let floor = floor_w(active.as_ref(), window_w, self.nav_width());
-            // A Panel never changed reads its floor without being made.
-            if self.panel.surfaces.get(thread).is_some_and(|state| state.width < floor) {
-                self.surfaces_mut(thread).width = floor;
-            }
             match active {
                 Some(SurfaceId::Files) => {
                     self.ensure_files(thread, cx);
@@ -393,15 +387,11 @@ impl CockpitView {
         self.save_surfaces();
     }
 
-    /// How much of the window's right edge the panel's column covers this
-    /// frame: its Thread's width, a draft's preview's reading width, none
-    /// hidden.
-    pub(super) fn panel_column_w(&self) -> f32 {
-        let Some(index) = self.panel_pane() else {
-            return 0.;
-        };
+    /// How wide the panel of Pane `index` rests: its Thread's width, a
+    /// draft's preview's reading width.
+    pub(super) fn panel_rest_w(&self, index: usize) -> f32 {
         let window = self.panel.window_w;
-        let nav = self.nav_width();
+        let nav = self.nav_rest_w();
         match self.panes[index].thread() {
             Some(thread) => match self.panel.surfaces.get(thread) {
                 Some(state) => panel_w(state, window, nav),
@@ -411,13 +401,17 @@ impl CockpitView {
         }
     }
 
-    /// What the board leaves at its right: the panel's column, or the
-    /// frame's gutter when the panel is hidden (SPEC §4).
+    /// How wide the panel ends up: its rest width while it shows or opens,
+    /// none while it is hidden or sliding shut.
+    pub(super) fn panel_target_w(&self) -> f32 {
+        self.panel_pane()
+            .map_or(0., |index| self.panel_rest_w(index))
+    }
+
+    /// What the board leaves at its right: the panel's column as far in as
+    /// it is, or the frame's gutter when the panel is hidden (SPEC §4).
     pub(super) fn board_right(&self) -> f32 {
-        match self.panel_pane() {
-            Some(_) => self.panel_column_w(),
-            None => self.board_pad(),
-        }
+        self.panel_column_w().max(self.board_pad())
     }
 
     /// ⌥⌘B, the View menu, the palette and the title bar's toggle: show or
@@ -479,7 +473,8 @@ impl CockpitView {
 
     /// A press on the column's left edge: the drag that follows sets the
     /// Thread's width.
-    fn begin_panel_resize(&mut self, thread: ThreadId) {
+    fn begin_panel_resize(&mut self, thread: ThreadId, cx: &gpui::App) {
+        self.land_panel(cx);
         self.panel.resizing = Some(thread);
     }
 
@@ -512,7 +507,7 @@ impl CockpitView {
             return;
         };
         let window = self.panel.window_w;
-        let nav = self.nav_width();
+        let nav = self.nav_rest_w();
         let floor = floor_w(self.active_surface(thread).as_ref(), window, nav);
         let width = (window - f32::from(position.x)).clamp(floor, most_w(window, nav).max(floor));
         let state = self.surfaces_mut(thread);
@@ -553,8 +548,9 @@ impl CockpitView {
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
         use ferrite_ui::theme::*;
-        let index = self.panel_pane()?;
+        let index = self.panel_drawn_pane()?;
         let owner = self.panes[index].identity;
+        let sliding_out = self.panel_pane().is_none();
         let column = div()
             .size_full()
             .flex()
@@ -598,7 +594,7 @@ impl CockpitView {
                     MouseButton::Left,
                     cx.listener(move |view, _: &MouseDownEvent, _, cx| {
                         cx.stop_propagation();
-                        view.begin_panel_resize(thread);
+                        view.begin_panel_resize(thread, cx);
                         cx.notify();
                     }),
                 )
@@ -615,8 +611,17 @@ impl CockpitView {
                 .w(px(self.panel_column_w()))
                 .overflow_hidden()
                 .bg(paint::PANEL)
-                .child(column)
+                .child(
+                    div()
+                        .absolute()
+                        .top_0()
+                        .right_0()
+                        .bottom_0()
+                        .w(px(self.panel_rest_w(index)))
+                        .child(column),
+                )
                 .children(edge)
+                .when(sliding_out, |panel| panel.child(super::columns::veil()))
                 .into_any_element(),
         )
     }

@@ -3529,12 +3529,13 @@ pub const PROJECT_HUES: [u32; 18] = [
 // Ferrite surface that wears it. The rules every animated surface follows:
 //
 // - **Menus and popovers snap; dialogs, the palette and toasts fade out.**
-//   A menu, a popover, a fold of tool steps, the sidebar (cmd-B) and the
-//   panel land on their frame, open and shut, as Claude's do. A sheet, the
-//   palette and a toast leave as a face no pointer finds (`motion::float_out`,
-//   `toast_out`), their veil fading with them. A board slot is no float:
-//   the Review slides in and, a little quicker, out (`MOTION_SLOT_OPEN_MS` /
-//   `MOTION_SLOT_CLOSE_MS`), its Pane giving way and taking the room back.
+//   A menu, a popover and a fold of tool steps land on their frame, open
+//   and shut, as Claude's do. A sheet, the palette and a toast leave as a
+//   face no pointer finds (`motion::float_out`, `toast_out`), their veil
+//   fading with them. A board slot is no float: the Review slides in and,
+//   a little quicker, out (`MOTION_SLOT_OPEN_MS` / `MOTION_SLOT_CLOSE_MS`),
+//   its Pane giving way and taking the room back; the sidebar (cmd-B) and
+//   the panel slide over `MOTION_DUR_BASE_MS` (`motion::COLUMN`).
 // - **One hover blend for buttons (`MOTION_DUR_FAST_MS`, the quart); list
 //   rows and menu rows snap.** A button's ground blends over 60ms and its
 //   press squishes it (`MOTION_PRESS_SCALE`); a nav row, a menu row and the

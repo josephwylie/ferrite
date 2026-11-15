@@ -118,7 +118,10 @@ fn a_tab_dragged_past_six_pixels_moves_and_five_is_a_click(cx: &mut TestAppConte
     let (tabs, active) = panel_tabs(&view, thread, cx);
     assert_eq!(tabs, [SurfaceId::Overview, SurfaceId::Changes, SurfaceId::Background]);
     assert_eq!(active, Some(SurfaceId::Changes));
-    // Dragged onto Overview: it moves there.
+    // Dragged onto Overview: it moves there. The shown tool's floor sets the
+    // Panel's width, so the tabs are read again.
+    let changes = cx.debug_bounds("panel-tab-Changes").unwrap().center();
+    let overview = cx.debug_bounds("panel-tab-Overview").unwrap().center();
     cx.simulate_mouse_down(changes, gpui::MouseButton::Left, gpui::Modifiers::none());
     cx.simulate_mouse_move(overview, gpui::MouseButton::Left, gpui::Modifiers::none());
     cx.simulate_mouse_up(overview, gpui::MouseButton::Left, gpui::Modifiers::none());
