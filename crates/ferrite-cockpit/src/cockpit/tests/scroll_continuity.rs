@@ -110,7 +110,7 @@ fn the_top_of_the_transcript_stays_the_top_through_reflow(cx: &mut TestAppContex
 
 /// One jump to the end from the top of a long answer, every frame recorded
 /// as the distance still to go.
-fn jump_to_the_end(name: &str, pill: bool, cx: &mut TestAppContext) -> Vec<f32> {
+fn jump_to_the_end(name: &str, pill: bool, cx: &mut TestAppContext) -> (Vec<f32>, f32) {
     bind_production_keys(cx);
     let (view, _fake, cx) = answered(name, true, cx);
     send(cx);
@@ -146,7 +146,7 @@ fn jump_to_the_end(name: &str, pill: bool, cx: &mut TestAppContext) -> Vec<f32> 
         frames.last().unwrap().abs() <= 0.5,
         "the same final row: {frames:?}"
     );
-    frames
+    (frames, f32::from(scroll.bounds().size.height))
 }
 
 /// The Scroll to end pill from far up comes within a viewport at once (the
@@ -154,8 +154,7 @@ fn jump_to_the_end(name: &str, pill: bool, cx: &mut TestAppContext) -> Vec<f32> 
 /// none overshooting, several frames on the way.
 #[gpui::test]
 fn the_pill_from_far_up_eases_its_last_stretch(cx: &mut TestAppContext) {
-    let frames = jump_to_the_end("jump-pill", true, cx);
-    let viewport = 571.;
+    let (frames, viewport) = jump_to_the_end("jump-pill", true, cx);
     assert!(
         frames[1] <= viewport + 1.,
         "within a viewport after one frame: {frames:?}"
@@ -174,7 +173,7 @@ fn the_pill_from_far_up_eases_its_last_stretch(cx: &mut TestAppContext) {
 /// End is the same move without the ease: one frame to the same final row.
 #[gpui::test]
 fn end_from_far_up_lands_at_once(cx: &mut TestAppContext) {
-    let frames = jump_to_the_end("jump-end", false, cx);
+    let (frames, _) = jump_to_the_end("jump-end", false, cx);
     assert!(frames[1].abs() <= 0.5, "at once: {frames:?}");
 }
 
@@ -197,12 +196,14 @@ fn paging_leaves_no_line_unread(cx: &mut TestAppContext) {
         (top, f32::from(-scroll.offset().y + view_h))
     };
     let mut pages = vec![readable(&scroll)];
+    let mut masks = vec![scroll.top_mask()];
     let mut guard = 0;
     while !scroll.is_following_tail() && guard < 40 {
         cx.simulate_keystrokes("pagedown");
         at(16, cx);
         at(16, cx);
         pages.push(readable(&scroll));
+        masks.push(scroll.top_mask());
         guard += 1;
     }
     assert!(pages.len() > 4, "the premise: several pages: {pages:?}");
@@ -211,8 +212,8 @@ fn paging_leaves_no_line_unread(cx: &mut TestAppContext) {
         "a band pinned: {pages:?}"
     );
     assert!(
-        pages.iter().skip(1).any(|_| scroll.top_mask() > px(line)),
-        "the pinned band covers more than a line"
+        masks.iter().any(|mask| *mask > px(line)),
+        "the pinned band covers more than a line: {masks:?}"
     );
     for pair in pages.windows(2) {
         let overlap = pair[0].1 - pair[1].0;
