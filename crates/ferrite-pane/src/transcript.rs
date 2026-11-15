@@ -1045,7 +1045,7 @@ impl TranscriptView {
             if focus == self.controls_end {
                 return false;
             }
-            if crate::rich::code_actions_focused(window) {
+            if crate::rich::controls_focused(window) {
                 return true;
             }
         }

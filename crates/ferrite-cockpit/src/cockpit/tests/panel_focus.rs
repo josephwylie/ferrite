@@ -417,3 +417,60 @@ fn find_from_the_controls_over_another_surface_searches_the_transcript(cx: &mut 
     assert!(!transcript_find_open(&view, cx), "esc closes the bar");
     assert!(composer_focused(&view, cx), "and typing returns to the composer");
 }
+
+/// ⌘↓ and ⌘↑ with the keyboard on the Panel's controls read the open prose
+/// file to its end and back to its start, as Home and End do elsewhere.
+#[gpui::test]
+fn command_arrows_go_to_the_ends_of_a_prose_file(cx: &mut TestAppContext) {
+    let (view, thread, file, cx) = with_marked_file("focus-prose-ends", cx);
+    let readme = file.parent().unwrap().parent().unwrap().join("README.md");
+    std::fs::write(&readme, "A paragraph of prose.\n\n".repeat(200)).unwrap();
+    view.update(cx, |view, cx| view.open_in_files(thread, readme, None, true, cx));
+    tick(cx);
+    press("f6", cx);
+    let offset = |view: &Entity<CockpitView>, cx: &mut gpui::VisualTestContext| {
+        view.read_with(cx, |view, _| {
+            view.files_prose_scroll(thread).unwrap().offset().y
+        })
+    };
+    assert_eq!(offset(&view, cx), px(0.));
+    press("cmd-down", cx);
+    let end = offset(&view, cx);
+    assert!(end < px(0.), "⌘↓ reads to the end");
+    press("cmd-up", cx);
+    assert_eq!(offset(&view, cx), px(0.), "⌘↑ goes back to the start");
+}
+
+/// ⌘↓ and ⌘↑ in the open Markdown preview read it to its end and back, and
+/// PageDown pages it: the same paging keys the transcript answers.
+#[gpui::test]
+fn command_arrows_go_to_the_ends_of_the_preview(cx: &mut TestAppContext) {
+    let dir = scratch("preview-ends-file");
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = dir.join("notes.md");
+    std::fs::write(&file, "A paragraph of prose.\n\n".repeat(200)).unwrap();
+    let (core, _fake) = cockpit("preview-ends", 1);
+    bind_production_keys(cx);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    hold_nav_open(&view, cx);
+    cx.simulate_resize(gpui::size(px(1440.), px(900.)));
+    tick(cx);
+    super::find::read_beside(&view, file, cx);
+    let offset = |view: &Entity<CockpitView>, cx: &mut gpui::VisualTestContext| {
+        view.read_with(cx, |view, _| {
+            view.panes[0].preview_tab.markdown_scroll.offset().y
+        })
+    };
+    for _ in 0..8 {
+        view.update(cx, |_, cx| cx.notify());
+        tick(cx);
+    }
+    assert_eq!(offset(&view, cx), px(0.));
+    press("pagedown", cx);
+    let page = offset(&view, cx);
+    assert!(page < px(0.), "PageDown pages the preview");
+    press("cmd-down", cx);
+    assert!(offset(&view, cx) < page, "⌘↓ reads to the end");
+    press("cmd-up", cx);
+    assert_eq!(offset(&view, cx), px(0.), "⌘↑ goes back to the start");
+}

@@ -1062,6 +1062,14 @@ impl CockpitView {
                 }),
             )
     }
+
+    pub(in crate::cockpit) fn files_prose_scroll(&self, thread: ThreadId) -> Option<ScrollHandle> {
+        let files = self.files_ref(thread)?;
+        match &files.tabs[files.active?].body {
+            TabBody::Prose { scroll, .. } => Some(scroll.clone()),
+            _ => None,
+        }
+    }
 }
 
 #[cfg(test)]

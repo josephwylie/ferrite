@@ -983,7 +983,7 @@ fn keyboard_reaches_code_actions_after_disclosures_and_returns_to_the_draft(
     cx.simulate_keystrokes("tab");
     view.read_with(cx, |view, _| assert!(view.panes[0].has_tool_target()));
     cx.simulate_keystrokes("tab");
-    assert!(cx.update(|window, _| ferrite_pane::rich::code_actions_focused(window)));
+    assert!(cx.update(|window, _| ferrite_pane::rich::controls_focused(window)));
     enter(cx);
     assert_eq!(clipboard(cx).as_deref(), Some("    first();"));
     // HTML has Preview before Copy in the same native tab order.
@@ -1044,7 +1044,7 @@ fn code_copy_traversal_does_not_accept_an_empty_composers_followup(cx: &mut Test
     });
 
     cx.simulate_keystrokes("shift-tab");
-    assert!(cx.update(|window, _| ferrite_pane::rich::code_actions_focused(window)));
+    assert!(cx.update(|window, _| ferrite_pane::rich::controls_focused(window)));
     cx.simulate_keystrokes("tab");
     cx.update(|window, cx| {
         let view = view.read(cx);

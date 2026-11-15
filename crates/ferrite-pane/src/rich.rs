@@ -9,19 +9,23 @@ use crate::link_target::{LinkTarget, Open};
 use ferrite_ui::theme;
 
 pub fn init(cx: &mut App) {
-    cx.bind_keys([gpui::KeyBinding::new(
-        "enter",
-        gpui::NoAction {},
-        Some("TranscriptCodeActions"),
-    )]);
+    cx.bind_keys(CONTROL_CONTEXTS.map(|context| {
+        gpui::KeyBinding::new("enter", gpui::NoAction {}, Some(context))
+    }));
 }
 
-/// Code controls form a native keyboard island inside the transcript.
-pub fn code_actions_focused(window: &Window) -> bool {
-    window
-        .context_stack()
-        .iter()
-        .any(|context| context.contains("TranscriptCodeActions"))
+/// The key contexts of the transcript's native controls: a code block's
+/// actions and an inline link's tab stop (the toolkit's `LinkStop`).
+const CONTROL_CONTEXTS: [&str; 2] = ["TranscriptCodeActions", "LinkStop"];
+
+/// Code actions and links form a native keyboard island inside the
+/// transcript: Tab walks them and ⏎ presses the focused one.
+pub fn controls_focused(window: &Window) -> bool {
+    window.context_stack().iter().any(|context| {
+        CONTROL_CONTEXTS
+            .iter()
+            .any(|name| context.contains(name))
+    })
 }
 
 /// Replace a native text output's source without losing the reader's
@@ -908,6 +912,7 @@ fn style_hanging(rem_size: gpui::Pixels, base: gpui::Pixels, hang: f32) -> TextV
         .with_link(rgb(theme::LINK_INK).into())
         .with_link_underline(Some(rgb(theme::LINK_INK).into()))
         .with_link_underline_on_hover(true)
+        .with_link_focus(Some(rgba(theme::FOCUS_RING).into()))
         // An image in an answer sits in the prompt image's frame:
         // `IMAGE_CELLS` wide at the prose's size, a 1px `LINE` edge.
         .with_image(

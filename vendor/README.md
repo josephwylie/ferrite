@@ -146,6 +146,13 @@ look above (they join `PartialEq`, so a change re-keys selection layout):
   underlines are unaffected. The inline keeps the hovered link's ordinal in its
   state and notifies only when the pointer moves onto another link or off one
   (leaving the text included), where upstream notified on every glyph crossed.
+- `with_link_focus(Option<Hsla>)`: the ring round a link the keyboard has
+  reached (`Inline::link_stops`). Every native link is a tab stop (key
+  context `LinkStop`, its focus handle kept per URL and occurrence so a streamed
+  insert never moves focus): an invisible, focusable element over the link's
+  first line, so Tab reaches it,
+  a focus ring shows it, and ⏎ or space clicks it through the view's
+  `on_link_click` (a key click only: the pointer keeps its own press path).
 - `with_numeric_columns_right(bool)`: a table column left at the default
   alignment whose non-empty body cells all read as numbers (`41`, `-3.5`,
   `12%`, `1,204`, `3.2k`, `$12`) is drawn right-aligned

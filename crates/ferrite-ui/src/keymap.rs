@@ -366,6 +366,8 @@ pub fn bindings(platform: Platform) -> Vec<Binding> {
             "cockpit::TranscriptBottom",
             Some(NO_TEXT_FIELD),
         ),
+        (with_primary("up"), "cockpit::TranscriptTop", Some(NO_TEXT_FIELD)),
+        (with_primary("down"), "cockpit::TranscriptBottom", Some(NO_TEXT_FIELD)),
         // ⌘/ anywhere, a text field's too: the desktop apps' shortcuts key,
         // and the Help menu's chord.
         (with_primary("/"), "shortcuts::Toggle", None),
@@ -648,6 +650,8 @@ pub fn bindings(platform: Platform) -> Vec<Binding> {
         (with_primary("v"), NO_ACTION, Some(BROWSER)),
         (with_primary("x"), NO_ACTION, Some(BROWSER)),
         (with_primary("a"), NO_ACTION, Some(BROWSER)),
+        (with_primary("up"), NO_ACTION, Some(BROWSER)),
+        (with_primary("down"), NO_ACTION, Some(BROWSER)),
         // A Panel control (a tab, `+`, maximize, a pull request's number or
         // segment) is one stop of a roving row: ←→ ⇱ ⇲ move between stops,
         // ⏎ presses (the button's own key-up click, so ⏎ stands down), ⌫ or
@@ -1565,6 +1569,29 @@ mod tests {
             .all(|(_, action, _)| *action != "cockpit::OpenPrInBrowser"));
         assert_eq!(refused.len(), 1, "{refused:?}");
         assert!(refused[0].contains("would take that key from typing"));
+    }
+
+    /// ⌘↑ ⌘↓ go to the ends of the transcript, but not while the embedded
+    /// browser holds the keyboard: the page owns its caret and scroll keys,
+    /// so the later `Browser` row stands them down.
+    #[test]
+    fn the_end_chords_stand_down_for_the_browser() {
+        for platform in [Platform::Mac, Platform::Windows] {
+            let table = bindings(platform);
+            for (suffix, action) in [
+                ("-up", "cockpit::TranscriptTop"),
+                ("-down", "cockpit::TranscriptBottom"),
+            ] {
+                let at = |wanted: &str, context: &str| {
+                    table.iter().position(|(key, act, ctx)| {
+                        key.ends_with(suffix) && *act == wanted && *ctx == Some(context)
+                    })
+                };
+                let go = at(action, NO_TEXT_FIELD).expect("the chord goes to an end");
+                let stand_down = at(NO_ACTION, BROWSER).expect("the browser row exists");
+                assert!(stand_down > go, "{platform:?} {suffix}: the stand-down binds later");
+            }
+        }
     }
 
     #[test]
