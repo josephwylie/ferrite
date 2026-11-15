@@ -1904,11 +1904,13 @@ impl ReviewView {
                 .rounded(px(R_CARD))
                 .bg(paint::RAISED)
                 .child(muted(pr_comment_head(comment)))
-                .child(
-                    div()
-                        .text_color(rgb(INK_STRONG))
-                        .child(SharedString::from(comment.body.clone())),
-                );
+                .when(!comment.body.is_empty(), |card| {
+                    card.child(
+                        div()
+                            .text_color(rgb(INK_STRONG))
+                            .child(SharedString::from(comment.body.clone())),
+                    )
+                });
             for reply in &comment.replies {
                 card = card.child(
                     div()
@@ -2992,6 +2994,11 @@ mod tests {
             outdated: false,
             replies: Vec::new(),
         };
+        let said = WirePrComment {
+            verdict: None,
+            body: "Looks good.".into(),
+            ..approval.clone()
+        };
         review.update(cx, |review, cx| {
             review.show_pr(
                 ReviewPullRequest {
@@ -3008,7 +3015,7 @@ mod tests {
                         merge: WireMerge::Clean,
                         sync: WireSync::InSync,
                         checks: Vec::new(),
-                        comments: vec![approval.clone()],
+                        comments: vec![approval.clone(), said.clone()],
                         truncated: false,
                         checks_truncated: false,
                         comments_truncated: false,
@@ -3019,7 +3026,13 @@ mod tests {
             )
         });
         cx.run_until_parked();
-        assert!(cx.debug_bounds("review-pr-comment-0").is_some(), "its card");
+        let mut height = |id| cx.debug_bounds(id).expect("its card").size.height;
+        let verdict_only = height("review-pr-comment-0");
+        let with_words = height("review-pr-comment-1");
+        assert!(
+            verdict_only < with_words,
+            "a verdict-only card has no blank body line"
+        );
         assert_eq!(pr_comment_head(&approval), "cy \u{b7} review \u{b7} approved");
     }
 
