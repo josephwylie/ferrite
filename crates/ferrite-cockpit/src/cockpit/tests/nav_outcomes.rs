@@ -125,3 +125,27 @@ fn undo_restores_the_groups_a_park_left(cx: &mut TestAppContext) {
     assert_eq!(members(&view, cx), before, "made again, whole, with its title");
     assert!(notice(&view, cx).is_none());
 }
+
+/// ⌘O reopens a parked Thread the nav's Project scope hides: the scope
+/// widens, and its row is in the list.
+#[gpui::test]
+fn opening_a_thread_outside_the_scope_widens_it(cx: &mut TestAppContext) {
+    bind_production_keys(cx);
+    let (mut core, _fake) = cockpit("nav-scope-reveal", 2);
+    let threads = sorted_threads(&core);
+    core.park(threads[1]).unwrap();
+    let elsewhere = core
+        .register_project(&std::env::temp_dir().canonicalize().unwrap())
+        .unwrap();
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    hide_panel(&view, cx);
+    view.update(cx, |view, cx| view.choose_nav_filter(Some(elsewhere), cx));
+    tick(cx);
+    let row_id: &'static str = format!("nav-thread-{}", threads[1].get()).leak();
+    assert!(cx.debug_bounds(row_id).is_none(), "scoped out of the list");
+
+    cx.simulate_keystrokes("cmd-o");
+    tick(cx);
+    view.read_with(cx, |view, _| assert_eq!(view.nav_filter, None, "all projects"));
+    assert!(cx.debug_bounds(row_id).is_some(), "its row is in the list");
+}

@@ -9065,7 +9065,18 @@ impl CockpitView {
             if let Some(index) = self.pane_for(thread) {
                 self.focus_pane(index);
             }
+            self.widen_scope_to(thread, cx);
             cx.notify();
+        }
+    }
+
+    /// The operator went to a Thread the nav's Project scope hides: the
+    /// scope widens to all Projects, so the shown Thread has its row in the
+    /// list (and the Filter button says why). Owned Threads are never
+    /// listed, so nothing here reveals them.
+    fn widen_scope_to(&mut self, thread: ThreadId, cx: &mut Context<Self>) {
+        if self.nav_filter.is_some() && self.cockpit.operators(thread) && !self.admitted(thread) {
+            self.choose_nav_filter(None, cx);
         }
     }
 
@@ -9110,6 +9121,7 @@ impl CockpitView {
         self.cockpit.reopen(thread)?;
         self.empty_shown = false;
         self.factory_view = None;
+        self.widen_scope_to(thread, cx);
         self.sync_panes(cx);
         cx.notify();
         Ok(())
@@ -9182,6 +9194,7 @@ impl CockpitView {
                 result: result.map_err(|e| e.to_string()),
             };
             if outcome.result.is_ok() {
+                self.widen_scope_to(thread, cx);
                 self.sync_panes(cx);
             }
             self.report_failures("reopen", &[outcome]);
