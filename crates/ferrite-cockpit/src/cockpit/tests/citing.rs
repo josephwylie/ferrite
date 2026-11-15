@@ -527,3 +527,146 @@ fn a_sent_quote_says_when_its_source_is_gone(cx: &mut TestAppContext) {
     assert!(cx.debug_bounds("quote-row-0-go").is_none());
     assert!(cx.debug_bounds("quote-row-0-source").is_some(), "it says so");
 }
+
+/// A prompt, then an answer of `lines` paragraphs, the last one cited and
+/// the tray's chip opened: the pinned band covers the top of the view.
+fn cited_answer<'a>(
+    name: &str,
+    lines: usize,
+    cx: &'a mut TestAppContext,
+) -> (
+    gpui::Entity<ferrite_pane::transcript::TranscriptView>,
+    ferrite_core::transcript::BlockId,
+    &'a mut gpui::VisualTestContext,
+) {
+    let (mut core, fake) = cockpit(name, 1);
+    let thread = core.threads()[0];
+    let _ = core.send(thread, "Explain the lines".into());
+    bind_production_keys(cx);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(1000.), px(700.)));
+    let stream = fake.streams.borrow()[0].clone();
+    stream
+        .send(SessionEvent::TextDelta {
+            text: (0..lines).map(|n| format!("Line {n}\n\n")).collect(),
+        })
+        .unwrap();
+    stream
+        .send(SessionEvent::TurnEnded {
+            outcome: ferrite_core::TurnOutcome::Completed,
+            cost_usd: None,
+        })
+        .unwrap();
+    tick(cx);
+    drag(&view, cx, (lines, 0), (lines, 4));
+    let cite = cx.debug_bounds("selection-reply-quote").expect("Cite draws");
+    cx.simulate_click(cite.center(), gpui::Modifiers::none());
+    tick(cx);
+    let block = replies(&view, cx)[0].source.expect("cited").block;
+    let transcript = view.read_with(cx, |view, _| view.panes[0].transcript().unwrap());
+    (transcript, block, cx)
+}
+
+/// What the cited row shows of itself, against the pinned band: its top
+/// and the foot of the band, both in window space.
+fn row_against_band(
+    transcript: &gpui::Entity<ferrite_pane::transcript::TranscriptView>,
+    block: ferrite_core::transcript::BlockId,
+    cx: &mut gpui::VisualTestContext,
+) -> (gpui::Pixels, gpui::Pixels, gpui::Pixels) {
+    transcript.read_with(cx, |transcript, _| {
+        let scroll = transcript.scroll();
+        let row = transcript.block_row_bounds(block).expect("the row is laid out");
+        let viewport = scroll.bounds();
+        (row.top(), viewport.top() + scroll.top_mask(), viewport.bottom())
+    })
+}
+
+/// Go to source lands the top of a long answer just below its turn's
+/// pinned prompt, not under it.
+#[gpui::test]
+fn go_to_source_lands_the_answers_top_below_the_pinned_band(cx: &mut TestAppContext) {
+    let (transcript, block, cx) = cited_answer("cite-below-band", 40, cx);
+    let (top, floor, _) = row_against_band(&transcript, block, cx);
+    assert!(top < floor, "the answer's top starts out under the band");
+    open_chip(cx, 0);
+    click(cx, "cite-source");
+    tick(cx);
+    let (top, floor, bottom) = row_against_band(&transcript, block, cx);
+    assert!(
+        top >= floor && top < bottom,
+        "the cited row's top {top:?} is visible at or below the band's foot {floor:?}"
+    );
+}
+
+/// A cited answer whose top is already readable stays where it is.
+#[gpui::test]
+fn go_to_source_leaves_a_readable_answer_in_place(cx: &mut TestAppContext) {
+    let (transcript, block, cx) = cited_answer("cite-in-place", 40, cx);
+    transcript.update(cx, |transcript, cx| {
+        transcript.scroll_to(ferrite_pane::transcript::ScrollTarget::Top, cx)
+    });
+    tick(cx);
+    let (top, floor, bottom) = row_against_band(&transcript, block, cx);
+    assert!(top >= floor && top < bottom, "the answer's top is readable");
+    let before = transcript.read_with(cx, |transcript, _| transcript.scroll().offset());
+    open_chip(cx, 0);
+    click(cx, "cite-source");
+    tick(cx);
+    let after = transcript.read_with(cx, |transcript, _| transcript.scroll().offset());
+    assert_eq!(after, before, "the view did not move");
+}
+
+/// The pinned band follows the turn on screen: from a later turn's short
+/// prompt, Go to source lands an earlier answer below that earlier turn's
+/// taller band, which is not the one the jump started under.
+#[gpui::test]
+fn go_to_source_clears_the_band_of_the_turn_it_lands_in(cx: &mut TestAppContext) {
+    let (mut core, fake) = cockpit("cite-other-turn", 1);
+    let thread = core.threads()[0];
+    let long = "A long first prompt that wraps over several lines of the pane. ".repeat(12);
+    let _ = core.send(thread, long);
+    bind_production_keys(cx);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(1000.), px(700.)));
+    let stream = fake.streams.borrow()[0].clone();
+    let answer = |label: &str| SessionEvent::TextDelta {
+        text: (0..40).map(|n| format!("{label} {n}\n\n")).collect(),
+    };
+    let ended = || SessionEvent::TurnEnded {
+        outcome: ferrite_core::TurnOutcome::Completed,
+        cost_usd: None,
+    };
+    stream.send(answer("First")).unwrap();
+    stream.send(ended()).unwrap();
+    tick(cx);
+    let _ = view.update(cx, |view, _| view.cockpit.send(thread, "Next".into()));
+    stream.send(answer("Second")).unwrap();
+    stream.send(ended()).unwrap();
+    tick(cx);
+    let transcript = view.read_with(cx, |view, _| view.panes[0].transcript().unwrap());
+    transcript.update(cx, |transcript, cx| {
+        transcript.scroll_to(ferrite_pane::transcript::ScrollTarget::Top, cx)
+    });
+    tick(cx);
+    drag(&view, cx, (5, 0), (5, 4));
+    let cite = cx.debug_bounds("selection-reply-quote").expect("Cite draws");
+    cx.simulate_click(cite.center(), gpui::Modifiers::none());
+    tick(cx);
+    let block = replies(&view, cx)[0].source.expect("cited").block;
+    transcript.update(cx, |transcript, cx| transcript.scroll_to_bottom(cx));
+    tick(cx);
+    let later_floor = transcript.read_with(cx, |transcript, _| transcript.scroll().top_mask());
+    open_chip(cx, 0);
+    click(cx, "cite-source");
+    for _ in 0..4 {
+        tick(cx);
+    }
+    let (top, floor, bottom) = row_against_band(&transcript, block, cx);
+    assert!(
+        top >= floor && top < bottom,
+        "the cited row's top {top:?} is visible at or below its turn's band {floor:?} (was {later_floor:?} from the later turn)"
+    );
+    let mask = transcript.read_with(cx, |transcript, _| transcript.scroll().top_mask());
+    assert!(mask > later_floor, "the earlier turn's band is the taller");
+}

@@ -1509,6 +1509,7 @@ impl CockpitView {
         // operator. Start drafts where they were last working, and leave a
         // new installation genuinely empty.
         let launch_project = startup_project(&cockpit);
+        let cited_sources = cited_sources_of_live_threads(&cockpit, &prefs.dir);
         // The existing GPUI fixtures assume construction supplies a draft.
         // Keep their synthetic seed out of production; `startup_project` is
         // tested directly against an empty registry below.
@@ -1617,7 +1618,7 @@ impl CockpitView {
             dragging: None,
             nav_dragging: None,
             unsent: drafts::Unsent::load(&prefs.dir),
-            cited_sources: ferrite_core::cited_sources::CitedSources::load(&prefs.dir),
+            cited_sources,
             prefs,
             settings_open: false,
             settings_exit: Default::default(),
@@ -2042,7 +2043,7 @@ impl CockpitView {
             rewind: rewind.clone(),
             quotes,
             skills: open.commands().len(),
-            cited: cited.len(),
+            cited: self.cited_sources.revision(),
             note: None,
             earlier,
             queued,
@@ -2097,6 +2098,7 @@ impl CockpitView {
             reply_to: open.provider().to_string().into(),
             skills: open.commands().into(),
             cited,
+            cited_revision: self.cited_sources.revision(),
             note: None,
             earlier,
             queued,
@@ -3696,7 +3698,7 @@ impl CockpitView {
         let mut refused = 0usize;
         let mut reason = None;
         for thread in parked {
-            if let Err(error) = self.cockpit.delete(thread) {
+            if let Err(error) = self.delete_thread(thread) {
                 refused += 1;
                 reason = Some(error.to_string());
             }
@@ -13195,6 +13197,23 @@ pub(crate) fn here() -> std::path::PathBuf {
 /// the work they were actually doing — and the newest registered Project
 /// is the fallback for a store whose Threads name nothing the registry
 /// still knows.
+/// The sources saved beside the settings, less those of Threads the store
+/// no longer holds (deleted by another window or by hand).
+fn cited_sources_of_live_threads(
+    cockpit: &ferrite_core::cockpit::Cockpit,
+    dir: &std::path::Path,
+) -> ferrite_core::cited_sources::CitedSources {
+    let mut sources = ferrite_core::cited_sources::CitedSources::load(dir);
+    if let Some(live) = cockpit.stored_threads() {
+        if sources.retain_threads(&live) {
+            if let Err(error) = sources.save(dir) {
+                eprintln!("ferrite: cited sources were not saved: {error}");
+            }
+        }
+    }
+    sources
+}
+
 fn startup_project(cockpit: &ferrite_core::cockpit::Cockpit) -> Option<ProjectId> {
     cockpit.last_worked_project().or_else(|| {
         cockpit

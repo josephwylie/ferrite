@@ -300,7 +300,7 @@ impl CockpitView {
         });
         if worktree {
             let _ = self.cockpit.park(thread);
-        } else if let Err(error) = self.cockpit.delete(thread) {
+        } else if let Err(error) = self.delete_thread(thread) {
             ferrite_core::log!("side chat thread {thread} could not be deleted: {error:?}");
         }
     }
@@ -574,6 +574,7 @@ impl CockpitView {
             reply_to: open.provider().to_string().into(),
             skills: open.commands().into(),
             cited: Default::default(),
+            cited_revision: 0,
             note,
             earlier: None,
             queued: 0,

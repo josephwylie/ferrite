@@ -931,7 +931,7 @@ impl CockpitView {
                 }
             }
             (MenuTarget::Thread(thread) | MenuTarget::Pane(thread), MenuVerb::Delete) => {
-                if let Err(error) = self.cockpit.delete(thread) {
+                if let Err(error) = self.delete_thread(thread) {
                     self.group_error = Some(format!("delete refused: {error}").into());
                 } else {
                     self.group_error = None;

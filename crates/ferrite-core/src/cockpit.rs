@@ -2321,6 +2321,12 @@ impl Cockpit {
         }
     }
 
+    /// Every Thread this computer's store holds; `None` where there is no
+    /// store to ask (a machine) or it cannot be read.
+    pub fn stored_threads(&self) -> Option<Vec<ThreadId>> {
+        self.logs.as_ref()?.thread_ids().ok()
+    }
+
     /// The open Threads.
     pub fn threads(&self) -> Vec<ThreadId> {
         self.mirrors.threads()
