@@ -49,7 +49,7 @@
 //! | find bar | [`FADE_QUICK`] 150ms, opacity only | the transcript's find bar fades in ([`fade_in`]); it goes at once |
 //! | notices | [`FADE_QUICK`] 150ms, opacity only | a notice over or in the Composer (a draft's failed start) fades in ([`fade_in`]); it goes at once. The approval card keeps [`PROMOTE_IN`], the queue strip none |
 //! | usage ring | [`USAGE_ARC`] 300ms / [`USAGE_INK`] 200ms, quart | the footer's plan-usage ring moving to a new reading ([`settle`]); first paint lands |
-//! | row-in | [`ROW_IN`] 180ms, opacity only | a preview opening in the Panel, or another document replacing it, and a Panel tab's body when the operator picks the tab, from 0.3 ([`swap_in`]) |
+//! | row-in | [`ROW_IN`] 180ms, opacity only | a preview opening in the Panel, or another document replacing it ([`swap_in`]), and every other Panel tab's body when the operator picks the tab ([`swap_since`]), from 0.3; the outgoing body goes at once and hears nothing |
 //! | scrollbar | `MOTION_SCROLLBAR_LINGER_MS` 1.4s + [`SCROLLBAR_FADE`] 100ms | a thumb appears on the first scroll frame, holds 1.4s, then fades, and widens 4 → 6px under the pointer (`scrollbar::step_widen`); idle, nothing is drawn |
 //!
 //! Kit-drawn surfaces (gpui-kit's `PopupMenu`, its dialogs) keep the kit's
@@ -599,6 +599,21 @@ where
     })
 }
 
+/// [`swap_in`] for a body whose tab was picked at `picked`, drawn in the
+/// same place whether or not it plays: `None` is a body that arrived with
+/// no pick (first paint, a Thread's change, the Panel opening).
+pub fn swap_since<E>(picked: Option<Instant>, element: E) -> impl IntoElement
+where
+    E: Styled + IntoElement + 'static,
+{
+    Played {
+        origin: picked.map_or(Origin::Settled, Origin::At),
+        spec: ROW_IN,
+        element,
+        face: |el: E, t: f32| el.opacity(lerp(theme::MOTION_MENU_FROM_OPACITY, 1.0, t)),
+    }
+}
+
 /// `toast-in` for a toast hung under the window's head: it fades up from
 /// 0 while sliding its own height down out from under the edge it hangs
 /// on, over `TOAST_IN` (Claude's toasts rise their own height from the
@@ -815,6 +830,8 @@ enum Origin {
     Mount(ElementId),
     /// At an instant the caller holds (an exit: when its subject went).
     At(Instant),
+    /// Already played out.
+    Settled,
 }
 
 /// A one-shot drawn at its spec's eased progress on the executor's clock:
@@ -858,6 +875,7 @@ fn play(origin: Origin, spec: MotionSpec, window: &mut Window, cx: &mut App) -> 
     }
     let now = cx.background_executor().now();
     let started = match origin {
+        Origin::Settled => return 1.0,
         Origin::At(at) => at,
         Origin::Mount(id) => window.with_global_id(id, |id, window| {
             window.with_element_state(id, |started: Option<Instant>, _| {
@@ -2170,9 +2188,15 @@ pub mod testing {
     }
 }
 
-/// Launch: adopt the system's Reduce Motion setting. gpui reads no platform
-/// setting itself, so without this the flag is never set. Read off the main
-/// thread; `FERRITE_REDUCE_MOTION=1` (or `0`) overrides it.
+/// How often the system's Reduce Motion setting is read again while the
+/// app runs: macOS offers no cheap change callback to a process without a
+/// bridge to AppKit, and a read is one short `defaults` call.
+const SYSTEM_POLL: Duration = Duration::from_secs(2);
+
+/// Launch: adopt the system's Reduce Motion setting, and follow it while
+/// the app runs. gpui reads no platform setting itself, so without this
+/// the flag is never set. Read off the main thread;
+/// `FERRITE_REDUCE_MOTION=1` (or `0`) overrides it and is never polled.
 pub fn init(cx: &mut App) {
     if let Some(forced) = std::env::var("FERRITE_REDUCE_MOTION")
         .ok()
@@ -2184,18 +2208,20 @@ pub fn init(cx: &mut App) {
     if !cfg!(target_os = "macos") {
         return;
     }
-    let read = cx.background_executor().spawn(async {
-        std::process::Command::new("defaults")
-            .args(["read", "com.apple.universalaccess", "reduceMotion"])
-            .output()
-            .is_ok_and(|out| out.status.success() && out.stdout.trim_ascii() == b"1")
-    });
-    cx.spawn(async move |cx| {
-        if read.await {
-            cx.update(|cx| cx.set_reduce_motion(true));
-        }
+    cx.spawn(async move |cx| loop {
+        let reduced = cx.background_executor().spawn(read_system_setting()).await;
+        cx.update(|cx| cx.set_reduce_motion(reduced));
+        cx.background_executor().timer(SYSTEM_POLL).await;
     })
     .detach();
+}
+
+/// Whether macOS's Reduce Motion is on: the key is absent while it is off.
+async fn read_system_setting() -> bool {
+    std::process::Command::new("defaults")
+        .args(["read", "com.apple.universalaccess", "reduceMotion"])
+        .output()
+        .is_ok_and(|out| out.status.success() && out.stdout.trim_ascii() == b"1")
 }
 
 #[cfg(test)]
