@@ -128,6 +128,13 @@ pub enum SlimTime {
     Snoozed(SharedString),
 }
 
+/// What fills a slim row's title: the row's name, or the live rename field
+/// while the operator renames it (a card's `editing` title).
+pub enum SlimTitle {
+    Row,
+    Editor(AnyElement),
+}
+
 /// The blend a slim row's time-to-action crossfade and its badge ride,
 /// apart from its fill's.
 pub(crate) fn slim_fade_key(key: &str) -> SharedString {
@@ -143,20 +150,22 @@ pub(crate) fn slim_fade_key(key: &str) -> SharedString {
 /// card's. The cockpit wires the press.
 pub fn slim_row(
     row: &ThreadRow,
+    title: SlimTitle,
     time: SlimTime,
     action: AnyElement,
     measure: &Measure,
 ) -> Stateful<Div> {
-    slim(row, time, Some(action), measure, true)
+    slim(row, title, time, Some(action), measure, true)
 }
 
 /// A slim row that has left the list, for its ghost.
 pub fn ghost_slim(row: &ThreadRow, time: SlimTime, measure: &Measure) -> Stateful<Div> {
-    slim(row, time, None, measure, false)
+    slim(row, SlimTitle::Row, time, None, measure, false)
 }
 
 fn slim(
     row: &ThreadRow,
+    title: SlimTitle,
     time: SlimTime,
     action: Option<AnyElement>,
     measure: &Measure,
@@ -187,14 +196,18 @@ fn slim(
     };
     let ground = card::card_ground(&key, row.selected, row.picked);
     let title_w = INNER_SLIM_TITLE_W;
-    let title = fitted_in(
-        title_w,
-        FS_NAV_TITLE,
-        ink,
-        W_BODY,
-        row.name.clone(),
-        super::cut_ground(measure, &row.name, FS_NAV_TITLE, W_BODY, title_w, ground),
-    );
+    let title = match title {
+        SlimTitle::Editor(field) => field,
+        SlimTitle::Row => fitted_in(
+            title_w,
+            FS_NAV_TITLE,
+            ink,
+            W_BODY,
+            row.name.clone(),
+            super::cut_ground(measure, &row.name, FS_NAV_TITLE, W_BODY, title_w, ground),
+        )
+        .into_any_element(),
+    };
     let rest = match &time {
         SlimTime::Parked(age) => div()
             .flex()

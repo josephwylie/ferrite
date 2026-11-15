@@ -432,7 +432,12 @@ impl CockpitView {
             }
         };
         faces.push((NavKey::Slim(thread), NavFace::Slim(row.clone(), time.clone())));
-        let slim = list::slim_row(row, time, action, &nav::Measure::Text(cx))
+        let title = if self.renaming_thread(thread) {
+            list::SlimTitle::Editor(self.editable_thread_title(thread, row.name.clone(), cx))
+        } else {
+            list::SlimTitle::Row
+        };
+        let slim = list::slim_row(row, title, time, action, &nav::Measure::Text(cx))
             .children(self.cursor_reveal(NavItem::Thread(thread)))
             .children(self.shown_reveal(row))
             .on_click(cx.listener(move |view, _: &ClickEvent, window, cx| {

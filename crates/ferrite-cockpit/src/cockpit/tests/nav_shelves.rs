@@ -504,3 +504,47 @@ fn a_resize_does_not_send_shelf_rows_travelling(cx: &mut TestAppContext) {
     let row = cx.debug_bounds(card(threads[0])).unwrap();
     assert!(row.top() >= header.bottom(), "under its header: {row:?} {header:?}");
 }
+
+/// Rename from a Parked or a Snoozed row's menu draws the editor in that
+/// row, on the title, and Enter saves it.
+#[gpui::test]
+fn rename_on_a_slim_row_draws_the_editor(cx: &mut TestAppContext) {
+    cx.update(|cx| cx.bind_keys([KeyBinding::new("enter", Submit, None)]));
+    let (mut core, _fake) = cockpit("nav-slim-rename", 3);
+    let threads = sorted_threads(&core);
+    core.park(threads[0]).unwrap();
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    hide_panel(&view, cx);
+    cx.simulate_resize(gpui::size(px(1000.), px(700.)));
+    view.update(cx, |view, cx| {
+        view.set_shelf_open(nav::Shelf::Parked, true, cx);
+        let later = ferrite_core::clock::system_time() + Duration::from_secs(3600);
+        view.snooze_thread(threads[1], Some(later), cx);
+        view.set_shelf_open(nav::Shelf::Snoozed, true, cx);
+    });
+    tick(cx);
+    for (at, thread) in [("Open", threads[2]), ("Parked", threads[0]), ("Snoozed", threads[1])] {
+        view.update(cx, |view, cx| view.open_context_menu(MenuTarget::Thread(thread), gpui::point(px(10.), px(10.)), cx));
+        tick(cx);
+        let rename = view.read_with(cx, |view, _| {
+            view.context_rows(MenuTarget::Thread(thread))
+                .iter()
+                .position(|row| matches!(row, Some((_, verb)) if *verb == MenuVerb::Rename))
+                .expect("the menu offers Rename")
+        });
+        view.update_in(cx, |view, window, cx| view.press_menu_row(rename, window, cx));
+        tick(cx);
+        assert!(
+            cx.debug_bounds("rename-hint").is_some(),
+            "{at}: the rename field is drawn in the row"
+        );
+        let editor = view.read_with(cx, |view, _| view.rename.clone().unwrap().1);
+        editor.update(cx, |editor, cx| editor.set(format!("{at} renamed"), cx));
+        cx.simulate_keystrokes("enter");
+        tick(cx);
+        assert!(cx.debug_bounds("rename-hint").is_none(), "{at}: it closed");
+        view.read_with(cx, |view, _| {
+            assert_eq!(view.facts.name(thread).as_ref(), format!("{at} renamed"));
+        });
+    }
+}
