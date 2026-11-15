@@ -38,8 +38,6 @@ use crate::cockpit::context_menu::Submenu;
 
 /// The filter field's key context: ⏎ opens the first match.
 pub(crate) const FILTER_CONTEXT: &str = "FilesFilter";
-/// The most rows a filter's list draws.
-const FILTER_ROWS: usize = 200;
 
 gpui::actions!(files, [OpenFirst]);
 
@@ -116,6 +114,8 @@ pub(crate) struct Files {
     tree_scroll: ScrollHandle,
     /// The tree row a right-click is on, for the menu's verbs.
     pressed: Option<PathBuf>,
+    /// Counts the git status reads started; only the latest one lands.
+    status_reads: u64,
 }
 
 impl Files {
@@ -200,6 +200,17 @@ impl CockpitView {
             })
     }
 
+    /// The editors of `thread`'s open Files tabs.
+    pub(in crate::cockpit) fn files_editors(&self, thread: ThreadId) -> Vec<Entity<Editor>> {
+        let tabs = self.files_ref(thread).map(|files| files.tabs.as_slice()).unwrap_or_default();
+        tabs.iter()
+            .filter_map(|tab| match &tab.body {
+                TabBody::Code(editor) => Some(editor.clone()),
+                _ => None,
+            })
+            .collect()
+    }
+
     pub(in crate::cockpit) fn files_ref(&self, thread: ThreadId) -> Option<&Files> {
         self.tools.files.get(&thread)
     }
@@ -236,6 +247,7 @@ impl CockpitView {
                 show_tree: true,
                 tree_scroll: ScrollHandle::new(),
                 pressed: None,
+                status_reads: 0,
             };
             if let Some(stored) = stored {
                 files.settings = stored.settings;
@@ -256,6 +268,7 @@ impl CockpitView {
                 }
             }
             self.tools.files.insert(thread, files);
+            self.refresh_file_tree(thread, cx);
         }
         self.files_of(thread)
     }
@@ -366,10 +379,32 @@ impl CockpitView {
 
     /// The Files tab is brought forward again: what changed in the checkout
     /// while it was away shows.
-    pub(in crate::cockpit) fn refresh_file_tree(&mut self, thread: ThreadId) {
-        if let Some(files) = self.files_of(thread) {
-            files.tree.refresh();
-        }
+    pub(in crate::cockpit) fn refresh_file_tree(&mut self, thread: ThreadId, cx: &mut Context<Self>) {
+        let Some(files) = self.files_of(thread) else {
+            return;
+        };
+        files.tree.refresh();
+        files.status_reads += 1;
+        let read = files.status_reads;
+        let root = files.tree.root().to_path_buf();
+        cx.spawn(async move |view, cx| {
+            let status = {
+                let root = root.clone();
+                cx.background_executor().spawn(async move { FileTree::read_status(&root) }).await
+            };
+            view.update(cx, |view, cx| {
+                if let Some(files) = view
+                    .files_of(thread)
+                    .filter(|files| files.status_reads == read && files.tree.root() == root)
+                {
+                    files.tree.set_status(status);
+                    cx.notify();
+                }
+            })
+            .ok();
+        })
+        .detach();
+        cx.notify();
     }
 
     fn select_tab(&mut self, thread: ThreadId, at: usize, cx: &mut Context<Self>) {
@@ -480,7 +515,7 @@ impl CockpitView {
 
     fn open_first_match(&mut self, thread: ThreadId, cx: &mut Context<Self>) {
         let first = self.files_of(thread).and_then(|files| {
-            files.tree.rows().into_iter().find(|row| !row.entry.dir).map(|row| row.entry.path)
+            files.tree.rows().rows.into_iter().find(|row| !row.entry.dir).map(|row| row.entry.path)
         });
         if let Some(path) = first {
             self.open_in_files(thread, path, None, false, cx);
@@ -503,7 +538,7 @@ impl CockpitView {
         match verb {
             Verb::ToggleTree => files.show_tree = !files.show_tree,
             Verb::CollapseAll => files.tree.collapse_all(),
-            Verb::Refresh => files.tree.refresh(),
+            Verb::Refresh => self.refresh_file_tree(thread, cx),
             Verb::TogglePreviewTabs => files.preview_tabs = !files.preview_tabs,
             Verb::ToggleAutoSave => files.settings.auto_save = !files.settings.auto_save,
             Verb::ToggleWrap => files.settings.wrap = !files.settings.wrap,
@@ -947,7 +982,7 @@ impl CockpitView {
                         )
                     }),
             );
-                let rows = files.tree.rows();
+        let listing = files.tree.rows();
         let active = files.active_path().map(Path::to_path_buf);
         let body = div()
             .id("files-tree-scroll")
@@ -958,11 +993,21 @@ impl CockpitView {
             .track_scroll(&files.tree_scroll)
             .px(px(SPACE_2))
             .children(
-                rows.into_iter()
-                    .take(FILTER_ROWS.max(1_000))
+                listing
+                    .rows
+                    .into_iter()
                     .enumerate()
                     .map(|(at, row)| self.tree_row(thread, at, row, active.as_deref(), cx)),
-            );
+            )
+            .children(listing.note.map(|note| {
+                div()
+                    .debug_selector(|| "files-tree-note".into())
+                    .flex_shrink_0()
+                    .p(px(SPACE_2))
+                    .text_size(px(FS_META))
+                    .text_color(rgb(INK_SUBTLE))
+                    .child(SharedString::from(note))
+            }));
         div()
             .debug_selector(|| "files-tree-column".into())
             .flex()
@@ -1090,6 +1135,10 @@ impl CockpitView {
 
     pub(in crate::cockpit) fn files_active_path(&self, thread: ThreadId) -> Option<PathBuf> {
         self.files_ref(thread)?.active_path().map(Path::to_path_buf)
+    }
+
+    pub(in crate::cockpit) fn files_status_for_test(&self, thread: ThreadId, path: &Path) -> Option<Status> {
+        self.files_ref(thread)?.tree.status_of(path)
     }
 
     /// The shown tab's editor, when it is a code file.

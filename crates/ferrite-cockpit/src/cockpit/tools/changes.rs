@@ -114,6 +114,9 @@ struct File {
     added: u32,
     removed: u32,
     hunks: Shown,
+    /// `hunks` without its whitespace-only changes, worked out off the UI
+    /// thread with the diff.
+    hunks_without_whitespace: Shown,
     /// The file's change is in git's index (`git add`).
     staged: bool,
     /// What its hunks say, so a mark made on other content is not this one's.
@@ -225,18 +228,91 @@ fn staged_paths(root: &std::path::Path) -> HashSet<String> {
         .unwrap_or_default()
 }
 
+/// The most removed-by-added line pairs one changed block is matched over.
+const MATCHED_CELLS: usize = 1_000_000;
+
+/// A line with every whitespace character taken out, which is how
+/// `git diff -w` reads two lines as the same.
+fn bare(line: &Line) -> String {
+    line.text.chars().filter(|c| !c.is_whitespace()).collect()
+}
+
 /// `hunks` without the changes that are only whitespace: a changed line
-/// blank after trimming goes, and a hunk left with no change goes with it.
+/// blank after trimming goes, a removed line and an added one that differ
+/// only in whitespace become one unchanged line, and a hunk left with no
+/// change goes with it.
 pub(crate) fn without_whitespace(hunks: Vec<Vec<Line>>) -> Vec<Vec<Line>> {
     hunks
         .into_iter()
         .map(|hunk| {
-            hunk.into_iter()
-                .filter(|line| line.sign == Sign::Context || !line.text.trim().is_empty())
-                .collect::<Vec<_>>()
+            let mut out = Vec::with_capacity(hunk.len());
+            let mut lines = hunk.into_iter().peekable();
+            while let Some(line) = lines.next() {
+                if line.sign == Sign::Context {
+                    out.push(line);
+                    continue;
+                }
+                let mut block = vec![line];
+                while let Some(next) = lines.next_if(|next| next.sign != Sign::Context) {
+                    block.push(next);
+                }
+                out.extend(unchanged_in_block(block));
+            }
+            out
         })
         .filter(|hunk| hunk.iter().any(|line| line.sign != Sign::Context))
         .collect()
+}
+
+/// One run of changed lines, less its blank lines. The removed and added
+/// lines are matched in order (a longest common subsequence, whitespace
+/// ignored), each match shown as one unchanged line, so a swap of two lines
+/// stays a change and the lines keep their file order. A block too big to
+/// match cheaply keeps its changes as they are.
+fn unchanged_in_block(block: Vec<Line>) -> Vec<Line> {
+    let (removed, added): (Vec<Line>, Vec<Line>) = block
+        .into_iter()
+        .filter(|line| !line.text.trim().is_empty())
+        .partition(|line| line.sign == Sign::Removed);
+    if removed.len().saturating_mul(added.len()) > MATCHED_CELLS {
+        let mut out = removed;
+        out.extend(added);
+        return out;
+    }
+    let removed_keys: Vec<String> = removed.iter().map(bare).collect();
+    let added_keys: Vec<String> = added.iter().map(bare).collect();
+    let (rows, columns) = (removed.len(), added.len());
+    let mut common = vec![vec![0usize; columns + 1]; rows + 1];
+    for i in (0..rows).rev() {
+        for j in (0..columns).rev() {
+            common[i][j] = if removed_keys[i] == added_keys[j] {
+                common[i + 1][j + 1] + 1
+            } else {
+                common[i + 1][j].max(common[i][j + 1])
+            };
+        }
+    }
+    let (mut removed, mut added) = (removed.into_iter(), added.into_iter());
+    let (mut i, mut j) = (0, 0);
+    let mut out = Vec::new();
+    while i < rows && j < columns {
+        if removed_keys[i] == added_keys[j] {
+            removed.next();
+            let line = added.next().expect("j < columns");
+            out.push(Line { sign: Sign::Context, ..line });
+            i += 1;
+            j += 1;
+        } else if common[i + 1][j] >= common[i][j + 1] {
+            out.extend(removed.next());
+            i += 1;
+        } else {
+            out.extend(added.next());
+            j += 1;
+        }
+    }
+    out.extend(removed);
+    out.extend(added);
+    out
 }
 
 impl CockpitView {
@@ -335,8 +411,18 @@ impl CockpitView {
         .detach();
     }
 
+    /// Read the diff again, for the current scope, the last read standing
+    /// until the new one lands.
+    pub(in crate::cockpit) fn reread_changes(&mut self, diff: Diff, cx: &mut Context<Self>) {
+        self.read_changes(diff, true, cx);
+    }
+
     /// Read the diff again, for the current scope.
     fn refresh_changes(&mut self, diff: Diff, cx: &mut Context<Self>) {
+        self.read_changes(diff, false, cx);
+    }
+
+    fn read_changes(&mut self, diff: Diff, keep_shown: bool, cx: &mut Context<Self>) {
         let Some(root) = self.thread_path(diff.thread()) else {
             return;
         };
@@ -344,40 +430,49 @@ impl CockpitView {
             return;
         };
         changes.generation += 1;
-        changes.load = Load::Reading;
-        changes.branches = ferrite_reviewr::git::list_branches(&root)
-            .unwrap_or_default()
-            .into_iter()
-            .take(BRANCHES_LISTED)
-            .map(|branch| branch.name)
-            .collect();
+        if !(keep_shown && matches!(changes.load, Load::Read(_))) {
+            changes.load = Load::Reading;
+        }
         let generation = changes.generation;
         let (read, base) = changes.scope.read();
         cx.spawn(async move |view, cx| {
-            let files = cx
+            let (files, branches) = cx
                 .background_executor()
                 .spawn(async move {
+                    let branches: Vec<String> = ferrite_reviewr::git::list_branches(&root)
+                        .unwrap_or_default()
+                        .into_iter()
+                        .take(BRANCHES_LISTED)
+                        .map(|branch| branch.name)
+                        .collect();
                     let staged = staged_paths(&root);
-                    review_against(&root, &read, base.as_deref()).map(|files| {
+                    let files = review_against(&root, &read, base.as_deref()).map(|files| {
                         files
                             .iter()
                             .map(|sides| {
                                 let hunks = shown(Some(sides));
+                                let hunks_without_whitespace = match &hunks {
+                                    Shown::Hunks(hunks) => Shown::Hunks(without_whitespace(hunks.clone())),
+                                    other => other.clone(),
+                                };
                                 File {
                                     path: sides.file.path.clone(),
                                     added: sides.file.additions,
                                     removed: sides.file.deletions,
                                     revision: revision_of(&hunks),
                                     hunks,
+                                    hunks_without_whitespace,
                                     staged: staged.contains(&sides.file.path),
                                 }
                             })
                             .collect::<Vec<_>>()
-                    })
+                    });
+                    (files, branches)
                 })
                 .await;
             view.update(cx, |view, cx| {
                 if let Some(changes) = view.changes_of(diff).filter(|c| c.generation == generation) {
+                    changes.branches = branches;
                     changes.load = match files {
                         Ok(files) => {
                             changes.forget_stale_reviews(&files);
@@ -926,11 +1021,8 @@ impl CockpitView {
                 ),
             );
         let hunks = (!folded).then(|| {
-            let hunks = match (&file.hunks, changes.hide_whitespace) {
-                (Shown::Hunks(hunks), true) => Shown::Hunks(without_whitespace(hunks.clone())),
-                (other, _) => other.clone(),
-            };
-            hunks_element(at, &hunks, Layout::Whole { wrap: changes.wrap })
+            let hunks = if changes.hide_whitespace { &file.hunks_without_whitespace } else { &file.hunks };
+            hunks_element(at, hunks, Layout::Whole { wrap: changes.wrap })
         });
         div().flex().flex_col().flex_shrink_0().child(head).children(hunks)
     }
@@ -973,12 +1065,82 @@ mod tests {
     }
 
     #[test]
+    fn a_block_too_big_to_match_keeps_its_changes() {
+        let side = 1_001;
+        let block: Vec<Line> = (0..side)
+            .map(|n| line(Sign::Removed, &format!("line {n}")))
+            .chain((0..side).map(|n| line(Sign::Added, &format!("  line {n}"))))
+            .collect();
+        let out = without_whitespace(vec![block.clone()]);
+        assert_eq!(out, vec![block]);
+    }
+
+    #[test]
+    fn hiding_whitespace_keeps_a_swap_of_two_lines() {
+        let swap = vec![
+            line(Sign::Removed, "x"),
+            line(Sign::Removed, "y"),
+            line(Sign::Added, "y"),
+            line(Sign::Added, "x"),
+        ];
+        let out = without_whitespace(vec![swap]);
+        assert_eq!(out.len(), 1, "a swap is still a change");
+        assert!(out[0].iter().any(|line| line.sign != Sign::Context));
+    }
+
+    #[test]
+    fn hiding_whitespace_keeps_the_lines_in_file_order() {
+        let block = vec![
+            line(Sign::Removed, "let a = 1;"),
+            line(Sign::Removed, "let b = 2;"),
+            line(Sign::Added, "    let a = 1;"),
+        ];
+        let out = without_whitespace(vec![block]);
+        let shown: Vec<_> = out[0].iter().map(|l| (l.sign, l.text.trim().to_string())).collect();
+        assert_eq!(
+            shown,
+            [(Sign::Context, "let a = 1;".into()), (Sign::Removed, "let b = 2;".into())]
+        );
+    }
+
+    #[test]
     fn hiding_whitespace_drops_blank_changes_and_the_hunks_they_leave_bare() {
         let kept = vec![line(Sign::Context, "a"), line(Sign::Added, "b")];
         let bare = vec![line(Sign::Context, "c"), line(Sign::Added, "  "), line(Sign::Removed, "")];
         let mixed = vec![line(Sign::Added, ""), line(Sign::Removed, "x")];
         let out = without_whitespace(vec![kept.clone(), bare, mixed]);
         assert_eq!(out, [kept, vec![line(Sign::Removed, "x")]]);
+    }
+
+    #[test]
+    fn hiding_whitespace_drops_reindented_and_trailing_space_changes() {
+        let reindented = vec![
+            line(Sign::Context, "fn a() {"),
+            line(Sign::Removed, "    let x = 1;"),
+            line(Sign::Added, "\tlet x = 1; "),
+            line(Sign::Context, "}"),
+        ];
+        let substantive = vec![
+            line(Sign::Removed, "    let y = 1;"),
+            line(Sign::Added, "        let y = 2;"),
+        ];
+        let out = without_whitespace(vec![reindented, substantive.clone()]);
+        assert_eq!(out, [substantive]);
+    }
+
+    #[test]
+    fn hiding_whitespace_keeps_the_real_edit_beside_a_reindented_line() {
+        let hunk = vec![
+            line(Sign::Removed, "  a"),
+            line(Sign::Removed, "b"),
+            line(Sign::Added, "a"),
+            line(Sign::Added, "c"),
+        ];
+        let out = without_whitespace(vec![hunk]);
+        assert_eq!(
+            out,
+            [vec![line(Sign::Context, "a"), line(Sign::Removed, "b"), line(Sign::Added, "c")]]
+        );
     }
 
     #[test]

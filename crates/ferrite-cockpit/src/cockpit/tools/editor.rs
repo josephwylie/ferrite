@@ -88,6 +88,8 @@ pub(crate) struct Editor {
     saved_revision: u64,
     /// The fingerprint of the file as the buffer last matched it.
     on_disk: u64,
+    /// The file's modification time and size when `follow_disk` last read it.
+    seen: Option<(std::time::SystemTime, u64)>,
     save: SaveState,
     writer: save::Writer,
     /// The tab is to close once its text is on disk.
@@ -127,6 +129,7 @@ impl Editor {
             revision: 0,
             saved_revision: 0,
             on_disk,
+            seen: None,
             save: SaveState::Idle,
             writer: save::replace_file,
             closing: false,
@@ -295,6 +298,37 @@ impl Editor {
         cx.notify();
     }
 
+    /// A buffer with no edits of its own follows its file: if the disk now
+    /// holds other text, the buffer takes it, its caret kept where it was.
+    /// An edited buffer is left alone; saving it reports the conflict. The
+    /// file is read only once its size or modification time has moved.
+    pub(crate) fn follow_disk(&mut self, cx: &mut Context<Self>) {
+        if self.is_dirty() || matches!(self.save, SaveState::Saving(_)) {
+            return;
+        }
+        let stamp = std::fs::metadata(&self.path)
+            .ok()
+            .and_then(|meta| Some((meta.modified().ok()?, meta.len())));
+        if stamp.is_none() || stamp == self.seen {
+            return;
+        }
+        self.seen = stamp;
+        let Ok(bytes) = std::fs::read(&self.path) else {
+            return;
+        };
+        let on_disk = save::fingerprint(&bytes);
+        if on_disk == self.on_disk {
+            return;
+        }
+        if let Ok(text) = String::from_utf8(bytes) {
+            let caret = self.text.cursor();
+            let at = (self.line_of(caret), self.column_of(caret));
+            self.take_disk(text, on_disk, at);
+            cx.emit(Event::Settled);
+            cx.notify();
+        }
+    }
+
     /// Take the disk's text in place of the buffer.
     fn reload(&mut self, cx: &mut Context<Self>) {
         let read = std::fs::read(&self.path)
@@ -307,20 +341,27 @@ impl Editor {
             });
         match read {
             Ok((text, on_disk)) => {
-                self.text.set(text);
-                self.text.place_caret(0);
-                self.reindex();
-                self.list.reset(self.starts.len());
-                self.revision += 1;
-                self.saved_revision = self.revision;
-                self.on_disk = on_disk;
-                self.save = SaveState::Idle;
+                self.take_disk(text, on_disk, (0, 0));
                 self.closing = false;
                 self.writing = None;
             }
             Err(error) => self.save = SaveState::ReloadFailed(error),
         }
         cx.notify();
+    }
+
+    /// The buffer becomes the disk's `text`, saved, with the caret at
+    /// `(line, column)`, held to the new text's lines.
+    fn take_disk(&mut self, text: String, on_disk: u64, (line, column): (usize, usize)) {
+        self.text.set(text);
+        self.reindex();
+        let line = line.min(self.starts.len() - 1);
+        self.text.place_caret(self.offset_at_column(line, column));
+        self.list.reset(self.starts.len());
+        self.revision += 1;
+        self.saved_revision = self.revision;
+        self.on_disk = on_disk;
+        self.save = SaveState::Idle;
     }
 
     fn overwrite(&mut self, cx: &mut Context<Self>) {
@@ -1078,6 +1119,10 @@ impl Editor {
 impl Editor {
     pub(crate) fn find_count_for_test(&self) -> Option<String> {
         self.find.as_ref()?.count().map(|count| count.to_string())
+    }
+
+    pub(crate) fn caret_for_test(&self) -> usize {
+        self.text.cursor()
     }
 
     pub(crate) fn text_for_test(&self) -> &str {

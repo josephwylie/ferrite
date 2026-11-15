@@ -306,6 +306,88 @@ fn discarding_a_failed_buffer_closes_the_tab(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
+fn a_clean_buffer_follows_its_file_when_the_agent_edits_it(cx: &mut TestAppContext) {
+    let (core, fake, checkout) = bound_cockpit("files-follow", Provider::Claude);
+    bind_production_keys(cx);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    hold_nav_open(&view, cx);
+    cx.simulate_resize(gpui::size(px(1900.), px(900.)));
+    tick(cx);
+    let thread = view.read_with(cx, |view, _| view.panes[0].thread().unwrap());
+    let file = checkout.join("src/lib.rs");
+    open(&view, thread, &file, true, cx);
+    let editor = view.read_with(cx, |view, _| view.files_editor_of(thread).expect("a code file"));
+    std::fs::write(&file, "agent\n").unwrap();
+    agent_worked(&view, &fake, 0, cx);
+    assert_eq!(editor.read_with(cx, |e, _| e.text_for_test().to_string()), "agent\n");
+    assert!(!editor.read_with(cx, |e, _| e.is_dirty()));
+
+    type_into("// mine\n", cx);
+    std::fs::write(&file, "agent again\n").unwrap();
+    agent_worked(&view, &fake, 0, cx);
+    assert!(
+        editor.read_with(cx, |e, _| e.text_for_test().to_string()).contains("// mine"),
+        "an edited buffer is left to its owner"
+    );
+}
+
+#[gpui::test]
+fn a_clean_buffer_keeps_its_caret_when_it_follows_its_file(cx: &mut TestAppContext) {
+    let (core, fake, checkout) = bound_cockpit("files-follow-caret", Provider::Claude);
+    bind_production_keys(cx);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    hold_nav_open(&view, cx);
+    cx.simulate_resize(gpui::size(px(1900.), px(900.)));
+    tick(cx);
+    let thread = view.read_with(cx, |view, _| view.panes[0].thread().unwrap());
+    let file = checkout.join("src/lib.rs");
+    std::fs::write(&file, "alpha\nbeta\ngamma\n").unwrap();
+    open(&view, thread, &file, true, cx);
+    let editor = view.read_with(cx, |view, _| view.files_editor_of(thread).expect("a code file"));
+    let at = cx.debug_bounds("editor").expect("the editor is on screen");
+    cx.simulate_click(at.center(), gpui::Modifiers::none());
+    cx.simulate_keystrokes("down down");
+    tick(cx);
+    let caret = editor.read_with(cx, |e, _| e.caret_for_test());
+    assert!(caret > 0, "the caret is off the first line");
+    std::fs::write(&file, "a\nBETA\ngamma\n").unwrap();
+    agent_worked(&view, &fake, 0, cx);
+    assert_eq!(editor.read_with(cx, |e, _| e.text_for_test().to_string()), "a\nBETA\ngamma\n");
+    assert_eq!(
+        editor.read_with(cx, |e, _| e.caret_for_test()),
+        caret - "lpha".len(),
+        "the caret keeps its line and column when a line above it shrinks"
+    );
+}
+
+#[gpui::test]
+fn the_tree_reads_git_status_off_the_ui_thread(cx: &mut TestAppContext) {
+    let (view, thread, checkout, cx) = files_window("files-status", cx);
+    let git = |args: &[&str]| {
+        let out = std::process::Command::new("git").args(args).current_dir(&checkout).output().unwrap();
+        assert!(out.status.success(), "git {args:?}: {out:?}");
+    };
+    git(&["init", "-q"]);
+    git(&["add", "-A"]);
+    git(&["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "a"]);
+    view.update(cx, |view, cx| view.run_opener(thread, Opener::Files, cx));
+    cx.run_until_parked();
+    let readme = checkout.join("README.md");
+    std::fs::write(&readme, "changed\n").unwrap();
+    view.update(cx, |view, cx| view.refresh_file_tree(thread, cx));
+    assert_eq!(
+        view.read_with(cx, |view, _| view.files_status_for_test(thread, &readme)),
+        None,
+        "the UI thread did not wait for git"
+    );
+    cx.run_until_parked();
+    assert_eq!(
+        view.read_with(cx, |view, _| view.files_status_for_test(thread, &readme)),
+        Some(crate::cockpit::tools::FileStatus::Modified)
+    );
+}
+
+#[gpui::test]
 fn closing_a_dirty_tab_writes_it_then_closes(cx: &mut TestAppContext) {
     let (view, thread, file, _editor, cx) = open_editor("files-close-dirty", cx);
     type_into("// hi\n", cx);

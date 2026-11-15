@@ -15,6 +15,14 @@ fn window<'a>(
     name: &str,
     cx: &'a mut TestAppContext,
 ) -> (Entity<CockpitView>, ThreadId, &'a mut gpui::VisualTestContext) {
+    let (view, _fake, _repo, thread, cx) = window_with_agent(name, cx);
+    (view, thread, cx)
+}
+
+fn window_with_agent<'a>(
+    name: &str,
+    cx: &'a mut TestAppContext,
+) -> (Entity<CockpitView>, Fake, std::path::PathBuf, ThreadId, &'a mut gpui::VisualTestContext) {
     let base = scratch(name);
     let repo = repo_in(&base);
     std::fs::write(repo.join("a.rs"), "one\ntwo\n").unwrap();
@@ -24,15 +32,15 @@ fn window<'a>(
     std::fs::write(repo.join("b.rs"), "new\n").unwrap();
     let fake = Fake::default();
     let store = Store::open(base.join("store")).unwrap();
-    let mut core = Cockpit::new(store, Box::new(fake));
-    core.open(Provider::Claude, WorkspaceChoice::Main { checkout: repo }).unwrap();
+    let mut core = Cockpit::new(store, Box::new(fake.clone()));
+    core.open(Provider::Claude, WorkspaceChoice::Main { checkout: repo.clone() }).unwrap();
     bind_production_keys(cx);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     hold_nav_open(&view, cx);
     cx.simulate_resize(gpui::size(px(1900.), px(900.)));
     tick(cx);
     let thread = view.read_with(cx, |view, _| view.panes[0].thread().unwrap());
-    (view, thread, cx)
+    (view, fake, repo, thread, cx)
 }
 
 /// Press the door and wait for the read to land.
@@ -46,6 +54,16 @@ fn opened(view: &Entity<CockpitView>, thread: ThreadId, cx: &mut gpui::VisualTes
         std::thread::sleep(std::time::Duration::from_millis(5));
     }
     panic!("the read never landed");
+}
+
+#[gpui::test]
+fn changes_follow_the_agents_edits_without_a_refresh(cx: &mut TestAppContext) {
+    let (view, fake, repo, thread, cx) = window_with_agent("changes-follow", cx);
+    opened(&view, thread, cx);
+    assert_eq!(view.read_with(cx, |view, _| view.changes_read(Diff::Changes(thread))), Some(2));
+    std::fs::remove_file(repo.join("b.rs")).unwrap();
+    agent_worked(&view, &fake, 0, cx);
+    assert_eq!(view.read_with(cx, |view, _| view.changes_read(Diff::Changes(thread))), Some(1));
 }
 
 #[gpui::test]
