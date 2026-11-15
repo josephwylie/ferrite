@@ -2922,6 +2922,12 @@ impl Cockpit {
             || self.forge_lists.keys().any(|(fixture, _)| fixture == path)
     }
 
+    /// The Server's message about a browser, as a window linked to it
+    /// would hear it; an in-process window hears none.
+    pub fn fixture_browser_message(&mut self, message: ServerMessage) {
+        self.browser_messages.push(message);
+    }
+
     /// A fixture world's free disk: from now on the bar's `N GB free`
     /// reads `bytes` (`free_disk_fixture`) instead of the volume.
     pub fn fixture_free_disk(&mut self, bytes: u64) {

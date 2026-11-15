@@ -457,6 +457,11 @@ impl CockpitView {
             files.tabs.push(tab);
             files.active = Some(files.tabs.len() - 1);
         }
+        if !self.files_tree_beside() {
+            if let Some(files) = self.files_of(thread) {
+                files.show_tree = false;
+            }
+        }
         let Some(files) = self.files_of(thread) else {
             return;
         };
@@ -911,6 +916,8 @@ impl CockpitView {
         let Some(files) = self.files_ref(thread) else {
             return div().flex_1();
         };
+        let beside = self.files_tree_beside();
+        let tree = files.show_tree.then(|| self.files_tree(thread, files, cx));
         div()
             .debug_selector(|| "files".into())
             .flex()
@@ -920,12 +927,27 @@ impl CockpitView {
             .child(self.files_head(thread, files, cx))
             .child(
                 div()
+                    .relative()
                     .flex()
                     .flex_1()
                     .min_h_0()
                     .child(self.files_editor(thread, files, cx))
-                    .children(files.show_tree.then(|| self.files_tree(thread, files, cx))),
+                    .children(tree.map(|tree| {
+                        if beside {
+                            tree.w(px(theme::FILES_TREE_W))
+                        } else {
+                            tree.absolute().inset_0().bg(theme::paint::PANEL)
+                        }
+                    })),
             )
+    }
+
+    /// Whether the Panel is wide enough for the tree beside a readable
+    /// editor. Narrower, the tree is a page over the editor, and a file
+    /// picked from it shows the editor again.
+    fn files_tree_beside(&self) -> bool {
+        self.panel_pane()
+            .is_some_and(|index| self.panel_rest_w(index) >= theme::FILES_TREE_W + theme::FILES_EDITOR_MIN_W)
     }
 
     fn files_head(&self, thread: ThreadId, files: &Files, cx: &mut Context<Self>) -> Div {
@@ -1084,6 +1106,7 @@ impl CockpitView {
     fn files_editor(&self, thread: ThreadId, files: &Files, cx: &mut Context<Self>) -> Div {
         use theme::*;
         let column = div()
+            .debug_selector(|| "files-editor".into())
             .flex()
             .flex_col()
             .flex_1()
@@ -1100,11 +1123,13 @@ impl CockpitView {
                     .justify_center()
                     .gap(px(SPACE_2))
                     .px(px(SPACE_6))
+                    .min_w_0()
                     .text_center()
                     .child(icon(icons::FOLDER, ICON_BUTTON_GLYPH + 4., INK_SUBTLE))
-                    .child(div().text_size(px(FS_LABEL)).child("Open files appear here"))
+                    .child(div().w_full().text_size(px(FS_LABEL)).child("Open files appear here"))
                     .child(
                         div()
+                            .w_full()
                             .text_size(px(FS_META))
                             .text_color(rgb(INK_SUBTLE))
                             .child("Pick a file in the tree, or click a file path in the conversation."),
@@ -1354,7 +1379,6 @@ impl CockpitView {
             .flex()
             .flex_col()
             .flex_shrink_0()
-            .w(px(FILES_TREE_W))
             .h_full()
             .gap(px(SPACE_1))
             .child(div().h(px(ICON_BUTTON - SPACE_2)).flex_shrink_0())

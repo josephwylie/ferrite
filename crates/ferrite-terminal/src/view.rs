@@ -2,8 +2,8 @@
 //! each cell's colours, a block cursor (blue and blinking while the grid
 //! holds the keyboard, a hollow outline while it does not), the scrollback
 //! under the wheel, a selection by press and drag (a double press takes a
-//! word, a triple a line), ⌘-press on an address to open it, copy, paste and select all, and the shell's size
-//! following the pane's. The grid takes the keyboard as a text field does:
+//! word, a triple a line), ⌘-press on an address to open it, copy, paste
+//! and select all, and the shell's size following the pane's. The grid takes the keyboard as a text field does:
 //! no key of the window's reaches it but the command chords.
 //!
 //! The cockpit decides what the rest of a press means — the menu, the

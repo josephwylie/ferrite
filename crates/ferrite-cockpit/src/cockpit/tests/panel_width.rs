@@ -2,7 +2,7 @@
 //! tool's own least (Files, Changes, a file) only widens what is drawn.
 use super::*;
 use crate::cockpit::surfaces::SurfaceId;
-use ferrite_ui::theme::{DOCK_THREAD_MIN_W, PANEL_W};
+use ferrite_ui::theme::{DOCK_THREAD_MIN_W, FILES_EDITOR_MIN_W, PANEL_W};
 use std::time::Duration;
 
 fn window<'a>(
@@ -98,6 +98,13 @@ fn every_tool_leaves_the_chosen_width_alone_at_any_window_width(cx: &mut TestApp
         let rest = drawn(cx);
         for id in [SurfaceId::Files, SurfaceId::Changes, SurfaceId::Browser] {
             show(&view, thread, id.clone(), cx);
+            if id == SurfaceId::Files {
+                let editor = f32::from(cx.debug_bounds("files-editor").expect("the editor").size.width);
+                assert!(
+                    editor >= FILES_EDITOR_MIN_W,
+                    "the editor stays readable at {window_w}: {editor}"
+                );
+            }
             let card = cx.update(|window, cx| view.read(cx).pane_rects(window))[0].1;
             assert!(
                 card.w >= DOCK_THREAD_MIN_W,

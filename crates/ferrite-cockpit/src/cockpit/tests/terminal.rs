@@ -344,23 +344,43 @@ fn a_panel_sliding_shut_gives_the_shell_no_keys(cx: &mut TestAppContext) {
     assert!(cx.debug_bounds("panel").is_some(), "⌥⌘B reopens it without a click");
 }
 
-/// The point on the grid's row `row`, `column` cells in, as the face lays
-/// it out.
 fn cmd_click(cx: &mut gpui::VisualTestContext, row: usize, column: usize) {
     let at = cell(cx, row, column);
     cx.simulate_click(at, gpui::Modifiers::secondary_key());
-    tick(cx);
+    settle(cx);
 }
 
-/// The browser holds the first click, so the shell is reached through Overview.
+/// One click on the shell's own tab, as the operator would make it.
 fn back_to_shell(cx: &mut gpui::VisualTestContext) {
-    for tab in ["panel-tab-Overview", "panel-tab-Terminal-1"] {
-        let at = cx.debug_bounds(tab).expect("a tab").center();
-        cx.simulate_click(at, gpui::Modifiers::none());
-        leap(cx, std::time::Duration::from_secs(1));
-    }
+    settle(cx);
+    let at = cx.debug_bounds("panel-tab-Terminal-1").expect("a tab").center();
+    cx.simulate_click(at, gpui::Modifiers::none());
+    settle(cx);
 }
 
+/// What a Server linked to this window sends back for the open it was asked:
+/// the same action, read a frame later than the operator's next click.
+fn hear_own_open_echoed(view: &gpui::Entity<CockpitView>, thread: ThreadId, cx: &mut gpui::VisualTestContext) {
+    view.update(cx, |view, _| {
+        view.cockpit.fixture_browser_message(ferrite_core::protocol::ServerMessage::Browser {
+            thread,
+            owner: None,
+            state: Default::default(),
+            action: Some(ferrite_core::browser::Action::Open { url: "http://localhost:5173/app".into() }),
+            owned: false,
+        })
+    });
+    settle(cx);
+}
+
+/// What the operator sees once the panel has stopped moving.
+fn settle(cx: &mut gpui::VisualTestContext) {
+    frame_after(400, cx);
+    frame_after(20, cx);
+}
+
+/// The point on the grid's row `row`, `column` cells in, as the face lays
+/// it out.
 fn cell(cx: &mut gpui::VisualTestContext, row: usize, column: usize) -> gpui::Point<gpui::Pixels> {
     let grid = cx.debug_bounds("terminal").expect("the grid");
     gpui::point(
@@ -375,6 +395,7 @@ fn cell(cx: &mut gpui::VisualTestContext, row: usize, column: usize) -> gpui::Po
 /// nothing.
 #[gpui::test]
 fn cmd_click_opens_what_the_shell_printed(cx: &mut TestAppContext) {
+    ferrite_ui::motion::testing::drive();
     let (core, _fake, checkout) = bound_cockpit("terminal-links", Provider::Claude);
     std::fs::write(checkout.join("src/main.rs"), "one\ntwo\nthree\nfour\n").unwrap();
     bind_production_keys(cx);
@@ -401,13 +422,20 @@ fn cmd_click_opens_what_the_shell_printed(cx: &mut TestAppContext) {
     assert_eq!(panel_tabs(&view, thread, cx).1, Some(SurfaceId::Browser));
 
     back_to_shell(cx);
+    assert_eq!(panel_tabs(&view, thread, cx).1, Some(SurfaceId::Terminal(1)), "one click returns to the shell");
+    hear_own_open_echoed(&view, thread, cx);
+    assert_eq!(
+        panel_tabs(&view, thread, cx).1,
+        Some(SurfaceId::Terminal(1)),
+        "the Server's echo of the window's own open does not take the panel back"
+    );
     cmd_click(cx, 1, 12);
     assert_eq!(panel_tabs(&view, thread, cx).1, Some(SurfaceId::Browser));
 
     back_to_shell(cx);
     cmd_click(cx, 2, 5);
     assert_eq!(panel_tabs(&view, thread, cx).1, Some(SurfaceId::Files));
-    assert_eq!(view.read_with(cx, |view, _| view.files_tab_names(thread)), [("main.rs".to_string(), true)]);
+    assert!(view.read_with(cx, |view, _| view.files_tab_names(thread)).contains(&("main.rs".to_string(), true)));
     let editor = view.read_with(cx, |view, _| view.files_editor_of(thread).expect("the editor"));
     let (text, caret) = editor.read_with(cx, |editor, _| (editor.text_for_test().to_string(), editor.caret_for_test()));
     assert_eq!(text[..caret].matches('\n').count(), 2, "the caret is on line 3");

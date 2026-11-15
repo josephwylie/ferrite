@@ -2027,6 +2027,9 @@ pub const TERMINAL_PILL_LIFT: f32 = 28.0;
 /// `FILES_INDENT` in, a git status marked by a `FILES_STATUS_DOT` dot at
 /// the row's end.
 pub const FILES_TREE_W: f32 = 240.0;
+/// The least the editor beside the tree keeps; a Panel narrower than the
+/// tree and this has the tree as a page over the editor.
+pub const FILES_EDITOR_MIN_W: f32 = 260.0;
 /// The Panel's least width while Files or Changes shows (`files-code.png`:
 /// the column 1000 of 1666, the thread 666): `FILES_SHARE` of the room
 /// right of the nav, never under `FILES_MIN_W`. Wide or maximized, the
