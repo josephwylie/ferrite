@@ -512,6 +512,9 @@ pub struct TranscriptView {
     /// Cited Blocks Go to source found gone from this transcript: their
     /// Quote rows say so.
     missing_sources: HashSet<BlockId>,
+    /// The passage a Go to source landed on, marked the way Find marks a
+    /// hit until the reader scrolls.
+    cited: Option<reply::CitedPassage>,
     #[cfg(any(test, feature = "test-support"))]
     disclosure_bounds: Rc<std::cell::RefCell<HashMap<DisclosureId, gpui::Bounds<gpui::Pixels>>>>,
     /// What prose path targets resolve against: the checkout and the paths
@@ -670,6 +673,7 @@ impl TranscriptView {
             heights: Default::default(),
             used_steps: HashMap::new(),
             missing_sources: HashSet::new(),
+            cited: None,
             #[cfg(any(test, feature = "test-support"))]
             disclosure_bounds: Default::default(),
             targets,
@@ -844,6 +848,11 @@ impl TranscriptView {
             self.document.set_scope(scope, cx);
             if content_changed || disclosure_changed || shape_changed || workspace_changed {
                 self.sync_members(cx);
+            }
+            if content_changed {
+                let rows = &self.rows;
+                self.missing_sources
+                    .retain(|block| reply::row_of(rows, *block).is_none());
             }
             cx.notify();
         }
@@ -1118,6 +1127,7 @@ impl TranscriptView {
     /// already under the rows stays, used up as they arrive.
     fn revoke_automatic_movement(&mut self) {
         self.cite_landing.set(None);
+        self.cited = None;
         self.scroll.cancel_ease();
         self.scroll.release_reading_place();
         self.drop_pending_reveal();
@@ -3102,6 +3112,7 @@ impl Render for TranscriptView {
         // The answers' file links are this transcript's path targets.
         self.rich.set_path_scope(self.input.namespace.clone());
         self.settle_found(window, cx);
+        self.settle_cited(window, cx);
         if self.fading(cx) {
             window.request_animation_frame();
         }

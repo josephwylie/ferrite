@@ -26,6 +26,29 @@ pub struct FindState {
     pub painted: Option<gpui::Bounds<gpui::Pixels>>,
 }
 
+/// Where an occurrence a host waits on has painted: it waits `reveal`
+/// frames for it (a hit in text that is not drawn never reports), and 0 when
+/// none is due.
+pub(super) fn painted(
+    reveal: &mut u8,
+    report: &gpui::base::text::FindReport,
+    window: &mut Window,
+) -> Option<gpui::Bounds<gpui::Pixels>> {
+    if *reveal == 0 {
+        return None;
+    }
+    let found = report.revealed.get();
+    if found.is_some() {
+        *reveal = 0;
+    } else {
+        *reveal -= 1;
+        if *reveal > 0 {
+            window.request_animation_frame();
+        }
+    }
+    found
+}
+
 /// The open bar and what it needs between frames.
 pub(super) struct TranscriptFind {
     bar: crate::find::Find,
@@ -260,17 +283,18 @@ impl TranscriptView {
     /// painted, scroll it a third of the way down the view if it lies
     /// outside it (or under the pinned band).
     pub(super) fn settle_found(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(find) = self.find.as_mut().filter(|find| find.reveal > 0) else {
+        let Some(find) = self.find.as_mut() else {
             return;
         };
-        let Some(found) = find.bar.report().revealed.get() else {
-            find.reveal -= 1;
-            if find.reveal > 0 {
-                window.request_animation_frame();
-            }
-            return;
-        };
-        find.reveal = 0;
+        let found = painted(&mut find.reveal, find.bar.report(), window);
+        if let Some(found) = found {
+            self.settle_hit(found, cx);
+        }
+    }
+
+    /// Scroll an occurrence that painted at `found` a third of the way down
+    /// the view, if it lies outside it or under the pinned band.
+    pub(super) fn settle_hit(&mut self, found: gpui::Bounds<gpui::Pixels>, cx: &mut Context<Self>) {
         let viewport = self.scroll.list_state().viewport_bounds();
         let top = viewport.top() + self.scroll.top_mask();
         if found.top() < top || found.bottom() > viewport.bottom() {
@@ -281,7 +305,9 @@ impl TranscriptView {
 
     /// What the runs mark: the query, and the occurrence the bar is on.
     pub(super) fn find_marks(&self) -> Option<FindMarks> {
-        let find = self.find.as_ref()?;
+        let Some(find) = self.find.as_ref() else {
+            return self.cited.as_ref().map(|cited| cited.marks.clone());
+        };
         Some(FindMarks {
             query: find.bar.query().clone(),
             active: find.bar.active().and_then(|hit| {

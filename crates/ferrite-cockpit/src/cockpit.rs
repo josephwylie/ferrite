@@ -2418,7 +2418,7 @@ impl CockpitView {
     fn composer_opens_source(
         &mut self,
         composer: Entity<Composer>,
-        OpenSource(source): &OpenSource,
+        OpenSource { source, quote }: &OpenSource,
         cx: &mut Context<Self>,
     ) {
         let Some(pane) = self.panes.iter().find(|pane| pane.composer == composer) else {
@@ -2426,7 +2426,7 @@ impl CockpitView {
         };
         let found = pane.thread() == Some(source.thread)
             && pane.transcript().is_some_and(|transcript| {
-                transcript.update(cx, |transcript, cx| transcript.reveal_block(source.block, cx))
+                transcript.update(cx, |transcript, cx| transcript.reveal_passage(source.block, quote, cx))
             });
         if !found {
             composer.update(cx, |composer, cx| composer.source_missing(*source, cx));

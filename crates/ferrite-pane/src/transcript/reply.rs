@@ -17,6 +17,7 @@
 //! does (a press anywhere else), on Escape, and a scroll fades it out over
 //! `FADE_QUICK`.
 
+use std::rc::Rc;
 use std::time::{Duration, Instant};
 
 use gpui::{
@@ -25,6 +26,7 @@ use gpui::{
 };
 
 use super::{Navigate, TranscriptEvent, TranscriptView};
+use crate::select::FindMarks;
 use ferrite_core::replies::Reply;
 use ferrite_core::transcript::BlockId;
 use ferrite_ui::{icons, motion, theme};
@@ -42,6 +44,21 @@ pub(super) struct SelectionReply {
     at: Point<Pixels>,
     appears: Instant,
     fading: Option<Instant>,
+}
+
+/// What a Go to source landed on within its row: the cited words, marked
+/// as a Find occurrence (`FindMarks`), and the frames left to wait for them
+/// to paint and report where.
+pub(super) struct CitedPassage {
+    pub(super) marks: FindMarks,
+    reveal: u8,
+}
+
+/// The row holding `block`.
+pub(super) fn row_of(rows: &super::TranscriptRows, block: BlockId) -> Option<usize> {
+    rows.rows()
+        .iter()
+        .position(|row| row.blocks().iter().any(|candidate| candidate.id == block))
 }
 
 impl TranscriptView {
@@ -199,23 +216,74 @@ impl TranscriptView {
         })
     }
 
-    /// Bring the top of the row holding `block` into view below the pinned
-    /// band, leaving it be when that top is already readable. Says whether it is still in this transcript (a
-    /// replayed or evicted history may have dropped it).
-    pub fn reveal_block(&mut self, block: BlockId, cx: &mut Context<Self>) -> bool {
+    /// Bring the cited `passage` of the row holding `block` into view: left
+    /// where it lies when it is fully readable, else settled a third of the
+    /// way down the view as a Find hit is, and marked. A passage the row's
+    /// text does not hold lands the row's top below the pinned band instead.
+    /// Says whether the Block is still in this transcript (a replayed or
+    /// evicted history may have dropped it).
+    pub fn reveal_passage(&mut self, block: BlockId, quote: &str, cx: &mut Context<Self>) -> bool {
         let Some(row) = self.row_holding(block) else {
             return false;
         };
-        self.navigate(Navigate::Cite { row }, cx);
+        let query = crate::find::Query::new(quote);
+        let holder = self
+            .texts
+            .iter()
+            .find(|(at, text)| {
+                *at == row
+                    && !query.needle.is_empty()
+                    && !query.matches(&text.find_text()).is_empty()
+            })
+            .map(|(_, text)| text.key.clone());
+        match holder {
+            Some(key) => {
+                let report = Rc::new(gpui::base::text::FindReport::default());
+                self.navigate(Navigate::Reveal { row }, cx);
+                self.cited = Some(CitedPassage {
+                    marks: FindMarks {
+                        query,
+                        active: Some((key, 0)),
+                        report,
+                    },
+                    reveal: crate::find::REVEAL_FRAMES,
+                });
+            }
+            None => self.navigate(Navigate::Cite { row }, cx),
+        }
         cx.notify();
         true
     }
 
+    /// Each render while a landing is due: scroll the passage into the
+    /// reading band once it has painted (`settle_hit`). The settle is this
+    /// landing's own movement, so the mark it set survives it.
+    pub(super) fn settle_cited(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(cited) = self.cited.as_mut() else {
+            return;
+        };
+        let found = super::find::painted(&mut cited.reveal, &cited.marks.report, window);
+        if let Some(found) = found {
+            let cited = self.cited.take();
+            self.settle_hit(found, cx);
+            self.cited = cited;
+        }
+    }
+
+    /// Where the landed passage last painted, as the tests read it.
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn cited_painted(&self) -> Option<gpui::Bounds<Pixels>> {
+        self.cited.as_ref()?.marks.report.revealed.get()
+    }
+
+    /// Whether `block` is in this transcript, as the tests read it.
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn holds_block(&self, block: BlockId) -> bool {
+        self.row_holding(block).is_some()
+    }
+
     fn row_holding(&self, block: BlockId) -> Option<usize> {
-        self.rows
-            .rows()
-            .iter()
-            .position(|row| row.blocks().iter().any(|candidate| candidate.id == block))
+        row_of(&self.rows, block)
     }
 
     /// Where the row holding `block` is drawn, as the tests read it.
@@ -228,8 +296,8 @@ impl TranscriptView {
 
     /// A sent Quote row's Go to source: scroll to the Block it was cited
     /// from, or have the row say it is gone.
-    fn open_cited(&mut self, block: BlockId, cx: &mut Context<Self>) {
-        if !self.reveal_block(block, cx) {
+    fn open_cited(&mut self, block: BlockId, quote: &str, cx: &mut Context<Self>) {
+        if !self.reveal_passage(block, quote, cx) {
             self.missing_sources.insert(block);
             cx.notify();
         }
@@ -251,10 +319,11 @@ impl TranscriptView {
                 let key = ferrite_core::cited_sources::key(&reply.quote);
                 let block = *self.input.cited.get(&key)?;
                 let view = view.clone();
+                let quote = reply.quote.clone();
                 Some(crate::attachments::QuoteSource {
                     missing: self.missing_sources.contains(&block),
                     go: std::rc::Rc::new(move |_, cx| {
-                        let _ = view.update(cx, |transcript, cx| transcript.open_cited(block, cx));
+                        let _ = view.update(cx, |transcript, cx| transcript.open_cited(block, &quote, cx));
                     }),
                 })
             })
