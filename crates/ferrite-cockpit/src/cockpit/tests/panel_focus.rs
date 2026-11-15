@@ -394,6 +394,28 @@ fn find_in_a_prose_file_searches_the_document_and_shows_the_hit(cx: &mut TestApp
     assert!(cx.debug_bounds("find-bar").is_none(), "esc closes the bar");
 }
 
+/// F6 from a document read in the Panel's body goes to the Panel's
+/// controls, not away from the Panel; a second one leaves.
+#[gpui::test]
+fn f6_from_a_document_in_the_panel_enters_its_controls(cx: &mut TestAppContext) {
+    let (view, thread, _file, cx) = with_marked_file("focus-f6-readme", cx);
+    let readme = view.read_with(cx, |view, _| view.thread_path(thread).unwrap()).join("README.md");
+    std::fs::write(&readme, "# Hello\n\nbody\n").unwrap();
+    view.update(cx, |view, cx| view.open_in_files(thread, readme, None, true, cx));
+    tick(cx);
+    let prose = cx.debug_bounds("files-prose").expect("the README reads as prose");
+    cx.simulate_click(prose.center(), gpui::Modifiers::none());
+    tick(cx);
+
+    press("f6", cx);
+    assert!(
+        focused_control(&view, cx).is_some(),
+        "the first F6 lands on the Panel's controls"
+    );
+    press("f6", cx);
+    assert!(composer_focused(&view, cx), "the next one leaves for the conversation");
+}
+
 /// A file opened by a press in the tree: the press leaves the keyboard in
 /// the Files surface, so ⌘F finds in that file.
 #[gpui::test]

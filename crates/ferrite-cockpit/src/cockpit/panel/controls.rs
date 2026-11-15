@@ -273,9 +273,10 @@ impl CockpitView {
     }
 
     /// F6 and ⇧F6: the next or previous area, round the conversation and the
-    /// Panel.
+    /// Panel's controls. Typing or reading in a Panel body is neither: its
+    /// next area is the controls above it, not a way out of the Panel.
     pub(in crate::cockpit) fn step_area(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.panel_control_focused(window) || self.panel_keys_held(window, cx) {
+        if self.panel_control_focused(window) {
             self.leave_panel(window, cx);
         } else {
             self.focus_panel(window, cx);
