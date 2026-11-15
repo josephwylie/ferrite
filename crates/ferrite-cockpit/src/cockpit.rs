@@ -33,6 +33,7 @@ mod nav_pick;
 mod palette;
 pub(crate) mod panel;
 mod parts;
+mod sends;
 mod server;
 mod side_chat;
 mod snooze;
@@ -301,6 +302,9 @@ pub(crate) struct CockpitPane {
     pub(crate) preview_tab: panel::preview::PreviewTab,
     /// The Review beside this Pane on the board (`beside.rs`).
     pub(crate) review: beside::ReviewSlot,
+    /// Drafts sent while the Session was starting, kept whole until it takes
+    /// the prompt or hands it back (`sends.rs`).
+    pub(crate) held_sends: Vec<ferrite_pane::composer::SentDraft>,
 }
 
 impl CockpitPane {
@@ -310,6 +314,7 @@ impl CockpitPane {
             request_forms: Default::default(),
             preview_tab: Default::default(),
             review: beside::ReviewSlot::new(cx),
+            held_sends: Vec::new(),
         }
     }
 }
@@ -2406,10 +2411,14 @@ impl CockpitView {
         self.apply_thread_rules(&frame, cx);
         self.land(cx);
         self.ring_alerts(cx);
-        for pane in &self.panes {
-            if let Some(thread) = pane.thread() {
+        for index in 0..self.panes.len() {
+            if let Some(thread) = self.panes[index].thread() {
                 while let Some((held, prepend)) = self.cockpit.take_retrieved_prompt(thread) {
-                    pane.composer.update(cx, |composer, cx| {
+                    if let Some(draft) = self.held_draft(index, &held) {
+                        self.put_back_send(index, draft, cx);
+                        continue;
+                    }
+                    self.panes[index].composer.update(cx, |composer, cx| {
                         let (current, mut files) =
                             ferrite_core::prompt_files::split(composer.editable());
                         let (held, restored_files) = ferrite_core::prompt_files::split(held);
@@ -5615,8 +5624,8 @@ impl CockpitView {
             return;
         }
         let composer = self.panes[self.focused()].composer.clone();
-        let text = composer.update(cx, |composer, cx| composer.take(cx));
-        let text = text.trim().to_string();
+        let draft = composer.update(cx, |composer, cx| composer.take_draft(cx));
+        let text = draft.prompt().trim().to_string();
         // `/effort max` and `/model sonnet` typed out are Ferrite's own
         // acts, the same as the pickers: the chip stays truthful, Codex
         // (which has no such command) gets them too, and a level or model
@@ -5648,23 +5657,30 @@ impl CockpitView {
             return;
         }
         // Typing does not wait for the agent; sending does.
-        if self
+        let focused = self.focused();
+        let admitted = if self
             .cockpit
             .thread(thread)
             .is_some_and(|open| open.needs_queue())
         {
-            if !self.cockpit.queue(thread, text.clone()) {
-                composer.update(cx, |composer, cx| composer.set(text.clone(), cx));
+            let queued = self.cockpit.queue(thread, text.clone());
+            if !queued {
+                self.put_back_send(focused, draft, cx);
             }
+            queued
         } else {
-            self.cockpit.send(thread, text.clone());
-            self.scroll_transcript_to_new_prompt(self.focused(), cx);
-        }
+            let admission = self.cockpit.send(thread, text.clone());
+            let admitted = self.settle_send(focused, thread, draft, admission, cx);
+            if admitted {
+                self.scroll_transcript_to_new_prompt(focused, cx);
+            }
+            admitted
+        };
         self.facts.acted(&self.cockpit, thread);
         // A first prompt names an untitled Thread.
         self.facts.renamed(&self.cockpit, thread);
         self.refresh_names();
-        if self.is_first_prompt(thread) {
+        if admitted && self.is_first_prompt(thread) {
             self.start_titling(thread, text, cx);
         }
         cx.notify();

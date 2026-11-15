@@ -352,7 +352,7 @@ impl Remote {
                 Ok(message) => self.inbox.push_back(message),
                 Err(RecvTimeoutError::Timeout) => {
                     return Err(WireError {
-                        code: ErrorCode::Failed,
+                        code: ErrorCode::Unconfirmed,
                         message: "the Ferrite server did not answer in time".into(),
                     })
                 }
@@ -1153,7 +1153,7 @@ fn hello(attach: &Attach) -> ClientMessage {
 /// it, and it is never sent again.
 fn gone(reason: &str) -> WireError {
     WireError {
-        code: ErrorCode::Failed,
+        code: ErrorCode::Unconfirmed,
         message: format!("{reason}; this may not have arrived"),
     }
 }

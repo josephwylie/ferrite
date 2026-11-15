@@ -1346,6 +1346,8 @@ pub enum ErrorCode {
     UnsupportedGeneration,
     /// The client fell more than the reliable queue's bound behind.
     Lagged,
+    /// The act may or may not have happened: no reply came.
+    Unconfirmed,
     #[serde(other)]
     Unknown,
 }
@@ -1418,6 +1420,8 @@ pub enum Done {
     Threads {
         threads: Vec<ThreadId>,
     },
+    /// A sent prompt is waiting for its Session to start.
+    Held,
     /// A prompt handed back, and whether it goes ahead of the draft.
     Recovered {
         text: String,

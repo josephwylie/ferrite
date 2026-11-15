@@ -2890,8 +2890,12 @@ fn a_send_with_a_vanished_root_is_refused_naming_the_path_and_the_remedy() {
         .unwrap();
     std::fs::remove_dir_all(&root).unwrap();
 
-    cockpit.send(thread, "into the void".into());
+    let admission = cockpit.send(thread, "into the void".into());
 
+    assert!(
+        matches!(&admission, crate::cockpit::Admission::Refused(words) if words.contains("re-pick")),
+        "the refusal comes back to the caller: {admission:?}"
+    );
     assert!(
         fake.sent.borrow().is_empty(),
         "nothing may reach the provider"

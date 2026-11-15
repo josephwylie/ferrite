@@ -136,6 +136,32 @@ pub(crate) fn key_context(role: Role, empty: bool, history: bool, menu: bool) ->
 /// `@` menus following what the operator is typing (#23).
 pub struct Edited;
 
+/// What one send took out of a Composer: the line as typed and each kind of
+/// attachment, kept apart so `Composer::restore` can put the draft back
+/// exactly, and the `prompt` the wire was given.
+#[derive(Clone, Debug)]
+pub struct SentDraft {
+    prompt: String,
+    line: String,
+    files: Vec<PathBuf>,
+    replies: Vec<Reply>,
+    review: Vec<ReviewComment>,
+    annotations: Vec<Annotation>,
+    chips: Vec<SharedString>,
+}
+
+impl SentDraft {
+    /// The words the send put on the wire.
+    pub fn prompt(&self) -> &str {
+        &self.prompt
+    }
+
+    /// What the operator typed, without the attachments the wire also got.
+    pub fn line(&self) -> &str {
+        &self.line
+    }
+}
+
 pub struct Composer {
     focus_handle: FocusHandle,
     files_focus: FocusHandle,
@@ -331,6 +357,10 @@ impl Composer {
             + usize::from(!self.review.is_empty())
     }
 
+    pub fn files(&self) -> &[PathBuf] {
+        &self.files
+    }
+
     pub fn browser_annotations(&self) -> &[Annotation] {
         &self.browser_annotations
     }
@@ -515,16 +545,51 @@ impl Composer {
 
     /// Hand the line to the Pane and clear it — pills and all.
     pub fn take(&mut self, cx: &mut Context<Self>) -> String {
-        let text = self.prompt();
+        self.take_draft(cx).prompt
+    }
+
+    /// `take`, keeping everything it cleared: the sender holds it until the
+    /// send is admitted, and `restore`s it if it is not.
+    pub fn take_draft(&mut self, cx: &mut Context<Self>) -> SentDraft {
+        let draft = SentDraft {
+            prompt: self.prompt(),
+            line: self.line.text().to_string(),
+            files: std::mem::take(&mut self.files),
+            replies: std::mem::take(&mut self.replies),
+            review: self.review.take_all(),
+            annotations: std::mem::take(&mut self.browser_annotations),
+            chips: std::mem::take(&mut self.chips),
+        };
         self.line.take();
-        self.files.clear();
         self.files_added.clear();
-        self.replies.clear();
-        self.review.take_all();
-        self.browser_annotations.clear();
-        self.chips.clear();
         self.edited(cx);
-        text
+        draft
+    }
+
+    /// Put a `SentDraft` back whole. What the operator has typed since stays:
+    /// the restored words come first, its attachments beside the new ones.
+    pub fn restore(&mut self, draft: SentDraft, cx: &mut Context<Self>) {
+        let typed = self.line.text().to_string();
+        let line = match (draft.line.is_empty(), typed.is_empty()) {
+            (_, true) => draft.line,
+            (true, false) => typed,
+            (false, false) => format!("{}\n\n{typed}", draft.line),
+        };
+        self.line.set(line);
+        let mut files = draft.files;
+        files.retain(|file| !self.files.contains(file));
+        self.files.splice(0..0, files);
+        self.replies.splice(0..0, draft.replies);
+        self.browser_annotations.splice(0..0, draft.annotations);
+        for comment in draft.review {
+            self.review.add(comment);
+        }
+        for chip in draft.chips {
+            if !self.chips.contains(&chip) {
+                self.chips.push(chip);
+            }
+        }
+        self.edited(cx);
     }
 
     /// Whether the line holds no text — what gives Backspace its

@@ -72,6 +72,7 @@ mod terminal;
 mod tools;
 mod transcript_pointer;
 mod send_scroll;
+mod sends;
 mod transcript_rows;
 mod ui_a;
 mod ui_b;

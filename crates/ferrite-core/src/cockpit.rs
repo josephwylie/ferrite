@@ -17,7 +17,7 @@ use std::time::{Duration, Instant};
 
 use crate::activity::{AgentKey, DecisionHandle, Subject};
 pub use crate::engine::{
-    title_from_prompt, AgentLaunch, BootstrapResult, Bootstrapped, DeleteError, Engine,
+    title_from_prompt, Admission, AgentLaunch, BootstrapResult, Bootstrapped, DeleteError, Engine,
     HistoryDirection, PaneUpdate, Preparation, ProviderChoice, ProvisionError, Restart,
     ReviveGroupError, RssSampler, SpawnRequest, Spawner, SubjectUpdate, ToolTiming,
 };
@@ -25,7 +25,7 @@ use crate::groups::{
     Applied, ApplyError, Dissolved, Drag, DropTarget, GroupChange, GroupId, Groups, Plan,
 };
 use crate::notifications::{DecisionNoticeId, NoticeId, Notifications};
-use crate::protocol::{Done, NoticeAction, Op, ProjectAction, ServerMessage, When, WireError};
+use crate::protocol::{Done, ErrorCode, NoticeAction, Op, ProjectAction, ServerMessage, When, WireError};
 use crate::roster::{DraftId, DraftScope, PaneIdentity, Roster, View};
 use crate::store::{LoadError, Provider, Store};
 use crate::transcript::Input;
@@ -1744,19 +1744,23 @@ impl Cockpit {
         )
     }
 
-    pub fn send(&mut self, thread: ThreadId, text: String) {
+    pub fn send(&mut self, thread: ThreadId, text: String) -> Admission {
         self.act(
             |engine| engine.send(thread, text.clone()),
             |server| {
-                said(
-                    server,
-                    Op::Send {
-                        thread,
-                        text: text.clone(),
-                    },
-                )
+                match server.execute(Op::Send {
+                    thread,
+                    text: text.clone(),
+                }) {
+                    Ok(Some(Done::Held)) => Admission::Held,
+                    Ok(_) => Admission::Delivered,
+                    Err(error) if error.code == ErrorCode::Unconfirmed => {
+                        Admission::Unconfirmed(error.message)
+                    }
+                    Err(error) => Admission::Refused(error.message),
+                }
             },
-        );
+        )
     }
 
     /// Go back to before the prompt `prompt` names (`Engine::rewind`):
