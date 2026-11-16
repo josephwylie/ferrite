@@ -1759,7 +1759,10 @@ impl Cockpit {
     }
 
     pub fn try_project_id(&self, thread: ThreadId) -> Result<Option<ProjectId>, LoadError> {
-        self.peek(thread).map(|meta| meta.project_id)
+        match self.thread(thread) {
+            Some(open) => Ok(open.project_id()),
+            None => self.peek(thread).map(|meta| meta.project_id),
+        }
     }
 
     /// Delete a Thread for good. Its parked row goes at once, not when the

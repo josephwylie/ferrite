@@ -298,10 +298,18 @@ def local_collision(ui):
     ui.check("local-collision-thread-created", thread=ui.state["local_collision_thread"])
 
 
-def attachment_turn(ui, name, screenshot, new=False):
+def remote_threads(ui):
+    body = json.loads(remote_cli(ui, "thread", "list").stdout)
+    return body.get("result", body)["threads"]
+
+
+def attachment_turn(ui, name, screenshot, expected_thread, new=False):
     before = len(rows(ui.output, "provider-await"))
+    existing_ids = {str(row["thread"]) for row in remote_threads(ui)}
     if new:
         ui.command("key", "cmd-n")
+        ui.wait("draft-model-picker")
+        assert not ui.has("project-editor-card"), "New thread opened the project creator"
     ui.wait("composer-block")
     ui.command("attach", str(screenshot))
     ui.wait("tray-image-0")
@@ -312,6 +320,24 @@ def attachment_turn(ui, name, screenshot, new=False):
     ui.click("composer-send")
     pending = until(lambda: rows(ui.output, "provider-await")[before:], "Fixture did not receive submitted prompt")[0]
     assert pending["store"] == ui.state["remote_store"], "Prompt reached the local provider"
+    current = until(lambda: [row for row in remote_threads(ui)
+                             if row.get("provider_session") == f"parity-fixture-{pending['pid']}"],
+                    "Submitted provider has no remote Thread")[0]
+    submitted_thread = str(current["thread"])
+    if new:
+        assert submitted_thread not in existing_ids, "New-thread prompt reused an existing Thread"
+        assert submitted_thread != expected_thread
+        assert current["provider"] == "codex" and not current["draft"]
+        assert current["cwd"] == str(Path(ui.state["root"]) / "remote-project")
+        assert current.get("project"), "New remote Thread has no project binding"
+        assert any(row.get("pid") == pending["pid"]
+                   and row.get("store") == ui.state["remote_store"]
+                   and row.get("cwd") == current["cwd"]
+                   and row.get("request", {}).get("method") == "thread/start"
+                   for row in rows(ui.output, "provider-fixture")), "New provider did not launch remotely"
+        ui.wait("draft-model-picker", visible=False)
+    else:
+        assert submitted_thread == expected_thread, "Prompt reached the wrong existing Thread"
     inputs = pending["request"]["params"].get("input", [])
     image_inputs = [item for item in inputs if item.get("type") == "localImage"]
     assert image_inputs, f"Screenshot absent from provider input: {inputs}"
@@ -325,7 +351,8 @@ def attachment_turn(ui, name, screenshot, new=False):
     ui.wait("composer-stop", visible=False)
     ui.shot(name + "-completed")
     ui.check(name, remote_path=str(remote_path), screenshot_sha256=digest(screenshot),
-             provider="simulated Codex app-server", input=inputs)
+             provider="simulated Codex app-server", input=inputs, remote_thread=submitted_thread,
+             distinct_from=expected_thread if new else None)
 
 
 def workspace_flow(ui, protocol, screenshot):
@@ -348,8 +375,8 @@ def workspace_flow(ui, protocol, screenshot):
                       and row.get("request", {}).get("method") == "thread/start"
                       for row in rows(ui.output, "provider-fixture")), "Remote fixture launcher was not proven")
     ui.shot(protocol + "-remote-thread")
-    attachment_turn(ui, protocol + "-existing-thread", screenshot)
-    attachment_turn(ui, protocol + "-new-thread", screenshot, new=True)
+    attachment_turn(ui, protocol + "-existing-thread", screenshot, thread)
+    attachment_turn(ui, protocol + "-new-thread", screenshot, thread, new=True)
     remote_cli(ui, "thread", "focus", thread)
     ui.command("key", "cmd-shift-f")
     ui.wait("files-row-0")

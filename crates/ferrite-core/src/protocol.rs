@@ -1775,6 +1775,8 @@ pub struct ThreadState {
     pub generation: u64,
     pub provider: Provider,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project: Option<crate::workspace::registry::ProjectId>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub effort: Option<String>,

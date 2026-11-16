@@ -245,6 +245,7 @@ fn state() -> ThreadState {
         thread: ThreadId::new(4),
         generation: 3,
         provider: Provider::Claude,
+        project: None,
         model: Some("sonnet".into()),
         effort: Some("high".into()),
         title: Some("Fix the parser".into()),

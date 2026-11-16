@@ -742,6 +742,7 @@ fn box_thread(thread: ThreadId, title: &str) -> ferrite_core::protocol::ThreadSt
         thread,
         generation: 1,
         provider: Provider::Claude,
+        project: None,
         model: None,
         effort: None,
         title: Some(title.into()),

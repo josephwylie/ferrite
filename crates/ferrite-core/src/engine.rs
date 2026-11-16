@@ -858,6 +858,7 @@ impl Thread {
             thread: id,
             generation: self.generation,
             provider: self.provider,
+            project: self.project,
             model: self.model.clone(),
             effort: self.effort.clone(),
             title: self.title.clone(),
