@@ -56,7 +56,7 @@ pub(crate) struct PrsView {
     lists: HashMap<(ProjectId, WirePrFilter), ListRead>,
     pub(super) selected: Option<u64>,
     detail: bool,
-    tab: PrTab,
+    pub(in crate::cockpit) tab: PrTab,
     pub(super) scroll: ScrollHandle,
     issued: u64,
     focus_at_open: Option<PaneIdentity>,

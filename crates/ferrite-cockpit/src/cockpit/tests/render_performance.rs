@@ -2376,11 +2376,11 @@ fn frames_over(cx: &mut gpui::VisualTestContext, ms: u64) -> usize {
     frames
 }
 
-/// A menu the Cockpit draws snaps open (`motion::MENU_IN` is 0ms): after
-/// the frame that opens it, nothing more is drawn for it and no Pane is
-/// rebuilt.
+/// A menu the Cockpit draws settles from its opener (`motion::MENU_IN`):
+/// frames run while it lands, none after, and no Pane is rebuilt.
 #[gpui::test]
-fn a_menu_snaps_open_and_rebuilds_no_pane(cx: &mut TestAppContext) {
+fn a_menu_eases_open_and_rebuilds_no_pane(cx: &mut TestAppContext) {
+    ferrite_ui::motion::testing::drive();
     let (view, _fake, threads, cx) = group_board("menu-entrance", &[], cx);
     view.update(cx, |view, cx| {
         view.open_context_menu(
@@ -2390,15 +2390,13 @@ fn a_menu_snaps_open_and_rebuilds_no_pane(cx: &mut TestAppContext) {
         )
     });
     cx.run_until_parked();
-    // The frame that opens it is the Cockpit's change; a snap asks for no
-    // frame after it.
-    frames_over(cx, 16);
     let panes = pane_builds(&threads);
     let frames = frames_over(cx, 160);
     let built = built_since(&threads, &panes);
     eprintln!("MENU_OPEN frames={frames} pane_builds={built:?}");
-    assert_eq!(frames, 0, "the menu snaps open: no entrance frames");
+    assert!(frames > 0, "the menu settles in: entrance frames run");
     assert_eq!(built, [0, 0, 0, 0], "opening it rebuilt a Pane");
+    assert_eq!(frames_over(cx, 160), 0, "frames stop once it has landed");
 }
 
 /// The pointer on a row of a menu the Cockpit draws blends the row's wash
@@ -2702,7 +2700,7 @@ fn plays_beside_nav_rebuilds(
 
 /// A part's rebuild landing mid-entrance — the nav rebuilt alone on every
 /// frame — starves no `motion::Played` entrance the Cockpit draws: the
-/// palette, a sheet (a menu snaps, so it has none). The part's ancestors
+/// palette, a sheet, a menu. The part's ancestors
 /// are dirtied with it, so the Cockpit around it draws again and each
 /// entrance asks there for its next frame.
 #[gpui::test]
@@ -2766,7 +2764,8 @@ fn the_palette_comes_in_and_rebuilds_no_pane(cx: &mut TestAppContext) {
 }
 
 /// The model picker opens in its place — no frame drawn blank while it
-/// measures itself — stands still there, and asks for nothing after.
+/// measures itself — settles from its opener, then stands still there and
+/// asks for nothing after.
 #[gpui::test]
 fn the_model_picker_opens_in_place_and_then_rests(cx: &mut TestAppContext) {
     let (view, _fake, threads, cx) = group_board("choice-menu-entrance", &[], cx);
@@ -2777,15 +2776,20 @@ fn the_model_picker_opens_in_place_and_then_rests(cx: &mut TestAppContext) {
     cockpit_renders_over(cx, 300);
     view.update(cx, |view, cx| view.open_provider_picker(threads[0], cx));
     cx.run_until_parked();
-    let mut stood = Vec::new();
-    for _ in 0..160 / 16 {
-        cx.executor().advance_clock(Duration::from_millis(16));
-        cx.run_until_parked();
-        display_frames(cx);
-        stood.extend(cx.debug_bounds("model-picker").map(|menu| menu.bottom()));
-    }
+    let mut watch = |cx: &mut gpui::VisualTestContext, ms: u64| {
+        let mut stood = Vec::new();
+        for _ in 0..ms / 16 {
+            cx.executor().advance_clock(Duration::from_millis(16));
+            cx.run_until_parked();
+            display_frames(cx);
+            stood.extend(cx.debug_bounds("model-picker").map(|menu| menu.bottom()));
+        }
+        stood
+    };
+    let entering = watch(cx, 160);
+    assert!(!entering.is_empty(), "the premise: it was drawn");
+    let stood = watch(cx, 160);
     assert_eq!(display_frames(cx), 0, "placed: no more frames");
-    assert!(!stood.is_empty(), "the premise: it was drawn");
     assert!(
         stood.windows(2).all(|pair| pair[0] == pair[1]),
         "it stood still once placed: {stood:?}"

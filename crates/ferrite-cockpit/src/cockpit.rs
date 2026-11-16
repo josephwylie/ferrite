@@ -19,6 +19,7 @@ mod delivery;
 mod details;
 pub(crate) mod direction;
 mod drafts;
+mod float_exits;
 pub(crate) mod empty_board;
 pub(crate) mod environment;
 pub(crate) mod factory;
@@ -121,6 +122,7 @@ use ferrite_pane::link_target::{LinkTarget, Open};
 use ferrite_pane::decision;
 use ferrite_pane::pane::{self, PaneView};
 use ferrite_ui::menu;
+use ferrite_ui::motion::POPOVER;
 // Declared with the Pane, whose Group head dispatches it.
 use crate::project_editor;
 pub(crate) use ferrite_pane::pane::NextDecision;
@@ -437,6 +439,8 @@ pub struct CockpitView {
     /// The next frame of the list lands at once: a shelf just opened or
     /// folded.
     nav_snap: std::cell::Cell<bool>,
+    /// How far each shelf's body is open on screen (`nav_list`).
+    shelf_folds: std::cell::RefCell<Vec<(nav::Shelf, ferrite_ui::motion::Reveal)>>,
     /// The window the list was last laid out in. A resize moves the
     /// shelves anchored over the foot, and that is no change to the list:
     /// it lands at once.
@@ -610,6 +614,8 @@ pub struct CockpitView {
     cited_sources: ferrite_core::cited_sources::CitedSources,
     /// The Settings panel is up.
     settings_open: bool,
+    /// The menus and popovers on their way out (`float_exits`).
+    float_exits: float_exits::Held,
     /// The Settings sheet on its way out (`settings_element`).
     settings_exit: ferrite_ui::motion::Exits<()>,
     /// The Settings page the sidebar has selected; each opening starts on
@@ -1629,6 +1635,7 @@ impl CockpitView {
             nav_drag_live: std::cell::Cell::new(false),
             nav_motion: Default::default(),
             nav_snap: std::cell::Cell::new(false),
+            shelf_folds: Default::default(),
             nav_viewport: Default::default(),
             head_parent_room: Default::default(),
             nav_parked_shown: ferrite_ui::theme::NAV_PARKED_PAGE_FIRST,
@@ -1646,6 +1653,7 @@ impl CockpitView {
             cited_sources,
             prefs,
             settings_open: false,
+            float_exits: Default::default(),
             settings_exit: Default::default(),
             settings_page: settings::PageKey::default(),
             settings_search: None,
@@ -3496,7 +3504,7 @@ impl CockpitView {
     /// `INK_STRONG` behind a faint ring.
     fn plan_card_element(&self, window: &mut Window, cx: &mut Context<Self>) -> Option<AnyElement> {
         use ferrite_ui::theme::*;
-        let thread = self.plan_card?;
+        let (thread, left) = self.standing(|exits| &mut exits.plan, self.plan_card, POPOVER, cx)?;
         if self.focused_thread() != Some(thread) {
             return None;
         }
@@ -3565,18 +3573,22 @@ impl CockpitView {
                 MouseButton::Left,
                 cx.listener(|_, _: &MouseDownEvent, _, cx| cx.stop_propagation()),
             )
-            .on_mouse_down_out(cx.listener(|view, _: &MouseDownEvent, _, cx| {
-                if view.plan_card.take().is_some() {
-                    cx.notify();
-                }
-            }));
+            .when(left.is_none(), |card| {
+                card.on_mouse_down_out(cx.listener(|view, _: &MouseDownEvent, _, cx| {
+                    if view.plan_card.take().is_some() {
+                        cx.notify();
+                    }
+                }))
+            });
         Some(
             deferred(
                 anchored()
                     .anchor(gpui::Anchor::TopRight)
                     .position(at)
                     .snap_to_window_with_margin(px(GRID_PAD))
-                    .child(ferrite_ui::motion::menu_in(
+                    .child(ferrite_ui::motion::float_at(
+                        POPOVER,
+                        left,
                         "plan-card-in",
                         card,
                         ferrite_ui::motion::Opens::Down,
@@ -11909,7 +11921,12 @@ impl CockpitView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
-        let (thread, generation) = self.session_controls?;
+        let ((thread, generation), left) = self.standing(
+            |exits| &mut exits.session,
+            self.session_controls,
+            POPOVER,
+            cx,
+        )?;
         let at = self.card_corner(
             format!("session-{}", thread.get()),
             CardFrom::Composer(PaneIdentity::Thread(thread)),
@@ -12288,18 +12305,22 @@ impl CockpitView {
                 MouseButton::Left,
                 cx.listener(|_, _: &MouseDownEvent, _, cx| cx.stop_propagation()),
             )
-            .on_mouse_down_out(cx.listener(move |view, _: &MouseDownEvent, _, cx| {
-                if view.session_controls.take().is_some() {
-                    cx.notify();
-                }
-            }));
+            .when(left.is_none(), |card| {
+                card.on_mouse_down_out(cx.listener(move |view, _: &MouseDownEvent, _, cx| {
+                    if view.session_controls.take().is_some() {
+                        cx.notify();
+                    }
+                }))
+            });
         Some(
             deferred(
                 anchored()
                     .anchor(gpui::Anchor::BottomRight)
                     .position(at)
                     .snap_to_window_with_margin(px(ferrite_ui::theme::GRID_PAD))
-                    .child(ferrite_ui::motion::menu_in(
+                    .child(ferrite_ui::motion::float_at(
+                        POPOVER,
+                        left,
                         "session-controls-in",
                         card,
                         ferrite_ui::motion::Opens::Up,
@@ -12320,7 +12341,8 @@ impl CockpitView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
-        let thread = self.context_checks?;
+        let (thread, left) =
+            self.standing(|exits| &mut exits.checks, self.context_checks, POPOVER, cx)?;
         let at = self.card_corner(
             format!("ci-{}", thread.get()),
             CardFrom::Head(PaneIdentity::Thread(thread)),
@@ -12357,11 +12379,13 @@ impl CockpitView {
                 MouseButton::Left,
                 cx.listener(|_, _: &MouseDownEvent, _, cx| cx.stop_propagation()),
             )
-            .on_mouse_down_out(cx.listener(|view, _: &MouseDownEvent, _, cx| {
-                if view.context_checks.take().is_some() {
-                    cx.notify();
-                }
-            }));
+            .when(left.is_none(), |card| {
+                card.on_mouse_down_out(cx.listener(|view, _: &MouseDownEvent, _, cx| {
+                    if view.context_checks.take().is_some() {
+                        cx.notify();
+                    }
+                }))
+            });
         // The mark rides the Pane head's checkout line: the card drops
         // below it, from its left edge.
         Some(
@@ -12370,7 +12394,9 @@ impl CockpitView {
                     .anchor(gpui::Anchor::TopRight)
                     .position(at)
                     .snap_to_window_with_margin(px(ferrite_ui::theme::GRID_PAD))
-                    .child(ferrite_ui::motion::menu_in(
+                    .child(ferrite_ui::motion::float_at(
+                        POPOVER,
+                        left,
                         "context-checks-in",
                         card,
                         ferrite_ui::motion::Opens::Down,

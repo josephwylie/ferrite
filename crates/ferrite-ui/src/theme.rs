@@ -3544,11 +3544,14 @@ pub const PROJECT_HUES: [u32; 18] = [
 // (`MOTION_EASE_*`, `--cds-ease-*`). `motion.rs` maps each entry to the
 // Ferrite surface that wears it. The rules every animated surface follows:
 //
-// - **Menus and popovers snap; dialogs, the palette and toasts fade out.**
-//   A menu, a popover and a fold of tool steps land on their frame, open
-//   and shut, as Claude's do. A sheet, the palette and a toast leave as a
-//   face no pointer finds (`motion::float_out`, `toast_out`), their veil
-//   fading with them. A board slot is no float: the Review slides in and,
+// - **Menus and popovers settle from their opener; a tool step snaps.**
+//   A menu comes in over `MOTION_MENU_IN_MS` and a popover, the larger
+//   surface, over `MOTION_POPOVER_IN_MS`, each from the edge it hangs on
+//   (`motion::float_in`); one the Cockpit can redraw after it closed goes
+//   as a face no pointer finds, quicker (`motion::float_gone`). A fold of
+//   tool steps lands on its frame. A sheet, the palette and a toast leave
+//   as a face no pointer finds (`motion::float_out`, `toast_out`), their
+//   veil fading with them. A board slot is no float: the Review slides in and,
 //   a little quicker, out (`MOTION_SLOT_OPEN_MS` / `MOTION_SLOT_CLOSE_MS`),
 //   its Pane giving way and taking the room back; the sidebar (cmd-B) and
 //   the panel slide over `MOTION_DUR_BASE_MS` (`motion::COLUMN`).
@@ -3672,11 +3675,16 @@ pub const MOTION_FADE_QUICK_MS: u64 = 150;
 /// glyph shrinks to this scale as it fades, the arriving one grows from it
 /// (an `svg` transform: the icon swap's scale without its blur).
 pub const MOTION_SEND_GLYPH_FROM: f32 = 0.5;
-/// `menu-in`: 0ms — a menu snaps open and shut, as Claude's `Menu`,
-/// `ContextMenu` and `Popover` do. At 0 the entrance draws its element as
-/// it is (`motion::menu_in`); the shift and opacity below are its face
-/// should it ever run again.
-pub const MOTION_MENU_IN_MS: u64 = 0;
+/// A menu (a context menu, an answer's menu) settles in over 100ms and
+/// goes in 80ms. T3's own menus snap; this is the operator's preference.
+pub const MOTION_MENU_IN_MS: u64 = 100;
+pub const MOTION_MENU_OUT_MS: u64 = 80;
+/// A popover (the model picker, the permission menu, the plan, checks and
+/// session cards) is a larger surface: T3's scale and fade it. It settles
+/// in over `MOTION_DUR_SNAP_MS`, so it never trails the keys that opened
+/// it, and goes in 100ms.
+pub const MOTION_POPOVER_IN_MS: u64 = MOTION_DUR_SNAP_MS;
+pub const MOTION_POPOVER_OUT_MS: u64 = 100;
 pub const MOTION_MENU_SHIFT: f32 = 2.0;
 /// The opacity a menu starts from: it is already legible on its first frame.
 pub const MOTION_MENU_FROM_OPACITY: f32 = 0.3;
@@ -3796,7 +3804,8 @@ pub const MOTION_RECEDE_MS: u64 = 150;
 /// 150ms on `MOTION_EASE_OUT` (T3's `Sidebar.motion.ts`).
 pub const MOTION_NAV_LIST_MS: u64 = 150;
 /// A shelf header's chevron turns over 150ms on `MOTION_EASE_STANDARD`
-/// (Tailwind's `transition-transform`); the shelf itself snaps.
+/// (Tailwind's `transition-transform`); the shelf's body folds with it over
+/// `MOTION_FOLD_MS`.
 pub const MOTION_SHELF_CHEVRON_MS: u64 = 150;
 /// A slim row's time gives way to its action over 150ms on
 /// `MOTION_EASE_STANDARD`, and its badge comes up to full colour.

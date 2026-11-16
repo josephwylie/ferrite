@@ -2551,7 +2551,8 @@ fn hang_menu(id: &'static str, at: gpui::Point<gpui::Pixels>, shell: gpui::Div) 
         gpui::anchored()
             .position(at)
             .snap_to_window_with_margin(px(theme::GRID_PAD))
-            .child(ferrite_ui::motion::menu_in(
+            .child(ferrite_ui::motion::float_in(
+                ferrite_ui::motion::MENU,
                 id,
                 shell,
                 ferrite_ui::motion::Opens::Down,

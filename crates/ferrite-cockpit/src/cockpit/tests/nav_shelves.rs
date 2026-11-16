@@ -491,7 +491,12 @@ fn a_slim_row_fades_its_age_into_revive(cx: &mut TestAppContext) {
     view.update(cx, |view, cx| {
         view.set_shelf_open(nav::Shelf::Parked, true, cx)
     });
-    tick(cx);
+    for _ in 0..3 {
+        cx.executor()
+            .advance_clock(Duration::from_millis(ferrite_ui::theme::MOTION_FOLD_MS));
+        cx.update(|window, cx| window.simulate_next_frame(cx));
+        cx.run_until_parked();
+    }
     let row = cx.debug_bounds(card(threads[0])).expect("its slim row");
     assert_eq!(row.size.height, px(ferrite_ui::theme::NAV_SLIM_H));
     assert_eq!(
@@ -595,4 +600,89 @@ fn rename_on_a_slim_row_draws_the_editor(cx: &mut TestAppContext) {
             assert_eq!(view.facts.name(thread).as_ref(), format!("{at} renamed"));
         });
     }
+}
+
+/// A shelf's body folds open and shut over `MOTION_FOLD_MS`: the heading
+/// above it moves continuously, a reversal turns round from the frame on
+/// screen, and the shown Thread's row stays where it is.
+#[gpui::test]
+fn a_shelf_folds_and_turns_round_from_where_it_is(cx: &mut TestAppContext) {
+    ferrite_ui::motion::testing::drive();
+    let (mut core, _fake) = cockpit("nav-shelf-fold", 4);
+    let threads = sorted_threads(&core);
+    core.park(threads[0]).unwrap();
+    core.park(threads[1]).unwrap();
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    hide_panel(&view, cx);
+    cx.simulate_resize(gpui::size(px(1000.), px(700.)));
+    tick(cx);
+    let top = |cx: &mut gpui::VisualTestContext| {
+        f32::from(cx.debug_bounds("nav-shelf-parked").unwrap().top())
+    };
+    let live = cx.debug_bounds(card(threads[2])).unwrap();
+    let step = |ms: u64, cx: &mut gpui::VisualTestContext| {
+        cx.executor().advance_clock(Duration::from_millis(ms));
+        cx.update(|window, cx| window.simulate_next_frame(cx));
+        cx.run_until_parked();
+    };
+    let folded = top(cx);
+    let header = cx.debug_bounds("nav-shelf-parked").unwrap();
+    cx.simulate_click(header.center(), gpui::Modifiers::none());
+    cx.run_until_parked();
+    step(20, cx);
+    step(20, cx);
+    let part = top(cx);
+    assert!(part < folded, "opening lifts the heading: {part} < {folded}");
+    step(ferrite_ui::theme::MOTION_FOLD_MS, cx);
+    step(16, cx);
+    let open = top(cx);
+    assert!(open < part, "and settles higher: {open} < {part}");
+    let header = cx.debug_bounds("nav-shelf-parked").unwrap();
+    cx.simulate_click(header.center(), gpui::Modifiers::none());
+    cx.run_until_parked();
+    step(20, cx);
+    step(20, cx);
+    let closing = top(cx);
+    assert!(closing > open && closing < folded, "closing: {closing}");
+    let header = cx.debug_bounds("nav-shelf-parked").unwrap();
+    cx.simulate_click(header.center(), gpui::Modifiers::none());
+    cx.run_until_parked();
+    step(1, cx);
+    assert!(
+        (top(cx) - closing).abs() < 12.0,
+        "a reversal starts from the frame on screen: {} from {closing}",
+        top(cx)
+    );
+    step(ferrite_ui::theme::MOTION_FOLD_MS, cx);
+    step(16, cx);
+    assert_eq!(top(cx), open, "and opens fully");
+    assert_eq!(
+        cx.debug_bounds(card(threads[2])).unwrap().top(),
+        live.top(),
+        "a live card above does not move"
+    );
+}
+
+/// With motion reduced a shelf opens and shuts in the click's own frame.
+#[gpui::test]
+fn a_shelf_snaps_when_motion_is_reduced(cx: &mut TestAppContext) {
+    ferrite_ui::motion::testing::drive();
+    let (mut core, _fake) = cockpit("nav-shelf-reduced", 4);
+    let threads = sorted_threads(&core);
+    core.park(threads[0]).unwrap();
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    hide_panel(&view, cx);
+    cx.simulate_resize(gpui::size(px(1000.), px(700.)));
+    cx.update(|_, cx| cx.set_reduce_motion(true));
+    tick(cx);
+    let header = cx.debug_bounds("nav-shelf-parked").unwrap();
+    cx.simulate_click(header.center(), gpui::Modifiers::none());
+    cx.run_until_parked();
+    cx.update(|window, cx| window.simulate_next_frame(cx));
+    cx.run_until_parked();
+    let row = cx.debug_bounds(card(threads[0])).expect("open at once");
+    assert!(
+        cx.debug_bounds("nav-shelf-parked").unwrap().bottom() <= row.top() + px(1.),
+        "the row sits in its place under the heading"
+    );
 }

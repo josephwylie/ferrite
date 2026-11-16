@@ -78,6 +78,9 @@ pub(crate) struct Panel {
     /// at once.
     shown: Option<(ThreadId, Option<SurfaceId>)>,
     picked: Option<std::time::Instant>,
+    /// When the operator last chose another view of a pull request
+    /// (Summary, Guide, Timeline, Code): its body fades in from then.
+    pub(in crate::cockpit) pr_picked: Option<std::time::Instant>,
     /// The Thread whose Panel's left edge is being dragged.
     resizing: Option<ThreadId>,
     /// The tab pressed, until the button goes up.
@@ -121,6 +124,7 @@ impl Panel {
             tended: false,
             shown: None,
             picked: None,
+            pr_picked: None,
             resizing: None,
             tab_press: None,
             empty_highlight: 0,

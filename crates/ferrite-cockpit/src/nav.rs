@@ -15,7 +15,8 @@
 //!
 //! Rows move as T3's do (`flip::ListMotion`): one that moves slides from
 //! its old place over 150ms, one that enters drops in, one that leaves is
-//! drawn as a fading ghost. Shelf folds snap.
+//! drawn as a fading ghost. A shelf's body eases open and shut
+//! (`motion::fold_body`), the list's own motion standing still for it.
 //!
 //! Drawing only, like `pane.rs`: the cockpit assembles a `NavState` per
 //! frame from O(1) reads plus its project/branch/parked caches —

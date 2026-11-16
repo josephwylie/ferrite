@@ -20,13 +20,14 @@
 //! | selection move | none | the nav's one selection ground (`paint::SELECTED`) moves at once: selection is keyboard-rate |
 //! | toasts | [`TOAST_IN`] 200ms quart, its own height / [`TOAST_OUT`] 200ms quart to 0.85 | the Needs-you toast (FL-18), hung top right under the window's head, slides out from under it ([`toast_in`]); one that goes on its own fades away shrinking, drawn as a face that answers no pointer ([`toast_out`], [`Exits`]). The kit's toasts (the Server and update toasts) move the same way on the same two tokens (`DefaultToastMotion`; the card through Ferrite's patch to the vendored gpui-component) |
 //! | loops | pulse clock / display | the Composer's caret blink and the spinners ride [`loop_phase`] (one timer on a ~30fps grid, woken only when a loop's picture changes, parks) instead of a per-frame repeat; the working marks (the working line, nav, Pane heads, plan steps), whose orbs move at every instant, and the working line's shimmer, whose crest does, ride [`frame_loop`]: the display's rate, one request a frame for the window, only while one can be seen; no dot breathes |
-//! | menus, popovers | [`MENU_IN`] 0ms: a snap | every Ferrite-drawn menu and popover, open and shut ([`menu_in`]), as Claude's `Menu`, `ContextMenu` and `Popover` |
+//! | menus | [`MENU_IN`] 100ms / [`MENU_OUT`] 80ms quart, 0.98 → 1 about the edge it hangs on, `MOTION_MENU_SHIFT` off its opener | the context menu and an answer's or an output's menu come in ([`float_in`]); the context menu goes as a face no pointer finds ([`float_gone`], [`Exits::standing`]); an answer's and an output's snap shut. Keys select at once |
+//! | popovers | [`POPOVER_IN`] 120ms / [`POPOVER_OUT`] 100ms quart, as a menu | the model picker, the permission menu and the plan, checks and session cards come in ([`float_in`]); all but the model picker (its search and focus are its own) go as a face no pointer finds ([`float_gone`]); opening one again draws the open one alone. Under reduced motion all snap |
 //! | dialog | [`DIALOG_IN`] / [`DIALOG_OUT`] 200ms quart, 0.98 ↔ 1 | the Settings and Project sheets, in ([`dialog_in`]) and out ([`dialog_out`]), over their veil fading both ways over [`VEIL`] ([`veil_in`], [`veil_out`]) |
 //! | palette | [`DIALOG_IN`] in from its top, [`PALETTE_OUT`] 120ms out | the palette and the shortcuts sheet ([`dialog_in_casting`], [`float_out`]), their veil fading over [`PALETTE_VEIL`] 50ms both ways |
 //! | tooltip | [`TOOLTIP_IN`] 120ms ease-snap, 0.98 → 1 | every tooltip (`menu::tooltip`, [`tooltip_in`]) after gpui's 300ms delay; the next one within 200ms shows at once, with no entrance. No exit: gpui drops a tooltip on its frame |
 //! | nav tooltip | [`NAV_TOOLTIP_IN`] 150ms standard, 0.98 → 1 | the nav's tooltips (`menu::nav_tooltip`, `nav::NavTooltip`), T3's: 12px, after 150ms, the next within 400ms at once; scrolling the list dismisses one. No exit, as above |
 //! | nav list | [`NAV_LIST`] 150ms `ease-out`, ±40px | the nav's rows (`nav::flip::ListMotion`, T3's `Sidebar.motion.ts`): a row that moves slides from its old top, one that enters fades in from 40px above (or rides the moved row above it), one that leaves is drawn as a ghost fading 40px down; a move cut short carries on from where it is. Never on first paint, a shelf toggle, a drag, reduced motion, or an update fading more than 40 rows |
-//! | shelf fold | none | a nav shelf (Working, Snoozed, Parked) opens and shuts at once; only its chevron turns, over [`SHELF_CHEVRON`] 150ms standard |
+//! | shelf fold | [`FOLD`] 150ms ease-out, height and opacity | a nav shelf's body (Working, Snoozed, Parked) opens and shuts clipped (`fold_body`, a [`Reveal`] per shelf), the headings below following it every frame while the list's own motion stands still; a reversal turns round from the frame on screen; the shown Thread's row never moves; reduced motion snaps; its chevron turns with it over [`SHELF_CHEVRON`] 150ms standard |
 //! | slim row action | [`SLIM_ACTION`] 150ms standard | under the pointer a slim row's time fades out and its Revive or Wake fades in; its badge comes up from 40% greyscale |
 //! | undo notice | [`UNDO_NOTICE`] 200ms Tailwind `ease-out` | the foot's `Parked, Undo ⌘Z` fades in, and out before it goes |
 //! | thread-state line | [`LINE_IN`] 150ms Tailwind `ease-out`, opacity only | the background-work line at the transcript's foot fades in when work begins; it goes at once |
@@ -60,8 +61,8 @@
 //! would clip rows the pointer can already reach.
 //!
 //! **What stays still** (T3 Code leaves these unanimated; do not add
-//! motion to them): menus, context menus and the `/` and `@` menus
-//! (`MENU_IN` 0ms); the Composer's height after a send clears it; the
+//! motion to them): the `/` and `@` menus (the Composer's own lists); the
+//! Composer's height after a send clears it; the
 //! scroll on a send's release to the tail, on Composer or footer growth
 //! while following, on idle tail growth, on the anchor holding its place
 //! as its own row resizes, and on restoring a thread's position; Scroll to
@@ -310,7 +311,10 @@ pub const STREAM_LAND: Duration = Duration::from_millis(theme::MOTION_STREAM_LAN
 /// The sent bubble's pop (`bubble_face`).
 pub const BUBBLE_IN: MotionSpec = spec(theme::MOTION_BUBBLE_FADE_MS, EASE_OVERSHOOT);
 pub const FADE_QUICK: MotionSpec = spec(theme::MOTION_FADE_QUICK_MS, EASE);
-pub const MENU_IN: MotionSpec = spec(theme::MOTION_MENU_IN_MS, EASE);
+pub const MENU_IN: MotionSpec = spec(theme::MOTION_MENU_IN_MS, EASE_OUT_QUART);
+pub const MENU_OUT: MotionSpec = spec(theme::MOTION_MENU_OUT_MS, EASE_OUT_QUART);
+pub const POPOVER_IN: MotionSpec = spec(theme::MOTION_POPOVER_IN_MS, EASE_OUT_QUART);
+pub const POPOVER_OUT: MotionSpec = spec(theme::MOTION_POPOVER_OUT_MS, EASE_OUT_QUART);
 pub const DIALOG_IN: MotionSpec = spec(theme::MOTION_DIALOG_IN_MS, EASE_OUT_QUART);
 pub const DIALOG_OUT: MotionSpec = spec(theme::MOTION_DIALOG_OUT_MS, EASE_OUT_QUART);
 /// A sheet's veil, darkening in and lifting out with it.
@@ -409,6 +413,7 @@ pub const FROM_CENTRE: ScaleFrom = (0.5, 0.5);
 pub const FROM_TOP: ScaleFrom = (0.5, 0.0);
 pub const FROM_TOP_LEFT: ScaleFrom = (0.0, 0.0);
 pub const FROM_RIGHT: ScaleFrom = (1.0, 0.5);
+pub const FROM_BOTTOM: ScaleFrom = (0.5, 1.0);
 
 /// `el` painted at `scale` about `from`; nothing at 1.
 fn scaled<E: Styled>(el: E, scale: f32, from: ScaleFrom) -> E {
@@ -426,8 +431,9 @@ fn scaled<E: Styled>(el: E, scale: f32, from: ScaleFrom) -> E {
 // after layout, so, like a CSS transform, siblings never move. A scale is
 // painted only (Ferrite's gpui patch). The entrances play once when their
 // element id first mounts, so a caller mounts one only for a change the
-// operator watched. A menu or a popover has no exit: it is gone at once, as
-// Claude's are. A sheet, the palette and a toast leave as a face that
+// operator watched. A menu or a popover the Cockpit holds the state of goes
+// as a face too ([`float_gone`]); the rest are gone at once. A sheet, the
+// palette and a toast leave as a face that
 // answers no pointer ([`float_out`], [`dialog_out`], [`toast_out`]), drawn
 // from the instant they went until their exit has run; the caller stops
 // drawing it then ([`Exits`]).
@@ -466,7 +472,32 @@ impl Opens {
         };
         toward * theme::MOTION_MENU_SHIFT * (1.0 - t)
     }
+
+    /// The edge it grows from: the one it hangs on.
+    fn origin(self) -> ScaleFrom {
+        match self {
+            Opens::Down => FROM_TOP,
+            Opens::Up => FROM_BOTTOM,
+            Opens::InPlace => FROM_CENTRE,
+        }
+    }
 }
+
+/// How a floating surface comes and goes: a menu or a popover.
+#[derive(Debug, Clone, Copy)]
+pub struct FloatMotion {
+    pub into: MotionSpec,
+    pub out: MotionSpec,
+}
+
+pub const MENU: FloatMotion = FloatMotion {
+    into: MENU_IN,
+    out: MENU_OUT,
+};
+pub const POPOVER: FloatMotion = FloatMotion {
+    into: POPOVER_IN,
+    out: POPOVER_OUT,
+};
 
 /// A floating surface at `opacity`, its float shadow ramped under it.
 fn float_face<E: Styled>(el: E, opacity: f32) -> E {
@@ -491,26 +522,66 @@ fn grown<E: Styled>(el: E, t: f32, from: ScaleFrom) -> E {
 
 /// `menu-in` for a floating surface in flow (inside `anchored` or a
 /// wrapper): fades up from `MOTION_MENU_FROM_OPACITY` and grows from
-/// `MOTION_FLOAT_FROM_SCALE` while settling `MOTION_MENU_SHIFT` away from
-/// its opener. At 0ms (`MOTION_MENU_IN_MS`, a snap) it is the element
-/// itself: no entrance state, no face, no frame.
-pub fn menu_in<E>(id: impl Into<ElementId>, element: E, opens: Opens) -> AnyElement
+/// `MOTION_FLOAT_FROM_SCALE` about the edge it hangs on while settling
+/// `MOTION_MENU_SHIFT` away from its opener.
+pub fn float_in<E>(
+    motion: FloatMotion,
+    id: impl Into<ElementId>,
+    element: E,
+    opens: Opens,
+) -> AnyElement
 where
     E: Styled + IntoElement + 'static,
 {
-    if MENU_IN.duration_ms == 0 {
-        return element.into_any_element();
-    }
-    entrance(id, MENU_IN, element, move |el, t| {
+    entrance(id, motion.into, element, move |el, t| {
         grown(
             float_face(el, lerp(theme::MOTION_MENU_FROM_OPACITY, 1.0, t)),
             t,
-            FROM_CENTRE,
+            opens.origin(),
         )
         .relative()
         .top(px(opens.shift(t)))
     })
     .into_any_element()
+}
+
+/// A menu or popover as it stands: coming in, or, when it `left` at an
+/// instant, going ([`float_gone`]).
+pub fn float_at<E>(
+    motion: FloatMotion,
+    left: Option<Instant>,
+    id: impl Into<ElementId>,
+    element: E,
+    opens: Opens,
+) -> AnyElement
+where
+    E: Styled + IntoElement + 'static,
+{
+    match left {
+        None => float_in(motion, id, element, opens),
+        Some(left) => float_gone(motion, left, element, opens).into_any_element(),
+    }
+}
+
+/// A menu or popover that went at `left`: it fades and shrinks back toward
+/// its opener over `motion.out`, under a cover that takes every press — a
+/// face no pointer finds. The caller draws it without its own handlers and
+/// stops once `motion.out` has passed ([`Exits::standing`]).
+pub fn float_gone<E>(
+    motion: FloatMotion,
+    left: Instant,
+    element: E,
+    opens: Opens,
+) -> impl IntoElement
+where
+    E: Styled + IntoElement + 'static,
+{
+    unreachable_face(Played {
+        origin: Origin::At(left),
+        spec: motion.out,
+        element,
+        face: move |el: E, t: f32| grown(float_face(el, 1.0 - t), 1.0 - t, opens.origin()),
+    })
 }
 
 /// `dialog-in` for a sheet: opacity 0 → 1, growing from
@@ -1484,6 +1555,23 @@ impl<T: Clone> Exits<T> {
             self.leaving = None;
         }
         self.leaving.clone()
+    }
+
+    /// What to draw this frame for a surface `open` or just closed: the
+    /// open one, or the last one open with when it went while `exit` runs.
+    /// Opening it again draws the open one alone, never beside its exit.
+    pub fn standing(
+        &mut self,
+        open: Option<T>,
+        exit: MotionSpec,
+        now: Instant,
+        reduced: bool,
+    ) -> Option<(T, Option<Instant>)> {
+        let leaving = self.stage(open.as_ref(), |_, _| true, exit, now, reduced);
+        match open {
+            Some(open) => Some((open, None)),
+            None => leaving.map(|(gone, left)| (gone, Some(left))),
+        }
     }
 
     /// What stood goes at once, with no exit (the operator answered it).
