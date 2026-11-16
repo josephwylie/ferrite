@@ -216,6 +216,9 @@ impl CockpitView {
                     self.open_preview_from(index, file.path, line, cx);
                 }
             }
+            Some(Destination::PullRequest { number, url }) => {
+                self.open_named_pr(thread, number, url, cx)
+            }
             None => {}
         }
     }
@@ -498,12 +501,14 @@ mod tests {
 }
 
 /// Where a printed address goes: a web address to the Thread's browser, a
-/// path to the Panel's editor. Other schemes a program names stay shut:
+/// path to the Panel's editor, a PR of the checkout's repository to its
+/// native detail (`open_named_pr`). Other schemes a program names stay shut:
 /// terminal output is not trusted with the OS's openers.
 #[derive(Debug, PartialEq)]
 enum Destination {
     Web(String),
     File(ferrite_pane::file_links::FileLink),
+    PullRequest { number: u64, url: String },
 }
 
 impl Destination {
@@ -513,6 +518,7 @@ impl Destination {
                 Some(Self::Web(url))
             }
             LinkTarget::File(file) => Some(Self::File(file)),
+            LinkTarget::RepoPullRequest { number, url } => Some(Self::PullRequest { number, url }),
             _ => None,
         }
     }
@@ -539,6 +545,29 @@ mod destination_tests {
         };
         assert_eq!(file.path, folder.join("src/main.rs"));
         assert_eq!(file.line(), Some(12));
+    }
+
+    /// `gh pr create`'s printed address of the checkout's own repository
+    /// reads natively, keeping the address as printed.
+    #[test]
+    fn a_pr_address_of_the_checkouts_repository_reads_natively() {
+        let folder = std::env::temp_dir().join(format!("ferrite-terminal-pr-{}", std::process::id()));
+        std::fs::create_dir_all(folder.join(".git")).unwrap();
+        std::fs::write(
+            folder.join(".git/config"),
+            "[remote \"origin\"]\n\turl = git@github.com:owner/repo.git\n",
+        )
+        .unwrap();
+        let printed = "https://github.com/owner/repo/pull/123/files";
+        assert_eq!(
+            Destination::of(printed, Some(&folder)),
+            Some(Destination::PullRequest { number: 123, url: printed.into() })
+        );
+        assert_eq!(
+            Destination::of("https://github.com/other/repo/pull/9", Some(&folder)),
+            Some(Destination::Web("https://github.com/other/repo/pull/9".into()))
+        );
+        let _ = std::fs::remove_dir_all(folder);
     }
 
     #[test]

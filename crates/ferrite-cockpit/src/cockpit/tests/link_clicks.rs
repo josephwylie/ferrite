@@ -379,22 +379,75 @@ fn issue_answer<'a>(
     (view, cx)
 }
 
+/// The PR tab `thread`'s Panel shows, if it shows one.
+fn shown_pr(view: &Entity<CockpitView>, cx: &mut gpui::VisualTestContext) -> Option<u64> {
+    view.read_with(cx, |view, _| {
+        (view.prs.shown && view.prs.detail)
+            .then_some(view.prs.selected)
+            .flatten()
+    })
+}
+
+fn back_to_transcript(view: &Entity<CockpitView>, cx: &mut gpui::VisualTestContext) {
+    view.update(cx, |view, cx| {
+        view.leave_destination();
+        cx.notify();
+    });
+    tick(cx);
+}
+
+/// `#212` in a GitHub checkout is that repository's PR: a press opens its
+/// native detail in the PRs destination, not a browser; the menu still offers both browsers, and
+/// Copy gives the forge address.
 #[gpui::test]
-fn an_issue_reference_opens_and_copies_its_forge_address(cx: &mut TestAppContext) {
+fn a_pr_number_opens_its_native_detail_and_copies_its_forge_address(cx: &mut TestAppContext) {
     let page = "https://github.com/owner/repo/issues/212";
     let (view, cx) = issue_answer("link-issue-origin", Some("git@github.com:owner/repo.git"), cx);
     let at = caret(&view, cx, 0, 11);
     cx.simulate_click(at, gpui::Modifiers::none());
-    browser_opened(&view, cx);
+    assert_eq!(shown_pr(&view, cx), Some(212));
+    browser_closed(&view, cx);
+    back_to_transcript(&view, cx);
 
     let at = caret(&view, cx, 0, 11);
     right_click(at, cx);
-    menu_row(2, cx);
+    menu_row(3, cx);
     assert_eq!(cx.read_from_clipboard().and_then(|item| item.text()).as_deref(), Some(page));
     let at = caret(&view, cx, 0, 11);
     right_click(at, cx);
-    menu_row(1, cx);
+    menu_row(2, cx);
     assert_eq!(cx.opened_url().as_deref(), Some(page));
+}
+
+/// The repository's own PR address in prose opens the same native detail;
+/// another repository's stays a web page.
+#[gpui::test]
+fn a_pr_address_of_this_repository_opens_its_native_detail(cx: &mut TestAppContext) {
+    let (core, fake, checkout) = bound_cockpit("link-pr-address", Provider::Claude);
+    std::fs::create_dir_all(checkout.join(".git")).unwrap();
+    std::fs::write(
+        checkout.join(".git/config"),
+        "[remote \"origin\"]\n\turl = https://github.com/owner/repo.git\n",
+    )
+    .unwrap();
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    hide_panel(&view, cx);
+    cx.simulate_resize(gpui::size(px(1000.), px(700.)));
+    fake.streams.borrow()[0]
+        .send(SessionEvent::TextDelta {
+            text: "Opened https://github.com/owner/repo/pull/305 today.\n\nSee https://github.com/other/repo/pull/9 too.\n\n".into(),
+        })
+        .unwrap();
+    tick(cx);
+    let at = caret(&view, cx, 0, 12);
+    cx.simulate_click(at, gpui::Modifiers::none());
+    assert_eq!(shown_pr(&view, cx), Some(305));
+    assert_eq!(cx.opened_url(), None);
+    back_to_transcript(&view, cx);
+
+    let at = caret(&view, cx, 1, 8);
+    cx.simulate_click(at, gpui::Modifiers::none());
+    browser_opened(&view, cx);
 }
 
 /// No origin, no address: the press and the rows say why, and nothing is

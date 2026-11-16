@@ -186,13 +186,16 @@ impl PathTarget {
 
 type OpenReader = Rc<dyn Fn(PathBuf, Option<u32>, &mut Window, &mut App)>;
 type OpenThread = Rc<dyn Fn(ferrite_core::ThreadId, &mut Window, &mut App)>;
+type OpenPullRequest = Rc<dyn Fn(u64, String, &mut Window, &mut App)>;
 
 /// What a transcript does with a press on a link in its prose: ⌘-click on a
-/// path opens the Thread's preview, a Thread link opens that Thread.
+/// path opens the Thread's preview, a Thread link opens that Thread, and a
+/// link to one of its repository's pull requests opens that PR's detail.
 #[derive(Clone)]
 pub(crate) struct ScopeRoute {
     pub reader: OpenReader,
     pub thread: OpenThread,
+    pub pull_request: OpenPullRequest,
 }
 
 /// Where ⌘-click on a target goes, by the transcript namespace hosting it,
@@ -271,6 +274,21 @@ pub(crate) fn open_thread(
     if let Some(open) = handler {
         open(thread, window, cx);
     }
+}
+
+/// Open the PR a prose link names, through the transcript hosting `scope`.
+/// Answers whether a transcript took it.
+pub(crate) fn open_pull_request(
+    scope: &str,
+    number: u64,
+    url: String,
+    window: &mut Window,
+    cx: &mut App,
+) -> bool {
+    let handler = cx
+        .try_global::<PathScopes>()
+        .and_then(|scopes| scopes.open.get(scope).map(|(_, route)| route.pull_request.clone()));
+    handler.map(|open| open(number, url, window, cx)).is_some()
 }
 
 /// A transcript renders `scope` anew: the first target of each path laid
@@ -670,14 +688,18 @@ thread_local! {
 /// (`git@github.com:owner/repo.git` → `https://github.com/owner/repo/issues/212`),
 /// read once per checkout from its git config.
 pub(crate) fn issue_url(workspace: &Path, number: &str) -> Option<String> {
-    let base = ORIGINS.with(|cache| {
+    Some(format!("{}/issues/{number}", origin_base(workspace)?))
+}
+
+/// The web address of the forge repository `workspace`'s origin names.
+pub fn origin_base(workspace: &Path) -> Option<String> {
+    ORIGINS.with(|cache| {
         cache
             .borrow_mut()
             .entry(workspace.to_path_buf())
             .or_insert_with(|| origin_web_base(workspace))
             .clone()
-    })?;
-    Some(format!("{base}/issues/{number}"))
+    })
 }
 
 /// The origin remote's web base for the git checkout holding `dir`.

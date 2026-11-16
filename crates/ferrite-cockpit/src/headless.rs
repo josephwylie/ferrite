@@ -26,8 +26,9 @@ const TICK_MS: u64 = 16;
 
 /// `ferrite --headless`: the production window on this Store's Server,
 /// drawn off-screen and driven only by the Server's `window.*` actions.
-/// It runs until it is stopped.
-pub fn run() {
+/// It runs until it is stopped. Remote images load through `http`, as the
+/// app's do.
+pub fn run(http: Arc<dyn gpui::http_client::HttpClient>) {
     // Never the operator's Store: a driven window on it would let any API
     // caller type into their Threads and answer their Decisions.
     throwaway("FERRITE_STORE", "");
@@ -46,6 +47,7 @@ pub fn run() {
         ferrite_core::spawner::SessionDefaults::from_settings(&settings),
     ));
     let mut cx = app(keys);
+    cx.update(|cx| cx.set_http_client(http));
     let machines = cx.new(|_| {
         Machines::new(
             Reach {

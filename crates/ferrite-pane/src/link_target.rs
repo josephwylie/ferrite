@@ -12,7 +12,7 @@ use std::path::Path;
 use ferrite_core::ThreadId;
 use gpui::{App, SharedString, Window};
 
-use crate::file_links::{issue_url, FileLink};
+use crate::file_links::{issue_url, origin_base, FileLink};
 use crate::preview::Preview;
 use crate::rich::{CHIP_SCHEME, ISSUE_SCHEME, PATH_SCHEME, SKILL_SCHEME, THREAD_SCHEME};
 
@@ -24,6 +24,13 @@ pub enum LinkTarget {
         thread: ThreadId,
         number: u64,
         url: Option<String>,
+    },
+    /// A pull request of the repository the link's checkout belongs to,
+    /// named by `#N` or by its forge address: the app opens its native
+    /// detail, and `url` is where a browser would go.
+    RepoPullRequest {
+        number: u64,
+        url: String,
     },
     Thread(ThreadId),
     /// A file, and the line or range inside it (`FileLink::location`).
@@ -66,6 +73,10 @@ impl LinkTarget {
     /// checkout its relative paths and issue numbers belong to.
     pub fn resolve(raw: &str, cwd: Option<&Path>) -> Self {
         let raw = raw.strip_prefix(PATH_SCHEME).unwrap_or(raw);
+        let base = cwd.and_then(origin_base);
+        if let Some(pr) = base.as_deref().and_then(|base| repo_pull_request(raw, base)) {
+            return pr;
+        }
         if let Some(number) = raw.strip_prefix(ISSUE_SCHEME) {
             return match cwd.and_then(|cwd| issue_url(cwd, number)) {
                 Some(url) => Self::External(url),
@@ -102,7 +113,9 @@ impl LinkTarget {
     /// The text Copy puts on the clipboard, or why there is none.
     pub fn address(&self) -> Result<String, SharedString> {
         match self {
-            Self::PullRequest { url: Some(url), .. } | Self::External(url) => Ok(url.clone()),
+            Self::PullRequest { url: Some(url), .. }
+            | Self::RepoPullRequest { url, .. }
+            | Self::External(url) => Ok(url.clone()),
             Self::PullRequest { number, .. } => {
                 Err(format!("PR #{number} has no address yet").into())
             }
@@ -125,7 +138,8 @@ impl LinkTarget {
         cx: &mut App,
     ) -> bool {
         match self {
-            Self::External(url) => {
+            Self::RepoPullRequest { .. } if how == Open::Primary => false,
+            Self::External(url) | Self::RepoPullRequest { url, .. } => {
                 let inside = how != Open::System
                     && preview.is_some_and(|preview| preview.open_url(url, window));
                 if !inside {
@@ -145,9 +159,31 @@ impl LinkTarget {
                 notify_unavailable(why, window, cx);
                 true
             }
-            Self::PullRequest { .. } | Self::Thread(_) => false,
+            Self::PullRequest { .. } | Self::RepoPullRequest { .. } | Self::Thread(_) => false,
         }
     }
+}
+
+/// `raw` as a pull request of the repository at `base`: `issue:N` (the
+/// renderer's `#N`), or the forge's `<base>/pull/N` with or without a page
+/// after it.
+/// Only GitHub's numbers read natively yet.
+fn repo_pull_request(raw: &str, base: &str) -> Option<LinkTarget> {
+    if !base.starts_with("https://github.com/") {
+        return None;
+    }
+    // GitHub sends `/issues/N` on to `/pull/N` for a PR, so a bare `#N`
+    // keeps an address that is right whichever it names.
+    let (number, url) = match raw.strip_prefix(ISSUE_SCHEME) {
+        Some(number) => (number, format!("{base}/issues/{number}")),
+        None => {
+            let rest = raw.strip_prefix(base)?.strip_prefix("/pull/")?;
+            let end = rest.find(['/', '#', '?']).unwrap_or(rest.len());
+            (&rest[..end], raw.to_string())
+        }
+    };
+    let number: u64 = number.parse().ok()?;
+    Some(LinkTarget::RepoPullRequest { number, url })
 }
 
 pub fn notify_unavailable(why: &str, window: &mut Window, cx: &mut App) {
