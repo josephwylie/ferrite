@@ -68,6 +68,8 @@ def prepare(output, binary, server):
     for config_path in (root / "ssh-hosts/config", root / "ssh_config"):
         with config_path.open("a") as stream:
             stream.write(f"\nInclude {included}/*.conf\n")
+            stream.write("\nHost ferrite-pending\n    HostName 127.0.0.1\n    Port 1\n"
+                         "    ConnectTimeout 20\n    ProxyCommand /bin/sleep 20\n")
     for name in ("remote-project", "local-project"):
         project = root / name
         project.mkdir(exist_ok=True)
@@ -250,7 +252,7 @@ def modal_flow(ui):
     ui.shot("07-ssh-validation")
     assert not ui.saved(), "Invalid SSH connection persisted"
     ui.click("connection-close")
-    ui.add_ssh("ferrite-unreachable")
+    ui.add_ssh("ferrite-pending")
     ui.wait("connection-progress")
     ui.shot("08-ssh-connecting-cancel")
     ui.click("connection-close")

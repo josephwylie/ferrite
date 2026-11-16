@@ -163,6 +163,7 @@ fn mode_card(
             .flex()
             .items_start()
             .w_full()
+            .h_full()
             .gap(px(12.))
             .child(
                 div()
