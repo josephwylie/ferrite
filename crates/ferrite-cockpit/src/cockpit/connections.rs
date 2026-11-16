@@ -986,6 +986,11 @@ impl CockpitView {
     }
 
     fn toggle_local_environment(&mut self, cx: &mut Context<Self>) {
+        if let Some(error) = &self.prefs.unreadable {
+            self.connections.error = Some(format!("Settings cannot be saved: {error}"));
+            cx.notify();
+            return;
+        }
         let enabled = !self.prefs.settings.local_environment_enabled;
         if !enabled && !self.on_machine() {
             if let Some(error) = self.files_leave_error(cx) {

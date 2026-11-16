@@ -2303,3 +2303,38 @@ fn local_environment_switch_persists_and_empty_client_blocks_new_threads(cx: &mu
     }
     assert!(cx.debug_bounds("no-environment-connections").is_some());
 }
+
+#[gpui::test]
+fn local_environment_switch_preserves_unreadable_settings(cx: &mut TestAppContext) {
+    let (core, _fake) = cockpit("local-toggle-unreadable", 1);
+    let prefs = Preferences {
+        unreadable: Some("expected value at line 1 column 1".into()),
+        ..Preferences::ephemeral()
+    };
+    let path = prefs.dir.join(ferrite_core::settings::Settings::FILE);
+    std::fs::create_dir_all(&prefs.dir).unwrap();
+    std::fs::write(&path, b"not json").unwrap();
+    let (view, cx) = add_cockpit_window(cx, |_, cx| {
+        CockpitView::new_with_settings(core, Provider::Codex, prefs, cx)
+    });
+    let toggle = view.update_in(cx, |view, window, cx| {
+        view.connection_settings(window, cx)
+            .into_iter()
+            .flat_map(|group| group.rows)
+            .find_map(|row| match row.control {
+                settings::Control::ConnectionRow(row) => row
+                    .actions
+                    .into_iter()
+                    .find(|action| action.id.as_ref() == "connection-toggle-local")
+                    .map(|action| action.act),
+                _ => None,
+            })
+            .unwrap()
+    });
+    cx.update(|window, cx| toggle(window, cx));
+    view.read_with(cx, |view, _| {
+        assert!(view.prefs.settings.local_environment_enabled);
+        assert!(view.connections.error.as_deref().unwrap().contains("Settings cannot be saved"));
+    });
+    assert_eq!(std::fs::read(&path).unwrap(), b"not json");
+}
