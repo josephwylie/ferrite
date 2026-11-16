@@ -1,0 +1,23 @@
+{
+  "path": "02-add-remote-link.jpg",
+  "sha256": "39b8549b3fdc0588890b52df00e279269c1931244e04cf8ea2b5a5da71e10e0d",
+  "logical_viewport": [
+    1470,
+    923
+  ],
+  "device_pixel_ratio": 2,
+  "pixel_dimensions": [
+    2940,
+    1846
+  ],
+  "image_format": "JPEG",
+  "crop_px": [
+    0,
+    0,
+    2940,
+    1846
+  ],
+  "surface": "Actual installed T3 native application",
+  "installed_version": "0.1.10-nightly.20261111.4544",
+  "capture_method": "cua_repl native getScreenshot; original bytes, no conversion"
+}

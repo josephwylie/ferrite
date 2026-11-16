@@ -1,0 +1,220 @@
+    Checking serde_core v1.0.229
+    Checking futures-util v0.3.34
+    Checking getrandom v0.2.17
+    Checking tokio v1.53.1
+    Checking subtle v2.6.1
+    Checking ring v0.17.14
+    Checking httpdate v1.0.3
+    Checking taffy v0.13.0 (/Users/josephwylie/Desktop/Projects/ferrite-remote-connections/vendor/taffy)
+    Checking sha1 v0.10.7
+    Checking data-encoding v2.11.1
+    Checking rand_core v0.6.4
+    Checking filedescriptor v0.8.3
+    Checking serial2 v0.2.39
+    Checking matchit v0.8.4
+    Checking rand_chacha v0.3.1
+    Checking downcast-rs v1.2.1
+    Checking shell-words v1.1.1
+    Checking rand v0.8.7
+    Checking glob v0.3.4
+    Checking shlex v1.3.0
+   Compiling ferrite-cockpit v0.4.0 (/Users/josephwylie/Desktop/Projects/ferrite-remote-connections/crates/ferrite-cockpit)
+   Compiling ferrite v0.4.0 (/Users/josephwylie/Desktop/Projects/ferrite-remote-connections/crates/ferrite)
+    Checking rustls-webpki v0.103.15
+    Checking bitflags v2.13.1
+    Checking erased-serde v0.4.10
+    Checking serde_fmt v1.1.0
+    Checking serde v1.0.229
+    Checking indexmap v2.14.0
+    Checking uuid v1.25.0
+    Checking objc2-core-foundation v0.3.2
+    Checking rustix v1.1.4
+    Checking value-bag-serde1 v1.13.2
+    Checking core-graphics-types v0.2.0
+    Checking serde_urlencoded v0.7.1
+    Checking value-bag v1.13.2
+    Checking chrono v0.4.45
+    Checking serde_json v1.0.151
+    Checking core-graphics v0.24.0
+    Checking futures-executor v0.3.34
+    Checking log v0.4.34
+    Checking security-framework v3.7.0
+    Checking tracing v0.1.44
+    Checking tracing-log v0.2.0
+    Checking gpui-pre-util v0.3.3
+    Checking rustls v0.23.43
+    Checking gpui-pre-collections v0.3.3
+    Checking tracing-subscriber v0.3.23
+    Checking simplecss v0.2.2
+    Checking objc2-foundation v0.3.2
+    Checking fontdb v0.23.0
+    Checking metal v0.33.0
+    Checking gpui-pre-zlog v0.3.3
+    Checking schemars v1.2.2
+    Checking futures v0.3.34
+    Checking rustybuzz v0.20.1
+    Checking tokio-util v0.7.19
+    Checking bincode v1.3.3
+    Checking accesskit v0.24.1
+    Checking core-graphics2 v0.5.2
+    Checking h2 v0.4.19
+    Checking tempfile v3.27.0
+    Checking polling v3.11.0
+    Checking gpui-pre-http-client v0.3.3
+    Checking core-text v21.0.0
+    Checking pathfinder_geometry v0.5.1
+    Checking tiny-skia v0.11.4
+    Checking globset v0.4.20
+    Checking png v0.18.1
+    Checking usvg v0.46.0
+    Checking rusty-fork v0.3.1
+    Checking zed-font-kit v0.14.1-zed
+    Checking proptest v1.11.0
+    Checking gpui-pre-shared-string v0.3.3
+    Checking image v0.25.10
+    Checking postage v0.5.0
+    Checking gpui-pre-scheduler v0.3.3
+    Checking async-io v2.6.0
+    Checking tokio-rustls v0.26.4
+    Checking plist v1.10.1
+    Checking gpui-pre-ztracing v0.3.3
+    Checking core-video v0.5.2
+    Checking gpui-pre-sum-tree v0.3.3
+    Checking cocoa-foundation v0.2.0
+    Checking string_cache v0.8.9
+    Checking objc2-foundation v0.2.2
+    Checking syntect v5.3.0
+    Checking resvg v0.46.0
+    Checking cocoa v0.26.0
+    Checking markup5ever v0.12.1
+    Checking accesskit_consumer v0.38.0
+    Checking hyper v1.11.0
+    Checking rustls-native-certs v0.8.4
+    Checking objc2-core-text v0.3.2
+    Checking objc2-core-graphics v0.3.2
+    Checking objc2-core-video v0.3.2
+    Checking gpui-pre-media v0.3.3
+    Checking async-signal v0.2.14
+    Checking gpui-pre v0.3.3 (/Users/josephwylie/Desktop/Projects/ferrite-remote-connections/vendor/gpui-pre)
+    Checking rustls-platform-verifier v0.7.0
+    Checking tower v0.5.3
+    Checking objc2-core-services v0.3.2
+    Checking dispatch2 v0.3.1
+    Checking notify-types v2.1.0
+    Checking semver v1.0.28
+    Checking notify v9.0.0-rc.5
+    Checking async-process v2.5.0
+    Checking objc2-app-kit v0.2.2
+    Checking html5ever v0.27.0
+    Checking xml5ever v0.18.1
+    Checking async-net v2.0.0
+    Checking rust-embed-utils v8.12.0
+    Checking heed-types v0.21.0
+    Checking triomphe v0.1.16
+    Checking rust-embed v8.12.0
+    Checking heed v0.22.1
+    Checking smol v2.0.2
+    Checking hyper-util v0.1.20
+    Checking fff-notify-debouncer-full v0.9.4
+    Checking rust-i18n-support v4.2.1
+    Checking ignore v0.4.33
+    Checking markup5ever_rcdom v0.3.0
+    Checking tracing-appender v0.2.5
+    Checking tokio-socks v0.5.3
+    Checking lsp-types v0.97.0
+    Checking git2 v0.21.0
+    Checking tungstenite v0.29.0
+    Checking markdown v1.0.0
+    Checking nix v0.31.3
+    Checking accesskit_macos v0.26.3
+    Checking system-configuration v0.6.1
+    Checking tokio-tungstenite v0.29.0
+    Checking rust-i18n v4.2.1
+    Checking gpui-pre-http-client-tls v0.3.3
+    Checking two-face v0.5.2+bat-0.26.1
+    Checking tungstenite v0.28.0
+    Checking fs-err v3.3.2
+    Checking axum-core v0.5.6
+    Checking notify v7.0.0
+    Checking ureq-proto v0.6.4
+    Checking process-wrap v10.0.1
+    Checking nix v0.28.0
+    Checking serde_path_to_error v0.1.20
+    Checking ureq v3.4.2
+    Checking axum-server v0.7.3
+    Checking keyring v3.6.3
+    Checking rustix-openpty v0.2.0
+    Checking vte v0.15.0
+    Checking ferrite-focus-notify v0.8.0 (/Users/josephwylie/Desktop/Projects/ferrite-remote-connections/crates/ferrite-focus-notify)
+    Checking axum v0.8.9
+    Checking portable-pty v0.9.0
+    Checking alacritty_terminal v0.26.0
+    Checking fff-search v0.11.0
+    Checking objc2-core-data v0.3.2
+    Checking objc2-core-location v0.3.2
+    Checking objc2-cloud-kit v0.3.2
+    Checking objc2-core-image v0.3.2
+    Checking objc2-quartz-core v0.3.2
+    Checking hyper-rustls v0.27.9
+    Checking objc2-user-notifications v0.3.2
+    Checking gpui-pre-reqwest v0.12.15
+    Checking tokio-tungstenite v0.28.0
+    Checking ferrite-reviewr v0.46.0 (/Users/josephwylie/Desktop/Projects/ferrite-remote-connections/crates/ferrite-reviewr)
+    Checking objc2-app-kit v0.3.2
+    Checking gpui-pre-reqwest-client v0.3.3
+    Checking ferrite-core v0.4.0 (/Users/josephwylie/Desktop/Projects/ferrite-remote-connections/crates/ferrite-core)
+    Checking gpui-pre-apple v0.3.3
+    Checking gpui-kit-assets v0.6.0
+    Checking gpui-pre-macos v0.3.3 (/Users/josephwylie/Desktop/Projects/ferrite-remote-connections/vendor/gpui-pre-macos)
+    Checking gpui-pre-platform v0.3.3
+    Checking gpui-base v0.6.0 (/Users/josephwylie/Desktop/Projects/ferrite-remote-connections/vendor/gpui-base)
+    Checking gpui-component v0.6.0 (/Users/josephwylie/Desktop/Projects/ferrite-remote-connections/vendor/gpui-component)
+    Checking gpui-kit v0.6.0
+    Checking ferrite-ui v0.4.0 (/Users/josephwylie/Desktop/Projects/ferrite-remote-connections/crates/ferrite-ui)
+    Checking ferrite-terminal v0.4.0 (/Users/josephwylie/Desktop/Projects/ferrite-remote-connections/crates/ferrite-terminal)
+    Checking ferrite-pane v0.4.0 (/Users/josephwylie/Desktop/Projects/ferrite-remote-connections/crates/ferrite-pane)
+    Checking ferrite-frame v0.4.0 (/Users/josephwylie/Desktop/Projects/ferrite-remote-connections/crates/ferrite-frame)
+warning: unreachable pattern
+   --> crates/ferrite-pane/src/link_target.rs:165:40
+    |
+142 |             Self::External(url) | Self::RepoPullRequest { url, .. } => {
+    |                                   --------------------------------- matches all the relevant values
+...
+165 |             Self::PullRequest { .. } | Self::RepoPullRequest { .. } | Self::Thread(_) => false,
+    |                                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^ no value can reach this
+    |
+    = note: `#[warn(unreachable_patterns)]` (part of `#[warn(unused)]`) on by default
+
+warning: `ferrite-pane` (lib) generated 1 warning
+warning: unused variable: `open`
+     --> crates/ferrite-cockpit/src/cockpit.rs:11567:13
+      |
+11567 |         let open = self.cockpit.thread(thread).filter(|open| open.resume_lost())?;
+      |             ^^^^ help: if this is intentional, prefix it with an underscore: `_open`
+      |
+      = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+warning: method `set_archive_search` is never used
+   --> crates/ferrite-cockpit/src/cockpit/archive.rs:161:19
+    |
+ 22 | impl CockpitView {
+    | ---------------- method in this implementation
+...
+161 |     pub(crate) fn set_archive_search(&mut self, text: &str, cx: &mut Context<Self>) {
+    |                   ^^^^^^^^^^^^^^^^^^
+    |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: associated function `of` is never used
+   --> crates/ferrite-cockpit/src/cockpit/workflows.rs:179:19
+    |
+177 | impl StepDrag {
+    | ------------- associated function in this implementation
+178 |     /// A drag of `step`, as a press on its row starts one.
+179 |     pub(crate) fn of(step: &Step) -> Self {
+    |                   ^^
+
+warning: `ferrite-cockpit` (lib) generated 3 warnings (run `cargo fix --lib -p ferrite-cockpit` to apply 1 suggestion)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 1m 09s
+warning: the following packages contain code that will be rejected by a future version of Rust: block v0.1.6
+note: to see what the problems were, use the option `--future-incompat-report`, or run `cargo report future-incompatibilities --id 1`

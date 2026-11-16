@@ -1,6 +1,8 @@
-# Native visual gallery
+# Earlier SSH visual gallery
 
-69 final captures from Ferrite’s production native renderer. Real localhost OpenSSH, prepared task-owned Server, and clearly labeled simulated Codex responses. The setup-warning diagnostic alone is fault-injected; file errors, conflicts, terminal exit and recovery use actual SSH operations.
+This is the earlier SSH-only iteration. The current connection modes and end-to-end parity evidence are in the [updated review gallery](parity/gallery.md).
+
+69 captures from Ferrite’s production native renderer. Real localhost OpenSSH, prepared task-owned Server, and clearly labeled simulated Codex responses. The setup-warning diagnostic alone is fault-injected; file errors, conflicts, terminal exit and recovery use actual SSH operations.
 
 Settings images are lossless crops of the modal; tool images retain the whole window. No retouching, rescaling, compositing or generated UI. The [manifest](evidence/screenshot-manifest.json) records original hashes, dimensions, crop coordinates and public-image hashes. Untrimmed captures and failed debug attempts remain local and can be regenerated with the [harness](../../../scripts/verify-remote-connections.py).
 

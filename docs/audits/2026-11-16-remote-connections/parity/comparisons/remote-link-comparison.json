@@ -1,0 +1,54 @@
+{
+  "sources": [
+    {
+      "path": "02-add-remote-link.jpg",
+      "sha256": "39b8549b3fdc0588890b52df00e279269c1931244e04cf8ea2b5a5da71e10e0d",
+      "logical_viewport": [
+        1470,
+        923
+      ],
+      "device_pixel_ratio": 2,
+      "pixel_dimensions": [
+        2940,
+        1846
+      ],
+      "image_format": "JPEG",
+      "crop_px": [
+        0,
+        0,
+        2940,
+        1846
+      ],
+      "surface": "Actual installed T3 native application",
+      "installed_version": "0.1.10-nightly.20261111.4544",
+      "capture_method": "cua_repl native getScreenshot; original bytes, no conversion"
+    },
+    {
+      "path": "/Users/josephwylie/Desktop/Projects/ferrite-remote-connections/docs/audits/2026-11-16-remote-connections/parity/native-7/02-add-remote-default-1470x923.png",
+      "sha256": "561f9bd915300087e1a7ff2814189fa9615b9f3eae753b5f8a576e41d2f5dc9f",
+      "logical_viewport": [
+        1470,
+        923
+      ],
+      "device_pixel_ratio": 2.0,
+      "pixel_dimensions": [
+        2940,
+        1846
+      ],
+      "image_format": "PNG",
+      "crop_px": [
+        0,
+        0,
+        2940,
+        1846
+      ],
+      "surface": "Ferrite native headless Driver",
+      "provider": "simulated Codex app-server, no model API calls",
+      "source_commit": "545742f1e82335a1ae24016f4eb6250e68af5223",
+      "binary_sha256": "8362b7bca5fc616cd93722d8704ca61821323798227e7904af1514025ee97da4"
+    }
+  ],
+  "comparison_sha256": "dd398c3b968e7906b6ca062a46273689d581ad198ea6e9e83ce9b5789d65dd15",
+  "composition": "Native pixel crops, side by side, no scaling or retouching",
+  "verdict": "requires parent visual review"
+}

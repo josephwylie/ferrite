@@ -1,0 +1,23 @@
+{
+  "path": "01-environments.jpg",
+  "sha256": "5fa293d2cb88c27dc54ca8fb0973e618abc9164e2e5299c90e106ac4aa40046b",
+  "logical_viewport": [
+    1470,
+    923
+  ],
+  "device_pixel_ratio": 2,
+  "pixel_dimensions": [
+    2940,
+    1846
+  ],
+  "image_format": "JPEG",
+  "crop_px": [
+    0,
+    0,
+    2940,
+    1846
+  ],
+  "surface": "Actual installed T3 native application",
+  "installed_version": "0.1.10-nightly.20261111.4544",
+  "capture_method": "cua_repl native getScreenshot; original bytes, no conversion"
+}

@@ -1,0 +1,34 @@
+{
+  "root": "/private/tmp/ferrite-remote-d_9xd7xc",
+  "store": "/private/tmp/ferrite-remote-d_9xd7xc/client/threads",
+  "remote_store": "/private/tmp/ferrite-remote-d_9xd7xc/remote/threads",
+  "binary": "/Users/josephwylie/Desktop/Projects/ferrite-remote-connections/target/debug/ferrite",
+  "server": "/Users/josephwylie/Desktop/Projects/ferrite-remote-connections/target/debug/ferrited",
+  "processes": [],
+  "ssh_transport": "actual OpenSSH localhost",
+  "filesystem": "localhost SSH fixture shares the host filesystem; SSH request logs prove routing",
+  "credentials": "fixture-passphrase is a synthetic, task-only test credential",
+  "provider": "simulated Codex app-server, no model API calls",
+  "port": 53537
+}
+{"passed": true, "nonroot": true, "strict_modes": true, "pid": 16292}
+Launched isolated local/remote Servers and native headless window.
+Traceback (most recent call last):
+  File "/Users/josephwylie/Desktop/Projects/ferrite-remote-connections/scripts/verify-remote-parity.py", line 593, in <module>
+    main()
+    ~~~~^^
+  File "/Users/josephwylie/Desktop/Projects/ferrite-remote-connections/scripts/verify-remote-parity.py", line 569, in main
+    verify(args)
+    ~~~~~~^^^^^^
+  File "/Users/josephwylie/Desktop/Projects/ferrite-remote-connections/scripts/verify-remote-parity.py", line 480, in verify
+    remote_link_flow(ui)
+    ~~~~~~~~~~~~~~~~^^^^
+  File "/Users/josephwylie/Desktop/Projects/ferrite-remote-connections/scripts/verify-remote-parity.py", line 461, in remote_link_flow
+    ui.wait("connection-menu-1")
+    ~~~~~~~^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/josephwylie/Desktop/Projects/ferrite-remote-connections/scripts/verify-remote-parity.py", line 161, in wait
+    until(lambda: self.has(selector) == visible, f"Expected {selector} visible={visible}")
+    ~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/josephwylie/Desktop/Projects/ferrite-remote-connections/scripts/verify-remote-parity.py", line 44, in until
+    raise AssertionError(message)
+AssertionError: Expected connection-menu-1 visible=True

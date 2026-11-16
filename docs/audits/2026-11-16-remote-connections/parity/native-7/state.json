@@ -1,0 +1,67 @@
+{
+  "root": "/private/tmp/ferrite-remote-52_jfif5",
+  "store": "/private/tmp/ferrite-remote-52_jfif5/client/threads",
+  "remote_store": "/private/tmp/ferrite-remote-52_jfif5/remote/threads",
+  "binary": "/Users/josephwylie/Desktop/Projects/ferrite-remote-connections/target/debug/ferrite",
+  "server": "/Users/josephwylie/Desktop/Projects/ferrite-remote-connections/target/debug/ferrited",
+  "processes": [
+    {
+      "name": "sshd",
+      "pid": 87523,
+      "identity": "Tue 17 Nov 01:07:18 2026",
+      "termination_sent": true,
+      "stopped": true
+    },
+    {
+      "name": "remote-server",
+      "pid": 87893,
+      "identity": "Tue 17 Nov 01:07:18 2026",
+      "termination_sent": true,
+      "stopped": true
+    },
+    {
+      "name": "server",
+      "pid": 87913,
+      "identity": "Tue 17 Nov 01:07:19 2026",
+      "termination_sent": true,
+      "stopped": true
+    },
+    {
+      "name": "headless",
+      "pid": 87987,
+      "identity": "Tue 17 Nov 01:07:20 2026",
+      "termination_sent": true,
+      "stopped": true
+    },
+    {
+      "name": "remote-gateway",
+      "pid": 12293,
+      "identity": "Tue 17 Nov 01:08:52 2026",
+      "termination_sent": true,
+      "stopped": true
+    }
+  ],
+  "ssh_transport": "actual OpenSSH localhost",
+  "filesystem": "localhost SSH fixture shares the host filesystem; SSH request logs prove routing",
+  "credentials": "fixture-passphrase is a synthetic, task-only test credential",
+  "provider": "simulated Codex app-server, no model API calls",
+  "port": 56341,
+  "local_collision_sha256": "e5c7aa07356c6ab78e056e326b9b4ac702f670e542bf83a1b22586dc78c6c094",
+  "verification": {
+    "functional": "passed",
+    "visual": "requires parent review",
+    "actual_model": "not run; explicit Codex protocol fixture",
+    "owned_processes_stopped": true
+  },
+  "harness_sha256": "937fd802ed69f13bf988b58e87f0353775c29505803939093a4ea6daa74c66bb",
+  "ssh_smoke": {
+    "passed": true,
+    "nonroot": true,
+    "strict_modes": true,
+    "pid": 87523
+  },
+  "binary_sha256": "8362b7bca5fc616cd93722d8704ca61821323798227e7904af1514025ee97da4",
+  "server_sha256": "962111c21f3b517c5d2a07fb1cde33d0067f7fb3e14a622d03e2482b9569e69f",
+  "source_commit": "545742f1e82335a1ae24016f4eb6250e68af5223",
+  "local_collision_thread": "1"
+}

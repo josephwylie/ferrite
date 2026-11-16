@@ -1,0 +1,14 @@
+{
+  "root": "/private/tmp/ferrite-remote-_e78nnqo",
+  "store": "/private/tmp/ferrite-remote-_e78nnqo/client/threads",
+  "remote_store": "/private/tmp/ferrite-remote-_e78nnqo/remote/threads",
+  "binary": "/Users/josephwylie/Desktop/Projects/ferrite-remote-connections/target/debug/ferrite",
+  "server": "/Users/josephwylie/Desktop/Projects/ferrite-remote-connections/target/debug/ferrited",
+  "processes": [],
+  "ssh_transport": "actual OpenSSH localhost",
+  "filesystem": "localhost SSH fixture shares the host filesystem; SSH request logs prove routing",
+  "credentials": "fixture-passphrase is a synthetic, task-only test credential",
+  "provider": "simulated Codex app-server, no model API calls",
+  "port": 55563
+}
+Launched isolated local/remote Servers and native headless window.

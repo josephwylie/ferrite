@@ -1,6 +1,6 @@
 # Remote connection parity acceptance
 
-This matrix describes the proof required for PR 310 to match the actual T3 remote workflow. It records intended coverage, not a passing result. The parent reviewer owns the visual verdict after opening both original captures and their comparisons.
+This matrix describes the proof required for PR 310 to match the actual T3 remote workflow. It records the required coverage; actual results and limits are in [verification](verification.md) and [parent visual review](visual-review.md). The parent reviewer owns the visual verdict after opening both original captures and their comparisons.
 
 The new verifier is `scripts/verify-remote-parity.py`. It imports process and SSH helpers from the previous verifier without changing those helpers or replacing earlier evidence. Every run needs a new output directory. Its `summary.json` distinguishes functional assertions, visual review, actual model verification, and cleanup.
 
@@ -47,7 +47,7 @@ If verification fails, preserve its output and failure screenshot. A repeat run 
 
 ## Compare actual captures without resizing
 
-Each native PNG has a JSON sidecar containing its SHA-256, actual PNG dimensions, logical viewport, device pixel ratio, source commit, binary hash, and crop rectangle. Add equivalent sidecars for the actual T3 screenshots. Record the installed T3 version and capture method in those sidecars. Keep the original screenshots unchanged.
+Each native capture has a JSON sidecar containing its SHA-256, actual dimensions and image format, logical viewport, device pixel ratio, source commit, binary hash, and crop rectangle. T3's native capture API returned JPEG bytes; those originals are preserved as JPEG, while Ferrite's driver writes PNG. Record the installed T3 version and capture method in its sidecars. Keep the original screenshots unchanged.
 
 A sidecar has this structure. Values below illustrate the format and are not capture evidence.
 
@@ -57,7 +57,8 @@ A sidecar has this structure. Values below illustrate the format and are not cap
   "sha256": "sha256-of-the-original-file",
   "logical_viewport": [1440, 900],
   "device_pixel_ratio": 2,
-  "png_dimensions": [2880, 1800],
+  "pixel_dimensions": [2880, 1800],
+  "image_format": "PNG",
   "crop_px": [0, 0, 2880, 1800],
   "surface": "Actual installed T3 native application",
   "installed_version": "record the observed version",
@@ -77,13 +78,13 @@ A comparison manifest names sidecars relative to itself.
 ]
 ```
 
-Run the compositor after both sets of screenshots exist. It requires Pillow. It verifies source hashes and PNG dimensions, then rejects unequal logical viewports, device pixel ratios, or crop dimensions. It places the native pixel crops side by side and labels their dimensions. It does not scale or retouch either source.
+Run the compositor after both sets of screenshots exist. It requires Pillow. It verifies source hashes and decoded image formats and dimensions, then rejects unequal logical viewports, device pixel ratios, or crop dimensions. It places the native pixel crops side by side and labels their dimensions. It does not scale or retouch either source.
 
 ```sh
 python3 scripts/verify-remote-parity.py compose /absolute/path/to/comparisons.json
 ```
 
-The compositor writes a comparison PNG and provenance JSON. Its verdict remains `requires parent visual review`. Functional assertions do not establish matching appearance. Differences in the installed T3 version, fixture content, and desktop chrome must remain explicit in the final verdict.
+The compositor writes a comparison PNG and provenance JSON. Its verdict remains `requires parent visual review`. Functional assertions do not establish matching appearance. Differences in the installed T3 version, native capture encoding, fixture content, and desktop chrome must remain explicit in the final verdict.
 
 ## Narrow verification commands
 
