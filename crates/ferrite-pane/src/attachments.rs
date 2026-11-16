@@ -22,8 +22,8 @@ use gpui::{prelude::*, px, App, ElementId, IntoElement, SharedString, Window};
 
 use crate::preview::Preview;
 use ferrite_core::attachment::{Failure, Readiness};
-use ferrite_core::replies::Reply;
 use ferrite_core::browser_annotations::Annotation;
+use ferrite_core::replies::Reply;
 
 /// Nothing to install now: delivered files draw in the float grammar rather
 /// than on the kit's stock attachment cards, so the kit's own tokens are no
@@ -50,6 +50,8 @@ pub struct Attachments {
     closing: HashMap<PathBuf, Instant>,
     readiness: HashMap<PathBuf, Readiness>,
     on_retry: Option<Retry>,
+    local: HashSet<PathBuf>,
+    uploaded: HashMap<PathBuf, PathBuf>,
 }
 
 impl Attachments {
@@ -68,6 +70,8 @@ impl Attachments {
             closing: HashMap::new(),
             readiness: HashMap::new(),
             on_retry: None,
+            local: HashSet::new(),
+            uploaded: HashMap::new(),
         }
     }
 
@@ -75,6 +79,12 @@ impl Attachments {
     /// own place, and a retry looks at it again.
     pub fn readiness(mut self, readiness: HashMap<PathBuf, Readiness>) -> Self {
         self.readiness = readiness;
+        self
+    }
+
+    pub fn sources(mut self, local: HashSet<PathBuf>, uploaded: HashMap<PathBuf, PathBuf>) -> Self {
+        self.local = local;
+        self.uploaded = uploaded;
         self
     }
 
@@ -162,30 +172,34 @@ fn grown(added: &HashSet<PathBuf>, path: &Path, element: impl IntoElement) -> gp
 /// `gap` is the row's, which the closing chip gives back as it goes. Its
 /// id is the file and the moment it went, not its place, which moves as
 /// the ghosts before it expire.
-fn slipping(
-    path: &Path,
-    left: Instant,
-    gap: f32,
-    ghost: impl IntoElement,
-) -> gpui::AnyElement {
+fn slipping(path: &Path, left: Instant, gap: f32, ghost: impl IntoElement) -> gpui::AnyElement {
     let id = SharedString::from(format!("attachment-out-{}-{left:?}", path.display()));
     ferrite_ui::motion::slip_out(id, left, ferrite_ui::motion::CHIP_OUT, gap, ghost)
-    .into_any_element()
+        .into_any_element()
 }
 
 /// An image card with no controls, for the moment it closes.
-fn ghost_card(index: usize, path: &Path) -> gpui::Div {
+fn ghost_card(index: usize, path: &Path, preview: &Preview, local: bool) -> gpui::Div {
     use ferrite_ui::theme;
     gpui::div()
         .flex_shrink_0()
         .size(px(theme::COMPOSER_THUMB))
         .rounded(px(theme::R_CARD))
         .overflow_hidden()
-        .child(thumbnail(
-            ("tray-image", index),
-            path,
-            (theme::COMPOSER_THUMB, theme::COMPOSER_THUMB),
-        ))
+        .child(if local || !preview.remote_files() {
+            thumbnail(
+                ("tray-image", index),
+                path,
+                (theme::COMPOSER_THUMB, theme::COMPOSER_THUMB),
+            )
+        } else {
+            remote_thumbnail(
+                ("tray-image", index),
+                path,
+                preview,
+                (theme::COMPOSER_THUMB, theme::COMPOSER_THUMB),
+            )
+        })
 }
 
 fn chips(attachments: Attachments) -> gpui::AnyElement {
@@ -206,17 +220,34 @@ fn chips(attachments: Attachments) -> gpui::AnyElement {
         closing,
         readiness,
         on_retry,
+        local,
+        uploaded,
     } = attachments;
     let (images, others): (Vec<_>, Vec<_>) = files
         .into_iter()
         .enumerate()
         .partition(|(_, path)| crate::image_viewer::is_image(path));
-    let gallery: Arc<[PathBuf]> = images.iter().map(|(_, path)| path.clone()).collect();
+    let gallery: Arc<[PathBuf]> = images
+        .iter()
+        .map(|(_, path)| uploaded.get(path).unwrap_or(path).clone())
+        .collect();
+    let local_gallery: Arc<[PathBuf]> = images
+        .iter()
+        .filter(|(_, path)| {
+            !preview.remote_files() || (local.contains(path) && !uploaded.contains_key(path))
+        })
+        .map(|(_, path)| path.clone())
+        .collect();
     let mut cards: Vec<_> = images
         .iter()
         .map(|(index, path)| {
             if let Some(left) = closing.get(path) {
-                return slipping(path, *left, ferrite_ui::theme::SPACE_2, ghost_card(*index, path));
+                return slipping(
+                    path,
+                    *left,
+                    ferrite_ui::theme::SPACE_2,
+                    ghost_card(*index, path, &preview, local.contains(path)),
+                );
             }
             grown(
                 &added,
@@ -224,11 +255,17 @@ fn chips(attachments: Attachments) -> gpui::AnyElement {
                 image_card(
                     *index,
                     path,
-                    &gallery,
+                    if local.contains(path) && !uploaded.contains_key(path) {
+                        &local_gallery
+                    } else {
+                        &gallery
+                    },
                     &preview,
                     on_remove.clone(),
                     readiness.get(path),
                     on_retry.clone(),
+                    local.contains(path),
+                    uploaded.get(path),
                 ),
             )
         })
@@ -251,7 +288,8 @@ fn chips(attachments: Attachments) -> gpui::AnyElement {
             .to_string_lossy()
             .to_string();
         let host = preview.clone();
-        let open = path.clone();
+        let open = uploaded.get(&path).unwrap_or(&path).clone();
+        let open_local = local.contains(&path) && !uploaded.contains_key(&path);
         let explanation = readiness.get(&path).and_then(Readiness::explanation);
         let chip = div()
             .id(("attachment", index))
@@ -308,6 +346,7 @@ fn chips(attachments: Attachments) -> gpui::AnyElement {
                 |chip, retry| {
                     let retried = path.clone();
                     let button = retry_button(("retry-attachment", index))
+                        .debug_selector(move || format!("tray-file-{index}-retry"))
                         .tab_stop(live)
                         .accessibility_label(format!("Retry {name}"));
                     chip.child(if live {
@@ -343,7 +382,11 @@ fn chips(attachments: Attachments) -> gpui::AnyElement {
             .when(live, |chip| {
                 chip.on_click(move |_, window, cx| {
                     cx.stop_propagation();
-                    host.open_local(open.clone(), None, &[], window, cx);
+                    if open_local {
+                        host.open_local(open.clone(), None, &[], window, cx);
+                    } else {
+                        host.open(open.clone(), None, &[], window, cx);
+                    }
                 })
             });
         match left {
@@ -485,6 +528,8 @@ fn image_card(
     on_remove: Option<Remove>,
     readiness: Option<&Readiness>,
     on_retry: Option<Retry>,
+    local: bool,
+    uploaded: Option<&PathBuf>,
 ) -> gpui::AnyElement {
     use ferrite_ui::theme;
     use gpui::div;
@@ -495,48 +540,55 @@ fn image_card(
         .to_string();
     let group = SharedString::from(format!("tray-image-{index}"));
     let host = preview.clone();
-    let open = path.to_path_buf();
+    let open = uploaded.map_or_else(|| path.to_path_buf(), Clone::clone);
+    let open_local = local && uploaded.is_none();
     let gallery = gallery.clone();
-    let blocked = readiness.filter(|state| state.blocks());
-    let blocked_now = blocked.is_some();
     let retry = retry_of(readiness, on_retry);
+    let repair_on_open = matches!(
+        readiness,
+        Some(Readiness::Failed(Failure::Missing | Failure::Unreadable(_)))
+    );
+    let repair = retry.clone();
+    let repair_path = path.to_path_buf();
+    let image = if open_local || !preview.remote_files() {
+        thumbnail(
+            ("tray-image", index),
+            &open,
+            (theme::COMPOSER_THUMB, theme::COMPOSER_THUMB),
+        )
+    } else {
+        remote_thumbnail(
+            ("tray-image", index),
+            &open,
+            preview,
+            (theme::COMPOSER_THUMB, theme::COMPOSER_THUMB),
+        )
+    };
     let card = ferrite_ui::components::button(("preview-attachment", index))
         .tab_stop(true)
         .p_0()
         .size(px(theme::COMPOSER_THUMB))
         .rounded(px(theme::R_CARD))
         .key_context("PromptAttachment")
-        .accessibility_label(match (blocked, retry.is_some()) {
-            (Some(_), true) => format!("Retry {name}"),
-            (Some(_), false) => name.clone(),
-            (None, _) => format!("Preview {name}"),
+        .accessibility_label(if repair_on_open {
+            format!("Retry {name}")
+        } else {
+            format!("Preview {name}")
         })
-        .when_some(
-            blocked.and_then(|state| state.explanation()),
-            |card, why| card.tooltip_builder(ferrite_ui::menu::tooltip(why)),
-        )
-        .child(match blocked.and_then(Readiness::label) {
-            Some(label) => failed_tile(
-                ("tray-image", index),
-                (theme::COMPOSER_THUMB, theme::COMPOSER_THUMB),
-                label,
-                retry.is_some(),
-            ),
-            None => thumbnail(
-                ("tray-image", index),
-                path,
-                (theme::COMPOSER_THUMB, theme::COMPOSER_THUMB),
-            ),
+        .when_some(readiness.and_then(Readiness::explanation), |card, why| {
+            card.tooltip_builder(ferrite_ui::menu::tooltip(why))
         })
-        .on_click({
-            let retried = path.to_path_buf();
-            move |_, window, cx| {
-                cx.stop_propagation();
-                match (&retry, blocked_now) {
-                    (Some(retry), true) => retry(&retried, window, cx),
-                    (None, true) => {}
-                    _ => host.open_local(open.clone(), None, &gallery, window, cx),
+        .child(image)
+        .on_click(move |_, window, cx| {
+            cx.stop_propagation();
+            if repair_on_open {
+                if let Some(repair) = &repair {
+                    repair(&repair_path, window, cx);
                 }
+            } else if open_local {
+                host.open_local(open.clone(), None, &gallery, window, cx);
+            } else {
+                host.open(open.clone(), None, &gallery, window, cx);
             }
         });
     let remove = on_remove.map(|remove| {
@@ -556,9 +608,60 @@ fn image_card(
         .group(group)
         .relative()
         .flex_shrink_0()
+        .flex()
+        .flex_col()
+        .gap(px(theme::SPACE_1))
         .child(card)
+        .children(readiness.and_then(|state| status_label(("attachment-status", index), state)))
+        .when_some(retry, |card, retry| {
+            let retried = path.to_path_buf();
+            card.child(
+                retry_button(("retry-attachment", index))
+                    .debug_selector(move || format!("tray-image-{index}-retry"))
+                    .accessibility_label(format!("Retry {name}"))
+                    .on_click(move |_, window, cx| {
+                        cx.stop_propagation();
+                        retry(&retried, window, cx);
+                    }),
+            )
+        })
         .children(remove)
         .into_any_element()
+}
+
+pub(crate) fn remote_thumbnail(
+    id: impl Into<ElementId>,
+    path: &Path,
+    preview: &Preview,
+    (width, height): (f32, f32),
+) -> gpui::Stateful<gpui::Div> {
+    if let Some(local) = preview.attachment_local(path) {
+        return thumbnail(id, &local, (width, height));
+    }
+    use ferrite_ui::theme;
+    let label = if preview.attachment_failed(path) {
+        "Preview unavailable"
+    } else if ferrite_core::attachment_transfer::is_retained_path(path) {
+        "Loading preview"
+    } else {
+        "Remote image"
+    };
+    gpui::div()
+        .id(id)
+        .debug_selector(|| "attachment-preview-pending".into())
+        .flex_shrink_0()
+        .flex()
+        .items_center()
+        .justify_center()
+        .w(px(width))
+        .h(px(height))
+        .rounded(px(theme::R_CARD))
+        .border_1()
+        .border_color(theme::paint::LINE)
+        .bg(theme::paint::RAISED)
+        .text_size(px(theme::FS_LABEL))
+        .text_color(gpui::rgb(theme::INK_SUBTLE))
+        .child(label)
 }
 
 /// An image as a card, in the tray and over a sent prompt (Claude's): the
@@ -826,8 +929,18 @@ fn retry_button(id: impl Into<ElementId>) -> gpui::component::button::Button {
 /// send, quiet when it only goes as a path.
 fn status_label(id: impl Into<ElementId>, state: &Readiness) -> Option<gpui::Stateful<gpui::Div>> {
     use ferrite_ui::theme;
-    let label = state.label()?;
-    let ink = if state.blocks() {
+    let label = match state {
+        Readiness::Uploading { sent, total } if *total > 0 => format!(
+            "Uploading {}%",
+            sent.saturating_mul(100)
+                .checked_div(*total)
+                .unwrap_or(0)
+                .min(100)
+        ),
+        _ => state.label()?.to_string(),
+    };
+    let uploading = matches!(state, Readiness::Pending | Readiness::Uploading { .. });
+    let ink = if matches!(state, Readiness::Failed(_)) {
         theme::RED
     } else {
         theme::INK_SUBTLE
@@ -835,10 +948,17 @@ fn status_label(id: impl Into<ElementId>, state: &Readiness) -> Option<gpui::Sta
     Some(
         gpui::div()
             .id(id)
-            .debug_selector(|| "attachment-status".into())
+            .debug_selector(move || {
+                if uploading {
+                    "attachment-upload-progress"
+                } else {
+                    "attachment-status"
+                }
+                .into()
+            })
             .flex_shrink_0()
             .text_color(gpui::rgb(ink))
-            .child(label),
+            .child(SharedString::from(label)),
     )
 }
 
@@ -846,7 +966,9 @@ fn status_label(id: impl Into<ElementId>, state: &Readiness) -> Option<gpui::Sta
 /// change what it says. A file that is on the wrong machine stays so.
 fn retry_of(state: Option<&Readiness>, retry: Option<Retry>) -> Option<Retry> {
     match state {
-        Some(Readiness::Failed(Failure::Missing | Failure::Unreadable(_))) => retry,
+        Some(Readiness::Failed(Failure::Missing | Failure::Unreadable(_) | Failure::Upload(_))) => {
+            retry
+        }
         _ => None,
     }
 }
@@ -999,8 +1121,6 @@ pub fn inline_file(
         .child(button);
     (
         size,
-        crate::file_links::wire_inline(element, target)
-            .into_any_element(),
+        crate::file_links::wire_inline(element, target).into_any_element(),
     )
 }
-

@@ -2469,6 +2469,7 @@ impl CockpitView {
     /// Menus follow the text — typing `/` or `@` opens, backspacing past
     /// the trigger closes, and a pick's own splice closes through here too.
     fn composer_edited(&mut self, composer: Entity<Composer>, _: &Edited, cx: &mut Context<Self>) {
+        self.upload_attachments(&composer, cx);
         if let Some(draft) = self
             .panes
             .iter_mut()
@@ -2588,6 +2589,7 @@ impl CockpitView {
             self.sync_menu(cx);
         }
         let frame = self.cockpit.pump();
+        self.fetch_attachment_previews(cx);
         self.note_work(&frame);
         self.prune_background_stops();
         self.pump_browsers(cx);

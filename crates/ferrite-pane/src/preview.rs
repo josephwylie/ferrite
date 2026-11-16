@@ -22,6 +22,7 @@
 
 use ferrite_ui::pointer::Pointer as _;
 use std::{
+    collections::HashMap,
     ops::Range,
     path::{Path, PathBuf},
     sync::{Arc, Mutex},
@@ -168,6 +169,9 @@ pub struct FileOpen {
 struct State {
     remote_files: bool,
     file_requests: Vec<FileOpen>,
+    attachments: HashMap<PathBuf, AttachmentPreview>,
+    next_attachment_request: u64,
+    attachment_open: Option<(FileOpen, Vec<PathBuf>)>,
     document: Option<Document>,
     /// Counts every open, so the cockpit tells a new one from the last.
     opened: u64,
@@ -175,6 +179,13 @@ struct State {
     browser_urls: Vec<String>,
     annotation_requests: Vec<ferrite_core::browser_annotations::Annotation>,
     annotation_edits: Vec<ferrite_core::browser_annotations::Annotation>,
+}
+
+enum AttachmentPreview {
+    Queued,
+    Loading(u64),
+    Ready(PathBuf),
+    Failed(String),
 }
 
 #[derive(Clone)]
@@ -195,11 +206,125 @@ impl Preview {
     }
 
     pub fn set_remote_files(&self, remote: bool) {
-        self.state.lock().unwrap().remote_files = remote;
+        let mut state = self.state.lock().unwrap();
+        if state.remote_files != remote {
+            state.attachments.clear();
+            state.attachment_open = None;
+        }
+        state.remote_files = remote;
     }
 
     pub fn remote_files(&self) -> bool {
         self.state.lock().unwrap().remote_files
+    }
+
+    pub fn request_attachment(&self, path: &Path) {
+        let mut state = self.state.lock().unwrap();
+        if state.remote_files && ferrite_core::attachment_transfer::is_retained_path(path) {
+            state
+                .attachments
+                .entry(path.to_path_buf())
+                .or_insert(AttachmentPreview::Queued);
+        }
+    }
+
+    pub fn attachment_local(&self, path: &Path) -> Option<PathBuf> {
+        if !self.remote_files() {
+            return Some(path.to_path_buf());
+        }
+        self.request_attachment(path);
+        match self.state.lock().unwrap().attachments.get(path) {
+            Some(AttachmentPreview::Ready(local)) => Some(local.clone()),
+            _ => None,
+        }
+    }
+
+    pub fn attachment_failed(&self, path: &Path) -> bool {
+        matches!(
+            self.state.lock().unwrap().attachments.get(path),
+            Some(AttachmentPreview::Failed(_))
+        )
+    }
+
+    pub fn take_attachment_requests(&self) -> Vec<(PathBuf, u64)> {
+        let mut state = self.state.lock().unwrap();
+        let active = state
+            .attachments
+            .values()
+            .filter(|entry| matches!(entry, AttachmentPreview::Loading(_)))
+            .count();
+        let queued: Vec<_> = state
+            .attachments
+            .iter()
+            .filter_map(|(path, entry)| {
+                matches!(entry, AttachmentPreview::Queued).then_some(path.clone())
+            })
+            .take(2usize.saturating_sub(active))
+            .collect();
+        queued
+            .into_iter()
+            .map(|path| {
+                state.next_attachment_request += 1;
+                let request = state.next_attachment_request;
+                state
+                    .attachments
+                    .insert(path.clone(), AttachmentPreview::Loading(request));
+                (path, request)
+            })
+            .collect()
+    }
+
+    pub fn finish_attachment(&self, path: &Path, request: u64, result: Result<PathBuf, String>) {
+        let mut state = self.state.lock().unwrap();
+        if matches!(state.attachments.get(path), Some(AttachmentPreview::Loading(current)) if *current == request)
+        {
+            state.attachments.insert(
+                path.to_path_buf(),
+                match result {
+                    Ok(local) => AttachmentPreview::Ready(local),
+                    Err(reason) => AttachmentPreview::Failed(reason),
+                },
+            );
+        }
+    }
+
+    pub fn settle_attachment_open(&self, window: &mut Window, cx: &mut App) {
+        let ready = {
+            let mut state = self.state.lock().unwrap();
+            let Some((request, gallery)) = state.attachment_open.as_ref() else {
+                return;
+            };
+            let result = match state.attachments.get(&request.path) {
+                Some(AttachmentPreview::Ready(local)) => Ok(local.clone()),
+                Some(AttachmentPreview::Failed(reason)) => Err(reason.clone()),
+                _ => return,
+            };
+            let local_gallery = gallery
+                .iter()
+                .filter_map(|path| match state.attachments.get(path) {
+                    Some(AttachmentPreview::Ready(local)) => Some(local.clone()),
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+            (
+                state.attachment_open.take().unwrap().0,
+                local_gallery,
+                result,
+            )
+        };
+        match ready {
+            (request, gallery, Ok(local)) => {
+                self.open_local(local, request.line, &gallery, window, cx)
+            }
+            (request, _, Err(reason)) => {
+                self.set(Document {
+                    path: request.path,
+                    name: None,
+                    body: Body::Unshown(Unshown::Unreadable(reason.into())),
+                });
+                window.refresh();
+            }
+        }
     }
 
     pub fn take_file_requests(&self) -> Vec<FileOpen> {
@@ -299,6 +424,20 @@ impl Preview {
         {
             let mut state = self.state.lock().unwrap();
             if state.remote_files {
+                if ferrite_core::attachment_transfer::is_retained_path(&path) {
+                    if matches!(
+                        state.attachments.get(&path),
+                        None | Some(AttachmentPreview::Failed(_))
+                    ) {
+                        state
+                            .attachments
+                            .insert(path.clone(), AttachmentPreview::Queued);
+                    }
+                    state.attachment_open = Some((FileOpen { path, line }, gallery.to_vec()));
+                    window.refresh();
+                    return;
+                }
+                state.attachment_open = None;
                 state.file_requests.push(FileOpen { path, line });
                 window.refresh();
                 return;
@@ -315,6 +454,7 @@ impl Preview {
         window: &mut Window,
         cx: &mut App,
     ) {
+        self.state.lock().unwrap().attachment_open = None;
         if crate::image_viewer::is_image(&path) {
             self.open_image(path, gallery, window, cx);
         } else {
@@ -489,13 +629,16 @@ impl Preview {
 
     fn set(&self, document: Document) {
         let mut state = self.state.lock().unwrap();
+        state.attachment_open = None;
         state.document = Some(document);
         state.opened += 1;
     }
 
     /// Close the preview (esc in it, its ×, ⌘W while it holds focus).
     pub fn close(&self) {
-        self.state.lock().unwrap().document = None;
+        let mut state = self.state.lock().unwrap();
+        state.attachment_open = None;
+        state.document = None;
     }
 
     pub fn document(&self) -> Option<Document> {
@@ -779,6 +922,68 @@ pub fn open_original(path: &Path, window: &mut Window, cx: &mut App) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn receipt(name: &str) -> PathBuf {
+        PathBuf::from(format!("/server/attachments/{}/{name}", "a".repeat(64)))
+    }
+
+    #[gpui::test]
+    fn remote_attachment_cache_is_separate_from_local_paths_and_other_previews(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let first = cx.update(Preview::new);
+        let other = cx.update(Preview::new);
+        first.set_remote_files(true);
+        other.set_remote_files(true);
+        let path = receipt("screenshot.png");
+        let local = PathBuf::from("/local-cache/screenshot.png");
+        assert_eq!(first.attachment_local(&path), None);
+        let requests = first.take_attachment_requests();
+        assert_eq!(requests[0].0, path);
+        first.finish_attachment(&path, requests[0].1, Ok(local.clone()));
+        assert_eq!(first.attachment_local(&path), Some(local));
+        assert_eq!(other.attachment_local(&path), None);
+        assert_eq!(other.take_attachment_requests()[0].0, path);
+        let workspace = PathBuf::from("/server/workspace/image.png");
+        assert_eq!(first.attachment_local(&workspace), None);
+        assert!(first.take_attachment_requests().is_empty());
+    }
+
+    #[gpui::test]
+    fn remote_attachment_preview_fetches_are_bounded_and_stale_answers_are_discarded(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let preview = cx.update(Preview::new);
+        preview.set_remote_files(true);
+        for name in ["a.png", "b.png", "c.png"] {
+            preview.request_attachment(&receipt(name));
+        }
+        let pending = preview.take_attachment_requests();
+        assert_eq!(pending.len(), 2);
+        assert!(preview.take_attachment_requests().is_empty());
+        preview.finish_attachment(&pending[0].0, pending[0].1, Err("Disconnected".into()));
+        assert!(preview.attachment_failed(&pending[0].0));
+        assert_eq!(preview.take_attachment_requests().len(), 1);
+        preview.set_remote_files(false);
+        preview.set_remote_files(true);
+        assert_eq!(preview.attachment_local(&pending[1].0), None);
+        let next = preview.take_attachment_requests();
+        preview.finish_attachment(
+            &pending[1].0,
+            pending[1].1,
+            Ok("/old-machine/cache.png".into()),
+        );
+        assert_eq!(preview.attachment_local(&pending[1].0), None);
+        preview.finish_attachment(
+            &next[0].0,
+            next[0].1,
+            Ok("/current-machine/cache.png".into()),
+        );
+        assert_eq!(
+            preview.attachment_local(&pending[1].0),
+            Some("/current-machine/cache.png".into())
+        );
+    }
 
     /// A text's lines split as `str::lines` splits them, `\r\n` and a last
     /// line with no newline included, and read back without copying.

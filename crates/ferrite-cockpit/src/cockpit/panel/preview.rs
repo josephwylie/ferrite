@@ -246,6 +246,9 @@ impl CockpitView {
     /// list; the preview follows the File tab the Panel shows. A find bar
     /// closes with its document, and a Markdown reveal that is due settles.
     pub(in crate::cockpit) fn tend_previews(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        for pane in &self.panes {
+            pane.preview.settle_attachment_open(window, cx);
+        }
         let requests: Vec<_> = self.panes.iter().flat_map(|pane| {
             pane.preview.take_file_requests().into_iter().map(|request| (pane.thread(), request))
         }).collect();
