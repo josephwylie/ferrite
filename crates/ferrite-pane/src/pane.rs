@@ -4590,6 +4590,14 @@ fn group_list(
     };
     div()
         .debug_selector(|| "tool-group-members".into())
+        .on_scroll_wheel({
+            let handle = handle.clone();
+            move |_, _, cx| {
+                if handle.max_offset().y > px(0.) {
+                    cx.stop_propagation();
+                }
+            }
+        })
         .relative()
         .w_full()
         .min_w_0()
