@@ -360,6 +360,9 @@ pub enum TranscriptEvent {
     /// A Thread link in prose (`[title](ferrite-thread:12)`) pressed: land
     /// on that Thread.
     OpenThread(ferrite_core::ThreadId),
+    /// A link in prose to a pull request of this Thread's repository
+    /// (`#N`, or its forge address) pressed: that PR's native detail.
+    OpenPullRequest(u64),
     /// A changed-files card's `Open diff`, or a press on one of its files
     /// (as the turn named it): the Changes Surface, on that file.
     OpenChanges(Option<String>),
@@ -702,7 +705,8 @@ impl TranscriptView {
     }
 
     /// Route ⌘-click on this transcript's path targets to
-    /// `TranscriptEvent::OpenReader`, and its Thread links to `OpenThread`.
+    /// `TranscriptEvent::OpenReader`, its Thread links to `OpenThread`, and
+    /// its repository's PR links to `OpenPullRequest`.
     fn register_scope(&self, cx: &mut Context<Self>) {
         let weak = cx.entity().downgrade();
         crate::file_links::register_scope(
@@ -717,9 +721,17 @@ impl TranscriptView {
                         });
                     }
                 }),
-                thread: Rc::new(move |thread, _window, cx| {
+                thread: Rc::new({
+                    let weak = weak.clone();
+                    move |thread, _window, cx| {
+                        let _ = weak.update(cx, |_, cx| {
+                            cx.emit(TranscriptEvent::OpenThread(thread));
+                        });
+                    }
+                }),
+                pull_request: Rc::new(move |number, _window, cx| {
                     let _ = weak.update(cx, |_, cx| {
-                        cx.emit(TranscriptEvent::OpenThread(thread));
+                        cx.emit(TranscriptEvent::OpenPullRequest(number));
                     });
                 }),
             },

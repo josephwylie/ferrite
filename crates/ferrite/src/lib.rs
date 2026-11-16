@@ -3,6 +3,7 @@
 // Cockpit the window shows is `ferrite_cockpit`'s, in the frame
 // `ferrite_frame` draws (ADR 0035).
 mod entry;
+mod github_images;
 mod menus;
 #[cfg(all(windows, feature = "cef"))]
 mod windows_bootstrap;
@@ -32,10 +33,9 @@ use ferrite_core::spawner::{self, ProcessRss, SessionDefaults};
 /// every request.
 fn http_client() -> std::sync::Arc<dyn gpui::http_client::HttpClient> {
     let agent = concat!("Ferrite/", env!("CARGO_PKG_VERSION"));
-    std::sync::Arc::new(
-        reqwest_client::ReqwestClient::user_agent(agent)
-            .unwrap_or_else(|_| reqwest_client::ReqwestClient::new()),
-    )
+    let client = reqwest_client::ReqwestClient::user_agent(agent)
+        .unwrap_or_else(|_| reqwest_client::ReqwestClient::new());
+    std::sync::Arc::new(github_images::GitHubImages::new(std::sync::Arc::new(client)))
 }
 
 /// GPUI defaults to hiding the OS pointer whenever a key is typed. In a
@@ -140,7 +140,7 @@ pub fn launch() {
     // (`ferrite_cockpit::headless`, ADR 0038).
     #[cfg(feature = "headless")]
     if std::env::args().nth(1).as_deref() == Some("--headless") {
-        ferrite_cockpit::headless::run();
+        ferrite_cockpit::headless::run(http_client());
         return;
     }
     // The operator's settings live beside the store (`~/.ferrite`), and

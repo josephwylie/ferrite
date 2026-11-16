@@ -149,6 +149,14 @@ impl TranscriptView {
                         vec![row(Verb::OpenLink(Open::Integrated)), row(Verb::OpenLink(Open::System))],
                         Verb::CopyLink,
                     ),
+                    LinkTarget::RepoPullRequest { .. } => (
+                        vec![
+                            row(Verb::OpenLink(Open::Primary)),
+                            row(Verb::OpenLink(Open::Integrated)),
+                            row(Verb::OpenLink(Open::System)),
+                        ],
+                        Verb::CopyLink,
+                    ),
                     LinkTarget::File(_) => (vec![row(Verb::OpenLink(Open::Primary))], Verb::CopyPath),
                     _ => (vec![row(Verb::OpenLink(Open::Primary))], Verb::CopyLink),
                 };
@@ -214,7 +222,11 @@ impl TranscriptView {
                 at: menu.at,
             }),
             (Verb::OpenLink(how), Target::Link(target)) => {
-                target.open(how, Some(&self.input.preview), window, cx);
+                if !target.open(how, Some(&self.input.preview), window, cx) {
+                    if let LinkTarget::RepoPullRequest { number, .. } = target {
+                        cx.emit(TranscriptEvent::OpenPullRequest(*number));
+                    }
+                }
             }
             (Verb::CopyLink | Verb::CopyPath, Target::Link(target)) => {
                 if let Ok(address) = target.address() {

@@ -55,7 +55,7 @@ pub(crate) struct PrsView {
     pub(super) filter: WirePrFilter,
     lists: HashMap<(ProjectId, WirePrFilter), ListRead>,
     pub(super) selected: Option<u64>,
-    detail: bool,
+    pub(super) detail: bool,
     pub(in crate::cockpit) tab: PrTab,
     pub(super) scroll: ScrollHandle,
     issued: u64,
@@ -140,6 +140,19 @@ impl CockpitView {
             self.read_prs_list(project, cx);
         }
         cx.notify();
+    }
+
+    /// A PR `thread`'s transcript names: the Thread's own in its Panel,
+    /// with its actions and its diff; any other read whole in the PRs
+    /// destination of the Thread's Project.
+    pub(crate) fn open_named_pr(&mut self, thread: ThreadId, number: u64, cx: &mut Context<Self>) {
+        if self.facts.pr(thread).is_some_and(|pr| pr.number == number) {
+            self.upsert_surface(thread, surfaces::SurfaceId::PullRequest(number), cx);
+            return;
+        }
+        let project = self.facts.get(thread).and_then(|facts| facts.project);
+        self.open_prs(project, cx);
+        self.open_pr_detail(number, cx);
     }
 
     /// The footer's Pull requests: the shown Thread's own PR in its Panel
