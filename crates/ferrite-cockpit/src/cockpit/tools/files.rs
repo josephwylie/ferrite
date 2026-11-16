@@ -1255,6 +1255,7 @@ impl CockpitView {
                     .flex()
                     .flex_col()
                     .flex_1()
+                    .w_full()
                     .items_center()
                     .justify_center()
                     .gap(px(SPACE_2))
@@ -1266,6 +1267,8 @@ impl CockpitView {
                     .child(
                         div()
                             .w_full()
+                            .min_w_0()
+                            .whitespace_normal()
                             .text_size(px(FS_META))
                             .text_color(rgb(INK_SUBTLE))
                             .child("Pick a file in the tree, or click a file path in the conversation."),
