@@ -1,0 +1,147 @@
+{
+  "root": "/private/tmp/ferrite-remote-b3lvgix_",
+  "store": "/private/tmp/ferrite-remote-b3lvgix_/client/threads",
+  "remote_store": "/private/tmp/ferrite-remote-b3lvgix_/remote/threads",
+  "binary": "/Users/josephwylie/Desktop/Projects/ferrite-remote-connections/target/debug/ferrite",
+  "server": "/Users/josephwylie/Desktop/Projects/ferrite-remote-connections/target/debug/ferrited",
+  "processes": [
+    {
+      "name": "sshd",
+      "pid": 32582,
+      "identity": "Mon 16 Nov 21:39:38 2026",
+      "termination_sent": true,
+      "stopped": true
+    },
+    {
+      "name": "remote-server",
+      "pid": 32592,
+      "identity": "Mon 16 Nov 21:39:39 2026",
+      "termination_sent": true,
+      "stopped": true
+    },
+    {
+      "name": "server",
+      "pid": 32772,
+      "identity": "Mon 16 Nov 21:39:39 2026",
+      "termination_sent": true,
+      "stopped": true
+    },
+    {
+      "name": "headless",
+      "pid": 33089,
+      "identity": "Mon 16 Nov 21:39:40 2026",
+      "termination_sent": true,
+      "stopped": true
+    },
+    {
+      "name": "sshd",
+      "pid": 65535,
+      "identity": "Mon 16 Nov 21:47:59 2026",
+      "termination_sent": true,
+      "stopped": true
+    },
+    {
+      "name": "remote-server",
+      "pid": 65637,
+      "identity": "Mon 16 Nov 21:48:00 2026",
+      "termination_sent": true,
+      "stopped": true
+    },
+    {
+      "name": "server",
+      "pid": 65726,
+      "identity": "Mon 16 Nov 21:48:00 2026",
+      "termination_sent": true,
+      "stopped": true
+    },
+    {
+      "name": "headless",
+      "pid": 65750,
+      "identity": "Mon 16 Nov 21:48:01 2026",
+      "termination_sent": true,
+      "stopped": true
+    },
+    {
+      "name": "sshd",
+      "pid": 75445,
+      "identity": "Mon 16 Nov 21:48:32 2026",
+      "termination_sent": true,
+      "stopped": true
+    },
+    {
+      "name": "remote-server",
+      "pid": 75455,
+      "identity": "Mon 16 Nov 21:48:33 2026",
+      "termination_sent": true,
+      "stopped": true
+    },
+    {
+      "name": "server",
+      "pid": 75645,
+      "identity": "Mon 16 Nov 21:48:33 2026",
+      "termination_sent": true,
+      "stopped": true
+    },
+    {
+      "name": "headless",
+      "pid": 75889,
+      "identity": "Mon 16 Nov 21:48:34 2026",
+      "termination_sent": true,
+      "stopped": true
+    },
+    {
+      "name": "sshd",
+      "pid": 92067,
+      "identity": "Mon 16 Nov 21:49:33 2026",
+      "termination_sent": true,
+      "stopped": true
+    },
+    {
+      "name": "remote-server",
+      "pid": 92077,
+      "identity": "Mon 16 Nov 21:49:33 2026",
+      "termination_sent": true,
+      "stopped": true
+    },
+    {
+      "name": "server",
+      "pid": 92393,
+      "identity": "Mon 16 Nov 21:49:33 2026",
+      "termination_sent": true,
+      "stopped": true
+    },
+    {
+      "name": "headless",
+      "pid": 92529,
+      "identity": "Mon 16 Nov 21:49:34 2026",
+      "termination_sent": true,
+      "stopped": true
+    }
+  ],
+  "ssh_transport": "actual OpenSSH localhost",
+  "filesystem": "localhost SSH fixture shares the host filesystem; SSH request logs prove routing",
+  "credentials": "fixture-passphrase is a synthetic, task-only test credential",
+  "provider": "simulated Codex app-server, no model API calls",
+  "port": 61604,
+  "ssh_smoke": {
+    "passed": true,
+    "nonroot": true,
+    "strict_modes": true,
+    "pid": 92067
+  },
+  "binary_sha256": "c428a4e5597e1d339471c45ab7c67aba1bb413715fd7bfd0e2c807db55396bf6",
+  "server_sha256": "edb4c09f92c2d19d460780b5eb2a71f136cb7211015ed74fb290caed49c43272",
+  "source_commit": "92087e9e28d1bae3bb69ff92ab56d48aeb968362",
+  "flow": {
+    "passed": true,
+    "size": "1440x900",
+    "binary_sha256": "858f3afc9e73ed7b9c9abc05ead32bea4caebfcb5da4cd1f7ff8536d913dfe28",
+    "source_commit": "7cef3de1594d65f1d85891692942e952029a134f"
+  },
+  "files_recapture": {
+    "passed": true,
+    "size": "1440x900",
+    "binary_sha256": "c428a4e5597e1d339471c45ab7c67aba1bb413715fd7bfd0e2c807db55396bf6",
+    "source_commit": "92087e9e28d1bae3bb69ff92ab56d48aeb968362"
+  }
+}

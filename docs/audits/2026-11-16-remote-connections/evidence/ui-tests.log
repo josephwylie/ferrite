@@ -1,0 +1,262 @@
+warning: unreachable pattern
+   --> crates/ferrite-pane/src/link_target.rs:165:40
+    |
+142 |             Self::External(url) | Self::RepoPullRequest { url, .. } => {
+    |                                   --------------------------------- matches all the relevant values
+...
+165 |             Self::PullRequest { .. } | Self::RepoPullRequest { .. } | Self::Thread(_) => false,
+    |                                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^ no value can reach this
+    |
+    = note: `#[warn(unreachable_patterns)]` (part of `#[warn(unused)]`) on by default
+
+warning: `ferrite-pane` (lib) generated 1 warning
+warning: `ferrite-pane` (lib test) generated 1 warning (1 duplicate)
+   Compiling ferrite-cockpit v0.4.0 (/Users/josephwylie/Desktop/Projects/ferrite-remote-connections/crates/ferrite-cockpit)
+warning: unused variable: `open`
+     --> crates/ferrite-cockpit/src/cockpit.rs:11557:13
+      |
+11557 |         let open = self.cockpit.thread(thread).filter(|open| open.resume_lost())?;
+      |             ^^^^ help: if this is intentional, prefix it with an underscore: `_open`
+      |
+      = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+warning: variable does not need to be mutable
+   --> crates/ferrite-cockpit/src/cockpit/tests/changes.rs:310:13
+    |
+310 |     let mut again = |text: &str, cx: &mut gpui::VisualTestContext| {
+    |         ----^^^^^
+    |         |
+    |         help: remove this `mut`
+    |
+    = note: `#[warn(unused_mut)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused variable: `engine`
+   --> crates/ferrite-cockpit/src/cockpit/tests/browser_chrome.rs:467:10
+    |
+467 |     let (engine, view, thread, cx) = browser_window(cx, "bnt-draft");
+    |          ^^^^^^ help: if this is intentional, prefix it with an underscore: `_engine`
+
+warning: variable does not need to be mutable
+    --> crates/ferrite-cockpit/src/cockpit/tests/render_performance.rs:2779:13
+     |
+2779 |     let mut watch = |cx: &mut gpui::VisualTestContext, ms: u64| {
+     |         ----^^^^^
+     |         |
+     |         help: remove this `mut`
+
+warning: unused variable: `overview`
+   --> crates/ferrite-cockpit/src/cockpit/tests/tools.rs:111:9
+    |
+111 |     let overview = cx.debug_bounds("panel-tab-Overview").unwrap().center();
+    |         ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_overview`
+
+warning: unused `Admission` that must be used
+   --> crates/ferrite-cockpit/src/cockpit/tests/find.rs:265:5
+    |
+265 |     core.send(thread, "Look into it".into());
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = note: a refused or unconfirmed send leaves the draft with the caller
+    = note: `#[warn(unused_must_use)]` (part of `#[warn(unused)]`) on by default
+help: if you wish to disregard this recommendation, use `let _ = ...` to ignore the value
+    |
+265 |     let _ = core.send(thread, "Look into it".into());
+    |     +++++++
+
+warning: unused `Admission` that must be used
+   --> crates/ferrite-cockpit/src/cockpit/tests/find.rs:327:5
+    |
+327 |     core.send(thread, "Ship it".into());
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = note: a refused or unconfirmed send leaves the draft with the caller
+help: if you wish to disregard this recommendation, use `let _ = ...` to ignore the value
+    |
+327 |     let _ = core.send(thread, "Ship it".into());
+    |     +++++++
+
+warning: unused `Admission` that must be used
+   --> crates/ferrite-cockpit/src/cockpit/tests/retention.rs:159:5
+    |
+159 |     core.send(thread, "the very first question".into());
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = note: a refused or unconfirmed send leaves the draft with the caller
+help: if you wish to disregard this recommendation, use `let _ = ...` to ignore the value
+    |
+159 |     let _ = core.send(thread, "the very first question".into());
+    |     +++++++
+
+warning: unused `Admission` that must be used
+   --> crates/ferrite-cockpit/src/cockpit/tests/send_scroll.rs:788:9
+    |
+788 |         core.send(thread, "turn 0".into());
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = note: a refused or unconfirmed send leaves the draft with the caller
+help: if you wish to disregard this recommendation, use `let _ = ...` to ignore the value
+    |
+788 |         let _ = core.send(thread, "turn 0".into());
+    |         +++++++
+
+warning: unused `Admission` that must be used
+   --> crates/ferrite-cockpit/src/cockpit/tests/send_scroll.rs:795:13
+    |
+795 |             view.update(cx, |view, _| view.cockpit.send(thread, format!("turn {turn}")));
+    |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = note: a refused or unconfirmed send leaves the draft with the caller
+help: if you wish to disregard this recommendation, use `let _ = ...` to ignore the value
+    |
+795 |             let _ = view.update(cx, |view, _| view.cockpit.send(thread, format!("turn {turn}")));
+    |             +++++++
+
+warning: unused `Admission` that must be used
+   --> crates/ferrite-cockpit/src/cockpit/tests/send_scroll.rs:868:9
+    |
+868 |         core.send(thread, "turn 0".into());
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = note: a refused or unconfirmed send leaves the draft with the caller
+help: if you wish to disregard this recommendation, use `let _ = ...` to ignore the value
+    |
+868 |         let _ = core.send(thread, "turn 0".into());
+    |         +++++++
+
+warning: unused `Admission` that must be used
+   --> crates/ferrite-cockpit/src/cockpit/tests/send_scroll.rs:875:13
+    |
+875 |             view.update(cx, |view, _| view.cockpit.send(thread, format!("turn {turn}")));
+    |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = note: a refused or unconfirmed send leaves the draft with the caller
+help: if you wish to disregard this recommendation, use `let _ = ...` to ignore the value
+    |
+875 |             let _ = view.update(cx, |view, _| view.cockpit.send(thread, format!("turn {turn}")));
+    |             +++++++
+
+warning: `ferrite-cockpit` (lib test) generated 12 warnings (run `cargo fix --lib -p ferrite-cockpit --tests` to apply 5 suggestions)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 40.54s
+warning: the following packages contain code that will be rejected by a future version of Rust: block v0.1.6
+note: to see what the problems were, use the option `--future-incompat-report`, or run `cargo report future-incompatibilities --id 1`
+────────────
+ Nextest run ID 315592ea-8795-4417-ae73-0b987895a950 with nextest profile: default
+    Starting 116 tests across 4 binaries (1551 tests skipped)
+        PASS [   0.039s] (  1/116) ferrite-cockpit cockpit::panel::preview::tests::the_readers_code_and_head_are_set_in_the_scales_tokens
+        PASS [   0.040s] (  2/116) ferrite-cockpit cockpit::panel::preview::tests::a_long_line_slides_its_occurrence_into_view
+        PASS [   0.338s] (  3/116) ferrite-cockpit cockpit::tests::files::a_file_the_preview_opens_opens_here_instead
+        PASS [   0.467s] (  4/116) ferrite-cockpit cockpit::tests::files::a_line_for_a_markdown_file_opens_its_source_there
+        PASS [   0.567s] (  5/116) ferrite-cockpit cockpit::tests::files::a_press_previews_and_the_next_replaces_it_until_kept
+        PASS [   0.540s] (  6/116) ferrite-cockpit cockpit::tests::files::a_quit_writes_what_auto_save_had_not_yet
+        PASS [   0.588s] (  7/116) ferrite-cockpit cockpit::tests::files::a_late_write_does_not_mark_newer_edits_saved
+        PASS [   0.607s] (  8/116) ferrite-cockpit cockpit::tests::files::a_failed_reload_says_so_and_keeps_the_buffer
+        PASS [   0.640s] (  9/116) ferrite-cockpit cockpit::tests::files::a_clean_buffer_keeps_its_caret_when_it_follows_its_file
+        PASS [   0.750s] ( 10/116) ferrite-cockpit cockpit::tests::files::a_clean_buffer_follows_its_file_when_the_agent_edits_it
+        PASS [   0.368s] ( 11/116) ferrite-cockpit cockpit::tests::files::an_image_from_the_tree_opens_the_lightbox_and_a_pdf_names_its_kind
+        PASS [   0.944s] ( 12/116) ferrite-cockpit cockpit::tests::files::a_refused_write_keeps_the_buffer_and_retry_writes_it
+        PASS [   1.021s] ( 13/116) ferrite-cockpit cockpit::tests::files::a_changed_files_tab_offers_show_changes
+        PASS [   0.508s] ( 14/116) ferrite-cockpit cockpit::tests::files::closing_a_dirty_tab_writes_it_then_closes
+        PASS [   0.659s] ( 15/116) ferrite-cockpit cockpit::tests::files::coming_back_to_the_files_tab_shows_what_changed_while_away
+        PASS [   0.267s] ( 16/116) ferrite-cockpit cockpit::tests::files::prose_reads_rendered_until_its_source_is_asked_for
+        PASS [   0.539s] ( 17/116) ferrite-cockpit cockpit::tests::files::leaving_asks_about_text_the_disk_refused
+        PASS [   0.962s] ( 18/116) ferrite-cockpit cockpit::tests::files::a_reveal_in_a_hidden_row_asks_for_no_frames
+        PASS [   0.665s] ( 19/116) ferrite-cockpit cockpit::tests::files::discarding_a_failed_buffer_closes_the_tab
+        PASS [   0.427s] ( 20/116) ferrite-cockpit cockpit::tests::files::leaving_asks_about_the_text_a_quit_will_not_write
+        PASS [   0.998s] ( 21/116) ferrite-cockpit cockpit::tests::files::an_external_edit_is_not_overwritten_until_the_user_chooses
+        PASS [   0.372s] ( 22/116) ferrite-cockpit cockpit::tests::files::remote_files_transcript_preview_routes_to_remote_editor_and_keeps_line_target
+        PASS [   0.564s] ( 23/116) ferrite-cockpit cockpit::tests::files::remote_files_failure_and_binary_never_fall_back_to_readable_local_text
+        PASS [   0.443s] ( 24/116) ferrite-cockpit cockpit::tests::files::remote_files_inline_transcript_chip_uses_remote_bytes_despite_local_collision
+        PASS [   0.443s] ( 25/116) ferrite-cockpit cockpit::tests::files::the_door_opens_files_with_its_empty_word_and_the_tree
+        PASS [   0.390s] ( 26/116) ferrite-cockpit cockpit::tests::files::the_more_menu_holds_only_its_five_settings_and_they_take_effect
+        PASS [   0.466s] ( 27/116) ferrite-cockpit cockpit::tests::files::the_filter_lists_matches_and_a_row_menu_copies_paths
+        PASS [   0.634s] ( 28/116) ferrite-cockpit cockpit::tests::files::remote_files_use_remote_tree_text_saves_conflicts_and_reload_when_local_paths_collide
+        PASS [   0.994s] ( 29/116) ferrite-cockpit cockpit::tests::files::prose_edits_in_its_source_saves_and_reads_the_edit_rendered
+        PASS [   0.105s] ( 30/116) ferrite-cockpit cockpit::tests::machines::a_failed_read_that_later_lands_is_not_an_unsaved_edit
+        PASS [   0.470s] ( 31/116) ferrite-cockpit cockpit::tests::files::the_refresh_door_shows_a_file_made_after_the_tree_was_read
+        PASS [   0.437s] ( 32/116) ferrite-cockpit cockpit::tests::files::the_tab_that_first_overflows_the_row_sits_whole_in_it
+        PASS [   0.069s] ( 33/116) ferrite-cockpit cockpit::tests::machines::a_machine_without_ferrited_says_so_and_takes_no_input
+        PASS [   0.555s] ( 34/116) ferrite-cockpit cockpit::tests::files::the_tree_reads_git_status_off_the_ui_thread
+        PASS [   0.272s] ( 35/116) ferrite-cockpit cockpit::tests::machines::a_machine_off_screen_heads_its_rows_with_its_connection
+        PASS [   0.397s] ( 36/116) ferrite-cockpit cockpit::tests::machines::a_landing_revives_a_parked_thread_and_lapses_unattached
+        PASS [   0.238s] ( 37/116) ferrite-cockpit cockpit::tests::machines::a_machines_parked_threads_show_in_the_nav_and_revive_on_click
+        PASS [   0.662s] ( 38/116) ferrite-cockpit cockpit::tests::files::typing_edits_the_file_and_auto_save_writes_it_after_a_pause
+        PASS [   0.664s] ( 39/116) ferrite-cockpit cockpit::tests::machines::a_decision_off_screen_rings_once_and_its_click_goes_to_its_machine
+        PASS [   0.512s] ( 40/116) ferrite-cockpit cockpit::tests::machines::a_machine_that_cannot_save_its_defaults_says_so
+        PASS [   0.258s] ( 41/116) ferrite-cockpit cockpit::tests::machines::a_window_with_only_this_computer_lists_no_machines
+        PASS [   2.249s] ( 42/116) ferrite-cockpit cockpit::tests::files::a_revealed_tab_sits_whole_in_the_row_whatever_the_chevrons_do
+        PASS [   0.499s] ( 43/116) ferrite-cockpit cockpit::tests::machines::a_saved_edit_clears_an_earlier_refusal
+        PASS [   0.519s] ( 44/116) ferrite-cockpit cockpit::tests::machines::background_thread_changes_keep_the_visible_composer_live
+        PASS [   0.619s] ( 45/116) ferrite-cockpit cockpit::tests::machines::a_toast_press_goes_to_its_machine
+        PASS [   0.312s] ( 46/116) ferrite-cockpit cockpit::tests::machines::going_to_a_machine_that_needs_a_sign_in_says_so_and_holds_still
+        PASS [   0.677s] ( 47/116) ferrite-cockpit cockpit::tests::machines::a_system_notification_outlives_a_move
+        PASS [   1.333s] ( 48/116) ferrite-cockpit cockpit::tests::machines::a_draft_on_a_machine_starts_a_thread_in_a_directory_typed_there
+        PASS [   0.121s] ( 49/116) ferrite-cockpit cockpit::tests::machines::removing_the_selected_connection_confirms_then_returns_to_this_computer
+        PASS [   0.231s] ( 50/116) ferrite-cockpit cockpit::tests::machines::remote_inbox_uses_digests_and_follows_another_clients_park
+        PASS [   0.123s] ( 51/116) ferrite-cockpit cockpit::tests::machines::turning_off_the_machine_on_screen_goes_home
+        PASS [   0.156s] ( 52/116) ferrite-cockpit cockpit::tests::settings_window::a_connection_save_failure_keeps_the_form_and_runtime_unchanged
+        PASS [   0.579s] ( 53/116) ferrite-cockpit cockpit::tests::machines::remote_files_block_machine_switch_until_the_save_has_finished
+        PASS [   0.423s] ( 54/116) ferrite-cockpit cockpit::tests::machines::the_window_opens_what_it_came_for_once_attached
+        PASS [   0.173s] ( 55/116) ferrite-cockpit cockpit::tests::settings_window::a_menu_shortcut_is_a_bound_chord
+        PASS [   1.396s] ( 56/116) ferrite-cockpit cockpit::tests::machines::a_review_of_a_machines_thread_reads_its_checkout_there
+        PASS [   0.341s] ( 57/116) ferrite-cockpit cockpit::tests::settings_window::cmd_plus_and_minus_step_the_reading_size_and_save_it
+        PASS [   0.381s] ( 58/116) ferrite-cockpit cockpit::tests::settings_window::a_right_click_summons_the_menu_and_delete_takes_two_presses
+        PASS [   0.314s] ( 59/116) ferrite-cockpit cockpit::tests::settings_window::reconnect_leaves_search_and_rejects_another_saved_target
+        PASS [   0.751s] ( 60/116) ferrite-cockpit cockpit::tests::machines::two_quick_edits_to_a_machines_defaults_both_land
+        PASS [   1.473s] ( 61/116) ferrite-cockpit cockpit::tests::machines::browser_annotation_host_intercepts_selection_and_releases_cancelled_capture
+        PASS [   0.687s] ( 62/116) ferrite-cockpit cockpit::tests::settings_window::connections_keep_failed_input_save_only_ready_and_cancel_with_escape
+        PASS [   1.454s] ( 63/116) ferrite-cockpit cockpit::tests::machines::settings_on_a_machine_edit_its_defaults_not_this_computers
+        PASS [   0.372s] ( 64/116) ferrite-cockpit cockpit::tests::terminal::a_second_terminal_is_a_second_tab_and_cmd_j_shows_the_last
+        PASS [   1.933s] ( 65/116) ferrite-cockpit cockpit::tests::machines::remote_files_block_disconnect_and_remove_before_settings_or_selection_change
+        PASS [   0.261s] ( 66/116) ferrite-cockpit cockpit::tests::terminal::a_shell_that_cannot_start_says_so_and_retries
+        PASS [   1.084s] ( 67/116) ferrite-cockpit cockpit::tests::settings_window::settings_arrows_step_pages_and_about_paths_copy
+        PASS [   0.845s] ( 68/116) ferrite-cockpit cockpit::tests::terminal::cmd_w_in_the_shell_closes_its_tab_not_the_thread
+        PASS [   1.224s] ( 69/116) ferrite-cockpit cockpit::tests::terminal::an_agents_open_after_a_refused_one_still_shows_the_browser
+        PASS [   4.372s] ( 70/116) ferrite-cockpit cockpit::tests::files::twenty_tabs_at_a_narrow_width_are_all_reachable
+        PASS [   0.368s] ( 71/116) ferrite-cockpit cockpit::tests::terminal::the_door_opens_a_shell_in_a_panel_tab_and_closing_it_ends_it
+        PASS [   0.398s] ( 72/116) ferrite-cockpit cockpit::tests::terminal::the_more_menu_holds_claudes_four_rows
+        PASS [   0.041s] ( 73/116) ferrite-cockpit cockpit::tools::save::tests::a_read_only_file_is_refused_and_left_alone
+        PASS [   0.044s] ( 74/116) ferrite-cockpit cockpit::tools::save::tests::a_writable_file_in_a_read_only_directory_still_saves
+        PASS [   0.049s] ( 75/116) ferrite-cockpit cockpit::tools::save::tests::saving_through_a_dangling_symlink_creates_its_target
+        PASS [   0.047s] ( 76/116) ferrite-cockpit cockpit::tools::save::tests::saving_through_a_symlink_writes_the_target
+        PASS [   0.020s] ( 77/116) ferrite-cockpit cockpit::tools::terminal::tests::a_remote_terminal_never_falls_back_to_a_local_shell
+        PASS [   0.022s] ( 78/116) ferrite-cockpit cockpit::tools::terminal::tests::scrollback_reads_with_thousands_separators
+        PASS [   2.877s] ( 79/116) ferrite-cockpit cockpit::tests::settings_window::settings_open_on_cmd_comma_and_every_change_saves
+        PASS [   0.045s] ( 80/116) ferrite-cockpit cockpit::tools::tree::tests::a_folder_within_the_limit_has_no_note
+        PASS [   0.039s] ( 81/116) ferrite-cockpit cockpit::tools::tree::tests::folders_list_before_files_and_open_one_at_a_time
+        PASS [   0.042s] ( 82/116) ferrite-cockpit cockpit::tools::tree::tests::porcelain_reads_each_state_and_skips_a_renames_old_path
+        PASS [   0.035s] ( 83/116) ferrite-cockpit cockpit::tools::tree::tests::reveal_opens_every_folder_above_a_file
+        PASS [   0.026s] ( 84/116) ferrite-cockpit cockpit::tools::tree::tests::the_filter_lists_matching_files_flat_and_skips_build_folders
+        PASS [   0.671s] ( 85/116) ferrite-cockpit cockpit::tests::terminal::with_no_selection_the_menu_has_no_attach_row_and_copy_is_greyed
+        PASS [   0.026s] ( 86/116) ferrite-cockpit machines::tests::a_cockpit_that_cannot_be_built_is_not_gone_to
+        PASS [   0.018s] ( 87/116) ferrite-cockpit machines::tests::a_machine_whose_target_is_an_option_is_never_listed
+        PASS [   0.016s] ( 88/116) ferrite-cockpit machines::tests::a_remote_launch_on_a_turned_off_machine_starts_here
+        PASS [   0.018s] ( 89/116) ferrite-cockpit machines::tests::only_the_machine_on_screen_streams_more_than_status
+        PASS [   0.025s] ( 90/116) ferrite-cockpit machines::tests::a_remote_launch_starts_on_its_machine_saved_or_not
+        PASS [   0.029s] ( 91/116) ferrite-cockpit machines::tests::removing_the_saved_selection_returns_to_local_and_drops_its_status_link
+        PASS [   0.026s] ( 92/116) ferrite-cockpit machines::tests::this_computer_alone_lists_no_machines
+        PASS [   0.030s] ( 93/116) ferrite-cockpit machines::tests::turning_off_the_machine_on_screen_says_the_window_must_leave
+        PASS [   0.037s] ( 94/116) ferrite-frame settings::tests::a_busy_connection_form_disables_submit_but_keeps_cancel_live
+        PASS [   0.033s] ( 95/116) ferrite-frame settings::tests::a_chooser_shows_its_value_and_its_menu_picks_another
+        PASS [   0.027s] ( 96/116) ferrite-frame settings::tests::a_chosen_segment_is_lit_and_the_rest_lie_flat
+        PASS [   0.034s] ( 97/116) ferrite-frame settings::tests::host_verification_keeps_the_fingerprint_bounded_and_continues_on_enter
+        PASS [   0.036s] ( 98/116) ferrite-frame settings::tests::rows_sit_on_the_grid_and_the_sheet_fits_its_pages
+        PASS [   0.034s] ( 99/116) ferrite-frame settings::tests::search_filters_every_page_and_labels_each_result
+        PASS [   0.030s] (100/116) ferrite-frame settings::tests::ssh_search_finds_the_connections_page
+        PASS [   0.027s] (101/116) ferrite-frame settings::tests::the_settings_sheet_is_the_sheet_recipe
+        PASS [   0.030s] (102/116) ferrite-pane link_target::tests::a_pr_without_an_address_says_so
+        PASS [   0.029s] (103/116) ferrite-pane link_target::tests::an_address_is_what_the_link_names_not_what_it_shows
+        PASS [   0.026s] (104/116) ferrite-pane link_target::tests::the_renderers_schemes_never_become_an_address_for_the_os
+        PASS [   0.034s] (105/116) ferrite-ui frame::settings::tests::a_path_under_home_reads_from_tilde
+        PASS [   0.040s] (106/116) ferrite-pane preview::tests::a_text_finds_its_lines_once
+        PASS [   0.033s] (107/116) ferrite-ui frame::settings::tests::model_choices_keep_default_alias_and_custom_values_selected
+        PASS [   0.029s] (108/116) ferrite-ui frame::settings::tests::pages_step_in_sidebar_order_and_hold_at_the_ends
+        PASS [   0.672s] (109/116) ferrite-cockpit cockpit::tools::tree::tests::a_folder_past_the_row_limit_says_how_many_rows_it_leaves_out
+        PASS [   4.239s] (110/116) ferrite-cockpit cockpit::tests::terminal::a_local_shell_with_a_failed_exit_still_closes_its_tab
+        PASS [   4.344s] (111/116) ferrite-cockpit cockpit::tests::terminal::a_click_in_the_shell_takes_the_keyboard_back_from_the_composer
+        PASS [   5.612s] (112/116) ferrite-cockpit cockpit::tests::machines::conversation_browser_shares_the_live_preview_and_new_tab_opens_separately
+        PASS [   3.817s] (113/116) ferrite-cockpit cockpit::tests::terminal::a_selection_offers_attach_and_attaches_as_a_reply_tile
+        PASS [   2.973s] (114/116) ferrite-cockpit cockpit::tests::terminal::keys_typed_after_the_door_opens_reach_the_shell
+        PASS [   4.777s] (115/116) ferrite-cockpit cockpit::tests::terminal::a_panel_sliding_shut_gives_the_shell_no_keys
+        PASS [   3.994s] (116/116) ferrite-cockpit cockpit::tests::terminal::cmd_click_opens_what_the_shell_printed
+────────────
+     Summary [   8.923s] 116 tests run: 116 passed, 1551 skipped

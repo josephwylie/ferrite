@@ -1,0 +1,59 @@
+   Compiling ferrite-core v0.4.0 (/Users/josephwylie/Desktop/Projects/ferrite-remote-connections/crates/ferrite-core)
+warning: variable does not need to be mutable
+   --> crates/ferrite-core/src/server/tests/drive.rs:121:13
+    |
+121 |     let mut driven = attach_driven(&harness.address);
+    |         ----^^^^^^
+    |         |
+    |         help: remove this `mut`
+    |
+    = note: `#[warn(unused_mut)]` (part of `#[warn(unused)]`) on by default
+
+warning: `ferrite-core` (lib test) generated 1 warning (run `cargo fix --lib -p ferrite-core --tests` to apply 1 suggestion)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1m 03s
+────────────
+ Nextest run ID 921ee828-a96b-4f69-ace6-0cbc4c0294bc with nextest profile: default
+    Starting 41 tests across 50 binaries (1711 tests skipped)
+        PASS [   0.034s] ( 1/41) ferrite-core file_operations::tests::file_operations_wire_accepts_future_fields_and_unknown_variants
+        PASS [   0.046s] ( 2/41) ferrite-core file_operations::tests::file_operations_reject_escape_binary_and_oversized_text_without_writing
+        PASS [   0.046s] ( 3/41) ferrite-core machine::auth::tests::invalid_answers_cancel_without_returning_a_secret
+        PASS [   0.047s] ( 4/41) ferrite-core machine::auth::tests::a_question_dropped_by_the_ui_cancels_the_helper
+        PASS [   0.049s] ( 5/41) ferrite-core machine::auth::tests::configuring_a_command_does_not_change_global_environment
+        PASS [   0.050s] ( 6/41) ferrite-core file_operations::tests::file_operations_read_save_conflict_reload_and_overwrite
+        PASS [   0.051s] ( 7/41) ferrite-core file_operations::tests::file_operations_do_not_follow_symlinks_outside_the_workspace
+        PASS [   0.051s] ( 8/41) ferrite-core machine::auth::tests::dropping_the_broker_cancels_a_prompt_retained_by_the_ui
+        PASS [   0.068s] ( 9/41) ferrite-core file_operations::tests::file_operations_keep_available_files_when_an_expanded_folder_disappears
+        PASS [   0.024s] (10/41) ferrite-core machine::hosts::tests::suggests_literal_aliases_and_unhashed_known_hosts_without_resolving_them
+        PASS [   0.038s] (11/41) ferrite-core machine::auth::tests::malformed_or_stalled_helpers_do_not_keep_the_broker_alive
+        PASS [   0.033s] (12/41) ferrite-core machine::auth::tests::password_and_host_confirmation_reach_only_their_helper
+        PASS [   0.037s] (13/41) ferrite-core machine::auth::tests::socket_is_private_and_long_settings_paths_still_work
+        PASS [   0.129s] (14/41) ferrite-core file_operations::tests::file_operations_snapshot_lists_expanded_folders_search_and_git_status
+        PASS [   0.327s] (15/41) ferrite-core machine::setup::tests::bootstrap_reuses_a_prepared_path_executable_without_requiring_release_assets
+        PASS [   0.020s] (16/41) ferrite-core machine::tests::a_failed_tunnel_tells_the_window_why
+        PASS [   0.017s] (17/41) ferrite-core machine::tests::a_gone_ferrites_bridge_socket_is_swept
+        PASS [   0.355s] (18/41) ferrite-core machine::setup::tests::setup_requires_welcome_and_snapshot_and_warns_without_restarting_an_older_server
+        PASS [   0.017s] (19/41) ferrite-core machine::tests::a_saved_machine_is_enabled_unless_it_says_not
+        PASS [   0.016s] (20/41) ferrite-core machine::tests::a_target_is_one_word_and_never_an_option
+        PASS [   0.393s] (21/41) ferrite-core machine::setup::tests::cancelling_bootstrap_removes_its_staging_and_lock
+        PASS [   0.016s] (22/41) ferrite-core machine::tests::an_ending_says_what_the_operator_must_do
+        PASS [   0.017s] (23/41) ferrite-core machine::tests::dropping_a_bridge_releases_its_address_for_reconnect
+        PASS [   0.020s] (24/41) ferrite-core machine::tests::each_machine_has_its_own_short_dir
+        PASS [   0.017s] (25/41) ferrite-core machine::tests::remote_terminal_uses_the_same_destination_and_authentication_as_the_bridge
+        PASS [   0.014s] (26/41) ferrite-core machine::tests::signing_in_asks_in_a_terminal_and_leaves_the_master
+        PASS [   0.015s] (27/41) ferrite-core machine::tests::ssh_fields_preserve_aliases_and_include_explicit_endpoints_in_identity
+        PASS [   0.427s] (28/41) ferrite-core machine::setup::tests::setup_deadlines_and_drop_stop_the_owned_process
+        PASS [   0.015s] (29/41) ferrite-core machine::tests::ssh_fields_reject_options_shell_programs_and_invalid_ports
+        PASS [   0.015s] (30/41) ferrite-core machine::tests::the_bridge_never_asks_and_keeps_its_connection_alive
+        PASS [   0.053s] (31/41) ferrite-core protocol::tests::every_frozen_fixture_still_decodes
+        PASS [   0.042s] (32/41) ferrite-core protocol::tests::every_gen1_message_has_a_frozen_fixture_that_round_trips_byte_for_byte
+        PASS [   0.155s] (33/41) ferrite-core server::tests::a_window_on_a_machine_drives_its_threads_through_the_bridge
+        PASS [   0.646s] (34/41) ferrite-core machine::auth::tests::prompts_expire_and_the_next_prompt_can_be_answered
+        PASS [   0.672s] (35/41) ferrite-core machine::setup::tests::bootstrap_and_bridges_skip_a_managed_binary_with_the_wrong_version
+        PASS [   0.311s] (36/41) ferrite-core machine::tests::remote_terminal_enters_the_quoted_directory_before_starting_the_login_shell
+        PASS [   0.811s] (37/41) ferrite-core machine::setup::tests::bootstrap_rejects_corrupt_and_missing_release_assets_without_publishing
+        PASS [   0.987s] (38/41) ferrite-core machine::setup::tests::setup_without_a_shared_sign_in_requires_a_verified_batch_connection
+        PASS [   1.065s] (39/41) ferrite-core machine::setup::tests::bootstrap_rejects_unsupported_platforms_and_recovers_a_dead_lock
+        PASS [   1.096s] (40/41) ferrite-core machine::setup::tests::bootstrap_installs_a_verified_release_then_reuses_it_without_downloading
+        PASS [   1.446s] (41/41) ferrite-core server::tests::file_operations::file_operations_execute_on_the_server_and_preserve_conflicts
+────────────
+     Summary [   2.007s] 41 tests run: 41 passed, 1711 skipped
