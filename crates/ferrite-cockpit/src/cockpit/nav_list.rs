@@ -8,6 +8,8 @@
 use super::*;
 use crate::nav::flip::{self, Update};
 use crate::nav::{list, NavItem, Shelf, SHELVES};
+use ferrite_ui::motion::{fold_body, Reveal, FOLD};
+use std::time::Instant;
 
 /// A row of the list as its motion keys it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -66,9 +68,33 @@ impl CockpitView {
         self.prefs.settings.open_shelves.contains(&shelf)
     }
 
-    /// Open or fold `shelf`, at once, and remember it. The list's motion
-    /// stands still for it: the shelf's rows would travel over the headers
-    /// below.
+    /// How far `shelf`'s body is open on screen, 0 to 1: it follows the
+    /// setting, turning round from where it is when that flips, and is
+    /// already there on first sight.
+    fn shelf_shown(&self, shelf: Shelf, now: Instant, reduced: bool) -> (f32, bool) {
+        let open = self.shelf_open(shelf);
+        let mut folds = self.shelf_folds.borrow_mut();
+        let at = match folds.iter().position(|(other, _)| *other == shelf) {
+            Some(at) => at,
+            None => {
+                let fold = if open {
+                    Reveal::open(FOLD, FOLD, now)
+                } else {
+                    Reveal::closed(FOLD, FOLD, now)
+                };
+                folds.push((shelf, fold));
+                folds.len() - 1
+            }
+        };
+        let fold = &mut folds[at].1;
+        fold.set(open, now, reduced);
+        (fold.value(now, reduced), fold.running(now, reduced))
+    }
+
+    /// Open or fold `shelf` and remember it. Its body eases open and shut
+    /// (`shelf_shown`), and the list's motion stands still for it: the
+    /// rows would travel over the headers below, which the body's own
+    /// height already moves.
     pub(crate) fn set_shelf_open(&mut self, shelf: Shelf, open: bool, cx: &mut Context<Self>) {
         if self.shelf_open(shelf) == open {
             return;
@@ -93,8 +119,18 @@ impl CockpitView {
         state: &'a nav::NavState,
         shelf: Shelf,
     ) -> Vec<&'a nav::ThreadRow> {
+        self.rows_of(state, shelf, self.shelf_open(shelf))
+    }
+
+    /// [`Self::shelf_rows`] for a shelf `open` or not.
+    fn rows_of<'a>(
+        &self,
+        state: &'a nav::NavState,
+        shelf: Shelf,
+        open: bool,
+    ) -> Vec<&'a nav::ThreadRow> {
         let rows = state.shelf(shelf);
-        if !self.shelf_open(shelf) {
+        if !open {
             return rows.iter().filter(|row| row.selected).collect();
         }
         match shelf {
@@ -156,6 +192,9 @@ impl CockpitView {
         if !folded && state.pinned.is_empty() && state.active.is_empty() {
             rows.push(self.nav_empty(state, cx));
         }
+        let now = cx.background_executor().now();
+        let reduced = ferrite_ui::motion::reduced_motion(cx);
+        let mut folding = false;
         let mut anchored = false;
         for shelf in SHELVES.into_iter().filter(|_| !folded) {
             let all = state.shelf(shelf);
@@ -167,17 +206,36 @@ impl CockpitView {
                 anchored = true;
             }
             rows.push(self.shelf_header(shelf, all.len(), cx));
-            for row in self.shelf_rows(state, shelf) {
-                rows.push(match shelf {
+            // Its body: the rows between the shown Thread's (which a fold
+            // keeps) ride one clip each, so they close without the
+            // Thread's row, or the rows below, jumping.
+            let (shown, moving) = self.shelf_shown(shelf, now, reduced);
+            folding |= moving;
+            let name = list::shelf_key(shelf);
+            let mut body: Vec<AnyElement> = Vec::new();
+            let mut segments = 0;
+            let mut clip = |body: &mut Vec<AnyElement>, rows: &mut Vec<AnyElement>| {
+                if !body.is_empty() {
+                    segments += 1;
+                    let id = SharedString::from(format!("{name}-fold-{segments}"));
+                    let clipped = div().flex().flex_col().children(std::mem::take(body));
+                    rows.push(fold_body(id, shown, clipped).into_any_element());
+                }
+            };
+            for row in self.rows_of(state, shelf, shown > 0.0) {
+                let face = match shelf {
                     Shelf::Working => self.nav_card(row, None, &mut faces, cx),
                     Shelf::Snoozed | Shelf::Parked => self.nav_slim(row, shelf, &mut faces, cx),
-                });
+                };
+                if row.selected {
+                    clip(&mut body, &mut rows);
+                    rows.push(face);
+                } else {
+                    body.push(face);
+                }
             }
-            if shelf == Shelf::Parked
-                && self.shelf_open(shelf)
-                && all.len() > self.nav_parked_shown
-            {
-                rows.push(
+            if shelf == Shelf::Parked && shown > 0.0 && all.len() > self.nav_parked_shown {
+                body.push(
                     list::show_more_parked()
                         .on_click(cx.listener(|view, _: &ClickEvent, _, cx| {
                             view.nav_parked_shown += ferrite_ui::theme::NAV_PARKED_PAGE;
@@ -186,15 +244,16 @@ impl CockpitView {
                         .into_any_element(),
                 );
             }
+            clip(&mut body, &mut rows);
         }
-        let now = cx.background_executor().now();
         let ghosts = self.nav_motion.borrow_mut().begin(Update {
             rows: faces,
-            snap: self.nav_snap.replace(false)
+            snap: self.nav_snap.replace(folding)
+                || folding
                 || self.nav_drag_live.get()
                 || self.nav_viewport.replace(window.viewport_size()) != window.viewport_size(),
             now,
-            reduced: ferrite_ui::motion::reduced_motion(cx),
+            reduced,
         });
         let measure = nav::Measure::Text(cx);
         let ghosts = ghosts.into_iter().map(|ghost| {
@@ -211,7 +270,7 @@ impl CockpitView {
                 .opacity(opacity)
                 .child(face)
         });
-        if self.nav_motion.borrow().running(now) {
+        if folding || self.nav_motion.borrow().running(now) {
             ferrite_ui::motion::request_frame(window);
         }
         let body = list::body().children(rows).children(ghosts);

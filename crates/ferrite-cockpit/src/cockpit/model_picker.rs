@@ -846,7 +846,8 @@ impl CockpitView {
                     .anchor(gpui::Anchor::BottomLeft)
                     .position(gpui::point(left, field.top() - px(MODEL_PICKER_GAP)))
                     .snap_to_window_with_margin(px(GRID_PAD))
-                    .child(ferrite_ui::motion::menu_in(
+                    .child(ferrite_ui::motion::float_in(
+                        ferrite_ui::motion::POPOVER,
                         "model-picker-in",
                         surface,
                         ferrite_ui::motion::Opens::Up,

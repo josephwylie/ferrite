@@ -535,6 +535,17 @@ impl CockpitView {
 
     /// A view of `target`'s PR chosen, in whichever surface shows it.
     fn select_pr_view(&mut self, target: PrTarget, tab: PrTab, cx: &mut Context<Self>) {
+        let was = match target.source {
+            PrSource::Thread(thread) => self
+                .panel
+                .surfaces
+                .get(thread)
+                .map_or(PrTab::Summary, |state| state.pr_tab(target.number)),
+            PrSource::Project(_) => self.prs.tab,
+        };
+        if was != tab {
+            self.panel.pr_picked = Some(cx.background_executor().now());
+        }
         match target.source {
             PrSource::Thread(thread) => self.select_pr_tab(thread, target.number, tab, cx),
             PrSource::Project(_) => self.select_prs_tab(tab, cx),
@@ -647,7 +658,10 @@ impl CockpitView {
             .min_h_0()
             .child(self.pr_views(target, tab, cx))
             .children(notice)
-            .child(div().flex().flex_col().flex_1().min_h_0().child(body))
+            .child(ferrite_ui::motion::swap_since(
+                self.panel.pr_picked,
+                div().flex().flex_col().flex_1().min_h_0().child(body),
+            ))
     }
 
     /// A read that failed: what went wrong and its way back, over the last

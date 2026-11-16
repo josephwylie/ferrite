@@ -276,6 +276,28 @@ fn the_pr_surface_keeps_its_view(cx: &mut TestAppContext) {
     assert!(cx.debug_bounds("pr-write-guide").is_some(), "no guide yet: the way to ask");
 }
 
+/// Choosing another view fades the body in once; choosing the one already
+/// shown, or an unrelated update, plays nothing.
+#[gpui::test]
+fn a_pr_view_fades_in_once_when_the_view_changes(cx: &mut TestAppContext) {
+    let (view, thread, _fake, cx) =
+        with_pr("pr-surface-fade", ferrite_core::protocol::WirePrState::Open, cx);
+    view.update(cx, |view, cx| view.open_pr_surface(thread, cx));
+    tick(cx);
+    let picked = |view: &gpui::Entity<CockpitView>, cx: &mut gpui::VisualTestContext| {
+        view.read_with(cx, |view, _| view.panel.pr_picked)
+    };
+    assert_eq!(picked(&view, cx), None, "opening the Surface plays nothing");
+    click("pr-tab-Timeline", cx);
+    let at = picked(&view, cx);
+    assert!(at.is_some(), "a new view fades in");
+    click("pr-tab-Timeline", cx);
+    assert_eq!(picked(&view, cx), at, "the same view again does not replay");
+    view.update(cx, |_, cx| cx.notify());
+    tick(cx);
+    assert_eq!(picked(&view, cx), at, "an unrelated update does not replay");
+}
+
 /// An open PR's primary action is Merge, which asks once more before it
 /// hands the merge to the agent; a merged one shows its pill instead, and
 /// its `⋯` offers what a merged PR can still take.

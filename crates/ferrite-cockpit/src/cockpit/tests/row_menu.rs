@@ -109,6 +109,63 @@ fn open_in_opens_its_submenu_beside_the_menu(cx: &mut TestAppContext) {
     );
 }
 
+/// A closed menu leaves with its short exit: the state is gone at once (so
+/// input is released), the face stays drawn until `MOTION_MENU_OUT_MS`
+/// passes and takes no press, and with motion reduced it is gone at once.
+#[gpui::test]
+fn a_closed_menu_fades_out_and_takes_no_input(cx: &mut TestAppContext) {
+    ferrite_ui::motion::testing::drive();
+    let (core, _fake) = cockpit("row-menu-exit", 1);
+    bind_production_keys(cx);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(1200.), px(800.)));
+    tick(cx);
+    let thread = view.read_with(cx, |view, _| view.panes[0].thread().unwrap());
+    let open = |cx: &mut gpui::VisualTestContext| {
+        view.update(cx, |view, cx| {
+            view.open_context_menu(
+                MenuTarget::Thread(thread),
+                gpui::point(px(300.), px(200.)),
+                cx,
+            )
+        });
+        tick(cx);
+    };
+    let step = |ms: u64, cx: &mut gpui::VisualTestContext| {
+        cx.executor().advance_clock(Duration::from_millis(ms));
+        cx.update(|window, cx| window.simulate_next_frame(cx));
+        cx.run_until_parked();
+    };
+    open(cx);
+    cx.simulate_keystrokes("escape");
+    cx.run_until_parked();
+    step(16, cx);
+    assert!(
+        view.read_with(cx, |view, _| view.context_menu.is_none()),
+        "input is released at once"
+    );
+    assert!(cx.debug_bounds("context-menu").is_some(), "the face is still leaving");
+    step(ferrite_ui::theme::MOTION_MENU_OUT_MS, cx);
+    step(16, cx);
+    assert!(cx.debug_bounds("context-menu").is_none(), "and gone once it has");
+
+    open(cx);
+    cx.simulate_keystrokes("escape");
+    open(cx);
+    step(16, cx);
+    assert!(view.read_with(cx, |view, _| view.context_menu.is_some()));
+    assert_eq!(
+        cx.debug_bounds("context-menu").iter().count(),
+        1,
+        "a reopen mid-exit shows one face"
+    );
+
+    cx.update(|_, cx| cx.set_reduce_motion(true));
+    cx.simulate_keystrokes("escape");
+    tick(cx);
+    assert!(cx.debug_bounds("context-menu").is_none(), "reduced motion snaps shut");
+}
+
 /// The menu is worked from the keyboard: ↓ and ↑ walk its rows (past the
 /// rules, wrapping), → steps into a submenu and ← out of it, ⏎ presses the
 /// cursor row and esc closes the menu.

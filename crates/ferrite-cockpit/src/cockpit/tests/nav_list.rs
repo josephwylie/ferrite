@@ -270,7 +270,12 @@ fn a_working_card_counts_its_run_and_recedes(cx: &mut TestAppContext) {
     }
 
     view.update(cx, |view, cx| view.set_shelf_open(nav::Shelf::Working, true, cx));
-    tick(cx);
+    for _ in 0..3 {
+        cx.executor()
+            .advance_clock(Duration::from_millis(ferrite_ui::theme::MOTION_FOLD_MS));
+        cx.update(|window, cx| window.simulate_next_frame(cx));
+        cx.run_until_parked();
+    }
     let drawn = nav::testing::drawn_card(threads[0]).expect("drawn");
     assert!(drawn.receded);
     assert_eq!(drawn.opacity, NAV_CARD_RECEDED_OPACITY, "70% at rest");

@@ -404,7 +404,7 @@ pub fn fade(fill: Hsla, rising: bool, height: f32, stops: &[(f32, f32)]) -> Div 
 }
 
 /// `shadow` with its ink scaled by `k` (0..1): a floating surface's shadow
-/// while it fades in or out (`motion::menu_in`).
+/// while it fades in or out (`motion::float_in`).
 pub fn shadow_faded(shadow: Vec<BoxShadow>, k: f32) -> Vec<BoxShadow> {
     shadow
         .into_iter()

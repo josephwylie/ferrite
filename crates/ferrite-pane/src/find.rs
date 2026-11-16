@@ -273,7 +273,7 @@ impl Find {
     /// `search` icon in `INK_SUBTLE`, the query in `INK_STRONG`, the count
     /// muted at the right — hung `FLOAT_OFFSET` under the top right of its host, the
     /// text it searches (`relative`). A host narrower than the bar narrows
-    /// the query, never the count. It opens like every float (`menu_in`).
+    /// the query, never the count. It opens like every float (`float_in`).
     pub fn bar(&self) -> Div {
         let bar = ferrite_ui::menu::float()
             .debug_selector(|| "find-bar".into())

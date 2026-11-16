@@ -162,6 +162,7 @@ pub(super) enum Submenu {
 }
 
 /// The context menu up on screen.
+#[derive(Clone)]
 pub(super) struct ContextMenu {
     pub(super) target: MenuTarget,
     pub(super) at: Point<Pixels>,
@@ -1107,7 +1108,13 @@ impl CockpitView {
         window: &Window,
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
-        let open = self.context_menu.as_ref()?;
+        let (open, left) = self.standing(
+            |exits| &mut exits.context_menu,
+            self.context_menu.clone(),
+            ferrite_ui::motion::MENU,
+            cx,
+        )?;
+        let open = &open;
         let mut shell = menu::shell().on_mouse_down(
             MouseButton::Left,
             cx.listener(|_, _: &MouseDownEvent, _, cx| cx.stop_propagation()),
@@ -1224,7 +1231,9 @@ impl CockpitView {
             None => placed.snap_to_window_with_margin(px(ferrite_ui::theme::GRID_PAD)),
         };
         Some(
-            deferred(placed.child(ferrite_ui::motion::menu_in(
+            deferred(placed.child(ferrite_ui::motion::float_at(
+                ferrite_ui::motion::MENU,
+                left,
                 "context-menu-in",
                 shell,
                 ferrite_ui::motion::Opens::Down,
