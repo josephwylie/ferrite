@@ -170,7 +170,7 @@ impl CockpitView {
         let key = self
             .machines
             .as_ref()
-            .and_then(|machines| machines.read(cx).selected_key().0)
+            .and_then(|machines| machines.read(cx).selected_key().and_then(|key| key.0))
             .unwrap_or_else(|| format!("session-{:p}", std::sync::Arc::as_ptr(&machine)));
         let store = ferrite_core::machine::dir(&self.prefs.dir, &key).join("attachment-previews");
         let requests: Vec<_> = self
