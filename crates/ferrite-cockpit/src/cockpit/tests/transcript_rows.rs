@@ -1259,6 +1259,159 @@ fn a_drag_in_a_scrolled_back_transcript_selects_the_rows_under_the_pointer(
     assert_eq!(clipboard(cx).as_deref(), Some(expected.join("\n").as_str()));
 }
 
+#[gpui::test]
+fn wheel_inside_an_expanded_tool_group_only_scrolls_its_tools(cx: &mut TestAppContext) {
+    let (core, fake) = cockpit("tool-group-wheel", 1);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(1000.), px(900.)));
+    let stream = fake.streams.borrow()[0].clone();
+    for line in 0..30 {
+        stream
+            .send(SessionEvent::TextDelta {
+                text: format!("Earlier paragraph {line}.\n\n"),
+            })
+            .unwrap();
+    }
+    for call in 0..40 {
+        stream
+            .send(SessionEvent::ToolStarted {
+                id: format!("wheel-{call}"),
+                name: "Bash".into(),
+                input: serde_json::json!({ "command": format!("echo {call}") }),
+            })
+            .unwrap();
+        stream
+            .send(SessionEvent::ToolCompleted {
+                id: format!("wheel-{call}"),
+                output: call.to_string(),
+                is_error: false,
+                result: ferrite_core::ToolResult::Opaque,
+            })
+            .unwrap();
+    }
+    for line in 0..3 {
+        stream
+            .send(SessionEvent::TextDelta {
+                text: format!("Later paragraph {line}.\n\n"),
+            })
+            .unwrap();
+    }
+    tick(cx);
+    view.update(cx, |view, cx| {
+        view.panes[0].toggle_tool(&pane::DisclosureId::Group("wheel-0".into()));
+        cx.notify();
+    });
+    tick(cx);
+    let scroll = view.read_with(cx, |view, cx| {
+        view.panes[0]
+            .transcript()
+            .unwrap()
+            .read(cx)
+            .scroll()
+            .clone()
+    });
+    let viewport = scroll.bounds();
+    let outside = gpui::point(viewport.left() + px(2.), viewport.center().y);
+    let wheel = |cx: &mut gpui::VisualTestContext, position, delta| {
+        cx.simulate_event(gpui::ScrollWheelEvent {
+            position,
+            delta: gpui::ScrollDelta::Pixels(gpui::point(px(0.), px(delta))),
+            ..Default::default()
+        });
+        cx.run_until_parked();
+    };
+    wheel(cx, outside, -100000.);
+    wheel(cx, outside, 60.);
+    let group = cx.debug_bounds("tool-group-members").unwrap();
+    assert!(
+        group.top() > viewport.top() && group.bottom() < viewport.bottom(),
+        "the entire tool list must be visible: {group:?} in {viewport:?}"
+    );
+    assert!(
+        scroll.offset().y < px(0.) && scroll.offset().y > -scroll.max_offset().y,
+        "the transcript must be able to scroll in either direction"
+    );
+    let outer_anchor = || {
+        let top = scroll.list_state().logical_scroll_top();
+        (top.item_ix, top.offset_in_item)
+    };
+    let anchor = outer_anchor();
+    let first_top =
+        |cx: &mut gpui::VisualTestContext| cx.debug_bounds("tool-row-wheel-0").unwrap().top();
+    let start = first_top(cx);
+    wheel(cx, group.center(), -48.);
+    assert!(first_top(cx) < start, "wheel down moves the tools");
+    assert_eq!(
+        outer_anchor(),
+        anchor,
+        "wheel inside the group must not move the transcript"
+    );
+    wheel(cx, group.center(), 48.);
+    assert_eq!(first_top(cx), start, "wheel up returns the tools");
+    assert_eq!(outer_anchor(), anchor);
+
+    wheel(cx, group.center(), -100000.);
+    let bottom = first_top(cx);
+    assert!(bottom < start, "the tool list has overflowing content");
+    assert_eq!(outer_anchor(), anchor);
+    wheel(cx, group.center(), -48.);
+    assert_eq!(
+        first_top(cx),
+        bottom,
+        "the tool list stays at its bottom edge"
+    );
+    assert_eq!(
+        outer_anchor(),
+        anchor,
+        "the bottom edge must not pass wheel events to the transcript"
+    );
+
+    let top_fade = cx.debug_bounds("tool-group-fade-top").unwrap().center();
+    wheel(cx, top_fade, 48.);
+    assert!(
+        first_top(cx) > bottom,
+        "the top fade still scrolls the tools"
+    );
+    assert_eq!(outer_anchor(), anchor);
+    wheel(cx, group.center(), 100000.);
+    assert_eq!(first_top(cx), start);
+    assert_eq!(outer_anchor(), anchor);
+    wheel(cx, group.center(), 48.);
+    assert_eq!(first_top(cx), start, "the tool list stays at its top edge");
+    assert_eq!(
+        outer_anchor(),
+        anchor,
+        "the top edge must not pass wheel events to the transcript"
+    );
+    let bottom_fade = cx.debug_bounds("tool-group-fade-bottom").unwrap().center();
+    wheel(cx, bottom_fade, -48.);
+    assert!(
+        first_top(cx) < start,
+        "the bottom fade still scrolls the tools"
+    );
+    assert_eq!(outer_anchor(), anchor);
+
+    let before_padding = first_top(cx);
+    wheel(
+        cx,
+        gpui::point(group.center().x, group.bottom() - px(1.)),
+        -48.,
+    );
+    assert_eq!(first_top(cx), before_padding);
+    assert_eq!(
+        outer_anchor(),
+        anchor,
+        "the group padding must not pass wheel events to the transcript"
+    );
+
+    wheel(cx, outside, 48.);
+    assert_ne!(
+        outer_anchor(),
+        anchor,
+        "wheel outside the tool list still scrolls the transcript"
+    );
+}
+
 /// The live row stands for the running turn's trailing work (`Running
 /// sleep`); a press opens that work's own rows above it, and shuts them
 /// again.
