@@ -154,9 +154,6 @@ fn mode_card(
     .min_w_0()
     .h(px(if compact { 44. } else { 96. }))
     .p(px(if compact { 8. } else { 16. }))
-    .when(compact, |button| {
-        button.tooltip(description)
-    })
     .items_start()
     .justify_start()
     .rounded(px(8.))
@@ -167,6 +164,7 @@ fn mode_card(
             .flex()
             .items_start()
             .when(compact, |row| row.items_center())
+            .when(compact, |row| row.tooltip(ferrite_ui::menu::tooltip(description)))
             .w_full()
             .h_full()
             .gap(px(12.))
