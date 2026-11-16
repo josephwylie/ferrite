@@ -27,6 +27,7 @@ pub(super) struct Editor {
     highlighted: Option<usize>,
     suggestion_scroll: gpui::ScrollHandle,
     original: Option<Machine>,
+    remote_host_value: String,
     pairing: Option<remote::PairingFields>,
     stage: Stage,
     warning: Option<String>,
@@ -240,7 +241,7 @@ impl CockpitView {
             field
         };
         let fields = settings::ConnectionFields {
-            remote_host: field(remote_host, "backend.example.com"),
+            remote_host: field(remote_host.clone(), "backend.example.com"),
             pairing_code: field(String::new(), "PAIRCODE"),
             host: field(host, "Search hosts or type devbox"),
             username: field(username, "root"),
@@ -273,6 +274,7 @@ impl CockpitView {
             highlighted: None,
             suggestion_scroll: gpui::ScrollHandle::new(),
             original: machine,
+            remote_host_value: remote_host,
             pairing: None,
             stage: Stage::Editing,
             warning: None,
@@ -306,9 +308,14 @@ impl CockpitView {
         }
         if input == &editor.fields.remote_host {
             let value = input.read(cx).value().to_string();
-            if let Ok(fields) = remote::PairingFields::parse(&value, "") {
+            let previous = std::mem::replace(&mut editor.remote_host_value, value.clone());
+            if let Some(fields) = remote::PairingFields::parse(&value, "")
+                .ok()
+                .filter(|_| inserted_multiple_characters(&previous, &value))
+            {
                 if fields.host != value {
                     editor.pairing = Some(fields.clone());
+                    editor.remote_host_value = fields.host.clone();
                     editor
                         .fields
                         .remote_host
@@ -1259,6 +1266,23 @@ fn connection_row(row: settings::ConnectionRow) -> settings::Row {
         vec![row.status.clone()],
         settings::Control::ConnectionRow(row),
     )
+}
+
+fn inserted_multiple_characters(previous: &str, value: &str) -> bool {
+    let prefix = previous
+        .chars()
+        .zip(value.chars())
+        .take_while(|(a, b)| a == b)
+        .count();
+    let previous: Vec<_> = previous.chars().skip(prefix).collect();
+    let value: Vec<_> = value.chars().skip(prefix).collect();
+    let suffix = previous
+        .iter()
+        .rev()
+        .zip(value.iter().rev())
+        .take_while(|(a, b)| a == b)
+        .count();
+    value.len().saturating_sub(suffix) > 1
 }
 
 fn connection_exists(machine: &Machine, original: Option<&Machine>, saved: &[Machine]) -> bool {

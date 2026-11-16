@@ -816,3 +816,64 @@ fn connection_modal_does_not_submit_or_close_during_ime_composition(cx: &mut Tes
     tick(cx);
     assert!(cx.debug_bounds("connection-dialog").is_none());
 }
+
+#[gpui::test]
+fn connection_pairing_url_can_be_typed_without_rewriting_its_prefix(cx: &mut TestAppContext) {
+    let (core, _fake) = cockpit("connection-typed-pairing", 1);
+    bind_production_keys(cx);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    tick(cx);
+    cx.simulate_keystrokes("cmd-,");
+    tick(cx);
+    view.update_in(cx, |view, window, cx| view.edit_connection(None, window, cx));
+    tick(cx);
+    let fields = connection_fields(&view, cx);
+    let url = "https://backend.example.com/pair#code=0123456789abcdef0123456789abcdef&server=fedcba9876543210fedcba9876543210";
+    let mut typed = String::new();
+    for character in url.chars() {
+        typed.push(character);
+        cx.simulate_input(&character.to_string());
+        cx.run_until_parked();
+        view.read_with(cx, |_, cx| {
+            assert_eq!(fields.remote_host.read(cx).value().as_ref(), typed.as_str());
+            assert!(fields.pairing_code.read(cx).value().is_empty());
+        });
+    }
+    view.read_with(cx, |_, cx| {
+        let parsed = ferrite_core::machine::remote::PairingFields::parse(
+            fields.remote_host.read(cx).value().as_ref(),
+            fields.pairing_code.read(cx).value().as_ref(),
+        )
+        .unwrap();
+        assert_eq!(parsed.host, "https://backend.example.com");
+        assert_eq!(parsed.pairing_code, "0123456789abcdef0123456789abcdef");
+    });
+}
+
+#[gpui::test]
+fn connection_pairing_url_paste_fills_host_and_code_after_replacing_text(cx: &mut TestAppContext) {
+    let (core, _fake) = cockpit("connection-pasted-pairing", 1);
+    bind_production_keys(cx);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    tick(cx);
+    cx.simulate_keystrokes("cmd-,");
+    tick(cx);
+    view.update_in(cx, |view, window, cx| view.edit_connection(None, window, cx));
+    tick(cx);
+    let fields = connection_fields(&view, cx);
+    cx.simulate_input("https://backend.example.com");
+    cx.run_until_parked();
+    cx.simulate_keystrokes("cmd-a");
+    cx.simulate_input("https://backend.example.com/pair#code=0123456789abcdef0123456789abcdef&server=fedcba9876543210fedcba9876543210");
+    cx.run_until_parked();
+    view.read_with(cx, |_, cx| {
+        assert_eq!(
+            fields.remote_host.read(cx).value().as_ref(),
+            "https://backend.example.com"
+        );
+        assert_eq!(
+            fields.pairing_code.read(cx).value().as_ref(),
+            "0123456789abcdef0123456789abcdef"
+        );
+    });
+}
