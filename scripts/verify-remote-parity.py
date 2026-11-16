@@ -163,7 +163,7 @@ class Window:
         self.command("click", "--selector", selector)
 
     def field(self, selector, value):
-        if selector in ("editor", "composer-block"):
+        if selector in ("editor", "composer-row"):
             bounds = json.loads(self.command("find", selector).stdout)["result"]
             self.command("click", "--x", str(int(bounds["x"] + 45)),
                          "--y", str(int(bounds["y"] + 16)))
@@ -306,7 +306,7 @@ def attachment_turn(ui, name, screenshot, new=False):
     ui.wait("attachment-upload-progress", visible=False)
     assert not ui.has("attachment-failed"), "Remote screenshot upload failed"
     ui.shot(name + "-attachment-ready")
-    ui.field("composer-block", "Inspect the attached screenshot. PARITY_STREAM")
+    ui.field("composer-row", "Inspect the attached screenshot. PARITY_STREAM")
     ui.click("composer-send")
     pending = until(lambda: rows(ui.output, "provider-await")[before:], "Fixture did not receive submitted prompt")[0]
     assert pending["store"] == ui.state["remote_store"], "Prompt reached the local provider"
