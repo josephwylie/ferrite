@@ -305,7 +305,7 @@ fn the_group_board_resizes_by_its_seam_and_reorders_by_drop(cx: &mut TestAppCont
         .unwrap();
     bind_production_keys(cx);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
-    cx.simulate_resize(gpui::size(px(1200.), px(700.)));
+    cx.simulate_resize(gpui::size(px(1800.), px(700.)));
     view.update(cx, |view, cx| view.enter_group(group, cx));
     tick(cx);
 

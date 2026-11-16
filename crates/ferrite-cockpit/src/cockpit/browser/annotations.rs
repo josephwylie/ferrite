@@ -530,6 +530,7 @@ impl CockpitView {
                             })
                             .detach();
                             session.phase = Phase::Editing(editor);
+                            cx.notify();
                         }
                         Ok(Err(failure)) => error = Some(failure.to_string()),
                         Err(TryRecvError::Disconnected) => {

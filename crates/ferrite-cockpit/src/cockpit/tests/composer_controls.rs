@@ -357,6 +357,9 @@ fn multiline_drafts_keep_context_visible_across_group_sizes(cx: &mut TestAppCont
         (6, 860., 500.),
     ] {
         let (mut core, _) = cockpit(&format!("composer-sized-{count}-{width}"), count);
+        // An empty Thread is the hero composer (its own toolbar, no context
+        // to protect); the cap is for a Pane that has a transcript.
+        let _ = core.send(core.threads()[0], "go".into());
         if count > 1 {
             let group = group_all(&mut core);
             core.enter_group(group).unwrap();

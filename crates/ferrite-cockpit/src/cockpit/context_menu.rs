@@ -171,8 +171,9 @@ pub(super) struct ContextMenu {
     pub(super) corner: gpui::Anchor,
     /// Opened from a `⋯`: `at` is `MENU_UNDER_GAP` over the button and
     /// this drops the menu to the same gap under it. Where the window has
-    /// no room below, the menu flips to hang over the button instead
-    /// (gpui's `SwitchAnchor` flips about `at`). None at the pointer.
+    /// less room below than the menu needs, the menu scrolls there, or
+    /// hangs over the button where even two rows would not fit (see
+    /// `context_menu_element`). None at the pointer.
     pub(super) drop: Option<Pixels>,
     pub(super) rows: Vec<Option<(menu::Item, MenuVerb)>>,
     /// The destructive row pressed once, waiting for its confirmation.
@@ -250,8 +251,9 @@ impl CockpitView {
     }
 
     /// The menu a row's `⋯` opens, as Claude's: under the button, its right
-    /// edge on the button's, `MENU_UNDER_GAP` below it — over it, the same
-    /// gap above, only where the window has no room below.
+    /// edge on the button's, `MENU_UNDER_GAP` below it, scrolling where the
+    /// window has less room below than its rows need and over the button
+    /// where it has room for less than two.
     pub(super) fn open_context_menu_under(
         &mut self,
         target: MenuTarget,
@@ -1177,13 +1179,23 @@ impl CockpitView {
                 }
             };
         }
-        // Hung under its trigger, a long menu keeps below it and scrolls,
-        // rather than flipping up over what stands above the trigger.
-        let below = open.drop.map(|drop| {
-            window.viewport_size().height - open.at.y - drop - px(ferrite_ui::theme::GRID_PAD)
+        // Hung under its trigger, a menu keeps below it and scrolls in the
+        // room it has. Where that room cannot show two rows, it hangs over
+        // the trigger instead (the same gap above), scrolling in the room
+        // there.
+        let pad = px(ferrite_ui::theme::GRID_PAD);
+        let usable = px(2. * (ferrite_ui::theme::FLOAT_ROW_H + ferrite_ui::theme::FLOAT_PAD));
+        let hang = open.drop.map(|drop| {
+            let below = window.viewport_size().height - open.at.y - drop - pad;
+            let above = open.at.y - pad;
+            if below < usable && above > below {
+                (ferrite_ui::motion::Opens::Up, above)
+            } else {
+                (ferrite_ui::motion::Opens::Down, below)
+            }
         });
-        let shell = match below {
-            Some(room) if y + px(ferrite_ui::theme::FLOAT_PAD) > room => shell
+        let shell = match hang {
+            Some((_, room)) if y + px(ferrite_ui::theme::FLOAT_PAD) > room => shell
                 .max_h(room)
                 .id("context-menu-scroll")
                 .overflow_y_scroll()
@@ -1225,10 +1237,17 @@ impl CockpitView {
             .debug_selector(|| "context-menu".into())
             .child(shell)
             .children(side);
-        let placed = anchored().anchor(open.corner).position(open.at);
-        let placed = match open.drop {
-            Some(drop) => placed.offset(gpui::point(px(0.), drop)),
-            None => placed.snap_to_window_with_margin(px(ferrite_ui::theme::GRID_PAD)),
+        let opens = hang.map_or(ferrite_ui::motion::Opens::Down, |(opens, _)| opens);
+        let placed = match (open.drop, opens) {
+            (Some(_), ferrite_ui::motion::Opens::Up) => anchored().anchor(bottom_of(open.corner)).position(open.at),
+            (Some(drop), _) => anchored()
+                .anchor(open.corner)
+                .position(open.at)
+                .offset(gpui::point(px(0.), drop)),
+            (None, _) => anchored()
+                .anchor(open.corner)
+                .position(open.at)
+                .snap_to_window_with_margin(pad),
         };
         Some(
             deferred(placed.child(ferrite_ui::motion::float_at(
@@ -1236,12 +1255,20 @@ impl CockpitView {
                 left,
                 "context-menu-in",
                 shell,
-                ferrite_ui::motion::Opens::Down,
+                opens,
             )))
             // Over the sheets (`VEIL_PRIORITY`), whose pickers open it.
             .with_priority(crate::float::FLOAT_PRIORITY)
             .into_any_element(),
         )
+    }
+}
+
+/// `corner`'s twin on the bottom edge: the menu hangs by it over its button.
+fn bottom_of(corner: gpui::Anchor) -> gpui::Anchor {
+    match corner {
+        gpui::Anchor::TopLeft | gpui::Anchor::BottomLeft => gpui::Anchor::BottomLeft,
+        _ => gpui::Anchor::BottomRight,
     }
 }
 

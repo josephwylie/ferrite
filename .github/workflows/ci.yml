@@ -32,7 +32,9 @@ env:
 jobs:
   # What the run covers: `code` is false for a PR that changes only docs
   # (Markdown, docs/); `reviewr` is true when the vendored review core or
-  # the lockfile changes; `full` is true on main and for a `full-ci` PR.
+  # the lockfile changes; `ui` is true when the cockpit, pane or ui crates,
+  # or a crate they build on, change; `full` is true on main and for a
+  # `full-ci` PR.
   # A scope that fails to say runs everything (`!= 'false'` below), so a
   # broken scope never skips a check.
   scope:
@@ -42,6 +44,7 @@ jobs:
     outputs:
       code: ${{ steps.scope.outputs.code }}
       reviewr: ${{ steps.scope.outputs.reviewr }}
+      ui: ${{ steps.scope.outputs.ui }}
       full: ${{ steps.scope.outputs.full }}
     steps:
       - id: scope
@@ -54,6 +57,7 @@ jobs:
           if [ "$EVENT" != pull_request ]; then
             echo "code=true" >> "$GITHUB_OUTPUT"
             echo "reviewr=true" >> "$GITHUB_OUTPUT"
+            echo "ui=true" >> "$GITHUB_OUTPUT"
             echo "full=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
@@ -67,6 +71,11 @@ jobs:
             echo "reviewr=true" >> "$GITHUB_OUTPUT"
           else
             echo "reviewr=false" >> "$GITHUB_OUTPUT"
+          fi
+          if printf '%s\n' "$files" | grep -qE '^crates/ferrite-(cockpit|pane|ui|core|terminal|frame|focus-notify|reviewr)/|^Cargo\.|^vendor/|^\.cargo/|^\.config/nextest\.toml$|^\.github/workflows/ci\.yml$'; then
+            echo "ui=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "ui=false" >> "$GITHUB_OUTPUT"
           fi
           echo "full=$FULL_LABEL" >> "$GITHUB_OUTPUT"
 
@@ -89,6 +98,18 @@ jobs:
       - name: Test the vendored review core
         if: needs.scope.outputs.reviewr != 'false'
         run: cargo test -p ferrite-reviewr --locked
+      # The Cockpit window's real entry paths (rendered controls, production
+      # key bindings, clicks) on the synthetic engine: no CEF, default
+      # features, so `browser-window.yml` stays the CEF pass.
+      - name: Install nextest
+        if: needs.scope.outputs.ui != 'false'
+        uses: taiki-e/install-action@nextest
+      - name: Test the Cockpit, Pane and UI crates (synthetic engine)
+        if: needs.scope.outputs.ui != 'false'
+        run: |
+          echo "crates: ferrite-cockpit ferrite-pane ferrite-ui"
+          echo "features: default (synthetic engine, no cef or browser-smoke)"
+          cargo nextest run -p ferrite-cockpit -p ferrite-pane -p ferrite-ui --locked --no-fail-fast --status-level all --final-status-level fail
       - name: Build app
         run: cargo build -p ferrite --locked
 

@@ -27,6 +27,14 @@ on:
       - 'scripts/probe-browser-window.py'
       - 'scripts/*windows.ps1'
       - 'scripts/install-app.sh'
+      - 'crates/ferrite-pane/src/visual/**'
+      - 'crates/ferrite-cockpit/src/cockpit/browser.rs'
+      - 'crates/ferrite-cockpit/src/cockpit/browser/**'
+      - 'crates/ferrite-core/src/browser*'
+      - 'crates/ferrite-core/src/browser*/**'
+      - 'crates/ferrite/src/lib.rs'
+      - 'crates/ferrite/Cargo.toml'
+      - 'vendor/gpui-pre*/**'
   workflow_dispatch:
 
 concurrency:
@@ -35,7 +43,7 @@ concurrency:
 
 jobs:
   packaged-cef:
-    name: Production Cockpit window (${{ matrix.os }})
+    name: CEF pass, production Cockpit window (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: 75
     env:
@@ -47,8 +55,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+      # Pinned for Windows' long rustc commands; see ci.yml.
       - uses: mozilla-actions/sccache-action@v0.0.11
         continue-on-error: true
+        with:
+          version: v0.16.0
       - name: Continue without optional compiler cache when unavailable
         shell: bash
         run: |
@@ -198,14 +209,17 @@ jobs:
           if-no-files-found: warn
 
   focused-regressions:
-    name: Focused browser, provider and GPUI regressions
+    name: Synthetic-engine pass, focused browser, provider and GPUI regressions
     runs-on: macos-latest
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+      # Pinned for Windows' long rustc commands; see ci.yml.
       - uses: mozilla-actions/sccache-action@v0.0.11
         continue-on-error: true
+        with:
+          version: v0.16.0
       - name: Keep compiler cache optional
         shell: bash
         run: |

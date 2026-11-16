@@ -829,15 +829,18 @@ impl Preferences {
                 ..Default::default()
             },
             // One directory each: a window's drafts must not reach the
-            // next test's window.
+            // next test's window. Process ids recycle, so a name alone
+            // would hand a later run the tabs and drafts an earlier left.
             dir: {
                 static NEXT: std::sync::atomic::AtomicUsize =
                     std::sync::atomic::AtomicUsize::new(0);
-                std::env::temp_dir().join(format!(
+                let dir = std::env::temp_dir().join(format!(
                     "ferrite-prefs-{}-{}",
                     std::process::id(),
                     NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
-                ))
+                ));
+                let _ = std::fs::remove_dir_all(&dir);
+                dir
             },
             defaults: std::sync::Arc::new(std::sync::Mutex::new(
                 ferrite_core::spawner::SessionDefaults::default(),
