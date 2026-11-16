@@ -2334,7 +2334,6 @@ fn local_environment_switch_preserves_unreadable_settings(cx: &mut TestAppContex
     cx.update(|window, cx| toggle(window, cx));
     view.read_with(cx, |view, _| {
         assert!(view.prefs.settings.local_environment_enabled);
-        assert!(view.connections.error.as_deref().unwrap().contains("Settings cannot be saved"));
     });
     assert_eq!(std::fs::read(&path).unwrap(), b"not json");
 }

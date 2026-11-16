@@ -275,7 +275,7 @@ fn show_suggestions(
     window.defer_draw(popup, gpui::point(anchor.left(), top), 5, None);
 }
 
-pub(super) fn form(form: ConnectionForm, cx: &App) -> Div {
+pub(super) fn form(form: ConnectionForm, cx: &App) -> AnyElement {
     let ConnectionForm::Editing {
         fields,
         mode,
@@ -293,7 +293,7 @@ pub(super) fn form(form: ConnectionForm, cx: &App) -> Div {
         cancel,
     } = form
     else {
-        return div();
+        return div().into_any_element();
     };
     let busy = progress.is_some();
     let host = field(
@@ -582,7 +582,7 @@ pub(super) fn form(form: ConnectionForm, cx: &App) -> Div {
                 .child(dialog),
         );
     }
-    overlay
+    overlay.into_any_element()
 }
 
 pub(super) fn group(label: Option<SharedString>, group: &Group, cx: &App) -> Div {

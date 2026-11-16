@@ -8011,6 +8011,7 @@ impl CockpitView {
         let (Some(draft), Some(id)) = (pane.draft(), pane.identity.draft()) else {
             return;
         };
+        let binding = draft.binding.clone();
         let composer = pane.composer.clone();
         if !self.admit_files(self.focused(), cx) {
             return;
@@ -8019,10 +8020,9 @@ impl CockpitView {
         if text.is_empty() {
             return;
         }
-        let provider = draft.binding.provider().clone();
-        let effort = draft.binding.effort().map(str::to_owned);
-        let resolved = draft
-            .binding
+        let provider = binding.provider().clone();
+        let effort = binding.effort().map(str::to_owned);
+        let resolved = binding
             .resolve(self.cockpit.registry(), !self.on_machine())
             .map_err(|e| e.to_string());
         let opened = resolved.and_then(|choice| {

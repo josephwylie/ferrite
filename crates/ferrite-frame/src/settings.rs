@@ -477,10 +477,12 @@ fn section_words(label: &str) -> Div {
 
 /// One setting row: label over hint at the left, the control right and
 /// centred; one row in a quarter row of air each side, or two with a hint.
-fn setting_row(row: &Row, window: &mut Window, cx: &mut App) -> Div {
+fn setting_row(row: &Row, window: &mut Window, cx: &mut App) -> AnyElement {
     match &row.control {
         Control::ConnectionForm(form) => return connections::form(form.clone(), cx),
-        Control::ConnectionRow(connection) => return connections::row(connection.clone(), cx),
+        Control::ConnectionRow(connection) => {
+            return connections::row(connection.clone(), cx).into_any_element()
+        }
         _ => {}
     }
     let hinted = !row.hint.is_empty();
@@ -534,6 +536,7 @@ fn setting_row(row: &Row, window: &mut Window, cx: &mut App) -> Div {
                 })
                 .child(control(row, window, cx)),
         )
+        .into_any_element()
 }
 
 /// A row's description: `INK_SUBTLE` at 13, wrapping to a second line where
