@@ -4590,6 +4590,7 @@ fn group_list(
     };
     div()
         .debug_selector(|| "tool-group-members".into())
+        .on_scroll_wheel(|_, _, cx| cx.stop_propagation())
         .relative()
         .w_full()
         .min_w_0()
