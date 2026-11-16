@@ -161,6 +161,14 @@ fn act(driver: &mut Driver, action: Action) -> Result<Answer, String> {
                 height: bounds.size.height.into(),
             })
         }
+        Action::Attach(files) => {
+            if files.paths.is_empty() || files.paths.iter().any(|path| !path.is_absolute()) {
+                return Err("attachments require absolute local file paths".into());
+            }
+            driver.update(|view, _, cx| view.attach_local_files(&files.paths, cx))?;
+            driver.tick(60);
+            Ok(Answer::Attached)
+        }
         Action::Shot(Shot { path }) => {
             if !path.is_absolute() {
                 return Err(format!("a shot's path is absolute, not {}", path.display()));

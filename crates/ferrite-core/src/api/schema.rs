@@ -239,6 +239,8 @@ operations! {
         "Where the headless window last drew an element, by its debug selector.";
     WindowShot(drive::Shot) => "window.shot", ["path"], Operator,
         "Save the headless window's frame as a PNG at a path.";
+    WindowAttach(drive::Attach) => "window.attach", ["paths"], Operator,
+        "Stage local files in the focused headless Composer, using absolute paths on the window's computer.";
 }
 
 /// Who may call an operation (#224). A call that names no Thread is the

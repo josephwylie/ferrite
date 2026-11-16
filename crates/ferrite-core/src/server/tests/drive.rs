@@ -130,3 +130,22 @@ fn a_driven_window_that_goes_mid_action_leaves_its_caller_refused() {
     let none = caller.answer("2", "window.shot", json!({ "path": "/tmp/shot.png" }));
     assert_eq!(none["error"]["code"], "no_headless_window", "{none}");
 }
+
+#[test]
+fn attachment_paths_reach_the_driven_window_without_server_filesystem_lookup() {
+    let harness = start("drive-attach");
+    let mut driven = attach_driven(&harness.address);
+    let mut caller = call(&harness);
+    let paths = vec![PathBuf::from("/client-only/screenshot.png")];
+    caller.ask("1", "window.attach", json!({ "paths": paths }));
+    let (request, action) = handed(&driven);
+    assert_eq!(action, Action::Attach(crate::drive::Attach { paths }));
+    driven
+        .send(&ClientMessage::Driven {
+            request,
+            ok: Some(Answer::Attached),
+            error: None,
+        })
+        .unwrap();
+    assert_eq!(caller.next()["result"], json!({ "answer": "attached" }));
+}
