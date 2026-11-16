@@ -21,6 +21,7 @@ pub(super) struct Editor {
     generation: u64,
     mode: ConnectionMode,
     focus: FocusHandle,
+    _keys: gpui::Subscription,
     discovery: Discovery,
     suggestions_open: bool,
     highlighted: Option<usize>,
@@ -252,11 +253,21 @@ impl CockpitView {
         };
         initial.update(cx, |field, cx| field.focus(window, cx));
         self.connections.generation = self.connections.generation.wrapping_add(1);
+        let view = cx.entity().downgrade();
+        let owner = window.window_handle();
+        let keys = cx.intercept_keystrokes(move |event, window, cx| {
+            if window.window_handle() == owner {
+                let _ = view.update(cx, |view, cx| {
+                    view.connection_key_down(&event.keystroke, window, cx)
+                });
+            }
+        });
         self.connections.editor = Some(Editor {
             fields,
             generation: self.connections.generation,
             mode,
             focus: cx.focus_handle(),
+            _keys: keys,
             discovery: Discovery::default(),
             suggestions_open: false,
             highlighted: None,
@@ -469,7 +480,7 @@ impl CockpitView {
 
     fn connection_key_down(
         &mut self,
-        event: &gpui::KeyDownEvent,
+        keystroke: &gpui::Keystroke,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -477,16 +488,13 @@ impl CockpitView {
             return;
         };
         if self.connection_is_composing(window, cx) {
-            if matches!(
-                event.keystroke.key.as_str(),
-                "enter" | "escape" | "up" | "down"
-            ) {
+            if matches!(keystroke.key.as_str(), "enter" | "escape" | "up" | "down") {
                 cx.stop_propagation();
             }
             return;
         }
-        let key = event.keystroke.key.as_str();
-        let modifiers = event.keystroke.modifiers;
+        let key = keystroke.key.as_str();
+        let modifiers = keystroke.modifiers;
         if key == "tab" && !modifiers.platform && !modifiers.control && !modifiers.alt {
             cx.stop_propagation();
             let scope = match &editor.stage {
@@ -853,12 +861,6 @@ impl CockpitView {
         let choose_mode = Rc::new(move |mode, window: &mut Window, cx: &mut App| {
             let _ = view.update(cx, |view, cx| view.set_connection_mode(mode, window, cx));
         });
-        let view = cx.entity().downgrade();
-        let key_down = Rc::new(
-            move |event: &gpui::KeyDownEvent, window: &mut Window, cx: &mut App| {
-                let _ = view.update(cx, |view, cx| view.connection_key_down(event, window, cx));
-            },
-        );
         let open_suggestions = action(cx, |view, _, cx| {
             if let Some(editor) = &mut view.connections.editor {
                 editor.suggestions_open = true;
@@ -974,7 +976,6 @@ impl CockpitView {
             suggestions,
             choose_mode,
             open_suggestions,
-            key_down,
             choose_host,
             progress,
             error,

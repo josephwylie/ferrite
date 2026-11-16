@@ -283,7 +283,6 @@ pub(super) fn form(form: ConnectionForm, cx: &App) -> AnyElement {
         suggestions: list,
         choose_mode,
         open_suggestions,
-        key_down,
         choose_host,
         progress,
         error,
@@ -488,7 +487,6 @@ pub(super) fn form(form: ConnectionForm, cx: &App) -> AnyElement {
         } else {
             0xffffff99
         }))
-        .capture_key_down(move |event, window, cx| key_down(event, window, cx))
         .on_mouse_down(MouseButton::Left, move |_, window, cx| {
             cx.stop_propagation();
             backdrop_cancel(window, cx);

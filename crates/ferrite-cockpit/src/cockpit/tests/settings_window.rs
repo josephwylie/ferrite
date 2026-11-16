@@ -721,13 +721,19 @@ fn connection_modal_defaults_to_link_traps_tab_and_resets_on_reopen(cx: &mut Tes
             .focus_handle(cx)
             .is_focused(window))
     });
+    let mut visited = Vec::new();
     for _ in 0..12 {
         cx.simulate_keystrokes("tab");
         tick(cx);
-        view.update_in(cx, |view, window, cx| {
-            assert!(view.connection_holds_focus(window, cx))
+        let focused = view.update_in(cx, |view, window, cx| {
+            assert!(view.connection_holds_focus(window, cx));
+            window.focused(cx).unwrap()
         });
+        if !visited.contains(&focused) {
+            visited.push(focused);
+        }
     }
+    assert!(visited.len() >= 6, "Tab reaches the fields, modes, close, and submit");
     for _ in 0..12 {
         cx.simulate_keystrokes("shift-tab");
         tick(cx);
@@ -770,6 +776,9 @@ fn connection_modal_defaults_to_link_traps_tab_and_resets_on_reopen(cx: &mut Tes
     view.read_with(cx, |view, _| {
         assert!(view.settings_open && view.connections.editor.is_none())
     });
+    cx.simulate_keystrokes("escape");
+    tick(cx);
+    view.read_with(cx, |view, _| assert!(!view.settings_open));
 }
 
 #[gpui::test]

@@ -125,8 +125,6 @@ pub struct ConnectionSuggestions {
     pub scroll: gpui::ScrollHandle,
 }
 
-pub type ConnectionKey = Rc<dyn Fn(&gpui::KeyDownEvent, &mut Window, &mut App)>;
-
 #[derive(Clone)]
 pub struct ConnectionVerification {
     pub target: SharedString,
@@ -150,7 +148,6 @@ pub enum ConnectionForm {
         suggestions: Option<ConnectionSuggestions>,
         choose_mode: Rc<dyn Fn(ConnectionMode, &mut Window, &mut App)>,
         open_suggestions: WindowAct,
-        key_down: ConnectionKey,
         choose_host: Rc<dyn Fn(SharedString, &mut Window, &mut App)>,
         progress: Option<SharedString>,
         error: Option<SharedString>,
