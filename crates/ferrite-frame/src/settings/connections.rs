@@ -161,6 +161,7 @@ fn mode_card(
     .border_color(rgb(if selected { 0x344881 } else { edge(cx) }))
     .child(
         div()
+            .id((id, 0))
             .flex()
             .items_start()
             .when(compact, |row| row.items_center())
