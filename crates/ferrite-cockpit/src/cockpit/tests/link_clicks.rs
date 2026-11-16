@@ -401,7 +401,7 @@ fn back_to_transcript(view: &Entity<CockpitView>, cx: &mut gpui::VisualTestConte
 /// Copy gives the forge address.
 #[gpui::test]
 fn a_pr_number_opens_its_native_detail_and_copies_its_forge_address(cx: &mut TestAppContext) {
-    let page = "https://github.com/owner/repo/pull/212";
+    let page = "https://github.com/owner/repo/issues/212";
     let (view, cx) = issue_answer("link-issue-origin", Some("git@github.com:owner/repo.git"), cx);
     let at = caret(&view, cx, 0, 11);
     cx.simulate_click(at, gpui::Modifiers::none());

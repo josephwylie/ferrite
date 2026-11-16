@@ -186,7 +186,7 @@ impl PathTarget {
 
 type OpenReader = Rc<dyn Fn(PathBuf, Option<u32>, &mut Window, &mut App)>;
 type OpenThread = Rc<dyn Fn(ferrite_core::ThreadId, &mut Window, &mut App)>;
-type OpenPullRequest = Rc<dyn Fn(u64, &mut Window, &mut App)>;
+type OpenPullRequest = Rc<dyn Fn(u64, String, &mut Window, &mut App)>;
 
 /// What a transcript does with a press on a link in its prose: ⌘-click on a
 /// path opens the Thread's preview, a Thread link opens that Thread, and a
@@ -278,11 +278,17 @@ pub(crate) fn open_thread(
 
 /// Open the PR a prose link names, through the transcript hosting `scope`.
 /// Answers whether a transcript took it.
-pub(crate) fn open_pull_request(scope: &str, number: u64, window: &mut Window, cx: &mut App) -> bool {
+pub(crate) fn open_pull_request(
+    scope: &str,
+    number: u64,
+    url: String,
+    window: &mut Window,
+    cx: &mut App,
+) -> bool {
     let handler = cx
         .try_global::<PathScopes>()
         .and_then(|scopes| scopes.open.get(scope).map(|(_, route)| route.pull_request.clone()));
-    handler.map(|open| open(number, window, cx)).is_some()
+    handler.map(|open| open(number, url, window, cx)).is_some()
 }
 
 /// A transcript renders `scope` anew: the first target of each path laid
@@ -686,7 +692,7 @@ pub(crate) fn issue_url(workspace: &Path, number: &str) -> Option<String> {
 }
 
 /// The web address of the forge repository `workspace`'s origin names.
-pub(crate) fn origin_base(workspace: &Path) -> Option<String> {
+pub fn origin_base(workspace: &Path) -> Option<String> {
     ORIGINS.with(|cache| {
         cache
             .borrow_mut()

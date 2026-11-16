@@ -6,7 +6,7 @@
 use std::{
     future::Future,
     pin::Pin,
-    sync::{Arc, OnceLock},
+    sync::{Arc, Mutex},
 };
 
 use gpui::http_client::{
@@ -18,7 +18,8 @@ type Sent = Pin<Box<dyn Future<Output = gpui::http_client::Result<Response<Async
 
 pub(crate) struct GitHubImages {
     inner: Arc<dyn HttpClient>,
-    token: Arc<OnceLock<Option<HeaderValue>>>,
+    /// The login once `gh` gave one; asked again until it does.
+    token: Arc<Mutex<Option<HeaderValue>>>,
 }
 
 impl GitHubImages {
@@ -47,8 +48,15 @@ impl HttpClient for GitHubImages {
         let token = self.token.clone();
         Box::pin(async move {
             *request.uri_mut() = raw.parse()?;
-            if let Some(token) = token.get_or_init(gh_token) {
-                request.headers_mut().insert(AUTHORIZATION, token.clone());
+            let token = {
+                let mut token = token.lock().unwrap_or_else(|e| e.into_inner());
+                if token.is_none() {
+                    *token = gh_token();
+                }
+                token.clone()
+            };
+            if let Some(token) = token {
+                request.headers_mut().insert(AUTHORIZATION, token);
             }
             inner.send(request).await
         })
@@ -76,8 +84,10 @@ fn raw_address(address: &str) -> Option<String> {
 }
 
 fn gh_token() -> Option<HeaderValue> {
+    use ferrite_core::spawn::NoConsoleWindow as _;
     let output = std::process::Command::new("gh")
         .args(["auth", "token", "--hostname", "github.com"])
+        .no_console_window()
         .output()
         .ok()?;
     let token = String::from_utf8(output.stdout).ok()?;

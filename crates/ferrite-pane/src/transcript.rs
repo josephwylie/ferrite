@@ -361,8 +361,9 @@ pub enum TranscriptEvent {
     /// on that Thread.
     OpenThread(ferrite_core::ThreadId),
     /// A link in prose to a pull request of this Thread's repository
-    /// (`#N`, or its forge address) pressed: that PR's native detail.
-    OpenPullRequest(u64),
+    /// (`#N`, or its forge address) pressed: that PR's native detail, or
+    /// its forge `url` where no Project of this repository reads it.
+    OpenPullRequest { number: u64, url: String },
     /// A changed-files card's `Open diff`, or a press on one of its files
     /// (as the turn named it): the Changes Surface, on that file.
     OpenChanges(Option<String>),
@@ -729,9 +730,9 @@ impl TranscriptView {
                         });
                     }
                 }),
-                pull_request: Rc::new(move |number, _window, cx| {
+                pull_request: Rc::new(move |number, url, _window, cx| {
                     let _ = weak.update(cx, |_, cx| {
-                        cx.emit(TranscriptEvent::OpenPullRequest(number));
+                        cx.emit(TranscriptEvent::OpenPullRequest { number, url });
                     });
                 }),
             },

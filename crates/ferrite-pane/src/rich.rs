@@ -635,7 +635,7 @@ impl gpui::RenderOnce for Markdown {
                         let how = Open::of(event);
                         let routed = how == Open::Primary
                             && scope.is_some_and(|scope| {
-                                crate::file_links::open_pull_request(&scope, *number, window, cx)
+                                crate::file_links::open_pull_request(&scope, *number, url.clone(), window, cx)
                             });
                         if !routed {
                             let browser = if how == Open::Primary { Open::Integrated } else { how };

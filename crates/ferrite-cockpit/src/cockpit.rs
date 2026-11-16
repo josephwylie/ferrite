@@ -2394,10 +2394,10 @@ impl CockpitView {
             ferrite_pane::transcript::TranscriptEvent::OpenThread(thread) => {
                 self.focus_thread(*thread, cx);
             }
-            ferrite_pane::transcript::TranscriptEvent::OpenPullRequest(number) => {
+            ferrite_pane::transcript::TranscriptEvent::OpenPullRequest { number, url } => {
                 self.focus_pane(index);
                 if let Some(thread) = self.panes[index].thread() {
-                    self.open_named_pr(thread, *number, cx);
+                    self.open_named_pr(thread, *number, url.clone(), cx);
                 }
             }
             ferrite_pane::transcript::TranscriptEvent::OpenBackground => {

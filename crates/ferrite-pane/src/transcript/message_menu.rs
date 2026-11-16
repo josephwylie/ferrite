@@ -223,8 +223,11 @@ impl TranscriptView {
             }),
             (Verb::OpenLink(how), Target::Link(target)) => {
                 if !target.open(how, Some(&self.input.preview), window, cx) {
-                    if let LinkTarget::RepoPullRequest { number, .. } = target {
-                        cx.emit(TranscriptEvent::OpenPullRequest(*number));
+                    if let LinkTarget::RepoPullRequest { number, url } = target {
+                        cx.emit(TranscriptEvent::OpenPullRequest {
+                            number: *number,
+                            url: url.clone(),
+                        });
                     }
                 }
             }

@@ -172,19 +172,18 @@ fn repo_pull_request(raw: &str, base: &str) -> Option<LinkTarget> {
     if !base.starts_with("https://github.com/") {
         return None;
     }
-    let number = match raw.strip_prefix(ISSUE_SCHEME) {
-        Some(number) => number,
+    // GitHub sends `/issues/N` on to `/pull/N` for a PR, so a bare `#N`
+    // keeps an address that is right whichever it names.
+    let (number, url) = match raw.strip_prefix(ISSUE_SCHEME) {
+        Some(number) => (number, format!("{base}/issues/{number}")),
         None => {
             let rest = raw.strip_prefix(base)?.strip_prefix("/pull/")?;
             let end = rest.find(['/', '#', '?']).unwrap_or(rest.len());
-            &rest[..end]
+            (&rest[..end], raw.to_string())
         }
     };
     let number: u64 = number.parse().ok()?;
-    Some(LinkTarget::RepoPullRequest {
-        number,
-        url: format!("{base}/pull/{number}"),
-    })
+    Some(LinkTarget::RepoPullRequest { number, url })
 }
 
 pub fn notify_unavailable(why: &str, window: &mut Window, cx: &mut App) {
