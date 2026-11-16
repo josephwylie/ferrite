@@ -434,6 +434,7 @@ const STATES: &[(&str, &[&str])] = &[
     ("live", &["narrow", "wide", "app"]),
     ("decision", &["narrow", "wide", "app"]),
     ("approval", &["narrow", "wide", "app"]),
+    ("form", &["app"]),
     ("expanded", &["narrow", "wide", "app"]),
     ("interrupted", &["narrow", "wide", "app"]),
     ("conversation", &["app", "wide"]),
@@ -1596,6 +1597,38 @@ fn legacy(state: &str) -> (Scene, Setup) {
         }
         "decision" => {
             sender.ev(questions("fixture-question", "question"));
+        }
+        "form" => {
+            use ferrite_core::{FormField, FormFieldKind};
+            let text = |id: &str, label: &str, description: &str| FormField {
+                id: id.into(),
+                label: label.into(),
+                description: description.into(),
+                required: true,
+                kind: FormFieldKind::String {
+                    min_length: None,
+                    max_length: None,
+                    default: None,
+                },
+            };
+            sender.ev(SessionEvent::DecisionRequested {
+                decision: Decision {
+                    delivery: Default::default(),
+                    kind: DecisionKind::Form {
+                        fields: vec![
+                            text("name", "Release name", "Shown in the changelog heading."),
+                            text("notes", "Notes", "One line for the release notes."),
+                        ],
+                    },
+                    policy: Default::default(),
+                    id: "fixture-form".into(),
+                    tool_use_id: "form".into(),
+                    tool_name: "release".into(),
+                    description: "The release server needs two details.".into(),
+                    suggestions: vec![],
+                    input: serde_json::Value::Null,
+                },
+            });
         }
         "interrupted" => {
             sender.ev(SessionEvent::TurnEnded {

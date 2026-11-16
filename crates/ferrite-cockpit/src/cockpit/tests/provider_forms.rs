@@ -358,6 +358,55 @@ fn contract_mcp_required_input_without_default_is_editable_and_validated(cx: &mu
     ));
 }
 
+#[gpui::test]
+fn a_typed_form_value_is_sent_exactly_and_the_draft_is_untouched(cx: &mut TestAppContext) {
+    let (core, fake) = cockpit("mcp-typed-value", 1);
+    bind_production_keys(cx);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(1100.), px(800.)));
+    fake.streams.borrow()[0]
+        .send(typed_decision(DecisionKind::Form {
+            fields: vec![FormField {
+                id: "count".into(),
+                label: "Count".into(),
+                description: "Enter 1 to 3".into(),
+                required: true,
+                kind: FormFieldKind::Integer {
+                    minimum: Some(1),
+                    maximum: Some(3),
+                    default: None,
+                },
+            }],
+        }))
+        .unwrap();
+    tick(cx);
+    let serial = view.read_with(cx, |v, _| {
+        v.cockpit
+            .thread(v.panes[0].thread().unwrap())
+            .unwrap()
+            .pending_decisions()[0]
+            .handle
+            .serial
+    });
+    let input = cx.debug_bounds("form-input-count").unwrap();
+    cx.simulate_click(input.center(), gpui::Modifiers::none());
+    cx.run_until_parked();
+    cx.simulate_input("2");
+    cx.run_until_parked();
+    let submit = debug_bounds(cx, format!("request-submit-1-{serial}")).unwrap();
+    cx.simulate_click(submit.center(), gpui::Modifiers::none());
+    cx.run_until_parked();
+    let answered = fake.answered.borrow();
+    let DecisionAnswer::Form { values } = &answered[0].1 else {
+        panic!("the form is answered, got {:?}", answered[0].1)
+    };
+    assert_eq!(values["count"], serde_json::json!(2));
+    drop(answered);
+    view.read_with(cx, |v, cx| {
+        assert_eq!(v.panes[0].composer.read(cx).text(), "", "typing reached the form, not the draft");
+    });
+}
+
 /// An approval offers exactly three options (the terminal-native ruling):
 /// the provider's standing answer is option 2, and where a plain Allow is
 /// forbidden it goes back as the provider's own opaque choice, unchanged.
