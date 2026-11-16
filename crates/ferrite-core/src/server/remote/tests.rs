@@ -390,6 +390,59 @@ mod network {
     }
 
     #[test]
+    fn remote_terminal_drains_final_output_before_reporting_exit() {
+        let fixture = Fixture::new();
+        let directory = fixture.folder.canonicalize().unwrap();
+        remote::socket::runtime().unwrap().block_on(async {
+            let mut socket =
+                remote::socket::connect(&fixture.profile, &fixture.granted.secret, "/v1/terminal")
+                    .await
+                    .unwrap();
+            socket
+                .send(ClientFrame::Text(
+                    serde_json::to_string(&remote::terminal::Command::Open {
+                        cwd: directory.to_string_lossy().into_owned(),
+                        columns: 80,
+                        rows: 24,
+                    })
+                    .unwrap()
+                    .into(),
+                ))
+                .await
+                .unwrap();
+            socket
+                .send(ClientFrame::Binary(
+                    b"exec /bin/sh -c 'printf \"%262144s\" \"\" | tr \" \" x; printf \"\\nREMOTE_FINAL_MARKER\\n\"; exit 37'\n"
+                        .to_vec()
+                        .into(),
+                ))
+                .await
+                .unwrap();
+            let mut output = Vec::new();
+            tokio::time::timeout(Duration::from_secs(5), async {
+                loop {
+                    match socket.next().await.expect("the terminal reports its exit").unwrap() {
+                        ClientFrame::Binary(bytes) => output.extend_from_slice(&bytes),
+                        ClientFrame::Text(text) => {
+                            let event: serde_json::Value = serde_json::from_str(&text).unwrap();
+                            assert_eq!(event["type"], "exit");
+                            assert_eq!(event["code"], 37);
+                            break;
+                        },
+                        ClientFrame::Ping(_) | ClientFrame::Pong(_) => {},
+                        frame => panic!("terminal closed before reporting its exit: {frame:?}"),
+                    }
+                }
+            })
+            .await
+            .unwrap();
+            let output = String::from_utf8(output).unwrap();
+            assert!(output.contains(&"x".repeat(262144)), "terminal output was truncated");
+            assert!(output.contains("\r\nREMOTE_FINAL_MARKER\r\n"), "terminal lost its final output");
+        });
+    }
+
+    #[test]
     fn remote_terminal_runs_in_remote_directory_resizes_and_cleans_up() {
         let fixture = Fixture::new();
         let directory = fixture.folder.join("remote-only-workspace");
