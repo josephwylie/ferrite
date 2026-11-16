@@ -1952,6 +1952,19 @@ impl Cockpit {
         )
     }
 
+    /// Read or save Files content on the computer that owns the workspace.
+    pub fn file_operation(
+        &mut self,
+        request: crate::file_operations::Request,
+    ) -> io::Result<Receiver<io::Result<crate::file_operations::Reply>>> {
+        match &mut self.link {
+            Link::Server(server) => server.file_operation(request),
+            Link::InProcess(_) => Ok(read_here(move || {
+                crate::file_operations::execute(request).map_err(|error| error.to_string())
+            })),
+        }
+    }
+
     /// A directory's entries on the computer the Server runs on — on a
     /// machine, the machine's (ADR 0026). Answered later: a machine is a
     /// round trip away. Only a Server answers: a window that runs its

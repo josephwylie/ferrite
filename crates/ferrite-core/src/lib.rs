@@ -33,6 +33,7 @@ pub mod machine;
 pub mod notifications;
 pub mod progress;
 pub mod prompt_files;
+pub mod file_operations;
 mod prompt_history;
 pub mod protocol;
 pub mod providers;

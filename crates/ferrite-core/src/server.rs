@@ -89,6 +89,10 @@ pub fn settings_dir() -> PathBuf {
 pub fn ferrited(args: &[String]) -> i32 {
     let executable = std::env::current_exe().unwrap_or_else(|_| "ferrited".into());
     match args.get(1).map(String::as_str) {
+        Some("--version" | "-V") => {
+            println!("ferrited {}", env!("CARGO_PKG_VERSION"));
+            0
+        }
         Some("server") => run(Options {
             store: store_dir(),
             settings_dir: settings_dir(),
@@ -105,7 +109,7 @@ pub fn ferrited(args: &[String]) -> i32 {
         Some("service") => agent::service(&executable, args.get(2).map(String::as_str)),
         _ => {
             eprintln!(
-                "usage: ferrited server | ferrited bridge | ferrited api-bridge{USAGE_SERVICE}"
+                "usage: ferrited --version | ferrited server | ferrited bridge | ferrited api-bridge{USAGE_SERVICE}"
             );
             2
         }
@@ -829,6 +833,15 @@ impl Server {
                 }
                 None => Err(failed("no such Project")),
             },
+            Op::FileOperation { request: operation } => {
+                let operation = operation.clone();
+                self.read_off_pump(id, request, move || {
+                    crate::file_operations::execute(operation)
+                        .map(|reply| Some(Done::FileOperation { reply }))
+                        .map_err(failed)
+                });
+                return;
+            }
             Op::ListDir { path } => {
                 let path = path.clone();
                 self.read_off_pump(id, request, move || {

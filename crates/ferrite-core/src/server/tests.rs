@@ -24,6 +24,7 @@ mod browser_providers;
 mod drive;
 mod environment;
 mod factory;
+mod file_operations;
 mod owned;
 mod park;
 mod publish;

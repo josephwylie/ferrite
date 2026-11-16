@@ -1356,6 +1356,15 @@ fn samples() -> Vec<(&'static str, Sample)> {
             command(25, Op::Restart { when: When::Idle }),
         ),
         ("command_stop", command(26, Op::Stop { when: When::Now })),
+        ("command_file_operation_read", command(301, Op::FileOperation {
+            request: crate::file_operations::Request::Read { root: "/workspace".into(), path: "/workspace/main.rs".into() },
+        })),
+        ("command_file_operation_write", command(302, Op::FileOperation {
+            request: crate::file_operations::Request::Write { root: "/workspace".into(), path: "/workspace/main.rs".into(), text: "edited".into(), expected: Some(crate::file_operations::fingerprint(b"original")) },
+        })),
+        ("command_file_operation_snapshot", command(303, Op::FileOperation {
+            request: crate::file_operations::Request::Snapshot { root: "/workspace".into(), directories: vec!["/workspace".into()], search: true },
+        })),
         (
             "command_list_dir",
             command(
@@ -1674,6 +1683,21 @@ fn samples() -> Vec<(&'static str, Sample)> {
                 error: None,
             }),
         ),
+        ("reply_file_operation_text", Sample::Server(ServerMessage::Reply {
+            id: 301, ok: Some(Done::FileOperation { reply: crate::file_operations::Reply::Text { text: "original".into(), fingerprint: crate::file_operations::fingerprint(b"original") } }), error: None,
+        })),
+        ("reply_file_operation_written", Sample::Server(ServerMessage::Reply {
+            id: 302, ok: Some(Done::FileOperation { reply: crate::file_operations::Reply::Written { fingerprint: crate::file_operations::fingerprint(b"edited") } }), error: None,
+        })),
+        ("reply_file_operation_conflict", Sample::Server(ServerMessage::Reply {
+            id: 303, ok: Some(Done::FileOperation { reply: crate::file_operations::Reply::Conflict }), error: None,
+        })),
+        ("reply_file_operation_binary", Sample::Server(ServerMessage::Reply {
+            id: 304, ok: Some(Done::FileOperation { reply: crate::file_operations::Reply::Binary }), error: None,
+        })),
+        ("reply_file_operation_snapshot", Sample::Server(ServerMessage::Reply {
+            id: 305, ok: Some(Done::FileOperation { reply: crate::file_operations::Reply::Snapshot(crate::file_operations::Snapshot::default()) }), error: None,
+        })),
         (
             "reply_listing",
             Sample::Server(ServerMessage::Reply {

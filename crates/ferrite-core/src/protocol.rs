@@ -146,6 +146,9 @@ pub struct Command {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "op", rename_all = "snake_case")]
 pub enum Op {
+    FileOperation {
+        request: crate::file_operations::Request,
+    },
     BrowserCapture {
         thread: ThreadId,
         owner: crate::browser::Owner,
@@ -614,6 +617,7 @@ impl Op {
             | Op::CliReplaced { .. }
             | Op::Focused { .. }
             | Op::ListDir { .. }
+            | Op::FileOperation { .. }
             | Op::ListRepo { .. }
             | Op::ReviewDiff { .. }
             | Op::ReviewRead { .. }
@@ -1482,6 +1486,9 @@ pub enum ErrorCode {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Done {
+    FileOperation {
+        reply: crate::file_operations::Reply,
+    },
     BrowserCapture {
         annotation: crate::browser_annotations::Annotation,
     },

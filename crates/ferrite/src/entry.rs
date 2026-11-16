@@ -3,6 +3,9 @@
 use ferrite_core::server::{settings_dir, store_dir};
 
 pub fn run() {
+    if let Some(code) = ferrite_core::machine::auth::dispatch() {
+        std::process::exit(code);
+    }
     let args: Vec<String> = std::env::args().collect();
     #[cfg(feature = "browser-smoke")]
     if args.get(1).map(String::as_str) == Some("--browser-window-stop") {

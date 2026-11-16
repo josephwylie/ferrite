@@ -456,6 +456,16 @@ impl Remote {
         Ok(answered)
     }
 
+    pub(crate) fn file_operation(
+        &mut self,
+        request: crate::file_operations::Request,
+    ) -> io::Result<Receiver<io::Result<crate::file_operations::Reply>>> {
+        self.ask(Op::FileOperation { request }, |done| match done {
+            Done::FileOperation { reply } => Some(reply),
+            _ => None,
+        })
+    }
+
     pub(crate) fn list_dir(&mut self, path: &Path) -> io::Result<Receiver<io::Result<Listing>>> {
         let op = Op::ListDir {
             path: path.to_path_buf(),

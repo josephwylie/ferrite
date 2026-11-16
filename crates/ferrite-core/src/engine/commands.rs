@@ -285,6 +285,7 @@ impl Engine {
             | Op::Focused { .. }
             | Op::Composing { .. }
             | Op::ListDir { .. }
+            | Op::FileOperation { .. }
             | Op::ListRepo { .. }
             | Op::ReviewDiff { .. }
             | Op::ReviewRead { .. }
