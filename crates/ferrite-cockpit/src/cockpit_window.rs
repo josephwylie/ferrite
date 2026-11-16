@@ -93,7 +93,7 @@ impl CockpitWindow {
     /// streams status from here on.
     fn go_to(
         &mut self,
-        index: usize,
+        index: Option<usize>,
         open: Option<crate::cockpit::Landing>,
         window: &mut Window,
         cx: &mut Context<Self>,
@@ -127,7 +127,7 @@ impl CockpitWindow {
         let needs_you = self
             .cockpit
             .update(cx, |view, _| std::mem::take(&mut view.needs_you))
-            .moved(&left, &arrived);
+            .moved(left.as_ref(), arrived.as_ref());
         let until = cx.background_executor().now() + LANDING_WAIT;
         let view = cx.new(|cx| {
             CockpitView::new_with_settings(core, provider, prefs, cx)

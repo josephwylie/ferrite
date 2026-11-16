@@ -743,9 +743,9 @@ pub struct CockpitView {
 }
 
 /// The Cockpit asks its window to put it on machine `index` (ADR 0026),
-/// and there to open `open`.
+/// and there to open `open`. `None` leaves the client without an environment.
 pub struct GoToMachine {
-    pub index: usize,
+    pub index: Option<usize>,
     pub open: Option<Landing>,
 }
 
@@ -7420,6 +7420,9 @@ impl CockpitView {
         chosen: Option<ProjectId>,
         cx: &mut Context<Self>,
     ) {
+        if !self.cockpit.environment_available() {
+            return;
+        }
         // The draft starts in the Project of the Thread the operator is in:
         // the focused one, else the one focus last left.
         let current = match placement {
@@ -10515,7 +10518,8 @@ impl CockpitView {
         };
         let visible = self.visible_indices();
         // The empty board names the provider CLIs it found: ask once.
-        if self.empty_board_shown()
+        if self.cockpit.environment_available()
+            && self.empty_board_shown()
             && self.cli_versions.is_none()
             && !self.cli_probing
             && !cfg!(test)
@@ -10524,7 +10528,9 @@ impl CockpitView {
             self.probe_cli_versions(cx);
         }
         let board = self.board_bounds(window);
-        let grid = if self.factory_view.is_some() {
+        let grid = if !self.cockpit.environment_available() {
+            frame().flex().child(self.no_environment(cx))
+        } else if self.factory_view.is_some() {
             // A Project's Factory board stands in the board's place.
             frame().flex().child(self.factory_board(window, cx))
         } else if self.prs.shown {
@@ -12849,11 +12855,13 @@ impl CockpitView {
         now: std::time::SystemTime,
     ) -> Option<crate::system_notifications::Posting> {
         let row = self.alert_row(alert, machines, now)?;
-        let machine = alert.away.clone().unwrap_or_else(|| {
-            machines.map_or(crate::machines::MachineKey(None), |machines| {
-                machines.selected_key()
-            })
-        });
+        let machine = match alert.away.clone() {
+            Some(machine) => machine,
+            None => match machines {
+                Some(machines) => machines.selected_key()?,
+                None => crate::machines::MachineKey(None),
+            },
+        };
         // The directory is this computer's only for a Thread on screen.
         let cwd = match alert.away {
             None => self

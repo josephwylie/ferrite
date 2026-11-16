@@ -49,7 +49,7 @@ pub fn run(http: Arc<dyn gpui::http_client::HttpClient>) {
     let mut cx = app(keys);
     cx.update(|cx| cx.set_http_client(http));
     let machines = cx.new(|_| {
-        Machines::new(
+        Machines::with_local_environment(
             Reach {
                 settings_dir: settings_dir.clone(),
                 store: store.clone(),
@@ -65,6 +65,7 @@ pub fn run(http: Arc<dyn gpui::http_client::HttpClient>) {
             },
             &settings.machines,
             None,
+            settings.local_environment_enabled,
         )
     });
     let core = match cx.update(|cx| machines.update(cx, |machines, _| machines.cockpit())) {

@@ -148,7 +148,7 @@ impl CockpitView {
         let selected = self
             .machines
             .as_ref()
-            .and_then(|machines| machines.read(cx).selected_key().0);
+            .and_then(|machines| machines.read(cx).selected_key().and_then(|key| key.0));
         let leaves = selected.is_some_and(|target| {
             self.prefs
                 .settings
@@ -812,7 +812,12 @@ impl CockpitView {
                 self.connections.warning = warning;
                 self.connections.editor = None;
                 let selected = self.machines.as_ref().is_some_and(|machines| {
-                    machines.read(cx).selected_key().0.as_deref() == Some(&machine.target)
+                    machines
+                        .read(cx)
+                        .selected_key()
+                        .and_then(|key| key.0)
+                        .as_deref()
+                        == Some(&machine.target)
                 });
                 if let Some(machines) = &self.machines {
                     machines.update(cx, |machines, cx| {
@@ -980,6 +985,29 @@ impl CockpitView {
         }
     }
 
+    fn toggle_local_environment(&mut self, cx: &mut Context<Self>) {
+        let enabled = !self.prefs.settings.local_environment_enabled;
+        if !enabled && !self.on_machine() {
+            if let Some(error) = self.files_leave_error(cx) {
+                self.connections.error = Some(error.into());
+                cx.notify();
+                return;
+            }
+        }
+        let mut settings = self.prefs.settings.clone();
+        settings.local_environment_enabled = enabled;
+        if let Err(error) = settings.save(&self.prefs.dir) {
+            self.connections.error =
+                Some(format!("Local environment not saved: {error}. Try again."));
+            cx.notify();
+            return;
+        }
+        self.prefs.settings = settings;
+        self.connections.error = None;
+        self.machines_changed(cx);
+        cx.notify();
+    }
+
     pub(super) fn connection_settings(
         &mut self,
         window: &mut Window,
@@ -1004,29 +1032,24 @@ impl CockpitView {
                     .collect::<Vec<_>>()
             })
             .unwrap_or_default();
-        let local_actions = if self.on_machine() {
-            vec![settings::ConnectionAction {
-                id: "connection-open-0".into(),
-                label: "Open".into(),
-                enabled: true,
-                act: action(cx, |_, _, cx| {
-                    cx.emit(GoToMachine {
-                        index: 0,
-                        open: None,
-                    })
-                }),
-            }]
-        } else {
-            Vec::new()
-        };
+        let local_enabled = self.prefs.settings.local_environment_enabled;
         let local = connection_row(settings::ConnectionRow {
             name: "Local environment".into(),
-            target: "Local environment".into(),
-            status: "Connected".into(),
-            connected: true,
-            enabled: true,
+            target: "".into(),
+            status: if local_enabled {
+                "Run agents on this computer. Turn off to use Ferrite only with remote environments."
+            } else {
+                "Turned off. This client only uses remote environments. Running agents are unaffected."
+            }.into(),
+            connected: local_enabled,
+            enabled: local_enabled,
             detail: None,
-            actions: local_actions,
+            actions: vec![settings::ConnectionAction {
+                id: "connection-toggle-local".into(),
+                label: "Local environment".into(),
+                enabled: self.machines.is_some(),
+                act: action(cx, |view, _, cx| view.toggle_local_environment(cx)),
+            }],
             removal: None,
         });
         let form = self.connection_form(window, cx);
@@ -1052,7 +1075,10 @@ impl CockpitView {
                 label: "Open".into(),
                 enabled: machine.enabled && !selected,
                 act: action(cx, move |_, _, cx| {
-                    cx.emit(GoToMachine { index, open: None })
+                    cx.emit(GoToMachine {
+                        index: Some(index),
+                        open: None,
+                    })
                 }),
             }];
             if machine.enabled && row.connection != Connection::Online {
@@ -1133,7 +1159,7 @@ impl CockpitView {
             let removal = (self.connections.removing.as_ref() == Some(&target)).then(|| {
                 let confirm = action(cx, move |view, _, cx| {
                     let selected = view.machines.as_ref().is_some_and(|machines| {
-                        machines.read(cx).selected_key().0.as_deref() == Some(&target)
+                        machines.read(cx).selected_key().and_then(|key| key.0).as_deref() == Some(&target)
                     });
                     if selected {
                         if let Some(error) = view.files_leave_error(cx) {
@@ -1172,7 +1198,7 @@ impl CockpitView {
                             });
                             if leave {
                                 cx.emit(GoToMachine {
-                                    index: 0,
+                                    index: view.machines.as_ref().and_then(|machines| machines.read(cx).fallback()),
                                     open: None,
                                 });
                             }

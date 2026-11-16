@@ -485,7 +485,7 @@ fn going_to_a_machine_that_needs_a_sign_in_says_so_and_holds_still(cx: &mut Test
     let first = shown(cx);
     first.update(cx, |_, cx| {
         cx.emit(GoToMachine {
-            index: 1,
+            index: Some(1),
             open: None,
         })
     });
@@ -529,7 +529,7 @@ fn going_to_a_machine_that_needs_a_sign_in_says_so_and_holds_still(cx: &mut Test
     // And back: the window follows the Cockpit it built last.
     on_box.update(cx, |_, cx| {
         cx.emit(GoToMachine {
-            index: 0,
+            index: Some(0),
             open: None,
         })
     });
@@ -2110,7 +2110,7 @@ fn remote_files_block_machine_switch_until_the_save_has_finished(cx: &mut TestAp
         machine_with_edited_remote_file("remote-files-leave", false, false, cx);
     view.update(cx, |_, cx| {
         cx.emit(GoToMachine {
-            index: 1,
+            index: Some(1),
             open: None,
         })
     });
@@ -2135,7 +2135,7 @@ fn remote_files_block_machine_switch_until_the_save_has_finished(cx: &mut TestAp
     assert!(!editor.read_with(cx, |editor, _| editor.is_dirty()));
     view.update(cx, |_, cx| {
         cx.emit(GoToMachine {
-            index: 1,
+            index: Some(1),
             open: None,
         })
     });
@@ -2213,6 +2213,7 @@ fn remote_files_block_disconnect_and_remove_before_settings_or_selection_change(
                     .unwrap()
                     .read(cx)
                     .selected_key()
+                    .unwrap()
                     .0
                     .as_deref(),
                 Some("me@box")
@@ -2237,4 +2238,68 @@ fn remote_files_block_disconnect_and_remove_before_settings_or_selection_change(
             }
         });
     }
+}
+
+#[gpui::test]
+fn local_environment_switch_persists_and_empty_client_blocks_new_threads(cx: &mut TestAppContext) {
+    bind_production_keys(cx);
+    let machines = cx.new(|_| {
+        let mut machines = machines("local-environment-toggle", None);
+        machines.set_local_enabled(false);
+        machines.settings_changed(&[]);
+        machines
+    });
+    let core = machines
+        .update(cx, |machines, _| machines.go_to(None))
+        .unwrap()
+        .unwrap();
+    let (root, cx) = machine_window(cx, core, machines);
+    let dir = settings_dir("local-environment-toggle-prefs");
+    shown(&root, cx).update(cx, |view, _| {
+        view.prefs.dir = dir.clone();
+        view.prefs.settings.local_environment_enabled = false;
+        view.prefs.settings.save(&dir).unwrap();
+    });
+    tick(cx);
+    assert!(cx.debug_bounds("no-environment").is_some());
+    cx.simulate_keystrokes("cmd-n");
+    cx.simulate_keystrokes("cmd-shift-n");
+    tick(cx);
+    shown(&root, cx).read_with(cx, |view, _| {
+        assert!(view.panes.is_empty());
+        assert!(
+            view.on_machine(),
+            "empty client cannot use local file fallbacks"
+        );
+        assert!(view.shown_defaults().is_none());
+    });
+    for enabled in [true, false] {
+        let toggle = shown(&root, cx).update_in(cx, |view, window, cx| {
+            view.connection_settings(window, cx)
+                .into_iter()
+                .flat_map(|group| group.rows)
+                .find_map(|row| match row.control {
+                    settings::Control::ConnectionRow(row) => row
+                        .actions
+                        .into_iter()
+                        .find(|action| action.id.as_ref() == "connection-toggle-local")
+                        .map(|action| action.act),
+                    _ => None,
+                })
+                .unwrap()
+        });
+        cx.update(|window, cx| toggle(window, cx));
+        tick(cx);
+        assert_eq!(
+            ferrite_core::settings::Settings::load(&dir)
+                .unwrap()
+                .local_environment_enabled,
+            enabled
+        );
+        shown(&root, cx).read_with(cx, |view, _| {
+            assert_eq!(view.cockpit.environment_available(), enabled);
+            assert_eq!(view.prefs.settings.local_environment_enabled, enabled);
+        });
+    }
+    assert!(cx.debug_bounds("no-environment-connections").is_some());
 }

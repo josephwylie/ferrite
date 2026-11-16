@@ -48,14 +48,14 @@ fn a_cockpit_that_cannot_be_built_is_not_gone_to() {
     std::fs::create_dir_all(&reach.settings_dir).unwrap();
     std::fs::write(&reach.store, "").unwrap();
     let mut machines = Machines::new(reach, &saved(), Some("me@build"));
-    assert!(machines.go_to(0).unwrap().is_err());
+    assert!(machines.go_to(Some(0)).unwrap().is_err());
     assert_eq!(
         machines.selected().unwrap().target,
         "me@build",
         "still on the machine"
     );
     assert_eq!(streaming(&machines), [true, false, false]);
-    assert!(machines.go_to(1).is_none(), "already on it");
+    assert!(machines.go_to(Some(1)).is_none(), "already on it");
 }
 
 #[test]
@@ -137,5 +137,69 @@ fn turning_off_the_machine_on_screen_says_the_window_must_leave() {
     off[0].enabled = false;
     assert!(machines.settings_changed(&off));
     assert!(machines.select(0));
+    assert_eq!(streaming(&machines), [false, false, false]);
+}
+
+#[test]
+fn local_environment_disabled_without_remotes_has_no_selection_or_local_access() {
+    let reach = reach("local-environment-empty");
+    let store = reach.store.clone();
+    let mut machines = Machines::with_local_environment(reach, &[], None, false);
+    assert_eq!(machines.selected_key(), None);
+    assert_eq!(machines.fallback(), None);
+    assert!(machines.rows(None).is_empty());
+    assert_eq!(streaming(&machines), [false]);
+    assert!(machines.go_to(Some(0)).is_none());
+    let mut cockpit = machines.cockpit().unwrap();
+    assert!(!cockpit.environment_available());
+    cockpit.retry_server();
+    cockpit.pump();
+    assert!(!store.exists(), "disabled Local never opens its store");
+    assert!(cockpit.discover_sessions(Vec::new(), 10).is_none());
+    assert!(cockpit
+        .discover_commands(
+            ferrite_core::store::Provider::Codex,
+            std::path::Path::new("/")
+        )
+        .is_none());
+}
+
+#[test]
+fn local_environment_disabled_selects_remote_and_never_streams_local() {
+    let mut machines =
+        Machines::with_local_environment(reach("local-environment-remote"), &saved(), None, false);
+    assert_eq!(machines.selected().unwrap().target, "me@build");
+    assert_eq!(streaming(&machines), [false, false, false]);
+    assert_eq!(
+        machines
+            .rows(None)
+            .iter()
+            .map(|row| row.index)
+            .collect::<Vec<_>>(),
+        [1, 2]
+    );
+    assert!(machines.settings_changed(&[]));
+    assert_eq!(machines.fallback(), None);
+    let cockpit = machines.go_to(None).unwrap().unwrap();
+    assert!(!cockpit.environment_available());
+    assert_eq!(machines.selected_key(), None);
+    assert!(machines.rows(None).is_empty(), "the removed remote is gone");
+    machines.set_local_enabled(true);
+    assert_eq!(machines.fallback(), Some(0));
+    assert!(machines.select(0));
+    assert_eq!(machines.selected_key(), Some(MachineKey(None)));
+    assert_eq!(streaming(&machines), [false]);
+}
+
+#[test]
+fn local_environment_disable_keeps_an_existing_remote_selected() {
+    let mut machines = Machines::new(
+        reach("local-environment-selected"),
+        &saved(),
+        Some("me@build"),
+    );
+    machines.set_local_enabled(false);
+    assert!(!machines.settings_changed(&saved()));
+    assert_eq!(machines.selected().unwrap().target, "me@build");
     assert_eq!(streaming(&machines), [false, false, false]);
 }

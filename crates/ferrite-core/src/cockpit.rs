@@ -500,7 +500,15 @@ impl Cockpit {
         }
     }
 
-    /// The machine this window is on (ADR 0026); `None` for this computer.
+    /// Whether this client has an enabled environment to connect to.
+    pub fn environment_available(&self) -> bool {
+        match &self.link {
+            Link::InProcess(_) => true,
+            Link::Server(server) => server.available(),
+        }
+    }
+
+    /// The remote machine, if selected.
     pub fn machine(&self) -> Option<&std::sync::Arc<crate::machine::Bridge>> {
         match &self.link {
             Link::InProcess(_) => None,
@@ -1131,7 +1139,10 @@ impl Cockpit {
     ) -> Option<Receiver<io::Result<Vec<crate::import::Candidate>>>> {
         match &mut self.link {
             Link::InProcess(engine) => engine.discover_sessions(roots, cap),
-            Link::Server(server) => server.discovery().discover_sessions(roots, cap),
+            Link::Server(server) if server.available() => {
+                server.discovery().discover_sessions(roots, cap)
+            }
+            Link::Server(_) => None,
         }
     }
 
@@ -2777,7 +2788,10 @@ impl Cockpit {
     ) -> Option<crate::providers::commands::Discovery> {
         match &mut self.link {
             Link::InProcess(engine) => engine.discover_commands(provider, cwd),
-            Link::Server(server) => server.discovery().discover_commands(provider, cwd),
+            Link::Server(server) if server.available() => {
+                server.discovery().discover_commands(provider, cwd)
+            }
+            Link::Server(_) => None,
         }
     }
 

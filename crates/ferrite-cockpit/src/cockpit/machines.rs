@@ -38,17 +38,17 @@ impl CockpitView {
             .then(|| machines.rows(self.cockpit.server()))
     }
 
-    /// The window is on a machine: the paths it shows are the machine's,
-    /// so no git or folder of this computer answers for them — the Server
-    /// does, or nothing.
+    /// Remote and empty clients must never substitute local files or defaults.
     pub(super) fn on_machine(&self) -> bool {
-        self.cockpit.machine().is_some()
+        !self.cockpit.environment_available() || self.cockpit.machine().is_some()
     }
 
     /// The window is on a machine whose Server is not there: what it shows
     /// stays, dimmed, and takes no input until it is back.
     pub(super) fn machine_lost(&self) -> bool {
-        self.on_machine() && matches!(self.cockpit.server(), Some(ServerState::Detached { .. }))
+        self.cockpit.environment_available()
+            && self.on_machine()
+            && matches!(self.cockpit.server(), Some(ServerState::Detached { .. }))
     }
 
     /// Take what the machines off screen said.
@@ -80,7 +80,10 @@ impl CockpitView {
                     if selected {
                         view.fold_machine(index, cx);
                     } else {
-                        cx.emit(GoToMachine { index, open: None });
+                        cx.emit(GoToMachine {
+                            index: Some(index),
+                            open: None,
+                        });
                     }
                 }),
             )
@@ -107,7 +110,10 @@ impl CockpitView {
                     .on_mouse_down(
                         MouseButton::Left,
                         cx.listener(move |_, _: &MouseDownEvent, _, cx| {
-                            cx.emit(GoToMachine { index, open: None });
+                            cx.emit(GoToMachine {
+                                index: Some(index),
+                                open: None,
+                            });
                         }),
                     )
                     .into_any_element()
@@ -127,7 +133,7 @@ impl CockpitView {
         });
         if let Some(index) = index {
             cx.emit(GoToMachine {
-                index,
+                index: Some(index),
                 open: Some(Landing::Alert(Alert {
                     away: None,
                     ..alert
@@ -232,21 +238,21 @@ impl CockpitView {
         }
     }
 
-    /// Follow Settings' machines. Turning off the one the window is on
-    /// puts the window on this computer: a turned-off machine is never
-    /// connected to.
+    /// Move a disabled selection to the first enabled environment, or none.
     pub(super) fn machines_changed(&mut self, cx: &mut Context<Self>) {
         let saved = self.prefs.settings.machines.clone();
         let Some(machines) = &self.machines else {
             return;
         };
+        let local_enabled = self.prefs.settings.local_environment_enabled;
         let turned_off = machines.update(cx, |machines, cx| {
+            machines.set_local_enabled(local_enabled);
             cx.notify();
             machines.settings_changed(&saved)
         });
         if turned_off {
             cx.emit(GoToMachine {
-                index: 0,
+                index: machines.read(cx).fallback(),
                 open: None,
             });
         }

@@ -755,14 +755,18 @@ pub(super) fn row(row: ConnectionRow, cx: &App) -> Div {
                 .flex()
                 .items_center()
                 .gap(px(12.))
-                .child(icon(icons::LAPTOP, 16., muted(cx)))
+                .when(!row.target.is_empty(), |row| {
+                    row.child(icon(icons::LAPTOP, 16., muted(cx)))
+                })
                 .child(
                     div()
                         .flex()
                         .flex_col()
                         .min_w_0()
                         .flex_1()
-                        .when(!enabled, |identity| identity.opacity(0.5))
+                        .when(!enabled && !row.target.is_empty(), |identity| {
+                            identity.opacity(0.5)
+                        })
                         .child(text(row.name, 14., ink(cx)).font_weight(gpui::FontWeight::MEDIUM))
                         .child(text(
                             if row.target.is_empty() {
