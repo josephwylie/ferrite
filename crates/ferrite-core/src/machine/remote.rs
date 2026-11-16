@@ -1,6 +1,6 @@
 //! Authenticated link routes. Settings hold only the stable environment id.
 
-use std::io::{self, Read, Write};
+use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 use std::sync::{
     atomic::{AtomicBool, Ordering},

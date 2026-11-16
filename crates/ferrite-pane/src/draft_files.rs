@@ -1,7 +1,3 @@
-//! The files a draft carries, each with what a send would make of it
-//! (`ferrite_core::attachment`). The Composer waits for uploads and refuses
-//! failed files. Uploaded files keep their source separate from the receipt.
-
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 

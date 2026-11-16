@@ -1,7 +1,3 @@
-//! The Settings sheet: the Cockpit's pages (`ferrite_ui::frame::settings`)
-//! laid out, searched and drawn. Values and persistence remain the
-//! Cockpit's (`CockpitView::change_settings`).
-
 use std::rc::Rc;
 
 use gpui::prelude::*;
