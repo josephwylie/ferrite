@@ -262,9 +262,10 @@ fn an_open_menu_joins_the_root_context_and_global_chords_still_act(cx: &mut Test
     });
 }
 
-/// A row's `⋯` menu stays in the window: under its button where there is
-/// room, over it (the same gap above) near the window's foot, and never
-/// past the window's edge.
+/// A row's `⋯` menu hangs under its button, its right edge on the
+/// button's. Where the window has less room below than the rows need, the
+/// menu keeps that place and scrolls rather than flipping over what stands
+/// above the button, and never runs past the window's edge.
 #[gpui::test]
 fn a_menu_from_a_button_stays_in_the_window(cx: &mut TestAppContext) {
     let (core, _fake) = cockpit("row-menu-in-window", 1);
@@ -289,22 +290,27 @@ fn a_menu_from_a_button_stays_in_the_window(cx: &mut TestAppContext) {
         (button, menu)
     };
 
-    let (button, menu) = open_under(cx, 100.);
+    let (button, whole) = open_under(cx, 100.);
     assert!(
-        (menu.top() - button.bottom() - gap).abs() <= px(1.),
-        "under it: {menu:?} {button:?}"
+        (whole.top() - button.bottom() - gap).abs() <= px(1.),
+        "under it: {whole:?} {button:?}"
     );
-    assert!((menu.right() - button.right()).abs() <= px(1.));
+    assert!((whole.right() - button.right()).abs() <= px(1.));
 
-    for top in [560., 700., 770.] {
+    let no_room_below = 800. - f32::from(whole.size.height);
+    for top in [no_room_below, 560., 700.] {
         let (button, menu) = open_under(cx, top);
         assert!(
-            menu.bottom() <= px(800.) && menu.top() >= px(0.),
+            (menu.top() - button.bottom() - gap).abs() <= px(1.),
+            "still under it from {top}: {menu:?} {button:?}"
+        );
+        assert!(
+            menu.bottom() <= px(800.),
             "in the window from {top}: {menu:?}"
         );
         assert!(
-            (button.top() - menu.bottom() - gap).abs() <= px(1.),
-            "over it near the foot: {menu:?} {button:?}"
+            menu.size.height < whole.size.height,
+            "scrolls in the room it has from {top}: {menu:?}"
         );
     }
 }

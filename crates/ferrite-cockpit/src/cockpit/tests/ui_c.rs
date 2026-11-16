@@ -403,8 +403,8 @@ fn the_prompt_bubble_keeps_the_transcript_column(cx: &mut TestAppContext) {
 }
 
 /// The expand and approve keys still reach a board cell once the head's
-/// chips are gone: `y` answers the focused cell's approval and the expand
-/// key fills the board with it.
+/// chips are gone: ⌘⏎ answers the focused cell's approval (a bare `y` is
+/// text in its Composer) and the expand key fills the board with it.
 #[gpui::test]
 fn the_expand_and_approve_keys_still_work_without_head_chips(cx: &mut TestAppContext) {
     let (view, fake, cx, _group) = board("board-keys", 4, cx);
@@ -431,9 +431,9 @@ fn the_expand_and_approve_keys_still_work_without_head_chips(cx: &mut TestAppCon
             "the expand key fills the board"
         );
     });
-    cx.simulate_keystrokes("y");
+    cx.simulate_keystrokes("cmd-enter");
     tick(cx);
-    assert_eq!(fake.answered.borrow().len(), 1, "y answered the approval");
+    assert_eq!(fake.answered.borrow().len(), 1, "⌘⏎ answered the approval");
 }
 
 /// Terminal-native (theme rule 6: no pulsing dots): unread reads as a

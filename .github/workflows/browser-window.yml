@@ -27,6 +27,9 @@ on:
       - 'scripts/probe-browser-window.py'
       - 'scripts/*windows.ps1'
       - 'scripts/install-app.sh'
+      - 'crates/ferrite-pane/src/visual/**'
+      - 'crates/ferrite-cockpit/src/cockpit/browser/**'
+      - 'crates/ferrite-core/src/browser*'
   workflow_dispatch:
 
 concurrency:
@@ -35,7 +38,7 @@ concurrency:
 
 jobs:
   packaged-cef:
-    name: Production Cockpit window (${{ matrix.os }})
+    name: CEF pass, production Cockpit window (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: 75
     env:
@@ -198,7 +201,7 @@ jobs:
           if-no-files-found: warn
 
   focused-regressions:
-    name: Focused browser, provider and GPUI regressions
+    name: Synthetic-engine pass, focused browser, provider and GPUI regressions
     runs-on: macos-latest
     timeout-minutes: 60
     steps:

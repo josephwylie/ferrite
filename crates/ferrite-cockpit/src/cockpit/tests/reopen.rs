@@ -309,18 +309,10 @@ fn a_file_missing_after_restart_says_so_and_can_be_tried_again(cx: &mut TestAppC
             .contains(&SurfaceId::File(note.clone())),
         "the tab is kept, not dropped"
     );
-    tick(cx);
-    tick(cx);
-    assert!(
-        cx.debug_bounds("preview-unshown").is_some(),
-        "a note, not a blank body"
-    );
+    until(cx, |cx| cx.debug_bounds("files-unshown").is_some());
     std::fs::write(&note, "n\n").unwrap();
-    click("preview-try-again", cx);
-    assert!(
-        cx.debug_bounds("preview-unshown").is_none(),
-        "the file is read again"
-    );
+    click("files-retry", cx);
+    until(cx, |cx| cx.debug_bounds("files-unshown").is_none());
 
     view.update(cx, |view, cx| {
         view.upsert_surface(thread, SurfaceId::Files, cx)

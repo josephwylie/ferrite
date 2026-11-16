@@ -171,8 +171,8 @@ pub(super) struct ContextMenu {
     pub(super) corner: gpui::Anchor,
     /// Opened from a `⋯`: `at` is `MENU_UNDER_GAP` over the button and
     /// this drops the menu to the same gap under it. Where the window has
-    /// no room below, the menu flips to hang over the button instead
-    /// (gpui's `SwitchAnchor` flips about `at`). None at the pointer.
+    /// less room below than the menu needs, the menu keeps its place and
+    /// scrolls (see `render_context_menu`). None at the pointer.
     pub(super) drop: Option<Pixels>,
     pub(super) rows: Vec<Option<(menu::Item, MenuVerb)>>,
     /// The destructive row pressed once, waiting for its confirmation.
@@ -250,8 +250,8 @@ impl CockpitView {
     }
 
     /// The menu a row's `⋯` opens, as Claude's: under the button, its right
-    /// edge on the button's, `MENU_UNDER_GAP` below it — over it, the same
-    /// gap above, only where the window has no room below.
+    /// edge on the button's, `MENU_UNDER_GAP` below it, scrolling where the
+    /// window has less room below than its rows need.
     pub(super) fn open_context_menu_under(
         &mut self,
         target: MenuTarget,
