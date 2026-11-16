@@ -1406,12 +1406,16 @@ impl CockpitView {
                     .flex()
                     .flex_col()
                     .flex_1()
+                    .w_full()
+                    .min_w_0()
                     .items_center()
                     .justify_center()
                     .gap(px(SPACE_2))
+                    .px(px(SPACE_6))
+                    .text_center()
                     .text_size(px(FS_LABEL))
                     .text_color(rgb(INK_SUBTLE))
-                    .child(why.note().to_owned())
+                    .child(div().w_full().whitespace_normal().child(why.note().to_owned()))
                     .when(
                         matches!(why, Unshown::Binary(_)) && files.remote.is_none(),
                         |note| {

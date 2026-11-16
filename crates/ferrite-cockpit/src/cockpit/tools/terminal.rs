@@ -463,8 +463,8 @@ impl CockpitView {
             .px(px(SPACE_4))
             .text_size(px(FS_LABEL))
             .text_color(rgb(INK_SUBTLE))
-            .child("The terminal could not start")
-            .child(div().text_center().child(why))
+            .child(div().w_full().text_center().whitespace_normal().child("The terminal could not start"))
+            .child(div().w_full().text_center().whitespace_normal().child(why))
             .child(
                 ferrite_ui::components::form_button("terminal-retry", cx)
                     .debug_selector(|| "terminal-retry".into())
