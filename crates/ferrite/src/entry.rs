@@ -7,6 +7,9 @@ pub fn run() {
         std::process::exit(code);
     }
     let args: Vec<String> = std::env::args().collect();
+    if let Some(code) = ferrite_core::machine::remote::terminal_dispatch(&args) {
+        std::process::exit(code);
+    }
     #[cfg(feature = "browser-smoke")]
     if args.get(1).map(String::as_str) == Some("--browser-window-stop") {
         std::process::exit(stop_browser_smoke_server());

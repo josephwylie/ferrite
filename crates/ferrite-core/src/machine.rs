@@ -19,6 +19,7 @@ use crate::protocol::ClientMessage;
 
 pub mod auth;
 pub mod hosts;
+pub mod remote;
 pub mod setup;
 
 /// A saved machine, as `settings.json` keeps it.
@@ -46,6 +47,14 @@ impl Machine {
             target: target.to_string(),
             enabled: true,
         }
+    }
+
+    pub fn is_link(&self) -> bool {
+        self.target.starts_with("ferrite-link:")
+    }
+
+    pub fn display_target(&self, settings_dir: &Path) -> String {
+        remote::display_target(self, settings_dir)
     }
 
     pub fn from_ssh_fields(host: &str, username: &str, port: &str) -> Result<Self, String> {
@@ -81,6 +90,9 @@ impl Machine {
 /// Whether `target` can be handed to `ssh` as its destination: never an
 /// option (`-oProxyCommand=…`), and one word.
 pub fn check_target(target: &str) -> Result<(), String> {
+    if let Some(id) = target.strip_prefix("ferrite-link:") {
+        return remote::check_identity(id);
+    }
     Destination::parse(target).map(|_| ())
 }
 
@@ -291,6 +303,7 @@ pub struct Bridge {
     dial: Arc<Dial>,
     /// The SSH master's socket, for an ssh bridge: what signing in opens.
     ssh: Option<(String, PathBuf)>,
+    remote: Option<(String, PathBuf)>,
     /// The socket is being served; false again if its accepting stops.
     listening: Arc<Mutex<bool>>,
     /// How the last Tunnel that failed ended.
@@ -301,6 +314,25 @@ pub struct Bridge {
 }
 
 impl Bridge {
+    pub fn for_machine(machine: &Machine, settings_dir: &Path) -> Self {
+        if machine.is_link() {
+            remote::bridge(machine, settings_dir)
+        } else {
+            Self::ssh(machine, settings_dir)
+        }
+    }
+
+    pub fn terminal_command(&self, cwd: &Path) -> io::Result<(String, Vec<String>)> {
+        if let Some((target, settings)) = &self.remote {
+            let program = std::env::current_exe()?.to_string_lossy().into_owned();
+            return Ok((program, vec![
+                "--remote-terminal".into(), settings.to_string_lossy().into_owned(),
+                target.clone(), cwd.to_string_lossy().into_owned(),
+            ]));
+        }
+        self.terminal_args(cwd).map(|args| ("ssh".into(), args))
+    }
+
     /// The bridge to `machine` over the operator's own `ssh`.
     pub fn ssh(machine: &Machine, settings_dir: &Path) -> Self {
         let dir = dir(settings_dir, &machine.target);
@@ -323,6 +355,7 @@ impl Bridge {
             socket,
             dial: Arc::new(dial),
             ssh: None,
+            remote: None,
             listening: Arc::default(),
             failure: Arc::default(),
             signed_in: Arc::default(),
@@ -492,7 +525,7 @@ fn carry(mut stream: link::Stream, dial: &Dial, failure: &Mutex<Option<Failure>>
             ended()
         }
         Err(error) => Some(Failure::Unreachable(format!(
-            "ssh could not start: {error}"
+            "The remote connection could not start: {error}"
         ))),
     };
     if let Some(ended) = ended {

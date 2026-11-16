@@ -287,7 +287,7 @@ pub fn launch() {
                             renderer: Some(renderer),
                             driven: false,
                             defaults: defaults.clone(),
-                            bridge: ferrite_core::machine::Bridge::ssh,
+                            bridge: ferrite_core::machine::Bridge::for_machine,
                         },
                         &settings.machines,
                         remote.as_deref(),

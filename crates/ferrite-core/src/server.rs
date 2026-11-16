@@ -37,6 +37,7 @@ mod drive;
 mod factory;
 pub mod github;
 mod render;
+pub mod remote;
 mod signals;
 
 /// How long the pump waits for a client while any Thread is open: a frame.
@@ -103,6 +104,8 @@ pub fn ferrited(args: &[String]) -> i32 {
                 .and_then(|at| args.get(at + 1))
                 .and_then(|pid| pid.parse().ok()),
         }),
+        Some("remote") => remote::cli(&args[2..], &store_dir(), &executable),
+        Some("--remote-terminal") => crate::machine::remote::terminal_dispatch(args).unwrap_or(2),
         Some("api-bridge") => bridge::api(&store_dir()),
         Some("bridge") => bridge::run(&store_dir(), &executable),
         #[cfg(target_os = "linux")]

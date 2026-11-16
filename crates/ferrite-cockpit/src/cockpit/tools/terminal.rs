@@ -113,8 +113,8 @@ fn spawn_shell(
 ) -> std::io::Result<Terminal> {
     match machine {
         Some(machine) => {
-            let args = machine.terminal_args(directory)?;
-            Terminal::spawn_command(&std::env::temp_dir(), "ssh", args, scrollback, size)
+            let (program, args) = machine.terminal_command(directory)?;
+            Terminal::spawn_command(&std::env::temp_dir(), &program, args, scrollback, size)
         }
         None => Terminal::spawn(directory, scrollback, size),
     }

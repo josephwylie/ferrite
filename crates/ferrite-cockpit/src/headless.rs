@@ -61,7 +61,7 @@ pub fn run(http: Arc<dyn gpui::http_client::HttpClient>) {
                 renderer: None,
                 driven: true,
                 defaults: defaults.clone(),
-                bridge: ferrite_core::machine::Bridge::ssh,
+                bridge: ferrite_core::machine::Bridge::for_machine,
             },
             &settings.machines,
             None,
