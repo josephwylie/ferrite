@@ -285,15 +285,28 @@ async fn carry(mut websocket: WebSocket, gateway: Gateway, session: String, addr
         }
     });
     let mut clock = tokio::time::interval(Duration::from_millis(200));
+    let mut pending: Option<(Vec<u8>, std::time::Instant)> = None;
     loop {
         tokio::select! {
-            _ = clock.tick() => if !gateway.active(&session) { break; },
+            _ = clock.tick() => {
+                if !gateway.active(&session)
+                    || pending.as_ref().is_some_and(|(_, since)| since.elapsed() > Duration::from_secs(2))
+                {
+                    break;
+                }
+            },
+            permit = incoming.reserve(), if pending.is_some() => match permit {
+                Ok(permit) => permit.send(pending.take().expect("a pending input frame").0),
+                Err(_) => break,
+            },
             bytes = outgoing.recv() => match bytes {
                 Some(bytes) => if send_frame(&mut websocket, Message::Binary(bytes.into())).await.is_err() { break; },
                 None => break,
             },
-            message = websocket.next() => match message {
-                Some(Ok(Message::Binary(bytes))) if gateway.active(&session) => if incoming.try_send(bytes.to_vec()).is_err() { break; },
+            message = websocket.next(), if pending.is_none() => match message {
+                Some(Ok(Message::Binary(bytes))) if gateway.active(&session) => {
+                    pending = Some((bytes.to_vec(), std::time::Instant::now()));
+                },
                 Some(Ok(Message::Ping(_))) | Some(Ok(Message::Pong(_))) => {},
                 _ => break,
             },

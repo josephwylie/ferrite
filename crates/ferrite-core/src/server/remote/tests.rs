@@ -476,6 +476,67 @@ mod network {
     }
 
     #[test]
+    fn fragmented_attachment_upload_crosses_the_gateway_without_dropping_the_link() {
+        use crate::attachment_transfer;
+        use crate::protocol::{self, ClientMessage, Command, Done, Op, Peer, ServerMessage};
+
+        struct Fragmented(Box<dyn Write + Send>);
+        impl Write for Fragmented {
+            fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+                self.0.write(&bytes[..bytes.len().min(512)])
+            }
+            fn flush(&mut self) -> io::Result<()> {
+                self.0.flush()
+            }
+        }
+
+        let fixture = Fixture::new();
+        let bytes: Vec<u8> = (0..attachment_transfer::CHUNK_SIZE * 3 + 17)
+            .map(|index| (index % 251) as u8)
+            .collect();
+        let source = fixture.folder.join("fragmented.bin");
+        std::fs::write(&source, &bytes).unwrap();
+        let profile = fixture.profile.clone();
+        let secret = fixture.granted.secret.clone();
+        let transfer = attachment_transfer::upload(source, move || {
+            let tunnel = remote::socket::tunnel(&profile, &secret, "/v1/link")?;
+            let mut writer = Fragmented(tunnel.to);
+            let mut lines = link::Lines::new(tunnel.from);
+            link::send(&mut writer, &ClientMessage::Hello {
+                generation: protocol::GENERATION,
+                client: Peer { name: "fragmented upload".into(), version: "test".into() },
+                capabilities: Vec::new(),
+            })?;
+            assert!(matches!(lines.next_message::<ServerMessage>()?,
+                Some(ServerMessage::Welcome { error: None, .. })));
+            let mut id = 0;
+            Ok(Box::new(move |request| {
+                id += 1;
+                link::send(&mut writer, &ClientMessage::Command(Command {
+                    id,
+                    op: Op::Attachment { request },
+                }))?;
+                loop {
+                    match lines.next_message::<ServerMessage>()? {
+                        Some(ServerMessage::Reply { id: replied, ok: Some(Done::Attachment { reply }), error: None })
+                            if replied == id => return Ok(reply),
+                        Some(ServerMessage::Reply { id: replied, error: Some(error), .. })
+                            if replied == id => return Err(io::Error::other(format!("{error:?}"))),
+                        Some(_) => {},
+                        None => return Err(io::Error::other("the gateway dropped a valid upload")),
+                    }
+                }
+            }) as attachment_transfer::Exchange)
+        });
+        let retained = transfer.result.recv_timeout(Duration::from_secs(20)).unwrap().unwrap();
+        assert_eq!(retained.size, bytes.len() as u64);
+        assert!(retained.path.starts_with(fixture.folder.join("remote-store")));
+        assert_eq!(std::fs::read(&retained.path).unwrap(), bytes);
+        assert_eq!(transfer.progress.try_iter().last().unwrap().sent, retained.size);
+        remote::verify_connection(&fixture.profile, &fixture.granted.secret).unwrap();
+    }
+
+    #[test]
     fn remote_terminal_drains_final_output_before_reporting_exit() {
         let fixture = Fixture::new();
         let directory = fixture.folder.canonicalize().unwrap();
