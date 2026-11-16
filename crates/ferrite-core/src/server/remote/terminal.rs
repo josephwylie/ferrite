@@ -93,15 +93,16 @@ async fn run(socket: &mut WebSocket, gateway: &Gateway, session: &str) -> std::i
         tokio::select! {
             _ = clock.tick() => {
                 if !gateway.active(session) { break; }
-                if let Some(status) = child.0.try_wait().map_err(std::io::Error::other)? {
-                    while let Ok(bytes) = receive.try_recv() { send_frame(socket, Message::Binary(bytes.into())).await?; }
-                    send_frame(socket, Message::Text(serde_json::json!({"type":"exit","code":status.exit_code()}).to_string().into())).await?;
-                    break;
+                if receive.is_closed() && receive.is_empty() {
+                    if let Some(status) = child.0.try_wait().map_err(std::io::Error::other)? {
+                        send_frame(socket, Message::Text(serde_json::json!({"type":"exit","code":status.exit_code()}).to_string().into())).await?;
+                        break;
+                    }
                 }
             },
-            bytes = receive.recv() => match bytes {
+            bytes = receive.recv(), if !receive.is_closed() || !receive.is_empty() => match bytes {
                 Some(bytes) => send_frame(socket, Message::Binary(bytes.into())).await?,
-                None => break,
+                None => {},
             },
             message = socket.next() => match message {
                 Some(Ok(Message::Binary(bytes))) if gateway.active(session) => input.try_send(bytes.to_vec()).map_err(std::io::Error::other)?,
