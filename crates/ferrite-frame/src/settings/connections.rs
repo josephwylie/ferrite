@@ -155,7 +155,7 @@ fn mode_card(
     .h(px(if compact { 44. } else { 96. }))
     .p(px(if compact { 8. } else { 16. }))
     .when(compact, |button| {
-        button.tooltip(ferrite_ui::menu::tooltip(description))
+        button.tooltip(description)
     })
     .items_start()
     .justify_start()
