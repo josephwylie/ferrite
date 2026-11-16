@@ -276,7 +276,7 @@ fn shift_click_ranges_and_the_chip_drops_the_comments(cx: &mut TestAppContext) {
     tidied(&mut core, &fake, &repo);
     bind_production_keys(cx);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
-    cx.simulate_resize(gpui::size(px(1440.), px(900.)));
+    cx.simulate_resize(gpui::size(px(1600.), px(900.)));
     tick(cx);
     let review = cx
         .debug_bounds("panel-review-changes")
@@ -325,7 +325,7 @@ fn the_right_click_menu_comments_opens_and_copies(cx: &mut TestAppContext) {
     let (core, _fake, _repo) = edited("review-menu");
     bind_production_keys(cx);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
-    cx.simulate_resize(gpui::size(px(1600.), px(900.)));
+    cx.simulate_resize(gpui::size(px(1440.), px(900.)));
     tick(cx);
     open_review(&view, Scope::Uncommitted, cx);
     let thread = view.read_with(cx, |view, _| view.panes[0].thread().unwrap());
