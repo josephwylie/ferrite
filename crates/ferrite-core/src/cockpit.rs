@@ -1952,6 +1952,51 @@ impl Cockpit {
         )
     }
 
+    pub fn upload_attachment(&mut self, path: PathBuf) -> io::Result<crate::attachment_transfer::Upload> {
+        match &mut self.link {
+            Link::Server(server) => server.upload_attachment(path),
+            Link::InProcess(engine) => {
+                let store = engine.browser_store().dir().to_path_buf();
+                Ok(crate::attachment_transfer::upload(path, move || {
+                    let mut session = crate::attachment_transfer::Session::new(store);
+                    Ok(Box::new(move |request| session.execute(request)))
+                }))
+            }
+        }
+    }
+
+    pub fn read_attachment(&mut self, path: &Path) -> io::Result<Receiver<io::Result<Vec<u8>>>> {
+        let path = path.to_path_buf();
+        match &mut self.link {
+            Link::Server(server) => server.read_attachment(path),
+            Link::InProcess(engine) => {
+                let store = engine.browser_store().dir().to_path_buf();
+                Ok(read_here(move || {
+                    let mut session = crate::attachment_transfer::Session::new(store);
+                    crate::attachment_transfer::read(path, |request| session.execute(request)).map_err(|error| error.to_string())
+                }))
+            }
+        }
+    }
+
+    pub fn changes(&mut self, root: &Path, scope: crate::changes::Scope) -> io::Result<Receiver<io::Result<crate::changes::Snapshot>>> {
+        let request = crate::changes::Request::Read { root: root.to_path_buf(), scope };
+        match &mut self.link {
+            Link::Server(server) => server.changes(request),
+            Link::InProcess(_) => Ok(read_here(move || {
+                crate::changes::execute(request)?.snapshot().ok_or_else(|| "Missing Changes snapshot".into())
+            })),
+        }
+    }
+
+    pub fn set_file_staged(&mut self, root: &Path, path: String, staged: bool) -> io::Result<Receiver<io::Result<()>>> {
+        let request = crate::changes::Request::SetStaged { root: root.to_path_buf(), path, staged };
+        match &mut self.link {
+            Link::Server(server) => server.set_file_staged(request),
+            Link::InProcess(_) => Ok(read_here(move || crate::changes::execute(request).map(|_| ()))),
+        }
+    }
+
     /// Read or save Files content on the computer that owns the workspace.
     pub fn file_operation(
         &mut self,

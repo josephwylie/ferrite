@@ -136,9 +136,7 @@ impl CockpitView {
         let checkout = self.thread_path(thread).is_some();
         match opener {
             Opener::Terminal | Opener::Files if !checkout => Some("Needs a checkout"),
-            Opener::Changes if !checkout || self.on_machine() => {
-                Some("Needs a checkout on this computer")
-            }
+            Opener::Changes if !checkout => Some("Needs a checkout"),
             Opener::PullRequest if self.facts.pr(thread).is_none() => {
                 Some("No pull request on this branch")
             }

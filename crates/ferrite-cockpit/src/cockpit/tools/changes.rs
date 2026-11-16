@@ -23,7 +23,7 @@
 use std::collections::{HashMap, HashSet};
 use std::hash::{DefaultHasher, Hash, Hasher};
 
-use ferrite_reviewr::ferrite::{review_against, Read};
+use ferrite_core::changes::Scope as ReadScope;
 use ferrite_ui::icons;
 use ferrite_ui::theme::{self, paint};
 
@@ -54,11 +54,11 @@ impl Scope {
         }
     }
 
-    fn read(&self) -> (Read, Option<String>) {
+    fn read(&self) -> ReadScope {
         match self {
-            Scope::All => (Read::Branch, None),
-            Scope::Uncommitted => (Read::Uncommitted, None),
-            Scope::Against(branch) => (Read::Branch, Some(branch.clone())),
+            Scope::All => ReadScope::All,
+            Scope::Uncommitted => ReadScope::Uncommitted,
+            Scope::Against(branch) => ReadScope::Against(branch.clone()),
         }
     }
 }
@@ -218,16 +218,6 @@ pub(crate) fn is_test_path(path: &str) -> bool {
         || name.contains(".spec.")
 }
 
-/// The paths whose change is staged, as git's index holds them.
-fn staged_paths(root: &std::path::Path) -> HashSet<String> {
-    std::process::Command::new("git")
-        .args(["diff", "--cached", "--name-only"])
-        .current_dir(root)
-        .output()
-        .map(|out| String::from_utf8_lossy(&out.stdout).lines().map(str::to_owned).collect())
-        .unwrap_or_default()
-}
-
 /// The most removed-by-added line pairs one changed block is matched over.
 const MATCHED_CELLS: usize = 1_000_000;
 
@@ -315,6 +305,17 @@ fn unchanged_in_block(block: Vec<Line>) -> Vec<Line> {
     out
 }
 
+fn same_machine(
+    current: Option<&std::sync::Arc<ferrite_core::machine::Bridge>>,
+    requested: Option<&std::sync::Arc<ferrite_core::machine::Bridge>>,
+) -> bool {
+    match (current, requested) {
+        (None, None) => true,
+        (Some(current), Some(requested)) => std::sync::Arc::ptr_eq(current, requested),
+        _ => false,
+    }
+}
+
 impl CockpitView {
     fn changes_of(&mut self, diff: Diff) -> Option<&mut Changes> {
         self.tools.changes.get_mut(&diff)
@@ -377,38 +378,31 @@ impl CockpitView {
         let Some(root) = self.thread_path(diff.thread()) else {
             return;
         };
-        let target = path.clone();
+        let machine = self.cockpit.machine().cloned();
+        let generation = self.tools.changes.get(&diff).map(|changes| changes.generation);
+        let outcome = self.cockpit.set_file_staged(&root, path.clone(), stage);
         cx.spawn(async move |view, cx| {
-            let outcome = cx
-                .background_executor()
-                .spawn(async move {
-                    let mut git = std::process::Command::new("git");
-                    git.current_dir(&root);
-                    if stage {
-                        git.args(["add", "--"]);
-                    } else {
-                        git.args(["restore", "--staged", "--"]);
-                    }
-                    match git.arg(&path).output() {
-                        Ok(out) if out.status.success() => Ok(()),
-                        Ok(out) => Err(String::from_utf8_lossy(&out.stderr).trim().to_string()),
-                        Err(error) => Err(error.to_string()),
-                    }
-                })
-                .await;
+            let outcome = crate::cockpit::beside::answered(outcome, cx).await;
             view.update(cx, |view, cx| {
-                if let Some(changes) = view.changes_of(diff) {
+                if !same_machine(view.cockpit.machine(), machine.as_ref())
+                    || view.thread_path(diff.thread()).as_ref() != Some(&root)
+                {
+                    return;
+                }
+                if let Some(changes) = view.changes_of(diff).filter(|changes| Some(changes.generation) == generation) {
                     changes.stage_failure = outcome.err().map(|message| StageFailure {
-                        path: target,
+                        path,
                         stage,
-                        message: message.into(),
+                        message: message.to_string().into(),
                     });
                 }
-                view.refresh_changes(diff, cx)
-            })
-            .ok();
-        })
-        .detach();
+                for changed in [Diff::Changes(diff.thread()), Diff::PullRequest(diff.thread())] {
+                    if view.tools.changes.contains_key(&changed) {
+                        view.reread_changes(changed, cx);
+                    }
+                }
+            }).ok();
+        }).detach();
     }
 
     /// Read the diff again, for the current scope, the last read standing
@@ -434,58 +428,51 @@ impl CockpitView {
             changes.load = Load::Reading;
         }
         let generation = changes.generation;
-        let (read, base) = changes.scope.read();
+        let read = changes.scope.read();
+        let machine = self.cockpit.machine().cloned();
+        let answer = self.cockpit.changes(&root, read);
         cx.spawn(async move |view, cx| {
-            let (files, branches) = cx
-                .background_executor()
-                .spawn(async move {
-                    let branches: Vec<String> = ferrite_reviewr::git::list_branches(&root)
-                        .unwrap_or_default()
-                        .into_iter()
-                        .take(BRANCHES_LISTED)
-                        .map(|branch| branch.name)
-                        .collect();
-                    let staged = staged_paths(&root);
-                    let files = review_against(&root, &read, base.as_deref()).map(|files| {
-                        files
-                            .iter()
-                            .map(|sides| {
-                                let hunks = shown(Some(sides));
-                                let hunks_without_whitespace = match &hunks {
-                                    Shown::Hunks(hunks) => Shown::Hunks(without_whitespace(hunks.clone())),
-                                    other => other.clone(),
-                                };
-                                File {
-                                    path: sides.file.path.clone(),
-                                    added: sides.file.additions,
-                                    removed: sides.file.deletions,
-                                    revision: revision_of(&hunks),
-                                    hunks,
-                                    hunks_without_whitespace,
-                                    staged: staged.contains(&sides.file.path),
-                                }
-                            })
-                            .collect::<Vec<_>>()
-                    });
-                    (files, branches)
+            let snapshot = crate::cockpit::beside::answered(answer, cx).await;
+            let outcome = cx.background_executor().spawn(async move {
+                snapshot.map(|snapshot| {
+                    let files = snapshot.files.iter().map(|sides| {
+                        let hunks = shown(Some(sides));
+                        let hunks_without_whitespace = match &hunks {
+                            Shown::Hunks(hunks) => Shown::Hunks(without_whitespace(hunks.clone())),
+                            other => other.clone(),
+                        };
+                        File {
+                            path: sides.file.path.clone(),
+                            added: sides.file.additions,
+                            removed: sides.file.deletions,
+                            revision: revision_of(&hunks),
+                            hunks,
+                            hunks_without_whitespace,
+                            staged: snapshot.staged.contains(&sides.file.path),
+                        }
+                    }).collect::<Vec<_>>();
+                    (files, snapshot.branches.into_iter().take(BRANCHES_LISTED).collect())
                 })
-                .await;
+            }).await;
             view.update(cx, |view, cx| {
+                if !same_machine(view.cockpit.machine(), machine.as_ref())
+                    || view.thread_path(diff.thread()).as_ref() != Some(&root)
+                {
+                    return;
+                }
                 if let Some(changes) = view.changes_of(diff).filter(|c| c.generation == generation) {
-                    changes.branches = branches;
-                    changes.load = match files {
-                        Ok(files) => {
+                    changes.load = match outcome {
+                        Ok((files, branches)) => {
+                            changes.branches = branches;
                             changes.forget_stale_reviews(&files);
                             Load::Read(files)
                         }
-                        Err(why) => Load::Failed(why.into()),
+                        Err(why) => Load::Failed(why.to_string().into()),
                     };
                     cx.notify();
                 }
-            })
-            .ok();
-        })
-        .detach();
+            }).ok();
+        }).detach();
         cx.notify();
     }
 
@@ -1156,9 +1143,9 @@ mod tests {
 
     #[test]
     fn a_scope_says_what_it_reads() {
-        assert_eq!(Scope::Uncommitted.read(), (Read::Uncommitted, None));
-        assert_eq!(Scope::All.read(), (Read::Branch, None));
-        assert_eq!(Scope::Against("dev".into()).read(), (Read::Branch, Some("dev".into())));
+        assert_eq!(Scope::Uncommitted.read(), ReadScope::Uncommitted);
+        assert_eq!(Scope::All.read(), ReadScope::All);
+        assert_eq!(Scope::Against("dev".into()).read(), ReadScope::Against("dev".into()));
         assert_eq!(Scope::All.label(), "All changes");
     }
 }

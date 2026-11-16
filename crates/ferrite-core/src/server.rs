@@ -373,6 +373,7 @@ struct Server {
         BTreeMap<ThreadId, (crate::browser::Document, u64, crate::browser::Observation)>,
     searches: Vec<Search>,
     reads: Vec<Read>,
+    attachments: HashMap<ClientId, Arc<Mutex<crate::attachment_transfer::Session>>>,
     api_reads: Vec<ApiRead>,
     /// First sends still starting, by the tag the Engine knows them by:
     /// who asked, in which command.
@@ -457,6 +458,7 @@ impl Server {
             browser_observed: BTreeMap::new(),
             searches: Vec::new(),
             reads: Vec::new(),
+            attachments: HashMap::new(),
             api_reads: Vec::new(),
             starting: HashMap::new(),
             next_start: 0,
@@ -510,6 +512,9 @@ impl Server {
             if self.swept.elapsed() >= SWEEP_INTERVAL {
                 self.swept = Instant::now();
                 self.engine.sweep();
+                for uploads in self.attachments.values() {
+                    if let Ok(mut uploads) = uploads.try_lock() { uploads.expire(); }
+                }
             }
             self.answer_bootstraps();
             self.answer_searches();
@@ -833,6 +838,31 @@ impl Server {
                 }
                 None => Err(failed("no such Project")),
             },
+            Op::Attachment { request: operation } => {
+                if !self.attachments.contains_key(&id) && self.attachments.len() >= 16 {
+                    self.reply(id, request, Err(failed("Too many attachment transfers are active. Retry shortly.")));
+                    return;
+                }
+                let store = self.engine.browser_store().dir().to_path_buf();
+                let uploads = self.attachments.entry(id).or_insert_with(|| {
+                    Arc::new(Mutex::new(crate::attachment_transfer::Session::new(store)))
+                }).clone();
+                let operation = operation.clone();
+                self.read_off_pump(id, request, move || {
+                    uploads.lock().map_err(|_| failed("Attachment worker stopped"))?
+                        .execute(operation)
+                        .map(|reply| Some(Done::Attachment { reply })).map_err(failed)
+                });
+                return;
+            }
+            Op::Changes { request: operation } => {
+                let operation = operation.clone();
+                self.read_off_pump(id, request, move || {
+                    crate::changes::execute(operation)
+                        .map(|reply| Some(Done::Changes { reply })).map_err(failed)
+                });
+                return;
+            }
             Op::FileOperation { request: operation } => {
                 let operation = operation.clone();
                 self.read_off_pump(id, request, move || {
@@ -1375,6 +1405,7 @@ impl Server {
     /// A client's connection ended: what it held or was asked goes too.
     fn gone(&mut self, id: ClientId) {
         self.clients.remove(&id);
+        self.attachments.remove(&id);
         self.engine.window_gone(id);
         self.renders.client_gone(id);
         self.undriven(id);

@@ -7,6 +7,8 @@
 pub mod activity;
 pub mod api;
 pub mod attachment;
+pub mod attachment_transfer;
+pub mod changes;
 mod attention;
 pub mod cadence;
 pub mod cited_sources;

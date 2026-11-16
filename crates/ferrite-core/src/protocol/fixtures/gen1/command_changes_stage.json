@@ -1,0 +1,1 @@
+{"type":"command","id":316,"op":"changes","request":{"action":"set_staged","root":"/workspace","path":"a.rs","staged":true}}

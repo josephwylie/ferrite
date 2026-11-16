@@ -286,6 +286,8 @@ impl Engine {
             | Op::Composing { .. }
             | Op::ListDir { .. }
             | Op::FileOperation { .. }
+            | Op::Attachment { .. }
+            | Op::Changes { .. }
             | Op::ListRepo { .. }
             | Op::ReviewDiff { .. }
             | Op::ReviewRead { .. }

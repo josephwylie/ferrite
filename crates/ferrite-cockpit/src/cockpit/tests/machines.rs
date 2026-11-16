@@ -227,6 +227,7 @@ fn remote_files_and_terminal_open_through_their_keyboard_shortcuts(cx: &mut Test
         assert!(view.on_machine());
         assert!(view.opener_unavailable(thread, crate::cockpit::panel::Opener::Files).is_none());
         assert!(view.opener_unavailable(thread, crate::cockpit::panel::Opener::Terminal).is_none());
+        assert!(view.opener_unavailable(thread, crate::cockpit::panel::Opener::Changes).is_none());
     });
     cx.simulate_keystrokes("cmd-shift-f");
     tick(cx);

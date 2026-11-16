@@ -146,6 +146,8 @@ pub struct Command {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "op", rename_all = "snake_case")]
 pub enum Op {
+    Attachment { request: crate::attachment_transfer::Request },
+    Changes { request: crate::changes::Request },
     FileOperation {
         request: crate::file_operations::Request,
     },
@@ -618,6 +620,8 @@ impl Op {
             | Op::Focused { .. }
             | Op::ListDir { .. }
             | Op::FileOperation { .. }
+            | Op::Attachment { .. }
+            | Op::Changes { .. }
             | Op::ListRepo { .. }
             | Op::ReviewDiff { .. }
             | Op::ReviewRead { .. }
@@ -1486,6 +1490,8 @@ pub enum ErrorCode {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Done {
+    Attachment { reply: crate::attachment_transfer::Reply },
+    Changes { reply: crate::changes::Reply },
     FileOperation {
         reply: crate::file_operations::Reply,
     },

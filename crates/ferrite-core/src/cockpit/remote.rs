@@ -456,6 +456,71 @@ impl Remote {
         Ok(answered)
     }
 
+    pub(crate) fn changes(&mut self, request: crate::changes::Request) -> io::Result<Receiver<io::Result<crate::changes::Snapshot>>> {
+        self.ask(Op::Changes { request }, |done| match done {
+            Done::Changes { reply } => reply.snapshot(),
+            _ => None,
+        })
+    }
+
+    pub(crate) fn set_file_staged(&mut self, request: crate::changes::Request) -> io::Result<Receiver<io::Result<()>>> {
+        self.ask(Op::Changes { request }, |done| match done {
+            Done::Changes { reply: crate::changes::Reply::Staged } => Some(()),
+            _ => None,
+        })
+    }
+
+    fn attachment_connection(&self) -> io::Result<impl FnOnce() -> io::Result<crate::attachment_transfer::Exchange> + Send + 'static> {
+        let expected_boot = self.attachment.as_ref().ok_or_else(|| io::Error::new(io::ErrorKind::NotConnected, &*self.detached))?.boot_id.clone();
+        let endpoint = self.attach.server.clone();
+        let store = self.attach.store.clone();
+        let hello = ClientMessage::Hello {
+            generation: protocol::GENERATION,
+            client: self.attach.client.clone(),
+            capabilities: Vec::new(),
+        };
+        Ok(move || {
+            let attached = attach_to(&store, &endpoint, hello)?;
+            if attached.snapshot.boot_id != expected_boot {
+                return Err(io::Error::new(io::ErrorKind::NotConnected, "The attachment server changed. Reconnect and retry."));
+            }
+            let mut client = attached.client;
+            let mut next = 0;
+            Ok(Box::new(move |request| {
+                let _route = &endpoint;
+                next += 1;
+                client.send(&ClientMessage::Command(Command { id: next, op: Op::Attachment { request } }))?;
+                let deadline = Instant::now() + Duration::from_secs(30);
+                loop {
+                    let remaining = deadline.saturating_duration_since(Instant::now());
+                    match client.messages.recv_timeout(remaining) {
+                        Ok(ServerMessage::Reply { id, ok, error }) if id == next => {
+                            if let Some(error) = error { return Err(error.into()); }
+                            return match ok {
+                                Some(Done::Attachment { reply }) => Ok(reply),
+                                _ => Err(io::Error::new(io::ErrorKind::InvalidData, "The server did not answer the attachment operation")),
+                            };
+                        }
+                        Ok(_) => {},
+                        Err(RecvTimeoutError::Timeout) => return Err(io::Error::new(io::ErrorKind::TimedOut, "Attachment transfer timed out")),
+                        Err(RecvTimeoutError::Disconnected) => return Err(io::Error::new(io::ErrorKind::NotConnected, "Attachment connection closed")),
+                    }
+                }
+            }) as crate::attachment_transfer::Exchange)
+        })
+    }
+
+    pub(crate) fn upload_attachment(&self, path: PathBuf) -> io::Result<crate::attachment_transfer::Upload> {
+        Ok(crate::attachment_transfer::upload(path, self.attachment_connection()?))
+    }
+
+    pub(crate) fn read_attachment(&self, path: PathBuf) -> io::Result<Receiver<io::Result<Vec<u8>>>> {
+        let connect = self.attachment_connection()?;
+        Ok(super::read_here(move || {
+            crate::attachment_transfer::read(path, connect().map_err(|error| error.to_string())?).map_err(|error| error.to_string())
+        }))
+    }
+
     pub(crate) fn file_operation(
         &mut self,
         request: crate::file_operations::Request,
