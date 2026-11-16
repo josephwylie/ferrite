@@ -1259,8 +1259,10 @@ fn a_drag_in_a_scrolled_back_transcript_selects_the_rows_under_the_pointer(
     assert_eq!(clipboard(cx).as_deref(), Some(expected.join("\n").as_str()));
 }
 
-#[gpui::test]
-fn wheel_inside_an_expanded_tool_group_only_scrolls_its_tools(cx: &mut TestAppContext) {
+fn expanded_tool_group_for_wheel(
+    cx: &mut TestAppContext,
+    calls: usize,
+) -> (Entity<CockpitView>, &mut gpui::VisualTestContext) {
     let (core, fake) = cockpit("tool-group-wheel", 1);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     cx.simulate_resize(gpui::size(px(1000.), px(900.)));
@@ -1272,7 +1274,7 @@ fn wheel_inside_an_expanded_tool_group_only_scrolls_its_tools(cx: &mut TestAppCo
             })
             .unwrap();
     }
-    for call in 0..40 {
+    for call in 0..calls {
         stream
             .send(SessionEvent::ToolStarted {
                 id: format!("wheel-{call}"),
@@ -1302,6 +1304,44 @@ fn wheel_inside_an_expanded_tool_group_only_scrolls_its_tools(cx: &mut TestAppCo
         cx.notify();
     });
     tick(cx);
+    (view, cx)
+}
+
+#[gpui::test]
+fn wheel_inside_a_short_expanded_tool_group_scrolls_the_transcript(cx: &mut TestAppContext) {
+    let (view, cx) = expanded_tool_group_for_wheel(cx, 2);
+    let scroll = view.read_with(cx, |view, cx| {
+        view.panes[0]
+            .transcript()
+            .unwrap()
+            .read(cx)
+            .scroll()
+            .clone()
+    });
+    let group = cx.debug_bounds("tool-group-members").unwrap();
+    let viewport = scroll.bounds();
+    assert!(group.top() > viewport.top() && group.bottom() < viewport.bottom());
+    assert!(cx.debug_bounds("tool-group-fade-top").is_none());
+    assert!(cx.debug_bounds("tool-group-fade-bottom").is_none());
+    assert!(scroll.offset().y < px(0.));
+    let before = scroll.list_state().logical_scroll_top();
+    cx.simulate_event(gpui::ScrollWheelEvent {
+        position: group.center(),
+        delta: gpui::ScrollDelta::Pixels(gpui::point(px(0.), px(48.))),
+        ..Default::default()
+    });
+    cx.run_until_parked();
+    let after = scroll.list_state().logical_scroll_top();
+    assert_ne!(
+        (after.item_ix, after.offset_in_item),
+        (before.item_ix, before.offset_in_item),
+        "wheel over a tool list without overflow must scroll the transcript"
+    );
+}
+
+#[gpui::test]
+fn wheel_inside_an_expanded_tool_group_only_scrolls_its_tools(cx: &mut TestAppContext) {
+    let (view, cx) = expanded_tool_group_for_wheel(cx, 40);
     let scroll = view.read_with(cx, |view, cx| {
         view.panes[0]
             .transcript()
