@@ -32,7 +32,7 @@ chrono = "0.4.45"
 # The host's time zone named where a schedule says it runs (#225).
 # Already in the tree via chrono.
 iana-time-zone = "0.1"
-ureq = "3"
+ureq = { version = "3", features = ["platform-verifier"] }
 # Shared with the UI: validate website authorities, including localhost/IPv6.
 url = "2"
 glob = "0.3"

@@ -165,6 +165,7 @@ mod network {
         let fixture = Fixture::new();
         let directory = fixture.folder.join("remote-only-workspace");
         std::fs::create_dir_all(&directory).unwrap();
+        let directory = directory.canonicalize().unwrap();
         remote::socket::runtime().unwrap().block_on(async {
             let mut socket =
                 remote::socket::connect(&fixture.profile, &fixture.granted.secret, "/v1/terminal")

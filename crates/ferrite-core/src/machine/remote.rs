@@ -167,6 +167,11 @@ pub(crate) fn configure_tls() {
 fn agent() -> ureq::Agent {
     configure_tls();
     ureq::Agent::config_builder()
+        .tls_config(
+            ureq::tls::TlsConfig::builder()
+                .root_certs(ureq::tls::RootCerts::PlatformVerifier)
+                .build(),
+        )
         .timeout_global(Some(TIMEOUT))
         .max_redirects(0)
         .build()
@@ -244,7 +249,8 @@ impl PairAttempt {
                 let mut pending = registration.lock().unwrap_or_else(|e| e.into_inner());
                 match result {
                     Ok(machine) if stopped.load(Ordering::Acquire) => {
-                        cleanup_pairing(&machine, &worker_settings)
+                        drop(pending);
+                        cleanup_pairing(&machine, &worker_settings);
                     }
                     Ok(machine) => {
                         *pending = Some(machine.clone());
