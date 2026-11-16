@@ -28,8 +28,13 @@ on:
       - 'scripts/*windows.ps1'
       - 'scripts/install-app.sh'
       - 'crates/ferrite-pane/src/visual/**'
+      - 'crates/ferrite-cockpit/src/cockpit/browser.rs'
       - 'crates/ferrite-cockpit/src/cockpit/browser/**'
       - 'crates/ferrite-core/src/browser*'
+      - 'crates/ferrite-core/src/browser*/**'
+      - 'crates/ferrite/src/lib.rs'
+      - 'crates/ferrite/Cargo.toml'
+      - 'vendor/gpui-pre*/**'
   workflow_dispatch:
 
 concurrency:

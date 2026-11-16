@@ -264,8 +264,9 @@ fn an_open_menu_joins_the_root_context_and_global_chords_still_act(cx: &mut Test
 
 /// A row's `⋯` menu hangs under its button, its right edge on the
 /// button's. Where the window has less room below than the rows need, the
-/// menu keeps that place and scrolls rather than flipping over what stands
-/// above the button, and never runs past the window's edge.
+/// menu keeps that place and scrolls; where the room cannot show two rows
+/// it hangs over the button instead. Never past the window's edge, never
+/// on its own button.
 #[gpui::test]
 fn a_menu_from_a_button_stays_in_the_window(cx: &mut TestAppContext) {
     let (core, _fake) = cockpit("row-menu-in-window", 1);
@@ -297,6 +298,7 @@ fn a_menu_from_a_button_stays_in_the_window(cx: &mut TestAppContext) {
     );
     assert!((whole.right() - button.right()).abs() <= px(1.));
 
+    let rows = px(2. * (ferrite_ui::theme::FLOAT_ROW_H + ferrite_ui::theme::FLOAT_PAD));
     let no_room_below = 800. - f32::from(whole.size.height);
     for top in [no_room_below, 560., 700.] {
         let (button, menu) = open_under(cx, top);
@@ -313,6 +315,21 @@ fn a_menu_from_a_button_stays_in_the_window(cx: &mut TestAppContext) {
             "scrolls in the room it has from {top}: {menu:?}"
         );
     }
+
+    let (button, menu) = open_under(cx, 770.);
+    assert!(
+        menu.top() >= px(0.) && menu.bottom() <= px(800.),
+        "in the window from the foot: {menu:?}"
+    );
+    assert!(
+        (button.top() - menu.bottom() - gap).abs() <= px(1.),
+        "over its button, clear of it: {menu:?} {button:?}"
+    );
+    assert!(
+        (menu.right() - button.right()).abs() <= px(1.),
+        "on the button's right edge: {menu:?} {button:?}"
+    );
+    assert!(menu.size.height >= rows, "tall enough to use: {menu:?}");
 }
 
 /// Mark as unread, for a Thread off the screen that has been read: its

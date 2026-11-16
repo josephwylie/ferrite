@@ -276,7 +276,7 @@ fn shift_click_ranges_and_the_chip_drops_the_comments(cx: &mut TestAppContext) {
     tidied(&mut core, &fake, &repo);
     bind_production_keys(cx);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
-    cx.simulate_resize(gpui::size(px(1600.), px(900.)));
+    cx.simulate_resize(gpui::size(px(1440.), px(900.)));
     tick(cx);
     let review = cx
         .debug_bounds("panel-review-changes")

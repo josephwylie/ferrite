@@ -72,7 +72,7 @@ jobs:
           else
             echo "reviewr=false" >> "$GITHUB_OUTPUT"
           fi
-          if printf '%s\n' "$files" | grep -qE '^crates/ferrite-(cockpit|pane|ui|core|terminal|frame|focus-notify|reviewr)/|^Cargo\.|^\.config/nextest\.toml$|^\.github/workflows/ci\.yml$'; then
+          if printf '%s\n' "$files" | grep -qE '^crates/ferrite-(cockpit|pane|ui|core|terminal|frame|focus-notify|reviewr)/|^Cargo\.|^vendor/|^\.cargo/|^\.config/nextest\.toml$|^\.github/workflows/ci\.yml$'; then
             echo "ui=true" >> "$GITHUB_OUTPUT"
           else
             echo "ui=false" >> "$GITHUB_OUTPUT"
