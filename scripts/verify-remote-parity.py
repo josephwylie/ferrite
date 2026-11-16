@@ -306,7 +306,7 @@ def attachment_turn(ui, name, screenshot, new=False):
     ui.command("attach", str(screenshot))
     ui.wait("tray-image-0")
     ui.wait("attachment-upload-progress", visible=False)
-    assert not ui.has("attachment-failed"), "Remote screenshot upload failed"
+    assert not ui.has("attachment-failed") and not ui.has("attachment-status"), "Remote screenshot upload did not become ready"
     ui.shot(name + "-attachment-ready")
     ui.field("composer-row", "Inspect the attached screenshot. PARITY_STREAM")
     ui.click("composer-send")
@@ -450,12 +450,13 @@ def remote_link_flow(ui):
 
     pair = until(pairing, "Remote gateway did not issue a pairing code")
     ui.click("connection-add")
-    ui.field("connection-remote-host", pair["url"])
+    ui.field("connection-remote-host", endpoint)
     ui.field("connection-pairing-code", "incorrect-code")
     ui.click("connection-submit")
     ui.wait("connection-error")
     assert not ui.saved()
     ui.shot("20-remote-pairing-rejected")
+    ui.field("connection-remote-host", pair["url"])
     ui.field("connection-pairing-code", pair["code"])
     ui.click("connection-submit")
     ui.wait("connection-menu-1")
