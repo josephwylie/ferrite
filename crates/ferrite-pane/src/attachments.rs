@@ -343,7 +343,7 @@ fn chips(attachments: Attachments) -> gpui::AnyElement {
             .when(live, |chip| {
                 chip.on_click(move |_, window, cx| {
                     cx.stop_propagation();
-                    host.open(open.clone(), None, &[], window, cx);
+                    host.open_local(open.clone(), None, &[], window, cx);
                 })
             });
         match left {
@@ -535,7 +535,7 @@ fn image_card(
                 match (&retry, blocked_now) {
                     (Some(retry), true) => retry(&retried, window, cx),
                     (None, true) => {}
-                    _ => host.open(open.clone(), None, &gallery, window, cx),
+                    _ => host.open_local(open.clone(), None, &gallery, window, cx),
                 }
             }
         });
@@ -949,6 +949,10 @@ pub fn inline_file(
     let open = move |event: &gpui::ClickEvent, window: &mut Window, cx: &mut App| {
         gpui::base::TextSelection::end(window, cx);
         cx.stop_propagation();
+        if let Some(host) = host.as_ref().filter(|host| host.remote_files()) {
+            host.open(file.path.clone(), file.line(), &[], window, cx);
+            return;
+        }
         if event.modifiers().secondary() {
             crate::file_links::open_target(&reader, window, cx);
             return;

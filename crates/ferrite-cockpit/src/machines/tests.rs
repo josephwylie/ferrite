@@ -104,12 +104,15 @@ fn a_remote_launch_starts_on_its_machine_saved_or_not() {
 }
 
 #[test]
-fn the_machine_on_screen_stays_when_settings_drop_it() {
+fn removing_the_saved_selection_returns_to_local_and_drops_its_status_link() {
     let mut machines = Machines::new(reach("dropped"), &saved(), Some("me@build"));
-    machines.settings_changed(&[]);
-    assert_eq!(machines.selected().unwrap().target, "me@build");
-    assert_eq!(machines.unsaved().unwrap().target, "me@build");
+    assert!(machines.settings_changed(&[]));
+    assert!(machines.unsaved().is_none());
     assert_eq!(streaming(&machines), [true, false]);
+    assert!(machines.select(0));
+    assert!(machines.selected().is_none());
+    assert!(!machines.listed());
+    assert_eq!(streaming(&machines), [false]);
 }
 
 #[test]

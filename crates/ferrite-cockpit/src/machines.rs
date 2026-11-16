@@ -56,6 +56,7 @@ struct Entry {
     unsaved: bool,
     /// The nav shows its heading alone.
     folded: bool,
+    removed: bool,
 }
 
 /// A machine as alerts name it (ADR 0017): an index moves when Settings
@@ -147,6 +148,28 @@ impl Machines {
         self.entries.get(index)?.machine.as_ref()
     }
 
+    pub fn server_state(&self, index: usize, shown: Option<ServerState>) -> Option<ServerState> {
+        if index == self.selected {
+            shown
+        } else {
+            self.entries
+                .get(index)?
+                .status
+                .as_ref()
+                .map(ServerStatus::server)
+        }
+    }
+
+    pub fn retry(&mut self, index: usize) {
+        if let Some(status) = self
+            .entries
+            .get_mut(index)
+            .and_then(|entry| entry.status.as_mut())
+        {
+            status.retry();
+        }
+    }
+
     /// The machine the window is on, as alerts name it.
     pub fn selected_key(&self) -> MachineKey {
         self.entries[self.selected].key()
@@ -215,6 +238,28 @@ impl Machines {
             .and_then(|entry| entry.machine.as_ref())
     }
 
+    pub fn forget_unsaved(&mut self, target: &str) -> bool {
+        let Some(index) = self
+            .entries
+            .iter()
+            .position(|entry| entry.unsaved && entry.target() == Some(target))
+        else {
+            return false;
+        };
+        if index == self.selected {
+            let entry = &mut self.entries[index];
+            entry.removed = true;
+            entry.machine.as_mut().expect("remote entry").enabled = false;
+            true
+        } else {
+            self.entries.remove(index);
+            if index < self.selected {
+                self.selected -= 1;
+            }
+            false
+        }
+    }
+
     /// A window's Cockpit on the selected machine.
     pub fn cockpit(&mut self) -> io::Result<Cockpit> {
         self.attach(self.selected)
@@ -241,6 +286,9 @@ impl Machines {
             return false;
         }
         self.selected = index;
+        if self.selected == 0 {
+            self.entries.retain(|entry| !entry.removed);
+        }
         self.sync_status();
         true
     }
@@ -312,12 +360,11 @@ impl Machines {
     }
 
     /// Follow Settings' machines: added, removed, renamed, enabled or not.
-    /// A machine keeps its bridge and status across the change; the one
-    /// the window is on stays, unsaved, when Settings drops it. True when
-    /// Settings turned off the one the window is on: the window leaves it
-    /// for this computer.
+    /// A removed saved selection remains disabled until the window moves
+    /// to this computer. An unsaved command-line selection stays unsaved.
     pub fn settings_changed(&mut self, saved: &[Machine]) -> bool {
         let selected = self.entries[self.selected].machine.clone();
+        let was_unsaved = self.entries[self.selected].unsaved;
         let mut old: Vec<Entry> = self.entries.drain(1..).collect();
         let mut take = |target: &str| {
             old.iter()
@@ -331,6 +378,7 @@ impl Machines {
                 let mut entry = take(&machine.target).unwrap_or_else(|| Entry::new(None, false));
                 entry.machine = Some(machine.clone());
                 entry.unsaved = false;
+                entry.removed = false;
                 entry
             })
             .collect();
@@ -341,7 +389,11 @@ impl Machines {
             {
                 let mut entry = take(&machine.target).unwrap_or_else(|| Entry::new(None, true));
                 entry.machine = Some(machine.clone());
-                entry.unsaved = true;
+                entry.unsaved = was_unsaved;
+                entry.removed = !was_unsaved;
+                if entry.removed {
+                    entry.machine.as_mut().expect("selected remote").enabled = false;
+                }
                 entries.push(entry);
             }
         }
@@ -431,6 +483,7 @@ impl Entry {
             status: None,
             unsaved,
             folded: false,
+            removed: false,
         }
     }
 

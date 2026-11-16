@@ -48,6 +48,20 @@ fn the_door_opens_a_shell_in_a_panel_tab_and_closing_it_ends_it(cx: &mut TestApp
     assert!(numbers(&view, thread, cx).is_empty(), "its shell ended with it");
 }
 
+#[gpui::test]
+fn a_local_shell_with_a_failed_exit_still_closes_its_tab(cx: &mut TestAppContext) {
+    let (view, thread, cx) = window("terminal-local-exit", cx);
+    opened(&view, cx);
+    run(&view, thread, b"exit 7\r", cx);
+    let until = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while !numbers(&view, thread, cx).is_empty() {
+        assert!(std::time::Instant::now() < until, "the local shell's tab never closed");
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        tick(cx);
+    }
+    assert!(cx.debug_bounds("terminal-failed").is_none());
+}
+
 /// ⌘W with the keyboard in the shell closes that tab, as it does from the
 /// Panel's controls, and never parks the Thread.
 #[gpui::test]

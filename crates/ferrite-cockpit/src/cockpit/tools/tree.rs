@@ -56,6 +56,12 @@ pub(crate) struct FileTree {
     listed: RefCell<HashMap<PathBuf, Vec<Entry>>>,
     status: HashMap<PathBuf, Status>,
     filter: String,
+    remote: Option<RemoteSnapshot>,
+}
+
+struct RemoteSnapshot {
+    files: Vec<Entry>,
+    note: Option<String>,
 }
 
 impl FileTree {
@@ -66,6 +72,66 @@ impl FileTree {
             listed: RefCell::default(),
             status: HashMap::new(),
             filter: String::new(),
+            remote: None,
+        }
+    }
+
+    pub(crate) fn remote(root: PathBuf) -> Self {
+        let mut tree = Self::new(root);
+        tree.remote = Some(RemoteSnapshot {
+            files: Vec::new(),
+            note: Some("Loading remote files…".into()),
+        });
+        tree
+    }
+
+    pub(crate) fn remote_request(&self) -> (Vec<PathBuf>, bool) {
+        let mut directories: Vec<_> = self.open.iter().cloned().collect();
+        directories.sort();
+        directories.insert(0, self.root.clone());
+        (directories, !self.filter.trim().is_empty())
+    }
+
+    pub(crate) fn set_remote(
+        &mut self,
+        result: Result<ferrite_core::file_operations::Snapshot, String>,
+    ) {
+        let Some(remote) = &mut self.remote else {
+            return;
+        };
+        match result {
+            Ok(snapshot) => {
+                let convert = |entry: ferrite_core::file_operations::Entry| Entry {
+                    path: entry.path,
+                    name: entry.name,
+                    dir: entry.directory,
+                };
+                *self.listed.borrow_mut() = snapshot
+                    .directories
+                    .into_iter()
+                    .map(|dir| (dir.path, dir.entries.into_iter().map(convert).collect()))
+                    .collect();
+                remote.files = snapshot.files.into_iter().map(convert).collect();
+                remote.note = snapshot.truncated.then(|| {
+                    "Some remote files were omitted. Collapse folders or narrow the workspace."
+                        .into()
+                });
+                self.status = snapshot
+                    .status
+                    .into_iter()
+                    .filter_map(|(path, status)| {
+                        use ferrite_core::file_operations::Status as RemoteStatus;
+                        let status = match status {
+                            RemoteStatus::Modified => Status::Modified,
+                            RemoteStatus::Added => Status::Added,
+                            RemoteStatus::Deleted => Status::Deleted,
+                            RemoteStatus::Unknown => return None,
+                        };
+                        Some((self.root.join(path), status))
+                    })
+                    .collect();
+            }
+            Err(error) => remote.note = Some(error),
         }
     }
 
@@ -75,7 +141,9 @@ impl FileTree {
 
     /// Read every open folder afresh.
     pub(crate) fn refresh(&mut self) {
-        self.listed.borrow_mut().clear();
+        if self.remote.is_none() {
+            self.listed.borrow_mut().clear();
+        }
     }
 
     /// What `git status` says under `root`, to be read off the UI thread and
@@ -120,7 +188,12 @@ impl FileTree {
     /// Past `ROW_LIMIT` rows, or `SEARCH_LIMIT` files searched, the note
     /// says what is left out.
     pub(crate) fn rows(&self) -> Listing {
-        let mut notes = Vec::new();
+        let mut notes: Vec<String> = self
+            .remote
+            .as_ref()
+            .and_then(|remote| remote.note.clone())
+            .into_iter()
+            .collect();
         let mut rows = if self.filter.trim().is_empty() {
             let mut rows = Vec::new();
             let root = self.root.clone();
@@ -163,6 +236,9 @@ impl FileTree {
     }
 
     fn children(&self, dir: &Path) -> Vec<Entry> {
+        if self.remote.is_some() {
+            return self.listed.borrow().get(dir).cloned().unwrap_or_default();
+        }
         self.listed
             .borrow_mut()
             .entry(dir.to_path_buf())
@@ -172,6 +248,30 @@ impl FileTree {
 
     /// The matching files, and whether every file was looked through.
     fn matching_files(&self) -> (Vec<Row>, bool) {
+        if let Some(remote) = &self.remote {
+            let mut found: Vec<_> = remote
+                .files
+                .iter()
+                .filter_map(|entry| {
+                    let relative = entry.path.strip_prefix(&self.root).unwrap_or(&entry.path);
+                    crate::fuzzy::matches(&self.filter, &relative.to_string_lossy())
+                        .map(|(score, _)| (score, entry.clone()))
+                })
+                .collect();
+            found.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.path.cmp(&b.1.path)));
+            return (
+                found
+                    .into_iter()
+                    .map(|(_, entry)| Row {
+                        status: self.status_of(&entry.path),
+                        entry,
+                        depth: 0,
+                        expanded: false,
+                    })
+                    .collect(),
+                true,
+            );
+        }
         let mut found: Vec<(i64, Entry)> = Vec::new();
         let mut seen = 0;
         let mut searched_all = true;

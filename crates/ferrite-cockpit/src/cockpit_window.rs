@@ -109,6 +109,11 @@ impl CockpitWindow {
                 view.launch_provider(),
             )
         };
+        if let Some(error) = self.cockpit.read(cx).files_leave_error(cx) {
+            use gpui::component::{notification::Notification, WindowExt};
+            window.push_notification(Notification::warning(error), cx);
+            return;
+        }
         let left = machines.read(cx).selected_key();
         let core = match machines.update(cx, |machines, _| machines.go_to(index)) {
             Some(Ok(core)) => core,

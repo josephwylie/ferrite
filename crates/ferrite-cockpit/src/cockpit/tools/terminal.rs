@@ -17,7 +17,7 @@
 
 use std::path::Path;
 
-use ferrite_core::replies::Reply;
+use ferrite_core::{machine::Bridge, replies::Reply};
 use ferrite_pane::link_target::LinkTarget;
 use ferrite_terminal::{Cursor, Settings, Terminal, TerminalEvent, TerminalView};
 use ferrite_ui::icons;
@@ -105,6 +105,21 @@ fn scrollback_label(lines: usize) -> String {
     format!("{out} lines")
 }
 
+fn spawn_shell(
+    machine: Option<&Bridge>,
+    directory: &Path,
+    scrollback: usize,
+    size: (u16, u16),
+) -> std::io::Result<Terminal> {
+    match machine {
+        Some(machine) => {
+            let args = machine.terminal_args(directory)?;
+            Terminal::spawn_command(&std::env::temp_dir(), "ssh", args, scrollback, size)
+        }
+        None => Terminal::spawn(directory, scrollback, size),
+    }
+}
+
 impl CockpitView {
     /// One more shell in the Thread's folder, its Surface opened and
     /// shown (⌘J's first, the `+` menu's Terminal).
@@ -130,7 +145,7 @@ impl CockpitView {
         let columns = ((theme::TERMINAL_W - 2. * theme::TERMINAL_PAD_X)
             / (theme::FS_TERMINAL * theme::CODE_ADVANCE)) as u16;
         let lines = (theme::TERMINAL_FIRST_ROWS) as u16;
-        match Terminal::spawn(directory, scrollback, (columns, lines)) {
+        match spawn_shell(self.cockpit.machine().map(AsRef::as_ref), directory, scrollback, (columns, lines)) {
             Ok(shell) => {
                 let view = cx.new(|cx| TerminalView::new(shell, settings, cx));
                 cx.subscribe(&view, move |cockpit, view, event: &TerminalEvent, cx| {
@@ -191,7 +206,17 @@ impl CockpitView {
                 self.tools.terminal_selected = view.read(cx).selection().is_some();
                 self.open_context_menu(MenuTarget::Terminal(thread), *at, cx)
             }
-            TerminalEvent::Exited => {
+            TerminalEvent::Failed(status) if self.cockpit.machine().is_some() => {
+                if let Some(tab) = self.tools.terminals.get_mut(&thread).and_then(|terminals| {
+                    terminals.tabs.iter_mut().find(|tab| tab.view() == Some(&view))
+                }) {
+                    tab.shell = Shell::Failed(format!(
+                        "The remote terminal ended ({status}). Check the connection in Settings, then try again."
+                    ));
+                    cx.notify();
+                }
+            }
+            TerminalEvent::Exited | TerminalEvent::Failed(_) => {
                 if let Some(number) = self.terminal_number(thread, &view) {
                     self.end_terminal(thread, number, cx);
                     self.forget_surface(thread, &SurfaceId::Terminal(number));
@@ -490,13 +515,27 @@ impl CockpitView {
 
 #[cfg(test)]
 mod tests {
-    use super::scrollback_label;
+    use super::{scrollback_label, spawn_shell, Bridge};
 
     #[test]
     fn scrollback_reads_with_thousands_separators() {
         assert_eq!(scrollback_label(1_000), "1,000 lines");
         assert_eq!(scrollback_label(10_000), "10,000 lines");
         assert_eq!(scrollback_label(100_000), "100,000 lines");
+    }
+
+    #[test]
+    fn a_remote_terminal_never_falls_back_to_a_local_shell() {
+        let directory = std::env::temp_dir();
+        let bridge = Bridge::new(
+            "remote fixture",
+            directory.join("unused-terminal-bridge.sock"),
+            Box::new(|| unreachable!("terminal startup does not dial the Server")),
+        );
+        let error = spawn_shell(Some(&bridge), &directory, 1000, (80, 24))
+            .err()
+            .expect("a non-SSH remote must fail even when the folder exists locally");
+        assert_eq!(error.kind(), std::io::ErrorKind::Unsupported);
     }
 }
 

@@ -148,7 +148,10 @@ impl LinkTarget {
                 true
             }
             Self::File(file) => {
-                file.open(window, cx);
+                match preview.filter(|preview| preview.remote_files()) {
+                    Some(preview) => preview.open(file.path.clone(), file.line(), &[], window, cx),
+                    None => file.open(window, cx),
+                }
                 true
             }
             Self::Fragment(_) => {

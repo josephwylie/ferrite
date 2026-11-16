@@ -3,21 +3,15 @@
 //! looks like, what the Inbox says of the machines off screen, and Settings
 //! › Machines. A window with only this computer draws none of it.
 
-use std::rc::Rc;
-
 use super::*;
 use crate::machines::{Connection, MachineRow, Machines, OffScreen};
 use crate::notifications::{Alert, Detail, State};
 use ferrite_core::cockpit::ServerState;
-use ferrite_core::machine::{self, Machine};
 use ferrite_core::notifications::Notifications;
 use ferrite_core::workspace::Listing;
 use gpui::App;
 use std::path::PathBuf;
 use std::sync::mpsc::{Receiver, TryRecvError};
-
-/// An edit to the saved machines list.
-type SavedChange = Box<dyn Fn(&mut Vec<Machine>)>;
 
 /// What a lost machine still shows (ADR 0026): `element` dimmed under a
 /// cover, `id`, that takes every press until the machine is back.
@@ -256,135 +250,6 @@ impl CockpitView {
                 open: None,
             });
         }
-    }
-
-    /// Settings › Machines: each machine — sign in, on or off, remove (or
-    /// save, for the `--remote` one) — and a field to add one by its ssh
-    /// target. `None` for a window on an Engine of its own.
-    pub(super) fn machine_settings(
-        &mut self,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> Option<settings::Group> {
-        let machines = self.machines.clone()?;
-        let field = self
-            .machine_field
-            .get_or_insert_with(|| {
-                cx.new(|cx| {
-                    gpui::component::input::InputState::new(window, cx).placeholder("me@host")
-                })
-            })
-            .clone();
-        let view = cx.entity().downgrade();
-        let act = |change: SavedChange| -> settings::Act {
-            let view = view.clone();
-            Rc::new(move |cx: &mut gpui::App| {
-                let _ = view.update(cx, |view, cx| {
-                    view.change_settings(|settings| change(&mut settings.machines), cx);
-                });
-            })
-        };
-        let listed: Vec<(MachineRow, Machine)> = {
-            let machines = machines.read(cx);
-            machines
-                .rows(self.cockpit.server())
-                .into_iter()
-                .filter_map(|row| Some((row.clone(), machines.machine(row.index)?.clone())))
-                .collect()
-        };
-        let unsaved = machines.read(cx).unsaved().cloned();
-        let none = listed.is_empty();
-        let mut shown = Vec::new();
-        for (row, machine) in listed {
-            let target = machine.target.clone();
-            let mut acts: Vec<(SharedString, settings::Act)> = Vec::new();
-            if row.connection == Connection::Attention {
-                let index = row.index;
-                let view = view.clone();
-                acts.push((
-                    "Sign in".into(),
-                    Rc::new(move |cx: &mut gpui::App| {
-                        let _ = view.update(cx, |view, cx| {
-                            let signed = view.machines.as_ref().map(|machines| {
-                                machines.update(cx, |machines, _| machines.sign_in(index))
-                            });
-                            if let Some(Err(error)) = signed {
-                                view.group_error = Some(format!("cannot sign in: {error}").into());
-                            }
-                            cx.notify();
-                        });
-                    }),
-                ));
-            }
-            if unsaved.as_ref() == Some(&machine) {
-                let saving = machine.clone();
-                acts.push((
-                    "Save".into(),
-                    act(Box::new(move |saved| saved.push(saving.clone()))),
-                ));
-            } else {
-                let (flip, word) = if machine.enabled {
-                    (false, ferrite_ui::theme::words::OFF)
-                } else {
-                    (true, "on")
-                };
-                let flipped = target.clone();
-                acts.push((
-                    format!("Turn {word}").into(),
-                    act(Box::new(move |saved| {
-                        for machine in saved.iter_mut().filter(|m| m.target == flipped) {
-                            machine.enabled = flip;
-                        }
-                    })),
-                ));
-                let removed = target.clone();
-                acts.push((
-                    "Remove".into(),
-                    act(Box::new(move |saved| saved.retain(|m| m.target != removed))),
-                ));
-            }
-            shown.push(settings::named(
-                "settings-machine",
-                row.index,
-                row.name.clone().into(),
-                connection_hint(&target, row.connection).into(),
-                acts,
-            ));
-        }
-        let adding = view.clone();
-        let typed = field.clone();
-        shown.push(settings::entry(
-            "settings-machine-add",
-            "Add a machine",
-            "Its ssh target. It needs `ferrited` on its PATH; ssh signs in as it \
-             always does, and Ferrite keeps no password.",
-            field,
-            "Add",
-            move |window, cx| {
-                let target = typed.read(cx).value().trim().to_string();
-                let _ = adding.update(cx, |view, cx| match machine::check_target(&target) {
-                    Ok(()) => {
-                        view.change_settings(
-                            |settings| {
-                                if !settings.machines.iter().any(|m| m.target == target) {
-                                    settings.machines.push(Machine::new(&target));
-                                }
-                            },
-                            cx,
-                        );
-                        view.group_error = None;
-                    }
-                    Err(error) => view.group_error = Some(error.into()),
-                });
-                typed.update(cx, |field, cx| field.set_value("", window, cx));
-            },
-        ));
-        let group = settings::Group::new(Some("Machines")).rows(shown);
-        Some(if none {
-            group.note("No machines yet. Add one by its ssh target to run its threads here.")
-        } else {
-            group
-        })
     }
 }
 
@@ -692,17 +557,6 @@ impl CockpitView {
             ))
             .child(project_editor::directory_list(completions.collect()))
     }
-}
-
-/// A machine's hint in Settings: its target and how it is connected.
-fn connection_hint(target: &str, connection: Connection) -> String {
-    let state = match connection {
-        Connection::Online => "connected",
-        Connection::Connecting => ferrite_ui::theme::words::CONNECTING,
-        Connection::Attention => ferrite_ui::theme::words::NEEDS_YOU,
-        Connection::Disabled => ferrite_ui::theme::words::OFF,
-    };
-    format!("{target} · {state}")
 }
 
 /// Whether an alert's record still wants the operator, on its machine:

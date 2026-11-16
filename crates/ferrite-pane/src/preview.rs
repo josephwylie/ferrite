@@ -158,8 +158,16 @@ impl Text {
     }
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FileOpen {
+    pub path: PathBuf,
+    pub line: Option<u32>,
+}
+
 #[derive(Default)]
 struct State {
+    remote_files: bool,
+    file_requests: Vec<FileOpen>,
     document: Option<Document>,
     /// Counts every open, so the cockpit tells a new one from the last.
     opened: u64,
@@ -184,6 +192,18 @@ impl Preview {
             state: Arc::new(Mutex::new(State::default())),
             focus: cx.focus_handle(),
         }
+    }
+
+    pub fn set_remote_files(&self, remote: bool) {
+        self.state.lock().unwrap().remote_files = remote;
+    }
+
+    pub fn remote_files(&self) -> bool {
+        self.state.lock().unwrap().remote_files
+    }
+
+    pub fn take_file_requests(&self) -> Vec<FileOpen> {
+        std::mem::take(&mut self.state.lock().unwrap().file_requests)
     }
 
     pub fn review_annotation(
@@ -269,6 +289,25 @@ impl Preview {
     /// note saying so with its original a click away, the document open
     /// before giving way.
     pub fn open(
+        &self,
+        path: PathBuf,
+        line: Option<u32>,
+        gallery: &[PathBuf],
+        window: &mut Window,
+        cx: &mut App,
+    ) {
+        {
+            let mut state = self.state.lock().unwrap();
+            if state.remote_files {
+                state.file_requests.push(FileOpen { path, line });
+                window.refresh();
+                return;
+            }
+        }
+        self.open_local(path, line, gallery, window, cx);
+    }
+
+    pub fn open_local(
         &self,
         path: PathBuf,
         line: Option<u32>,

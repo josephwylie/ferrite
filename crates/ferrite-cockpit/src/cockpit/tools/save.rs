@@ -2,10 +2,11 @@
 //! the edit revision it carries, refused when the disk moved on since the
 //! buffer last matched it.
 
-use std::hash::{DefaultHasher, Hasher};
-use std::io::{self, Write as _};
-use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
+pub(crate) use ferrite_core::file_operations::{fingerprint, replace_file, Fingerprint};
+use std::io;
+use std::path::Path;
+#[cfg(test)]
+use std::path::PathBuf;
 
 /// Where the buffer stands against the disk.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -27,27 +28,26 @@ pub(crate) enum SaveState {
 #[derive(Debug)]
 pub(crate) enum Outcome {
     /// Written; the disk now holds text with this fingerprint.
-    Written(u64),
+    Written(Fingerprint),
     Changed,
     Refused(String),
 }
 
 pub(crate) type Writer = fn(&Path, &[u8]) -> io::Result<()>;
 
-pub(crate) fn fingerprint(bytes: &[u8]) -> u64 {
-    let mut hasher = DefaultHasher::new();
-    hasher.write(bytes);
-    hasher.finish()
-}
-
 /// Whether the file on disk is no longer the one `expected` was read from.
-pub(crate) fn changed_on_disk(path: &Path, expected: u64) -> bool {
+pub(crate) fn changed_on_disk(path: &Path, expected: Fingerprint) -> bool {
     std::fs::read(path).is_ok_and(|bytes| fingerprint(&bytes) != expected)
 }
 
 /// Write `text` over the file, unless `expected` (the fingerprint the buffer
 /// was read with) no longer matches what is on disk. `None` overwrites.
-pub(crate) fn write(path: &Path, text: &str, expected: Option<u64>, writer: Writer) -> Outcome {
+pub(crate) fn write(
+    path: &Path,
+    text: &str,
+    expected: Option<Fingerprint>,
+    writer: Writer,
+) -> Outcome {
     if let Some(expected) = expected {
         match std::fs::read(path) {
             Ok(bytes) if fingerprint(&bytes) != expected => return Outcome::Changed,
@@ -61,50 +61,6 @@ pub(crate) fn write(path: &Path, text: &str, expected: Option<u64>, writer: Writ
         Ok(()) => Outcome::Written(fingerprint(text.as_bytes())),
         Err(error) => Outcome::Refused(error.to_string()),
     }
-}
-
-/// Replace the file whole: a sibling of the real file (a symlink is followed,
-/// as a plain write would) is written and renamed over it, so a failure
-/// part-way leaves the old file. Only where the directory refuses the sibling
-/// is the file written in place.
-pub(crate) fn replace_file(path: &Path, bytes: &[u8]) -> io::Result<()> {
-    static WRITES: AtomicU64 = AtomicU64::new(0);
-    let Ok(target) = std::fs::canonicalize(path) else {
-        // A new file, or a link to one: a plain write creates what it names.
-        return std::fs::write(path, bytes);
-    };
-    let permissions = std::fs::metadata(&target).ok().map(|meta| meta.permissions());
-    if permissions.as_ref().is_some_and(|permissions| permissions.readonly()) {
-        return Err(io::Error::new(io::ErrorKind::PermissionDenied, "the file is read-only"));
-    }
-    let mut staging = target.as_os_str().to_owned();
-    staging.push(format!(
-        ".ferrite-save-{}-{}",
-        std::process::id(),
-        WRITES.fetch_add(1, Ordering::Relaxed)
-    ));
-    let staging = PathBuf::from(staging);
-    let mut file = match std::fs::File::create_new(&staging) {
-        Ok(file) => file,
-        // A directory that refuses new files; any other refusal (a full
-        // disk) would leave an in-place write half-done.
-        Err(error) if error.kind() == io::ErrorKind::PermissionDenied => {
-            return std::fs::write(&target, bytes)
-        }
-        Err(error) => return Err(error),
-    };
-    let result = file
-        .write_all(bytes)
-        .and_then(|()| file.sync_all())
-        .and_then(|()| {
-            drop(file);
-            permissions.map_or(Ok(()), |permissions| std::fs::set_permissions(&staging, permissions))
-        })
-        .and_then(|()| std::fs::rename(&staging, &target));
-    if result.is_err() {
-        let _ = std::fs::remove_file(&staging);
-    }
-    result
 }
 
 #[cfg(all(test, unix))]

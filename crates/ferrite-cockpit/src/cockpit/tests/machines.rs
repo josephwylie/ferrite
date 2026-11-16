@@ -171,6 +171,29 @@ fn machine_window(
     })
 }
 
+#[gpui::test]
+fn escape_closes_settings_on_an_empty_remote_workspace(cx: &mut TestAppContext) {
+    bind_production_keys(cx);
+    let machines = cx.new(|_| machines("empty-remote-escape", Some("me@box")));
+    let core = machines.update(cx, |machines, _| machines.cockpit()).unwrap();
+    let (root, cx) = machine_window(cx, core, machines);
+    tick(cx);
+    let view = shown(&root, cx);
+    view.read_with(cx, |view, _| assert!(view.panes.is_empty()));
+    cx.simulate_keystrokes("cmd-,");
+    cx.run_until_parked();
+    view.read_with(cx, |view, _| assert!(view.settings_open));
+    cx.simulate_keystrokes("escape");
+    cx.run_until_parked();
+    view.read_with(cx, |view, _| assert!(!view.settings_open));
+    cx.simulate_keystrokes("escape");
+    cx.run_until_parked();
+    view.update_in(cx, |view, window, cx| {
+        view.unqueue_from_backspace(&ferrite_pane::composer::Backspace, window, cx);
+    });
+    view.read_with(cx, |view, _| assert!(view.panes.is_empty()));
+}
+
 /// The Cockpit the window shows now.
 fn shown(
     root: &Entity<gpui::component::Root>,
@@ -303,6 +326,78 @@ fn a_machine_off_screen_heads_its_rows_with_its_connection(cx: &mut TestAppConte
     assert!(debug_bounds(cx, "nav-machine-1".into()).is_some(), "box");
     until(cx, |cx| connection(&view, 1, cx) == Connection::Attention);
     assert_eq!(connection(&view, 0, cx), Connection::Online);
+    view.update(cx, |view, cx| {
+        let machines = view.machines.as_ref().unwrap();
+        assert!(matches!(
+            machines.read(cx).server_state(1, view.cockpit.server()),
+            Some(ferrite_core::cockpit::ServerState::Detached {
+                attention: Some(Failure::SignIn),
+                ..
+            })
+        ));
+        machines.update(cx, |machines, _| machines.retry(1));
+        assert_eq!(
+            machines.read(cx).rows(view.cockpit.server())[1].connection,
+            Connection::Connecting,
+            "Retry also releases an off-screen authentication stop"
+        );
+    });
+}
+
+#[gpui::test]
+fn removing_the_selected_connection_confirms_then_returns_to_this_computer(
+    cx: &mut TestAppContext,
+) {
+    let machines = cx.new(|_| machines("remove-selected", Some("me@box")));
+    let core = machines
+        .update(cx, |machines, _| machines.cockpit())
+        .unwrap();
+    let (root, cx) = machine_window(cx, core, machines);
+    let remote = shown(&root, cx);
+    let remove = remote.update_in(cx, |view, window, cx| {
+        view.prefs.settings.machines = vec![Machine {
+            name: "box".into(),
+            target: "me@box".into(),
+            enabled: true,
+        }];
+        view.connection_settings(window, cx)
+            .into_iter()
+            .flat_map(|group| group.rows)
+            .find_map(|row| match row.control {
+                settings::Control::ConnectionRow(row) => row
+                    .actions
+                    .into_iter()
+                    .find(|action| action.id.as_ref() == "connection-remove-1")
+                    .map(|action| action.act),
+                _ => None,
+            })
+            .unwrap()
+    });
+    cx.update(|window, cx| remove(window, cx));
+    let confirm = remote.update_in(cx, |view, window, cx| {
+        assert_eq!(
+            view.prefs.settings.machines.len(),
+            1,
+            "the first press only asks"
+        );
+        view.connection_settings(window, cx)
+            .into_iter()
+            .flat_map(|group| group.rows)
+            .find_map(|row| match row.control {
+                settings::Control::ConnectionRow(row) => row.removal.map(|(confirm, _)| confirm),
+                _ => None,
+            })
+            .unwrap()
+    });
+    cx.update(|window, cx| confirm(window, cx));
+    tick(cx);
+    let local = shown(&root, cx);
+    assert_ne!(local.entity_id(), remote.entity_id());
+    local.read_with(cx, |view, cx| {
+        assert!(view.cockpit.machine().is_none());
+        assert!(view.prefs.settings.machines.is_empty());
+        assert!(!view.machines.as_ref().unwrap().read(cx).listed());
+    });
 }
 
 #[gpui::test]
@@ -1886,4 +1981,216 @@ fn a_saved_edit_clears_an_earlier_refusal(cx: &mut TestAppContext) {
         Settings::load(&remote).is_ok_and(|written| written.factory_tasks_at_once == 6)
     });
     until(cx, |cx| !says_in_machine_group(&view, cx, "Not saved"));
+}
+
+fn machine_with_edited_remote_file<'a>(
+    name: &str,
+    selected: bool,
+    unsaved: bool,
+    cx: &'a mut TestAppContext,
+) -> (
+    Entity<gpui::component::Root>,
+    Entity<CockpitView>,
+    Entity<crate::cockpit::tools::Editor>,
+    &'a mut gpui::VisualTestContext,
+) {
+    use ferrite_core::file_operations::{fingerprint, Reply, Request};
+    let (core, _fake, checkout) = bound_cockpit(name, Provider::Codex);
+    let machines = cx.new(|_| {
+        if unsaved {
+            let dir = settings_dir(name);
+            Machines::new(
+                Reach {
+                    settings_dir: dir.clone(),
+                    store: dir.join("threads"),
+                    executable: dir.join("no-such-ferrite"),
+                    client: ferrite_core::protocol::Peer {
+                        name: "test".into(),
+                        version: "0".into(),
+                    },
+                    renderer: None,
+                    driven: false,
+                    defaults: Default::default(),
+                    bridge: needs_sign_in,
+                },
+                &[],
+                Some("me@box"),
+            )
+        } else {
+            machines(name, selected.then_some("me@box"))
+        }
+    });
+    let (root, cx) = machine_window(cx, core, machines);
+    cx.simulate_resize(gpui::size(px(1900.), px(900.)));
+    tick(cx);
+    let view = shown(&root, cx);
+    let thread = view.read_with(cx, |view, _| view.panes[0].thread().unwrap());
+    view.update(cx, |view, cx| {
+        view.prefs.settings.machines = if unsaved {
+            Vec::new()
+        } else {
+            vec![Machine {
+                name: "box".into(),
+                target: "me@box".into(),
+                enabled: true,
+            }]
+        };
+        view.prefs.settings.save(&view.prefs.dir).unwrap();
+        view.remote_files_for_test(
+            thread,
+            |request| {
+                Ok(match request {
+                    Request::Read { .. } => Reply::Text {
+                        text: "remote original".into(),
+                        fingerprint: fingerprint(b"remote original"),
+                    },
+                    Request::Write { text, .. } => Reply::Written {
+                        fingerprint: fingerprint(text.as_bytes()),
+                    },
+                    _ => Reply::Unknown,
+                })
+            },
+            cx,
+        );
+        view.open_in_files(thread, checkout.join("edited.rs"), None, true, cx);
+    });
+    tick(cx);
+    let editor = view.read_with(cx, |view, _| view.files_editor_of(thread).unwrap());
+    editor.update(cx, |editor, cx| editor.type_text("edited ", cx));
+    (root, view, editor, cx)
+}
+
+#[gpui::test]
+fn remote_files_block_machine_switch_until_the_save_has_finished(cx: &mut TestAppContext) {
+    let (root, view, editor, cx) =
+        machine_with_edited_remote_file("remote-files-leave", false, false, cx);
+    view.update(cx, |_, cx| {
+        cx.emit(GoToMachine {
+            index: 1,
+            open: None,
+        })
+    });
+    tick(cx);
+    assert_eq!(
+        shown(&root, cx),
+        view,
+        "the dirty editor stays in its window"
+    );
+    assert!(editor.read_with(cx, |editor, _| editor.is_dirty()));
+    editor.update(cx, |editor, cx| editor.save(cx));
+    assert!(matches!(
+        editor.read_with(cx, |editor, _| editor.save_state().clone()),
+        crate::cockpit::tools::SaveState::Saving(_)
+    ));
+    assert!(
+        view.read_with(cx, |view, cx| view.files_leave_error(cx))
+            .is_some(),
+        "an in-flight save still blocks leaving"
+    );
+    tick(cx);
+    assert!(!editor.read_with(cx, |editor, _| editor.is_dirty()));
+    view.update(cx, |_, cx| {
+        cx.emit(GoToMachine {
+            index: 1,
+            open: None,
+        })
+    });
+    tick(cx);
+    assert_ne!(
+        shown(&root, cx),
+        view,
+        "a confirmed save permits the switch"
+    );
+}
+
+#[gpui::test]
+fn remote_files_block_disconnect_and_remove_before_settings_or_selection_change(
+    cx: &mut TestAppContext,
+) {
+    for (name, remove, unsaved) in [
+        ("disconnect", false, false),
+        ("remove", true, false),
+        ("forget-unsaved", true, true),
+    ] {
+        let (root, view, editor, cx) =
+            machine_with_edited_remote_file(&format!("remote-files-{name}"), true, unsaved, cx);
+        let action = view.update_in(cx, |view, window, cx| {
+            view.connection_settings(window, cx)
+                .into_iter()
+                .flat_map(|group| group.rows)
+                .find_map(|row| match row.control {
+                    settings::Control::ConnectionRow(row) => row
+                        .actions
+                        .into_iter()
+                        .find(|action| {
+                            action.id.as_ref()
+                                == if remove {
+                                    "connection-remove-1"
+                                } else {
+                                    "connection-toggle-1"
+                                }
+                        })
+                        .map(|action| action.act),
+                    _ => None,
+                })
+                .unwrap()
+        });
+        cx.update(|window, cx| action(window, cx));
+        let action = if remove {
+            view.update_in(cx, |view, window, cx| {
+                view.connection_settings(window, cx)
+                    .into_iter()
+                    .flat_map(|group| group.rows)
+                    .find_map(|row| match row.control {
+                        settings::Control::ConnectionRow(row) => {
+                            row.removal.map(|(confirm, _)| confirm)
+                        }
+                        _ => None,
+                    })
+                    .unwrap()
+            })
+        } else {
+            action
+        };
+        cx.update(|window, cx| action(window, cx));
+        tick(cx);
+        assert_eq!(shown(&root, cx), view, "{name} preserves the dirty editor");
+        view.read_with(cx, |view, cx| {
+            assert!(editor.read(cx).is_dirty(), "{name} preserves the unsaved buffer");
+            assert_eq!(
+                view.prefs.settings.machines,
+                ferrite_core::settings::Settings::load(&view.prefs.dir)
+                    .unwrap()
+                    .machines
+            );
+            assert_eq!(
+                view.machines
+                    .as_ref()
+                    .unwrap()
+                    .read(cx)
+                    .selected_key()
+                    .0
+                    .as_deref(),
+                Some("me@box")
+            );
+            if !unsaved {
+                assert!(view.prefs.settings.machines[0].enabled);
+            } else {
+                assert!(view.machines.as_ref().unwrap().read(cx).unsaved().is_some());
+            }
+        });
+        editor.update(cx, |editor, cx| editor.save(cx));
+        tick(cx);
+        cx.update(|window, cx| action(window, cx));
+        tick(cx);
+        assert_ne!(shown(&root, cx), view, "{name} can leave after saving");
+        let next = shown(&root, cx);
+        next.read_with(cx, |view, _| {
+            if remove {
+                assert!(view.prefs.settings.machines.is_empty());
+            } else {
+                assert!(!view.prefs.settings.machines[0].enabled);
+            }
+        });
+    }
 }

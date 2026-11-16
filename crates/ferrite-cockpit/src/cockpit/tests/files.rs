@@ -774,5 +774,353 @@ fn leaving_asks_about_the_text_a_quit_will_not_write(cx: &mut TestAppContext) {
 
     view.update(cx, |view, cx| view.run_files_verb(thread, FilesVerb::ToggleAutoSave, cx));
     std::fs::write(&file, "l\n").unwrap();
-    assert!(warning(&view, cx).is_some(), "auto save off, the text is only in the buffer");
+    assert!(
+        warning(&view, cx).is_some(),
+        "auto save off, the text is only in the buffer"
+    );
+}
+
+#[gpui::test]
+fn remote_files_use_remote_tree_text_saves_conflicts_and_reload_when_local_paths_collide(
+    cx: &mut TestAppContext,
+) {
+    use crate::cockpit::tools::SaveState;
+    use ferrite_core::file_operations::{
+        fingerprint, Directory, Entry, Reply, Request, Snapshot, Status,
+    };
+    let (view, thread, root, cx) = files_window("remote-files-collision", cx);
+    let path = root.join("collision.rs");
+    std::fs::write(&path, "local must stay untouched").unwrap();
+    let remote_text = Rc::new(RefCell::new("remote original".to_string()));
+    let requests = Rc::new(RefCell::new(Vec::new()));
+    let fail_reads = Rc::new(std::cell::Cell::new(false));
+    let read_failure = fail_reads.clone();
+    let content = remote_text.clone();
+    let observed = requests.clone();
+    let remote_path = path.clone();
+    let remote_root = root.clone();
+    view.update(cx, |view, cx| {
+        view.remote_files_for_test(
+            thread,
+            move |request| {
+                observed.borrow_mut().push(request.clone());
+                if matches!(request, Request::Read { .. }) && read_failure.get() {
+                    return Err(std::io::Error::other("temporary disconnect"));
+                }
+                Ok(match request {
+                    Request::Read { .. } => Reply::Text {
+                        text: content.borrow().clone(),
+                        fingerprint: fingerprint(content.borrow().as_bytes()),
+                    },
+                    Request::Write { text, expected, .. } => {
+                        if expected.is_some_and(|expected| {
+                            expected != fingerprint(content.borrow().as_bytes())
+                        }) {
+                            Reply::Conflict
+                        } else {
+                            *content.borrow_mut() = text;
+                            Reply::Written {
+                                fingerprint: fingerprint(content.borrow().as_bytes()),
+                            }
+                        }
+                    }
+                    Request::Snapshot { .. } => {
+                        let entry = Entry {
+                            path: remote_path.clone(),
+                            name: "remote-name.rs".into(),
+                            directory: false,
+                        };
+                        Reply::Snapshot(Snapshot {
+                            directories: vec![Directory {
+                                path: remote_root.clone(),
+                                entries: vec![entry.clone()],
+                            }],
+                            files: vec![entry],
+                            status: vec![("collision.rs".into(), Status::Modified)],
+                            truncated: false,
+                        })
+                    }
+                    Request::Unknown => panic!("unknown operation"),
+                })
+            },
+            cx,
+        );
+        view.open_in_files(thread, path.clone(), None, true, cx);
+    });
+    tick(cx);
+    let editor = view.read_with(cx, |view, _| view.files_editor_of(thread).unwrap());
+    assert_eq!(
+        editor.read_with(cx, |editor, _| editor.text().to_string()),
+        "remote original"
+    );
+    assert_eq!(
+        view.read_with(cx, |view, _| view.files_row_names(thread)),
+        ["remote-name.rs"]
+    );
+    assert_eq!(
+        view.read_with(cx, |view, _| view.files_status_for_test(thread, &path)),
+        Some(crate::cockpit::tools::FileStatus::Modified)
+    );
+    assert!(
+        cx.debug_bounds("files-open").is_none(),
+        "a remote path has no local app action"
+    );
+    editor.update(cx, |editor, cx| {
+        editor.type_text("edit ", cx);
+        editor.save(cx);
+    });
+    tick(cx);
+    assert_eq!(*remote_text.borrow(), "edit remote original");
+    assert_eq!(
+        std::fs::read_to_string(&path).unwrap(),
+        "local must stay untouched"
+    );
+    fail_reads.set(true);
+    editor.update(cx, |editor, cx| editor.follow_disk(cx));
+    tick(cx);
+    assert_eq!(
+        editor.read_with(cx, |editor, _| editor.save_state().clone()),
+        SaveState::Saved
+    );
+    fail_reads.set(false);
+    editor.update(cx, |editor, cx| editor.follow_disk(cx));
+    tick(cx);
+    editor.update(cx, |editor, cx| {
+        editor.type_text("recovered ", cx);
+        editor.save(cx);
+    });
+    tick(cx);
+    assert_eq!(
+        editor.read_with(cx, |editor, _| editor.save_state().clone()),
+        SaveState::Saved
+    );
+    assert!(remote_text.borrow().contains("recovered"));
+    *remote_text.borrow_mut() = "remote agent changed it".into();
+    editor.update(cx, |editor, cx| editor.follow_disk(cx));
+    tick(cx);
+    assert_eq!(
+        editor.read_with(cx, |editor, _| editor.text().to_string()),
+        "remote agent changed it"
+    );
+    editor.update(cx, |editor, cx| editor.type_text("mine ", cx));
+    *remote_text.borrow_mut() = "changed again".into();
+    editor.update(cx, |editor, cx| editor.save(cx));
+    tick(cx);
+    assert_eq!(
+        editor.read_with(cx, |editor, _| editor.save_state().clone()),
+        SaveState::Conflict
+    );
+    let reload = cx.debug_bounds("editor-reload").unwrap();
+    cx.simulate_click(reload.center(), gpui::Modifiers::none());
+    tick(cx);
+    assert_eq!(
+        editor.read_with(cx, |editor, _| editor.text().to_string()),
+        "changed again"
+    );
+    editor.update(cx, |editor, cx| editor.type_text("mine ", cx));
+    *remote_text.borrow_mut() = "raced".into();
+    editor.update(cx, |editor, cx| editor.save(cx));
+    tick(cx);
+    let overwrite = cx.debug_bounds("editor-overwrite").unwrap();
+    cx.simulate_click(overwrite.center(), gpui::Modifiers::none());
+    tick(cx);
+    assert_eq!(*remote_text.borrow(), "mine changed again");
+    editor.update(cx, |editor, cx| {
+        editor.type_text("unsaved ", cx);
+        assert!(editor.lost_by_leaving());
+        editor.flush_for_quit();
+        assert!(editor.is_dirty());
+    });
+    assert_eq!(
+        std::fs::read_to_string(&path).unwrap(),
+        "local must stay untouched"
+    );
+    assert!(requests
+        .borrow()
+        .iter()
+        .any(|request| matches!(request, Request::Write { expected: None, .. })));
+}
+
+#[gpui::test]
+fn remote_files_failure_and_binary_never_fall_back_to_readable_local_text(cx: &mut TestAppContext) {
+    use ferrite_core::file_operations::{Reply, Request};
+    let (view, thread, root, cx) = files_window("remote-files-failure", cx);
+    let path = root.join("collision.rs");
+    std::fs::write(&path, "local text must not appear").unwrap();
+    let unavailable = Rc::new(std::cell::Cell::new(true));
+    let server_unavailable = unavailable.clone();
+    view.update(cx, |view, cx| {
+        view.remote_files_for_test(
+            thread,
+            move |request| {
+                if server_unavailable.get() {
+                    return Err(std::io::Error::other("Remote server unavailable"));
+                }
+                Ok(match request {
+                    Request::Read { .. } => Reply::Text {
+                        text: "remote recovered".into(),
+                        fingerprint: ferrite_core::file_operations::fingerprint(
+                            b"remote recovered",
+                        ),
+                    },
+                    _ => Reply::Unknown,
+                })
+            },
+            cx,
+        );
+        view.open_in_files(thread, path.clone(), None, true, cx);
+    });
+    tick(cx);
+    assert!(view
+        .read_with(cx, |view, _| view.files_editor_of(thread))
+        .is_none());
+    assert_eq!(
+        view.read_with(cx, |view, _| view.files_unshown_note(thread)),
+        Some("Remote server unavailable".into())
+    );
+    unavailable.set(false);
+    let retry = cx
+        .debug_bounds("files-retry")
+        .expect("remote read errors can retry");
+    cx.simulate_click(retry.center(), gpui::Modifiers::none());
+    tick(cx);
+    let editor = view.read_with(cx, |view, _| view.files_editor_of(thread).unwrap());
+    assert_eq!(
+        editor.read_with(cx, |editor, _| editor.text().to_string()),
+        "remote recovered"
+    );
+    view.update(cx, |view, cx| {
+        view.remote_files_for_test(
+            thread,
+            |request| {
+                Ok(match request {
+                    Request::Read { .. } => Reply::Binary,
+                    _ => Reply::Unknown,
+                })
+            },
+            cx,
+        );
+        view.open_in_files(thread, path, None, true, cx);
+    });
+    tick(cx);
+    assert!(view
+        .read_with(cx, |view, _| view.files_editor_of(thread))
+        .is_none());
+    assert!(view
+        .read_with(cx, |view, _| view.files_unshown_note(thread))
+        .unwrap()
+        .contains("remote terminal"));
+    assert!(cx.debug_bounds("files-open-original").is_none());
+}
+
+#[gpui::test]
+fn remote_files_transcript_preview_routes_to_remote_editor_and_keeps_line_target(
+    cx: &mut TestAppContext,
+) {
+    use ferrite_core::file_operations::{fingerprint, Reply, Request};
+    let (view, thread, root, cx) = files_window("remote-files-preview", cx);
+    let path = root.join("preview.md");
+    std::fs::write(&path, "local text must not appear").unwrap();
+    view.update(cx, |view, cx| {
+        view.remote_files_for_test(
+            thread,
+            |request| {
+                Ok(match request {
+                    Request::Read { .. } => Reply::Text {
+                        text: "remote\nsecond\nthird".into(),
+                        fingerprint: fingerprint(b"remote\nsecond\nthird"),
+                    },
+                    _ => Reply::Unknown,
+                })
+            },
+            cx,
+        );
+        view.open_preview_from(0, path.clone(), Some(3), cx);
+    });
+    tick(cx);
+    let editor = view.read_with(cx, |view, _| {
+        assert!(
+            view.panes[0].preview.document().is_none(),
+            "the local preview never reads this path"
+        );
+        view.files_editor_of(thread).unwrap()
+    });
+    assert_eq!(
+        editor.read_with(cx, |editor, _| editor.text().to_string()),
+        "remote\nsecond\nthird"
+    );
+    assert_eq!(
+        editor.read_with(cx, |editor, _| editor.caret_line_for_test()),
+        3
+    );
+    assert!(
+        cx.debug_bounds("files-show-rendered").is_none(),
+        "remote source cannot load local Markdown images or file links"
+    );
+    assert_eq!(
+        std::fs::read_to_string(&path).unwrap(),
+        "local text must not appear"
+    );
+}
+
+#[gpui::test]
+fn remote_files_inline_transcript_chip_uses_remote_bytes_despite_local_collision(
+    cx: &mut TestAppContext,
+) {
+    use ferrite_core::file_operations::{fingerprint, Reply, Request};
+    let (core, fake, root) = bound_cockpit("remote-files-inline-chip", Provider::Claude);
+    bind_production_keys(cx);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(1900.), px(900.)));
+    tick(cx);
+    let thread = view.read_with(cx, |view, _| view.panes[0].thread().unwrap());
+    let path = root.join("chip.rs");
+    std::fs::write(&path, "local collision must not open").unwrap();
+    view.update(cx, |view, cx| {
+        view.remote_files_for_test(
+            thread,
+            |request| {
+                Ok(match request {
+                    Request::Read { .. } => Reply::Text {
+                        text: "remote chip\nsecond".into(),
+                        fingerprint: fingerprint(b"remote chip\nsecond"),
+                    },
+                    _ => Reply::Unknown,
+                })
+            },
+            cx,
+        )
+    });
+    fake.streams.borrow()[0]
+        .send(SessionEvent::TextDelta {
+            text: format!("Open [remote source]({}:2).\n", path.display()),
+        })
+        .unwrap();
+    tick(cx);
+    let selector = Box::leak(format!("file-attachment-{}", path.display()).into_boxed_str());
+    let chip = cx
+        .debug_bounds(selector)
+        .expect("the transcript's file chip");
+    cx.simulate_click(chip.center(), gpui::Modifiers::none());
+    tick(cx);
+    let editor = view.read_with(cx, |view, _| {
+        assert!(view.panes[0].preview.document().is_none());
+        view.files_editor_of(thread).unwrap()
+    });
+    assert_eq!(
+        editor.read_with(cx, |editor, _| editor.text().to_string()),
+        "remote chip\nsecond"
+    );
+    assert_eq!(
+        editor.read_with(cx, |editor, _| editor.caret_line_for_test()),
+        2
+    );
+    assert!(
+        cx.opened_url().is_none(),
+        "no local default application is opened"
+    );
+    assert_eq!(
+        std::fs::read_to_string(path).unwrap(),
+        "local collision must not open"
+    );
 }
