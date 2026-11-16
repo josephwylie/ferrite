@@ -194,6 +194,49 @@ fn escape_closes_settings_on_an_empty_remote_workspace(cx: &mut TestAppContext) 
     view.read_with(cx, |view, _| assert!(view.panes.is_empty()));
 }
 
+#[gpui::test]
+fn remote_files_and_terminal_open_through_their_keyboard_shortcuts(cx: &mut TestAppContext) {
+    use ferrite_core::cockpit::{Attach, Endpoint, ServerState};
+    use crate::cockpit::surfaces::SurfaceId;
+    let dir = settings_dir("tool-keys");
+    let _ = std::fs::remove_dir_all(&dir);
+    let dial = ferrite_core::server::fixture_machine(
+        dir.join("box"), Box::new(OnBox(Default::default())),
+    ).unwrap();
+    let mut core = Cockpit::attach(Attach {
+        browser: false,
+        driven: false,
+        store: dir.join("window/threads"),
+        server: Endpoint::Machine(std::sync::Arc::new(Bridge::new(
+            "box", dir.join("bridge/bridge.sock"), dial,
+        ))),
+        client: ferrite_core::protocol::Peer { name: "test".into(), version: "0".into() },
+        renderer: None,
+        discovery: Box::new(Fake::default()),
+    }).unwrap();
+    ferrite_core::doorbell::until("remote server never attached", || {
+        core.pump();
+        matches!(core.server(), Some(ServerState::Attached { .. }))
+    });
+    let thread = core.open(Provider::Codex, WorkspaceChoice::Main { checkout: here() }).unwrap();
+    bind_production_keys(cx);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(1400.), px(900.)));
+    tick(cx);
+    view.read_with(cx, |view, _| {
+        assert!(view.on_machine());
+        assert!(view.opener_unavailable(thread, crate::cockpit::panel::Opener::Files).is_none());
+        assert!(view.opener_unavailable(thread, crate::cockpit::panel::Opener::Terminal).is_none());
+    });
+    cx.simulate_keystrokes("cmd-shift-f");
+    tick(cx);
+    view.read_with(cx, |view, _| assert_eq!(view.active_surface(thread), Some(SurfaceId::Files)));
+    cx.simulate_keystrokes("cmd-j");
+    tick(cx);
+    view.read_with(cx, |view, _| assert!(matches!(view.active_surface(thread), Some(SurfaceId::Terminal(_)))));
+    assert!(cx.debug_bounds("terminal-failed").is_some(), "a fake SSH bridge cannot start a local shell");
+}
+
 /// The Cockpit the window shows now.
 fn shown(
     root: &Entity<gpui::component::Root>,

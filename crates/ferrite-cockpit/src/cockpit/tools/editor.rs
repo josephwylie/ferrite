@@ -754,7 +754,7 @@ impl Editor {
             line,
             layouts: self.layouts.clone(),
             caret_bounds: self.caret_bounds.clone(),
-            input: caret.map(|_| (self.focus.clone(), cx.entity())),
+            input: (current && focused).then(|| (self.focus.clone(), cx.entity())),
         };
         div()
             .flex()

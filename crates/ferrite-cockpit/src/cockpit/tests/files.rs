@@ -90,6 +90,21 @@ fn typing_edits_the_file_and_auto_save_writes_it_after_a_pause(cx: &mut TestAppC
 }
 
 #[gpui::test]
+fn typing_replaces_selected_file_text_through_platform_input(cx: &mut TestAppContext) {
+    let (view, thread, checkout, cx) = files_window("files-replace-selection", cx);
+    let file = checkout.join("src/lib.rs");
+    open(&view, thread, &file, false, cx);
+    type_into("", cx);
+    cx.simulate_keystrokes("cmd-a");
+    tick(cx);
+    cx.simulate_input("replacement");
+    tick(cx);
+    cx.simulate_keystrokes("cmd-s");
+    tick(cx);
+    assert_eq!(std::fs::read_to_string(file).unwrap(), "replacement");
+}
+
+#[gpui::test]
 fn prose_reads_rendered_until_its_source_is_asked_for(cx: &mut TestAppContext) {
     let (view, thread, checkout, cx) = files_window("files-prose", cx);
     open(&view, thread, &checkout.join("README.md"), false, cx);
