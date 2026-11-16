@@ -5,12 +5,14 @@
 //! this holds only what the tray is showing of them.
 
 use std::collections::HashSet;
+use std::time::Instant;
 
-use gpui::{div, prelude::*, px, rgb, AnyElement, App, Entity, SharedString, Window};
+use gpui::{div, prelude::*, px, rgb, AnyElement, App, ElementId, Entity, SharedString, Window};
 
+use super::departed::{Gone, Place};
 use super::Composer;
 use ferrite_core::replies::{Reply, Source};
-use ferrite_ui::{components, icons, theme};
+use ferrite_ui::{components, icons, motion, theme};
 
 gpui::actions!(cite, [SaveComment, CancelComment]);
 
@@ -148,7 +150,10 @@ impl Composer {
         if index >= self.replies.len() {
             return;
         }
-        self.replies.remove(index);
+        let tray_held = self.files_focus.contains_focused(window, cx);
+        let reply = self.replies.remove(index);
+        self.reply_added = None;
+        self.depart(super::departed::Gone::Reply(reply), index, cx);
         let shift = |at: &mut Option<usize>| match *at {
             Some(open) if open == index => *at = None,
             Some(open) if open > index => *at = Some(open - 1),
@@ -161,7 +166,7 @@ impl Composer {
             (Some(now), Some(edit)) => edit.index = now,
             _ => self.citations.editing = None,
         }
-        self.focus_handle.focus(window, cx);
+        self.refocus_after_removal(tray_held, window, cx);
         self.edited(cx);
     }
 
@@ -192,17 +197,42 @@ impl Composer {
     }
 }
 
-pub(super) fn tray(entity: &Entity<Composer>, cx: &App) -> Option<AnyElement> {
+/// The replies' chips, the ones the draft holds and, in the places they
+/// held, the ones taken off it that are still closing (`departed`).
+pub(super) fn tray(entity: &Entity<Composer>, now: Instant, cx: &App) -> Option<AnyElement> {
     let composer = entity.read(cx);
-    if composer.replies.is_empty() {
+    let places = composer.places(composer.replies.len(), now, |gone| {
+        matches!(gone, Gone::Reply(_))
+    });
+    if places.is_empty() {
         return None;
     }
+    let growing = composer
+        .reply_added
+        .filter(|(_, at)| now.saturating_duration_since(*at) < motion::CHIP_IN.duration())
+        .map(|(index, _)| index);
     let open = composer.citations.open;
-    let chips = composer
-        .replies
-        .iter()
-        .enumerate()
-        .map(|(index, reply)| chip(entity, index, reply, open == Some(index)));
+    let chips: Vec<_> = places
+        .into_iter()
+        .filter_map(|place| match place {
+            Place::Gone(ghost) => match &ghost.what {
+                Gone::Reply(reply) => Some(ghost_chip(ghost.left, reply)),
+                Gone::File { .. } => None,
+            },
+            Place::Kept(index) => {
+                let chip = chip(entity, index, &composer.replies[index], open == Some(index));
+                Some(if growing == Some(index) {
+                    motion::chip_in(
+                        SharedString::from(format!("reply-in-{index}")),
+                        div().child(chip),
+                    )
+                    .into_any_element()
+                } else {
+                    chip
+                })
+            }
+        })
+        .collect();
     let panel = open
         .and_then(|index| composer.replies.get(index).map(|reply| (index, reply)))
         .map(|(index, reply)| panel(entity, index, reply, cx));
@@ -229,12 +259,37 @@ pub(super) fn tray(entity: &Entity<Composer>, cx: &App) -> Option<AnyElement> {
     )
 }
 
-fn chip(entity: &Entity<Composer>, index: usize, reply: &Reply, open: bool) -> AnyElement {
-    let text = label(&reply.quote);
-    let toggle = entity.downgrade();
-    let remove = entity.downgrade();
+/// What a chip shows of its reply: the quote's mark and words, and a pencil
+/// when it carries a comment.
+fn chip_face(index: Option<usize>, reply: &Reply) -> Vec<AnyElement> {
+    let mut face = vec![
+        icons::icon(icons::QUOTE, theme::ATTACH_THUMB, theme::LINK_INK).into_any_element(),
+        div()
+            .min_w_0()
+            .truncate()
+            .child(SharedString::from(label(&reply.quote)))
+            .into_any_element(),
+    ];
+    if !reply.text.is_empty() {
+        face.push(
+            div()
+                .when_some(index, |mark, index| {
+                    mark.debug_selector(move || format!("cite-chip-{index}-comment"))
+                })
+                .flex_shrink_0()
+                .child(icons::icon(
+                    icons::PENCIL,
+                    theme::ATTACH_THUMB,
+                    theme::INK_SUBTLE,
+                ))
+                .into_any_element(),
+        );
+    }
+    face
+}
+
+fn chip_shell() -> gpui::Div {
     div()
-        .debug_selector(move || format!("cite-chip-{index}"))
         .flex()
         .flex_shrink_0()
         .items_center()
@@ -243,65 +298,97 @@ fn chip(entity: &Entity<Composer>, index: usize, reply: &Reply, open: bool) -> A
         .min_w_0()
         .rounded(px(theme::R_CONTROL))
         .bg(theme::paint::RAISED)
-        .when(open, |chip| chip.bg(theme::paint::SELECTED))
         .font_family(theme::FONT_UI)
         .text_size(px(theme::FS_META))
         .line_height(px(theme::LH_META))
         .font_weight(theme::W_BODY)
         .text_color(rgb(theme::LINK_INK))
         .whitespace_nowrap()
-        .child(
-            components::button(("cite-open", index))
-                .tab_stop(true)
-                .key_context("PromptAttachment")
-                .p_0()
-                .px(px(theme::SPACE_2))
-                .h(px(theme::ATTACH_CHIP_H))
-                .min_w_0()
-                .flex()
-                .items_center()
-                .gap(px(theme::CH))
-                .accessibility_label(format!("Quote: {}", reply.quote))
-                .tooltip_builder(ferrite_ui::menu::tooltip(if open {
-                    "Hide the quote"
-                } else {
-                    "Show the quote and comment"
-                }))
-                .child(icons::icon(
-                    icons::QUOTE,
-                    theme::ATTACH_THUMB,
-                    theme::LINK_INK,
-                ))
-                .child(div().min_w_0().truncate().child(SharedString::from(text)))
-                .when(!reply.text.is_empty(), |button| {
-                    button.child(
-                        div()
-                            .debug_selector(move || format!("cite-chip-{index}-comment"))
-                            .flex_shrink_0()
-                            .child(icons::icon(
-                                icons::PENCIL,
-                                theme::ATTACH_THUMB,
-                                theme::INK_SUBTLE,
-                            )),
-                    )
-                })
-                .on_click(move |_, _, cx| {
-                    cx.stop_propagation();
-                    let _ = toggle.update(cx, |composer, cx| composer.toggle_citation(index, cx));
-                }),
-        )
-        .child(
-            crate::attachments::remove_button(("remove-reply", index))
-                .tab_stop(!open)
-                .debug_selector(move || format!("cite-chip-{index}-remove"))
-                .accessibility_label("Remove quote")
-                .tooltip_builder(ferrite_ui::menu::tooltip("Remove quote"))
-                .on_click(move |_, window, cx| {
-                    cx.stop_propagation();
-                    let _ =
-                        remove.update(cx, |composer, cx| composer.remove_reply(index, window, cx));
-                }),
-        )
+}
+
+/// A reply taken off the draft at `left`, closing its place: its chip
+/// drawn as it stood, with no controls to reach. Its id is the moment it
+/// went and its words, not its place, which moves as the ghosts before it
+/// expire.
+fn ghost_chip(left: Instant, reply: &Reply) -> AnyElement {
+    let id = SharedString::from(format!("reply-out-{left:?}-{}", reply.quote));
+    motion::slip_out(
+        id.clone(),
+        left,
+        motion::CHIP_OUT,
+        theme::CH,
+        chip_view(id, None, reply, false, None),
+    )
+    .into_any_element()
+}
+
+fn chip(entity: &Entity<Composer>, index: usize, reply: &Reply, open: bool) -> AnyElement {
+    chip_view(
+        ElementId::from(("cite-open", index)),
+        Some(index),
+        reply,
+        open,
+        Some(entity),
+    )
+}
+
+/// A reply's chip: the live one when `entity` is given (`index` its place
+/// among the draft's replies), else the ghost of one gone. They are one
+/// recipe, so a closing chip is the chip it was.
+fn chip_view(
+    id: impl Into<ElementId>,
+    index: Option<usize>,
+    reply: &Reply,
+    open: bool,
+    entity: Option<&Entity<Composer>>,
+) -> AnyElement {
+    let live = entity.is_some();
+    let mut open_chip = components::button(id)
+        .tab_stop(live)
+        .key_context("PromptAttachment")
+        .p_0()
+        .px(px(theme::SPACE_2))
+        .h(px(theme::ATTACH_CHIP_H))
+        .min_w_0()
+        .flex()
+        .items_center()
+        .gap(px(theme::CH))
+        .children(chip_face(index, reply));
+    let mut remove = crate::attachments::remove_button(SharedString::from(format!(
+        "remove-reply-{}",
+        index.map_or_else(|| "gone".to_string(), |index| index.to_string())
+    )))
+    .tab_stop(live && !open);
+    if let (Some(entity), Some(index)) = (entity, index) {
+        let toggle = entity.downgrade();
+        let removed = entity.downgrade();
+        open_chip = open_chip
+            .accessibility_label(format!("Quote: {}", reply.quote))
+            .tooltip_builder(ferrite_ui::menu::tooltip(if open {
+                "Hide the quote"
+            } else {
+                "Show the quote and comment"
+            }))
+            .on_click(move |_, _, cx| {
+                cx.stop_propagation();
+                let _ = toggle.update(cx, |composer, cx| composer.toggle_citation(index, cx));
+            });
+        remove = remove
+            .debug_selector(move || format!("cite-chip-{index}-remove"))
+            .accessibility_label("Remove quote")
+            .tooltip_builder(ferrite_ui::menu::tooltip("Remove quote"))
+            .on_click(move |_, window, cx| {
+                cx.stop_propagation();
+                let _ = removed.update(cx, |composer, cx| composer.remove_reply(index, window, cx));
+            });
+    }
+    chip_shell()
+        .when_some(index, |chip, index| {
+            chip.debug_selector(move || format!("cite-chip-{index}"))
+        })
+        .when(open, |chip| chip.bg(theme::paint::SELECTED))
+        .child(open_chip)
+        .child(remove)
         .into_any_element()
 }
 

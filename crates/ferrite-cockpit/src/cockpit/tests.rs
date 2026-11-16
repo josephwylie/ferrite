@@ -85,6 +85,7 @@ mod send_scroll;
 mod resume_recovery;
 mod sends;
 mod transcript_rows;
+mod tray_motion;
 mod ui_a;
 mod ui_b;
 mod ui_c;

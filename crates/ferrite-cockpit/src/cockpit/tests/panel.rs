@@ -395,6 +395,65 @@ fn connectors_fold_under_their_count(cx: &mut TestAppContext) {
     assert!(cx.debug_bounds("panel-connector-0").is_none(), "shut again");
 }
 
+/// Connectors eases open and shut over `FOLD`, and a press mid-way turns it
+/// round from where it is, not from either end.
+#[gpui::test]
+fn connectors_ease_and_turn_round_from_where_they_are(cx: &mut TestAppContext) {
+    ferrite_ui::motion::testing::drive();
+    let (core, fake) = cockpit("panel-connectors-ease", 1);
+    bind_production_keys(cx);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    own_settings(&view, "panel-connectors-ease", cx);
+    hold_nav_open(&view, cx);
+    cx.simulate_resize(gpui::size(px(1600.), px(900.)));
+    let server = |name: &str| ferrite_core::McpServer {
+        name: name.into(),
+        status: ferrite_core::McpStatus::Connected,
+        error: None,
+    };
+    fake.streams.borrow()[0]
+        .send(SessionEvent::McpServers {
+            servers: vec![server("github"), server("linear")],
+        })
+        .unwrap();
+    tick(cx);
+    let head = cx.debug_bounds("panel-connectors-head").unwrap();
+    let body = |cx: &mut gpui::VisualTestContext| {
+        cx.debug_bounds("panel-connectors-body")
+            .map_or(0.0, |body| f32::from(body.size.height))
+    };
+    let step = |ms: u64, cx: &mut gpui::VisualTestContext| {
+        cx.executor().advance_clock(Duration::from_millis(ms));
+        cx.update(|window, cx| window.simulate_next_frame(cx));
+        cx.run_until_parked();
+    };
+    cx.simulate_click(head.center(), gpui::Modifiers::none());
+    cx.run_until_parked();
+    step(20, cx);
+    step(20, cx);
+    let part = body(cx);
+    assert!(part > 0.0, "opening: {part}");
+    step(ferrite_ui::theme::MOTION_FOLD_MS, cx);
+    let open = body(cx);
+    assert!(open > part, "open: {open} after {part}");
+    cx.simulate_click(head.center(), gpui::Modifiers::none());
+    cx.run_until_parked();
+    step(20, cx);
+    step(20, cx);
+    let closing = body(cx);
+    assert!(closing > 0.0 && closing < open, "closing: {closing} of {open}");
+    cx.simulate_click(head.center(), gpui::Modifiers::none());
+    cx.run_until_parked();
+    step(1, cx);
+    assert!(
+        body(cx) >= closing - 1.0 && body(cx) < open,
+        "a reversal starts from where it is: {} from {closing}",
+        body(cx)
+    );
+    step(ferrite_ui::theme::MOTION_FOLD_MS, cx);
+    assert_eq!(body(cx), open, "and opens fully");
+}
+
 /// The branch is the panel's, so while the panel is hidden the head says
 /// it after the title's ▾, and while it shows the head does not.
 #[gpui::test]

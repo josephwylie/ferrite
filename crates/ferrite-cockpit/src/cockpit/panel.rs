@@ -380,8 +380,9 @@ impl CockpitView {
     /// Note a move from one tab to another of the same Thread's open
     /// Panel. A document's preview fades itself, so a pick of or from
     /// one starts none here, nor does the Panel opening or another
-    /// Thread's coming up.
-    fn tend_tab_pick(&mut self, cx: &mut Context<Self>) {
+    /// Thread's coming up. Keys held for a body that is leaving, with none
+    /// of the new tab's own to take them, go back to the conversation.
+    fn tend_tab_pick(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let shown = self
             .panel_pane()
             .and_then(|index| self.panes[index].thread())
@@ -400,6 +401,10 @@ impl CockpitView {
             }
             _ => None,
         };
+        let keyed = matches!(&shown, Some((_, tab)) if reads_panel_keys(tab.as_ref()));
+        if !keyed && self.panel_keys_held(window, cx) {
+            self.leave_panel(window, cx);
+        }
         self.panel.shown = shown;
     }
 
@@ -412,7 +417,7 @@ impl CockpitView {
         self.tend_prose_find(window);
         self.disarm_unseen_merge();
         self.panel.window_w = f32::from(window.viewport_size().width);
-        self.tend_tab_pick(cx);
+        self.tend_tab_pick(window, cx);
         if let Some(thread) = self
             .panel_pane()
             .and_then(|index| self.panes[index].thread())
@@ -723,8 +728,9 @@ impl CockpitView {
                 .child(body)
                 .into_any_element()
         };
+        let takes_keys = reads_panel_keys(active.as_ref());
         let body = match active {
-            None => keyed(self.surface_empty(thread, cx)),
+            None => self.surface_empty(thread, cx),
             Some(SurfaceId::Overview) => {
                 let scroll = self.panel.scrolls.get(&thread).cloned().unwrap_or_default();
                 div()
@@ -752,7 +758,7 @@ impl CockpitView {
                     .into_any_element()
             }
             Some(SurfaceId::File(_) | SurfaceId::Browser) => padded(self.panel_preview(owner, cx)),
-            Some(SurfaceId::Files) => keyed(self.files_pane(thread, cx).into_any_element()),
+            Some(SurfaceId::Files) => self.files_pane(thread, cx).into_any_element(),
             Some(SurfaceId::Changes) => filled(self.changes_pane(tools::Diff::Changes(thread), cx).into_any_element()),
             Some(SurfaceId::Terminal(number)) => {
                 filled(self.terminal_pane(thread, number, cx).into_any_element())
@@ -761,12 +767,19 @@ impl CockpitView {
             Some(SurfaceId::Agent(key)) => filled(self.agent_drill_body(thread, &key, cx)),
             Some(SurfaceId::PullRequest(number)) => filled(self.pr_surface(thread, number, cx)),
         };
+        let body = if takes_keys { keyed(body) } else { body };
         ferrite_ui::motion::swap_since(
             self.panel.picked,
             div().flex().flex_col().flex_1().min_h_0().min_w_0().child(body),
         )
         .into_any_element()
     }
+}
+
+/// Whether `tab`'s body takes the Panel's keys (`panel_keys`): the empty
+/// Panel and Files read them, every other tab's body has its own.
+fn reads_panel_keys(tab: Option<&SurfaceId>) -> bool {
+    matches!(tab, None | Some(SurfaceId::Files))
 }
 
 /// How far in from the window's right edge the title tools' right edge sits

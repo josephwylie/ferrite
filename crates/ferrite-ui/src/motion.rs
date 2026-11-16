@@ -46,6 +46,7 @@
 //! | send scroll | `MOTION_SCROLL_MAX_MS` 200ms at most, [`EASE_STANDARD`] | a send's prompt eases up to the top of the transcript (`TX_SEND_ANCHOR_OFFSET` below it) for Chromium's smooth-scroll length, `min(√Δpx, 12) / 60` s, re-measured each frame so rows growing under it are absorbed; any scroll by the operator stops it where it stands; the bubble's pop starts when it lands (`transcript/scroll.rs`) |
 //! | scroll to end | shows `SCROLL_END_SHOW_DELAY_MS` 150ms after it is wanted, hides at once; its click rides the send scroll's ease to the tail | the transcript's Scroll to end pill: no fade either way, its ring blending over [`HOVER_FADE`] |
 //! | chip in | [`CHIP_IN`] 300ms ease-snap, 0.95 → 1 about its centre | an attachment added to a draft's tray ([`chip_in`]); never what the tray held when it was first drawn, nor a sent prompt's |
+//! | chip out | [`CHIP_OUT`] 160ms ease-out, its width to 0 as it fades, the row closing over it | an attachment or a citation taken off a draft's tray ([`slip_out`]): a ghost with no controls, under a cover that takes every press; none under reduced motion |
 //! | find bar | [`FADE_QUICK`] 150ms, opacity only | the transcript's find bar fades in ([`fade_in`]); it goes at once |
 //! | notices | [`FADE_QUICK`] 150ms, opacity only | a notice over or in the Composer (a draft's failed start) fades in ([`fade_in`]); it goes at once. The approval card keeps [`PROMOTE_IN`], the queue strip none |
 //! | usage ring | [`USAGE_ARC`] 300ms / [`USAGE_INK`] 200ms, quart | the footer's plan-usage ring moving to a new reading ([`settle`]); first paint lands |
@@ -364,6 +365,8 @@ pub const FOLD: MotionSpec = spec(theme::MOTION_FOLD_MS, EASE_OUT);
 pub const TAB_SCROLL: MotionSpec = spec(theme::MOTION_TAB_SCROLL_MS, EASE_STANDARD);
 /// An attachment added to a draft growing in (`chip_in`).
 pub const CHIP_IN: MotionSpec = spec(theme::MOTION_CHIP_IN_MS, EASE_SNAP);
+/// An attachment taken off a draft closing its place (`slip_out`).
+pub const CHIP_OUT: MotionSpec = spec(theme::MOTION_CHIP_OUT_MS, EASE_OUT);
 /// The usage ring's arc and ink moving to a new reading.
 pub const USAGE_ARC: MotionSpec = spec(theme::MOTION_USAGE_ARC_MS, EASE_OUT_QUART);
 pub const USAGE_INK: MotionSpec = spec(theme::MOTION_USAGE_INK_MS, EASE_OUT_QUART);
@@ -1229,42 +1232,121 @@ pub fn fold_body(id: impl Into<ElementId>, shown: f32, body: impl IntoElement) -
     FoldBody {
         id: id.into(),
         shown,
+        axis: Axis::Vertical,
         body: body.into_any_element(),
     }
+}
+
+#[derive(Clone, Copy)]
+enum Axis {
+    Vertical,
+    /// Along a row, taking `gap` back from the row's own as it closes, so
+    /// the siblings sit as they will once the body is gone.
+    Horizontal { gap: f32 },
 }
 
 #[derive(IntoElement)]
 struct FoldBody {
     id: ElementId,
     shown: f32,
+    axis: Axis,
     body: AnyElement,
 }
 
 impl gpui::RenderOnce for FoldBody {
     fn render(self, window: &mut Window, _: &mut App) -> impl IntoElement {
         let natural = window.with_global_id(self.id, |id, window| {
-            window.with_element_state(id, |cell: Option<Rc<Cell<gpui::Pixels>>>, _| {
+            window.with_element_state(id, |cell: Option<Rc<Cell<Option<gpui::Size<gpui::Pixels>>>>>, _| {
                 let cell = cell.unwrap_or_default();
                 (cell.clone(), cell)
             })
         });
         let measured = natural.clone();
         let shown = self.shown.clamp(0.0, 1.0);
-        div()
-            .flex()
-            .flex_col()
-            .flex_shrink_0()
-            .when(shown < 1.0, |clip| {
-                clip.h(natural.get() * shown)
-                    .overflow_hidden()
-                    .opacity(shown)
-            })
-            .on_children_prepainted(move |bounds, _, _| {
-                if let Some(body) = bounds.first() {
-                    measured.set(body.size.height);
-                }
-            })
-            .child(div().flex().flex_col().flex_shrink_0().child(self.body))
+        // A body not yet measured stands at its natural size for the frame
+        // that measures it: clipping to a size of 0 would snap its
+        // neighbours to where it started.
+        let size = natural.get().filter(|_| shown < 1.0);
+        let clip = div().flex().flex_shrink_0();
+        let clip = match (self.axis, size) {
+            (Axis::Vertical, Some(natural)) => clip
+                .flex_col()
+                .h(natural.height * shown)
+                .overflow_hidden()
+                .opacity(shown),
+            (Axis::Vertical, None) => clip.flex_col(),
+            (Axis::Horizontal { gap }, Some(natural)) => clip
+                .w(natural.width * shown)
+                .mr(px(-gap * (1.0 - shown)))
+                .overflow_hidden()
+                .opacity(shown),
+            (Axis::Horizontal { .. }, None) => clip,
+        };
+        clip.on_children_prepainted(move |bounds, _, _| {
+            if let Some(body) = bounds.first() {
+                measured.set(Some(body.size));
+            }
+        })
+        .child(div().flex().flex_col().flex_shrink_0().child(self.body))
+    }
+}
+
+/// A chip that went at `left` (an attachment taken off a draft's tray): it
+/// closes along its row over `spec` as it fades, its neighbours following
+/// it in, under a cover that takes every press — a face no pointer finds.
+/// The caller draws it as a ghost with no controls of its own, and stops
+/// once `spec` has passed.
+pub fn slip_out(
+    id: impl Into<ElementId>,
+    left: Instant,
+    spec: MotionSpec,
+    gap: f32,
+    element: impl IntoElement,
+) -> impl IntoElement {
+    Slip {
+        id: id.into(),
+        left,
+        spec,
+        axis: Axis::Horizontal { gap },
+        element: element.into_any_element(),
+    }
+}
+
+/// [`slip_out`] for a block that went at `left`, closing its height: a tray
+/// whose last chip has gone.
+pub fn slip_shut(
+    id: impl Into<ElementId>,
+    left: Instant,
+    spec: MotionSpec,
+    element: impl IntoElement,
+) -> impl IntoElement {
+    Slip {
+        id: id.into(),
+        left,
+        spec,
+        axis: Axis::Vertical,
+        element: element.into_any_element(),
+    }
+}
+
+#[derive(IntoElement)]
+struct Slip {
+    id: ElementId,
+    left: Instant,
+    spec: MotionSpec,
+    axis: Axis,
+    element: AnyElement,
+}
+
+impl gpui::RenderOnce for Slip {
+    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
+        let t = play(Origin::At(self.left), self.spec, window, cx);
+        FoldBody {
+            id: self.id,
+            shown: 1.0 - t,
+            axis: self.axis,
+            body: unreachable_face(div().child(self.element)).into_any_element(),
+        }
     }
 }
 
