@@ -284,7 +284,9 @@ impl CockpitView {
         let Some(editor) = &mut self.connections.editor else {
             return;
         };
-        if input == &editor.fields.host {
+        if input == &editor.fields.host
+            && !matches!(editor.stage, Stage::Adding { .. } | Stage::Resolving)
+        {
             editor.highlighted = None;
             editor.suggestions_open = true;
             editor
@@ -455,6 +457,12 @@ impl CockpitView {
         {
             self.choose_connection_host(host.alias.into(), window, cx);
         } else {
+            if self.connections.editor.as_ref().is_some_and(|editor| {
+                editor.mode == ConnectionMode::Ssh
+                    && editor.fields.host.read(cx).value().trim().is_empty()
+            }) {
+                return;
+            }
             self.submit_connection(window, cx);
         }
     }
