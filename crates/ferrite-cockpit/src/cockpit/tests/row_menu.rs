@@ -300,7 +300,7 @@ fn a_menu_from_a_button_stays_in_the_window(cx: &mut TestAppContext) {
 
     let rows = px(2. * (ferrite_ui::theme::FLOAT_ROW_H + ferrite_ui::theme::FLOAT_PAD));
     let no_room_below = 800. - f32::from(whole.size.height);
-    for top in [no_room_below, 560., 700.] {
+    for top in [no_room_below, 560.] {
         let (button, menu) = open_under(cx, top);
         assert!(
             (menu.top() - button.bottom() - gap).abs() <= px(1.),
@@ -316,20 +316,25 @@ fn a_menu_from_a_button_stays_in_the_window(cx: &mut TestAppContext) {
         );
     }
 
-    let (button, menu) = open_under(cx, 770.);
-    assert!(
-        menu.top() >= px(0.) && menu.bottom() <= px(800.),
-        "in the window from the foot: {menu:?}"
-    );
-    assert!(
-        (button.top() - menu.bottom() - gap).abs() <= px(1.),
-        "over its button, clear of it: {menu:?} {button:?}"
-    );
-    assert!(
-        (menu.right() - button.right()).abs() <= px(1.),
-        "on the button's right edge: {menu:?} {button:?}"
-    );
-    assert!(menu.size.height >= rows, "tall enough to use: {menu:?}");
+    for top in [700., 770.] {
+        let (button, menu) = open_under(cx, top);
+        assert!(
+            menu.top() >= px(0.) && menu.bottom() <= px(800.),
+            "in the window from {top}: {menu:?}"
+        );
+        assert!(
+            (button.top() - menu.bottom() - gap).abs() <= px(1.),
+            "over its button, clear of it from {top}: {menu:?} {button:?}"
+        );
+        assert!(
+            (menu.right() - button.right()).abs() <= px(1.),
+            "on the button's right edge from {top}: {menu:?} {button:?}"
+        );
+        assert!(
+            menu.size.height >= rows,
+            "tall enough to use from {top}: {menu:?}"
+        );
+    }
 }
 
 /// Mark as unread, for a Thread off the screen that has been read: its
