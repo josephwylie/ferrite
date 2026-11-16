@@ -57,8 +57,6 @@ async fn run(socket: &mut WebSocket, gateway: &Gateway, session: &str) -> std::i
         .openpty(size)
         .map_err(std::io::Error::other)?;
     let mut command = CommandBuilder::new_default_prog();
-    #[cfg(unix)]
-    command.arg("-l");
     command.cwd(cwd);
     command.env("TERM", "xterm-256color");
     command.env("COLORTERM", "truecolor");
