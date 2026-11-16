@@ -151,6 +151,7 @@ pub(crate) struct Changes {
     branches: Vec<String>,
     /// Bumped by every read, so a late answer for an old scope is dropped.
     generation: u64,
+    stage_generation: u64,
     /// The filter field over the files: only names it matches are listed.
     filter: Entity<Composer>,
     /// The last stage or unstage git refused, until the next one replaces it
@@ -195,6 +196,7 @@ impl Changes {
             scroll: ScrollHandle::new(),
             branches: Vec::new(),
             generation: 0,
+            stage_generation: 0,
             filter,
             stage_failure: None,
         }
@@ -379,7 +381,11 @@ impl CockpitView {
             return;
         };
         let machine = self.cockpit.machine().cloned();
-        let generation = self.tools.changes.get(&diff).map(|changes| changes.generation);
+        let Some(changes) = self.changes_of(diff) else {
+            return;
+        };
+        changes.stage_generation += 1;
+        let generation = changes.stage_generation;
         let outcome = self.cockpit.set_file_staged(&root, path.clone(), stage);
         cx.spawn(async move |view, cx| {
             let outcome = crate::cockpit::beside::answered(outcome, cx).await;
@@ -389,7 +395,7 @@ impl CockpitView {
                 {
                     return;
                 }
-                if let Some(changes) = view.changes_of(diff).filter(|changes| Some(changes.generation) == generation) {
+                if let Some(changes) = view.changes_of(diff).filter(|changes| changes.stage_generation == generation) {
                     changes.stage_failure = outcome.err().map(|message| StageFailure {
                         path,
                         stage,

@@ -63,6 +63,7 @@ fn changes_follow_the_agents_edits_without_a_refresh(cx: &mut TestAppContext) {
     assert_eq!(view.read_with(cx, |view, _| view.changes_read(Diff::Changes(thread))), Some(2));
     std::fs::remove_file(repo.join("b.rs")).unwrap();
     agent_worked(&view, &fake, 0, cx);
+    wait_for_changes(&view, thread, cx, |view, diff| view.changes_read(diff) == Some(1));
     assert_eq!(view.read_with(cx, |view, _| view.changes_read(Diff::Changes(thread))), Some(1));
 }
 
@@ -251,9 +252,18 @@ fn repo_of(name: &str) -> std::path::PathBuf {
 
 /// Wait until the Changes read lands again after `press`.
 fn reread(view: &Entity<CockpitView>, thread: ThreadId, cx: &mut gpui::VisualTestContext) {
+    wait_for_changes(view, thread, cx, |view, diff| view.changes_read(diff).is_some());
+}
+
+fn wait_for_changes(
+    view: &Entity<CockpitView>,
+    thread: ThreadId,
+    cx: &mut gpui::VisualTestContext,
+    ready: impl Fn(&CockpitView, Diff) -> bool,
+) {
     for _ in 0..400 {
         tick(cx);
-        if view.read_with(cx, |view, _| view.changes_read(Diff::Changes(thread)).is_some()) {
+        if view.read_with(cx, |view, _| ready(view, Diff::Changes(thread))) {
             return;
         }
         std::thread::sleep(std::time::Duration::from_millis(5));
@@ -331,14 +341,15 @@ fn a_refused_stage_names_its_file_and_git_and_a_retry_stages_it(cx: &mut TestApp
     std::fs::write(&lock, "").unwrap();
     let button = cx.debug_bounds("changes-stage-0").unwrap();
     cx.simulate_click(button.center(), gpui::Modifiers::none());
-    reread(&view, thread, cx);
+    view.update(cx, |view, cx| view.reread_changes(Diff::Changes(thread), cx));
+    wait_for_changes(&view, thread, cx, |view, diff| view.changes_stage_failure_for_test(diff).is_some());
     assert!(cx.debug_bounds("changes-stage-failure").is_some(), "the refusal is shown");
     let said = view.read_with(cx, |view, _| view.changes_stage_failure_for_test(Diff::Changes(thread))).unwrap();
     assert!(said.contains("a.rs") && said.contains("index.lock"), "{said}");
     std::fs::remove_file(&lock).unwrap();
     let button = cx.debug_bounds("changes-stage-0").unwrap();
     cx.simulate_click(button.center(), gpui::Modifiers::none());
-    reread(&view, thread, cx);
+    wait_for_changes(&view, thread, cx, |view, diff| view.changes_stage_failure_for_test(diff).is_none());
     assert!(cx.debug_bounds("changes-stage-failure").is_none(), "the retry cleared it");
     let out = std::process::Command::new("git").args(["diff", "--cached", "--name-only"]).current_dir(&repo).output().unwrap();
     assert_eq!(String::from_utf8_lossy(&out.stdout).trim(), "a.rs");
