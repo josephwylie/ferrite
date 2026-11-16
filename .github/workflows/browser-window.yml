@@ -55,8 +55,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+      # Pinned for Windows' long rustc commands; see ci.yml.
       - uses: mozilla-actions/sccache-action@v0.0.11
         continue-on-error: true
+        with:
+          version: v0.16.0
       - name: Continue without optional compiler cache when unavailable
         shell: bash
         run: |
@@ -212,8 +215,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+      # Pinned for Windows' long rustc commands; see ci.yml.
       - uses: mozilla-actions/sccache-action@v0.0.11
         continue-on-error: true
+        with:
+          version: v0.16.0
       - name: Keep compiler cache optional
         shell: bash
         run: |
