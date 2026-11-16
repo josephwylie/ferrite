@@ -89,6 +89,8 @@ async fn run(socket: &mut WebSocket, gateway: &Gateway, session: &str) -> std::i
         }
     });
     let mut clock = tokio::time::interval(Duration::from_millis(100));
+    let mut pending = None;
+    let mut input_closed = false;
     loop {
         tokio::select! {
             _ = clock.tick() => {
@@ -100,12 +102,19 @@ async fn run(socket: &mut WebSocket, gateway: &Gateway, session: &str) -> std::i
                     }
                 }
             },
+            permit = input.reserve(), if pending.is_some() => match permit {
+                Ok(permit) => permit.send(pending.take().expect("a pending terminal input frame")),
+                Err(_) => {
+                    pending = None;
+                    input_closed = true;
+                },
+            },
             bytes = receive.recv(), if !receive.is_closed() || !receive.is_empty() => match bytes {
                 Some(bytes) => send_frame(socket, Message::Binary(bytes.into())).await?,
                 None => {},
             },
-            message = socket.next() => match message {
-                Some(Ok(Message::Binary(bytes))) if gateway.active(session) => input.try_send(bytes.to_vec()).map_err(std::io::Error::other)?,
+            message = socket.next(), if pending.is_none() && !input_closed => match message {
+                Some(Ok(Message::Binary(bytes))) if gateway.active(session) => pending = Some(bytes.to_vec()),
                 Some(Ok(Message::Text(text))) if gateway.active(session) => match serde_json::from_str::<Command>(&text)? {
                     Command::Resize { columns, rows } => pair.master.resize(self::size(columns, rows).ok_or_else(|| std::io::Error::other("Invalid terminal dimensions."))?).map_err(std::io::Error::other)?,
                     Command::Close => break,

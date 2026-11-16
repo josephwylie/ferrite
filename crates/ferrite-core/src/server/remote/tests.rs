@@ -537,6 +537,66 @@ mod network {
     }
 
     #[test]
+    fn remote_terminal_backpressures_large_pastes_while_forwarding_output() {
+        let fixture = Fixture::new();
+        let directory = fixture.folder.canonicalize().unwrap();
+        let paste = vec![b'x'; 512 * 1024];
+        remote::socket::runtime().unwrap().block_on(async {
+            let mut socket = remote::socket::connect(
+                &fixture.profile, &fixture.granted.secret, "/v1/terminal",
+            ).await.unwrap();
+            socket.send(ClientFrame::Text(serde_json::to_string(
+                &remote::terminal::Command::Open {
+                    cwd: directory.to_string_lossy().into_owned(), columns: 80, rows: 24,
+                },
+            ).unwrap().into())).await.unwrap();
+            socket.send(ClientFrame::Binary(
+                b"stty raw -echo; printf '\\nPASTE_READY\\n'; while [ ! -f read-now ]; do printf '\\nPASTE_WAITING\\n'; sleep 0.05; done; dd bs=1 count=524288 of=pasted.bin 2>/dev/null; printf '\\nPASTE_DONE\\n'; exit\n"
+                    .to_vec().into(),
+            )).await.unwrap();
+            let mut output = String::new();
+            tokio::time::timeout(Duration::from_secs(5), async {
+                while !output.lines().any(|line| line.trim() == "PASTE_READY") {
+                    match socket.next().await.unwrap().unwrap() {
+                        ClientFrame::Binary(bytes) => output.push_str(&String::from_utf8_lossy(&bytes)),
+                        frame => panic!("terminal did not become ready: {frame:?}"),
+                    }
+                }
+            }).await.unwrap();
+            for chunk in paste.chunks(4096) {
+                socket.feed(ClientFrame::Binary(chunk.to_vec().into())).await.unwrap();
+            }
+            socket.flush().await.unwrap();
+            output.clear();
+            tokio::time::timeout(Duration::from_secs(5), async {
+                while output.lines().filter(|line| line.trim() == "PASTE_WAITING").count() < 3 {
+                    match socket.next().await.unwrap().unwrap() {
+                        ClientFrame::Binary(bytes) => output.push_str(&String::from_utf8_lossy(&bytes)),
+                        frame => panic!("a full input queue stopped terminal output: {frame:?}"),
+                    }
+                }
+            }).await.unwrap();
+            std::fs::write(directory.join("read-now"), b"read").unwrap();
+            tokio::time::timeout(Duration::from_secs(10), async {
+                loop {
+                    match socket.next().await.unwrap().unwrap() {
+                        ClientFrame::Binary(bytes) => output.push_str(&String::from_utf8_lossy(&bytes)),
+                        ClientFrame::Text(text) => {
+                            let event: serde_json::Value = serde_json::from_str(&text).unwrap();
+                            assert_eq!(event["type"], "exit", "{event}");
+                            assert_eq!(event["code"], 0, "{event}");
+                            break;
+                        }
+                        frame => panic!("large paste closed the terminal: {frame:?}"),
+                    }
+                }
+            }).await.unwrap();
+            assert!(output.lines().any(|line| line.trim() == "PASTE_DONE"));
+        });
+        assert_eq!(std::fs::read(directory.join("pasted.bin")).unwrap(), paste);
+    }
+
+    #[test]
     fn remote_terminal_drains_final_output_before_reporting_exit() {
         let fixture = Fixture::new();
         let directory = fixture.folder.canonicalize().unwrap();
