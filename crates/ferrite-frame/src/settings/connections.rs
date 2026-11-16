@@ -114,6 +114,7 @@ fn mode_card(
     mode: ConnectionMode,
     selected: bool,
     busy: bool,
+    compact: bool,
     choose: Rc<dyn Fn(ConnectionMode, &mut Window, &mut App)>,
     cx: &App,
 ) -> Button {
@@ -151,8 +152,11 @@ fn mode_card(
     .tab_stop(!busy)
     .flex_1()
     .min_w_0()
-    .h(px(96.))
-    .p(px(16.))
+    .h(px(if compact { 44. } else { 96. }))
+    .p(px(if compact { 8. } else { 16. }))
+    .when(compact, |button| {
+        button.tooltip(ferrite_ui::menu::tooltip(description))
+    })
     .items_start()
     .justify_start()
     .rounded(px(8.))
@@ -162,6 +166,7 @@ fn mode_card(
         div()
             .flex()
             .items_start()
+            .when(compact, |row| row.items_center())
             .w_full()
             .h_full()
             .gap(px(12.))
@@ -171,8 +176,8 @@ fn mode_card(
                     .items_center()
                     .justify_center()
                     .flex_shrink_0()
-                    .size(px(32.))
-                    .mt(px(2.))
+                    .size(px(if compact { 24. } else { 32. }))
+                    .mt(px(if compact { 0. } else { 2. }))
                     .rounded(px(6.))
                     .border_1()
                     .border_color(rgb(if selected { 0x293961 } else { edge(cx) }))
@@ -186,7 +191,9 @@ fn mode_card(
                     .flex_1()
                     .gap(px(4.))
                     .child(text(title, 14., ink(cx)).font_weight(gpui::FontWeight::MEDIUM))
-                    .child(text(description, 12., muted(cx)).whitespace_normal()),
+                    .when(!compact, |column| {
+                        column.child(text(description, 12., muted(cx)).whitespace_normal())
+                    }),
             ),
     )
     .on_click(move |_, window, cx| {
@@ -278,7 +285,7 @@ fn show_suggestions(
     window.defer_draw(popup, gpui::point(anchor.left(), top), 5, None);
 }
 
-pub(super) fn form(form: ConnectionForm, cx: &App) -> AnyElement {
+pub(super) fn form(form: ConnectionForm, window: &Window, cx: &App) -> AnyElement {
     let ConnectionForm::Editing {
         fields,
         mode,
@@ -298,6 +305,7 @@ pub(super) fn form(form: ConnectionForm, cx: &App) -> AnyElement {
         return div().into_any_element();
     };
     let busy = progress.is_some();
+    let compact = window.viewport_size().height < px(600.);
     let host = field(
         "connection-host",
         "SSH host or alias",
@@ -345,25 +353,53 @@ pub(super) fn form(form: ConnectionForm, cx: &App) -> AnyElement {
                 12.,
                 muted(cx),
             )),
-        ConnectionMode::Ssh => div().flex().flex_col().gap(px(12.)).child(host).child(
+        ConnectionMode::Ssh => div()
+            .flex()
+            .flex_col()
+            .gap(px(if compact { 8. } else { 12. }))
+            .child(host)
+            .child(
+                div()
+                    .flex()
+                    .gap(px(12.))
+                    .child(field(
+                        "connection-username",
+                        "Username",
+                        &fields.username,
+                        busy,
+                        cx,
+                    ))
+                    .child(div().w(px(112.)).flex_shrink_0().child(field(
+                        "connection-port",
+                        "Port",
+                        &fields.port,
+                        busy,
+                        cx,
+                    ))),
+            ),
+    };
+    let submit_button = || {
+        button(
+            "connection-submit",
+            "Add environment",
+            !busy,
+            submit.clone(),
+            cx,
+        )
+        .w_full()
+        .child(
             div()
                 .flex()
-                .gap(px(12.))
-                .child(field(
-                    "connection-username",
-                    "Username",
-                    &fields.username,
-                    busy,
-                    cx,
-                ))
-                .child(div().w(px(112.)).flex_shrink_0().child(field(
-                    "connection-port",
-                    "Port",
-                    &fields.port,
-                    busy,
-                    cx,
-                ))),
-        ),
+                .items_center()
+                .justify_center()
+                .gap(px(8.))
+                .child(icon(icons::PLUS, 14., muted(cx)))
+                .child(text(
+                    if busy { "Adding…" } else { "Add environment" },
+                    14.,
+                    ink(cx),
+                )),
+        )
     };
     let close = cancel.clone();
     let card = div()
@@ -374,7 +410,7 @@ pub(super) fn form(form: ConnectionForm, cx: &App) -> AnyElement {
         .flex_col()
         .w(px(768.))
         .max_w_full()
-        .max_h(gpui::relative(0.8))
+        .max_h(gpui::relative(if compact { 0.94 } else { 0.8 }))
         .rounded(px(16.))
         .bg(rgb(surface(cx)))
         .border_1()
@@ -383,20 +419,24 @@ pub(super) fn form(form: ConnectionForm, cx: &App) -> AnyElement {
         .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
         .child(
             div()
-                .px(px(24.))
-                .pt(px(24.))
-                .pb(px(12.))
+                .px(px(if compact { 16. } else { 24. }))
+                .pt(px(if compact { 12. } else { 24. }))
+                .pb(px(if compact { 8. } else { 12. }))
+                .flex_shrink_0()
                 .flex()
                 .flex_col()
                 .gap(px(8.))
                 .child(
-                    text("Add Environment", 20., ink(cx)).font_weight(gpui::FontWeight::SEMIBOLD),
+                    text("Add Environment", if compact { 18. } else { 20. }, ink(cx))
+                        .font_weight(gpui::FontWeight::SEMIBOLD),
                 )
-                .child(text(
-                    "Pair another environment to this client.",
-                    14.,
-                    muted(cx),
-                )),
+                .when(!compact, |header| {
+                    header.child(text(
+                        "Pair another environment to this client.",
+                        14.,
+                        muted(cx),
+                    ))
+                }),
         )
         .child(
             div().absolute().top(px(8.)).right(px(8.)).child(
@@ -414,10 +454,10 @@ pub(super) fn form(form: ConnectionForm, cx: &App) -> AnyElement {
                 .flex()
                 .flex_col()
                 .min_h_0()
-                .px(px(24.))
+                .px(px(if compact { 16. } else { 24. }))
                 .pt(px(4.))
-                .pb(px(24.))
-                .gap(px(16.))
+                .pb(px(if compact { 0. } else { 24. }))
+                .gap(px(if compact { 10. } else { 16. }))
                 .child(
                     div()
                         .flex()
@@ -426,6 +466,7 @@ pub(super) fn form(form: ConnectionForm, cx: &App) -> AnyElement {
                             ConnectionMode::Remote,
                             mode == ConnectionMode::Remote,
                             busy,
+                            compact,
                             choose_mode.clone(),
                             cx,
                         ))
@@ -433,6 +474,7 @@ pub(super) fn form(form: ConnectionForm, cx: &App) -> AnyElement {
                             ConnectionMode::Ssh,
                             mode == ConnectionMode::Ssh,
                             busy,
+                            compact,
                             choose_mode,
                             cx,
                         )),
@@ -455,24 +497,18 @@ pub(super) fn form(form: ConnectionForm, cx: &App) -> AnyElement {
                 .children(progress.map(|progress| {
                     text(progress, 12., muted(cx)).debug_selector(|| "connection-progress".into())
                 }))
-                .child(
-                    button("connection-submit", "Add environment", !busy, submit, cx)
-                        .w_full()
-                        .child(
-                            div()
-                                .flex()
-                                .items_center()
-                                .justify_center()
-                                .gap(px(8.))
-                                .child(icon(icons::PLUS, 14., muted(cx)))
-                                .child(text(
-                                    if busy { "Adding…" } else { "Add environment" },
-                                    14.,
-                                    ink(cx),
-                                )),
-                        ),
-                ),
-        );
+                .when(!compact, |body| body.child(submit_button())),
+        )
+        .when(compact, |card| {
+            card.child(
+                div()
+                    .flex_shrink_0()
+                    .px(px(16.))
+                    .pt(px(8.))
+                    .pb(px(12.))
+                    .child(submit_button()),
+            )
+        });
     let backdrop_cancel = cancel.clone();
     let mut overlay = div()
         .absolute()

@@ -115,7 +115,8 @@ pub fn draw(sheet: SettingsSheet, window: &mut Window, cx: &mut App) -> AnyEleme
         .inset_0()
         .child(deferred(sheet).with_priority(3))
         .children(
-            connection_form.map(|form| deferred(connections::form(form, cx)).with_priority(4)),
+            connection_form
+                .map(|form| deferred(connections::form(form, window, cx)).with_priority(4)),
         )
         .into_any_element()
 }
@@ -479,7 +480,7 @@ fn section_words(label: &str) -> Div {
 /// centred; one row in a quarter row of air each side, or two with a hint.
 fn setting_row(row: &Row, window: &mut Window, cx: &mut App) -> AnyElement {
     match &row.control {
-        Control::ConnectionForm(form) => return connections::form(form.clone(), cx),
+        Control::ConnectionForm(form) => return connections::form(form.clone(), window, cx),
         Control::ConnectionRow(connection) => {
             return connections::row(connection.clone(), cx).into_any_element()
         }
@@ -557,10 +558,10 @@ fn hint(detail: SharedString) -> Div {
 }
 
 /// A row's control, drawn from what the Cockpit says it is.
-fn control(row: &Row, _window: &mut Window, cx: &mut App) -> AnyElement {
+fn control(row: &Row, window: &mut Window, cx: &mut App) -> AnyElement {
     let title = row.title.clone();
     match row.control.clone() {
-        Control::ConnectionForm(form) => connections::form(form, cx).into_any_element(),
+        Control::ConnectionForm(form) => connections::form(form, window, cx).into_any_element(),
         Control::ConnectionRow(connection) => connections::row(connection, cx).into_any_element(),
         // Two options: a token each, the chosen one inverse.
         // A short choice: a segmented control, the chosen segment lit.
@@ -984,7 +985,7 @@ mod tests {
             cancelled: Rc<Cell<usize>>,
         }
         impl Render for Host {
-            fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+            fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
                 let submitted = self.submitted.clone();
                 let cancelled = self.cancelled.clone();
                 connections::form(
@@ -1003,6 +1004,7 @@ mod tests {
                         submit: Rc::new(move |_, _| submitted.set(submitted.get() + 1)),
                         cancel: Rc::new(move |_, _| cancelled.set(cancelled.get() + 1)),
                     },
+                    window,
                     cx,
                 )
             }
@@ -1040,6 +1042,116 @@ mod tests {
     }
 
     #[gpui::test]
+    fn compact_connection_form_keeps_fields_errors_and_submit_visible(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        use ferrite_ui::frame::settings::{ConnectionFields, ConnectionForm, ConnectionMode};
+        use std::cell::Cell;
+        struct Host {
+            fields: ConnectionFields,
+            mode: Rc<Cell<ConnectionMode>>,
+            failed: Rc<Cell<bool>>,
+        }
+        impl Render for Host {
+            fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+                connections::form(
+                    ConnectionForm::Editing {
+                        fields: self.fields.clone(),
+                        mode: self.mode.get(),
+                        focus: cx.focus_handle(),
+                        suggestions: None,
+                        choose_mode: Rc::new(|_, _, _| {}),
+                        open_suggestions: Rc::new(|_, _| {}),
+                        choose_host: Rc::new(|_, _, _| {}),
+                        progress: None,
+                        error: self.failed.get().then(|| {
+                            "The server could not be reached. Check the host and try again.".into()
+                        }),
+                        warning: None,
+                        verification: None,
+                        submit: Rc::new(|_, _| {}),
+                        cancel: Rc::new(|_, _| {}),
+                    },
+                    window,
+                    cx,
+                )
+            }
+        }
+        cx.update(ferrite_pane::pane::init_components);
+        let mode = Rc::new(Cell::new(ConnectionMode::Ssh));
+        let failed = Rc::new(Cell::new(false));
+        let (root, cx) = cx.add_window_view({
+            let mode = mode.clone();
+            let failed = failed.clone();
+            |window, cx| {
+                let host = cx.new(|cx| Host {
+                    fields: ConnectionFields {
+                        remote_host: cx.new(|cx| InputState::new(window, cx)),
+                        pairing_code: cx.new(|cx| InputState::new(window, cx)),
+                        host: cx.new(|cx| InputState::new(window, cx)),
+                        username: cx.new(|cx| InputState::new(window, cx)),
+                        port: cx.new(|cx| InputState::new(window, cx)),
+                    },
+                    mode,
+                    failed,
+                });
+                gpui::component::Root::new(host, window, cx)
+            }
+        });
+        let host = root.read_with(cx, |root, _| {
+            root.view().clone().downcast::<Host>().unwrap()
+        });
+        cx.simulate_resize(gpui::size(px(1470.), px(923.)));
+        cx.run_until_parked();
+        assert_eq!(
+            cx.debug_bounds("connection-dialog").unwrap().size.width,
+            px(768.)
+        );
+        assert_eq!(
+            cx.debug_bounds("connection-mode-ssh").unwrap().size.height,
+            px(96.)
+        );
+        cx.simulate_resize(gpui::size(px(640.), px(420.)));
+        for selected in [ConnectionMode::Ssh, ConnectionMode::Remote] {
+            mode.set(selected);
+            for has_error in [false, true] {
+                failed.set(has_error);
+                host.update(cx, |_, cx| cx.notify());
+                cx.run_until_parked();
+                let dialog = cx.debug_bounds("connection-dialog").unwrap();
+                let submit = cx.debug_bounds("connection-submit").unwrap();
+                assert!(dialog.top() >= px(0.) && dialog.bottom() <= px(420.));
+                assert!(submit.top() >= dialog.top() && submit.bottom() < dialog.bottom());
+                assert_eq!(
+                    cx.debug_bounds("connection-mode-ssh").unwrap().size.height,
+                    px(44.)
+                );
+                let fields = match selected {
+                    ConnectionMode::Ssh => {
+                        &["connection-host", "connection-username", "connection-port"][..]
+                    }
+                    ConnectionMode::Remote => {
+                        &["connection-remote-host", "connection-pairing-code"][..]
+                    }
+                };
+                for selector in fields {
+                    let bounds = cx.debug_bounds(selector).unwrap();
+                    assert!(
+                        bounds.top() >= dialog.top() && bounds.bottom() < submit.top(),
+                        "{selector}: {bounds:?}"
+                    );
+                }
+                let close = cx.debug_bounds("connection-close").unwrap();
+                assert!(close.top() >= dialog.top() && close.bottom() < submit.top());
+                if has_error {
+                    let error = cx.debug_bounds("connection-error").unwrap();
+                    assert!(error.top() >= dialog.top() && error.bottom() < submit.top());
+                }
+            }
+        }
+    }
+
+    #[gpui::test]
     fn host_verification_keeps_the_fingerprint_bounded_and_continues_on_enter(
         cx: &mut gpui::TestAppContext,
     ) {
@@ -1053,7 +1165,7 @@ mod tests {
             submitted: Rc<Cell<usize>>,
         }
         impl Render for Host {
-            fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+            fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
                 let submitted = self.submitted.clone();
                 connections::form(
                     ConnectionForm::Editing {
@@ -1082,6 +1194,7 @@ mod tests {
                         submit: Rc::new(|_, _| {}),
                         cancel: Rc::new(|_, _| {}),
                     },
+                    window,
                     cx,
                 )
             }
