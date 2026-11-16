@@ -621,8 +621,11 @@ pub fn sign_in_args(target: &str, control: &Path) -> Vec<String> {
     args
 }
 
-/// The CLI's Tunnels to `machine`'s API, through the window's master.
+/// The CLI's Tunnels to `machine`'s API through its saved transport.
 pub fn api_dial(machine: &Machine, settings_dir: &Path) -> Dial {
+    if machine.is_link() {
+        return remote::dial(machine, settings_dir, "/v1/api");
+    }
     let control = dir(settings_dir, &machine.target).join("c");
     ssh_dial(machine.target.clone(), control, API)
 }

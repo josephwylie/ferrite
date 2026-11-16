@@ -212,18 +212,22 @@ fn verify_identity(profile: &Profile) -> io::Result<()> {
 
 pub(super) fn bridge(machine: &Machine, settings: &Path) -> Bridge {
     let (settings, target) = (settings.to_owned(), machine.target.clone());
-    let (dial_settings, dial_target) = (settings.clone(), target.clone());
     let mut bridge = Bridge::new(
         &machine.name,
         super::dir(&settings, &target).join(format!("bridge-{}.sock", std::process::id())),
-        Box::new(move || {
-            let profile = profile(&dial_settings, &dial_target)?;
-            verify_identity(&profile)?;
-            socket::tunnel(&profile, &secret(&profile)?, "/v1/link")
-        }),
+        dial(machine, &settings, "/v1/link"),
     );
     bridge.remote = Some((target, settings));
     bridge
+}
+
+pub(super) fn dial(machine: &Machine, settings: &Path, path: &'static str) -> super::Dial {
+    let (settings, target) = (settings.to_owned(), machine.target.clone());
+    Box::new(move || {
+        let profile = profile(&settings, &target)?;
+        verify_identity(&profile)?;
+        socket::tunnel(&profile, &secret(&profile)?, path)
+    })
 }
 
 pub struct PairAttempt {
@@ -488,6 +492,19 @@ pub(crate) fn verify_connection(profile: &Profile, secret: &str) -> io::Result<(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn api_dial_for_a_link_requires_its_saved_profile_before_connecting() {
+        let settings = std::env::temp_dir().join(format!(
+            "ferrite-api-route-{}",
+            crate::server::remote::random_secret(8)
+        ));
+        let machine = Machine::new("ferrite-link:00112233445566778899aabbccddeeff");
+        match super::super::api_dial(&machine, &settings)() {
+            Err(error) => assert_eq!(error.kind(), io::ErrorKind::NotFound),
+            Ok(_) => panic!("a link must load its profile, never launch an SSH tunnel"),
+        }
+    }
+
     #[test]
     fn links_require_tls_except_explicit_loopback_and_keep_secrets_out_of_origins() {
         assert!(PairingFields::parse("http://example.com", "abc").is_err());

@@ -54,14 +54,43 @@ mod network {
         fn with_tls(tls: Option<axum_server::tls_rustls::RustlsConfig>) -> Self {
             let folder = std::env::temp_dir().join(format!("ferrite-link-{}", random_secret(8)));
             let store = folder.join("remote-store");
-            let _dial =
-                crate::server::fixture_machine(store.clone(), Box::new(NoSessions)).unwrap();
+            let (heard, hear) = std::sync::mpsc::channel();
+            link::accept_all(
+                link::listen(&link::address(&store)).unwrap(),
+                heard.clone(),
+                link::LAGGED_BYTES,
+            )
+            .unwrap();
+            crate::api::accept_all(link::listen(&crate::api::address(&store)).unwrap(), heard)
+                .unwrap();
+            let server_store = store.clone();
+            std::thread::spawn(move || {
+                let engine = crate::engine::Engine::try_new(
+                    crate::store::Store::open(&server_store).unwrap(),
+                    Box::new(NoSessions),
+                )
+                .unwrap();
+                let info = crate::protocol::ServerInfo {
+                    version: env!("CARGO_PKG_VERSION").into(),
+                    executable: PathBuf::new(),
+                };
+                let (_, renders) = crate::server::render::remote();
+                crate::server::Server::new(
+                    engine,
+                    info,
+                    renders,
+                    Arc::default(),
+                    server_store.parent().unwrap().to_path_buf(),
+                )
+                .serve(hear);
+            });
             let mut access = Access::open(&store).unwrap();
             let code = access.issue().unwrap();
             let granted = access.exchange(&code, "test desktop").unwrap();
             let gateway = Gateway {
                 access: Arc::new(Mutex::new(access)),
                 socket: link::address(&store),
+                api_socket: crate::api::address(&store),
                 slots: Arc::new(Semaphore::new(32)),
             };
             let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
@@ -386,6 +415,63 @@ mod network {
             assert!(tokio_tungstenite::connect_async(unauthenticated)
                 .await
                 .is_err());
+        });
+    }
+
+    #[test]
+    fn authenticated_api_routes_to_the_remote_server_and_revokes_live_access() {
+        use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+
+        let fixture = Fixture::new();
+        remote::socket::runtime().unwrap().block_on(async {
+            let url = fixture.profile.origin.replacen("http", "ws", 1) + "/v1/api";
+            assert!(tokio_tungstenite::connect_async(&url).await.is_err());
+            assert!(remote::socket::connect(&fixture.profile, "incorrect", "/v1/api")
+                .await
+                .is_err());
+            let mut browser_request = url.into_client_request().unwrap();
+            browser_request.headers_mut().insert(
+                "authorization",
+                format!("Bearer {}", fixture.granted.secret).parse().unwrap(),
+            );
+            browser_request.headers_mut().insert("origin", "https://example.com".parse().unwrap());
+            assert!(tokio_tungstenite::connect_async(browser_request).await.is_err());
+
+            let mut socket = remote::socket::connect(
+                &fixture.profile,
+                &fixture.granted.secret,
+                "/v1/api",
+            )
+            .await
+            .unwrap();
+            socket.send(ClientFrame::Binary(
+                b"{\"id\":\"remote-api\",\"method\":\"project.list\",\"params\":{}}\n".to_vec().into(),
+            )).await.unwrap();
+            let response = tokio::time::timeout(Duration::from_secs(3), async {
+                let mut bytes = Vec::new();
+                loop {
+                    match socket.next().await.unwrap().unwrap() {
+                        ClientFrame::Binary(part) => {
+                            bytes.extend_from_slice(&part);
+                            if bytes.contains(&b'\n') {
+                                return serde_json::from_slice::<serde_json::Value>(&bytes).unwrap();
+                            }
+                        }
+                        ClientFrame::Ping(_) | ClientFrame::Pong(_) => {},
+                        frame => panic!("API closed without its response: {frame:?}"),
+                    }
+                }
+            }).await.unwrap();
+            assert_eq!(response["id"], "remote-api");
+            assert!(response.get("result").is_some(), "{response}");
+            assert!(response.get("error").is_none(), "{response}");
+
+            fixture.gateway.access.lock().unwrap()
+                .revoke(&fixture.granted.session_id).unwrap();
+            let end = tokio::time::timeout(Duration::from_secs(3), socket.next()).await.unwrap();
+            assert!(matches!(end, None | Some(Ok(ClientFrame::Close(_))) | Some(Err(_))));
+            assert!(remote::socket::connect(&fixture.profile, &fixture.granted.secret, "/v1/api")
+                .await.is_err());
         });
     }
 

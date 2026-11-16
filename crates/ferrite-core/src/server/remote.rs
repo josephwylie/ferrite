@@ -85,6 +85,7 @@ fn persist_private(path: &Path, bytes: &[u8], replace: bool) -> io::Result<()> {
 struct Gateway {
     access: Arc<Mutex<Access>>,
     socket: PathBuf,
+    api_socket: PathBuf,
     slots: Arc<Semaphore>,
 }
 impl Gateway {
@@ -157,21 +158,35 @@ async fn upgrade_link(
     headers: HeaderMap,
     upgrade: WebSocketUpgrade,
 ) -> Response {
-    upgraded(gateway, headers, upgrade, false)
+    upgraded(gateway, headers, upgrade, Route::Link)
 }
 async fn upgrade_terminal(
     State(gateway): State<Gateway>,
     headers: HeaderMap,
     upgrade: WebSocketUpgrade,
 ) -> Response {
-    upgraded(gateway, headers, upgrade, true)
+    upgraded(gateway, headers, upgrade, Route::Terminal)
+}
+
+async fn upgrade_api(
+    State(gateway): State<Gateway>,
+    headers: HeaderMap,
+    upgrade: WebSocketUpgrade,
+) -> Response {
+    upgraded(gateway, headers, upgrade, Route::Api)
+}
+
+enum Route {
+    Link,
+    Api,
+    Terminal,
 }
 
 fn upgraded(
     gateway: Gateway,
     headers: HeaderMap,
     upgrade: WebSocketUpgrade,
-    terminal: bool,
+    route: Route,
 ) -> Response {
     let session = match gateway.authorize(&headers) {
         Ok(session) => session,
@@ -192,10 +207,16 @@ fn upgraded(
         .max_frame_size(FRAME_LIMIT)
         .on_upgrade(move |socket| async move {
             let _permit = permit;
-            if terminal {
-                terminal::serve(socket, gateway, session).await;
-            } else {
-                carry(socket, gateway, session).await;
+            match route {
+                Route::Terminal => terminal::serve(socket, gateway, session).await,
+                Route::Link => {
+                    let address = gateway.socket.clone();
+                    carry(socket, gateway, session, address).await;
+                }
+                Route::Api => {
+                    let address = gateway.api_socket.clone();
+                    carry(socket, gateway, session, address).await;
+                }
             }
         })
         .into_response();
@@ -218,8 +239,8 @@ async fn send_frame(socket: &mut WebSocket, message: Message) -> io::Result<()> 
         .map_err(io::Error::other)
 }
 
-async fn carry(mut websocket: WebSocket, gateway: Gateway, session: String) {
-    let Ok(mut stream) = link::connect(&gateway.socket) else {
+async fn carry(mut websocket: WebSocket, gateway: Gateway, session: String, address: PathBuf) {
+    let Ok(mut stream) = link::connect(&address) else {
         return;
     };
     let Ok(mut upload) = stream.try_clone() else {
@@ -382,6 +403,7 @@ fn serve(args: &[String], store: &Path, executable: &Path) -> io::Result<()> {
     let gateway = Gateway {
         access: Arc::new(Mutex::new(Access::open(store)?)),
         socket: link::address(store),
+        api_socket: crate::api::address(store),
         slots: Arc::new(Semaphore::new(32)),
     };
     admin(gateway.clone(), admin_listener, public.host)?;
@@ -410,6 +432,7 @@ fn app(gateway: Gateway) -> Router {
         .route("/v1/pair", post(pair))
         .route("/v1/logout", post(logout))
         .route("/v1/link", get(upgrade_link))
+        .route("/v1/api", get(upgrade_api))
         .route("/v1/terminal", get(upgrade_terminal))
         .layer(DefaultBodyLimit::max(1024))
         .layer(axum::middleware::from_fn(
