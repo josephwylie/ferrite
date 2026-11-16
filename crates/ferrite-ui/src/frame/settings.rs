@@ -88,6 +88,7 @@ pub struct ConnectionRow {
     pub target: SharedString,
     pub status: SharedString,
     pub connected: bool,
+    pub enabled: bool,
     pub detail: Option<SharedString>,
     pub actions: Vec<ConnectionAction>,
     pub removal: Option<(WindowAct, WindowAct)>,
@@ -95,10 +96,36 @@ pub struct ConnectionRow {
 
 #[derive(Clone)]
 pub struct ConnectionFields {
+    pub remote_host: Entity<InputState>,
+    pub pairing_code: Entity<InputState>,
     pub host: Entity<InputState>,
     pub username: Entity<InputState>,
     pub port: Entity<InputState>,
 }
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ConnectionMode {
+    #[default]
+    Remote,
+    Ssh,
+}
+
+#[derive(Clone)]
+pub struct ConnectionSuggestion {
+    pub value: SharedString,
+    pub label: SharedString,
+    pub address: SharedString,
+}
+
+#[derive(Clone)]
+pub struct ConnectionSuggestions {
+    pub rows: Vec<ConnectionSuggestion>,
+    pub highlighted: Option<usize>,
+    pub message: Option<SharedString>,
+    pub scroll: gpui::ScrollHandle,
+}
+
+pub type ConnectionKey = Rc<dyn Fn(&gpui::KeyDownEvent, &mut Window, &mut App)>;
 
 #[derive(Clone)]
 pub struct ConnectionVerification {
@@ -118,7 +145,12 @@ pub enum ConnectionForm {
     },
     Editing {
         fields: ConnectionFields,
-        suggestions: Vec<SharedString>,
+        mode: ConnectionMode,
+        focus: FocusHandle,
+        suggestions: Option<ConnectionSuggestions>,
+        choose_mode: Rc<dyn Fn(ConnectionMode, &mut Window, &mut App)>,
+        open_suggestions: WindowAct,
+        key_down: ConnectionKey,
         choose_host: Rc<dyn Fn(SharedString, &mut Window, &mut App)>,
         progress: Option<SharedString>,
         error: Option<SharedString>,

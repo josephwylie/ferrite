@@ -1,8 +1,10 @@
 use super::*;
 use crate::machines::Connection;
 use ferrite_core::cockpit::ServerState;
-use ferrite_core::machine::{self, auth, setup, Machine};
+use ferrite_core::machine::{self, auth, remote, setup, Machine};
 use gpui::component::input::{InputEvent, InputState};
+use gpui::{App, EntityInputHandler};
+use settings::ConnectionMode;
 use std::rc::Rc;
 
 #[derive(Default)]
@@ -11,20 +13,51 @@ pub(super) struct Connections {
     removing: Option<String>,
     warning: Option<String>,
     error: Option<String>,
+    generation: u64,
 }
 
 pub(super) struct Editor {
     fields: settings::ConnectionFields,
-    candidates: Vec<String>,
+    generation: u64,
+    mode: ConnectionMode,
+    focus: FocusHandle,
+    discovery: Discovery,
+    suggestions_open: bool,
+    highlighted: Option<usize>,
+    suggestion_scroll: gpui::ScrollHandle,
     original: Option<Machine>,
+    pairing: Option<remote::PairingFields>,
     stage: Stage,
     warning: Option<String>,
 }
 
+#[derive(Default)]
+struct Discovery {
+    hosts: Vec<machine::hosts::Host>,
+    generation: u64,
+    pending: bool,
+    error: Option<String>,
+}
+
+enum Attempt {
+    Ssh(setup::Attempt),
+    Remote(remote::PairAttempt),
+}
+
+impl Attempt {
+    fn poll(&mut self) -> Option<setup::Event> {
+        match self {
+            Self::Ssh(attempt) => attempt.poll(),
+            Self::Remote(attempt) => attempt.poll(),
+        }
+    }
+}
+
 enum Stage {
     Editing,
+    Resolving,
     Adding {
-        attempt: setup::Attempt,
+        attempt: Attempt,
         target: String,
         phase: setup::Phase,
         verification: Option<Verification>,
@@ -35,11 +68,13 @@ enum Stage {
 struct Verification {
     question: auth::Question,
     input: VerificationInput,
+    focus: FocusHandle,
+    remaining: u64,
 }
 
 enum VerificationInput {
     Pending,
-    Confirm(FocusHandle),
+    Confirm,
     Secret(Entity<InputState>),
 }
 
@@ -54,28 +89,49 @@ fn action(
 }
 
 impl CockpitView {
-    pub(super) fn connection_holds_focus(&self, window: &Window, cx: &gpui::App) -> bool {
+    pub(super) fn connection_holds_focus(&self, window: &Window, cx: &App) -> bool {
         self.connections.editor.as_ref().is_some_and(|editor| {
-            [
-                &editor.fields.host,
-                &editor.fields.username,
-                &editor.fields.port,
-            ]
-            .into_iter()
-            .any(|field| field.read(cx).focus_handle(cx).is_focused(window))
+            editor.focus.contains_focused(window, cx)
+                || [&editor.fields.host, &editor.fields.remote_host, &editor.fields.pairing_code,
+                    &editor.fields.username, &editor.fields.port].into_iter()
+                    .any(|field| field.read(cx).focus_handle(cx).is_focused(window))
                 || match &editor.stage {
-                    Stage::Adding {
-                        verification: Some(verification),
-                        ..
-                    } => match &verification.input {
-                        VerificationInput::Secret(field) => {
-                            field.read(cx).focus_handle(cx).is_focused(window)
-                        }
-                        VerificationInput::Confirm(focus) => focus.contains_focused(window, cx),
-                        VerificationInput::Pending => false,
-                    },
+                    Stage::Adding { verification: Some(verification), .. } => {
+                        verification.focus.contains_focused(window, cx)
+                            || matches!(&verification.input, VerificationInput::Secret(input) if input.read(cx).focus_handle(cx).is_focused(window))
+                    }
                     _ => false,
                 }
+        })
+    }
+
+    fn connection_is_composing(&self, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        let Some(editor) = &self.connections.editor else {
+            return false;
+        };
+        let mut inputs = vec![
+            &editor.fields.host,
+            &editor.fields.remote_host,
+            &editor.fields.pairing_code,
+            &editor.fields.username,
+            &editor.fields.port,
+        ];
+        if let Stage::Adding {
+            verification:
+                Some(Verification {
+                    input: VerificationInput::Secret(input),
+                    ..
+                }),
+            ..
+        } = &editor.stage
+        {
+            inputs.push(input);
+        }
+        inputs.into_iter().any(|input| {
+            input.read(cx).focus_handle(cx).is_focused(window)
+                && input.update(cx, |input, cx| {
+                    input.marked_text_range(window, cx).is_some()
+                })
         })
     }
 
@@ -89,10 +145,20 @@ impl CockpitView {
         }
         let mut settings = self.prefs.settings.clone();
         change(&mut settings.machines);
-        let selected = self.machines.as_ref().and_then(|machines| machines.read(cx).selected_key().0);
+        let selected = self
+            .machines
+            .as_ref()
+            .and_then(|machines| machines.read(cx).selected_key().0);
         let leaves = selected.is_some_and(|target| {
-            self.prefs.settings.machines.iter().any(|machine| machine.target == target && machine.enabled)
-                && !settings.machines.iter().any(|machine| machine.target == target && machine.enabled)
+            self.prefs
+                .settings
+                .machines
+                .iter()
+                .any(|machine| machine.target == target && machine.enabled)
+                && !settings
+                    .machines
+                    .iter()
+                    .any(|machine| machine.target == target && machine.enabled)
         });
         if leaves {
             if let Some(error) = self.files_leave_error(cx) {
@@ -125,75 +191,463 @@ impl CockpitView {
         if let Some(search) = &self.settings_search {
             search.update(cx, |search, cx| search.set_value("", window, cx));
         }
+        let mode = if machine.as_ref().is_some_and(|machine| !machine.is_link()) {
+            ConnectionMode::Ssh
+        } else {
+            ConnectionMode::Remote
+        };
         let (host, username, port) = machine
             .as_ref()
+            .filter(|machine| !machine.is_link())
             .map(Machine::ssh_fields)
+            .unwrap_or_default();
+        let remote_host = machine
+            .as_ref()
+            .filter(|machine| machine.is_link())
+            .map(|machine| machine.display_target(&self.prefs.dir))
             .unwrap_or_default();
         let mut field = |value: String, placeholder: &'static str| {
             let field = cx.new(|cx| InputState::new(window, cx).placeholder(placeholder));
             field.update(cx, |field, cx| field.set_value(value, window, cx));
-            cx.subscribe_in(&field, window, |view, _, event: &InputEvent, window, cx| {
-                if matches!(event, InputEvent::PressEnter { .. }) {
-                    view.submit_connection(window, cx);
-                }
-                cx.notify();
-            })
+            cx.subscribe_in(
+                &field,
+                window,
+                |view, input, event: &InputEvent, window, cx| {
+                    match event {
+                        InputEvent::PressEnter { .. } => view.connection_enter(window, cx),
+                        InputEvent::Change => view.connection_input_changed(input, window, cx),
+                        InputEvent::Focus => {
+                            if let Some(editor) = &mut view.connections.editor {
+                                if input == &editor.fields.host {
+                                    editor.suggestions_open = true;
+                                }
+                            }
+                        }
+                        InputEvent::Blur => {
+                            if let Some(editor) = &mut view.connections.editor {
+                                if input == &editor.fields.host {
+                                    editor.suggestions_open = false;
+                                    editor.highlighted = None;
+                                }
+                            }
+                        }
+                    }
+                    cx.notify();
+                },
+            )
             .detach();
             field
         };
         let fields = settings::ConnectionFields {
-            host: field(host, "example.com or SSH alias"),
-            username: field(username, "From SSH config"),
+            remote_host: field(remote_host, "backend.example.com"),
+            pairing_code: field(String::new(), "PAIRCODE"),
+            host: field(host, "Search hosts or type devbox"),
+            username: field(username, "root"),
             port: field(port, "22"),
         };
-        fields.host.update(cx, |field, cx| field.focus(window, cx));
+        let initial = if mode == ConnectionMode::Ssh {
+            &fields.host
+        } else {
+            &fields.remote_host
+        };
+        initial.update(cx, |field, cx| field.focus(window, cx));
+        self.connections.generation = self.connections.generation.wrapping_add(1);
         self.connections.editor = Some(Editor {
             fields,
-            candidates: machine::hosts::candidates(),
+            generation: self.connections.generation,
+            mode,
+            focus: cx.focus_handle(),
+            discovery: Discovery::default(),
+            suggestions_open: false,
+            highlighted: None,
+            suggestion_scroll: gpui::ScrollHandle::new(),
             original: machine,
+            pairing: None,
             stage: Stage::Editing,
             warning: None,
         });
         self.connections.warning = None;
         self.connections.error = None;
         self.connections.removing = None;
+        if mode == ConnectionMode::Ssh {
+            self.refresh_connection_hosts(window, cx);
+        }
         cx.notify();
+    }
+
+    fn connection_input_changed(
+        &mut self,
+        input: &Entity<InputState>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(editor) = &mut self.connections.editor else {
+            return;
+        };
+        if input == &editor.fields.host {
+            editor.highlighted = None;
+            editor.suggestions_open = true;
+            editor
+                .suggestion_scroll
+                .set_offset(gpui::point(px(0.), px(0.)));
+        }
+        if input == &editor.fields.remote_host {
+            let value = input.read(cx).value().to_string();
+            if let Ok(fields) = remote::PairingFields::parse(&value, "") {
+                if fields.host != value {
+                    editor.pairing = Some(fields.clone());
+                    editor
+                        .fields
+                        .remote_host
+                        .update(cx, |input, cx| input.set_value(fields.host, window, cx));
+                    editor.fields.pairing_code.update(cx, |input, cx| {
+                        input.set_value(fields.pairing_code, window, cx)
+                    });
+                }
+            }
+        }
+        if editor.pairing.as_ref().is_some_and(|pairing| {
+            pairing.host != editor.fields.remote_host.read(cx).value().trim()
+                || pairing.pairing_code != editor.fields.pairing_code.read(cx).value().trim()
+        }) {
+            editor.pairing = None;
+        }
+    }
+
+    fn set_connection_mode(
+        &mut self,
+        mode: ConnectionMode,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(editor) = &mut self.connections.editor else {
+            return;
+        };
+        if matches!(editor.stage, Stage::Adding { .. } | Stage::Resolving) {
+            return;
+        }
+        editor.mode = mode;
+        editor.stage = Stage::Editing;
+        editor.warning = None;
+        editor.suggestions_open = false;
+        editor.highlighted = None;
+        let field = match mode {
+            ConnectionMode::Remote => &editor.fields.remote_host,
+            ConnectionMode::Ssh => &editor.fields.host,
+        };
+        field.update(cx, |field, cx| field.focus(window, cx));
+        if mode == ConnectionMode::Ssh {
+            self.refresh_connection_hosts(window, cx);
+        }
+        cx.notify();
+    }
+
+    fn refresh_connection_hosts(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(editor) = &mut self.connections.editor else {
+            return;
+        };
+        editor.discovery.generation = editor.discovery.generation.wrapping_add(1);
+        editor.discovery.pending = true;
+        editor.discovery.error = None;
+        let session = editor.generation;
+        let refresh = editor.discovery.generation;
+        cx.spawn_in(window, async move |view, cx| {
+            let result = cx
+                .background_executor()
+                .spawn(async { machine::hosts::discover() })
+                .await;
+            let _ = view.update(cx, |view, cx| {
+                let Some(editor) = &mut view.connections.editor else {
+                    return;
+                };
+                if editor.generation != session || editor.discovery.generation != refresh {
+                    return;
+                }
+                editor.discovery.pending = false;
+                match result {
+                    Ok(hosts) => editor.discovery.hosts = hosts,
+                    Err(error) => editor.discovery.error = Some(error),
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    fn choose_connection_host(
+        &mut self,
+        value: SharedString,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(editor) = &mut self.connections.editor else {
+            return;
+        };
+        if matches!(editor.stage, Stage::Adding { .. } | Stage::Resolving) {
+            return;
+        }
+        editor.suggestions_open = false;
+        editor.highlighted = None;
+        editor
+            .fields
+            .host
+            .update(cx, |field, cx| field.set_value(value.clone(), window, cx));
+        editor.stage = Stage::Resolving;
+        let generation = editor.generation;
+        cx.spawn_in(window, async move |view, cx| {
+            let result = cx
+                .background_executor()
+                .spawn(async move { machine::hosts::resolve(&value) })
+                .await;
+            let _ = view.update_in(cx, |view, window, cx| {
+                let Some(editor) = &mut view.connections.editor else {
+                    return;
+                };
+                if editor.generation != generation || !matches!(editor.stage, Stage::Resolving) {
+                    return;
+                }
+                match result {
+                    Ok(host) => {
+                        editor.fields.username.update(cx, |field, cx| {
+                            field.set_value(host.username.unwrap_or_default(), window, cx)
+                        });
+                        editor.fields.port.update(cx, |field, cx| {
+                            field.set_value(
+                                host.port.map(|port| port.to_string()).unwrap_or_default(),
+                                window,
+                                cx,
+                            )
+                        });
+                        editor.stage = Stage::Editing;
+                        view.submit_connection(window, cx);
+                    }
+                    Err(error) => editor.stage = Stage::Failed(error),
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+        cx.notify();
+    }
+
+    fn matching_connection_hosts(&self, cx: &App) -> Vec<machine::hosts::Host> {
+        let Some(editor) = &self.connections.editor else {
+            return Vec::new();
+        };
+        matching_hosts(
+            &editor.discovery.hosts,
+            editor.fields.host.read(cx).value().as_ref(),
+            &self.prefs.settings.machines,
+        )
+    }
+
+    fn connection_enter(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.connection_is_composing(window, cx) {
+            return;
+        }
+        let highlighted = self.connections.editor.as_ref().and_then(|editor| {
+            (editor.mode == ConnectionMode::Ssh && editor.suggestions_open)
+                .then_some(editor.highlighted)
+                .flatten()
+        });
+        if let Some(host) =
+            highlighted.and_then(|at| self.matching_connection_hosts(cx).get(at).cloned())
+        {
+            self.choose_connection_host(host.alias.into(), window, cx);
+        } else {
+            self.submit_connection(window, cx);
+        }
+    }
+
+    fn connection_key_down(
+        &mut self,
+        event: &gpui::KeyDownEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(editor) = &self.connections.editor else {
+            return;
+        };
+        if self.connection_is_composing(window, cx) {
+            if matches!(
+                event.keystroke.key.as_str(),
+                "enter" | "escape" | "up" | "down"
+            ) {
+                cx.stop_propagation();
+            }
+            return;
+        }
+        let key = event.keystroke.key.as_str();
+        let modifiers = event.keystroke.modifiers;
+        if key == "tab" && !modifiers.platform && !modifiers.control && !modifiers.alt {
+            cx.stop_propagation();
+            let scope = match &editor.stage {
+                Stage::Adding {
+                    verification: Some(verification),
+                    ..
+                } => verification.focus.clone(),
+                _ => editor.focus.clone(),
+            };
+            let mut visited = Vec::new();
+            loop {
+                if modifiers.shift {
+                    window.focus_prev(cx);
+                } else {
+                    window.focus_next(cx);
+                }
+                let Some(focused) = window.focused(cx) else {
+                    break;
+                };
+                if scope.contains_focused(window, cx) {
+                    break;
+                }
+                if visited.contains(&focused) {
+                    window.focus(&scope, cx);
+                    break;
+                }
+                visited.push(focused);
+            }
+            return;
+        }
+        if key == "escape" && !modifiers.modified() {
+            cx.stop_propagation();
+            if let Some(editor) = &mut self.connections.editor {
+                if editor.suggestions_open
+                    && editor.mode == ConnectionMode::Ssh
+                    && (!editor.discovery.hosts.is_empty()
+                        || editor.discovery.pending
+                        || editor.discovery.error.is_some())
+                {
+                    editor.suggestions_open = false;
+                    editor.highlighted = None;
+                    cx.notify();
+                    return;
+                }
+            }
+            self.cancel_connection(window, cx);
+            return;
+        }
+        if editor.mode != ConnectionMode::Ssh
+            || !editor
+                .fields
+                .host
+                .read(cx)
+                .focus_handle(cx)
+                .is_focused(window)
+            || matches!(editor.stage, Stage::Adding { .. } | Stage::Resolving)
+        {
+            return;
+        }
+        let hosts = self.matching_connection_hosts(cx);
+        if modifiers.platform && !modifiers.alt && !modifiers.control && !modifiers.shift {
+            if let Some(at) = key.parse::<usize>().ok().filter(|at| (1..=9).contains(at)) {
+                if let Some(host) = hosts.get(at - 1) {
+                    cx.stop_propagation();
+                    self.choose_connection_host(host.alias.clone().into(), window, cx);
+                }
+            }
+            return;
+        }
+        if modifiers.modified() {
+            return;
+        }
+        if key == "up" || key == "down" {
+            if hosts.is_empty() {
+                return;
+            }
+            cx.stop_propagation();
+            let editor = self.connections.editor.as_mut().unwrap();
+            editor.suggestions_open = true;
+            let at = match (editor.highlighted, key) {
+                (Some(at), "down") => (at + 1) % hosts.len(),
+                (Some(at), _) => (at + hosts.len() - 1) % hosts.len(),
+                (None, "down") => 0,
+                (None, _) => hosts.len() - 1,
+            };
+            editor.highlighted = Some(at);
+            editor.suggestion_scroll.scroll_to_item(at);
+            cx.notify();
+        } else if key == "enter" {
+            cx.stop_propagation();
+            self.connection_enter(window, cx);
+        }
     }
 
     fn submit_connection(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
         let Some(editor) = self.connections.editor.as_mut() else {
             return;
         };
-        if matches!(editor.stage, Stage::Adding { .. }) {
+        if matches!(editor.stage, Stage::Adding { .. } | Stage::Resolving) {
             return;
         }
+        editor.suggestions_open = false;
         let fields = &editor.fields;
-        let result = Machine::from_ssh_fields(
-            fields.host.read(cx).value().as_ref(),
-            fields.username.read(cx).value().as_ref(),
-            fields.port.read(cx).value().as_ref(),
-        )
-        .and_then(|mut machine| {
-            if connection_exists(
-                &machine,
-                editor.original.as_ref(),
-                &self.prefs.settings.machines,
-            ) {
-                return Err(
-                    "This environment is already saved. Open it or reconnect below.".into(),
-                );
-            }
-            if let Some(original) = &editor.original {
-                if original.name != original.target {
-                    machine.name = original.name.clone();
+        let result = match editor.mode {
+            ConnectionMode::Remote => {
+                let existing = editor.original.as_ref().filter(|machine| {
+                    machine.is_link()
+                        && fields.pairing_code.read(cx).value().is_empty()
+                        && machine.display_target(&self.prefs.dir)
+                            == fields.remote_host.read(cx).value().as_ref()
+                });
+                if let Some(machine) = existing {
+                    let mut machine = machine.clone();
+                    machine.enabled = true;
+                    remote::PairAttempt::reconnect(machine.clone(), self.prefs.dir.clone())
+                        .map(|attempt| {
+                            (
+                                Attempt::Remote(attempt),
+                                machine.display_target(&self.prefs.dir),
+                            )
+                        })
+                        .map_err(|error| error.to_string())
+                } else {
+                    let host = fields.remote_host.read(cx).value();
+                    let code = fields.pairing_code.read(cx).value();
+                    let parsed = if host.trim().is_empty() {
+                        Err("Enter a backend host.".into())
+                    } else if let Some(pairing) = editor.pairing.as_ref().filter(|pairing| {
+                        pairing.host == host.trim() && pairing.pairing_code == code.trim()
+                    }) {
+                        Ok(pairing.clone())
+                    } else {
+                        remote::PairingFields::parse(host.as_ref(), code.as_ref())
+                    };
+                    parsed.and_then(|fields| {
+                        let target = fields.host.clone();
+                        remote::PairAttempt::start(fields, self.prefs.dir.clone())
+                            .map(|attempt| (Attempt::Remote(attempt), target))
+                            .map_err(|error| error.to_string())
+                    })
                 }
             }
-            let helper = std::env::current_exe().map_err(|error| error.to_string())?;
-            let target = machine.target.clone();
-            setup::Attempt::start(machine, self.prefs.dir.clone(), helper)
-                .map(|attempt| (attempt, target))
-                .map_err(|error| error.to_string())
-        });
+            ConnectionMode::Ssh => Machine::from_ssh_fields(
+                fields.host.read(cx).value().as_ref(),
+                fields.username.read(cx).value().as_ref(),
+                fields.port.read(cx).value().as_ref(),
+            )
+            .and_then(|mut machine| {
+                if connection_exists(
+                    &machine,
+                    editor.original.as_ref(),
+                    &self.prefs.settings.machines,
+                ) {
+                    return Err(
+                        "This environment is already saved. Open it or reconnect below.".into(),
+                    );
+                }
+                if let Some(original) = &editor.original {
+                    if original.name != original.target {
+                        machine.name = original.name.clone();
+                    }
+                }
+                let helper = std::env::current_exe().map_err(|error| error.to_string())?;
+                let target = machine.target.clone();
+                setup::Attempt::start(machine, self.prefs.dir.clone(), helper)
+                    .map(|attempt| (Attempt::Ssh(attempt), target))
+                    .map_err(|error| error.to_string())
+            }),
+        };
         editor.stage = match result {
             Ok((attempt, target)) => Stage::Adding {
                 attempt,
@@ -207,6 +661,9 @@ impl CockpitView {
     }
 
     fn answer_connection(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.connection_is_composing(window, cx) {
+            return;
+        }
         let Some(editor) = self.connections.editor.as_mut() else {
             return;
         };
@@ -229,7 +686,7 @@ impl CockpitView {
         if let Err(error) = verification.question.respond(Some(answer)) {
             editor.stage = Stage::Failed(format!("SSH verification failed: {error}. Try again."));
         }
-        window.focus(&self.settings_focus, cx);
+        window.focus(&editor.focus, cx);
         cx.notify();
     }
 
@@ -254,6 +711,17 @@ impl CockpitView {
                 cx.notify();
                 return;
             }
+            if let Some(verification) = verification {
+                let remaining = verification
+                    .question
+                    .expires_at
+                    .saturating_duration_since(std::time::Instant::now())
+                    .as_secs();
+                if remaining != verification.remaining {
+                    verification.remaining = remaining;
+                    cx.notify();
+                }
+            }
             let Some(event) = attempt.poll() else { return };
             self.connection_event(event, cx);
         }
@@ -272,8 +740,13 @@ impl CockpitView {
             setup::Event::Verify(question) => {
                 if let Stage::Adding { verification, .. } = &mut editor.stage {
                     *verification = Some(Verification {
+                        remaining: question
+                            .expires_at
+                            .saturating_duration_since(std::time::Instant::now())
+                            .as_secs(),
                         question,
                         input: VerificationInput::Pending,
+                        focus: cx.focus_handle(),
                     });
                 }
             }
@@ -317,6 +790,17 @@ impl CockpitView {
                     cx.notify();
                     return;
                 }
+                if let Some(Editor {
+                    stage:
+                        Stage::Adding {
+                            attempt: Attempt::Remote(attempt),
+                            ..
+                        },
+                    ..
+                }) = &mut self.connections.editor
+                {
+                    attempt.commit();
+                }
                 self.connections.warning = warning;
                 self.connections.editor = None;
                 let selected = self.machines.as_ref().is_some_and(|machines| {
@@ -348,22 +832,27 @@ impl CockpitView {
         let verify = action(cx, Self::answer_connection);
         let view = cx.entity().downgrade();
         let choose_host = Rc::new(
-            move |host: SharedString, window: &mut Window, cx: &mut gpui::App| {
-                let _ = view.update(cx, |view, cx| {
-                    if let Some(editor) = &view.connections.editor {
-                        editor
-                            .fields
-                            .host
-                            .update(cx, |field, cx| field.set_value(host.clone(), window, cx));
-                        editor
-                            .fields
-                            .username
-                            .update(cx, |field, cx| field.focus(window, cx));
-                    }
-                    cx.notify();
-                });
+            move |host: SharedString, window: &mut Window, cx: &mut App| {
+                let _ = view.update(cx, |view, cx| view.choose_connection_host(host, window, cx));
             },
         );
+        let view = cx.entity().downgrade();
+        let choose_mode = Rc::new(move |mode, window: &mut Window, cx: &mut App| {
+            let _ = view.update(cx, |view, cx| view.set_connection_mode(mode, window, cx));
+        });
+        let view = cx.entity().downgrade();
+        let key_down = Rc::new(
+            move |event: &gpui::KeyDownEvent, window: &mut Window, cx: &mut App| {
+                let _ = view.update(cx, |view, cx| view.connection_key_down(event, window, cx));
+            },
+        );
+        let open_suggestions = action(cx, |view, _, cx| {
+            if let Some(editor) = &mut view.connections.editor {
+                editor.suggestions_open = true;
+            }
+            cx.notify();
+        });
+        let hosts = self.matching_connection_hosts(cx);
         let Some(editor) = self.connections.editor.as_mut() else {
             return settings::ConnectionForm::Closed {
                 open: action(cx, |view, window, cx| {
@@ -375,6 +864,7 @@ impl CockpitView {
         let mut prompt = None;
         let (progress, error) = match &mut editor.stage {
             Stage::Editing => (None, None),
+            Stage::Resolving => (Some("Resolving SSH host…".into()), None),
             Stage::Failed(error) => (None, Some(error.clone().into())),
             Stage::Adding {
                 phase,
@@ -404,9 +894,8 @@ impl CockpitView {
                         response.update(cx, |field, cx| field.focus(window, cx));
                         verification.input = VerificationInput::Secret(response);
                     } else if matches!(verification.input, VerificationInput::Pending) {
-                        let focus = cx.focus_handle();
-                        window.focus(&focus, cx);
-                        verification.input = VerificationInput::Confirm(focus);
+                        window.focus(&verification.focus, cx);
+                        verification.input = VerificationInput::Confirm;
                     }
                     let seconds = verification
                         .question
@@ -420,37 +909,59 @@ impl CockpitView {
                             VerificationInput::Secret(field) => Some(field.clone()),
                             _ => None,
                         },
-                        focus: match &verification.input {
-                            VerificationInput::Confirm(focus) => Some(focus.clone()),
-                            _ => None,
-                        },
-                        expires: format!("Expires in {seconds} seconds").into(),
+                        focus: Some(verification.focus.clone()),
+                        expires: format!("Expires in {}:{:02}", seconds / 60, seconds % 60).into(),
                         submit: verify,
                     });
                 }
                 (Some(phase.label().into()), None)
             }
         };
-        let typed = editor
-            .fields
-            .host
-            .read(cx)
-            .value()
-            .to_string()
-            .to_lowercase();
-        let suggestions = editor
-            .candidates
-            .iter()
-            .filter(|candidate| {
-                candidate.to_lowercase().contains(&typed) && candidate.as_str() != typed
-            })
-            .take(4)
-            .cloned()
-            .map(Into::into)
-            .collect();
+        let suggestions = (editor.mode == ConnectionMode::Ssh
+            && editor.suggestions_open
+            && progress.is_none()
+            && (!editor.discovery.hosts.is_empty()
+                || editor.discovery.pending
+                || editor.discovery.error.is_some()))
+        .then(|| settings::ConnectionSuggestions {
+            message: if let Some(error) = &editor.discovery.error {
+                Some(error.clone().into())
+            } else if hosts.is_empty() {
+                Some(if editor.discovery.pending {
+                    "Loading hosts…".into()
+                } else {
+                    format!(
+                        "No hosts match \"{}\".",
+                        editor.fields.host.read(cx).value()
+                    )
+                    .into()
+                })
+            } else {
+                None
+            },
+            rows: hosts
+                .into_iter()
+                .map(|host| settings::ConnectionSuggestion {
+                    value: host.alias.clone().into(),
+                    label: host.alias.clone().into(),
+                    address: if host.hostname == host.alias {
+                        "".into()
+                    } else {
+                        host.hostname.into()
+                    },
+                })
+                .collect(),
+            highlighted: editor.highlighted,
+            scroll: editor.suggestion_scroll.clone(),
+        });
         settings::ConnectionForm::Editing {
             fields: editor.fields.clone(),
+            mode: editor.mode,
+            focus: editor.focus.clone(),
             suggestions,
+            choose_mode,
+            open_suggestions,
+            key_down,
             choose_host,
             progress,
             error,
@@ -501,10 +1012,11 @@ impl CockpitView {
             Vec::new()
         };
         let local = connection_row(settings::ConnectionRow {
-            name: "This computer".into(),
+            name: "Local environment".into(),
             target: "Local environment".into(),
             status: "Connected".into(),
             connected: true,
+            enabled: true,
             detail: None,
             actions: local_actions,
             removal: None,
@@ -609,6 +1121,7 @@ impl CockpitView {
                     cx.notify();
                 }),
             });
+            let forgetting = machine.clone();
             let removal = (self.connections.removing.as_ref() == Some(&target)).then(|| {
                 let confirm = action(cx, move |view, _, cx| {
                     let selected = view.machines.as_ref().is_some_and(|machines| {
@@ -628,6 +1141,19 @@ impl CockpitView {
                     );
                     if result.is_ok() {
                         view.connections.removing = None;
+                        if forgetting.is_link() {
+                            let machine = forgetting.clone();
+                            let directory = view.prefs.dir.clone();
+                            cx.spawn(async move |view, cx| {
+                                let result = cx.background_executor().spawn(async move { remote::forget(&machine, &directory) }).await;
+                                if let Err(error) = result {
+                                    let _ = view.update(cx, |view, cx| {
+                                        view.connections.warning = Some(format!("Environment removed, but its saved credential could not be deleted: {error}"));
+                                        cx.notify();
+                                    });
+                                }
+                            }).detach();
+                        }
                         if unsaved {
                             let leave = view.machines.as_ref().is_some_and(|machines| {
                                 machines.update(cx, |machines, cx| {
@@ -666,21 +1192,23 @@ impl CockpitView {
                 ),
                 _ => ("Connecting…", None),
             };
+            let display_target = machine.display_target(&self.prefs.dir);
             remote.push(connection_row(settings::ConnectionRow {
                 name: machine.name.into(),
-                target: machine.target.into(),
+                target: display_target.into(),
                 status: status.into(),
                 connected: row.connection == Connection::Online,
+                enabled: machine.enabled,
                 detail,
                 actions,
                 removal,
             }));
         }
-        let mut group = settings::Group::new(Some("Remote environments")).rows(remote);
+        let mut group = settings::Group::new(Some("Environments")).rows(remote);
         if let Some(warning) = &self.connections.warning {
             group = group.note(warning.clone());
         }
-        vec![settings::Group::new(None).rows([local]), group]
+        vec![settings::Group::new(Some("This app")).rows([local]), group]
     }
 }
 
@@ -698,4 +1226,75 @@ fn connection_exists(machine: &Machine, original: Option<&Machine>, saved: &[Mac
         saved.target == machine.target
             && original.is_none_or(|original| original.target != saved.target)
     })
+}
+
+fn matching_hosts(
+    hosts: &[machine::hosts::Host],
+    typed: &str,
+    saved: &[Machine],
+) -> Vec<machine::hosts::Host> {
+    let typed = typed.trim().to_lowercase();
+    let mut matches: Vec<_> = hosts
+        .iter()
+        .filter(|host| {
+            (host.alias.to_lowercase().contains(&typed)
+                || host.hostname.to_lowercase().contains(&typed))
+                && !saved
+                    .iter()
+                    .any(|machine| machine.ssh_fields().0 == host.alias)
+        })
+        .cloned()
+        .collect();
+    matches.sort_by_key(|host| {
+        (
+            !host.alias.to_lowercase().starts_with(&typed),
+            host.alias.to_lowercase(),
+        )
+    });
+    matches
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn host(alias: &str, hostname: &str) -> machine::hosts::Host {
+        machine::hosts::Host {
+            alias: alias.into(),
+            hostname: hostname.into(),
+            username: None,
+            port: None,
+            source: "config".into(),
+        }
+    }
+
+    #[test]
+    fn ssh_autocomplete_prioritizes_alias_prefixes_then_matches_resolved_addresses() {
+        let hosts = vec![
+            host("my-dev", "other.example"),
+            host("zebra", "dev.example"),
+            host("Devbox", "10.0.0.2"),
+            host("dev", "10.0.0.1"),
+            host("unrelated", "10.0.0.3"),
+        ];
+        let names: Vec<_> = matching_hosts(&hosts, "DEV", &[])
+            .into_iter()
+            .map(|host| host.alias)
+            .collect();
+        assert_eq!(names, ["dev", "Devbox", "my-dev", "zebra"]);
+        assert_eq!(matching_hosts(&hosts, "10.0.0.2", &[])[0].alias, "Devbox");
+        assert!(matching_hosts(&hosts, "missing", &[]).is_empty());
+    }
+
+    #[test]
+    fn ssh_autocomplete_omits_saved_aliases_and_keeps_every_other_match() {
+        let hosts: Vec<_> = (0..12)
+            .map(|at| host(&format!("dev{at:02}"), "example.com"))
+            .collect();
+        let saved = Machine::from_ssh_fields("dev03", "developer", "2222").unwrap();
+        let found = matching_hosts(&hosts, "dev", &[saved]);
+        assert_eq!(found.len(), 11);
+        assert!(found.iter().all(|host| host.alias != "dev03"));
+        assert_eq!(found.last().unwrap().alias, "dev11");
+    }
 }

@@ -31,10 +31,16 @@ fn connections_keep_failed_input_save_only_ready_and_cancel_with_escape(cx: &mut
     tick(cx);
     cx.simulate_keystrokes("cmd-,");
     tick(cx);
-    let hit = cx.debug_bounds("settings-page-connections").unwrap().center();
+    let hit = cx
+        .debug_bounds("settings-page-connections")
+        .unwrap()
+        .center();
     cx.simulate_click(hit, gpui::Modifiers::none());
     tick(cx);
     let hit = cx.debug_bounds("connection-add").unwrap().center();
+    cx.simulate_click(hit, gpui::Modifiers::none());
+    tick(cx);
+    let hit = cx.debug_bounds("connection-mode-ssh").unwrap().center();
     cx.simulate_click(hit, gpui::Modifiers::none());
     tick(cx);
     let fields = connection_fields(&view, cx);
@@ -52,13 +58,13 @@ fn connections_keep_failed_input_save_only_ready_and_cancel_with_escape(cx: &mut
     cx.simulate_keystrokes("enter");
     tick(cx);
     assert!(cx.debug_bounds("connection-error").is_some());
-    let card = cx.debug_bounds("settings-card").unwrap();
+    let card = cx.debug_bounds("connection-dialog").unwrap();
     for selector in [
         "connection-host",
         "connection-username",
         "connection-port",
         "connection-submit",
-        "connection-cancel",
+        "connection-close",
     ] {
         let bounds = cx.debug_bounds(selector).expect(selector);
         assert!(
@@ -684,4 +690,120 @@ fn settings_open_on_cmd_comma_and_every_change_saves(cx: &mut TestAppContext) {
         assert!(view.cockpit.thread(thread).is_none(), "gone on one press");
     });
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[gpui::test]
+fn connection_modal_defaults_to_link_traps_tab_and_resets_on_reopen(cx: &mut TestAppContext) {
+    let (core, _fake) = cockpit("connection-modal-focus", 1);
+    bind_production_keys(cx);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(1000.), px(700.)));
+    tick(cx);
+    cx.simulate_keystrokes("cmd-,");
+    tick(cx);
+    let hit = cx
+        .debug_bounds("settings-page-connections")
+        .unwrap()
+        .center();
+    cx.simulate_click(hit, gpui::Modifiers::none());
+    tick(cx);
+    let hit = cx.debug_bounds("connection-add").unwrap().center();
+    cx.simulate_click(hit, gpui::Modifiers::none());
+    tick(cx);
+    assert!(cx.debug_bounds("connection-remote-host").is_some());
+    assert!(cx.debug_bounds("connection-pairing-code").is_some());
+    assert!(cx.debug_bounds("connection-host").is_none());
+    let fields = connection_fields(&view, cx);
+    cx.update(|window, cx| {
+        assert!(fields
+            .remote_host
+            .read(cx)
+            .focus_handle(cx)
+            .is_focused(window))
+    });
+    for _ in 0..12 {
+        cx.simulate_keystrokes("tab");
+        tick(cx);
+        view.update_in(cx, |view, window, cx| {
+            assert!(view.connection_holds_focus(window, cx))
+        });
+    }
+    for _ in 0..12 {
+        cx.simulate_keystrokes("shift-tab");
+        tick(cx);
+        view.update_in(cx, |view, window, cx| {
+            assert!(view.connection_holds_focus(window, cx))
+        });
+    }
+    cx.update(|window, cx| {
+        fields.remote_host.update(cx, |field, cx| {
+            field.set_value("backend.example.com", window, cx)
+        });
+        fields
+            .pairing_code
+            .update(cx, |field, cx| field.set_value("", window, cx));
+    });
+    let hit = cx.debug_bounds("connection-submit").unwrap().center();
+    cx.simulate_click(hit, gpui::Modifiers::none());
+    tick(cx);
+    assert!(cx.debug_bounds("connection-error").is_some());
+    let hit = cx.debug_bounds("connection-mode-ssh").unwrap().center();
+    cx.simulate_click(hit, gpui::Modifiers::none());
+    tick(cx);
+    assert!(cx.debug_bounds("connection-error").is_none());
+    let hit = cx.debug_bounds("connection-close").unwrap().center();
+    cx.simulate_click(hit, gpui::Modifiers::none());
+    tick(cx);
+    let hit = cx.debug_bounds("connection-add").unwrap().center();
+    cx.simulate_click(hit, gpui::Modifiers::none());
+    tick(cx);
+    let reopened = connection_fields(&view, cx);
+    assert_ne!(fields.remote_host, reopened.remote_host);
+    assert!(cx.debug_bounds("connection-remote-host").is_some());
+    assert!(cx.debug_bounds("connection-host").is_none());
+    view.read_with(cx, |_, cx| {
+        assert!(reopened.remote_host.read(cx).value().is_empty());
+        assert!(reopened.pairing_code.read(cx).value().is_empty());
+    });
+    cx.simulate_keystrokes("escape");
+    tick(cx);
+    view.read_with(cx, |view, _| {
+        assert!(view.settings_open && view.connections.editor.is_none())
+    });
+}
+
+#[gpui::test]
+fn connection_modal_does_not_submit_or_close_during_ime_composition(cx: &mut TestAppContext) {
+    use gpui::EntityInputHandler;
+    let (core, _fake) = cockpit("connection-modal-ime", 1);
+    bind_production_keys(cx);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    tick(cx);
+    cx.simulate_keystrokes("cmd-,");
+    tick(cx);
+    view.update_in(cx, |view, window, cx| {
+        view.edit_connection(None, window, cx)
+    });
+    tick(cx);
+    let fields = connection_fields(&view, cx);
+    cx.update(|window, cx| {
+        fields.remote_host.update(cx, |input, cx| {
+            input.focus(window, cx);
+            input.replace_and_mark_text_in_range(None, "仮", None, window, cx);
+        });
+    });
+    for key in ["enter", "escape"] {
+        cx.simulate_keystrokes(key);
+        tick(cx);
+        assert!(cx.debug_bounds("connection-dialog").is_some());
+        assert!(cx.debug_bounds("connection-error").is_none());
+    }
+    cx.update(|window, cx| {
+        fields
+            .remote_host
+            .update(cx, |input, cx| input.unmark_text(window, cx))
+    });
+    cx.simulate_keystrokes("escape");
+    tick(cx);
+    assert!(cx.debug_bounds("connection-dialog").is_none());
 }

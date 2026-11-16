@@ -1,8 +1,6 @@
 //! The Settings sheet: the Cockpit's pages (`ferrite_ui::frame::settings`)
 //! laid out, searched and drawn. Values and persistence remain the
-//! Cockpit's (`CockpitView::change_settings`). The sheet's rules live in
-//! `theme.rs` (`Settings sheet`, WP-E); it is the sheet recipe
-//! (`ferrite_ui::sheet`) at `SETTINGS_W` × `SETTINGS_H`.
+//! Cockpit's (`CockpitView::change_settings`).
 
 use std::rc::Rc;
 
@@ -56,8 +54,21 @@ pub fn draw(sheet: SettingsSheet, window: &mut Window, cx: &mut App) -> AnyEleme
         step,
         close,
     } = sheet;
+    let connection_form = pages
+        .iter()
+        .flat_map(|page| &page.groups)
+        .flat_map(|group| &group.rows)
+        .find_map(|row| match &row.control {
+            Control::ConnectionForm(
+                form @ ferrite_ui::frame::settings::ConnectionForm::Editing { .. },
+            ) => Some(form.clone()),
+            _ => None,
+        });
     let body = body(pages, selected, &search, select, window, cx);
     let card = settings_sheet()
+        .when(selected == PageKey::Connections, |card| {
+            card.w(px(1120.)).h(px(700.))
+        })
         .id("settings-card")
         .debug_selector(|| "settings-card".into())
         .track_focus(&focus)
@@ -103,7 +114,14 @@ pub fn draw(sheet: SettingsSheet, window: &mut Window, cx: &mut App) -> AnyEleme
         )
         .into_any_element(),
     };
-    deferred(sheet).with_priority(3).into_any_element()
+    div()
+        .absolute()
+        .inset_0()
+        .child(deferred(sheet).with_priority(3))
+        .children(
+            connection_form.map(|form| deferred(connections::form(form, cx)).with_priority(4)),
+        )
+        .into_any_element()
 }
 
 /// What the content column shows: the selected page, or, while the search
@@ -234,15 +252,32 @@ fn body(
         .min_w_0()
         .min_h_0()
         .overflow_y_scroll()
-        .px(px(MODAL_PAD))
-        .pt(px(HALF_ROW))
-        .pb(px(ROW))
+        .px(px(if selected == PageKey::Connections {
+            24.
+        } else {
+            MODAL_PAD
+        }))
+        .pt(px(if selected == PageKey::Connections {
+            24.
+        } else {
+            HALF_ROW
+        }))
+        .pb(px(if selected == PageKey::Connections {
+            48.
+        } else {
+            ROW
+        }))
         .child(
             div()
                 .flex()
                 .flex_shrink_0()
                 .items_center()
-                .h(px(ROW))
+                .h(px(if selected == PageKey::Connections && !searching {
+                    0.
+                } else {
+                    ROW
+                }))
+                .overflow_hidden()
                 .px(px(SETTINGS_ROW_PAD_X))
                 .font_weight(W_LABEL)
                 .text_color(rgb(INK_STRONG))
@@ -253,8 +288,16 @@ fn body(
                 .flex()
                 .flex_col()
                 .flex_shrink_0()
-                .pt(px(SETTINGS_TITLE_GAP))
-                .gap(px(SETTINGS_GROUP_GAP))
+                .pt(px(if selected == PageKey::Connections && !searching {
+                    0.
+                } else {
+                    SETTINGS_TITLE_GAP
+                }))
+                .gap(px(if selected == PageKey::Connections {
+                    32.
+                } else {
+                    SETTINGS_GROUP_GAP
+                }))
                 .when(searching && shown.groups.is_empty(), |list| {
                     list.child(
                         components::text_ui()
@@ -385,6 +428,14 @@ fn group_rows(
     window: &mut Window,
     cx: &mut App,
 ) -> Div {
+    if group.rows.iter().any(|row| {
+        matches!(
+            row.control,
+            Control::ConnectionForm(_) | Control::ConnectionRow(_)
+        )
+    }) {
+        return connections::group(label, group, cx);
+    }
     let rows: Vec<AnyElement> = group
         .rows
         .iter()
@@ -940,7 +991,12 @@ mod tests {
                 connections::form(
                     ConnectionForm::Editing {
                         fields: self.fields.clone(),
-                        suggestions: vec![],
+                        mode: ferrite_ui::frame::settings::ConnectionMode::Ssh,
+                        focus: cx.focus_handle(),
+                        suggestions: None,
+                        choose_mode: Rc::new(|_, _, _| {}),
+                        open_suggestions: Rc::new(|_, _| {}),
+                        key_down: Rc::new(|_, _, _| {}),
                         choose_host: Rc::new(|_, _, _| {}),
                         progress: Some("Connecting…".into()),
                         error: None,
@@ -962,6 +1018,8 @@ mod tests {
             |window, cx| {
                 let host = cx.new(|cx| Host {
                     fields: ConnectionFields {
+                        remote_host: cx.new(|cx| InputState::new(window, cx)),
+                        pairing_code: cx.new(|cx| InputState::new(window, cx)),
                         host: cx.new(|cx| InputState::new(window, cx)),
                         username: cx.new(|cx| InputState::new(window, cx)),
                         port: cx.new(|cx| InputState::new(window, cx)),
@@ -977,7 +1035,7 @@ mod tests {
         cx.simulate_click(hit, gpui::Modifiers::none());
         cx.run_until_parked();
         assert_eq!(submitted.get(), 0);
-        let hit = cx.debug_bounds("connection-cancel").unwrap().center();
+        let hit = cx.debug_bounds("connection-close").unwrap().center();
         cx.simulate_click(hit, gpui::Modifiers::none());
         cx.run_until_parked();
         assert_eq!(cancelled.get(), 1);
@@ -1002,7 +1060,12 @@ mod tests {
                 connections::form(
                     ConnectionForm::Editing {
                         fields: self.fields.clone(),
-                        suggestions: vec![],
+                        mode: ferrite_ui::frame::settings::ConnectionMode::Ssh,
+                        focus: cx.focus_handle(),
+                        suggestions: None,
+                        choose_mode: Rc::new(|_, _, _| {}),
+                        open_suggestions: Rc::new(|_, _| {}),
+                        key_down: Rc::new(|_, _, _| {}),
                         choose_host: Rc::new(|_, _, _| {}),
                         progress: Some("Connecting…".into()),
                         error: None,
@@ -1035,6 +1098,8 @@ mod tests {
             |window, cx| {
                 let host = cx.new(|cx| Host {
                     fields: ConnectionFields {
+                        remote_host: cx.new(|cx| InputState::new(window, cx)),
+                        pairing_code: cx.new(|cx| InputState::new(window, cx)),
                         host: cx.new(|cx| InputState::new(window, cx)),
                         username: cx.new(|cx| InputState::new(window, cx)),
                         port: cx.new(|cx| InputState::new(window, cx)),
