@@ -6,8 +6,10 @@ use portable_pty::{CommandBuilder, PtySize};
 use std::{
     io::{Read, Write},
     path::PathBuf,
-    time::Duration,
+    time::{Duration, Instant},
 };
+
+const INPUT_STALL: Duration = Duration::from_secs(5);
 
 fn size(columns: u16, rows: u16) -> Option<PtySize> {
     ((1..=1000).contains(&columns) && (1..=1000).contains(&rows)).then_some(PtySize {
@@ -20,15 +22,13 @@ fn size(columns: u16, rows: u16) -> Option<PtySize> {
 
 pub(super) async fn serve(mut socket: WebSocket, gateway: Gateway, session: String) {
     if let Err(error) = run(&mut socket, &gateway, &session).await {
-        let _ = socket
-            .send(Message::Text(
-                serde_json::json!({"type":"error","message":error.to_string()})
-                    .to_string()
-                    .into(),
-            ))
-            .await;
+        let _ = send_frame(&mut socket, Message::Text(
+            serde_json::json!({"type":"error","message":error.to_string()})
+                .to_string()
+                .into(),
+        )).await;
     }
-    let _ = socket.close().await;
+    let _ = tokio::time::timeout(Duration::from_secs(2), socket.close()).await;
 }
 
 async fn run(socket: &mut WebSocket, gateway: &Gateway, session: &str) -> std::io::Result<()> {
@@ -89,12 +89,18 @@ async fn run(socket: &mut WebSocket, gateway: &Gateway, session: &str) -> std::i
         }
     });
     let mut clock = tokio::time::interval(Duration::from_millis(100));
-    let mut pending = None;
+    let mut pending: Option<(Vec<u8>, Instant)> = None;
     let mut input_closed = false;
     loop {
         tokio::select! {
             _ = clock.tick() => {
                 if !gateway.active(session) { break; }
+                if pending.as_ref().is_some_and(|(_, since)| since.elapsed() >= INPUT_STALL) {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::TimedOut,
+                        "The remote terminal stopped accepting input for five seconds.",
+                    ));
+                }
                 if receive.is_closed() && receive.is_empty() {
                     if let Some(status) = child.0.try_wait().map_err(std::io::Error::other)? {
                         send_frame(socket, Message::Text(serde_json::json!({"type":"exit","code":status.exit_code()}).to_string().into())).await?;
@@ -103,7 +109,7 @@ async fn run(socket: &mut WebSocket, gateway: &Gateway, session: &str) -> std::i
                 }
             },
             permit = input.reserve(), if pending.is_some() => match permit {
-                Ok(permit) => permit.send(pending.take().expect("a pending terminal input frame")),
+                Ok(permit) => permit.send(pending.take().expect("a pending terminal input frame").0),
                 Err(_) => {
                     pending = None;
                     input_closed = true;
@@ -114,7 +120,7 @@ async fn run(socket: &mut WebSocket, gateway: &Gateway, session: &str) -> std::i
                 None => {},
             },
             message = socket.next(), if pending.is_none() && !input_closed => match message {
-                Some(Ok(Message::Binary(bytes))) if gateway.active(session) => pending = Some(bytes.to_vec()),
+                Some(Ok(Message::Binary(bytes))) if gateway.active(session) => pending = Some((bytes.to_vec(), Instant::now())),
                 Some(Ok(Message::Text(text))) if gateway.active(session) => match serde_json::from_str::<Command>(&text)? {
                     Command::Resize { columns, rows } => pair.master.resize(self::size(columns, rows).ok_or_else(|| std::io::Error::other("Invalid terminal dimensions."))?).map_err(std::io::Error::other)?,
                     Command::Close => break,

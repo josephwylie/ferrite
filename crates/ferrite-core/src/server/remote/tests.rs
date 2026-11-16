@@ -597,6 +597,53 @@ mod network {
     }
 
     #[test]
+    fn remote_terminal_reaps_a_disconnected_child_when_paste_input_stalls() {
+        let fixture = Fixture::new();
+        let directory = fixture.folder.canonicalize().unwrap();
+        remote::socket::runtime().unwrap().block_on(async {
+            let mut socket = remote::socket::connect(
+                &fixture.profile, &fixture.granted.secret, "/v1/terminal",
+            ).await.unwrap();
+            socket.send(ClientFrame::Text(serde_json::to_string(
+                &remote::terminal::Command::Open {
+                    cwd: directory.to_string_lossy().into_owned(), columns: 80, rows: 24,
+                },
+            ).unwrap().into())).await.unwrap();
+            socket.send(ClientFrame::Binary(
+                b"stty raw -echo; printf '\\nSTALL_PID=%s\\n' $$; exec /bin/sleep 3600\n"
+                    .to_vec().into(),
+            )).await.unwrap();
+            let mut output = String::new();
+            let pid = tokio::time::timeout(Duration::from_secs(5), async {
+                loop {
+                    if let Some(pid) = output.lines().find_map(|line| {
+                        line.strip_prefix("STALL_PID=")?.trim().parse::<i32>().ok()
+                    }) {
+                        break pid;
+                    }
+                    match socket.next().await.unwrap().unwrap() {
+                        ClientFrame::Binary(bytes) => output.push_str(&String::from_utf8_lossy(&bytes)),
+                        frame => panic!("terminal did not start its child: {frame:?}"),
+                    }
+                }
+            }).await.unwrap();
+            assert_eq!(fixture.gateway.slots.available_permits(), 31);
+            for _ in 0..128 {
+                socket.feed(ClientFrame::Binary(vec![b'x'; 4096].into())).await.unwrap();
+            }
+            socket.flush().await.unwrap();
+            drop(socket);
+            tokio::time::timeout(Duration::from_secs(10), async {
+                while unsafe { libc::kill(pid, 0) } == 0
+                    || fixture.gateway.slots.available_permits() != 32
+                {
+                    tokio::time::sleep(Duration::from_millis(20)).await;
+                }
+            }).await.expect("a stalled input cannot retain its PTY child or connection slot");
+        });
+    }
+
+    #[test]
     fn remote_terminal_drains_final_output_before_reporting_exit() {
         let fixture = Fixture::new();
         let directory = fixture.folder.canonicalize().unwrap();
