@@ -1862,7 +1862,12 @@ impl Cards {
                 | ferrite_core::FormFieldKind::Number { .. }
                 | ferrite_core::FormFieldKind::Integer { .. } => {
                     if let Some(input) = forms.0.borrow()[&handle].form_inputs.get(&field.id) {
-                        section = section.child(Input::new(input).disabled(request.submitting));
+                        let id = field.id.clone();
+                        section = section.child(
+                            div()
+                                .debug_selector(move || format!("form-input-{id}"))
+                                .child(Input::new(input).disabled(request.submitting)),
+                        );
                     }
                 }
                 ferrite_core::FormFieldKind::Boolean { .. } => {
@@ -1987,17 +1992,20 @@ impl Cards {
         let cancel_handle = handle.clone();
         let mut children = vec![head.into_any_element()];
         children.extend(title.map(|title| decision::section(title).into_any_element()));
+        let scroll = forms.0.borrow()[&handle].scroll.clone();
         children.push(
-            decision::section(
-                div()
-                    .min_h_0()
-                    .max_h(px(theme::DECISION_BODY_MAX_H))
-                    .flex()
-                    .flex_col()
-                    .overflow_y_scrollbar()
-                    .child(body),
-            )
-            .into_any_element(),
+            div()
+                .id(("form-body", handle.serial as usize))
+                .w_full()
+                .min_w_0()
+                .flex_shrink_1()
+                .max_h(px(theme::DECISION_BODY_MAX_H))
+                .overflow_y_scroll()
+                .track_scroll(&scroll)
+                .vertical_scrollbar(&scroll)
+                .pr(px(theme::DECISION_SCROLL_GUTTER))
+                .child(body)
+                .into_any_element(),
         );
         children.extend(error.map(|error| {
             decision::section(

@@ -5949,7 +5949,7 @@ impl CockpitView {
                     thread
                         .pending_decisions()
                         .iter()
-                        .any(|request| pane::question_of(&request.decision).is_some())
+                        .any(|request| asks_in_fields(&request.decision))
                 })
         {
             window.focus_next(cx);
@@ -5996,7 +5996,7 @@ impl CockpitView {
                         || thread
                             .pending_decisions()
                             .iter()
-                            .any(|request| pane::question_of(&request.decision).is_some())
+                            .any(|request| asks_in_fields(&request.decision))
                 })
         {
             window.focus_prev(cx);
@@ -10382,8 +10382,7 @@ impl CockpitView {
                         !pane.is_main()
                             || thread.pending_decisions().len() > 1
                             || thread.pending_decisions().iter().any(|request| {
-                                request.subject.is_none()
-                                    || pane::question_of(&request.decision).is_some()
+                                request.subject.is_none() || asks_in_fields(&request.decision)
                             })
                     });
                 controls
@@ -13248,3 +13247,12 @@ fn rss_mb() -> f64 {
 
 #[cfg(test)]
 mod tests;
+
+/// Whether a Decision's card asks in fields of its own (questions, or an
+/// MCP form): its controls keep the keyboard, and Tab walks them.
+fn asks_in_fields(decision: &ferrite_core::Decision) -> bool {
+    matches!(
+        decision.kind,
+        ferrite_core::DecisionKind::Questions(_) | ferrite_core::DecisionKind::Form { .. }
+    )
+}
