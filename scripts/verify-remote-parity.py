@@ -163,7 +163,7 @@ class Window:
         self.command("click", "--selector", selector)
 
     def field(self, selector, value):
-        if selector in ("editor", "composer-drop-target"):
+        if selector in ("editor", "composer-block"):
             bounds = json.loads(self.command("find", selector).stdout)["result"]
             self.command("click", "--x", str(int(bounds["x"] + 45)),
                          "--y", str(int(bounds["y"] + 16)))
@@ -181,7 +181,7 @@ class Window:
         assert pixels == [result["width"], result["height"]]
         assert pixels == [round(value * scale) for value in logical], (pixels, logical, scale)
         metadata = {"path": str(path), "sha256": digest(path), "logical_viewport": logical,
-                    "device_pixel_ratio": scale, "png_dimensions": pixels,
+                    "device_pixel_ratio": scale, "pixel_dimensions": pixels, "image_format": "PNG",
                     "crop_px": [0, 0, *pixels], "surface": "Ferrite native headless Driver",
                     "provider": self.state["provider"], "source_commit": self.state["source_commit"],
                     "binary_sha256": self.state["binary_sha256"]}
@@ -300,13 +300,13 @@ def attachment_turn(ui, name, screenshot, new=False):
     before = len(rows(ui.output, "provider-await"))
     if new:
         ui.command("key", "cmd-n")
-    ui.wait("composer-drop-target")
+    ui.wait("composer-block")
     ui.command("attach", str(screenshot))
     ui.wait("tray-image-0")
     ui.wait("attachment-upload-progress", visible=False)
     assert not ui.has("attachment-failed"), "Remote screenshot upload failed"
     ui.shot(name + "-attachment-ready")
-    ui.field("composer-drop-target", "Inspect the attached screenshot. PARITY_STREAM")
+    ui.field("composer-block", "Inspect the attached screenshot. PARITY_STREAM")
     ui.click("composer-send")
     pending = until(lambda: rows(ui.output, "provider-await")[before:], "Fixture did not receive submitted prompt")[0]
     assert pending["store"] == ui.state["remote_store"], "Prompt reached the local provider"
@@ -523,10 +523,12 @@ def compose(manifest):
             if not path.is_absolute():
                 path = meta_path.parent / path
             assert digest(path) == meta["sha256"], f"Source changed: {path}"
-            assert png_size(path) == meta["png_dimensions"]
+            with Image.open(path) as original:
+                assert list(original.size) == meta["pixel_dimensions"]
+                assert original.format == meta["image_format"]
             x, y, width, height = meta["crop_px"]
             assert x >= 0 and y >= 0 and width > 0 and height > 0
-            assert x + width <= meta["png_dimensions"][0] and y + height <= meta["png_dimensions"][1]
+            assert x + width <= meta["pixel_dimensions"][0] and y + height <= meta["pixel_dimensions"][1]
             images.append(Image.open(path).convert("RGB").crop((x, y, x + width, y + height)))
             metadata.append(meta)
         for key in ("logical_viewport", "device_pixel_ratio"):
@@ -538,7 +540,7 @@ def compose(manifest):
         for at, (source, meta) in enumerate(zip(images, metadata)):
             canvas.paste(source, (at * width, 60))
             draw.text((at * width + 12, 10),
-                      f"{meta['surface']} | PNG {meta['png_dimensions']} | DPR {meta['device_pixel_ratio']}", fill="#000000")
+                      f"{meta['surface']} | {meta['image_format']} {meta['pixel_dimensions']} | DPR {meta['device_pixel_ratio']}", fill="#000000")
             draw.text((at * width + 12, 30),
                       f"Viewport {meta['logical_viewport']} | crop {meta['crop_px']}", fill="#000000")
         destination = manifest.parent / (entry["name"] + "-comparison.png")

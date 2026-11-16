@@ -122,7 +122,7 @@ fn mode_card(
             "connection-mode-remote",
             "Remote link",
             "Enter a backend host and pairing code.",
-            icons::GLOBE,
+            icons::CODE,
         ),
         ConnectionMode::Ssh => (
             "connection-mode-ssh",
@@ -153,6 +153,8 @@ fn mode_card(
     .min_w_0()
     .h(px(96.))
     .p(px(16.))
+    .items_start()
+    .justify_start()
     .rounded(px(8.))
     .border_1()
     .border_color(rgb(if selected { 0x344881 } else { edge(cx) }))
@@ -183,7 +185,7 @@ fn mode_card(
                     .flex_1()
                     .gap(px(4.))
                     .child(text(title, 14., ink(cx)).font_weight(gpui::FontWeight::MEDIUM))
-                    .child(text(description, 12., muted(cx))),
+                    .child(text(description, 12., muted(cx)).whitespace_normal()),
             ),
     )
     .on_click(move |_, window, cx| {
