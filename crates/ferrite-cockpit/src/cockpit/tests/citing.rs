@@ -19,6 +19,17 @@ fn conversation<'a>(
     (view, cx)
 }
 
+/// Pasted, not typed: one edit, where typing it is thousands of keystrokes
+/// and a frame for each.
+fn paste(cx: &mut gpui::VisualTestContext, text: String) {
+    cx.update(|_, cx| cx.write_to_clipboard(ClipboardItem::new_string(text)));
+    cx.simulate_keystrokes(if cfg!(target_os = "macos") {
+        "cmd-v"
+    } else {
+        "ctrl-v"
+    });
+}
+
 /// `conversation`, and the prompts the provider is sent.
 fn conversation_sent<'a>(
     name: &str,
@@ -887,7 +898,7 @@ fn citation_comment_limit_blocks_save_send_and_outside_dismissal(cx: &mut TestAp
     let (view, sent, cx) = conversation_sent("cite-comment-limit", cx, PARAGRAPHS);
     cite_alpha(&view, cx);
     open_comment(cx, 0);
-    cx.simulate_input(&"😀".repeat(4_001));
+    paste(cx, "😀".repeat(4_001));
     tick(cx);
     assert!(cx.debug_bounds("cite-comment-too-long").is_some());
     cx.simulate_keystrokes("enter");
@@ -1058,7 +1069,7 @@ fn disappearing_source_keeps_an_invalid_comment_above_its_pencil(cx: &mut TestAp
     let (view, cx) = conversation("cite-source-invalid", cx, PARAGRAPHS);
     drag(&view, cx, (3, 0), (3, 4));
     click(cx, "selection-reply-quote");
-    cx.simulate_input(&"x".repeat(8_001));
+    paste(cx, "x".repeat(8_001));
     remove_citation_source(&view, cx);
     let popup = cx
         .debug_bounds("cite-panel")
