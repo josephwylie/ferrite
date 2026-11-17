@@ -3171,12 +3171,9 @@ fn the_import_door_passes_a_refusal_through_unchanged() {
     let path = dir.join("junk.jsonl");
     std::fs::write(&path, "not a session file\n").unwrap();
 
-    let refused = cockpit.import(&path);
+    let refused = cockpit.import(&path).unwrap_err().to_string();
     assert!(
-        matches!(
-            refused,
-            Err(crate::import::ImportError::Unrecognized { .. })
-        ),
+        refused.starts_with("not an importable session file"),
         "got {refused:?}"
     );
     assert!(cockpit.parked().unwrap().is_empty(), "no Thread was left");
@@ -3921,16 +3918,18 @@ fn a_provider_switch_after_the_first_prompt_hands_the_conversation_over() {
     fake.streams.borrow()[1].send(text("working")).unwrap();
     cockpit.pump();
     let attempts = *fake.attempts.borrow();
-    assert!(matches!(
+    assert_eq!(
         cockpit.set_provider(
             thread,
             ProviderChoice {
                 provider: Provider::Claude,
                 model: None,
             },
-        ),
-        Err(ProvisionError::Busy)
-    ));
+        )
+        .unwrap_err()
+        .to_string(),
+        ProvisionError::Busy.to_string()
+    );
     assert_eq!(*fake.attempts.borrow(), attempts);
     assert_eq!(cockpit.peek(thread).unwrap().provider, Provider::Codex);
 }
@@ -4173,10 +4172,12 @@ fn the_model_can_change_after_the_first_prompt_by_resuming() {
     // Mid-turn: refused, nothing spawned.
     assert!(cockpit.thread(thread).is_some_and(|open| open.busy()));
     let attempts = *fake.attempts.borrow();
-    assert!(matches!(
-        cockpit.set_model(thread, Some("claude-fable-5-1".into())),
-        Err(ProvisionError::Busy)
-    ));
+    assert_eq!(
+        cockpit.set_model(thread, Some("claude-fable-5-1".into()))
+        .unwrap_err()
+        .to_string(),
+        ProvisionError::Busy.to_string()
+    );
     assert_eq!(*fake.attempts.borrow(), attempts);
 
     fake.streams.borrow()[0]
@@ -4287,16 +4288,18 @@ fn a_parked_switch_waits_for_revive_and_a_revived_switch_still_carries() {
     cockpit.park(thread).unwrap();
 
     // Parked: the store-only path refuses.
-    assert!(matches!(
+    assert_eq!(
         cockpit.set_provider(
             thread,
             ProviderChoice {
                 provider: Provider::Codex,
                 model: None,
             },
-        ),
-        Err(ProvisionError::Locked)
-    ));
+        )
+        .unwrap_err()
+        .to_string(),
+        ProvisionError::Locked.to_string()
+    );
     assert_eq!(cockpit.peek(thread).unwrap().provider, Provider::Claude);
 
     cockpit.revive(thread).unwrap();
@@ -4374,10 +4377,7 @@ fn a_refused_effort_keeps_the_choice_and_pending_handover() {
         )
         .unwrap();
     *fake.fail_effort.borrow_mut() = true;
-    assert!(matches!(
-        cockpit.set_effort(thread, Some("max".into())),
-        Err(ProvisionError::Tune(_))
-    ));
+    assert!(cockpit.set_effort(thread, Some("max".into())).is_err());
     assert_eq!(cockpit.peek(thread).unwrap().effort, None);
     assert_eq!(cockpit.thread(thread).unwrap().effort(), None);
     assert_eq!(*fake.attempts.borrow(), 2);
@@ -4425,10 +4425,12 @@ fn effort_changes_in_place_and_persists() {
     stream.send(text("working")).unwrap();
     cockpit.pump();
     let attempts = *fake.attempts.borrow();
-    assert!(matches!(
-        cockpit.set_effort(thread, Some("max".into())),
-        Err(ProvisionError::Busy)
-    ));
+    assert_eq!(
+        cockpit.set_effort(thread, Some("max".into()))
+        .unwrap_err()
+        .to_string(),
+        ProvisionError::Busy.to_string()
+    );
     assert_eq!(*fake.attempts.borrow(), attempts);
     stream.send(ended()).unwrap();
     cockpit.pump();
@@ -4522,10 +4524,12 @@ fn an_effort_change_commits_when_the_provider_accepts_it() {
     assert!(open.tuning());
     assert_eq!(open.effort(), None, "not before the provider accepts it");
     assert_eq!(cockpit.peek(thread).unwrap().effort, None);
-    assert!(matches!(
-        cockpit.set_effort(thread, Some("max".into())),
-        Err(ProvisionError::Tuning)
-    ));
+    assert_eq!(
+        cockpit.set_effort(thread, Some("max".into()))
+        .unwrap_err()
+        .to_string(),
+        ProvisionError::Tuning.to_string()
+    );
     cockpit.pump();
     assert!(cockpit.thread(thread).unwrap().tuning(), "still unanswered");
 
@@ -4673,7 +4677,7 @@ fn a_failed_provider_spawn_leaves_the_old_session_serving() {
         },
     );
 
-    let Err(ProvisionError::Spawn(e)) = refused else {
+    let Err(e) = refused else {
         panic!("expected the spawn refusal: {refused:?}");
     };
     assert!(e.to_string().contains("stub refused to spawn"));
