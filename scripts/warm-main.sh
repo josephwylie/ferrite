@@ -25,4 +25,4 @@ cargo test --locked --no-run -p ferrite-cockpit --lib
 cargo test --locked --no-run -p ferrite-core
 cargo check --locked -p ferrite
 cargo check --locked -p ferrite-cockpit --tests
-cargo check --locked --workspace --tests
+cargo check --locked --tests

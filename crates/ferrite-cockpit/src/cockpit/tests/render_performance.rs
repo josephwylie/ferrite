@@ -2293,12 +2293,13 @@ fn streaming_rebuilds_its_pane_and_not_its_siblings(cx: &mut TestAppContext) {
 /// idle Panes beside it sit still.
 #[gpui::test]
 fn a_clock_rollover_rebuilds_only_the_working_pane(cx: &mut TestAppContext) {
+    let clock = hold_wall_clock();
     let (_view, _fake, threads, cx) = group_board("clock-parts", &[1], cx);
     // The first sweep's git labels land on every Pane's head: past it.
     cockpit_renders_over(cx, 2_500);
     let renders = || crate::cockpit::RENDERS.with(std::cell::Cell::get);
     let (cockpit, panes) = (renders(), pane_builds(&threads));
-    std::thread::sleep(Duration::from_millis(1_100));
+    clock.advance(Duration::from_millis(1_100));
     cockpit_renders_over(cx, 3_000);
     let built: Vec<usize> = pane_builds(&threads)
         .iter()
@@ -2321,6 +2322,7 @@ fn a_clock_rollover_rebuilds_only_the_working_pane(cx: &mut TestAppContext) {
 /// Cockpit or any Pane being rebuilt for it.
 #[gpui::test]
 fn an_open_palette_does_not_rebuild_the_cockpit(cx: &mut TestAppContext) {
+    let _clock = hold_wall_clock();
     let (view, _fake, threads, cx) = solo_board("palette-parts", cx);
     view.update_in(cx, |view, window, cx| {
         view.open_palette(crate::palette::PaletteScope::All, "", window, cx)

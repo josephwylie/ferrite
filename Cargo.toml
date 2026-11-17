@@ -10,16 +10,18 @@ members = [
     "crates/ferrite-frame",
     "crates/ferrite-focus-notify",
     "crates/ferrite-reviewr",
-]
-# Spikes build standalone with their own lockfiles; panes24 is the pinned
-# perf fixture and must not churn with workspace dependency updates.
-exclude = [
-    "spikes/panes24",
+    # Members so their tests can resolve dev-dependencies and run in CI
+    # against the patched tree; default-members keeps them out of plain builds.
     "vendor/gpui-base",
+    "vendor/gpui-component",
     "vendor/gpui-pre",
     "vendor/gpui-pre-macos",
     "vendor/taffy",
 ]
+default-members = ["crates/*"]
+# Spikes build standalone with their own lockfiles; panes24 is the pinned
+# perf fixture and must not churn with workspace dependency updates.
+exclude = ["spikes/panes24"]
 
 [workspace.package]
 version = "0.4.0"
@@ -57,6 +59,27 @@ incremental = true
 # into dependencies rarely matter, and a clean build is 21% smaller and 13%
 # faster (#248). Build scripts' dependencies then match, so they build once.
 [profile.dev.package."*"]
+opt-level = 2
+debug = false
+
+# "*" skips workspace members, so the vendored members are listed by name.
+[profile.dev.package.gpui-base]
+opt-level = 2
+debug = false
+
+[profile.dev.package.gpui-component]
+opt-level = 2
+debug = false
+
+[profile.dev.package.gpui-pre]
+opt-level = 2
+debug = false
+
+[profile.dev.package.gpui-pre-macos]
+opt-level = 2
+debug = false
+
+[profile.dev.package.taffy]
 opt-level = 2
 debug = false
 
