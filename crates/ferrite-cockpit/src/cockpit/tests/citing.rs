@@ -334,7 +334,7 @@ fn the_tray_stays_bounded_in_a_narrow_pane(cx: &mut TestAppContext) {
             .unwrap_or_else(|| panic!("Cite draws after {from:?} {to:?}"));
         cx.simulate_click(cite.center(), gpui::Modifiers::none());
         tick(cx);
-        cx.simulate_keystrokes("escape");
+        cx.simulate_keystrokes("enter");
         tick(cx);
     }
     assert_eq!(replies(&view, cx).len(), 5);
