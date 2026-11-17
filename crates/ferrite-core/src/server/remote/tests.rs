@@ -554,7 +554,7 @@ mod network {
                 },
             ).unwrap().into())).await.unwrap();
             socket.send(ClientFrame::Binary(
-                b"stty raw -echo; printf '\\nPASTE_READY\\n'; while [ ! -f read-now ]; do printf '\\nPASTE_WAITING\\n'; sleep 0.05; done; dd bs=1 count=524288 of=pasted.bin 2>/dev/null; printf '\\nPASTE_DONE\\n'; exit\n"
+                b"stty raw -echo; printf '\\nPASTE_READY\\n'; while [ ! -f read-now ]; do printf '\\nPASTE_WAITING\\n'; sleep 0.05; done; head -c 524288 > pasted.bin; printf '\\nPASTE_DONE\\n'; exit\n"
                     .to_vec().into(),
             )).await.unwrap();
             let mut output = String::new();
