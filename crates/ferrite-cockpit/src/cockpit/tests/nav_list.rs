@@ -544,7 +544,7 @@ fn the_parked_shelf_shows_its_rows_and_its_menu_deletes_them(cx: &mut TestAppCon
             2,
             "the open Threads are untouched"
         );
-        assert!(view.nav_notice.is_none(), "nothing refused");
+        assert!(view.nav_notice.text().is_none(), "nothing refused");
     });
     cx.run_until_parked();
     assert!(

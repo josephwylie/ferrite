@@ -833,8 +833,8 @@ impl CockpitView {
                 if let Some(until) = preset.until(ferrite_core::clock::system_time()) {
                     self.snooze_thread(thread, Some(until), cx);
                 } else {
-                    self.nav_notice =
-                        Some("That snooze time has passed. Choose another time.".into());
+                    self.nav_notice
+                        .hint("That snooze time has passed. Choose another time.");
                 }
             }
             (
@@ -1020,10 +1020,9 @@ impl CockpitView {
                 }
             }
             (MenuTarget::Thread(thread) | MenuTarget::Pane(thread), MenuVerb::Delete) => {
-                if let Err(error) = self.delete_thread(thread) {
-                    self.nav_notice = Some(format!("delete refused: {error}").into());
-                } else {
-                    self.nav_notice = None;
+                match self.delete_thread(thread) {
+                    Err(error) => self.nav_notice.problem(format!("delete refused: {error}")),
+                    Ok(()) => self.nav_notice.clear(),
                 }
                 if self
                     .popover

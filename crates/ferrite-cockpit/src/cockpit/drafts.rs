@@ -112,7 +112,7 @@ impl CockpitView {
     pub(super) fn keep_cited_sources(&mut self, thread: ThreadId, replies: &[Reply]) {
         if self.cited_sources.record(thread, replies) {
             if let Err(error) = self.cited_sources.save(&self.prefs.dir) {
-                eprintln!("ferrite: cited sources were not saved: {error}");
+                ferrite_core::log!("cited sources were not saved: {error}");
             }
         }
     }
@@ -125,7 +125,7 @@ impl CockpitView {
         self.cockpit.delete(thread)?;
         if self.cited_sources.forget(thread) {
             if let Err(error) = self.cited_sources.save(&self.prefs.dir) {
-                eprintln!("ferrite: cited sources were not saved: {error}");
+                ferrite_core::log!("cited sources were not saved: {error}");
             }
         }
         Ok(())
@@ -208,7 +208,7 @@ impl CockpitView {
             self.snapshot_draft(identity, cx);
         }
         if let Err(error) = self.unsent.drafts.save(&self.prefs.dir) {
-            eprintln!("ferrite: drafts were not saved: {error}");
+            ferrite_core::log!("drafts were not saved: {error}");
         }
     }
 }

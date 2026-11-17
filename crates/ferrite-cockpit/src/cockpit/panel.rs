@@ -108,7 +108,7 @@ impl Panel {
     pub(crate) fn load(dir: &std::path::Path) -> Self {
         let surfaces = Surfaces::load(dir, |_, id| id.lifecycle().restart == Restart::Restore)
             .unwrap_or_else(|error| {
-                eprintln!("ferrite: the panel's tabs were not read: {error}");
+                ferrite_core::log!("the panel's tabs were not read: {error}");
                 Surfaces::default()
             });
         Self::with_storage(surfaces, super::tools::WorkingSets::load(dir), Default::default())
@@ -410,7 +410,7 @@ impl CockpitView {
             &self.panel.surfaces,
             &self.panel.working_sets,
         ) {
-            eprintln!("ferrite: the Panel was not saved on quit: {error}");
+            ferrite_core::log!("the Panel was not saved on quit: {error}");
         }
     }
 

@@ -44,8 +44,12 @@ impl CockpitView {
                 Some(format!("{}: {why}", self.facts.name(outcome.thread)))
             })
             .collect();
-        self.nav_notice = (!failed.is_empty())
-            .then(|| format!("Couldn't {verb} {}", failed.join("; ")).into());
+        if failed.is_empty() {
+            self.nav_notice.clear();
+        } else {
+            self.nav_notice
+                .problem(format!("Couldn't {verb} {}", failed.join("; ")));
+        }
     }
 
     /// ⌘Z on a Park: the Threads revive, last parked first.
