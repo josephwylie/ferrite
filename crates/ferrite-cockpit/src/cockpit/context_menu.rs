@@ -364,7 +364,7 @@ impl CockpitView {
                 rows.push(Some((
                     menu::Item::new("Delete parked threads")
                         .destructive()
-                        .disabled(self.deletable_parked().is_empty()),
+                        .disabled(self.parked_threads().is_empty()),
                     MenuVerb::DeleteAllParked,
                 )));
             }

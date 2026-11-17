@@ -160,7 +160,7 @@ fn find_steps_both_ways_and_wraps(cx: &mut TestAppContext) {
     assert_eq!(count(cx).as_ref(), "2/3", "and ⌘⇧G");
     assert!(
         view.read_with(cx, |view, _| view.floats.palette.is_none()),
-        "⌘G steps instead of opening the Groups"
+        "⌘G steps and opens nothing else"
     );
     assert!(
         view.read_with(cx, |view, cx| view.panes[0].composer.read(cx).is_empty()),

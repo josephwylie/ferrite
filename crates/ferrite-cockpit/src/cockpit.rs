@@ -3463,22 +3463,6 @@ impl CockpitView {
             .collect()
     }
 
-    /// What "Delete parked threads" deletes: the parked Threads no stored
-    /// Group lists. The UI shows no Groups, but a legacy member stays in
-    /// `groups.json`, and the menu never deletes a Thread out of one.
-    fn deletable_parked(&self) -> Vec<ThreadId> {
-        let grouped: std::collections::HashSet<ThreadId> = self
-            .cockpit
-            .groups()
-            .iter()
-            .flat_map(|group| group.members.iter().copied())
-            .collect();
-        self.parked_threads()
-            .into_iter()
-            .filter(|thread| !grouped.contains(thread))
-            .collect()
-    }
-
     /// Whether any Thread, open or parked, records this Project.
     fn project_in_use(&self, project: ProjectId) -> bool {
         self.cockpit
@@ -3539,7 +3523,7 @@ impl CockpitView {
     /// into the nav's banner, with the last reason, and the survivors stay
     /// listed where the operator can deal with them one at a time.
     fn delete_parked_threads(&mut self, cx: &mut Context<Self>) {
-        let parked = self.deletable_parked();
+        let parked = self.parked_threads();
         let mut refused = 0usize;
         let mut reason = None;
         for thread in parked {
@@ -8484,12 +8468,6 @@ impl CockpitView {
             .panes
             .iter()
             .filter_map(|pane| pane.thread())
-            .chain(
-                self.cockpit
-                    .groups()
-                    .iter()
-                    .flat_map(|group| group.members.iter().copied()),
-            )
             .filter(|thread| self.cockpit.thread(*thread).is_some() && self.admitted(*thread))
             .collect();
         threads.sort();

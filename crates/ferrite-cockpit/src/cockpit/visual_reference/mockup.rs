@@ -1,7 +1,7 @@
 //! The UI refresh's world (`docs/design/ui-refresh/mockups/`): the one
 //! roster behind the `refresh-*` scenes of the visual reference and behind
-//! `--demo parity`. Seven Projects under a disposable HOME, the Threads,
-//! Groups and states the mockups draw, and a timeline written in the
+//! `--demo parity`. Seven Projects under a disposable HOME, the Threads
+//! and states the mockups draw, and a timeline written in the
 //! mockups' own wall-clock times, so every stamp, age and duration a
 //! capture shows falls out of the fixture clock rather than being painted.
 //!
@@ -35,7 +35,7 @@ use ferrite_reviewr::forge::{
 
 use super::world::{
     Clock, DAY, HOUR, MINUTE, Run, Script, Secs, Sessions, apply, approval, bash_approval,
-    claude_menu, filler, git, git_command, group, hms, init, last_used, limits, mode, phase, play,
+    claude_menu, filler, git, git_command, hms, init, last_used, limits, mode, phase, play,
     question, quiet, started, text, tokens, write_lines,
 };
 
@@ -313,11 +313,6 @@ pub(crate) fn build(root: &Path, look: Look, pr: Pr, clock: Clock) -> World {
     // The operator's follow-up, held until the crash fix's turn ends.
     core.queue(memory, QUEUED.into());
     core.pump();
-
-    // The Groups, in creation order: the bar's `2 Work`, `3 InvoiceMate
-    // business`. WORK sits under agenticos, its first member's Project.
-    group(&mut core, supplier, calls, &[epicurean, bb], "WORK");
-    group(&mut core, business, redesign, &[], "InvoiceMate Business");
 
     // The idle Threads were read when they finished: only Complete BB
     // supplier list is done and unseen, and the notices hold only what
@@ -1488,8 +1483,6 @@ mod tests {
         assert_eq!(core.threads().len(), 14, "fourteen Threads are open");
         assert_eq!(core.parked().unwrap().len(), 3, "three are parked");
         assert_eq!(core.registry().projects().len(), 7);
-        let titles: Vec<String> = core.groups().iter().map(|g| g.display_title()).collect();
-        assert_eq!(titles, ["WORK", "InvoiceMate Business"]);
         let asking = core.needs_you();
         assert_eq!(asking.len(), 4, "four need you");
         for thread in [
@@ -1499,12 +1492,6 @@ mod tests {
         ] {
             assert!(asking.contains(&thread));
         }
-        let focused = core.roster().focused_thread().expect("a focused Thread");
-        assert_eq!(
-            core.groups().of(focused).map(|group| group.display_title()),
-            Some("WORK".to_string()),
-            "Supplier Price Review, on WORK"
-        );
         let memory = core.thread(world.cast.memory).unwrap();
         assert_eq!(memory.model(), Some("opus"));
         assert_eq!(
