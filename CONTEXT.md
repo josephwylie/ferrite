@@ -27,9 +27,9 @@ relationships, latest outcomes, and Decisions. Observation does not create
 additional Ferrite Sessions or Threads.
 
 **Digest**
-What every window knows of a Thread it does not draw at Transcript level:
-what Main is doing, the Decisions it waits on, its Wall tile, its counts and
-how its latest turn finished. A window holds a Thread's whole Activity only
+What every window knows of a Thread it does not draw: what Main is doing,
+the Decisions it waits on, its Wall card, its counts and how its latest
+turn finished. A window holds a Thread's whole Activity only
 while it draws its Transcript.
 _Avoid_: summary; not the Handover's digest of earlier exchanges.
 
@@ -148,14 +148,8 @@ The operator's defaults for new Threads (Provider, model, effort,
 permissions) and for the app's behaviour, in one file beside the store. Never history: a
 Thread's header remains the durable truth about that Thread.
 
-**Semantic zoom**
-A Pane's rendering chosen by its size: **Transcript** (near: the transcript
-and its Composer) or **Wall** (far: the state word, the last few lines, quick
-answers), which a Pane reaches only in a window too small for its
-Transcript. No user mode-switch; size decides.
-
 **Composer**
-The prompt box at the bottom of a Transcript Pane: text that wraps and
+The prompt box at the bottom of a Pane: text that wraps and
 grows a row per line, keyboard-driven menus, queue-while-busy.
 _Avoid_: chat box, input field.
 
@@ -348,7 +342,8 @@ would be a new concept, not a revival of this one.
 - v1 providers: Claude + Codex, minimal.
 - v1 cockpit: Solo by default; an opened Group shows its exact membership with
   semantic zoom. Amended 2026-11-17: one Thread at a time, and Groups are
-  gone; their members are ordinary Threads.
+  gone; their members are ordinary Threads. Amended 2026-11-17: semantic
+  zoom is gone; a Pane draws its transcript and Composer at any size.
 - v1 git: workspace binding only (worktree or main); no checkpoints yet.
 - Issue-tracker/board integration: later, not v1. Amended 2026-11-10 (ADR 0037):
   a Project has a Factory; the operator's tracker stays the tracker.

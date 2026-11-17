@@ -1,5 +1,5 @@
 ---
-status: accepted
+status: accepted, amended 2026-11-17 (a Pane has one drawing)
 date: 2026-10-20
 ---
 
@@ -85,3 +85,9 @@ results keep their bounded preview, not the provider's whole JSON value.
 - Supersedes ADR 0018's launch stagger, since boot starts no Sessions to
   stagger, and ADR 0027's `agent_starting` refusal, since a second prompt
   now waits behind the first.
+
+## Amendment (2026-11-17): a Pane has one drawing
+
+The Wall level is gone, so "drawn at Transcript level" now means drawn: a
+window mirrors the Threads it shows. The digest still carries the Wall
+card; the nav row is what reads it.

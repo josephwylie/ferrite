@@ -397,9 +397,8 @@ pub struct WallCard {
     pub context: String,
     /// How long the last completed turn worked (`3m 12s`): `done · 3m 12s`.
     pub done_after: Option<String>,
-    /// The transcript's last lines as the tile prints them, oldest first
-    /// (the tile shows the last `WALL_LINES` rows), a pending Decision's
-    /// lines last. Prose is cut to the rows it can fill (`ROW_CHARS` each).
+    /// The transcript's last lines as the tile prints them, oldest first,
+    /// a pending Decision's lines last. Prose is cut to the rows it can fill (`ROW_CHARS` each).
     pub lines: Vec<WallLine>,
 }
 
@@ -410,8 +409,7 @@ pub struct WallCard {
 pub struct WallLine {
     pub text: String,
     /// Agent prose: wider than the tile it wraps once, its continuation
-    /// hanging under the first word (`pane::wall_rows`); every other line
-    /// truncates.
+    /// hanging under the first word; every other line truncates.
     pub wraps: bool,
 }
 

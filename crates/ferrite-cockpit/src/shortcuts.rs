@@ -5,7 +5,7 @@
 //!
 //! The palette's input row (the `search` icon, the filter, `esc`), its
 //! section headings by where a key acts — `Threads`, `Board`, `Composer`,
-//! `Decision`, `Wall`, `Transcript` — rows with the label at the left and
+//! `Decision`, `Transcript` — rows with the label at the left and
 //! the chord at the right, and the palette's footer, `↑↓ scroll · esc`. Typing keeps the rows whose label, section or chord
 //! match, as the palette filters. The floats' own keys (the palette's, the
 //! list's, this sheet's) and the Review slot's are in their footers, so the
@@ -35,7 +35,6 @@ pub(crate) enum Place {
     Board,
     Composer,
     Decision,
-    Wall,
     Transcript,
     Review,
 }
@@ -47,7 +46,6 @@ impl Place {
             Place::Board => "Board",
             Place::Composer => "Composer",
             Place::Decision => "Decision",
-            Place::Wall => "Wall",
             Place::Transcript => "Transcript",
             Place::Review => "Review",
         }
@@ -67,7 +65,6 @@ pub(crate) enum Entry {
 pub(crate) fn label(action: &str, context: Option<&str>) -> Option<Entry> {
     use Entry::{Hidden, Row};
     use Place::*;
-    let wall = context == Some(ferrite_ui::keymap::WALL);
     // The file editor edits as the Composer does: its keys are the same
     // rows, not new ones.
     if context == Some(ferrite_ui::keymap::FILE_EDITOR)
@@ -128,12 +125,7 @@ pub(crate) fn label(action: &str, context: Option<&str>) -> Option<Entry> {
         "pull_requests::Next" => Row(Board, "Pull requests: next"),
         "pull_requests::Open" => Row(Board, "Pull requests: open"),
         "pull_requests::Back" => Row(Board, "Pull requests: back"),
-        // A Decision row (and the wall's quick answers).
-        "cockpit::Allow" if wall => Row(Wall, "Allow"),
-        "cockpit::Deny" if wall => Row(Wall, "Deny"),
-        "cockpit::Always" if wall => Row(Wall, "Always allow"),
-        "cockpit::PickOption1" if wall => Row(Wall, "Answer 1\u{2013}3"),
-        "cockpit::PickOption2" | "cockpit::PickOption3" if wall => Hidden,
+        // A Decision row.
         "cockpit::Allow" => Row(Decision, "Allow, on a subagent's request"),
         "cockpit::Deny" => Row(Decision, "Deny, on a subagent's request"),
         "cockpit::Always" => Row(Decision, "Always allow, on a subagent's request"),
@@ -492,7 +484,7 @@ mod tests {
     }
 
     /// The sheet reads the table: its sections in order, each action once,
-    /// the digits gathered, the Decision and wall keys in their own places,
+    /// the digits gathered, the Decision keys in their own place,
     /// the editing keys included.
     #[test]
     fn the_sheet_lists_the_table_by_place() {
@@ -526,7 +518,6 @@ mod tests {
             find(Place::Decision, "Amend (a note with the answer)"),
             "\u{21e5}"
         );
-        assert_eq!(find(Place::Wall, "Answer 1\u{2013}3"), "1\u{2026}3");
         assert_eq!(
             find(Place::Composer, "Cycle permission mode"),
             "shift-\u{21e5}"
@@ -561,7 +552,7 @@ mod tests {
         assert_eq!(labels("").len(), rows.len());
         assert_eq!(labels("park"), ["Show parked", "Park thread"]);
         assert!(
-            labels("wall").contains(&"Always allow"),
+            labels("decision").contains(&"Allow, on a subagent's request"),
             "a section matches"
         );
         assert!(labels("cmd-k").contains(&"Commands"), "a chord matches");

@@ -564,7 +564,7 @@ impl CockpitView {
                 presentation,
                 || {
                     let mut blocks =
-                        pane::rendered_window(transcript.blocks(), Level::Transcript).to_vec();
+                        pane::rendered_window(transcript.blocks()).to_vec();
                     let first = transcript.blocks().len() - blocks.len();
                     blocks.drain(..skip.saturating_sub(first).min(blocks.len()));
                     let disclosure = pane.transcript_disclosure_snapshot();

@@ -1343,7 +1343,7 @@ impl CockpitView {
                     .flex()
                     .flex_col()
                     .p(px(SPACE_2))
-                    .child(self.pane_slot(index, Level::Transcript, window, cx))
+                    .child(self.pane_slot(index, window, cx))
                     .into_any_element(),
                 None => self
                     .worker_read(task, cx)

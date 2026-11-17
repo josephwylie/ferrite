@@ -773,42 +773,6 @@ fn clicking_a_parked_nav_row_revives_that_thread(cx: &mut TestAppContext) {
     });
 }
 
-/// #21: the nav's width is part of the zoom input — cmd-b folding it
-/// away hands width back, so a Pane that could not hold a transcript
-/// beside the full nav can without it. cmd-b again takes the width back.
-#[gpui::test]
-fn cmd_b_collapses_the_nav_and_the_cells_grow_a_level(cx: &mut TestAppContext) {
-    let (core, _fake) = cockpit("nav-toggle", 1);
-    cx.update(|cx| {
-        cx.bind_keys([KeyBinding::new("cmd-b", ToggleNav, None)]);
-    });
-    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
-    hide_panel(&view, cx);
-    hold_nav_open(&view, cx);
-    // A narrow window holds the nav at its minimum: the cell beside it
-    // falls short of the Transcript threshold, and folded clears it by
-    // the hysteresis.
-    let width = ferrite_ui::theme::NAV_MIN_W + ferrite_core::docview::TRANSCRIPT_WIDTH
-        - ferrite_ui::theme::LEVEL_HYSTERESIS;
-    cx.simulate_resize(gpui::size(px(width), px(700.)));
-    tick(cx);
-    let expanded = cx.update(|window, cx| view.read(cx).level_now(window));
-    assert_eq!(
-        expanded,
-        Level::Wall,
-        "the premise: the full nav costs this cell its transcript"
-    );
-
-    cx.simulate_keystrokes("cmd-b");
-    let collapsed = cx.update(|window, cx| view.read(cx).level_now(window));
-    assert_eq!(collapsed, Level::Transcript, "folding hands width back");
-    tick(cx);
-
-    cx.simulate_keystrokes("cmd-b");
-    let reopened = cx.update(|window, cx| view.read(cx).level_now(window));
-    assert_eq!(reopened, Level::Wall, "cmd-b toggles back");
-}
-
 /// The Threads in creation order.
 fn in_order(view: &Entity<CockpitView>, cx: &mut gpui::VisualTestContext) -> Vec<ThreadId> {
     view.read_with(cx, |view, _| {

@@ -568,32 +568,6 @@ fn decision_keys_resolve_only_on_an_empty_line(cx: &mut TestAppContext) {
     });
 }
 
-/// FL-19: at wall range the number keys answer the flagged Thread.
-#[gpui::test]
-fn wall_numbers_bind_the_quick_answers(cx: &mut TestAppContext) {
-    bind_production_keys(cx);
-    cx.update(|cx| {
-        let stack = vec![gpui::KeyContext::parse("Ferrite Wall").unwrap()];
-        for (keys, action) in [
-            ("1", "cockpit::PickOption1"),
-            ("2", "cockpit::PickOption2"),
-            ("3", "cockpit::PickOption3"),
-            ("y", "cockpit::Allow"),
-        ] {
-            let keystroke = gpui::Keystroke::parse(keys).unwrap();
-            let (bindings, _) = cx
-                .key_bindings()
-                .borrow()
-                .bindings_for_input(&[keystroke], &stack);
-            assert_eq!(
-                bindings.first().map(|binding| binding.action().name()),
-                Some(action),
-                "{keys} on the wall"
-            );
-        }
-    });
-}
-
 /// FL-13: every model with a ladder shows exactly one inverse step — the
 /// effort in force, else the CLI's own.
 #[gpui::test]

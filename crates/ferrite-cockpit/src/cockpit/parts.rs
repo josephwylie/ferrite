@@ -19,7 +19,6 @@
 
 use std::collections::HashMap;
 
-use ferrite_core::docview::Level;
 use ferrite_core::roster::PaneIdentity;
 use gpui::{
     div, prelude::*, px, AnyElement, AnyView, Context, Div, Entity, StyleRefinement, WeakEntity,
@@ -61,8 +60,6 @@ pub(crate) struct Parts {
     /// overlay, over a cached Cockpit.
     pub on: bool,
     views: HashMap<Part, Entity<PartView>>,
-    /// The Level each Pane was last laid out at (the board's, one for all).
-    levels: HashMap<PaneIdentity, Level>,
 }
 
 impl Parts {
@@ -109,20 +106,13 @@ impl CockpitView {
         )
     }
 
-    /// A Pane's cell on the board, at `level`: its cached part, or the cell
-    /// itself without parts.
-    pub(super) fn pane_slot(
-        &self,
-        index: usize,
-        level: Level,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> Div {
+    /// A Pane's cell on the board: its cached part, or the cell itself
+    /// without parts.
+    pub(super) fn pane_slot(&self, index: usize, window: &mut Window, cx: &mut Context<Self>) -> Div {
         if !self.parts.borrow().on {
-            return self.pane_cell(index, level, window, cx);
+            return self.pane_cell(index, window, cx);
         }
         let identity = self.panes[index].identity;
-        self.parts.borrow_mut().levels.insert(identity, level);
         // The box `pane_content`'s cell has on the board.
         let frame = div()
             .relative()
@@ -150,7 +140,6 @@ impl CockpitView {
             Part::Nav => true,
             Part::Pane(identity) => open.contains(identity),
         });
-        parts.levels.retain(|identity, _| open.contains(identity));
     }
 
     /// What a part's view draws.
@@ -164,18 +153,15 @@ impl CockpitView {
             Part::Nav => self
                 .nav_content(&self.nav_state(), window, cx)
                 .into_any_element(),
-            Part::Pane(identity) => {
-                let level = self.parts.borrow().levels.get(&identity).copied();
-                match (self.index_of(identity), level) {
-                    (Some(index), Some(level)) => div()
-                        .size_full()
-                        .flex()
-                        .flex_col()
-                        .child(self.pane_cell(index, level, window, cx))
-                        .into_any_element(),
-                    _ => div().into_any_element(),
-                }
-            }
+            Part::Pane(identity) => match self.index_of(identity) {
+                Some(index) => div()
+                    .size_full()
+                    .flex()
+                    .flex_col()
+                    .child(self.pane_cell(index, window, cx))
+                    .into_any_element(),
+                None => div().into_any_element(),
+            },
         }
     }
 

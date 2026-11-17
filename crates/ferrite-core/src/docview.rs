@@ -207,49 +207,19 @@ impl Cell {
     pub fn new(width: f32, height: f32) -> Self {
         Self { width, height }
     }
+
+    /// Whether a transcript and its Composer read in this cell: from
+    /// `TRANSCRIPT_WIDTH` wide and `TRANSCRIPT_HEIGHT` tall.
+    pub fn holds_transcript(self) -> bool {
+        self.width >= TRANSCRIPT_WIDTH && self.height >= TRANSCRIPT_HEIGHT
+    }
 }
 
-/// How much a Pane can say at its current size. Two altitudes, no middle
-/// one (R12): a cell big enough to read a transcript in draws the
-/// transcript and its Composer; anything smaller is a wall tile.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub enum Level {
-    /// Far: the tile — the head, the state word, the last few lines, and
-    /// the quick answers while the Thread waits.
-    Wall,
-    /// Near: the transcript itself, and a Composer to answer it.
-    Transcript,
-}
-
-/// The zoom ladder, by both axes: a transcript with its Composer reads
-/// from 300px wide and 360px tall — a 2x2 board on a laptop window is that
-/// size; a 3x3 board is not, and its cells are wall tiles.
 pub const TRANSCRIPT_WIDTH: f32 = 300.0;
 const TRANSCRIPT_HEIGHT: f32 = 360.0;
-/// The tile floor: the narrowest a wall tile still reads at. The UI folds
-/// the nav to its rail rather than let a board cell drop under it.
+/// The narrowest a Pane is let fall to: the UI folds the nav to its rail
+/// rather than let the board's cell drop under it.
 pub const TILE_FLOOR_WIDTH: f32 = 200.0;
-
-impl Level {
-    /// How many Blocks this level draws. A wall tile reads its folded card
-    /// (`WallCard`), never the Blocks; only the near view reads the Thread.
-    pub fn visible_blocks(self) -> usize {
-        match self {
-            Level::Wall => 0,
-            Level::Transcript => 200,
-        }
-    }
-
-    /// Size decides — both of the cell's dimensions: a transcript needs
-    /// `TRANSCRIPT_WIDTH` and `TRANSCRIPT_HEIGHT`; anything less is a tile.
-    pub fn for_cell(cell: Cell) -> Self {
-        if cell.width >= TRANSCRIPT_WIDTH && cell.height >= TRANSCRIPT_HEIGHT {
-            Level::Transcript
-        } else {
-            Level::Wall
-        }
-    }
-}
 
 #[cfg(test)]
 mod tests {
@@ -458,31 +428,13 @@ mod tests {
         assert_eq!(test_count("it failed", &["failed", "failing"]), None);
     }
 
+    /// From 300 wide and 360 tall, a hair under on either axis does not.
     #[test]
-    fn each_level_draws_only_what_it_can_show() {
-        // The budget is the frame's, not the transcript's: walking history
-        // nobody can read is what turns a 120fps wall into a 30fps one.
-        assert_eq!(Level::Wall.visible_blocks(), 0);
-        assert!(Level::Transcript.visible_blocks() >= 100);
-    }
-
-    /// R12's ladder: a transcript from 300 wide and 360 tall, a tile under
-    /// either. At 1440x900 a 3x3 board's cells are tiles and a 2x2's are
-    /// transcripts, nav open (383.7 / 576 wide) or folded (479 / 719).
-    #[test]
-    fn size_alone_decides_the_level() {
-        assert_eq!(Level::for_cell(Cell::new(383.7, 280.7)), Level::Wall);
-        assert_eq!(Level::for_cell(Cell::new(479.0, 280.7)), Level::Wall);
-        assert_eq!(Level::for_cell(Cell::new(576.0, 421.5)), Level::Transcript);
-        assert_eq!(Level::for_cell(Cell::new(719.0, 421.5)), Level::Transcript);
-        // Boundaries: 300x360 reads, a hair under on either axis does not.
-        assert_eq!(Level::for_cell(Cell::new(300.0, 360.0)), Level::Transcript);
-        assert_eq!(Level::for_cell(Cell::new(299.9, 900.0)), Level::Wall);
-        assert_eq!(Level::for_cell(Cell::new(1200.0, 359.9)), Level::Wall);
-        // A tall Solo column, a wide strip, a sliver.
-        assert_eq!(Level::for_cell(Cell::new(372.0, 880.0)), Level::Transcript);
-        assert_eq!(Level::for_cell(Cell::new(900.0, 200.0)), Level::Wall);
-        assert_eq!(Level::for_cell(Cell::new(142.3, 115.5)), Level::Wall);
+    fn a_cell_holds_a_transcript_from_300_by_360() {
+        assert!(Cell::new(300.0, 360.0).holds_transcript());
+        assert!(Cell::new(372.0, 880.0).holds_transcript());
+        assert!(!Cell::new(299.9, 900.0).holds_transcript());
+        assert!(!Cell::new(1200.0, 359.9).holds_transcript());
     }
 
     /// The comps' running cells name the tool in flight; the activity line

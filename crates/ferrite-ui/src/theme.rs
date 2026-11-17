@@ -577,8 +577,6 @@ pub mod words {
     pub const SETTING_UP: &str = "setting up";
     /// Held by the operator.
     pub const PAUSED: &str = "paused";
-    /// Parked: no Session in memory, one keystroke from coming back.
-    pub const PARKED: &str = "parked";
     /// Ferrite cannot observe it.
     pub const UNAVAILABLE: &str = "unavailable";
     /// An answer is on its way to the provider.
@@ -2147,7 +2145,7 @@ const _: () = assert!(SCROLLBAR_GUTTER <= PANE_PAD_X);
 // (end WP-B) — append above this line only
 
 // ======================================== WP-C · pane frame, levels, board, titlebar
-// Owner: WP-C (the pane shell, head, wall tiles, board, seams, titlebar.)
+// Owner: WP-C (the pane shell, head, board, seams, titlebar.)
 // Edit values and append tokens only inside this section.
 //
 // **One plane** (theme rule 2, SPEC §4). The window is the nav and the
@@ -2182,14 +2180,6 @@ const _: () = assert!(SCROLLBAR_GUTTER <= PANE_PAD_X);
 // `failed` `BLOCKED`, the elapsed time and an unseen `done` `INK_SUBTLE`),
 // then the provider's 13px logo and the fill button. No band on the
 // focused head: the ring says focus. A draft carries its × instead.
-//
-// **Two altitudes** (R12): a Pane reads its transcript from 300px wide and
-// 360px tall (`docview::Level::for_cell`); smaller, it is a wall tile. One
-// Level per board (rule 2.3.5), with `LEVEL_HYSTERESIS`. A tile is the
-// head, its state word at the strong weight in its colour, half a row, its
-// last `WALL_LINES` lines — one `INK_SUBTLE` run each, glyph included —
-// and, while it waits, quick answers boxed in `paint::LINE`; no meter, no
-// sparkline.
 //
 // **The window chrome** (ADR 0014, SPEC §4). The head row is the nav's top
 // chrome, the traffic lights' row and the window's drag strip, and the slot
@@ -2226,16 +2216,9 @@ pub const CAPTION_RESIZE_EDGE: f32 = 4.0;
 pub const CAPTION_CLOSE: u32 = 0xc42b1c;
 pub const CAPTION_CLOSE_PRESSED: u32 = 0x9b2218;
 pub const CAPTION_CLOSE_INK: u32 = 0xffffff;
-/// The smallest window the chrome still lays out in: the nav plus one wall
-/// tile and the Windows caption group.
+/// The smallest window the chrome still lays out in.
 pub const WINDOW_MIN_W: f32 = 640.0;
 pub const WINDOW_MIN_H: f32 = 420.0;
-
-/// How far every cell must clear a Level's size threshold, on both axes,
-/// before the board steps *up* to it (`CockpitView::board_level`); it steps
-/// down at the plain threshold. 24px keeps a resize that hovers at an edge
-/// from flickering the whole board between tiers.
-pub const LEVEL_HYSTERESIS: f32 = 24.0;
 
 /// 8px — the gutter between two cards on a board, the tree's gap
 /// (`layout::Tree::rects`): the core's `GRID_GAP`, so the default grid's
@@ -2301,18 +2284,6 @@ pub const CHECKS_ROW_H: f32 = FLOAT_ROW_H;
 /// heading itself is the menu section title (`FLOAT_SECTION_H`).
 pub const CHECKS_GROUP_GAP: f32 = MENU_GROUP_GAP;
 
-/// The wall tile's body: half a row above and below, two cells in.
-pub const WALL_PAD_Y: f32 = HALF_ROW;
-pub const WALL_PAD_X: f32 = 2.0 * CH;
-/// How many rows of a tile's last transcript lines it shows, dim, under its
-/// state word (a wrapped prose line spends two).
-pub const WALL_LINES: usize = 3;
-/// A quick answer at the wall: `1 allow` as an edgeless secondary button,
-/// 22px tall (a line and a pixel above and below), a cell of padding each
-/// side, a cell between buttons, half a row above the row.
-pub const QUICK_ANSWER_H: f32 = LH_UI + 2.0;
-pub const QUICK_ANSWER_PAD_X: f32 = CH;
-pub const QUICK_ANSWER_GAP: f32 = CH;
 
 /// The reader's code (the Panel's preview of a file as numbered lines):
 /// the transcript's code size, a step under its prose (13 at Standard),

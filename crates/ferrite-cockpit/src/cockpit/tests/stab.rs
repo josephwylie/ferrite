@@ -4,7 +4,6 @@
 use super::*;
 
 /// Reduced motion holds the working line's mark still; otherwise it moves.
-/// A wall tile draws no working line at all: its state word says it.
 #[gpui::test]
 fn the_working_mark_rests_under_reduced_motion(cx: &mut TestAppContext) {
     let (mut core, fake) = cockpit("working-mark-motion", 1);
@@ -25,19 +24,8 @@ fn the_working_mark_rests_under_reduced_motion(cx: &mut TestAppContext) {
 
     cx.update(|_, cx| cx.set_reduce_motion(true));
     tick(cx);
-    assert!(cx.debug_bounds("progress-mark-still").is_some(), "L1");
-    assert!(cx.debug_bounds("progress-mark-live").is_none(), "L1");
-
-    cx.simulate_resize(gpui::size(px(560.), px(700.)));
-    tick(cx);
-    assert_eq!(
-        cx.update(|window, cx| view.read(cx).level_now(window)),
-        Level::Wall,
-        "the premise: the cell is a wall tile"
-    );
-    assert!(cx.debug_bounds("progress-mark-still").is_none(), "a tile");
-    assert!(cx.debug_bounds("progress-mark-live").is_none(), "a tile");
-    assert!(cx.debug_bounds("wall-tile").is_some());
+    assert!(cx.debug_bounds("progress-mark-still").is_some());
+    assert!(cx.debug_bounds("progress-mark-live").is_none());
 }
 
 /// The command key is drawn, never typed: the empty board's keycaps and the
@@ -344,47 +332,6 @@ fn the_solo_agent_strip_fits_its_tabs_with_room(cx: &mut TestAppContext) {
         assert!(cx.debug_bounds("pane-head-1").is_none(), "Solo has no head");
         assert!(cx.debug_bounds("pane-subagent-1").is_none(), "no strip");
     }
-}
-
-/// A wall tile's call line reads as the transcript spells it, `● Name(args)`,
-/// on one row that truncates at the tile's edge (F-6): a long command never
-/// runs out through it, and never wraps.
-#[gpui::test]
-fn a_wall_tile_truncates_a_long_call_inside_the_tile(cx: &mut TestAppContext) {
-    let (core, fake) = cockpit("l2-tail-inside", 1);
-    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
-    hide_panel(&view, cx);
-    super::hold_nav_open(&view, cx);
-    // A narrow window holds the nav at its minimum, the cell beside it
-    // short of the Transcript threshold.
-    let width = ferrite_ui::theme::NAV_MIN_W + ferrite_core::docview::TRANSCRIPT_WIDTH
-        - ferrite_ui::theme::LEVEL_HYSTERESIS;
-    cx.simulate_resize(gpui::size(px(width), px(700.)));
-    fake.streams.borrow()[0]
-        .send(SessionEvent::ToolStarted {
-            id: "long".into(),
-            name: "Bash".into(),
-            input: serde_json::json!({
-                "command": "cargo check --workspace --all-targets --features visual-reference,test-support --message-format=short"
-            }),
-        })
-        .unwrap();
-    tick(cx);
-    let rect = cx.update(|window, cx| view.read(cx).pane_rects(window)[0].1);
-    assert_eq!(
-        cx.update(|window, cx| view.read(cx).level_now(window)),
-        Level::Wall
-    );
-    let row = cx.debug_bounds("wall-line").expect("the call's line");
-    assert!(
-        row.right() <= px(rect.x + rect.w - ferrite_ui::theme::WALL_PAD_X) + px(0.5),
-        "the row {row:?} ends inside the tile {rect:?}"
-    );
-    assert_eq!(
-        row.size.height,
-        px(ferrite_ui::theme::LH_UI),
-        "one row: {row:?}"
-    );
 }
 
 /// A draft in a narrow Pane keeps its controls inside the Composer: the

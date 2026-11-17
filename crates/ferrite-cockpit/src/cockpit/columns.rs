@@ -1,7 +1,7 @@
 //! The two columns beside the board: the nav's and the right panel's.
 //! Each slides open and shut over `COLUMN` (a `motion::Reveal`), the board
 //! following the width on screen every frame. The decisions (the nav's
-//! auto-fold, the panel's floor, a Level) read where each slide ends
+//! auto-fold, the panel's floor) read where each slide ends
 //! (`nav_rest_w`, `panel_target_w`), so a width sweeping through a
 //! threshold never flaps them; a flip mid-slide turns around from the
 //! width on screen, and a column sliding out is drawn under an occluding
