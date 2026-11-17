@@ -2007,6 +2007,7 @@ fn two_quick_edits_to_a_machines_defaults_both_land(cx: &mut TestAppContext) {
 
 /// A machine that cannot write its file says so in both groups that show
 /// its defaults, beside the values it kept.
+#[cfg(unix)]
 #[gpui::test]
 fn a_machine_that_cannot_save_its_defaults_says_so(cx: &mut TestAppContext) {
     use ferrite_core::settings::Settings;
@@ -2045,6 +2046,7 @@ fn a_machine_that_cannot_save_its_defaults_says_so(cx: &mut TestAppContext) {
     std::fs::set_permissions(&remote, std::fs::Permissions::from_mode(0o755)).unwrap();
 }
 
+#[cfg(unix)]
 fn says_in_machine_group(
     view: &Entity<CockpitView>,
     cx: &mut gpui::VisualTestContext,
@@ -2059,6 +2061,7 @@ fn says_in_machine_group(
 }
 
 /// A read that failed and then lands shows the values, not a refused edit.
+#[cfg(unix)]
 #[gpui::test]
 fn a_failed_read_that_later_lands_is_not_an_unsaved_edit(cx: &mut TestAppContext) {
     use ferrite_core::settings::Settings;
@@ -2081,6 +2084,7 @@ fn a_failed_read_that_later_lands_is_not_an_unsaved_edit(cx: &mut TestAppContext
 }
 
 /// An edit that saves after one was refused takes the refusal away.
+#[cfg(unix)]
 #[gpui::test]
 fn a_saved_edit_clears_an_earlier_refusal(cx: &mut TestAppContext) {
     use ferrite_core::settings::Settings;

@@ -802,6 +802,7 @@ pub(crate) mod tests {
     }
     /// A checkout and a symlink to it, as `/tmp` is to `/private/tmp` on
     /// macOS: (the checkout's real path, the link the Thread stands in).
+    #[cfg(unix)]
     pub(crate) fn symlinked_checkout(name: &str) -> (PathBuf, PathBuf) {
         let dir = std::env::temp_dir().join(format!("ferrite-{name}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
@@ -813,6 +814,7 @@ pub(crate) mod tests {
 
     /// The agent names a file by its real path while the Thread stands in
     /// the checkout through a symlink: the file is still the checkout's.
+    #[cfg(unix)]
     #[test]
     fn a_checkout_reached_through_a_symlink_holds_its_real_paths() {
         let (real, link) = symlinked_checkout("inside-checkout");

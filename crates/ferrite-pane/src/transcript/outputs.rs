@@ -671,9 +671,12 @@ mod tests {
         assert_eq!(names(&top), ["a/b/"]);
         // The agent names the file by its real path; the Thread stands in
         // the checkout through a symlink: the file is still under it.
-        let (real, link) = crate::file_links::tests::symlinked_checkout("changed-tree");
-        let linked = [change(&real.join("f01.txt").to_string_lossy())];
-        assert_eq!(names(&tree(&linked, Some(&link))), ["f01.txt"]);
+        #[cfg(unix)]
+        {
+            let (real, link) = crate::file_links::tests::symlinked_checkout("changed-tree");
+            let linked = [change(&real.join("f01.txt").to_string_lossy())];
+            assert_eq!(names(&tree(&linked, Some(&link))), ["f01.txt"]);
+        }
         assert_eq!(changed_label(1), "1 changed file");
         assert_eq!(changed_label(3), "3 changed files");
     }

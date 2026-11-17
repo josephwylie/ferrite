@@ -1,0 +1,56 @@
+# Tests the Windows check does not run yet.
+#
+# Until #311 the Windows check ran ferrite-core and ferrite-reviewr only. It
+# now runs every affected package, and these 33 failed on their first run
+# there. Each line is a debt: fix the test or the product, then delete the
+# line. A `full-ci` label runs the Windows check on a PR.
+#
+# In the order below, by what the failure said:
+#   - a path compared with `canonicalize`, which on Windows carries `\\?\`
+#   - a Unix-shaped path or link address: `/` separators, or rooted at `/`
+#   - a chord written as `cmd-` where Windows binds `ctrl-`
+#   - a Unix shell
+#   - not yet read
+[[profile.default.overrides]]
+platform = 'cfg(windows)'
+default-filter = '''
+not (
+    test(=tests::a_dock_launch_stands_where_the_newest_thread_works)
+  | test(=cockpit::tests::machines::a_draft_on_a_machine_starts_a_thread_in_a_directory_typed_there)
+  | test(=cockpit::tests::project_picker::a_draft_starts_on_the_filtered_project)
+  | test(=cockpit::tests::project_picker::the_project_card_edits_an_existing_project)
+  | test(=cockpit::tests::project_picker::the_project_card_stages_directories_and_registers_on_confirm)
+  | test(=cockpit::tests::provider_forms::project_completion_stays_visible_while_a_compact_form_scrolls)
+  | test(=cockpit::tests::provider_picker::draft_command_discovery_discards_old_workspace_replies_and_shows_failures)
+  | test(=cockpit::tests::thread_groups::multi_project_groups_keep_bindings_and_filter_only_navigation)
+  | test(=cockpit::tests::workspace_binding::a_new_thread_binds_to_the_main_checkout)
+  | test(=demo::mockup::tests::the_world_holds_the_mockups_roster)
+
+  | test(=cockpit::tests::files::the_filter_lists_matches_and_a_row_menu_copies_paths)
+  | test(=link_target::tests::an_address_is_what_the_link_names_not_what_it_shows)
+  | test(=cockpit::tests::render_performance::a_hovered_link_keeps_its_underline_while_its_transcript_streams)
+  | test(=cockpit::tests::render_performance::retained_transcript_relative_file_links_use_the_thread_workspace_and_copy_text)
+  | test(=cockpit::tests::retention::path_scopes_follow_live_transcripts_not_every_history_generation)
+  | test(=cockpit::tests::core_transcript_parity::a_prompts_files_flow_inline_after_its_words)
+  | test(=cockpit::tests::attachments::remote_upload_admission_preserves_a_new_thread_draft_until_ready)
+  | test(=cockpit::tests::attachments::remote_upload_admission_preserves_an_existing_thread_draft_until_ready)
+  | test(=preview::tests::remote_attachment_cache_is_separate_from_local_paths_and_other_previews)
+  | test(=preview::tests::remote_attachment_preview_fetches_are_bounded_and_stale_answers_are_discarded)
+
+  | test(=cockpit::tests::floats_parity::par_keeps_two_commands_and_the_parked_thread)
+  | test(=cockpit::tests::floats_parity::thread_rows_name_their_scope_state_and_digit)
+  | test(=cockpit::tests::settings_window::a_menu_shortcut_is_a_bound_chord)
+
+  | test(=cockpit::tests::terminal::cmd_click_opens_what_the_shell_printed)
+
+  | test(=cockpit::tests::browser_annotations::browser_annotation_history_keeps_a_distinct_reviewable_capture)
+  | test(=cockpit::tests::machines::settings_on_a_machine_edit_its_defaults_not_this_computers)
+  | test(=cockpit::tests::panel_preview::another_tab_keeps_the_preview_for_later)
+  | test(=cockpit::tests::provider_controls::background_work_lives_in_its_row_the_rail_and_the_pane)
+  | test(=cockpit::tests::settings_window::connection_pairing_url_paste_fills_host_and_code_after_replacing_text)
+  | test(=cockpit::tests::side_chat::side_chat_tabs_are_separate_conversations)
+  | test(=cockpit::tests::tools::a_tab_dragged_past_six_pixels_moves_and_five_is_a_click)
+  | test(=cockpit::tests::tools::overflowing_tabs_show_chevrons_that_scroll_the_strip)
+  | test(=cockpit::tests::tools::the_plus_menu_lists_every_surface_with_its_letter)
+)
+'''

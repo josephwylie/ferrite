@@ -16,6 +16,7 @@ fn notice(view: &Entity<CockpitView>, cx: &mut gpui::VisualTestContext) -> Optio
 /// A Park of two where one cannot park (its Group's file cannot be
 /// written): the other parks, the failed one is named and stays picked, and
 /// ⌘Z takes back only the one.
+#[cfg(unix)]
 #[gpui::test]
 fn a_bulk_park_names_the_thread_that_failed(cx: &mut TestAppContext) {
     use std::os::unix::fs::PermissionsExt;
