@@ -7,7 +7,7 @@
 #
 # In the order below, by what the failure said:
 #   - a path compared with `canonicalize`, which on Windows carries `\\?\`
-#   - a path or link address written with `/` where Windows writes `\`
+#   - a Unix-shaped path or link address: `/` separators, or rooted at `/`
 #   - a chord written as `cmd-` where Windows binds `ctrl-`
 #   - a Unix shell
 #   - not yet read
