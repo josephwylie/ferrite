@@ -265,6 +265,7 @@ fn a_tools_floor_is_not_the_operators_width(cx: &mut TestAppContext) {
     settle(cx);
     assert_eq!(drawn_w(&view, cx), PANEL_W, "closed and reopened");
 
+    view.update(cx, |view, _| view.flush_panel_persistence());
     let (saved, dir) = view.read_with(cx, |view, _| {
         (
             view.panel.surfaces.get(thread).map(|state| state.width),
@@ -295,6 +296,9 @@ fn a_dragged_width_survives_a_visit_to_a_wider_tool(cx: &mut TestAppContext) {
     show(&view, SurfaceId::Overview, cx);
     assert_eq!(drawn_w(&view, cx), 480.0);
 
+    // A restart follows a quit, and a quit flushes what the background
+    // writer has not yet saved.
+    view.update(cx, |view, _| view.flush_panel_persistence());
     let dir = view.read_with(cx, |view, _| view.prefs.dir.clone());
     let restarted = Surfaces::load(&dir, |_, _| true).unwrap();
     assert_eq!(restarted.get(thread).map(|state| state.width), Some(480.0));
