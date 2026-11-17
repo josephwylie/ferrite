@@ -256,8 +256,8 @@ fn an_open_menu_joins_the_root_context_and_global_chords_still_act(cx: &mut Test
     );
     cx.simulate_keystrokes("cmd-,");
     tick(cx);
-    view.read_with(cx, |view, _| {
-        assert!(view.settings_open, "⌘, is bound for every context and still acts");
+    view.read_with(cx, |view, cx| {
+        assert!(view.settings_open(cx), "⌘, is bound for every context and still acts");
     });
 }
 

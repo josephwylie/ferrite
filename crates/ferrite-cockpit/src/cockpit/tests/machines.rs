@@ -182,10 +182,10 @@ fn escape_closes_settings_on_an_empty_remote_workspace(cx: &mut TestAppContext) 
     view.read_with(cx, |view, _| assert!(view.panes.is_empty()));
     cx.simulate_keystrokes("cmd-,");
     cx.run_until_parked();
-    view.read_with(cx, |view, _| assert!(view.settings_open));
+    view.read_with(cx, |view, cx| assert!(view.settings_open(cx)));
     cx.simulate_keystrokes("escape");
     cx.run_until_parked();
-    view.read_with(cx, |view, _| assert!(!view.settings_open));
+    view.read_with(cx, |view, cx| assert!(!view.settings_open(cx)));
     cx.simulate_keystrokes("escape");
     cx.run_until_parked();
     view.update_in(cx, |view, window, cx| {
