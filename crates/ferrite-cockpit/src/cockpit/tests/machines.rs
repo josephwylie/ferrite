@@ -423,6 +423,46 @@ fn going_to_a_machine_that_needs_a_sign_in_says_so_and_holds_still(cx: &mut Test
     });
 }
 
+#[gpui::test]
+fn switching_machines_transfers_unsaved_panel_state_and_retires_the_previous_writer(cx: &mut TestAppContext) {
+    use crate::cockpit::surfaces::{SurfaceAction, SurfaceId, Surfaces};
+    let (core, _fake, checkout) = bound_cockpit("machines-panel-transfer", Provider::Claude);
+    let machines = cx.new(|_| machines("panel-transfer", None));
+    let (root, cx) = machine_window(cx, core, machines);
+    let first = shown(&root, cx);
+    let dir = scratch("machines-panel-transfer-prefs");
+    std::fs::write(&dir, "the settings directory is temporarily unavailable").unwrap();
+    let thread = first.update(cx, |view, cx| {
+        view.prefs.dir = dir.clone();
+        let thread = view.panes[0].thread().unwrap();
+        view.open_in_files(thread, checkout.join("src/lib.rs"), None, true, cx);
+        view.pump(cx);
+        view.flush_panel_persistence();
+        view.apply_surface(thread, SurfaceAction::Open(SurfaceId::Browser));
+        view.apply_surface(thread, SurfaceAction::Open(SurfaceId::Changes));
+        cx.emit(GoToMachine { index: 1, open: None });
+        thread
+    });
+    cx.run_until_parked();
+    let successor = shown(&root, cx);
+    assert_ne!(successor.entity_id(), first.entity_id());
+    successor.read_with(cx, |view, _| {
+        let state = view.panel.surfaces.get(thread).unwrap();
+        assert_eq!(state.active, Some(SurfaceId::Changes));
+        assert!(!state.tabs.contains(&SurfaceId::Browser), "live resources end with their owner");
+    });
+    std::fs::remove_file(&dir).unwrap();
+    successor.update(cx, |view, _| view.flush_panel_persistence());
+    first.update(cx, |view, cx| {
+        view.apply_surface(thread, SurfaceAction::Open(SurfaceId::Overview));
+        view.pump(cx);
+        view.flush_panel_persistence();
+    });
+    assert_eq!(Surfaces::load(&dir, |_, _| true).unwrap().get(thread).unwrap().active, Some(SurfaceId::Changes));
+    let files: serde_json::Value = serde_json::from_slice(&std::fs::read(dir.join("files.json")).unwrap()).unwrap();
+    assert_eq!(files["threads"][thread.get().to_string()]["files"][0]["path"], checkout.join("src/lib.rs").to_str().unwrap());
+}
+
 /// A machine with no `ferrited` says so, and while it is away its board,
 /// its tree and the keyboard are held: the root keeps the keys, so no
 /// Composer or answer reaches it.

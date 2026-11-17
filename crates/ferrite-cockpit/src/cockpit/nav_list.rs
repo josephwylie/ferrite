@@ -44,8 +44,7 @@ impl CockpitView {
             self.nav_list(state, window, cx)
         };
         let list = self.sweep_release(list, cx);
-        nav::content()
-            .child(nav::head(self.history_arrows(cx)))
+        nav::content().w(px(self.nav_expanded_width()))
             .child(self.search_row(window, cx))
             // Over the list, outside its keys: the field's ⏎ and Esc are its own.
             .children(self.snooze_field())
@@ -177,7 +176,7 @@ impl CockpitView {
                 None => {
                     let verb = notice.open_verb();
                     let index = rows.len();
-                    nav::notice_row(index, &notice, false, &nav::Measure::Text(cx))
+                    nav::notice_row(index, &notice, false, &nav::Measure::Text(cx, self.nav_expanded_width()))
                         .on_click(cx.listener(move |view, _: &ClickEvent, window, cx| {
                             view.notice_verb(verb.clone(), cx);
                             window.blur(cx);
@@ -255,7 +254,7 @@ impl CockpitView {
             now,
             reduced,
         });
-        let measure = nav::Measure::Text(cx);
+        let measure = nav::Measure::Text(cx, self.nav_expanded_width());
         let ghosts = ghosts.into_iter().map(|ghost| {
             let (top, opacity) = ghost.at(now);
             let face = match &ghost.face {
@@ -349,7 +348,7 @@ impl CockpitView {
             title,
             self.card_doors(thread, cx),
             self.renaming_thread(thread),
-            &nav::Measure::Text(cx),
+            &nav::Measure::Text(cx, self.nav_expanded_width()),
         )
         .children(self.cursor_reveal(NavItem::Thread(thread)))
         .children(self.shown_reveal(row))
@@ -439,6 +438,7 @@ impl CockpitView {
         Some(crate::nav::chrome::hover_card(
             row,
             crate::nav::chrome::HoverLines { lines },
+            self.nav_expanded_width(),
         ))
     }
 
@@ -498,7 +498,7 @@ impl CockpitView {
         } else {
             list::SlimTitle::Row
         };
-        let slim = list::slim_row(row, title, time, action, &nav::Measure::Text(cx))
+        let slim = list::slim_row(row, title, time, action, &nav::Measure::Text(cx, self.nav_expanded_width()))
             .children(self.cursor_reveal(NavItem::Thread(thread)))
             .children(self.shown_reveal(row))
             .on_click(cx.listener(move |view, _: &ClickEvent, window, cx| {

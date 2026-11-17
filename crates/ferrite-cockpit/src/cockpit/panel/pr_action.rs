@@ -242,7 +242,7 @@ impl PrAction {
 
 impl CockpitView {
     /// A row of the `⋯`, the primary action or a view's button, on
-    /// `target`'s PR: copy, open a side chat on it, or ask the Thread's
+    /// `target`'s PR: copy, add it to the current composer, or ask the Thread's
     /// agent, queued behind a running turn, and follow what comes of it.
     pub(in crate::cockpit) fn run_pr_action(
         &mut self,
@@ -260,8 +260,23 @@ impl CockpitView {
             PrAction::CopyLink => cx.write_to_clipboard(ClipboardItem::new_string(pr.url)),
             PrAction::CopyBranch => cx.write_to_clipboard(ClipboardItem::new_string(pr.head)),
             PrAction::Ask => {
-                let passage = format!("Pull request #{} {}", pr.number, pr.title);
-                self.open_side_chat(thread, Some(passage), cx);
+                let Some(index) = self.pane_for(thread) else {
+                    return;
+                };
+                self.panes[index].composer.update(cx, |composer, cx| {
+                    let context = format!(
+                        "About pull request #{}: {}\n{}\n\n",
+                        pr.number, pr.title, pr.url
+                    );
+                    let draft = composer.text();
+                    let text = if draft.is_empty() {
+                        context
+                    } else {
+                        format!("{draft}\n\n{context}")
+                    };
+                    composer.set(text, cx);
+                });
+                cx.notify();
             }
             _ => {
                 if self.panel.pr_actions.pending(target) {

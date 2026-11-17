@@ -35,7 +35,7 @@ use ferrite_ui::icons::{self, icon};
 use ferrite_ui::theme::*;
 use ferrite_ui::{components, motion};
 
-use super::{NavTooltip, cut_ground, fitted_in, hovered, Measure, NavTail, RowStatus, ThreadRow, TEXT_W};
+use super::{NavTooltip, cut_ground, fitted_in, hovered, Measure, NavTail, RowStatus, ThreadRow};
 
 /// A Thread's pull request as its card's chip reads it.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -276,6 +276,7 @@ impl ThreadRow {
     /// waits on the operator, an unseen finish or a failure.
     pub fn receded(&self) -> bool {
         !self.selected
+            && !self.picked
             && matches!(
                 self.status,
                 RowStatus::Working
@@ -319,7 +320,7 @@ pub(crate) fn title_face(row: &ThreadRow, hover: f32) -> (Hsla, FontWeight) {
 /// the column: the ground a title's fade melts into.
 fn over_column(fill: u32) -> Hsla {
     motion::mix(
-        paint::SIDEBAR.hsla(),
+        NAV_BACKGROUND.hsla(),
         rgb(fill >> 8).into(),
         (fill & 0xff) as f32 / 255.0,
     )
@@ -331,12 +332,10 @@ pub(super) fn card_ground(key: &SharedString, active: bool, picked: bool) -> Hsl
     if active {
         return over_column(NAV_CARD_ACTIVE);
     }
-    let rest = if picked {
-        over_column(NAV_CARD_SELECTED)
-    } else {
-        paint::SIDEBAR.hsla()
-    };
-    motion::mix(rest, over_column(NAV_CARD_HOVER), motion::hover_t(key))
+    if picked {
+        return over_column(NAV_CARD_SELECTED);
+    }
+    motion::mix(NAV_BACKGROUND.hsla(), over_column(NAV_CARD_HOVER), motion::hover_t(key))
 }
 
 /// The blend a receded card's opacity rides, apart from its fill's.
@@ -432,7 +431,7 @@ fn card(
         super::testing::DRAWN_HOVER.with(|drawn| drawn.borrow_mut().insert(key.clone(), hover));
     }
     let lit = !editing && (hover > 0.0 || doors.strip_held);
-    let text_w = TEXT_W;
+    let text_w = measure.inner_width() - 2.0 * NAV_ROW_PAD_X;
     let checkout = row.has_checkout();
     let logo_w = row
         .provider
@@ -468,21 +467,14 @@ fn card(
             )
         });
     }
-    let rest = if row.picked {
-        NAV_CARD_SELECTED
-    } else {
-        TRANSPARENT
-    };
     let fill = if active {
         Some(rgba(NAV_CARD_ACTIVE).into())
+    } else if row.picked {
+        Some(rgba(NAV_CARD_SELECTED).into())
     } else if hover > 0.0 {
-        Some(motion::mix(
-            rgba(rest).into(),
-            rgba(NAV_CARD_HOVER).into(),
-            hover,
-        ))
+        Some(motion::mix(rgba(TRANSPARENT).into(), rgba(NAV_CARD_HOVER).into(), hover))
     } else {
-        row.picked.then(|| rgba(NAV_CARD_SELECTED).into())
+        None
     };
     let slot: AnyElement = match doors.strip.filter(|_| lit) {
         Some(strip) => strip,
@@ -506,6 +498,11 @@ fn card(
                 .as_ref()
                 .map(|project| ferrite_ui::project_badge::project_badge(project)),
         )
+        .children((row.pinned && live).then(|| {
+            doors
+                .pin
+                .unwrap_or_else(|| pin_glyph(thread, false).into_any_element())
+        }))
         .child(
             tag(div(), live, "nav-card-project", thread)
                 .flex_1()
@@ -515,11 +512,6 @@ fn card(
                 .text_color(rgb(INK_SECONDARY_LABEL))
                 .children(row.project.clone()),
         )
-        .children((row.pinned && live).then(|| {
-            doors
-                .pin
-                .unwrap_or_else(|| pin_glyph(thread, false).into_any_element())
-        }))
         .child(
             tag(div(), live, "nav-card-status", thread)
                 .flex()
@@ -629,6 +621,7 @@ fn card(
         .flex()
         .flex_col()
         .flex_shrink_0()
+        .cursor_pointer()
         .my(px(NAV_CARD_ITEM_PAD_Y))
         .h(px(if checkout {
             NAV_CARD_H

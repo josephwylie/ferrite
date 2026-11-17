@@ -1,6 +1,8 @@
 //! Window realization of the Server's Thread-owned browser tabs.
 //! Native pages belong here, independently of whichever Preview is visible.
 mod annotations;
+mod controls;
+use controls::{ControlRequest, PendingControls};
 mod manual;
 mod page_menu;
 
@@ -49,33 +51,14 @@ pub(super) struct Browsers {
     /// with the stamp of its action, not of the frame it is read in, or it
     /// would outrank a tab the operator chose in between.
     sent: BTreeMap<ThreadId, std::collections::VecDeque<u64>>,
-    control_queue: std::collections::VecDeque<ControlRequest>,
+    controls: PendingControls,
     #[cfg(feature = "cef")]
     pub(super) controller:
         Option<std::sync::Arc<ferrite_pane::visual::browser_control::native::Worker>>,
     #[cfg(feature = "cef")]
-    running_control: Option<RunningControl>,
-    #[cfg(feature = "cef")]
     capture_queue: std::collections::VecDeque<CaptureRequest>,
     #[cfg(feature = "cef")]
     running_capture: Option<RunningCapture>,
-}
-
-struct ControlRequest {
-    request: u64,
-    thread: ThreadId,
-    owner: Owner,
-    document: Document,
-    revision: u64,
-    control: ferrite_core::browser::Control,
-}
-#[cfg(feature = "cef")]
-struct RunningControl {
-    request: ControlRequest,
-    native_generation: u64,
-    epoch: u64,
-    manual: Rc<RefCell<manual::Manual>>,
-    answer: std::sync::mpsc::Receiver<ferrite_pane::visual::browser_control::native::Event>,
 }
 
 #[cfg(feature = "cef")]
@@ -298,6 +281,7 @@ impl CockpitView {
         action: Action,
         cx: &mut Context<Self>,
     ) {
+        if self.defer_annotation_action(thread, action.clone(), cx) { return; }
         self.cancel_browser_capture(thread, cx);
         self.ensure_browser(thread, cx);
         let seen = self.surface_revision(thread);
@@ -446,14 +430,16 @@ impl CockpitView {
                     document,
                     revision,
                     control,
+                    dispatch,
                 } => {
-                    self.browsers.control_queue.push_back(ControlRequest {
+                    self.browsers.controls.push(ControlRequest {
                         request,
                         thread,
                         owner,
                         document,
                         revision,
                         control,
+                        dispatch,
                     });
                     continue;
                 }
@@ -997,7 +983,14 @@ impl CockpitView {
             let result = loop {
                 match running.answer.try_recv() {
                     Ok(NativeEvent::Ready(authorize)) => {
-                        let _ = authorize.send(unchanged());
+                        let permission = if unchanged() {
+                            ferrite_pane::visual::browser_control::native::Permission::Grant {
+                                deadline: std::time::Instant::now() + std::time::Duration::from_secs(30),
+                            }
+                        } else {
+                            ferrite_pane::visual::browser_control::native::Permission::Deny
+                        };
+                        let _ = authorize.send(permission);
                     }
                     Ok(NativeEvent::Finished(Outcome::Success { value })) => {
                         break Some(if unchanged() {
@@ -1125,161 +1118,6 @@ impl CockpitView {
         } else {
             page.manual.borrow_mut().release_local();
             self.browsers.capture_queue.push_front(request);
-        }
-    }
-
-    fn reply_browser_control(
-        &mut self,
-        request: ControlRequest,
-        outcome: ferrite_core::browser::Outcome,
-    ) {
-        self.cockpit.browser_reply(
-            request.request,
-            request.thread,
-            request.owner,
-            request.document,
-            request.revision,
-            outcome,
-        );
-    }
-
-    fn pump_browser_controls(&mut self, cx: &mut Context<Self>) {
-        use ferrite_core::browser::Outcome;
-        #[cfg(feature = "cef")]
-        if let Some(running) = self.browsers.running_control.take() {
-            let result =
-                loop {
-                    match running.answer.try_recv() {
-                    Ok(ferrite_pane::visual::browser_control::native::Event::Ready(authorize)) => {
-                        let valid = self.browsers.control_page(&running.request)
-                            .is_some_and(|page| {
-                                page.native.state().document_generation == running.native_generation
-                                    && page.native.control_epoch() == running.epoch
-                            });
-                        let _ = authorize.send(valid);
-                    }
-                    Ok(ferrite_pane::visual::browser_control::native::Event::Finished(outcome)) => {
-                        break Some(outcome)
-                    }
-                    Err(std::sync::mpsc::TryRecvError::Disconnected) => {
-                        break Some(Outcome::Uncertain {
-                            error:
-                                "Browser worker disconnected; observe the page before continuing"
-                                    .into(),
-                        })
-                    }
-                    Err(std::sync::mpsc::TryRecvError::Empty) => break None,
-                }
-                };
-            if let Some(mut outcome) = result {
-                let current = self
-                    .browsers
-                    .threads
-                    .get(&running.request.thread)
-                    .filter(|browser| browser.owner == Some(running.request.owner))
-                    .and_then(|browser| browser.pages.get(&running.request.document.tab));
-                let unchanged = current.is_some_and(|page| {
-                    page.document.get() == running.request.document
-                        && page.native.state().document_generation == running.native_generation
-                        && page.native.control_epoch() == running.epoch
-                        && (!matches!(
-                            running.request.control,
-                            ferrite_core::browser::Control::Screenshot
-                        ) || !page.native.state().loading)
-                });
-                if !unchanged {
-                    outcome = if running.request.control.observation() {
-                        Outcome::Failed { error: "The page or operator state changed during observation; observe again".into() }
-                    } else {
-                        Outcome::Uncertain { error: "The page or operator state changed while input was in flight; observe the result and do not replay the write".into() }
-                    };
-                }
-                running.manual.borrow_mut().release_local();
-                self.reply_browser_control(running.request, outcome);
-            } else {
-                self.browsers.running_control = Some(running);
-                return;
-            }
-        }
-        loop {
-            let Some(request) = self.browsers.control_queue.pop_front() else {
-                return;
-            };
-            let valid = self.browsers.control_page(&request).is_some();
-            if !valid {
-                self.reply_browser_control(request, Outcome::Failed { error: "The owned browser document or operator revision changed before dispatch; obtain fresh State and Observe".into() });
-                continue;
-            }
-            #[cfg(not(feature = "cef"))]
-            {
-                let _ = cx;
-                self.reply_browser_control(
-                    request,
-                    Outcome::Failed {
-                        error: "Browser agent control is not available in this build".into(),
-                    },
-                );
-            }
-            #[cfg(feature = "cef")]
-            {
-                let endpoint = match Visuals::engine(cx) {
-                    Availability::Ready(engine) => engine.controller(),
-                    _ => Err("The owning browser engine is unavailable".into()),
-                };
-                let endpoint = match endpoint {
-                    Ok(endpoint) => endpoint,
-                    Err(error) => {
-                        self.reply_browser_control(request, Outcome::Failed { error });
-                        continue;
-                    }
-                };
-                let page = self
-                    .browsers
-                    .threads
-                    .get(&request.thread)
-                    .and_then(|browser| browser.pages.get(&request.document.tab))
-                    .expect("control eligibility checked above");
-                let Some(target) = page.native.target_id() else {
-                    self.reply_browser_control(
-                        request,
-                        Outcome::Failed {
-                            error: "The exact live browser target is not ready; observe again"
-                                .into(),
-                        },
-                    );
-                    continue;
-                };
-                let worker = self.browsers.controller.get_or_insert_with(
-                    ferrite_pane::visual::browser_control::native::Worker::shared,
-                );
-                let generation = page.native.state().document_generation;
-                let epoch = page.native.control_epoch();
-                // This direct edge precedes dispatch and cannot disappear in a
-                // coalesced Server state update.
-                page.manual.borrow_mut().protect_local();
-                let answer = worker.try_start(
-                    endpoint,
-                    target,
-                    request.document,
-                    request.revision,
-                    epoch,
-                    request.control.clone(),
-                    None,
-                );
-                if let Some(answer) = answer {
-                    self.browsers.running_control = Some(RunningControl {
-                        request,
-                        native_generation: generation,
-                        epoch,
-                        manual: page.manual.clone(),
-                        answer,
-                    });
-                } else {
-                    page.manual.borrow_mut().release_local();
-                    self.browsers.control_queue.push_front(request);
-                }
-                return;
-            }
         }
     }
 
@@ -1546,7 +1384,12 @@ impl CockpitView {
         })
         .collect::<Vec<_>>();
         let active = browser.shown_tab();
-        let mut toolbar = div().flex().items_center().gap(px(4.)).p(px(4.));
+        let mut toolbar = div()
+            .flex()
+            .items_center()
+            .gap(px(4.))
+            .h(px(40.))
+            .px(px(8.));
         for (id, glyph, label, enabled, kind) in [
             (
                 "browser-back",
@@ -1597,10 +1440,10 @@ impl CockpitView {
             .as_ref()
             .or_else(|| active.and_then(|tab| tab.error.as_ref()));
         let loading = active.is_some_and(|tab| tab.loading);
-        let annotatable = !loading
-            && active.is_some_and(|tab| browser.pages.contains_key(&tab.id));
+        let annotatable = !loading && active.is_some_and(|tab| browser.pages.contains_key(&tab.id));
+        let annotating = browser.annotation.is_some();
         let address_empty = browser.address.read(cx).text().is_empty();
-        let annotate_why = if annotatable {
+        let annotate_why = if annotatable || annotating {
             None
         } else if loading {
             Some("Available when the page finishes loading")
@@ -1608,19 +1451,6 @@ impl CockpitView {
             Some("Open a page to annotate it")
         };
         toolbar = toolbar
-            .child(
-                ferrite_ui::components::button("browser-annotate")
-                    .debug_selector(|| "browser-annotate".into())
-                    .tab_stop(true)
-                    .disabled(!annotatable)
-                    .when_some(annotate_why, |button, why| {
-                        button.opacity(0.35).tip(why)
-                    })
-                    .child("Annotate")
-                    .on_click(cx.listener(move |this, _, window, cx| {
-                        this.begin_browser_annotation(thread, window, cx);
-                    })),
-            )
             .child(
                 div()
                     .debug_selector(|| "browser-address".into())
@@ -1649,6 +1479,35 @@ impl CockpitView {
                     .on_action(cx.listener(move |this, _: &CancelAddress, _, cx| {
                         if !this.cancel_address(thread, cx) {
                             cx.propagate();
+                        }
+                    })),
+            )
+            .child(
+                ferrite_ui::components::button("browser-annotate")
+                    .debug_selector(|| "browser-annotate".into())
+                    .tab_stop(true)
+                    .size(px(24.))
+                    .p_0()
+                    .disabled(!annotatable && !annotating)
+                    .when(annotating, |button| {
+                        button.bg(Paint((SEND_LIT << 8) | 26).hsla())
+                    })
+                    .when_some(annotate_why, |button, _| button.opacity(0.35))
+                    .tip(annotate_why.unwrap_or(if annotating {
+                        "Cancel annotation (Esc)"
+                    } else {
+                        "Annotate preview"
+                    }))
+                    .child(icons::icon(
+                        icons::SQUARE_PEN,
+                        16.,
+                        if annotating { SEND_LIT } else { INK_SUBTLE },
+                    ))
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        if annotating {
+                            this.close_browser_annotation(thread, cx);
+                        } else {
+                            this.begin_browser_annotation(thread, window, cx);
                         }
                     })),
             )
@@ -1732,6 +1591,7 @@ impl CockpitView {
             .map(|page| page.web.clone());
         let retry = failure.is_some().then(|| active.map(|tab| tab.document())).flatten();
         let notice = match failure {
+            _ if browser.annotation.is_some() => None,
             Some(error) if retry.is_some() => Some(format!("{error}\nEdit the address or retry.")),
             Some(error) => Some(format!("{error}\nEdit the address.")),
             None if body.is_none() => Some("Enter a website address above to browse.".to_owned()),

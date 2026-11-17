@@ -120,8 +120,8 @@ impl CockpitView {
     /// branch and open the pull request (`create_pr_prompt`), queued behind
     /// a running turn, as Claude's button does. The PR's row takes the
     /// button's place once the forge reports it.
-    fn create_pr(&mut self, thread: ThreadId, cx: &mut Context<Self>) {
-        let Some(index) = self.panel_pane() else {
+    pub(in crate::cockpit) fn create_pr(&mut self, thread: ThreadId, cx: &mut Context<Self>) {
+        let Some(index) = self.pane_for(thread) else {
             return;
         };
         let branch = self.thread_branch(thread);

@@ -4,6 +4,7 @@
 use super::pr::snapshot;
 use super::*;
 use crate::cockpit::panel::pr_read::PrTarget;
+use crate::cockpit::panel::PrAction;
 use ferrite_core::cockpit::HeldRead;
 use ferrite_core::protocol::{ReviewPullRequest, WireMerge, WirePr, WirePrState};
 use ferrite_reviewr::forge::PrView;
@@ -96,6 +97,27 @@ fn end_turn(fake: &Fake, cx: &mut gpui::VisualTestContext) {
 
 /// Merge hands off once, shows it is running and cannot be pressed again,
 /// and when the agent's turn ends the PR is read: merged, it is done.
+#[gpui::test]
+fn asking_about_a_pr_prepares_its_current_composer_without_sending(cx: &mut TestAppContext) {
+    let (view, thread, fake, cx) = on_pr("pr-ask-composer", snapshot(WirePrState::Open), cx);
+    let before = view.read_with(cx, |view, _| view.panes.len());
+    view.update(cx, |view, cx| {
+        let index = view.pane_for(thread).unwrap();
+        view.panes[index]
+            .composer
+            .update(cx, |composer, cx| composer.set("My draft".into(), cx));
+        view.run_pr_action(PrTarget::thread(thread, 48), PrAction::Ask, cx);
+    });
+    view.read_with(cx, |view, cx| {
+        assert_eq!(view.panes.len(), before);
+        let index = view.pane_for(thread).unwrap();
+        let text = view.panes[index].composer.read(cx).text();
+        assert!(text.starts_with("My draft\n\n"));
+        assert!(text.contains("https://github.com/o/r/pull/48"));
+    });
+    assert_eq!(sent(&fake), 0);
+}
+
 #[gpui::test]
 fn a_merge_is_pending_until_the_pr_shows_it_merged(cx: &mut TestAppContext) {
     let (view, _thread, fake, cx) = on_pr("pr-act-merge", snapshot(WirePrState::Open), cx);

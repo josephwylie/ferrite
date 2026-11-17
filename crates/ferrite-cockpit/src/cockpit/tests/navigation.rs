@@ -65,10 +65,14 @@ fn the_arrows_lead_the_head_and_step_on_a_click(cx: &mut TestAppContext) {
     let title = cx.debug_bounds("view-title").expect("the title");
     let card = cx.debug_bounds("nav-card").expect("the nav's card");
     assert!(
-        card.contains(&back.center()) && card.contains(&forward.center()),
-        "open, the arrows head the nav's card"
+        back.bottom() <= card.top() && forward.bottom() <= card.top(),
+        "open, the arrows sit in the sidebar titlebar"
     );
-    assert!(back.top() >= px(ferrite_ui::theme::WIN_CHROME_H));
+    assert_eq!(back.center().y, px(ferrite_ui::theme::NAV_HEADER_H / 2.0));
+    let search = cx.debug_bounds("nav-search").expect("the search field");
+    assert_eq!(search.center().y, px(76.0));
+    let brand = cx.debug_bounds("nav-brand").expect("the sidebar brand");
+    assert!(brand.right() < back.left(), "the brand precedes history");
     assert!(back.right() < title.left(), "the arrows come first");
     cx.simulate_click(back.center(), gpui::Modifiers::none());
     tick(cx);
@@ -277,5 +281,66 @@ fn the_solo_head_is_a_project_then_title_breadcrumb(cx: &mut TestAppContext) {
     view.read_with(cx, |view, _| {
         let draft = view.panes[view.focused()].draft().expect("a new Thread");
         assert_eq!(draft.binding.project(), here, "in the head's project");
+    });
+}
+
+#[gpui::test]
+fn deferred_preview_follows_its_pane_after_reflow(cx: &mut TestAppContext) {
+    let (core, _fake) = cockpit("deferred-preview-reflow", 3);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    tick(cx);
+    let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("Cargo.toml");
+    let source = view.update(cx, |view, cx| {
+        let first = view.panes[0].identity;
+        let source = view.panes[1].identity;
+        view.focus_pane(2);
+        view.open_preview_from(1, path.clone(), Some(3), cx);
+        view.close_pane(first, cx);
+        assert_eq!(view.index_of(source), Some(0));
+        source
+    });
+    tick(cx);
+
+    view.read_with(cx, |view, _| {
+        assert_eq!(view.cockpit.roster().focused(), Some(source));
+        let thread = source.thread().unwrap();
+        assert_eq!(view.files_active_path(thread), Some(path));
+        assert_eq!(
+            view.active_surface(thread),
+            Some(super::super::surfaces::SurfaceId::Files)
+        );
+        assert!(view
+            .panes
+            .iter()
+            .filter(|pane| pane.identity != source)
+            .all(|pane| !pane.preview.is_open()
+                && pane
+                    .thread()
+                    .is_none_or(|thread| view.files_active_path(thread).is_none())));
+    });
+}
+
+#[gpui::test]
+fn deferred_preview_for_a_closed_pane_is_dropped(cx: &mut TestAppContext) {
+    let (core, _fake) = cockpit("deferred-preview-closed", 3);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    tick(cx);
+    let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("Cargo.toml");
+    let focused = view.update(cx, |view, cx| {
+        let source = view.panes[1].identity;
+        let focused = view.panes[2].identity;
+        view.focus_pane(2);
+        view.open_preview_from(1, path, None, cx);
+        view.close_pane(source, cx);
+        focused
+    });
+    tick(cx);
+
+    view.read_with(cx, |view, _| {
+        assert_eq!(view.cockpit.roster().focused(), Some(focused));
+        assert!(view.panes.iter().all(|pane| !pane.preview.is_open()
+            && pane
+                .thread()
+                .is_none_or(|thread| view.files_active_path(thread).is_none())));
     });
 }

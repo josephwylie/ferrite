@@ -21,21 +21,11 @@ use super::*;
 use ferrite_core::{McpServer, McpStatus};
 use ferrite_ui::motion::{fold_body, settled, FOLD};
 
-/// How much of the sections a surface draws: the Panel's Overview all of
-/// them, the details card (`cockpit/details.rs`) the Thread's facts and
-/// its context at a glance.
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub(in crate::cockpit) enum Depth {
-    Full,
-    Summary,
-}
-
 impl CockpitView {
     /// The sections (see the module doc).
     pub(in crate::cockpit) fn panel_sections(
         &self,
         thread: ThreadId,
-        depth: Depth,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
@@ -61,33 +51,27 @@ impl CockpitView {
                     .flex()
                     .flex_col()
                     .child(panel_section_head("panel-context-head", "Context"))
-                    .child(div().debug_selector(|| "panel-context".into()).child(
-                        match depth {
-                            Depth::Full => pane::context_usage(
+                    .child(
+                        div().debug_selector(|| "panel-context".into()).child(
+                            pane::context_usage(
                                 usage,
                                 transcript.context_details(),
                                 transcript.usage_details(),
                             )
                             .into_any_element(),
-                            Depth::Summary => {
-                                pane::context_summary(usage, transcript.context_details())
-                                    .into_any_element()
-                            }
-                        },
-                    ))
+                        ),
+                    )
                     .children(
                         error.map(|error| pane::card_error(error).id("session-control-error")),
                     ),
             );
         }
-        if depth == Depth::Full {
-            let servers = transcript.mcp_servers();
-            if !servers.is_empty() {
-                sections.push(connectors(servers, window, cx));
-            }
-            sections.extend(self.changes_section(thread, cx));
-            sections.extend(self.background_section(thread, cx));
+        let servers = transcript.mcp_servers();
+        if !servers.is_empty() {
+            sections.push(connectors(servers, window, cx));
         }
+        sections.extend(self.changes_section(thread, cx));
+        sections.extend(self.background_section(thread, cx));
 
         div()
             .debug_selector(|| "panel-sections".into())
@@ -128,7 +112,8 @@ impl CockpitView {
         }
         if let (Some(facts), Some(branch)) = (self.facts.get(thread), self.thread_branch(thread)) {
             let meta = branch_meta(&branch, facts);
-            section = section.child(detail_row("panel-branch", icons::BRANCH, branch, meta));
+            let row = detail_row("panel-branch", icons::BRANCH, branch, meta);
+            section = section.child(div().child(row));
         }
         section
     }

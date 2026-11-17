@@ -47,6 +47,7 @@ mod navigation;
 mod output_cards;
 mod owned_threads;
 mod panel;
+mod panel_persistence;
 mod panel_width;
 pub(super) mod panel_focus;
 mod panel_preview;

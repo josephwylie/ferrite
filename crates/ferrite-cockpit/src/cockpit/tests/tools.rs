@@ -3,7 +3,7 @@
 //! door, the head row's tabs, `+` menu, maximize and edge, and "Open a
 //! surface".
 use super::*;
-use crate::cockpit::surfaces::SurfaceId;
+use crate::cockpit::surfaces::{SurfaceAction, SurfaceId};
 use ferrite_ui::theme::*;
 
 fn solo<'a>(
@@ -295,12 +295,15 @@ fn the_tabs_survive_a_restart(cx: &mut TestAppContext) {
     let dir = scratch("surfaces-restart-prefs");
     std::fs::create_dir_all(&dir).unwrap();
     let mut surfaces = crate::cockpit::surfaces::Surfaces::default();
-    let state = surfaces.entry(thread, true);
-    state.upsert(SurfaceId::Changes);
-    state.upsert(SurfaceId::Background);
-    state.activate(&SurfaceId::Changes);
-    state.maximized = true;
-    state.width = 700.;
+    for action in [
+        SurfaceAction::Open(SurfaceId::Changes),
+        SurfaceAction::Open(SurfaceId::Background),
+        SurfaceAction::Activate(SurfaceId::Changes),
+        SurfaceAction::Resize(700.),
+        SurfaceAction::ToggleMaximized,
+    ] {
+        surfaces.apply(thread, true, action);
+    }
     surfaces.save(&dir).unwrap();
     let prefs = Preferences {
         dir,

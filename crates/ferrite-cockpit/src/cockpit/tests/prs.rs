@@ -48,6 +48,9 @@ fn list_of(rows: Vec<WirePrRow>, more: bool) -> ReviewPullRequests {
 
 fn comment(kind: WirePrCommentKind, author: &str, body: &str) -> WirePrComment {
     WirePrComment {
+        id: None,
+        author_is_bot: false,
+        place: None,
         kind,
         author: author.into(),
         anchor: "comment".into(),
@@ -70,6 +73,12 @@ fn full_pr() -> WirePr {
         title: "Keep rows tall".into(),
         url: "https://github.com/o/r/pull/7".into(),
         body: "## What\n\nRows **keep** their height.".into(),
+        author: None,
+        author_avatar_url: None,
+        updated_at: None,
+        changed_files: None,
+        additions: None,
+        deletions: None,
         state: WirePrState::Open,
         draft: false,
         head: "feature/7".into(),
@@ -88,6 +97,8 @@ fn full_pr() -> WirePr {
                 snippet: Some("@@ -10,2 +10,3 @@\n+let h = ROW_H;".into()),
                 resolved: true,
                 replies: vec![WireReply {
+                    id: None,
+                    author_is_bot: false,
                     author: "bob".into(),
                     body: "Fixed in the next push.".into(),
                     created_at: "2026-11-12".into(),
@@ -216,11 +227,24 @@ fn a_listed_pr_shows_whole_with_its_review_threads(cx: &mut TestAppContext) {
     click(cx, "prs-row-7");
     assert!(shows(cx, "prs-detail"));
     lands(cx, "pr-body");
-    assert!(!shows(cx, "pr-tab-Code"), "no checkout, no Code");
+    let title = debug_bounds(cx, "pr-title".into()).unwrap();
+    let tabs = debug_bounds(cx, "pr-views".into()).unwrap();
+    assert!(
+        title.bottom() <= tabs.top(),
+        "PR identity stays above the views"
+    );
+    assert!(
+        shows(cx, "pr-tab-Code"),
+        "published Code is available without a checkout branch"
+    );
     assert!(!shows(cx, "pr-primary"), "no actions: they are a Thread's");
 
     click(cx, "pr-tab-Timeline");
     lands(cx, "pr-snippet-0");
+    assert!(
+        shows(cx, "pr-title"),
+        "PR identity remains visible on Timeline"
+    );
     assert!(shows(cx, "pr-snippet-0"), "the thread's code context");
     assert!(shows(cx, "pr-resolved-0"), "resolved");
     assert!(!shows(cx, "pr-resolved-1"));
@@ -229,6 +253,36 @@ fn a_listed_pr_shows_whole_with_its_review_threads(cx: &mut TestAppContext) {
         shows(cx, "pr-more-comments"),
         "the cap, with the way past it"
     );
+}
+
+#[gpui::test]
+fn a_project_pr_reads_published_code_without_a_thread(cx: &mut TestAppContext) {
+    use crate::cockpit::panel::pr_read::PrTarget;
+    use crate::cockpit::tools::Diff;
+    let (world, cx) = world("prs-published-code", 0, two_rows(), false, cx);
+    world.view.update(cx, |view, _| {
+        let files = ferrite_core::protocol::sides_of_unified("diff --git a/remote.rs b/remote.rs\n--- a/remote.rs\n+++ b/remote.rs\n@@ -1 +1 @@\n-old\n+remote\n");
+        view.cockpit.fixture_forge_diff(world.path.clone(), 7, files);
+        view.cockpit.fixture_forge_diff(world.path.clone(), 3, Vec::new());
+    });
+    click(cx, "nav-pull-requests");
+    lands(cx, "prs-row-7");
+    click(cx, "prs-row-7");
+    lands(cx, "pr-body");
+    click(cx, "pr-tab-Code");
+    let target = PrTarget::project(world.project, 7);
+    until(cx, |cx| {
+        world
+            .view
+            .read_with(cx, |view, _| view.changes_read(Diff::PullRequest(target)))
+            == Some(1)
+    });
+    assert!(!shows(cx, "changes-stage-0"));
+    assert!(!shows(cx, "changes-open-0"));
+    assert!(shows(cx, "changes-reviewed-0"));
+    click(cx, "pr-tab-Timeline");
+    assert!(shows(cx, "pr-snippet-0"));
+    assert!(shows(cx, "pr-reply-0-0"));
 }
 
 /// A review shows its verdict whether or not it has words, and a failed
@@ -243,8 +297,14 @@ fn a_pr_shows_each_review_verdict_and_its_failed_checks_run(cx: &mut TestAppCont
 
     click(cx, "pr-tab-Timeline");
     lands(cx, "pr-verdict-2");
-    assert!(shows(cx, "pr-comment-2"), "the approval stands with no body");
-    assert!(shows(cx, "pr-verdict-3"), "changes requested, with its words");
+    assert!(
+        shows(cx, "pr-comment-2"),
+        "the approval stands with no body"
+    );
+    assert!(
+        shows(cx, "pr-verdict-3"),
+        "changes requested, with its words"
+    );
     assert!(!shows(cx, "pr-verdict-0"), "a finding has no verdict");
 
     click(cx, "pr-tab-Summary");
@@ -487,4 +547,77 @@ fn the_footer_keeps_a_threads_own_pr_and_the_palette_opens_the_list(cx: &mut Tes
     cx.simulate_keystrokes("enter");
     tick(cx);
     assert!(shows(cx, "prs-board"), "the palette always opens the list");
+}
+
+#[gpui::test]
+fn a_transcript_pr_keeps_the_conversation_and_loads_the_requested_number(cx: &mut TestAppContext) {
+    let (world, cx) = world("pr-transcript-number", 1, two_rows(), false, cx);
+    let thread = world
+        .view
+        .read_with(cx, |view, _| view.cockpit.threads()[0]);
+    world.view.update(cx, |view, cx| {
+        view.pr_landed(thread, Some(pr_with_checks()), cx);
+        let base =
+            ferrite_pane::file_links::origin_base(&view.thread_path(thread).unwrap()).unwrap();
+        view.open_named_pr(thread, 7, format!("{base}/pull/7"), cx);
+    });
+    lands(cx, "pr-body");
+    world.view.read_with(cx, |view, _| {
+        assert!(!view.destination_shown(), "the conversation stays visible");
+        assert_eq!(
+            view.active_surface(thread),
+            Some(super::super::surfaces::SurfaceId::PullRequest(7))
+        );
+        assert_eq!(view.pr_snapshot(thread).map(|pr| pr.number), Some(7));
+    });
+    assert!(
+        !shows(cx, "pr-primary"),
+        "another branch's PR has no checkout actions"
+    );
+    assert!(
+        shows(cx, "pr-tab-Code"),
+        "Code reads the requested PR independently of the checkout branch"
+    );
+}
+
+#[gpui::test]
+fn a_bare_pr_reference_uses_the_contextual_panel(cx: &mut TestAppContext) {
+    let (world, cx) = world("pr-bare-number", 1, two_rows(), false, cx);
+    let thread = world
+        .view
+        .read_with(cx, |view, _| view.cockpit.threads()[0]);
+    world.view.update(cx, |view, cx| {
+        view.pr_landed(thread, Some(pr_with_checks()), cx);
+        let base =
+            ferrite_pane::file_links::origin_base(&view.thread_path(thread).unwrap()).unwrap();
+        view.open_named_pr(thread, 7, format!("{base}/issues/7"), cx);
+    });
+    lands(cx, "pr-body");
+    world.view.read_with(cx, |view, _| {
+        assert!(!view.destination_shown());
+        assert_eq!(view.pr_snapshot(thread).map(|pr| pr.number), Some(7));
+    });
+}
+
+#[gpui::test]
+fn a_foreign_pr_with_the_same_number_keeps_its_repository(cx: &mut TestAppContext) {
+    let (world, cx) = world("pr-foreign-number", 1, two_rows(), false, cx);
+    let thread = world
+        .view
+        .read_with(cx, |view, _| view.cockpit.threads()[0]);
+    world.view.update(cx, |view, cx| {
+        let pr = pr_with_checks();
+        let number = pr.number;
+        view.pr_landed(thread, Some(pr), cx);
+        view.open_named_pr(
+            thread,
+            number,
+            format!("https://github.com/other/repository/pull/{number}"),
+            cx,
+        );
+        assert_ne!(
+            view.active_surface(thread),
+            Some(super::super::surfaces::SurfaceId::PullRequest(number))
+        );
+    });
 }

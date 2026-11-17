@@ -1308,7 +1308,7 @@ impl CockpitView {
             }
             Command::ReopenSurface => {
                 if let Some(thread) = thread {
-                    self.surfaces_mut(thread).reopen_closed();
+                    self.apply_surface(thread, surfaces::SurfaceAction::Reopen);
                     cx.notify();
                 }
             }

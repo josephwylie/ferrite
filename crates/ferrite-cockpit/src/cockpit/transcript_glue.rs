@@ -32,7 +32,7 @@ pub(super) enum Handoff {
 }
 
 /// Whether a sent prompt's Edit, Rewind and Fork can be asked of `open`
-/// now (`TranscriptInput::rewind`): not drawn when its agent offers none,
+/// now (`TranscriptPresentation::rewind`): not drawn when its agent offers none,
 /// disabled with the reason while a turn runs, prompts wait, a request
 /// waits for an answer, or the agent is changing — the cut never races
 /// them. Core refuses the same, in the same words.
@@ -212,6 +212,9 @@ impl CockpitView {
         line: Option<u32>,
         cx: &mut Context<Self>,
     ) {
+        let Some(identity) = self.panes.get(index).map(|pane| pane.identity) else {
+            return;
+        };
         let Some(window) = cx.active_window() else {
             return;
         };
@@ -219,6 +222,9 @@ impl CockpitView {
         cx.defer(move |cx| {
             let _ = window.update(cx, |_, window, cx| {
                 let _ = cockpit.update(cx, |view, cx| {
+                    let Some(index) = view.index_of(identity) else {
+                        return;
+                    };
                     view.focus_pane(index);
                     view.open_preview(path, line, window, cx);
                 });
