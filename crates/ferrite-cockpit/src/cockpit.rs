@@ -43,6 +43,7 @@ mod parts;
 mod prs;
 mod sends;
 mod server;
+mod project_editor_view;
 mod settings_view;
 mod side_chat;
 mod snooze;
@@ -563,12 +564,8 @@ pub struct CockpitView {
     /// The menus and popovers on their way out (`float_exits`).
     float_exits: float_exits::Held,
     /// The Project card: creating a Project, or editing the one the nav
-    /// filter names. `None` is closed.
-    project_editor: Option<ProjectEditor>,
-    /// The card the operator closed, and when, drawn from while it fades
-    /// out (`close_project_editor`).
-    project_editor_leaving: Option<(ProjectEditor, std::time::Instant)>,
-    project_editor_focus: FocusHandle,
+    /// filter names (ADR 0041).
+    project_editor_view: Entity<project_editor_view::ProjectEditorView>,
     /// The Thread whose `Background work` dialog is open
     /// (`background_work.rs`).
     background_dialog: Option<ThreadId>,
@@ -942,42 +939,6 @@ impl Render for PaneGhost {
 /// prototype's 9px band (`.seam{width:9px;margin-left:-4px}`), a pixel past
 /// the 8px gutter.
 const SEAM_GRAB: f32 = 9.0;
-
-/// The open Project card. One surface serves both verbs: `target` names
-/// the Project being edited, or `None` while one is being created.
-///
-/// `staged` is the create card's directory list — a Project does not exist
-/// until it is confirmed, so its directories live here until then. The edit
-/// card writes through to the registry instead and leaves `staged` empty.
-struct ProjectEditor {
-    target: Option<ProjectId>,
-    /// The name line. Empty means "call it after the main directory".
-    name: Entity<ferrite_pane::composer::Composer>,
-    staged: Vec<std::path::PathBuf>,
-    /// A refusal, shown on the card that caused it.
-    error: Option<SharedString>,
-    /// The body's scroll, for its overlay scrollbar.
-    scroll: ScrollHandle,
-    /// On a machine, the path field that stands in for the folder dialog.
-    remote: Option<machines::RemotePath>,
-}
-
-impl ProjectEditor {
-    /// The name to save: what was typed, else the main directory's leaf.
-    /// A directory with no leaf name (a drive root) keeps its whole path.
-    fn resolved_name(&self, typed: &str) -> Option<String> {
-        let typed = typed.trim();
-        if !typed.is_empty() {
-            return Some(typed.to_string());
-        }
-        let main = self.staged.first()?;
-        Some(
-            main.file_name()
-                .map(|leaf| leaf.to_string_lossy().into_owned())
-                .unwrap_or_else(|| main.display().to_string()),
-        )
-    }
-}
 
 /// About's Version: the package version, and ` · dev` on a development
 /// build, so a release is never labelled.
@@ -1445,6 +1406,11 @@ impl CockpitView {
         let settings_view =
             cx.new(|cx| settings_view::SettingsView::new(cockpit_weak.clone(), cx));
         cx.subscribe(&settings_view, Self::on_settings_event).detach();
+        let project_editor_view = cx.new(|cx| {
+            project_editor_view::ProjectEditorView::new(cockpit_weak.clone(), cx)
+        });
+        cx.subscribe(&project_editor_view, Self::on_project_editor_event)
+            .detach();
         let mut view = Self {
             cockpit,
             browsers: Default::default(),
@@ -1525,9 +1491,7 @@ impl CockpitView {
             prefs,
             settings_view,
             float_exits: Default::default(),
-            project_editor: None,
-            project_editor_leaving: None,
-            project_editor_focus: cx.focus_handle(),
+            project_editor_view,
             background_dialog: None,
             background_stops: Default::default(),
             background_stop_sends: 0,
@@ -2449,7 +2413,8 @@ impl CockpitView {
         self.note_work(&frame);
         self.prune_background_stops();
         self.pump_browsers(cx);
-        self.poll_remote_path(cx);
+        self.project_editor_view
+            .update(cx, |editor, cx| editor.poll_remote_path(cx));
         self.poll_machine_repo(cx);
         let server_moved = self.server_moved();
         // The Server says when its parked Threads' rows moved.
@@ -2934,7 +2899,7 @@ impl CockpitView {
     /// press (the frame's titlebar).
     fn overlay_open(&self, cx: &gpui::App) -> bool {
         self.settings_open(cx)
-            || self.project_editor.is_some()
+            || self.project_editor_open(cx)
             || self.popover.is_some()
             || self.context_checks.is_some()
             || self.plan_card.is_some()
@@ -3772,7 +3737,8 @@ impl CockpitView {
             self.connections.editor = None;
         }
         if open {
-            self.project_editor = None;
+            self.project_editor_view
+                .update(cx, |editor, cx| editor.discard(cx));
             self.popover = None;
             self.context_menu = None;
             if self.cli_versions.is_none() {
@@ -4088,466 +4054,6 @@ impl CockpitView {
         .detach();
     }
 
-    /// Open the card on an existing Project, seeded with its name.
-    pub(crate) fn open_project_editor(&mut self, project: ProjectId, cx: &mut Context<Self>) {
-        let Some(title) = self
-            .cockpit
-            .registry()
-            .project(project)
-            .map(|project| project.title.clone())
-        else {
-            return;
-        };
-        let name = cx.new(ferrite_pane::composer::Composer::new);
-        name.update(cx, |name, cx| {
-            name.set_role(ferrite_pane::composer::Role::Field(None), cx);
-            name.set(title, cx)
-        });
-        let remote = self.remote_path(cx);
-        self.show_project_editor(
-            ProjectEditor {
-                target: Some(project),
-                name,
-                staged: Vec::new(),
-                error: None,
-                scroll: ScrollHandle::new(),
-                remote,
-            },
-            cx,
-        );
-    }
-
-    /// Open the card on a Project that does not exist yet: an empty name
-    /// and no directories. Nothing is registered until Create.
-    fn open_project_creator(&mut self, cx: &mut Context<Self>) {
-        let name = cx.new(ferrite_pane::composer::Composer::new);
-        name.update(cx, |name, cx| {
-            name.set_role(ferrite_pane::composer::Role::Field(None), cx)
-        });
-        let remote = self.remote_path(cx);
-        self.show_project_editor(
-            ProjectEditor {
-                target: None,
-                name,
-                staged: Vec::new(),
-                error: None,
-                scroll: ScrollHandle::new(),
-                remote,
-            },
-            cx,
-        );
-    }
-
-    /// The card is modal: everything else floating goes down with it.
-    fn show_project_editor(&mut self, editor: ProjectEditor, cx: &mut Context<Self>) {
-        self.project_editor = Some(editor);
-        self.settings_view.update(cx, |settings, cx| settings.close(cx));
-        self.connections.editor = None;
-        self.popover = None;
-        self.context_menu = None;
-        self.list_remote_path(cx);
-        cx.notify();
-    }
-
-    /// Whether the card's confirm can commit — a new Project needs at least
-    /// its main directory.
-    fn project_editor_ready(&self) -> bool {
-        self.project_editor
-            .as_ref()
-            .is_some_and(|editor| editor.target.is_some() || !editor.staged.is_empty())
-    }
-
-    /// Commit the card. Creating registers the staged directories as one
-    /// Project — the first is primary — and names it; editing only renames,
-    /// because its directory edits already went through. A refusal keeps the
-    /// card open with the reason on it, so nothing typed is lost.
-    fn confirm_project_editor(&mut self, cx: &mut Context<Self>) {
-        let Some(editor) = self.project_editor.take() else {
-            return;
-        };
-        let typed = editor.name.read(cx).text().to_string();
-        let outcome = match editor.target {
-            Some(project) => {
-                let typed = typed.trim();
-                if typed.is_empty() {
-                    Ok(project)
-                } else {
-                    self.cockpit
-                        .rename_project(project, typed)
-                        .map(|()| project)
-                }
-            }
-            None => {
-                let name = editor.resolved_name(&typed);
-                self.cockpit
-                    .register_project_directories(&editor.staged)
-                    .and_then(|project| {
-                        match name {
-                            Some(name) => self.cockpit.rename_project(project, &name),
-                            None => Ok(()),
-                        }
-                        .map(|()| project)
-                    })
-            }
-        };
-        match outcome {
-            Ok(project) => {
-                // The Project the operator just described is the one they
-                // want to look at, and to work in.
-                self.launch_project = Some(project);
-                self.choose_nav_filter(Some(project), cx);
-                if self.panes.is_empty() {
-                    self.open_draft_with_provider(
-                        DraftTarget::Main,
-                        self.prefs.settings.default_provider,
-                        cx,
-                    );
-                }
-                self.nav_notice.clear();
-                self.refresh_names();
-                self.leave_project_editor(editor, cx);
-            }
-            Err(error) => {
-                self.project_editor = Some(ProjectEditor {
-                    error: Some(format!("project unchanged · {error}").into()),
-                    ..editor
-                });
-            }
-        }
-        cx.notify();
-    }
-
-    /// One directory of this computer, for the open card (a machine's card
-    /// has a path field instead). The picker is single-select
-    /// deliberately: a Project's main directory is the first one added, and
-    /// a multi-select would leave which-is-which to the file dialog.
-    fn browse_for_project_directory(&mut self, cx: &mut Context<Self>) {
-        let receiver = cx.prompt_for_paths(gpui::PathPromptOptions {
-            files: false,
-            directories: true,
-            multiple: false,
-            prompt: Some("Add directory".into()),
-        });
-        cx.spawn(async move |this, cx| {
-            let path = match receiver.await {
-                Ok(Ok(Some(paths))) => paths.into_iter().next(),
-                _ => return,
-            };
-            let Some(path) = path else {
-                return;
-            };
-            this.update(cx, |view, cx| view.adopt_editor_directory(path, cx))
-                .ok();
-        })
-        .detach();
-    }
-
-    /// Land a picked directory on the open card. On a new Project it is
-    /// staged — and the first one also names the Project, unless a name has
-    /// already been typed. On an existing one it is attached at once, so
-    /// the card always shows the registry's own list.
-    fn adopt_editor_directory(&mut self, path: std::path::PathBuf, cx: &mut Context<Self>) {
-        let Some(editor) = self.project_editor.as_mut() else {
-            return;
-        };
-        match editor.target {
-            Some(project) => {
-                editor.error = None;
-                if let Err(error) = self.cockpit.add_project_directories(project, &[path]) {
-                    if let Some(editor) = self.project_editor.as_mut() {
-                        editor.error = Some(format!("directory unchanged · {error}").into());
-                    }
-                }
-            }
-            None => {
-                if editor.staged.contains(&path) {
-                    editor.error = Some("that directory is already on this project".into());
-                    cx.notify();
-                    return;
-                }
-                let first = editor.staged.is_empty();
-                editor.error = None;
-                editor.staged.push(path);
-                if first {
-                    let name = editor.name.clone();
-                    let seed = editor.resolved_name("");
-                    if name.read(cx).text().trim().is_empty() {
-                        if let Some(seed) = seed {
-                            name.update(cx, |name, cx| name.set(seed, cx));
-                        }
-                    }
-                }
-            }
-        }
-        cx.notify();
-    }
-
-    /// Drop a staged directory from a Project that does not exist yet. If
-    /// the main one goes, the next takes its place — the list is ordered,
-    /// and the top of it is always primary.
-    fn drop_staged_directory(&mut self, index: usize, cx: &mut Context<Self>) {
-        let Some(editor) = self.project_editor.as_mut() else {
-            return;
-        };
-        if index < editor.staged.len() {
-            editor.staged.remove(index);
-            editor.error = None;
-        }
-        cx.notify();
-    }
-
-    /// Project mutations stay visible together in one protected surface.
-    /// Folder picking may temporarily leave the app, but the card remains
-    /// open so the changed directory list is visible on return.
-    fn project_editor_element(
-        &self,
-        window: &Window,
-        cx: &mut Context<Self>,
-    ) -> Option<AnyElement> {
-        // The open card, or the one that closed while it fades out.
-        let (editor, leaving) = match (&self.project_editor, &self.project_editor_leaving) {
-            (Some(editor), _) => (editor, None),
-            (None, Some((editor, left)))
-                if cx
-                    .background_executor()
-                    .now()
-                    .saturating_duration_since(*left)
-                    < ferrite_ui::motion::DIALOG_OUT.duration() =>
-            {
-                (editor, Some(*left))
-            }
-            _ => return None,
-        };
-        let project = editor
-            .target
-            .and_then(|project| self.cockpit.registry().project(project));
-        // An editing card whose Project was removed underneath it has
-        // nothing left to edit.
-        if editor.target.is_some() && project.is_none() {
-            return None;
-        }
-        let title = match project {
-            Some(project) => SharedString::from(format!("Edit {}", project.title)),
-            None => SharedString::from("New project"),
-        };
-        let directories: Vec<_> = match project {
-            Some(project) => std::iter::once(project.root.clone())
-                .chain(project.additional_roots.iter().cloned())
-                .collect(),
-            None => editor.staged.clone(),
-        };
-        let empty = directories.is_empty();
-        let editing = editor.target;
-
-        let close = project_editor::close_button(cx).on_click(cx.listener(
-            |view, _: &ClickEvent, _, cx| {
-                cx.stop_propagation();
-                view.close_project_editor(cx);
-            },
-        ));
-        let mut body = project_editor::body()
-            .track_scroll(&editor.scroll)
-            .child(project_editor::name_field(
-                editor.name.clone(),
-                editor.name.read(cx).focus_handle(cx).is_focused(window),
-            ))
-            .child(project_editor::section_label(
-                "Directories",
-                "The first is the main directory",
-            ));
-        let mut rows = Vec::new();
-        for (index, directory) in directories.into_iter().enumerate() {
-            let mut actions = div().flex().items_center().gap(px(4.));
-            // An existing Project's main directory is fixed: Threads,
-            // worktrees and titles all hang off it. A staged one is not
-            // real yet, so any row can go.
-            if editing.is_none() || index > 0 {
-                actions = actions.child(
-                    project_editor::destructive_button(
-                        ("remove-project-directory", index),
-                        "Remove",
-                        false,
-                        cx,
-                    )
-                    .on_click(cx.listener(
-                        move |view, _: &ClickEvent, _, cx| {
-                            cx.stop_propagation();
-                            let Some(project) = editing else {
-                                view.drop_staged_directory(index, cx);
-                                return;
-                            };
-                            let refusal = view
-                                .cockpit
-                                .remove_project_directory(project, index)
-                                .err()
-                                .map(|error| {
-                                    SharedString::from(format!("directory unchanged · {error}"))
-                                });
-                            if let Some(editor) = view.project_editor.as_mut() {
-                                editor.error = refusal;
-                            }
-                            cx.notify();
-                        },
-                    )),
-                );
-            }
-            rows.push(project_editor::directory_row(
-                index,
-                directory.display().to_string().into(),
-                home_relative(&directory).into(),
-                index == 0,
-                actions,
-            ));
-        }
-        body = body.child(project_editor::directory_list(rows));
-        // On a machine a path field stands in for the folder dialog, which
-        // could only browse this computer (ADR 0026).
-        body = match &editor.remote {
-            Some(remote) => body.child(self.remote_path_element(remote, window, cx)),
-            // Its own flex row, so the control hugs its label on the list's edge.
-            None => body.child(
-                div().flex().child(
-                    project_editor::add_directory(
-                        if empty {
-                            "+ Add main directory"
-                        } else {
-                            "+ Add directory"
-                        },
-                        cx,
-                    )
-                    .on_click(cx.listener(
-                        move |view, _: &ClickEvent, _, cx| {
-                            cx.stop_propagation();
-                            view.browse_for_project_directory(cx);
-                        },
-                    )),
-                ),
-            ),
-        };
-        let mut left = div().flex().items_center();
-        if let Some(project) = editing {
-            let in_use = self.project_in_use(project);
-            left = left.child(
-                // The verb stays the verb while it cannot run; why it cannot
-                // is the tooltip's to say.
-                project_editor::destructive_button("remove-project", "Remove project", in_use, cx)
-                    .debug_selector(|| "remove-project".into())
-                    .when(in_use, |button| {
-                        button.tip("Park or move its threads first")
-                    })
-                    .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
-                        cx.stop_propagation();
-                        if view.project_in_use(project) {
-                            return;
-                        }
-                        match view.cockpit.remove_project(project) {
-                            Err(error) => {
-                                if let Some(editor) = view.project_editor.as_mut() {
-                                    editor.error = Some(format!("not removed · {error}").into());
-                                }
-                            }
-                            Ok(()) => {
-                                if view.nav_filter == Some(project) {
-                                    view.nav_filter = None;
-                                }
-                                view.nav_notice.clear();
-                                view.close_project_editor(cx);
-                            }
-                        }
-                        cx.notify();
-                    })),
-            );
-        }
-        let ready = self.project_editor_ready();
-        let right = div().flex().items_center().child(
-            project_editor::primary_button(
-                "confirm-project",
-                if editing.is_some() { "Done" } else { "Create" },
-                !ready,
-                cx,
-            )
-            .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
-                cx.stop_propagation();
-                if view.project_editor_ready() {
-                    view.confirm_project_editor(cx);
-                }
-            })),
-        );
-        let footer = project_editor::footer(left, right);
-        if let Some(error) = editor.error.clone() {
-            body = body.child(project_editor::error_line(error));
-        }
-
-        let card = project_editor::card(f32::from(window.viewport_size().height))
-            .id("project-editor-card")
-            .debug_selector(|| "project-editor-card".into())
-            .track_focus(&self.project_editor_focus)
-            .on_mouse_down(
-                MouseButton::Left,
-                cx.listener(|_, _: &MouseDownEvent, _, cx| cx.stop_propagation()),
-            )
-            .child(project_editor::head(title, close))
-            .child(
-                // The body scrolls under an overlay bar, never a gutter.
-                div()
-                    .relative()
-                    .flex()
-                    .flex_col()
-                    .flex_shrink(1.)
-                    .min_h_0()
-                    .child(body)
-                    .child(ferrite_ui::components::scrollbar(
-                        "project-editor-scrollbar",
-                        &editor.scroll,
-                    )),
-            )
-            .child(footer);
-        let sheet = match leaving {
-            Some(left) => ferrite_ui::motion::veil_out(
-                left,
-                ferrite_ui::motion::VEIL,
-                ferrite_ui::sheet::leaving_veil().child(ferrite_ui::motion::dialog_out(left, card)),
-            )
-            .into_any_element(),
-            None => ferrite_ui::motion::veil_in(
-                "project-editor-veil",
-                ferrite_ui::motion::VEIL,
-                project_editor::veil()
-                    .on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(|view, _: &MouseDownEvent, _, cx| {
-                            cx.stop_propagation();
-                            view.close_project_editor(cx);
-                        }),
-                    )
-                    .child(ferrite_ui::motion::dialog_in(
-                        "project-editor-card-in",
-                        card,
-                    )),
-            )
-            .into_any_element(),
-        };
-        Some(deferred(sheet).with_priority(3).into_any_element())
-    }
-
-    /// Close the Project card, if it is open; whether it was. It fades out
-    /// over `motion::DIALOG_OUT` (Claude's dialog exit), drawn from the card
-    /// as it stood.
-    fn close_project_editor(&mut self, cx: &mut Context<Self>) -> bool {
-        let Some(editor) = self.project_editor.take() else {
-            return false;
-        };
-        self.leave_project_editor(editor, cx);
-        true
-    }
-
-    /// `editor` leaves now: kept for its exit, unless motion is reduced.
-    fn leave_project_editor(&mut self, editor: ProjectEditor, cx: &mut Context<Self>) {
-        self.project_editor_leaving = (!ferrite_ui::motion::reduced_motion(cx))
-            .then(|| (editor, cx.background_executor().now()));
-        cx.notify();
-    }
-
     fn pane_for(&self, thread: ThreadId) -> Option<usize> {
         self.panes
             .iter()
@@ -4609,11 +4115,15 @@ impl CockpitView {
         }
         // The card's ↵ is its confirm — but in a machine's path field that
         // holds a path, it adds that directory.
-        if self.project_editor.is_some() {
-            if self.submit_remote_path(window, cx) {
+        if self.project_editor_open(cx) {
+            let typed = self
+                .project_editor_view
+                .update(cx, |editor, cx| editor.take_remote_path(window, cx));
+            if let Some(path) = typed {
+                self.adopt_editor_directory(path, cx);
                 return;
             }
-            if self.project_editor_ready() {
+            if self.project_editor_view.read(cx).ready() {
                 self.confirm_project_editor(cx);
             }
             return;
@@ -4875,7 +4385,7 @@ impl CockpitView {
     /// about whether there is something to accept.
     fn accept_suggestion(&mut self, window: &Window, cx: &mut Context<Self>) -> bool {
         if self.settings_open(cx)
-            || self.project_editor.is_some()
+            || self.project_editor_open(cx)
             || self.rename.is_some()
             || self.snooze_editor.is_some()
             || self.popover.is_some()
@@ -4914,7 +4424,10 @@ impl CockpitView {
     }
 
     fn band_cycle(&mut self, _: &BandCycle, window: &mut Window, cx: &mut Context<Self>) {
-        if self.tab_remote_path(window, cx) {
+        if self
+            .project_editor_view
+            .update(cx, |editor, cx| editor.tab_remote_path(window, cx))
+        {
             return;
         }
         if let Some(at) = self
@@ -4930,7 +4443,7 @@ impl CockpitView {
             return;
         }
         if self.settings_open(cx)
-            || self.project_editor.is_some()
+            || self.project_editor_open(cx)
             || self
                 .focused_thread()
                 .and_then(|thread| self.cockpit.thread(thread))
@@ -4976,7 +4489,7 @@ impl CockpitView {
         cx: &mut Context<Self>,
     ) {
         if self.settings_open(cx)
-            || self.project_editor.is_some()
+            || self.project_editor_open(cx)
             || self
                 .focused_thread()
                 .and_then(|thread| self.cockpit.thread(thread))
@@ -8925,7 +8438,7 @@ impl CockpitView {
         if self.context_checks.is_some_and(|thread| {
             self.focused_thread() != Some(thread)
                 || self.settings_open(cx)
-                || self.project_editor.is_some()
+                || self.project_editor_open(cx)
                 || self.facts.pr(thread).is_none_or(|pr| pr.checks.is_none())
         }) {
             self.context_checks = None;
@@ -9199,9 +8712,10 @@ impl CockpitView {
             if !focus.contains_focused(window, cx) && !self.connection_holds_focus(window, cx) {
                 window.focus(&focus, cx);
             }
-        } else if self.project_editor.is_some() {
-            if !self.project_editor_focus.contains_focused(window, cx) {
-                window.focus(&self.project_editor_focus, cx);
+        } else if self.project_editor_open(cx) {
+            let focus = self.project_editor_view.read(cx).focus.clone();
+            if !focus.contains_focused(window, cx) {
+                window.focus(&focus, cx);
             }
         } else if !self
             .popover
@@ -9585,7 +9099,7 @@ impl CockpitView {
             .children(self.model_picker_element(window, cx))
             .children(self.mode_menu_element(window, cx))
             .child(self.settings_view.clone())
-            .children(self.project_editor_element(window, cx))
+            .child(self.project_editor_view.clone())
             .children(self.new_task_sheet(window, cx))
             .children(self.direct_sheet(window, cx))
             .children(self.background_dialog_element(window, cx))
@@ -9605,7 +9119,7 @@ impl CockpitView {
         #[cfg(test)]
         drawn::built_pane(self.panes[index].identity);
         let content = self.pane_content(index, window, cx);
-        if self.settings_open(cx) || self.project_editor.is_some() {
+        if self.settings_open(cx) || self.project_editor_open(cx) {
             return content;
         }
         if !self.panes[index].is_main() {
