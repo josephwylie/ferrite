@@ -149,6 +149,15 @@ impl CockpitView {
         cx: &mut Context<Self>,
     ) {
         self.empty_shown = false;
+        if let Some(thread) = self.focused_thread().filter(|thread| self.uses_remote_files(*thread)) {
+            self.open_in_files(thread, path, line, true, cx);
+            return;
+        }
+        if self.on_machine() {
+            self.group_error = Some("Start a Thread in this remote workspace before opening its files.".into());
+            cx.notify();
+            return;
+        }
         if let Some(pane) = self.panes.get(self.focused()) {
             pane.preview.open(path, line, &[], window, cx);
         }
@@ -237,6 +246,18 @@ impl CockpitView {
     /// list; the preview follows the File tab the Panel shows. A find bar
     /// closes with its document, and a Markdown reveal that is due settles.
     pub(in crate::cockpit) fn tend_previews(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        for pane in &self.panes {
+            pane.preview.settle_attachment_open(window, cx);
+        }
+        let requests: Vec<_> = self.panes.iter().flat_map(|pane| {
+            pane.preview.take_file_requests().into_iter().map(|request| (pane.thread(), request))
+        }).collect();
+        for (thread, request) in requests {
+            match thread {
+                Some(thread) => self.open_in_files(thread, request.path, request.line, true, cx),
+                None => self.group_error = Some("Start a Thread in this remote workspace before opening its files.".into()),
+            }
+        }
         for pane in &mut self.panes {
             for annotation in pane.preview.take_annotation_requests() {
                 let image = pane

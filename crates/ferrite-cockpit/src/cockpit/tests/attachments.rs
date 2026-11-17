@@ -270,7 +270,7 @@ fn a_pasted_screenshot_outlives_the_launch(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
-fn a_local_file_bound_for_a_machine_is_refused_and_a_workspace_file_is_not(
+fn a_local_file_bound_for_a_machine_waits_for_upload_and_a_workspace_file_does_not(
     cx: &mut TestAppContext,
 ) {
     let (view, fake, dir, cx) = window_on("attach-remote", cx);
@@ -292,7 +292,7 @@ fn a_local_file_bound_for_a_machine_is_refused_and_a_workspace_file_is_not(
         0,
         "it is not sent as a path the machine lacks"
     );
-    assert!(cx.debug_bounds("attachment-failed").is_some());
+    assert!(cx.debug_bounds("attachment-upload-progress").is_some());
     assert_eq!(held_files(&view, cx), [local.clone()]);
     view.update(cx, |view, cx| view.save_drafts(cx));
     assert!(
@@ -354,4 +354,68 @@ fn an_image_the_header_reader_does_not_know_is_still_drawn(cx: &mut TestAppConte
     drop_files(std::slice::from_ref(&svg), cx);
     assert!(cx.debug_bounds("tray-image-0").is_some());
     assert!(cx.debug_bounds("attachment-failed").is_none());
+}
+
+fn upload_admission(name: &str, fresh: bool, cx: &mut TestAppContext) {
+    let (view, fake, dir, cx) = window_on(name, cx);
+    if fresh {
+        view.update(cx, |view, cx| {
+            view.open_draft_with_placement(DraftTarget::Main, DraftPlacement::Loose, cx);
+        });
+        tick(cx);
+    }
+    let local = dir.join("desktop-only.txt");
+    let receipt = PathBuf::from("/server-only/attachments/receipt/desktop-only.txt");
+    let composer = view.read_with(cx, |view, _| view.panes[view.focused()].composer.clone());
+    let attempt = composer.update(cx, |composer, cx| {
+        composer.aim_files(Destination::Remote, dir, cx);
+        composer.set(WORDS.into(), cx);
+        composer.add_local_files(std::slice::from_ref(&local), cx);
+        let [(_, attempt)] = composer.pending_uploads(cx).try_into().unwrap();
+        attempt
+    });
+    tick(cx);
+    cx.simulate_keystrokes("enter");
+    tick(cx);
+    assert_eq!(sent_with(&fake, WORDS), 0);
+    composer.update(cx, |composer, cx| {
+        assert!(composer.finish_upload(&local, attempt, Err("Disconnected".into()), cx));
+    });
+    tick(cx);
+    cx.simulate_keystrokes("enter");
+    tick(cx);
+    assert_eq!(sent_with(&fake, WORDS), 0);
+    composer.read_with(cx, |composer, _| {
+        assert_eq!(composer.text(), WORDS);
+        assert_eq!(composer.files(), [local.clone()]);
+    });
+    let retry = cx.debug_bounds("tray-file-0-retry").expect("a failed upload can retry");
+    cx.simulate_click(retry.center(), gpui::Modifiers::none());
+    tick(cx);
+    composer.update(cx, |composer, cx| {
+        let [(_, next)] = composer.pending_uploads(cx).try_into().unwrap();
+        assert_ne!(next, attempt);
+        assert!(composer.finish_upload(&local, next, Ok(receipt.clone()), cx));
+        assert_eq!(composer.content().files, [receipt.clone()]);
+        assert!(composer.content().local.is_empty());
+    });
+    tick(cx);
+    let editor = cx.debug_bounds("focused-prompt-editor").unwrap();
+    cx.simulate_click(editor.center(), gpui::Modifiers::none());
+    cx.simulate_keystrokes("enter");
+    tick(cx);
+    assert_eq!(sent_with(&fake, WORDS), 1);
+    let sent = fake.sent.borrow().iter().find(|text| text.contains(WORDS)).unwrap().clone();
+    assert_eq!(ferrite_core::prompt_files::paths(&sent, None), [receipt]);
+    assert!(!sent.contains(&local.to_string_lossy().to_string()));
+}
+
+#[gpui::test]
+fn remote_upload_admission_preserves_an_existing_thread_draft_until_ready(cx: &mut TestAppContext) {
+    upload_admission("upload-existing-admission", false, cx);
+}
+
+#[gpui::test]
+fn remote_upload_admission_preserves_a_new_thread_draft_until_ready(cx: &mut TestAppContext) {
+    upload_admission("upload-bootstrap-admission", true, cx);
 }

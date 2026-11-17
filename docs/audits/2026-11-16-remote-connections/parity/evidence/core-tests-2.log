@@ -1,0 +1,254 @@
+    Updating crates.io index
+    Blocking waiting for file lock on package cache
+     Locking 33 packages to highest compatible versions
+      Adding axum v0.8.9
+      Adding axum-core v0.5.6
+      Adding axum-server v0.7.3 (available: v0.9.2)
+      Adding cfg_aliases v0.1.1
+      Adding dbus v0.9.12
+      Adding dbus-secret-service v4.1.0
+      Adding httpdate v1.0.3
+      Adding keyring v3.6.3 (available: v4.2.0)
+      Adding libdbus-sys v0.2.7
+      Adding linux-keyutils v0.2.5
+      Adding matchit v0.8.4 (available: v0.8.6)
+      Adding nix v0.28.0
+      Adding nix v0.29.0
+      Adding portable-pty v0.9.0
+      Adding secret-service v4.0.0
+      Adding security-framework v2.11.1
+      Adding serde_path_to_error v0.1.20
+      Adding serial2 v0.2.39
+      Adding shared_library v0.1.9
+      Adding shell-words v1.1.1
+      Adding tokio-macros v2.7.2
+      Adding tokio-tungstenite v0.28.0 (available: v0.30.0)
+      Adding tokio-tungstenite v0.29.0
+      Adding tungstenite v0.28.0
+      Adding tungstenite v0.29.0
+      Adding winreg v0.10.1
+      Adding xdg-home v1.3.0
+      Adding zbus v4.4.0
+      Adding zbus_macros v4.4.0
+      Adding zbus_names v3.0.0
+      Adding zvariant v4.2.0
+      Adding zvariant_derive v4.2.0
+      Adding zvariant_utils v2.1.0
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on package cache
+ Downloading crates ...
+  Downloaded axum-core v0.5.6
+  Downloaded downcast-rs v1.2.1
+  Downloaded axum v0.8.9
+  Downloaded portable-pty v0.9.0
+  Downloaded keyring v3.6.3
+  Downloaded shell-words v1.1.1
+  Downloaded tokio-tungstenite v0.29.0
+  Downloaded cfg_aliases v0.1.1
+  Downloaded axum-server v0.7.3
+  Downloaded serde_path_to_error v0.1.20
+  Downloaded tokio-tungstenite v0.28.0
+  Downloaded filedescriptor v0.8.3
+  Downloaded httpdate v1.0.3
+  Downloaded tungstenite v0.29.0
+  Downloaded tungstenite v0.28.0
+  Downloaded tokio-macros v2.7.2
+  Downloaded matchit v0.8.4
+  Downloaded serial2 v0.2.39
+  Downloaded nix v0.28.0
+    Blocking waiting for file lock on package cache
+   Compiling serde_core v1.0.229
+   Compiling syn v3.0.4
+   Compiling tracing v0.1.44
+   Compiling getrandom v0.2.17
+   Compiling ppv-lite86 v0.2.21
+   Compiling rustls v0.23.43
+   Compiling subtle v2.6.1
+   Compiling sha1 v0.10.7
+   Compiling data-encoding v2.11.1
+   Compiling security-framework-sys v2.17.0
+   Compiling ring v0.17.14
+   Compiling rand_chacha v0.9.0
+   Compiling futures-channel v0.3.34
+   Compiling cfg_aliases v0.1.1
+   Compiling rand v0.9.5
+   Compiling httpdate v1.0.3
+   Compiling nix v0.28.0
+   Compiling tracing-subscriber v0.3.23
+   Compiling fs-err v3.3.2
+   Compiling thiserror-impl v1.0.69
+   Compiling rustls-webpki v0.103.15
+   Compiling sync_wrapper v1.0.2
+   Compiling serde_derive_internals v0.30.0
+   Compiling ahash v0.8.12
+   Compiling rand_core v0.6.4
+   Compiling axum-core v0.5.6
+   Compiling ureq-proto v0.6.4
+   Compiling serial2 v0.2.39
+   Compiling downcast-rs v1.2.1
+   Compiling shell-words v1.1.1
+   Compiling matchit v0.8.4
+   Compiling ureq v3.4.2
+   Compiling rand_chacha v0.3.1
+   Compiling thiserror v1.0.69
+   Compiling filedescriptor v0.8.3
+   Compiling rand v0.8.7
+   Compiling serde_derive v1.0.229
+   Compiling tokio-macros v2.7.2
+   Compiling zerovec-derive v0.11.6
+   Compiling thiserror-impl v2.0.20
+   Compiling displaydoc v0.2.7
+   Compiling futures-macro v0.3.34
+   Compiling ref-cast-impl v1.0.27
+   Compiling schemars_derive v1.2.2
+   Compiling tokio v1.53.1
+   Compiling zerotrie v0.2.5
+   Compiling zerovec v0.11.8
+   Compiling futures-util v0.3.34
+   Compiling tinystr v0.8.4
+   Compiling icu_locale_core v2.3.0
+   Compiling thiserror v2.0.20
+   Compiling potential_utf v0.1.6
+   Compiling icu_collections v2.3.0
+   Compiling icu_provider v2.3.1
+   Compiling tokio-util v0.7.19
+   Compiling icu_properties v2.3.0
+   Compiling h2 v0.4.19
+   Compiling icu_normalizer v2.3.0
+   Compiling tungstenite v0.29.0
+   Compiling idna_adapter v1.2.2
+   Compiling tracing-appender v0.2.5
+   Compiling tokio-rustls v0.26.4
+   Compiling tokio-tungstenite v0.29.0
+   Compiling idna v1.1.0
+   Compiling ref-cast v1.0.27
+   Compiling tower v0.5.3
+   Compiling tungstenite v0.28.0
+   Compiling url v2.5.8
+   Compiling hyper v1.11.0
+   Compiling hyper-util v0.1.20
+   Compiling axum-server v0.7.3
+   Compiling bitflags v2.13.1
+   Compiling serde v1.0.229
+   Compiling serde_json v1.0.151
+   Compiling serde_path_to_error v0.1.20
+   Compiling objc2-core-foundation v0.3.2
+   Compiling notify-types v2.1.0
+   Compiling security-framework v3.7.0
+   Compiling git2 v0.21.0
+   Compiling rustix v1.1.4
+   Compiling nix v0.31.3
+   Compiling bincode v1.3.3
+   Compiling plist v1.10.1
+   Compiling serde_urlencoded v0.7.1
+   Compiling heed-types v0.21.0
+   Compiling heed v0.22.1
+   Compiling syntect v5.3.0
+   Compiling process-wrap v10.0.1
+   Compiling tempfile v3.27.0
+   Compiling rustls-native-certs v0.8.4
+   Compiling portable-pty v0.9.0
+   Compiling keyring v3.6.3
+   Compiling tokio-tungstenite v0.28.0
+   Compiling two-face v0.5.2+bat-0.26.1
+   Compiling schemars v1.2.2
+   Compiling axum v0.8.9
+   Compiling objc2-core-services v0.3.2
+   Compiling notify v9.0.0-rc.5
+   Compiling fff-notify-debouncer-full v0.9.4
+   Compiling fff-search v0.11.0
+   Compiling ferrite-reviewr v0.46.0 (/Users/josephwylie/Desktop/Projects/ferrite-remote-connections/crates/ferrite-reviewr)
+   Compiling ferrite-core v0.4.0 (/Users/josephwylie/Desktop/Projects/ferrite-remote-connections/crates/ferrite-core)
+warning: unused import: `Write`
+ --> crates/ferrite-core/src/machine/remote.rs:3:27
+  |
+3 | use std::io::{self, Read, Write};
+  |                           ^^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: `ferrite-core` (lib) generated 1 warning (run `cargo fix --lib -p ferrite-core` to apply 1 suggestion)
+warning: variable does not need to be mutable
+   --> crates/ferrite-core/src/server/tests/drive.rs:121:13
+    |
+121 |     let mut driven = attach_driven(&harness.address);
+    |         ----^^^^^^
+    |         |
+    |         help: remove this `mut`
+    |
+    = note: `#[warn(unused_mut)]` (part of `#[warn(unused)]`) on by default
+
+warning: `ferrite-core` (lib test) generated 2 warnings (1 duplicate) (run `cargo fix --lib -p ferrite-core --tests` to apply 1 suggestion)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 4m 24s
+────────────
+ Nextest run ID 599606f3-23f5-4e06-8686-c609d9a8d28f with nextest profile: default
+    Starting 65 tests across 50 binaries (1712 tests skipped)
+        PASS [   0.043s] ( 1/65) ferrite-core api::tests::a_prompts_wait_times_out_while_its_agent_still_works
+        PASS [   0.042s] ( 2/65) ferrite-core api::tests::a_prompts_wait_settles_only_after_its_agent_was_seen_working
+        PASS [   0.045s] ( 3/65) ferrite-core api::tests::a_line_that_is_not_a_request_is_answered_with_why
+        PASS [   0.045s] ( 4/65) ferrite-core api::tests::a_prompt_whose_agent_shows_no_work_stalls_after_five_seconds
+        PASS [   0.048s] ( 5/65) ferrite-core api::tests::a_ready_wait_answers_once_the_agent_is_up_and_at_rest
+        PASS [   0.049s] ( 6/65) ferrite-core api::tests::a_prompts_wait_settles_blocked_when_its_agent_asks_a_decision
+        PASS [   0.048s] ( 7/65) ferrite-core api::tests::a_prompts_wait_until_working_answers_once_the_prompt_is_taken
+        PASS [   0.049s] ( 8/65) ferrite-core api::tests::a_plain_wait_answers_at_once_when_the_agent_is_settled
+        PASS [   0.050s] ( 9/65) ferrite-core api::tests::a_thread_starts_where_the_cli_runs_unless_told
+        PASS [   0.050s] (10/65) ferrite-core api::tests::a_report_names_the_worker_it_runs_in
+        PASS [   0.034s] (11/65) ferrite-core api::tests::a_wrong_command_line_says_what_is_wrong
+        PASS [   0.035s] (12/65) ferrite-core api::tests::a_worktree_is_removed_by_its_directory
+        PASS [   0.039s] (13/65) ferrite-core api::tests::a_wait_until_one_attention_passes_every_other
+        PASS [   0.039s] (14/65) ferrite-core api::tests::a_timeout_shorter_than_the_stall_comes_first
+        PASS [   0.038s] (15/65) ferrite-core api::tests::after_a_double_dash_every_word_is_an_argument
+        PASS [   0.043s] (16/65) ferrite-core api::tests::answers_refusals_and_events_keep_their_shape
+        PASS [   0.053s] (17/65) ferrite-core api::tests::automatic_starts_parse_from_the_cli
+        PASS [   0.053s] (18/65) ferrite-core api::tests::current_names_the_calling_thread_and_frees_its_position
+        PASS [   0.057s] (19/65) ferrite-core api::tests::an_owner_is_given_as_json
+        PASS [   0.041s] (20/65) ferrite-core api::tests::machine_is_a_global_flag_before_the_arguments
+        PASS [   0.052s] (21/65) ferrite-core api::tests::help_lists_every_command_with_its_arguments
+        PASS [   0.054s] (22/65) ferrite-core api::tests::every_operations_schema_admits_a_request_this_server_reads
+        PASS [   0.055s] (23/65) ferrite-core api::tests::every_operation_is_a_group_and_a_verb_whose_positionals_are_its_parameters
+        PASS [   0.060s] (24/65) ferrite-core api::tests::every_later_parameter_has_a_frozen_request_that_round_trips
+        PASS [   0.042s] (25/65) ferrite-core api::tests::on_a_machine_a_cwd_is_given_whole
+        PASS [   0.039s] (26/65) ferrite-core api::tests::positionals_come_in_their_declared_order_and_flags_by_their_type
+        PASS [   0.060s] (27/65) ferrite-core api::tests::machine_names_a_saved_enabled_machine
+        PASS [   0.030s] (28/65) ferrite-core api::tests::proposals_parse_from_the_cli
+        PASS [   0.037s] (29/65) ferrite-core api::tests::pull_requests_and_merging_parse_from_the_cli
+        PASS [   0.039s] (30/65) ferrite-core api::tests::questions_approval_and_direction_parse_from_the_cli
+        PASS [   0.137s] (31/65) ferrite-core api::tests::every_frozen_request_still_decodes
+        PASS [   0.044s] (32/65) ferrite-core api::tests::the_launch_options_read_as_their_parameters
+        PASS [   0.108s] (33/65) ferrite-core api::tests::every_operation_has_a_frozen_request_that_round_trips
+        PASS [   0.049s] (34/65) ferrite-core api::tests::the_cli_leaves_the_apps_own_arguments_alone
+        PASS [   0.049s] (35/65) ferrite-core api::tests::the_operations_are_the_ones_declared_and_never_renamed
+        FAIL [   0.037s] (36/65) ferrite-core api::tests::the_bundled_skill_names_the_safety_rules
+  stdout ───
+
+    running 1 test
+    test api::tests::the_bundled_skill_names_the_safety_rules ... FAILED
+
+    failures:
+
+    failures:
+        api::tests::the_bundled_skill_names_the_safety_rules
+
+    test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1378 filtered out; finished in 0.01s
+
+  stderr ───
+
+    thread 'api::tests::the_bundled_skill_names_the_safety_rules' (53638034) panicked at crates/ferrite-core/src/api/tests.rs:1616:9:
+    the skill never shows `window.attach`
+    note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+  Cancelling due to test failure: 9 tests still running
+        PASS [   0.039s] (37/65) ferrite-core api::tests::the_stall_clock_waits_for_the_session_to_be_up
+        PASS [   0.046s] (38/65) ferrite-core api::tests::the_version_is_the_name_then_semver
+        PASS [   0.042s] (39/65) ferrite-core api::tests::workflow_authoring_parses_from_the_cli
+        PASS [   0.061s] (40/65) ferrite-core api::tests::window_actions_read_as_the_window_takes_them
+        PASS [   0.054s] (41/65) ferrite-core attachment_transfer::tests::cancellation_expiry_and_disconnect_remove_scratch_files
+        PASS [   0.060s] (42/65) ferrite-core attachment_transfer::tests::a_corrupted_retained_preview_is_rejected
+        PASS [   0.068s] (43/65) ferrite-core attachment_transfer::tests::concurrent_same_name_uploads_keep_distinct_content_and_verify_existing_content
+        PASS [   0.106s] (44/65) ferrite-core attachment_transfer::tests::chunk_boundaries_retain_exact_content_and_read_it_in_bounded_pieces
+        PASS [   2.640s] (45/65) ferrite-core attachment_transfer::tests::a_file_exactly_at_the_limit_is_accepted_in_chunks
+────────────
+     Summary [   2.833s] 45/65 tests run: 44 passed, 1 failed, 1712 skipped
+        FAIL [   0.037s] (36/65) ferrite-core api::tests::the_bundled_skill_names_the_safety_rules
+warning: 20/65 tests were not run due to test failure (run with --no-fail-fast to run all tests, or run with --max-fail)
+error: test run failed

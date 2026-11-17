@@ -1,0 +1,24 @@
+{
+  "path": "/Users/josephwylie/Desktop/Projects/ferrite-remote-connections/docs/audits/2026-11-16-remote-connections/parity/native-5/failure-1470x923.png",
+  "sha256": "50e88d1c30aeaf677671034d28e7561db23d50b8213df2b63a280950b235ab18",
+  "logical_viewport": [
+    1470,
+    923
+  ],
+  "device_pixel_ratio": 2.0,
+  "pixel_dimensions": [
+    2940,
+    1846
+  ],
+  "image_format": "PNG",
+  "crop_px": [
+    0,
+    0,
+    2940,
+    1846
+  ],
+  "surface": "Ferrite native headless Driver",
+  "provider": "simulated Codex app-server, no model API calls",
+  "source_commit": "c3743ff834284fbb27d459afc8d1bcbd90f7f514",
+  "binary_sha256": "332f91c83d1f0c7083b2efa7e55bdaa66049bac0e5d1b817ebeb032f64e32851"
+}

@@ -1,0 +1,19 @@
+   Compiling ferrite-core v0.4.0 (/Users/josephwylie/Desktop/Projects/ferrite-remote-connections/crates/ferrite-core)
+   Compiling ferrite-ui v0.4.0 (/Users/josephwylie/Desktop/Projects/ferrite-remote-connections/crates/ferrite-ui)
+   Compiling ferrite-terminal v0.4.0 (/Users/josephwylie/Desktop/Projects/ferrite-remote-connections/crates/ferrite-terminal)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 26.52s
+warning: the following packages contain code that will be rejected by a future version of Rust: block v0.1.6
+note: to see what the problems were, use the option `--future-incompat-report`, or run `cargo report future-incompatibilities --id 1`
+────────────
+ Nextest run ID e10630f3-dfbe-42c5-8088-546b2de9db85 with nextest profile: default
+    Starting 8 tests across 1 binary (10 tests skipped)
+        PASS [   0.023s] (1/8) ferrite-terminal session::tests::a_missing_folder_is_refused
+        PASS [   0.034s] (2/8) ferrite-terminal session::tests::a_missing_program_does_not_start_the_default_shell
+        PASS [   0.100s] (3/8) ferrite-terminal session::tests::dropping_a_terminal_never_waits_on_its_shell
+        PASS [   0.264s] (4/8) ferrite-terminal session::tests::an_explicit_command_preserves_arguments_local_directory_and_terminal_input
+        PASS [   2.094s] (5/8) ferrite-terminal session::tests::the_shell_starts_in_the_folder_and_runs_what_is_written
+        PASS [   2.191s] (6/8) ferrite-terminal session::tests::a_selection_copies_its_text_and_paste_types_it
+        PASS [   2.193s] (7/8) ferrite-terminal session::tests::dropping_it_ends_the_shell
+        PASS [   2.261s] (8/8) ferrite-terminal session::tests::a_resize_reaches_the_shell
+────────────
+     Summary [   2.261s] 8 tests run: 8 passed, 10 skipped

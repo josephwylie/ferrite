@@ -29,6 +29,11 @@
 
 use std::path::{Path, PathBuf};
 
+#[path = "remote_files.rs"]
+pub(in crate::cockpit::tools) mod remote_files;
+use ferrite_core::file_operations::Reply as FileReply;
+use remote_files::RemoteFiles;
+
 use ferrite_pane::composer::{Composer, Role};
 use ferrite_pane::preview::{head_door, open_original, reading_markup, Body as DocBody};
 use ferrite_ui::icons::{self, icon};
@@ -84,16 +89,20 @@ enum TabBody {
     Unshown(Unshown),
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 enum Unshown {
+    Loading,
+    Remote(String),
     Unreadable,
     /// Not text: what kind of file it looks like, by its extension.
     Binary(&'static str),
 }
 
 impl Unshown {
-    fn note(self) -> &'static str {
+    fn note(&self) -> &str {
         match self {
+            Self::Loading => "Loading remote file…",
+            Self::Remote(error) => error,
             Self::Unreadable => "Could not read this file",
             Self::Binary(kind) => kind,
         }
@@ -146,6 +155,8 @@ struct Tab {
     preview: bool,
     body: TabBody,
     reading: Reading,
+    load: u64,
+    pending_line: Option<u32>,
 }
 
 impl Tab {
@@ -167,6 +178,7 @@ impl Tab {
 
 pub(crate) struct Files {
     tree: FileTree,
+    remote: Option<RemoteFiles>,
     filter: Entity<Composer>,
     tabs: Vec<Tab>,
     active: Option<usize>,
@@ -363,6 +375,10 @@ impl CockpitView {
             .collect()
     }
 
+    pub(in crate::cockpit) fn uses_remote_files(&self, thread: ThreadId) -> bool {
+        self.on_machine() || self.files_ref(thread).is_some_and(|files| files.remote.is_some())
+    }
+
     pub(in crate::cockpit) fn files_ref(&self, thread: ThreadId) -> Option<&Files> {
         self.tools.files.get(&thread)
     }
@@ -375,22 +391,37 @@ impl CockpitView {
     ) -> Option<&mut Files> {
         if !self.tools.files.contains_key(&thread) {
             let root = self.thread_path(thread)?;
+            let remote =
+                self.cockpit.machine().cloned().map(|machine| {
+                    RemoteFiles::new(root.clone(), cx.entity().downgrade(), machine)
+                });
             let filter = cx.new(|cx| {
                 let mut field = Composer::new(cx);
                 field.set_role(Role::Field(Some(FILTER_CONTEXT)), cx);
                 field
             });
-            cx.subscribe(&filter, move |view, field, _: &ferrite_pane::composer::Edited, cx| {
-                let text = field.read(cx).text().to_string();
-                if let Some(files) = view.files_of(thread) {
-                    files.tree.set_filter(text);
-                    cx.notify();
-                }
-            })
+            cx.subscribe(
+                &filter,
+                move |view, field, _: &ferrite_pane::composer::Edited, cx| {
+                    let text = field.read(cx).text().to_string();
+                    if let Some(files) = view.files_of(thread) {
+                        files.tree.set_filter(text);
+                        if files.remote.is_some() {
+                            view.refresh_file_tree(thread, cx);
+                        }
+                        cx.notify();
+                    }
+                },
+            )
             .detach();
             let stored = self.panel.working_sets.get(thread.get()).cloned();
             let mut files = Files {
-                tree: FileTree::new(root),
+                tree: if remote.is_some() {
+                    FileTree::remote(root)
+                } else {
+                    FileTree::new(root)
+                },
+                remote,
                 filter,
                 tabs: Vec::new(),
                 active: None,
@@ -407,7 +438,14 @@ impl CockpitView {
                 files.preview_tabs = stored.preview_tabs;
                 files.show_tree = stored.show_tree;
                 for open in stored.files {
-                    let tab = Self::read_tab(open.path, open.preview, files.settings, thread, cx);
+                    let tab = Self::read_tab(
+                        open.path,
+                        open.preview,
+                        files.settings,
+                        files.remote.clone(),
+                        thread,
+                        cx,
+                    );
                     files.tabs.push(tab);
                 }
                 files.active = stored.active.filter(|at| *at < files.tabs.len());
@@ -445,7 +483,8 @@ impl CockpitView {
         } else {
             let preview = files.preview_tabs && !keep;
             let settings = files.settings;
-            let tab = Self::read_tab(path, preview, settings, thread, cx);
+            let remote = files.remote.clone();
+            let tab = Self::read_tab(path, preview, settings, remote, thread, cx);
             let Some(files) = self.files_of(thread) else {
                 return;
             };
@@ -469,10 +508,14 @@ impl CockpitView {
         files.tab_scroll.reveal(at);
         if let Some(line) = line {
             let tab = &mut files.tabs[at];
+            tab.pending_line = Some(line);
             tab.show_source();
             if let Some(editor) = tab.shown_editor() {
                 editor.update(cx, |editor, cx| editor.go_to_line(line as usize, cx));
             }
+        }
+        if files.remote.is_some() {
+            self.refresh_file_tree(thread, cx);
         }
         cx.notify();
     }
@@ -488,7 +531,7 @@ impl CockpitView {
         cx: &mut Context<Self>,
     ) {
         match self.pane_for(thread) {
-            Some(index) if ferrite_pane::image_viewer::is_image(&path) => {
+            Some(index) if !self.uses_remote_files(thread) && ferrite_pane::image_viewer::is_image(&path) => {
                 self.panes[index].preview.open(path, None, &[], window, cx);
                 cx.notify();
             }
@@ -500,9 +543,51 @@ impl CockpitView {
         path: PathBuf,
         preview: bool,
         settings: editor::Settings,
+        remote: Option<RemoteFiles>,
         thread: ThreadId,
         cx: &mut Context<Self>,
     ) -> Tab {
+        static LOADS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+        let load = LOADS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        if let Some(remote) = remote {
+            let answer = remote.read(&path, cx);
+            let opened = path.clone();
+            cx.spawn(async move |view, cx| {
+                let result = cx.background_executor().spawn(async move { remote_files::receive(answer).await }).await;
+                let _ = view.update(cx, |view, cx| {
+                    let Some(files) = view.files_ref(thread).filter(|files| files.remote.as_ref().is_some_and(|current| current.same_workspace(&remote))) else { return; };
+                    let Some(at) = files.tabs.iter().position(|tab| tab.load == load && tab.path == opened) else { return; };
+                    let settings = files.settings;
+                    let line = files.tabs[at].pending_line;
+                    let (body, reading) = match result {
+                        Ok(FileReply::Text { text, .. }) => {
+                            let editor = Self::editor_for(&opened, text, settings, thread, cx);
+                            editor.update(cx, |editor, cx| {
+                                editor.set_remote(remote);
+                                if let Some(line) = line { editor.go_to_line(line as usize, cx); }
+                            });
+                            (TabBody::Code(editor), Reading::Plain)
+                        }
+                        Ok(FileReply::Binary) => (TabBody::Unshown(Unshown::Remote("This remote file is not text. Use the remote terminal to open or copy it.".into())), Reading::Plain),
+                        Ok(_) => (TabBody::Unshown(Unshown::Remote("Update Ferrite on this machine to open remote files.".into())), Reading::Plain),
+                        Err(error) => (TabBody::Unshown(Unshown::Remote(error.to_string())), Reading::Plain),
+                    };
+                    if let Some(tab) = view.files_of(thread).and_then(|files| files.tabs.get_mut(at)) {
+                        tab.body = body;
+                        tab.reading = reading;
+                    }
+                    cx.notify();
+                });
+            }).detach();
+            return Tab {
+                path,
+                preview,
+                body: TabBody::Unshown(Unshown::Loading),
+                reading: Reading::Plain,
+                load,
+                pending_line: None,
+            };
+        }
         let (body, reading) = match std::fs::read(&path) {
             Err(_) => (TabBody::Unshown(Unshown::Unreadable), Reading::Plain),
             Ok(bytes) => match String::from_utf8(bytes) {
@@ -520,7 +605,14 @@ impl CockpitView {
                 }
             },
         };
-        Tab { path, preview, body, reading }
+        Tab {
+            path,
+            preview,
+            body,
+            reading,
+            load,
+            pending_line: None,
+        }
     }
 
     fn editor_for(
@@ -603,6 +695,36 @@ impl CockpitView {
         files.status_reads += 1;
         let read = files.status_reads;
         let root = files.tree.root().to_path_buf();
+        if let Some(remote) = files.remote.clone() {
+            let (directories, search) = files.tree.remote_request();
+            let answer = remote.snapshot(directories, search, cx);
+            cx.spawn(async move |view, cx| {
+                let result = cx
+                    .background_executor()
+                    .spawn(async move { remote_files::receive(answer).await })
+                    .await;
+                let result = match result {
+                    Ok(FileReply::Snapshot(snapshot)) => Ok(snapshot),
+                    Ok(_) => Err("Update Ferrite on this machine to browse remote files.".into()),
+                    Err(error) => Err(error.to_string()),
+                };
+                let _ = view.update(cx, |view, cx| {
+                    if let Some(files) = view.files_of(thread).filter(|files| {
+                        files.status_reads == read
+                            && files
+                                .remote
+                                .as_ref()
+                                .is_some_and(|current| current.same_workspace(&remote))
+                    }) {
+                        files.tree.set_remote(result);
+                        cx.notify();
+                    }
+                });
+            })
+            .detach();
+            cx.notify();
+            return;
+        }
         cx.spawn(async move |view, cx| {
             let status = {
                 let root = root.clone();
@@ -651,7 +773,8 @@ impl CockpitView {
         };
         let (path, settings) = (files.tabs[at].path.clone(), files.settings);
         let preview = files.tabs[at].preview;
-        let tab = Self::read_tab(path, preview, settings, thread, cx);
+        let remote = files.remote.clone();
+        let tab = Self::read_tab(path, preview, settings, remote, thread, cx);
         if let Some(slot) = self
             .files_of(thread)
             .and_then(|files| files.tabs.get_mut(at))
@@ -699,6 +822,11 @@ impl CockpitView {
             })
             .count();
         (lost > 0).then_some(lost)
+    }
+
+    pub(crate) fn files_leave_error(&self, cx: &gpui::App) -> Option<&'static str> {
+        self.unsaved_files_at_leaving(cx)
+            .map(|_| "Save or close edited files before switching environments.")
     }
 
     pub(in crate::cockpit) fn save_working_sets(&mut self) {
@@ -794,6 +922,7 @@ impl CockpitView {
             return;
         };
         let pressed = files.pressed.clone();
+        let remote = files.remote.is_some();
         match verb {
             Verb::ToggleTree => files.show_tree = !files.show_tree,
             Verb::CollapseAll => files.tree.collapse_all(),
@@ -805,9 +934,16 @@ impl CockpitView {
             Verb::Attach => {
                 if let Some(path) = pressed {
                     if let Some(index) = self.pane_for(thread) {
-                        self.panes[index]
-                            .composer
-                            .update(cx, |composer, cx| composer.add_files(&[path], cx));
+                        self.panes[index].composer.update(cx, |composer, cx| {
+                            if remote {
+                                composer.insert(
+                                    &format!("\nPlease use the file at {} on this machine.\n", path.display()),
+                                    cx,
+                                );
+                            } else {
+                                composer.add_files(&[path], cx);
+                            }
+                        });
                     }
                 }
             }
@@ -905,7 +1041,7 @@ impl CockpitView {
             Some((menu::Item::new("Attach as context"), MenuVerb::Files(Verb::Attach))),
             Some((menu::Item::new("Copy"), MenuVerb::Submenu(Submenu::Files(Sub::Copy)))),
             None,
-            Some((menu::Item::new("Show in Finder"), MenuVerb::Reveal)),
+            (!self.on_machine()).then(|| (menu::Item::new("Show in Finder"), MenuVerb::Reveal)),
         ]
     }
 
@@ -1119,6 +1255,7 @@ impl CockpitView {
                     .flex()
                     .flex_col()
                     .flex_1()
+                    .w_full()
                     .items_center()
                     .justify_center()
                     .gap(px(SPACE_2))
@@ -1130,6 +1267,8 @@ impl CockpitView {
                     .child(
                         div()
                             .w_full()
+                            .min_w_0()
+                            .whitespace_normal()
                             .text_size(px(FS_META))
                             .text_color(rgb(INK_SUBTLE))
                             .child("Pick a file in the tree, or click a file path in the conversation."),
@@ -1207,7 +1346,7 @@ impl CockpitView {
                     move |view, _: &ClickEvent, _, cx| view.show_changes_of(thread, &path, cx),
                 ))
             }))
-            .child({
+            .children((files.remote.is_none()).then(|| {
                 let file = tab.path.clone();
                 text_action("files-open", "Open").on_click(cx.listener(
                     move |_, _: &ClickEvent, _, cx| {
@@ -1216,7 +1355,7 @@ impl CockpitView {
                         }
                     },
                 ))
-            });
+            }));
         let retry_path = tab.path.clone();
         let open_path = tab.path.clone();
         let body = match (&tab.body, &tab.reading) {
@@ -1261,20 +1400,30 @@ impl CockpitView {
                 .into_any_element(),
             (TabBody::Code(editor), _) => div().flex_1().min_h_0().child(editor.clone()).into_any_element(),
             (TabBody::Unshown(why), _) => {
-                let why = *why;
+                let why = why.clone();
                 div()
                     .debug_selector(|| "files-unshown".into())
                     .flex()
                     .flex_col()
                     .flex_1()
+                    .w_full()
+                    .min_w_0()
                     .items_center()
                     .justify_center()
                     .gap(px(SPACE_2))
+                    .px(px(SPACE_6))
+                    .text_center()
                     .text_size(px(FS_LABEL))
                     .text_color(rgb(INK_SUBTLE))
-                    .child(why.note())
-                    .when(why != Unshown::Unreadable, |note| {
-                        note.child(div().text_size(px(FS_META)).child("It has no text to show here."))
+                    .child(div().w_full().whitespace_normal().child(why.note().to_owned()))
+                    .when(
+                        matches!(why, Unshown::Binary(_)) && files.remote.is_none(),
+                        |note| {
+                            note.child(
+                                div()
+                                    .text_size(px(FS_META))
+                                    .child("It has no text to show here."),
+                            )
                             .child(
                                 ferrite_ui::components::form_button_on("files-open-original", theme::paint::RAISED, cx)
                                     .debug_selector(|| "files-open-original".into())
@@ -1288,8 +1437,9 @@ impl CockpitView {
                                         })
                                     }),
                             )
-                    })
-                    .when(why == Unshown::Unreadable, |note| {
+                        },
+                    )
+                    .when(matches!(why, Unshown::Unreadable | Unshown::Remote(_)), |note| {
                         note.child(
                             ferrite_ui::components::form_button("files-retry", cx)
                                 .debug_selector(|| "files-retry".into())
@@ -1454,6 +1604,9 @@ impl CockpitView {
                 };
                 if dir {
                     files.tree.toggle(&press);
+                    if files.remote.is_some() {
+                        view.refresh_file_tree(thread, cx);
+                    }
                     cx.notify();
                 } else {
                     // A second press keeps the tab (`ClickEvent::click_count`).
@@ -1471,6 +1624,25 @@ impl CockpitView {
                     view.open_context_menu(MenuTarget::File(thread), event.position, cx);
                 }),
             )
+    }
+
+    #[cfg(test)]
+    pub(in crate::cockpit) fn remote_files_for_test(
+        &mut self,
+        thread: ThreadId,
+        answer: impl Fn(ferrite_core::file_operations::Request) -> std::io::Result<FileReply> + 'static,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(files) = self.ensure_files(thread, cx) {
+            let root = files.tree.root().to_path_buf();
+            files.tree = FileTree::remote(root.clone());
+            files.remote = Some(RemoteFiles::fake(root, answer));
+            files.tabs.clear();
+            files.active = None;
+        }
+        if let Some(index) = self.pane_for(thread) {
+            self.panes[index].preview.set_remote_files(true);
+        }
     }
 
     /// The shown tab's editor, while its source is what shows.

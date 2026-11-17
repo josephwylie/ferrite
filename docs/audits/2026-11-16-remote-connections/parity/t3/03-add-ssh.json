@@ -1,0 +1,23 @@
+{
+  "path": "03-add-ssh.jpg",
+  "sha256": "41226ab0237bb16face6e7fe917869fb6fd5c91fcdf79d8e8c2653f5f1ef04dd",
+  "logical_viewport": [
+    1470,
+    923
+  ],
+  "device_pixel_ratio": 2,
+  "pixel_dimensions": [
+    2940,
+    1846
+  ],
+  "image_format": "JPEG",
+  "crop_px": [
+    0,
+    0,
+    2940,
+    1846
+  ],
+  "surface": "Actual installed T3 native application",
+  "installed_version": "0.1.10-nightly.20261111.4544",
+  "capture_method": "cua_repl native getScreenshot; original bytes, no conversion"
+}

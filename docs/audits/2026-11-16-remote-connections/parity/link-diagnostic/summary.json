@@ -1,0 +1,5 @@
+{
+  "functional": "link diagnostic failed",
+  "visual": "requires parent review",
+  "actual_model": "not run; explicit Codex protocol fixture"
+}

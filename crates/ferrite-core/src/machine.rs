@@ -2,9 +2,7 @@
 //! window attaches to it exactly as to its own Server, through a local
 //! socket that bridges each connection to `ssh <target> ferrited bridge`
 //! (after Herdr's `SshStdioBridge`). Ferrite owns the SSH connection's
-//! master (`ControlMaster`), so one sign-in carries every connection after
-//! it, and never sees or stores a credential: signing in is `ssh` itself,
-//! in a terminal the operator types into.
+//! master (`ControlMaster`), so one sign-in carries later connections.
 
 use std::fmt;
 use std::io::{self, Read, Write};
@@ -18,6 +16,11 @@ use serde::{Deserialize, Serialize};
 
 use crate::link::{self, TryClone};
 use crate::protocol::ClientMessage;
+
+pub mod auth;
+pub mod hosts;
+pub mod remote;
+pub mod setup;
 
 /// A saved machine, as `settings.json` keeps it.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -45,21 +48,157 @@ impl Machine {
             enabled: true,
         }
     }
+
+    pub fn is_link(&self) -> bool {
+        self.target.starts_with("ferrite-link:")
+    }
+
+    pub fn display_target(&self, settings_dir: &Path) -> String {
+        remote::display_target(self, settings_dir)
+    }
+
+    pub fn from_ssh_fields(host: &str, username: &str, port: &str) -> Result<Self, String> {
+        let mut destination = Destination::parse(host.trim())?;
+        let username = username.trim();
+        if !username.is_empty() {
+            check_username(username)?;
+            destination.username = Some(username.into());
+        }
+        let port = port.trim();
+        if !port.is_empty() {
+            let port = parse_port(port)?;
+            destination.port = Some(port);
+        }
+        Ok(Self::new(&destination.target()))
+    }
+
+    pub fn ssh_fields(&self) -> (String, String, String) {
+        match Destination::parse(&self.target) {
+            Ok(destination) => (
+                destination.host,
+                destination.username.unwrap_or_default(),
+                destination
+                    .port
+                    .map(|port| port.to_string())
+                    .unwrap_or_default(),
+            ),
+            Err(_) => (self.target.clone(), String::new(), String::new()),
+        }
+    }
 }
 
 /// Whether `target` can be handed to `ssh` as its destination: never an
 /// option (`-oProxyCommand=…`), and one word.
 pub fn check_target(target: &str) -> Result<(), String> {
-    if target.is_empty() {
-        return Err("a machine needs an ssh target".into());
+    if let Some(id) = target.strip_prefix("ferrite-link:") {
+        return remote::check_identity(id);
     }
-    if target.starts_with('-') {
-        return Err(format!("`{target}` is not a host"));
+    Destination::parse(target).map(|_| ())
+}
+
+struct Destination {
+    host: String,
+    username: Option<String>,
+    port: Option<u16>,
+}
+
+impl Destination {
+    fn parse(target: &str) -> Result<Self, String> {
+        let target = target.strip_prefix("ssh://").unwrap_or(target);
+        if target.is_empty() {
+            return Err("Enter an SSH host or alias.".into());
+        }
+        let (username, address) = match target.split_once('@') {
+            Some((username, host)) => {
+                check_username(username)?;
+                (Some(username.to_string()), host)
+            }
+            None => (None, target),
+        };
+        let (host, port) = if let Some(bracketed) = address.strip_prefix('[') {
+            let (host, suffix) = bracketed
+                .split_once(']')
+                .ok_or("Close the IPv6 address with ].")?;
+            if host.parse::<std::net::Ipv6Addr>().is_err() {
+                return Err("Enter a valid IPv6 address inside brackets.".into());
+            }
+            let port = if suffix.is_empty() {
+                None
+            } else {
+                Some(parse_port(
+                    suffix
+                        .strip_prefix(':')
+                        .ok_or("Enter a port after the IPv6 address.")?,
+                )?)
+            };
+            (host, port)
+        } else if address.matches(':').count() == 1 {
+            let (host, port) = address.split_once(':').unwrap();
+            (host, Some(parse_port(port)?))
+        } else {
+            (address, None)
+        };
+        let valid = if host.contains(':') {
+            host.parse::<std::net::Ipv6Addr>().is_ok()
+        } else {
+            !host.is_empty()
+                && !host.starts_with(['-', '.'])
+                && host
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || b"._-".contains(&byte))
+        };
+        if !valid {
+            return Err("Enter a host name, IP address, or SSH config alias without spaces or shell characters.".into());
+        }
+        Ok(Self {
+            host: host.into(),
+            username,
+            port,
+        })
     }
-    if target.chars().any(|c| c.is_whitespace() || c.is_control()) {
-        return Err(format!("`{target}` has spaces in it"));
+
+    fn target(&self) -> String {
+        let user = self
+            .username
+            .as_ref()
+            .map(|user| format!("{user}@"))
+            .unwrap_or_default();
+        match self.port {
+            Some(port) => {
+                let host = if self.host.contains(':') {
+                    format!("[{}]", self.host)
+                } else {
+                    self.host.clone()
+                };
+                format!("ssh://{user}{host}:{port}")
+            }
+            None => format!("{user}{}", self.host),
+        }
+    }
+}
+
+fn check_username(username: &str) -> Result<(), String> {
+    if username.is_empty()
+        || username.starts_with('-')
+        || !username
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || b"._-".contains(&byte))
+    {
+        return Err(
+            "Enter an SSH username using letters, numbers, periods, underscores, or hyphens."
+                .into(),
+        );
     }
     Ok(())
+}
+
+fn parse_port(port: &str) -> Result<u16, String> {
+    port.bytes()
+        .all(|byte| byte.is_ascii_digit())
+        .then(|| port.parse::<u16>().ok())
+        .flatten()
+        .filter(|&port| port != 0)
+        .ok_or_else(|| "Enter a port between 1 and 65535.".into())
 }
 
 /// Where Ferrite keeps what it needs for `target`: the bridge's socket and
@@ -164,14 +303,36 @@ pub struct Bridge {
     dial: Arc<Dial>,
     /// The SSH master's socket, for an ssh bridge: what signing in opens.
     ssh: Option<(String, PathBuf)>,
+    remote: Option<(String, PathBuf)>,
     /// The socket is being served; false again if its accepting stops.
     listening: Arc<Mutex<bool>>,
     /// How the last Tunnel that failed ended.
     failure: Arc<Mutex<Option<Failure>>>,
     signed_in: Arc<AtomicBool>,
+    stopping: Arc<AtomicBool>,
+    listener: Mutex<Option<std::thread::JoinHandle<()>>>,
 }
 
 impl Bridge {
+    pub fn for_machine(machine: &Machine, settings_dir: &Path) -> Self {
+        if machine.is_link() {
+            remote::bridge(machine, settings_dir)
+        } else {
+            Self::ssh(machine, settings_dir)
+        }
+    }
+
+    pub fn terminal_command(&self, cwd: &Path) -> io::Result<(String, Vec<String>)> {
+        if let Some((target, settings)) = &self.remote {
+            let program = std::env::current_exe()?.to_string_lossy().into_owned();
+            return Ok((program, vec![
+                "--remote-terminal".into(), settings.to_string_lossy().into_owned(),
+                target.clone(), cwd.to_string_lossy().into_owned(),
+            ]));
+        }
+        self.terminal_args(cwd).map(|args| ("ssh".into(), args))
+    }
+
     /// The bridge to `machine` over the operator's own `ssh`.
     pub fn ssh(machine: &Machine, settings_dir: &Path) -> Self {
         let dir = dir(settings_dir, &machine.target);
@@ -194,14 +355,45 @@ impl Bridge {
             socket,
             dial: Arc::new(dial),
             ssh: None,
+            remote: None,
             listening: Arc::default(),
             failure: Arc::default(),
             signed_in: Arc::default(),
+            stopping: Arc::default(),
+            listener: Mutex::default(),
         }
     }
 
     pub fn name(&self) -> &str {
         &self.name
+    }
+
+    /// SSH arguments for a login shell in an absolute Unix directory on this machine.
+    pub fn terminal_args(&self, cwd: &Path) -> io::Result<Vec<String>> {
+        let Some((target, control)) = &self.ssh else {
+            return Err(io::Error::new(
+                io::ErrorKind::Unsupported,
+                "This machine is not reached over SSH.",
+            ));
+        };
+        let cwd = cwd
+            .to_str()
+            .filter(|cwd| cwd.starts_with('/') && !cwd.contains('\0'))
+            .ok_or_else(|| {
+                io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "Choose an absolute remote directory for the terminal.",
+                )
+            })?;
+        let script = format!("cd {} && exec \"${{SHELL:-/bin/sh}}\" -l", quoted(cwd));
+        let mut args = vec!["-tt".to_string(), "-o".into(), "BatchMode=yes".into()];
+        args.extend(ssh_options(control));
+        args.extend([
+            "--".into(),
+            target.clone(),
+            format!("sh -c {}", quoted(&script)),
+        ]);
+        Ok(args)
     }
 
     /// Attach to the machine's Server: the window's hello through a fresh
@@ -266,11 +458,15 @@ impl Bridge {
         let dial = Arc::clone(&self.dial);
         let failure = Arc::clone(&self.failure);
         let stopped = Arc::clone(&self.listening);
-        std::thread::Builder::new()
+        let stopping = Arc::clone(&self.stopping);
+        let worker = std::thread::Builder::new()
             .name("ferrite-bridge-accept".into())
             .spawn(move || loop {
                 match listener.accept() {
                     Ok(stream) => {
+                        if stopping.load(Ordering::Acquire) {
+                            return;
+                        }
                         let (dial, failure) = (Arc::clone(&dial), Arc::clone(&failure));
                         let served = std::thread::Builder::new()
                             .name("ferrite-bridge".into())
@@ -287,8 +483,21 @@ impl Bridge {
                     }
                 }
             })?;
+        *lock(&self.listener) = Some(worker);
         *listening = true;
         Ok(())
+    }
+}
+
+impl Drop for Bridge {
+    fn drop(&mut self) {
+        self.stopping.store(true, Ordering::Release);
+        if let Some(worker) = lock(&self.listener).take() {
+            // Keep the wake connection open until Windows' accept observes it.
+            let wake = link::connect(&self.socket).ok();
+            let _ = worker.join();
+            drop(wake);
+        }
     }
 }
 
@@ -316,7 +525,7 @@ fn carry(mut stream: link::Stream, dial: &Dial, failure: &Mutex<Option<Failure>>
             ended()
         }
         Err(error) => Some(Failure::Unreachable(format!(
-            "ssh could not start: {error}"
+            "The remote connection could not start: {error}"
         ))),
     };
     if let Some(ended) = ended {
@@ -361,6 +570,12 @@ fn ssh_options(control: &Path) -> Vec<String> {
         "ServerAliveInterval=15".into(),
         "-o".into(),
         "ServerAliveCountMax=4".into(),
+        "-o".into(),
+        "ConnectTimeout=15".into(),
+        "-o".into(),
+        "ConnectionAttempts=1".into(),
+        "-o".into(),
+        "RemoteCommand=none".into(),
     ];
     // Windows' OpenSSH has no multiplexing: every connection signs in.
     if cfg!(unix) {
@@ -390,7 +605,11 @@ pub fn bridge_args(target: &str, control: &Path, remote: &[&str]) -> Vec<String>
     let mut args = vec!["-T".to_string(), "-o".into(), "BatchMode=yes".into()];
     args.extend(ssh_options(control));
     args.extend(["--".into(), target.into()]);
-    args.extend(remote.iter().map(|word| word.to_string()));
+    if remote == WINDOW || remote == API {
+        args.push(setup::bridge_command(remote[1]));
+    } else {
+        args.extend(remote.iter().map(|word| word.to_string()));
+    }
     args
 }
 
@@ -402,8 +621,11 @@ pub fn sign_in_args(target: &str, control: &Path) -> Vec<String> {
     args
 }
 
-/// The CLI's Tunnels to `machine`'s API, through the window's master.
+/// The CLI's Tunnels to `machine`'s API through its saved transport.
 pub fn api_dial(machine: &Machine, settings_dir: &Path) -> Dial {
+    if machine.is_link() {
+        return remote::dial(machine, settings_dir, "/v1/api");
+    }
     let control = dir(settings_dir, &machine.target).join("c");
     ssh_dial(machine.target.clone(), control, API)
 }

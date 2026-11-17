@@ -91,6 +91,9 @@ impl CockpitView {
     /// Say when there is no Server, or offer to restart one running an
     /// older build from this window's executable.
     pub(super) fn present_server(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.cockpit.environment_available() {
+            return;
+        }
         match self.cockpit.server() {
             None => {}
             // Down mid-restart: the restart's own notice says so.

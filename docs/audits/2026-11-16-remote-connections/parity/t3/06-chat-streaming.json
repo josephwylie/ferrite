@@ -1,0 +1,26 @@
+{
+  "path": "06-chat-streaming.jpg",
+  "sha256": "84eb140f53ec380545479c1e07c47ddc0ae3374339fd53db3ecca02df8995320",
+  "logical_viewport": [
+    1470,
+    923
+  ],
+  "device_pixel_ratio": 2,
+  "pixel_dimensions": [
+    2940,
+    1846
+  ],
+  "image_format": "JPEG",
+  "crop_px": [
+    0,
+    0,
+    2940,
+    1846
+  ],
+  "surface": "Actual installed T3 native application",
+  "installed_version": "0.1.10-nightly.20261111.4544",
+  "capture_method": "cua_repl native getScreenshot; original bytes, no conversion",
+  "provider": "Actual Codex GPT-6.1-Sol Low, synthetic local reference project; not a remote T3 connection",
+  "project": "/var/folders/5y/hnh41b2j29z8kqxy7ftzfdn80000gn/T/ferrite-parity-t3-wiwj0w7m",
+  "thread_url": "t3code://app/#/e10f8bba-80bf-4bb7-a23b-23a50cbf0e58/c6c04b8b-52d1-4eb7-8604-357ae2203e87"
+}

@@ -1,0 +1,46 @@
+warning: unreachable pattern
+   --> crates/ferrite-pane/src/link_target.rs:165:40
+    |
+142 |             Self::External(url) | Self::RepoPullRequest { url, .. } => {
+    |                                   --------------------------------- matches all the relevant values
+...
+165 |             Self::PullRequest { .. } | Self::RepoPullRequest { .. } | Self::Thread(_) => false,
+    |                                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^ no value can reach this
+    |
+    = note: `#[warn(unreachable_patterns)]` (part of `#[warn(unused)]`) on by default
+
+warning: `ferrite-pane` (lib) generated 1 warning
+    Checking ferrite-cockpit v0.4.0 (/Users/josephwylie/Desktop/Projects/ferrite-remote-connections/crates/ferrite-cockpit)
+warning: unused variable: `open`
+     --> crates/ferrite-cockpit/src/cockpit.rs:11559:13
+      |
+11559 |         let open = self.cockpit.thread(thread).filter(|open| open.resume_lost())?;
+      |             ^^^^ help: if this is intentional, prefix it with an underscore: `_open`
+      |
+      = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+warning: method `set_archive_search` is never used
+   --> crates/ferrite-cockpit/src/cockpit/archive.rs:161:19
+    |
+ 22 | impl CockpitView {
+    | ---------------- method in this implementation
+...
+161 |     pub(crate) fn set_archive_search(&mut self, text: &str, cx: &mut Context<Self>) {
+    |                   ^^^^^^^^^^^^^^^^^^
+    |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: associated function `of` is never used
+   --> crates/ferrite-cockpit/src/cockpit/workflows.rs:179:19
+    |
+177 | impl StepDrag {
+    | ------------- associated function in this implementation
+178 |     /// A drag of `step`, as a press on its row starts one.
+179 |     pub(crate) fn of(step: &Step) -> Self {
+    |                   ^^
+
+warning: `ferrite-cockpit` (lib) generated 3 warnings (run `cargo fix --lib -p ferrite-cockpit` to apply 1 suggestion)
+    Checking ferrite v0.4.0 (/Users/josephwylie/Desktop/Projects/ferrite-remote-connections/crates/ferrite)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 3.68s
+warning: the following packages contain code that will be rejected by a future version of Rust: block v0.1.6
+note: to see what the problems were, use the option `--future-incompat-report`, or run `cargo report future-incompatibilities --id 1`

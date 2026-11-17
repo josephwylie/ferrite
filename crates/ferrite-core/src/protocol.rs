@@ -146,6 +146,11 @@ pub struct Command {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "op", rename_all = "snake_case")]
 pub enum Op {
+    Attachment { request: crate::attachment_transfer::Request },
+    Changes { request: crate::changes::Request },
+    FileOperation {
+        request: crate::file_operations::Request,
+    },
     BrowserCapture {
         thread: ThreadId,
         owner: crate::browser::Owner,
@@ -614,6 +619,9 @@ impl Op {
             | Op::CliReplaced { .. }
             | Op::Focused { .. }
             | Op::ListDir { .. }
+            | Op::FileOperation { .. }
+            | Op::Attachment { .. }
+            | Op::Changes { .. }
             | Op::ListRepo { .. }
             | Op::ReviewDiff { .. }
             | Op::ReviewRead { .. }
@@ -1482,6 +1490,11 @@ pub enum ErrorCode {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Done {
+    Attachment { reply: crate::attachment_transfer::Reply },
+    Changes { reply: crate::changes::Reply },
+    FileOperation {
+        reply: crate::file_operations::Reply,
+    },
     BrowserCapture {
         annotation: crate::browser_annotations::Annotation,
     },
@@ -1761,6 +1774,8 @@ pub struct ThreadState {
     pub thread: ThreadId,
     pub generation: u64,
     pub provider: Provider,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project: Option<crate::workspace::registry::ProjectId>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

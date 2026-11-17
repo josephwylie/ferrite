@@ -245,6 +245,7 @@ fn state() -> ThreadState {
         thread: ThreadId::new(4),
         generation: 3,
         provider: Provider::Claude,
+        project: None,
         model: Some("sonnet".into()),
         effort: Some("high".into()),
         title: Some("Fix the parser".into()),
@@ -1356,6 +1357,29 @@ fn samples() -> Vec<(&'static str, Sample)> {
             command(25, Op::Restart { when: When::Idle }),
         ),
         ("command_stop", command(26, Op::Stop { when: When::Now })),
+        ("command_attachment_begin", command(310, Op::Attachment { request: crate::attachment_transfer::Request::Begin { name: "shot.png".into(), size: 3 } })),
+        ("command_attachment_chunk", command(311, Op::Attachment { request: crate::attachment_transfer::Request::Chunk { upload: 1, offset: 0, data: "YWJj".into() } })),
+        ("command_attachment_finish", command(312, Op::Attachment { request: crate::attachment_transfer::Request::Finish { upload: 1, sha256: "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad".into() } })),
+        ("command_attachment_cancel", command(313, Op::Attachment { request: crate::attachment_transfer::Request::Cancel { upload: 1 } })),
+        ("command_attachment_read", command(314, Op::Attachment { request: crate::attachment_transfer::Request::Read { path: "/store/attachments/hash/shot.png".into(), offset: 0 } })),
+        ("reply_attachment_begin", Sample::Server(ServerMessage::Reply { id: 310, ok: Some(Done::Attachment { reply: crate::attachment_transfer::Reply::Begun { upload: 1 } }), error: None })),
+        ("reply_attachment_chunk", Sample::Server(ServerMessage::Reply { id: 311, ok: Some(Done::Attachment { reply: crate::attachment_transfer::Reply::Written { offset: 3 } }), error: None })),
+        ("reply_attachment_finish", Sample::Server(ServerMessage::Reply { id: 312, ok: Some(Done::Attachment { reply: crate::attachment_transfer::Reply::Retained(crate::attachment_transfer::Retained { path: "/store/attachments/hash/shot.png".into(), sha256: "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad".into(), size: 3 }) }), error: None })),
+        ("reply_attachment_cancel", Sample::Server(ServerMessage::Reply { id: 313, ok: Some(Done::Attachment { reply: crate::attachment_transfer::Reply::Cancelled }), error: None })),
+        ("reply_attachment_read", Sample::Server(ServerMessage::Reply { id: 314, ok: Some(Done::Attachment { reply: crate::attachment_transfer::Reply::Bytes { data: "YWJj".into(), size: 3 } }), error: None })),
+        ("command_changes_read", command(315, Op::Changes { request: crate::changes::Request::Read { root: "/workspace".into(), scope: crate::changes::Scope::Against("main".into()) } })),
+        ("command_changes_stage", command(316, Op::Changes { request: crate::changes::Request::SetStaged { root: "/workspace".into(), path: "a.rs".into(), staged: true } })),
+        ("reply_changes_read", Sample::Server(ServerMessage::Reply { id: 315, ok: Some(Done::Changes { reply: crate::changes::Reply::Read { files: vec![], branches: vec!["main".into()], staged: vec!["a.rs".into()] } }), error: None })),
+        ("reply_changes_stage", Sample::Server(ServerMessage::Reply { id: 316, ok: Some(Done::Changes { reply: crate::changes::Reply::Staged }), error: None })),
+        ("command_file_operation_read", command(301, Op::FileOperation {
+            request: crate::file_operations::Request::Read { root: "/workspace".into(), path: "/workspace/main.rs".into() },
+        })),
+        ("command_file_operation_write", command(302, Op::FileOperation {
+            request: crate::file_operations::Request::Write { root: "/workspace".into(), path: "/workspace/main.rs".into(), text: "edited".into(), expected: Some(crate::file_operations::fingerprint(b"original")) },
+        })),
+        ("command_file_operation_snapshot", command(303, Op::FileOperation {
+            request: crate::file_operations::Request::Snapshot { root: "/workspace".into(), directories: vec!["/workspace".into()], search: true },
+        })),
         (
             "command_list_dir",
             command(
@@ -1674,6 +1698,21 @@ fn samples() -> Vec<(&'static str, Sample)> {
                 error: None,
             }),
         ),
+        ("reply_file_operation_text", Sample::Server(ServerMessage::Reply {
+            id: 301, ok: Some(Done::FileOperation { reply: crate::file_operations::Reply::Text { text: "original".into(), fingerprint: crate::file_operations::fingerprint(b"original") } }), error: None,
+        })),
+        ("reply_file_operation_written", Sample::Server(ServerMessage::Reply {
+            id: 302, ok: Some(Done::FileOperation { reply: crate::file_operations::Reply::Written { fingerprint: crate::file_operations::fingerprint(b"edited") } }), error: None,
+        })),
+        ("reply_file_operation_conflict", Sample::Server(ServerMessage::Reply {
+            id: 303, ok: Some(Done::FileOperation { reply: crate::file_operations::Reply::Conflict }), error: None,
+        })),
+        ("reply_file_operation_binary", Sample::Server(ServerMessage::Reply {
+            id: 304, ok: Some(Done::FileOperation { reply: crate::file_operations::Reply::Binary }), error: None,
+        })),
+        ("reply_file_operation_snapshot", Sample::Server(ServerMessage::Reply {
+            id: 305, ok: Some(Done::FileOperation { reply: crate::file_operations::Reply::Snapshot(crate::file_operations::Snapshot::default()) }), error: None,
+        })),
         (
             "reply_listing",
             Sample::Server(ServerMessage::Reply {

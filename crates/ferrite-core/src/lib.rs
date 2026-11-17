@@ -7,6 +7,8 @@
 pub mod activity;
 pub mod api;
 pub mod attachment;
+pub mod attachment_transfer;
+pub mod changes;
 mod attention;
 pub mod cadence;
 pub mod cited_sources;
@@ -33,6 +35,7 @@ pub mod machine;
 pub mod notifications;
 pub mod progress;
 pub mod prompt_files;
+pub mod file_operations;
 mod prompt_history;
 pub mod protocol;
 pub mod providers;

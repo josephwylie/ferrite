@@ -1,0 +1,169 @@
+{
+  "functional": "passed",
+  "visual": "requires parent review",
+  "actual_model": "passed: actual installed Codex",
+  "owned_processes_stopped": true,
+  "source_commit": "c3743ff834284fbb27d459afc8d1bcbd90f7f514",
+  "binary_sha256": "332f91c83d1f0c7083b2efa7e55bdaa66049bac0e5d1b817ebeb032f64e32851",
+  "smoke_harness_sha256": "44218425941b6b52d518aaad5c0a4809c5c2d35c7dd926a4d875d4c5c060503b",
+  "checks": [
+    {
+      "time": 1794837368.596668,
+      "kind": "check",
+      "name": "actual-codex-ssh-native-chat-image-file-read",
+      "passed": true,
+      "model": "gpt-6-astra",
+      "thread": "1",
+      "remote_image": "/private/tmp/ferrite-remote-fovutuc4/remote/threads/attachments/c8030238493fd7fa97c7d4cd50ff47798da898051f537faffde35341163dc4c6/real-codex-before-prompt-1470x923.png",
+      "image_sha256": "c8030238493fd7fa97c7d4cd50ff47798da898051f537faffde35341163dc4c6",
+      "provider_executable": "/Users/josephwylie/.nvm/versions/node/v25.9.0/bin/codex",
+      "launcher_wrapper": "/private/tmp/ferrite-remote-fovutuc4/bin/real-codex",
+      "remote_store": "/private/tmp/ferrite-remote-fovutuc4/remote/threads",
+      "completed": {
+        "method": "turn/completed",
+        "params": {
+          "threadId": "01a1e4a4-94e6-78b2-9c0e-036b00d0145d",
+          "turn": {
+            "id": "01a1e4a4-a733-7cf1-b761-9c6b69a3b3a4",
+            "rootTurnId": "01a1e4a4-a733-7cf1-b761-9c6b69a3b3a4",
+            "items": [
+              {
+                "type": "agentMessage",
+                "moderation": null,
+                "id": "msg_01dea245ec012627016afb0b75b2a487d0b193a4bed5d081f3",
+                "text": "`REMOTE-CODEX-e2397c947fd64ba09400374d9a0a1327`\n\nThe screenshot shows a dark Ferrite window with \u201cActual Codex SSH smoke\u201d selected under \u201cferrite-audit,\u201d an empty conversation asking \u201cWhat should we work on?\u201d, and a bottom prompt bar showing GPT-6 Astra, Low, and Never ask.",
+                "phase": "final_answer",
+                "memoryCitation": null,
+                "delivery": null,
+                "questions": null,
+                "startedAtMs": 1794837365791,
+                "completedAtMs": 1794837367382
+              }
+            ],
+            "itemsView": "summary",
+            "status": "completed",
+            "error": null,
+            "startedAt": 1794837358,
+            "completedAt": 1794837367,
+            "durationMs": 8949
+          }
+        },
+        "emittedAtMs": 1794837367406
+      }
+    }
+  ],
+  "screenshots": [
+    {
+      "time": 1794837354.858721,
+      "kind": "screenshot",
+      "path": "/Users/josephwylie/Desktop/Projects/ferrite-remote-connections/docs/audits/2026-11-16-remote-connections/parity/real-codex/real-codex-before-prompt-1470x923.png",
+      "sha256": "c8030238493fd7fa97c7d4cd50ff47798da898051f537faffde35341163dc4c6",
+      "logical_viewport": [
+        1470,
+        923
+      ],
+      "device_pixel_ratio": 2.0,
+      "pixel_dimensions": [
+        2940,
+        1846
+      ],
+      "image_format": "PNG",
+      "crop_px": [
+        0,
+        0,
+        2940,
+        1846
+      ],
+      "surface": "Ferrite native headless Driver",
+      "provider": "Actual installed OpenAI Codex app-server; no simulated provider for this turn",
+      "source_commit": "c3743ff834284fbb27d459afc8d1bcbd90f7f514",
+      "binary_sha256": "332f91c83d1f0c7083b2efa7e55bdaa66049bac0e5d1b817ebeb032f64e32851"
+    },
+    {
+      "time": 1794837356.558218,
+      "kind": "screenshot",
+      "path": "/Users/josephwylie/Desktop/Projects/ferrite-remote-connections/docs/audits/2026-11-16-remote-connections/parity/real-codex/real-codex-attachment-ready-1470x923.png",
+      "sha256": "8d5d12a4406df18912407eae0fbec46d18fb4cbdcf2767a7ebbe61927b3e1160",
+      "logical_viewport": [
+        1470,
+        923
+      ],
+      "device_pixel_ratio": 2.0,
+      "pixel_dimensions": [
+        2940,
+        1846
+      ],
+      "image_format": "PNG",
+      "crop_px": [
+        0,
+        0,
+        2940,
+        1846
+      ],
+      "surface": "Ferrite native headless Driver",
+      "provider": "Actual installed OpenAI Codex app-server; no simulated provider for this turn",
+      "source_commit": "c3743ff834284fbb27d459afc8d1bcbd90f7f514",
+      "binary_sha256": "332f91c83d1f0c7083b2efa7e55bdaa66049bac0e5d1b817ebeb032f64e32851"
+    },
+    {
+      "time": 1794837359.370068,
+      "kind": "screenshot",
+      "path": "/Users/josephwylie/Desktop/Projects/ferrite-remote-connections/docs/audits/2026-11-16-remote-connections/parity/real-codex/real-codex-running-1470x923.png",
+      "sha256": "08d955387daf92797390eb1f71d773aa53a80c0984431d56be1c865a48f45152",
+      "logical_viewport": [
+        1470,
+        923
+      ],
+      "device_pixel_ratio": 2.0,
+      "pixel_dimensions": [
+        2940,
+        1846
+      ],
+      "image_format": "PNG",
+      "crop_px": [
+        0,
+        0,
+        2940,
+        1846
+      ],
+      "surface": "Ferrite native headless Driver",
+      "provider": "Actual installed OpenAI Codex app-server; no simulated provider for this turn",
+      "source_commit": "c3743ff834284fbb27d459afc8d1bcbd90f7f514",
+      "binary_sha256": "332f91c83d1f0c7083b2efa7e55bdaa66049bac0e5d1b817ebeb032f64e32851"
+    },
+    {
+      "time": 1794837368.561704,
+      "kind": "screenshot",
+      "path": "/Users/josephwylie/Desktop/Projects/ferrite-remote-connections/docs/audits/2026-11-16-remote-connections/parity/real-codex/real-codex-completed-1470x923.png",
+      "sha256": "c9b258e5fe059f15596ea7e52d78fe19fad75998dcca0d87ba1a6596fb27a41a",
+      "logical_viewport": [
+        1470,
+        923
+      ],
+      "device_pixel_ratio": 2.0,
+      "pixel_dimensions": [
+        2940,
+        1846
+      ],
+      "image_format": "PNG",
+      "crop_px": [
+        0,
+        0,
+        2940,
+        1846
+      ],
+      "surface": "Ferrite native headless Driver",
+      "provider": "Actual installed OpenAI Codex app-server; no simulated provider for this turn",
+      "source_commit": "c3743ff834284fbb27d459afc8d1bcbd90f7f514",
+      "binary_sha256": "332f91c83d1f0c7083b2efa7e55bdaa66049bac0e5d1b817ebeb032f64e32851"
+    }
+  ],
+  "limitations": [
+    "Actual OpenAI model call using existing Codex sign-in.",
+    "Localhost SSH shares the host filesystem; separate Store and request routing are asserted.",
+    "Explicit task launcher wraps the exact installed Codex executable to record provider ownership.",
+    "Uses existing user Codex configuration except explicit model, reasoning, sandbox and approval overrides.",
+    "Does not exercise Remote link; the deterministic parity E2E covers that transport.",
+    "Visual parity requires separate review."
+  ]
+}

@@ -1,0 +1,24 @@
+{
+  "path": "/Users/josephwylie/Desktop/Projects/ferrite-remote-connections/docs/audits/2026-11-16-remote-connections/parity/native-4/02-add-remote-default-1470x923.png",
+  "sha256": "21a1f6ac574999ce79f1d065e88892511869d77e07f6f43634aaeee0d332de0f",
+  "logical_viewport": [
+    1470,
+    923
+  ],
+  "device_pixel_ratio": 2.0,
+  "pixel_dimensions": [
+    2940,
+    1846
+  ],
+  "image_format": "PNG",
+  "crop_px": [
+    0,
+    0,
+    2940,
+    1846
+  ],
+  "surface": "Ferrite native headless Driver",
+  "provider": "simulated Codex app-server, no model API calls",
+  "source_commit": "35ca3ae205b2af8fb47376be94c0f388e52eb5ba",
+  "binary_sha256": "707be7dd731cdd4413f26c787bbc400810d66fb6fc5afd28e8f61b892a43fb32"
+}

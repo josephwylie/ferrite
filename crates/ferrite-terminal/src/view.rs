@@ -77,6 +77,8 @@ pub enum TerminalEvent {
     Title(String),
     /// The shell ended.
     Exited,
+    /// The child ended with an unsuccessful status.
+    Failed(String),
     /// `Attach as context`: the selected text.
     Attach(String),
     /// A right-click, at this point of the window.
@@ -161,7 +163,11 @@ impl TerminalView {
             Event::Wakeup => {}
             Event::Title(title) => cx.emit(TerminalEvent::Title(title)),
             Event::PtyWrite(text) => self.terminal.write(text.into_bytes()),
-            Event::ChildExit(_) | Event::Exit => {
+            Event::ChildExit(status) if !self.exited && !status.success() => {
+                self.exited = true;
+                cx.emit(TerminalEvent::Failed(status.to_string()));
+            }
+            Event::ChildExit(_) | Event::Exit if !self.exited => {
                 self.exited = true;
                 cx.emit(TerminalEvent::Exited);
             }

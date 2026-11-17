@@ -37,6 +37,7 @@ mod drive;
 mod factory;
 pub mod github;
 mod render;
+pub mod remote;
 mod signals;
 
 /// How long the pump waits for a client while any Thread is open: a frame.
@@ -89,6 +90,10 @@ pub fn settings_dir() -> PathBuf {
 pub fn ferrited(args: &[String]) -> i32 {
     let executable = std::env::current_exe().unwrap_or_else(|_| "ferrited".into());
     match args.get(1).map(String::as_str) {
+        Some("--version" | "-V") => {
+            println!("ferrited {}", env!("CARGO_PKG_VERSION"));
+            0
+        }
         Some("server") => run(Options {
             store: store_dir(),
             settings_dir: settings_dir(),
@@ -99,13 +104,15 @@ pub fn ferrited(args: &[String]) -> i32 {
                 .and_then(|at| args.get(at + 1))
                 .and_then(|pid| pid.parse().ok()),
         }),
+        Some("remote") => remote::cli(&args[2..], &store_dir(), &executable),
+        Some("--remote-terminal") => crate::machine::remote::terminal_dispatch(args).unwrap_or(2),
         Some("api-bridge") => bridge::api(&store_dir()),
         Some("bridge") => bridge::run(&store_dir(), &executable),
         #[cfg(target_os = "linux")]
         Some("service") => agent::service(&executable, args.get(2).map(String::as_str)),
         _ => {
             eprintln!(
-                "usage: ferrited server | ferrited bridge | ferrited api-bridge{USAGE_SERVICE}"
+                "usage: ferrited --version | ferrited server | ferrited bridge | ferrited api-bridge{USAGE_SERVICE}"
             );
             2
         }
@@ -369,6 +376,7 @@ struct Server {
         BTreeMap<ThreadId, (crate::browser::Document, u64, crate::browser::Observation)>,
     searches: Vec<Search>,
     reads: Vec<Read>,
+    attachments: HashMap<ClientId, Arc<Mutex<crate::attachment_transfer::Session>>>,
     api_reads: Vec<ApiRead>,
     /// First sends still starting, by the tag the Engine knows them by:
     /// who asked, in which command.
@@ -453,6 +461,7 @@ impl Server {
             browser_observed: BTreeMap::new(),
             searches: Vec::new(),
             reads: Vec::new(),
+            attachments: HashMap::new(),
             api_reads: Vec::new(),
             starting: HashMap::new(),
             next_start: 0,
@@ -506,6 +515,9 @@ impl Server {
             if self.swept.elapsed() >= SWEEP_INTERVAL {
                 self.swept = Instant::now();
                 self.engine.sweep();
+                for uploads in self.attachments.values() {
+                    if let Ok(mut uploads) = uploads.try_lock() { uploads.expire(); }
+                }
             }
             self.answer_bootstraps();
             self.answer_searches();
@@ -829,6 +841,40 @@ impl Server {
                 }
                 None => Err(failed("no such Project")),
             },
+            Op::Attachment { request: operation } => {
+                if !self.attachments.contains_key(&id) && self.attachments.len() >= 16 {
+                    self.reply(id, request, Err(failed("Too many attachment transfers are active. Retry shortly.")));
+                    return;
+                }
+                let store = self.engine.browser_store().dir().to_path_buf();
+                let uploads = self.attachments.entry(id).or_insert_with(|| {
+                    Arc::new(Mutex::new(crate::attachment_transfer::Session::new(store)))
+                }).clone();
+                let operation = operation.clone();
+                self.read_off_pump(id, request, move || {
+                    uploads.lock().map_err(|_| failed("Attachment worker stopped"))?
+                        .execute(operation)
+                        .map(|reply| Some(Done::Attachment { reply })).map_err(failed)
+                });
+                return;
+            }
+            Op::Changes { request: operation } => {
+                let operation = operation.clone();
+                self.read_off_pump(id, request, move || {
+                    crate::changes::execute(operation)
+                        .map(|reply| Some(Done::Changes { reply })).map_err(failed)
+                });
+                return;
+            }
+            Op::FileOperation { request: operation } => {
+                let operation = operation.clone();
+                self.read_off_pump(id, request, move || {
+                    crate::file_operations::execute(operation)
+                        .map(|reply| Some(Done::FileOperation { reply }))
+                        .map_err(failed)
+                });
+                return;
+            }
             Op::ListDir { path } => {
                 let path = path.clone();
                 self.read_off_pump(id, request, move || {
@@ -1362,6 +1408,7 @@ impl Server {
     /// A client's connection ended: what it held or was asked goes too.
     fn gone(&mut self, id: ClientId) {
         self.clients.remove(&id);
+        self.attachments.remove(&id);
         self.engine.window_gone(id);
         self.renders.client_gone(id);
         self.undriven(id);

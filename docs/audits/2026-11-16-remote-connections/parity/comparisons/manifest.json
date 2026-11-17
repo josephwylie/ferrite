@@ -1,0 +1,42 @@
+[
+  {
+    "name": "remote-link",
+    "t3": "../t3/02-add-remote-link.json",
+    "ferrite": "../native-7/02-add-remote-default-1470x923.json"
+  },
+  {
+    "name": "ssh",
+    "t3": "../t3/03-add-ssh.json",
+    "ferrite": "../native-7/04-add-ssh-1470x923.json"
+  },
+  {
+    "name": "validation",
+    "t3": "../t3/04-ssh-validation.json",
+    "ferrite": "../native-7/07-ssh-validation-1470x923.json"
+  },
+  {
+    "name": "attachment",
+    "t3": "../t3/05-attachment-ready.json",
+    "ferrite": "../native-7/link-existing-thread-attachment-ready-1470x923.json"
+  },
+  {
+    "name": "chat",
+    "t3": "../t3/07-chat-completed.json",
+    "ferrite": "../native-7/link-existing-thread-completed-1470x923.json"
+  },
+  {
+    "name": "changes",
+    "t3": "../t3/09-changes.json",
+    "ferrite": "../native-7/link-changes-1470x923.json"
+  },
+  {
+    "name": "files",
+    "t3": "../t3/11-file-read.json",
+    "ferrite": "../native-7/link-file-read-1470x923.json"
+  },
+  {
+    "name": "terminal",
+    "t3": "../t3/12-terminal.json",
+    "ferrite": "../native-7/link-terminal-1470x923.json"
+  }
+]

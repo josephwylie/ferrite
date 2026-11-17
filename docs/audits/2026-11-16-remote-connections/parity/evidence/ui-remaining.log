@@ -1,0 +1,239 @@
+warning: variable does not need to be mutable
+   --> crates/ferrite-core/src/server/tests/drive.rs:121:13
+    |
+121 |     let mut driven = attach_driven(&harness.address);
+    |         ----^^^^^^
+    |         |
+    |         help: remove this `mut`
+    |
+    = note: `#[warn(unused_mut)]` (part of `#[warn(unused)]`) on by default
+
+warning: `ferrite-core` (lib test) generated 1 warning (run `cargo fix --lib -p ferrite-core --tests` to apply 1 suggestion)
+warning: unreachable pattern
+   --> crates/ferrite-pane/src/link_target.rs:165:40
+    |
+142 |             Self::External(url) | Self::RepoPullRequest { url, .. } => {
+    |                                   --------------------------------- matches all the relevant values
+...
+165 |             Self::PullRequest { .. } | Self::RepoPullRequest { .. } | Self::Thread(_) => false,
+    |                                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^ no value can reach this
+    |
+    = note: `#[warn(unreachable_patterns)]` (part of `#[warn(unused)]`) on by default
+
+warning: `ferrite-pane` (lib) generated 1 warning
+warning: `ferrite-pane` (lib test) generated 1 warning (1 duplicate)
+warning: unused variable: `open`
+     --> crates/ferrite-cockpit/src/cockpit.rs:11567:13
+      |
+11567 |         let open = self.cockpit.thread(thread).filter(|open| open.resume_lost())?;
+      |             ^^^^ help: if this is intentional, prefix it with an underscore: `_open`
+      |
+      = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+warning: variable does not need to be mutable
+   --> crates/ferrite-cockpit/src/cockpit/tests/changes.rs:310:13
+    |
+310 |     let mut again = |text: &str, cx: &mut gpui::VisualTestContext| {
+    |         ----^^^^^
+    |         |
+    |         help: remove this `mut`
+    |
+    = note: `#[warn(unused_mut)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused variable: `engine`
+   --> crates/ferrite-cockpit/src/cockpit/tests/browser_chrome.rs:467:10
+    |
+467 |     let (engine, view, thread, cx) = browser_window(cx, "bnt-draft");
+    |          ^^^^^^ help: if this is intentional, prefix it with an underscore: `_engine`
+
+warning: variable does not need to be mutable
+    --> crates/ferrite-cockpit/src/cockpit/tests/render_performance.rs:2779:13
+     |
+2779 |     let mut watch = |cx: &mut gpui::VisualTestContext, ms: u64| {
+     |         ----^^^^^
+     |         |
+     |         help: remove this `mut`
+
+warning: unused variable: `overview`
+   --> crates/ferrite-cockpit/src/cockpit/tests/tools.rs:111:9
+    |
+111 |     let overview = cx.debug_bounds("panel-tab-Overview").unwrap().center();
+    |         ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_overview`
+
+warning: unused `Admission` that must be used
+   --> crates/ferrite-cockpit/src/cockpit/tests/find.rs:265:5
+    |
+265 |     core.send(thread, "Look into it".into());
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = note: a refused or unconfirmed send leaves the draft with the caller
+    = note: `#[warn(unused_must_use)]` (part of `#[warn(unused)]`) on by default
+help: if you wish to disregard this recommendation, use `let _ = ...` to ignore the value
+    |
+265 |     let _ = core.send(thread, "Look into it".into());
+    |     +++++++
+
+warning: unused `Admission` that must be used
+   --> crates/ferrite-cockpit/src/cockpit/tests/find.rs:327:5
+    |
+327 |     core.send(thread, "Ship it".into());
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = note: a refused or unconfirmed send leaves the draft with the caller
+help: if you wish to disregard this recommendation, use `let _ = ...` to ignore the value
+    |
+327 |     let _ = core.send(thread, "Ship it".into());
+    |     +++++++
+
+warning: unused `Admission` that must be used
+   --> crates/ferrite-cockpit/src/cockpit/tests/retention.rs:159:5
+    |
+159 |     core.send(thread, "the very first question".into());
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = note: a refused or unconfirmed send leaves the draft with the caller
+help: if you wish to disregard this recommendation, use `let _ = ...` to ignore the value
+    |
+159 |     let _ = core.send(thread, "the very first question".into());
+    |     +++++++
+
+warning: unused `Admission` that must be used
+   --> crates/ferrite-cockpit/src/cockpit/tests/send_scroll.rs:788:9
+    |
+788 |         core.send(thread, "turn 0".into());
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = note: a refused or unconfirmed send leaves the draft with the caller
+help: if you wish to disregard this recommendation, use `let _ = ...` to ignore the value
+    |
+788 |         let _ = core.send(thread, "turn 0".into());
+    |         +++++++
+
+warning: unused `Admission` that must be used
+   --> crates/ferrite-cockpit/src/cockpit/tests/send_scroll.rs:795:13
+    |
+795 |             view.update(cx, |view, _| view.cockpit.send(thread, format!("turn {turn}")));
+    |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = note: a refused or unconfirmed send leaves the draft with the caller
+help: if you wish to disregard this recommendation, use `let _ = ...` to ignore the value
+    |
+795 |             let _ = view.update(cx, |view, _| view.cockpit.send(thread, format!("turn {turn}")));
+    |             +++++++
+
+warning: unused `Admission` that must be used
+   --> crates/ferrite-cockpit/src/cockpit/tests/send_scroll.rs:868:9
+    |
+868 |         core.send(thread, "turn 0".into());
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = note: a refused or unconfirmed send leaves the draft with the caller
+help: if you wish to disregard this recommendation, use `let _ = ...` to ignore the value
+    |
+868 |         let _ = core.send(thread, "turn 0".into());
+    |         +++++++
+
+warning: unused `Admission` that must be used
+   --> crates/ferrite-cockpit/src/cockpit/tests/send_scroll.rs:875:13
+    |
+875 |             view.update(cx, |view, _| view.cockpit.send(thread, format!("turn {turn}")));
+    |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = note: a refused or unconfirmed send leaves the draft with the caller
+help: if you wish to disregard this recommendation, use `let _ = ...` to ignore the value
+    |
+875 |             let _ = view.update(cx, |view, _| view.cockpit.send(thread, format!("turn {turn}")));
+    |             +++++++
+
+warning: linker stderr: ld: __eh_frame section too large (max 16MB) to encode dwarf unwind offsets in compact unwind table, performance of exception handling might be affected
+  |
+  = note: `#[warn(linker_messages)]` on by default
+
+warning: `ferrite-cockpit` (lib test) generated 13 warnings (run `cargo fix --lib -p ferrite-cockpit --tests` to apply 5 suggestions)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.06s
+warning: the following packages contain code that will be rejected by a future version of Rust: block v0.1.6
+note: to see what the problems were, use the option `--future-incompat-report`, or run `cargo report future-incompatibilities --id 1`
+────────────
+ Nextest run ID 53706bad-46c5-451c-9a84-ec9139f50d95 with nextest profile: default
+    Starting 40 tests across 4 binaries (2909 tests skipped)
+        PASS [   0.061s] ( 1/40) ferrite-cockpit cockpit::connections::tests::ssh_autocomplete_omits_saved_aliases_and_keeps_every_other_match
+        PASS [   0.061s] ( 2/40) ferrite-cockpit cockpit::connections::tests::ssh_autocomplete_prioritizes_alias_prefixes_then_matches_resolved_addresses
+        PASS [   0.066s] ( 3/40) ferrite-cockpit machines::tests::a_machine_whose_target_is_an_option_is_never_listed
+        PASS [   0.079s] ( 4/40) ferrite-cockpit machines::tests::a_cockpit_that_cannot_be_built_is_not_gone_to
+        PASS [   0.035s] ( 5/40) ferrite-cockpit machines::tests::a_remote_launch_on_a_turned_off_machine_starts_here
+        PASS [   0.035s] ( 6/40) ferrite-cockpit machines::tests::a_remote_launch_starts_on_its_machine_saved_or_not
+        PASS [   0.032s] ( 7/40) ferrite-cockpit machines::tests::local_environment_disabled_selects_remote_and_never_streams_local
+        PASS [   0.068s] ( 8/40) ferrite-cockpit machines::tests::local_environment_disable_keeps_an_existing_remote_selected
+        PASS [   0.036s] ( 9/40) ferrite-cockpit machines::tests::local_environment_disabled_without_remotes_has_no_selection_or_local_access
+        PASS [   0.026s] (10/40) ferrite-cockpit machines::tests::only_the_machine_on_screen_streams_more_than_status
+        PASS [   0.023s] (11/40) ferrite-cockpit machines::tests::removing_the_saved_selection_returns_to_local_and_drops_its_status_link
+        PASS [   0.025s] (12/40) ferrite-cockpit machines::tests::this_computer_alone_lists_no_machines
+        PASS [   0.026s] (13/40) ferrite-cockpit machines::tests::turning_off_the_machine_on_screen_says_the_window_must_leave
+        PASS [   0.020s] (14/40) ferrite-cockpit notifications::tests::what_rang_off_screen_does_not_ring_again_on_arrival
+        PASS [   0.307s] (15/40) ferrite-cockpit cockpit::tests::machines::remote_files_and_terminal_open_through_their_keyboard_shortcuts
+        PASS [   0.024s] (16/40) ferrite-cockpit notifications::tests::what_waits_or_stands_moves_with_the_window
+        PASS [   0.073s] (17/40) ferrite-core cockpit::remote::tests::unavailable_environment_never_attaches_even_after_retry
+        PASS [   0.437s] (18/40) ferrite-cockpit cockpit::tests::machines::local_environment_switch_preserves_unreadable_settings
+        PASS [   0.472s] (19/40) ferrite-cockpit cockpit::tests::settings_window::a_connection_save_failure_keeps_the_form_and_runtime_unchanged
+        PASS [   0.516s] (20/40) ferrite-cockpit cockpit::tests::machines::local_environment_switch_persists_and_empty_client_blocks_new_threads
+        PASS [   0.141s] (21/40) ferrite-core server::remote::tests::network::revocation_closes_live_links_and_blocks_reconnect
+        PASS [   0.108s] (22/40) ferrite-core server::remote::tests::network::tls::untrusted_certificate_and_wrong_hostname_are_rejected
+        PASS [   0.036s] (23/40) ferrite-core settings::tests::saved_settings_load_back_unchanged
+        PASS [   0.159s] (24/40) ferrite-core server::remote::tests::network::tls::trusted_certificate_pairs_and_attaches_to_the_real_server
+        PASS [   0.027s] (25/40) ferrite-core settings::tests::the_defaults_are_the_documented_ones
+        PASS [   0.031s] (26/40) ferrite-pane draft_files::tests::changing_destination_discards_receipts_and_inflight_attempts
+        PASS [   0.058s] (27/40) ferrite-frame settings::tests::host_verification_keeps_the_fingerprint_bounded_and_continues_on_enter
+        PASS [   0.074s] (28/40) ferrite-frame settings::tests::a_busy_connection_form_disables_submit_but_keeps_cancel_live
+        PASS [   0.026s] (29/40) ferrite-pane draft_files::tests::remote_upload_failure_preserves_source_and_retry_sends_only_receipt
+        PASS [   0.025s] (30/40) ferrite-pane draft_files::tests::remove_readd_and_draft_replacement_reject_old_uploads
+        PASS [   0.027s] (31/40) ferrite-pane draft_files::tests::remote_workspace_references_never_require_local_files
+        PASS [   0.043s] (32/40) ferrite-pane preview::tests::remote_attachment_cache_is_separate_from_local_paths_and_other_previews
+        PASS [   0.027s] (33/40) ferrite-pane preview::tests::remote_attachment_preview_fetches_are_bounded_and_stale_answers_are_discarded
+        PASS [   0.896s] (34/40) ferrite-cockpit cockpit::tests::settings_window::reconnect_leaves_search_and_rejects_another_saved_target
+        PASS [   0.703s] (35/40) ferrite-core server::remote::tests::network::authenticated_link_attaches_to_the_real_server_and_rejects_identity_change
+        FAIL [   1.063s] (36/40) ferrite-cockpit cockpit::tests::settings_window::connection_modal_does_not_submit_or_close_during_ime_composition
+  stdout ───
+
+    running 1 test
+    test cockpit::tests::settings_window::connection_modal_does_not_submit_or_close_during_ime_composition ... FAILED
+
+    failures:
+
+    failures:
+        cockpit::tests::settings_window::connection_modal_does_not_submit_or_close_during_ime_composition
+
+    test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1259 filtered out; finished in 0.98s
+
+  stderr ───
+
+    thread 'cockpit::tests::settings_window::connection_modal_does_not_submit_or_close_during_ime_composition' (54094050) panicked at crates/ferrite-cockpit/src/cockpit/tests/settings_window.rs:798:9:
+    assertion failed: cx.debug_bounds("connection-dialog").is_some()
+    note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+        FAIL [   1.132s] (37/40) ferrite-cockpit cockpit::tests::settings_window::connection_modal_defaults_to_link_traps_tab_and_resets_on_reopen
+  stdout ───
+
+    running 1 test
+    test cockpit::tests::settings_window::connection_modal_defaults_to_link_traps_tab_and_resets_on_reopen ... FAILED
+
+    failures:
+
+    failures:
+        cockpit::tests::settings_window::connection_modal_defaults_to_link_traps_tab_and_resets_on_reopen
+
+    test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1259 filtered out; finished in 1.11s
+
+  stderr ───
+
+    thread 'cockpit::tests::settings_window::connection_modal_defaults_to_link_traps_tab_and_resets_on_reopen' (54093985) panicked at crates/ferrite-cockpit/src/cockpit/tests/settings_window.rs:728:13:
+    assertion failed: view.connection_holds_focus(window, cx)
+    note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+        PASS [   1.387s] (38/40) ferrite-cockpit cockpit::tests::settings_window::connections_keep_failed_input_save_only_ready_and_cancel_with_escape
+        PASS [   3.125s] (39/40) ferrite-core server::remote::tests::network::remote_terminal_runs_in_remote_directory_resizes_and_cleans_up
+        PASS [   3.266s] (40/40) ferrite-core server::remote::tests::network::remote_terminal_drains_final_output_before_reporting_exit
+────────────
+     Summary [   3.590s] 40 tests run: 38 passed, 2 failed, 2909 skipped
+        FAIL [   1.063s] (36/40) ferrite-cockpit cockpit::tests::settings_window::connection_modal_does_not_submit_or_close_during_ime_composition
+        FAIL [   1.132s] (37/40) ferrite-cockpit cockpit::tests::settings_window::connection_modal_defaults_to_link_traps_tab_and_resets_on_reopen
+error: test run failed

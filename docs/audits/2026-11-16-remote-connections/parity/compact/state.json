@@ -1,0 +1,46 @@
+{
+  "root": "/private/tmp/ferrite-remote-f64hrkya",
+  "store": "/private/tmp/ferrite-remote-f64hrkya/client/threads",
+  "remote_store": "/private/tmp/ferrite-remote-f64hrkya/remote/threads",
+  "binary": "/Users/josephwylie/Desktop/Projects/ferrite-remote-connections/target/debug/ferrite",
+  "server": "/Users/josephwylie/Desktop/Projects/ferrite-remote-connections/target/debug/ferrited",
+  "processes": [
+    {
+      "name": "remote-server",
+      "pid": 23470,
+      "identity": "Tue 17 Nov 00:30:43 2026",
+      "termination_sent": true,
+      "stopped": true
+    },
+    {
+      "name": "server",
+      "pid": 23703,
+      "identity": "Tue 17 Nov 00:30:44 2026",
+      "termination_sent": true,
+      "stopped": true
+    },
+    {
+      "name": "headless",
+      "pid": 23718,
+      "identity": "Tue 17 Nov 00:30:44 2026",
+      "termination_sent": true,
+      "stopped": true
+    }
+  ],
+  "ssh_transport": "actual OpenSSH localhost",
+  "filesystem": "localhost SSH fixture shares the host filesystem; SSH request logs prove routing",
+  "credentials": "fixture-passphrase is a synthetic, task-only test credential",
+  "provider": "simulated Codex app-server, no model API calls",
+  "port": 54816,
+  "local_collision_sha256": "e5c7aa07356c6ab78e056e326b9b4ac702f670e542bf83a1b22586dc78c6c094",
+  "verification": {
+    "functional": "not run",
+    "visual": "requires parent review",
+    "actual_model": "not run; explicit Codex protocol fixture"
+  },
+  "harness_sha256": "bbc639e86271e8423fcada24ee34421161ec93c34fac254108658be88f430359",
+  "binary_sha256": "332f91c83d1f0c7083b2efa7e55bdaa66049bac0e5d1b817ebeb032f64e32851",
+  "server_sha256": "14aa499f85e920bff8d27037f9f841e280b6fe70daaf5f419d3aae10444c1a49",
+  "source_commit": "c3743ff834284fbb27d459afc8d1bcbd90f7f514",
+  "provenance_note": "Corrected to the actual binary build commit; later source edits had not been rebuilt."
+}

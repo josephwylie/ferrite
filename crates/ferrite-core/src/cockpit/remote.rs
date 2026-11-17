@@ -79,6 +79,8 @@ pub struct Attach {
 /// Where the Server is.
 #[derive(Clone)]
 pub enum Endpoint {
+    /// No environment is enabled. This client never attempts a connection.
+    Unavailable,
     /// This computer's, started as `<executable> server` when none answers.
     Local { executable: PathBuf },
     /// A machine's, through its bridge (ADR 0026). Never started from here.
@@ -189,6 +191,7 @@ impl Remote {
     /// Detached, attaching from the first `poll`.
     pub(crate) fn new(attach: Attach) -> Self {
         let detached = match &attach.server {
+            Endpoint::Unavailable => "No environment selected".into(),
             Endpoint::Local { .. } => "attaching to the Ferrite server".into(),
             Endpoint::Machine(bridge) => format!("connecting to {}", bridge.name()),
         };
@@ -249,9 +252,13 @@ impl Remote {
     }
 
     /// The machine this window is on, when it is not this computer.
+    pub(crate) fn available(&self) -> bool {
+        !matches!(self.attach.server, Endpoint::Unavailable)
+    }
+
     pub(crate) fn bridge(&self) -> Option<&Arc<Bridge>> {
         match &self.attach.server {
-            Endpoint::Local { .. } => None,
+            Endpoint::Unavailable | Endpoint::Local { .. } => None,
             Endpoint::Machine(bridge) => Some(bridge),
         }
     }
@@ -285,7 +292,8 @@ impl Remote {
                 Err(TryRecvError::Disconnected) => self.attaching = None,
             }
         }
-        if self.attachment.is_none()
+        if self.available()
+            && self.attachment.is_none()
             && self.attaching.is_none()
             && Instant::now() >= self.retry_at
             && !self.waits_for_operator()
@@ -454,6 +462,81 @@ impl Remote {
         let (answer, answered) = mpsc::channel();
         self.searches.insert(id, answer);
         Ok(answered)
+    }
+
+    pub(crate) fn changes(&mut self, request: crate::changes::Request) -> io::Result<Receiver<io::Result<crate::changes::Snapshot>>> {
+        self.ask(Op::Changes { request }, |done| match done {
+            Done::Changes { reply } => reply.snapshot(),
+            _ => None,
+        })
+    }
+
+    pub(crate) fn set_file_staged(&mut self, request: crate::changes::Request) -> io::Result<Receiver<io::Result<()>>> {
+        self.ask(Op::Changes { request }, |done| match done {
+            Done::Changes { reply: crate::changes::Reply::Staged } => Some(()),
+            _ => None,
+        })
+    }
+
+    fn attachment_connection(&self) -> io::Result<impl FnOnce() -> io::Result<crate::attachment_transfer::Exchange> + Send + 'static> {
+        let expected_boot = self.attachment.as_ref().ok_or_else(|| io::Error::new(io::ErrorKind::NotConnected, &*self.detached))?.boot_id.clone();
+        let endpoint = self.attach.server.clone();
+        let store = self.attach.store.clone();
+        let hello = ClientMessage::Hello {
+            generation: protocol::GENERATION,
+            client: self.attach.client.clone(),
+            capabilities: Vec::new(),
+        };
+        Ok(move || {
+            let attached = attach_to(&store, &endpoint, hello)?;
+            if attached.snapshot.boot_id != expected_boot {
+                return Err(io::Error::new(io::ErrorKind::NotConnected, "The attachment server changed. Reconnect and retry."));
+            }
+            let mut client = attached.client;
+            let mut next = 0;
+            Ok(Box::new(move |request| {
+                let _route = &endpoint;
+                next += 1;
+                client.send(&ClientMessage::Command(Command { id: next, op: Op::Attachment { request } }))?;
+                let deadline = Instant::now() + Duration::from_secs(30);
+                loop {
+                    let remaining = deadline.saturating_duration_since(Instant::now());
+                    match client.messages.recv_timeout(remaining) {
+                        Ok(ServerMessage::Reply { id, ok, error }) if id == next => {
+                            if let Some(error) = error { return Err(error.into()); }
+                            return match ok {
+                                Some(Done::Attachment { reply }) => Ok(reply),
+                                _ => Err(io::Error::new(io::ErrorKind::InvalidData, "The server did not answer the attachment operation")),
+                            };
+                        }
+                        Ok(_) => {},
+                        Err(RecvTimeoutError::Timeout) => return Err(io::Error::new(io::ErrorKind::TimedOut, "Attachment transfer timed out")),
+                        Err(RecvTimeoutError::Disconnected) => return Err(io::Error::new(io::ErrorKind::NotConnected, "Attachment connection closed")),
+                    }
+                }
+            }) as crate::attachment_transfer::Exchange)
+        })
+    }
+
+    pub(crate) fn upload_attachment(&self, path: PathBuf) -> io::Result<crate::attachment_transfer::Upload> {
+        Ok(crate::attachment_transfer::upload(path, self.attachment_connection()?))
+    }
+
+    pub(crate) fn read_attachment(&self, path: PathBuf) -> io::Result<Receiver<io::Result<Vec<u8>>>> {
+        let connect = self.attachment_connection()?;
+        Ok(super::read_here(move || {
+            crate::attachment_transfer::read(path, connect().map_err(|error| error.to_string())?).map_err(|error| error.to_string())
+        }))
+    }
+
+    pub(crate) fn file_operation(
+        &mut self,
+        request: crate::file_operations::Request,
+    ) -> io::Result<Receiver<io::Result<crate::file_operations::Reply>>> {
+        self.ask(Op::FileOperation { request }, |done| match done {
+            Done::FileOperation { reply } => Some(reply),
+            _ => None,
+        })
     }
 
     pub(crate) fn list_dir(&mut self, path: &Path) -> io::Result<Receiver<io::Result<Listing>>> {
@@ -781,7 +864,10 @@ impl Remote {
 
     /// What the Server's machine has of the provider CLIs, or the update it
     /// ran: the Server's `Done`, for the caller to read.
-    pub(crate) fn cli(&mut self, action: crate::protocol::CliAction) -> io::Result<Receiver<io::Result<Done>>> {
+    pub(crate) fn cli(
+        &mut self,
+        action: crate::protocol::CliAction,
+    ) -> io::Result<Receiver<io::Result<Done>>> {
         self.ask(Op::Cli { action }, Some)
     }
 
@@ -848,7 +934,7 @@ impl Remote {
     }
 
     fn send_command(&mut self, op: Op) -> Result<u64, WireError> {
-        if self.attachment.is_none() {
+        if self.available() && self.attachment.is_none() {
             return Err(WireError {
                 code: ErrorCode::Failed,
                 message: self.detached.clone(),
@@ -881,6 +967,7 @@ impl Remote {
             Ok(attached) => attached,
             Err(error) => {
                 let most = match &self.attach.server {
+                    Endpoint::Unavailable => return None,
                     Endpoint::Local { .. } => {
                         self.detached = format!("no Ferrite server: {error}");
                         RETRY_MOST
@@ -1165,6 +1252,10 @@ fn attach_to(
     hello: ClientMessage,
 ) -> io::Result<link::Attached> {
     match server {
+        Endpoint::Unavailable => Err(io::Error::new(
+            io::ErrorKind::NotConnected,
+            "No environment selected",
+        )),
         Endpoint::Local { executable } => {
             crate::server::agent::ensure_running(store, executable)?;
             link::Client::attach(&link::address(store), hello)

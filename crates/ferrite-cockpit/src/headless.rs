@@ -49,7 +49,7 @@ pub fn run(http: Arc<dyn gpui::http_client::HttpClient>) {
     let mut cx = app(keys);
     cx.update(|cx| cx.set_http_client(http));
     let machines = cx.new(|_| {
-        Machines::new(
+        Machines::with_local_environment(
             Reach {
                 settings_dir: settings_dir.clone(),
                 store: store.clone(),
@@ -61,10 +61,11 @@ pub fn run(http: Arc<dyn gpui::http_client::HttpClient>) {
                 renderer: None,
                 driven: true,
                 defaults: defaults.clone(),
-                bridge: ferrite_core::machine::Bridge::ssh,
+                bridge: ferrite_core::machine::Bridge::for_machine,
             },
             &settings.machines,
             None,
+            settings.local_environment_enabled,
         )
     });
     let core = match cx.update(|cx| machines.update(cx, |machines, _| machines.cockpit())) {
@@ -96,9 +97,15 @@ pub fn run(http: Arc<dyn gpui::http_client::HttpClient>) {
     );
     loop {
         driver.pass(TICK_MS);
-        for (request, action) in driver.update(|view, _, _| view.cockpit.take_drives()) {
+        let source = driver.current_view();
+        let requests = driver.cx.update(|cx| {
+            source.update(cx, |view, _| view.cockpit.take_drives())
+        });
+        for (request, action) in requests {
             let answer = act(&mut driver, action);
-            driver.update(|view, _, _| view.cockpit.driven(request, answer));
+            driver.cx.update(|cx| {
+                source.update(cx, |view, _| view.cockpit.driven(request, answer));
+            });
         }
     }
 }
@@ -155,6 +162,14 @@ fn act(driver: &mut Driver, action: Action) -> Result<Answer, String> {
                 height: bounds.size.height.into(),
             })
         }
+        Action::Attach(files) => {
+            if files.paths.is_empty() || files.paths.iter().any(|path| !path.is_absolute()) {
+                return Err("attachments require absolute local file paths".into());
+            }
+            driver.update(|view, _, cx| view.attach_local_files(&files.paths, cx))?;
+            driver.tick(60);
+            Ok(Answer::Attached)
+        }
         Action::Shot(Shot { path }) => {
             if !path.is_absolute() {
                 return Err(format!("a shot's path is absolute, not {}", path.display()));
@@ -207,7 +222,7 @@ fn window_size() -> (f32, f32) {
 pub struct Driver {
     cx: HeadlessAppContext,
     window: AnyWindowHandle,
-    view: Entity<CockpitView>,
+    shell: Entity<crate::cockpit_window::CockpitWindow>,
     /// The real instant the executor's clock last caught up to.
     synced: std::time::Instant,
 }
@@ -226,16 +241,16 @@ impl Driver {
         mut cx: HeadlessAppContext,
         build: impl FnOnce(&mut Context<CockpitView>) -> CockpitView,
     ) -> Self {
-        let mut view = None;
+        let mut shell = None;
         let (width, height) = window_size();
         let window = cx
             .open_window(
                 gpui::size(gpui::px(width), gpui::px(height)),
                 |window, cx| {
                     let cockpit = cx.new(build);
-                    view = Some(cockpit.clone());
                     let content =
                         cx.new(|cx| crate::cockpit_window::CockpitWindow::new(cockpit, window, cx));
+                    shell = Some(content.clone());
                     cx.new(|cx| {
                         gpui::component::Root::new(content, window, cx)
                             .bordered(false)
@@ -247,13 +262,17 @@ impl Driver {
         Self {
             cx,
             window: window.into(),
-            view: view.expect("the window built its Cockpit"),
+            shell: shell.expect("the window built its shell"),
             synced: std::time::Instant::now(),
         }
     }
 
+    fn current_view(&mut self) -> Entity<CockpitView> {
+        self.cx.update(|cx| self.shell.read(cx).cockpit().clone())
+    }
+
     pub fn read<R>(&mut self, f: impl FnOnce(&CockpitView, &App) -> R) -> R {
-        let view = self.view.clone();
+        let view = self.current_view();
         self.cx.update(|cx| f(view.read(cx), cx))
     }
 
@@ -261,7 +280,7 @@ impl Driver {
         &mut self,
         f: impl FnOnce(&mut CockpitView, &mut Window, &mut Context<CockpitView>) -> R,
     ) -> R {
-        let view = self.view.clone();
+        let view = self.current_view();
         self.cx
             .update_window(self.window, |_, window, cx| {
                 view.update(cx, |view, cx| f(view, window, cx))
@@ -441,8 +460,8 @@ impl Driver {
     /// Close the window and its app. gpui's leak check may panic on the
     /// way out; nothing is left to report by then.
     pub fn close(self) {
-        let Self { cx, view, .. } = self;
-        drop(view);
+        let Self { cx, shell, .. } = self;
+        drop(shell);
         let hook = std::panic::take_hook();
         std::panic::set_hook(Box::new(|_| {}));
         let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(cx)));

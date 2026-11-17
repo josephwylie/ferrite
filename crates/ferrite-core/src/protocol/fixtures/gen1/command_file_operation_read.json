@@ -1,0 +1,1 @@
+{"type":"command","id":301,"op":"file_operation","request":{"kind":"read","root":"/workspace","path":"/workspace/main.rs"}}

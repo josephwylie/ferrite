@@ -41,7 +41,9 @@ use gpui::{
     MouseMoveEvent, Pixels, Render, SharedString, StyledText, TextLayout, UTF16Selection, Window,
 };
 
+use super::files::remote_files::{self, RemoteFiles};
 use super::save::{self, Outcome, SaveState};
+use ferrite_core::file_operations::Reply as FileReply;
 
 actions!(editor, [Enter, Tab, PageUp, PageDown, Save]);
 
@@ -90,7 +92,9 @@ pub(crate) struct Editor {
     revision: u64,
     saved_revision: u64,
     /// The fingerprint of the file as the buffer last matched it.
-    on_disk: u64,
+    on_disk: save::Fingerprint,
+    remote: Option<RemoteFiles>,
+    remote_read: Option<gpui::Task<()>>,
     /// The file's modification time and size when `follow_disk` last read it.
     seen: Option<(std::time::SystemTime, u64)>,
     save: SaveState,
@@ -134,6 +138,8 @@ impl Editor {
             revision: 0,
             saved_revision: 0,
             on_disk,
+            remote: None,
+            remote_read: None,
             seen: None,
             save: SaveState::Idle,
             refused: false,
@@ -152,6 +158,10 @@ impl Editor {
         editor.reindex();
         editor.list.reset(editor.starts.len());
         editor
+    }
+
+    pub(in crate::cockpit::tools) fn set_remote(&mut self, remote: RemoteFiles) {
+        self.remote = Some(remote);
     }
 
     pub(crate) fn is_dirty(&self) -> bool {
@@ -270,10 +280,23 @@ impl Editor {
         self.save = SaveState::Saving(revision);
         let (path, text, writer) = (self.path.clone(), self.text.text().to_string(), self.writer);
         let expected = (!overwrite).then_some(self.on_disk);
+        let remote = self
+            .remote
+            .as_ref()
+            .map(|remote| remote.write(&path, text.clone(), expected, cx));
         self.writing = Some(cx.spawn(async move |this, cx| {
             let outcome = cx
-                .background_spawn(async move { save::write(&path, &text, expected, writer) })
-                .await;
+                .background_spawn(async move {
+                    match remote {
+                        Some(answer) => match remote_files::receive(answer).await {
+                            Ok(FileReply::Written { fingerprint }) => Outcome::Written(fingerprint),
+                            Ok(FileReply::Conflict) => Outcome::Changed,
+                            Ok(_) => Outcome::Refused("The remote server did not confirm this save. Update Ferrite on that machine and retry.".into()),
+                            Err(error) => Outcome::Refused(error.to_string()),
+                        },
+                        None => save::write(&path, &text, expected, writer),
+                    }
+                }).await;
             this.update(cx, |editor, cx| editor.finished(revision, outcome, cx))
                 .ok();
         }));
@@ -313,6 +336,10 @@ impl Editor {
         if self.is_dirty() || matches!(self.save, SaveState::Saving(_)) {
             return;
         }
+        if self.remote.is_some() {
+            self.read_remote(false, cx);
+            return;
+        }
         let stamp = std::fs::metadata(&self.path)
             .ok()
             .and_then(|meta| Some((meta.modified().ok()?, meta.len())));
@@ -338,6 +365,10 @@ impl Editor {
 
     /// Take the disk's text in place of the buffer.
     fn reload(&mut self, cx: &mut Context<Self>) {
+        if self.remote.is_some() {
+            self.read_remote(true, cx);
+            return;
+        }
         let read = std::fs::read(&self.path)
             .map_err(|error| error.to_string())
             .and_then(|bytes| {
@@ -357,9 +388,51 @@ impl Editor {
         cx.notify();
     }
 
+    fn read_remote(&mut self, reload: bool, cx: &mut Context<Self>) {
+        let Some(remote) = &self.remote else {
+            return;
+        };
+        if self.remote_read.is_some() && !reload {
+            return;
+        }
+        let answer = remote.read(&self.path, cx);
+        let revision = self.revision;
+        self.remote_read = Some(cx.spawn(async move |this, cx| {
+            let result = cx.background_spawn(async move { remote_files::receive(answer).await }).await;
+            let _ = this.update(cx, |editor, cx| {
+                editor.remote_read = None;
+                if editor.revision != revision || matches!(editor.save, SaveState::Saving(_)) { return; }
+                match result {
+                    Ok(FileReply::Text { text, fingerprint }) => {
+                        if reload || editor.on_disk != fingerprint {
+                            let caret = editor.text.cursor();
+                            let at = if reload { (0, 0) } else { (editor.line_of(caret), editor.column_of(caret)) };
+                            editor.take_disk(text, fingerprint, at);
+                            editor.closing = false;
+                            cx.emit(Event::Settled);
+                        }
+                    }
+                    result => {
+                        let error = match result {
+                            Err(error) => error.to_string(),
+                            _ => "The remote file is no longer text. Use the remote terminal to inspect it.".into(),
+                        };
+                        if reload { editor.save = SaveState::ReloadFailed(error); }
+                    }
+                }
+                cx.notify();
+            });
+        }));
+    }
+
     /// The buffer becomes the disk's `text`, saved, with the caret at
     /// `(line, column)`, held to the new text's lines.
-    fn take_disk(&mut self, text: String, on_disk: u64, (line, column): (usize, usize)) {
+    fn take_disk(
+        &mut self,
+        text: String,
+        on_disk: save::Fingerprint,
+        (line, column): (usize, usize),
+    ) {
         self.text.set(text);
         self.reindex();
         let line = line.min(self.starts.len() - 1);
@@ -681,7 +754,7 @@ impl Editor {
             line,
             layouts: self.layouts.clone(),
             caret_bounds: self.caret_bounds.clone(),
-            input: caret.map(|_| (self.focus.clone(), cx.entity())),
+            input: (current && focused).then(|| (self.focus.clone(), cx.entity())),
         };
         div()
             .flex()
@@ -1157,7 +1230,8 @@ impl Editor {
     /// disk refused its last write, or the file changed under it.
     pub(crate) fn lost_by_leaving(&self) -> bool {
         self.is_dirty()
-            && (!self.settings.auto_save
+            && (self.remote.is_some()
+                || !self.settings.auto_save
                 || self.refused
                 || save::changed_on_disk(&self.path, self.on_disk))
     }
@@ -1166,7 +1240,7 @@ impl Editor {
     /// disk, so what its pause has not yet written is written now, unless
     /// the file changed under the buffer.
     pub(crate) fn flush_for_quit(&mut self) {
-        if !self.is_dirty() || !self.settings.auto_save {
+        if self.remote.is_some() || !self.is_dirty() || !self.settings.auto_save {
             return;
         }
         let outcome = save::write(&self.path, self.text.text(), Some(self.on_disk), self.writer);
