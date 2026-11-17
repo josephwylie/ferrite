@@ -326,7 +326,7 @@ fn refresh_pr_status_rereads_the_open_tab(cx: &mut TestAppContext) {
 
     cx.update(|window, cx| {
         view.update(cx, |view, cx| {
-            view.run_palette_act(Act::Command(Command::RefreshPr), false, window, cx)
+            view.run_palette_act(Act::Command(Command::RefreshPr), window, cx)
         })
     });
     let mut changed = pr_at(48, "o/r", "Before");

@@ -443,43 +443,6 @@ fn a_file_opens_in_the_panel_and_closes(cx: &mut TestAppContext) {
     );
 }
 
-/// F-15: another Thread opens beside the Solo Pane as a second Pane, and
-/// the pair holds while focus stays on one of the two.
-#[gpui::test]
-fn a_thread_opens_beside_the_solo_pane(cx: &mut TestAppContext) {
-    let (core, _fake) = cockpit("frame-thread-beside", 2);
-    let threads = core.threads();
-    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
-    cx.simulate_resize(gpui::size(px(1440.), px(900.)));
-    view.update(cx, |view, cx| view.focus_thread(threads[0], cx));
-    tick(cx);
-    cx.update(|window, cx| {
-        view.update(cx, |view, cx| {
-            view.open_beside(beside::Beside::Thread(threads[1]), window, cx)
-        })
-    });
-    tick(cx);
-    view.read_with(cx, |view, _| {
-        assert_eq!(
-            view.visible_indices().len(),
-            2,
-            "two Panes on the Solo board"
-        );
-        assert_eq!(view.focused_thread(), Some(threads[0]), "focus stays home");
-    });
-    let rects = cx.update(|window, cx| view.read(cx).pane_rects(window));
-    assert_eq!(rects.len(), 2);
-    assert!(rects[0].1.x < rects[1].1.x, "the second Pane on the right");
-    // Focus moving to the companion keeps the pair.
-    view.update(cx, |view, cx| {
-        let index = view.pane_for(threads[1]).unwrap();
-        view.focus_pane(index);
-        cx.notify();
-    });
-    tick(cx);
-    view.read_with(cx, |view, _| assert_eq!(view.visible_indices().len(), 2));
-}
-
 /// F-18: a 2×2's vertical seam is one line: dragging it moves both rows'
 /// boundary together.
 #[gpui::test]

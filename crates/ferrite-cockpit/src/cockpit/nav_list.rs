@@ -353,35 +353,7 @@ impl CockpitView {
         .children(self.cursor_reveal(NavItem::Thread(thread)))
         .children(self.shown_reveal(row))
         .children(self.hover_card(row, cx));
-        let face = self.thread_ghost(thread);
-        let nav_edge = self.nav_width();
-        let chip = row.clone();
-        let lifted = matches!(
-            self.nav_dragging,
-            Some(Drag::Thread { thread: dragged, .. }) if dragged == thread
-        );
-        let card = self
-            .pickable_card(card, thread, cx)
-            .when(lifted, |card| card.opacity(ferrite_ui::theme::DRAG_SOURCE_OPACITY))
-            .on_drag(
-                NavDrag {
-                    drag: Drag::Thread {
-                        thread,
-                        group: None,
-                    },
-                },
-                move |_, grab, _, cx| {
-                    let face = face.clone();
-                    let chip = chip.clone();
-                    cx.new(|_| PaneGhost {
-                        face,
-                        grab,
-                        row_left_of: Some((nav_edge, NavChip::Thread(chip))),
-                    })
-                },
-            )
-            // A click, not a press: pressing a card to drag it onto the
-            // board must leave the board showing.
+        let card = self.pickable_card(card, thread, cx)
             .on_click(cx.listener(move |view, event: &ClickEvent, window, cx| {
                 cx.stop_propagation();
                 if view.pick_card(thread, event.modifiers(), cx) {

@@ -80,8 +80,6 @@ pub(crate) fn label(action: &str, context: Option<&str>) -> Option<Entry> {
         // Threads.
         "cockpit::NewThread" => Row(Threads, "New thread"),
         "cockpit::NewWorktreeThread" => Row(Threads, "New worktree thread"),
-        "cockpit::NewGroup" => Row(Threads, "New group"),
-        "palette::OpenGroups" => Row(Threads, "Open a group"),
         "palette::Toggle" => Row(Threads, "Commands"),
         "cockpit::CloseThread" => Row(Threads, "Park thread"),
         "cockpit::ReopenThread" => Row(Threads, "Reopen last"),
@@ -110,7 +108,6 @@ pub(crate) fn label(action: &str, context: Option<&str>) -> Option<Entry> {
         | "cockpit::FocusThread7"
         | "cockpit::FocusThread8"
         | "cockpit::FocusThread9" => Hidden,
-        "cockpit::ToggleFullscreen" => Row(Board, "Fullscreen pane"),
         "cockpit::ToggleNav" => Row(Board, "Toggle sidebar"),
         "cockpit::TogglePanel" => Row(Board, "Toggle panel"),
         "cockpit::ToggleDetails" => Row(Board, "Toggle thread details"),
@@ -223,7 +220,6 @@ pub(crate) fn label(action: &str, context: Option<&str>) -> Option<Entry> {
         | "palette::SelectNext"
         | "palette::SelectPrevious"
         | "palette::Confirm"
-        | "palette::Preview"
         | "palette::Dismiss"
         | "palette::NextType"
         | "palette::PreviousType"

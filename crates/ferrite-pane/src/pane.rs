@@ -653,8 +653,8 @@ pub struct PaneWiring {
     /// on Main, which has none.
     pub subagent_head: Option<AnyElement>,
     pub activity_decisions: Option<AnyElement>,
-    /// A question too big for this Pane's body: it answers in fullscreen
-    /// (the expand key), and the body keeps its transcript meanwhile.
+    /// A question too big for this Pane's body: its foot is a door to it,
+    /// and the body keeps its transcript meanwhile.
     pub expand_question: bool,
     pub question_measurement: Option<AnyElement>,
     /// Wires the whole L1 head as the Pane's drag handle (the cockpit
@@ -667,9 +667,6 @@ pub struct PaneWiring {
     /// The Solo Composer's controls, wired in the cockpit (SPEC §5.5); on
     /// a board, the focused Pane's send circle alone.
     pub toolbar: Option<ComposerControls>,
-    /// The Group head's fill button (`fill_button`), wired to fill the
-    /// board with this Pane; None in Solo.
-    pub fill: Option<AnyElement>,
     /// An empty Thread's hero (`Hero`): it stands centred over its body
     /// until the first prompt.
     pub start: Option<Hero>,
@@ -925,7 +922,6 @@ pub fn render_pane(
         head_drag,
         quick_answers,
         toolbar,
-        fill,
         start,
         details,
         details_lane_width,
@@ -1000,7 +996,7 @@ pub fn render_pane(
                 focused: framed,
                 title,
                 provider: provider_mark,
-                action: fill,
+                action: None,
                 width: Some(cell_width),
             });
             match head_drag {
@@ -2041,7 +2037,6 @@ pub fn resume_offer(key: u64, line: SharedString, action: gpui::component::butto
 /// you · question` and the key that answers it in full, as a door — a press
 /// runs the ⌘D jump. It sits where the Pane's state reads (theme rule 7).
 fn question_door(key: u64) -> AnyElement {
-    let expand = components::bound_chord("cockpit::ToggleFullscreen");
     let face = div()
         .debug_selector(|| "question-expand".into())
         .flex()
@@ -2075,17 +2070,7 @@ fn question_door(key: u64) -> AnyElement {
                 .text_color(rgb(TEXT_FAINT))
                 .child("\u{b7}"),
         )
-        .child(div().flex_shrink_0().child(theme::words::QUESTION))
-        .children(expand.map(|keys| {
-            div()
-                .flex()
-                .flex_shrink_0()
-                .items_center()
-                .gap(px(theme::CH))
-                .child(div().text_color(rgb(TEXT_FAINT)).child("\u{b7}"))
-                .child(components::key_combo(&keys, INK_SUBTLE))
-                .child("answers in full")
-        }));
+        .child(div().flex_shrink_0().child(theme::words::QUESTION));
     div()
         .flex()
         .flex_shrink_0()
@@ -2301,42 +2286,6 @@ impl HeadFit {
             floor: floor.min(room(false).max(0.0)),
         }
     }
-}
-
-/// The head's fill button (SPEC §5.9): a 28px `maximize` door, `RAISED`
-/// under the pointer, whose press the cockpit wires to fill the board with
-/// this Pane (`ToggleFullscreen`), its tooltip `Fill the board ⌘⇧⏎` read
-/// from the keymap.
-pub fn fill_button(key: u64) -> Stateful<Div> {
-    let blend = SharedString::from(format!("pane-fill-{key}"));
-    let t = ferrite_ui::motion::hover_t(&blend);
-    div()
-        .id(gpui::ElementId::Name(blend.clone()))
-        .debug_selector(move || format!("pane-fill-{key}"))
-        .flex()
-        .flex_shrink_0()
-        .items_center()
-        .justify_center()
-        .size(px(theme::ICON_BUTTON))
-        .rounded(px(theme::R_CONTROL))
-        .cursor_pointer()
-        .when(t > 0.0, |door| {
-            door.bg(ferrite_ui::motion::mix(
-                rgba(TRANSPARENT).into(),
-                theme::paint::RAISED.into(),
-                t,
-            ))
-        })
-        .on_hover(ferrite_ui::motion::hover_listener(blend))
-        .tooltip(ferrite_ui::menu::action_tooltip(
-            "Fill the board",
-            "cockpit::ToggleFullscreen",
-        ))
-        .child(icon(
-            icons::MAXIMIZE,
-            theme::PANE_HEAD_FILL_GLYPH,
-            INK_STRONG,
-        ))
 }
 
 /// The failure strip (SPEC §5.9 item 4), the transcript's tail row under

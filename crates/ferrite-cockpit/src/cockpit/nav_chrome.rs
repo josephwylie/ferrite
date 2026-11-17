@@ -297,8 +297,7 @@ impl CockpitView {
         self.nav_search.focus_handle(cx).is_focused(window)
     }
 
-    /// The Filter menu's rows: every Project (the scoped one checked), and
-    /// the Groups, which open from here.
+    /// The Filter menu's rows: every Project, the scoped one checked.
     pub(super) fn filter_rows(&self) -> Vec<Option<(menu::Item, MenuVerb)>> {
         let mut rows = vec![Some((
             menu::Item::new("All projects").checked(self.nav_filter.is_none()),
@@ -310,22 +309,6 @@ impl CockpitView {
                 MenuVerb::FilterProject(Some(project.id)),
             ))
         }));
-        let groups: Vec<_> = self
-            .cockpit
-            .groups()
-            .iter()
-            .map(|group| {
-                Some((
-                    menu::Item::new(group.display_title())
-                        .leading(ferrite_ui::icons::BOARD, ferrite_ui::theme::INK_SUBTLE),
-                    MenuVerb::OpenGroup(group.id),
-                ))
-            })
-            .collect();
-        if !groups.is_empty() {
-            rows.push(None);
-            rows.extend(groups);
-        }
         rows
     }
 

@@ -16,7 +16,6 @@ use std::thread;
 use std::time::Duration;
 
 use ferrite_core::cockpit::{Cockpit, SpawnRequest, Spawner};
-use ferrite_core::groups::GroupChange;
 use ferrite_core::providers::{applied, Session, SettingAck};
 use ferrite_core::store::Provider;
 use ferrite_core::workspace::WorkspaceChoice;
@@ -1096,51 +1095,27 @@ fn turn(thinking: &[&str], text: &str, cost: f64) -> Vec<Step> {
 
 // ---------------------------------------------------------------- seeding
 
-/// The multi-Pane seed (`--demo`, `--panes N`): revive whatever this store
+/// The demo seed (`--demo`, `--panes N`): revive whatever this store
 /// already parked — newest first, which `threads_for` does — and
 /// open new Threads for the room that is left.
 ///
 /// Those new Threads alternate the two providers, starting at `first`. A
 /// Cockpit opened on one provider draws the same logomark down the whole
 /// nav; the design shows both marks mixed, so the seed has to deal both.
-pub fn seed_panes(core: &mut Cockpit, panes: usize, first: Provider, demo: bool) {
-    // The seeded Panes are a Group's members: with no global wall (#28) a
-    // Group is the only view that shows more than one Pane. The nav's
-    // selected fill is carried by the current Group too — the one holding
-    // the focused Pane's Thread — so a seed of nothing but solo Threads
-    // leaves that fill unpainted and every Group title at `INK_STRONG` instead of
-    // `INK_STRONG`. A store that already holds
-    // Groups (any run after the first) is therefore revived from the first
-    // Group's members before anything else; a fresh store has no Group to
-    // revive from and gets one from `seed_groups`, over the Threads
-    // opened below. Panes open in ThreadId order, so the first member taken
-    // here is the focused Pane's Thread.
-    let members: Vec<ThreadId> = core
-        .groups()
-        .iter()
-        .next()
-        .map(|group| group.members.clone())
-        .unwrap_or_default();
-    // ...but only into the leading Panes. The Cockpit is a census, not a
-    // monoculture: a Decision waits in one Pane and a Session has closed in
-    // the last, which is what paints the two coloured `.signal` lines and
-    // the attention and blocked borders. A revived Thread replays its log,
-    // and a log carries neither a pending Decision nor an exit — both are
-    // Session state — so those Panes have to be freshly dealt. The demo
-    // spawner deals its seeds in open order and a revived Thread takes
-    // none, so the three Panes held back here get seeds 0, 1 and 2:
-    // the Decision the interactive script stops on, a working Thread, and
-    // a Session that closed.
+pub fn seed_panes(core: &mut Cockpit, panes: usize, first: Provider) {
+    // The leading Panes are the parked Threads a store already holds; the
+    // Cockpit is a census, not a monoculture: a Decision waits in one Pane
+    // and a Session has closed in the last, which is what paints the two
+    // coloured `.signal` lines and the attention and blocked borders. A
+    // revived Thread replays its log, and a log carries neither a pending
+    // Decision nor an exit — both are Session state — so those Panes have
+    // to be freshly dealt. The demo spawner deals its seeds in open order
+    // and a revived Thread takes none, so the three Panes held back here
+    // get seeds 0, 1 and 2: the Decision the interactive script stops on,
+    // a working Thread, and a Session that closed.
     let revivable = panes.saturating_sub(3).max(1);
-    let mut open = 0;
-    for thread in members.into_iter().take(revivable) {
-        match core.revive(thread) {
-            Ok(()) => open += 1,
-            Err(e) => ferrite_core::log!("thread {thread} could not be revived: {e:?}"),
-        }
-    }
     let parked = core.parked().map(|threads| threads.len()).unwrap_or(0);
-    open += threads_for(core, revivable.saturating_sub(open).min(parked), first).len();
+    let mut open = threads_for(core, revivable.min(parked), first).len();
     let checkout = std::env::current_dir().unwrap_or_else(|_| ".".into());
     while open < panes {
         let provider = match (open % 2 == 0, first) {
@@ -1159,21 +1134,6 @@ pub fn seed_panes(core: &mut Cockpit, panes: usize, first: Provider, demo: bool)
             }
         }
     }
-    // The Group tier the demo shows off, and only the demo: its titles are
-    // written copy and it opens Threads of its own to fill a second Group.
-    // That is fixture, exactly like the scripted transcripts around it, and
-    // it may never reach a store an operator keeps work in — `--panes N`
-    // alone spawns real Sessions, so it does not qualify.
-    if demo {
-        let seeded: Vec<ThreadId> = core.threads().to_vec();
-        seed_groups(core, &seeded, first);
-    }
-}
-
-/// A load run shows every requested Pane together, rather than the demo census.
-pub fn seed_load_group(core: &mut Cockpit) {
-    let threads = core.threads();
-    form_group(core, &threads, "Streaming load");
 }
 
 /// Fill the cockpit for a multi-pane run (`--panes N`, the perf load).
@@ -1231,93 +1191,6 @@ fn deal(first: Provider, nth: usize) -> Provider {
         (true, first) => first,
         (false, Provider::Claude) => Provider::Codex,
         (false, Provider::Codex) => Provider::Claude,
-    }
-}
-
-/// The Group tier the **demo** shows: the seeded Threads are the first
-/// Group and three Threads it opens and parks are the second, so the nav's
-/// selected fill has a Group to land on. Both titles are written copy and
-/// the second Group's members are Threads nothing asked for — fixture, like
-/// the scripted transcripts, and callable only from the `--demo` launch. A
-/// store that already holds a Group is the operator's own and is left
-/// untouched.
-pub fn seed_groups(cockpit: &mut Cockpit, seeded: &[ThreadId], provider: Provider) {
-    if cockpit.groups().iter().next().is_some() {
-        return;
-    }
-    let first_group = &seeded[..seeded.len().min(FIRST_GROUP)];
-    form_group(cockpit, first_group, "Project-scoped navigation prototype");
-    let mut parked = Vec::new();
-    while parked.len() < SECOND_GROUP {
-        // Dealt on from where the first Group left off, so the second
-        // Group's rows mix both logomarks too instead of repeating one.
-        let provider = deal(provider, first_group.len() + parked.len());
-        match cockpit.open(provider, WorkspaceChoice::Main { checkout: here() }) {
-            Ok(id) => {
-                // A member is a Thread, not a Pane: the Session ends the
-                // moment it exists, so the Cockpit stays the size it was
-                // asked for and the row is parked like the prototype's.
-                if let Err(e) = cockpit.park(id) {
-                    ferrite_core::log!("thread {id} would not park: {e}");
-                }
-                parked.push(id);
-            }
-            Err(e) => {
-                ferrite_core::log!("could not open a thread: {e}");
-                break;
-            }
-        }
-    }
-    form_group(
-        cockpit,
-        &parked,
-        "Durable provider stream hardening & replay",
-    );
-}
-
-/// How many of the seeded Threads the first Group holds, and how many
-/// parked Threads the second holds.
-const FIRST_GROUP: usize = 4;
-const SECOND_GROUP: usize = 3;
-
-/// One Group over these Threads, in this order, under this title. Core has
-/// no "create with members": a Group is born from two Threads and the rest
-/// join it.
-fn form_group(cockpit: &mut Cockpit, members: &[ThreadId], title: &str) {
-    let (Some(seed), Some(with), rest) = (
-        members.first().copied(),
-        members.get(1).copied(),
-        members.get(2..).unwrap_or_default(),
-    ) else {
-        return;
-    };
-    let group = match cockpit.apply_group(GroupChange::Create {
-        first: seed,
-        second: with,
-    }) {
-        Ok(applied) => applied.group,
-        Err(e) => {
-            ferrite_core::log!("could not group threads {seed} and {with}: {e}");
-            return;
-        }
-    };
-    let Some(group) = group else {
-        return;
-    };
-    for thread in rest {
-        if let Err(e) = cockpit.apply_group(GroupChange::Join {
-            thread: *thread,
-            group,
-            index: None,
-        }) {
-            ferrite_core::log!("thread {thread} would not join the group: {e}");
-        }
-    }
-    if let Err(e) = cockpit.apply_group(GroupChange::Rename {
-        group,
-        title: title.to_string(),
-    }) {
-        ferrite_core::log!("could not name the group: {e}");
     }
 }
 

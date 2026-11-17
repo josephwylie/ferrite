@@ -325,19 +325,8 @@ pub fn launch() {
             // The Server restores the Threads that were open; an empty
             // store starts as a draft Pane (#29).
             if core.threads().is_empty() && (demo || panes > 1) {
-                demo::seed_panes(&mut core, panes, provider, demo && !load);
-                if load {
-                    demo::seed_load_group(&mut core);
-                }
+                demo::seed_panes(&mut core, panes, provider);
             }
-
-            // The demo's Group (above): the fixture opens *on* it. The default
-            // view is Solo (#28), which is right for a launch but wrong here —
-            // the board the demo exists to draw is a Group's membership, and
-            // Solo would show one Pane of it.
-            let seeded_group = (demo && !parity)
-                .then(|| core.groups().iter().next().map(|group| group.id))
-                .flatten();
 
             // Who posts the system notifications (ADR 0017): the bundle's
             // identifier, and on Windows the AppUserModelID.
@@ -397,7 +386,7 @@ pub fn launch() {
                     },
                     |window, cx| {
                         let view = cx.new(|cx| {
-                            let mut view = CockpitView::new_with_settings(
+                            let view = CockpitView::new_with_settings(
                                 core,
                                 provider,
                                 cockpit::Preferences {
@@ -413,9 +402,6 @@ pub fn launch() {
                                 },
                                 cx,
                             );
-                            if let Some(group) = seeded_group {
-                                view.enter_group(group, cx);
-                            }
                             match machines {
                                 Some(machines) => view.with_machines(machines),
                                 None => view,

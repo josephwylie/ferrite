@@ -1,5 +1,5 @@
 //! The floats' cockpit half (FL-1…FL-9, FL-16, FL-18): the command palette
-//! (⌘K, ⌘G), the shortcuts sheet (`?`), the status line's mode cycle (⇧⇥),
+//! (⌘K), the shortcuts sheet (`?`), the status line's mode cycle (⇧⇥),
 //! the notifications list's keys, the palette's veil and the toasts' place.
 //!
 //! Every float key is an action bound in its float's context (`keymap`)
@@ -17,9 +17,6 @@ use crate::shortcuts::Shortcuts;
 /// while they are up.
 pub(super) struct Floats {
     pub palette: Option<Entity<Palette>>,
-    /// The palette is open to pick a Thread to open beside (the tab
-    /// strip's split button): ⏎ on a Thread row does what ⇥ does.
-    pub beside: bool,
     pub shortcuts: Option<Entity<Shortcuts>>,
     /// The palette or the shortcuts sheet on its way out (`sheet_floats`).
     pub exit: std::cell::RefCell<ferrite_ui::motion::Exits<gpui::AnyView>>,
@@ -29,7 +26,6 @@ impl Floats {
     pub(super) fn new() -> Self {
         Self {
             palette: None,
-            beside: false,
             shortcuts: None,
             exit: Default::default(),
         }
@@ -123,9 +119,6 @@ impl CockpitView {
         root.on_action(
             cx.listener(|view, _: &palette::Toggle, window, cx| view.toggle_palette(window, cx)),
         )
-        .on_action(cx.listener(|view, _: &palette::OpenGroups, window, cx| {
-            view.open_palette(PaletteScope::Groups, "", window, cx)
-        }))
         .on_action(
             cx.listener(|view, _: &palette::ShowParked, window, cx| view.show_parked(window, cx)),
         )
@@ -138,12 +131,9 @@ impl CockpitView {
         .on_action(
             cx.listener(|view, _: &palette::SelectPrevious, _, cx| view.palette_step(-1, cx)),
         )
-        .on_action(cx.listener(|view, _: &palette::Confirm, window, cx| {
-            view.palette_confirm(false, window, cx)
-        }))
-        .on_action(cx.listener(|view, _: &palette::Preview, window, cx| {
-            view.palette_confirm(true, window, cx)
-        }))
+        .on_action(
+            cx.listener(|view, _: &palette::Confirm, window, cx| view.palette_confirm(window, cx)),
+        )
         .on_action(cx.listener(|view, _: &palette::Dismiss, _, cx| view.close_palette(cx)))
         .on_action(
             cx.listener(|view, _: &shortcuts::Toggle, window, cx| {
@@ -196,8 +186,8 @@ impl CockpitView {
     }
 
     /// Open the palette over the board (FL-1): every Thread, the Projects
-    /// and Groups to jump to, then every command (`All`), or the Groups
-    /// alone (⌘G), its line seeded with `query` and holding the keyboard.
+    /// to jump to, then every command (`All`), or the sessions to import,
+    /// its line seeded with `query` and holding the keyboard.
     pub(crate) fn open_palette(
         &mut self,
         scope: PaletteScope,
@@ -210,11 +200,9 @@ impl CockpitView {
                 let mut rows = self.palette_thread_rows(window);
                 rows.extend(self.palette_project_rows());
                 rows.extend(self.palette_factory_rows());
-                rows.extend(self.palette_group_rows());
                 rows.extend(self.palette_command_rows(window, cx));
                 rows
             }
-            PaletteScope::Groups => self.palette_group_rows(),
             // Listed off the UI thread: `open_import_palette`.
             PaletteScope::Sessions => Vec::new(),
         };
@@ -222,16 +210,8 @@ impl CockpitView {
         let palette = cx.new(|cx| Palette::new(scope, rows, query, cx));
         let focus = palette.read(cx).input.focus_handle(cx);
         self.floats.palette = Some(palette);
-        self.floats.beside = false;
         window.focus(&focus, cx);
         cx.notify();
-    }
-
-    /// The palette, to pick a Thread to open beside the focused Pane (its
-    /// `Open a thread beside`, `Beside::Thread`).
-    pub(super) fn open_palette_beside(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.open_palette(PaletteScope::All, "", window, cx);
-        self.floats.beside = true;
     }
 
     /// Shut the palette without touching anything else (esc, the veil): a
@@ -248,22 +228,16 @@ impl CockpitView {
         }
     }
 
-    /// ⏎ runs the cursor's row and closes; ⇥ (`preview`) opens a Thread
-    /// beside the current Pane and closes, and does nothing on any other
-    /// row.
-    fn palette_confirm(&mut self, preview: bool, window: &mut Window, cx: &mut Context<Self>) {
+    /// ⏎ runs the cursor's row and closes.
+    fn palette_confirm(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(palette) = self.floats.palette.clone() else {
             return;
         };
         let Some(row) = palette.read(cx).selected().cloned() else {
             return;
         };
-        if preview && !matches!(row.act, Act::Thread(_)) {
-            return;
-        }
-        let preview = preview || self.floats.beside;
         self.floats.palette = None;
-        self.run_palette_act(row.act, preview, window, cx);
+        self.run_palette_act(row.act, window, cx);
         cx.notify();
     }
 
@@ -271,16 +245,11 @@ impl CockpitView {
     pub(super) fn run_palette_act(
         &mut self,
         act: Act,
-        preview: bool,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         match act {
-            Act::Thread(thread) if preview => {
-                self.open_beside(beside::Beside::Thread(thread), window, cx);
-            }
             Act::Thread(thread) => self.land_on_thread(thread, cx),
-            Act::Group(group) => self.enter_group(group, cx),
             Act::Project(project) => {
                 if let Some(thread) = self.project_lead(project) {
                     self.land_on_thread(thread, cx);
@@ -658,49 +627,6 @@ impl CockpitView {
             .map(|row| row.thread)
     }
 
-    /// The Groups' rows (⌘G's, and ⌘K's jumps): every Group in creation
-    /// order, named, with its members' roll-up and `<project | all
-    /// projects> · N threads` after it.
-    fn palette_group_rows(&self) -> Vec<PaletteRow> {
-        self.cockpit
-            .groups()
-            .iter()
-            .map(|group| {
-                let projects: std::collections::BTreeSet<SharedString> = group
-                    .members
-                    .iter()
-                    .filter_map(|thread| {
-                        self.facts
-                            .get(*thread)
-                            .and_then(|facts| facts.project_label.clone())
-                    })
-                    .collect();
-                let scope: SharedString = if projects.len() == 1 {
-                    projects.into_iter().next().unwrap_or_default()
-                } else {
-                    "all projects".into()
-                };
-                let count = group.members.len();
-                let noun = if count == 1 { "thread" } else { "threads" };
-                let members: Vec<nav::ThreadRow> = group
-                    .members
-                    .iter()
-                    .map(|thread| self.thread_row(*thread))
-                    .collect();
-                PaletteRow {
-                    section: PaletteSection::Groups,
-                    name: group.display_title().into(),
-                    context: format!("{scope} \u{b7} {count} {noun}").into(),
-                    status: nav::roll_up(&members),
-                    detail: None,
-                    keys: None,
-                    used: None,
-                    act: Act::Group(group.id),
-                }
-            })
-            .collect()
-    }
-
     /// The command table (FL-4), in its fixed order; a row whose act is
     /// unavailable right now is left out. Keys come from the key table.
     pub(super) fn palette_command_rows(
@@ -715,7 +641,6 @@ impl CockpitView {
             .panes
             .get(self.focused())
             .is_some_and(|pane| pane.draft().is_some());
-        let in_group = matches!(self.cockpit.roster().view(), View::Group(_));
         let parked = !self.parked_threads_all().is_empty();
         let supports =
             |kind: ferrite_core::ControlKind| open.is_some_and(|open| open.supports_control(kind));
@@ -765,12 +690,6 @@ impl CockpitView {
                     });
                 }
             };
-        // The last spelling of a new Thread (⌘T, after ⌘N), or the
-        // operator's one key for it.
-        let new_thread_in_group = ferrite_ui::keymap::active()
-            .into_iter()
-            .rfind(|(_, action, context)| *action == "cockpit::NewThread" && context.is_none())
-            .map(|(keys, _, _)| ferrite_ui::components::spell_chord(&keys));
         add(
             focused.is_some(),
             "Park thread".into(),
@@ -819,27 +738,6 @@ impl CockpitView {
             "/import",
             None,
             Command::ImportSession,
-        );
-        add(
-            in_group,
-            "New thread in this group".into(),
-            "",
-            new_thread_in_group,
-            Command::NewThreadInGroup,
-        );
-        add(
-            focused.is_some_and(|thread| self.cockpit.groups().of(thread).is_none()),
-            "New group".into(),
-            "",
-            bound_chord("cockpit::NewGroup"),
-            Command::NewGroup,
-        );
-        add(
-            self.cockpit.groups().iter().next().is_some(),
-            "Open a group".into(),
-            "",
-            bound_chord("palette::OpenGroups"),
-            Command::OpenGroup,
         );
         add(
             parked,
@@ -946,20 +844,6 @@ impl CockpitView {
             "",
             None,
             Command::ReopenSurface,
-        );
-        add(
-            focused.is_some() && !self.grid_board(),
-            "Open a thread beside".into(),
-            "",
-            None,
-            Command::OpenBeside,
-        );
-        add(
-            !self.panes.is_empty(),
-            "Fullscreen pane".into(),
-            "",
-            bound_chord("cockpit::ToggleFullscreen"),
-            Command::FullscreenPane,
         );
         add(
             size.step(1) != size,
@@ -1174,11 +1058,6 @@ impl CockpitView {
             ),
             Command::NewThread => self.new_thread(&NewThread, window, cx),
             Command::NewWorktreeThread => self.new_worktree_thread(&NewWorktreeThread, window, cx),
-            Command::NewThreadInGroup => {
-                self.open_draft_with_placement(DraftTarget::Main, DraftPlacement::CurrentGroup, cx)
-            }
-            Command::NewGroup => self.new_group(&NewGroup, window, cx),
-            Command::OpenGroup => self.open_palette(PaletteScope::Groups, "", window, cx),
             Command::ReopenLast => self.reopen_thread(&ReopenThread, window, cx),
             Command::NewThreadIn(project) => self.open_draft_in_project(project, cx),
             Command::FilterAll => self.choose_nav_filter(None, cx),
@@ -1190,7 +1069,6 @@ impl CockpitView {
             Command::ToggleSidebar => self.toggle_nav_now(cx),
             Command::TogglePanel => self.toggle_panel_now(cx),
             Command::ToggleDetails => self.toggle_details_now(window, cx),
-            Command::FullscreenPane => self.toggle_fullscreen(&ToggleFullscreen, window, cx),
             Command::TextLarger => self.step_text_size(1, cx),
             Command::TextSmaller => self.step_text_size(-1, cx),
             Command::TextReset => self.step_text_size(0, cx),
@@ -1312,7 +1190,6 @@ impl CockpitView {
                     cx.notify();
                 }
             }
-            Command::OpenBeside => self.open_palette_beside(window, cx),
             Command::ShowChecks => self.open_checks(window, cx),
             Command::RefreshPr => {
                 if let Some(thread) = thread {

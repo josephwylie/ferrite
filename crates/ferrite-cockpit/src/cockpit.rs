@@ -75,7 +75,7 @@ use ferrite_core::cockpit::{CloseError, Cockpit, HistoryDirection, ProviderChoic
 use ferrite_core::docview::{Cell, Level};
 use ferrite_core::draft::DraftTarget;
 use ferrite_core::followup;
-use ferrite_core::groups::{Drag, DropTarget, GroupChange, GroupId};
+use ferrite_core::groups::{GroupChange, GroupId};
 use ferrite_core::layout::{self, Edge, SeamId, Tree, Zone};
 use ferrite_core::roster::{PaneIdentity, View};
 use ferrite_core::sound::Sound;
@@ -153,7 +153,6 @@ actions!(
         PreviousPane,
         NewThread,
         NewWorktreeThread,
-        NewGroup,
         TextLarger,
         TextSmaller,
         TextReset,
@@ -181,7 +180,6 @@ actions!(
         PickOption3,
         PickOption4,
         OpenSettings,
-        ToggleFullscreen,
         ToggleNav,
         TogglePanel,
         ToggleDetails,
@@ -606,8 +604,6 @@ pub struct CockpitView {
     /// The board slot being dragged: it dims in place while its ghost
     /// moves, until the release.
     dragging: Option<ThreadId>,
-    /// The nav row being dragged, dimmed in the tree the same way.
-    nav_dragging: Option<Drag>,
     /// The operator's settings and where they save; every change saves.
     prefs: Preferences,
     /// What each Thread's Composer holds unsent.
@@ -721,9 +717,6 @@ pub struct CockpitView {
     /// The empty board's selected row, and the list's own focus.
     empty_cursor: usize,
     empty_focus: FocusHandle,
-    /// A Thread opened beside the Solo Pane (`open_beside(Beside::Thread)`):
-    /// (the Pane it opened from, the Thread beside it).
-    solo_beside: Option<(PaneIdentity, ThreadId)>,
     /// The plan card (`open_plan`), tied to its Thread.
     plan_card: Option<ThreadId>,
     /// The Pane whose preview took the last press: ⌘F finds there. A
@@ -1072,7 +1065,6 @@ impl ProjectEditor {
 enum DraftPlacement {
     Loose,
     CurrentGroup,
-    NewGroupWith(ThreadId),
 }
 
 /// About's Version: the package version, and ` · dev` on a development
@@ -1137,12 +1129,6 @@ impl NavChip {
             ),
         }, measure.inner_width())
     }
-}
-
-/// A nav card's drag onto the board.
-#[derive(Clone, Copy)]
-struct NavDrag {
-    drag: Drag,
 }
 
 /// The one popover the Composer's slot can hold — the `/` or `@` menu
@@ -1661,7 +1647,6 @@ impl CockpitView {
             board_layouts: std::collections::HashMap::new(),
             slot_sizes: Default::default(),
             dragging: None,
-            nav_dragging: None,
             unsent: drafts::Unsent::load(&prefs.dir),
             cited_sources,
             prefs,
@@ -1707,7 +1692,6 @@ impl CockpitView {
             task_toasts: Default::default(),
             empty_cursor: 0,
             empty_focus: cx.focus_handle(),
-            solo_beside: None,
             preview_pressed: None,
             reader_slides: Default::default(),
             columns: columns::Columns::new(),
@@ -3250,9 +3234,6 @@ impl CockpitView {
                 .filter(|index| self.has_reader(*index))
                 .map(|_| Board::Solo(shown));
         }
-        if let Some((owner, _)) = self.solo_pair() {
-            return Some(Board::Solo(owner));
-        }
         match self.cockpit.roster().view() {
             View::Group(group) => Some(Board::Group(group)),
             View::Solo => match self.visible_indices().as_slice() {
@@ -3317,14 +3298,7 @@ impl CockpitView {
             }
             Board::Solo(identity) => {
                 let base = self.board_layouts.get(&board).cloned().unwrap_or_default();
-                let mut panes = vec![pane_leaf(identity)];
-                // A Thread opened beside the Solo Pane takes the right half.
-                if let Some((owner, companion)) = self.solo_pair() {
-                    if owner == identity {
-                        panes.push(pane_leaf(companion));
-                    }
-                }
-                (base, panes)
+                (base, vec![pane_leaf(identity)])
             }
         };
         let readers: Vec<(ThreadId, ThreadId)> = readers
@@ -3651,13 +3625,6 @@ impl CockpitView {
     /// The Panes on screen, as indices into the mirror — the roster's
     /// `visible`, in its order.
     fn visible_indices(&self) -> Vec<usize> {
-        // A Solo pair (`open_beside`) shows both of its Panes.
-        if let Some((owner, companion)) = self.solo_pair() {
-            return [owner, companion]
-                .into_iter()
-                .filter_map(|identity| self.index_of(identity))
-                .collect();
-        }
         self.cockpit
             .visible()
             .into_iter()
@@ -4155,100 +4122,6 @@ impl CockpitView {
         }
     }
 
-    /// A nav row dragged over a board slot: it can only split in beside
-    /// it (swapping would push the slot off the board), so every point
-    /// reads as the nearest edge. A Thread over its own Pane means nothing.
-    fn preview_nav_drop(
-        &mut self,
-        drag: Drag,
-        target: ThreadId,
-        position: gpui::Point<Pixels>,
-        bounds: gpui::Bounds<Pixels>,
-        cx: &mut Context<Self>,
-    ) {
-        let preview = match drag {
-            Drag::Thread { thread, .. } if thread != target => {
-                let (pointer, rect) = drop_geometry(position, bounds);
-                Some((target, Zone::Split(layout::nearest_edge(pointer, rect))))
-            }
-            _ => None,
-        };
-        self.set_drop_preview(preview, cx);
-    }
-
-    /// A nav row released on a board slot: the Thread joins the board's
-    /// Group — or, on a Solo board, founds one with the Thread shown — and
-    /// lands beside the slot, on the edge the preview named. A member
-    /// already on the board just moves there.
-    fn drop_nav_on_board(&mut self, drag: Drag, target: ThreadId, cx: &mut Context<Self>) {
-        self.nav_dragging = None;
-        let preview = self.drop_preview.take();
-        let (Some((_, Zone::Split(edge))), Drag::Thread { thread, .. }) =
-            (preview.filter(|(previewed, _)| *previewed == target), drag)
-        else {
-            cx.notify();
-            return;
-        };
-        let view = self.cockpit.roster().view();
-        let shown = match leaf_slot(target) {
-            Slot::Pane(PaneIdentity::Thread(shown)) | Slot::Reader(shown) => Some(shown),
-            _ => None,
-        };
-        // Groups are non-exclusive (R1): the board's Group is the one being
-        // viewed; Solo's is the shown Thread's home.
-        let group_of = |view: &Self, thread: ThreadId| {
-            view.cockpit.groups().home(thread).map(|group| group.id)
-        };
-        let holds = |view: &Self, group: GroupId, thread: ThreadId| {
-            view.cockpit
-                .groups()
-                .get(group)
-                .is_some_and(|group| group.members.contains(&thread))
-        };
-        let group = match view {
-            View::Group(group) => Some(group),
-            View::Solo => shown.and_then(|shown| group_of(self, shown)),
-        };
-        if group.is_none_or(|group| !holds(self, group, thread)) {
-            let joined = match (group, shown) {
-                (Some(group), _) => self
-                    .cockpit
-                    .drop(drag, view, DropTarget::GroupHeader(group)),
-                (None, Some(shown)) => self.cockpit.drop(
-                    drag,
-                    view,
-                    DropTarget::ThreadRow {
-                        thread: shown,
-                        group: None,
-                        index: 0,
-                    },
-                ),
-                (None, None) => Ok(()),
-            };
-            if let Err(error) = joined {
-                self.group_error = Some(error.to_string().into());
-                self.sync_panes(cx);
-                cx.notify();
-                return;
-            }
-            self.group_error = None;
-        }
-        let Some(group) = group.or_else(|| shown.and_then(|shown| group_of(self, shown))) else {
-            self.sync_panes(cx);
-            cx.notify();
-            return;
-        };
-        // Entering revives a parked newcomer and shows the Group it joined.
-        self.enter_group(group, cx);
-        let board = Board::Group(group);
-        if let Some(mut tree) = self.board_tree(board) {
-            if tree.split(target, edge, thread) {
-                self.commit_board(board, tree);
-            }
-        }
-        self.focus_thread(thread, cx);
-        cx.notify();
-    }
 
     /// The release of a dragged slot on another: the centre swaps the two
     /// leaves, an edge moves the source beside the target — the tree is
@@ -6262,33 +6135,6 @@ impl CockpitView {
         cx.notify();
     }
 
-    /// ⌘⇧⏎ (#20): the focused Pane takes the whole cockpit; ⌘⇧⏎ again
-    /// restores the grid. Escape is deliberately not an exit — it stays
-    /// Interrupt, and stealing the panic key would make it ambiguous.
-    fn toggle_fullscreen(
-        &mut self,
-        _: &ToggleFullscreen,
-        _window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        self.cockpit.toggle_fullscreen();
-        cx.notify();
-    }
-
-    /// A Group Pane head's fill button (SPEC §5.9): its press fills the
-    /// board with that Pane — focusing it first, so the one act
-    /// (`ToggleFullscreen`, ⌘⇧⏎) fills the board with the Pane pressed.
-    fn fill_button(&self, index: usize, thread: ThreadId, cx: &mut Context<Self>) -> AnyElement {
-        pane::fill_button(thread.get())
-            .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
-            .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
-                view.focus_pane(index);
-                view.cockpit.toggle_fullscreen();
-                cx.notify();
-            }))
-            .into_any_element()
-    }
-
     /// ⌘F: find in the focused Pane's transcript — or in its preview, when
     /// the preview took the last press or holds the keyboard
     /// (`ferrite_pane::find`).
@@ -7434,11 +7280,11 @@ impl CockpitView {
         }
         // The draft starts in the Project of the Thread the operator is in:
         // the focused one, else the one focus last left.
-        let current = match placement {
-            DraftPlacement::NewGroupWith(thread) => Some(thread),
-            _ => self.cockpit.roster().current_thread(),
-        }
-        .and_then(|thread| self.cockpit.project_id(thread));
+        let current = self
+            .cockpit
+            .roster()
+            .current_thread()
+            .and_then(|thread| self.cockpit.project_id(thread));
         // A second press with a draft already up must not stack another:
         // focus the standing draft and re-aim it at the caller's target.
         // A draft mid-bootstrap is on its way out and does not count.
@@ -7467,9 +7313,6 @@ impl CockpitView {
                 match placement {
                     DraftPlacement::CurrentGroup => self.cockpit.aim_draft_at_current_view(draft),
                     DraftPlacement::Loose => self.cockpit.aim_draft_loose(draft),
-                    DraftPlacement::NewGroupWith(thread) => {
-                        self.cockpit.aim_draft_at_new_group(draft, thread)
-                    }
                 }
             }
             self.cockpit.focus(identity);
@@ -7512,7 +7355,6 @@ impl CockpitView {
         let draft = match placement {
             DraftPlacement::CurrentGroup => self.cockpit.open_draft_in_current_view(),
             DraftPlacement::Loose => self.cockpit.open_draft(),
-            DraftPlacement::NewGroupWith(thread) => self.cockpit.open_draft_for_new_group(thread),
         };
         let pane = CockpitPane::new(PaneView::new_draft(draft, binding, cx), cx);
         pane.preview.set_remote_files(self.on_machine());
@@ -9148,24 +8990,7 @@ impl CockpitView {
             self.land_on_owned(thread, owner, cx);
             return;
         }
-        let target: Option<GroupId> = {
-            let groups = self.cockpit.groups();
-            let viewed = match self.cockpit.roster().view() {
-                View::Group(group)
-                    if groups
-                        .get(group)
-                        .is_some_and(|group| group.members.contains(&thread)) =>
-                {
-                    Some(group)
-                }
-                _ => None,
-            };
-            viewed.or_else(|| groups.home(thread).map(|group| group.id))
-        };
-        if let Some(group) = target {
-            self.enter_group(group, cx);
-            self.focus_thread(thread, cx);
-        } else if self.pane_for(thread).is_some() {
+        if self.pane_for(thread).is_some() {
             self.focus_thread(thread, cx);
         } else {
             self.revive_thread(thread, cx);
@@ -9304,20 +9129,6 @@ impl CockpitView {
             self.change_settings(|settings| settings.reading_size = next, cx);
             cx.notify();
         }
-    }
-
-    /// cmd-g: the titlebar's New Group — a draft that founds a Group with
-    /// the focused Thread on its first send. Only a Thread in no Group can
-    /// found one, so elsewhere the key does nothing, as the button is not
-    /// offered there either.
-    fn new_group(&mut self, _: &NewGroup, _window: &mut Window, cx: &mut Context<Self>) {
-        let Some(thread) = self
-            .focused_thread()
-            .filter(|thread| self.cockpit.groups().of(*thread).is_none())
-        else {
-            return;
-        };
-        self.open_draft_with_placement(DraftTarget::Main, DraftPlacement::NewGroupWith(thread), cx);
     }
 
     /// Reopen the Thread parked most recently — the one the operator just
@@ -10116,14 +9927,10 @@ impl CockpitView {
         self.measure();
         #[cfg(test)]
         RENDERS.with(|renders| renders.set(renders.get() + 1));
-        // A Solo pair lasts while focus stays on one of its Panes.
         // A checkout's file goes to Files before the Panel tends its tabs,
         // so it never stands as a File tab of its own.
         self.redirect_previews_to_files(cx);
         self.tend_panel(window, cx);
-        if self.solo_beside.is_some() && self.solo_pair().is_none() {
-            self.solo_beside = None;
-        }
         self.measure_nav_width(window, cx);
         self.update_auto_fold(window);
         self.tend_columns(cx);
@@ -10677,7 +10484,6 @@ impl CockpitView {
             .on_action(cx.listener(Self::next_decision))
             .on_action(cx.listener(Self::new_thread))
             .on_action(cx.listener(Self::new_worktree_thread))
-            .on_action(cx.listener(Self::new_group))
             .on_action(cx.listener(|view, _: &TextLarger, _, cx| view.step_text_size(1, cx)))
             .on_action(cx.listener(|view, _: &TextSmaller, _, cx| view.step_text_size(-1, cx)))
             .on_action(cx.listener(|view, _: &TextReset, _, cx| view.step_text_size(0, cx)))
@@ -10695,7 +10501,6 @@ impl CockpitView {
             .on_action(cx.listener(Self::stop_agent_action))
             .on_action(cx.listener(Self::copy_selection))
             .on_action(cx.listener(Self::cite_selection))
-            .on_action(cx.listener(Self::toggle_fullscreen))
             .on_action(cx.listener(Self::open_find))
             .on_action(cx.listener(Self::toggle_nav))
             .on_action(cx.listener(Self::toggle_panel))
@@ -10770,21 +10575,7 @@ impl CockpitView {
                     view.end_seam_drag(cx);
                     view.finish_nav_resize(cx);
                     view.panel_pointer_released(event.position, cx);
-                    if view.drop_preview.take().is_some()
-                        | view.dragging.take().is_some()
-                        | view.nav_dragging.take().is_some()
-                    {
-                        cx.notify();
-                    }
-                }),
-            )
-            // Every drag move reaches every listener, so the root hears a
-            // nav drag wherever the pointer is — the tree dims its row.
-            .on_drag_move(
-                cx.listener(|view, event: &gpui::DragMoveEvent<NavDrag>, _, cx| {
-                    let drag = event.drag(cx).drag;
-                    if view.nav_dragging != Some(drag) {
-                        view.nav_dragging = Some(drag);
+                    if view.drop_preview.take().is_some() | view.dragging.take().is_some() {
                         cx.notify();
                     }
                 }),
@@ -10985,9 +10776,6 @@ impl CockpitView {
                     view.file_drop_over = None;
                     if let Some(index) = view.index_of(identity) {
                         view.focus_pane(index);
-                        if level == Level::Wall {
-                            view.cockpit.toggle_fullscreen();
-                        }
                         if let Some(draft) = view.panes[index].draft_mut() {
                             draft.band_focus = None;
                         }
@@ -11202,9 +10990,6 @@ impl CockpitView {
                 .flatten(),
             toolbar: l1.then(|| self.composer_toolbar(index, cx)).flatten(),
             resume_offer: l1.then(|| self.resume_offer(index, cx)).flatten(),
-            fill: self
-                .grid_board()
-                .then(|| self.fill_button(index, thread, cx)),
             // An empty Thread in Solo wears the draft's start card until
             // its first prompt.
             start: if l1
@@ -11304,19 +11089,6 @@ impl CockpitView {
         )
         .on_drop(cx.listener(move |view, drag: &PaneDrag, _, cx| {
             view.drop_pane(drag.leaf, target, cx);
-        }))
-        .on_drag_move(
-            cx.listener(move |view, event: &gpui::DragMoveEvent<NavDrag>, _, cx| {
-                let drag = event.drag(cx).drag;
-                if event.bounds.contains(&event.event.position) {
-                    view.preview_nav_drop(drag, target, event.event.position, event.bounds, cx);
-                } else {
-                    left(view, target, cx);
-                }
-            }),
-        )
-        .on_drop(cx.listener(move |view, drag: &NavDrag, _, cx| {
-            view.drop_nav_on_board(drag.drag, target, cx);
         }))
     }
 
@@ -11749,7 +11521,7 @@ impl CockpitView {
     }
 
     /// A question's option from the wall: a single-select question answers
-    /// at once; anything more opens the Pane in full to answer in its form.
+    /// at once; anything more focuses the Pane to answer in its form.
     fn wall_answer_question(
         &mut self,
         thread: ThreadId,
@@ -11760,9 +11532,6 @@ impl CockpitView {
         if !self.answer_question_option(thread, option, window, cx) {
             if let Some(index) = self.pane_for(thread) {
                 self.focus_pane(index);
-                if self.cockpit.roster().fullscreen().is_none() {
-                    self.cockpit.toggle_fullscreen();
-                }
             }
         }
         cx.notify();

@@ -732,49 +732,36 @@ fn deleting_every_parked_thread_always_asks_first(cx: &mut TestAppContext) {
     });
 }
 
-/// #21 AC2: clicking a running nav row lands the operator on that Pane —
-/// through `focus_pane`, so a fullscreened cockpit re-aims to the
-/// clicked Thread instead of going stale on the one they left.
+/// #21 AC2: clicking a running nav row puts that Thread on screen, and
+/// clicking the other row puts it back.
 #[gpui::test]
-fn clicking_a_running_nav_row_focuses_its_pane_and_reaims_fullscreen(cx: &mut TestAppContext) {
+fn clicking_a_running_nav_row_shows_its_thread(cx: &mut TestAppContext) {
     let (core, _fake) = cockpit("nav-click", 2);
-    cx.update(|cx| {
-        cx.bind_keys([KeyBinding::new("cmd-shift-enter", ToggleFullscreen, None)]);
-    });
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     tick(cx);
-    view.read_with(cx, |view, _| assert_eq!(view.focused(), 0));
-
-    // Each Pane's row, where the nav drew it.
-    let row_at = |view: &Entity<CockpitView>, pane: usize, cx: &mut gpui::VisualTestContext| {
-        let thread = view.read_with(cx, |view, _| view.panes[pane].thread().unwrap());
+    let threads = view.read_with(cx, |view, _| {
+        [view.panes[0].thread().unwrap(), view.panes[1].thread().unwrap()]
+    });
+    let shown = |cx: &mut gpui::VisualTestContext| -> Vec<ThreadId> {
+        threads
+            .iter()
+            .copied()
+            .filter(|thread| debug_bounds(cx, format!("pane-root-{}", thread.get())).is_some())
+            .collect()
+    };
+    let row_at = |thread: ThreadId, cx: &mut gpui::VisualTestContext| {
         cx.debug_bounds(format!("nav-thread-{}", thread.get()).leak())
             .expect("every open Thread has a row")
             .center()
     };
-    let (second, first) = (row_at(&view, 1, cx), row_at(&view, 0, cx));
+    let (second, first) = (row_at(threads[1], cx), row_at(threads[0], cx));
     cx.simulate_click(second, gpui::Modifiers::none());
-    view.read_with(cx, |view, _| {
-        assert_eq!(view.focused(), 1, "the click moved focus to the row's Pane");
-    });
+    tick(cx);
+    assert_eq!(shown(cx), [threads[1]], "the click shows the row's Thread alone");
 
-    cx.simulate_keystrokes("cmd-shift-enter");
-    view.read_with(cx, |view, _| {
-        assert_eq!(
-            view.cockpit.roster().fullscreen(),
-            Some(PaneIdentity::Thread(view.panes[1].thread().unwrap()))
-        );
-    });
-    // And back to the other Pane's row.
     cx.simulate_click(first, gpui::Modifiers::none());
-    view.read_with(cx, |view, _| {
-        assert_eq!(view.focused(), 0, "the nav still answers while fullscreen");
-        assert_eq!(
-            view.cockpit.roster().fullscreen(),
-            Some(PaneIdentity::Thread(view.panes[0].thread().unwrap())),
-            "and the fullscreen re-aims with focus — the one door"
-        );
-    });
+    tick(cx);
+    assert_eq!(shown(cx), [threads[0]], "and the other row brings its Thread back");
 }
 
 /// #21 AC2: clicking a parked nav row revives that Thread — a Pane,

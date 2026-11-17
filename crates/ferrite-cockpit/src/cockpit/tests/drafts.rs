@@ -149,7 +149,6 @@ fn a_new_pane_comes_back_with_its_words_and_binding(cx: &mut TestAppContext) {
 /// way of closing, from the production key or the rendered discard control.
 fn a_closed_new_pane_is_not_reopened(
     name: &str,
-    placement: fn(ThreadId) -> DraftPlacement,
     cx: &mut TestAppContext,
     close: fn(&mut gpui::VisualTestContext),
 ) {
@@ -159,7 +158,7 @@ fn a_closed_new_pane_is_not_reopened(
     let dir = prefs.dir.clone();
     let (view, cx) = window_with(core, prefs, cx);
     view.update(cx, |view, cx| {
-        view.open_draft_with_placement(DraftTarget::Main, placement(thread), cx)
+        view.open_draft_with_placement(DraftTarget::Main, DraftPlacement::Loose, cx)
     });
     tick(cx);
     cx.simulate_input("never send this");
@@ -196,22 +195,7 @@ fn a_closed_new_pane_is_not_reopened(
 
 #[gpui::test]
 fn cmd_w_discards_a_new_pane_for_good(cx: &mut TestAppContext) {
-    a_closed_new_pane_is_not_reopened(
-        "drafts-cmd-w",
-        |_| DraftPlacement::Loose,
-        cx,
-        |cx| cx.simulate_keystrokes("cmd-w"),
-    );
-}
-
-#[gpui::test]
-fn the_discard_control_discards_a_new_pane_for_good(cx: &mut TestAppContext) {
-    a_closed_new_pane_is_not_reopened("drafts-discard-x", DraftPlacement::NewGroupWith, cx, |cx| {
-        let close = cx
-            .debug_bounds("discard-draft")
-            .expect("the discard control is drawn");
-        cx.simulate_click(close.center(), gpui::Modifiers::none());
-    });
+    a_closed_new_pane_is_not_reopened("drafts-cmd-w", cx, |cx| cx.simulate_keystrokes("cmd-w"));
 }
 
 /// A prompt taken back from the queue (Enter on the empty line) returns as the parts it was sent

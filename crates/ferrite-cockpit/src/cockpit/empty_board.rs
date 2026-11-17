@@ -129,14 +129,6 @@ impl CockpitView {
                 Box::new(ReopenThread),
             ));
         }
-        if self.cockpit.groups().iter().next().is_some() {
-            rows.push(StartRow::new(
-                "palette::OpenGroups",
-                icons::BOARD,
-                "Open a group",
-                Box::new(crate::palette::OpenGroups),
-            ));
-        }
         rows.push(StartRow::new(
             "palette::Toggle",
             icons::SEARCH,

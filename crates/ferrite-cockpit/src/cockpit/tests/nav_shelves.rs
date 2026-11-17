@@ -365,19 +365,17 @@ fn the_keyboard_walks_the_list_and_follows_a_parked_thread(cx: &mut TestAppConte
     }
 }
 
-/// The Filter menu lists every Project to filter by, and the Groups,
-/// which open from there.
+/// The Filter menu lists every Project to filter by, and nothing else.
 #[gpui::test]
-fn the_filter_menu_scopes_a_project_and_opens_groups(cx: &mut TestAppContext) {
-    let (mut core, _fake) = cockpit("nav-filter", 3);
-    let group = group_all(&mut core);
+fn the_filter_menu_scopes_a_project(cx: &mut TestAppContext) {
+    let (core, _fake) = cockpit("nav-filter", 3);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     hide_panel(&view, cx);
     tick(cx);
     let button = cx.debug_bounds("nav-filter").expect("Filter");
     cx.simulate_mouse_down(button.center(), gpui::MouseButton::Left, gpui::Modifiers::none());
     tick(cx);
-    let (project, open_group) = view.read_with(cx, |view, _| {
+    let project = view.read_with(cx, |view, _| {
         let menu = view.context_menu.as_ref().expect("its menu");
         assert_eq!(menu.target, MenuTarget::NavFilter);
         let verbs: Vec<MenuVerb> = menu.rows.iter().flatten().map(|(_, verb)| *verb).collect();
@@ -389,14 +387,15 @@ fn the_filter_menu_scopes_a_project_and_opens_groups(cx: &mut TestAppContext) {
                 _ => None,
             })
             .expect("a Project");
-        (project, verbs.contains(&MenuVerb::OpenGroup(group)))
+        assert!(
+            verbs.iter().all(|verb| matches!(verb, MenuVerb::FilterProject(_))),
+            "Projects only: {verbs:?}"
+        );
+        project
     });
-    assert!(open_group, "the Group opens from here");
     view.update_in(cx, |view, window, cx| {
         view.run_menu_verb(MenuTarget::NavFilter, MenuVerb::FilterProject(Some(project)), window, cx);
         assert_eq!(view.nav_filter, Some(project));
-        view.run_menu_verb(MenuTarget::NavFilter, MenuVerb::OpenGroup(group), window, cx);
-        assert_eq!(view.cockpit.roster().view(), View::Group(group));
     });
 }
 

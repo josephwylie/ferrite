@@ -11,9 +11,9 @@ use ferrite_ui::keymap::{Hide, HideOthers, Minimize, Quit, ShowAll, Zoom};
 
 pub fn app_menus() -> Vec<Menu> {
     use cockpit::{
-        CloseThread, GoBack, GoForward, NewGroup, NewThread, NewWorktreeThread, NextPane,
+        CloseThread, GoBack, GoForward, NewThread, NewWorktreeThread, NextPane,
         OpenPrInBrowser, OpenSettings, PreviousPane, RefreshPrStatus, ReopenThread, TextLarger,
-        TextReset, TextSmaller, ToggleChanges, ToggleFiles, ToggleFullscreen, ToggleNav,
+        TextReset, TextSmaller, ToggleChanges, ToggleFiles, ToggleNav,
         ToggleDetails, ToggleNotifications, TogglePanel, ToggleTerminal,
     };
     use ferrite_pane::pane::NextDecision;
@@ -39,10 +39,6 @@ pub fn app_menus() -> Vec<Menu> {
             items: vec![
                 MenuItem::action("New Thread", NewThread),
                 MenuItem::action("New Thread in a Worktree", NewWorktreeThread),
-                // ⌘⇧G: the focused Thread and a new one, founding a Group.
-                MenuItem::action("New Group", NewGroup),
-                // ⌘G: the palette scoped to Groups.
-                MenuItem::action("Open Group\u{2026}", palette::OpenGroups),
                 MenuItem::separator(),
                 MenuItem::action("Park Thread", CloseThread),
                 MenuItem::action("Reopen Parked Thread", ReopenThread),
@@ -85,7 +81,6 @@ pub fn app_menus() -> Vec<Menu> {
                 MenuItem::action("Toggle Panel", TogglePanel),
                 MenuItem::action("Toggle Thread Details", ToggleDetails),
                 MenuItem::action("Inbox", ToggleNotifications),
-                MenuItem::action("Toggle Pane Fullscreen", ToggleFullscreen),
                 MenuItem::separator(),
                 // The transcript's reading size (the browser's zoom keys).
                 MenuItem::action("Larger Text", TextLarger),

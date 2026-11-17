@@ -436,66 +436,6 @@ fn a_request_off_the_board_posts_while_the_window_is_frontmost(cx: &mut TestAppC
     );
 }
 
-/// ADR 0017: with the window in the background, a finish on a Pane
-/// left on screen is news. It chimes, toasts and posts a system
-/// notification; clicking that brings the window forward and lands on
-/// the Thread, and everything on screen is read.
-#[gpui::test]
-fn away_from_the_window_a_finish_posts_a_system_notification(cx: &mut TestAppContext) {
-    let (mut core, fake) = cockpit("system-notification", 2);
-    let group = group_all(&mut core);
-    cx.update(|cx| cx.set_app_identity("com.github.josephwylie.ferrite", "Ferrite"));
-    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
-    view.update(cx, |view, cx| view.enter_group(group, cx));
-    let threads = view.read_with(cx, |view, _| view.cockpit.threads());
-    let home = crate::machines::MachineKey(None);
-    cx.deactivate_window();
-    for at in [0, 1] {
-        fake.streams.borrow()[at]
-            .send(SessionEvent::TurnEnded {
-                outcome: ferrite_core::TurnOutcome::Completed,
-                cost_usd: None,
-            })
-            .unwrap();
-    }
-    tick(cx);
-    ring(cx);
-    let tags = |cx: &mut gpui::VisualTestContext| {
-        cx.delivered_system_notifications()
-            .iter()
-            .map(|notification| notification.tag.to_string())
-            .collect::<Vec<_>>()
-    };
-    assert_eq!(
-        tags(cx),
-        [system_tag(&home, threads[0]), system_tag(&home, threads[1])],
-        "both Panes are on the board, but nobody is looking"
-    );
-    view.read_with(cx, |view, _| {
-        assert_eq!(
-            view.chimed,
-            [Sound::Done],
-            "ringing together, they chime once"
-        );
-        assert_eq!(view.needs_you.toasts().len(), 2);
-    });
-
-    cx.simulate_system_notification_response(gpui::SystemNotificationResponse {
-        tag: system_tag(&home, threads[1]).into(),
-        action_id: None,
-    });
-    tick(cx);
-    view.read_with(cx, |view, _| {
-        assert_eq!(view.focused(), 1, "the click landed on its Thread");
-        assert!(!view.cockpit.notifications().attention(threads[1]));
-        assert!(view.needs_you.toasts().is_empty(), "both are in view now");
-    });
-    assert!(
-        tags(cx).is_empty(),
-        "read, they leave the notification centre"
-    );
-}
-
 /// ADR 0017: the Thread on screen finishing while the window is away posts
 /// a system notification, since nobody is looking at it; clicking it reads
 /// it, and read, it leaves the notification centre.

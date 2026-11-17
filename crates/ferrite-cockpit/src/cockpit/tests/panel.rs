@@ -20,24 +20,6 @@ fn solo<'a>(
     (view, cx)
 }
 
-/// A Group of `count` Threads at 1600, entered, the nav held open.
-fn group<'a>(
-    name: &str,
-    count: usize,
-    cx: &'a mut TestAppContext,
-) -> (Entity<CockpitView>, &'a mut gpui::VisualTestContext) {
-    let (mut core, _fake) = cockpit(name, count);
-    let group = group_all(&mut core);
-    core.enter_group(group).unwrap();
-    bind_production_keys(cx);
-    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
-    own_settings(&view, name, cx);
-    hold_nav_open(&view, cx);
-    cx.simulate_resize(gpui::size(px(1600.), px(900.)));
-    tick(cx);
-    (view, cx)
-}
-
 /// A settings file of the window's own: these tests save the toggle, and
 /// the suite's windows otherwise share one file.
 fn own_settings(view: &Entity<CockpitView>, name: &str, cx: &mut gpui::VisualTestContext) {
@@ -49,16 +31,6 @@ fn own_settings(view: &Entity<CockpitView>, name: &str, cx: &mut gpui::VisualTes
 /// The Thread the panel shows for this frame.
 fn shown(view: &Entity<CockpitView>, cx: &mut gpui::VisualTestContext) -> Option<ThreadId> {
     view.read_with(cx, |view, _| view.panel_thread())
-}
-
-/// Focus `thread`'s Pane on the board shown, without changing the view.
-fn focus(view: &Entity<CockpitView>, thread: ThreadId, cx: &mut gpui::VisualTestContext) {
-    view.update(cx, |view, cx| {
-        let index = view.pane_for(thread).expect("on the board");
-        view.focus_pane(index);
-        cx.notify();
-    });
-    tick(cx);
 }
 
 /// The Solo card's right edge, as the board laid it out.
@@ -84,47 +56,34 @@ fn the_panel_never_hides_for_width(cx: &mut TestAppContext) {
     assert!(cx.debug_bounds("panel").is_some(), "at the window minimum");
 }
 
-/// In a Group the panel is the focused Pane's Thread's: focusing another
-/// Pane switches it, and a fullscreen Pane keeps it. A draft has no
-/// Thread, so no panel and no toggle.
+/// The panel is the shown Thread's: showing another Thread switches it.
+/// A draft has no Thread, so no panel and no toggle.
 #[gpui::test]
-fn the_panel_follows_the_focused_group_pane(cx: &mut TestAppContext) {
-    let (view, cx) = group("panel-group", 2, cx);
+fn the_panel_follows_the_shown_thread(cx: &mut TestAppContext) {
+    let (view, cx) = solo("panel-follows", 2, 1600., cx);
     let threads = view.read_with(cx, |view, _| view.cockpit.threads());
-    focus(&view, threads[0], cx);
-    assert!(cx.debug_bounds("panel").is_some(), "a Group shows it");
+    view.update(cx, |view, cx| view.focus_thread(threads[0], cx));
+    tick(cx);
+    assert!(cx.debug_bounds("panel").is_some(), "a Thread shows it");
     assert_eq!(shown(&view, cx), Some(threads[0]));
 
-    focus(&view, threads[1], cx);
-    assert_eq!(shown(&view, cx), Some(threads[1]), "focus switches it");
-    focus(&view, threads[0], cx);
-
-    cx.simulate_keystrokes("cmd-shift-enter");
+    view.update(cx, |view, cx| view.focus_thread(threads[1], cx));
     tick(cx);
-    assert!(
-        view.read_with(cx, |view, _| view.cockpit.roster().fullscreen().is_some()),
-        "the premise: a fullscreen Pane"
-    );
-    assert_eq!(shown(&view, cx), Some(threads[0]), "fullscreen keeps it");
-    let rects = cx.update(|window, cx| view.read(cx).pane_rects(window));
-    let card = rects[0].1;
-    assert_eq!(card.x + card.w, 1600. - ferrite_ui::theme::PANEL_W);
-    cx.simulate_keystrokes("cmd-shift-enter");
-    tick(cx);
+    assert_eq!(shown(&view, cx), Some(threads[1]), "it follows the Thread on screen");
 
     view.update(cx, |view, cx| {
-        view.open_draft_with_placement(DraftTarget::Main, DraftPlacement::CurrentGroup, cx)
+        view.open_draft_with_placement(DraftTarget::Main, DraftPlacement::Loose, cx)
     });
     tick(cx);
     assert!(cx.debug_bounds("panel").is_none(), "a draft has none");
     assert!(cx.debug_bounds("panel-toggle").is_none(), "nor a toggle");
 }
 
-/// With the Beside slot open — a reader in the Pane, or another Thread
-/// beside it — the panel stays, for whichever Thread holds focus.
+/// With a reader open in the Pane the panel stays, for the Thread on
+/// screen.
 #[gpui::test]
-fn the_panel_stays_with_the_beside_slot_open(cx: &mut TestAppContext) {
-    let (view, cx) = solo("panel-beside", 2, 1600., cx);
+fn the_panel_stays_with_a_reader_open(cx: &mut TestAppContext) {
+    let (view, cx) = solo("panel-beside", 1, 1600., cx);
     let threads = view.read_with(cx, |view, _| view.cockpit.threads());
     view.update(cx, |view, cx| view.focus_thread(threads[0], cx));
     tick(cx);
@@ -145,26 +104,6 @@ fn the_panel_stays_with_the_beside_slot_open(cx: &mut TestAppContext) {
         "the premise: a preview open"
     );
     assert_eq!(shown(&view, cx), Some(threads[0]), "a preview keeps it");
-    view.update(cx, |view, cx| {
-        let index = view.pane_for(threads[0]).unwrap();
-        view.close_preview(index, cx)
-    });
-    tick(cx);
-
-    cx.update(|window, cx| {
-        view.update(cx, |view, cx| {
-            view.open_beside(beside::Beside::Thread(threads[1]), window, cx)
-        })
-    });
-    tick(cx);
-    assert_eq!(
-        view.read_with(cx, |view, _| view.visible_indices().len()),
-        2,
-        "the premise: a Thread beside"
-    );
-    assert_eq!(shown(&view, cx), Some(threads[0]));
-    focus(&view, threads[1], cx);
-    assert_eq!(shown(&view, cx), Some(threads[1]), "it follows focus");
 }
 
 /// ⌥⌘B and the toggle hide and show it, and the choice is the saved
@@ -237,12 +176,6 @@ fn the_solo_toggle_sits_in_one_place(cx: &mut TestAppContext) {
     toggle_sits_in_one_place(&view, cx, "Solo");
 }
 
-#[gpui::test]
-fn the_group_toggle_sits_in_one_place(cx: &mut TestAppContext) {
-    let (view, cx) = group("panel-toggle-group", 2, cx);
-    toggle_sits_in_one_place(&view, cx, "Group");
-}
-
 /// The palette's `Toggle panel` runs the same act, wherever there is a
 /// Thread for the panel.
 #[gpui::test]
@@ -260,7 +193,7 @@ fn the_palette_toggles_the_panel(cx: &mut TestAppContext) {
     assert!(names.iter().any(|name| name == "Toggle panel"), "{names:?}");
     cx.update(|window, cx| {
         view.update(cx, |view, cx| {
-            view.run_palette_act(Act::Command(Command::TogglePanel), false, window, cx)
+            view.run_palette_act(Act::Command(Command::TogglePanel), window, cx)
         })
     });
     tick(cx);

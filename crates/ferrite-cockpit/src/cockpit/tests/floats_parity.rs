@@ -4,7 +4,7 @@
 //! an empty Composer line adds.
 #[allow(unused_imports)]
 use super::*;
-use crate::palette::{Act, Command, PaletteScope, Section};
+use crate::palette::{Act, Section};
 
 /// A Bash approval, as Claude asks for one.
 fn bash(id: &str, command: &str) -> SessionEvent {
@@ -182,8 +182,8 @@ fn par_keeps_two_commands_and_the_parked_thread(cx: &mut TestAppContext) {
     });
 }
 
-/// FL-2: ↑↓ walk the rows and wrap; ⏎ lands on the cursor's Thread and
-/// closes; ⇥ on a command does nothing, and on a Thread it closes.
+/// FL-2: ↑↓ walk the rows and wrap, and ⇥ steps as ↓ does; ⏎ lands on
+/// the cursor's Thread and closes.
 #[gpui::test]
 fn palette_keys_wrap_and_land_on_a_thread(cx: &mut TestAppContext) {
     let (mut core, _fake) = cockpit("palette-keys", 2);
@@ -221,14 +221,13 @@ fn palette_keys_wrap_and_land_on_a_thread(cx: &mut TestAppContext) {
     cx.simulate_keystrokes("down");
     tick(cx);
     assert_eq!(selected(cx), first, "↓ wraps back");
-
-    // ⇥ on a command row stays.
-    cx.simulate_input("settings");
+    cx.simulate_keystrokes("down");
     tick(cx);
-    assert_eq!(selected(cx), Some(Act::Command(Command::Settings)));
-    cx.simulate_keystrokes("tab");
+    let second = selected(cx);
+    cx.simulate_keystrokes("up tab");
     tick(cx);
-    assert!(palette_open(&view, cx), "⇥ previews only a Thread");
+    assert_eq!(selected(cx), second, "⇥ steps as ↓ does");
+    assert!(palette_open(&view, cx), "and keeps the palette open");
     cx.simulate_keystrokes("escape");
     tick(cx);
 
@@ -245,15 +244,6 @@ fn palette_keys_wrap_and_land_on_a_thread(cx: &mut TestAppContext) {
         view.read_with(cx, |view, _| view.focused_thread()),
         Some(threads[1])
     );
-
-    // ⇥ on a Thread opens it beside, and closes.
-    cx.simulate_keystrokes("cmd-k");
-    tick(cx);
-    cx.simulate_input("Second");
-    tick(cx);
-    cx.simulate_keystrokes("tab");
-    tick(cx);
-    assert!(!palette_open(&view, cx), "⇥ on a Thread closes the palette");
 }
 
 /// FL-2: a Thread's row reads its scope and state, the board's Threads
@@ -309,64 +299,6 @@ fn thread_rows_name_their_scope_state_and_digit(cx: &mut TestAppContext) {
         .unwrap();
     assert_eq!(working.context.as_ref(), "Perf sweep \u{b7} working");
     assert_eq!(working.status, Some(nav::RowStatus::Working));
-}
-
-/// FL-5: ⌘G opens the palette on the Groups alone; ⏎ enters the Group. ⌘⇧G
-/// is New Group.
-#[gpui::test]
-fn cmd_g_opens_the_groups_and_cmd_shift_g_founds_one(cx: &mut TestAppContext) {
-    let (mut core, _fake) = cockpit("palette-groups", 3);
-    let threads = core.threads();
-    let group = core
-        .apply_group(GroupChange::Create {
-            first: threads[0],
-            second: threads[1],
-        })
-        .unwrap()
-        .group
-        .unwrap();
-    core.focus_thread(threads[2]);
-    bind_production_keys(cx);
-    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
-    cx.simulate_resize(gpui::size(px(1440.), px(900.)));
-    tick(cx);
-    cx.simulate_keystrokes("cmd-g");
-    tick(cx);
-    view.read_with(cx, |view, cx| {
-        let palette = view.floats.palette.as_ref().expect("⌘G opens").read(cx);
-        assert_eq!(palette.scope, PaletteScope::Groups);
-        let rows = palette.survivors();
-        assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0].section, Section::Groups);
-        assert!(
-            rows[0].context.ends_with("2 threads"),
-            "{:?}",
-            rows[0].context
-        );
-    });
-    cx.simulate_keystrokes("enter");
-    tick(cx);
-    assert_eq!(
-        view.read_with(cx, |view, _| view.cockpit.roster().view()),
-        View::Group(group)
-    );
-
-    // ⌘⇧G: the focused loose Thread and a new draft, founding a Group.
-    view.update(cx, |view, cx| {
-        let index = view.pane_for(threads[2]);
-        if let Some(index) = index {
-            view.focus_pane(index);
-        }
-        view.land_on_thread(threads[2], cx);
-    });
-    tick(cx);
-    let before = view.read_with(cx, |view, _| view.panes.len());
-    cx.simulate_keystrokes("cmd-shift-g");
-    tick(cx);
-    assert!(
-        view.read_with(cx, |view, _| view.panes.len()) > before,
-        "New Group opens its draft"
-    );
 }
 
 /// Repeated ⌘⌫ clears text without parking the Thread once empty.
@@ -878,7 +810,7 @@ fn the_palette_jumps_to_a_project_and_names_a_threads_directory(cx: &mut TestApp
     assert_eq!(detail.as_deref(), Some(shown.as_str()), "the cursor's cwd");
     cx.update(|window, cx| {
         view.update(cx, |view, cx| {
-            view.run_palette_act(row.act, false, window, cx)
+            view.run_palette_act(row.act, window, cx)
         })
     });
     tick(cx);

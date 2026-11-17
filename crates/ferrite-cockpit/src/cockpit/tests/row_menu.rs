@@ -32,7 +32,6 @@ fn the_row_menu_reads_in_claudes_order(cx: &mut TestAppContext) {
                 "Open in",
                 "Pin",
                 "Rename",
-                "Toggle fullscreen",
                 "New thread in this project",
                 "Copy path",
                 "Copy thread link",
@@ -387,20 +386,11 @@ fn mark_as_unread_brings_back_a_read_threads_notice(cx: &mut TestAppContext) {
     });
 }
 
-/// Copy link copies the Thread in the form the CLI takes; `Move to group ›`
-/// lists the other Groups, and its row moves the Thread into one.
+/// Copy link copies the Thread in the form the CLI takes.
 #[gpui::test]
-fn copy_link_and_move_to_group(cx: &mut TestAppContext) {
-    let (mut core, _fake) = cockpit("row-menu-move", 3);
+fn copy_link_copies_the_cli_form(cx: &mut TestAppContext) {
+    let (core, _fake) = cockpit("row-menu-move", 3);
     let threads = core.threads();
-    let group = core
-        .apply_group(GroupChange::Create {
-            first: threads[0],
-            second: threads[1],
-        })
-        .unwrap()
-        .group
-        .unwrap();
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     tick(cx);
     view.update_in(cx, |view, window, cx| {
@@ -415,38 +405,4 @@ fn copy_link_and_move_to_group(cx: &mut TestAppContext) {
         cx.read_from_clipboard().and_then(|item| item.text()),
         Some(format!("ferrite thread focus {}", threads[2].get()))
     );
-    let parent = view.read_with(cx, |view, _| {
-        let move_to = MenuVerb::Submenu(super::super::context_menu::Submenu::MoveToGroup);
-        assert!(
-            row_of(&view.context_rows(MenuTarget::Thread(threads[0])), move_to).is_none(),
-            "no other Group to move to"
-        );
-        row_of(&view.context_rows(MenuTarget::Thread(threads[2])), move_to)
-            .expect("a loose Thread can join the Group")
-    });
-    view.update_in(cx, |view, window, cx| {
-        view.open_context_menu(
-            MenuTarget::Thread(threads[2]),
-            gpui::point(px(10.), px(10.)),
-            cx,
-        );
-        view.press_menu_row(parent, window, cx);
-        let (_, rows) = view
-            .context_menu
-            .as_ref()
-            .unwrap()
-            .sub
-            .clone()
-            .expect("open");
-        assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0].1, MenuVerb::JoinGroup(group));
-        view.press_submenu_row(parent, 0, window, cx);
-        assert!(view.context_menu.is_none(), "the pick closes the menu");
-    });
-    view.read_with(cx, |view, _| {
-        assert_eq!(
-            view.cockpit.groups().of(threads[2]).map(|g| g.id),
-            Some(group)
-        );
-    });
 }

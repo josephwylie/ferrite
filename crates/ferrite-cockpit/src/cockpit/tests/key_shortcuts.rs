@@ -2,34 +2,6 @@
 #[allow(unused_imports)]
 use super::*;
 
-/// AC3: one key walks to whoever is waiting, wherever they are in the grid.
-#[gpui::test]
-fn one_key_jumps_to_the_pane_that_needs_answering(cx: &mut TestAppContext) {
-    let (mut core, fake) = cockpit("jump", 4);
-    let group = group_all(&mut core);
-    cx.update(|cx| {
-        cx.bind_keys([
-            KeyBinding::new("cmd-d", NextDecision, None),
-            KeyBinding::new("cmd-]", NextPane, None),
-        ]);
-    });
-    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
-    view.update(cx, |view, cx| view.enter_group(group, cx));
-    fake.streams.borrow()[2].send(decision("perm_03")).unwrap();
-    tick(cx);
-    view.read_with(cx, |view, _| assert_eq!(view.focused(), 0));
-
-    cx.simulate_keystrokes("cmd-d");
-
-    view.read_with(cx, |view, _| {
-        assert_eq!(view.focused(), 2, "focus should land on the blocked Pane");
-    });
-
-    // And plain cycling still walks the grid in order.
-    cx.simulate_keystrokes("cmd-]");
-    view.read_with(cx, |view, _| assert_eq!(view.focused(), 3));
-}
-
 /// AC3, one Thread at a time: ⌘D puts the Thread that needs answering on
 /// screen in place of the one the operator was reading.
 #[gpui::test]
@@ -108,41 +80,6 @@ fn cmd_t_from_a_solo_thread_starts_in_its_project(cx: &mut TestAppContext) {
             .draft()
             .expect("cmd-t opened a draft");
         assert_eq!(draft.binding.project(), here);
-    });
-}
-
-/// In a Group that spans Projects, cmd-t follows the focused member's
-/// Project, not the Group's first member or the last draft's.
-#[gpui::test]
-fn cmd_t_from_a_grouped_thread_starts_in_its_project(cx: &mut TestAppContext) {
-    let (mut core, _fake) = cockpit("cmd-t-group-project", 1);
-    let first = core.threads()[0];
-    let home = core.project_id(first).expect("a bound Thread");
-    let repo = repo_in(&scratch("cmd-t-group-other"));
-    let other = core.register_project(&repo).unwrap();
-    let second = core
-        .open(Provider::Claude, WorkspaceChoice::Main { checkout: repo })
-        .unwrap();
-    let group = core
-        .apply_group(GroupChange::Create { first, second })
-        .unwrap()
-        .group
-        .unwrap();
-    cx.update(|cx| cx.bind_keys([KeyBinding::new("cmd-t", NewThread, None)]));
-    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
-    view.update(cx, |view, cx| {
-        view.launch_project = Some(home);
-        view.enter_group(group, cx);
-        view.cockpit.focus(PaneIdentity::Thread(second));
-    });
-    tick(cx);
-
-    cx.simulate_keystrokes("cmd-t");
-    view.read_with(cx, |view, _| {
-        let draft = view.panes[view.focused()]
-            .draft()
-            .expect("cmd-t opened a draft");
-        assert_eq!(draft.binding.project(), other);
     });
 }
 

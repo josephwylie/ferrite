@@ -5295,17 +5295,19 @@ fn a_drop_out_of_a_pair_tracks_its_origin_and_lands_on_the_survivor() {
     assert!(cockpit.groups().get(group).is_none());
 }
 
+/// A stored Group no longer pulls the screen into it: the waiting Thread
+/// is shown alone.
 #[test]
-fn the_next_decision_lands_in_the_view_that_shows_the_waiting_thread() {
+fn the_next_decision_shows_the_waiting_thread_alone() {
     let (mut cockpit, fake) = cockpit("roster-decision");
     let threads = opened(&mut cockpit, 3);
-    let group = pair(&mut cockpit, threads[1], threads[2]);
+    pair(&mut cockpit, threads[1], threads[2]);
     fake.streams.borrow()[2]
         .send(decision("perm", "Write"))
         .unwrap();
     cockpit.pump();
     assert_eq!(cockpit.next_decision(), Some(threads[2]));
-    assert_eq!(cockpit.roster().view(), View::Group(group));
+    assert_eq!(cockpit.roster().view(), View::Solo);
     assert_eq!(cockpit.roster().focused_thread(), Some(threads[2]));
 }
 
