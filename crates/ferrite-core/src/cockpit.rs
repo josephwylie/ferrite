@@ -187,26 +187,33 @@ impl Link {
     /// reply cross as their encoded lines, so nothing escapes the contract.
     fn execute(&mut self, op: Op) -> Executed {
         match self {
-            Link::InProcess(engine) => {
-                let ClientMessage::Command(Command { op, .. }) =
-                    crossed(ClientMessage::Command(Command { id: 0, op }))
-                else {
-                    unreachable!("a command decodes as a command")
-                };
-                let (ok, error) = match engine.execute(&op) {
-                    Ok(ok) => (ok, None),
-                    Err(error) => (None, Some(error)),
-                };
-                let ServerMessage::Reply { ok, error, .. } =
-                    crossed(ServerMessage::Reply { id: 0, ok, error })
-                else {
-                    unreachable!("a reply decodes as a reply")
-                };
-                error.map_or(Ok(ok), Err)
-            }
+            Link::InProcess(engine) => replied(engine.execute(&commanded(op))),
             Link::Server(server) => server.execute(op),
         }
     }
+}
+
+/// An Op as the Server reads it off the socket.
+fn commanded(op: Op) -> Op {
+    let ClientMessage::Command(Command { op, .. }) =
+        crossed(ClientMessage::Command(Command { id: 0, op }))
+    else {
+        unreachable!("a command decodes as a command")
+    };
+    op
+}
+
+/// A command's outcome as the window reads the Server's reply.
+fn replied(executed: Executed) -> Executed {
+    let (ok, error) = match executed {
+        Ok(ok) => (ok, None),
+        Err(error) => (None, Some(error)),
+    };
+    let ServerMessage::Reply { ok, error, .. } = crossed(ServerMessage::Reply { id: 0, ok, error })
+    else {
+        unreachable!("a reply decodes as a reply")
+    };
+    error.map_or(Ok(ok), Err)
 }
 
 /// What a command came to, as its reply says.
@@ -1053,36 +1060,24 @@ impl Cockpit {
             .notifications
             .get(id)
             .map(|notice| notice.thread);
-        let thread = self.act(
-            |engine| engine.open_notice(id),
-            |server| {
-                let thread = known?;
-                notice(server, NoticeAction::Open { notice: id.get() });
-                Some(thread)
-            },
-        )?;
-        self.land_on(thread)
+        notice(self.act_op(Op::Notice {
+            action: NoticeAction::Open { notice: id.get() },
+        }));
+        self.land_on(known?)
     }
 
     /// Open one live Decision attention record: its Subject is shown, and
     /// the operator lands on its Thread as `open_notice` does.
     pub fn open_decision_notice(&mut self, id: &DecisionNoticeId) -> Option<ThreadId> {
         let live = self.shared.notifications.decision(id).is_some();
-        let thread = self.act(
-            |engine| engine.open_decision_notice(id),
-            |server| {
-                live.then_some(())?;
-                notice(
-                    server,
-                    NoticeAction::OpenDecision {
-                        thread: id.thread,
-                        handle: (&id.handle).into(),
-                    },
-                );
-                Some(id.thread)
+        notice(self.act_op(Op::Notice {
+            action: NoticeAction::OpenDecision {
+                thread: id.thread,
+                handle: (&id.handle).into(),
             },
-        )?;
-        self.land_on(thread)
+        }));
+        live.then_some(())?;
+        self.land_on(id.thread)
     }
 
     fn land_on(&mut self, thread: ThreadId) -> Option<ThreadId> {
@@ -1115,39 +1110,21 @@ impl Cockpit {
         if !self.window_active {
             return false;
         }
-        let shown: Vec<ThreadId> = self
+        // Only what would read anything is sent: this runs every frame.
+        let unread: Vec<ThreadId> = self
             .visible()
             .into_iter()
             .filter_map(PaneIdentity::thread)
+            .filter(|thread| self.would_read(*thread))
             .collect();
-        match &mut self.link {
-            Link::InProcess(engine) => {
-                let read = engine.acknowledge_seen(&shown);
-                // The Notices read come back as the Engine's messages.
-                self.receive();
-                read
-            }
-            Link::Server(_) => {
-                // Only what would read anything goes to the Server: this
-                // runs every frame.
-                let unread: Vec<ThreadId> = shown
-                    .into_iter()
-                    .filter(|thread| self.would_read(*thread))
-                    .collect();
-                if unread.is_empty() {
-                    return false;
-                }
-                self.act(
-                    |_| (),
-                    |server| {
-                        for thread in unread {
-                            notice(server, NoticeAction::Seen { thread });
-                        }
-                    },
-                );
-                true
-            }
+        for &thread in &unread {
+            notice(self.link.execute(Op::Notice {
+                action: NoticeAction::Seen { thread },
+            }));
         }
+        // Received, not settled: the frame being pumped keeps its updates.
+        self.receive();
+        !unread.is_empty()
     }
 
     /// Whether looking at `thread` reads anything: an unread Notice, or an
@@ -1222,8 +1199,8 @@ fn changed(executed: Result<Option<Done>, WireError>) -> io::Result<bool> {
 
 /// A Notice act. Its reply carries nothing: what it changed is the next
 /// `notices` message.
-fn notice(server: &mut remote::Remote, action: NoticeAction) {
-    if let Err(error) = server.execute(Op::Notice { action }) {
+fn notice(executed: Executed) {
+    if let Err(error) = executed {
         crate::log!("a notice act did not reach the server: {}", error.message);
     }
 }
@@ -1405,29 +1382,15 @@ impl Cockpit {
     }
 
     pub fn register_project(&mut self, root: &Path) -> io::Result<ProjectId> {
-        self.act(
-            |engine| engine.register_project(root),
-            |server| {
-                registered(server.execute(Op::Project {
-                    action: ProjectAction::Register {
-                        roots: vec![root.to_path_buf()],
-                    },
-                }))
-            },
-        )
+        self.register_project_directories(&[root.to_path_buf()])
     }
 
     pub fn register_project_directories(&mut self, roots: &[PathBuf]) -> io::Result<ProjectId> {
-        self.act(
-            |engine| engine.register_project_directories(roots),
-            |server| {
-                registered(server.execute(Op::Project {
-                    action: ProjectAction::Register {
-                        roots: roots.to_vec(),
-                    },
-                }))
+        registered(self.act_op(Op::Project {
+            action: ProjectAction::Register {
+                roots: roots.to_vec(),
             },
-        )
+        }))
     }
 
     pub fn add_project_directories(
@@ -1435,20 +1398,12 @@ impl Cockpit {
         project: ProjectId,
         roots: &[PathBuf],
     ) -> io::Result<()> {
-        self.act(
-            |engine| engine.add_project_directories(project, roots),
-            |server| {
-                run(
-                    server,
-                    Op::Project {
-                        action: ProjectAction::AddDirectories {
-                            project,
-                            roots: roots.to_vec(),
-                        },
-                    },
-                )
+        done(self.act_op(Op::Project {
+            action: ProjectAction::AddDirectories {
+                project,
+                roots: roots.to_vec(),
             },
-        )
+        }))
     }
 
     pub fn replace_project_directory(
@@ -1457,66 +1412,34 @@ impl Cockpit {
         index: usize,
         root: &Path,
     ) -> io::Result<()> {
-        self.act(
-            |engine| engine.replace_project_directory(project, index, root),
-            |server| {
-                run(
-                    server,
-                    Op::Project {
-                        action: ProjectAction::ReplaceDirectory {
-                            project,
-                            index,
-                            root: root.to_path_buf(),
-                        },
-                    },
-                )
+        done(self.act_op(Op::Project {
+            action: ProjectAction::ReplaceDirectory {
+                project,
+                index,
+                root: root.to_path_buf(),
             },
-        )
+        }))
     }
 
     pub fn remove_project_directory(&mut self, project: ProjectId, index: usize) -> io::Result<()> {
-        self.act(
-            |engine| engine.remove_project_directory(project, index),
-            |server| {
-                run(
-                    server,
-                    Op::Project {
-                        action: ProjectAction::RemoveDirectory { project, index },
-                    },
-                )
-            },
-        )
+        done(self.act_op(Op::Project {
+            action: ProjectAction::RemoveDirectory { project, index },
+        }))
     }
 
     pub fn remove_project(&mut self, project: ProjectId) -> io::Result<()> {
-        self.act(
-            |engine| engine.remove_project(project),
-            |server| {
-                run(
-                    server,
-                    Op::Project {
-                        action: ProjectAction::Remove { project },
-                    },
-                )
-            },
-        )
+        done(self.act_op(Op::Project {
+            action: ProjectAction::Remove { project },
+        }))
     }
 
     pub fn rename_project(&mut self, project: ProjectId, title: &str) -> io::Result<()> {
-        self.act(
-            |engine| engine.rename_project(project, title),
-            |server| {
-                run(
-                    server,
-                    Op::Project {
-                        action: ProjectAction::Rename {
-                            project,
-                            title: title.to_string(),
-                        },
-                    },
-                )
+        done(self.act_op(Op::Project {
+            action: ProjectAction::Rename {
+                project,
+                title: title.to_string(),
             },
-        )
+        }))
     }
 
     /// Watch Session memory in this process. A Server watches its own.
@@ -1528,24 +1451,24 @@ impl Cockpit {
     /// Replace any Session grown past the memory limit. A Server sweeps on
     /// its own, so a window attached to one has nothing to do.
     pub fn sweep(&mut self) -> Vec<Restart> {
-        self.act(Engine::sweep, |_| Vec::new())
+        let restarts = match &mut self.link {
+            Link::InProcess(engine) => engine.sweep(),
+            Link::Server(_) => Vec::new(),
+        };
+        self.settle();
+        restarts
     }
 
     /// The provider's CLI was replaced on disk: its Sessions end as they
     /// settle, so the next start runs the new release, and its models are
     /// asked for again.
     pub fn cli_replaced(&mut self, provider: Provider) {
-        self.act(
-            |engine| {
-                engine.end_stale_sessions(provider);
-                engine.rediscover_models();
-            },
-            |server| {
-                if let Err(error) = run(server, Op::CliReplaced { provider }) {
-                    crate::log!("the server did not hear of the new {provider} CLI: {error}");
-                }
-            },
-        );
+        if let Err(error) = self.act_op(Op::CliReplaced { provider }) {
+            crate::log!(
+                "the server did not hear of the new {provider} CLI: {}",
+                error.message
+            );
+        }
     }
 
     pub fn open(&mut self, provider: Provider, workspace: WorkspaceChoice) -> io::Result<ThreadId> {
@@ -1699,20 +1622,15 @@ impl Cockpit {
         handle: &DecisionHandle,
         answer: DecisionAnswer,
     ) -> io::Result<bool> {
-        self.act(
-            |engine| engine.respond_decision(thread, handle, answer.clone()),
-            |server| match server.execute(Op::Answer {
-                thread,
-                handle: handle.into(),
-                answer: (&answer).into(),
-            }) {
-                Ok(_) => Ok(true),
-                Err(error) if error.code == crate::protocol::ErrorCode::AlreadyAnswered => {
-                    Ok(false)
-                }
-                Err(error) => Err(error.into()),
-            },
-        )
+        match self.act_op(Op::Answer {
+            thread,
+            handle: handle.into(),
+            answer: (&answer).into(),
+        }) {
+            Ok(_) => Ok(true),
+            Err(error) if error.code == crate::protocol::ErrorCode::AlreadyAnswered => Ok(false),
+            Err(error) => Err(error.into()),
+        }
     }
 
     /// Something only `--demo` and the tests put in a Pane directly.
@@ -1731,10 +1649,12 @@ impl Cockpit {
         thread: ThreadId,
         query: &str,
     ) -> io::Result<Receiver<io::Result<Vec<crate::providers::FileSuggestion>>>> {
-        self.act(
-            |engine| engine.search_files(thread, query),
-            |server| server.search_files(thread, query),
-        )
+        let asked = match &mut self.link {
+            Link::InProcess(engine) => engine.search_files(thread, query),
+            Link::Server(server) => server.search_files(thread, query),
+        };
+        self.settle();
+        asked
     }
 
     pub fn upload_attachment(&mut self, path: PathBuf) -> io::Result<crate::attachment_transfer::Upload> {
@@ -2380,13 +2300,11 @@ impl Cockpit {
     /// review reads, among them.
     pub fn settings_changed(&mut self, settings: &crate::settings::Settings) {
         self.forge = settings.forge_hosts.review_config();
-        self.act(
-            |engine| {
-                engine.set_suggestions_enabled(settings.placeholder_suggestions);
-                engine.set_allowance_thresholds(settings.allowance_warnings.clone());
-            },
-            |server| said(server.execute(Op::SettingsChanged)),
-        );
+        match &mut self.link {
+            Link::InProcess(engine) => engine.apply_settings(settings),
+            Link::Server(server) => said(server.execute(Op::SettingsChanged)),
+        }
+        self.settle();
     }
 
     /// The defaults of the Server this window is on, as its own
@@ -2606,52 +2524,40 @@ impl Cockpit {
 
     pub fn dismiss_notice(&mut self, id: NoticeId) -> bool {
         let known = self.shared.notifications.get(id).is_some();
-        self.act(
-            |engine| engine.dismiss_notice(id),
-            |server| {
-                notice(server, NoticeAction::Dismiss { notice: id.get() });
-                known
-            },
-        )
+        notice(self.act_op(Op::Notice {
+            action: NoticeAction::Dismiss { notice: id.get() },
+        }));
+        known
     }
 
     pub fn dismiss_decision_notice(&mut self, id: &DecisionNoticeId) -> bool {
         let shown = self.shared.notifications.decision(id).is_some();
-        self.act(
-            |engine| engine.dismiss_decision_notice(id),
-            |server| {
-                notice(
-                    server,
-                    NoticeAction::DismissDecision {
-                        thread: id.thread,
-                        handle: (&id.handle).into(),
-                    },
-                );
-                shown
+        notice(self.act_op(Op::Notice {
+            action: NoticeAction::DismissDecision {
+                thread: id.thread,
+                handle: (&id.handle).into(),
             },
-        )
+        }));
+        shown
     }
 
     pub fn clear_notices(&mut self) {
-        self.act(Engine::clear_notices, |server| {
-            notice(server, NoticeAction::Clear)
-        });
+        notice(self.act_op(Op::Notice {
+            action: NoticeAction::Clear,
+        }));
     }
 
     pub fn mark_notices_read(&mut self) {
-        self.act(Engine::mark_notices_read, |server| {
-            notice(server, NoticeAction::Read)
-        });
+        notice(self.act_op(Op::Notice {
+            action: NoticeAction::Read,
+        }));
     }
 
     /// Claude's `Mark as unread` (`Notifications::mark_unread`).
     pub fn mark_unread(&mut self, thread: ThreadId) {
-        self.act(
-            |engine| {
-                engine.mark_unread(thread);
-            },
-            |server| notice(server, NoticeAction::Unseen { thread }),
-        );
+        notice(self.act_op(Op::Notice {
+            action: NoticeAction::Unseen { thread },
+        }));
     }
 
     pub fn fixture_backdate_notices(&mut self, thread: ThreadId, at: std::time::SystemTime) {
@@ -2832,6 +2738,14 @@ fn started(executed: Result<Option<Done>, WireError>) -> io::Result<ThreadId> {
     }
 }
 
+/// A first send's reply: the Thread it became, or `None` while it starts.
+fn started_now(executed: Executed) -> io::Result<Option<ThreadId>> {
+    match executed.map_err(io::Error::from)? {
+        Some(Done::Thread { thread }) => Ok(Some(thread)),
+        _ => Ok(None),
+    }
+}
+
 /// A command that answers with a registered Project.
 fn registered(executed: Result<Option<Done>, WireError>) -> io::Result<ProjectId> {
     match executed.map_err(io::Error::from)? {
@@ -2996,29 +2910,27 @@ impl Cockpit {
         if !self.roster.has_draft(draft) {
             return Err(io::Error::other("no such draft"));
         }
-        let started = self.act(
-            |engine| {
-                engine.bootstrap_draft(
-                    draft,
-                    choice.clone(),
-                    workspace.clone(),
-                    prompt,
-                    effort.clone(),
-                )
-            },
-            |server| {
-                let op = Op::Bootstrap {
-                    provider: choice.provider,
-                    model: choice.model.clone(),
-                    effort: effort.clone(),
-                    workspace: (&workspace).into(),
-                    prompt: prompt.to_string(),
-                    group: None,
-                    new_group_with: None,
-                };
-                server.bootstrap(draft, prompt, op).map(|()| None)
-            },
-        );
+        let op = Op::Bootstrap {
+            provider: choice.provider,
+            model: choice.model,
+            effort,
+            workspace: (&workspace).into(),
+            prompt: prompt.to_string(),
+            group: None,
+            new_group_with: None,
+        };
+        // A Server answers a first send that starts at once in its reply,
+        // and one still starting as it settles: both as `Done::Thread`.
+        let started = match &mut self.link {
+            Link::InProcess(engine) => {
+                let started = engine
+                    .bootstrap_command(draft, &commanded(op))
+                    .map(|thread| thread.map(|thread| Done::Thread { thread }));
+                started_now(replied(started))
+            }
+            Link::Server(server) => server.bootstrap(draft, prompt, op).map(|()| None),
+        };
+        self.settle();
         Ok(started?.map(|thread| self.complete_draft(draft, thread)))
     }
 
@@ -3030,10 +2942,12 @@ impl Cockpit {
     /// Cancel a submitted startup before changing a draft's choices. The
     /// draft slot and Composer remain; cancellation emits no completion.
     pub fn cancel_draft_start(&mut self, draft: DraftId) -> io::Result<bool> {
-        self.act(
-            |engine| engine.cancel_draft_start(draft),
-            |server| server.cancel_bootstrap(draft),
-        )
+        let cancelled = match &mut self.link {
+            Link::InProcess(engine) => engine.cancel_draft_start(draft),
+            Link::Server(server) => server.cancel_bootstrap(draft),
+        };
+        self.settle();
+        cancelled
     }
 
     /// The first sends settled since the last take, each Draft's already
