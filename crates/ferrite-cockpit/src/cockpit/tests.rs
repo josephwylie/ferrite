@@ -675,6 +675,22 @@ fn tick(cx: &mut gpui::VisualTestContext) {
     cx.run_until_parked();
 }
 
+/// Deliver the frames the window asks for until it asks for none. The test
+/// window has no platform frame loop, and a measurement's redraw joins a
+/// requested frame (`components::redraw_drawn_view`), so without this the
+/// layout a measurement corrects stays as first drawn.
+fn deliver_frames(cx: &mut gpui::VisualTestContext) {
+    for _ in 0..64 {
+        let frames = cx.update(|window, cx| window.simulate_next_frame(cx));
+        cx.executor().advance_clock(Duration::from_millis(16));
+        cx.run_until_parked();
+        if frames == 0 {
+            return;
+        }
+    }
+    panic!("the window never stopped asking for frames");
+}
+
 /// `thread`'s Panel tabs, in order, and the one it shows (ADR 0039).
 fn panel_tabs(
     view: &gpui::Entity<CockpitView>,

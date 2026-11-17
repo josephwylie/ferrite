@@ -154,6 +154,7 @@ fn the_files_a_turn_changed_draw_one_card_that_opens_the_diff(cx: &mut TestAppCo
 fn a_page_card_opens_the_page_beside_the_transcript(cx: &mut TestAppContext) {
     let (view, workspace, cx) = turn("output-page-card", cx);
     hide_panel(&view, cx);
+    deliver_frames(cx);
     assert!(
         cx.debug_bounds("page-card-0").is_some(),
         "the written page has its card"

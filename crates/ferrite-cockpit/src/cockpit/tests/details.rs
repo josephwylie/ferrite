@@ -518,6 +518,7 @@ fn popup_density_preserves_content_while_the_available_height_shrinks(cx: &mut T
     tick(cx);
     cx.simulate_keystrokes("cmd-shift-b");
     tick(cx);
+    deliver_frames(cx);
     let full = cx
         .debug_bounds("details-density-full")
         .expect("full initially fits");
