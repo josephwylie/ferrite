@@ -590,10 +590,6 @@ pub struct CockpitView {
     cli_versions: Option<(SharedString, SharedString)>,
     /// A CLI version probe is in flight (the empty board asks once).
     cli_probing: bool,
-    /// The version the empty board's banner names: this build's
-    /// (`CARGO_PKG_VERSION`). The parity capture names the release the
-    /// prototype's world runs (`0.5.0`).
-    /// Who the foot names: the login at the machine (`$USER`).
     /// Where each provider CLI stands against its newest release.
     cli_updates: crate::cli_updates::CliUpdates,
     /// What the machine's Server has been asked and said.
@@ -9846,9 +9842,8 @@ impl CockpitView {
         ferrite_ui::components::bound_chord(action).map(SharedString::from)
     }
 
-    /// A board slot as a drop target, for a slot dragged from the board
-    /// and for a Thread dragged from the nav: the moves over it compute
-    /// the preview, the release applies it.
+    /// A board slot as a drop target for a reader dragged by its head: the
+    /// moves over it compute the preview, the release applies it.
     fn slot_drop_target(&self, cell: Div, target: ThreadId, cx: &mut Context<Self>) -> Div {
         // gpui hands every drag move to every listener, not just the one
         // under the pointer: a slot only previews while the pointer is
