@@ -391,38 +391,6 @@ fn failed_handover_rewrite_leaves_no_durable_handover_and_keeps_serving() {
 }
 
 #[test]
-fn grouped_draft_revalidates_membership_before_delivering() {
-    let (first, _) = planned(false);
-    let (second, _) = planned(false);
-    let (new, mut replacement) = planned(true);
-    let mut cockpit = cockpit("group-changed", vec![first, second, new]);
-    let first = cockpit.open(Provider::Claude, workspace()).unwrap();
-    let second = cockpit.open(Provider::Claude, workspace()).unwrap();
-    let group = cockpit
-        .apply_group(GroupChange::Create { first, second })
-        .unwrap()
-        .group
-        .unwrap();
-    cockpit.enter_group(group).unwrap();
-    // The shortcut path is the one that still scopes a Draft to its Group;
-    // plain `open_draft` is deliberately loose.
-    let draft = cockpit.open_draft_in_current_view();
-    cockpit
-        .bootstrap_draft(draft, choice(Provider::Claude), workspace(), "join", None)
-        .unwrap();
-    // Group can change through another operator action during startup.
-    cockpit
-        .apply_group(GroupChange::Leave { thread: first })
-        .unwrap();
-    replacement.ready();
-    let completed = settle(&mut cockpit);
-    assert!(completed.result.is_err());
-    assert!(replacement.sent().is_empty());
-    assert!(cockpit.roster().draft_scope(draft).is_some());
-    assert_eq!(cockpit.threads().len(), 2);
-}
-
-#[test]
 fn effort_waits_for_startup_without_losing_the_pending_prompt() {
     let (plan, mut provider) = planned(true);
     let mut cockpit = cockpit("startup-effort", vec![plan]);

@@ -7,7 +7,7 @@ mod context;
 mod rewind;
 use super::*;
 use crate::cockpit::Cockpit;
-use crate::roster::{PaneIdentity, View};
+use crate::roster::PaneIdentity;
 use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::mpsc::{self, Sender};
@@ -1078,61 +1078,6 @@ fn a_failed_first_send_leaves_no_thread_or_log() {
 }
 
 #[test]
-fn grouped_bootstrap_persists_membership_before_sending() {
-    let root = scratch("group-bootstrap-persist");
-    let repo = init_repo(&root);
-    let store_dir = scratch("group-bootstrap-persist-store");
-    let fake = Fake::default();
-    let mut cockpit = Cockpit::new(Store::open(&store_dir).unwrap(), Box::new(fake.clone()));
-    let seed = cockpit
-        .open(
-            Provider::Claude,
-            WorkspaceChoice::Main {
-                checkout: repo.clone(),
-            },
-        )
-        .unwrap();
-    let second = cockpit
-        .open(
-            Provider::Claude,
-            WorkspaceChoice::Main {
-                checkout: repo.clone(),
-            },
-        )
-        .unwrap();
-    let group = cockpit
-        .apply_group(GroupChange::Create {
-            first: seed,
-            second,
-        })
-        .unwrap()
-        .group
-        .unwrap();
-    let groups_path = store_dir.join("groups.json");
-    std::fs::remove_file(&groups_path).unwrap();
-    std::fs::create_dir(&groups_path).unwrap();
-
-    let refused = cockpit.bootstrap_in_group(
-        ProviderChoice {
-            provider: Provider::Claude,
-            model: None,
-        },
-        WorkspaceChoice::Main { checkout: repo },
-        "must not be sent",
-        group,
-    );
-
-    assert!(refused.is_err());
-    assert_eq!(fake.sent.borrow().as_slice(), &[] as &[String]);
-    assert_eq!(cockpit.threads(), vec![seed, second]);
-    assert_eq!(
-        cockpit.groups().get(group).unwrap().members,
-        vec![seed, second]
-    );
-    assert!(cockpit.parked().unwrap().is_empty());
-}
-
-#[test]
 fn opening_on_the_main_checkout_spawns_the_session_there() {
     let root = scratch("main-open");
     let (mut cockpit, fake) = cockpit("main-open-store");
@@ -1407,134 +1352,6 @@ fn deleting_a_main_bound_thread_leaves_the_checkout_alone() {
 }
 
 #[test]
-fn deleting_a_grouped_thread_removes_membership_before_the_log() {
-    let root = scratch("delete-grouped");
-    let repo = init_repo(&root);
-    let (mut cockpit, _fake) = cockpit("delete-grouped-store");
-    let one = cockpit
-        .open(
-            Provider::Claude,
-            WorkspaceChoice::Main {
-                checkout: repo.clone(),
-            },
-        )
-        .unwrap();
-    let two = cockpit
-        .open(Provider::Claude, WorkspaceChoice::Main { checkout: repo })
-        .unwrap();
-    let group = cockpit
-        .apply_group(GroupChange::Create {
-            first: one,
-            second: two,
-        })
-        .unwrap()
-        .group
-        .unwrap();
-
-    cockpit.delete(one).unwrap();
-
-    assert!(cockpit.groups().get(group).is_none());
-    assert_eq!(cockpit.threads(), vec![two]);
-    assert_eq!(cockpit.engine().store.thread_ids().unwrap(), vec![two]);
-}
-
-#[test]
-fn failed_delete_restores_the_exact_group_snapshot() {
-    let store = Store::open(scratch("delete-group-rollback"))
-        .unwrap()
-        .refuse_delete();
-    let mut cockpit = Cockpit::new(store, Box::new(Fake::default()));
-    let threads: Vec<_> = (0..4)
-        .map(|_| cockpit.open(Provider::Claude, main_choice()).unwrap())
-        .collect();
-    let first = cockpit
-        .apply_group(GroupChange::Create {
-            first: threads[0],
-            second: threads[1],
-        })
-        .unwrap()
-        .group
-        .unwrap();
-    let second = cockpit
-        .apply_group(GroupChange::Create {
-            first: threads[2],
-            second: threads[3],
-        })
-        .unwrap()
-        .group
-        .unwrap();
-    cockpit
-        .apply_group(GroupChange::Rename {
-            group: first,
-            title: "exact title".into(),
-        })
-        .unwrap();
-    cockpit
-        .apply_group(GroupChange::MoveGroup {
-            group: second,
-            index: 0,
-        })
-        .unwrap();
-    let before: Vec<_> = cockpit.groups().iter().cloned().collect();
-
-    assert!(cockpit.delete(threads[0]).is_err());
-    assert_eq!(cockpit.groups().iter().cloned().collect::<Vec<_>>(), before);
-}
-
-#[test]
-fn revive_group_is_ordered_and_rolls_back_when_a_later_member_fails() {
-    let (mut cockpit, _fake) = cockpit("revive-group-atomic");
-    let first = cockpit.open(Provider::Claude, main_choice()).unwrap();
-    let second = cockpit.open(Provider::Claude, main_choice()).unwrap();
-    let third = cockpit.open(Provider::Claude, main_choice()).unwrap();
-    let group = cockpit
-        .apply_group(GroupChange::Create { first, second })
-        .unwrap()
-        .group
-        .unwrap();
-    cockpit
-        .apply_group(GroupChange::Join {
-            thread: third,
-            group,
-            index: None,
-        })
-        .unwrap();
-    cockpit.park(first).unwrap();
-    cockpit.park(second).unwrap();
-    cockpit.park(third).unwrap();
-    cockpit.engine_mut().refuse_park.insert(first);
-    // Reviving starts no agent (ADR 0032): a member fails when its history
-    // cannot be read.
-    let log = std::env::temp_dir()
-        .join(format!(
-            "ferrite-cockpit-{}-revive-group-atomic",
-            std::process::id()
-        ))
-        .join(third.to_string())
-        .join("log.jsonl");
-    let aside = log.with_extension("aside");
-    std::fs::rename(&log, &aside).unwrap();
-
-    assert!(matches!(
-        cockpit.revive_group(group),
-        Err(ReviveGroupError::Rollback { thread, .. }) if thread == first
-    ));
-    assert!(
-        cockpit.threads().is_empty(),
-        "the first revival rolled back"
-    );
-    assert_eq!(
-        cockpit.groups().get(group).unwrap().members,
-        [first, second, third]
-    );
-
-    cockpit.engine_mut().refuse_park.clear();
-    std::fs::rename(&aside, &log).unwrap();
-    assert_eq!(cockpit.revive_group(group).unwrap(), [first, second, third]);
-    assert_eq!(cockpit.threads(), [first, second, third]);
-}
-
-#[test]
 fn thread_title_is_durable_and_blank_rename_is_refused() {
     let dir = scratch("thread-title");
     let fake = Fake::default();
@@ -1662,10 +1479,10 @@ fn a_timed_interruption_is_never_read_as_a_completion() {
     );
 }
 
-/// Seen means on screen while the window has focus: a Group's member
-/// that finishes in view is read with no focus of its own, a finish
-/// while the window is away stays unread until it comes back, and a
-/// Thread off the board stays unread whatever the window does.
+/// Seen means on screen while the window has focus: the Thread on screen
+/// that finishes is read, a finish while the window is away stays unread
+/// until it comes back, and a Thread off screen stays unread whatever the
+/// window does.
 #[test]
 fn a_finish_is_seen_when_it_is_on_screen_while_the_window_has_focus() {
     let (mut cockpit, fake) = cockpit("seen-on-screen");
@@ -1673,15 +1490,7 @@ fn a_finish_is_seen_when_it_is_on_screen_while_the_window_has_focus() {
     let threads: Vec<ThreadId> = (0..3)
         .map(|_| cockpit.open(Provider::Claude, main_choice()).unwrap())
         .collect();
-    let group = cockpit
-        .apply_group(GroupChange::Create {
-            first: threads[0],
-            second: threads[1],
-        })
-        .unwrap()
-        .group
-        .unwrap();
-    cockpit.enter_group(group).unwrap();
+    assert!(cockpit.focus_thread(threads[1]));
     let finish = |cockpit: &mut Cockpit, at: usize| {
         let _ = cockpit.send(threads[at], "work".into());
         cockpit.pump();
@@ -1697,16 +1506,16 @@ fn a_finish_is_seen_when_it_is_on_screen_while_the_window_has_focus() {
     let unread = |cockpit: &Cockpit, at: usize| cockpit.notifications().attention(threads[at]);
 
     finish(&mut cockpit, 1);
-    assert!(!unread(&cockpit, 1), "on the board, focused or not");
+    assert!(!unread(&cockpit, 1), "on screen");
     finish(&mut cockpit, 2);
-    assert!(unread(&cockpit, 2), "off the board");
+    assert!(unread(&cockpit, 2), "off screen");
 
     cockpit.set_window_active(false);
-    finish(&mut cockpit, 0);
-    assert!(unread(&cockpit, 0), "on the board while the window is away");
+    finish(&mut cockpit, 1);
+    assert!(unread(&cockpit, 1), "on screen while the window is away");
     cockpit.set_window_active(true);
-    assert!(!unread(&cockpit, 0), "seen the moment the window is back");
-    assert!(unread(&cockpit, 2), "and still not what is off the board");
+    assert!(!unread(&cockpit, 1), "seen the moment the window is back");
+    assert!(unread(&cockpit, 2), "and still not what is off screen");
 }
 
 #[test]
@@ -4922,14 +4731,6 @@ fn opened(cockpit: &mut Cockpit, n: usize) -> Vec<ThreadId> {
         .collect()
 }
 
-fn pair(cockpit: &mut Cockpit, first: ThreadId, second: ThreadId) -> GroupId {
-    cockpit
-        .apply_group(GroupChange::Create { first, second })
-        .unwrap()
-        .group
-        .unwrap()
-}
-
 #[test]
 fn open_threads_are_the_roster_and_solo_shows_the_focused_one() {
     let (mut cockpit, _) = cockpit("roster-solo");
@@ -4974,242 +4775,6 @@ fn open_threads_are_the_roster_and_solo_shows_the_focused_one() {
 }
 
 #[test]
-fn closing_parks_in_one_act_and_a_group_member_leaves_onto_the_ordinal_survivor() {
-    let (mut cockpit, _) = cockpit("roster-close");
-    let threads = opened(&mut cockpit, 3);
-    let group = pair(&mut cockpit, threads[0], threads[1]);
-    cockpit
-        .apply_group(GroupChange::Join {
-            thread: threads[2],
-            group,
-            index: None,
-        })
-        .unwrap();
-    cockpit.enter_group(group).unwrap();
-    cockpit.focus(PaneIdentity::Thread(threads[1]));
-
-    // cmd-w on a member: out of the Group and parked, in one press.
-    cockpit.close(PaneIdentity::Thread(threads[1])).unwrap();
-    assert!(
-        cockpit.parked().unwrap().contains(&threads[1]),
-        "one park parks a Group member"
-    );
-    assert!(cockpit.groups().of(threads[1]).is_none(), "and it left");
-    assert_eq!(cockpit.threads().len(), 2);
-    assert_eq!(cockpit.roster().view(), View::Group(group));
-    assert_eq!(
-        cockpit.roster().focused_thread(),
-        Some(threads[2]),
-        "the Thread that took the parked one's ordinal"
-    );
-
-    cockpit.close(PaneIdentity::Thread(threads[2])).unwrap();
-    assert!(cockpit.parked().unwrap().contains(&threads[2]));
-    assert_eq!(
-        cockpit.roster().view(),
-        View::Solo,
-        "a pair losing a member dissolves"
-    );
-    assert_eq!(
-        cockpit.roster().focused_thread(),
-        Some(threads[0]),
-        "onto the survivor"
-    );
-    assert!(cockpit.groups().get(group).is_none());
-
-    cockpit.close(PaneIdentity::Thread(threads[0])).unwrap();
-    assert!(
-        cockpit.parked().unwrap().contains(&threads[0]),
-        "a Solo close parks"
-    );
-    assert_eq!(
-        cockpit.roster().park_order(),
-        [threads[1], threads[2], threads[0]]
-    );
-    assert!(cockpit.roster().panes().is_empty());
-}
-
-#[test]
-fn parking_a_member_whose_group_is_not_on_screen_leaves_and_parks() {
-    let (mut cockpit, _) = cockpit("roster-park-offscreen");
-    let threads = opened(&mut cockpit, 3);
-    let group = pair(&mut cockpit, threads[0], threads[1]);
-    cockpit
-        .apply_group(GroupChange::Join {
-            thread: threads[2],
-            group,
-            index: None,
-        })
-        .unwrap();
-    assert_eq!(cockpit.roster().view(), View::Solo);
-
-    cockpit.park_thread(threads[1]).unwrap();
-    assert!(cockpit.parked().unwrap().contains(&threads[1]));
-    assert_eq!(
-        cockpit.groups().get(group).unwrap().members,
-        [threads[0], threads[2]]
-    );
-    assert_eq!(cockpit.roster().park_order(), [threads[1]]);
-}
-
-#[test]
-fn a_new_thread_started_from_a_group_remains_outside_the_group() {
-    let (mut cockpit, _) = cockpit("roster-loose-draft");
-    let threads = opened(&mut cockpit, 2);
-    let group = pair(&mut cockpit, threads[0], threads[1]);
-    cockpit.enter_group(group).unwrap();
-    let draft = cockpit.open_draft();
-    assert_eq!(cockpit.roster().view(), View::Solo);
-    assert_eq!(
-        cockpit.visible(),
-        [PaneIdentity::Draft(draft)],
-        "the new draft Pane opens outside the Group"
-    );
-    assert_eq!(cockpit.roster().draft_scope(draft).unwrap().group, None);
-
-    let done = cockpit
-        .bootstrap_draft(
-            draft,
-            ProviderChoice {
-                provider: Provider::Claude,
-                model: None,
-            },
-            main_choice(),
-            "new card",
-            None,
-        )
-        .unwrap()
-        .unwrap();
-    assert_eq!(
-        cockpit.groups().get(group).unwrap().members,
-        threads,
-        "sending the draft does not add the Thread to the Group"
-    );
-    assert!(cockpit.groups().of(done.thread).is_none());
-    assert_eq!(
-        cockpit.roster().focused_thread(),
-        Some(done.thread),
-        "the Thread took the draft's own slot"
-    );
-    assert_eq!(cockpit.roster().draft_scope(draft), None);
-}
-
-#[test]
-fn a_draft_beside_a_loose_thread_creates_and_opens_a_group_on_send() {
-    let (mut cockpit, _) = cockpit("roster-new-group-draft");
-    let first = opened(&mut cockpit, 1)[0];
-    cockpit.focus(PaneIdentity::Thread(first));
-    let draft = cockpit.open_draft_for_new_group(first);
-
-    assert_eq!(
-        cockpit.roster().draft_scope(draft).unwrap().new_group_with,
-        Some(first)
-    );
-    assert_eq!(
-        cockpit.visible(),
-        [PaneIdentity::Thread(first), PaneIdentity::Draft(draft)],
-        "the pending pair is visible before the Draft becomes durable"
-    );
-    assert_eq!(cockpit.roster().focused(), Some(PaneIdentity::Draft(draft)));
-    assert_eq!(
-        crate::layout::grid_shape(
-            cockpit.visible().len(),
-            crate::layout::Rect {
-                x: 0.0,
-                y: 0.0,
-                w: 1134.0,
-                h: 838.0
-            }
-        )
-        .0,
-        2
-    );
-    assert!(cockpit.groups().of(first).is_none());
-    let done = cockpit
-        .bootstrap_draft(
-            draft,
-            ProviderChoice {
-                provider: Provider::Claude,
-                model: None,
-            },
-            main_choice(),
-            "work beside the first thread",
-            None,
-        )
-        .unwrap()
-        .unwrap();
-
-    let group = cockpit.groups().of(done.thread).unwrap();
-    assert_eq!(group.members, [first, done.thread]);
-    assert_eq!(cockpit.roster().view(), View::Group(group.id));
-    assert_eq!(cockpit.roster().focused_thread(), Some(done.thread));
-    assert_eq!(
-        cockpit.visible(),
-        [
-            PaneIdentity::Thread(first),
-            PaneIdentity::Thread(done.thread)
-        ]
-    );
-}
-
-#[test]
-fn entering_a_group_shows_parked_members_parked_and_keeps_focus_on_a_member() {
-    let (mut cockpit, _) = cockpit("roster-enter");
-    let threads = opened(&mut cockpit, 3);
-    let group = pair(&mut cockpit, threads[1], threads[2]);
-    // A member parked without leaving: cmd-w would take it out of the
-    // Group, so this is the raw park a relaunch leaves behind.
-    cockpit.park(threads[2]).unwrap();
-    cockpit.roster.note_parked(threads[2]);
-    assert!(cockpit.parked().unwrap().contains(&threads[2]));
-    assert_eq!(cockpit.groups().of(threads[2]).map(|g| g.id), Some(group));
-    cockpit.focus(PaneIdentity::Thread(threads[1]));
-
-    cockpit.enter_group(group).unwrap();
-    assert_eq!(cockpit.roster().view(), View::Group(group));
-    assert_eq!(
-        cockpit.roster().focused_thread(),
-        Some(threads[1]),
-        "focus stays on the member the operator was on"
-    );
-    assert!(
-        cockpit.thread(threads[2]).is_none(),
-        "entering spends no Session on the parked member"
-    );
-    assert!(
-        cockpit
-            .visible()
-            .contains(&PaneIdentity::Thread(threads[2])),
-        "but it keeps its slot on the board, as its parked tile"
-    );
-    assert_eq!(cockpit.roster().park_order(), [threads[2]]);
-
-    // ⏎ on the tile wakes it in place, and cmd-o forgets it.
-    cockpit.wake(threads[2]).unwrap();
-    assert!(cockpit.thread(threads[2]).is_some(), "woken");
-    assert_eq!(cockpit.roster().focused_thread(), Some(threads[2]));
-    assert_eq!(cockpit.roster().view(), View::Group(group));
-    assert!(
-        cockpit.roster().park_order().is_empty(),
-        "and cmd-o forgets it"
-    );
-    cockpit.focus(PaneIdentity::Thread(threads[1]));
-
-    assert!(cockpit.focus_thread(threads[0]));
-    assert_eq!(
-        cockpit.roster().view(),
-        View::Solo,
-        "a loose Thread shows Solo"
-    );
-    cockpit.enter_group(group).unwrap();
-    assert_eq!(
-        cockpit.roster().focused_thread(),
-        Some(threads[1]),
-        "entering from outside lands on the first member"
-    );
-}
-
-#[test]
 fn reopen_walks_this_launches_park_order_then_creation_order() {
     let (mut cockpit, _) = cockpit("roster-reopen");
     let threads = opened(&mut cockpit, 3);
@@ -5237,78 +4802,15 @@ fn reopen_walks_this_launches_park_order_then_creation_order() {
 }
 
 #[test]
-fn fullscreen_follows_focus_and_survives_a_close_but_not_an_external_park() {
-    let (mut cockpit, _) = cockpit("roster-fullscreen");
-    let threads = opened(&mut cockpit, 3);
-    cockpit.toggle_fullscreen();
-    assert_eq!(
-        cockpit.roster().fullscreen(),
-        Some(PaneIdentity::Thread(threads[0]))
-    );
-    cockpit.step_focus(1);
-    assert_eq!(
-        cockpit.roster().fullscreen(),
-        Some(PaneIdentity::Thread(threads[0])),
-        "Solo has one visible Pane to step through"
-    );
-    cockpit.focus(PaneIdentity::Thread(threads[1]));
-    assert_eq!(
-        cockpit.roster().fullscreen(),
-        Some(PaneIdentity::Thread(threads[1]))
-    );
-    cockpit.close(PaneIdentity::Thread(threads[1])).unwrap();
-    assert_eq!(
-        cockpit.roster().fullscreen(),
-        Some(PaneIdentity::Thread(threads[2])),
-        "the survivor fills the screen, like the next tab"
-    );
-    cockpit.park(threads[2]).unwrap();
-    assert_eq!(
-        cockpit.roster().fullscreen(),
-        None,
-        "parked under the roster: back to the grid"
-    );
-}
-
-#[test]
-fn a_drop_out_of_a_pair_tracks_its_origin_and_lands_on_the_survivor() {
-    let (mut cockpit, _) = cockpit("roster-drop");
-    let threads = opened(&mut cockpit, 3);
-    let group = pair(&mut cockpit, threads[0], threads[1]);
-    cockpit.enter_group(group).unwrap();
-    cockpit
-        .drop(
-            Drag::Thread {
-                thread: threads[0],
-                group: Some(group),
-            },
-            View::Group(group),
-            DropTarget::ThreadRow {
-                thread: threads[2],
-                group: None,
-                index: 0,
-            },
-        )
-        .unwrap();
-    assert_eq!(cockpit.roster().view(), View::Solo);
-    assert_eq!(cockpit.roster().focused_thread(), Some(threads[1]));
-    assert!(cockpit.groups().get(group).is_none());
-}
-
-/// A stored Group no longer pulls the screen into it: the waiting Thread
-/// is shown alone.
-#[test]
 fn the_next_decision_shows_the_waiting_thread_alone() {
     let (mut cockpit, fake) = cockpit("roster-decision");
     let threads = opened(&mut cockpit, 3);
-    pair(&mut cockpit, threads[1], threads[2]);
     fake.streams.borrow()[2]
         .send(decision("perm", "Write"))
         .unwrap();
     cockpit.pump();
     assert_eq!(cockpit.next_decision(), Some(threads[2]));
-    assert_eq!(cockpit.roster().view(), View::Solo);
-    assert_eq!(cockpit.roster().focused_thread(), Some(threads[2]));
+    assert_eq!(cockpit.visible(), [PaneIdentity::Thread(threads[2])]);
 }
 
 #[test]

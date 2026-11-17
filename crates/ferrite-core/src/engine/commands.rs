@@ -312,9 +312,9 @@ impl Engine {
         }
     }
 
-    /// A window's first send, with the scope its Draft gave it, tagged
-    /// `tag` so its settling (`take_bootstrap_results`) names it. The
-    /// Thread, or `None` while it starts.
+    /// A window's first send, tagged `tag` so its settling
+    /// (`take_bootstrap_results`) names it. The Thread, or `None` while it
+    /// starts. A Group an older window names is not joined.
     pub fn bootstrap_command(
         &mut self,
         tag: DraftId,
@@ -326,8 +326,7 @@ impl Engine {
             effort,
             workspace,
             prompt,
-            group,
-            new_group_with,
+            ..
         } = op
         else {
             return Err(unknown());
@@ -337,12 +336,7 @@ impl Engine {
             provider: *provider,
             model: model.clone(),
         };
-        let scope = DraftScope {
-            group: *group,
-            new_group_with: *new_group_with,
-            pending_leave: None,
-        };
-        self.bootstrap_draft(tag, scope, choice, workspace, prompt, effort.clone())
+        self.bootstrap_draft(tag, choice, workspace, prompt, effort.clone())
             .map_err(failed)
     }
 

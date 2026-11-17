@@ -71,7 +71,7 @@ pub mod visual_reference;
 
 use std::time::Duration;
 
-use ferrite_core::cockpit::{CloseError, Cockpit, HistoryDirection, ProviderChoice, ThreadView};
+use ferrite_core::cockpit::{Cockpit, HistoryDirection, ProviderChoice, ThreadView};
 use ferrite_core::docview::{Cell, Level};
 use ferrite_core::draft::DraftTarget;
 use ferrite_core::followup;
@@ -5253,22 +5253,6 @@ impl CockpitView {
         let Some(thread) = self.focused_thread() else {
             return;
         };
-        // ⏎ on a parked Thread's tile reopens it in place (F-8):
-        // `⏎ reopens it`.
-        if self.cockpit.thread(thread).is_none() {
-            match self.cockpit.wake(thread) {
-                Ok(()) => {
-                    self.sync_panes(cx);
-                    self.thread_opened(thread, cx);
-                    self.parked_changed(cx);
-                }
-                Err(error) => {
-                    ferrite_core::log!("thread {thread} could not be woken: {error:?}")
-                }
-            }
-            cx.notify();
-            return;
-        }
         if !self.panes[self.focused()].is_main() {
             return;
         }
@@ -6983,9 +6967,6 @@ impl CockpitView {
                     draft.binding.choose_project(aim);
                     draft.error = None;
                 }
-            }
-            if let Some(draft) = identity.draft() {
-                self.cockpit.aim_draft_loose(draft);
             }
             self.cockpit.focus(identity);
             self.sync_panes(cx);
@@ -8795,15 +8776,8 @@ impl CockpitView {
     fn close_pane(&mut self, identity: PaneIdentity, cx: &mut Context<Self>) {
         let result = self.cockpit.close(identity);
         let closed = result.is_ok();
-        match result {
-            Ok(()) => {}
-            Err(CloseError::Park(e)) => {
-                ferrite_core::log!("pane {identity:?} did not park cleanly: {e}")
-            }
-            Err(CloseError::Group(error)) => {
-                ferrite_core::log!("group change refused: {error}");
-                self.nav_notice = Some(error.to_string().into());
-            }
+        if let Err(error) = result {
+            ferrite_core::log!("pane {identity:?} did not close cleanly: {error}");
         }
         // A popover on the closed Pane goes with it.
         if self

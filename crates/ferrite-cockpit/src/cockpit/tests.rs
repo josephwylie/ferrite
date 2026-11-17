@@ -109,7 +109,6 @@ use std::rc::Rc;
 use std::sync::mpsc::{self, Receiver, Sender};
 
 use ferrite_core::cockpit::Spawner;
-use ferrite_core::roster::View;
 
 use ferrite_core::providers::Session;
 

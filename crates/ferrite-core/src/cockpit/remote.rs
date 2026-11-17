@@ -1104,11 +1104,7 @@ impl Remote {
                 };
                 if let Some((draft, prompt)) = self.starting.remove(&id) {
                     let result = result.and_then(|done| match done {
-                        Some(Done::Thread { thread }) => Ok(Bootstrapped {
-                            thread,
-                            refused_leave: None,
-                            applied_leave: false,
-                        }),
+                        Some(Done::Thread { thread }) => Ok(Bootstrapped { thread }),
                         _ => Err(io::Error::other("the server started no Thread")),
                     });
                     return vec![Arrival::Started(BootstrapResult {

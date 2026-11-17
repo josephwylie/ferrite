@@ -30,7 +30,7 @@ pub use crate::prompt_history::HistoryDirection;
 use crate::prompt_history::PromptHistory;
 use crate::protocol::{self, Outgoing, ServerMessage, SharedRoster};
 use crate::providers::{ResumeFailure, Session, SettingAck};
-use crate::roster::{DraftId, DraftScope};
+use crate::roster::DraftId;
 use crate::session::SessionLifecycle;
 use crate::store::{LoadError, Provider, Store, ThreadWriter};
 use crate::suggest::Suggestion;
@@ -507,8 +507,6 @@ pub(crate) const HELD_AT_REST: Duration = Duration::from_secs(5 * 60);
 
 struct PendingBootstrap {
     prompt: String,
-    group: Option<GroupId>,
-    new_group_with: Option<ThreadId>,
     draft: Option<DraftId>,
 }
 
@@ -1791,29 +1789,7 @@ impl Engine {
         prompt: &str,
         effort: Option<String>,
     ) -> io::Result<ThreadId> {
-        self.begin_bootstrap(choice, workspace, prompt, effort, None, None)
-    }
-
-    pub fn bootstrap_in_group(
-        &mut self,
-        choice: ProviderChoice,
-        workspace: WorkspaceChoice,
-        prompt: &str,
-        group: GroupId,
-    ) -> io::Result<ThreadId> {
-        self.bootstrap_in_group_with(choice, workspace, prompt, group, None)
-    }
-
-    fn bootstrap_in_group_with(
-        &mut self,
-        choice: ProviderChoice,
-        workspace: WorkspaceChoice,
-        prompt: &str,
-        group: GroupId,
-        effort: Option<String>,
-    ) -> io::Result<ThreadId> {
-        self.groups.validate_join(group).map_err(io::Error::other)?;
-        self.begin_bootstrap(choice, workspace, prompt, effort, Some(group), None)
+        self.begin_bootstrap(choice, workspace, prompt, effort)
     }
 
     fn begin_bootstrap(
@@ -1822,14 +1798,10 @@ impl Engine {
         workspace: WorkspaceChoice,
         prompt: &str,
         effort: Option<String>,
-        group: Option<GroupId>,
-        new_group_with: Option<ThreadId>,
     ) -> io::Result<ThreadId> {
         let id = self.open_choice(choice, workspace, effort, Launch::default())?;
         let pending = PendingBootstrap {
             prompt: prompt.to_string(),
-            group,
-            new_group_with,
             draft: None,
         };
         if self.threads[&id]
@@ -1846,27 +1818,8 @@ impl Engine {
         Ok(id)
     }
 
-    /// Membership is durable before delivery; readiness precedes both.
+    /// Readiness precedes delivery.
     fn finish_bootstrap(&mut self, id: ThreadId, pending: &PendingBootstrap) -> io::Result<()> {
-        if let Some(group) = pending.group {
-            self.groups
-                .apply(GroupChange::Join {
-                    thread: id,
-                    group,
-                    index: None,
-                })
-                .map_err(io::Error::other)?;
-        }
-        if let Some(first) = pending.new_group_with {
-            if self.groups.of(first).is_some() {
-                return Err(io::Error::other(
-                    "the original Thread joined a Group before the draft was sent",
-                ));
-            }
-            self.groups
-                .apply(GroupChange::Create { first, second: id })
-                .map_err(io::Error::other)?;
-        }
         let state = self.threads.get_mut(&id).expect("pending Thread exists");
         if let Some(binding) = &state.workspace {
             state.apply(Input::Notice(format!(
@@ -2352,9 +2305,6 @@ impl Engine {
             return Ok(());
         }
         let Some(state) = self.threads.get_mut(&thread) else {
-            // A parked Group member's tile (`enter_group`) has a Pane and no
-            // Session: parking it again only takes the Pane away.
-            self.open.retain(|open| *open != thread);
             return Ok(());
         };
         // The parked row's subagent count, from the Activity that knows it.
@@ -3270,13 +3220,9 @@ impl Engine {
                 if let Some(pending) = self.bootstraps.remove(&id) {
                     let delivered = result.and_then(|_| self.finish_bootstrap(id, &pending));
                     let result = match delivered {
-                        // A draft's own slot and deferred leave are its
-                        // window's: `Cockpit::pump` completes them.
-                        Ok(()) => Ok(Bootstrapped {
-                            thread: id,
-                            refused_leave: None,
-                            applied_leave: false,
-                        }),
+                        // A draft's own slot is its window's:
+                        // `Cockpit::pump` completes it.
+                        Ok(()) => Ok(Bootstrapped { thread: id }),
                         Err(error) => match self.rollback_bootstrap(id) {
                             Ok(()) => Err(error),
                             Err(rollback) => Err(io::Error::other(format!(
@@ -5254,31 +5200,18 @@ impl Engine {
         }
     }
 
-    /// A Draft's first send, in the scope its window gave it: the Thread
-    /// it became, or `None` while startup is pending — the result then
-    /// arrives through `take_bootstrap_results`, tagged with `draft`.
+    /// A Draft's first send: the Thread it became, or `None` while startup
+    /// is pending — the result then arrives through
+    /// `take_bootstrap_results`, tagged with `draft`.
     pub fn bootstrap_draft(
         &mut self,
         draft: DraftId,
-        scope: DraftScope,
         choice: ProviderChoice,
         workspace: WorkspaceChoice,
         prompt: &str,
         effort: Option<String>,
     ) -> io::Result<Option<ThreadId>> {
-        let thread = match scope.group {
-            Some(group) => {
-                self.bootstrap_in_group_with(choice, workspace, prompt, group, effort)?
-            }
-            None => self.begin_bootstrap(
-                choice,
-                workspace,
-                prompt,
-                effort,
-                None,
-                scope.new_group_with,
-            )?,
-        };
+        let thread = self.begin_bootstrap(choice, workspace, prompt, effort)?;
         match self.bootstraps.get_mut(&thread) {
             Some(pending) => {
                 pending.draft = Some(draft);
@@ -5676,16 +5609,10 @@ impl<'a> ThreadView<'a> {
     }
 }
 
-/// A draft's first send, done: the Thread it became, and whether the
-/// leave the draft was holding open (see `close`) applied.
+/// A draft's first send, done: the Thread it became.
 #[derive(Debug)]
 pub struct Bootstrapped {
     pub thread: ThreadId,
-    /// The deferred leave the Groups module refused, if it did — the Thread
-    /// is live and in its Group regardless.
-    pub refused_leave: Option<ApplyError>,
-    /// A deferred Group leave applied with this first send.
-    pub applied_leave: bool,
 }
 
 fn megabytes(bytes: u64) -> String {
