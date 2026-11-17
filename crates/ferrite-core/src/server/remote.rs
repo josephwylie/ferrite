@@ -87,6 +87,8 @@ struct Gateway {
     socket: PathBuf,
     api_socket: PathBuf,
     slots: Arc<Semaphore>,
+    /// The program a terminal runs; `None` is the account's login shell.
+    shell: Option<PathBuf>,
 }
 impl Gateway {
     fn active(&self, session: &str) -> bool {
@@ -418,6 +420,7 @@ fn serve(args: &[String], store: &Path, executable: &Path) -> io::Result<()> {
         socket: link::address(store),
         api_socket: crate::api::address(store),
         slots: Arc::new(Semaphore::new(32)),
+        shell: None,
     };
     admin(gateway.clone(), admin_listener, public.host)?;
     let runtime = tokio::runtime::Builder::new_multi_thread()

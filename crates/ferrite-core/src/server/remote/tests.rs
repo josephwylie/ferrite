@@ -92,6 +92,9 @@ mod network {
                 socket: link::address(&store),
                 api_socket: crate::api::address(&store),
                 slots: Arc::new(Semaphore::new(32)),
+                // Not the operator's login shell: its startup files take
+                // seconds, longer under load than the waits below.
+                shell: Some("/bin/sh".into()),
             };
             let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
             listener.set_nonblocking(true).unwrap();
