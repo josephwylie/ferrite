@@ -287,6 +287,44 @@ impl CockpitView {
         )
     }
 
+    pub(super) fn no_environment(&self, cx: &mut Context<Self>) -> Div {
+        use ferrite_ui::theme::*;
+        div()
+            .debug_selector(|| "no-environment".into())
+            .size_full()
+            .flex()
+            .flex_col()
+            .items_center()
+            .justify_center()
+            .gap(px(16.))
+            .px(px(24.))
+            .child(
+                div()
+                    .text_size(px(20.))
+                    .text_color(rgb(INK_STRONG))
+                    .child("No environment enabled"),
+            )
+            .child(
+                div()
+                    .text_size(px(14.))
+                    .text_color(rgb(INK_SUBTLE))
+                    .child("Add a remote environment or turn on Local in Connections."),
+            )
+            .child(
+                ferrite_ui::components::form_button("no-environment-connections", cx)
+                    .debug_selector(|| "no-environment-connections".into())
+                    .accessibility_label("Open Connections")
+                    .px(px(16.))
+                    .py(px(8.))
+                    .child("Open Connections")
+                    .on_click(cx.listener(|view, _, _, cx| {
+                        view.settings_open = true;
+                        view.settings_page = settings::PageKey::Connections;
+                        cx.notify();
+                    })),
+            )
+    }
+
     /// The board with no Pane on it (see the module doc).
     pub(super) fn empty_board(&self, cx: &mut Context<Self>) -> Div {
         use ferrite_ui::theme::*;

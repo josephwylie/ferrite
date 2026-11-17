@@ -431,3 +431,26 @@ fn a_command_the_server_does_not_know_reads_as_unsupported() {
     .into();
     assert_eq!(error.kind(), io::ErrorKind::Unsupported);
 }
+
+#[test]
+fn unavailable_environment_never_attaches_even_after_retry() {
+    let mut remote = Remote::new(Attach {
+        store: scratch("unavailable-environment"),
+        server: Endpoint::Unavailable,
+        client: Peer {
+            name: "test".into(),
+            version: "0".into(),
+        },
+        renderer: None,
+        browser: false,
+        driven: false,
+        discovery: Box::new(NoDiscovery),
+    });
+    assert!(!remote.available());
+    assert!(remote.attach_now().is_none());
+    remote.retry();
+    assert!(remote.poll().is_empty());
+    assert!(remote.attaching.is_none());
+    assert!(remote.attachment.is_none());
+    assert!(remote.bridge().is_none());
+}

@@ -1,0 +1,34 @@
+{
+  "root": "/private/tmp/ferrite-remote-6mypobj8",
+  "store": "/private/tmp/ferrite-remote-6mypobj8/client/threads",
+  "remote_store": "/private/tmp/ferrite-remote-6mypobj8/remote/threads",
+  "binary": "/Users/josephwylie/Desktop/Projects/ferrite-remote-connections/target/debug/ferrite",
+  "server": "/Users/josephwylie/Desktop/Projects/ferrite-remote-connections/target/debug/ferrited",
+  "processes": [],
+  "ssh_transport": "actual OpenSSH localhost",
+  "filesystem": "localhost SSH fixture shares the host filesystem; SSH request logs prove routing",
+  "credentials": "fixture-passphrase is a synthetic, task-only test credential",
+  "provider": "simulated Codex app-server, no model API calls",
+  "port": 54496
+}
+{"passed": true, "nonroot": true, "strict_modes": true, "pid": 26239}
+Launched isolated local/remote Servers and native headless window.
+Traceback (most recent call last):
+  File "/Users/josephwylie/Desktop/Projects/ferrite-remote-connections/scripts/verify-remote-parity.py", line 594, in <module>
+    main()
+    ~~~~^^
+  File "/Users/josephwylie/Desktop/Projects/ferrite-remote-connections/scripts/verify-remote-parity.py", line 570, in main
+    verify(args)
+    ~~~~~~^^^^^^
+  File "/Users/josephwylie/Desktop/Projects/ferrite-remote-connections/scripts/verify-remote-parity.py", line 482, in verify
+    workspace_flow(ui, "link", screenshot)
+    ~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/josephwylie/Desktop/Projects/ferrite-remote-connections/scripts/verify-remote-parity.py", line 351, in workspace_flow
+    attachment_turn(ui, protocol + "-existing-thread", screenshot)
+    ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/josephwylie/Desktop/Projects/ferrite-remote-connections/scripts/verify-remote-parity.py", line 313, in attachment_turn
+    pending = until(lambda: rows(ui.output, "provider-await")[before:], "Fixture did not receive submitted prompt")[0]
+              ~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/josephwylie/Desktop/Projects/ferrite-remote-connections/scripts/verify-remote-parity.py", line 44, in until
+    raise AssertionError(message)
+AssertionError: Fixture did not receive submitted prompt

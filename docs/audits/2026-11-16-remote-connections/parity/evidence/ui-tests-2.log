@@ -1,0 +1,88 @@
+warning: variable does not need to be mutable
+   --> crates/ferrite-core/src/server/tests/drive.rs:121:13
+    |
+121 |     let mut driven = attach_driven(&harness.address);
+    |         ----^^^^^^
+    |         |
+    |         help: remove this `mut`
+    |
+    = note: `#[warn(unused_mut)]` (part of `#[warn(unused)]`) on by default
+
+warning: `ferrite-core` (lib test) generated 1 warning (run `cargo fix --lib -p ferrite-core --tests` to apply 1 suggestion)
+warning: unreachable pattern
+   --> crates/ferrite-pane/src/link_target.rs:165:40
+    |
+142 |             Self::External(url) | Self::RepoPullRequest { url, .. } => {
+    |                                   --------------------------------- matches all the relevant values
+...
+165 |             Self::PullRequest { .. } | Self::RepoPullRequest { .. } | Self::Thread(_) => false,
+    |                                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^ no value can reach this
+    |
+    = note: `#[warn(unreachable_patterns)]` (part of `#[warn(unused)]`) on by default
+
+   Compiling ferrite-frame v0.4.0 (/Users/josephwylie/Desktop/Projects/ferrite-remote-connections/crates/ferrite-frame)
+   Compiling ferrite-pane v0.4.0 (/Users/josephwylie/Desktop/Projects/ferrite-remote-connections/crates/ferrite-pane)
+warning: `ferrite-pane` (lib) generated 1 warning
+   Compiling ferrite-cockpit v0.4.0 (/Users/josephwylie/Desktop/Projects/ferrite-remote-connections/crates/ferrite-cockpit)
+error[E0616]: field `error` of struct `connections::Connections` is private
+    --> crates/ferrite-cockpit/src/cockpit/tests/machines.rs:2337:34
+     |
+2337 |         assert!(view.connections.error.as_deref().unwrap().contains("Settings cannot be saved"));
+     |                                  ^^^^^ private field
+
+warning: `ferrite-pane` (lib test) generated 1 warning (1 duplicate)
+error[E0502]: cannot borrow `*self` as mutable because it is also borrowed as immutable
+    --> crates/ferrite-cockpit/src/cockpit.rs:8015:13
+     |
+8008 |         let Some(pane) = self.panes.get(self.focused()) else {
+     |                          ---------- immutable borrow occurs here
+...
+8015 |         if !self.admit_files(self.focused(), cx) {
+     |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ mutable borrow occurs here
+...
+8022 |         let provider = draft.binding.provider().clone();
+     |                        ------------- immutable borrow later used here
+
+warning: unused variable: `open`
+     --> crates/ferrite-cockpit/src/cockpit.rs:11567:13
+      |
+11567 |         let open = self.cockpit.thread(thread).filter(|open| open.resume_lost())?;
+      |             ^^^^ help: if this is intentional, prefix it with an underscore: `_open`
+      |
+      = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+warning: variable does not need to be mutable
+   --> crates/ferrite-cockpit/src/cockpit/tests/changes.rs:310:13
+    |
+310 |     let mut again = |text: &str, cx: &mut gpui::VisualTestContext| {
+    |         ----^^^^^
+    |         |
+    |         help: remove this `mut`
+    |
+    = note: `#[warn(unused_mut)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused variable: `engine`
+   --> crates/ferrite-cockpit/src/cockpit/tests/browser_chrome.rs:467:10
+    |
+467 |     let (engine, view, thread, cx) = browser_window(cx, "bnt-draft");
+    |          ^^^^^^ help: if this is intentional, prefix it with an underscore: `_engine`
+
+warning: variable does not need to be mutable
+    --> crates/ferrite-cockpit/src/cockpit/tests/render_performance.rs:2779:13
+     |
+2779 |     let mut watch = |cx: &mut gpui::VisualTestContext, ms: u64| {
+     |         ----^^^^^
+     |         |
+     |         help: remove this `mut`
+
+warning: unused variable: `overview`
+   --> crates/ferrite-cockpit/src/cockpit/tests/tools.rs:111:9
+    |
+111 |     let overview = cx.debug_bounds("panel-tab-Overview").unwrap().center();
+    |         ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_overview`
+
+Some errors have detailed explanations: E0502, E0616.
+For more information about an error, try `rustc --explain E0502`.
+warning: `ferrite-cockpit` (lib test) generated 5 warnings
+error: could not compile `ferrite-cockpit` (lib test) due to 2 previous errors; 5 warnings emitted
+error: command `/Users/josephwylie/.rustup/toolchains/beta-aarch64-apple-darwin/bin/cargo '--color=auto' test --no-run '--message-format=json-render-diagnostics' '--package=ferrite-core' '--package=ferrite-pane' '--package=ferrite-cockpit' '--package=ferrite-frame' --lib '--features=ferrite-core/test-support'` exited with code 101

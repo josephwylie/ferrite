@@ -135,6 +135,8 @@ pub struct Settings {
     /// Other computers whose Servers the window can be on, over ssh (ADR
     /// 0026), in the nav's order. Default: none.
     pub machines: Vec<crate::machine::Machine>,
+    /// Whether this client can use this computer. Running agents are unaffected.
+    pub local_environment_enabled: bool,
     /// The self-hosted forges a review reads pull requests from, besides
     /// github.com, gitlab.com and Azure DevOps (reviewr's `*_host` keys,
     /// ADR 0021). Default: none.
@@ -382,6 +384,7 @@ impl Default for Settings {
             system_notifications: true,
             allowance_warnings: vec![80, 95],
             machines: Vec::new(),
+            local_environment_enabled: true,
             forge_hosts: ForgeHosts::default(),
             factory_tasks_at_once: crate::factory::DEFAULT_LIMIT,
             favourite_models: Vec::new(),
@@ -632,6 +635,7 @@ mod tests {
             codex_sounds: false,
             system_notifications: false,
             allowance_warnings: vec![90],
+            local_environment_enabled: false,
             machines: vec![crate::machine::Machine {
                 name: "build box".into(),
                 target: "me@build.example.com".into(),
@@ -707,6 +711,7 @@ mod tests {
 
     #[test]
     fn the_defaults_are_the_documented_ones() {
+        assert!(Settings::default().local_environment_enabled);
         let settings = Settings::default();
 
         assert_eq!(settings.default_provider, Provider::Claude);

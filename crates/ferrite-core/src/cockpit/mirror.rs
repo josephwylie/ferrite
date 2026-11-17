@@ -48,6 +48,7 @@ pub(crate) struct Mirror {
 struct Facts {
     generation: u64,
     provider: Provider,
+    project: Option<crate::workspace::registry::ProjectId>,
     model: Option<String>,
     effort: Option<String>,
     title: Option<String>,
@@ -97,6 +98,7 @@ impl From<ThreadState> for Facts {
         Self {
             generation: state.generation,
             provider: state.provider,
+            project: state.project,
             model: state.model,
             effort: state.effort,
             title: state.title,
@@ -633,6 +635,10 @@ impl<'a> ThreadView<'a> {
     /// Which backend serves this Thread.
     pub fn provider(&self) -> Provider {
         self.facts.provider
+    }
+
+    pub fn project_id(&self) -> Option<crate::workspace::registry::ProjectId> {
+        self.facts.project
     }
 
     /// The model this Thread chose before its first prompt (#25) — the ✓ in

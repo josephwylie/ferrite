@@ -1,9 +1,3 @@
-//! The Settings sheet: the Cockpit's pages (`ferrite_ui::frame::settings`)
-//! laid out, searched and drawn. Values and persistence remain the
-//! Cockpit's (`CockpitView::change_settings`). The sheet's rules live in
-//! `theme.rs` (`Settings sheet`, WP-E); it is the sheet recipe
-//! (`ferrite_ui::sheet`) at `SETTINGS_W` × `SETTINGS_H`.
-
 use std::rc::Rc;
 
 use gpui::prelude::*;
@@ -25,6 +19,8 @@ use ferrite_ui::icons::{self, icon};
 use ferrite_ui::pointer::Pointer;
 use ferrite_ui::sheet::{sheet, sheet_close, sheet_head, veil};
 use ferrite_ui::theme::*;
+
+mod connections;
 
 /// The Settings sheet: the sheet recipe at `SETTINGS_W` × `SETTINGS_H`
 /// (capped to the window).
@@ -54,8 +50,21 @@ pub fn draw(sheet: SettingsSheet, window: &mut Window, cx: &mut App) -> AnyEleme
         step,
         close,
     } = sheet;
+    let connection_form = pages
+        .iter()
+        .flat_map(|page| &page.groups)
+        .flat_map(|group| &group.rows)
+        .find_map(|row| match &row.control {
+            Control::ConnectionForm(
+                form @ ferrite_ui::frame::settings::ConnectionForm::Editing { .. },
+            ) => Some(form.clone()),
+            _ => None,
+        });
     let body = body(pages, selected, &search, select, window, cx);
     let card = settings_sheet()
+        .when(selected == PageKey::Connections, |card| {
+            card.w(px(1120.)).h(px(700.))
+        })
         .id("settings-card")
         .debug_selector(|| "settings-card".into())
         .track_focus(&focus)
@@ -101,7 +110,15 @@ pub fn draw(sheet: SettingsSheet, window: &mut Window, cx: &mut App) -> AnyEleme
         )
         .into_any_element(),
     };
-    deferred(sheet).with_priority(3).into_any_element()
+    div()
+        .absolute()
+        .inset_0()
+        .child(deferred(sheet).with_priority(3))
+        .children(
+            connection_form
+                .map(|form| deferred(connections::form(form, window, cx)).with_priority(4)),
+        )
+        .into_any_element()
 }
 
 /// What the content column shows: the selected page, or, while the search
@@ -216,6 +233,7 @@ fn body(
                         PageKey::Behaviour,
                         PageKey::Notifications,
                         PageKey::Server,
+                        PageKey::Connections,
                     ]
                     .map(|key| nav_row(key, cx)),
                 ),
@@ -231,15 +249,32 @@ fn body(
         .min_w_0()
         .min_h_0()
         .overflow_y_scroll()
-        .px(px(MODAL_PAD))
-        .pt(px(HALF_ROW))
-        .pb(px(ROW))
+        .px(px(if selected == PageKey::Connections {
+            24.
+        } else {
+            MODAL_PAD
+        }))
+        .pt(px(if selected == PageKey::Connections {
+            24.
+        } else {
+            HALF_ROW
+        }))
+        .pb(px(if selected == PageKey::Connections {
+            48.
+        } else {
+            ROW
+        }))
         .child(
             div()
                 .flex()
                 .flex_shrink_0()
                 .items_center()
-                .h(px(ROW))
+                .h(px(if selected == PageKey::Connections && !searching {
+                    0.
+                } else {
+                    ROW
+                }))
+                .overflow_hidden()
                 .px(px(SETTINGS_ROW_PAD_X))
                 .font_weight(W_LABEL)
                 .text_color(rgb(INK_STRONG))
@@ -250,8 +285,16 @@ fn body(
                 .flex()
                 .flex_col()
                 .flex_shrink_0()
-                .pt(px(SETTINGS_TITLE_GAP))
-                .gap(px(SETTINGS_GROUP_GAP))
+                .pt(px(if selected == PageKey::Connections && !searching {
+                    0.
+                } else {
+                    SETTINGS_TITLE_GAP
+                }))
+                .gap(px(if selected == PageKey::Connections {
+                    32.
+                } else {
+                    SETTINGS_GROUP_GAP
+                }))
                 .when(searching && shown.groups.is_empty(), |list| {
                     list.child(
                         components::text_ui()
@@ -382,6 +425,14 @@ fn group_rows(
     window: &mut Window,
     cx: &mut App,
 ) -> Div {
+    if group.rows.iter().any(|row| {
+        matches!(
+            row.control,
+            Control::ConnectionForm(_) | Control::ConnectionRow(_)
+        )
+    }) {
+        return connections::group(label, group, cx);
+    }
     let rows: Vec<AnyElement> = group
         .rows
         .iter()
@@ -427,7 +478,14 @@ fn section_words(label: &str) -> Div {
 
 /// One setting row: label over hint at the left, the control right and
 /// centred; one row in a quarter row of air each side, or two with a hint.
-fn setting_row(row: &Row, window: &mut Window, cx: &mut App) -> Div {
+fn setting_row(row: &Row, window: &mut Window, cx: &mut App) -> AnyElement {
+    match &row.control {
+        Control::ConnectionForm(form) => return connections::form(form.clone(), window, cx),
+        Control::ConnectionRow(connection) => {
+            return connections::row(connection.clone(), cx).into_any_element()
+        }
+        _ => {}
+    }
     let hinted = !row.hint.is_empty();
     let fact = row.is_fact();
     div()
@@ -479,6 +537,7 @@ fn setting_row(row: &Row, window: &mut Window, cx: &mut App) -> Div {
                 })
                 .child(control(row, window, cx)),
         )
+        .into_any_element()
 }
 
 /// A row's description: `INK_SUBTLE` at 13, wrapping to a second line where
@@ -499,9 +558,11 @@ fn hint(detail: SharedString) -> Div {
 }
 
 /// A row's control, drawn from what the Cockpit says it is.
-fn control(row: &Row, _window: &mut Window, cx: &mut App) -> AnyElement {
+fn control(row: &Row, window: &mut Window, cx: &mut App) -> AnyElement {
     let title = row.title.clone();
     match row.control.clone() {
+        Control::ConnectionForm(form) => connections::form(form, window, cx).into_any_element(),
+        Control::ConnectionRow(connection) => connections::row(connection, cx).into_any_element(),
         // Two options: a token each, the chosen one inverse.
         // A short choice: a segmented control, the chosen segment lit.
         Control::Tokens { id, options, pick } => controls::segments(false)
@@ -892,6 +953,281 @@ mod tests {
         assert!(shown(&pages, PageKey::NewThreads, "nothing like it")
             .groups
             .is_empty());
+    }
+
+    #[test]
+    fn ssh_search_finds_the_connections_page() {
+        use ferrite_ui::frame::settings::page;
+        let pages = vec![page(
+            PageKey::Connections,
+            vec![Group::new(Some("Remote environments")).rows([Row::new(
+                "Add environment",
+                "SSH host alias username port",
+                vec![],
+                Control::Fact { value: "".into() },
+            )])],
+        )];
+        let found = shown(&pages, PageKey::About, "SSH");
+        assert_eq!(found.hit, vec![PageKey::Connections]);
+        assert_eq!(
+            found.groups[0].0.as_deref(),
+            Some("Connections · Remote environments")
+        );
+    }
+
+    #[gpui::test]
+    fn a_busy_connection_form_disables_submit_but_keeps_cancel_live(cx: &mut gpui::TestAppContext) {
+        use ferrite_ui::frame::settings::{ConnectionFields, ConnectionForm};
+        use std::cell::Cell;
+        struct Host {
+            fields: ConnectionFields,
+            submitted: Rc<Cell<usize>>,
+            cancelled: Rc<Cell<usize>>,
+        }
+        impl Render for Host {
+            fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+                let submitted = self.submitted.clone();
+                let cancelled = self.cancelled.clone();
+                connections::form(
+                    ConnectionForm::Editing {
+                        fields: self.fields.clone(),
+                        mode: ferrite_ui::frame::settings::ConnectionMode::Ssh,
+                        focus: cx.focus_handle(),
+                        suggestions: None,
+                        choose_mode: Rc::new(|_, _, _| {}),
+                        open_suggestions: Rc::new(|_, _| {}),
+                        choose_host: Rc::new(|_, _, _| {}),
+                        progress: Some("Connecting…".into()),
+                        error: None,
+                        warning: None,
+                        verification: None,
+                        submit: Rc::new(move |_, _| submitted.set(submitted.get() + 1)),
+                        cancel: Rc::new(move |_, _| cancelled.set(cancelled.get() + 1)),
+                    },
+                    window,
+                    cx,
+                )
+            }
+        }
+        cx.update(ferrite_pane::pane::init_components);
+        let submitted = Rc::new(Cell::new(0));
+        let cancelled = Rc::new(Cell::new(0));
+        let (_, cx) = cx.add_window_view({
+            let submitted = submitted.clone();
+            let cancelled = cancelled.clone();
+            |window, cx| {
+                let host = cx.new(|cx| Host {
+                    fields: ConnectionFields {
+                        remote_host: cx.new(|cx| InputState::new(window, cx)),
+                        pairing_code: cx.new(|cx| InputState::new(window, cx)),
+                        host: cx.new(|cx| InputState::new(window, cx)),
+                        username: cx.new(|cx| InputState::new(window, cx)),
+                        port: cx.new(|cx| InputState::new(window, cx)),
+                    },
+                    submitted,
+                    cancelled,
+                });
+                gpui::component::Root::new(host, window, cx)
+            }
+        });
+        cx.run_until_parked();
+        let hit = cx.debug_bounds("connection-submit").unwrap().center();
+        cx.simulate_click(hit, gpui::Modifiers::none());
+        cx.run_until_parked();
+        assert_eq!(submitted.get(), 0);
+        let hit = cx.debug_bounds("connection-close").unwrap().center();
+        cx.simulate_click(hit, gpui::Modifiers::none());
+        cx.run_until_parked();
+        assert_eq!(cancelled.get(), 1);
+    }
+
+    #[gpui::test]
+    fn compact_connection_form_keeps_fields_errors_and_submit_visible(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        use ferrite_ui::frame::settings::{ConnectionFields, ConnectionForm, ConnectionMode};
+        use std::cell::Cell;
+        struct Host {
+            fields: ConnectionFields,
+            mode: Rc<Cell<ConnectionMode>>,
+            failed: Rc<Cell<bool>>,
+        }
+        impl Render for Host {
+            fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+                connections::form(
+                    ConnectionForm::Editing {
+                        fields: self.fields.clone(),
+                        mode: self.mode.get(),
+                        focus: cx.focus_handle(),
+                        suggestions: None,
+                        choose_mode: Rc::new(|_, _, _| {}),
+                        open_suggestions: Rc::new(|_, _| {}),
+                        choose_host: Rc::new(|_, _, _| {}),
+                        progress: None,
+                        error: self.failed.get().then(|| {
+                            "The server could not be reached. Check the host and try again.".into()
+                        }),
+                        warning: None,
+                        verification: None,
+                        submit: Rc::new(|_, _| {}),
+                        cancel: Rc::new(|_, _| {}),
+                    },
+                    window,
+                    cx,
+                )
+            }
+        }
+        cx.update(ferrite_pane::pane::init_components);
+        let mode = Rc::new(Cell::new(ConnectionMode::Ssh));
+        let failed = Rc::new(Cell::new(false));
+        let (root, cx) = cx.add_window_view({
+            let mode = mode.clone();
+            let failed = failed.clone();
+            |window, cx| {
+                let host = cx.new(|cx| Host {
+                    fields: ConnectionFields {
+                        remote_host: cx.new(|cx| InputState::new(window, cx)),
+                        pairing_code: cx.new(|cx| InputState::new(window, cx)),
+                        host: cx.new(|cx| InputState::new(window, cx)),
+                        username: cx.new(|cx| InputState::new(window, cx)),
+                        port: cx.new(|cx| InputState::new(window, cx)),
+                    },
+                    mode,
+                    failed,
+                });
+                gpui::component::Root::new(host, window, cx)
+            }
+        });
+        let host = root.read_with(cx, |root, _| {
+            root.view().clone().downcast::<Host>().unwrap()
+        });
+        cx.simulate_resize(gpui::size(px(1470.), px(923.)));
+        cx.run_until_parked();
+        assert_eq!(
+            cx.debug_bounds("connection-dialog").unwrap().size.width,
+            px(768.)
+        );
+        assert_eq!(
+            cx.debug_bounds("connection-mode-ssh").unwrap().size.height,
+            px(96.)
+        );
+        cx.simulate_resize(gpui::size(px(640.), px(420.)));
+        for selected in [ConnectionMode::Ssh, ConnectionMode::Remote] {
+            mode.set(selected);
+            for has_error in [false, true] {
+                failed.set(has_error);
+                host.update(cx, |_, cx| cx.notify());
+                cx.run_until_parked();
+                let dialog = cx.debug_bounds("connection-dialog").unwrap();
+                let submit = cx.debug_bounds("connection-submit").unwrap();
+                assert!(dialog.top() >= px(0.) && dialog.bottom() <= px(420.));
+                assert!(submit.top() >= dialog.top() && submit.bottom() < dialog.bottom());
+                assert_eq!(
+                    cx.debug_bounds("connection-mode-ssh").unwrap().size.height,
+                    px(44.)
+                );
+                let fields = match selected {
+                    ConnectionMode::Ssh => {
+                        &["connection-host", "connection-username", "connection-port"][..]
+                    }
+                    ConnectionMode::Remote => {
+                        &["connection-remote-host", "connection-pairing-code"][..]
+                    }
+                };
+                for selector in fields {
+                    let bounds = cx.debug_bounds(selector).unwrap();
+                    assert!(
+                        bounds.top() >= dialog.top() && bounds.bottom() < submit.top(),
+                        "{selector}: {bounds:?}"
+                    );
+                }
+                let close = cx.debug_bounds("connection-close").unwrap();
+                assert!(close.top() >= dialog.top() && close.bottom() < submit.top());
+                if has_error {
+                    let error = cx.debug_bounds("connection-error").unwrap();
+                    assert!(error.top() >= dialog.top() && error.bottom() < submit.top());
+                }
+            }
+        }
+    }
+
+    #[gpui::test]
+    fn host_verification_keeps_the_fingerprint_bounded_and_continues_on_enter(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        use ferrite_ui::frame::settings::{
+            ConnectionFields, ConnectionForm, ConnectionVerification,
+        };
+        use std::cell::Cell;
+        struct Host {
+            fields: ConnectionFields,
+            focus: gpui::FocusHandle,
+            submitted: Rc<Cell<usize>>,
+        }
+        impl Render for Host {
+            fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+                let submitted = self.submitted.clone();
+                connections::form(
+                    ConnectionForm::Editing {
+                        fields: self.fields.clone(),
+                        mode: ferrite_ui::frame::settings::ConnectionMode::Ssh,
+                        focus: cx.focus_handle(),
+                        suggestions: None,
+                        choose_mode: Rc::new(|_, _, _| {}),
+                        open_suggestions: Rc::new(|_, _| {}),
+                        choose_host: Rc::new(|_, _, _| {}),
+                        progress: Some("Connecting…".into()),
+                        error: None,
+                        warning: None,
+                        verification: Some(ConnectionVerification {
+                            target: "developer@example.com".into(),
+                            prompt: format!(
+                                "{}\nSHA256:exact-fingerprint",
+                                "Host information\n".repeat(200)
+                            )
+                            .into(),
+                            response: None,
+                            focus: Some(self.focus.clone()),
+                            expires: "Expires in 120 seconds".into(),
+                            submit: Rc::new(move |_, _| submitted.set(submitted.get() + 1)),
+                        }),
+                        submit: Rc::new(|_, _| {}),
+                        cancel: Rc::new(|_, _| {}),
+                    },
+                    window,
+                    cx,
+                )
+            }
+        }
+        cx.update(ferrite_pane::pane::init_components);
+        let submitted = Rc::new(Cell::new(0));
+        let focus = cx.update(|cx| cx.focus_handle());
+        let (_, cx) = cx.add_window_view({
+            let submitted = submitted.clone();
+            let focus = focus.clone();
+            |window, cx| {
+                let host = cx.new(|cx| Host {
+                    fields: ConnectionFields {
+                        remote_host: cx.new(|cx| InputState::new(window, cx)),
+                        pairing_code: cx.new(|cx| InputState::new(window, cx)),
+                        host: cx.new(|cx| InputState::new(window, cx)),
+                        username: cx.new(|cx| InputState::new(window, cx)),
+                        port: cx.new(|cx| InputState::new(window, cx)),
+                    },
+                    focus,
+                    submitted,
+                });
+                gpui::component::Root::new(host, window, cx)
+            }
+        });
+        cx.run_until_parked();
+        cx.update(|window, cx| window.focus(&focus, cx));
+        assert!(cx.debug_bounds("connection-prompt").unwrap().size.height <= px(96.));
+        assert!(cx.debug_bounds("connection-verify-submit").is_some());
+        assert!(cx.debug_bounds("connection-response").is_none());
+        cx.simulate_keystrokes("enter");
+        cx.run_until_parked();
+        assert_eq!(submitted.get(), 1);
     }
 
     /// The chosen segment of a short choice is lit — the selected fill —

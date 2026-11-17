@@ -55,6 +55,9 @@ fn cli_line(binary: Option<&CliBinary>) -> SharedString {
 impl CockpitView {
     /// Where the window's Sessions run, as Settings says it.
     pub(super) fn machine_place(&self) -> SharedString {
+        if !self.cockpit.environment_available() {
+            return "No environment selected".into();
+        }
         match self.cockpit.machine() {
             Some(machine) => machine.name().to_string().into(),
             None => "this computer".into(),
@@ -157,6 +160,12 @@ impl CockpitView {
 
     /// What stands in for the machine's rows until it has said them.
     fn defaults_unread(&self) -> settings::Row {
+        if !self.cockpit.environment_available() {
+            return settings::fact(
+                "Defaults",
+                "Enable or add an environment in Connections".into(),
+            );
+        }
         let status: SharedString = match &self.environment.defaults_error {
             Some(DefaultsTrouble::Unread(error)) => format!("Could not read them: {error}").into(),
             _ => format!("Reading from {}…", self.machine_place()).into(),

@@ -1,0 +1,1421 @@
+{
+  "functional": "passed",
+  "visual": "requires parent review",
+  "actual_model": "not run; explicit Codex protocol fixture",
+  "owned_processes_stopped": true,
+  "source_commit": "8d5708cac2179305848293c7522e2fc26339a2f4",
+  "binary_sha256": "59092e14021c3d01d45c4425c442a88ccfee2b1fe5f811e77600e5e5001eb14c",
+  "harness_sha256": "bbc639e86271e8423fcada24ee34421161ec93c34fac254108658be88f430359",
+  "checks": [
+    {
+      "time": 1794838692.939567,
+      "kind": "check",
+      "name": "local-collision-thread-created",
+      "passed": true,
+      "thread": "1"
+    },
+    {
+      "time": 1794838725.285078,
+      "kind": "check",
+      "name": "modal-default-modes-autocomplete-validation-cancel-connect",
+      "passed": true
+    },
+    {
+      "time": 1794838732.697224,
+      "kind": "check",
+      "name": "ssh-existing-thread",
+      "passed": true,
+      "remote_path": "/private/tmp/ferrite-remote-gj30h_ft/remote/threads/attachments/7d3d72e08802150b55be27cccb8fc7b037cba39f599f33890d7d78b4f60f7240/02-add-remote-default-1470x923.png",
+      "screenshot_sha256": "7d3d72e08802150b55be27cccb8fc7b037cba39f599f33890d7d78b4f60f7240",
+      "provider": "simulated Codex app-server",
+      "input": [
+        {
+          "type": "localImage",
+          "path": "/private/tmp/ferrite-remote-gj30h_ft/remote/threads/attachments/7d3d72e08802150b55be27cccb8fc7b037cba39f599f33890d7d78b4f60f7240/02-add-remote-default-1470x923.png"
+        },
+        {
+          "type": "text",
+          "text": "Inspect the attached screenshot. PARITY_STREAM\n@\"/private/tmp/ferrite-remote-gj30h_ft/remote/threads/attachments/7d3d72e08802150b55be27cccb8fc7b037cba39f599f33890d7d78b4f60f7240/02-add-remote-default-1470x923.png\""
+        }
+      ]
+    },
+    {
+      "time": 1794838738.438097,
+      "kind": "check",
+      "name": "ssh-new-thread",
+      "passed": true,
+      "remote_path": "/private/tmp/ferrite-remote-gj30h_ft/remote/threads/attachments/7d3d72e08802150b55be27cccb8fc7b037cba39f599f33890d7d78b4f60f7240/02-add-remote-default-1470x923.png",
+      "screenshot_sha256": "7d3d72e08802150b55be27cccb8fc7b037cba39f599f33890d7d78b4f60f7240",
+      "provider": "simulated Codex app-server",
+      "input": [
+        {
+          "type": "localImage",
+          "path": "/private/tmp/ferrite-remote-gj30h_ft/remote/threads/attachments/7d3d72e08802150b55be27cccb8fc7b037cba39f599f33890d7d78b4f60f7240/02-add-remote-default-1470x923.png"
+        },
+        {
+          "type": "text",
+          "text": "Inspect the attached screenshot. PARITY_STREAM\n@\"/private/tmp/ferrite-remote-gj30h_ft/remote/threads/attachments/7d3d72e08802150b55be27cccb8fc7b037cba39f599f33890d7d78b4f60f7240/02-add-remote-default-1470x923.png\""
+        }
+      ]
+    },
+    {
+      "time": 1794838748.951137,
+      "kind": "check",
+      "name": "ssh-workspace-routing",
+      "passed": true,
+      "remote_thread": "1",
+      "local_collision_sha256": "e5c7aa07356c6ab78e056e326b9b4ac702f670e542bf83a1b22586dc78c6c094"
+    },
+    {
+      "time": 1794838757.903797,
+      "kind": "check",
+      "name": "ssh-disconnect-reconnect-remove-server-survival",
+      "passed": true
+    },
+    {
+      "time": 1794838765.2215319,
+      "kind": "check",
+      "name": "remote-link-real-gateway-pairing",
+      "passed": true,
+      "endpoint": "http://127.0.0.1:55596",
+      "server_id": "e9bf665e5b156cd05d971a4ee8f422a2",
+      "expiry_seconds": 600,
+      "expiry_runtime": "covered by server::remote::access::tests::expired_codes_and_excessive_auth_requests_are_rejected; not asserted in this native run"
+    },
+    {
+      "time": 1794838772.620627,
+      "kind": "check",
+      "name": "link-existing-thread",
+      "passed": true,
+      "remote_path": "/private/tmp/ferrite-remote-gj30h_ft/remote/threads/attachments/7d3d72e08802150b55be27cccb8fc7b037cba39f599f33890d7d78b4f60f7240/02-add-remote-default-1470x923.png",
+      "screenshot_sha256": "7d3d72e08802150b55be27cccb8fc7b037cba39f599f33890d7d78b4f60f7240",
+      "provider": "simulated Codex app-server",
+      "input": [
+        {
+          "type": "localImage",
+          "path": "/private/tmp/ferrite-remote-gj30h_ft/remote/threads/attachments/7d3d72e08802150b55be27cccb8fc7b037cba39f599f33890d7d78b4f60f7240/02-add-remote-default-1470x923.png"
+        },
+        {
+          "type": "text",
+          "text": "Inspect the attached screenshot. PARITY_STREAM\n@\"/private/tmp/ferrite-remote-gj30h_ft/remote/threads/attachments/7d3d72e08802150b55be27cccb8fc7b037cba39f599f33890d7d78b4f60f7240/02-add-remote-default-1470x923.png\""
+        }
+      ]
+    },
+    {
+      "time": 1794838778.4124641,
+      "kind": "check",
+      "name": "link-new-thread",
+      "passed": true,
+      "remote_path": "/private/tmp/ferrite-remote-gj30h_ft/remote/threads/attachments/7d3d72e08802150b55be27cccb8fc7b037cba39f599f33890d7d78b4f60f7240/02-add-remote-default-1470x923.png",
+      "screenshot_sha256": "7d3d72e08802150b55be27cccb8fc7b037cba39f599f33890d7d78b4f60f7240",
+      "provider": "simulated Codex app-server",
+      "input": [
+        {
+          "type": "localImage",
+          "path": "/private/tmp/ferrite-remote-gj30h_ft/remote/threads/attachments/7d3d72e08802150b55be27cccb8fc7b037cba39f599f33890d7d78b4f60f7240/02-add-remote-default-1470x923.png"
+        },
+        {
+          "type": "text",
+          "text": "Inspect the attached screenshot. PARITY_STREAM\n@\"/private/tmp/ferrite-remote-gj30h_ft/remote/threads/attachments/7d3d72e08802150b55be27cccb8fc7b037cba39f599f33890d7d78b4f60f7240/02-add-remote-default-1470x923.png\""
+        }
+      ]
+    },
+    {
+      "time": 1794838790.3682501,
+      "kind": "check",
+      "name": "link-workspace-routing",
+      "passed": true,
+      "remote_thread": "2",
+      "local_collision_sha256": "e5c7aa07356c6ab78e056e326b9b4ac702f670e542bf83a1b22586dc78c6c094"
+    },
+    {
+      "time": 1794838802.8314219,
+      "kind": "check",
+      "name": "link-disconnect-reconnect-remove-server-survival",
+      "passed": true
+    }
+  ],
+  "screenshots": [
+    {
+      "time": 1794838694.680753,
+      "kind": "screenshot",
+      "path": "/Users/josephwylie/Desktop/Projects/ferrite-remote-connections/docs/audits/2026-11-16-remote-connections/parity/native-6/01-connections-empty-1470x923.png",
+      "sha256": "748ebe7a466b12d159edd5b133512539003db70b6f2846a3e39c19ec857e185a",
+      "logical_viewport": [
+        1470,
+        923
+      ],
+      "device_pixel_ratio": 2.0,
+      "pixel_dimensions": [
+        2940,
+        1846
+      ],
+      "image_format": "PNG",
+      "crop_px": [
+        0,
+        0,
+        2940,
+        1846
+      ],
+      "surface": "Ferrite native headless Driver",
+      "provider": "simulated Codex app-server, no model API calls",
+      "source_commit": "8d5708cac2179305848293c7522e2fc26339a2f4",
+      "binary_sha256": "59092e14021c3d01d45c4425c442a88ccfee2b1fe5f811e77600e5e5001eb14c"
+    },
+    {
+      "time": 1794838696.2411652,
+      "kind": "screenshot",
+      "path": "/Users/josephwylie/Desktop/Projects/ferrite-remote-connections/docs/audits/2026-11-16-remote-connections/parity/native-6/02-add-remote-default-1470x923.png",
+      "sha256": "7d3d72e08802150b55be27cccb8fc7b037cba39f599f33890d7d78b4f60f7240",
+      "logical_viewport": [
+        1470,
+        923
+      ],
+      "device_pixel_ratio": 2.0,
+      "pixel_dimensions": [
+        2940,
+        1846
+      ],
+      "image_format": "PNG",
+      "crop_px": [
+        0,
+        0,
+        2940,
+        1846
+      ],
+      "surface": "Ferrite native headless Driver",
+      "provider": "simulated Codex app-server, no model API calls",
+      "source_commit": "8d5708cac2179305848293c7522e2fc26339a2f4",
+      "binary_sha256": "59092e14021c3d01d45c4425c442a88ccfee2b1fe5f811e77600e5e5001eb14c"
+    },
+    {
+      "time": 1794838699.364182,
+      "kind": "screenshot",
+      "path": "/Users/josephwylie/Desktop/Projects/ferrite-remote-connections/docs/audits/2026-11-16-remote-connections/parity/native-6/03-remote-validation-1470x923.png",
+      "sha256": "ac163fcbb0833f10290b788d0f57744a67f3b2b92e15e55c23d519142c9e755c",
+      "logical_viewport": [
+        1470,
+        923
+      ],
+      "device_pixel_ratio": 2.0,
+      "pixel_dimensions": [
+        2940,
+        1846
+      ],
+      "image_format": "PNG",
+      "crop_px": [
+        0,
+        0,
+        2940,
+        1846
+      ],
+      "surface": "Ferrite native headless Driver",
+      "provider": "simulated Codex app-server, no model API calls",
+      "source_commit": "8d5708cac2179305848293c7522e2fc26339a2f4",
+      "binary_sha256": "59092e14021c3d01d45c4425c442a88ccfee2b1fe5f811e77600e5e5001eb14c"
+    },
+    {
+      "time": 1794838701.348146,
+      "kind": "screenshot",
+      "path": "/Users/josephwylie/Desktop/Projects/ferrite-remote-connections/docs/audits/2026-11-16-remote-connections/parity/native-6/04-add-ssh-1470x923.png",
+      "sha256": "385bb57fb0725feab7bd84daab35a5166f86e097425f546627653774fa1307b1",
+      "logical_viewport": [
+        1470,
+        923
+      ],
+      "device_pixel_ratio": 2.0,
+      "pixel_dimensions": [
+        2940,
+        1846
+      ],
+      "image_format": "PNG",
+      "crop_px": [
+        0,
+        0,
+        2940,
+        1846
+      ],
+      "surface": "Ferrite native headless Driver",
+      "provider": "simulated Codex app-server, no model API calls",
+      "source_commit": "8d5708cac2179305848293c7522e2fc26339a2f4",
+      "binary_sha256": "59092e14021c3d01d45c4425c442a88ccfee2b1fe5f811e77600e5e5001eb14c"
+    },
+    {
+      "time": 1794838703.3038652,
+      "kind": "screenshot",
+      "path": "/Users/josephwylie/Desktop/Projects/ferrite-remote-connections/docs/audits/2026-11-16-remote-connections/parity/native-6/05-ssh-include-autocomplete-1470x923.png",
+      "sha256": "d2b2bcc30d3b65ce4abc260a11aca621ff076fb94acc9187c727e300af62cf53",
+      "logical_viewport": [
+        1470,
+        923
+      ],
+      "device_pixel_ratio": 2.0,
+      "pixel_dimensions": [
+        2940,
+        1846
+      ],
+      "image_format": "PNG",
+      "crop_px": [
+        0,
+        0,
+        2940,
+        1846
+      ],
+      "surface": "Ferrite native headless Driver",
+      "provider": "simulated Codex app-server, no model API calls",
+      "source_commit": "8d5708cac2179305848293c7522e2fc26339a2f4",
+      "binary_sha256": "59092e14021c3d01d45c4425c442a88ccfee2b1fe5f811e77600e5e5001eb14c"
+    },
+    {
+      "time": 1794838704.6714828,
+      "kind": "screenshot",
+      "path": "/Users/josephwylie/Desktop/Projects/ferrite-remote-connections/docs/audits/2026-11-16-remote-connections/parity/native-6/06-ssh-autocomplete-selected-1470x923.png",
+      "sha256": "ea9fcb41976a6276719e38f6ecbb75ebf17e33bd23f214821b038374c9299986",
+      "logical_viewport": [
+        1470,
+        923
+      ],
+      "device_pixel_ratio": 2.0,
+      "pixel_dimensions": [
+        2940,
+        1846
+      ],
+      "image_format": "PNG",
+      "crop_px": [
+        0,
+        0,
+        2940,
+        1846
+      ],
+      "surface": "Ferrite native headless Driver",
+      "provider": "simulated Codex app-server, no model API calls",
+      "source_commit": "8d5708cac2179305848293c7522e2fc26339a2f4",
+      "binary_sha256": "59092e14021c3d01d45c4425c442a88ccfee2b1fe5f811e77600e5e5001eb14c"
+    },
+    {
+      "time": 1794838709.03741,
+      "kind": "screenshot",
+      "path": "/Users/josephwylie/Desktop/Projects/ferrite-remote-connections/docs/audits/2026-11-16-remote-connections/parity/native-6/07-ssh-validation-1470x923.png",
+      "sha256": "edd292c1dafd4a3f86cfdad1f0a0daad7b93ecd6e08f222364692452948be8ab",
+      "logical_viewport": [
+        1470,
+        923
+      ],
+      "device_pixel_ratio": 2.0,
+      "pixel_dimensions": [
+        2940,
+        1846
+      ],
+      "image_format": "PNG",
+      "crop_px": [
+        0,
+        0,
+        2940,
+        1846
+      ],
+      "surface": "Ferrite native headless Driver",
+      "provider": "simulated Codex app-server, no model API calls",
+      "source_commit": "8d5708cac2179305848293c7522e2fc26339a2f4",
+      "binary_sha256": "59092e14021c3d01d45c4425c442a88ccfee2b1fe5f811e77600e5e5001eb14c"
+    },
+    {
+      "time": 1794838712.901271,
+      "kind": "screenshot",
+      "path": "/Users/josephwylie/Desktop/Projects/ferrite-remote-connections/docs/audits/2026-11-16-remote-connections/parity/native-6/08-ssh-connecting-cancel-1470x923.png",
+      "sha256": "76c9931a3240c1c00432d06aa44174e42629cfad33b2116d236750b8edba889f",
+      "logical_viewport": [
+        1470,
+        923
+      ],
+      "device_pixel_ratio": 2.0,
+      "pixel_dimensions": [
+        2940,
+        1846
+      ],
+      "image_format": "PNG",
+      "crop_px": [
+        0,
+        0,
+        2940,
+        1846
+      ],
+      "surface": "Ferrite native headless Driver",
+      "provider": "simulated Codex app-server, no model API calls",
+      "source_commit": "8d5708cac2179305848293c7522e2fc26339a2f4",
+      "binary_sha256": "59092e14021c3d01d45c4425c442a88ccfee2b1fe5f811e77600e5e5001eb14c"
+    },
+    {
+      "time": 1794838718.574338,
+      "kind": "screenshot",
+      "path": "/Users/josephwylie/Desktop/Projects/ferrite-remote-connections/docs/audits/2026-11-16-remote-connections/parity/native-6/09-ssh-failure-1470x923.png",
+      "sha256": "c3cb82b9e3a0a753c43d82c8c16e0f78157763dca2a20cc1263e617cdc1e82dc",
+      "logical_viewport": [
+        1470,
+        923
+      ],
+      "device_pixel_ratio": 2.0,
+      "pixel_dimensions": [
+        2940,
+        1846
+      ],
+      "image_format": "PNG",
+      "crop_px": [
+        0,
+        0,
+        2940,
+        1846
+      ],
+      "surface": "Ferrite native headless Driver",
+      "provider": "simulated Codex app-server, no model API calls",
+      "source_commit": "8d5708cac2179305848293c7522e2fc26339a2f4",
+      "binary_sha256": "59092e14021c3d01d45c4425c442a88ccfee2b1fe5f811e77600e5e5001eb14c"
+    },
+    {
+      "time": 1794838722.353633,
+      "kind": "screenshot",
+      "path": "/Users/josephwylie/Desktop/Projects/ferrite-remote-connections/docs/audits/2026-11-16-remote-connections/parity/native-6/10-ssh-authentication-1470x923.png",
+      "sha256": "1c92c82881906854c17498d169c05e4ade8001578e4e1aad1739e65af50b1b75",
+      "logical_viewport": [
+        1470,
+        923
+      ],
+      "device_pixel_ratio": 2.0,
+      "pixel_dimensions": [
+        2940,
+        1846
+      ],
+      "image_format": "PNG",
+      "crop_px": [
+        0,
+        0,
+        2940,
+        1846
+      ],
+      "surface": "Ferrite native headless Driver",
+      "provider": "simulated Codex app-server, no model API calls",
+      "source_commit": "8d5708cac2179305848293c7522e2fc26339a2f4",
+      "binary_sha256": "59092e14021c3d01d45c4425c442a88ccfee2b1fe5f811e77600e5e5001eb14c"
+    },
+    {
+      "time": 1794838725.2849212,
+      "kind": "screenshot",
+      "path": "/Users/josephwylie/Desktop/Projects/ferrite-remote-connections/docs/audits/2026-11-16-remote-connections/parity/native-6/11-ssh-connected-1470x923.png",
+      "sha256": "9d48cff8a40e991c819fbd74d0c9c5566a6e3fadfd826df26ef27756e81f4ac6",
+      "logical_viewport": [
+        1470,
+        923
+      ],
+      "device_pixel_ratio": 2.0,
+      "pixel_dimensions": [
+        2940,
+        1846
+      ],
+      "image_format": "PNG",
+      "crop_px": [
+        0,
+        0,
+        2940,
+        1846
+      ],
+      "surface": "Ferrite native headless Driver",
+      "provider": "simulated Codex app-server, no model API calls",
+      "source_commit": "8d5708cac2179305848293c7522e2fc26339a2f4",
+      "binary_sha256": "59092e14021c3d01d45c4425c442a88ccfee2b1fe5f811e77600e5e5001eb14c"
+    },
+    {
+      "time": 1794838727.598156,
+      "kind": "screenshot",
+      "path": "/Users/josephwylie/Desktop/Projects/ferrite-remote-connections/docs/audits/2026-11-16-remote-connections/parity/native-6/ssh-remote-thread-1470x923.png",
+      "sha256": "8ee0173f9a85e8e13df0485073ef030adc67e2ed2f82337c8e0c39a1157feb53",
+      "logical_viewport": [
+        1470,
+        923
+      ],
+      "device_pixel_ratio": 2.0,
+      "pixel_dimensions": [
+        2940,
+        1846
+      ],
+      "image_format": "PNG",
+      "crop_px": [
+        0,
+        0,
+        2940,
+        1846
+      ],
+      "surface": "Ferrite native headless Driver",
+      "provider": "simulated Codex app-server, no model API calls",
+      "source_commit": "8d5708cac2179305848293c7522e2fc26339a2f4",
+      "binary_sha256": "59092e14021c3d01d45c4425c442a88ccfee2b1fe5f811e77600e5e5001eb14c"
+    },
+    {
+      "time": 1794838729.228022,
+      "kind": "screenshot",
+      "path": "/Users/josephwylie/Desktop/Projects/ferrite-remote-connections/docs/audits/2026-11-16-remote-connections/parity/native-6/ssh-existing-thread-attachment-ready-1470x923.png",
+      "sha256": "15b4b28f94478603db21ed6fd340f9622a8d9fd1e4400f9fd1df0f8506c28402",
+      "logical_viewport": [
+        1470,
+        923
+      ],
+      "device_pixel_ratio": 2.0,
+      "pixel_dimensions": [
+        2940,
+        1846
+      ],
+      "image_format": "PNG",
+      "crop_px": [
+        0,
+        0,
+        2940,
+        1846
+      ],
+      "surface": "Ferrite native headless Driver",
+      "provider": "simulated Codex app-server, no model API calls",
+      "source_commit": "8d5708cac2179305848293c7522e2fc26339a2f4",
+      "binary_sha256": "59092e14021c3d01d45c4425c442a88ccfee2b1fe5f811e77600e5e5001eb14c"
+    },
+    {
+      "time": 1794838731.5169,
+      "kind": "screenshot",
+      "path": "/Users/josephwylie/Desktop/Projects/ferrite-remote-connections/docs/audits/2026-11-16-remote-connections/parity/native-6/ssh-existing-thread-streaming-tool-1470x923.png",
+      "sha256": "804bd719640aa3f748772041f42d184c3e5ac11e4a0fb59bc66ffabea4c716a9",
+      "logical_viewport": [
+        1470,
+        923
+      ],
+      "device_pixel_ratio": 2.0,
+      "pixel_dimensions": [
+        2940,
+        1846
+      ],
+      "image_format": "PNG",
+      "crop_px": [
+        0,
+        0,
+        2940,
+        1846
+      ],
+      "surface": "Ferrite native headless Driver",
+      "provider": "simulated Codex app-server, no model API calls",
+      "source_commit": "8d5708cac2179305848293c7522e2fc26339a2f4",
+      "binary_sha256": "59092e14021c3d01d45c4425c442a88ccfee2b1fe5f811e77600e5e5001eb14c"
+    },
+    {
+      "time": 1794838732.696617,
+      "kind": "screenshot",
+      "path": "/Users/josephwylie/Desktop/Projects/ferrite-remote-connections/docs/audits/2026-11-16-remote-connections/parity/native-6/ssh-existing-thread-completed-1470x923.png",
+      "sha256": "6c93d02602613e63fb2a6f93b6c15d583b275693725a7825ff06a799543f3c1f",
+      "logical_viewport": [
+        1470,
+        923
+      ],
+      "device_pixel_ratio": 2.0,
+      "pixel_dimensions": [
+        2940,
+        1846
+      ],
+      "image_format": "PNG",
+      "crop_px": [
+        0,
+        0,
+        2940,
+        1846
+      ],
+      "surface": "Ferrite native headless Driver",
+      "provider": "simulated Codex app-server, no model API calls",
+      "source_commit": "8d5708cac2179305848293c7522e2fc26339a2f4",
+      "binary_sha256": "59092e14021c3d01d45c4425c442a88ccfee2b1fe5f811e77600e5e5001eb14c"
+    },
+    {
+      "time": 1794838734.505885,
+      "kind": "screenshot",
+      "path": "/Users/josephwylie/Desktop/Projects/ferrite-remote-connections/docs/audits/2026-11-16-remote-connections/parity/native-6/ssh-new-thread-attachment-ready-1470x923.png",
+      "sha256": "bb35eb60dc9dd8502be1700352c5e4c7f55f60d436a59ed4af023f462e398ea6",
+      "logical_viewport": [
+        1470,
+        923
+      ],
+      "device_pixel_ratio": 2.0,
+      "pixel_dimensions": [
+        2940,
+        1846
+      ],
+      "image_format": "PNG",
+      "crop_px": [
+        0,
+        0,
+        2940,
+        1846
+      ],
+      "surface": "Ferrite native headless Driver",
+      "provider": "simulated Codex app-server, no model API calls",
+      "source_commit": "8d5708cac2179305848293c7522e2fc26339a2f4",
+      "binary_sha256": "59092e14021c3d01d45c4425c442a88ccfee2b1fe5f811e77600e5e5001eb14c"
+    },
+    {
+      "time": 1794838737.227112,
+      "kind": "screenshot",
+      "path": "/Users/josephwylie/Desktop/Projects/ferrite-remote-connections/docs/audits/2026-11-16-remote-connections/parity/native-6/ssh-new-thread-streaming-tool-1470x923.png",
+      "sha256": "c62c9051e8cb71f5d3a109d5a91f1c29a5e76b29b9f674da02ff72feb806dc34",
+      "logical_viewport": [
+        1470,
+        923
+      ],
+      "device_pixel_ratio": 2.0,
+      "pixel_dimensions": [
+        2940,
+        1846
+      ],
+      "image_format": "PNG",
+      "crop_px": [
+        0,
+        0,
+        2940,
+        1846
+      ],
+      "surface": "Ferrite native headless Driver",
+      "provider": "simulated Codex app-server, no model API calls",
+      "source_commit": "8d5708cac2179305848293c7522e2fc26339a2f4",
+      "binary_sha256": "59092e14021c3d01d45c4425c442a88ccfee2b1fe5f811e77600e5e5001eb14c"
+    },
+    {
+      "time": 1794838738.4376462,
+      "kind": "screenshot",
+      "path": "/Users/josephwylie/Desktop/Projects/ferrite-remote-connections/docs/audits/2026-11-16-remote-connections/parity/native-6/ssh-new-thread-completed-1470x923.png",
+      "sha256": "c083f462ec354a2d05de2ae2fb43b98d38dc43a355021ac2115926aad9e41263",
+      "logical_viewport": [
+        1470,
+        923
+      ],
+      "device_pixel_ratio": 2.0,
+      "pixel_dimensions": [
+        2940,
+        1846
+      ],
+      "image_format": "PNG",
+      "crop_px": [
+        0,
+        0,
+        2940,
+        1846
+      ],
+      "surface": "Ferrite native headless Driver",
+      "provider": "simulated Codex app-server, no model API calls",
+      "source_commit": "8d5708cac2179305848293c7522e2fc26339a2f4",
+      "binary_sha256": "59092e14021c3d01d45c4425c442a88ccfee2b1fe5f811e77600e5e5001eb14c"
+    },
+    {
+      "time": 1794838739.726144,
+      "kind": "screenshot",
+      "path": "/Users/josephwylie/Desktop/Projects/ferrite-remote-connections/docs/audits/2026-11-16-remote-connections/parity/native-6/ssh-files-tree-1470x923.png",
+      "sha256": "54c65653cd109b4fbaa2ca1c1c13077d50208ea3041d8864f679e596dc545ece",
+      "logical_viewport": [
+        1470,
+        923
+      ],
+      "device_pixel_ratio": 2.0,
+      "pixel_dimensions": [
+        2940,
+        1846
+      ],
+      "image_format": "PNG",
+      "crop_px": [
+        0,
+        0,
+        2940,
+        1846
+      ],
+      "surface": "Ferrite native headless Driver",
+      "provider": "simulated Codex app-server, no model API calls",
+      "source_commit": "8d5708cac2179305848293c7522e2fc26339a2f4",
+      "binary_sha256": "59092e14021c3d01d45c4425c442a88ccfee2b1fe5f811e77600e5e5001eb14c"
+    },
+    {
+      "time": 1794838740.9699311,
+      "kind": "screenshot",
+      "path": "/Users/josephwylie/Desktop/Projects/ferrite-remote-connections/docs/audits/2026-11-16-remote-connections/parity/native-6/ssh-file-read-1470x923.png",
+      "sha256": "1711d2a8fa36b04765d3c1197d5ba8e084be54a6cf98bb2735a2df2347219666",
+      "logical_viewport": [
+        1470,
+        923
+      ],
+      "device_pixel_ratio": 2.0,
+      "pixel_dimensions": [
+        2940,
+        1846
+      ],
+      "image_format": "PNG",
+      "crop_px": [
+        0,
+        0,
+        2940,
+        1846
+      ],
+      "surface": "Ferrite native headless Driver",
+      "provider": "simulated Codex app-server, no model API calls",
+      "source_commit": "8d5708cac2179305848293c7522e2fc26339a2f4",
+      "binary_sha256": "59092e14021c3d01d45c4425c442a88ccfee2b1fe5f811e77600e5e5001eb14c"
+    },
+    {
+      "time": 1794838742.828026,
+      "kind": "screenshot",
+      "path": "/Users/josephwylie/Desktop/Projects/ferrite-remote-connections/docs/audits/2026-11-16-remote-connections/parity/native-6/ssh-file-saved-1470x923.png",
+      "sha256": "1bc4ad1805a374eaf3a352e72f23d5c9f7a0f92b6845177115f4f328794b7484",
+      "logical_viewport": [
+        1470,
+        923
+      ],
+      "device_pixel_ratio": 2.0,
+      "pixel_dimensions": [
+        2940,
+        1846
+      ],
+      "image_format": "PNG",
+      "crop_px": [
+        0,
+        0,
+        2940,
+        1846
+      ],
+      "surface": "Ferrite native headless Driver",
+      "provider": "simulated Codex app-server, no model API calls",
+      "source_commit": "8d5708cac2179305848293c7522e2fc26339a2f4",
+      "binary_sha256": "59092e14021c3d01d45c4425c442a88ccfee2b1fe5f811e77600e5e5001eb14c"
+    },
+    {
+      "time": 1794838743.8971,
+      "kind": "screenshot",
+      "path": "/Users/josephwylie/Desktop/Projects/ferrite-remote-connections/docs/audits/2026-11-16-remote-connections/parity/native-6/ssh-changes-1470x923.png",
+      "sha256": "6a766c00f5370d17655bf05e50612d53579b5bd359d0393a04b7ee910e145c35",
+      "logical_viewport": [
+        1470,
+        923
+      ],
+      "device_pixel_ratio": 2.0,
+      "pixel_dimensions": [
+        2940,
+        1846
+      ],
+      "image_format": "PNG",
+      "crop_px": [
+        0,
+        0,
+        2940,
+        1846
+      ],
+      "surface": "Ferrite native headless Driver",
+      "provider": "simulated Codex app-server, no model API calls",
+      "source_commit": "8d5708cac2179305848293c7522e2fc26339a2f4",
+      "binary_sha256": "59092e14021c3d01d45c4425c442a88ccfee2b1fe5f811e77600e5e5001eb14c"
+    },
+    {
+      "time": 1794838745.1741781,
+      "kind": "screenshot",
+      "path": "/Users/josephwylie/Desktop/Projects/ferrite-remote-connections/docs/audits/2026-11-16-remote-connections/parity/native-6/ssh-changes-staged-1470x923.png",
+      "sha256": "a90c32c97799cbc3a829a5db9029a048227ebe666f28cc0ea0e10c8c7c9b8b56",
+      "logical_viewport": [
+        1470,
+        923
+      ],
+      "device_pixel_ratio": 2.0,
+      "pixel_dimensions": [
+        2940,
+        1846
+      ],
+      "image_format": "PNG",
+      "crop_px": [
+        0,
+        0,
+        2940,
+        1846
+      ],
+      "surface": "Ferrite native headless Driver",
+      "provider": "simulated Codex app-server, no model API calls",
+      "source_commit": "8d5708cac2179305848293c7522e2fc26339a2f4",
+      "binary_sha256": "59092e14021c3d01d45c4425c442a88ccfee2b1fe5f811e77600e5e5001eb14c"
+    },
+    {
+      "time": 1794838746.398478,
+      "kind": "screenshot",
+      "path": "/Users/josephwylie/Desktop/Projects/ferrite-remote-connections/docs/audits/2026-11-16-remote-connections/parity/native-6/ssh-changes-unstaged-1470x923.png",
+      "sha256": "490f2eb7f115ebadcea96f6b072f55f97f7a1eb9374d5e7aaaa48b1f2ab7deb1",
+      "logical_viewport": [
+        1470,
+        923
+      ],
+      "device_pixel_ratio": 2.0,
+      "pixel_dimensions": [
+        2940,
+        1846
+      ],
+      "image_format": "PNG",
+      "crop_px": [
+        0,
+        0,
+        2940,
+        1846
+      ],
+      "surface": "Ferrite native headless Driver",
+      "provider": "simulated Codex app-server, no model API calls",
+      "source_commit": "8d5708cac2179305848293c7522e2fc26339a2f4",
+      "binary_sha256": "59092e14021c3d01d45c4425c442a88ccfee2b1fe5f811e77600e5e5001eb14c"
+    },
+    {
+      "time": 1794838748.914241,
+      "kind": "screenshot",
+      "path": "/Users/josephwylie/Desktop/Projects/ferrite-remote-connections/docs/audits/2026-11-16-remote-connections/parity/native-6/ssh-terminal-1470x923.png",
+      "sha256": "b515e3485a96cac927ea8c9c212f423dcea2b9851c87727132943a4427cf5d22",
+      "logical_viewport": [
+        1470,
+        923
+      ],
+      "device_pixel_ratio": 2.0,
+      "pixel_dimensions": [
+        2940,
+        1846
+      ],
+      "image_format": "PNG",
+      "crop_px": [
+        0,
+        0,
+        2940,
+        1846
+      ],
+      "surface": "Ferrite native headless Driver",
+      "provider": "simulated Codex app-server, no model API calls",
+      "source_commit": "8d5708cac2179305848293c7522e2fc26339a2f4",
+      "binary_sha256": "59092e14021c3d01d45c4425c442a88ccfee2b1fe5f811e77600e5e5001eb14c"
+    },
+    {
+      "time": 1794838751.686054,
+      "kind": "screenshot",
+      "path": "/Users/josephwylie/Desktop/Projects/ferrite-remote-connections/docs/audits/2026-11-16-remote-connections/parity/native-6/ssh-disconnected-1470x923.png",
+      "sha256": "e6be51ba3d6db61dfa2483c3da6dfd1d7dae3039d88654e2250fd05cb1558504",
+      "logical_viewport": [
+        1470,
+        923
+      ],
+      "device_pixel_ratio": 2.0,
+      "pixel_dimensions": [
+        2940,
+        1846
+      ],
+      "image_format": "PNG",
+      "crop_px": [
+        0,
+        0,
+        2940,
+        1846
+      ],
+      "surface": "Ferrite native headless Driver",
+      "provider": "simulated Codex app-server, no model API calls",
+      "source_commit": "8d5708cac2179305848293c7522e2fc26339a2f4",
+      "binary_sha256": "59092e14021c3d01d45c4425c442a88ccfee2b1fe5f811e77600e5e5001eb14c"
+    },
+    {
+      "time": 1794838753.328774,
+      "kind": "screenshot",
+      "path": "/Users/josephwylie/Desktop/Projects/ferrite-remote-connections/docs/audits/2026-11-16-remote-connections/parity/native-6/ssh-reconnected-1470x923.png",
+      "sha256": "b5e3bff6d1efd5d4570b1d30aa4e68d43bdeed9dd34b43134195641778227b0f",
+      "logical_viewport": [
+        1470,
+        923
+      ],
+      "device_pixel_ratio": 2.0,
+      "pixel_dimensions": [
+        2940,
+        1846
+      ],
+      "image_format": "PNG",
+      "crop_px": [
+        0,
+        0,
+        2940,
+        1846
+      ],
+      "surface": "Ferrite native headless Driver",
+      "provider": "simulated Codex app-server, no model API calls",
+      "source_commit": "8d5708cac2179305848293c7522e2fc26339a2f4",
+      "binary_sha256": "59092e14021c3d01d45c4425c442a88ccfee2b1fe5f811e77600e5e5001eb14c"
+    },
+    {
+      "time": 1794838755.137006,
+      "kind": "screenshot",
+      "path": "/Users/josephwylie/Desktop/Projects/ferrite-remote-connections/docs/audits/2026-11-16-remote-connections/parity/native-6/ssh-remove-confirmation-1470x923.png",
+      "sha256": "87f48dbaf86fb793a3b0991ce8b9a33adefeb22450e2e727053947d78e458cae",
+      "logical_viewport": [
+        1470,
+        923
+      ],
+      "device_pixel_ratio": 2.0,
+      "pixel_dimensions": [
+        2940,
+        1846
+      ],
+      "image_format": "PNG",
+      "crop_px": [
+        0,
+        0,
+        2940,
+        1846
+      ],
+      "surface": "Ferrite native headless Driver",
+      "provider": "simulated Codex app-server, no model API calls",
+      "source_commit": "8d5708cac2179305848293c7522e2fc26339a2f4",
+      "binary_sha256": "59092e14021c3d01d45c4425c442a88ccfee2b1fe5f811e77600e5e5001eb14c"
+    },
+    {
+      "time": 1794838757.8852448,
+      "kind": "screenshot",
+      "path": "/Users/josephwylie/Desktop/Projects/ferrite-remote-connections/docs/audits/2026-11-16-remote-connections/parity/native-6/ssh-removed-1470x923.png",
+      "sha256": "8622e3d603111fde7ff33b7cb6c8ec51e1fa7f15ea12c4e3c8b3ced8378a39f4",
+      "logical_viewport": [
+        1470,
+        923
+      ],
+      "device_pixel_ratio": 2.0,
+      "pixel_dimensions": [
+        2940,
+        1846
+      ],
+      "image_format": "PNG",
+      "crop_px": [
+        0,
+        0,
+        2940,
+        1846
+      ],
+      "surface": "Ferrite native headless Driver",
+      "provider": "simulated Codex app-server, no model API calls",
+      "source_commit": "8d5708cac2179305848293c7522e2fc26339a2f4",
+      "binary_sha256": "59092e14021c3d01d45c4425c442a88ccfee2b1fe5f811e77600e5e5001eb14c"
+    },
+    {
+      "time": 1794838761.755014,
+      "kind": "screenshot",
+      "path": "/Users/josephwylie/Desktop/Projects/ferrite-remote-connections/docs/audits/2026-11-16-remote-connections/parity/native-6/20-remote-pairing-rejected-1470x923.png",
+      "sha256": "10241124a95dbb894f398f94a23fd02d074665fcc875837aeb7649436a13d523",
+      "logical_viewport": [
+        1470,
+        923
+      ],
+      "device_pixel_ratio": 2.0,
+      "pixel_dimensions": [
+        2940,
+        1846
+      ],
+      "image_format": "PNG",
+      "crop_px": [
+        0,
+        0,
+        2940,
+        1846
+      ],
+      "surface": "Ferrite native headless Driver",
+      "provider": "simulated Codex app-server, no model API calls",
+      "source_commit": "8d5708cac2179305848293c7522e2fc26339a2f4",
+      "binary_sha256": "59092e14021c3d01d45c4425c442a88ccfee2b1fe5f811e77600e5e5001eb14c"
+    },
+    {
+      "time": 1794838765.221468,
+      "kind": "screenshot",
+      "path": "/Users/josephwylie/Desktop/Projects/ferrite-remote-connections/docs/audits/2026-11-16-remote-connections/parity/native-6/21-remote-link-connected-1470x923.png",
+      "sha256": "1b98f1767141872d2a22705edb6c3f5cdd8580ba89581ec36aea3f81e52b765b",
+      "logical_viewport": [
+        1470,
+        923
+      ],
+      "device_pixel_ratio": 2.0,
+      "pixel_dimensions": [
+        2940,
+        1846
+      ],
+      "image_format": "PNG",
+      "crop_px": [
+        0,
+        0,
+        2940,
+        1846
+      ],
+      "surface": "Ferrite native headless Driver",
+      "provider": "simulated Codex app-server, no model API calls",
+      "source_commit": "8d5708cac2179305848293c7522e2fc26339a2f4",
+      "binary_sha256": "59092e14021c3d01d45c4425c442a88ccfee2b1fe5f811e77600e5e5001eb14c"
+    },
+    {
+      "time": 1794838767.387966,
+      "kind": "screenshot",
+      "path": "/Users/josephwylie/Desktop/Projects/ferrite-remote-connections/docs/audits/2026-11-16-remote-connections/parity/native-6/link-remote-thread-1470x923.png",
+      "sha256": "40b975dab2c757a98c8a4088f8c612289e4f4b861f97103ac1c7bef324b401eb",
+      "logical_viewport": [
+        1470,
+        923
+      ],
+      "device_pixel_ratio": 2.0,
+      "pixel_dimensions": [
+        2940,
+        1846
+      ],
+      "image_format": "PNG",
+      "crop_px": [
+        0,
+        0,
+        2940,
+        1846
+      ],
+      "surface": "Ferrite native headless Driver",
+      "provider": "simulated Codex app-server, no model API calls",
+      "source_commit": "8d5708cac2179305848293c7522e2fc26339a2f4",
+      "binary_sha256": "59092e14021c3d01d45c4425c442a88ccfee2b1fe5f811e77600e5e5001eb14c"
+    },
+    {
+      "time": 1794838769.042992,
+      "kind": "screenshot",
+      "path": "/Users/josephwylie/Desktop/Projects/ferrite-remote-connections/docs/audits/2026-11-16-remote-connections/parity/native-6/link-existing-thread-attachment-ready-1470x923.png",
+      "sha256": "4b853c6d089c59e0104c4c8f21d37378992b73609bfecb4adc97704c9fc93ddb",
+      "logical_viewport": [
+        1470,
+        923
+      ],
+      "device_pixel_ratio": 2.0,
+      "pixel_dimensions": [
+        2940,
+        1846
+      ],
+      "image_format": "PNG",
+      "crop_px": [
+        0,
+        0,
+        2940,
+        1846
+      ],
+      "surface": "Ferrite native headless Driver",
+      "provider": "simulated Codex app-server, no model API calls",
+      "source_commit": "8d5708cac2179305848293c7522e2fc26339a2f4",
+      "binary_sha256": "59092e14021c3d01d45c4425c442a88ccfee2b1fe5f811e77600e5e5001eb14c"
+    },
+    {
+      "time": 1794838771.5582159,
+      "kind": "screenshot",
+      "path": "/Users/josephwylie/Desktop/Projects/ferrite-remote-connections/docs/audits/2026-11-16-remote-connections/parity/native-6/link-existing-thread-streaming-tool-1470x923.png",
+      "sha256": "0879ecdcc015c783ba307d12cdbc16e06548ba59970bf19f16eb60adce04dedb",
+      "logical_viewport": [
+        1470,
+        923
+      ],
+      "device_pixel_ratio": 2.0,
+      "pixel_dimensions": [
+        2940,
+        1846
+      ],
+      "image_format": "PNG",
+      "crop_px": [
+        0,
+        0,
+        2940,
+        1846
+      ],
+      "surface": "Ferrite native headless Driver",
+      "provider": "simulated Codex app-server, no model API calls",
+      "source_commit": "8d5708cac2179305848293c7522e2fc26339a2f4",
+      "binary_sha256": "59092e14021c3d01d45c4425c442a88ccfee2b1fe5f811e77600e5e5001eb14c"
+    },
+    {
+      "time": 1794838772.6202712,
+      "kind": "screenshot",
+      "path": "/Users/josephwylie/Desktop/Projects/ferrite-remote-connections/docs/audits/2026-11-16-remote-connections/parity/native-6/link-existing-thread-completed-1470x923.png",
+      "sha256": "66325ffc617a2d72bf7492187022b6dc6e07db013af6dc979da53e7fca6b6255",
+      "logical_viewport": [
+        1470,
+        923
+      ],
+      "device_pixel_ratio": 2.0,
+      "pixel_dimensions": [
+        2940,
+        1846
+      ],
+      "image_format": "PNG",
+      "crop_px": [
+        0,
+        0,
+        2940,
+        1846
+      ],
+      "surface": "Ferrite native headless Driver",
+      "provider": "simulated Codex app-server, no model API calls",
+      "source_commit": "8d5708cac2179305848293c7522e2fc26339a2f4",
+      "binary_sha256": "59092e14021c3d01d45c4425c442a88ccfee2b1fe5f811e77600e5e5001eb14c"
+    },
+    {
+      "time": 1794838774.513833,
+      "kind": "screenshot",
+      "path": "/Users/josephwylie/Desktop/Projects/ferrite-remote-connections/docs/audits/2026-11-16-remote-connections/parity/native-6/link-new-thread-attachment-ready-1470x923.png",
+      "sha256": "6f2f93f1e78e8e5698385473dce9f40995e76f06f772520eca89dc9750729794",
+      "logical_viewport": [
+        1470,
+        923
+      ],
+      "device_pixel_ratio": 2.0,
+      "pixel_dimensions": [
+        2940,
+        1846
+      ],
+      "image_format": "PNG",
+      "crop_px": [
+        0,
+        0,
+        2940,
+        1846
+      ],
+      "surface": "Ferrite native headless Driver",
+      "provider": "simulated Codex app-server, no model API calls",
+      "source_commit": "8d5708cac2179305848293c7522e2fc26339a2f4",
+      "binary_sha256": "59092e14021c3d01d45c4425c442a88ccfee2b1fe5f811e77600e5e5001eb14c"
+    },
+    {
+      "time": 1794838777.199771,
+      "kind": "screenshot",
+      "path": "/Users/josephwylie/Desktop/Projects/ferrite-remote-connections/docs/audits/2026-11-16-remote-connections/parity/native-6/link-new-thread-streaming-tool-1470x923.png",
+      "sha256": "03905916546c70b9dd863f0550705a611d6c94cc7c206b930df88301ab73c24e",
+      "logical_viewport": [
+        1470,
+        923
+      ],
+      "device_pixel_ratio": 2.0,
+      "pixel_dimensions": [
+        2940,
+        1846
+      ],
+      "image_format": "PNG",
+      "crop_px": [
+        0,
+        0,
+        2940,
+        1846
+      ],
+      "surface": "Ferrite native headless Driver",
+      "provider": "simulated Codex app-server, no model API calls",
+      "source_commit": "8d5708cac2179305848293c7522e2fc26339a2f4",
+      "binary_sha256": "59092e14021c3d01d45c4425c442a88ccfee2b1fe5f811e77600e5e5001eb14c"
+    },
+    {
+      "time": 1794838778.411304,
+      "kind": "screenshot",
+      "path": "/Users/josephwylie/Desktop/Projects/ferrite-remote-connections/docs/audits/2026-11-16-remote-connections/parity/native-6/link-new-thread-completed-1470x923.png",
+      "sha256": "13400fd494964d3c727e0685b84c80bc57c6fd856f3ab2ef36b9ec43e132f9aa",
+      "logical_viewport": [
+        1470,
+        923
+      ],
+      "device_pixel_ratio": 2.0,
+      "pixel_dimensions": [
+        2940,
+        1846
+      ],
+      "image_format": "PNG",
+      "crop_px": [
+        0,
+        0,
+        2940,
+        1846
+      ],
+      "surface": "Ferrite native headless Driver",
+      "provider": "simulated Codex app-server, no model API calls",
+      "source_commit": "8d5708cac2179305848293c7522e2fc26339a2f4",
+      "binary_sha256": "59092e14021c3d01d45c4425c442a88ccfee2b1fe5f811e77600e5e5001eb14c"
+    },
+    {
+      "time": 1794838779.690512,
+      "kind": "screenshot",
+      "path": "/Users/josephwylie/Desktop/Projects/ferrite-remote-connections/docs/audits/2026-11-16-remote-connections/parity/native-6/link-files-tree-1470x923.png",
+      "sha256": "cd0ebd3d6b42395356c6c405c833bc49ee38ad44dd29ef534e9176ce0e424654",
+      "logical_viewport": [
+        1470,
+        923
+      ],
+      "device_pixel_ratio": 2.0,
+      "pixel_dimensions": [
+        2940,
+        1846
+      ],
+      "image_format": "PNG",
+      "crop_px": [
+        0,
+        0,
+        2940,
+        1846
+      ],
+      "surface": "Ferrite native headless Driver",
+      "provider": "simulated Codex app-server, no model API calls",
+      "source_commit": "8d5708cac2179305848293c7522e2fc26339a2f4",
+      "binary_sha256": "59092e14021c3d01d45c4425c442a88ccfee2b1fe5f811e77600e5e5001eb14c"
+    },
+    {
+      "time": 1794838780.989703,
+      "kind": "screenshot",
+      "path": "/Users/josephwylie/Desktop/Projects/ferrite-remote-connections/docs/audits/2026-11-16-remote-connections/parity/native-6/link-file-read-1470x923.png",
+      "sha256": "5e254f4ca96c40873283150563f98e078c6cb4969e5efbc431cdbe97f7f2e361",
+      "logical_viewport": [
+        1470,
+        923
+      ],
+      "device_pixel_ratio": 2.0,
+      "pixel_dimensions": [
+        2940,
+        1846
+      ],
+      "image_format": "PNG",
+      "crop_px": [
+        0,
+        0,
+        2940,
+        1846
+      ],
+      "surface": "Ferrite native headless Driver",
+      "provider": "simulated Codex app-server, no model API calls",
+      "source_commit": "8d5708cac2179305848293c7522e2fc26339a2f4",
+      "binary_sha256": "59092e14021c3d01d45c4425c442a88ccfee2b1fe5f811e77600e5e5001eb14c"
+    },
+    {
+      "time": 1794838783.172513,
+      "kind": "screenshot",
+      "path": "/Users/josephwylie/Desktop/Projects/ferrite-remote-connections/docs/audits/2026-11-16-remote-connections/parity/native-6/link-file-saved-1470x923.png",
+      "sha256": "f941875e53960ea610058c29cc7075eb0ba0c2c06172520a71ec159bc71a4ed7",
+      "logical_viewport": [
+        1470,
+        923
+      ],
+      "device_pixel_ratio": 2.0,
+      "pixel_dimensions": [
+        2940,
+        1846
+      ],
+      "image_format": "PNG",
+      "crop_px": [
+        0,
+        0,
+        2940,
+        1846
+      ],
+      "surface": "Ferrite native headless Driver",
+      "provider": "simulated Codex app-server, no model API calls",
+      "source_commit": "8d5708cac2179305848293c7522e2fc26339a2f4",
+      "binary_sha256": "59092e14021c3d01d45c4425c442a88ccfee2b1fe5f811e77600e5e5001eb14c"
+    },
+    {
+      "time": 1794838784.508707,
+      "kind": "screenshot",
+      "path": "/Users/josephwylie/Desktop/Projects/ferrite-remote-connections/docs/audits/2026-11-16-remote-connections/parity/native-6/link-changes-1470x923.png",
+      "sha256": "b867f02bf5783ba496cd091d350fbb176b90421962dc3810d73fb81012270b33",
+      "logical_viewport": [
+        1470,
+        923
+      ],
+      "device_pixel_ratio": 2.0,
+      "pixel_dimensions": [
+        2940,
+        1846
+      ],
+      "image_format": "PNG",
+      "crop_px": [
+        0,
+        0,
+        2940,
+        1846
+      ],
+      "surface": "Ferrite native headless Driver",
+      "provider": "simulated Codex app-server, no model API calls",
+      "source_commit": "8d5708cac2179305848293c7522e2fc26339a2f4",
+      "binary_sha256": "59092e14021c3d01d45c4425c442a88ccfee2b1fe5f811e77600e5e5001eb14c"
+    },
+    {
+      "time": 1794838785.780549,
+      "kind": "screenshot",
+      "path": "/Users/josephwylie/Desktop/Projects/ferrite-remote-connections/docs/audits/2026-11-16-remote-connections/parity/native-6/link-changes-staged-1470x923.png",
+      "sha256": "feaaa6f4ac4c63fc83be79e93ea6efd7fefecf4db8c5ef2ce31a23c669d38ef6",
+      "logical_viewport": [
+        1470,
+        923
+      ],
+      "device_pixel_ratio": 2.0,
+      "pixel_dimensions": [
+        2940,
+        1846
+      ],
+      "image_format": "PNG",
+      "crop_px": [
+        0,
+        0,
+        2940,
+        1846
+      ],
+      "surface": "Ferrite native headless Driver",
+      "provider": "simulated Codex app-server, no model API calls",
+      "source_commit": "8d5708cac2179305848293c7522e2fc26339a2f4",
+      "binary_sha256": "59092e14021c3d01d45c4425c442a88ccfee2b1fe5f811e77600e5e5001eb14c"
+    },
+    {
+      "time": 1794838787.051295,
+      "kind": "screenshot",
+      "path": "/Users/josephwylie/Desktop/Projects/ferrite-remote-connections/docs/audits/2026-11-16-remote-connections/parity/native-6/link-changes-unstaged-1470x923.png",
+      "sha256": "fa593bd093f355c7b0ff059cfb2331d6d7d6754d26298fcabb28ad50849b284f",
+      "logical_viewport": [
+        1470,
+        923
+      ],
+      "device_pixel_ratio": 2.0,
+      "pixel_dimensions": [
+        2940,
+        1846
+      ],
+      "image_format": "PNG",
+      "crop_px": [
+        0,
+        0,
+        2940,
+        1846
+      ],
+      "surface": "Ferrite native headless Driver",
+      "provider": "simulated Codex app-server, no model API calls",
+      "source_commit": "8d5708cac2179305848293c7522e2fc26339a2f4",
+      "binary_sha256": "59092e14021c3d01d45c4425c442a88ccfee2b1fe5f811e77600e5e5001eb14c"
+    },
+    {
+      "time": 1794838790.316442,
+      "kind": "screenshot",
+      "path": "/Users/josephwylie/Desktop/Projects/ferrite-remote-connections/docs/audits/2026-11-16-remote-connections/parity/native-6/link-terminal-1470x923.png",
+      "sha256": "d306c13574b86f43a1f514f209340335e4399200483661f3596f4e228553f6fc",
+      "logical_viewport": [
+        1470,
+        923
+      ],
+      "device_pixel_ratio": 2.0,
+      "pixel_dimensions": [
+        2940,
+        1846
+      ],
+      "image_format": "PNG",
+      "crop_px": [
+        0,
+        0,
+        2940,
+        1846
+      ],
+      "surface": "Ferrite native headless Driver",
+      "provider": "simulated Codex app-server, no model API calls",
+      "source_commit": "8d5708cac2179305848293c7522e2fc26339a2f4",
+      "binary_sha256": "59092e14021c3d01d45c4425c442a88ccfee2b1fe5f811e77600e5e5001eb14c"
+    },
+    {
+      "time": 1794838793.977824,
+      "kind": "screenshot",
+      "path": "/Users/josephwylie/Desktop/Projects/ferrite-remote-connections/docs/audits/2026-11-16-remote-connections/parity/native-6/link-disconnected-1470x923.png",
+      "sha256": "043ded66d4db949d173c5ca72e26e705b98de316fba29b4ebd43d89694c1619f",
+      "logical_viewport": [
+        1470,
+        923
+      ],
+      "device_pixel_ratio": 2.0,
+      "pixel_dimensions": [
+        2940,
+        1846
+      ],
+      "image_format": "PNG",
+      "crop_px": [
+        0,
+        0,
+        2940,
+        1846
+      ],
+      "surface": "Ferrite native headless Driver",
+      "provider": "simulated Codex app-server, no model API calls",
+      "source_commit": "8d5708cac2179305848293c7522e2fc26339a2f4",
+      "binary_sha256": "59092e14021c3d01d45c4425c442a88ccfee2b1fe5f811e77600e5e5001eb14c"
+    },
+    {
+      "time": 1794838795.936857,
+      "kind": "screenshot",
+      "path": "/Users/josephwylie/Desktop/Projects/ferrite-remote-connections/docs/audits/2026-11-16-remote-connections/parity/native-6/link-reconnected-1470x923.png",
+      "sha256": "93fefc92a557a9534f4246efdf6e19cdf90373a0b516af36d7bc5a867333a193",
+      "logical_viewport": [
+        1470,
+        923
+      ],
+      "device_pixel_ratio": 2.0,
+      "pixel_dimensions": [
+        2940,
+        1846
+      ],
+      "image_format": "PNG",
+      "crop_px": [
+        0,
+        0,
+        2940,
+        1846
+      ],
+      "surface": "Ferrite native headless Driver",
+      "provider": "simulated Codex app-server, no model API calls",
+      "source_commit": "8d5708cac2179305848293c7522e2fc26339a2f4",
+      "binary_sha256": "59092e14021c3d01d45c4425c442a88ccfee2b1fe5f811e77600e5e5001eb14c"
+    },
+    {
+      "time": 1794838798.708508,
+      "kind": "screenshot",
+      "path": "/Users/josephwylie/Desktop/Projects/ferrite-remote-connections/docs/audits/2026-11-16-remote-connections/parity/native-6/link-remove-confirmation-1470x923.png",
+      "sha256": "9e47d8aaac09ac33201b341c76613917f058201f8cd93d7eea39ad2141b49301",
+      "logical_viewport": [
+        1470,
+        923
+      ],
+      "device_pixel_ratio": 2.0,
+      "pixel_dimensions": [
+        2940,
+        1846
+      ],
+      "image_format": "PNG",
+      "crop_px": [
+        0,
+        0,
+        2940,
+        1846
+      ],
+      "surface": "Ferrite native headless Driver",
+      "provider": "simulated Codex app-server, no model API calls",
+      "source_commit": "8d5708cac2179305848293c7522e2fc26339a2f4",
+      "binary_sha256": "59092e14021c3d01d45c4425c442a88ccfee2b1fe5f811e77600e5e5001eb14c"
+    },
+    {
+      "time": 1794838802.814774,
+      "kind": "screenshot",
+      "path": "/Users/josephwylie/Desktop/Projects/ferrite-remote-connections/docs/audits/2026-11-16-remote-connections/parity/native-6/link-removed-1470x923.png",
+      "sha256": "10637afa1f3321f6742de49b39f37767e0b9b1d94e4b4219ea17214e3daed11c",
+      "logical_viewport": [
+        1470,
+        923
+      ],
+      "device_pixel_ratio": 2.0,
+      "pixel_dimensions": [
+        2940,
+        1846
+      ],
+      "image_format": "PNG",
+      "crop_px": [
+        0,
+        0,
+        2940,
+        1846
+      ],
+      "surface": "Ferrite native headless Driver",
+      "provider": "simulated Codex app-server, no model API calls",
+      "source_commit": "8d5708cac2179305848293c7522e2fc26339a2f4",
+      "binary_sha256": "59092e14021c3d01d45c4425c442a88ccfee2b1fe5f811e77600e5e5001eb14c"
+    }
+  ],
+  "limitations": [
+    "simulated Codex app-server, no model API calls",
+    "localhost SSH fixture shares the host filesystem; SSH request logs prove routing",
+    "Localhost fixture uses a preinstalled task-owned runtime.",
+    "Remote link uses explicit loopback HTTP; production TLS has separate tests.",
+    "Visual parity is not inferred from functional assertions."
+  ]
+}

@@ -1,7 +1,3 @@
-//! The files a draft carries, each with what a send would make of it
-//! (`ferrite_core::attachment`). The Composer sends only while none has
-//! failed, and sends the bytes `retain` kept.
-
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
@@ -13,8 +9,17 @@ pub(crate) struct DraftFiles {
     local: Vec<PathBuf>,
     readiness: HashMap<PathBuf, Readiness>,
     destination: Destination,
+    uploads: HashMap<PathBuf, UploadState>,
+    next_attempt: u64,
     /// Where retained copies live.
     store: PathBuf,
+}
+
+enum UploadState {
+    Pending,
+    Uploading { attempt: u64, sent: u64, total: u64 },
+    Ready(PathBuf),
+    Failed(String),
 }
 
 impl DraftFiles {
@@ -24,6 +29,8 @@ impl DraftFiles {
             local: Vec::new(),
             readiness: HashMap::new(),
             destination: Destination::Local,
+            uploads: HashMap::new(),
+            next_attempt: 0,
             store: std::env::temp_dir().join("ferrite-attachments"),
         }
     }
@@ -47,6 +54,7 @@ impl DraftFiles {
     /// Where the Thread's agent is, and where retained copies go. Files
     /// already held are inspected again against the new destination.
     pub(crate) fn aim(&mut self, destination: Destination, store: PathBuf) {
+        self.uploads.clear();
         self.destination = destination;
         self.store = store;
         self.inspect_all();
@@ -73,16 +81,19 @@ impl DraftFiles {
         self.paths.retain(|kept| kept != path);
         self.local.retain(|kept| kept != path);
         self.readiness.remove(path);
+        self.uploads.remove(path);
     }
 
     pub(crate) fn clear(&mut self) {
         self.paths.clear();
         self.local.clear();
         self.readiness.clear();
+        self.uploads.clear();
     }
 
     /// Hold exactly `paths`, `local` among them.
     pub(crate) fn replace(&mut self, paths: Vec<PathBuf>, local: Vec<PathBuf>) {
+        self.uploads.clear();
         self.paths = paths;
         self.local = local;
         self.inspect_all();
@@ -112,7 +123,25 @@ impl DraftFiles {
     /// Look at `path` again: a file restored, repaired or replaced since
     /// it was added reads as it is now.
     pub(crate) fn inspect(&mut self, path: &Path) {
-        let readiness = attachment::inspect(path, self.source(path), self.destination);
+        let readiness = if self.destination == Destination::Remote
+            && self.source(path) == Source::Local
+        {
+            match self
+                .uploads
+                .entry(path.to_path_buf())
+                .or_insert(UploadState::Pending)
+            {
+                UploadState::Pending => Readiness::Pending,
+                UploadState::Uploading { sent, total, .. } => Readiness::Uploading {
+                    sent: *sent,
+                    total: *total,
+                },
+                UploadState::Ready(_) => Readiness::Ready,
+                UploadState::Failed(reason) => Readiness::Failed(Failure::Upload(reason.clone())),
+            }
+        } else {
+            attachment::inspect(path, self.source(path), self.destination)
+        };
         self.readiness.insert(path.to_path_buf(), readiness);
     }
 
@@ -121,6 +150,115 @@ impl DraftFiles {
         for path in self.paths.clone() {
             self.inspect(&path);
         }
+    }
+
+    pub(crate) fn retry(&mut self, path: &Path) {
+        if matches!(self.uploads.get(path), Some(UploadState::Failed(_))) {
+            self.uploads
+                .insert(path.to_path_buf(), UploadState::Pending);
+        }
+        self.inspect(path);
+    }
+
+    pub(crate) fn pending_uploads(&mut self) -> Vec<(PathBuf, u64)> {
+        let mut pending = Vec::new();
+        for path in &self.paths {
+            if matches!(self.uploads.get(path), Some(UploadState::Pending)) {
+                self.next_attempt += 1;
+                let attempt = self.next_attempt;
+                self.uploads.insert(
+                    path.clone(),
+                    UploadState::Uploading {
+                        attempt,
+                        sent: 0,
+                        total: 0,
+                    },
+                );
+                self.readiness
+                    .insert(path.clone(), Readiness::Uploading { sent: 0, total: 0 });
+                pending.push((path.clone(), attempt));
+            }
+        }
+        pending
+    }
+
+    pub(crate) fn uploading(&self, path: &Path, attempt: u64) -> bool {
+        matches!(self.uploads.get(path), Some(UploadState::Uploading { attempt: current, .. }) if *current == attempt)
+    }
+
+    pub(crate) fn progress(&mut self, path: &Path, attempt: u64, sent: u64, total: u64) -> bool {
+        if !self.uploading(path, attempt) {
+            return false;
+        }
+        self.uploads.insert(
+            path.to_path_buf(),
+            UploadState::Uploading {
+                attempt,
+                sent,
+                total,
+            },
+        );
+        self.inspect(path);
+        true
+    }
+
+    pub(crate) fn uploaded(
+        &mut self,
+        path: &Path,
+        attempt: u64,
+        result: Result<PathBuf, String>,
+    ) -> bool {
+        if !self.uploading(path, attempt) {
+            return false;
+        }
+        self.uploads.insert(
+            path.to_path_buf(),
+            match result {
+                Ok(remote) => UploadState::Ready(remote),
+                Err(reason) => UploadState::Failed(reason),
+            },
+        );
+        self.inspect(path);
+        true
+    }
+
+    pub(crate) fn uploaded_paths(&self) -> HashMap<PathBuf, PathBuf> {
+        self.uploads
+            .iter()
+            .filter_map(|(path, state)| match state {
+                UploadState::Ready(remote) => Some((path.clone(), remote.clone())),
+                _ => None,
+            })
+            .collect()
+    }
+
+    pub(crate) fn content_paths(&self) -> (Vec<PathBuf>, Vec<PathBuf>) {
+        let paths = self
+            .paths
+            .iter()
+            .map(|path| match self.uploads.get(path) {
+                Some(UploadState::Ready(remote)) => remote.clone(),
+                _ => path.clone(),
+            })
+            .collect();
+        let local = self
+            .local
+            .iter()
+            .filter(|path| !matches!(self.uploads.get(*path), Some(UploadState::Ready(_))))
+            .cloned()
+            .collect();
+        (paths, local)
+    }
+
+    pub(crate) fn wire_paths(&self) -> Vec<PathBuf> {
+        self.paths
+            .iter()
+            .filter_map(|path| match self.uploads.get(path) {
+                Some(UploadState::Ready(remote)) => Some(remote.clone()),
+                Some(_) => None,
+                None => Some(path.clone()),
+            })
+            .collect()
     }
 
     /// The first file a send cannot take, and why.
@@ -177,4 +315,97 @@ fn inside(path: &Path, root: &Path) -> bool {
             (Ok(path), Ok(root)) => path.starts_with(root),
             _ => false,
         }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn remote() -> DraftFiles {
+        let mut files = DraftFiles::new();
+        files.aim(Destination::Remote, std::env::temp_dir());
+        files
+    }
+
+    #[test]
+    fn remote_upload_failure_preserves_source_and_retry_sends_only_receipt() {
+        let mut files = remote();
+        let source = PathBuf::from("/local-only/screenshot.png");
+        let receipt = PathBuf::from("/server-only/attachments/hash/screenshot.png");
+        files.add(&source, Source::Local);
+        assert!(matches!(files.blocked(), Some((_, Readiness::Pending))));
+        assert!(files.wire_paths().is_empty());
+        let [(_, first)] = files.pending_uploads().try_into().unwrap();
+        assert!(files.progress(&source, first, 4, 10));
+        assert!(matches!(
+            files.blocked(),
+            Some((_, Readiness::Uploading { sent: 4, total: 10 }))
+        ));
+        assert!(files.uploaded(&source, first, Err("Connection closed".into())));
+        files.inspect_all();
+        assert!(matches!(
+            files.blocked(),
+            Some((_, Readiness::Failed(Failure::Upload(_))))
+        ));
+        assert_eq!(
+            files.content_paths(),
+            (vec![source.clone()], vec![source.clone()])
+        );
+        assert!(files.pending_uploads().is_empty());
+        files.retry(&source);
+        let [(_, second)] = files.pending_uploads().try_into().unwrap();
+        assert_ne!(first, second);
+        assert!(!files.uploaded(&source, first, Ok(receipt.clone())));
+        assert!(files.uploaded(&source, second, Ok(receipt.clone())));
+        assert!(files.blocked().is_none());
+        assert_eq!(files.wire_paths(), [receipt.clone()]);
+        assert_eq!(files.content_paths(), (vec![receipt], vec![]));
+        assert_eq!(files.paths(), [source]);
+    }
+
+    #[test]
+    fn remove_readd_and_draft_replacement_reject_old_uploads() {
+        let mut files = remote();
+        let source = PathBuf::from("/local-only/file.txt");
+        files.add(&source, Source::Local);
+        let [(_, removed)] = files.pending_uploads().try_into().unwrap();
+        files.remove(&source);
+        assert!(!files.uploading(&source, removed));
+        files.add(&source, Source::Local);
+        let [(_, replaced)] = files.pending_uploads().try_into().unwrap();
+        assert!(!files.uploaded(&source, removed, Ok("/server/stale.txt".into())));
+        files.replace(vec![source.clone()], vec![source.clone()]);
+        let [(_, current)] = files.pending_uploads().try_into().unwrap();
+        assert!(!files.progress(&source, replaced, 100, 100));
+        assert!(!files.uploaded(&source, replaced, Ok("/server/stale.txt".into())));
+        assert!(files.uploading(&source, current));
+        assert!(files.wire_paths().is_empty());
+    }
+
+    #[test]
+    fn changing_destination_discards_receipts_and_inflight_attempts() {
+        let mut files = remote();
+        let source = PathBuf::from("/local-only/file.txt");
+        files.add(&source, Source::Local);
+        let [(_, first)] = files.pending_uploads().try_into().unwrap();
+        files.aim(Destination::Remote, std::env::temp_dir());
+        assert!(!files.uploaded(&source, first, Ok("/first-server/file.txt".into())));
+        let [(_, second)] = files.pending_uploads().try_into().unwrap();
+        files.uploaded(&source, second, Ok("/second-server/file.txt".into()));
+        files.aim(Destination::Remote, std::env::temp_dir());
+        assert!(matches!(files.blocked(), Some((_, Readiness::Pending))));
+        assert!(files.wire_paths().is_empty());
+    }
+
+    #[test]
+    fn remote_workspace_references_never_require_local_files() {
+        let mut files = remote();
+        let path = PathBuf::from("/server-only/workspace/does-not-exist-here.png");
+        files.add(&path, Source::Workspace);
+        files.inspect_all();
+        assert!(files.blocked().is_none());
+        assert!(files.pending_uploads().is_empty());
+        assert!(files.retain(None));
+        assert_eq!(files.wire_paths(), [path]);
+    }
 }

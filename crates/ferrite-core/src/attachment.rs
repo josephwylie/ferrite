@@ -1,7 +1,7 @@
 //! Whether a file in a draft can be sent as it looks, and what keeps the
 //! bytes that were sent. A draft's files are paths, so each is inspected
-//! where it came from (`inspect`) and a send is admitted only while none has
-//! `Failed`. `retain` copies a file into the app's own store, named by its
+//! where it came from (`inspect`). A send waits for every upload and stops
+//! when a file has failed. `retain` copies a file into the app's own store, named by its
 //! content, so history, retry and a restored draft keep the bytes that went
 //! out even after the source changes.
 
@@ -41,6 +41,8 @@ pub enum Source {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Readiness {
     Ready,
+    Pending,
+    Uploading { sent: u64, total: u64 },
     /// Goes out as a path the agent reads with its own tools, not as native
     /// content.
     Reference(Fallback),
@@ -62,21 +64,25 @@ pub enum Failure {
     Unreadable(String),
     /// A file of this computer, bound for another machine.
     NotOnMachine,
+    Upload(String),
 }
 
 impl Readiness {
     pub fn blocks(&self) -> bool {
-        matches!(self, Self::Failed(_))
+        matches!(self, Self::Pending | Self::Uploading { .. } | Self::Failed(_))
     }
 
     /// One short phrase, for a tile that has no room for more.
     pub fn label(&self) -> Option<&'static str> {
         match self {
             Self::Ready => None,
+            Self::Pending => Some("Waiting to upload"),
+            Self::Uploading { .. } => Some("Uploading"),
             Self::Reference(_) => Some("Path only"),
             Self::Failed(Failure::Missing) => Some("Missing"),
             Self::Failed(Failure::Unreadable(_)) => Some("Unreadable"),
             Self::Failed(Failure::NotOnMachine) => Some("Not on machine"),
+            Self::Failed(Failure::Upload(_)) => Some("Upload failed"),
         }
     }
 
@@ -84,6 +90,9 @@ impl Readiness {
     pub fn explanation(&self) -> Option<String> {
         Some(match self {
             Self::Ready => return None,
+            Self::Pending => "This file is waiting to upload. Send becomes available when every upload finishes.".into(),
+            Self::Uploading { sent, total } => format!("Uploading {} of {}. Wait for it to finish or remove the file.", size(*sent), size(*total)),
+            Self::Failed(Failure::Upload(why)) => format!("The upload failed: {why}. Retry or remove the file."),
             Self::Reference(Fallback::TooLarge(bytes)) => format!(
                 "{} is over the {} an agent takes inline: it is sent as a path.",
                 size(*bytes),
@@ -95,7 +104,7 @@ impl Readiness {
             Self::Failed(Failure::Missing) => "The file is gone. Restore it and retry, or remove it.".into(),
             Self::Failed(Failure::Unreadable(why)) => format!("The file cannot be read ({why}). Fix it and retry, or remove it."),
             Self::Failed(Failure::NotOnMachine) => {
-                "This file is on this computer, and the agent is on another machine. Ferrite does not upload it: remove it.".into()
+                "This file has not been uploaded to the agent's machine. Upload it before sending.".into()
             }
         })
     }

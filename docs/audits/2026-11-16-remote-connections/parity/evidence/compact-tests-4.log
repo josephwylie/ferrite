@@ -1,0 +1,57 @@
+warning: variable does not need to be mutable
+   --> crates/ferrite-core/src/server/tests/drive.rs:121:13
+    |
+121 |     let mut driven = attach_driven(&harness.address);
+    |         ----^^^^^^
+    |         |
+    |         help: remove this `mut`
+    |
+    = note: `#[warn(unused_mut)]` (part of `#[warn(unused)]`) on by default
+
+warning: `ferrite-core` (lib test) generated 1 warning (run `cargo fix --lib -p ferrite-core --tests` to apply 1 suggestion)
+warning: unreachable pattern
+   --> crates/ferrite-pane/src/link_target.rs:165:40
+    |
+142 |             Self::External(url) | Self::RepoPullRequest { url, .. } => {
+    |                                   --------------------------------- matches all the relevant values
+...
+165 |             Self::PullRequest { .. } | Self::RepoPullRequest { .. } | Self::Thread(_) => false,
+    |                                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^ no value can reach this
+    |
+    = note: `#[warn(unreachable_patterns)]` (part of `#[warn(unused)]`) on by default
+
+   Compiling ferrite-frame v0.4.0 (/Users/josephwylie/Desktop/Projects/ferrite-remote-connections/crates/ferrite-frame)
+warning: `ferrite-pane` (lib) generated 1 warning
+warning: `ferrite-pane` (lib test) generated 1 warning (1 duplicate)
+error[E0277]: the trait bound `ElementId: From<(&str, i32)>` is not satisfied
+   --> crates/ferrite-frame/src/settings/connections.rs:164:17
+    |
+164 |             .id((id, 0))
+    |              -- ^^^^^^^ the trait `From<(&str, i32)>` is not implemented for `ElementId`
+    |              |
+    |              required by a bound introduced by this call
+    |
+    = help: `ElementId` implements trait `From<T>`:
+              From<&gpui_kit::FocusHandle>
+              From<&std::panic::Location<'_>>
+              From<&str>
+              From<(&str, EntityId)>
+              From<(&str, u32)>
+              From<(&str, u64)>
+              From<(&str, usize)>
+              From<(ElementId, T)>
+            and 12 others
+    = note: required for `(&str, i32)` to implement `Into<ElementId>`
+note: required by a bound in `gpui_kit::InteractiveElement::id`
+   --> vendor/gpui-pre/src/elements/div.rs:772:30
+    |
+761 | pub trait InteractiveElement: Sized {
+...
+772 |     fn id(mut self, id: impl Into<ElementId>) -> Stateful<Self> {
+    |                              ^^^^^^^^^^^^^^^ required by this bound in `InteractiveElement::id`
+
+For more information about this error, try `rustc --explain E0277`.
+error: could not compile `ferrite-frame` (lib) due to 1 previous error
+warning: build failed, waiting for other jobs to finish...
+error: could not compile `ferrite-frame` (lib test) due to 1 previous error
+error: command `/Users/josephwylie/.rustup/toolchains/beta-aarch64-apple-darwin/bin/cargo '--color=auto' test --no-run '--message-format=json-render-diagnostics' '--package=ferrite-core' '--package=ferrite-pane' '--package=ferrite-cockpit' '--package=ferrite-frame' --lib '--features=ferrite-core/test-support'` exited with code 101

@@ -338,6 +338,7 @@ impl Server {
             Method::WindowType(text) => return self.drive(caller_id, id, Action::Type(text)),
             Method::WindowClick(click) => return self.drive(caller_id, id, Action::Click(click)),
             Method::WindowFind(find) => return self.drive(caller_id, id, Action::Find(find)),
+            Method::WindowAttach(files) => return self.drive(caller_id, id, Action::Attach(files)),
             Method::WindowShot(shot) => return self.drive(caller_id, id, Action::Shot(shot)),
             Method::NotificationShow(params) => {
                 self.say(ServerMessage::Notification {

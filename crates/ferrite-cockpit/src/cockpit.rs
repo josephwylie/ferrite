@@ -29,6 +29,7 @@ mod lightbox;
 mod mode_menu;
 mod model_picker;
 mod machines;
+mod connections;
 mod nav_chrome;
 mod nav_keys;
 mod nav_list;
@@ -738,14 +739,13 @@ pub struct CockpitView {
     /// The machines this window can be on (ADR 0026); `None` in a window
     /// on an Engine of its own.
     machines: Option<Entity<crate::machines::Machines>>,
-    /// Settings › Machines' field for a new machine's ssh target.
-    machine_field: Option<Entity<gpui::component::input::InputState>>,
+    connections: connections::Connections,
 }
 
 /// The Cockpit asks its window to put it on machine `index` (ADR 0026),
-/// and there to open `open`.
+/// and there to open `open`. `None` leaves the client without an environment.
 pub struct GoToMachine {
-    pub index: usize,
+    pub index: Option<usize>,
     pub open: Option<Landing>,
 }
 
@@ -1716,7 +1716,7 @@ impl CockpitView {
             plan_card: None,
             launch_provider,
             machines: None,
-            machine_field: None,
+            connections: connections::Connections::default(),
         };
         // A Cockpit notification is the earliest common point after core
         // state changes and before GPUI draws cached transcript children.
@@ -1812,6 +1812,7 @@ impl CockpitView {
                 continue;
             };
             let pane = CockpitPane::new(PaneView::new(thread, cx), cx);
+            pane.preview.set_remote_files(self.on_machine());
             self.aim_attachments(&pane.composer, cx);
             cx.subscribe(&pane.composer, Self::composer_edited).detach();
             cx.subscribe(&pane.composer, Self::composer_opens_source).detach();
@@ -2478,6 +2479,7 @@ impl CockpitView {
     /// Menus follow the text — typing `/` or `@` opens, backspacing past
     /// the trigger closes, and a pick's own splice closes through here too.
     fn composer_edited(&mut self, composer: Entity<Composer>, _: &Edited, cx: &mut Context<Self>) {
+        self.upload_attachments(&composer, cx);
         if let Some(draft) = self
             .panes
             .iter_mut()
@@ -2588,6 +2590,7 @@ impl CockpitView {
         let shared = self.parts.borrow().on.then(|| self.shared_chrome());
         self.poll_navigation(cx);
         self.poll_machines(cx);
+        self.poll_connections(cx);
         let commands_changed = self
             .draft_commands
             .as_mut()
@@ -2596,6 +2599,7 @@ impl CockpitView {
             self.sync_menu(cx);
         }
         let frame = self.cockpit.pump();
+        self.fetch_attachment_previews(cx);
         self.note_work(&frame);
         self.prune_background_stops();
         self.pump_browsers(cx);
@@ -4296,6 +4300,9 @@ impl CockpitView {
 
     fn toggle_settings(&mut self, cx: &mut Context<Self>) {
         self.settings_open = !self.settings_open;
+        if !self.settings_open {
+            self.connections.editor = None;
+        }
         if self.settings_open {
             self.settings_page = settings::PageKey::default();
             self.settings_search = None;
@@ -4707,7 +4714,7 @@ impl CockpitView {
                 })
             })
             .clone();
-        let machines = self.machine_settings(window, cx);
+        let connections = self.connection_settings(window, cx);
         let settings = &self.prefs.settings;
         let defaults = vec![settings::choices(
             "settings-provider",
@@ -4947,7 +4954,6 @@ impl CockpitView {
         about.splice(1..1, self.ferrite_update_rows(cx));
         let mut about = vec![settings::Group::new(None).rows(about)];
         let server = self.server_rows(cx);
-        about.extend(machines);
         about.push(settings::Group::new(Some("Provider CLIs")).rows(clis));
         let pages = vec![
             settings::page(settings::PageKey::NewThreads, new_thread_groups),
@@ -4976,6 +4982,7 @@ impl CockpitView {
                 settings::PageKey::Server,
                 vec![settings::Group::new(None).rows(server)],
             ),
+            settings::page(settings::PageKey::Connections, connections),
             settings::page(settings::PageKey::About, about),
         ];
 
@@ -4987,6 +4994,9 @@ impl CockpitView {
                 search.update(cx, |search, cx| search.set_value("", window, cx));
                 let _ = view.update(cx, |view, cx| {
                     view.settings_page = page;
+                    if page != settings::PageKey::Connections {
+                        view.connections.editor = None;
+                    }
                     cx.notify();
                 });
             }
@@ -4997,6 +5007,9 @@ impl CockpitView {
             move |delta, _: &mut Window, cx: &mut gpui::App| {
                 let _ = view.update(cx, |view, cx| {
                     view.settings_page = view.settings_page.step(delta);
+                    if view.settings_page != settings::PageKey::Connections {
+                        view.connections.editor = None;
+                    }
                     cx.notify();
                 });
             }
@@ -5004,6 +5017,7 @@ impl CockpitView {
         let close = move |_: &mut Window, cx: &mut gpui::App| {
             let _ = view.update(cx, |view, cx| {
                 view.settings_open = false;
+                view.connections.editor = None;
                 cx.notify();
             });
         };
@@ -5077,6 +5091,7 @@ impl CockpitView {
     fn show_project_editor(&mut self, editor: ProjectEditor, cx: &mut Context<Self>) {
         self.project_editor = Some(editor);
         self.settings_open = false;
+        self.connections.editor = None;
         self.popover = None;
         self.context_menu = None;
         self.list_remote_path(cx);
@@ -5782,7 +5797,9 @@ impl CockpitView {
         cx: &mut Context<Self>,
     ) {
         // ⌫ in the palette's line edits the query, never the queue.
-        if self.floats.palette.is_some() || !self.panes[self.focused()].is_main() {
+        if self.floats.palette.is_some()
+            || self.panes.get(self.focused()).is_none_or(|pane| !pane.is_main())
+        {
             return;
         }
         let Some(thread) = self.focused_thread() else {
@@ -5803,7 +5820,7 @@ impl CockpitView {
     }
 
     fn interrupt(&mut self, _: &Interrupt, window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(transcript) = self.panes[self.focused()].transcript() {
+        if let Some(transcript) = self.panes.get(self.focused()).and_then(|pane| pane.transcript()) {
             if transcript.update(cx, |transcript, cx| transcript.dismiss_offer(cx)) {
                 return;
             }
@@ -5825,6 +5842,10 @@ impl CockpitView {
             return;
         }
         if self.settings_open {
+            if self.connections.editor.is_some() {
+                self.cancel_connection(window, cx);
+                return;
+            }
             self.settings_open = false;
             cx.notify();
             return;
@@ -7415,6 +7436,9 @@ impl CockpitView {
         chosen: Option<ProjectId>,
         cx: &mut Context<Self>,
     ) {
+        if !self.cockpit.environment_available() {
+            return;
+        }
         // The draft starts in the Project of the Thread the operator is in:
         // the focused one, else the one focus last left.
         let current = match placement {
@@ -7498,6 +7522,7 @@ impl CockpitView {
             DraftPlacement::NewGroupWith(thread) => self.cockpit.open_draft_for_new_group(thread),
         };
         let pane = CockpitPane::new(PaneView::new_draft(draft, binding, cx), cx);
+        pane.preview.set_remote_files(self.on_machine());
         self.aim_attachments(&pane.composer, cx);
         cx.subscribe(&pane.composer, Self::composer_edited).detach();
         cx.subscribe(&pane.composer, Self::composer_opens_source).detach();
@@ -8003,6 +8028,7 @@ impl CockpitView {
         let (Some(draft), Some(id)) = (pane.draft(), pane.identity.draft()) else {
             return;
         };
+        let binding = draft.binding.clone();
         let composer = pane.composer.clone();
         if !self.admit_files(self.focused(), cx) {
             return;
@@ -8011,10 +8037,9 @@ impl CockpitView {
         if text.is_empty() {
             return;
         }
-        let provider = draft.binding.provider().clone();
-        let effort = draft.binding.effort().map(str::to_owned);
-        let resolved = draft
-            .binding
+        let provider = binding.provider().clone();
+        let effort = binding.effort().map(str::to_owned);
+        let resolved = binding
             .resolve(self.cockpit.registry(), !self.on_machine())
             .map_err(|e| e.to_string());
         let opened = resolved.and_then(|choice| {
@@ -10474,7 +10499,9 @@ impl CockpitView {
             // An open menu holds the keyboard at the root (`tend_menu_focus`).
         } else if self.settings_open {
             // The pump must not steal focus from Settings search or controls.
-            if !self.settings_focus.contains_focused(window, cx) {
+            if !self.settings_focus.contains_focused(window, cx)
+                && !self.connection_holds_focus(window, cx)
+            {
                 window.focus(&self.settings_focus, cx);
             }
         } else if self.project_editor.is_some() {
@@ -10509,7 +10536,8 @@ impl CockpitView {
         };
         let visible = self.visible_indices();
         // The empty board names the provider CLIs it found: ask once.
-        if self.empty_board_shown()
+        if self.cockpit.environment_available()
+            && self.empty_board_shown()
             && self.cli_versions.is_none()
             && !self.cli_probing
             && !cfg!(test)
@@ -10518,7 +10546,9 @@ impl CockpitView {
             self.probe_cli_versions(cx);
         }
         let board = self.board_bounds(window);
-        let grid = if self.factory_view.is_some() {
+        let grid = if !self.cockpit.environment_available() {
+            frame().flex().child(self.no_environment(cx))
+        } else if self.factory_view.is_some() {
             // A Project's Factory board stands in the board's place.
             frame().flex().child(self.factory_board(window, cx))
         } else if self.prs.shown {
@@ -12853,11 +12883,13 @@ impl CockpitView {
         now: std::time::SystemTime,
     ) -> Option<crate::system_notifications::Posting> {
         let row = self.alert_row(alert, machines, now)?;
-        let machine = alert.away.clone().unwrap_or_else(|| {
-            machines.map_or(crate::machines::MachineKey(None), |machines| {
-                machines.selected_key()
-            })
-        });
+        let machine = match alert.away.clone() {
+            Some(machine) => machine,
+            None => match machines {
+                Some(machines) => machines.selected_key()?,
+                None => crate::machines::MachineKey(None),
+            },
+        };
         // The directory is this computer's only for a Thread on screen.
         let cwd = match alert.away {
             None => self

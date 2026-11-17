@@ -17,6 +17,7 @@ pub enum Action {
     Click(Click),
     Find(Find),
     Shot(Shot),
+    Attach(Attach),
 }
 
 /// Keystrokes pressed in order, as gpui writes them: `cmd-,`, `escape`,
@@ -142,6 +143,13 @@ pub struct Shot {
     pub path: PathBuf,
 }
 
+/// Local files staged through the focused Composer's normal attachment path.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct Attach {
+    /// Absolute paths on the computer running the headless window.
+    pub paths: Vec<PathBuf>,
+}
+
 /// What the window did. Points and sizes are in its logical pixels.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "answer", rename_all = "snake_case")]
@@ -149,6 +157,7 @@ pub enum Answer {
     /// The keys pressed; `unhandled` are those nothing took.
     Pressed { unhandled: Vec<String> },
     Typed,
+    Attached,
     Clicked { x: f32, y: f32 },
     Found { x: f32, y: f32, width: f32, height: f32 },
     /// `width` and `height` in the PNG's pixels, `scale` of them to a

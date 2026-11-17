@@ -1,0 +1,129 @@
+ferrite: attached to the Ferrite server, boot 6f3b-18e880dea3197400
+ferrite --headless: pid 28572, on the server of /private/tmp/ferrite-remote-7la8_29a/client/threads
+ferrite: attached to the Ferrite server, boot 6dc5-18e880de80d0faa8
+ferrite: attached to the Ferrite server, boot 6dc5-18e880de80d0faa8
+ferrite: the server refused an act: connecting to ferrite-auth
+ferrite: could not ask the CLIs' versions: connecting to ferrite-auth
+ferrite: attached to the Ferrite server, boot 6f3b-18e880dea3197400
+ferrite: attached to the Ferrite server, boot 6dc5-18e880de80d0faa8
+ferrite: crashed; report in /private/tmp/ferrite-remote-7la8_29a/client/logs/crash-20261116-211927.174.txt
+
+thread 'main' (50951430) panicked at crates/ferrite-cockpit/src/cockpit.rs:5804:45:
+index out of bounds: the len is 0 but the index is 0
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+ferrite: crashed; report in /private/tmp/ferrite-remote-7la8_29a/client/logs/crash-20261116-211927.177.txt
+
+thread 'main' (50951430) panicked at vendor/gpui-pre/src/app/entity_map.rs:142:36:
+cannot update ferrite_cockpit::cockpit::CockpitView while it is already being updated
+stack backtrace:
+   0:        0x1047450dc - std[dbcb3c9cb88318be]::backtrace_rs::backtrace::libunwind::trace
+                               at /rustc/bbcdfd90a3f81ca2a5f6d69b943a6ff0d8582102/library/std/src/../../backtrace/src/backtrace/libunwind.rs:117:9
+   1:        0x1047450dc - std[dbcb3c9cb88318be]::backtrace_rs::backtrace::trace_unsynchronized::<std[dbcb3c9cb88318be]::sys::backtrace::_print_fmt::{closure#1}>
+                               at /rustc/bbcdfd90a3f81ca2a5f6d69b943a6ff0d8582102/library/std/src/../../backtrace/src/backtrace/mod.rs:66:14
+   2:        0x1047450dc - std[dbcb3c9cb88318be]::sys::backtrace::_print_fmt
+                               at /rustc/bbcdfd90a3f81ca2a5f6d69b943a6ff0d8582102/library/std/src/sys/backtrace.rs:74:9
+   3:        0x1047450dc - <<std[dbcb3c9cb88318be]::sys::backtrace::BacktraceLock>::print::DisplayBacktrace as core[af1bf1f233a8fff4]::fmt::Display>::fmt
+                               at /rustc/bbcdfd90a3f81ca2a5f6d69b943a6ff0d8582102/library/std/src/sys/backtrace.rs:44:26
+   4:        0x10475da70 - <core[af1bf1f233a8fff4]::fmt::rt::Argument>::fmt
+                               at /rustc/bbcdfd90a3f81ca2a5f6d69b943a6ff0d8582102/library/core/src/fmt/rt.rs:152:76
+   5:        0x10475da70 - core[af1bf1f233a8fff4]::fmt::write
+                               at /rustc/bbcdfd90a3f81ca2a5f6d69b943a6ff0d8582102/library/core/src/fmt/mod.rs:1687:22
+   6:        0x10474bad0 - core[af1bf1f233a8fff4]::io::write::default_write_fmt::<std[dbcb3c9cb88318be]::sys::stdio::unix::Stderr>
+                               at /rustc/bbcdfd90a3f81ca2a5f6d69b943a6ff0d8582102/library/core/src/io/write.rs:402:11
+   7:        0x10474bad0 - <std[dbcb3c9cb88318be]::sys::stdio::unix::Stderr as core[af1bf1f233a8fff4]::io::write::Write>::write_fmt
+                               at /rustc/bbcdfd90a3f81ca2a5f6d69b943a6ff0d8582102/library/core/src/io/write.rs:335:13
+   8:        0x104722728 - <std[dbcb3c9cb88318be]::sys::backtrace::BacktraceLock>::print
+                               at /rustc/bbcdfd90a3f81ca2a5f6d69b943a6ff0d8582102/library/std/src/sys/backtrace.rs:47:25
+   9:        0x104722728 - std[dbcb3c9cb88318be]::panicking::default_hook::{closure#0}
+                               at /rustc/bbcdfd90a3f81ca2a5f6d69b943a6ff0d8582102/library/std/src/panicking.rs:289:27
+  10:        0x10473c404 - std[dbcb3c9cb88318be]::panicking::default_hook
+                               at /rustc/bbcdfd90a3f81ca2a5f6d69b943a6ff0d8582102/library/std/src/panicking.rs:316:9
+  11:        0x103befdb8 - call<(&std::panic::PanicHookInfo), (dyn core::ops::function::Fn<(&std::panic::PanicHookInfo), Output=()> + core::marker::Send + core::marker::Sync), alloc::alloc::Global>
+                               at /Users/josephwylie/.rustup/toolchains/beta-aarch64-apple-darwin/lib/rustlib/src/rust/library/alloc/src/boxed.rs:2480:9
+  12:        0x1035dc5b8 - {closure#0}
+                               at /Users/josephwylie/Desktop/Projects/ferrite-remote-connections/crates/ferrite-core/src/store.rs:1986:9
+  13:        0x103befdb8 - call<(&std::panic::PanicHookInfo), (dyn core::ops::function::Fn<(&std::panic::PanicHookInfo), Output=()> + core::marker::Send + core::marker::Sync), alloc::alloc::Global>
+                               at /Users/josephwylie/.rustup/toolchains/beta-aarch64-apple-darwin/lib/rustlib/src/rust/library/alloc/src/boxed.rs:2480:9
+  14:        0x103ba33f8 - {closure#0}
+                               at /Users/josephwylie/Desktop/Projects/ferrite-remote-connections/crates/ferrite-core/src/diagnostics.rs:62:9
+  15:        0x10473c900 - <alloc[496aead148c8744e]::boxed::Box<dyn for<'a, 'b> core[af1bf1f233a8fff4]::ops::function::Fn<(&'a std[dbcb3c9cb88318be]::panic::PanicHookInfo<'b>,), Output = ()> + core[af1bf1f233a8fff4]::marker::Sync + core[af1bf1f233a8fff4]::marker::Send> as core[af1bf1f233a8fff4]::ops::function::Fn<(&std[dbcb3c9cb88318be]::panic::PanicHookInfo,)>>::call
+                               at /rustc/bbcdfd90a3f81ca2a5f6d69b943a6ff0d8582102/library/alloc/src/boxed.rs:2480:9
+  16:        0x10473c900 - std[dbcb3c9cb88318be]::panicking::panic_with_hook
+                               at /rustc/bbcdfd90a3f81ca2a5f6d69b943a6ff0d8582102/library/std/src/panicking.rs:819:13
+  17:        0x1047227b0 - std[dbcb3c9cb88318be]::panicking::panic_handler::{closure#0}
+                               at /rustc/bbcdfd90a3f81ca2a5f6d69b943a6ff0d8582102/library/std/src/panicking.rs:685:13
+  18:        0x10471b478 - std[dbcb3c9cb88318be]::sys::backtrace::__rust_end_short_backtrace::<std[dbcb3c9cb88318be]::panicking::panic_handler::{closure#0}, !>
+                               at /rustc/bbcdfd90a3f81ca2a5f6d69b943a6ff0d8582102/library/std/src/sys/backtrace.rs:182:18
+  19:        0x1047234dc - __rustc[abc93889656912e2]::rust_begin_unwind
+                               at /rustc/bbcdfd90a3f81ca2a5f6d69b943a6ff0d8582102/library/std/src/panicking.rs:676:5
+  20:        0x1048254d8 - core[af1bf1f233a8fff4]::panicking::panic_fmt
+                               at /rustc/bbcdfd90a3f81ca2a5f6d69b943a6ff0d8582102/library/core/src/panicking.rs:80:14
+  21:        0x101855804 - double_lease_panic<ferrite_cockpit::cockpit::CockpitView>
+                               at /Users/josephwylie/Desktop/Projects/ferrite/vendor/gpui-pre/src/app/entity_map.rs:215:5
+  22:        0x101856020 - {closure#0}<ferrite_cockpit::cockpit::CockpitView>
+                               at /Users/josephwylie/Desktop/Projects/ferrite/vendor/gpui-pre/src/app/entity_map.rs:142:36
+  23:        0x1015133dc - unwrap_or_else<alloc::boxed::Box<dyn core::any::Any, alloc::alloc::Global>, gpui::app::entity_map::{impl#3}::lease::{closure_env#0}<ferrite_cockpit::cockpit::CockpitView>>
+                               at /Users/josephwylie/.rustup/toolchains/beta-aarch64-apple-darwin/lib/rustlib/src/rust/library/core/src/option.rs:1067:21
+  24:        0x101816294 - lease<ferrite_cockpit::cockpit::CockpitView>
+                               at /Users/josephwylie/Desktop/Projects/ferrite/vendor/gpui-pre/src/app/entity_map.rs:142:18
+  25:        0x1012c8450 - {closure#0}<ferrite_cockpit::cockpit::CockpitView, ferrite_cockpit::cockpit::{impl#13}::new_with_settings::{closure#2}::{async_block_env#0}, gpui::app::context::{impl#2}::on_app_quit::{closure#0}::{closure_env#0}<ferrite_cockpit::cockpit::CockpitView, ferrite_cockpit::cockpit::{impl#13}::new_with_settings::{closure#2}::{async_block_env#0}, ferrite_cockpit::cockpit::{impl#13}::new_with_settings::{closure_env#2}>>
+                               at /Users/josephwylie/Desktop/Projects/ferrite/vendor/gpui-pre/src/app.rs:2859:42
+  26:        0x10128ce40 - update<ferrite_cockpit::cockpit::{impl#13}::new_with_settings::{closure#2}::{async_block_env#0}, gpui::app::{impl#10}::update_entity::{closure_env#0}<ferrite_cockpit::cockpit::CockpitView, ferrite_cockpit::cockpit::{impl#13}::new_with_settings::{closure#2}::{async_block_env#0}, gpui::app::context::{impl#2}::on_app_quit::{closure#0}::{closure_env#0}<ferrite_cockpit::cockpit::CockpitView, ferrite_cockpit::cockpit::{impl#13}::new_with_settings::{closure#2}::{async_block_env#0}, ferrite_cockpit::cockpit::{impl#13}::new_with_settings::{closure_env#2}>>>
+                               at /Users/josephwylie/Desktop/Projects/ferrite/vendor/gpui-pre/src/app.rs:1094:22
+  27:        0x1012a64b4 - update_entity<ferrite_cockpit::cockpit::CockpitView, ferrite_cockpit::cockpit::{impl#13}::new_with_settings::{closure#2}::{async_block_env#0}, gpui::app::context::{impl#2}::on_app_quit::{closure#0}::{closure_env#0}<ferrite_cockpit::cockpit::CockpitView, ferrite_cockpit::cockpit::{impl#13}::new_with_settings::{closure#2}::{async_block_env#0}, ferrite_cockpit::cockpit::{impl#13}::new_with_settings::{closure_env#2}>>
+                               at /Users/josephwylie/Desktop/Projects/ferrite/vendor/gpui-pre/src/app.rs:2858:14
+  28:        0x1018231f8 - update<ferrite_cockpit::cockpit::CockpitView, gpui::app::App, ferrite_cockpit::cockpit::{impl#13}::new_with_settings::{closure#2}::{async_block_env#0}, gpui::app::context::{impl#2}::on_app_quit::{closure#0}::{closure_env#0}<ferrite_cockpit::cockpit::CockpitView, ferrite_cockpit::cockpit::{impl#13}::new_with_settings::{closure#2}::{async_block_env#0}, ferrite_cockpit::cockpit::{impl#13}::new_with_settings::{closure_env#2}>>
+                               at /Users/josephwylie/Desktop/Projects/ferrite/vendor/gpui-pre/src/app/entity_map.rs:793:15
+  29:        0x1014f9c28 - {closure#0}<ferrite_cockpit::cockpit::CockpitView, ferrite_cockpit::cockpit::{impl#13}::new_with_settings::{closure#2}::{async_block_env#0}, ferrite_cockpit::cockpit::{impl#13}::new_with_settings::{closure_env#2}>
+                               at /Users/josephwylie/Desktop/Projects/ferrite/vendor/gpui-pre/src/app/context.rs:218:33
+  30:        0x1012b0ee0 - {closure#0}<core::pin::Pin<alloc::boxed::Box<dyn core::future::future::Future<Output=()>, alloc::alloc::Global>>, gpui::app::context::{impl#2}::on_app_quit::{closure_env#0}<ferrite_cockpit::cockpit::CockpitView, ferrite_cockpit::cockpit::{impl#13}::new_with_settings::{closure#2}::{async_block_env#0}, ferrite_cockpit::cockpit::{impl#13}::new_with_settings::{closure_env#2}>>
+                               at /Users/josephwylie/Desktop/Projects/ferrite/vendor/gpui-pre/src/app.rs:2400:30
+  31:        0x101062cc8 - call_once<gpui::app::{impl#9}::on_app_quit::{closure_env#0}<core::pin::Pin<alloc::boxed::Box<dyn core::future::future::Future<Output=()>, alloc::alloc::Global>>, gpui::app::context::{impl#2}::on_app_quit::{closure_env#0}<ferrite_cockpit::cockpit::CockpitView, ferrite_cockpit::cockpit::{impl#13}::new_with_settings::{closure#2}::{async_block_env#0}, ferrite_cockpit::cockpit::{impl#13}::new_with_settings::{closure_env#2}>>, (&mut gpui::app::App)>
+                               at /Users/josephwylie/.rustup/toolchains/beta-aarch64-apple-darwin/lib/rustlib/src/rust/library/core/src/ops/function.rs:250:5
+  32:        0x10277ab1c - <alloc[496aead148c8744e]::boxed::Box<dyn for<'a> core[af1bf1f233a8fff4]::ops::function::FnOnce<(&'a mut gpui[876e2efc324cce02]::app::App,), Output = core[af1bf1f233a8fff4]::pin::Pin<alloc[496aead148c8744e]::boxed::Box<dyn core[af1bf1f233a8fff4]::future::future::Future<Output = ()>>>>> as core[af1bf1f233a8fff4]::ops::function::FnOnce<(&mut gpui[876e2efc324cce02]::app::App,)>>::call_once
+  33:        0x1028d4e38 - <gpui[876e2efc324cce02]::app::App>::shutdown
+  34:        0x10294a2d4 - <gpui[876e2efc324cce02]::app::headless_app_context::HeadlessAppContext as core[af1bf1f233a8fff4]::ops::drop::Drop>::drop
+  35:        0x101053220 - drop_glue<gpui::app::headless_app_context::HeadlessAppContext>
+                               at /Users/josephwylie/.rustup/toolchains/beta-aarch64-apple-darwin/lib/rustlib/src/rust/library/core/src/ptr/mod.rs:844:1
+  36:        0x101052128 - drop_glue<ferrite_cockpit::headless::Driver>
+                               at /Users/josephwylie/.rustup/toolchains/beta-aarch64-apple-darwin/lib/rustlib/src/rust/library/core/src/ptr/mod.rs:844:1
+  37:        0x1016bb4f8 - run
+                               at /Users/josephwylie/Desktop/Projects/ferrite-remote-connections/crates/ferrite-cockpit/src/headless.rs:110:1
+  38:        0x100e526e4 - launch
+                               at /Users/josephwylie/Desktop/Projects/ferrite-remote-connections/crates/ferrite/src/lib.rs:143:9
+  39:        0x100e53c80 - run
+                               at /Users/josephwylie/Desktop/Projects/ferrite-remote-connections/crates/ferrite/src/entry.rs:33:5
+  40:        0x100e39398 - main
+                               at /Users/josephwylie/Desktop/Projects/ferrite-remote-connections/crates/ferrite/src/main.rs:7:5
+  41:        0x100e393fc - call_once<fn(), ()>
+                               at /Users/josephwylie/.rustup/toolchains/beta-aarch64-apple-darwin/lib/rustlib/src/rust/library/core/src/ops/function.rs:250:5
+  42:        0x100e39380 - __rust_begin_short_backtrace<fn(), ()>
+                               at /Users/josephwylie/.rustup/toolchains/beta-aarch64-apple-darwin/lib/rustlib/src/rust/library/std/src/sys/backtrace.rs:166:18
+  43:        0x100e39358 - {closure#0}<()>
+                               at /Users/josephwylie/.rustup/toolchains/beta-aarch64-apple-darwin/lib/rustlib/src/rust/library/std/src/rt.rs:206:18
+  44:        0x10473ae74 - <&dyn core[af1bf1f233a8fff4]::ops::function::Fn<(), Output = i32> + core[af1bf1f233a8fff4]::marker::Sync + core[af1bf1f233a8fff4]::panic::unwind_safe::RefUnwindSafe as core[af1bf1f233a8fff4]::ops::function::FnOnce<()>>::call_once
+                               at /rustc/bbcdfd90a3f81ca2a5f6d69b943a6ff0d8582102/library/core/src/ops/function.rs:287:21
+  45:        0x10473ae74 - std[dbcb3c9cb88318be]::panicking::catch_unwind::do_call::<&dyn core[af1bf1f233a8fff4]::ops::function::Fn<(), Output = i32> + core[af1bf1f233a8fff4]::marker::Sync + core[af1bf1f233a8fff4]::panic::unwind_safe::RefUnwindSafe, i32>
+                               at /rustc/bbcdfd90a3f81ca2a5f6d69b943a6ff0d8582102/library/std/src/panicking.rs:573:43
+  46:        0x10473ae74 - std[dbcb3c9cb88318be]::panicking::catch_unwind::<i32, &dyn core[af1bf1f233a8fff4]::ops::function::Fn<(), Output = i32> + core[af1bf1f233a8fff4]::marker::Sync + core[af1bf1f233a8fff4]::panic::unwind_safe::RefUnwindSafe>
+                               at /rustc/bbcdfd90a3f81ca2a5f6d69b943a6ff0d8582102/library/std/src/panicking.rs:541:19
+  47:        0x10473ae74 - std[dbcb3c9cb88318be]::panic::catch_unwind::<&dyn core[af1bf1f233a8fff4]::ops::function::Fn<(), Output = i32> + core[af1bf1f233a8fff4]::marker::Sync + core[af1bf1f233a8fff4]::panic::unwind_safe::RefUnwindSafe, i32>
+                               at /rustc/bbcdfd90a3f81ca2a5f6d69b943a6ff0d8582102/library/std/src/panic.rs:359:14
+  48:        0x10473ae74 - std[dbcb3c9cb88318be]::rt::lang_start_internal::{closure#0}
+                               at /rustc/bbcdfd90a3f81ca2a5f6d69b943a6ff0d8582102/library/std/src/rt.rs:175:24
+  49:        0x10473ae74 - std[dbcb3c9cb88318be]::panicking::catch_unwind::do_call::<std[dbcb3c9cb88318be]::rt::lang_start_internal::{closure#0}, isize>
+                               at /rustc/bbcdfd90a3f81ca2a5f6d69b943a6ff0d8582102/library/std/src/panicking.rs:573:43
+  50:        0x10473ae74 - std[dbcb3c9cb88318be]::panicking::catch_unwind::<isize, std[dbcb3c9cb88318be]::rt::lang_start_internal::{closure#0}>
+                               at /rustc/bbcdfd90a3f81ca2a5f6d69b943a6ff0d8582102/library/std/src/panicking.rs:541:19
+  51:        0x10473ae74 - std[dbcb3c9cb88318be]::panic::catch_unwind::<std[dbcb3c9cb88318be]::rt::lang_start_internal::{closure#0}, isize>
+                               at /rustc/bbcdfd90a3f81ca2a5f6d69b943a6ff0d8582102/library/std/src/panic.rs:359:14
+  52:        0x10473ae74 - std[dbcb3c9cb88318be]::rt::lang_start_internal
+                               at /rustc/bbcdfd90a3f81ca2a5f6d69b943a6ff0d8582102/library/std/src/rt.rs:171:5
+  53:        0x100e3933c - lang_start<()>
+                               at /Users/josephwylie/.rustup/toolchains/beta-aarch64-apple-darwin/lib/rustlib/src/rust/library/std/src/rt.rs:205:5
+  54:        0x100e393c4 - _main
+ferrite: crashed; report in /private/tmp/ferrite-remote-7la8_29a/client/logs/crash-20261116-211927.188.txt
+
+thread 'main' (50951430) panicked at /rustc/bbcdfd90a3f81ca2a5f6d69b943a6ff0d8582102/library/core/src/panicking.rs:233:5:
+panic in a destructor during cleanup
+thread caused non-unwinding panic. aborting.

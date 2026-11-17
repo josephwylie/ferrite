@@ -18,13 +18,25 @@ similar = { version = "3.2.0", features = ["text"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
 base64 = "0.22"
+axum = { version = "0.8", features = ["ws"] }
+axum-server = { version = "0.7", features = ["tls-rustls"] }
+tokio = { version = "1", features = ["rt-multi-thread", "net", "sync", "time", "io-util", "macros"] }
+tokio-tungstenite = { version = "0.28", features = ["rustls-tls-native-roots"] }
+futures-util = { version = "0.3", features = ["sink"] }
+rand = "0.8"
+subtle = "2"
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+portable-pty = "0.9"
+keyring = { version = "3.6", features = ["apple-native", "windows-native", "linux-native-sync-persistent", "crypto-rust"] }
 chrono = "0.4.45"
 # The host's time zone named where a schedule says it runs (#225).
 # Already in the tree via chrono.
 iana-time-zone = "0.1"
-ureq = "3"
+ureq = { version = "3", features = ["platform-verifier"] }
 # Shared with the UI: validate website authorities, including localhost/IPv6.
 url = "2"
+glob = "0.3"
+shlex = "1.3"
 # Ferrite's own update is checked against the SHA-256 GitHub publishes
 # for the installer (`self_update`). Already in the tree via gpui.
 sha2 = "0.10"

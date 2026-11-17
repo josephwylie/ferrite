@@ -275,7 +275,7 @@ pub fn launch() {
                 // This computer's Server, or `--remote`'s machine's (ADR
                 // 0026); the nav lists the others.
                 let machines = cx.new(|_| {
-                    machines::Machines::new(
+                    machines::Machines::with_local_environment(
                         machines::Reach {
                             settings_dir: settings_dir.clone(),
                             store: store_dir(),
@@ -287,10 +287,11 @@ pub fn launch() {
                             renderer: Some(renderer),
                             driven: false,
                             defaults: defaults.clone(),
-                            bridge: ferrite_core::machine::Bridge::ssh,
+                            bridge: ferrite_core::machine::Bridge::for_machine,
                         },
                         &settings.machines,
                         remote.as_deref(),
+                        settings.local_environment_enabled,
                     )
                 });
                 let core = machines

@@ -1,0 +1,25 @@
+{
+  "path": "/Users/josephwylie/Desktop/Projects/ferrite-remote-connections/docs/audits/2026-11-16-remote-connections/parity/compact/03-ssh-640x420.png",
+  "sha256": "949964ca541058681939969b292af1fa0d246aaed07ee927d177ca15752e67ca",
+  "logical_viewport": [
+    640,
+    420
+  ],
+  "device_pixel_ratio": 2.0,
+  "pixel_dimensions": [
+    1280,
+    840
+  ],
+  "image_format": "PNG",
+  "crop_px": [
+    0,
+    0,
+    1280,
+    840
+  ],
+  "surface": "Ferrite native headless Driver",
+  "provider": "simulated Codex app-server, no model API calls",
+  "source_commit": "c3743ff834284fbb27d459afc8d1bcbd90f7f514",
+  "binary_sha256": "332f91c83d1f0c7083b2efa7e55bdaa66049bac0e5d1b817ebeb032f64e32851",
+  "provenance_note": "Corrected to the actual binary build commit; later source edits had not been rebuilt."
+}

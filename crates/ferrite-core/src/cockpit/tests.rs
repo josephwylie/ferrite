@@ -318,6 +318,33 @@ fn cockpit(name: &str) -> (Cockpit, Fake) {
     (Cockpit::new(store, Box::new(fake.clone())), fake)
 }
 
+#[test]
+fn an_open_thread_keeps_its_project_without_local_header() {
+    let (mut core, _) = cockpit("remote-open-project");
+    let thread = core.open(Provider::Codex, main_choice()).unwrap();
+    let project = core
+        .project_id(thread)
+        .expect("the Server registered the project");
+    let local_header = core
+        .history_log(thread)
+        .unwrap()
+        .dir()
+        .join(thread.to_string())
+        .join("log.jsonl");
+    std::fs::remove_file(local_header).unwrap();
+
+    assert!(
+        core.peek(thread).is_err(),
+        "the project must not require an accessible local header"
+    );
+    assert_eq!(core.try_project_id(thread).unwrap(), Some(project));
+    assert!(core
+        .registry()
+        .projects()
+        .iter()
+        .any(|entry| entry.id == project));
+}
+
 /// An empty store was never worked in; otherwise the answer is the
 /// most recently used Thread's Project. A registry lost by hand
 /// orphans nothing, so the Threads keep their headers — but a Project

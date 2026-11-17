@@ -405,6 +405,32 @@ impl Composer {
         kept
     }
 
+    pub fn pending_uploads(&mut self, cx: &mut Context<Self>) -> Vec<(PathBuf, u64)> {
+        let pending = self.files.pending_uploads();
+        if !pending.is_empty() {
+            cx.notify();
+        }
+        pending
+    }
+
+    pub fn uploading_file(&self, path: &Path, attempt: u64) -> bool {
+        self.files.uploading(path, attempt)
+    }
+
+    pub fn upload_progress(&mut self, path: &Path, attempt: u64, sent: u64, total: u64, cx: &mut Context<Self>) {
+        if self.files.progress(path, attempt, sent, total) {
+            cx.notify();
+        }
+    }
+
+    pub fn finish_upload(&mut self, path: &Path, attempt: u64, result: Result<PathBuf, String>, cx: &mut Context<Self>) -> bool {
+        if !self.files.uploaded(path, attempt, result) {
+            return false;
+        }
+        self.edited(cx);
+        true
+    }
+
     pub fn browser_annotations(&self) -> &[Annotation] {
         &self.browser_annotations
     }
@@ -493,10 +519,11 @@ impl Composer {
                 .added(added)
                 .closing(closing)
                 .readiness(readiness)
+                .sources(composer.files.local().iter().cloned().collect(), composer.files.uploaded_paths())
                 .on_retry(move |path, _, cx| {
                     let _ = retry_file.update(cx, |composer, cx| {
-                        composer.files.inspect(path);
-                        cx.notify();
+                        composer.files.retry(path);
+                        composer.edited(cx);
                     });
                 })
                 .review(comments)
@@ -698,10 +725,11 @@ impl Composer {
 
     /// Everything the Composer holds, as its typed parts.
     pub fn content(&self) -> DraftContent {
+        let (files, local) = self.files.content_paths();
         DraftContent {
             text: self.line.text().to_string(),
-            files: self.files.paths().to_vec(),
-            local: self.files.local().to_vec(),
+            files,
+            local,
             replies: self.replies.clone(),
             review: self.review.iter().map(ReviewNote::from).collect(),
             annotations: self.browser_annotations.clone(),
@@ -789,7 +817,7 @@ impl Composer {
     pub fn prompt(&self) -> String {
         browser_annotations::compose(
             &ferrite_reviewr::ferrite::attach(&self.quoted_line(), &self.review),
-            self.files.paths(),
+            &self.files.wire_paths(),
             &self.browser_annotations,
         )
     }
@@ -800,7 +828,7 @@ impl Composer {
     pub fn editable(&self) -> String {
         browser_annotations::compose(
             &self.quoted_line(),
-            self.files.paths(),
+            &self.files.wire_paths(),
             &self.browser_annotations,
         )
     }

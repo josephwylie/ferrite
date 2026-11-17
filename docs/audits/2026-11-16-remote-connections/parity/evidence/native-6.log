@@ -1,0 +1,16 @@
+{
+  "root": "/private/tmp/ferrite-remote-gj30h_ft",
+  "store": "/private/tmp/ferrite-remote-gj30h_ft/client/threads",
+  "remote_store": "/private/tmp/ferrite-remote-gj30h_ft/remote/threads",
+  "binary": "/Users/josephwylie/Desktop/Projects/ferrite-remote-connections/target/debug/ferrite",
+  "server": "/Users/josephwylie/Desktop/Projects/ferrite-remote-connections/target/debug/ferrited",
+  "processes": [],
+  "ssh_transport": "actual OpenSSH localhost",
+  "filesystem": "localhost SSH fixture shares the host filesystem; SSH request logs prove routing",
+  "credentials": "fixture-passphrase is a synthetic, task-only test credential",
+  "provider": "simulated Codex app-server, no model API calls",
+  "port": 55564
+}
+{"passed": true, "nonroot": true, "strict_modes": true, "pid": 94780}
+Launched isolated local/remote Servers and native headless window.
+{"functional": "passed", "visual": "requires parent review", "actual_model": "not run; explicit Codex protocol fixture", "owned_processes_stopped": true}

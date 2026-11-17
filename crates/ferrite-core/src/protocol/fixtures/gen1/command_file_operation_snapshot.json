@@ -1,0 +1,1 @@
+{"type":"command","id":303,"op":"file_operation","request":{"kind":"snapshot","root":"/workspace","directories":["/workspace"],"search":true}}

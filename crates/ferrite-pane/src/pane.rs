@@ -3863,7 +3863,8 @@ fn inline_image(
     preview: &crate::preview::Preview,
 ) -> AnyElement {
     // Whole pixels, so the ring sits on the pixel grid.
-    let size = match image_facts(path).and_then(|facts| facts.size) {
+    let local = preview.attachment_local(path);
+    let size = match local.as_deref().and_then(image_facts).and_then(|facts| facts.size) {
         Some((w, h)) if w > 0 && h > 0 => {
             let scale = (theme::THUMB_MAX_W / w as f32)
                 .min(theme::THUMB_MAX_H / h as f32)
@@ -3878,9 +3879,10 @@ fn inline_image(
     let host = preview.clone();
     let gallery = gallery.clone();
     let open = path.to_path_buf();
-    crate::attachments::thumbnail(
+    crate::attachments::remote_thumbnail(
         SharedString::from(format!("sent-image-{block:?}-{index}")),
         path,
+        preview,
         size,
     )
     .debug_selector(|| "sent-image".into())

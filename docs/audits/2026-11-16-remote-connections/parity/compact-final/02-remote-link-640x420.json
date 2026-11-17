@@ -1,0 +1,24 @@
+{
+  "path": "/Users/josephwylie/Desktop/Projects/ferrite-remote-connections/docs/audits/2026-11-16-remote-connections/parity/compact-final/02-remote-link-640x420.png",
+  "sha256": "ddcb64110d28bc8618a876f7cefd914659050261b2d9fdbf2ece808fc8fdc1ca",
+  "logical_viewport": [
+    640,
+    420
+  ],
+  "device_pixel_ratio": 2.0,
+  "pixel_dimensions": [
+    1280,
+    840
+  ],
+  "image_format": "PNG",
+  "crop_px": [
+    0,
+    0,
+    1280,
+    840
+  ],
+  "surface": "Ferrite native headless Driver",
+  "provider": "simulated Codex app-server, no model API calls",
+  "source_commit": "8d5708cac2179305848293c7522e2fc26339a2f4",
+  "binary_sha256": "59092e14021c3d01d45c4425c442a88ccfee2b1fe5f811e77600e5e5001eb14c"
+}

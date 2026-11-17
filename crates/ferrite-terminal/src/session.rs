@@ -54,6 +54,31 @@ impl Terminal {
     /// caller reckons it, so the shell's first prompt is drawn to fit; the
     /// view sets the measured size on its first frame.
     pub fn spawn(directory: &Path, scrollback: usize, (columns, lines): (u16, u16)) -> io::Result<Self> {
+        #[cfg(unix)]
+        let shell = Some(hangup::login_shell());
+        #[cfg(not(unix))]
+        let shell = None;
+        Self::spawn_with_shell(directory, shell, scrollback, (columns, lines))
+    }
+
+    /// Run a program directly on the PTY, preserving its argument boundaries.
+    /// `directory` is the local process's working directory, including for SSH.
+    pub fn spawn_command(
+        directory: &Path,
+        program: &str,
+        args: Vec<String>,
+        scrollback: usize,
+        size: (u16, u16),
+    ) -> io::Result<Self> {
+        Self::spawn_with_shell(directory, Some(tty::Shell::new(program.into(), args)), scrollback, size)
+    }
+
+    fn spawn_with_shell(
+        directory: &Path,
+        shell: Option<tty::Shell>,
+        scrollback: usize,
+        (columns, lines): (u16, u16),
+    ) -> io::Result<Self> {
         // Left to the pty, a missing folder is quietly swapped for the home one.
         if !directory.is_dir() {
             return Err(io::Error::new(
@@ -72,10 +97,12 @@ impl Terminal {
             &TermSize::new(columns as usize, lines as usize),
             listener.clone(),
         )));
+        #[cfg(windows)]
+        let escape_args = shell.is_some();
         let options = tty::Options {
-            #[cfg(unix)]
-            shell: Some(hangup::login_shell()),
-            // On Windows, use alacritty's native PowerShell/ConPTY default.
+            shell,
+            #[cfg(windows)]
+            escape_args,
             working_directory: Some(directory.to_path_buf()),
             env: HashMap::from([
                 ("TERM".to_string(), "xterm-256color".to_string()),
@@ -282,6 +309,38 @@ mod tests {
         let gone = scratch("gone").join("nowhere");
         let error = Terminal::spawn(&gone, 1000, (80, 24)).err().expect("no shell in a missing folder");
         assert_eq!(error.kind(), std::io::ErrorKind::NotFound);
+    }
+
+    #[test]
+    fn an_explicit_command_preserves_arguments_local_directory_and_terminal_input() {
+        let dir = scratch("command with spaces");
+        let argument = "remote folder; $(printf injected) 'quoted'";
+        let terminal = Terminal::spawn_command(
+            &dir,
+            "/bin/sh",
+            vec![
+                "-c".into(),
+                "printf 'argument=<%s>\\ndirectory=<%s>\\n' \"$1\" \"$PWD\"; IFS= read -r line; printf 'input=<%s>\\n' \"$line\"; exec /bin/sh".into(),
+                "terminal-test".into(),
+                argument.into(),
+            ],
+            1000,
+            (240, 24),
+        )
+        .unwrap();
+        let text = wait_for(&terminal, "directory=<");
+        assert!(text.contains(&format!("argument=<{argument}>")), "{text}");
+        assert!(text.contains(&format!("directory=<{}>", dir.display())), "{text}");
+        terminal.write(&b"hello terminal\r"[..]);
+        let text = wait_for(&terminal, "input=<hello terminal>");
+        assert!(text.contains("input=<hello terminal>"), "{text}");
+    }
+
+    #[test]
+    fn a_missing_program_does_not_start_the_default_shell() {
+        let dir = scratch("missing-program");
+        let program = dir.join("not-a-program");
+        assert!(Terminal::spawn_command(&dir, program.to_str().unwrap(), vec![], 1000, (80, 24)).is_err());
     }
 
     #[test]
