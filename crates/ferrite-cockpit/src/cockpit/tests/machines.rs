@@ -1304,7 +1304,7 @@ fn a_draft_on_a_machine_starts_a_thread_in_a_directory_typed_there(cx: &mut Test
 
     let field = view.update(cx, |view, cx| {
         view.open_project_creator(cx);
-        let field = view.project_editor.as_ref().unwrap().remote.as_ref();
+        let field = view.project_editor_view.read(cx).editor.as_ref().unwrap().remote.as_ref();
         field.expect("a path field on a machine").field.clone()
     });
     assert!(
@@ -1317,7 +1317,9 @@ fn a_draft_on_a_machine_starts_a_thread_in_a_directory_typed_there(cx: &mut Test
         field.set(format!("{}/re", folder.display()), cx)
     });
     until(cx, |cx| {
-        view.read_with(cx, |view, cx| view.remote_completions(cx) == ["repo"])
+        view.read_with(cx, |view, cx| {
+            view.project_editor_view.read(cx).remote_completions(cx) == ["repo"]
+        })
     });
     tick(cx);
     assert!(debug_bounds(cx, "project-path-completion:repo".into()).is_some());
@@ -1338,15 +1340,15 @@ fn a_draft_on_a_machine_starts_a_thread_in_a_directory_typed_there(cx: &mut Test
     cx.simulate_keystrokes("enter");
     view.update(cx, |view, cx| {
         assert_eq!(
-            view.project_editor.as_ref().unwrap().staged,
+            view.project_editor_view.read(cx).editor.as_ref().unwrap().staged,
             std::slice::from_ref(&repo)
         );
         assert_eq!(field.read(cx).text(), "", "the field empties");
     });
     cx.simulate_keystrokes("enter");
-    let project = view.update(cx, |view, _| {
+    let project = view.update(cx, |view, cx| {
         assert!(
-            view.project_editor.is_none(),
+            !view.project_editor_open(cx),
             "the next ↵ confirms the card, adding nothing more"
         );
         let project = view.cockpit.registry().projects().last().unwrap().clone();

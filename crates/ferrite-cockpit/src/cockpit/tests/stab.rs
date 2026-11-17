@@ -181,8 +181,8 @@ fn the_project_name_field_shows_keyboard_focus(cx: &mut TestAppContext) {
     cx.simulate_resize(gpui::size(px(1200.), px(800.)));
     view.update(cx, |view, cx| view.open_project_creator(cx));
     tick(cx);
-    let name = view.read_with(cx, |view, _| {
-        view.project_editor.as_ref().unwrap().name.clone()
+    let name = view.read_with(cx, |view, cx| {
+        view.project_editor_view.read(cx).editor.as_ref().unwrap().name.clone()
     });
     cx.update(|window, cx| {
         let handle = name.read(cx).focus_handle(cx);
@@ -635,9 +635,9 @@ fn a_project_in_use_keeps_its_remove_verb_disabled(cx: &mut TestAppContext) {
     let remove = cx.debug_bounds("remove-project").expect("the remove verb");
     cx.simulate_click(remove.center(), gpui::Modifiers::none());
     tick(cx);
-    view.read_with(cx, |view, _| {
+    view.read_with(cx, |view, cx| {
         assert!(view.cockpit.registry().project(project).is_some());
-        assert!(view.project_editor.is_some(), "the sheet stays up");
+        assert!(view.project_editor_open(cx), "the sheet stays up");
     });
 }
 

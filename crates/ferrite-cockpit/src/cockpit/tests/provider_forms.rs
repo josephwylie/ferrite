@@ -500,7 +500,7 @@ fn project_completion_stays_visible_while_a_compact_form_scrolls(cx: &mut TestAp
                     view.adopt_editor_directory(directory.clone(), cx);
                 }
             }
-            let name = view.project_editor.as_ref().unwrap().name.clone();
+            let name = view.project_editor_view.read(cx).editor.as_ref().unwrap().name.clone();
             name.update(cx, |name, cx| name.set(title.into(), cx));
         });
         tick(cx);
@@ -560,9 +560,9 @@ fn project_completion_stays_visible_while_a_compact_form_scrolls(cx: &mut TestAp
 
         cx.simulate_click(confirm.center(), gpui::Modifiers::none());
         tick(cx);
-        created = Some(view.read_with(cx, |view, _| {
+        created = Some(view.read_with(cx, |view, app| {
             assert!(
-                view.project_editor.is_none(),
+                !view.project_editor_open(app),
                 "the visible footer completes the form"
             );
             assert_eq!(view.cockpit.registry().projects().len(), before + 1);

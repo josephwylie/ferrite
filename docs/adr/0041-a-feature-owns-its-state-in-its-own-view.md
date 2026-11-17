@@ -38,6 +38,13 @@ that happened to touch it, and nothing in the code said whose a field was.
   of its own yet (Connections, Permissions, Machine defaults, Server,
   Ferrite updates) the root still builds, with its own listeners, and
   hands over with the inputs. Each moves when its feature does.
+- **The Project card is the third.** `ProjectEditorView`
+  (`cockpit/project_editor_view.rs`) owns the open card, the one fading
+  out, its focus, and on a machine its path field and the listings it
+  completes from. It emits `ProjectEditorEvent`. What changes the Projects
+  (create, rename, add or remove a directory, remove a Project) stays the
+  root's, as do the closes that make the card modal, since they close other
+  features' state.
 
 ## Precedent
 
