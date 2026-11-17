@@ -292,14 +292,13 @@ impl TranscriptView {
         }
     }
 
-    /// Scroll an occurrence that painted at `found` a third of the way down
-    /// the view, if it lies outside it or under the pinned band.
+    /// Scroll an occurrence that painted at `found` to the reading line, if
+    /// it lies outside the view or under the pinned band.
     pub(super) fn settle_hit(&mut self, found: gpui::Bounds<gpui::Pixels>, cx: &mut Context<Self>) {
         let viewport = self.scroll.list_state().viewport_bounds();
         let top = viewport.top() + self.scroll.top_mask();
         if found.top() < top || found.bottom() > viewport.bottom() {
-            let goal = top + (viewport.bottom() - top) / 3.;
-            self.navigate(Navigate::Settle { by: found.top() - goal }, cx);
+            self.navigate(Navigate::Settle { at: found.top() }, cx);
         }
     }
 

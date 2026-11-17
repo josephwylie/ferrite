@@ -318,6 +318,43 @@ impl TranscriptScroll {
         self.reading.take();
     }
 
+    /// How far below the viewport's top a passage is read.
+    fn reading_line(&self) -> Pixels {
+        let mask = self.top_mask.get();
+        mask + (self.list.viewport_bounds().size.height - mask) * READING_LINE
+    }
+
+    /// The passage drawn at window height `y`, as the place to hold it at
+    /// the reading line.
+    fn place_at(&self, y: Pixels, rows: &TranscriptRows) -> Option<ReadingPlace> {
+        let top = self.list.logical_scroll_top();
+        (top.item_ix..self.list.item_count()).find_map(|index| {
+            let bounds = self.list.bounds_for_item(index)?;
+            let depth = y - bounds.top();
+            if depth < px(0.) || depth >= bounds.size.height {
+                return None;
+            }
+            Some(ReadingPlace {
+                row: rows.get(index)?.id().clone(),
+                along: depth / bounds.size.height.max(px(1.)),
+                line: self.reading_line(),
+                width: self.list.viewport_bounds().size.width,
+            })
+        })
+    }
+
+    /// Bring the passage drawn at window height `y` to the reading line and
+    /// hold it there. The move is a place in the passage's row as well as a
+    /// distance: `y` was painted by the frame before, and a layout that
+    /// rewraps the row before the move shows (a column sliding in or out)
+    /// would land that distance on another passage.
+    pub(crate) fn settle_at_reading_line(&self, y: Pixels, rows: &TranscriptRows) {
+        let place = self.place_at(y, rows);
+        let line = self.list.viewport_bounds().top() + self.reading_line();
+        self.list.scroll_by(y - line);
+        *self.reading.borrow_mut() = place;
+    }
+
     /// Put the passage the reader holds back where it was when wrapping
     /// changes it, then sample the passage now held. GPUI still owns every
     /// offset, measurement and tail-follow transition.
@@ -347,25 +384,9 @@ impl TranscriptScroll {
                 }
             }
         }
-        let mask = self.top_mask.get();
-        let reading_line = mask + (viewport.size.height - mask) * READING_LINE;
         let top = self.list.logical_scroll_top();
         let place = (top.item_ix != 0 || top.offset_in_item > px(0.))
-            .then(|| {
-                (top.item_ix..self.list.item_count()).find_map(|index| {
-                    let bounds = self.list.bounds_for_item(index)?;
-                    let depth = viewport.top() + reading_line - bounds.top();
-                    if depth < px(0.) || depth >= bounds.size.height {
-                        return None;
-                    }
-                    Some(ReadingPlace {
-                        row: rows.get(index)?.id().clone(),
-                        along: depth / bounds.size.height.max(px(1.)),
-                        line: reading_line,
-                        width: viewport.size.width,
-                    })
-                })
-            })
+            .then(|| self.place_at(viewport.top() + self.reading_line(), rows))
             .flatten();
         *self.reading.borrow_mut() = place;
         adjusted

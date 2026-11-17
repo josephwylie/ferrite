@@ -130,9 +130,9 @@ enum Navigate {
     /// The prompt a send just added, to the top with room under it for its
     /// answer: eased, or at once.
     Prompt { eased: bool },
-    /// The Find hit, painted outside the readable view: `by` px to bring it
-    /// a third of the way down.
-    Settle { by: gpui::Pixels },
+    /// The Find hit, painted at window height `at` outside the readable
+    /// view: to the reading line, held there.
+    Settle { at: gpui::Pixels },
 }
 
 /// Where a scene (or a command) asks a transcript to scroll.
@@ -1229,7 +1229,7 @@ impl TranscriptView {
                     self.scroll.scroll_to(row, px(0.));
                 }
             }
-            Navigate::Settle { by } => self.scroll.list_state().scroll_by(by),
+            Navigate::Settle { at } => self.scroll.settle_at_reading_line(at, &self.rows),
             Navigate::Prompt { eased } => {
                 let Some((index, row)) = self
                     .rows
