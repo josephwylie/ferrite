@@ -16,8 +16,8 @@
 //! The frame around the parts (titlebar, bottom bar, floats) is rebuilt
 //! whenever any part is, without rebuilding the others.
 //!
-//! Under `FERRITE_LOOPS_OVERLAY=0` (no cached Cockpit) the parts are drawn
-//! inline, as before.
+//! Under `FERRITE_LOOPS_OVERLAY=0` (no cached Cockpit) the Panes are drawn
+//! inline and the nav's view is mounted uncached.
 
 use std::collections::HashMap;
 
