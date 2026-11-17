@@ -757,7 +757,8 @@ fn the_bar_fits_a_narrow_pane(cx: &mut TestAppContext) {
     super::hold_nav_open(&view, cx);
     // A narrow window holds the nav at its minimum, the cell beside it
     // the narrowest that still steps up to a transcript.
-    let width = ferrite_ui::theme::NAV_MIN_W
+    let nav_minimum = super::nav_parity::sidebar_width(cx, 0., 0.);
+    let width = nav_minimum
         + ferrite_core::docview::TRANSCRIPT_WIDTH
         + ferrite_ui::theme::LEVEL_HYSTERESIS;
     cx.simulate_resize(gpui::size(px(width), px(700.)));

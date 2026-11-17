@@ -693,9 +693,11 @@ fn a_card_title_takes_its_line_and_the_branch_its_own(cx: &mut TestAppContext) {
         cx.notify();
     });
     tick(cx);
+    let viewport = cx.update(|window, _| f32::from(window.viewport_size().width));
+    let default_width = super::nav_parity::sidebar_width(cx, crate::nav::WIDTH, viewport);
     assert_eq!(
         view.read_with(cx, |view, _| view.nav_width()),
-        crate::nav::COLUMN_WIDTH,
+        default_width,
         "the nav at its default width"
     );
     for thread in &threads {
