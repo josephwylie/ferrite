@@ -148,7 +148,6 @@ impl CockpitView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.empty_shown = false;
         if let Some(thread) = self.focused_thread().filter(|thread| self.uses_remote_files(*thread)) {
             self.open_in_files(thread, path, line, true, cx);
             return;

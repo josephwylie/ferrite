@@ -269,7 +269,6 @@ impl CockpitView {
     /// opened. What the Surface needs (the Files tree, the Changes read) is
     /// made as it opens.
     pub(crate) fn upsert_surface(&mut self, thread: ThreadId, id: SurfaceId, cx: &mut Context<Self>) {
-        self.empty_shown = false;
         match &id {
             SurfaceId::Files => {
                 if self.active_surface(thread) != Some(SurfaceId::Files) {

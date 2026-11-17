@@ -117,7 +117,6 @@ impl CockpitView {
     /// told, else where it was left, else the shown Thread's Project, else
     /// the first one.
     pub(crate) fn open_prs(&mut self, project: Option<ProjectId>, cx: &mut Context<Self>) {
-        self.empty_shown = false;
         self.factory_view = None;
         let focused = self.focused_thread();
         let from_thread =

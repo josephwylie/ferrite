@@ -305,10 +305,12 @@ fn a_parked_member_is_its_tile_until_enter_wakes_it(cx: &mut TestAppContext) {
 /// `Previous`, wrapping.
 #[gpui::test]
 fn the_empty_board_walks_its_rows(cx: &mut TestAppContext) {
-    let (core, _fake) = cockpit("frame-empty-board", 6);
+    let (core, _fake) = cockpit("frame-empty-board", 0);
+    bind_production_keys(cx);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     cx.simulate_resize(gpui::size(px(1440.), px(900.)));
-    view.update(cx, |view, cx| view.show_empty_board(cx));
+    tick(cx);
+    cx.simulate_keystrokes("cmd-w");
     tick(cx);
     assert!(cx.debug_bounds("empty-board").is_some());
     for at in 0..3 {
@@ -329,10 +331,9 @@ fn the_empty_board_walks_its_rows(cx: &mut TestAppContext) {
     view.read_with(cx, |view, _| assert_eq!(view.empty_cursor, 0, "it wraps"));
     step(Box::new(empty_board::Previous), cx);
     view.read_with(cx, |view, _| assert_eq!(view.empty_cursor, 2, "both ways"));
-    // Landing on a Thread leaves the empty board.
-    let thread = view.read_with(cx, |view, _| view.cockpit.threads()[0]);
-    view.update(cx, |view, cx| view.focus_thread(thread, cx));
-    tick(cx);
+    // Its first row, a new Thread, leaves the empty board.
+    step(Box::new(empty_board::Next), cx);
+    step(Box::new(empty_board::Run), cx);
     assert!(cx.debug_bounds("empty-board").is_none());
 }
 

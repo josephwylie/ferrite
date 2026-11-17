@@ -711,8 +711,6 @@ pub struct CockpitView {
     /// Measuring at every reader's slide's destination (`board_level`), so
     /// a Level never flaps mid-slide.
     nav_measure_rest: std::cell::Cell<bool>,
-    /// The empty board shown while Threads stay open (`show_empty_board`).
-    empty_shown: bool,
     /// A Project's Factory board, shown in the board's place (ADR 0037).
     factory_view: Option<factory::FactoryView>,
     /// The PRs destination, kept as it was left while another view shows.
@@ -1703,7 +1701,6 @@ impl CockpitView {
             transcript_entities: Default::default(),
             decisions: decisions::DecisionState::new(cx.weak_entity()),
             nav_measure_rest: std::cell::Cell::new(false),
-            empty_shown: false,
             factory_view: None,
             prs: prs::PrsView::new(cx),
             task_toasts: Default::default(),
@@ -1982,7 +1979,7 @@ impl CockpitView {
     /// wherever the nav row's own click would land. A Thread already
     /// shown stays put.
     fn show_thread(&mut self, thread: ThreadId, cx: &mut Context<Self>) {
-        if self.focused_thread() != Some(thread) || self.destination_shown() || self.empty_shown {
+        if self.focused_thread() != Some(thread) || self.destination_shown() {
             self.open_nav_row(thread, cx);
         }
     }
@@ -7249,16 +7246,11 @@ impl CockpitView {
                         "imported thread {} would not open: {error:?}",
                         adopted.thread
                     );
-                } else {
-                    // The import has focus: an empty board shown over the
-                    // open Threads would hide it.
-                    self.empty_shown = false;
-                    if let Some(index) = draft.and_then(|draft| self.index_of(draft)) {
-                        self.panes[index].composer.update(cx, |composer, cx| {
-                            composer.take(cx);
-                        });
-                        self.panes[index].adopt_thread(adopted.thread);
-                    }
+                } else if let Some(index) = draft.and_then(|draft| self.index_of(draft)) {
+                    self.panes[index].composer.update(cx, |composer, cx| {
+                        composer.take(cx);
+                    });
+                    self.panes[index].adopt_thread(adopted.thread);
                 }
                 if let Some(error) = &adopted.blank_kept {
                     ferrite_core::log!("the blank thread stayed open: {error}");
@@ -9205,7 +9197,6 @@ impl CockpitView {
     /// that shows it — the core's one door, so a fullscreened cockpit
     /// re-aims to the clicked Thread like every other deliberate move.
     fn focus_thread(&mut self, thread: ThreadId, cx: &mut Context<Self>) {
-        self.empty_shown = false;
         self.leave_destination();
         if self.cockpit.focus_thread(thread) {
             if let Some(index) = self.pane_for(thread) {
@@ -9230,7 +9221,6 @@ impl CockpitView {
     /// one's as its tile, woken by ⏎ (F-8) — and enters the view; the
     /// mirror follows.
     pub fn enter_group(&mut self, group: GroupId, cx: &mut Context<Self>) {
-        self.empty_shown = false;
         self.leave_destination();
         match self.cockpit.enter_group(group) {
             Ok(()) => {
@@ -9265,7 +9255,6 @@ impl CockpitView {
         cx: &mut Context<Self>,
     ) -> Result<(), ferrite_core::store::LoadError> {
         self.cockpit.reopen(thread)?;
-        self.empty_shown = false;
         self.leave_destination();
         self.widen_scope_to(thread, cx);
         self.sync_panes(cx);
@@ -10553,9 +10542,6 @@ impl CockpitView {
             frame().flex().child(self.factory_board(window, cx))
         } else if self.prs.shown {
             frame().flex().child(self.prs_board(cx))
-        } else if self.empty_shown && fullscreen.is_none() {
-            // Shown on purpose while Threads stay open (`show_empty_board`).
-            frame().flex().child(self.empty_board(cx))
         } else if let Some(index) = fullscreen.filter(|index| !self.has_reader(*index)) {
             // The fullscreened Pane takes the whole window (with a reader,
             // its own cell splits: the board below). The other Panes are

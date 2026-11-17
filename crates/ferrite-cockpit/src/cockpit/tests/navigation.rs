@@ -92,10 +92,9 @@ fn the_arrows_lead_the_head_and_step_on_a_click(cx: &mut TestAppContext) {
     let forward = cx.debug_bounds("history-forward").unwrap();
     assert!(forward.right() < title.left(), "the title clears them");
 
-    view.update(cx, |view, cx| {
-        view.empty_shown = true;
-        cx.notify();
-    });
+    cx.simulate_keystrokes("cmd-w");
+    tick(cx);
+    cx.simulate_keystrokes("cmd-w");
     tick(cx);
     assert!(
         cx.debug_bounds("history-back").is_some(),
