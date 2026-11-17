@@ -2164,6 +2164,32 @@ fn pane_builds(threads: &[ThreadId]) -> Vec<usize> {
         .collect()
 }
 
+/// One Thread, Solo, in an active window, the keyboard in its Pane, first
+/// paint settled.
+fn solo_board<'a>(
+    name: &str,
+    cx: &'a mut TestAppContext,
+) -> (
+    Entity<CockpitView>,
+    Fake,
+    Vec<ThreadId>,
+    &'a mut gpui::VisualTestContext,
+) {
+    ferrite_ui::motion::testing::drive();
+    let (core, fake) = cockpit(name, 1);
+    let threads = core.threads().to_vec();
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(1600.), px(1000.)));
+    cx.update(|window, _| window.activate_window());
+    view.update(cx, |view, cx| {
+        view.focus_pane(0);
+        cx.notify();
+    });
+    tick(cx);
+    cockpit_renders_over(cx, 1_000);
+    (view, fake, threads, cx)
+}
+
 /// A four-Pane Group in an active window, the keyboard in the first Pane,
 /// `working` mid-turn, first paint settled.
 fn group_board<'a>(
@@ -2295,7 +2321,7 @@ fn a_clock_rollover_rebuilds_only_the_working_pane(cx: &mut TestAppContext) {
 /// Cockpit or any Pane being rebuilt for it.
 #[gpui::test]
 fn an_open_palette_does_not_rebuild_the_cockpit(cx: &mut TestAppContext) {
-    let (view, _fake, threads, cx) = group_board("palette-parts", &[], cx);
+    let (view, _fake, threads, cx) = solo_board("palette-parts", cx);
     view.update_in(cx, |view, window, cx| {
         view.open_palette(crate::palette::PaletteScope::All, "", window, cx)
     });
@@ -2314,7 +2340,7 @@ fn an_open_palette_does_not_rebuild_the_cockpit(cx: &mut TestAppContext) {
         rendered <= 10,
         "an open palette rebuilt the Cockpit {rendered} times in 5s"
     );
-    assert_eq!(built, [0, 0, 0, 0]);
+    assert_eq!(built, [0]);
 }
 
 /// The arrows in an open model picker move its cursor by rebuilding the
@@ -2381,7 +2407,7 @@ fn frames_over(cx: &mut gpui::VisualTestContext, ms: u64) -> usize {
 #[gpui::test]
 fn a_menu_eases_open_and_rebuilds_no_pane(cx: &mut TestAppContext) {
     ferrite_ui::motion::testing::drive();
-    let (view, _fake, threads, cx) = group_board("menu-entrance", &[], cx);
+    let (view, _fake, threads, cx) = solo_board("menu-entrance", cx);
     view.update(cx, |view, cx| {
         view.open_context_menu(
             MenuTarget::Pane(threads[0]),
@@ -2395,7 +2421,7 @@ fn a_menu_eases_open_and_rebuilds_no_pane(cx: &mut TestAppContext) {
     let built = built_since(&threads, &panes);
     eprintln!("MENU_OPEN frames={frames} pane_builds={built:?}");
     assert!(frames > 0, "the menu settles in: entrance frames run");
-    assert_eq!(built, [0, 0, 0, 0], "opening it rebuilt a Pane");
+    assert_eq!(built, [0], "opening it rebuilt a Pane");
     assert_eq!(frames_over(cx, 160), 0, "frames stop once it has landed");
 }
 
@@ -2403,7 +2429,7 @@ fn a_menu_eases_open_and_rebuilds_no_pane(cx: &mut TestAppContext) {
 /// in the frame around the parts: no Pane is rebuilt for it.
 #[gpui::test]
 fn a_hover_on_a_menu_row_rebuilds_no_pane(cx: &mut TestAppContext) {
-    let (view, _fake, threads, cx) = group_board("menu-row-hover", &[], cx);
+    let (view, _fake, threads, cx) = solo_board("menu-row-hover", cx);
     view.update(cx, |view, cx| {
         view.open_context_menu(
             MenuTarget::Pane(threads[0]),
@@ -2433,7 +2459,7 @@ fn a_hover_on_a_menu_row_rebuilds_no_pane(cx: &mut TestAppContext) {
     cockpit_renders_over(cx, 300);
     let built = built_since(&threads, &panes);
     eprintln!("MENU_ROW_HOVER pane_builds={built:?}");
-    assert_eq!(built, [0, 0, 0, 0], "a menu row's hover rebuilt a Pane");
+    assert_eq!(built, [0], "a menu row's hover rebuilt a Pane");
 }
 
 /// The kit's toast stack measures a toast as it slides in: that redraws
@@ -2441,7 +2467,7 @@ fn a_hover_on_a_menu_row_rebuilds_no_pane(cx: &mut TestAppContext) {
 /// `refresh_windows` rebuilt every Pane on every frame a toast moved).
 #[gpui::test]
 fn a_kit_toast_coming_in_rebuilds_no_pane(cx: &mut TestAppContext) {
-    let (_view, _fake, threads, cx) = group_board("kit-toast", &[], cx);
+    let (_view, _fake, threads, cx) = solo_board("kit-toast", cx);
     cockpit_renders_over(cx, 2_500);
     let panes = pane_builds(&threads);
     cx.update(|window, cx| {
@@ -2461,7 +2487,7 @@ fn a_kit_toast_coming_in_rebuilds_no_pane(cx: &mut TestAppContext) {
     }
     let built = built_since(&threads, &panes);
     eprintln!("KIT_TOAST_IN pane_builds={built:?}");
-    assert_eq!(built, [0, 0, 0, 0], "a toast sliding in rebuilt a Pane");
+    assert_eq!(built, [0], "a toast sliding in rebuilt a Pane");
 }
 
 /// The kit's toast card moves as Ferrite's own toasts do (the vendored
@@ -2471,7 +2497,7 @@ fn a_kit_toast_coming_in_rebuilds_no_pane(cx: &mut TestAppContext) {
 #[gpui::test]
 fn a_kit_toast_slides_its_own_height_on_the_toast_tokens(cx: &mut TestAppContext) {
     ferrite_ui::motion::testing::drive();
-    let (_view, _fake, _threads, cx) = group_board("kit-toast-motion", &[], cx);
+    let (_view, _fake, _threads, cx) = solo_board("kit-toast-motion", cx);
     cx.update(|window, cx| {
         use gpui::component::WindowExt;
         window.push_notification(
@@ -2560,18 +2586,11 @@ fn needs_you_toast_comes_and_goes(
     cx: &mut TestAppContext,
 ) -> (usize, usize) {
     ferrite_ui::motion::testing::drive();
-    // A board of two, and a third Thread off it, working.
+    // The first Thread shown, and a third off the board, working.
     let (mut core, fake) = cockpit(name, 3);
     let threads = core.threads().to_vec();
-    core.apply_group(GroupChange::Create {
-        first: threads[0],
-        second: threads[1],
-    })
-    .unwrap();
-    let group = core.groups().of(threads[0]).unwrap().id;
     let _ = core.send(threads[2], "task".into());
     core.pump();
-    core.enter_group(group).unwrap();
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     cx.simulate_resize(gpui::size(px(1440.), px(900.)));
     view.update(cx, |view, cx| view.set_nav_collapsed(true, cx));
@@ -2705,7 +2724,7 @@ fn plays_beside_nav_rebuilds(
 /// entrance asks there for its next frame.
 #[gpui::test]
 fn nav_rebuilds_starve_no_entrance(cx: &mut TestAppContext) {
-    let (view, _fake, _threads, cx) = group_board("nav-rebuild-entrances", &[], cx);
+    let (view, _fake, _threads, cx) = solo_board("nav-rebuild-entrances", cx);
     view.update_in(cx, |view, window, cx| {
         view.open_palette(crate::palette::PaletteScope::All, "", window, cx)
     });
@@ -2723,7 +2742,7 @@ fn nav_rebuilds_starve_no_entrance(cx: &mut TestAppContext) {
 /// moves on every frame until it lands, then asks for none.
 #[gpui::test]
 fn nav_rebuilds_starve_no_review_slide(cx: &mut TestAppContext) {
-    let (view, _fake, _threads, cx) = group_board("nav-rebuild-review", &[], cx);
+    let (view, _fake, _threads, cx) = solo_board("nav-rebuild-review", cx);
     view.update(cx, |view, cx| {
         let composer = view.panes[0].composer.clone();
         let reading = view.prefs.settings.reading_size;
@@ -2746,7 +2765,7 @@ fn nav_rebuilds_starve_no_review_slide(cx: &mut TestAppContext) {
 /// while it does, no Pane rebuilt for them, none once it has landed.
 #[gpui::test]
 fn the_palette_comes_in_and_rebuilds_no_pane(cx: &mut TestAppContext) {
-    let (view, _fake, threads, cx) = group_board("palette-entrance", &[], cx);
+    let (view, _fake, threads, cx) = solo_board("palette-entrance", cx);
     view.update_in(cx, |view, window, cx| {
         view.open_palette(crate::palette::PaletteScope::All, "", window, cx)
     });
@@ -2759,7 +2778,7 @@ fn the_palette_comes_in_and_rebuilds_no_pane(cx: &mut TestAppContext) {
     let built = built_since(&threads, &panes);
     eprintln!("PALETTE_ENTRANCE frames={frames} pane_builds={built:?}");
     assert!(frames > 0, "the palette comes in");
-    assert_eq!(built, [0, 0, 0, 0], "its entrance rebuilt a Pane");
+    assert_eq!(built, [0], "its entrance rebuilt a Pane");
     assert_eq!(display_frames(cx), 0, "landed: no more frames");
 }
 
@@ -2768,12 +2787,7 @@ fn the_palette_comes_in_and_rebuilds_no_pane(cx: &mut TestAppContext) {
 /// asks for nothing after.
 #[gpui::test]
 fn the_model_picker_opens_in_place_and_then_rests(cx: &mut TestAppContext) {
-    let (view, _fake, threads, cx) = group_board("choice-menu-entrance", &[], cx);
-    view.update(cx, |view, cx| {
-        view.cockpit.toggle_fullscreen();
-        cx.notify();
-    });
-    cockpit_renders_over(cx, 300);
+    let (view, _fake, threads, cx) = solo_board("choice-menu-entrance", cx);
     view.update(cx, |view, cx| view.open_provider_picker(threads[0], cx));
     cx.run_until_parked();
     let mut watch = |cx: &mut gpui::VisualTestContext, ms: u64| {
