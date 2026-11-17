@@ -224,6 +224,21 @@ impl InlineSelectionProjection {
         }
     }
 
+    pub(super) fn paint_retained_atomic(&self, handle: &crate::TextSelectionHandle, ordinal: usize, window: &mut Window, cx: &App) {
+        for retained in handle.retained_ranges(cx) {
+            let selected = selection_for_document_range(&self.text, ordinal, self.source_offset, retained.range.get()).is_some();
+            if selected {
+                window.paint_quad(gpui::fill(self.bounds, crate::Theme::global(cx).tokens.colors.selection));
+            }
+            retained.record(ordinal, self.source_offset, self.source_text(), selected.then_some(self.bounds));
+        }
+    }
+
+    pub(super) fn source_text(&self) -> SharedString {
+        let (root, _) = InlineState::source_metadata(&self.state);
+        root.upgrade().and_then(|root| root.lock().ok().map(|state| state.text.clone())).unwrap_or_else(|| self.text.clone())
+    }
+
     pub(super) fn source_root(&self) -> usize {
         self.source_root
     }
@@ -285,7 +300,7 @@ impl InlineSelectionProjection {
     }
 }
 
-fn selection_for_document_range(
+pub(super) fn selection_for_document_range(
     text: &str,
     ordinal: usize,
     source_offset: usize,
@@ -349,17 +364,35 @@ fn code_line_bounds(
     range: Range<usize>,
     line_height: Pixels,
 ) -> Vec<Bounds<Pixels>> {
+    line_bounds(
+        text,
+        range,
+        line_height,
+        text_layout.bounds().left(),
+        |index| text_layout.position_for_index(index),
+    )
+}
+
+/// `code_line_bounds` over a layout given as its `left` edge and its index
+/// → `position`.
+fn line_bounds(
+    text: &str,
+    range: Range<usize>,
+    line_height: Pixels,
+    left: Pixels,
+    position: impl Fn(usize) -> Option<Point<Pixels>>,
+) -> Vec<Bounds<Pixels>> {
     let mut lines: Vec<Bounds<Pixels>> = Vec::new();
-    let end = range.end.min(text.len());
-    let mut offset = range.start.min(end);
-    for c in text[offset..end].chars() {
+    let range = char_range(text, range);
+    let mut offset = range.start;
+    for c in text[range].chars() {
         let next = offset + c.len_utf8();
-        if let Some(mut pos) = text_layout.position_for_index(offset) {
-            let next_pos = text_layout.position_for_index(next);
+        if let Some(mut pos) = position(offset) {
+            let next_pos = position(next);
             // At a soft wrap the index resolves to the end of the earlier
             // line, but the glyph is drawn at the start of the next one.
             if let Some(next_pos) = next_pos.filter(|next_pos| next_pos.y > pos.y) {
-                pos = point(text_layout.bounds().left(), next_pos.y);
+                pos = point(left, next_pos.y);
             }
             let right = next_pos
                 .filter(|next_pos| next_pos.y == pos.y)
@@ -392,9 +425,9 @@ fn underline_spans(
     // The line being walked: its top, its first glyph's left, and the right
     // edge of its last non-whitespace glyph so far.
     let mut line: Option<(Pixels, Pixels, Option<Pixels>)> = None;
-    let end = range.end.min(text.len());
-    let mut offset = range.start.min(end);
-    for c in text[offset..end].chars() {
+    let range = char_range(text, range);
+    let mut offset = range.start;
+    for c in text[range].chars() {
         let next = offset + c.len_utf8();
         if let Some(mut pos) = position(offset) {
             let next_pos = position(next);
@@ -422,6 +455,15 @@ fn underline_spans(
         spans.push((top, start, stop));
     }
     spans
+}
+
+/// `range` clipped to `text` and moved back onto character boundaries. A
+/// range counted against another frame's text (`FreshTally`'s runs are) can
+/// start or end inside a character of this one's.
+fn char_range(text: &str, range: Range<usize>) -> Range<usize> {
+    let end = utf8_boundary_before(text, range.end.min(text.len()));
+    let start = utf8_boundary_before(text, range.start.min(end));
+    start..end
 }
 
 fn utf8_boundary_before(text: &str, mut offset: usize) -> usize {
@@ -1093,6 +1135,7 @@ impl Element for Inline {
         let current_view = window.current_view();
         let (hitbox, stops) = prepaint;
         let (source_root, source_offset) = InlineState::source_metadata(&self.state);
+        let retained_source = source_root.upgrade().and_then(|root| root.lock().ok().map(|root| root.text.clone())).unwrap_or_else(|| self.text.clone());
         let Ok(mut state) = self.state.lock() else {
             return;
         };
@@ -1126,6 +1169,17 @@ impl Element for Inline {
                 )
             })
             .unwrap_or((None, 0, 0));
+
+        if let Some(view) = GlobalState::global(cx).text_view_state() {
+            let handle = view.read(cx).selection_adapter.handle();
+            for retained in handle.retained_ranges(cx) {
+                let selected = selection_for_document_range(&self.text, ordinal, source_offset, retained.range.get());
+                let last = selected.as_ref().and_then(|selected| {
+                    Self::paint_selection(selected, &text_layout, &bounds, window, if document_range.is_some() { gpui::transparent_black() } else { crate::Theme::global(cx).tokens.colors.selection }).last().copied()
+                });
+                retained.record(ordinal, source_offset, retained_source.clone(), last);
+            }
+        }
 
         // layout selections
         let (is_selectable, is_selection, selection) = self.layout_selections(
@@ -1541,6 +1595,30 @@ mod tests {
             vec![(px(0.), px(0.), px(10.)), (px(20.), px(0.), px(10.))],
             "the first line's stroke stops at `b`'s right edge, not the space's"
         );
+    }
+
+    /// A veil's range is counted against the text an earlier frame painted
+    /// (`FreshTally`), so it can split a character of this frame's. The box
+    /// moves back to that character's start; the paint does not panic.
+    #[test]
+    fn a_range_that_splits_a_character_is_boxed_from_its_start() {
+        // "a→b": `a` at byte 0, `→` at 1..4, `b` at 4; each glyph 10 wide.
+        let text = "a→b";
+        let at = |index: usize| -> Option<Point<Pixels>> {
+            let x = match index {
+                0 => 0.,
+                1 => 10.,
+                4 => 20.,
+                _ => 30.,
+            };
+            Some(point(px(x), px(0.)))
+        };
+        let boxes = |range| super::line_bounds(text, range, px(20.), px(0.), at);
+        let line = |left: f32, right: f32| {
+            Bounds::from_corners(point(px(left), px(0.)), point(px(right), px(20.)))
+        };
+        assert_eq!(boxes(0..2), vec![line(0., 10.)], "the run ends before `→`");
+        assert_eq!(boxes(2..5), vec![line(10., 30.)], "the next takes `→` whole");
     }
 
     #[test]

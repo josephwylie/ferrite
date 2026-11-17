@@ -184,6 +184,13 @@ impl TextViewSelectionAdapter {
 
         let view_for_document_position = view.clone();
         let projections_for_document_position = projections.clone();
+        let anchor_projections = projections.clone();
+        selection.anchor_sources_with(move |_| {
+            anchor_projections.borrow().iter().map(|projection| {
+                (projection.document_ordinal(), projection.source_text())
+            }).collect()
+        }, cx);
+
         selection.resolve_document_position_with(
             move |content_point, cx| {
                 let view = view_for_document_position.upgrade()?;
@@ -237,7 +244,8 @@ impl TextViewSelectionAdapter {
         changed && !is_selecting
     }
 
-    pub(super) fn begin_frame(&mut self) {
+    pub(super) fn begin_frame(&mut self, cx: &App) {
+        for part in self.selection.retained_ranges(cx) { part.begin_frame(); }
         self.text_bounds.clear();
         // This runs only when this native view paints. An unmounted virtual
         // row does not enter a frame, so its last projections stay available
