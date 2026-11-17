@@ -76,7 +76,7 @@ The parent run in `/tmp/ferrite-parity-isolated-ui-tests.log` exposed two sideba
 
 The collapse-level fixture used a 550px window. Sidebar clamping now leaves at least 300px for the cell there, so Transcript is the correct expanded level. The fixture now uses 480px. Even at the 208px sidebar minimum, the expanded cell is at most 272px; folding restores 480px. These bounds straddle `docview.rs`'s 300px Transcript threshold without changing production zoom rules.
 
-Fix Root Causes moved resize completion to the event phase that can receive every release. The existing red tests remain the regression checks. This worker made these corrections only in `/Users/josephwylie/Desktop/Projects/ferrite-t3-parity` and ran no Cargo commands, builds, or GUI checks. Parent rerun remains pending.
+Fix Root Causes moved resize completion to the event phase that can receive every release. The existing red tests remain the regression checks. This worker made these corrections only in the `ferrite-t3-parity` worktree and ran no Cargo commands, builds, or GUI checks. Parent rerun remains pending.
 
 
 ## Resize event routing correction
