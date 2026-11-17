@@ -1144,8 +1144,7 @@ pub fn seed_panes(core: &mut Cockpit, panes: usize, first: Provider) {
 /// it is owed — newest, because that is what the operator was last looking
 /// at — and opens a new one only when the store has none.
 pub fn threads_for(cockpit: &mut Cockpit, wanted: usize, provider: Provider) -> Vec<ThreadId> {
-    // Keep a fixture run scoped to its launch directory, even though real
-    // Groups may combine Threads from different Projects.
+    // Keep a fixture run scoped to its launch directory.
     let project = cockpit.register_project(&here()).ok();
     let mut parked = cockpit.parked().unwrap_or_default();
     parked.reverse();

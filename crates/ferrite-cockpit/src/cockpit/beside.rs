@@ -3,10 +3,9 @@
 //! Panel instead (`panel/preview.rs`).
 //!
 //! A review takes the reader slot the Pane has (`ReviewSlot`, laid out by
-//! `board_tree`): it needs the board's width, and takes line comments. In
-//! Solo the board becomes `Pane | review`, in a Group (or a fullscreen
-//! Pane) the Pane's own cell splits, half and half (`READER_SHARE`), the
-//! seam between them dragging like any other (22–78%). Escape in it, its
+//! `board_tree`): it needs the board's width, and takes line comments. The
+//! board becomes `Pane | review`, half and half (`READER_SHARE`), the seam
+//! between them dragging (22–78%). Escape in it, its
 //! ×, or ⌘W while it holds focus closes it, and the tree it was spliced
 //! into closes back over it, restoring the board as it was.
 //!

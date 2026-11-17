@@ -831,7 +831,7 @@ impl CockpitView {
                 if let Some(until) = preset.until(ferrite_core::clock::system_time()) {
                     self.snooze_thread(thread, Some(until), cx);
                 } else {
-                    self.group_error =
+                    self.nav_notice =
                         Some("That snooze time has passed. Choose another time.".into());
                 }
             }
@@ -846,7 +846,7 @@ impl CockpitView {
                 self.start_rename(RenameTarget::Thread(thread), cx)
             }
             (MenuTarget::Pane(thread), MenuVerb::Rename) => {
-                self.start_rename(RenameTarget::PaneTitle(thread), cx)
+                self.start_rename(RenameTarget::ViewTitle(thread), cx)
             }
             (MenuTarget::Thread(thread) | MenuTarget::Pane(thread), MenuVerb::Focus) => {
                 if self.pane_for(thread).is_some() {
@@ -1019,9 +1019,9 @@ impl CockpitView {
             }
             (MenuTarget::Thread(thread) | MenuTarget::Pane(thread), MenuVerb::Delete) => {
                 if let Err(error) = self.delete_thread(thread) {
-                    self.group_error = Some(format!("delete refused: {error}").into());
+                    self.nav_notice = Some(format!("delete refused: {error}").into());
                 } else {
-                    self.group_error = None;
+                    self.nav_notice = None;
                 }
                 if self
                     .popover

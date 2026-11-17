@@ -9,43 +9,6 @@ fn sorted_threads(core: &Cockpit) -> Vec<ThreadId> {
     threads
 }
 
-/// N-5: the one selection is the card of what the board shows — the
-/// shown Group's focused member on its board, the Thread's own card in
-/// Solo — and only that one.
-#[gpui::test]
-fn the_selection_follows_what_the_board_shows(cx: &mut TestAppContext) {
-    let (mut core, _fake) = cockpit("nav-selection", 3);
-    let threads = sorted_threads(&core);
-    let group = core
-        .apply_group(GroupChange::Create {
-            first: threads[0],
-            second: threads[1],
-        })
-        .unwrap()
-        .group
-        .unwrap();
-    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
-    tick(cx);
-
-    let selected = |view: &CockpitView| -> Vec<ThreadId> {
-        view.nav_state()
-            .open_rows()
-            .filter(|row| row.selected)
-            .map(|row| row.thread)
-            .collect()
-    };
-    view.update(cx, |view, cx| {
-        view.enter_group(group, cx);
-        let focused = view.cockpit.roster().focused_thread().expect("a member");
-        assert!(threads[..2].contains(&focused));
-        assert_eq!(selected(view), [focused], "the Group's focused member");
-
-        view.focus_thread(threads[2], cx);
-        assert_eq!(view.cockpit.roster().view(), View::Solo);
-        assert_eq!(selected(view), [threads[2]], "Solo selects the Thread's card");
-    });
-}
-
 #[gpui::test]
 fn the_nav_scrollbar_sits_beside_the_rows(cx: &mut TestAppContext) {
     use ferrite_ui::theme::NAV_SCROLLBAR_GUTTER;

@@ -158,7 +158,7 @@ fn a_closed_new_pane_is_not_reopened(
     let dir = prefs.dir.clone();
     let (view, cx) = window_with(core, prefs, cx);
     view.update(cx, |view, cx| {
-        view.open_draft_with_placement(DraftTarget::Main, DraftPlacement::Loose, cx)
+        view.open_draft(DraftTarget::Main, cx)
     });
     tick(cx);
     cx.simulate_input("never send this");

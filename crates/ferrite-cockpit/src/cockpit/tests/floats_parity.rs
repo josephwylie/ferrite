@@ -246,61 +246,6 @@ fn palette_keys_wrap_and_land_on_a_thread(cx: &mut TestAppContext) {
     );
 }
 
-/// FL-2: a Thread's row reads its scope and state, the board's Threads
-/// carry their ⌘ digit in head order, and the rows run Project by Project.
-#[gpui::test]
-fn thread_rows_name_their_scope_state_and_digit(cx: &mut TestAppContext) {
-    let (mut core, fake) = cockpit("palette-rows", 2);
-    let threads = core.threads();
-    let _ = core.send(threads[0], "work".into());
-    fake.streams.borrow()[0]
-        .send(SessionEvent::TextDelta {
-            text: "Working on it".into(),
-        })
-        .unwrap();
-    core.pump();
-    let group = group_all(&mut core);
-    core.apply_group(GroupChange::Rename {
-        group,
-        title: "Perf sweep".into(),
-    })
-    .unwrap();
-    core.enter_group(group).unwrap();
-    bind_production_keys(cx);
-    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
-    cx.simulate_resize(gpui::size(px(1440.), px(900.)));
-    tick(cx);
-    let order: Vec<ThreadId> = cx.update(|window, cx| {
-        let view = view.read(cx);
-        view.board_order(window)
-            .into_iter()
-            .map(|index| view.panes[index].thread().unwrap())
-            .collect()
-    });
-    let rows = cx.update(|window, cx| view.read(cx).palette_thread_rows(window));
-    for (at, thread) in order.iter().enumerate() {
-        let row = rows
-            .iter()
-            .find(|row| row.act == Act::Thread(*thread))
-            .expect("every Thread has a row");
-        assert_eq!(
-            row.keys.as_deref(),
-            Some(format!("cmd-{}", at + 1).as_str())
-        );
-        assert!(
-            row.context.starts_with("Perf sweep"),
-            "the shown Group names its Threads: {:?}",
-            row.context
-        );
-    }
-    let working = rows
-        .iter()
-        .find(|row| row.act == Act::Thread(threads[0]))
-        .unwrap();
-    assert_eq!(working.context.as_ref(), "Perf sweep \u{b7} working");
-    assert_eq!(working.status, Some(nav::RowStatus::Working));
-}
-
 /// Repeated ⌘⌫ clears text without parking the Thread once empty.
 #[gpui::test]
 fn cmd_backspace_deletes_text_without_parking_empty_threads(cx: &mut TestAppContext) {

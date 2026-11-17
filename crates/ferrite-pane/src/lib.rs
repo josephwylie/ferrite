@@ -32,10 +32,6 @@ mod tests {
             ("lib.rs", include_str!("lib.rs")),
             ("pane.rs", include_str!("pane.rs")),
             ("pane/text.rs", include_str!("pane/text.rs")),
-            (
-                "pane/compact_composer.rs",
-                include_str!("pane/compact_composer.rs"),
-            ),
             ("pane/composer.rs", include_str!("pane/composer.rs")),
             (
                 "pane/background_work.rs",

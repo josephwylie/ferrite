@@ -126,39 +126,6 @@ fn back_revives_a_parked_thread(cx: &mut TestAppContext) {
     assert_eq!(shown(&view, cx), Some(second), "back opened it again");
 }
 
-/// A Group is a place, and back leaves it for the Thread shown before.
-#[gpui::test]
-fn back_leaves_a_group_for_the_thread_before(cx: &mut TestAppContext) {
-    let (mut core, _fake) = cockpit("history-group", 3);
-    let threads = core.threads();
-    let group = core
-        .apply_group(GroupChange::Create {
-            first: threads[1],
-            second: threads[2],
-        })
-        .unwrap()
-        .group
-        .unwrap();
-    bind_production_keys(cx);
-    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
-    view.update(cx, |view, cx| view.focus_thread(threads[0], cx));
-    tick(cx);
-    view.update(cx, |view, cx| view.enter_group(group, cx));
-    tick(cx);
-
-    cx.simulate_keystrokes("cmd-[");
-    tick(cx);
-    view.read_with(cx, |view, _| {
-        assert_eq!(view.cockpit.roster().view(), View::Solo);
-        assert_eq!(view.focused_thread(), Some(threads[0]));
-    });
-    cx.simulate_keystrokes("cmd-]");
-    tick(cx);
-    view.read_with(cx, |view, _| {
-        assert_eq!(view.cockpit.roster().view(), View::Group(group))
-    });
-}
-
 /// Opening a Subagent is a place: ⌘[ goes from it back to Main.
 #[gpui::test]
 fn back_goes_from_a_subagent_to_main(cx: &mut TestAppContext) {

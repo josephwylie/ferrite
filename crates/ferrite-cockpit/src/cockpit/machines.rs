@@ -233,7 +233,7 @@ impl CockpitView {
             return;
         };
         if let Err(error) = bridge.sign_in() {
-            self.group_error = Some(format!("cannot sign in: {error}").into());
+            self.nav_notice = Some(format!("cannot sign in: {error}").into());
             cx.notify();
         }
     }

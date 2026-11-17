@@ -1,6 +1,6 @@
 //! The nav's chrome, wired (`nav::chrome`): the search row — the inline
-//! field and its results, the Filter menu (a Project to filter by, a Group
-//! to open), Add project and New thread — and the foot — Settings, Pull
+//! field and its results, the Filter menu (a Project to filter by), Add
+//! project and New thread — and the foot — Settings, Pull
 //! requests, Usage, the undo notice behind ⌘Z, free disk and the update
 //! door.
 
@@ -19,7 +19,7 @@ pub(crate) struct NavUndo {
 
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) enum UndoAct {
-    Parked(Vec<super::nav_undo::ParkedThread>),
+    Parked(Vec<ThreadId>),
     Snoozed(ThreadId),
 }
 

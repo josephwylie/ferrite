@@ -401,7 +401,7 @@ impl CockpitView {
     ) {
         let done = move |view: &mut Self, result: std::io::Result<()>| {
             if let Err(error) = result {
-                view.group_error = Some(format!("the server did not {verb}: {error}").into());
+                view.nav_notice = Some(format!("the server did not {verb}: {error}").into());
             }
         };
         let Some(busy) = self.in_flight() else {
@@ -497,7 +497,7 @@ impl CockpitView {
                             if let Err(error) = std::env::current_exe()
                                 .and_then(|exe| agent::start_at_login(&exe, on))
                             {
-                                view.group_error =
+                                view.nav_notice =
                                     Some(format!("start at login not changed: {error}").into());
                             }
                         });

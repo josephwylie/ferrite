@@ -408,49 +408,6 @@ fn native_selection_clears_on_subject_navigation_without_leaking_into_another_ag
 }
 
 #[gpui::test]
-fn next_child_request_leaves_another_group_and_opens_its_root(cx: &mut TestAppContext) {
-    let (mut core, fake) = cockpit("subagents-request-view", 3);
-    let threads = core.threads();
-    let group = core
-        .apply_group(GroupChange::Create {
-            first: threads[1],
-            second: threads[2],
-        })
-        .unwrap()
-        .group
-        .unwrap();
-    bind_production_keys(cx);
-    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
-    view.update(cx, |view, cx| view.enter_group(group, cx));
-    child(&fake, "Atlas", AgentStatus::Waiting);
-    let SessionEvent::DecisionRequested { decision } = decision("child-away") else {
-        unreachable!()
-    };
-    emit(
-        &fake,
-        ActivityEvent::Decision {
-            subject: Some(Subject::Subagent(key("Atlas"))),
-            decision,
-        },
-    );
-    tick(cx);
-    assert_eq!(
-        view.read_with(cx, |view, _| view.cockpit.roster().view()),
-        View::Group(group)
-    );
-    cx.simulate_keystrokes("cmd-d");
-    cx.run_until_parked();
-    view.read_with(cx, |view, _| {
-        assert_eq!(view.cockpit.roster().view(), View::Solo);
-        assert_eq!(view.cockpit.roster().focused_thread(), Some(threads[0]));
-        assert_eq!(
-            view.panes[view.focused()].selected,
-            Subject::Subagent(key("Atlas"))
-        );
-    });
-}
-
-#[gpui::test]
 fn unattributed_question_keeps_native_input_focus_across_repaint_and_sends_exact_answer(
     cx: &mut TestAppContext,
 ) {

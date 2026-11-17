@@ -5,14 +5,12 @@
 //! taking the row's free width, and its ▾ (the Thread's menu, as Claude's
 //! title carries one, shown under the pointer); the branch is the panel's,
 //! so while the panel is hidden the branch follows the ▾ in the quiet ink
-//! (`head_branch`). A Group names itself — its title, `<project> · N
-//! threads`, and `New thread`. There is no layout switch and no PR button.
+//! (`head_branch`). There is no layout switch and no PR button.
 //! The title bar keeps two tools (ADR 0039, `title_tools_element`): the
 //! details card's toggle and the Panel's, at the row's right end at the
 //! window's edge, where they stay whatever the Panel holds. Everything
 //! else the old tools opened is a Surface of the Panel, opened from its
-//! `+` menu or its chord; a Thread beside is the palette's
-//! (`open_palette_beside`). The head leaves the toggles their room.
+//! `+` menu or its chord. The head leaves the toggles their room.
 //!
 //! The head is an overlay laid after the titlebar's drag strip
 //! (the frame's titlebar), over the frame the board column already paints
@@ -22,11 +20,11 @@
 //! their region out of the strip's `Drag` hit test the same way).
 
 use super::*;
-use ferrite_ui::{components, icons, theme};
+use ferrite_ui::{icons, theme};
 
 impl CockpitView {
-    /// The head over the board: the view's name when the board shows one
-    /// — a Thread in Solo, or a Group.
+    /// The head over the board: the shown Thread's name, when the board
+    /// shows one.
     pub(super) fn view_head(&self, cx: &mut Context<Self>) -> AnyElement {
         let mut parts = Vec::new();
         if self.factory().is_some() {
@@ -34,18 +32,13 @@ impl CockpitView {
         } else if self.prs_shown() {
             parts.extend(self.prs_head());
         } else if !self.empty_board_shown() {
-            let named = match self.cockpit.roster().view() {
-                View::Solo => self.solo_head(cx),
-                View::Group(group) => self.group_view_head(group, cx),
-            };
-            parts.extend(named.into_iter().flatten());
+            parts.extend(self.solo_head(cx).into_iter().flatten());
         }
         // The head runs to the column's edge (or the window's), clear of
         // the tools that stand against it.
         let right = self.view_head_end();
-        let menu_thread = matches!(self.cockpit.roster().view(), View::Solo)
-            .then(|| self.focused_thread())
-            .flatten()
+        let menu_thread = self
+            .focused_thread()
             .filter(|_| !self.empty_board_shown() && !self.destination_shown());
         div()
             .debug_selector(|| "view-head".into())
@@ -450,7 +443,7 @@ impl CockpitView {
     /// The Thread's title at the view's weight, the breadcrumb's current
     /// item, at least `VIEW_TITLE_MIN_W`, its chevron shown only under the
     /// pointer (T3's). A click opens the Thread's menu; a double-click
-    /// renames it in place, as a Pane head's title does (`pane_title`).
+    /// renames it in place.
     fn view_title(&self, thread: ThreadId, cx: &mut Context<Self>) -> AnyElement {
         if let Some((RenameTarget::ViewTitle(editing), editor)) = &self.rename {
             if *editing == thread {
@@ -507,61 +500,6 @@ impl CockpitView {
             .child(title)
             .child(title_menu(thread, shown, cx))
             .into_any_element()
-    }
-
-    /// A Group: its title, `<project> · N threads`, a spacer, and `New
-    /// thread`, which starts a draft in this Group.
-    fn group_view_head(
-        &self,
-        group: ferrite_core::groups::GroupId,
-        cx: &mut Context<Self>,
-    ) -> Option<Vec<AnyElement>> {
-        let found = self.cockpit.groups().get(group)?;
-        let count = found.members.len();
-        // The Project, when every member that names one names the same.
-        let mut labels = found
-            .members
-            .iter()
-            .filter_map(|member| self.facts.get(*member)?.project_label.clone());
-        let project = labels
-            .next()
-            .filter(|first| labels.all(|label| label == *first));
-        let threads = format!("{count} thread{}", if count == 1 { "" } else { "s" });
-        let meta = match project {
-            Some(project) => format!("{project} \u{b7} {threads}"),
-            None => threads,
-        };
-        let title = div()
-            .debug_selector(|| "view-title".into())
-            .min_w_0()
-            .truncate()
-            .text_size(px(theme::FS_TITLE))
-            .font_weight(theme::W_LABEL)
-            .text_color(rgb(theme::INK_STRONG))
-            // The operator's title as typed (SPEC §7), as the bar and nav
-            // show it.
-            .child(SharedString::from(found.display_title()))
-            .into_any_element();
-        let new = control(
-            components::secondary_button(
-                ("group-new-thread", group.get() as usize),
-                Some(icons::PLUS),
-                "New thread",
-                cx,
-            )
-            .debug_selector(|| "group-new-thread".into())
-            .flex_shrink_0()
-            .on_click(cx.listener(|view, _: &ClickEvent, _, cx| {
-                cx.stop_propagation();
-                view.open_draft_with_placement(DraftTarget::Main, DraftPlacement::CurrentGroup, cx);
-            })),
-        );
-        Some(vec![
-            title,
-            head_meta(meta.into()),
-            div().flex_1().into_any_element(),
-            new,
-        ])
     }
 }
 
@@ -685,16 +623,6 @@ fn environment_badge(machine: &str) -> AnyElement {
         .text_size(px(theme::FS_META))
         .text_color(rgb(theme::BLUE))
         .child(SharedString::from(format!("From {machine}")))
-        .into_any_element()
-}
-
-/// The head's second word, `INK_SUBTLE`: where the Thread works, or a
-/// Group's tally.
-fn head_meta(text: SharedString) -> AnyElement {
-    div()
-        .flex_shrink_0()
-        .text_color(rgb(theme::INK_SUBTLE))
-        .child(text)
         .into_any_element()
 }
 

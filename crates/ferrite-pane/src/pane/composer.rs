@@ -141,21 +141,14 @@ pub fn attach_button(cx: &gpui::App) -> gpui::component::button::Button {
 
 /// Which of the Composer's primary actions stand (T3's): Solo's stop while
 /// a turn runs, its send once something is typed, both while a turn runs
-/// with text (stop first). The `compact` Composer's one circle always
-/// stands and always sends, into a running turn too.
+/// with text (stop first).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PrimaryActions {
     pub stop: bool,
     pub send: bool,
 }
 
-pub fn primary_actions(running: bool, empty: bool, compact: bool) -> PrimaryActions {
-    if compact {
-        return PrimaryActions {
-            stop: false,
-            send: true,
-        };
-    }
+pub fn primary_actions(running: bool, empty: bool) -> PrimaryActions {
     PrimaryActions {
         stop: running,
         send: !empty,
@@ -163,24 +156,18 @@ pub fn primary_actions(running: bool, empty: bool, compact: bool) -> PrimaryActi
 }
 
 /// The send circle (`COMPOSER_SEND` round, growing to
-/// `MOTION_SEND_HOVER_SCALE` under the pointer; the `compact` Composer's,
-/// SPEC §5.9, `SEND_CIRCLE_SM` with its glyph `SEND_GLYPH_SM`). With
+/// `MOTION_SEND_HOVER_SCALE` under the pointer). With
 /// something to send it is lit, T3's: `SEND_LIT` with an `ON_SEND_LIT`
-/// arrow under a `SEND_LIT_HIGHLIGHT` top edge; with nothing (`empty`, the
-/// compact one's) `paint::SEND` with the arrow in `INK_SUBTLE`, still
+/// arrow under a `SEND_LIT_HIGHLIGHT` top edge; with nothing (`empty`)
+/// `paint::SEND` with the arrow in `INK_SUBTLE`, still
 /// pressable. While a turn runs (`steer`) the arrow morphs into the steer
 /// glyph (`send_glyph`). The tooltip names the key.
 pub fn send_button(
     steer: bool,
     empty: bool,
-    compact: bool,
     cx: &gpui::App,
 ) -> gpui::component::button::Button {
-    let (size, glyph) = if compact {
-        (theme::SEND_CIRCLE_SM, theme::SEND_GLYPH_SM)
-    } else {
-        (theme::COMPOSER_SEND, theme::COMPOSER_SEND_ICON)
-    };
+    let (size, glyph) = (theme::COMPOSER_SEND, theme::COMPOSER_SEND_ICON);
     let lit = !empty;
     let (rest, hover, press, ink): (gpui::Hsla, gpui::Hsla, gpui::Hsla, u32) = if lit {
         (
@@ -197,11 +184,7 @@ pub fn send_button(
             INK_SUBTLE,
         )
     };
-    let lift = if compact {
-        1.0
-    } else {
-        theme::MOTION_SEND_HOVER_SCALE
-    };
+    let lift = theme::MOTION_SEND_HOVER_SCALE;
     components::lifting_button("composer-send", rest, hover, press, rgb(ink).into(), lift, cx)
         .debug_selector(|| "composer-send".into())
         .relative()
@@ -408,17 +391,11 @@ pub fn composer_footer(
 /// The Composer stack's slice of `PaneState`, bundled so `composer_region`
 /// stays readable as the states grow.
 pub(super) struct ComposerStack<'a> {
-    /// A board cell (C4): only the focused cell's Composer is live — its
-    /// shelf and queue; the others keep their input band.
-    pub(super) grid: bool,
     pub(super) decision: Option<&'a Decision>,
     /// Prompts not yet picked up, newest first (`ThreadView::queue`): the
     /// strip shows the latest and counts the rest.
     pub(super) queued: &'a [QueueItem],
     pub(super) empty: bool,
-    /// How many files the draft holds: what the flat line counts while
-    /// the shelf (`attachments`) waits for the live Composer.
-    pub(super) files: usize,
     pub(super) attachments: Option<AnyElement>,
     pub(super) menu: Option<AnyElement>,
     /// A draft's Composer: nothing exists to steer yet.
@@ -437,18 +414,15 @@ pub(super) struct ComposerStack<'a> {
     /// (no box to join); kept so the levels hand the Composer one shape.
     #[allow(dead_code)]
     pub(super) joined: bool,
-    /// The Composer's controls, wired in the cockpit: Solo's `+`, send and
-    /// footer; on a board, the focused Pane's send circle. Both carry the
-    /// queue strip's actions.
+    /// The Composer's controls, wired in the cockpit: the `+`, send and
+    /// footer, and the queue strip's actions.
     pub(super) toolbar: Option<ComposerControls>,
     /// What the Thread offers over the Composer (`PaneWiring::resume_offer`).
     pub(super) offer: Option<AnyElement>,
 }
 
-/// The Composer stack (theme WP-D): a board cell's compact box
-/// (`compact_composer`), Solo's box (`box_composer`, SPEC §5.5). On a
-/// board the shelf of pending files stands above it (Solo's ride inside
-/// its box, over the text). Running background work has no shelf: it is the
+/// The Composer stack (theme WP-D): the box (`box_composer`, SPEC §5.5),
+/// its pending files riding inside it, over the text. Running background work has no shelf: it is the
 /// transcript's last line (`background_work_line`) and in the rail and the
 /// Background tasks pane. The Pane lays the stack out `flex_shrink_0`
 /// below the body, so the transcript gives way. The Decision row is **not**
@@ -460,14 +434,10 @@ pub(super) fn composer_region(
     transcript: Option<&Transcript>,
     stack: ComposerStack,
 ) -> Div {
-    if stack.grid {
-        compact_composer::compact_composer(view, transcript, stack)
-    } else {
-        box_composer(view, transcript, stack)
-    }
+    box_composer(view, transcript, stack)
 }
 
-/// The Solo Composer (SPEC §5.5): a box `COMPOSER_OUTSET` past the reading
+/// The Composer (SPEC §5.5): a box `COMPOSER_OUTSET` past the reading
 /// column at each side — `paint::FIELD` at `R_COMPOSER`, its `FIELD_RING`
 /// laid outside it — holding the pending files, the input (no `❯`) and the
 /// toolbar the cockpit wires; the queue strip stands over it as its own
@@ -475,11 +445,9 @@ pub(super) fn composer_region(
 /// `Drop files to attach` over its contents.
 fn box_composer(view: &PaneView, transcript: Option<&Transcript>, stack: ComposerStack) -> Div {
     let ComposerStack {
-        grid: _,
         decision,
         queued,
         empty,
-        files: _,
         attachments,
         menu,
         draft,
@@ -701,19 +669,17 @@ fn box_composer(view: &PaneView, transcript: Option<&Transcript>, stack: Compose
                 .child(menu),
         ));
     }
-    composer_stack(None, true)
-        .children(offer.map(|offer| in_column(theme::COMPOSER_INSET, true, offer)))
+    composer_stack(None)
+        .children(offer.map(in_column))
         .children(queue.map(|queue| {
-            in_column(theme::COMPOSER_INSET, true, queue).pb(px(theme::QUEUE_CARD_GAP))
+            in_column(queue).pb(px(theme::QUEUE_CARD_GAP))
         }))
         // Where the work runs, on the box's top edge (Codex's).
-        .children(env.map(|env| in_column(theme::COMPOSER_INSET, true, env)))
-        .child(in_column(theme::COMPOSER_INSET, true, field))
+        .children(env.map(in_column))
+        .child(in_column(field))
         // The model, effort and mode under the box, as plain words, the
         // last one's ink ending where the column's text does.
         .child(in_column(
-            theme::COMPOSER_INSET,
-            true,
             div()
                 .debug_selector(|| "composer-footer".into())
                 .flex()
@@ -741,16 +707,10 @@ fn primary_slot(stop: Option<AnyElement>, send: Option<AnyElement>) -> Option<An
     )
 }
 
-/// What stands over either Composer: `SHELF_GAP` over the box it belongs
-/// to, the shelf of pending files. The shelf keeps to its box's inset
-/// (`boxed`: Solo's). The working line is the transcript's last row
+/// What stands over the Composer: `SHELF_GAP` over the box, the shelf of
+/// pending files, kept to the box's inset. The working line is the transcript's last row
 /// (`working_tail`), not the stack's.
-pub(super) fn composer_stack(attachments: Option<AnyElement>, boxed: bool) -> Div {
-    let inset = if boxed {
-        theme::COMPOSER_INSET
-    } else {
-        theme::COMPACT_COMPOSER_INSET
-    };
+pub(super) fn composer_stack(attachments: Option<AnyElement>) -> Div {
     div()
         .flex()
         .flex_col()
@@ -763,23 +723,27 @@ pub(super) fn composer_stack(attachments: Option<AnyElement>, boxed: bool) -> Di
                 .items_end()
                 .min_w_0()
                 .child(div().flex_1().min_w_0().child(attachments));
-            stack.child(in_column(inset, boxed, shelf).pb(px(theme::SHELF_GAP)))
+            stack.child(in_column(shelf).pb(px(theme::SHELF_GAP)))
         })
 }
 
-/// One row of the Composer stack, `inset` in from the card's sides — and in
-/// Solo (`column`) at most `COMPOSER_MAX_W`, the reading column and
+/// One row of the Composer stack, `COMPOSER_INSET` in from the card's
+/// sides and at most `COMPOSER_MAX_W`, the reading column and
 /// `COMPOSER_OUTSET` either side, centred as the transcript is, so the box,
-/// the queue and the shelf frame the messages they follow (Claude's). A
-/// Group Pane's rows keep the card's whole width.
-pub(super) fn in_column(inset: f32, column: bool, row: impl IntoElement) -> Div {
-    div().flex().justify_center().min_w_0().px(px(inset)).child(
-        div()
-            .flex_1()
-            .min_w_0()
-            .when(column, |row| row.max_w(px(theme::COMPOSER_MAX_W)))
-            .child(row),
-    )
+/// the queue and the shelf frame the messages they follow (Claude's).
+pub(super) fn in_column(row: impl IntoElement) -> Div {
+    div()
+        .flex()
+        .justify_center()
+        .min_w_0()
+        .px(px(theme::COMPOSER_INSET))
+        .child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .max_w(px(theme::COMPOSER_MAX_W))
+                .child(row),
+        )
 }
 
 /// The queue strip (Claude's): its own card over the box at `R_CARD` on
@@ -1041,21 +1005,6 @@ pub(super) fn placeholder(
     }
 }
 
-/// `flat_facts`' words: empty when there is nothing to say.
-pub fn flat_facts_text(files: usize, queued: usize) -> String {
-    let mut facts = Vec::new();
-    if files > 0 {
-        facts.push(format!(
-            "{files} attachment{}",
-            if files == 1 { "" } else { "s" }
-        ));
-    }
-    if queued > 0 {
-        facts.push(format!("{queued} queued"));
-    }
-    facts.join(" \u{b7} ")
-}
-
 /// What the line says in grey over its text: the placeholder while it is
 /// empty, and Claude's `Type to filter` after a lone `/` (the slash picker
 /// is open on it), clear of the typed slash.
@@ -1180,10 +1129,9 @@ pub fn permission_mode_label(
 }
 
 /// The queue's share of the editor's pane-height budget: Solo's strip —
-/// the rows it shows — and its gap whenever anything is queued; nothing on
-/// a board, whose compact box is input only.
-pub(crate) fn composer_queue_height(_height: f32, grid: bool, count: usize) -> f32 {
-    if grid || count == 0 {
+/// the rows it shows — and its gap whenever anything is queued.
+pub(crate) fn composer_queue_height(_height: f32, count: usize) -> f32 {
+    if count == 0 {
         0.
     } else {
         queue_rows_shown(count) as f32 * theme::QUEUE_CARD_H + theme::QUEUE_CARD_GAP
@@ -1191,24 +1139,19 @@ pub(crate) fn composer_queue_height(_height: f32, grid: bool, count: usize) -> f
 }
 
 /// The Composer's height less its editor rows and queue, the same at every
-/// level, focused or not. Solo's box: the row's padding around the line
-/// (its ring lies outside it), then the footer and the air under it. A board's compact box:
-/// the air around its row and the inset under it. The shelf and the
-/// working line stand above and are not part of it.
-pub(super) fn composer_fixed_height(grid: bool) -> f32 {
-    if grid {
-        theme::COMPACT_COMPOSER_H - theme::COMPOSER_ROW_H + theme::COMPACT_COMPOSER_INSET
-    } else {
-        2.0 * (theme::COMPOSER_ROW_PAD + theme::COMPOSER_TEXT_PAD_Y) + theme::COMPOSER_FOOTER_H
-    }
+/// level, focused or not: the row's padding around the line (its ring
+/// lies outside it), then the footer and the air under it. The working
+/// line stands above and is not part of it.
+pub(super) fn composer_fixed_height() -> f32 {
+    2.0 * (theme::COMPOSER_ROW_PAD + theme::COMPOSER_TEXT_PAD_Y) + theme::COMPOSER_FOOTER_H
 }
 
 /// Leave the majority of a Pane available for its Thread context. Only the
 /// viewport changes: the Composer keeps every character and scrolls to its
 /// caret, then reveals more rows again when the Pane grows.
-pub fn composer_row_limit(height: f32, grid: bool, queued: usize) -> usize {
-    let fixed = composer_fixed_height(grid);
-    let queue = composer_queue_height(height, grid, queued);
+pub fn composer_row_limit(height: f32, queued: usize) -> usize {
+    let fixed = composer_fixed_height();
+    let queue = composer_queue_height(height, queued);
     ((height * theme::COMPOSER_MAX_PANE_FRACTION - fixed - queue) / theme::COMPOSER_ROW_H)
         .floor()
         .max(1.)

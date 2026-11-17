@@ -148,7 +148,7 @@ impl CockpitView {
         let mut rows: Vec<AnyElement> = Vec::new();
         let mut faces: Vec<(NavKey, NavFace)> = Vec::new();
         rows.extend(
-            self.group_error
+            self.nav_notice
                 .as_ref()
                 .map(|error| nav::notice(error.clone()).into_any_element()),
         );

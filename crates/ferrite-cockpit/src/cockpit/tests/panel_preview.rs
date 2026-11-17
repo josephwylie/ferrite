@@ -43,11 +43,7 @@ fn window<'a>(
     panes: usize,
     cx: &'a mut TestAppContext,
 ) -> (Entity<CockpitView>, Fake, &'a mut gpui::VisualTestContext) {
-    let (mut core, fake) = cockpit(name, panes);
-    if panes > 1 {
-        let group = group_all(&mut core);
-        core.enter_group(group).unwrap();
-    }
+    let (core, fake) = cockpit(name, panes);
     open(core, fake, cx)
 }
 

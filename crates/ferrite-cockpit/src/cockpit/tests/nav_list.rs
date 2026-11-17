@@ -416,50 +416,6 @@ fn a_narrow_window_folds_the_nav_without_saving_it(cx: &mut TestAppContext) {
     );
 }
 
-/// ⌘1…⌘9 (R5) focus the shown board's Panes in head order — reading
-/// order — whatever needs answering; a digit past the board does
-/// nothing, and in Solo ⌘1 is the Solo Pane.
-#[gpui::test]
-fn command_digits_focus_the_boards_panes_in_head_order(cx: &mut TestAppContext) {
-    let (mut core, fake) = cockpit("board-digits", 3);
-    let group = group_all(&mut core);
-    core.enter_group(group).unwrap();
-    bind_production_keys(cx);
-    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
-    cx.simulate_resize(gpui::size(px(1440.), px(900.)));
-    tick(cx);
-    fake.streams.borrow()[1].send(decision("perm_2")).unwrap();
-    tick(cx);
-    let order: Vec<ThreadId> = cx.update(|window, cx| {
-        let view = view.read(cx);
-        view.board_order(window)
-            .into_iter()
-            .map(|index| view.panes[index].thread().unwrap())
-            .collect()
-    });
-    assert_eq!(order.len(), 3);
-    cx.simulate_keystrokes("cmd-3");
-    tick(cx);
-    assert_eq!(
-        view.read_with(cx, |view, _| view.focused_thread()),
-        Some(order[2])
-    );
-    cx.simulate_keystrokes("cmd-1");
-    tick(cx);
-    assert_eq!(
-        view.read_with(cx, |view, _| view.focused_thread()),
-        Some(order[0]),
-        "the waiting Thread does not jump the order"
-    );
-    cx.simulate_keystrokes("cmd-9");
-    tick(cx);
-    assert_eq!(
-        view.read_with(cx, |view, _| view.focused_thread()),
-        Some(order[0]),
-        "a digit past the board does nothing"
-    );
-}
-
 /// A new Thread in a named Project (the palette's command; the heading
 /// has no `+` now): one draft, bound to that Project whatever the nav
 /// filter or the focused Pane happen to say.
@@ -588,7 +544,7 @@ fn the_parked_shelf_shows_its_rows_and_its_menu_deletes_them(cx: &mut TestAppCon
             2,
             "the open Threads are untouched"
         );
-        assert!(view.group_error.is_none(), "nothing refused");
+        assert!(view.nav_notice.is_none(), "nothing refused");
     });
     cx.run_until_parked();
     assert!(

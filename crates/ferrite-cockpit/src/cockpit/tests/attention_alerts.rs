@@ -524,52 +524,6 @@ fn clicking_a_request_s_system_notification_opens_it(cx: &mut TestAppContext) {
     );
 }
 
-/// ADR 0017: alerts ringing together chime once, needs-you over done;
-/// and with the window focused, a request on a Pane that is on the
-/// board but not focused rings nothing — it is seen where it is asked.
-#[gpui::test]
-fn alerts_chime_once_and_a_request_in_view_rings_nothing(cx: &mut TestAppContext) {
-    let (mut core, fake) = cockpit("alerts-together", 2);
-    let group = group_all(&mut core);
-    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
-    view.update(cx, |view, cx| view.enter_group(group, cx));
-    cx.deactivate_window();
-    fake.streams.borrow()[0]
-        .send(SessionEvent::TurnEnded {
-            outcome: ferrite_core::TurnOutcome::Completed,
-            cost_usd: None,
-        })
-        .unwrap();
-    fake.streams.borrow()[1].send(decision("away")).unwrap();
-    tick(cx);
-    ring(cx);
-    view.read_with(cx, |view, _| {
-        assert_eq!(view.chimed, [Sound::NeedsYou]);
-        assert_eq!(view.needs_you.toasts().len(), 2);
-    });
-
-    cx.update(|window, _| window.activate_window());
-    view.update(cx, |view, _| view.chimed.clear());
-    tick(cx);
-    let unfocused = view.read_with(cx, |view, _| {
-        assert!(view.needs_you.toasts().is_empty(), "both are in view now");
-        view.cockpit
-            .threads()
-            .into_iter()
-            .position(|thread| Some(thread) != view.focused_thread())
-            .unwrap()
-    });
-    fake.streams.borrow()[unfocused]
-        .send(decision("here"))
-        .unwrap();
-    tick(cx);
-    ring(cx);
-    view.read_with(cx, |view, _| {
-        assert!(view.needs_you.toasts().is_empty());
-        assert!(view.chimed.is_empty());
-    });
-}
-
 /// The Notifications page: sounds on and off, a provider's sounds, a
 /// chime played and a chosen file put back to the built-in, system
 /// notifications — each press a saved setting.

@@ -103,8 +103,7 @@ impl CockpitView {
     }
 
     /// The ways to start, in order: only those that would do something
-    /// now (a parked Thread to reopen, a Group to open), as the palette
-    /// offers them.
+    /// now (a parked Thread to reopen), as the palette offers them.
     fn start_rows(&self) -> Vec<StartRow> {
         use ferrite_ui::icons;
         let mut rows = vec![
@@ -324,8 +323,8 @@ impl CockpitView {
             .flex_col()
             .w_full();
         let rows = self.start_rows();
-        // The rows offered can shrink under the cursor (the last Group
-        // dissolved): it holds on the last.
+        // The rows offered can shrink under the cursor (the last parked
+        // Thread reopened): it holds on the last.
         let cursor = self.empty_cursor.min(rows.len() - 1);
         for (at, row) in rows.into_iter().enumerate() {
             let StartRow {

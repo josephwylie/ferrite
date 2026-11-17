@@ -10,7 +10,7 @@ fn sorted_threads(core: &Cockpit) -> Vec<ThreadId> {
 }
 
 fn notice(view: &Entity<CockpitView>, cx: &mut gpui::VisualTestContext) -> Option<String> {
-    view.read_with(cx, |view, _| view.group_error.as_ref().map(|error| error.to_string()))
+    view.read_with(cx, |view, _| view.nav_notice.as_ref().map(|error| error.to_string()))
 }
 
 /// A Park of two where the Engine refuses one: the failed one is named in

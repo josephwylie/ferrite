@@ -28,7 +28,7 @@ impl CockpitView {
         if snoozed.is_ok() && until.is_some() {
             self.offer_undo(super::nav_chrome::UndoAct::Snoozed(thread), cx);
         }
-        self.group_error = snoozed.err().map(|error| error.to_string().into());
+        self.nav_notice = snoozed.err().map(|error| error.to_string().into());
         cx.notify();
     }
 
@@ -62,7 +62,7 @@ impl CockpitView {
                 ferrite_core::clock::system_time(),
             ) {
                 Ok(until) => match self.cockpit.snooze_thread(editor.thread, Some(until)) {
-                    Ok(()) => self.group_error = None,
+                    Ok(()) => self.nav_notice = None,
                     Err(error) => {
                         self.snooze_editor = Some(Editor {
                             error: Some(error.to_string().into()),

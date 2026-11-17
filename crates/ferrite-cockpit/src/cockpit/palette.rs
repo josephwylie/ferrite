@@ -393,24 +393,14 @@ impl CockpitView {
     }
 
     /// The palette's Threads (FL-2): Project by Project in the registry's
-    /// order (Threads no Project claims last), each Project's rows in the
-    /// nav's tree order — creation order, a Group's members together where
-    /// its first member stands, under that member's Project (R14) — then
-    /// that Project's parked Threads. Each Thread once.
+    /// order (Threads no Project claims last), each Project's open Threads
+    /// in creation order, then its parked Threads. Each Thread once.
     pub(super) fn palette_thread_rows(&self, window: &Window) -> Vec<PaletteRow> {
         let board: Vec<ThreadId> = self
             .board_order(window)
             .into_iter()
             .filter_map(|index| self.panes[index].thread())
             .collect();
-        let shown_group = match self.cockpit.roster().view() {
-            View::Group(group) => self
-                .cockpit
-                .groups()
-                .get(group)
-                .map(|group| SharedString::from(group.display_title())),
-            View::Solo => None,
-        };
         let project_of = |thread: ThreadId| self.facts.get(thread).and_then(|facts| facts.project);
         let open_threads: Vec<ThreadId> = {
             let mut open = self.cockpit.threads();
@@ -436,30 +426,6 @@ impl CockpitView {
                 })
             })
             .collect();
-        // Items in creation order: a loose Thread by itself, a Group by its
-        // first member (so it sits where that member was made).
-        enum Item {
-            Thread(ThreadId),
-            Group(Vec<ThreadId>),
-        }
-        let mut items: Vec<(ThreadId, Option<ProjectId>, Item)> = Vec::new();
-        for group in self.cockpit.groups().iter() {
-            let members: Vec<ThreadId> = group
-                .members
-                .iter()
-                .copied()
-                .filter(|thread| open_threads.contains(thread))
-                .collect();
-            if let Some(first) = members.first().copied() {
-                items.push((first, project_of(first), Item::Group(members)));
-            }
-        }
-        for thread in &open_threads {
-            if self.cockpit.groups().of(*thread).is_none() {
-                items.push((*thread, project_of(*thread), Item::Thread(*thread)));
-            }
-        }
-        items.sort_by_key(|(first, _, _)| *first);
         let mut projects: Vec<Option<ProjectId>> = self
             .cockpit
             .registry()
@@ -472,30 +438,11 @@ impl CockpitView {
         let mut rows: Vec<PaletteRow> = Vec::new();
         let now = ferrite_core::clock::system_time();
         for project in projects {
-            let mut ordered: Vec<ThreadId> = Vec::new();
-            for (_, item_project, item) in &items {
-                if *item_project != project {
-                    continue;
-                }
-                match item {
-                    Item::Thread(thread) => ordered.push(*thread),
-                    Item::Group(members) => ordered.extend(members.iter().copied()),
-                }
-            }
-            // A Group's guests from other Projects read under their own.
-            let mut guests: Vec<ThreadId> = Vec::new();
-            for (_, item_project, item) in &items {
-                if let (Item::Group(members), true) = (item, *item_project != project) {
-                    guests.extend(
-                        members
-                            .iter()
-                            .copied()
-                            .filter(|thread| project_of(*thread) == project),
-                    );
-                }
-            }
-            ordered.retain(|thread| project_of(*thread) == project);
-            ordered.extend(guests);
+            let mut ordered: Vec<ThreadId> = open_threads
+                .iter()
+                .copied()
+                .filter(|thread| project_of(*thread) == project)
+                .collect();
             ordered.extend(
                 parked
                     .iter()
@@ -514,13 +461,10 @@ impl CockpitView {
                     .unwrap_or_default();
                 let word = state_word(&row, age);
                 let on_board = board.iter().position(|shown| *shown == thread);
-                let scope = match (&shown_group, on_board) {
-                    (Some(group), Some(_)) => Some(group.clone()),
-                    _ => self
-                        .facts
-                        .get(thread)
-                        .and_then(|facts| facts.project_label.clone()),
-                };
+                let scope = self
+                    .facts
+                    .get(thread)
+                    .and_then(|facts| facts.project_label.clone());
                 let name = if row.status == nav::RowStatus::Parked {
                     SharedString::from(format!("Parked \u{b7} {}", row.name))
                 } else {

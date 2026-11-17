@@ -72,7 +72,7 @@ fn the_panel_follows_the_shown_thread(cx: &mut TestAppContext) {
     assert_eq!(shown(&view, cx), Some(threads[1]), "it follows the Thread on screen");
 
     view.update(cx, |view, cx| {
-        view.open_draft_with_placement(DraftTarget::Main, DraftPlacement::Loose, cx)
+        view.open_draft(DraftTarget::Main, cx)
     });
     tick(cx);
     assert!(cx.debug_bounds("panel").is_none(), "a draft has none");
