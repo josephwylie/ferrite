@@ -6,8 +6,7 @@
 //! through its client, `cockpit::Cockpit`, and changes it only by its acts.
 //!
 //! What it shares of the Roster is which Threads are open, in the order
-//! they opened (`open_threads`). Focus, the View, fullscreen and Drafts are
-//! each window's own.
+//! they opened (`open_threads`). Focus and Drafts are each window's own.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
 use std::io;
