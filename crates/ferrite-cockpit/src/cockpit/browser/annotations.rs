@@ -137,13 +137,13 @@ impl CockpitView {
                 state.document_generation,
                 page.manual.clone(),
                 page.native.clone(),
+                gpui::Focusable::focus_handle(page.web.read(cx), cx),
             ))
         });
-        let Some((owner, document, generation, manual, native)) = selected else {
+        let Some((owner, document, generation, manual, native, focus)) = selected else {
             return;
         };
         self.finish_browser_interaction(thread, owner, document.tab);
-        let focus = cx.focus_handle();
         window.focus(&focus, cx);
         manual.borrow_mut().protect_local();
         manual.borrow_mut().capture_pause(true);
