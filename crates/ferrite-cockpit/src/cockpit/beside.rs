@@ -193,7 +193,7 @@ pub(super) fn reader_pin(
 
 /// How often a read on another thread (a review's git, a PR's `gh`) is
 /// looked at for its answer.
-const ANSWER_POLL: std::time::Duration = std::time::Duration::from_millis(30);
+pub(super) const ANSWER_POLL: std::time::Duration = std::time::Duration::from_millis(30);
 
 /// What `open_beside` opens.
 #[derive(Clone, Debug, PartialEq, Eq)]
