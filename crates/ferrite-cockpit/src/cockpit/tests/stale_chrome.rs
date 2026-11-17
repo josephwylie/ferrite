@@ -1,8 +1,8 @@
 //! The stale-chrome matrix: the Cockpit draws its nav and each Pane as a
 //! cached part, rebuilt only when something it shows changes — so for every
 //! way chrome changes, a test that what is on screen (what the part last
-//! drew, `cockpit::drawn`) follows. A four-Pane Group, the motion kit live,
-//! an active window, the keyboard in the first Pane.
+//! drew, `cockpit::drawn`) follows. A four-Pane Group or one Thread Solo,
+//! the motion kit live, an active window, the keyboard in the first Pane.
 
 use super::*;
 use crate::cockpit::drawn;
@@ -30,6 +30,26 @@ fn board<'a>(name: &str, working: &[usize], cx: &'a mut TestAppContext) -> Board
     ferrite_ui::motion::testing::drive();
     let (mut core, fake) = cockpit(name, 4);
     let group = group_all(&mut core);
+    open(core, fake, Some(group), working, cx)
+}
+
+/// One Thread, Solo, mid-turn when `working`.
+fn solo<'a>(name: &str, working: bool, cx: &'a mut TestAppContext) -> Board<'a> {
+    ferrite_ui::motion::testing::drive();
+    let (core, fake) = cockpit(name, 1);
+    let working: &[usize] = if working { &[0] } else { &[] };
+    open(core, fake, None, working, cx)
+}
+
+/// A window on `core`, `group` entered if any, the keyboard in the first
+/// Pane, `working` mid-turn, first paint settled.
+fn open<'a>(
+    mut core: Cockpit,
+    fake: Fake,
+    group: Option<GroupId>,
+    working: &[usize],
+    cx: &'a mut TestAppContext,
+) -> Board<'a> {
     let threads = core.threads().to_vec();
     for index in working {
         let _ = core.send(threads[*index], "Keep going".into());
@@ -38,7 +58,9 @@ fn board<'a>(name: &str, working: &[usize], cx: &'a mut TestAppContext) -> Board
     cx.simulate_resize(gpui::size(px(1600.), px(1000.)));
     cx.update(|window, _| window.activate_window());
     view.update(cx, |view, cx| {
-        view.enter_group(group, cx);
+        if let Some(group) = group {
+            view.enter_group(group, cx);
+        }
         view.focus_pane(0);
         cx.notify();
     });
@@ -93,17 +115,17 @@ fn centre(rect: &layout::Rect) -> gpui::Point<Pixels> {
 /// the moment the window comes back.
 #[gpui::test]
 fn a_finish_while_the_window_is_away_is_drawn_done_until_it_returns(cx: &mut TestAppContext) {
-    let b = board("stale-attention", &[1], cx);
-    assert!(!b.pane(1).unread);
+    let b = solo("stale-attention", true, cx);
+    assert!(!b.pane(0).unread);
     b.cx.deactivate_window();
     b.send(
-        1,
+        0,
         SessionEvent::TextDelta {
             text: "Done here.".into(),
         },
     );
     b.send(
-        1,
+        0,
         SessionEvent::TurnEnded {
             outcome: ferrite_core::TurnOutcome::Completed,
             cost_usd: None,
@@ -111,20 +133,20 @@ fn a_finish_while_the_window_is_away_is_drawn_done_until_it_returns(cx: &mut Tes
     );
     tick(b.cx);
     frames(b.cx, 300);
-    assert!(b.pane(1).unread, "the Pane draws it done");
+    assert!(b.pane(0).unread, "the Pane draws it done");
     assert!(
-        drawn::row(b.threads[1]).starts_with("Done "),
+        drawn::row(b.threads[0]).starts_with("Done "),
         "and its nav row: {}",
-        drawn::row(b.threads[1])
+        drawn::row(b.threads[0])
     );
     b.cx.update(|window, _| window.activate_window());
     tick(b.cx);
     frames(b.cx, 300);
-    assert!(!b.pane(1).unread, "seen: the Pane redraws it read");
+    assert!(!b.pane(0).unread, "seen: the Pane redraws it read");
     assert!(
-        drawn::row(b.threads[1]).starts_with("Idle "),
+        drawn::row(b.threads[0]).starts_with("Idle "),
         "and so does its nav row: {}",
-        drawn::row(b.threads[1])
+        drawn::row(b.threads[0])
     );
 }
 
@@ -167,7 +189,7 @@ fn dragged_files_edge_the_pane_under_them(cx: &mut TestAppContext) {
 /// on screen every frame, and rest on the wider one.
 #[gpui::test]
 fn the_panes_ride_the_nav_fold(cx: &mut TestAppContext) {
-    let mut b = board("stale-nav-ride", &[], cx);
+    let mut b = solo("stale-nav-ride", false, cx);
     let view = b.view.clone();
     let before = b.pane(0).cell_width;
     view.update(b.cx, |view, cx| view.set_nav_collapsed(true, cx));
@@ -233,7 +255,7 @@ fn reduced_motion_reaches_every_pane(cx: &mut TestAppContext) {
 /// line; coming back gives it to the focused Pane's again.
 #[gpui::test]
 fn leaving_and_returning_to_the_window_reaches_the_panes(cx: &mut TestAppContext) {
-    let b = board("stale-activation", &[], cx);
+    let b = solo("stale-activation", false, cx);
     assert!(b.pane(0).editing);
     b.cx.deactivate_window();
     frames(b.cx, 100);
@@ -247,8 +269,8 @@ fn leaving_and_returning_to_the_window_reaches_the_panes(cx: &mut TestAppContext
 /// drops it once the pointer leaves.
 #[gpui::test]
 fn a_nav_rows_hover_fades_in_and_out(cx: &mut TestAppContext) {
-    let b = board("stale-hover", &[], cx);
-    let row = debug_bounds(b.cx, format!("nav-thread-{}", b.threads[2].get())).expect("a row");
+    let b = solo("stale-hover", false, cx);
+    let row = debug_bounds(b.cx, format!("nav-thread-{}", b.threads[0].get())).expect("a row");
     b.cx.simulate_mouse_move(row.center(), None, gpui::Modifiers::none());
     frames(b.cx, 200);
     let key =
@@ -279,7 +301,7 @@ fn a_nav_rows_hover_fades_in_and_out(cx: &mut TestAppContext) {
 /// typed, and closes on escape.
 #[gpui::test]
 fn the_slash_menu_opens_and_closes_over_its_pane(cx: &mut TestAppContext) {
-    let b = board("stale-popover", &[], cx);
+    let b = solo("stale-popover", false, cx);
     bind_production_keys(b.cx);
     b.cx.simulate_input("/");
     frames(b.cx, 100);
@@ -334,9 +356,9 @@ fn the_reading_size_reaches_every_pane(cx: &mut TestAppContext) {
 /// A working clock turns over on its Pane while the board sits still.
 #[gpui::test]
 fn a_working_clock_turns_over_on_its_pane(cx: &mut TestAppContext) {
-    let b = board("stale-clock", &[1], cx);
+    let b = solo("stale-clock", true, cx);
     let before = b
-        .pane(1)
+        .pane(0)
         .clock
         .clone()
         .expect("the premise: a working clock");
@@ -344,7 +366,7 @@ fn a_working_clock_turns_over_on_its_pane(cx: &mut TestAppContext) {
     // pulse clock's ride for it.
     std::thread::sleep(Duration::from_millis(1_100));
     frames(b.cx, 1_100);
-    let after = b.pane(1).clock.clone().unwrap_or_default();
+    let after = b.pane(0).clock.clone().unwrap_or_default();
     assert_ne!(after, before, "the Pane redrew its clock");
 }
 
@@ -353,14 +375,9 @@ fn a_working_clock_turns_over_on_its_pane(cx: &mut TestAppContext) {
 /// The chip is Solo's (SPEC §5.5): the board's Pane fills it first.
 #[gpui::test]
 fn the_model_picker_opens_placed_and_its_cursor_follows_the_arrows(cx: &mut TestAppContext) {
-    let b = board("stale-picker", &[], cx);
+    let b = solo("stale-picker", false, cx);
     bind_production_keys(b.cx);
     let thread = b.threads[0];
-    b.view.update(b.cx, |view, cx| {
-        view.cockpit.toggle_fullscreen();
-        cx.notify();
-    });
-    frames(b.cx, 300);
     b.view
         .update(b.cx, |view, cx| view.open_provider_picker(thread, cx));
     frames(b.cx, 300);
