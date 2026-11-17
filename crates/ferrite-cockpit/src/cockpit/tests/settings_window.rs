@@ -183,7 +183,8 @@ fn reconnect_leaves_search_and_rejects_another_saved_target(cx: &mut TestAppCont
     ];
     view.update_in(cx, |view, window, cx| {
         view.prefs.settings.machines = saved.clone();
-        view.settings_view
+        view.settings_sheet(cx)
+            .unwrap()
             .read(cx)
             .search
             .clone()
@@ -192,9 +193,10 @@ fn reconnect_leaves_search_and_rejects_another_saved_target(cx: &mut TestAppCont
                 search.set_value("first.example", window, cx)
             });
         view.edit_connection(Some(saved[0].clone()), window, cx);
-        assert_eq!(view.settings_view.read(cx).page, settings::PageKey::Connections);
+        assert_eq!(view.settings_sheet(cx).unwrap().read(cx).page, settings::PageKey::Connections);
         assert!(view
-            .settings_view
+            .settings_sheet(cx)
+            .unwrap()
             .read(cx)
             .search
             .as_ref()
@@ -365,7 +367,7 @@ fn settings_arrows_step_pages_and_about_paths_copy(cx: &mut TestAppContext) {
 
     cx.simulate_keystrokes("cmd-,");
     cx.run_until_parked();
-    let page = |cx: &mut gpui::VisualTestContext| view.read_with(cx, |view, cx| view.settings_view.read(cx).page);
+    let page = |cx: &mut gpui::VisualTestContext| view.read_with(cx, |view, cx| view.settings_sheet(cx).unwrap().read(cx).page);
     assert_eq!(page(cx), settings::PageKey::NewThreads);
     cx.simulate_keystrokes("down");
     tick(cx);
@@ -391,7 +393,7 @@ fn settings_arrows_step_pages_and_about_paths_copy(cx: &mut TestAppContext) {
     cx.simulate_click(threads, gpui::Modifiers::none());
     tick(cx);
     let dir = view.read_with(cx, |view, cx| {
-        assert_eq!(view.settings_view.read(cx).copied, Some("Threads"));
+        assert_eq!(view.settings_sheet(cx).unwrap().read(cx).copied, Some("Threads"));
         view.prefs.dir.join("threads").display().to_string()
     });
     assert_eq!(
@@ -406,7 +408,7 @@ fn settings_arrows_step_pages_and_about_paths_copy(cx: &mut TestAppContext) {
     cx.simulate_keystrokes("cmd-,");
     cx.run_until_parked();
     assert_eq!(page(cx), settings::PageKey::NewThreads);
-    view.read_with(cx, |view, cx| assert_eq!(view.settings_view.read(cx).copied, None));
+    view.read_with(cx, |view, cx| assert_eq!(view.settings_sheet(cx).unwrap().read(cx).copied, None));
 }
 
 /// cmd-, opens the Settings panel and escape closes it; a chip press

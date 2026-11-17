@@ -10,7 +10,7 @@
 //! pinned under a `FLOAT_EDGE` rule. Inside: rows and rules, words for controls.
 
 use gpui::prelude::*;
-use gpui::{div, px, rgb, App, Div, SharedString};
+use gpui::{div, px, rgb, AnyElement, App, Div, SharedString, Stateful};
 
 use gpui::component::button::Button;
 
@@ -18,8 +18,16 @@ use crate::components;
 use crate::icons::{self, icon};
 use crate::theme::*;
 
+/// A sheet as its owner draws it, for the Cockpit's one sheet host to lay
+/// over the veil: the card, and what floats above the card and the veil
+/// both (Settings' connection form).
+pub struct Drawn {
+    pub card: Stateful<Div>,
+    pub above: Option<AnyElement>,
+}
+
 /// The dim veil over the Cockpit while a sheet is up: a press on it
-/// closes the sheet (the cockpit wires that). It covers selectable
+/// closes the sheet (the Cockpit's sheet host wires that). It covers selectable
 /// transcript text, so it owns the neutral cursor outside the sheet too.
 pub fn veil() -> Div {
     components::veil().cursor_default()

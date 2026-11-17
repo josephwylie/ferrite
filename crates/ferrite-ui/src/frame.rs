@@ -23,8 +23,9 @@ pub trait Frame: Send + Sync {
     /// The titlebar strip across the window's head row. `draggable` is
     /// false while an overlay may reach into the band.
     fn titlebar(&self, draggable: bool, maximized: bool) -> AnyElement;
-    /// The Settings sheet over the Cockpit.
-    fn settings(&self, sheet: SettingsSheet, window: &mut Window, cx: &mut App) -> AnyElement;
+    /// The Settings sheet's card, for the Cockpit's sheet host to lay over
+    /// its veil.
+    fn settings(&self, sheet: SettingsSheet, window: &mut Window, cx: &mut App) -> crate::sheet::Drawn;
     /// Bind `table` in place of the key table bound before (ADR 0024), and
     /// set the menu bar again so its key equivalents follow.
     fn bind_keys(&self, table: Vec<Binding>, cx: &mut App);
@@ -98,10 +99,8 @@ pub struct SettingsSheet {
     /// Show a page (`select`), or the page `delta` rows away (`step`).
     pub select: std::rc::Rc<dyn Fn(settings::PageKey, &mut Window, &mut App)>,
     pub step: Box<dyn Fn(isize, &mut Window, &mut App)>,
-    /// The close button and a press on the veil.
-    pub close: std::rc::Rc<dyn Fn(&mut Window, &mut App)>,
-    /// When the sheet closed, while it fades out (`motion::dialog_out`).
-    pub leaving: Option<std::time::Instant>,
+    /// The close button.
+    pub close: Box<dyn Fn(&mut Window, &mut App)>,
 }
 
 #[cfg(test)]

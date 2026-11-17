@@ -179,8 +179,10 @@ impl CockpitView {
 
     pub(super) fn cancel_connection(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.connections.editor = None;
-        let focus = self.settings_view.read(cx).focus.clone();
-        window.focus(&focus, cx);
+        if let Some(settings) = self.settings_sheet(cx) {
+            let focus = settings.read(cx).focus.clone();
+            window.focus(&focus, cx);
+        }
         cx.notify();
     }
 
@@ -190,12 +192,14 @@ impl CockpitView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.settings_view.update(cx, |settings, cx| {
-            settings.page = settings::PageKey::Connections;
-            if let Some(search) = &settings.search {
-                search.update(cx, |search, cx| search.set_value("", window, cx));
-            }
-        });
+        if let Some(settings) = self.settings_sheet(cx) {
+            settings.update(cx, |settings, cx| {
+                settings.page = settings::PageKey::Connections;
+                if let Some(search) = &settings.search {
+                    search.update(cx, |search, cx| search.set_value("", window, cx));
+                }
+            });
+        }
         let mode = if machine.as_ref().is_some_and(|machine| !machine.is_link()) {
             ConnectionMode::Ssh
         } else {
