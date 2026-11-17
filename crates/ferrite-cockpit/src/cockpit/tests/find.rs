@@ -262,7 +262,7 @@ fn in_view(view: &Entity<CockpitView>, cx: &mut gpui::VisualTestContext) {
 fn find_opens_the_folds_that_hide_a_hit(cx: &mut TestAppContext) {
     let (mut core, fake) = cockpit("find-folded", 1);
     let thread = core.threads()[0];
-    core.send(thread, "Look into it".into());
+    assert_eq!(core.send(thread, "Look into it".into()), ferrite_core::cockpit::Admission::Delivered);
     bind_production_keys(cx);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     super::hold_nav_open(&view, cx);
@@ -324,7 +324,7 @@ fn a_completed_turns_plan_is_kept_in_its_fold(cx: &mut TestAppContext) {
     use ferrite_core::progress::{PlanStep, ProgressEvent, StepStatus};
     let (mut core, fake) = cockpit("plan-kept", 1);
     let thread = core.threads()[0];
-    core.send(thread, "Ship it".into());
+    assert_eq!(core.send(thread, "Ship it".into()), ferrite_core::cockpit::Admission::Delivered);
     bind_production_keys(cx);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     super::hold_nav_open(&view, cx);
@@ -757,7 +757,7 @@ fn the_bar_fits_a_narrow_pane(cx: &mut TestAppContext) {
     super::hold_nav_open(&view, cx);
     // A narrow window holds the nav at its minimum, the Pane beside it
     // narrower than the bar.
-    let width = ferrite_ui::theme::NAV_MIN_W + ferrite_core::docview::TRANSCRIPT_WIDTH;
+    let width = ferrite_ui::theme::NAV_MIN_W + 300.0;
     cx.simulate_resize(gpui::size(px(width), px(700.)));
     say(&fake, "A needle in a narrow Pane.\n\n");
     tick(cx);

@@ -2273,7 +2273,7 @@ fn the_model_picker_opens_in_place_and_then_rests(cx: &mut TestAppContext) {
     let (view, _fake, threads, cx) = solo_board("choice-menu-entrance", cx);
     view.update(cx, |view, cx| view.open_provider_picker(threads[0], cx));
     cx.run_until_parked();
-    let mut watch = |cx: &mut gpui::VisualTestContext, ms: u64| {
+    let watch = |cx: &mut gpui::VisualTestContext, ms: u64| {
         let mut stood = Vec::new();
         for _ in 0..ms / 16 {
             cx.executor().advance_clock(Duration::from_millis(16));

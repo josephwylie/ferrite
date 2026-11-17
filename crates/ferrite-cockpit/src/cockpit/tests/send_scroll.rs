@@ -785,14 +785,15 @@ fn expanding_completed_work_keeps_the_clicked_heading(cx: &mut TestAppContext) {
     let (mut core, fake) = cockpit("fold-anchor", 1);
     let thread = core.threads()[0];
     let (view, cx) = {
-        core.send(thread, "turn 0".into());
+        assert_eq!(core.send(thread, "turn 0".into()), ferrite_core::cockpit::Admission::Delivered);
         add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx))
     };
     hide_panel(&view, cx);
     cx.simulate_resize(gpui::size(px(1000.), px(700.)));
     for turn in 0..6 {
         if turn > 0 {
-            view.update(cx, |view, _| view.cockpit.send(thread, format!("turn {turn}")));
+            let admission = view.update(cx, |view, _| view.cockpit.send(thread, format!("turn {turn}")));
+            assert_eq!(admission, ferrite_core::cockpit::Admission::Delivered);
         }
         let stream = fake.streams.borrow().len() - 1;
         let send = |event| fake.streams.borrow()[stream].send(event).unwrap();
@@ -865,14 +866,15 @@ fn expanding_work_at_the_followed_tail_keeps_the_clicked_heading(cx: &mut TestAp
     let (mut core, fake) = cockpit("fold-tail", 1);
     let thread = core.threads()[0];
     let (view, cx) = {
-        core.send(thread, "turn 0".into());
+        assert_eq!(core.send(thread, "turn 0".into()), ferrite_core::cockpit::Admission::Delivered);
         add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx))
     };
     hide_panel(&view, cx);
     cx.simulate_resize(gpui::size(px(1000.), px(700.)));
     for turn in 0..3 {
         if turn > 0 {
-            view.update(cx, |view, _| view.cockpit.send(thread, format!("turn {turn}")));
+            let admission = view.update(cx, |view, _| view.cockpit.send(thread, format!("turn {turn}")));
+            assert_eq!(admission, ferrite_core::cockpit::Admission::Delivered);
         }
         let stream = fake.streams.borrow().len() - 1;
         let send = |event| fake.streams.borrow()[stream].send(event).unwrap();

@@ -464,7 +464,7 @@ fn address_text(view: &Entity<CockpitView>, thread: ThreadId, cx: &mut gpui::Vis
 
 #[gpui::test]
 fn an_address_draft_survives_the_pages_own_navigation(cx: &mut TestAppContext) {
-    let (engine, view, thread, cx) = browser_window(cx, "bnt-draft");
+    let (_, view, thread, cx) = browser_window(cx, "bnt-draft");
     let address = cx.debug_bounds("browser-address").unwrap();
     cx.simulate_click(address.center(), gpui::Modifiers::none());
     cx.simulate_keystrokes("cmd-a");

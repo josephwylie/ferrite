@@ -3029,8 +3029,7 @@ impl CockpitView {
     }
 
     fn update_auto_fold(&mut self, window: &Window) {
-        use ferrite_core::docview::TILE_FLOOR_WIDTH;
-        use ferrite_ui::theme::{NAV_AUTO_FOLD_BOARD_W, NAV_AUTO_FOLD_HYSTERESIS};
+        use ferrite_ui::theme::{NAV_AUTO_FOLD_BOARD_W, NAV_AUTO_FOLD_HYSTERESIS, NAV_AUTO_FOLD_PANE_W};
         let held = self.nav_auto_fold.get();
         let slack = if held { NAV_AUTO_FOLD_HYSTERESIS } else { 0.0 };
         let width = f32::from(window.viewport_size().width);
@@ -3047,7 +3046,7 @@ impl CockpitView {
         self.nav_measure_full.set(false);
         let gain = (width - right) / board.max(1.0);
         let folded = full * gain;
-        let cramped = full < TILE_FLOOR_WIDTH + slack && folded >= TILE_FLOOR_WIDTH;
+        let cramped = full < NAV_AUTO_FOLD_PANE_W + slack && folded >= NAV_AUTO_FOLD_PANE_W;
         let fold = board < NAV_AUTO_FOLD_BOARD_W + slack || cramped;
         self.nav_auto_fold.set(fold);
         // `board_bounds` cached the full-column board while measuring.
@@ -10631,7 +10630,7 @@ impl CockpitView {
     /// provider has none to resume. It says what the way on costs.
     fn resume_offer(&self, index: usize, cx: &mut Context<Self>) -> Option<AnyElement> {
         let thread = self.panes.get(index).filter(|pane| pane.is_main())?.thread()?;
-        let open = self.cockpit.thread(thread).filter(|open| open.resume_lost())?;
+        self.cockpit.thread(thread).filter(|open| open.resume_lost())?;
         let key = thread.get();
         let line = "A fresh conversation starts from the transcript's latest turns, sent as \
                     context with your next prompt. It will not remember the rest.";

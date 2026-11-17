@@ -118,7 +118,7 @@ fn with_no_driven_window_a_window_action_is_refused_at_once() {
 #[test]
 fn a_driven_window_that_goes_mid_action_leaves_its_caller_refused() {
     let harness = start("drive-gone");
-    let mut driven = attach_driven(&harness.address);
+    let driven = attach_driven(&harness.address);
     let mut caller = call(&harness);
     caller.ask("1", "window.shot", json!({ "path": "/tmp/shot.png" }));
     handed(&driven);
