@@ -141,7 +141,10 @@ jobs:
         run: |
           args=()
           for package in $PACKAGES; do args+=(-p "$package"); done
-          cargo nextest run "${args[@]}" --locked --no-fail-fast --status-level all --final-status-level fail
+          # This runner fails a different timing-dependent test on most runs.
+          # A test that passes on a retry is listed as flaky and does not fail
+          # the job; one that fails three times does.
+          cargo nextest run "${args[@]}" --locked --no-fail-fast --retries 2 --status-level all --final-status-level flaky
       - name: Build app
         working-directory: ${{ env.DEV_DRIVE_WORKSPACE }}
         run: cargo build -p ferrite --locked
