@@ -958,7 +958,7 @@ fn a_restored_code_tab_loads_and_wraps_without_repeated_reads(cx: &mut TestAppCo
         let files = ferrite_core::protocol::sides_of_unified(&format!("diff --git a/requested.rs b/requested.rs\n--- a/requested.rs\n+++ b/requested.rs\n@@ -1 +1 @@\n-old\n+{wide}\n"));
         view.cockpit.fixture_forge_diff(path.clone(), 7, files);
         // This is what session restoration retains, without runtime Changes state.
-        view.surfaces_mut(thread).pr_tabs.insert(7, PrTab::Code);
+        view.apply_surface(thread, crate::cockpit::surfaces::SurfaceAction::SelectPrTab { number: 7, tab: PrTab::Code });
         assert_eq!(view.changes_generation_for_test(diff), None);
         view.open_named_pr(thread, 7, format!("{base}/pull/7"), cx);
         path

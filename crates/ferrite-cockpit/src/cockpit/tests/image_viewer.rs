@@ -6,7 +6,7 @@
 //! between fit and actual size — easing, asking for frames only while it
 //! moves, and never rebuilding the Panes under it.
 use super::*;
-use crate::cockpit::surfaces::SurfaceId;
+use crate::cockpit::surfaces::{SurfaceAction, SurfaceId};
 use ferrite_pane::preview::Body;
 
 /// A solid PNG `width` × `height` at `path`.
@@ -102,9 +102,8 @@ fn a_restored_image_tab_cannot_steal_another_threads_comment_or_address(cx: &mut
     // Reproduce an old panel.json containing an image as a File surface.
     // Images have no preview document: only an explicit open makes a lightbox.
     view.update(cx, |view, cx| {
-        view.surfaces_mut(inactive)
-            .upsert(SurfaceId::File(image.clone()));
-        view.save_surfaces();
+        view.apply_surface(inactive, SurfaceAction::Open(SurfaceId::File(image.clone())));
+        view.flush_panel_persistence();
         view.panel.surfaces =
             super::super::surfaces::Surfaces::load(&view.prefs.dir, |_, _| true).unwrap();
         let index = view.pane_for(active).unwrap();
@@ -154,8 +153,7 @@ fn a_restored_image_tab_cannot_steal_another_threads_comment_or_address(cx: &mut
     cx.simulate_keystrokes("cmd-a");
     // Repeat the stale restoration while the address already owns focus.
     view.update(cx, |view, cx| {
-        view.surfaces_mut(inactive)
-            .upsert(SurfaceId::File(image.clone()));
+        view.apply_surface(inactive, SurfaceAction::Open(SurfaceId::File(image.clone())));
         cx.notify();
     });
     tick(cx);
