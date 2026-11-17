@@ -102,14 +102,8 @@ pub(super) fn running_work(open: &ferrite_core::cockpit::ThreadView<'_>) -> Vec<
             }
         })
         .collect();
-    for (names, agent) in open.activity().named_agents() {
-        let stoppable = matches!(
-            agent.status(),
-            AgentStatus::Working | AgentStatus::Pending | AgentStatus::Waiting
-        );
-        if !(stoppable || agent.status() == AgentStatus::Unknown) || !agent.fresh() {
-            continue;
-        }
+    for (names, agent) in open.activity().running_agents() {
+        let stoppable = agent.status() != AgentStatus::Unknown;
         // While Main's turn runs, an agent it launched in the foreground is
         // work it waits on, not background work.
         if open.busy() && !names.iter().any(|name| transcript.running_in_background(name)) {
