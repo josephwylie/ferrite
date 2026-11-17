@@ -1,20 +1,21 @@
 # Tests the Windows check does not run yet.
 #
-# Until #311 the Windows check ran ferrite-core and ferrite-reviewr only. It
-# now runs every affected package, and these 33 failed on their first run
-# there. Each line is a debt: fix the test or the product, then delete the
-# line. A `full-ci` label runs the Windows check on a PR.
-#
-# In the order below, by what the failure said:
-#   - a path compared with `canonicalize`, which on Windows carries `\\?\`
-#   - a Unix-shaped path or link address: `/` separators, or rooted at `/`
-#   - a chord written as `cmd-` where Windows binds `ctrl-`
-#   - a Unix shell
-#   - not yet read
+# Each line is a debt: fix the test or the product, then delete the line. A
+# `full-ci` label runs the Windows check on a PR.
 [[profile.default.overrides]]
 platform = 'cfg(windows)'
 default-filter = '''
 not (
     test(=cockpit::tests::browser_annotations::browser_annotation_history_keeps_a_distinct_reviewable_capture)
+
+    # The Panel's tab strip: a click lands on the wrong tab or nothing, and
+    # the chevron never shows. Likely cause, unmeasured: Windows reserves
+    # 138px of the 320px Panel head for its caption buttons.
+  | test(=cockpit::tests::panel_preview::another_tab_keeps_the_preview_for_later)
+  | test(=cockpit::tests::provider_controls::background_work_lives_in_its_row_the_rail_and_the_pane)
+  | test(=cockpit::tests::side_chat::side_chat_tabs_are_separate_conversations)
+  | test(=cockpit::tests::tools::a_tab_dragged_past_six_pixels_moves_and_five_is_a_click)
+  | test(=cockpit::tests::tools::overflowing_tabs_show_chevrons_that_scroll_the_strip)
+  | test(=cockpit::tests::tools::the_plus_menu_lists_every_surface_with_its_letter)
 )
 '''

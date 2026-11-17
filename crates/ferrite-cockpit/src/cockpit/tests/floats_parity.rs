@@ -180,7 +180,7 @@ fn par_keeps_two_commands_and_the_parked_thread(cx: &mut TestAppContext) {
             .unwrap();
         assert_eq!(
             park.keys.as_deref(),
-            Some(format!("{}-W", ferrite_ui::keymap::PLATFORM.primary()).as_str()),
+            Some(ferrite_ui::keymap::PLATFORM.chord("W").as_str()),
             "existing Park binding"
         );
     });
@@ -301,7 +301,7 @@ fn thread_rows_name_their_scope_state_and_digit(cx: &mut TestAppContext) {
             .expect("every Thread has a row");
         assert_eq!(
             row.keys.as_deref(),
-            Some(format!("{}-{}", ferrite_ui::keymap::PLATFORM.primary(), at + 1).as_str())
+            Some(ferrite_ui::keymap::PLATFORM.chord(&(at + 1).to_string()).as_str())
         );
         assert!(
             row.context.starts_with("Perf sweep"),

@@ -44,6 +44,11 @@ impl Platform {
             Platform::Windows => "ctrl",
         }
     }
+
+    /// `key` under the primary modifier: `cmd-w`, `ctrl-w`.
+    pub fn chord(self, key: &str) -> String {
+        format!("{}-{key}", self.primary())
+    }
 }
 
 /// The convention this build follows.

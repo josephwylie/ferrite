@@ -1944,7 +1944,7 @@ fn settings_on_a_machine_edit_its_defaults_not_this_computers(cx: &mut TestAppCo
     });
     let search = cx.debug_bounds("settings-search").unwrap();
     cx.simulate_click(search.center(), gpui::Modifiers::none());
-    cx.simulate_keystrokes("cmd-a");
+    cx.simulate_keystrokes(&ferrite_ui::keymap::PLATFORM.chord("a"));
     cx.simulate_input("follow-up");
     tick(cx);
     let at = cx
