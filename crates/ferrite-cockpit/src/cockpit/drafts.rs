@@ -121,7 +121,7 @@ impl CockpitView {
     pub(super) fn delete_thread(
         &mut self,
         thread: ThreadId,
-    ) -> Result<(), ferrite_core::engine::DeleteError> {
+    ) -> std::io::Result<()> {
         self.cockpit.delete(thread)?;
         if self.cited_sources.forget(thread) {
             if let Err(error) = self.cited_sources.save(&self.prefs.dir) {

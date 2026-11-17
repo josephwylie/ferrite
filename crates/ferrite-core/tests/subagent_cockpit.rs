@@ -605,8 +605,8 @@ fn hidden_child_decisions_reply_in_reverse_order_and_failed_writes_stay_pending(
         h.cockpit
             .respond_decision(h.thread, &beta_handle, allow())
             .unwrap_err()
-            .kind(),
-        io::ErrorKind::BrokenPipe
+            .to_string(),
+        "scripted reply failure"
     );
     assert_eq!(
         h.cockpit

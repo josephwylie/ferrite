@@ -396,10 +396,12 @@ fn effort_waits_for_startup_without_losing_the_pending_prompt() {
     let mut cockpit = cockpit("startup-effort", vec![plan]);
     let thread = cockpit.open(Provider::Claude, workspace()).unwrap();
     let _ = cockpit.send(thread, "waiting".into());
-    assert!(matches!(
-        cockpit.set_effort(thread, Some("high".into())),
-        Err(ProvisionError::Busy)
-    ));
+    assert_eq!(
+        cockpit.set_effort(thread, Some("high".into()))
+        .unwrap_err()
+        .to_string(),
+        ProvisionError::Busy.to_string()
+    );
     assert_eq!(cockpit.peek(thread).unwrap().effort, None);
     assert_eq!(
         cockpit
@@ -442,10 +444,12 @@ fn effort_waits_for_handover_then_tunes_in_place_without_consuming_context() {
         .set_provider(thread, choice(Provider::Codex))
         .unwrap();
     let _ = cockpit.send(thread, "after".into());
-    assert!(matches!(
-        cockpit.set_effort(thread, Some("high".into())),
-        Err(ProvisionError::Busy)
-    ));
+    assert_eq!(
+        cockpit.set_effort(thread, Some("high".into()))
+        .unwrap_err()
+        .to_string(),
+        ProvisionError::Busy.to_string()
+    );
     assert_eq!(cockpit.peek(thread).unwrap().provider, Provider::Claude);
     assert_eq!(
         cockpit

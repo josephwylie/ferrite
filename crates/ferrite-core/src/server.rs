@@ -1169,10 +1169,7 @@ impl Server {
     fn apply_settings(&mut self, settings: &Settings) {
         *self.defaults.lock().unwrap_or_else(|e| e.into_inner()) =
             SessionDefaults::from_settings(settings);
-        self.engine
-            .set_suggestions_enabled(settings.placeholder_suggestions);
-        self.engine
-            .set_allowance_thresholds(settings.allowance_warnings.clone());
+        self.engine.apply_settings(settings);
         self.default_provider = settings.default_provider;
         self.forge = settings.forge_hosts.review_config();
         self.factory_agent = factory::default_agent(settings);

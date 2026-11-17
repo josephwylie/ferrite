@@ -1300,12 +1300,7 @@ impl Engine {
         &self.registry
     }
 
-    /// Register a project root (idempotent, canonicalized) — the selector's
-    /// type-a-path row and the launch seed both land here.
-    pub fn register_project(&mut self, root: &Path) -> io::Result<ProjectId> {
-        self.registry.register(root)
-    }
-
+    /// Register a Project over these roots (idempotent, canonicalized).
     pub fn register_project_directories(&mut self, roots: &[PathBuf]) -> io::Result<ProjectId> {
         self.registry.register_directories(roots)
     }
@@ -4061,10 +4056,12 @@ impl Engine {
         self.limit_cache.get(provider)
     }
 
-    /// The use, in percent, at which a rising window warns the operator.
-    /// Empty turns the warnings off.
-    pub fn set_allowance_thresholds(&mut self, thresholds: Vec<u8>) {
-        self.allowance_thresholds = thresholds;
+    /// What the settings say of the Engine: whether completed turns
+    /// predict a follow-up, and the use, in percent, at which a rising
+    /// window warns the operator (none turns the warnings off).
+    pub fn apply_settings(&mut self, settings: &crate::settings::Settings) {
+        self.set_suggestions_enabled(settings.placeholder_suggestions);
+        self.allowance_thresholds = settings.allowance_warnings.clone();
     }
 
     /// Request workspace commands without creating a Thread or Session.

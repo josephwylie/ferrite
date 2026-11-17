@@ -8667,7 +8667,7 @@ impl CockpitView {
         &mut self,
         thread: ThreadId,
         cx: &mut Context<Self>,
-    ) -> Result<(), ferrite_core::store::LoadError> {
+    ) -> std::io::Result<()> {
         self.cockpit.reopen(thread)?;
         self.leave_destination();
         self.widen_scope_to(thread, cx);
