@@ -82,7 +82,9 @@ def check_boundaries(packages: dict[str, Package]) -> None:
 
 
 # These inputs affect packaging or dependency resolution outside workspace edges.
-SHARED_INPUTS = ("vendor/", "scripts/", "assets/", "resources/", ".cargo/", ".config/", ".github/workflows/")
+# Vendored crates are tested on macOS only, in their own run with test features.
+VENDOR = "vendor/"
+SHARED_INPUTS = (VENDOR, "scripts/", "assets/", "resources/", ".cargo/", ".config/", ".github/workflows/")
 SHARED_FILES = {"Cargo.toml", "Cargo.lock", "rust-toolchain", "rust-toolchain.toml"}
 
 
@@ -94,14 +96,16 @@ def select(packages: dict[str, Package], paths: list[str], full: bool = False) -
     if all_packages:
         reasons.add("full run or unavailable change list")
     for path in paths:
-        # Crate fixtures and vendored Markdown can be embedded at compile time.
-        owners = {name for name, package in packages.items() if path.startswith(package.directory + "/")}
-        if owners:
-            selected.update(owners)
-            continue
+        # Before ownership: vendored members reach Ferrite through crates.io
+        # packages such as gpui-kit, so their dependants are not workspace edges.
         if path in SHARED_FILES or path.startswith(SHARED_INPUTS):
             all_packages = True
             reasons.add(f"shared build or packaging input: {path}")
+            continue
+        # Crate fixtures, Markdown included, can be embedded at compile time.
+        owners = {name for name, package in packages.items() if path.startswith(package.directory + "/")}
+        if owners:
+            selected.update(owners)
         elif path.startswith("docs/") or ("/" not in path and path.endswith(".md")):
             continue
         else:
@@ -120,7 +124,8 @@ def select(packages: dict[str, Package], paths: list[str], full: bool = False) -
         "code": bool(selected),
         "browser": "ferrite" in selected or all_packages,
         "full": full,
-        "packages": sorted(selected),
+        "packages": sorted(name for name in selected if not packages[name].directory.startswith(VENDOR)),
+        "vendored": sorted(name for name in selected if packages[name].directory.startswith(VENDOR)),
         "decisions": {name: name in selected for name in sorted(packages)},
         "reasons": sorted(reasons) or ["workspace dependency closure" if selected else "documentation only"],
     }
@@ -153,7 +158,8 @@ def main() -> None:
         with args.github_output.open("a") as output:
             for name in ("code", "browser", "full"):
                 output.write(f"{name}={str(result[name]).lower()}\n")
-            output.write(f"packages={' '.join(result['packages'])}\n")
+            for name in ("packages", "vendored"):
+                output.write(f"{name}={' '.join(result[name])}\n")
 
 
 if __name__ == "__main__":

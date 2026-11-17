@@ -1310,8 +1310,9 @@ mod tests {
         assert!(list.read_with(cx, |list, _| list.is_advancing));
 
         // Autohide expiry plus the exit transition stops the clock with it.
+        let enter = cx.update(|_, cx| card_motion(cx).duration);
         cx.background_executor
-            .advance_clock(NOTIFICATION_TRANSITION_DURATION + Duration::from_secs(5));
+            .advance_clock(enter + Duration::from_secs(5));
         cx.run_until_parked();
         flush_dismiss(cx);
         assert!(ids(&list, cx).is_empty());
@@ -1322,8 +1323,9 @@ mod tests {
             list.push(Notification::info("again").id::<BarKind>(), window, cx);
         });
         assert!(list.read_with(cx, |list, _| list.is_advancing));
+        let enter = cx.update(|_, cx| card_motion(cx).duration);
         cx.background_executor
-            .advance_clock(NOTIFICATION_TRANSITION_DURATION + Duration::from_secs(5));
+            .advance_clock(enter + Duration::from_secs(5));
         cx.run_until_parked();
         flush_dismiss(cx);
         assert!(ids(&list, cx).is_empty());
@@ -1343,8 +1345,9 @@ mod tests {
             list.push(Notification::info("background").id::<FooKind>(), window, cx);
         });
 
+        let enter = cx.update(|_, cx| card_motion(cx).duration);
         cx.background_executor
-            .advance_clock(NOTIFICATION_TRANSITION_DURATION);
+            .advance_clock(enter);
         cx.run_until_parked();
         let note = list.read_with(cx, |list, _| {
             list.notifications
@@ -1378,8 +1381,9 @@ mod tests {
             list.push(Notification::info("paused").id::<FooKind>(), window, cx);
         });
 
+        let enter = cx.update(|_, cx| card_motion(cx).duration);
         cx.background_executor
-            .advance_clock(NOTIFICATION_TRANSITION_DURATION);
+            .advance_clock(enter);
         cx.run_until_parked();
         let note = list.read_with(cx, |list, _| {
             list.notifications

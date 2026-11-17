@@ -223,6 +223,14 @@ Patches (each change marked "Ferrite's patch"):
 Cargo applies them through the root `[patch.crates-io]`. Remove a patch when
 upstream lets an app set the card's motion, or a button's tooltip view.
 
+Test-only changes, so the unit tests build from the published crate (CI runs
+them): the published crate's tests read files from upstream's monorepo
+(`themes/aurora.json`, `story/examples/fixtures/test.md`, `base/`). The first
+two are copied from gpui-kit@`94a313a72a2513aee2780240cd322d552b2395f0` into
+`tests/fixtures/`; the dock test reads `../gpui-base`, the vendored copy of
+`base`. The notification tests advance the clock by the card's own motion
+(`card_motion`) where upstream used its removed 400ms constant.
+
 ## GPUI
 
 `gpui-pre/` is the crates.io `gpui-pre` **0.3.3** source (Zed's GPUI,
@@ -232,6 +240,13 @@ Apache-2.0 licenses and upstream READMEs are retained. The manifests are
 unchanged except that `gpui-pre`'s example targets are dropped with the
 `examples/` tree (4.9MB of fixtures); registry cache markers and lockfiles are
 omitted.
+
+Test-only change, so `gpui-pre`'s unit tests build (CI runs them): the files
+they include from outside the crate live in `tests/fixtures/`.
+`image/exif-orientation-rotate-180.jpg` is the published crate's (it was in
+the dropped `examples/`); the IBM Plex Sans and Lilex regular faces and their
+licenses are from zed@`5b055fa789a8b8d38ac951a6e0cde272f66b4495`
+`assets/fonts/`, which the published crate does not ship.
 
 Ferrite's design is drawn as HTML (`docs/design/ui-refresh/mockups/`), which
 a browser lays out and paints. The patches make gpui place and round what it paints the way a
@@ -361,6 +376,13 @@ browser does, so the same CSS geometry lands on the same device pixels:
   which upstream exposes only through `VisualTestContext`: the live
   reference capture drives a headless window that is no test context's and
   clicks what it finds there.
+- **A spring reads the executor's clock** (`elements/animation.rs`). A
+  spring element stepped by `Instant::now()`, so its tests' fake clock did
+  not move it: it moved by the real time between two frames, and under
+  about 25 microseconds `f32` rounds that step to nothing, which failed
+  `test_spring_animation_preserves_velocity_when_retargeted` in CI. It
+  reads `BackgroundExecutor::now`, as a synced animation does. The app's
+  executor reads the same real clock, so nothing changes there.
 
 Cargo applies both through the root `[patch.crates-io]`. Remove a patch when
 an upstream release offers equivalent behaviour.

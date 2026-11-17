@@ -56,7 +56,10 @@ async fn run(socket: &mut WebSocket, gateway: &Gateway, session: &str) -> std::i
     let pair = portable_pty::native_pty_system()
         .openpty(size)
         .map_err(std::io::Error::other)?;
-    let mut command = CommandBuilder::new_default_prog();
+    let mut command = match &gateway.shell {
+        Some(shell) => CommandBuilder::new(shell),
+        None => CommandBuilder::new_default_prog(),
+    };
     command.cwd(cwd);
     command.env("TERM", "xterm-256color");
     command.env("COLORTERM", "truecolor");
