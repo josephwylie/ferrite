@@ -34,6 +34,7 @@ jobs:
       code: ${{ steps.scope.outputs.code }}
       full: ${{ steps.scope.outputs.full }}
       packages: ${{ steps.scope.outputs.packages }}
+      vendored: ${{ steps.scope.outputs.vendored }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -83,6 +84,16 @@ jobs:
             for package in $PACKAGES; do args+=(-p "$package"); done
           fi
           cargo nextest run "${args[@]}" --locked --no-fail-fast --status-level all --final-status-level fail
+      # Its own run: gpui-pre-macos's tests need its test-support feature,
+      # which must not reach the app's test builds above.
+      - name: Test vendored framework crates
+        if: ${{ needs.scope.outputs.vendored != '' }}
+        env:
+          VENDORED: ${{ needs.scope.outputs.vendored }}
+        run: |
+          args=()
+          for package in $VENDORED; do args+=(-p "$package"); done
+          cargo nextest run "${args[@]}" --features gpui-pre-macos/test-support --locked --no-fail-fast --final-status-level fail
       - name: Build app
         run: cargo build -p ferrite --locked
 
