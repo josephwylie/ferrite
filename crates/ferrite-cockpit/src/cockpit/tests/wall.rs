@@ -1,25 +1,32 @@
-//! The wall: grid membership, levels and wall cards.
+//! The Pane at any size, and the wall cards the nav reads.
 #[allow(unused_imports)]
 use super::*;
 
-/// AC1: no mode switch — the same cockpit renders at a different altitude
-/// when the window changes size.
+/// A Pane has one drawing at any size: in the smallest window, the nav
+/// and the panel beside it squeeze it under what was once a transcript's
+/// floor, and it still reads the transcript and types in the Composer.
 #[gpui::test]
-fn resizing_the_window_changes_every_panes_level(cx: &mut TestAppContext) {
-    let (core, _fake) = cockpit("resize", 4);
+fn the_smallest_window_still_draws_the_transcript_and_composer(cx: &mut TestAppContext) {
+    let (core, fake) = cockpit("small-window", 1);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
-    cx.run_until_parked();
-
-    let wide = cx.update(|window, cx| view.read(cx).level_now(window));
-    // Narrow enough that the board under the folded nav is narrower
-    // than a transcript (300px).
-    cx.simulate_resize(gpui::size(gpui::px(300.), gpui::px(280.)));
-    let narrow = cx.update(|window, cx| view.read(cx).level_now(window));
-
+    super::hold_nav_open(&view, cx);
+    cx.simulate_resize(gpui::size(
+        px(ferrite_ui::theme::WINDOW_MIN_W),
+        px(ferrite_ui::theme::WINDOW_MIN_H),
+    ));
+    fake.streams.borrow()[0]
+        .send(SessionEvent::TextDelta {
+            text: "A small window still reads.\n\n".into(),
+        })
+        .unwrap();
+    tick(cx);
+    let rect = cx.update(|window, cx| view.read(cx).pane_rects(window)[0].1);
     assert!(
-        narrow < wide,
-        "a smaller window must fall to a lower level: {narrow:?} vs {wide:?}"
+        !ferrite_core::docview::Cell::new(rect.w, rect.h).holds_transcript(),
+        "the premise: the cell is under the old transcript floor: {rect:?}"
     );
+    assert!(cx.debug_bounds("composer-block").is_some(), "the Composer");
+    assert!(cx.debug_bounds("transcript-answer").is_some(), "the transcript");
 }
 
 /// What a Thread's wall card says right now: its alert context and the

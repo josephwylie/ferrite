@@ -169,11 +169,7 @@ fn menu_and_decision_states_disarm_history_before_their_arrows_dispatch(cx: &mut
     bind_production_keys(cx);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     tick(cx);
-    cx.update(|window, cx| {
-        assert!(view
-            .read(cx)
-            .history_available(0, view.read(cx).level_now(window)))
-    });
+    view.read_with(cx, |view, _| assert!(view.history_available(0)));
 
     view.update(cx, |view, cx| {
         view.panes[0]
@@ -182,11 +178,7 @@ fn menu_and_decision_states_disarm_history_before_their_arrows_dispatch(cx: &mut
     });
     tick(cx);
     view.read_with(cx, |view, _| assert!(view.popover.is_some()));
-    cx.update(|window, cx| {
-        assert!(!view
-            .read(cx)
-            .history_available(0, view.read(cx).level_now(window)))
-    });
+    view.read_with(cx, |view, _| assert!(!view.history_available(0)));
     cx.simulate_keystrokes("up");
     assert_eq!(composer_text(&view, cx), "/", "menu owns the arrow");
 
@@ -200,11 +192,7 @@ fn menu_and_decision_states_disarm_history_before_their_arrows_dispatch(cx: &mut
         .send(decision("history-decision"))
         .unwrap();
     tick(cx);
-    cx.update(|window, cx| {
-        assert!(!view
-            .read(cx)
-            .history_available(0, view.read(cx).level_now(window)))
-    });
+    view.read_with(cx, |view, _| assert!(!view.history_available(0)));
     cx.simulate_keystrokes("up");
     assert_eq!(composer_text(&view, cx), "draft", "Decision owns its state");
 }

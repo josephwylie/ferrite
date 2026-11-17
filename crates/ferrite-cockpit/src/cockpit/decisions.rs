@@ -1,6 +1,6 @@
 //! The Decision's answer paths and keys (WP-F). One door answers an
-//! approval whatever surface asked — the transcript's Decision row, the
-//! wall's quick answers, a toast — and one door answers a question's
+//! approval whatever surface asked — the transcript's Decision row or a
+//! toast — and one door answers a question's
 //! option. The per-Decision cursor and amend note live in each Pane's
 //! `RequestForms`; Ferrite's own thread rules live here.
 

@@ -20,8 +20,8 @@
 //! slid shut, and only then is it removed from the tree. A flip mid-slide
 //! turns around from where it is; a review switching scope reads in place,
 //! and the slot does not slide again; a seam grabbed mid-slide lands it,
-//! and a drag is never tweened. The board's Level and the narrow-window
-//! rail are measured where the slide ends. Each frame of a slide redraws
+//! and a drag is never tweened. The narrow-window
+//! rail is measured where the slide ends. Each frame of a slide redraws
 //! the frame around the parts, so only the Pane whose cell moves is built
 //! again; reduced motion snaps. A review is a Thread's — a draft has none
 //! — so a slot is keyed by its Thread.

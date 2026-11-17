@@ -1,5 +1,5 @@
 ---
-status: accepted
+status: accepted, amended 2026-11-17 (no wall tile)
 date: 2026-10-15
 ---
 
@@ -195,3 +195,8 @@ still returns to the tree. Working and Snoozed start as collapsed headings
 with counts. Expanded rows use the existing one-line Thread component;
 the Activity preview renderer is removed. Custom Snooze editing ends when
 its Inbox surface is hidden, including the sidebar rail.
+
+## Amendment (2026-11-17): no wall tile
+
+The wall tile is gone (ADR 0033's 2026-11-17 amendment). The Pane head
+and the nav row keep the `done` rule above.

@@ -755,11 +755,9 @@ fn the_bar_fits_a_narrow_pane(cx: &mut TestAppContext) {
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     hide_panel(&view, cx);
     super::hold_nav_open(&view, cx);
-    // A narrow window holds the nav at its minimum, the cell beside it
-    // the narrowest that still steps up to a transcript.
-    let width = ferrite_ui::theme::NAV_MIN_W
-        + ferrite_core::docview::TRANSCRIPT_WIDTH
-        + ferrite_ui::theme::LEVEL_HYSTERESIS;
+    // A narrow window holds the nav at its minimum, the Pane beside it
+    // narrower than the bar.
+    let width = ferrite_ui::theme::NAV_MIN_W + ferrite_core::docview::TRANSCRIPT_WIDTH;
     cx.simulate_resize(gpui::size(px(width), px(700.)));
     say(&fake, "A needle in a narrow Pane.\n\n");
     tick(cx);

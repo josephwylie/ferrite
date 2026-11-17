@@ -531,7 +531,7 @@ fn escape_on_an_opened_subagent_stops_it(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
-fn native_child_progress_uses_the_shared_pinned_row_and_selected_wall_cache(
+fn native_child_progress_uses_the_shared_pinned_row(
     cx: &mut TestAppContext,
 ) {
     let (core, fake) = cockpit("subagents-native-progress", 1);
@@ -574,11 +574,6 @@ fn native_child_progress_uses_the_shared_pinned_row_and_selected_wall_cache(
     view.read_with(cx, |view, _| {
         let pane = &view.panes[0];
         let facts = view.facts.get(pane.thread().unwrap()).unwrap();
-        assert!(facts
-            .wall_for(&pane.selected)
-            .unwrap()
-            .working
-            .contains("Retrying · Server busy"));
         assert!(!facts.wall.working.contains("Server busy"));
     });
     emit(

@@ -14,7 +14,7 @@ use std::collections::BTreeSet;
 
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
-use crate::docview::{Cell, Level};
+use crate::docview::Cell;
 use crate::ThreadId;
 
 /// The smallest share `set_ratio` lets either side of a split hold. A seam
@@ -151,8 +151,8 @@ pub enum Zone {
 impl Tree {
     /// The default (and reset) board: an aspect-aware grid over `bounds`.
     /// Every column count from 1 to n is tried, rows = ceil(n / cols), and
-    /// each cell measured with `GRID_GAP` between cells. The count that
-    /// gives the highest uniform `Level` wins, then the one whose cell is
+    /// each cell measured with `GRID_GAP` between cells. The count whose
+    /// cells hold a transcript wins, then the one whose cell is
     /// closest to `GRID_ASPECT` — so 4 → 2×2, 9 → 3×3 and 12 → 4×3 on a
     /// laptop window, and a portrait window stacks rows. Rows stack in a
     /// Column at equal shares and each row is an equal Row chain, so column
@@ -880,21 +880,21 @@ pub const GRID_GAP: f32 = 8.0;
 pub const SEAM_CLAMP: (f32, f32) = (0.22, 0.78);
 
 /// The cell aspect (w / h) the default grid prefers once every candidate
-/// draws at the same `Level`: a little wider than tall, like a terminal.
+/// holds a transcript alike: a little wider than tall, like a terminal.
 pub const GRID_ASPECT: f32 = 1.4;
 
 /// (columns, rows) of the default grid for `count` Panes in `bounds`
-/// (`Tree::grid`): the highest uniform `Level::for_cell` first, then the
+/// (`Tree::grid`): cells that hold a transcript first, then the
 /// cell aspect closest to `GRID_ASPECT`, fewer columns on a tie.
 pub fn grid_shape(count: usize, bounds: Rect) -> (usize, usize) {
     if count == 0 {
         return (0, 0);
     }
-    let mut best: Option<(Level, f32, usize, usize)> = None;
+    let mut best: Option<(bool, f32, usize, usize)> = None;
     for columns in 1..=count {
         let rows = count.div_ceil(columns);
         let cell = grid_cell(bounds, columns, rows);
-        let level = Level::for_cell(cell);
+        let holds = cell.holds_transcript();
         let aspect = if cell.height > 0.0 {
             (cell.width / cell.height - GRID_ASPECT).abs()
         } else {
@@ -902,12 +902,12 @@ pub fn grid_shape(count: usize, bounds: Rect) -> (usize, usize) {
         };
         let better = match best {
             None => true,
-            Some((best_level, best_aspect, _, _)) => {
-                level > best_level || (level == best_level && aspect < best_aspect)
+            Some((best_holds, best_aspect, _, _)) => {
+                holds > best_holds || (holds == best_holds && aspect < best_aspect)
             }
         };
         if better {
-            best = Some((level, aspect, columns, rows));
+            best = Some((holds, aspect, columns, rows));
         }
     }
     let (_, _, columns, rows) = best.expect("count > 0 tries a column count");
@@ -1189,7 +1189,7 @@ mod tests {
     };
 
     #[test]
-    fn grids_pick_the_highest_uniform_level_then_the_aspect_nearest_the_rule() {
+    fn grids_pick_cells_that_hold_a_transcript_then_the_aspect_nearest_the_rule() {
         let expected = [(1, 1), (1, 2), (2, 2), (2, 2), (2, 3), (2, 3)];
         for (index, want) in expected.iter().enumerate() {
             let members = ids(1..index as u64 + 2);
@@ -1200,16 +1200,15 @@ mod tests {
         }
         assert_eq!(Tree::grid(&[], LAPTOP), Tree::default());
         // The specified boards: 4 → 2×2, 9 → 3×3, 12 → 4×3 (rows × columns
-        // below); every cell of 4 at the transcript Level, every cell of 9
-        // a wall tile (R12).
+        // below); every cell of 4 holds a transcript, no cell of 9 does.
         assert_eq!(shape(&Tree::grid(&ids(1..5), LAPTOP)), (2, 2));
         assert_eq!(shape(&Tree::grid(&ids(1..10), LAPTOP)), (3, 3));
         assert_eq!(shape(&Tree::grid(&ids(1..13), LAPTOP)), (3, 4));
-        for (count, level) in [(4, Level::Transcript), (9, Level::Wall)] {
+        for (count, holds) in [(4, true), (9, false)] {
             let (columns, rows) = grid_shape(count, LAPTOP);
             assert_eq!(
-                Level::for_cell(grid_cell(LAPTOP, columns, rows)),
-                level,
+                grid_cell(LAPTOP, columns, rows).holds_transcript(),
+                holds,
                 "n = {count}"
             );
         }

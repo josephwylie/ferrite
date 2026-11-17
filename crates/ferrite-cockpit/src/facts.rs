@@ -1,6 +1,6 @@
 //! What the nav and the Pane head say about a Thread that costs more than
 //! an O(1) read: its checkout branch (a `git` call), its Project label (a
-//! store peek), a parked Thread's provider (a peek) and the L3 wall card
+//! store peek), a parked Thread's provider (a peek) and the wall card
 //! (a walk of every Block). Cached here and refreshed by *moment* — a Pane
 //! opened, a Thread streamed or was acted on, the watchdog's tick, the
 //! parked set changed — never per frame. Which of the four facts a moment
@@ -10,7 +10,6 @@
 use std::collections::HashMap;
 use std::time::{Duration, Instant, SystemTime};
 
-use ferrite_core::activity::Subject;
 use ferrite_core::cockpit::Cockpit;
 use ferrite_core::docview::FileChange;
 use ferrite_core::store::Provider;
@@ -79,32 +78,17 @@ pub struct ThreadFacts {
     /// as its Server counted them while parked — the parked tile's `11
     /// turns`.
     pub turns: Option<usize>,
-    /// The wall cell's folded reading — everything the L3 recipe needs that
-    /// is not an O(1) transcript read. A frame never walks Blocks at L3.
+    /// Main's folded reading from the digest: what the nav row reads
+    /// without walking Blocks.
     pub wall: WallCard,
     /// Files edited anywhere in this Thread, including its subagents, with
     /// their rolled-up diff totals. Folded only when activity changes.
     pub changed_files: Vec<FileChange>,
     main_busy: bool,
-    /// The card of the Subagent the windows show for this Thread.
-    selected_wall: Option<(Subject, WallCard)>,
     /// Whether `branch` has been asked for (a `None` answer included), so a
     /// parked row's checkout costs one `git` call, ever.
     branch_asked: bool,
 }
-impl ThreadFacts {
-    pub fn wall_for(&self, subject: &Subject) -> Option<&WallCard> {
-        match subject {
-            Subject::Main => Some(&self.wall),
-            _ => self
-                .selected_wall
-                .as_ref()
-                .filter(|(selected, _)| selected == subject)
-                .map(|(_, card)| card),
-        }
-    }
-}
-
 pub struct Facts {
     threads: HashMap<ThreadId, ThreadFacts>,
     /// Each Project's default branch, read once (a `git` call or two, off
@@ -441,10 +425,6 @@ impl Facts {
         if let Some(open) = open {
             let digest = open.digest();
             facts.wall = digest.wall.clone();
-            facts.selected_wall = digest
-                .shown
-                .as_ref()
-                .and_then(|shown| Some(((&shown.subject).try_into().ok()?, shown.wall.clone())));
             facts.turns = Some(digest.turns);
             facts.changed_files = digest.changed_files.clone();
             facts.subagents = digest.subagents;
