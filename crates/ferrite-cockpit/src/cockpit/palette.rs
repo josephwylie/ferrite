@@ -197,7 +197,7 @@ impl CockpitView {
     ) {
         let rows = match scope {
             PaletteScope::All => {
-                let mut rows = self.palette_thread_rows(window);
+                let mut rows = self.palette_thread_rows(cx);
                 rows.extend(self.palette_project_rows());
                 rows.extend(self.palette_factory_rows());
                 rows.extend(self.palette_command_rows(window, cx));
@@ -384,23 +384,11 @@ impl CockpitView {
         blank.then_some(pane.identity)
     }
 
-    /// The shown board's Panes in head order: reading order, top to bottom
-    /// then left to right (⌘1…⌘9, R5).
-    pub(super) fn board_order(&self, window: &Window) -> Vec<usize> {
-        let mut rects = self.pane_rects(window);
-        rects.sort_by_key(|(_, rect)| (rect.y.round() as i64, rect.x.round() as i64));
-        rects.into_iter().map(|(index, _)| index).collect()
-    }
-
     /// The palette's Threads (FL-2): Project by Project in the registry's
     /// order (Threads no Project claims last), each Project's open Threads
     /// in creation order, then its parked Threads. Each Thread once.
-    pub(super) fn palette_thread_rows(&self, window: &Window) -> Vec<PaletteRow> {
-        let board: Vec<ThreadId> = self
-            .board_order(window)
-            .into_iter()
-            .filter_map(|index| self.panes[index].thread())
-            .collect();
+    pub(super) fn palette_thread_rows(&self, cx: &gpui::App) -> Vec<PaletteRow> {
+        let order = self.thread_order(cx);
         let project_of = |thread: ThreadId| self.facts.get(thread).and_then(|facts| facts.project);
         let open_threads: Vec<ThreadId> = {
             let mut open = self.cockpit.threads();
@@ -460,7 +448,7 @@ impl CockpitView {
                     .map(|at| crate::facts::since_label(at, now))
                     .unwrap_or_default();
                 let word = state_word(&row, age);
-                let on_board = board.iter().position(|shown| *shown == thread);
+                let ordinal = order.iter().position(|listed| *listed == thread);
                 let scope = self
                     .facts
                     .get(thread)
@@ -470,7 +458,7 @@ impl CockpitView {
                 } else {
                     row.name.clone()
                 };
-                let keys = on_board
+                let keys = ordinal
                     .filter(|at| *at < 9)
                     .and_then(|at| focus_thread_action(at + 1))
                     .and_then(ferrite_ui::components::bound_chord);

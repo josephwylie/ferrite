@@ -260,20 +260,20 @@ pub fn bindings(platform: Platform) -> Vec<Binding> {
         // and the browser's ⌘[ / ⌘].
         (with_primary("["), "cockpit::GoBack", None),
         (with_primary("]"), "cockpit::GoForward", None),
-        // The cockpit: walk the grid (the browser's next and previous tab,
-        // ⌘⇧] / ⌘⇧[, typed as their shifted faces), and jump to whoever
-        // needs answering.
-        (with_primary("}"), "cockpit::NextPane", None),
+        // The cockpit: walk the sidebar's Threads (the browser's next and
+        // previous tab, ⌘⇧] / ⌘⇧[, typed as their shifted faces), and jump
+        // to whoever needs answering.
+        (with_primary("}"), "cockpit::NextThread", None),
         // F6 walks the screen's areas (the conversation, the panel), as it
         // does in a browser or an editor; ⇧F6 walks back.
         ("f6".into(), "cockpit::FocusNextArea", None),
         ("shift-f6".into(), "cockpit::FocusPreviousArea", None),
-        (with_primary("{"), "cockpit::PreviousPane", None),
+        (with_primary("{"), "cockpit::PreviousThread", None),
         (with_primary("d"), "cockpit::NextDecision", None),
         // The Composer's `+` menu's first verb: attach files or photos.
         (with_primary("u"), "cockpit::AttachFiles", None),
-        // The board's ordinals: ⌘1…⌘9 focus the shown board's Panes in head
-        // order (Solo: ⌘1 is the Solo Pane).
+        // The sidebar's ordinals: ⌘1…⌘9 show its first nine open Threads,
+        // in its order.
         (with_primary("1"), "cockpit::FocusThread1", None),
         (with_primary("2"), "cockpit::FocusThread2", None),
         (with_primary("3"), "cockpit::FocusThread3", None),
@@ -931,8 +931,8 @@ mod tests {
             ("cockpit::CiteSelection", "shift-l"),
             ("cockpit::GoBack", "["),
             ("cockpit::GoForward", "]"),
-            ("cockpit::NextPane", "}"),
-            ("cockpit::PreviousPane", "{"),
+            ("cockpit::NextThread", "}"),
+            ("cockpit::PreviousThread", "{"),
             ("cockpit::NextDecision", "d"),
             ("cockpit::NewThread", "n"),
             // #20: cmd-t is the browser-tab spelling of the same new Thread.
@@ -1544,8 +1544,8 @@ mod tests {
             Platform::Windows,
             &user_keys(&[
                 ("cockpit::Nothing", Some("ctrl-j")),
-                ("cockpit::NextPane", Some("ctrl-j-k")),
-                ("cockpit::PreviousPane", Some("cmd-j")),
+                ("cockpit::NextThread", Some("ctrl-j-k")),
+                ("cockpit::PreviousThread", Some("cmd-j")),
                 ("cockpit::TextLarger", Some("ctrl-j")),
                 ("cockpit::TextSmaller", Some("ctrl-j")),
                 ("cockpit::ToggleNav", Some("j")),
@@ -1555,9 +1555,9 @@ mod tests {
         assert_eq!(refused.len(), 6, "{refused:?}");
         let says = |words: &str| refused.iter().any(|refusal| refusal.contains(words));
         assert!(says("`cockpit::Nothing` is not an action"));
-        assert!(says("`ctrl-j-k` for cockpit::NextPane"));
+        assert!(says("`ctrl-j-k` for cockpit::NextThread"));
         assert!(says(
-            "`cmd-j` for cockpit::PreviousPane: Windows has no cmd key"
+            "`cmd-j` for cockpit::PreviousThread: Windows has no cmd key"
         ));
         assert!(says("both cockpit::TextLarger and cockpit::TextSmaller"));
         assert!(says(
@@ -1566,8 +1566,8 @@ mod tests {
         assert!(says(
             "`shift-space` for cockpit::ToggleNotifications would take"
         ));
-        assert!(table.contains(&("ctrl-}".into(), "cockpit::NextPane", None)));
-        assert!(table.contains(&("ctrl-{".into(), "cockpit::PreviousPane", None)));
+        assert!(table.contains(&("ctrl-}".into(), "cockpit::NextThread", None)));
+        assert!(table.contains(&("ctrl-{".into(), "cockpit::PreviousThread", None)));
         assert!(table.contains(&("ctrl-j".into(), "cockpit::TextLarger", None)));
         assert!(table.contains(&("ctrl--".into(), "cockpit::TextSmaller", None)));
     }

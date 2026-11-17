@@ -86,6 +86,17 @@ pub(crate) fn label(action: &str, context: Option<&str>) -> Option<Entry> {
         "palette::ShowParked" => Row(Threads, "Show parked"),
         "palette::ReviewBranch" => Row(Threads, "Review branch"),
         "cockpit::NextDecision" => Row(Threads, "Next request"),
+        "cockpit::NextThread" => Row(Threads, "Next thread"),
+        "cockpit::PreviousThread" => Row(Threads, "Previous thread"),
+        "cockpit::FocusThread1" => Row(Threads, "Go to thread 1\u{2013}9"),
+        "cockpit::FocusThread2"
+        | "cockpit::FocusThread3"
+        | "cockpit::FocusThread4"
+        | "cockpit::FocusThread5"
+        | "cockpit::FocusThread6"
+        | "cockpit::FocusThread7"
+        | "cockpit::FocusThread8"
+        | "cockpit::FocusThread9" => Hidden,
         "cockpit::ToggleNotifications" => Row(Threads, "Inbox"),
         "nav::Focus" => Row(Threads, "Focus sidebar"),
         "cockpit::OpenSettings" => Row(Threads, "Settings"),
@@ -97,17 +108,6 @@ pub(crate) fn label(action: &str, context: Option<&str>) -> Option<Entry> {
         // The board.
         "cockpit::GoBack" => Row(Board, "Back"),
         "cockpit::GoForward" => Row(Board, "Forward"),
-        "cockpit::NextPane" => Row(Board, "Next pane"),
-        "cockpit::PreviousPane" => Row(Board, "Previous pane"),
-        "cockpit::FocusThread1" => Row(Board, "Focus pane 1\u{2013}9"),
-        "cockpit::FocusThread2"
-        | "cockpit::FocusThread3"
-        | "cockpit::FocusThread4"
-        | "cockpit::FocusThread5"
-        | "cockpit::FocusThread6"
-        | "cockpit::FocusThread7"
-        | "cockpit::FocusThread8"
-        | "cockpit::FocusThread9" => Hidden,
         "cockpit::ToggleNav" => Row(Board, "Toggle sidebar"),
         "cockpit::TogglePanel" => Row(Board, "Toggle panel"),
         "cockpit::ToggleDetails" => Row(Board, "Toggle thread details"),
@@ -303,7 +303,7 @@ pub(crate) struct SheetRow {
 }
 
 /// The sheet's rows for a key table, in section order, each action once
-/// (its first binding in a place wins: `⌘N` before `⌘T`). The pane digits
+/// (its first binding in a place wins: `⌘N` before `⌘T`). The thread digits
 /// and the answer digits read as one row each (`⌘1…9`, `1…3`).
 pub(crate) fn rows(table: &[Binding]) -> Vec<SheetRow> {
     let mut rows: Vec<SheetRow> = Vec::new();
@@ -512,7 +512,7 @@ mod tests {
             "Park follows the existing close-thread binding"
         );
         assert_eq!(
-            find(Place::Board, "Focus pane 1\u{2013}9"),
+            find(Place::Threads, "Go to thread 1\u{2013}9"),
             "cmd-1\u{2026}9"
         );
         assert!(

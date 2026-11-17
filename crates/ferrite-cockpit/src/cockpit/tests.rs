@@ -76,6 +76,7 @@ mod starts;
 mod startup;
 mod subagents;
 mod terminal;
+mod thread_keys;
 mod tools;
 mod citing;
 mod transcript_pointer;

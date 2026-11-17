@@ -81,8 +81,8 @@ use ferrite_core::sound::Sound;
 use ferrite_pane::page::PageSource;
 use ferrite_pane::transcript::Page;
 
-/// The action ⌘`ordinal` is bound to: the shown board's `ordinal`th Pane in
-/// head order (R5, `CockpitView::board_order`; Solo's ⌘1 is the Solo Pane).
+/// The action ⌘`ordinal` is bound to: the sidebar's `ordinal`th open Thread
+/// (`CockpitView::thread_order`).
 pub(crate) fn focus_thread_action(ordinal: usize) -> Option<&'static str> {
     [
         "cockpit::FocusThread1",
@@ -148,8 +148,8 @@ actions!(
         AttachFiles,
         // ⌘D: the next Thread waiting on the operator.
         NextDecision,
-        NextPane,
-        PreviousPane,
+        NextThread,
+        PreviousThread,
         NewThread,
         NewWorktreeThread,
         TextLarger,
@@ -5838,14 +5838,12 @@ impl CockpitView {
         cx.notify();
     }
 
-    fn next_pane(&mut self, _: &NextPane, _window: &mut Window, cx: &mut Context<Self>) {
-        self.cockpit.step_focus(1);
-        cx.notify();
+    fn next_thread(&mut self, _: &NextThread, _window: &mut Window, cx: &mut Context<Self>) {
+        self.step_thread(1, cx);
     }
 
-    fn previous_pane(&mut self, _: &PreviousPane, _window: &mut Window, cx: &mut Context<Self>) {
-        self.cockpit.step_focus(-1);
-        cx.notify();
+    fn previous_thread(&mut self, _: &PreviousThread, _window: &mut Window, cx: &mut Context<Self>) {
+        self.step_thread(-1, cx);
     }
 
     /// ⌘F: find in the focused Pane's transcript — or in its preview, when
@@ -8657,19 +8655,6 @@ impl CockpitView {
         }
     }
 
-    /// ⌘1…⌘9 (R5): focus the shown board's `ordinal`th Pane in head order
-    /// (`board_order`); Solo's ⌘1 is the Solo Pane. A digit past the board's
-    /// Panes does nothing.
-    fn focus_ordinal(&mut self, ordinal: usize, window: &Window, cx: &mut Context<Self>) {
-        let index = ordinal
-            .checked_sub(1)
-            .and_then(|at| self.board_order(window).get(at).copied());
-        if let Some(index) = index {
-            self.focus_pane(index);
-            cx.notify();
-        }
-    }
-
     /// When a Thread was last used, for `sort: recent`. A Thread whose log
     /// cannot be stat'd sorts to the bottom rather than to the top: an
     /// unknown time is not a recent one.
@@ -10063,8 +10048,8 @@ impl CockpitView {
                     .map(|root| self.register_decision_actions(root, cx))
             })
             .on_action(cx.listener(Self::interrupt))
-            .on_action(cx.listener(Self::next_pane))
-            .on_action(cx.listener(Self::previous_pane))
+            .on_action(cx.listener(Self::next_thread))
+            .on_action(cx.listener(Self::previous_thread))
             .on_action(cx.listener(Self::next_decision))
             .on_action(cx.listener(Self::new_thread))
             .on_action(cx.listener(Self::new_worktree_thread))
@@ -10093,7 +10078,7 @@ impl CockpitView {
             .on_action(cx.listener(Self::go_back))
             .on_action(cx.listener(Self::go_forward))
             .on_action(
-                cx.listener(|view, _: &FocusThread1, window, cx| view.focus_ordinal(1, window, cx)),
+                cx.listener(|view, _: &FocusThread1, _, cx| view.go_to_thread(1, cx)),
             )
             .on_action(cx.listener(Self::toggle_terminal))
             .on_action(cx.listener(Self::toggle_changes))
@@ -10101,28 +10086,28 @@ impl CockpitView {
             .on_action(cx.listener(Self::toggle_file_tree_action))
             .on_action(cx.listener(Self::go_to_file_action))
             .on_action(
-                cx.listener(|view, _: &FocusThread2, window, cx| view.focus_ordinal(2, window, cx)),
+                cx.listener(|view, _: &FocusThread2, _, cx| view.go_to_thread(2, cx)),
             )
             .on_action(
-                cx.listener(|view, _: &FocusThread3, window, cx| view.focus_ordinal(3, window, cx)),
+                cx.listener(|view, _: &FocusThread3, _, cx| view.go_to_thread(3, cx)),
             )
             .on_action(
-                cx.listener(|view, _: &FocusThread4, window, cx| view.focus_ordinal(4, window, cx)),
+                cx.listener(|view, _: &FocusThread4, _, cx| view.go_to_thread(4, cx)),
             )
             .on_action(
-                cx.listener(|view, _: &FocusThread5, window, cx| view.focus_ordinal(5, window, cx)),
+                cx.listener(|view, _: &FocusThread5, _, cx| view.go_to_thread(5, cx)),
             )
             .on_action(
-                cx.listener(|view, _: &FocusThread6, window, cx| view.focus_ordinal(6, window, cx)),
+                cx.listener(|view, _: &FocusThread6, _, cx| view.go_to_thread(6, cx)),
             )
             .on_action(
-                cx.listener(|view, _: &FocusThread7, window, cx| view.focus_ordinal(7, window, cx)),
+                cx.listener(|view, _: &FocusThread7, _, cx| view.go_to_thread(7, cx)),
             )
             .on_action(
-                cx.listener(|view, _: &FocusThread8, window, cx| view.focus_ordinal(8, window, cx)),
+                cx.listener(|view, _: &FocusThread8, _, cx| view.go_to_thread(8, cx)),
             )
             .on_action(
-                cx.listener(|view, _: &FocusThread9, window, cx| view.focus_ordinal(9, window, cx)),
+                cx.listener(|view, _: &FocusThread9, _, cx| view.go_to_thread(9, cx)),
             )
             .on_action(cx.listener(Self::toggle_notifications))
             .on_action(cx.listener(|view, _: &nav::Focus, window, cx| view.focus_nav(window, cx)))
