@@ -46,7 +46,7 @@ fn copy_diagnostics_puts_the_report_on_the_clipboard(cx: &mut TestAppContext) {
     assert!(report.contains("Open Threads: 1\n"), "{report}");
     assert!(report.contains("--- ferrite.log, last"), "{report}");
     assert!(report.contains("--- server.log, last"), "{report}");
-    view.read_with(cx, |view, _| {
-        assert_eq!(view.settings_copied, Some("Diagnostics"))
+    view.read_with(cx, |view, cx| {
+        assert_eq!(view.settings_view.read(cx).copied, Some("Diagnostics"))
     });
 }

@@ -92,9 +92,9 @@ fn connections_keep_failed_input_save_only_ready_and_cancel_with_escape(cx: &mut
     );
     cx.simulate_keystrokes("escape");
     tick(cx);
-    view.read_with(cx, |view, _| {
+    view.read_with(cx, |view, cx| {
         assert!(
-            view.settings_open,
+            view.settings_open(cx),
             "Escape cancels the editor before closing Settings"
         );
         assert!(view.connections.editor.is_none());
@@ -183,16 +183,20 @@ fn reconnect_leaves_search_and_rejects_another_saved_target(cx: &mut TestAppCont
     ];
     view.update_in(cx, |view, window, cx| {
         view.prefs.settings.machines = saved.clone();
-        view.settings_search
-            .as_ref()
+        view.settings_view
+            .read(cx)
+            .search
+            .clone()
             .unwrap()
             .update(cx, |search, cx| {
                 search.set_value("first.example", window, cx)
             });
         view.edit_connection(Some(saved[0].clone()), window, cx);
-        assert_eq!(view.settings_page, settings::PageKey::Connections);
+        assert_eq!(view.settings_view.read(cx).page, settings::PageKey::Connections);
         assert!(view
-            .settings_search
+            .settings_view
+            .read(cx)
+            .search
             .as_ref()
             .unwrap()
             .read(cx)
@@ -361,7 +365,7 @@ fn settings_arrows_step_pages_and_about_paths_copy(cx: &mut TestAppContext) {
 
     cx.simulate_keystrokes("cmd-,");
     cx.run_until_parked();
-    let page = |cx: &mut gpui::VisualTestContext| view.read_with(cx, |view, _| view.settings_page);
+    let page = |cx: &mut gpui::VisualTestContext| view.read_with(cx, |view, cx| view.settings_view.read(cx).page);
     assert_eq!(page(cx), settings::PageKey::NewThreads);
     cx.simulate_keystrokes("down");
     tick(cx);
@@ -386,8 +390,8 @@ fn settings_arrows_step_pages_and_about_paths_copy(cx: &mut TestAppContext) {
         .center();
     cx.simulate_click(threads, gpui::Modifiers::none());
     tick(cx);
-    let dir = view.read_with(cx, |view, _| {
-        assert_eq!(view.settings_copied, Some("Threads"));
+    let dir = view.read_with(cx, |view, cx| {
+        assert_eq!(view.settings_view.read(cx).copied, Some("Threads"));
         view.prefs.dir.join("threads").display().to_string()
     });
     assert_eq!(
@@ -395,14 +399,14 @@ fn settings_arrows_step_pages_and_about_paths_copy(cx: &mut TestAppContext) {
         Some(dir),
         "the whole path, never the ~ form"
     );
-    assert!(view.read_with(cx, |view, _| view.settings_open));
+    assert!(view.read_with(cx, |view, cx| view.settings_open(cx)));
 
     cx.simulate_keystrokes("escape");
     cx.run_until_parked();
     cx.simulate_keystrokes("cmd-,");
     cx.run_until_parked();
     assert_eq!(page(cx), settings::PageKey::NewThreads);
-    view.read_with(cx, |view, _| assert_eq!(view.settings_copied, None));
+    view.read_with(cx, |view, cx| assert_eq!(view.settings_view.read(cx).copied, None));
 }
 
 /// cmd-, opens the Settings panel and escape closes it; a chip press
@@ -472,8 +476,8 @@ fn settings_open_on_cmd_comma_and_every_change_saves(cx: &mut TestAppContext) {
 
     cx.simulate_keystrokes("cmd-,");
     cx.run_until_parked();
-    view.read_with(cx, |view, _| {
-        assert!(view.settings_open, "cmd-, opens the panel")
+    view.read_with(cx, |view, cx| {
+        assert!(view.settings_open(cx), "cmd-, opens the panel")
     });
     let search = cx
         .debug_bounds("settings-search")
@@ -604,15 +608,15 @@ fn settings_open_on_cmd_comma_and_every_change_saves(cx: &mut TestAppContext) {
     cx.simulate_click(search.center(), gpui::Modifiers::none());
     cx.simulate_keystrokes("escape");
     cx.run_until_parked();
-    view.read_with(cx, |view, _| {
-        assert!(!view.settings_open, "escape from search closes Settings")
+    view.read_with(cx, |view, cx| {
+        assert!(!view.settings_open(cx), "escape from search closes Settings")
     });
     cx.simulate_keystrokes("cmd-,");
     cx.run_until_parked();
     let close = cx.debug_bounds("settings-close").unwrap().center();
     cx.simulate_click(close, gpui::Modifiers::none());
     cx.run_until_parked();
-    view.read_with(cx, |view, _| assert!(!view.settings_open));
+    view.read_with(cx, |view, cx| assert!(!view.settings_open(cx)));
     // The gear left the bar (SPEC §5.7) for the nav's foot; ⌘, (and
     // macOS' app menu, and the palette's `settings`) still opens it,
     // folded or not.
@@ -624,11 +628,11 @@ fn settings_open_on_cmd_comma_and_every_change_saves(cx: &mut TestAppContext) {
     tick(cx);
     cx.simulate_keystrokes("cmd-,");
     cx.run_until_parked();
-    view.read_with(cx, |view, _| assert!(view.settings_open));
+    view.read_with(cx, |view, cx| assert!(view.settings_open(cx)));
     cx.simulate_keystrokes("escape");
     cx.run_until_parked();
-    view.read_with(cx, |view, _| {
-        assert!(!view.settings_open, "escape closes it")
+    view.read_with(cx, |view, cx| {
+        assert!(!view.settings_open(cx), "escape closes it")
     });
 
     let dir = view.read_with(cx, |view, _| view.prefs.dir.clone());
@@ -764,12 +768,12 @@ fn connection_modal_defaults_to_link_traps_tab_and_resets_on_reopen(cx: &mut Tes
     });
     cx.simulate_keystrokes("escape");
     tick(cx);
-    view.read_with(cx, |view, _| {
-        assert!(view.settings_open && view.connections.editor.is_none())
+    view.read_with(cx, |view, cx| {
+        assert!(view.settings_open(cx) && view.connections.editor.is_none())
     });
     cx.simulate_keystrokes("escape");
     tick(cx);
-    view.read_with(cx, |view, _| assert!(!view.settings_open));
+    view.read_with(cx, |view, cx| assert!(!view.settings_open(cx)));
 }
 
 #[gpui::test]

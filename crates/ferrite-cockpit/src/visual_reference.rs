@@ -888,7 +888,7 @@ fn build(state: &str, label: &str) -> (Scene, Setup) {
                 // Seeded, so opening never probes the operator's CLIs.
                 view.cli_versions = Some(("2.3.1 (Claude Code)".into(), "codex-cli 0.61.0".into()));
                 view.toggle_settings(cx);
-                view.settings_page = page;
+                view.settings_view.update(cx, |settings, _| settings.page = page);
             });
             (scene, setup)
         }
@@ -902,7 +902,7 @@ fn build(state: &str, label: &str) -> (Scene, Setup) {
                         .placeholder("Search")
                         .default_value("codex")
                 });
-                view.settings_search = Some(search);
+                view.settings_view.update(cx, |settings, _| settings.search = Some(search));
             });
             (scene, setup)
         }

@@ -43,6 +43,7 @@ mod parts;
 mod prs;
 mod sends;
 mod server;
+mod settings_view;
 mod side_chat;
 mod snooze;
 pub(crate) mod starts;
@@ -557,21 +558,10 @@ pub struct CockpitView {
     unsent: drafts::Unsent,
     /// Where the quotes of sent prompts were cited from.
     cited_sources: ferrite_core::cited_sources::CitedSources,
-    /// The Settings panel is up.
-    settings_open: bool,
+    /// The Settings sheet (ADR 0041).
+    settings_view: Entity<settings_view::SettingsView>,
     /// The menus and popovers on their way out (`float_exits`).
     float_exits: float_exits::Held,
-    /// The Settings sheet on its way out (`settings_element`).
-    settings_exit: ferrite_ui::motion::Exits<()>,
-    /// The Settings page the sidebar has selected; each opening starts on
-    /// the first.
-    settings_page: settings::PageKey,
-    /// The Settings search field, made with the sheet (it needs a window)
-    /// and dropped with it, so each opening starts with an empty query.
-    settings_search: Option<Entity<gpui::component::input::InputState>>,
-    /// The About path copied last, shown with a check until the sheet
-    /// closes.
-    settings_copied: Option<&'static str>,
     /// The Project card: creating a Project, or editing the one the nav
     /// filter names. `None` is closed.
     project_editor: Option<ProjectEditor>,
@@ -590,7 +580,6 @@ pub struct CockpitView {
     /// How many stops `background_stops` has taken, to tell one send's
     /// timer from another's.
     background_stop_sends: u64,
-    settings_focus: FocusHandle,
     /// Whether the window is maximized, read once per frame in `render`.
     /// The nav's band is drawn without a `Window` in hand, and the two
     /// halves of the titlebar have to agree: a maximized window has no top
@@ -1457,6 +1446,9 @@ impl CockpitView {
             gpui::KeyBinding::new("escape", ferrite_pane::annotation_editor::Cancel, Some("AnnotationEditor")),
         ]);
         let cockpit_weak = cx.weak_entity();
+        let settings_view =
+            cx.new(|cx| settings_view::SettingsView::new(cockpit_weak.clone(), cx));
+        cx.subscribe(&settings_view, Self::on_settings_event).detach();
         let mut view = Self {
             cockpit,
             browsers: Default::default(),
@@ -1535,19 +1527,14 @@ impl CockpitView {
             unsent: drafts::Unsent::load(&prefs.dir),
             cited_sources,
             prefs,
-            settings_open: false,
+            settings_view,
             float_exits: Default::default(),
-            settings_exit: Default::default(),
-            settings_page: settings::PageKey::default(),
-            settings_search: None,
-            settings_copied: None,
             project_editor: None,
             project_editor_leaving: None,
             project_editor_focus: cx.focus_handle(),
             background_dialog: None,
             background_stops: Default::default(),
             background_stop_sends: 0,
-            settings_focus: cx.focus_handle(),
             maximized: false,
             cli_versions: None,
             cli_probing: false,
@@ -2025,7 +2012,7 @@ impl CockpitView {
     /// derives itself. Each push notifies only on a change.
     fn sync_composer_floats(&self, cx: &mut Context<Self>) {
         let focused_index = self.focused();
-        let float_open = self.overlay_open();
+        let float_open = self.overlay_open(cx);
         for (index, pane) in self.panes.iter().enumerate() {
             let open = self
                 .popover
@@ -2949,8 +2936,8 @@ impl CockpitView {
     /// lies under an open overlay would answer Windows' hit test as the
     /// window frame, and the row under the pointer would never see the
     /// press (the frame's titlebar).
-    fn overlay_open(&self) -> bool {
-        self.settings_open
+    fn overlay_open(&self, cx: &gpui::App) -> bool {
+        self.settings_open(cx)
             || self.project_editor.is_some()
             || self.popover.is_some()
             || self.context_checks.is_some()
@@ -3784,14 +3771,11 @@ impl CockpitView {
     }
 
     fn toggle_settings(&mut self, cx: &mut Context<Self>) {
-        self.settings_open = !self.settings_open;
-        if !self.settings_open {
+        let open = self.settings_view.update(cx, |settings, cx| settings.toggle(cx));
+        if !open {
             self.connections.editor = None;
         }
-        if self.settings_open {
-            self.settings_page = settings::PageKey::default();
-            self.settings_search = None;
-            self.settings_copied = None;
+        if open {
             self.project_editor = None;
             self.popover = None;
             self.context_menu = None;
@@ -3909,7 +3893,10 @@ impl CockpitView {
                 .await;
             this.update(cx, |view, cx| {
                 cx.write_to_clipboard(ClipboardItem::new_string(report));
-                view.settings_copied = Some("Diagnostics");
+                view.settings_view.update(cx, |settings, cx| {
+                    settings.copied = Some("Diagnostics");
+                    cx.notify();
+                });
                 cx.notify();
             })
             .ok();
@@ -4083,72 +4070,6 @@ impl CockpitView {
         }
     }
 
-    /// Settings' line for one provider CLI: its installed version, what
-    /// the update check found, and the button when there is a release
-    /// Ferrite can install.
-    fn cli_update_row(
-        &self,
-        id: &'static str,
-        provider: Provider,
-        version: SharedString,
-        cx: &Context<Self>,
-    ) -> settings::Row {
-        let (detail, button) = crate::cli_updates::describe(
-            provider,
-            self.cli_updates.state(provider),
-            self.prefs.settings.auto_update_clis,
-            self.cockpit.live_sessions(provider),
-            &self.machine_place(),
-        );
-        let title = ferrite_ui::provider::cli(provider);
-        let view = cx.entity().downgrade();
-        settings::action(id, title, detail, version, button, move |_, cx| {
-            view.update(cx, |view, cx| view.update_cli(provider, cx))
-                .ok();
-        })
-    }
-
-    /// Settings' line for one chime: the file it plays (or the built-in),
-    /// `Play` to hear it, `Choose…` for a file of the operator's own, and
-    /// `Use built-in` to go back.
-    fn sound_file_row(
-        &self,
-        id: &'static str,
-        title: &'static str,
-        sound: Sound,
-        cx: &Context<Self>,
-    ) -> settings::Row {
-        let file = self.prefs.settings.sound_file(sound);
-        let view = cx.entity().downgrade();
-        let play: settings::Act = std::rc::Rc::new({
-            let view = view.clone();
-            move |cx| {
-                let _ = view.update(cx, |view, _| view.chime(sound));
-            }
-        });
-        let choose: settings::Act = std::rc::Rc::new({
-            move |cx| {
-                let _ = view.update(cx, |view, cx| view.choose_sound_file(sound, cx));
-            }
-        });
-        let mut acts = vec![("Play", play), ("Choose\u{2026}", choose)];
-        if file.is_some() {
-            let reset = self.setting_change(cx, move |s, ()| s.set_sound_file(sound, None));
-            acts.push((
-                "Use built-in",
-                std::rc::Rc::new(move |cx: &mut gpui::App| reset((), cx)),
-            ));
-        }
-        settings::file_choice(
-            id,
-            title,
-            if cfg!(windows) { "A WAV file" } else { "" },
-            file,
-            "Built-in",
-            acts,
-        )
-    }
-
     /// Ask the system for a sound file, and play it from now on.
     fn choose_sound_file(&mut self, sound: Sound, cx: &mut Context<Self>) {
         let receiver = cx.prompt_for_paths(gpui::PathPromptOptions {
@@ -4169,357 +4090,6 @@ impl CockpitView {
             });
         })
         .detach();
-    }
-
-    /// The searchable Settings sheet, drawn above the cockpit's overlays.
-    fn settings_element(
-        &mut self,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> Option<AnyElement> {
-        // Closed, it fades out over `DIALOG_OUT`, drawn from the same state.
-        let leaving = self
-            .settings_exit
-            .stage(
-                self.settings_open.then_some(&()),
-                |_, _| true,
-                ferrite_ui::motion::DIALOG_OUT,
-                cx.background_executor().now(),
-                ferrite_ui::motion::reduced_motion(cx),
-            )
-            .map(|((), left)| left);
-        if !self.settings_open && leaving.is_none() {
-            return None;
-        }
-        let search = self
-            .settings_search
-            .get_or_insert_with(|| {
-                cx.new(|cx| {
-                    gpui::component::input::InputState::new(window, cx).placeholder("Search")
-                })
-            })
-            .clone();
-        let connections = self.connection_settings(window, cx);
-        let settings = &self.prefs.settings;
-        let defaults = vec![settings::choices(
-            "settings-provider",
-            "Provider",
-            "What a new thread starts on",
-            Provider::ALL
-                .into_iter()
-                .map(|provider| {
-                    (
-                        ferrite_ui::provider::title(provider).into(),
-                        settings.default_provider == provider,
-                        provider,
-                    )
-                })
-                .collect(),
-            self.setting_change(cx, |settings, provider| {
-                settings.default_provider = provider
-            }),
-        )];
-        let mut new_thread_groups = vec![settings::Group::new(None).rows(defaults)];
-        for provider in Provider::ALL {
-            let chosen = settings.model_for(provider).map(str::to_string);
-            let model = settings::chooser(
-                if provider == Provider::Claude {
-                    "settings-claude-model"
-                } else {
-                    "settings-codex-model"
-                },
-                // The group names the provider: `Claude › Model`.
-                "Model",
-                "",
-                settings::model_options(
-                    ferrite_core::providers::models::menu(
-                        self.cockpit.model_catalog(provider),
-                        chosen.as_deref(),
-                    ),
-                    chosen.as_deref(),
-                ),
-                self.setting_change(cx, move |settings, value| {
-                    settings.set_model_for(provider, value)
-                }),
-            );
-            let effort = settings.effort_for(provider).map(str::to_string);
-            let mut ladder = ferrite_core::providers::models::efforts_for(
-                provider,
-                chosen.as_deref(),
-                &self.cockpit.announced_models(provider),
-            );
-            // A saved value remains visible even if the current model's
-            // announcement no longer includes it; presentation never rewrites it.
-            if let Some(effort) = &effort {
-                if !ladder.contains(effort) {
-                    ladder.push(effort.clone());
-                }
-            }
-            let effort = settings::choices(
-                if provider == Provider::Claude {
-                    "settings-claude-effort"
-                } else {
-                    "settings-codex-effort"
-                },
-                "Effort",
-                // Said once, in the first group: it holds for both.
-                if provider == Provider::Claude {
-                    "Each thread can change its own"
-                } else {
-                    ""
-                },
-                std::iter::once(None)
-                    .chain(ladder.into_iter().map(Some))
-                    .map(|value| {
-                        let label = value
-                            .as_deref()
-                            .map(effort_title)
-                            .unwrap_or_else(|| settings::CLI_DEFAULT.into());
-                        (label.into(), effort == value, value)
-                    })
-                    .collect(),
-                self.setting_change(cx, move |settings, value| {
-                    settings.set_effort_for(provider, value)
-                }),
-            );
-            new_thread_groups.push(provider_group(provider).rows([model, effort]));
-        }
-        let behaviour = vec![
-            settings::toggle(
-                "settings-auto-title",
-                "Name threads automatically",
-                "Titled from the first prompt until you rename it",
-                settings.auto_title,
-                self.setting_change(cx, |s, v| s.auto_title = v),
-            ),
-            settings::toggle(
-                "settings-confirm-delete",
-                "Confirm before deleting a thread",
-                "Ask before removing a thread and its transcript",
-                settings.confirm_delete,
-                self.setting_change(cx, |s, v| s.confirm_delete = v),
-            ),
-            settings::toggle(
-                "settings-nav-collapsed",
-                "Start with the sidebar collapsed",
-                "cmd-B toggles it any time",
-                settings.nav_collapsed,
-                self.setting_change(cx, |s, v| s.nav_collapsed = v),
-            ),
-        ];
-        let size = settings.reading_size;
-        let reading = vec![settings::stepper(
-            "settings-text-size",
-            "Text size",
-            "Transcript text in every Pane, from 12 to 24px",
-            format!("{}px", size.px()).into(),
-            size > ferrite_core::settings::ReadingSize::SMALLEST,
-            size < ferrite_core::settings::ReadingSize::LARGEST,
-            {
-                let view = cx.entity().downgrade();
-                move |delta, cx| {
-                    let _ = view.update(cx, |view, cx| view.step_text_size(delta, cx));
-                }
-            },
-        )];
-        let sounds = vec![
-            settings::toggle(
-                "settings-sounds",
-                "Play sounds",
-                "A chime when a thread finishes or needs you, unless you are looking at it",
-                settings.sounds,
-                self.setting_change(cx, |s, v| s.sounds = v),
-            ),
-            // Under `Play sounds`, which they depend on.
-            self.sound_file_row("settings-done-sound", "Finished sound", Sound::Done, cx)
-                .nested(),
-            self.sound_file_row(
-                "settings-needs-you-sound",
-                "Needs-you sound",
-                Sound::NeedsYou,
-                cx,
-            )
-            .nested(),
-        ];
-        let provider_sounds = Provider::ALL.map(|provider| {
-            let (id, title) = match provider {
-                Provider::Claude => ("settings-claude-sounds", "Sounds for Claude threads"),
-                Provider::Codex => ("settings-codex-sounds", "Sounds for Codex threads"),
-            };
-            settings::toggle(
-                id,
-                title,
-                "",
-                settings.provider_sounds(provider),
-                self.setting_change(cx, move |s, v| s.set_provider_sounds(provider, v)),
-            )
-            .nested()
-        });
-        let system = vec![settings::toggle(
-            "settings-system-notifications",
-            "System notifications",
-            "When Ferrite is in the background · clicking one opens its thread",
-            settings.system_notifications,
-            self.setting_change(cx, |s, v| s.system_notifications = v),
-        )];
-        let (claude, codex) = self
-            .cli_versions
-            .clone()
-            .unwrap_or_else(|| ("checking…".into(), "checking…".into()));
-        let copied = self.settings_copied;
-        let copy = |key: &'static str, cx: &Context<Self>| {
-            let view = cx.entity().downgrade();
-            move |cx: &mut gpui::App| {
-                let _ = view.update(cx, |view, cx| {
-                    view.settings_copied = Some(key);
-                    cx.notify();
-                });
-            }
-        };
-        let clis = vec![
-            self.cli_update_row("settings-update-claude", Provider::Claude, claude, cx),
-            self.cli_update_row("settings-update-codex", Provider::Codex, codex, cx),
-            settings::toggle(
-                "settings-auto-update-clis",
-                "Update the CLIs automatically",
-                // One line (`settings::hint`): the reason first.
-                format!(
-                    "New models need a newer CLI · installed on {} when its Threads are idle",
-                    self.machine_place()
-                ),
-                settings.auto_update_clis,
-                self.setting_change(cx, |s, v| s.auto_update_clis = v),
-            ),
-        ];
-        let mut about = vec![
-            settings::fact(
-                "Version",
-                version_label(env!("CARGO_PKG_VERSION"), crate::DEV).into(),
-            ),
-            settings::path_fact(
-                "Threads",
-                self.prefs.dir.join("threads").display().to_string(),
-                copied == Some("Threads"),
-                copy("Threads", cx),
-            ),
-            settings::path_fact(
-                "Settings file",
-                self.prefs
-                    .dir
-                    .join(ferrite_core::settings::Settings::FILE)
-                    .display()
-                    .to_string(),
-                copied == Some("Settings file"),
-                copy("Settings file", cx),
-            ),
-            settings::action(
-                "settings-copy-diagnostics",
-                "Diagnostics",
-                "Version, CLIs, the last crash and the log's tail, for a bug report",
-                ferrite_core::diagnostics::logs(&self.prefs.dir)
-                    .display()
-                    .to_string()
-                    .into(),
-                Some(
-                    if copied == Some("Diagnostics") {
-                        "Copied"
-                    } else {
-                        "Copy"
-                    }
-                    .into(),
-                ),
-                {
-                    let view = cx.entity().downgrade();
-                    move |_, cx| {
-                        let _ = view.update(cx, |view, cx| view.copy_diagnostics(cx));
-                    }
-                },
-            ),
-        ];
-        about.splice(1..1, self.ferrite_update_rows(cx));
-        let mut about = vec![settings::Group::new(None).rows(about)];
-        let server = self.server_rows(cx);
-        about.push(settings::Group::new(Some("Provider CLIs")).rows(clis));
-        let pages = vec![
-            settings::page(settings::PageKey::NewThreads, new_thread_groups),
-            settings::page(
-                settings::PageKey::Permissions,
-                self.permission_groups(cx),
-            ),
-            settings::page(
-                settings::PageKey::Behaviour,
-                vec![
-                    settings::Group::new(Some("Reading")).rows(reading),
-                    settings::Group::new(Some("Threads and navigation")).rows(behaviour),
-                    self.machine_group(cx),
-                ],
-            ),
-            settings::page(
-                settings::PageKey::Notifications,
-                vec![
-                    settings::Group::new(Some("Sounds"))
-                        .rows(sounds)
-                        .rows(provider_sounds),
-                    settings::Group::new(Some("System")).rows(system),
-                ],
-            ),
-            settings::page(
-                settings::PageKey::Server,
-                vec![settings::Group::new(None).rows(server)],
-            ),
-            settings::page(settings::PageKey::Connections, connections),
-            settings::page(settings::PageKey::About, about),
-        ];
-
-        let select = {
-            let view = cx.entity().downgrade();
-            let search = search.clone();
-            move |page: settings::PageKey, window: &mut Window, cx: &mut gpui::App| {
-                // Choosing a page ends a search: the page shows whole.
-                search.update(cx, |search, cx| search.set_value("", window, cx));
-                let _ = view.update(cx, |view, cx| {
-                    view.settings_page = page;
-                    if page != settings::PageKey::Connections {
-                        view.connections.editor = None;
-                    }
-                    cx.notify();
-                });
-            }
-        };
-        let view = cx.entity().downgrade();
-        let step = {
-            let view = view.clone();
-            move |delta, _: &mut Window, cx: &mut gpui::App| {
-                let _ = view.update(cx, |view, cx| {
-                    view.settings_page = view.settings_page.step(delta);
-                    if view.settings_page != settings::PageKey::Connections {
-                        view.connections.editor = None;
-                    }
-                    cx.notify();
-                });
-            }
-        };
-        let close = move |_: &mut Window, cx: &mut gpui::App| {
-            let _ = view.update(cx, |view, cx| {
-                view.settings_open = false;
-                view.connections.editor = None;
-                cx.notify();
-            });
-        };
-        Some(crate::frame().settings(
-            ferrite_ui::frame::SettingsSheet {
-                pages,
-                selected: self.settings_page,
-                search,
-                focus: self.settings_focus.clone(),
-                select: std::rc::Rc::new(select),
-                step: Box::new(step),
-                close: std::rc::Rc::new(close),
-                leaving,
-            },
-            window,
-            cx,
-        ))
     }
 
     /// Open the card on an existing Project, seeded with its name.
@@ -4575,7 +4145,7 @@ impl CockpitView {
     /// The card is modal: everything else floating goes down with it.
     fn show_project_editor(&mut self, editor: ProjectEditor, cx: &mut Context<Self>) {
         self.project_editor = Some(editor);
-        self.settings_open = false;
+        self.settings_view.update(cx, |settings, cx| settings.close(cx));
         self.connections.editor = None;
         self.popover = None;
         self.context_menu = None;
@@ -5219,12 +4789,12 @@ impl CockpitView {
             self.leave_panel(window, cx);
             return;
         }
-        if self.settings_open {
+        if self.settings_open(cx) {
             if self.connections.editor.is_some() {
                 self.cancel_connection(window, cx);
                 return;
             }
-            self.settings_open = false;
+            self.settings_view.update(cx, |settings, cx| settings.close(cx));
             cx.notify();
             return;
         }
@@ -5308,7 +4878,7 @@ impl CockpitView {
     /// line renders from, so the key and the ghost text can never disagree
     /// about whether there is something to accept.
     fn accept_suggestion(&mut self, window: &Window, cx: &mut Context<Self>) -> bool {
-        if self.settings_open
+        if self.settings_open(cx)
             || self.project_editor.is_some()
             || self.rename.is_some()
             || self.snooze_editor.is_some()
@@ -5363,7 +4933,7 @@ impl CockpitView {
         if self.accept_suggestion(window, cx) {
             return;
         }
-        if self.settings_open
+        if self.settings_open(cx)
             || self.project_editor.is_some()
             || self
                 .focused_thread()
@@ -5409,7 +4979,7 @@ impl CockpitView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.settings_open
+        if self.settings_open(cx)
             || self.project_editor.is_some()
             || self
                 .focused_thread()
@@ -9358,7 +8928,7 @@ impl CockpitView {
         // claiming CI for a Pane that is no longer saying anything about it.
         if self.context_checks.is_some_and(|thread| {
             self.focused_thread() != Some(thread)
-                || self.settings_open
+                || self.settings_open(cx)
                 || self.project_editor.is_some()
                 || self.facts.pr(thread).is_none_or(|pr| pr.checks.is_none())
         }) {
@@ -9366,7 +8936,7 @@ impl CockpitView {
         }
 
         if self.session_controls.is_some_and(|(thread, generation)| {
-            self.settings_open
+            self.settings_open(cx)
                 || self.focused_thread() != Some(thread)
                 || self
                     .cockpit
@@ -9377,7 +8947,7 @@ impl CockpitView {
         }
 
         if self.mode_picker.is_some_and(|(thread, generation)| {
-            self.settings_open
+            self.settings_open(cx)
                 || self.focused_thread() != Some(thread)
                 || self
                     .cockpit
@@ -9627,12 +9197,11 @@ impl CockpitView {
             // Native text, dialogs, and the Inbox keep their own keyboard focus.
         } else if self.context_menu.is_some() {
             // An open menu holds the keyboard at the root (`tend_menu_focus`).
-        } else if self.settings_open {
+        } else if self.settings_open(cx) {
             // The pump must not steal focus from Settings search or controls.
-            if !self.settings_focus.contains_focused(window, cx)
-                && !self.connection_holds_focus(window, cx)
-            {
-                window.focus(&self.settings_focus, cx);
+            let focus = self.settings_view.read(cx).focus.clone();
+            if !focus.contains_focused(window, cx) && !self.connection_holds_focus(window, cx) {
+                window.focus(&focus, cx);
             }
         } else if self.project_editor.is_some() {
             if !self.project_editor_focus.contains_focused(window, cx) {
@@ -10001,7 +9570,7 @@ impl CockpitView {
             // thing under a menu: an overlay that reached into the band
             // would be answering the frame's hit test, not its own rows, so
             // the drag region stands down while one is open.
-            .child(crate::frame().titlebar(!self.overlay_open(), self.maximized))
+            .child(crate::frame().titlebar(!self.overlay_open(cx), self.maximized))
             .child(self.view_head(cx))
             .children(self.history_arrows_element(cx))
             .when(!self.nav_folded(), |root| root.child(self.nav_resize_rail(cx)))
@@ -10019,7 +9588,7 @@ impl CockpitView {
             .children(self.band_menu_element(window, cx))
             .children(self.model_picker_element(window, cx))
             .children(self.mode_menu_element(window, cx))
-            .children(self.settings_element(window, cx))
+            .child(self.settings_view.clone())
             .children(self.project_editor_element(window, cx))
             .children(self.new_task_sheet(window, cx))
             .children(self.direct_sheet(window, cx))
@@ -10040,7 +9609,7 @@ impl CockpitView {
         #[cfg(test)]
         drawn::built_pane(self.panes[index].identity);
         let content = self.pane_content(index, window, cx);
-        if self.settings_open || self.project_editor.is_some() {
+        if self.settings_open(cx) || self.project_editor.is_some() {
             return content;
         }
         if !self.panes[index].is_main() {

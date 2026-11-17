@@ -533,8 +533,10 @@ fn the_notifications_page_sets_every_alert_setting(cx: &mut TestAppContext) {
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     cx.simulate_resize(gpui::size(px(1000.), px(700.)));
     view.update(cx, |view, cx| {
-        view.settings_open = true;
-        view.settings_page = settings::PageKey::Notifications;
+        view.settings_view.update(cx, |settings, _| {
+            settings.open = true;
+            settings.page = settings::PageKey::Notifications;
+        });
         cx.notify();
     });
     tick(cx);
