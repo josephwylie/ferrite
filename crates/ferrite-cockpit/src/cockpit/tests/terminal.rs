@@ -43,9 +43,70 @@ fn the_door_opens_a_shell_in_a_panel_tab_and_closing_it_ends_it(cx: &mut TestApp
     assert_eq!(numbers(&view, thread, cx), [1]);
     assert_eq!(panel_tabs(&view, thread, cx).1, Some(SurfaceId::Terminal(1)));
     view.update(cx, |view, cx| view.close_surface(thread, &SurfaceId::Terminal(1), cx));
-    tick(cx);
+    leap(cx, std::time::Duration::from_secs(1));
     assert!(cx.debug_bounds("terminal-pane").is_none());
     assert!(numbers(&view, thread, cx).is_empty(), "its shell ended with it");
+}
+
+#[gpui::test]
+fn a_local_shell_with_a_failed_exit_still_closes_its_tab(cx: &mut TestAppContext) {
+    let (view, thread, cx) = window("terminal-local-exit", cx);
+    opened(&view, cx);
+    run(&view, thread, b"exit 7\r", cx);
+    let until = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while !numbers(&view, thread, cx).is_empty() {
+        assert!(std::time::Instant::now() < until, "the local shell's tab never closed");
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        tick(cx);
+    }
+    assert!(cx.debug_bounds("terminal-failed").is_none());
+}
+
+/// ⌘W with the keyboard in the shell closes that tab, as it does from the
+/// Panel's controls, and never parks the Thread.
+#[gpui::test]
+fn cmd_w_in_the_shell_closes_its_tab_not_the_thread(cx: &mut TestAppContext) {
+    let (view, thread, cx) = window("terminal-cmd-w", cx);
+    opened(&view, cx);
+    let shell = view.read_with(cx, |view, _| view.terminal_view(thread)).unwrap();
+    cx.update(|window, cx| window.focus(&shell.focus_handle(cx), cx));
+    tick(cx);
+    assert!(
+        cx.update(|window, cx| view.read(cx).terminal_holds_focus(window, cx)),
+        "the shell has the keyboard"
+    );
+    cx.simulate_keystrokes("cmd-w");
+    tick(cx);
+    assert!(numbers(&view, thread, cx).is_empty(), "⌘W ended the shell's tab");
+    assert!(
+        view.read_with(cx, |view, _| view.cockpit.thread(thread).is_some() && view.panes.len() == 1),
+        "the Thread stays open"
+    );
+}
+
+/// A shell that cannot start (its folder is gone) leaves a tab that says so
+/// and offers Try again, which starts it once the folder is back.
+#[gpui::test]
+fn a_shell_that_cannot_start_says_so_and_retries(cx: &mut TestAppContext) {
+    let (core, _fake, checkout) = bound_cockpit("terminal-fails", Provider::Claude);
+    bind_production_keys(cx);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    hold_nav_open(&view, cx);
+    cx.simulate_resize(gpui::size(px(1900.), px(900.)));
+    tick(cx);
+    let thread = view.read_with(cx, |view, _| view.panes[0].thread().unwrap());
+    let moved = checkout.with_extension("moved");
+    std::fs::rename(&checkout, &moved).unwrap();
+    opened(&view, cx);
+    assert!(cx.debug_bounds("terminal-failed").is_some(), "the tab says it could not start");
+    assert!(cx.debug_bounds("terminal").is_none(), "no grid");
+    assert_eq!(panel_tabs(&view, thread, cx).1, Some(SurfaceId::Terminal(1)));
+    std::fs::rename(&moved, &checkout).unwrap();
+    let at = cx.debug_bounds("terminal-retry").unwrap();
+    cx.simulate_click(at.center(), gpui::Modifiers::none());
+    tick(cx);
+    assert!(cx.debug_bounds("terminal-failed").is_none());
+    assert!(cx.debug_bounds("terminal").is_some(), "the retry started the shell");
 }
 
 /// Each new terminal is its own tab and shell; ⌘J shows the last one, not
@@ -207,6 +268,17 @@ fn typed_reaches(
     false
 }
 
+/// Whether `needle` is on the shell's screen now, without waiting for it.
+fn typed_reaches_in(
+    shell: &Entity<ferrite_terminal::TerminalView>,
+    needle: &str,
+    cx: &mut gpui::VisualTestContext,
+) -> bool {
+    std::thread::sleep(std::time::Duration::from_millis(300));
+    shell.update(cx, |shell, cx| shell.select_all(cx));
+    shell.read_with(cx, |shell, _| shell.selection().is_some_and(|text| text.contains(needle)))
+}
+
 #[gpui::test]
 fn keys_typed_after_the_door_opens_reach_the_shell(cx: &mut TestAppContext) {
     let (view, thread, cx) = window("terminal-keys", cx);
@@ -246,4 +318,173 @@ fn a_click_in_the_shell_takes_the_keyboard_back_from_the_composer(cx: &mut TestA
     tick(cx);
     cx.simulate_keystrokes("e c h o space c l i c k 5 enter");
     assert!(typed_reaches(&shell, "\nclick5", cx), "the click gave the shell the keyboard");
+}
+
+fn frame_after(ms: u64, cx: &mut gpui::VisualTestContext) {
+    cx.executor().advance_clock(std::time::Duration::from_millis(ms));
+    cx.update(|window, cx| window.simulate_next_frame(cx));
+    cx.run_until_parked();
+}
+
+/// A panel sliding shut over a shell that has the keyboard takes it back:
+/// what is typed mid-slide never reaches the shell, and ⌥⌘B opens the panel
+/// again at once, with no click first.
+#[gpui::test]
+fn a_panel_sliding_shut_gives_the_shell_no_keys(cx: &mut TestAppContext) {
+    ferrite_ui::motion::testing::drive();
+    let (view, thread, cx) = window("terminal-closing", cx);
+    opened(&view, cx);
+    let shell = view.read_with(cx, |view, _| view.terminal_view(thread)).unwrap();
+    tick(cx);
+    cx.simulate_keystrokes("e c h o space b e f o r e 1 enter");
+    assert!(typed_reaches(&shell, "\nbefore1", cx), "the shell has the keyboard");
+
+    cx.simulate_keystrokes("cmd-alt-b");
+    frame_after(20, cx);
+    frame_after(20, cx);
+    let width = cx.debug_bounds("panel").expect("still sliding").size.width;
+    assert!(width > px(0.) && width < px(ferrite_ui::theme::TERMINAL_W), "mid-slide: {width:?}");
+    cx.simulate_keystrokes("e c h o space m i d 2 enter");
+    frame_after(400, cx);
+    frame_after(20, cx);
+    assert!(cx.debug_bounds("panel").is_none(), "the panel has gone");
+    assert!(
+        !typed_reaches_in(&shell, "mid2", cx),
+        "nothing typed mid-slide reached the shell"
+    );
+
+    cx.simulate_keystrokes("cmd-alt-b");
+    frame_after(400, cx);
+    assert!(cx.debug_bounds("panel").is_some(), "⌥⌘B reopens it without a click");
+}
+
+/// An open the Server refused (here: an in-process window has no browser)
+/// is never echoed, so it leaves nothing behind that could later turn away
+/// an agent's open as stale.
+#[gpui::test]
+fn an_agents_open_after_a_refused_one_still_shows_the_browser(cx: &mut TestAppContext) {
+    ferrite_ui::motion::testing::drive();
+    let (core, _fake, _checkout) = bound_cockpit("terminal-refused-open", Provider::Claude);
+    bind_production_keys(cx);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    hold_nav_open(&view, cx);
+    cx.simulate_resize(gpui::size(px(1900.), px(900.)));
+    tick(cx);
+    let thread = view.read_with(cx, |view, _| view.panes[0].thread().unwrap());
+    opened(&view, cx);
+    view.update(cx, |view, cx| {
+        view.browser_action(
+            thread,
+            ferrite_core::browser::Action::Open { url: "http://user:pw@localhost:5173/".into() },
+            cx,
+        )
+    });
+    settle(cx);
+    back_to_shell(cx);
+    assert_eq!(panel_tabs(&view, thread, cx).1, Some(SurfaceId::Terminal(1)));
+
+    hear_own_open_echoed(&view, thread, cx);
+    assert_eq!(
+        panel_tabs(&view, thread, cx).1,
+        Some(SurfaceId::Browser),
+        "an agent's open after the operator's last click shows the browser"
+    );
+}
+
+fn cmd_click(cx: &mut gpui::VisualTestContext, row: usize, column: usize) {
+    let at = cell(cx, row, column);
+    cx.simulate_click(at, gpui::Modifiers::secondary_key());
+    settle(cx);
+}
+
+/// One click on the shell's own tab, as the operator would make it.
+fn back_to_shell(cx: &mut gpui::VisualTestContext) {
+    settle(cx);
+    let at = cx.debug_bounds("panel-tab-Terminal-1").expect("a tab").center();
+    cx.simulate_click(at, gpui::Modifiers::none());
+    settle(cx);
+}
+
+/// What a Server linked to this window sends back for the open it was asked:
+/// the same action, read a frame later than the operator's next click.
+fn hear_own_open_echoed(view: &gpui::Entity<CockpitView>, thread: ThreadId, cx: &mut gpui::VisualTestContext) {
+    view.update(cx, |view, _| {
+        view.cockpit.fixture_browser_message(ferrite_core::protocol::ServerMessage::Browser {
+            thread,
+            owner: None,
+            state: Default::default(),
+            action: Some(ferrite_core::browser::Action::Open { url: "http://localhost:5173/app".into() }),
+            owned: false,
+        })
+    });
+    settle(cx);
+}
+
+/// What the operator sees once the panel has stopped moving.
+fn settle(cx: &mut gpui::VisualTestContext) {
+    frame_after(400, cx);
+    frame_after(20, cx);
+}
+
+/// The point on the grid's row `row`, `column` cells in, as the face lays
+/// it out.
+fn cell(cx: &mut gpui::VisualTestContext, row: usize, column: usize) -> gpui::Point<gpui::Pixels> {
+    let grid = cx.debug_bounds("terminal").expect("the grid");
+    gpui::point(
+        grid.left() + px(ferrite_ui::theme::TERMINAL_PAD_X + (column as f32 + 0.5) * ferrite_ui::theme::FS_TERMINAL * ferrite_ui::theme::CODE_ADVANCE),
+        grid.top() + px(ferrite_ui::theme::TERMINAL_PAD_Y + (row as f32 + 0.5) * ferrite_ui::theme::LH_TERMINAL),
+    )
+}
+
+/// ⌘-click on what the shell printed: a local address and a web address
+/// open Ferrite's browser, a relative path with a line opens the editor on
+/// that line, resolved against the shell's folder. A plain click opens
+/// nothing.
+#[gpui::test]
+fn cmd_click_opens_what_the_shell_printed(cx: &mut TestAppContext) {
+    ferrite_ui::motion::testing::drive();
+    let (core, _fake, checkout) = bound_cockpit("terminal-links", Provider::Claude);
+    std::fs::write(checkout.join("src/main.rs"), "one\ntwo\nthree\nfour\n").unwrap();
+    bind_production_keys(cx);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    view.update(cx, |view, _| view.cockpit.fixture_browser_accepts());
+    hold_nav_open(&view, cx);
+    cx.simulate_resize(gpui::size(px(1900.), px(900.)));
+    tick(cx);
+    let thread = view.read_with(cx, |view, _| view.panes[0].thread().unwrap());
+    opened(&view, cx);
+    // The platform shell: the login shell on Unix, PowerShell on Windows.
+    #[cfg(unix)]
+    let print = b"printf '\\033[2J\\033[Hhttp://localhost:5173/app\\nhttps://example.com/docs\\nsrc/main.rs:3\\n'\r";
+    #[cfg(windows)]
+    let print = b"Clear-Host; 'http://localhost:5173/app', 'https://example.com/docs', 'src/main.rs:3'\r";
+    run(&view, thread, print, cx);
+    let shell = view.read_with(cx, |view, _| view.terminal_view(thread)).unwrap();
+    assert!(typed_reaches(&shell, "docs\nsrc/main.rs:3", cx), "the shell printed the three");
+    let at = cell(cx, 0, 12);
+    cx.simulate_click(at, gpui::Modifiers::none());
+    tick(cx);
+    assert_eq!(panel_tabs(&view, thread, cx).1, Some(SurfaceId::Terminal(1)), "a plain click opens nothing");
+
+    cmd_click(cx, 0, 12);
+    assert_eq!(panel_tabs(&view, thread, cx).1, Some(SurfaceId::Browser));
+
+    back_to_shell(cx);
+    assert_eq!(panel_tabs(&view, thread, cx).1, Some(SurfaceId::Terminal(1)), "one click returns to the shell");
+    hear_own_open_echoed(&view, thread, cx);
+    assert_eq!(
+        panel_tabs(&view, thread, cx).1,
+        Some(SurfaceId::Terminal(1)),
+        "the Server's echo of the window's own open does not take the panel back"
+    );
+    cmd_click(cx, 1, 12);
+    assert_eq!(panel_tabs(&view, thread, cx).1, Some(SurfaceId::Browser));
+
+    back_to_shell(cx);
+    cmd_click(cx, 2, 5);
+    assert_eq!(panel_tabs(&view, thread, cx).1, Some(SurfaceId::Files));
+    assert!(view.read_with(cx, |view, _| view.files_tab_names(thread)).contains(&("main.rs".to_string(), true)));
+    let editor = view.read_with(cx, |view, _| view.files_editor_of(thread).expect("the editor"));
+    let (text, caret) = editor.read_with(cx, |editor, _| (editor.text().to_string(), editor.caret_for_test()));
+    assert_eq!(text[..caret].matches('\n').count(), 2, "the caret is on line 3");
 }

@@ -287,9 +287,10 @@ fn a_frame_the_cockpit_did_not_ask_for_replays_it(cx: &mut TestAppContext) {
 #[gpui::test]
 fn working_marks_draw_every_frame_in_the_overlay_unclipped(cx: &mut TestAppContext) {
     ferrite_ui::motion::testing::drive();
+    let _clock = hold_wall_clock();
     let (mut core, fake) = cockpit("overlay-working-marks", 1);
     let thread = core.threads()[0];
-    core.send(thread, "Inspect progress".into());
+    let _ = core.send(thread, "Inspect progress".into());
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     super::hold_nav_open(&view, cx);
     cx.simulate_resize(gpui::size(px(1440.), px(900.)));

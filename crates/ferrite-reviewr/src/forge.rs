@@ -37,42 +37,101 @@ pub enum PrView {
     MalformedOrigin(String),
     /// A local Git read failed before the forge fetch could start.
     GitError(String),
+    /// The forge CLI did not answer within `READ_DEADLINE`.
+    TimedOut(crate::git::Forge),
     /// Any other forge-CLI failure (rate limit, offline, …); the app freezes the last good view.
     Error(crate::git::Forge, String),
 }
 
+/// How long one read may take, its forge CLI's processes included.
+pub const READ_DEADLINE: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// What a forge CLI's failure wording says went wrong, for the remedy it earns.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Failure {
+    RateLimited,
+    Offline,
+    Other,
+}
+
+impl Failure {
+    pub fn of(message: &str) -> Self {
+        let s = message.to_lowercase();
+        if s.contains("rate limit") || s.contains("abuse detection") || reports_status(&s, 429) {
+            Self::RateLimited
+        } else if [
+            "could not resolve host",
+            "no such host",
+            "dial tcp",
+            "connection refused",
+            "connection reset",
+            "network is unreachable",
+            "tls handshake",
+            "i/o timeout",
+            "error connecting to",
+        ]
+        .iter()
+        .any(|wording| s.contains(wording))
+        {
+            Self::Offline
+        } else {
+            Self::Other
+        }
+    }
+}
+
 impl PrView {
     /// The remedy for a retryable failure, which keeps the visible snapshot; `None` otherwise.
-    pub fn retry_remedy(&self, refresh: crate::keymap::Key) -> Option<String> {
-        let refresh = refresh.label();
+    pub fn retry_remedy(&self) -> Option<String> {
         match self {
             Self::NoCli(forge) => Some(format!(
-                "{} CLI not found. Install `{}`, then press {refresh}.",
+                "{} CLI not found. Install `{}`, then retry.",
                 forge.display_name(),
                 forge.cli()
             )),
             // A forge with no extension still gets a remedy.
             Self::NoExtension(forge) => Some(match extension_hint(*forge) {
                 Some(hint) => format!(
-                    "{} CLI extension missing. Run {hint}, then press {refresh}.",
+                    "{} CLI extension missing. Run {hint}, then retry.",
                     forge.display_name()
                 ),
-                None => format!(
-                    "{} CLI extension missing. Press {refresh} to retry.",
-                    forge.display_name()
-                ),
+                None => {
+                    format!("{} CLI extension missing. Retry to try again.", forge.display_name())
+                }
             }),
             Self::NotAuthed(forge, host) => Some(format!(
-                "Not signed in to {host}. Run {}, then press {refresh}.",
+                "Not signed in to {host}. Run {}, then retry.",
                 login_hint(*forge, host)
             )),
-            Self::GitError(message) => {
-                Some(format!("Git read failed: {message}. Press {refresh} to retry."))
-            }
-            Self::Error(forge, message) => Some(format!(
-                "{} unavailable: {message}. Press {refresh} to retry.",
-                forge.display_name()
+            Self::GitError(message) => Some(format!(
+                "Git read failed: {}. Retry to try again.",
+                message.trim_end_matches('.')
             )),
+            Self::TimedOut(forge) => Some(format!(
+                "{} did not answer within {} seconds. Retry to try again.",
+                forge.display_name(),
+                READ_DEADLINE.as_secs()
+            )),
+            Self::Error(forge, message) => {
+                // A CLI's own message often ends in a period; the sentence adds one.
+                let message = message.trim_end_matches('.');
+                Some(match Failure::of(message) {
+                    Failure::RateLimited => format!(
+                        "{} rate limit reached: {message}. Wait a few minutes, then retry.",
+                        forge.display_name()
+                    ),
+                    Failure::Offline => format!(
+                        "Cannot reach {}: {message}. Check the connection, then retry.",
+                        forge.display_name()
+                    ),
+                    Failure::Other => {
+                        format!(
+                            "{} unavailable: {message}. Retry to try again.",
+                            forge.display_name()
+                        )
+                    }
+                })
+            }
             _ => None,
         }
     }
@@ -107,6 +166,12 @@ pub struct PrSnapshot {
     pub url: String,
     /// The PR description as the forge returns it, empty when none.
     pub body: String,
+    pub author: Option<String>,
+    pub author_avatar_url: Option<String>,
+    pub updated_at: Option<String>,
+    pub changed_files: Option<u64>,
+    pub additions: Option<u64>,
+    pub deletions: Option<u64>,
     pub state: PrState,
     pub is_draft: bool,
     /// The PR's head branch name, which may differ from the local one.
@@ -159,6 +224,8 @@ pub enum Sync {
 pub struct Check {
     pub name: String,
     pub status: CheckStatus,
+    /// Where the run's log lives, when the forge names one.
+    pub url: Option<String>,
 }
 
 /// A check's outcome, normalised across check runs and commit statuses.
@@ -174,11 +241,15 @@ pub enum CheckStatus {
 /// One incoming comment: a PR-level review, a plain comment, or an inline finding.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Comment {
+    pub id: Option<String>,
     pub kind: CommentKind,
     pub author: String,
     pub author_is_bot: bool,
     /// `path`, `path:line`, or `path:start-end` for a finding, the kind word otherwise.
     pub anchor: String,
+    /// How a `review` ended: approved, changes requested, or only commented.
+    /// `None` for every other kind, and for a review the forge gives no verdict.
+    pub verdict: Option<ReviewState>,
     /// Path, line range, and side for a `finding`. None for a review or comment.
     pub place: Option<FindingPlace>,
     pub body: String,
@@ -195,6 +266,7 @@ pub struct Comment {
 /// One reply on a thread. The root lives on [`Comment`].
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Reply {
+    pub id: Option<String>,
     pub author: String,
     pub author_is_bot: bool,
     pub body: String,
@@ -207,6 +279,31 @@ pub enum CommentKind {
     Review,
     Comment,
     Finding,
+}
+
+/// The verdict a submitted review carries.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ReviewState {
+    Approved,
+    ChangesRequested,
+    Commented,
+}
+
+impl ReviewState {
+    /// GitHub's `PullRequestReviewState`; a pending or dismissed review has no verdict.
+    fn of_github(state: &str) -> Option<Self> {
+        match state {
+            "APPROVED" => Some(Self::Approved),
+            "CHANGES_REQUESTED" => Some(Self::ChangesRequested),
+            "COMMENTED" => Some(Self::Commented),
+            _ => None,
+        }
+    }
+
+    /// A verdict stands without words; a plain comment review is only its body.
+    fn stands_alone(self) -> bool {
+        self != Self::Commented
+    }
 }
 
 /// Where a finding sits: path, inclusive line range, and which file side.
@@ -479,10 +576,186 @@ fn fetch_input_inner(
     Ok(PrFetchInput { repository, origin_repository, local })
 }
 
-/// Read GitHub for one already-derived input. Degradation stays in-band for the PR tab.
+/// Read the forge for one already-derived input, within `READ_DEADLINE`. Degradation stays
+/// in-band for the PR tab.
 #[must_use]
 pub fn fetch(repo: &Path, input: &PrFetchInput) -> PrView {
-    fetch_cancellable(repo, input, &AtomicBool::new(false))
+    let forge = match &input.repository {
+        crate::git::RepositoryIdentity::Repository(target) => target.forge(),
+        _ => crate::git::Forge::GitHub,
+    };
+    within(READ_DEADLINE, PrView::TimedOut(forge), |cancelled| {
+        fetch_cancellable(repo, input, cancelled)
+    })
+}
+
+/// Which of a repository's pull requests a list shows.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ListFilter {
+    #[default]
+    Open,
+    /// Merged and closed ones.
+    Closed,
+    All,
+}
+
+impl ListFilter {
+    fn states(self) -> &'static str {
+        match self {
+            Self::Open => "OPEN",
+            Self::Closed => "MERGED,CLOSED",
+            Self::All => "OPEN,MERGED,CLOSED",
+        }
+    }
+}
+
+/// One row of a repository's pull request list.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PrRow {
+    pub number: u64,
+    pub title: String,
+    pub url: String,
+    pub state: PrState,
+    pub is_draft: bool,
+    pub author: String,
+    pub head_ref: String,
+    pub base_ref: String,
+    /// The forge's ISO-8601 time of the last change.
+    pub updated_at: String,
+}
+
+/// A repository's pull requests, most recently changed first.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct PrList {
+    pub rows: Vec<PrRow>,
+    /// The forge holds more than one read fetches.
+    pub more: bool,
+}
+
+/// The GitHub repository of the checkout at `repo`, or the state that says why not.
+fn github_repository(
+    repo: &Path,
+    config: &crate::config::PluginConfig,
+) -> Result<crate::git::RepoTarget, PrView> {
+    let (identity, _) = crate::git::remote_identities(repo, &config.forge_hosts())
+        .map_err(|error| PrView::GitError(error.0))?;
+    match identity {
+        crate::git::RepositoryIdentity::Repository(target)
+            if target.forge() == crate::git::Forge::GitHub =>
+        {
+            Ok(target)
+        }
+        crate::git::RepositoryIdentity::Repository(target) => Err(PrView::Error(
+            target.forge(),
+            "browsing pull requests by number is read for GitHub repositories only".to_string(),
+        )),
+        crate::git::RepositoryIdentity::Missing | crate::git::RepositoryIdentity::Hostless => {
+            Err(PrView::NeedsForgeRemote)
+        }
+        crate::git::RepositoryIdentity::Unsupported(host) => Err(PrView::UnsupportedHost(host)),
+        crate::git::RepositoryIdentity::Malformed(host) => Err(PrView::MalformedOrigin(host)),
+    }
+}
+
+/// Pull request `number` of the repository `repo` is a checkout of, whole: the checkout's branch
+/// plays no part, so it reads the same from any checkout.
+#[must_use]
+pub fn fetch_numbered(repo: &Path, config: &crate::config::PluginConfig, number: u64) -> PrView {
+    let target = match github_repository(repo, config) {
+        Ok(target) => target,
+        Err(view) => return view,
+    };
+    let forge = crate::git::Forge::GitHub;
+    within(READ_DEADLINE, PrView::TimedOut(forge), |cancelled| {
+        let input = PrFetchInput {
+            repository: crate::git::RepositoryIdentity::Repository(target.clone()),
+            origin_repository: None,
+            local: crate::git::PrLocalState::default(),
+        };
+        match read_pr(repo, &input, &target, number, cancelled) {
+            Ok(Some(view)) => view,
+            Ok(None) => PrView::Error(
+                forge,
+                format!("no pull request #{number} in {}/{}", target.owner(), target.name()),
+            ),
+            Err(error) => error.into(),
+        }
+    })
+}
+
+mod code;
+pub use code::diff_numbered;
+
+/// The newest of the repository's pull requests that `filter` admits, as many as one read holds.
+pub fn list(
+    repo: &Path,
+    config: &crate::config::PluginConfig,
+    filter: ListFilter,
+) -> Result<PrList, PrView> {
+    let target = github_repository(repo, config)?;
+    let forge = crate::git::Forge::GitHub;
+    within(READ_DEADLINE, Err(PrView::TimedOut(forge)), |cancelled| {
+        let query = format!(
+            "query($o:String!,$n:String!){{repository(owner:$o,name:$n){{\
+             pullRequests(first:{LIST_CAP},states:[{}],orderBy:{{field:UPDATED_AT,direction:DESC}}){{\
+             pageInfo{{hasNextPage}} nodes{{number title url state isDraft headRefName baseRefName \
+             updatedAt author{{login}}}}}}}}}}",
+            filter.states()
+        );
+        let vars = [
+            ("o".to_string(), target.owner().to_string()),
+            ("n".to_string(), target.name().to_string()),
+        ];
+        let answer =
+            graphql(repo, target.host(), &query, &vars, cancelled).map_err(PrView::from)?;
+        parse_list(&answer["data"]["repository"]["pullRequests"]).ok_or_else(|| {
+            PrView::Error(
+                forge,
+                "the forge did not answer with a list of pull requests".to_string(),
+            )
+        })
+    })
+}
+
+/// How many pull requests one list read holds.
+const LIST_CAP: usize = 50;
+
+fn parse_list(connection: &Value) -> Option<PrList> {
+    let nodes = connection["nodes"].as_array()?;
+    let rows = nodes
+        .iter()
+        .map(|node| PrRow {
+            number: node["number"].as_u64().unwrap_or_default(),
+            title: node["title"].as_str().unwrap_or_default().to_string(),
+            url: node["url"].as_str().unwrap_or_default().to_string(),
+            state: parse_state(node["state"].as_str().unwrap_or("OPEN")),
+            is_draft: node["isDraft"].as_bool().unwrap_or(false),
+            author: node["author"]["login"].as_str().unwrap_or_default().to_string(),
+            head_ref: node["headRefName"].as_str().unwrap_or_default().to_string(),
+            base_ref: node["baseRefName"].as_str().unwrap_or_default().to_string(),
+            updated_at: node["updatedAt"].as_str().unwrap_or_default().to_string(),
+        })
+        .collect();
+    Some(PrList { rows, more: connection["pageInfo"]["hasNextPage"].as_bool().unwrap_or(false) })
+}
+
+/// Run `read` with a cancellation flag raised once `limit` has passed; a read the deadline
+/// stopped is `timed_out`, whatever it made of being stopped.
+fn within<T>(limit: std::time::Duration, timed_out: T, read: impl FnOnce(&AtomicBool) -> T) -> T {
+    use std::sync::atomic::Ordering;
+    let cancelled = AtomicBool::new(false);
+    let (finished, deadline) = std::sync::mpsc::channel::<()>();
+    let raise = &cancelled;
+    std::thread::scope(|scope| {
+        scope.spawn(move || {
+            if deadline.recv_timeout(limit) == Err(std::sync::mpsc::RecvTimeoutError::Timeout) {
+                raise.store(true, Ordering::Release);
+            }
+        });
+        let view = read(&cancelled);
+        drop(finished);
+        if cancelled.load(Ordering::Acquire) { timed_out } else { view }
+    })
 }
 
 /// Read GitHub with a cancellation signal owned by the event-loop coordinator.
@@ -855,14 +1128,14 @@ fn build_detail_query(number: u64) -> String {
         "query($o:String!,$n:String!){{repository(owner:$o,name:$n){{\
          pullRequest(number:{number}){{\
          number title url body isDraft state mergeable mergeStateStatus baseRefName headRefName \
-         headRefOid isCrossRepository \
+         headRefOid isCrossRepository author{{login avatarUrl}} updatedAt changedFiles additions deletions \
          commits(last:1){{nodes{{commit{{statusCheckRollup{{contexts(first:100){{pageInfo{{hasNextPage}} nodes{{__typename \
-         ... on CheckRun{{name status conclusion}} ... on StatusContext{{context state}}}}}}}}}}}}}} \
-         reviews(last:100){{pageInfo{{hasPreviousPage}} nodes{{author{{login}} body submittedAt}}}} \
-         comments(last:100){{pageInfo{{hasPreviousPage}} nodes{{author{{login}} body createdAt}}}} \
+         ... on CheckRun{{name status conclusion detailsUrl}} ... on StatusContext{{context state targetUrl}}}}}}}}}}}}}} \
+         reviews(last:100){{pageInfo{{hasPreviousPage}} nodes{{id author{{login}} state body submittedAt}}}} \
+         comments(last:100){{pageInfo{{hasPreviousPage}} nodes{{id author{{login}} body createdAt}}}} \
          reviewThreads(last:100){{pageInfo{{hasPreviousPage}} nodes{{id isResolved isOutdated path \
          startLine line originalStartLine originalLine diffSide \
-         comments(first:100){{pageInfo{{hasNextPage endCursor}} nodes{{author{{login}} body createdAt diffHunk}}}}}}}}}}}}}}"
+         comments(first:100){{pageInfo{{hasNextPage endCursor}} nodes{{id author{{login}} body createdAt diffHunk}}}}}}}}}}}}}}"
     )
 }
 
@@ -932,7 +1205,7 @@ fn append_thread_comment_page(thread: &mut Value, page: &Value) -> Result<(), Gh
 fn thread_comments_page(target: &FetchTarget<'_>, id: &str, after: &str) -> Result<Value, GhError> {
     let q = "query($id:ID!,$after:String!){node(id:$id){... on PullRequestReviewThread{\
              comments(first:100, after:$after){pageInfo{hasNextPage endCursor} \
-             nodes{author{login} body createdAt}}}}}";
+             nodes{id author{login} body createdAt}}}}}";
     graphql(
         target.repo,
         target.host,
@@ -977,6 +1250,12 @@ fn build_snapshot(node: &Value, sync: Sync) -> PrSnapshot {
         title: node["title"].as_str().unwrap_or_default().to_string(),
         url: node["url"].as_str().unwrap_or_default().to_string(),
         body: node["body"].as_str().unwrap_or_default().to_string(),
+        author: node["author"]["login"].as_str().map(str::to_string),
+        author_avatar_url: node["author"]["avatarUrl"].as_str().map(str::to_string),
+        updated_at: node["updatedAt"].as_str().map(str::to_string),
+        changed_files: node["changedFiles"].as_u64(),
+        additions: node["additions"].as_u64(),
+        deletions: node["deletions"].as_u64(),
         state: parse_state(node["state"].as_str().unwrap_or("OPEN")),
         is_draft: node["isDraft"].as_bool().unwrap_or(false),
         head_ref: node["headRefName"].as_str().unwrap_or_default().to_string(),
@@ -1022,9 +1301,8 @@ pub(crate) fn upsert_latest(checks: &mut Vec<Check>, check: Check) {
     }
 }
 
-/// Keep each bot's latest PR-level post, then order newest first.
+/// Keep the full conversation in newest-first order.
 pub(crate) fn finish_comments(out: &mut Vec<Comment>) {
-    dedup_bot_prose(out);
     out.sort_by(|a, b| b.created_at.cmp(&a.created_at));
 }
 
@@ -1038,7 +1316,12 @@ fn normalize_checks(rollup: &Value) -> Vec<Check> {
             continue;
         }
         let status = check_status(node);
-        upsert_latest(&mut out, Check { name, status });
+        let url = node["detailsUrl"]
+            .as_str()
+            .or_else(|| node["targetUrl"].as_str())
+            .filter(|url| !url.is_empty())
+            .map(str::to_string);
+        upsert_latest(&mut out, Check { name, status, url });
     }
     out
 }
@@ -1072,10 +1355,15 @@ fn merge_comments(reviews: &Value, issues: &Value, threads: &Value) -> Vec<Comme
     // Submitted reviews with a non-empty body (the PR-level `review` cards).
     for r in reviews.as_array().into_iter().flatten() {
         let body = r["body"].as_str().unwrap_or("").trim().to_string();
-        if body.is_empty() {
+        let verdict = r["state"].as_str().and_then(ReviewState::of_github);
+        if body.is_empty() && !verdict.is_some_and(ReviewState::stands_alone) {
             continue;
         }
-        out.push(prose_comment(CommentKind::Review, &r["author"], body, r["submittedAt"].as_str()));
+        let mut review =
+            prose_comment(CommentKind::Review, &r["author"], body, r["submittedAt"].as_str());
+        review.id = provider_id(&r["id"]);
+        review.verdict = verdict;
+        out.push(review);
     }
 
     // Plain conversation comments (the `comment` cards).
@@ -1084,7 +1372,10 @@ fn merge_comments(reviews: &Value, issues: &Value, threads: &Value) -> Vec<Comme
         if body.is_empty() {
             continue;
         }
-        out.push(prose_comment(CommentKind::Comment, &c["author"], body, c["createdAt"].as_str()));
+        let mut comment =
+            prose_comment(CommentKind::Comment, &c["author"], body, c["createdAt"].as_str());
+        comment.id = provider_id(&c["id"]);
+        out.push(comment);
     }
 
     // Inline review threads (the `finding` cards), with resolved/outdated and replies.
@@ -1113,7 +1404,9 @@ fn merge_comments(reviews: &Value, issues: &Value, threads: &Value) -> Vec<Comme
             finding_side(diff_side == Some("RIGHT"), diff_side == Some("LEFT")),
         );
         out.push(Comment {
+            id: provider_id(&root["id"]),
             kind: CommentKind::Finding,
+            verdict: None,
             author_is_bot: is_bot(&login),
             author: login,
             anchor: place.anchor(),
@@ -1197,10 +1490,12 @@ pub(crate) fn prose_row(
         _ => "comment",
     };
     Comment {
+        id: None,
         kind,
         author_is_bot,
         author,
         anchor: anchor.to_string(),
+        verdict: None,
         place: None,
         body,
         snippet: None,
@@ -1223,6 +1518,7 @@ fn replies_from_nodes(nodes: &[Value]) -> Vec<Reply> {
             }
             let login = n["author"]["login"].as_str().unwrap_or("").to_string();
             Some(Reply {
+                id: provider_id(&n["id"]),
                 author_is_bot: is_bot(&login),
                 author: login,
                 body: body.to_string(),
@@ -1232,24 +1528,8 @@ fn replies_from_nodes(nodes: &[Value]) -> Vec<Reply> {
         .collect()
 }
 
-/// Keep only the latest PR-level (`review`/`comment`) post per bot author; humans keep all.
-fn dedup_bot_prose(out: &mut Vec<Comment>) {
-    let mut keep_newest: std::collections::HashMap<String, String> =
-        std::collections::HashMap::new();
-    for c in out.iter() {
-        if c.author_is_bot && c.kind != CommentKind::Finding {
-            let e = keep_newest.entry(c.author.clone()).or_default();
-            if c.created_at > *e {
-                e.clone_from(&c.created_at);
-            }
-        }
-    }
-    out.retain(|c| {
-        !(c.author_is_bot && c.kind != CommentKind::Finding)
-            // An undated review is a standing verdict, never lost to a newer post.
-            || (c.kind == CommentKind::Review && c.created_at.is_empty())
-            || keep_newest.get(&c.author) == Some(&c.created_at)
-    });
+pub(crate) fn provider_id(value: &Value) -> Option<String> {
+    value.as_str().map(str::to_string).or_else(|| value.as_u64().map(|id| id.to_string()))
 }
 
 /// Percent-encode one URL path or query value, `/` included.
@@ -1287,6 +1567,28 @@ pub(crate) fn parse_iso(s: &str) -> Option<i64> {
 
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
+
+    #[test]
+    fn a_read_past_its_deadline_is_stopped_and_timed_out() {
+        let timed_out = PrView::TimedOut(crate::git::Forge::GitHub);
+        let view = within(Duration::from_millis(20), timed_out.clone(), |cancelled| {
+            while !cancelled.load(std::sync::atomic::Ordering::Acquire) {
+                std::thread::sleep(Duration::from_millis(2));
+            }
+            PrView::Error(crate::git::Forge::GitHub, "request cancelled".into())
+        });
+        assert_eq!(view, timed_out);
+        assert_eq!(within(Duration::from_secs(30), timed_out, |_| PrView::NoPr), PrView::NoPr);
+    }
+
+    #[test]
+    fn failure_wording_tells_a_rate_limit_from_a_dropped_connection() {
+        assert_eq!(Failure::of("API rate limit exceeded for user"), Failure::RateLimited);
+        assert_eq!(Failure::of("gh: Too Many Requests (HTTP 429)"), Failure::RateLimited);
+        assert_eq!(Failure::of("dial tcp: lookup api.github.com: no such host"), Failure::Offline);
+        assert_eq!(Failure::of("GraphQL: something odd"), Failure::Other);
+    }
     use super::*;
 
     #[test]
@@ -1310,6 +1612,29 @@ mod tests {
         assert_eq!(parse_state("CLOSED"), PrState::Closed);
         assert_eq!(parse_state("OPEN"), PrState::Open);
         assert_eq!(parse_state("anything-else"), PrState::Open); // default is the live case
+    }
+
+    #[test]
+    fn snapshot_carries_header_metadata_without_inventing_missing_values() {
+        let node = serde_json::json!({
+            "author": { "login": "ada", "avatarUrl": "https://example.test/ada.png" },
+            "updatedAt": "2026-11-16T08:00:00Z", "changedFiles": 3,
+            "additions": 0, "deletions": 12
+        });
+        let pr = build_snapshot(&node, Sync::Unknown);
+        assert_eq!(pr.author.as_deref(), Some("ada"));
+        assert_eq!(pr.author_avatar_url.as_deref(), Some("https://example.test/ada.png"));
+        assert_eq!(pr.updated_at.as_deref(), Some("2026-11-16T08:00:00Z"));
+        assert_eq!((pr.changed_files, pr.additions, pr.deletions), (Some(3), Some(0), Some(12)));
+        let missing = build_snapshot(&Value::Null, Sync::Unknown);
+        assert_eq!(
+            (missing.author, missing.author_avatar_url, missing.updated_at),
+            (None, None, None)
+        );
+        assert_eq!(
+            (missing.changed_files, missing.additions, missing.deletions),
+            (None, None, None)
+        );
     }
 
     #[test]
@@ -1387,6 +1712,12 @@ mod tests {
             title: String::new(),
             url: String::new(),
             body: String::new(),
+            author: None,
+            author_avatar_url: None,
+            updated_at: None,
+            changed_files: None,
+            additions: None,
+            deletions: None,
             state: PrState::Open,
             is_draft: false,
             head_ref: String::new(),
@@ -1395,7 +1726,10 @@ mod tests {
             base_ref: String::new(),
             merge: Merge::Clean,
             sync: Sync::InSync,
-            checks: statuses.iter().map(|&s| Check { name: "c".into(), status: s }).collect(),
+            checks: statuses
+                .iter()
+                .map(|&s| Check { name: "c".into(), status: s, url: None })
+                .collect(),
             comments: Vec::new(),
             comments_truncated: false,
             checks_truncated: false,
@@ -1707,6 +2041,24 @@ mod tests {
     }
 
     #[test]
+    fn comment_and_reply_identity_survives_the_provider_read() {
+        let comments = merge_comments(
+            &serde_json::json!([]),
+            &serde_json::json!([]),
+            &serde_json::json!([{
+                "path":"src/lib.rs", "line":4, "diffSide":"RIGHT", "comments":{"nodes":[
+                    {"id":"comment-1", "author":{"login":"reviewer[bot]"}, "body":"Check this"},
+                    {"id":"comment-2", "author":{"login":"ada"}, "body":"Fixed"}
+                ]}
+            }]),
+        );
+        assert_eq!(comments[0].id.as_deref(), Some("comment-1"));
+        assert!(comments[0].author_is_bot);
+        assert_eq!(comments[0].place.as_ref().unwrap().range, Some((4, 4)));
+        assert_eq!(comments[0].replies[0].id.as_deref(), Some("comment-2"));
+    }
+
+    #[test]
     fn comments_merge_three_surfaces_newest_first() {
         let reviews = serde_json::json!([
             {"author": {"login": "codex[bot]"}, "state": "COMMENTED", "body": "Codex review.", "submittedAt": "2026-06-27T10:00:00Z"}
@@ -1786,7 +2138,7 @@ mod tests {
     }
 
     #[test]
-    fn a_bots_prose_collapses_to_its_latest_a_humans_is_kept() {
+    fn every_bot_and_human_post_is_kept() {
         let reviews = serde_json::json!([
             {"author": {"login": "claude[bot]"}, "body": "old review", "submittedAt": "2026-06-27T09:00:00Z"},
             {"author": {"login": "claude[bot]"}, "body": "new review", "submittedAt": "2026-06-27T10:00:00Z"},
@@ -1795,14 +2147,14 @@ mod tests {
         ]);
         let cs = merge_comments(&reviews, &serde_json::json!([]), &serde_json::json!([]));
         let claude: Vec<_> = cs.iter().filter(|c| c.author == "claude[bot]").collect();
-        assert_eq!(claude.len(), 1); // only the latest bot review
+        assert_eq!(claude.len(), 2);
         assert_eq!(claude[0].body, "new review");
         assert_eq!(cs.iter().filter(|c| c.author == "persijano").count(), 2); // both human notes
     }
 
     #[test]
-    fn a_bots_findings_are_each_kept_even_as_its_prose_collapses() {
-        // A bot's prose folds to one; its findings never do.
+    fn bot_findings_and_prose_are_all_kept() {
+        // Every post remains available in the timeline.
         let reviews = serde_json::json!([
             {"author": {"login": "claude[bot]"}, "body": "old prose", "submittedAt": "2026-06-27T09:00:00Z"},
             {"author": {"login": "claude[bot]"}, "body": "new prose", "submittedAt": "2026-06-27T09:30:00Z"}
@@ -1815,8 +2167,90 @@ mod tests {
         ]);
         let cs = merge_comments(&reviews, &serde_json::json!([]), &threads);
         assert_eq!(cs.iter().filter(|c| c.kind == CommentKind::Finding).count(), 2);
-        assert_eq!(cs.iter().filter(|c| c.kind == CommentKind::Review).count(), 1); // prose collapsed
+        assert_eq!(cs.iter().filter(|c| c.kind == CommentKind::Review).count(), 2);
         assert_eq!(cs.iter().find(|c| c.body == "finding one").unwrap().anchor, "a.py:10");
+    }
+
+    #[test]
+    fn a_verdict_review_stands_without_a_body_and_a_bare_comment_review_does_not() {
+        let reviews = serde_json::json!([
+            {"author": {"login": "ann"}, "state": "APPROVED", "body": "", "submittedAt": "2026-06-27T09:00:00Z"},
+            {"author": {"login": "bob"}, "state": "CHANGES_REQUESTED", "body": "Split it.", "submittedAt": "2026-06-27T09:10:00Z"},
+            {"author": {"login": "cy"}, "state": "COMMENTED", "body": "", "submittedAt": "2026-06-27T09:20:00Z"},
+            {"author": {"login": "di"}, "state": "PENDING", "body": "", "submittedAt": null}
+        ]);
+        let cs = merge_comments(&reviews, &serde_json::json!([]), &serde_json::json!([]));
+        let verdicts: Vec<_> = cs.iter().map(|c| (c.author.as_str(), c.verdict)).collect();
+        assert_eq!(
+            verdicts,
+            [("bob", Some(ReviewState::ChangesRequested)), ("ann", Some(ReviewState::Approved)),]
+        );
+    }
+
+    #[test]
+    fn a_bots_empty_approval_leaves_its_comment_standing() {
+        let reviews = serde_json::json!([
+            {"author": {"login": "claude[bot]"}, "state": "APPROVED", "body": "", "submittedAt": "2026-06-27T10:00:00Z"}
+        ]);
+        let issues = serde_json::json!([
+            {"author": {"login": "claude[bot]"}, "body": "Real findings.", "createdAt": "2026-06-27T09:00:00Z"}
+        ]);
+        let cs = merge_comments(&reviews, &issues, &serde_json::json!([]));
+        let bodies: Vec<_> = cs.iter().map(|c| c.body.as_str()).collect();
+        assert_eq!(bodies, ["", "Real findings."]);
+        assert_eq!(cs[0].verdict, Some(ReviewState::Approved));
+    }
+
+    #[test]
+    fn a_bots_stacked_approvals_are_all_kept() {
+        let approval = |at: &str| serde_json::json!({"author": {"login": "claude[bot]"}, "state": "APPROVED", "body": "", "submittedAt": at});
+        let reviews = serde_json::json!([
+            approval("2026-06-27T10:00:00Z"),
+            approval("2026-06-27T12:00:00Z"),
+            approval("2026-06-27T11:00:00Z")
+        ]);
+        let issues = serde_json::json!([
+            {"author": {"login": "claude[bot]"}, "body": "Real findings.", "createdAt": "2026-06-27T09:00:00Z"}
+        ]);
+        let cs = merge_comments(&reviews, &issues, &serde_json::json!([]));
+        let posts: Vec<_> = cs.iter().map(|c| (c.body.as_str(), c.created_at.as_str())).collect();
+        assert_eq!(
+            posts,
+            [
+                ("", "2026-06-27T12:00:00Z"),
+                ("", "2026-06-27T11:00:00Z"),
+                ("", "2026-06-27T10:00:00Z"),
+                ("Real findings.", "2026-06-27T09:00:00Z")
+            ]
+        );
+    }
+
+    #[test]
+    fn a_cli_message_ending_in_a_period_does_not_double_it() {
+        let view = PrView::Error(
+            crate::git::Forge::GitHub,
+            "gh: Could not resolve to a Repository with the name 'o/r'.".into(),
+        );
+        let remedy = view.retry_remedy().unwrap();
+        assert!(remedy.contains("'o/r'. Retry"), "{remedy}");
+    }
+
+    #[test]
+    fn a_check_keeps_the_url_of_its_run() {
+        let rollup = serde_json::json!([
+            {"__typename": "CheckRun", "name": "fmt", "status": "COMPLETED", "conclusion": "FAILURE", "detailsUrl": "https://ci.example/run/1"},
+            {"__typename": "StatusContext", "context": "deploy", "state": "PENDING", "targetUrl": "https://ci.example/deploy"},
+            {"__typename": "StatusContext", "context": "bare", "state": "SUCCESS"}
+        ]);
+        let urls: Vec<_> = normalize_checks(&rollup).into_iter().map(|c| c.url).collect();
+        assert_eq!(
+            urls,
+            [
+                Some("https://ci.example/run/1".to_string()),
+                Some("https://ci.example/deploy".to_string()),
+                None
+            ]
+        );
     }
 
     #[test]
@@ -1861,12 +2295,14 @@ mod tests {
 
     #[test]
     fn an_undated_bot_review_survives_beside_the_bots_dated_prose() {
-        // Undated reviews (approvals, votes) survive newest-wins dedup.
+        // Undated reviews sort after dated activity.
         let row = |kind, anchor: &str, body: &str, created_at: &str| Comment {
+            id: None,
             kind,
             author: "claude[bot]".to_string(),
             author_is_bot: true,
             anchor: anchor.to_string(),
+            verdict: None,
             place: None,
             body: body.to_string(),
             snippet: None,
@@ -1880,9 +2316,9 @@ mod tests {
             row(CommentKind::Comment, "comment", "old prose", "2026-06-27T09:00:00Z"),
             row(CommentKind::Comment, "comment", "new prose", "2026-06-27T10:00:00Z"),
         ];
-        dedup_bot_prose(&mut out);
+        finish_comments(&mut out);
         let bodies: Vec<_> = out.iter().map(|c| c.body.as_str()).collect();
-        assert_eq!(bodies, ["approved", "new prose"]);
+        assert_eq!(bodies, ["new prose", "old prose", "approved"]);
     }
 
     #[test]

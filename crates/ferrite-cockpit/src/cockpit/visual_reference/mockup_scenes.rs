@@ -26,9 +26,6 @@ enum Shot {
     Solo,
     /// solo-changes.png: the same, a changed file unfolded.
     SoloChanges,
-    /// group.png: WORK's four Panes, Supplier Price Review focused, Find
-    /// all calls asking.
-    Group,
     /// pr-states.png, first column: the panel's pull request row, a check
     /// failed and the branch conflicting with main.
     PrFailing,
@@ -39,16 +36,15 @@ enum Shot {
     /// No mockup: the row for a pull request with a description and a head
     /// branch too long for its line.
     PrDescribed,
-    /// command-search.png: the palette over WORK with `supp` typed, the
-    /// cursor on Supplier Price Review.
+    /// command-search.png: the palette over Supplier Price Review with
+    /// `supp` typed, the cursor on it.
     Palette,
 }
 
 /// Every refresh state, with the shot it takes.
-const SHOTS: [(&str, Shot); 8] = [
+const SHOTS: [(&str, Shot); 7] = [
     ("refresh-solo", Shot::Solo),
     ("refresh-solo-changes", Shot::SoloChanges),
-    ("refresh-group", Shot::Group),
     ("refresh-pr-failing", Shot::PrFailing),
     ("refresh-pr-merged", Shot::PrMerged),
     ("refresh-pr-none", Shot::PrNone),
@@ -64,7 +60,7 @@ pub(super) fn handles(state: &str) -> bool {
 impl Shot {
     fn look(self) -> Look {
         match self {
-            Shot::Group | Shot::Palette => Look::Group,
+            Shot::Palette => Look::Asking,
             Shot::Solo
             | Shot::SoloChanges
             | Shot::PrFailing
@@ -81,13 +77,13 @@ impl Shot {
             Shot::PrMerged => Pr::Merged,
             Shot::PrNone => Pr::None,
             Shot::PrDescribed => Pr::Described,
-            Shot::Solo | Shot::SoloChanges | Shot::Group | Shot::Palette => Pr::Open,
+            Shot::Solo | Shot::SoloChanges | Shot::Palette => Pr::Open,
         }
     }
 
-    /// Whether the scene opens the panel; not on a Group.
+    /// Whether the scene opens the panel; not under the palette.
     fn panel(self) -> bool {
-        !matches!(self, Shot::Group | Shot::Palette)
+        !matches!(self, Shot::Palette)
     }
 }
 
@@ -147,12 +143,7 @@ pub(super) fn build(state: &str) -> (Scene, Setup) {
         ],
     };
     let setup: Setup = Box::new(move |view, window, cx| {
-        // group.png draws Complete BB supplier list `done`: a finish that
-        // is on screen while the window has the operator's focus is seen at
-        // once (ADR 0015's seen rule), so the operator reads that word only
-        // while the window is in the background. The shot is taken so.
-        let active = shot != Shot::Group;
-        prepare(view, branches, active, window, cx);
+        prepare(view, branches, window, cx);
         if shot.panel() {
             view.open_panel(cast.memory, cx);
         }
@@ -169,11 +160,10 @@ pub(super) fn build(state: &str) -> (Scene, Setup) {
 
 /// What every refresh view shares: the CLIs it
 /// found, the checkouts' branches (before git's own reads land), no toast for a request that was standing when the
-/// window opened, and a window that has the keyboard when `active`.
+/// window opened, and a window that has the keyboard.
 fn prepare(
     view: &mut CockpitView,
     branches: Vec<(ThreadId, BranchStatus)>,
-    active: bool,
     window: &mut Window,
     cx: &mut Context<CockpitView>,
 ) {
@@ -194,9 +184,7 @@ fn prepare(
     window.clear_notifications(cx);
     view.ring_alerts(cx);
     view.needs_you.clear_toasts();
-    if active {
-        window.activate_window();
-    }
+    window.activate_window();
 }
 
 /// The Changes tab's block for `name` unfolded, as solo-changes.png draws

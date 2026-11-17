@@ -1,0 +1,37 @@
+[
+  {
+    "path": "/private/tmp/ferrite-interrogate-parity-a",
+    "removed": false,
+    "reason": "working files retained"
+  },
+  {
+    "path": "/private/tmp/ferrite-interrogate-parity-b",
+    "removed": false,
+    "reason": "working files retained"
+  },
+  {
+    "path": "/private/tmp/ferrite-parity-attachments",
+    "removed": true,
+    "error": ""
+  },
+  {
+    "path": "/private/tmp/ferrite-parity-connections",
+    "removed": true,
+    "error": ""
+  },
+  {
+    "path": "/private/tmp/ferrite-parity-operations",
+    "removed": true,
+    "error": ""
+  },
+  {
+    "path": "/private/tmp/ferrite-parity-transport",
+    "removed": true,
+    "error": ""
+  },
+  {
+    "path": "/private/tmp/ferrite-parity-verification",
+    "removed": true,
+    "error": ""
+  }
+]

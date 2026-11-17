@@ -18,8 +18,9 @@ use crate::api::{
     ThreadInfo, Until, Wait,
 };
 use crate::drive::Action;
-use crate::engine::Launch;
+use crate::engine::{Launch, ReadBack};
 use crate::protocol::{Done, Op, ProjectAction, ServerMessage};
+use crate::store::LoadError;
 use crate::workspace::{self, WorkspaceChoice};
 use crate::ThreadId;
 
@@ -142,7 +143,13 @@ impl Server {
                 }
                 None => Err(unknown_thread()),
             },
-            Method::AgentRead(params) => self.read(params),
+            Method::AgentRead(params) => match self.engine.read_back_later(params.thread) {
+                Some(read_back) => {
+                    self.read_back_off_pump(caller_id, id, params, read_back);
+                    return;
+                }
+                None => self.read(&params),
+            },
             Method::AgentInterrupt(params) => self.open_thread(params.thread).and_then(|thread| {
                 self.execute(Op::Interrupt { thread })?;
                 thread_result(&self.engine, thread)
@@ -331,6 +338,7 @@ impl Server {
             Method::WindowType(text) => return self.drive(caller_id, id, Action::Type(text)),
             Method::WindowClick(click) => return self.drive(caller_id, id, Action::Click(click)),
             Method::WindowFind(find) => return self.drive(caller_id, id, Action::Find(find)),
+            Method::WindowAttach(files) => return self.drive(caller_id, id, Action::Attach(files)),
             Method::WindowShot(shot) => return self.drive(caller_id, id, Action::Shot(shot)),
             Method::NotificationShow(params) => {
                 self.say(ServerMessage::Notification {
@@ -362,20 +370,8 @@ impl Server {
         self.engine.execute(&op).map_err(ApiError::from)
     }
 
-    /// Park a Thread as the window's park does (`Cockpit::park_thread`),
-    /// with the same two commands: a Group member leaves its Group first,
-    /// so no window's board keeps a seat for a Thread that went away.
-    /// The leave reaches the windows before the park, as each of a window's
-    /// commands does: published together, the Roster that closes the Thread
-    /// goes out ahead of the Groups it left, and a window between the two
-    /// holds a closed Thread in its Group, its focus still on it.
+    /// Park a Thread as the window's park does (`Cockpit::park_thread`).
     pub(super) fn park(&mut self, thread: ThreadId) -> Result<(), ApiError> {
-        if self.engine.groups().of(thread).is_some() {
-            self.execute(Op::Group {
-                change: (&crate::groups::GroupChange::Leave { thread }).into(),
-            })?;
-            self.broadcast();
-        }
         self.execute(Op::Park { thread }).map(drop)
     }
 
@@ -503,18 +499,62 @@ impl Server {
         self.execute(op).map(|_| ())
     }
 
-    fn read(&mut self, params: AgentReadParams) -> Result<Value, ApiError> {
-        self.engine.hold(params.thread);
+    /// A held Thread's transcript, read where it is.
+    fn read(&self, params: &AgentReadParams) -> Result<Value, ApiError> {
         let view = self
             .engine
             .thread(params.thread)
             .ok_or_else(unknown_thread)?;
-        let text = crate::transcript::plain_text(view.transcript().blocks());
-        let lines: Vec<&str> = text.lines().collect();
-        let from = lines
-            .len()
-            .saturating_sub(params.lines.unwrap_or(READ_LINES));
-        Ok(json!({ "thread": params.thread, "text": lines[from..].join("\n") }))
+        Ok(read_answer(params, view.transcript()))
+    }
+
+    /// A let-go Thread's transcript, read back from its log on a thread of
+    /// its own while the pump goes on serving every window and Session.
+    fn read_back_off_pump(
+        &mut self,
+        caller: CallerId,
+        request: String,
+        params: AgentReadParams,
+        read_back: std::io::Result<ReadBack>,
+    ) {
+        let (answer, answered) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            crate::spawn::serve_the_operator();
+            let read = read_back.map_err(LoadError::Io).and_then(ReadBack::read);
+            let reply = match &read {
+                Ok(read) => Ok(read_answer(&params, read.view().main().transcript())),
+                Err(error) => Err(ApiError::new(
+                    Code::Failed,
+                    format!("the Thread's log could not be read back: {error}"),
+                )),
+            };
+            let _ = answer.send((reply, read.ok()));
+        });
+        self.api_reads.push((caller, request, answered));
+    }
+
+    /// Reply to each read off the pump that finished, and hold what it read.
+    pub(super) fn answer_api_reads(&mut self) {
+        let mut answered = Vec::new();
+        self.api_reads
+            .retain(|(caller, request, answer)| match answer.try_recv() {
+                Ok((reply, read)) => {
+                    answered.push((*caller, request.clone(), reply, read));
+                    false
+                }
+                Err(std::sync::mpsc::TryRecvError::Empty) => true,
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                    let ended = ApiError::new(Code::Failed, "the read ended");
+                    answered.push((*caller, request.clone(), Err(ended), None));
+                    false
+                }
+            });
+        for (caller, request, reply, read) in answered {
+            if let Some(read) = read {
+                self.engine.adopt(read);
+            }
+            self.api.reply(caller, request, reply);
+        }
     }
 
     /// A Decision is named by the id the provider gave it, as
@@ -546,6 +586,16 @@ impl Server {
         self.answered.insert((thread, handle), caller);
         thread_result(&self.engine, thread)
     }
+}
+
+/// `agent.read`'s answer: the last lines of `transcript` as plain text.
+fn read_answer(params: &AgentReadParams, transcript: &crate::transcript::Transcript) -> Value {
+    let text = crate::transcript::plain_text(transcript.blocks());
+    let lines: Vec<&str> = text.lines().collect();
+    let from = lines
+        .len()
+        .saturating_sub(params.lines.unwrap_or(READ_LINES));
+    json!({ "thread": params.thread, "text": lines[from..].join("\n") })
 }
 
 /// Who a request comes from. A call that names no Thread is the

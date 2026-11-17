@@ -43,6 +43,7 @@ pub struct TextViewStyle {
     list_hang: Option<ListHang>,
     list_item_gap: Pixels,
     link_underline_on_hover: bool,
+    link_focus: Option<Hsla>,
     numeric_columns_right: bool,
     image: StyleRefinement,
 }
@@ -118,6 +119,7 @@ impl PartialEq for TextViewStyle {
             && self.list_hang == other.list_hang
             && self.list_item_gap == other.list_item_gap
             && self.link_underline_on_hover == other.link_underline_on_hover
+            && self.link_focus == other.link_focus
             && self.numeric_columns_right == other.numeric_columns_right
             && self.image == other.image
     }
@@ -181,6 +183,7 @@ impl TextViewStyle {
             list_hang: None,
             list_item_gap: px(0.),
             link_underline_on_hover: false,
+            link_focus: None,
             numeric_columns_right: false,
             image: StyleRefinement::default(),
         }
@@ -331,6 +334,13 @@ impl TextViewStyle {
         self
     }
 
+    /// Sets the ring round a link the keyboard has reached. `None` (the
+    /// default) rings it in the link's own ink.
+    pub fn with_link_focus(mut self, color: Option<Hsla>) -> Self {
+        self.link_focus = color;
+        self
+    }
+
     /// Draws a link's underline only while the pointer is on the link
     /// (`true`); `false` (the default) underlines every link at rest.
     pub fn with_link_underline_on_hover(mut self, on_hover: bool) -> Self {
@@ -453,6 +463,12 @@ impl TextViewStyle {
     /// Whether a link is underlined only under the pointer.
     pub fn link_underline_on_hover(&self) -> bool {
         self.link_underline_on_hover
+    }
+
+    /// The ring drawn round the link the keyboard is on; `None` (the
+    /// default) rings it in the link's own ink.
+    pub fn link_focus(&self) -> Option<Hsla> {
+        self.link_focus
     }
 
     /// Whether all-number table columns right-align by default.

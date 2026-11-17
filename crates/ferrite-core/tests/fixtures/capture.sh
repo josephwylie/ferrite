@@ -2,7 +2,7 @@
 # Record the `claude` CLI's stream-json wire protocol into committed fixtures.
 #
 # The fixtures next to this script are the protocol contract: the replay tests
-# in `tests/claude_session.rs` and `src/providers/claude/wire.rs` assert against
+# in `tests/it/claude_session.rs` and `src/providers/claude/wire.rs` assert against
 # them, so a vendor release that changes the wire breaks the build loudly. Re-run
 # this after a CLI upgrade, diff the result, and fix the parser — never the
 # other way round.

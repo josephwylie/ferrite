@@ -31,7 +31,7 @@ impl Server {
         owner: crate::browser::Owner,
         lease: crate::browser::Lease,
         capture: crate::browser_annotations::Capture,
-        png: &crate::protocol::WirePng,
+        png: Option<&crate::protocol::WirePng>,
     ) -> Result<Option<Done>, WireError> {
         use crate::browser_annotations::{self, MAX_CAPTURE_BYTES};
         use base64::Engine as _;
@@ -54,17 +54,22 @@ impl Server {
         {
             return Err(failed("The page changed; capture it again"));
         }
-        if png.base64.len() > ((MAX_CAPTURE_BYTES + 2) / 3) * 4 {
-            return Err(failed(
-                "The browser capture is too large; use a smaller viewport and capture again",
-            ));
-        }
-        let bytes = base64::engine::general_purpose::STANDARD
-            .decode(&png.base64)
-            .map_err(|_| failed("The browser capture could not be read; capture the page again"))?;
-        if browser_annotations::png_size(&bytes).map_err(failed)? != (png.width, png.height) {
-            return Err(failed("The page geometry changed; capture it again"));
-        }
+        let bytes = if let Some(png) = png {
+            if png.base64.len() > ((MAX_CAPTURE_BYTES + 2) / 3) * 4 {
+                return Err(failed(
+                    "The browser capture is too large; use a smaller viewport and capture again",
+                ));
+            }
+            let bytes = base64::engine::general_purpose::STANDARD
+                .decode(&png.base64)
+                .map_err(|_| failed("The browser capture could not be read; capture the page again"))?;
+            if browser_annotations::png_size(&bytes).map_err(failed)? != (png.width, png.height) {
+                return Err(failed("The page geometry changed; capture it again"));
+            }
+            Some(bytes)
+        } else {
+            None
+        };
         if self
             .browser_captures
             .iter()
@@ -196,7 +201,12 @@ impl Server {
                     .browser_pending
                     .remove(&request)
                     .expect("selected pending command");
-                let _ = pending.reply.send(Err("The operator closed or reloaded this tab. The previous action's completion is uncertain and may already have applied; observe the page before continuing and do not retry writes automatically".into()));
+                let error = if pending.uncertain() {
+                    "The operator closed or reloaded this tab. The previous action's completion is uncertain and may already have applied; observe the page before continuing and do not retry writes automatically"
+                } else {
+                    "The operator closed or reloaded this tab before dispatch authorization; no action was dispatched"
+                };
+                let _ = pending.reply.send(Err(error.into()));
             }
             if self
                 .browser_uncertain
@@ -303,8 +313,21 @@ pub(super) struct Pending {
     observation: bool,
     refreshes: bool,
     recovering: bool,
+    phase: Phase,
     deadline: Instant,
     reply: std::sync::mpsc::SyncSender<Result<crate::browser::Response, String>>,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Phase {
+    Queued,
+    Authorized,
+}
+
+impl Pending {
+    fn uncertain(&self) -> bool {
+        self.recovering || (self.phase == Phase::Authorized && !self.observation)
+    }
 }
 
 impl Server {
@@ -408,6 +431,10 @@ impl Server {
             let Ok(request) = self.browser_requests.0.try_recv() else {
                 break;
             };
+            if crate::clock::instant() >= request.deadline {
+                let _ = request.reply.send(Err("Browser request expired before dispatch authorization; no action was dispatched".into()));
+                continue;
+            }
             let thread = request.thread;
             let owner = match self.browser_owner(thread) {
                 Ok(owner) => owner,
@@ -442,6 +469,9 @@ impl Server {
                     control,
                 } => {
                     let prepare = (|| {
+                        if !self.clients.get(&owner.window).is_some_and(|client| client.browser_dispatch) {
+                            return Err("Update the owning Ferrite window to control this browser safely; it does not support dispatch authorization".into());
+                        }
                         if !control.supported() {
                             return Err("Unsupported browser control or wait state".into());
                         }
@@ -510,7 +540,8 @@ impl Server {
                                     refreshes: matches!(control, crate::browser::Control::Observe)
                                         && !self.browser.operator_active(thread),
                                     recovering,
-                                    deadline: Instant::now() + Duration::from_secs(45),
+                                    phase: Phase::Queued,
+                                    deadline: request.deadline,
                                     reply: request.reply,
                                 },
                             );
@@ -524,6 +555,7 @@ impl Server {
                                     document,
                                     revision,
                                     control,
+                                    dispatch: Some(self.engine.boot_id().into()),
                                 },
                             );
                             continue;
@@ -533,17 +565,22 @@ impl Server {
             };
             let _ = request.reply.send(result);
         }
+        self.expire_browser_requests();
+    }
+
+    fn expire_browser_requests(&mut self) {
+        let now = crate::clock::instant();
         let expired: Vec<_> = self
             .browser_pending
             .iter()
-            .filter(|(_, pending)| Instant::now() >= pending.deadline)
+            .filter(|(_, pending)| now >= pending.deadline)
             .map(|(id, _)| *id)
             .collect();
         for id in expired {
             let pending = self.browser_pending.remove(&id).expect("pending request");
-            // A dispatched write may have happened even though its reply did
-            // not arrive. Hold its page until a fresh observation resolves it.
-            if !pending.observation || pending.recovering {
+            let uncertain = pending.uncertain();
+            if uncertain {
+                self.browser_observed.remove(&pending.thread);
                 self.browser_uncertain.insert(pending.thread, pending.lease);
             } else {
                 let _ = self
@@ -551,20 +588,85 @@ impl Server {
                     .release(pending.thread, pending.owner, pending.lease);
             }
             self.publish_browser(pending.thread, None);
-            let _ = pending.reply.send(Err("Browser request timed out; action completion may be uncertain. Observe the page before continuing; do not retry writes automatically".into()));
+            let error = if uncertain {
+                "Browser request timed out after dispatch authorization; action completion may be uncertain. Observe the page before continuing; do not retry writes automatically"
+            } else if pending.phase == Phase::Queued {
+                "Browser request expired before dispatch authorization; no action was dispatched"
+            } else {
+                "Browser observation timed out"
+            };
+            let _ = pending.reply.send(Err(error.into()));
         }
+    }
+
+    fn browser_control_current(&self, pending: &Pending) -> Result<(), String> {
+        let Pending { thread, owner, document, revision, lease, observation, .. } = pending;
+        self.browser.check_owner(*thread, *owner)?;
+        self.browser.check_document(*thread, *document)?;
+        self.browser.check_exclusive_command(*thread, *owner, *lease)?;
+        if self.browser.state(*thread).active != Some(document.tab) {
+            return Err("The selected tab changed; select and observe it before continuing".into());
+        }
+        if *revision != self.browser.operator_revision(*thread)
+            || (!observation && self.browser.operator_active(*thread))
+        {
+            return Err("The operator interacted with this page; observe fresh state before continuing".into());
+        }
+        if !observation && self.browser_uncertain.contains_key(thread) {
+            return Err("The previous action is uncertain; observe the page before continuing and do not retry writes automatically".into());
+        }
+        Ok(())
+    }
+
+    pub(super) fn dispatch_browser(
+        &mut self,
+        client: ClientId,
+        request: u64,
+        boot_id: &str,
+        thread: ThreadId,
+        owner: crate::browser::Owner,
+        document: crate::browser::Document,
+        revision: u64,
+    ) -> Result<Option<Done>, WireError> {
+        if boot_id != self.engine.boot_id() {
+            return Err(failed("The browser request belongs to a previous server; observe fresh state"));
+        }
+        self.expire_browser_requests();
+        self.browser_owned(client, thread, owner)?;
+        if !self.clients.get(&client).is_some_and(|client| client.browser_dispatch) {
+            return Err(failed("Update Ferrite to authorize browser dispatch safely"));
+        }
+        let pending = self.browser_pending.get(&request)
+            .filter(|pending| pending.thread == thread && pending.owner == owner
+                && pending.document == document && pending.revision == revision)
+            .ok_or_else(|| failed("Browser request expired or was cancelled before dispatch authorization"))?;
+        if pending.phase != Phase::Queued {
+            return Err(failed("Browser dispatch was already authorized; do not replay it"));
+        }
+        self.browser_control_current(pending).map_err(failed)?;
+        let remaining_ms = pending.deadline.saturating_duration_since(crate::clock::instant()).as_millis() as u64;
+        if remaining_ms == 0 {
+            return Err(failed("Browser request expired before dispatch authorization"));
+        }
+        self.browser_pending.get_mut(&request).expect("checked request").phase = Phase::Authorized;
+        Ok(Some(Done::BrowserDispatch { remaining_ms }))
     }
 
     pub(super) fn answer_browser(
         &mut self,
         client: ClientId,
         request: u64,
+        boot_id: Option<&str>,
         thread: ThreadId,
         owner: crate::browser::Owner,
         document: crate::browser::Document,
         revision: u64,
         outcome: crate::browser::Outcome,
     ) {
+        if boot_id != Some(self.engine.boot_id()) {
+            return;
+        }
+        self.expire_browser_requests();
         let Some(pending) = self.browser_pending.get(&request) else {
             return;
         };
@@ -580,15 +682,20 @@ impl Server {
             .browser_pending
             .remove(&request)
             .expect("checked request");
-        let current = self.browser.check_owner(thread, owner)
-            .and_then(|_| self.browser.check_document(thread, document))
-            .and_then(|_| self.browser.check_exclusive_command(thread, owner, pending.lease))
-            .and_then(|_| if self.browser.state(thread).active == Some(document.tab) { Ok(()) } else { Err("The selected tab changed; select and observe it before continuing".into()) })
-            .and_then(|_| if revision == self.browser.operator_revision(thread) { Ok(()) }
-                else { Err("The operator interacted with this page; observe fresh state before continuing".into()) });
+        let current = self.browser_control_current(&pending);
+        let outcome = if pending.phase == Phase::Queued {
+            match outcome {
+                crate::browser::Outcome::Failed { .. } => outcome,
+                _ => crate::browser::Outcome::Failed {
+                    error: "Browser control ended before dispatch authorization; no action was dispatched".into(),
+                },
+            }
+        } else {
+            outcome
+        };
         let refreshes = pending.refreshes && !self.browser.operator_active(thread);
         let (mut result, uncertain) = match (current, outcome) {
-            (Err(error), _) => (Err(error), !pending.observation || pending.recovering),
+            (Err(error), _) => (Err(error), pending.uncertain()),
             (Ok(()), crate::browser::Outcome::Success { value }) => {
                 let mut response = self.browser_response(thread, Some(value));
                 if refreshes {
@@ -620,7 +727,7 @@ impl Server {
         if let Ok(response) = &mut result {
             response.state = self.browser.state(thread);
         }
-        if pending.reply.send(result).is_err() && !pending.observation {
+        if pending.reply.send(result).is_err() && pending.phase == Phase::Authorized && !pending.observation {
             // The native action finished, but its caller timed out or went
             // away before receiving completion. Keep that write uncertain
             // from the caller's perspective; an old receipt cannot retry it.
@@ -660,7 +767,12 @@ impl Server {
         for id in gone {
             let pending = self.browser_pending.remove(&id).expect("pending request");
             self.browser_uncertain.remove(&pending.thread);
-            let _ = pending.reply.send(Err("Conversation browser owner disconnected; action completion may be uncertain. Reopen this Thread and observe its current page before continuing".into()));
+            let error = if pending.uncertain() {
+                "Conversation browser owner disconnected; action completion may be uncertain. Reopen this Thread and observe its current page before continuing"
+            } else {
+                "Conversation browser owner disconnected before dispatch authorization; no action was dispatched"
+            };
+            let _ = pending.reply.send(Err(error.into()));
         }
         let detached = self.browser.detach_window(window);
         for thread in detached {

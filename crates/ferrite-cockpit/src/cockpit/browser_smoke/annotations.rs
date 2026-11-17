@@ -170,8 +170,8 @@ pub(super) fn history(view:&Entity<CockpitView>,window:&mut Window,cx:&mut App,o
     let Some((thread,annotations))=restored else{return Ok(false);};
     if annotations!=expected { return Err("Restarted history changed the original Browser annotation context".into()); }
     for annotation in &annotations {
-        let directory=annotation.original().parent().and_then(Path::parent).ok_or("missing retained image directory")?;
-        ferrite_core::browser_annotations::read_retained(directory,annotation.original_hash()).map_err(|e|e.to_string())?;
+        let directory=annotation.original().ok_or("missing retained screenshot")?.parent().and_then(Path::parent).ok_or("missing retained image directory")?;
+        ferrite_core::browser_annotations::read_retained(directory,annotation.original_hash().ok_or("missing retained screenshot hash")?).map_err(|e|e.to_string())?;
     }
     view.update(cx,|view,cx|view.focus_thread(thread,cx));
     window.draw(cx).clear(cx);

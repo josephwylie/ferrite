@@ -2,6 +2,8 @@
 //! resolution live here; Pane focus/errors and Thread creation do not.
 
 use std::io;
+
+use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
 use crate::engine::ProviderChoice;
@@ -15,7 +17,7 @@ use crate::ModelInfo;
 /// branch, one of the repo's existing worktrees, or a fresh worktree. An
 /// existing worktree carries the path git lists it at and the branch the
 /// row and chip call it by; a new one has no path until bootstrap.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum DraftTarget {
     Main,
     Branch { name: String },
@@ -26,7 +28,7 @@ pub enum DraftTarget {
 
 /// The pending binding, without a Thread or Session. Callers can read the
 /// choices but change them through the rules that keep them consistent.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct DraftBinding {
     provider: ProviderChoice,
     effort: Option<String>,

@@ -19,10 +19,11 @@
 
 use super::*;
 use ferrite_core::{McpServer, McpStatus};
+use ferrite_ui::motion::{fold_body, settled, FOLD};
 
 impl CockpitView {
     /// The sections (see the module doc).
-    pub(super) fn panel_sections(
+    pub(in crate::cockpit) fn panel_sections(
         &self,
         thread: ThreadId,
         window: &mut Window,
@@ -50,13 +51,16 @@ impl CockpitView {
                     .flex()
                     .flex_col()
                     .child(panel_section_head("panel-context-head", "Context"))
-                    .child(div().debug_selector(|| "panel-context".into()).child(
-                        pane::context_usage(
-                            usage,
-                            transcript.context_details(),
-                            transcript.usage_details(),
+                    .child(
+                        div().debug_selector(|| "panel-context".into()).child(
+                            pane::context_usage(
+                                usage,
+                                transcript.context_details(),
+                                transcript.usage_details(),
+                            )
+                            .into_any_element(),
                         ),
-                    ))
+                    )
                     .children(
                         error.map(|error| pane::card_error(error).id("session-control-error")),
                     ),
@@ -108,7 +112,8 @@ impl CockpitView {
         }
         if let (Some(facts), Some(branch)) = (self.facts.get(thread), self.thread_branch(thread)) {
             let meta = branch_meta(&branch, facts);
-            section = section.child(detail_row("panel-branch", icons::BRANCH, branch, meta));
+            let row = detail_row("panel-branch", icons::BRANCH, branch, meta);
+            section = section.child(div().child(row));
         }
         section
     }
@@ -194,7 +199,6 @@ pub(super) fn detail_row(
         )
         .child(
             div()
-                .flex_shrink_0()
                 .max_w_full()
                 .min_w_0()
                 .truncate()
@@ -217,7 +221,7 @@ pub(super) fn detail_row(
 /// Connectors (Claude's): its head, `Connectors ▸` with `N connected` at
 /// the right, folds its servers' lines open and shut — folded at first,
 /// the count saying what matters. The fold is the panel's own, kept while
-/// it shows.
+/// it shows, and eases open and shut (`motion::fold_body`).
 fn connectors(servers: &[McpServer], window: &mut Window, cx: &mut gpui::App) -> Div {
     use ferrite_ui::theme::*;
     let open = window.use_keyed_state("panel-connectors-open", cx, |_, _| false);
@@ -264,18 +268,26 @@ fn connectors(servers: &[McpServer], window: &mut Window, cx: &mut gpui::App) ->
                 cx.notify();
             })
         });
-    div()
-        .flex()
-        .flex_col()
-        .child(head)
-        .when(unfolded, |section| {
-            section.children(
-                servers
-                    .iter()
-                    .enumerate()
-                    .map(|(index, server)| connector_row(index, server)),
-            )
-        })
+    let rows = div().flex().flex_col().children(
+        servers
+            .iter()
+            .enumerate()
+            .map(|(index, server)| connector_row(index, server)),
+    );
+    // The lines are read-only, so a fold still shutting has nothing to take
+    // a press; it draws until it is shut.
+    div().flex().flex_col().child(head).child(settled(
+        "panel-connectors-fold",
+        unfolded,
+        FOLD,
+        move |shown| {
+            div().children((shown > 0.0).then(|| {
+                div()
+                    .debug_selector(|| "panel-connectors-body".into())
+                    .child(fold_body("panel-connectors-fold-body", shown, rows))
+            }))
+        },
+    ))
 }
 
 /// An MCP server's line: its name, and how it stands in the lexicon's

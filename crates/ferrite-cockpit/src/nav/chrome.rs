@@ -15,13 +15,13 @@ use ferrite_ui::project_badge::project_badge;
 use ferrite_ui::theme::*;
 use ferrite_ui::{components, motion};
 
-use super::{icon_button, NavTooltip, ThreadRow, INNER_W};
+use super::{icon_button, NavTooltip, ThreadRow};
 
 // --------------------------------------------------------- the search row
 
 /// The fixed row under the head (T3's `SidebarThreadHeader`): the field
-/// taking the slack, then the 28px buttons, 4px apart, the column's inset
-/// at the sides and below.
+/// taking the slack, a 4px gap, then the grouped 28px buttons. The
+/// parent supplies the horizontal inset.
 pub fn search_row(field: impl IntoElement, buttons: Vec<AnyElement>) -> Div {
     div()
         .debug_selector(|| "nav-search-row".into())
@@ -30,10 +30,9 @@ pub fn search_row(field: impl IntoElement, buttons: Vec<AnyElement>) -> Div {
         .flex_shrink_0()
         .items_center()
         .gap(px(NAV_SEARCH_ROW_GAP))
-        .px(px(NAV_COL_PAD))
         .pb(px(NAV_COL_PAD))
         .child(field)
-        .children(buttons)
+        .child(div().flex().flex_shrink_0().items_center().children(buttons))
 }
 
 /// The inline search field: 32px, radius 6, the 16px glyph in the icon
@@ -121,7 +120,7 @@ pub fn filter_button(project: Option<&str>) -> Stateful<Div> {
                     .flex()
                     .items_center()
                     .justify_center()
-                    .bg(paint::SIDEBAR)
+                    .bg(NAV_BACKGROUND)
                     .rounded(px(R_CONTROL))
                     .child(badge),
             )
@@ -177,6 +176,7 @@ pub fn result_row(row: &ThreadRow, age: SharedString, lit: bool) -> Stateful<Div
     div()
         .id(("nav-result", thread as usize))
         .debug_selector(move || selector.to_string())
+        .relative()
         .flex()
         .flex_row()
         .items_center()
@@ -223,7 +223,6 @@ pub fn foot(buttons: Vec<AnyElement>, notice: Option<AnyElement>, end: Vec<AnyEl
         .flex_row()
         .flex_shrink_0()
         .items_center()
-        .px(px(NAV_COL_PAD))
         .pt(px(NAV_FOOT_PAD_TOP))
         .pb(px(NAV_FOOT_PAD_BOTTOM))
         .children(buttons)
@@ -281,7 +280,7 @@ pub struct HoverLines {
 /// card, aligned to its top, 4px away, at most 320px wide, in the glass
 /// face (`menu::glass`). The Title, a line per fact, then the pull
 /// request under a rule.
-pub fn hover_card(row: &ThreadRow, lines: HoverLines) -> AnyElement {
+pub fn hover_card(row: &ThreadRow, lines: HoverLines, width: f32) -> AnyElement {
     let body = ferrite_ui::menu::glass()
         .debug_selector(|| "nav-hover-card".into())
         .flex()
@@ -341,7 +340,7 @@ pub fn hover_card(row: &ThreadRow, lines: HoverLines) -> AnyElement {
             deferred(
                 anchored()
                     .position_mode(gpui::AnchoredPositionMode::Local)
-                    .position(point(px(INNER_W + NAV_HOVER_CARD_GAP), px(0.)))
+                    .position(point(px(width - 2.0 * NAV_COL_PAD + NAV_HOVER_CARD_GAP), px(0.)))
                     .child(body),
             )
             .with_priority(1),

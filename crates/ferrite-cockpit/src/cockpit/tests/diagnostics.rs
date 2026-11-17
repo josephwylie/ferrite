@@ -28,8 +28,8 @@ fn an_unreadable_settings_file_is_never_saved_over(cx: &mut TestAppContext) {
     assert_eq!(std::fs::read(&path).unwrap(), b"not json");
 }
 
-/// Settings › About's Diagnostics puts the facts and the log's end on the
-/// clipboard.
+/// Settings › About's Diagnostics puts the facts and the end of both logs
+/// on the clipboard.
 #[gpui::test]
 fn copy_diagnostics_puts_the_report_on_the_clipboard(cx: &mut TestAppContext) {
     let (core, _fake) = cockpit("copy-diagnostics", 1);
@@ -44,8 +44,9 @@ fn copy_diagnostics_puts_the_report_on_the_clipboard(cx: &mut TestAppContext) {
         .unwrap();
     assert!(report.starts_with("Ferrite diagnostics\n"), "{report}");
     assert!(report.contains("Open Threads: 1\n"), "{report}");
-    assert!(report.contains("--- log, last"), "{report}");
-    view.read_with(cx, |view, _| {
-        assert_eq!(view.settings_copied, Some("Diagnostics"))
+    assert!(report.contains("--- ferrite.log, last"), "{report}");
+    assert!(report.contains("--- server.log, last"), "{report}");
+    view.read_with(cx, |view, cx| {
+        assert_eq!(view.settings_view.read(cx).copied, Some("Diagnostics"))
     });
 }

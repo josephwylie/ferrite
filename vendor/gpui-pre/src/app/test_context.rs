@@ -337,6 +337,11 @@ impl TestAppContext {
         self.test_platform.simulate_new_path_selection(select_path);
     }
 
+    /// Simulates the system's Reduce Motion setting changing.
+    pub fn simulate_system_reduce_motion(&self, reduced: bool) {
+        self.test_platform.simulate_system_reduce_motion(reduced);
+    }
+
     /// Simulates responding to a `prompt_for_paths` ("Open") dialog.
     pub fn simulate_path_prompt_response(
         &self,

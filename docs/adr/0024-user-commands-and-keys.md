@@ -1,5 +1,5 @@
 ---
-status: accepted
+status: accepted, amended 2026-11-17 (no wall keys)
 date: 2026-10-15
 ---
 
@@ -105,3 +105,9 @@ a key that collides with their muscle memory.
 - The key table is a process-wide value rather than a pure function of the
   platform. Tests keep using `keymap::bindings(platform)` and
   `with_user_keys` directly and never install a custom table.
+
+## Amendment (2026-11-17): no wall keys
+
+The wall is gone (ADR 0033's 2026-11-17 amendment), and its `y`/`n`/`a`
+and digit keys with it. Only the no-text-field root, the Review slot and a
+Decision take plain keys.

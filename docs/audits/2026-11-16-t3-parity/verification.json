@@ -1,0 +1,93 @@
+{
+  "base_commit": "f7884cffe3a1cc26434f2778598f371f81fad294",
+  "source_diff_sha256": "fba8d0545fa2f8daae7bfa562424814d23ce8fc2e374aa0427dd732991a443fa",
+  "reference_commit": "4da2bc520c38cd6b36014d2888774168fbf4c77f",
+  "final_checks": [
+    {
+      "scope": "PR surface, routing and read behavior",
+      "command": "cargo nextest run -p ferrite-cockpit -E 'test(cockpit::tests::pr::) | test(cockpit::tests::prs::) | test(cockpit::tests::pr_reads::)'",
+      "passed": 36
+    },
+    {
+      "scope": "Final explicit read mismatch state",
+      "command": "cargo nextest run -p ferrite-cockpit -E 'test(cockpit::tests::pr_reads::)'",
+      "passed": 9
+    },
+    {
+      "scope": "Citation flow and source navigation",
+      "command": "cargo nextest run -p ferrite-cockpit -E 'test(cockpit::tests::citing::)'",
+      "passed": 17,
+      "nextest_id": "dacc846f-dcb0-409a-af2b-fb787d7b33a3"
+    },
+    {
+      "scope": "Final styling, responsive context and annotation interactions",
+      "command": "cargo nextest run -p ferrite-cockpit -p ferrite-pane -E 'test(cockpit::tests::details::inline_details_persist) | test(cockpit::tests::citing::cite_opens_an_anchored) | test(annotation_editor_)'",
+      "passed": 4,
+      "nextest_id": "e98a410b-6d55-4b8f-af99-94ba5b9cc661"
+    },
+    {
+      "scope": "Typecheck",
+      "command": "cargo check --locked -p ferrite --features headless,visual-reference",
+      "result": "passed"
+    },
+    {
+      "scope": "Capture build",
+      "command": "cargo build --locked -p ferrite --features headless,visual-reference",
+      "result": "passed"
+    },
+    {
+      "scope": "Production reader verification build",
+      "command": "cargo build --locked -p ferrite --features headless",
+      "result": "passed"
+    },
+    {
+      "scope": "Corrected native annotation layout and interaction",
+      "command": "cargo nextest run -p ferrite-pane -p ferrite-cockpit -E 'test(annotation_editor_) | test(browser_annotation_)'",
+      "passed": 6,
+      "nextest_id": "adbab413-6cc5-4b0a-97f1-1612aa296ea8"
+    },
+    {
+      "scope": "Typecheck after annotation correction",
+      "command": "cargo check --locked -p ferrite --features headless,visual-reference",
+      "result": "passed"
+    },
+    {
+      "scope": "Native CEF bundle after correction",
+      "command": "scripts/install-app.sh --bundle-only",
+      "result": "passed"
+    }
+  ],
+  "initial_scoped_run": {
+    "tests": 162,
+    "passed": 153,
+    "failed": 9,
+    "note": "Failures were investigated and corrected through the narrow checks above; no full suite ran."
+  },
+  "e2e": {
+    "requested_pr": 308,
+    "pr_loaded": true,
+    "conversation_visible": true,
+    "citation_comment_delivered": true,
+    "quote_delivered": true,
+    "provider": "local fixture; no remote model"
+  },
+  "temporary_warmed_worktree_removed": true,
+  "fixture_processes_stopped": true,
+  "release_installed": false,
+  "merged": false,
+  "free_disk_gib_at_finish": 9.6,
+  "performance": "Source reviewed for bounded work. No measured regression or speed claim.",
+  "live_annotation": {
+    "capture_url": "http://127.0.0.1:60270/",
+    "selection_tag": "h1",
+    "selection_name": "Overview",
+    "comment_saved": true,
+    "one_pen_stroke_saved": true,
+    "original_sha256_verified": true,
+    "native_attach_review_and_send_recorded": true,
+    "fixture_provider_delivery": false,
+    "provider_routing_incident": "GUI auto-started server replaced the fixture PATH. Final send used host Claude. Turn interrupted after detection. It is not counted as a fixture-provider pass.",
+    "remote_turn_cost_usd": 0.41411869999999995,
+    "remote_turn_outcome": "interrupted"
+  }
+}

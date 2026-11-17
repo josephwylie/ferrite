@@ -19,8 +19,6 @@ fn factory_project(name: &str) -> (Harness, String, PathBuf) {
     (harness, project, repo)
 }
 
-/// Stop the Server as `ferrite server stop` does and serve its Store
-/// again: a restart.
 /// A call from inside `thread` that succeeds: its result.
 fn ok_in(
     harness: &Harness,
@@ -33,6 +31,10 @@ fn ok_in(
     said[0]["result"].clone()
 }
 
+/// Stop the Server as `ferrite server stop` does and serve its Store
+/// again: a restart.
+// A successor takes the store as `exec` hands it over (Unix).
+#[cfg(unix)]
 fn restart(harness: Harness) -> Harness {
     let mut control = attach(&harness.address);
     control.command(226, Op::Stop { when: When::Now });
@@ -205,17 +207,17 @@ fn a_worker_that_never_reports_is_prompted_once_then_needs_the_operator() {
     pump_until(&mut window, |window| {
         window.factory().needs_you(project_id) == 1
     });
-    let asked = window.take_asked();
-    assert!(
-        asked.iter().any(|asked| matches!(
-            asked,
-            crate::cockpit::Asked::TaskAlert {
-                status: crate::factory::Status::NeedsHuman,
-                ..
-            }
-        )),
-        "{asked:?}"
-    );
+    pump_until_asked(&mut window, |asked| {
+        asked.iter().any(|asked| {
+            matches!(
+                asked,
+                crate::cockpit::Asked::TaskAlert {
+                    status: crate::factory::Status::NeedsHuman,
+                    ..
+                }
+            )
+        })
+    });
     assert!(window.needs_you().is_empty(), "nothing in the Inbox");
 }
 

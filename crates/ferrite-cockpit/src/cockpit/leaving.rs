@@ -2,6 +2,7 @@
 //! an agent is working or a Decision waits: either would be cut off
 //! mid-turn. With nothing in flight it goes at once, as before. A window on
 //! the Server never asks: its agents keep running without it (ADR 0025).
+//! Unsaved file text that leaving cannot write is asked about too.
 
 use super::*;
 use gpui::{App, PromptLevel};
@@ -9,7 +10,7 @@ use gpui::{App, PromptLevel};
 impl CockpitView {
     /// ⌘Q: quit, asking first when work would be interrupted.
     pub fn request_quit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let warning = self.leaving_warning();
+        let warning = self.leaving_warning(cx);
         if self.confirm_leaving("Quit", warning, window, cx, |_, cx| cx.quit()) {
             cx.quit();
         }
@@ -17,7 +18,7 @@ impl CockpitView {
 
     /// The window's close button: the same question. `true` closes now.
     pub fn close_requested(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
-        let warning = self.leaving_warning();
+        let warning = self.leaving_warning(cx);
         self.confirm_leaving("Close", warning, window, cx, |window, _| {
             window.remove_window()
         })
@@ -61,13 +62,24 @@ impl CockpitView {
         false
     }
 
-    /// What leaving now would interrupt, or `None` when nothing would.
-    pub(crate) fn leaving_warning(&self) -> Option<String> {
-        if self.cockpit.server().is_some() {
-            return None;
+    /// What leaving now would interrupt or lose, or `None` when nothing
+    /// would.
+    pub(crate) fn leaving_warning(&self, cx: &App) -> Option<String> {
+        let agents = if self.cockpit.server().is_some() {
+            None
+        } else {
+            self.in_flight().map(|what| {
+                format!("{what}. Leaving stops them; their Threads reopen next launch.")
+            })
+        };
+        let files = self.unsaved_files_at_leaving(cx).map(|count| match count {
+            1 => "1 file has unsaved changes. Leaving discards them.".to_string(),
+            count => format!("{count} files have unsaved changes. Leaving discards them."),
+        });
+        match (agents, files) {
+            (Some(agents), Some(files)) => Some(format!("{agents} {files}")),
+            (warning, None) | (None, warning) => warning,
         }
-        self.in_flight()
-            .map(|what| format!("{what}. Leaving stops them; their Threads reopen next launch."))
     }
 
     /// Who is working and who waits on a Decision, or `None` when every

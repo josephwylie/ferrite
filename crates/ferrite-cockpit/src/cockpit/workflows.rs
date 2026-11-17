@@ -220,12 +220,12 @@ fn skill_matches(skill: &ferrite_core::SessionCommand, filter: &str) -> bool {
 /// A command the provider lists that is a skill.
 impl CockpitView {
     fn factory_project(&self) -> Option<ProjectId> {
-        self.factory_view.as_ref().map(|view| view.project)
+        self.factory().map(|view| view.project)
     }
 
     /// Switch the Factory view between its Board and its Workflows.
     pub(crate) fn factory_surface(&mut self, surface: Surface, cx: &mut Context<Self>) {
-        let Some(view) = self.factory_view.as_mut() else {
+        let Some(view) = self.factory_mut() else {
             return;
         };
         view.surface = surface;
@@ -246,7 +246,7 @@ impl CockpitView {
 
     /// The Workflow the surface shows: the one chosen, else the first.
     pub(crate) fn shown_workflow(&self) -> Option<&Workflow> {
-        let view = self.factory_view.as_ref()?;
+        let view = self.factory()?;
         let board = self.cockpit.factory();
         view.workflows
             .selected
@@ -259,7 +259,7 @@ impl CockpitView {
     /// The Step the inspector shows: the one chosen, else the first.
     pub(crate) fn shown_step(&self) -> Option<&Step> {
         let workflow = self.shown_workflow()?;
-        let chosen = self.factory_view.as_ref()?.workflows.step.as_deref();
+        let chosen = self.factory()?.workflows.step.as_deref();
         chosen
             .and_then(|id| workflow.draft.step(id))
             .or_else(|| workflow.draft.steps.first())
@@ -273,13 +273,13 @@ impl CockpitView {
     ) -> Option<Done> {
         let done = match self.cockpit.workflow(action) {
             Ok(done) => {
-                if let Some(view) = self.factory_view.as_mut() {
+                if let Some(view) = self.factory_mut() {
                     view.note = None;
                 }
                 done
             }
             Err(error) => {
-                if let Some(view) = self.factory_view.as_mut() {
+                if let Some(view) = self.factory_mut() {
                     view.note = Some(SharedString::from(error.to_string()));
                 }
                 None
@@ -302,7 +302,7 @@ impl CockpitView {
     }
 
     pub(crate) fn select_workflow(&mut self, workflow: WorkflowId, cx: &mut Context<Self>) {
-        if let Some(view) = self.factory_view.as_mut() {
+        if let Some(view) = self.factory_mut() {
             view.surface = Surface::Workflows;
             view.workflows.selected = Some(workflow);
             view.workflows.step = None;
@@ -314,7 +314,7 @@ impl CockpitView {
     }
 
     pub(crate) fn select_step(&mut self, step: StepId, cx: &mut Context<Self>) {
-        if let Some(view) = self.factory_view.as_mut() {
+        if let Some(view) = self.factory_mut() {
             view.workflows.step = Some(step);
             view.workflows.focused = None;
             view.workflows.approval = false;
@@ -326,7 +326,7 @@ impl CockpitView {
 
     /// Show the approval settings in the inspector.
     pub(crate) fn select_approval(&mut self, cx: &mut Context<Self>) {
-        if let Some(view) = self.factory_view.as_mut() {
+        if let Some(view) = self.factory_mut() {
             view.workflows.approval = true;
             view.workflows.focused = None;
         }
@@ -400,7 +400,7 @@ impl CockpitView {
             at.and_then(|at| steps.get(at.min(steps.len().saturating_sub(1))))
                 .map(|step| step.id.clone())
         });
-        if let Some(view) = self.factory_view.as_mut() {
+        if let Some(view) = self.factory_mut() {
             view.workflows.step = next;
         }
         self.ensure_fields(cx);
@@ -436,7 +436,7 @@ impl CockpitView {
             self.select_step(steps[to].clone(), cx);
         }
         // The chosen row stays in view: the head is the outline's first child.
-        if let Some(view) = self.factory_view.as_ref() {
+        if let Some(view) = self.factory() {
             view.workflows.outline_scroll.scroll_to_item(to + 1);
         }
     }
@@ -445,7 +445,7 @@ impl CockpitView {
     /// the draft when it is first made; one already made keeps what was
     /// typed in it.
     pub(crate) fn ensure_fields(&mut self, cx: &mut Context<Self>) {
-        let Some(view) = self.factory_view.as_ref() else {
+        let Some(view) = self.factory() else {
             return;
         };
         if view.surface != Surface::Workflows {
@@ -475,8 +475,7 @@ impl CockpitView {
         wanted.extend(self.start_fields());
         for (field, text) in wanted {
             let made = self
-                .factory_view
-                .as_ref()
+                .factory()
                 .is_some_and(|view| view.workflows.fields.contains_key(&field));
             if made {
                 continue;
@@ -493,7 +492,7 @@ impl CockpitView {
                 view.field_edited(&key, cx)
             })
             .detach();
-            if let Some(view) = self.factory_view.as_mut() {
+            if let Some(view) = self.factory_mut() {
                 view.workflows.fields.insert(field, composer);
             }
         }
@@ -505,8 +504,7 @@ impl CockpitView {
     /// What was typed in a field goes to the draft at once.
     fn field_edited(&mut self, field: &Field, cx: &mut Context<Self>) {
         let Some(text) = self
-            .factory_view
-            .as_ref()
+            .factory()
             .and_then(|view| view.workflows.fields.get(field))
             .map(|composer| composer.read(cx).text().to_string())
         else {
@@ -554,7 +552,7 @@ impl CockpitView {
 
     /// Give a text field the keyboard.
     pub(crate) fn focus_field(&mut self, field: Field, cx: &mut Context<Self>) {
-        if let Some(view) = self.factory_view.as_mut() {
+        if let Some(view) = self.factory_mut() {
             view.workflows.focused = Some(field);
         }
         cx.notify();
@@ -562,8 +560,7 @@ impl CockpitView {
 
     /// The text a field holds now.
     pub(crate) fn field_text(&self, field: &Field, cx: &gpui::App) -> Option<String> {
-        self.factory_view
-            .as_ref()?
+        self.factory()?
             .workflows
             .fields
             .get(field)
@@ -573,7 +570,7 @@ impl CockpitView {
     /// What holds the keyboard on the Workflows surface: the field
     /// chosen, else the outline.
     pub(super) fn workflows_focus(&self, cx: &gpui::App) -> Option<FocusHandle> {
-        let view = self.factory_view.as_ref()?;
+        let view = self.factory()?;
         if view.surface != Surface::Workflows {
             return None;
         }

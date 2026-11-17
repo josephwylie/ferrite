@@ -26,8 +26,9 @@ const TICK_MS: u64 = 16;
 
 /// `ferrite --headless`: the production window on this Store's Server,
 /// drawn off-screen and driven only by the Server's `window.*` actions.
-/// It runs until it is stopped.
-pub fn run() {
+/// It runs until it is stopped. Remote images load through `http`, as the
+/// app's do.
+pub fn run(http: Arc<dyn gpui::http_client::HttpClient>) {
     // Never the operator's Store: a driven window on it would let any API
     // caller type into their Threads and answer their Decisions.
     throwaway("FERRITE_STORE", "");
@@ -46,8 +47,9 @@ pub fn run() {
         ferrite_core::spawner::SessionDefaults::from_settings(&settings),
     ));
     let mut cx = app(keys);
+    cx.update(|cx| cx.set_http_client(http));
     let machines = cx.new(|_| {
-        Machines::new(
+        Machines::with_local_environment(
             Reach {
                 settings_dir: settings_dir.clone(),
                 store: store.clone(),
@@ -59,10 +61,11 @@ pub fn run() {
                 renderer: None,
                 driven: true,
                 defaults: defaults.clone(),
-                bridge: ferrite_core::machine::Bridge::ssh,
+                bridge: ferrite_core::machine::Bridge::for_machine,
             },
             &settings.machines,
             None,
+            settings.local_environment_enabled,
         )
     });
     let core = match cx.update(|cx| machines.update(cx, |machines, _| machines.cockpit())) {
@@ -94,9 +97,15 @@ pub fn run() {
     );
     loop {
         driver.pass(TICK_MS);
-        for (request, action) in driver.update(|view, _, _| view.cockpit.take_drives()) {
+        let source = driver.current_view();
+        let requests = driver.cx.update(|cx| {
+            source.update(cx, |view, _| view.cockpit.take_drives())
+        });
+        for (request, action) in requests {
             let answer = act(&mut driver, action);
-            driver.update(|view, _, _| view.cockpit.driven(request, answer));
+            driver.cx.update(|cx| {
+                source.update(cx, |view, _| view.cockpit.driven(request, answer));
+            });
         }
     }
 }
@@ -116,13 +125,17 @@ fn act(driver: &mut Driver, action: Action) -> Result<Answer, String> {
             Ok(Answer::Pressed { unhandled })
         }
         Action::Type(Text { text }) => driver.type_text(&text).map(|()| Answer::Typed),
-        Action::Click(Click { at, press }) => {
+        Action::Click(Click { at, press, command }) => {
             let (button, clicks) = match press {
                 Press::Single => (MouseButton::Left, 1),
                 Press::Double => (MouseButton::Left, 2),
                 Press::Right => (MouseButton::Right, 1),
             };
-            let modifiers = Modifiers::default();
+            let modifiers = if command {
+                Modifiers::secondary_key()
+            } else {
+                Modifiers::default()
+            };
             let at = match at {
                 Target::Selector(selector) => driver
                     .click(&selector, button, clicks, modifiers)
@@ -148,6 +161,14 @@ fn act(driver: &mut Driver, action: Action) -> Result<Answer, String> {
                 width: bounds.size.width.into(),
                 height: bounds.size.height.into(),
             })
+        }
+        Action::Attach(files) => {
+            if files.paths.is_empty() || files.paths.iter().any(|path| !path.is_absolute()) {
+                return Err("attachments require absolute local file paths".into());
+            }
+            driver.update(|view, _, cx| view.attach_local_files(&files.paths, cx))?;
+            driver.tick(60);
+            Ok(Answer::Attached)
         }
         Action::Shot(Shot { path }) => {
             if !path.is_absolute() {
@@ -183,13 +204,27 @@ pub fn app(keys: Vec<Binding>) -> HeadlessAppContext {
 }
 
 /// The window's size in logical pixels, as the app's opens at.
-pub const SIZE: (f32, f32) = (1440., 900.);
+const SIZE: (f32, f32) = (1440., 900.);
+
+/// `SIZE`, or `WIDTHxHEIGHT` from `FERRITE_HEADLESS_SIZE`, so a capture can
+/// show a narrow window.
+fn window_size() -> (f32, f32) {
+    std::env::var("FERRITE_HEADLESS_SIZE")
+        .ok()
+        .and_then(|size| {
+            let (width, height) = size.split_once('x')?;
+            Some((width.trim().parse().ok()?, height.trim().parse().ok()?))
+        })
+        .unwrap_or(SIZE)
+}
 
 /// One off-screen Cockpit window and the hands that drive it.
 pub struct Driver {
     cx: HeadlessAppContext,
     window: AnyWindowHandle,
-    view: Entity<CockpitView>,
+    shell: Entity<crate::cockpit_window::CockpitWindow>,
+    /// The real instant the executor's clock last caught up to.
+    synced: std::time::Instant,
 }
 
 /// What a shot saved: its size in pixels, and how many to a logical one.
@@ -206,29 +241,38 @@ impl Driver {
         mut cx: HeadlessAppContext,
         build: impl FnOnce(&mut Context<CockpitView>) -> CockpitView,
     ) -> Self {
-        let mut view = None;
+        let mut shell = None;
+        let (width, height) = window_size();
         let window = cx
-            .open_window(gpui::size(gpui::px(SIZE.0), gpui::px(SIZE.1)), |window, cx| {
-                let cockpit = cx.new(build);
-                view = Some(cockpit.clone());
-                let content =
-                    cx.new(|cx| crate::cockpit_window::CockpitWindow::new(cockpit, window, cx));
-                cx.new(|cx| {
-                    gpui::component::Root::new(content, window, cx)
-                        .bordered(false)
-                        .bg(ferrite_ui::theme::paint::WINDOW)
-                })
-            })
+            .open_window(
+                gpui::size(gpui::px(width), gpui::px(height)),
+                |window, cx| {
+                    let cockpit = cx.new(build);
+                    let content =
+                        cx.new(|cx| crate::cockpit_window::CockpitWindow::new(cockpit, window, cx));
+                    shell = Some(content.clone());
+                    cx.new(|cx| {
+                        gpui::component::Root::new(content, window, cx)
+                            .bordered(false)
+                            .bg(ferrite_ui::theme::paint::WINDOW)
+                    })
+                },
+            )
             .expect("open the off-screen window");
         Self {
             cx,
             window: window.into(),
-            view: view.expect("the window built its Cockpit"),
+            shell: shell.expect("the window built its shell"),
+            synced: std::time::Instant::now(),
         }
     }
 
+    fn current_view(&mut self) -> Entity<CockpitView> {
+        self.cx.update(|cx| self.shell.read(cx).cockpit().clone())
+    }
+
     pub fn read<R>(&mut self, f: impl FnOnce(&CockpitView, &App) -> R) -> R {
-        let view = self.view.clone();
+        let view = self.current_view();
         self.cx.update(|cx| f(view.read(cx), cx))
     }
 
@@ -236,7 +280,7 @@ impl Driver {
         &mut self,
         f: impl FnOnce(&mut CockpitView, &mut Window, &mut Context<CockpitView>) -> R,
     ) -> R {
-        let view = self.view.clone();
+        let view = self.current_view();
         self.cx
             .update_window(self.window, |_, window, cx| {
                 view.update(cx, |view, cx| f(view, window, cx))
@@ -246,10 +290,15 @@ impl Driver {
 
     /// One slice of real time, mirrored on the executor's clock: the pump
     /// runs and the frames the last draw asked for are delivered. The
-    /// window draws only if something in it changed, as on screen.
+    /// window draws only if something in it changed, as on screen. The
+    /// executor catches up on all the real time since its last pass, the
+    /// time spent drawing and shooting too, so a timer set for a clock's
+    /// next reading fires when the clock reads it.
     pub fn pass(&mut self, ms: u64) {
         std::thread::sleep(Duration::from_millis(ms));
-        self.cx.advance_clock(Duration::from_millis(ms));
+        let now = std::time::Instant::now();
+        self.cx.advance_clock(now - self.synced);
+        self.synced = now;
         self.cx.run_until_parked();
         self.cx
             .update_window(self.window, |_, window, cx| {
@@ -411,8 +460,8 @@ impl Driver {
     /// Close the window and its app. gpui's leak check may panic on the
     /// way out; nothing is left to report by then.
     pub fn close(self) {
-        let Self { cx, view, .. } = self;
-        drop(view);
+        let Self { cx, shell, .. } = self;
+        drop(shell);
         let hook = std::panic::take_hook();
         std::panic::set_hook(Box::new(|_| {}));
         let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(cx)));

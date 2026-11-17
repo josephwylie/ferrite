@@ -26,8 +26,6 @@ use ferrite_core::{
     activity::TranscriptCoverage,
     activity::{ActivityEvent, AgentInfo, AgentKey, AgentStatus, ExecutionEvent, Subject},
     cockpit::{Cockpit, SpawnRequest, Spawner},
-    groups::{GroupChange, GroupId},
-    layout::{Axis, Node, Tree},
     providers::Session,
     settings::ReadingSize,
     store::{Provider, Store},
@@ -197,16 +195,6 @@ impl Feed {
     }
     fn ok(&self, id: &str, output: &str) -> &Self {
         self.done(id, output, false, ToolResult::Opaque)
-    }
-    /// A shell call as Codex sends it: the command alone.
-    fn bash(&self, id: &str, command: &str, stdout: &str, exit: i64, ms: u64) -> &Self {
-        self.shell(
-            id,
-            serde_json::json!({ "command": command }),
-            stdout,
-            exit,
-            ms,
-        )
     }
     /// A Bash call as Claude Code sends it: the command and the words it
     /// wrote for what the command is for (the row's line).
@@ -388,34 +376,6 @@ impl Scene {
         let feed = Feed(self.feeds.borrow().last().expect("spawned").clone());
         (thread, feed)
     }
-
-    fn group(&mut self, members: &[ThreadId], title: &str) -> GroupId {
-        let group = self
-            .core
-            .apply_group(GroupChange::Create {
-                first: members[0],
-                second: members[1],
-            })
-            .expect("group fixture Threads")
-            .group
-            .expect("a new Group");
-        for thread in &members[2..] {
-            self.core
-                .apply_group(GroupChange::Join {
-                    thread: *thread,
-                    group,
-                    index: None,
-                })
-                .expect("join fixture Group");
-        }
-        self.core
-            .apply_group(GroupChange::Rename {
-                group,
-                title: title.into(),
-            })
-            .expect("name fixture Group");
-        group
-    }
 }
 
 /// Sizes by label: the two transcript widths the references began with,
@@ -434,15 +394,12 @@ const STATES: &[(&str, &[&str])] = &[
     ("live", &["narrow", "wide", "app"]),
     ("decision", &["narrow", "wide", "app"]),
     ("approval", &["narrow", "wide", "app"]),
+    ("form", &["app"]),
     ("expanded", &["narrow", "wide", "app"]),
     ("interrupted", &["narrow", "wide", "app"]),
     ("conversation", &["app", "wide"]),
     ("diff", &["app"]),
     ("nav", &["app"]),
-    ("group4", &["app"]),
-    ("group9", &["app"]),
-    ("group12", &["app"]),
-    ("group12-dragged", &["app"]),
     ("subagents", &["app"]),
     ("subagent", &["app"]),
     ("composer", &["app"]),
@@ -514,7 +471,6 @@ const STATES: &[(&str, &[&str])] = &[
     // (run from the bundle) the pages are Chromium's; without, the fallback.
     ("visuals", &["app", "wide", "narrow"]),
     ("visuals-top", &["app"]),
-    ("visuals-group", &["app"]),
     // (end visuals)
 
     // ---- WP-G states (append above the end line)
@@ -534,7 +490,6 @@ const STATES: &[(&str, &[&str])] = &[
     // compared against docs/design/ui-refresh/mockups/<view>.png.
     ("refresh-solo", &["refresh"]),
     ("refresh-solo-changes", &["refresh"]),
-    ("refresh-group", &["refresh"]),
     ("refresh-pr-failing", &["refresh"]),
     ("refresh-pr-merged", &["refresh"]),
     ("refresh-pr-none", &["refresh"]),
@@ -846,7 +801,6 @@ fn build(state: &str, label: &str) -> (Scene, Setup) {
             (scene, setup)
         }
         "nav" => nav(),
-        "group4" => group4(),
         "visuals" => (visuals(label), none),
         "visuals-top" => {
             let scene = visuals("top");
@@ -859,10 +813,6 @@ fn build(state: &str, label: &str) -> (Scene, Setup) {
             });
             (scene, setup)
         }
-        "visuals-group" => visuals_group(),
-        "group9" => group9(),
-        "group12" => group12(false),
-        "group12-dragged" => group12(true),
         "subagents" => subagents(),
         "composer" => composer(),
         "menu" => menu(),
@@ -938,7 +888,7 @@ fn build(state: &str, label: &str) -> (Scene, Setup) {
                 // Seeded, so opening never probes the operator's CLIs.
                 view.cli_versions = Some(("2.3.1 (Claude Code)".into(), "codex-cli 0.61.0".into()));
                 view.toggle_settings(cx);
-                view.settings_page = page;
+                view.settings_view.update(cx, |settings, _| settings.page = page);
             });
             (scene, setup)
         }
@@ -952,7 +902,7 @@ fn build(state: &str, label: &str) -> (Scene, Setup) {
                         .placeholder("Search")
                         .default_value("codex")
                 });
-                view.settings_search = Some(search);
+                view.settings_view.update(cx, |settings, _| settings.search = Some(search));
             });
             (scene, setup)
         }
@@ -980,7 +930,7 @@ fn build(state: &str, label: &str) -> (Scene, Setup) {
                 &root,
                 "A long prompt stays out of the way",
             );
-            scene.core.send(
+            let _ = scene.core.send(
                 thread,
                 (0..60)
                     .map(|n| format!("Requirement {n}: preserve the reader's scroll position.\n"))
@@ -1003,7 +953,7 @@ fn build(state: &str, label: &str) -> (Scene, Setup) {
             let mut scene = Scene::new("starting");
             let ferrite = scene.project("ferrite");
             let (thread, _feed) = scene.open(Provider::Claude, &ferrite, "Starting up");
-            scene.core.send(thread, "Summarise the open issues.".into());
+            let _ = scene.core.send(thread, "Summarise the open issues.".into());
             (scene, none)
         }
         "error-turn" => (error_turn(label), none),
@@ -1368,7 +1318,7 @@ fn build(state: &str, label: &str) -> (Scene, Setup) {
             let setup: Setup = Box::new(|view, window, cx| {
                 branches(view, window, cx);
                 view.set_shelf_open(crate::nav::Shelf::Parked, true, cx);
-                view.nav_scroll.scroll_to_bottom();
+                view.nav_view.read(cx).scroll.scroll_to_bottom();
                 let parked = view
                     .nav_state()
                     .parked
@@ -1391,7 +1341,9 @@ fn build(state: &str, label: &str) -> (Scene, Setup) {
             let setup: Setup = Box::new(|view, window, cx| {
                 branches(view, window, cx);
                 view.focus_nav(window, cx);
-                view.step_nav(2, window, cx);
+                let items = view.nav_view.read(cx).items(&view.nav_inputs(cx));
+                view.nav_view
+                    .update(cx, |nav, cx| nav.step(2, &items, window, cx));
             });
             (scene, setup)
         }
@@ -1419,9 +1371,9 @@ fn build(state: &str, label: &str) -> (Scene, Setup) {
             let (scene, branches) = nav();
             let setup: Setup = Box::new(|view, window, cx| {
                 branches(view, window, cx);
-                view.nav_search
-                    .update(cx, |line, cx| line.set("re".into(), cx));
-                let field = gpui::Focusable::focus_handle(&view.nav_search, cx);
+                let search = view.nav_view.read(cx).search.clone();
+                search.update(cx, |line, cx| line.set("re".into(), cx));
+                let field = gpui::Focusable::focus_handle(&search, cx);
                 window.focus(&field, cx);
                 cx.notify();
             });
@@ -1456,7 +1408,7 @@ fn build(state: &str, label: &str) -> (Scene, Setup) {
             let setup: Setup = Box::new(|view, window, cx| {
                 branches(view, window, cx);
                 // The shown working card sits at the list's foot.
-                view.nav_scroll.scroll_to_bottom();
+                view.nav_view.read(cx).scroll.scroll_to_bottom();
                 for (name, reading) in [
                     ("Screenshot harness", fixture_pr(415, PrState::Open, false)),
                     ("Release notes 0.9", fixture_pr(388, PrState::Open, true)),
@@ -1511,7 +1463,7 @@ fn legacy(state: &str) -> (Scene, Setup) {
     let (thread, sender) = scene.open(Provider::Claude, &checkout, "");
     sender.account(Provider::Claude);
     let core = &mut scene.core;
-    core.send(
+    let _ = core.send(
         thread,
         "Review the formatting fixture.  Preserve its spacing.".into(),
     );
@@ -1597,13 +1549,45 @@ fn legacy(state: &str) -> (Scene, Setup) {
         "decision" => {
             sender.ev(questions("fixture-question", "question"));
         }
+        "form" => {
+            use ferrite_core::{FormField, FormFieldKind};
+            let text = |id: &str, label: &str, description: &str| FormField {
+                id: id.into(),
+                label: label.into(),
+                description: description.into(),
+                required: true,
+                kind: FormFieldKind::String {
+                    min_length: None,
+                    max_length: None,
+                    default: None,
+                },
+            };
+            sender.ev(SessionEvent::DecisionRequested {
+                decision: Decision {
+                    delivery: Default::default(),
+                    kind: DecisionKind::Form {
+                        fields: vec![
+                            text("name", "Release name", "Shown in the changelog heading."),
+                            text("notes", "Notes", "One line for the release notes."),
+                        ],
+                    },
+                    policy: Default::default(),
+                    id: "fixture-form".into(),
+                    tool_use_id: "form".into(),
+                    tool_name: "release".into(),
+                    description: "The release server needs two details.".into(),
+                    suggestions: vec![],
+                    input: serde_json::Value::Null,
+                },
+            });
+        }
         "interrupted" => {
             sender.ev(SessionEvent::TurnEnded {
                 outcome: TurnOutcome::Interrupted,
                 cost_usd: None,
             });
             core.pump();
-            core.send(
+            let _ = core.send(
                 thread,
                 "Start a new turn; keep earlier tools inspectable.".into(),
             );
@@ -1655,7 +1639,7 @@ fn running_turn(done: bool) -> Scene {
         &ferrite,
         "UI test: color tokens and shell commands",
     );
-    scene.core.send(
+    let _ = scene.core.send(
         thread,
         "Launch 2 parallel subagents: one counts .rs files under crates/ferrite-ui, the other counts .md files under docs. Report both numbers.".into(),
     );
@@ -1664,7 +1648,7 @@ fn running_turn(done: bool) -> Scene {
         .end(0.21);
     scene.core.pump();
     clock.set(at(now) - Duration::from_secs(27));
-    scene.core.send(
+    let _ = scene.core.send(
         thread,
         "Use a 3-step todo list. Run `ls /definitely-missing-dir`, then run `sleep 15 && echo done` in the foreground, then reply in two short paragraphs with a 2-row table.".into(),
     );
@@ -1783,7 +1767,7 @@ fn conversation(label: &str) -> Scene {
         &ferrite,
         "Nav rows jitter on stream start",
     );
-    scene.core.send(
+    let _ = scene.core.send(
         thread,
         "The nav rows jump by a line when a Thread starts streaming. Find out why and propose a fix."
             .into(),
@@ -1813,7 +1797,7 @@ fn conversation(label: &str) -> Scene {
         .text(ANSWER_ONE)
         .end(0.1842);
     scene.core.pump();
-    scene
+    let _ = scene
         .core
         .send(thread, "Yes, apply it and run the nav tests.".into());
     feed.edit(
@@ -1876,8 +1860,8 @@ fn conversation(label: &str) -> Scene {
     scene
 }
 
-/// A spread of Threads across three Projects, one a three-member Group,
-/// covering every status the nav draws.
+/// A spread of Threads across three Projects, covering every status the
+/// nav draws.
 fn nav() -> (Scene, Setup) {
     let mut scene = Scene::new("nav");
     let ferrite = scene.project("ferrite");
@@ -1891,7 +1875,7 @@ fn nav() -> (Scene, Setup) {
         (&ferrite, "Codex resume handshake"),
     ] {
         let (thread, feed) = scene.open(Provider::Codex, checkout, title);
-        scene.core.send(thread, format!("{title}."));
+        let _ = scene.core.send(thread, format!("{title}."));
         feed.boot(Provider::Codex, 40_000)
             .text("Done; notes are in the thread.")
             .end(0.05);
@@ -1900,7 +1884,7 @@ fn nav() -> (Scene, Setup) {
     }
 
     let (running, feed) = scene.open(Provider::Claude, &ferrite, "Retained transcript rendering");
-    scene.core.send(
+    let _ = scene.core.send(
         running,
         "Profile the transcript cache under 24 panes.".into(),
     );
@@ -1922,7 +1906,7 @@ fn nav() -> (Scene, Setup) {
         );
 
     let (geist, geist_feed) = scene.open(Provider::Claude, &ferrite, "Geist type pass");
-    scene.core.send(geist, "Swap the UI face to Geist.".into());
+    let _ = scene.core.send(geist, "Swap the UI face to Geist.".into());
     geist_feed
         .boot(Provider::Claude, 58_000)
         .edit(
@@ -1942,7 +1926,7 @@ fn nav() -> (Scene, Setup) {
         )
         .text("Swapped the prose face; now checking every hard-coded line height against the new metrics");
     let (density, density_feed) = scene.open(Provider::Codex, &ferrite, "Nav density audit");
-    scene.core.send(density, "Audit nav row density.".into());
+    let _ = scene.core.send(density, "Audit nav row density.".into());
     density_feed
         .boot(Provider::Codex, 21_000)
         .text("I need to regenerate the reference screenshots to compare.\n\n")
@@ -1951,16 +1935,15 @@ fn nav() -> (Scene, Setup) {
             "cargo run -p ferrite --features visual-reference -- --visual-reference /tmp/ref",
         );
     let (harness, harness_feed) = scene.open(Provider::Claude, &ferrite, "Screenshot harness");
-    scene.core.send(harness, "Add app-size captures.".into());
+    let _ = scene.core.send(harness, "Add app-size captures.".into());
     harness_feed
         .boot(Provider::Claude, 77_000)
         .text("Added the `app` size and a state filter.")
         .end(0.2210);
     subagent_crew(&harness_feed, "harness", 5);
-    scene.group(&[geist, density, harness], "UI overhaul");
 
     let (flaky, flaky_feed) = scene.open(Provider::Claude, &ferrite, "Fix flaky pump test");
-    scene.core.send(flaky, "Fix the flaky pump test.".into());
+    let _ = scene.core.send(flaky, "Fix the flaky pump test.".into());
     flaky_feed
         .boot(Provider::Claude, 12_000)
         .text("Reproducing under `--test-threads 1`")
@@ -1970,7 +1953,7 @@ fn nav() -> (Scene, Setup) {
         });
 
     let (sync, sync_feed) = scene.open(Provider::Codex, &swarmdeck, "Board card sync");
-    scene
+    let _ = scene
         .core
         .send(sync, "Sync board cards with GitHub issues.".into());
     sync_feed
@@ -1978,7 +1961,7 @@ fn nav() -> (Scene, Setup) {
         .text("Cards now follow their issues.")
         .end(0.04);
     let (notes, notes_feed) = scene.open(Provider::Claude, &swarmdeck, "Release notes 0.9");
-    scene
+    let _ = scene
         .core
         .send(notes, "Draft the 0.9 release notes.".into());
     notes_feed
@@ -1988,7 +1971,7 @@ fn nav() -> (Scene, Setup) {
     subagent_crew(&notes_feed, "notes", 3);
 
     let (copy, copy_feed) = scene.open(Provider::Claude, &site, "Checkout copy review");
-    scene.core.send(copy, "Review the checkout copy.".into());
+    let _ = scene.core.send(copy, "Review the checkout copy.".into());
     copy_feed
         .boot(Provider::Claude, 18_000)
         .text("Two tones are possible here; I kept the warmer one.")
@@ -2047,7 +2030,7 @@ fn fixture_pr(number: u64, state: PrState, draft: bool) -> ferrite_core::workspa
 fn nav_card_states(scene: &mut Scene) {
     let ferrite = scene.project("ferrite");
     let (asking, feed) = scene.open(Provider::Claude, &ferrite, "Card status words");
-    scene
+    let _ = scene
         .core
         .send(asking, "Pick the card's status words.".into());
     feed.boot(Provider::Claude, 15_000)
@@ -2074,13 +2057,13 @@ fn nav_card_states(scene: &mut Scene) {
         },
         "Pay API migration",
     );
-    scene.core.send(migration, "Migrate the pay API.".into());
+    let _ = scene.core.send(migration, "Migrate the pay API.".into());
     feed.boot(Provider::Claude, 26_000)
         .text("Migrated; the old client is gone.")
         .end(0.07);
 
     let (handed, feed) = scene.open(Provider::Codex, &ferrite, "Docs outline");
-    scene.core.send(handed, "Outline the API docs.".into());
+    let _ = scene.core.send(handed, "Outline the API docs.".into());
     feed.boot(Provider::Codex, 20_000)
         .text("Outlined the docs.")
         .end(0.03);
@@ -2106,7 +2089,7 @@ fn nav_empty() -> Scene {
     let ferrite = scene.project("ferrite");
     for title in ["Codex resume handshake", "Old spike: wasm preview"] {
         let (thread, feed) = scene.open(Provider::Codex, &ferrite, title);
-        scene.core.send(thread, format!("{title}."));
+        let _ = scene.core.send(thread, format!("{title}."));
         feed.boot(Provider::Codex, 30_000).text("Done.").end(0.02);
         scene.core.pump();
         scene.core.park(thread).expect("park fixture Thread");
@@ -2127,105 +2110,6 @@ fn subagent_crew(feed: &Feed, prefix: &str, count: usize) {
     }
 }
 
-/// `nodes` side by side (or stacked), each an equal share.
-fn chain(mut nodes: Vec<Node>, axis: Axis) -> Node {
-    if nodes.len() == 1 {
-        return nodes.pop().unwrap();
-    }
-    let share = 1.0 / nodes.len() as f32;
-    let head = nodes.remove(0);
-    Node::Split {
-        axis,
-        ratio: share,
-        first: Box::new(head),
-        second: Box::new(chain(nodes, axis)),
-    }
-}
-
-fn leaves(threads: &[ThreadId]) -> Vec<Node> {
-    threads.iter().map(|thread| Node::Leaf(*thread)).collect()
-}
-
-/// Members in a mix of states: streaming, asking, done, failed.
-fn members(scene: &mut Scene, checkout: &Path, titles: &[&str]) -> Vec<ThreadId> {
-    let mut threads = Vec::new();
-    for (at, title) in titles.iter().enumerate() {
-        let provider = if at % 3 == 1 {
-            Provider::Codex
-        } else {
-            Provider::Claude
-        };
-        let (thread, feed) = scene.open(provider, checkout, title);
-        scene.core.send(thread, format!("{title}."));
-        feed.boot(provider, 20_000 + 9_000 * at as u64);
-        match at % 5 {
-            0 => {
-                feed.text("Wiring the joiner into the canvas path so the atlas stays per-cell; ")
-                    .bash(
-                        "check",
-                        "cargo check --workspace",
-                        "Finished dev profile",
-                        0,
-                        9_100,
-                    )
-                    .text("the fold keeps the tail following the newest line while")
-                    .tool(
-                        "test",
-                        "Bash",
-                        serde_json::json!({"command": "cargo test --workspace"}),
-                    );
-            }
-            1 => {
-                feed.text("Closing the superseded issue needs your ruling.\n\n")
-                    .approval("close", "gh issue close 212");
-            }
-            2 => {
-                feed.text("Landed the retune behind the theme tokens; the suite is green.")
-                    .end(0.31);
-            }
-            3 => {
-                feed.bash(
-                    "fail",
-                    "cargo test --workspace",
-                    "test result: FAILED. 357 passed; 2 failed",
-                    101,
-                    61_000,
-                )
-                .text("Two cases regressed after the retune; rerunning the pair with the fold instrumented");
-            }
-            _ => {
-                feed.text("Reading the board recipes side by side before touching anything")
-                    .tool(
-                        "read",
-                        "Read",
-                        serde_json::json!({"file_path": "crates/ferrite/src/pane.rs"}),
-                    );
-            }
-        }
-        threads.push(thread);
-    }
-    threads
-}
-
-/// Four members on the default grid: 2×2 at L1 at the app size.
-fn group4() -> (Scene, Setup) {
-    let mut scene = Scene::new("group4");
-    let ferrite = scene.project("ferrite");
-    let threads = members(
-        &mut scene,
-        &ferrite,
-        &[
-            "Perf: layout cache",
-            "Close stale issues",
-            "Theme retune",
-            "Fold regression",
-        ],
-    );
-    let group = scene.group(&threads, "Perf sweep");
-    scene.core.enter_group(group).expect("enter fixture Group");
-    (scene, Box::new(|_, _, _| {}))
-}
-
 /// An agent's visual: the tool call's input, as `show_visual` takes it.
 fn visual_input(title: &str, caption: &str, html: &str) -> serde_json::Value {
     serde_json::json!({ "title": title, "caption": caption, "html": html })
@@ -2243,7 +2127,7 @@ fn visuals(label: &str) -> Scene {
     let mut scene = Scene::new(&format!("visuals-{label}"));
     let ferrite = scene.project("ferrite");
     let (thread, feed) = scene.open(Provider::Claude, &ferrite, "Token spend, last month");
-    scene.core.send(
+    let _ = scene.core.send(
         thread,
         "Show me token usage and cost for the last 30 days.".into(),
     );
@@ -2270,7 +2154,7 @@ fn visuals(label: &str) -> Scene {
         .text("Spend peaks on the days the Group runs overnight; Opus is 71% of it.")
         .end(0.2210);
     scene.core.pump();
-    scene.core.send(
+    let _ = scene.core.send(
         thread,
         "Mock up two options for the settled notice, and show me where the repo's size is.".into(),
     );
@@ -2310,68 +2194,12 @@ fn visuals(label: &str) -> Scene {
     scene
 }
 
-/// Four Panes on a board, two with visuals: a visual at a Group Pane's
-/// width.
-fn visuals_group() -> (Scene, Setup) {
-    let mut scene = Scene::new("visuals-group");
-    let ferrite = scene.project("ferrite");
-    let threads = members(
-        &mut scene,
-        &ferrite,
-        &[
-            "Token spend",
-            "Notice options",
-            "Theme retune",
-            "Fold regression",
-        ],
-    );
-    for (index, (title, page)) in [
-        ("Token usage", STATS_PAGE),
-        ("Notice options", MOCKUPS_PAGE),
-    ]
-    .into_iter()
-    .enumerate()
-    {
-        let feed = Feed(scene.feeds.borrow()[index].clone());
-        feed.text("Here it is.")
-            .tool(&format!("v-{index}"), VISUAL, visual_input(title, "", page))
-            .ok(&format!("v-{index}"), "Shown to the operator inline.")
-            .end(0.01);
-    }
-    let group = scene.group(&threads, "Visuals");
-    scene.core.enter_group(group).expect("enter fixture Group");
-    (scene, Box::new(|_, _, _| {}))
-}
-
-/// Nine members on the default grid (3×3), one of them asking a Question.
-fn group9() -> (Scene, Setup) {
-    let mut scene = Scene::new("group9");
-    let ferrite = scene.project("ferrite");
-    let titles = [
-        "Perf: layout cache",
-        "Close stale issues",
-        "Theme retune",
-        "Fold regression",
-        "Board recipes",
-        "Pump backpressure",
-        "Triage 212",
-        "Diff stats badge",
-        "Wall census",
-    ];
-    let threads = members(&mut scene, &ferrite, &titles);
-    // "Board recipes" (spawned fifth) stops to ask.
-    Feed(scene.feeds.borrow()[4].clone()).ev(questions("board-question", "ask"));
-    let group = scene.group(&threads, "Grid of nine");
-    scene.core.enter_group(group).expect("enter fixture Group");
-    (scene, Box::new(|_, _, _| {}))
-}
-
 /// A turn that ends in a provider error after some work.
 fn error_turn(label: &str) -> Scene {
     let mut scene = Scene::new(&format!("error-turn-{label}"));
     let ferrite = scene.project("ferrite");
     let (thread, feed) = scene.open(Provider::Claude, &ferrite, "Fix flaky pump test");
-    scene.core.send(thread, "Fix the flaky pump test.".into());
+    let _ = scene.core.send(thread, "Fix the flaky pump test.".into());
     feed.boot(Provider::Claude, 12_000)
         .claude_bash(
             "repro",
@@ -2396,7 +2224,7 @@ fn tool_groups(label: &str) -> Scene {
     let mut scene = Scene::new(&format!("toolgroups-{label}"));
     let ferrite = scene.project("ferrite");
     let (thread, feed) = scene.open(Provider::Claude, &ferrite, "Reconcile October invoices");
-    scene.core.send(
+    let _ = scene.core.send(
         thread,
         "Reconcile the October supplier invoices against MYOB.".into(),
     );
@@ -2509,7 +2337,7 @@ fn tool_group_overflow() -> Scene {
     let mut scene = Scene::new("toolgroup-overflow");
     let ferrite = scene.project("ferrite");
     let (thread, feed) = scene.open(Provider::Claude, &ferrite, "Audit the crate layout");
-    scene
+    let _ = scene
         .core
         .send(thread, "Read every module under the pane crate.".into());
     feed.boot(Provider::Claude, 64_000);
@@ -2526,55 +2354,12 @@ fn tool_group_overflow() -> Scene {
     scene
 }
 
-/// Twelve members on the default grid (4×3, one Level for the board); or,
-/// `dragged`, the operator's own row of five over a row of seven, which the
-/// board keeps as it was left — at the one Level its smallest cell allows.
-fn group12(dragged: bool) -> (Scene, Setup) {
-    let mut scene = Scene::new(if dragged {
-        "group12-dragged"
-    } else {
-        "group12"
-    });
-    let ferrite = scene.project("ferrite");
-    let titles = [
-        "Perf: layout cache",
-        "Close stale issues",
-        "Theme retune",
-        "Fold regression",
-        "Board recipes",
-        "Pump backpressure",
-        "Triage 212",
-        "Diff stats badge",
-        "Wall census",
-        "Atlas eviction",
-        "Seam drag",
-        "Resume handshake",
-    ];
-    let threads = members(&mut scene, &ferrite, &titles);
-    let group = scene.group(&threads, "Wall of twelve");
-    if dragged {
-        let top = chain(leaves(&threads[..5]), Axis::Row);
-        let bottom = chain(leaves(&threads[5..]), Axis::Row);
-        scene
-            .core
-            .set_group_layout(
-                group,
-                Tree {
-                    root: Some(chain(vec![top, bottom], Axis::Column)),
-                },
-            )
-            .expect("lay out fixture Group");
-    }
-    scene.core.enter_group(group).expect("enter fixture Group");
-    (scene, Box::new(|_, _, _| {}))
-}
-
 /// A Main that delegated to three subagents, each in a different state.
 fn subagents() -> (Scene, Setup) {
     let mut scene = Scene::new("subagents");
     let ferrite = scene.project("ferrite");
     let (thread, feed) = scene.open(Provider::Claude, &ferrite, "Audit every surface");
-    scene.core.send(
+    let _ = scene.core.send(
         thread,
         "Audit the nav, the composer and the settings sheet in parallel.".into(),
     );
@@ -2657,7 +2442,7 @@ fn composer() -> (Scene, Setup) {
             .join("fixtures/wide.png"),
         &shot,
     );
-    scene.core.send(
+    let _ = scene.core.send(
         thread,
         ferrite_core::prompt_files::compose(
             "Tighten the queued prompt rows; this is how they stack now.",
@@ -2774,13 +2559,13 @@ fn notifications() -> (Scene, Setup) {
         (&ferrite, "Release notes 0.9", TurnOutcome::Completed),
     ] {
         let (thread, feed) = scene.open(Provider::Claude, checkout, title);
-        scene.core.send(thread, format!("{title}."));
+        let _ = scene.core.send(thread, format!("{title}."));
         feed.boot(Provider::Claude, 30_000)
             .text("Working through it.");
         others.push((feed, outcome));
     }
     let (asking, ask_feed) = scene.open(Provider::Codex, &ferrite, "Close stale issues");
-    scene.core.send(asking, "Close stale issues.".into());
+    let _ = scene.core.send(asking, "Close stale issues.".into());
     ask_feed.boot(Provider::Codex, 12_000);
     scene.core.pump();
     scene.core.focus_thread(focused);
@@ -2817,7 +2602,7 @@ fn prose() -> Scene {
     let mut scene = Scene::new("prose");
     let checkout = std::env::current_dir().unwrap();
     let (thread, sender) = scene.open(Provider::Claude, &checkout, "");
-    scene
+    let _ = scene
         .core
         .send(thread, "Where does the answer layout live?".into());
     sender.text(
@@ -3040,7 +2825,7 @@ fn loops_frames(
     let mut scene = Scene::new("loops-parity");
     let ferrite = scene.project("ferrite");
     let (thread, feed) = scene.open(Provider::Claude, &ferrite, "Caret parity");
-    scene
+    let _ = scene
         .core
         .send(thread, "Find out why the caret blinks.".into());
     feed.boot(Provider::Claude, 64_000)
@@ -3049,7 +2834,7 @@ fn loops_frames(
             summary_index: 0,
         });
     let (other, other_feed) = scene.open(Provider::Claude, &ferrite, "Spinner in the nav");
-    scene.core.send(other, "Keep going.".into());
+    let _ = scene.core.send(other, "Keep going.".into());
     other_feed
         .boot(Provider::Claude, 32_000)
         .text("Working on it.");

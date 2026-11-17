@@ -1,0 +1,34 @@
+{
+  "root": "/private/tmp/ferrite-remote-3lm07xal",
+  "store": "/private/tmp/ferrite-remote-3lm07xal/client/threads",
+  "remote_store": "/private/tmp/ferrite-remote-3lm07xal/remote/threads",
+  "binary": "/Users/josephwylie/Desktop/Projects/ferrite-remote-connections/target/debug/ferrite",
+  "server": "/Users/josephwylie/Desktop/Projects/ferrite-remote-connections/target/debug/ferrited",
+  "processes": [],
+  "ssh_transport": "actual OpenSSH localhost",
+  "filesystem": "localhost SSH fixture shares the host filesystem; SSH request logs prove routing",
+  "credentials": "fixture-passphrase is a synthetic, task-only test credential",
+  "provider": "simulated Codex app-server, no model API calls",
+  "port": 53384
+}
+{"passed": true, "nonroot": true, "strict_modes": true, "pid": 48396}
+Launched isolated local/remote Servers and native headless window.
+Traceback (most recent call last):
+  File "/Users/josephwylie/Desktop/Projects/ferrite-remote-connections/scripts/verify-remote-parity.py", line 591, in <module>
+    main()
+    ~~~~^^
+  File "/Users/josephwylie/Desktop/Projects/ferrite-remote-connections/scripts/verify-remote-parity.py", line 567, in main
+    verify(args)
+    ~~~~~~^^^^^^
+  File "/Users/josephwylie/Desktop/Projects/ferrite-remote-connections/scripts/verify-remote-parity.py", line 474, in verify
+    modal_flow(ui)
+    ~~~~~~~~~~^^^^
+  File "/Users/josephwylie/Desktop/Projects/ferrite-remote-connections/scripts/verify-remote-parity.py", line 258, in modal_flow
+    ui.wait("connection-dialog", visible=False)
+    ~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/josephwylie/Desktop/Projects/ferrite-remote-connections/scripts/verify-remote-parity.py", line 159, in wait
+    until(lambda: self.has(selector) == visible, f"Expected {selector} visible={visible}")
+    ~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/josephwylie/Desktop/Projects/ferrite-remote-connections/scripts/verify-remote-parity.py", line 44, in until
+    raise AssertionError(message)
+AssertionError: Expected connection-dialog visible=False

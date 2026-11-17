@@ -880,6 +880,9 @@ impl SubjectState {
             adopt_orphans(&mut self.records, at);
         }
         self.serials = self.records.len() as u64;
+        if self.truncated {
+            self.transcript.mark_earlier_dropped();
+        }
         self.transcript.restore_runtime(runtime);
         self.revision = self.revision.wrapping_add(1);
         transcript::Update {
@@ -2665,6 +2668,7 @@ fn reports(input: &Input) -> bool {
                 | SessionEvent::AccountPlan { .. }
                 | SessionEvent::Handshake { .. }
                 | SessionEvent::HookRan { .. }
+                | SessionEvent::ControlRefused { .. }
         )
     )
 }

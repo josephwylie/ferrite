@@ -173,7 +173,9 @@ impl CockpitView {
                     }
                     if (work_orders || annotate || boundaries) && !controlled_viewport {
                         if !preview_expanded {
-                            if annotations::click(window,cx,"preview-expand") { preview_expanded=true; }
+                            if window.debug_bounds("panel-restore").is_some()
+                                || annotations::click(window,cx,"panel-maximize")
+                            { preview_expanded=true; }
                             return Ok(false);
                         }
                         let viewport=view.read(cx).browser_smoke_viewport(scenario_thread.expect("scenario Thread"));

@@ -18,6 +18,7 @@ mod elicitation;
 pub mod limits;
 pub mod models;
 pub(crate) mod oneshot;
+mod resume;
 pub mod shell;
 pub mod update;
 // The Win32 calls are cfg(windows); the pid-selection logic inside is pure
@@ -203,6 +204,12 @@ pub trait Session {
     }
     fn permission_modes(&self) -> Vec<PermissionModeChoice> {
         Vec::new()
+    }
+    /// The sandbox the provider says this Session runs in, in `read-only`,
+    /// `workspace-write` or `danger-full-access` words. `None` when the
+    /// provider has none or has not said: a default is never guessed.
+    fn sandbox(&self) -> Option<String> {
+        None
     }
     /// Native follow-ups are optional; providers without them use the
     /// one-shot prediction path. These never enter the durable transcript.
@@ -412,6 +419,10 @@ impl Session for CodexSession {
         CodexSession::permission_modes(self)
     }
 
+    fn sandbox(&self) -> Option<String> {
+        CodexSession::sandbox(self)
+    }
+
     fn supports_control(&self, kind: ControlKind) -> bool {
         CodexSession::supports_control(self, kind)
     }
@@ -472,6 +483,7 @@ impl Session for CodexSession {
     }
 }
 pub use claude::discovery::list as claude_sessions;
+pub use resume::{ResumeFailure, ResumeRefused};
 /// Each Provider's title filler, beside its Session — the titler runs
 /// whichever the Thread's Provider is.
 pub use claude::title as claude_title;

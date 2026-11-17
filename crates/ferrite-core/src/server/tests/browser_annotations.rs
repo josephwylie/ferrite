@@ -83,11 +83,11 @@ fn browser_annotation_receipt_survives_navigation_and_fetches_only_retained_imag
                 owner,
                 lease,
                 capture: capture.clone(),
-                png: WirePng {
+                png: Some(WirePng {
                     base64: base64::engine::general_purpose::STANDARD.encode(png),
                     width: 1,
                     height: 1,
-                },
+                }),
             },
         }))
         .unwrap();
@@ -146,13 +146,13 @@ fn browser_annotation_receipt_survives_navigation_and_fetches_only_retained_imag
         .with_feedback("Keep the old page as evidence".into(), vec![])
         .unwrap();
     assert_eq!(feedback.capture(), &capture);
-    assert_eq!(feedback.original(), annotation.original());
+    assert_eq!(feedback.original().unwrap(), annotation.original().unwrap());
     let Some(Done::BrowserCaptureImage { png: fetched }) = request(
         &mut owner_window,
         905,
         Op::BrowserCaptureImage {
             thread,
-            hash: annotation.original_hash().to_owned(),
+            hash: annotation.original_hash().unwrap().to_owned(),
         },
     )
     .unwrap() else {

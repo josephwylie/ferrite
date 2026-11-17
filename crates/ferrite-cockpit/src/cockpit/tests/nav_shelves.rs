@@ -127,7 +127,9 @@ fn a_resorted_card_slides_and_a_parked_one_leaves_a_ghost(cx: &mut TestAppContex
     let travel = |view: &Entity<CockpitView>, cx: &mut gpui::VisualTestContext| {
         view.read_with(cx, |view, cx| {
             let now = cx.background_executor().now();
-            view.nav_motion
+            view.nav_view
+                .read(cx)
+                .motion
                 .borrow()
                 .offset(super::super::nav_list::NavKey::Card(mover), now)
         })
@@ -155,14 +157,14 @@ fn a_resorted_card_slides_and_a_parked_one_leaves_a_ghost(cx: &mut TestAppContex
     view.read_with(cx, |view, cx| {
         let now = cx.background_executor().now();
         assert!(
-            view.nav_motion.borrow().ghost_count(now) > 0,
+            view.nav_view.read(cx).motion.borrow().ghost_count(now) > 0,
             "its card leaves as a ghost"
         )
     });
     leap(cx, Duration::from_millis(400));
     view.read_with(cx, |view, cx| {
         let now = cx.background_executor().now();
-        assert_eq!(view.nav_motion.borrow().ghost_count(now), 0, "and goes")
+        assert_eq!(view.nav_view.read(cx).motion.borrow().ghost_count(now), 0, "and goes")
     });
 }
 
@@ -197,7 +199,7 @@ fn the_search_row_replaces_the_list_with_its_results(cx: &mut TestAppContext) {
     tick(cx);
     cx.simulate_input("needle");
     tick(cx);
-    let typed = view.read_with(cx, |view, cx| view.nav_search.read(cx).text().to_string());
+    let typed = view.read_with(cx, |view, cx| view.nav_view.read(cx).search.read(cx).text().to_string());
     assert!(cx.debug_bounds("nav-results").is_some(), "the results; typed {typed:?}");
     let result: &'static str = format!("nav-result-{}", threads[1].get()).leak();
     let row = cx.debug_bounds(result).expect("its row");
@@ -220,6 +222,54 @@ fn the_search_row_replaces_the_list_with_its_results(cx: &mut TestAppContext) {
     tick(cx);
     assert!(cx.debug_bounds("nav-no-results").is_none());
     assert!(cx.debug_bounds(card(threads[0])).is_some(), "the list is back");
+}
+
+/// ↓ in the search field highlights a Thread, not a place: when a live
+/// update moves it, the highlight stays on it and ⏎ opens it, never the
+/// Thread that took its place.
+#[gpui::test]
+fn the_search_highlight_follows_its_thread_through_live_updates(cx: &mut TestAppContext) {
+    bind_production_keys(cx);
+    let (core, _fake) = cockpit("nav-search-live", 3);
+    let threads = sorted_threads(&core);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    hide_panel(&view, cx);
+    view.update(cx, |view, cx| {
+        for (n, thread) in threads.iter().enumerate() {
+            view.cockpit.rename_thread(*thread, &format!("Needle {n}")).unwrap();
+            view.facts.renamed(&view.cockpit, *thread);
+        }
+        view.refresh_names();
+        cx.notify();
+    });
+    tick(cx);
+    let field = cx.debug_bounds("nav-search").expect("the field");
+    cx.simulate_click(field.center(), gpui::Modifiers::none());
+    tick(cx);
+    cx.simulate_input("needle");
+    cx.simulate_keystrokes("down");
+    tick(cx);
+
+    let results = |view: &CockpitView, cx: &gpui::App| {
+        let state = view.nav_state();
+        view.nav_view.read(cx).search_matches(&state, cx).iter().map(|row| row.thread).collect::<Vec<_>>()
+    };
+    let (order, lit) = view.read_with(cx, |view, cx| (results(view, cx), view.nav_view.read(cx).search_pick.get()));
+    assert_eq!(order.len(), 3);
+    assert_eq!(lit, Some(order[1]), "↓ lit the second result");
+
+    view.update(cx, |view, cx| view.park_listed(&[order[0]], cx));
+    tick(cx);
+    let after = view.read_with(cx, |view, cx| results(view, cx));
+    assert_ne!(after[1], order[1], "the live update moved the highlighted Thread");
+
+    cx.simulate_keystrokes("enter");
+    tick(cx);
+    assert_eq!(
+        view.read_with(cx, |view, _| view.focused_thread()),
+        Some(order[1]),
+        "⏎ opens the Thread that was highlighted"
+    );
 }
 
 /// The foot: Settings, Pull requests and Usage at 32px; a Park stands
@@ -247,9 +297,9 @@ fn the_foot_offers_undo_for_a_park(cx: &mut TestAppContext) {
 
     cx.simulate_keystrokes("cmd-shift-e cmd-z");
     tick(cx);
-    view.read_with(cx, |view, _| {
+    view.read_with(cx, |view, cx| {
         assert!(view.facts.parked().is_empty(), "⌘Z revived it");
-        assert!(view.nav_undo.is_none());
+        assert!(view.nav_view.read(cx).undo.is_none());
     });
     assert!(cx.debug_bounds("nav-undo-notice").is_none());
 
@@ -272,8 +322,8 @@ fn the_keyboard_walks_the_list_and_follows_a_parked_thread(cx: &mut TestAppConte
     hide_panel(&view, cx);
     tick(cx);
     let cursor = |view: &Entity<CockpitView>, cx: &mut gpui::VisualTestContext| {
-        view.read_with(cx, |view, _| {
-            view.nav_cursor.clone().map(|cursor| cursor.item)
+        view.read_with(cx, |view, cx| {
+            view.nav_view.read(cx).cursor.clone().map(|cursor| cursor.item)
         })
     };
     cx.simulate_keystrokes("cmd-shift-e end");
@@ -295,10 +345,10 @@ fn the_keyboard_walks_the_list_and_follows_a_parked_thread(cx: &mut TestAppConte
     };
     cx.simulate_keystrokes("cmd-w");
     tick(cx);
-    view.read_with(cx, |view, _| {
+    view.read_with(cx, |view, cx| {
         assert!(view.facts.parked().contains(&thread), "⌘W parked it");
         assert_eq!(
-            view.nav_cursor.clone().map(|cursor| cursor.item),
+            view.nav_view.read(cx).cursor.clone().map(|cursor| cursor.item),
             Some(nav::NavItem::Thread(thread)),
             "the cursor follows it"
         );
@@ -317,19 +367,17 @@ fn the_keyboard_walks_the_list_and_follows_a_parked_thread(cx: &mut TestAppConte
     }
 }
 
-/// The Filter menu lists every Project to filter by, and the Groups,
-/// which open from there.
+/// The Filter menu lists every Project to filter by, and nothing else.
 #[gpui::test]
-fn the_filter_menu_scopes_a_project_and_opens_groups(cx: &mut TestAppContext) {
-    let (mut core, _fake) = cockpit("nav-filter", 3);
-    let group = group_all(&mut core);
+fn the_filter_menu_scopes_a_project(cx: &mut TestAppContext) {
+    let (core, _fake) = cockpit("nav-filter", 3);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     hide_panel(&view, cx);
     tick(cx);
     let button = cx.debug_bounds("nav-filter").expect("Filter");
     cx.simulate_mouse_down(button.center(), gpui::MouseButton::Left, gpui::Modifiers::none());
     tick(cx);
-    let (project, open_group) = view.read_with(cx, |view, _| {
+    let project = view.read_with(cx, |view, _| {
         let menu = view.context_menu.as_ref().expect("its menu");
         assert_eq!(menu.target, MenuTarget::NavFilter);
         let verbs: Vec<MenuVerb> = menu.rows.iter().flatten().map(|(_, verb)| *verb).collect();
@@ -341,14 +389,15 @@ fn the_filter_menu_scopes_a_project_and_opens_groups(cx: &mut TestAppContext) {
                 _ => None,
             })
             .expect("a Project");
-        (project, verbs.contains(&MenuVerb::OpenGroup(group)))
+        assert!(
+            verbs.iter().all(|verb| matches!(verb, MenuVerb::FilterProject(_))),
+            "Projects only: {verbs:?}"
+        );
+        project
     });
-    assert!(open_group, "the Group opens from here");
     view.update_in(cx, |view, window, cx| {
         view.run_menu_verb(MenuTarget::NavFilter, MenuVerb::FilterProject(Some(project)), window, cx);
         assert_eq!(view.nav_filter, Some(project));
-        view.run_menu_verb(MenuTarget::NavFilter, MenuVerb::OpenGroup(group), window, cx);
-        assert_eq!(view.cockpit.roster().view(), View::Group(group));
     });
 }
 
@@ -443,7 +492,12 @@ fn a_slim_row_fades_its_age_into_revive(cx: &mut TestAppContext) {
     view.update(cx, |view, cx| {
         view.set_shelf_open(nav::Shelf::Parked, true, cx)
     });
-    tick(cx);
+    for _ in 0..3 {
+        cx.executor()
+            .advance_clock(Duration::from_millis(ferrite_ui::theme::MOTION_FOLD_MS));
+        cx.update(|window, cx| window.simulate_next_frame(cx));
+        cx.run_until_parked();
+    }
     let row = cx.debug_bounds(card(threads[0])).expect("its slim row");
     assert_eq!(row.size.height, px(ferrite_ui::theme::NAV_SLIM_H));
     assert_eq!(
@@ -492,7 +546,7 @@ fn a_resize_does_not_send_shelf_rows_travelling(cx: &mut TestAppContext) {
     let travel = |view: &Entity<CockpitView>, cx: &mut gpui::VisualTestContext| {
         view.read_with(cx, |view, cx| {
             let now = cx.background_executor().now();
-            view.nav_motion.borrow().offset(key, now)
+            view.nav_view.read(cx).motion.borrow().offset(key, now)
         })
     };
     assert_eq!(travel(&view, cx), None, "at rest");
@@ -503,4 +557,133 @@ fn a_resize_does_not_send_shelf_rows_travelling(cx: &mut TestAppContext) {
     let header = cx.debug_bounds("nav-shelf-parked").unwrap();
     let row = cx.debug_bounds(card(threads[0])).unwrap();
     assert!(row.top() >= header.bottom(), "under its header: {row:?} {header:?}");
+}
+
+/// Rename from a Parked or a Snoozed row's menu draws the editor in that
+/// row, on the title, and Enter saves it.
+#[gpui::test]
+fn rename_on_a_slim_row_draws_the_editor(cx: &mut TestAppContext) {
+    cx.update(|cx| cx.bind_keys([KeyBinding::new("enter", Submit, None)]));
+    let (mut core, _fake) = cockpit("nav-slim-rename", 3);
+    let threads = sorted_threads(&core);
+    core.park(threads[0]).unwrap();
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    hide_panel(&view, cx);
+    cx.simulate_resize(gpui::size(px(1000.), px(700.)));
+    view.update(cx, |view, cx| {
+        view.set_shelf_open(nav::Shelf::Parked, true, cx);
+        let later = ferrite_core::clock::system_time() + Duration::from_secs(3600);
+        view.snooze_thread(threads[1], Some(later), cx);
+        view.set_shelf_open(nav::Shelf::Snoozed, true, cx);
+    });
+    tick(cx);
+    for (at, thread) in [("Parked", threads[0]), ("Snoozed", threads[1])] {
+        view.update(cx, |view, cx| view.open_context_menu(MenuTarget::Thread(thread), gpui::point(px(10.), px(10.)), cx));
+        tick(cx);
+        let rename = view.read_with(cx, |view, cx| {
+            view.context_rows(MenuTarget::Thread(thread), cx)
+                .iter()
+                .position(|row| matches!(row, Some((_, verb)) if *verb == MenuVerb::Rename))
+                .expect("the menu offers Rename")
+        });
+        view.update_in(cx, |view, window, cx| view.press_menu_row(rename, window, cx));
+        tick(cx);
+        assert!(
+            cx.debug_bounds("rename-field").is_some(),
+            "{at}: the rename field is drawn in the row"
+        );
+        let editor = view.read_with(cx, |view, _| view.rename.clone().unwrap().1);
+        editor.update(cx, |editor, cx| editor.set(format!("{at} renamed"), cx));
+        cx.simulate_keystrokes("enter");
+        tick(cx);
+        assert!(cx.debug_bounds("rename-field").is_none(), "{at}: it closed");
+        view.read_with(cx, |view, _| {
+            assert_eq!(view.facts.name(thread).as_ref(), format!("{at} renamed"));
+        });
+    }
+}
+
+/// A shelf's body folds open and shut over `MOTION_FOLD_MS`: the heading
+/// above it moves continuously, a reversal turns round from the frame on
+/// screen, and the shown Thread's row stays where it is.
+#[gpui::test]
+fn a_shelf_folds_and_turns_round_from_where_it_is(cx: &mut TestAppContext) {
+    ferrite_ui::motion::testing::drive();
+    let (mut core, _fake) = cockpit("nav-shelf-fold", 4);
+    let threads = sorted_threads(&core);
+    core.park(threads[0]).unwrap();
+    core.park(threads[1]).unwrap();
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    hide_panel(&view, cx);
+    cx.simulate_resize(gpui::size(px(1000.), px(700.)));
+    tick(cx);
+    let top = |cx: &mut gpui::VisualTestContext| {
+        f32::from(cx.debug_bounds("nav-shelf-parked").unwrap().top())
+    };
+    let live = cx.debug_bounds(card(threads[2])).unwrap();
+    let step = |ms: u64, cx: &mut gpui::VisualTestContext| {
+        cx.executor().advance_clock(Duration::from_millis(ms));
+        cx.update(|window, cx| window.simulate_next_frame(cx));
+        cx.run_until_parked();
+    };
+    let folded = top(cx);
+    let header = cx.debug_bounds("nav-shelf-parked").unwrap();
+    cx.simulate_click(header.center(), gpui::Modifiers::none());
+    cx.run_until_parked();
+    step(20, cx);
+    step(20, cx);
+    let part = top(cx);
+    assert!(part < folded, "opening lifts the heading: {part} < {folded}");
+    step(ferrite_ui::theme::MOTION_FOLD_MS, cx);
+    step(16, cx);
+    let open = top(cx);
+    assert!(open < part, "and settles higher: {open} < {part}");
+    let header = cx.debug_bounds("nav-shelf-parked").unwrap();
+    cx.simulate_click(header.center(), gpui::Modifiers::none());
+    cx.run_until_parked();
+    step(20, cx);
+    step(20, cx);
+    let closing = top(cx);
+    assert!(closing > open && closing < folded, "closing: {closing}");
+    let header = cx.debug_bounds("nav-shelf-parked").unwrap();
+    cx.simulate_click(header.center(), gpui::Modifiers::none());
+    cx.run_until_parked();
+    step(1, cx);
+    assert!(
+        (top(cx) - closing).abs() < 12.0,
+        "a reversal starts from the frame on screen: {} from {closing}",
+        top(cx)
+    );
+    step(ferrite_ui::theme::MOTION_FOLD_MS, cx);
+    step(16, cx);
+    assert_eq!(top(cx), open, "and opens fully");
+    assert_eq!(
+        cx.debug_bounds(card(threads[2])).unwrap().top(),
+        live.top(),
+        "a live card above does not move"
+    );
+}
+
+/// With motion reduced a shelf opens and shuts in the click's own frame.
+#[gpui::test]
+fn a_shelf_snaps_when_motion_is_reduced(cx: &mut TestAppContext) {
+    ferrite_ui::motion::testing::drive();
+    let (mut core, _fake) = cockpit("nav-shelf-reduced", 4);
+    let threads = sorted_threads(&core);
+    core.park(threads[0]).unwrap();
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    hide_panel(&view, cx);
+    cx.simulate_resize(gpui::size(px(1000.), px(700.)));
+    cx.update(|_, cx| cx.set_reduce_motion(true));
+    tick(cx);
+    let header = cx.debug_bounds("nav-shelf-parked").unwrap();
+    cx.simulate_click(header.center(), gpui::Modifiers::none());
+    cx.run_until_parked();
+    cx.update(|window, cx| window.simulate_next_frame(cx));
+    cx.run_until_parked();
+    let row = cx.debug_bounds(card(threads[0])).expect("open at once");
+    assert!(
+        cx.debug_bounds("nav-shelf-parked").unwrap().bottom() <= row.top() + px(1.),
+        "the row sits in its place under the heading"
+    );
 }

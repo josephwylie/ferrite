@@ -189,7 +189,7 @@ fn answers_underline_links_keep_columns_left_and_frame_images() {
 fn edits_fold_and_an_edits_diff_waits_to_be_opened(cx: &mut TestAppContext) {
     let (mut core, fake) = cockpit("ct-banner-rows", 1);
     let thread = core.threads()[0];
-    core.send(thread, "Fix the nav".into());
+    let _ = core.send(thread, "Fix the nav".into());
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     cx.simulate_resize(gpui::size(px(1200.), px(900.)));
     for (id, old, new) in [
@@ -287,7 +287,7 @@ fn a_running_test_suite_shows_its_bar_and_count(cx: &mut TestAppContext) {
 fn a_long_edit_diff_caps_and_folds(cx: &mut TestAppContext) {
     let (mut core, fake) = cockpit("ct-long-diff", 1);
     let thread = core.threads()[0];
-    core.send(thread, "Rewrite the nav".into());
+    let _ = core.send(thread, "Rewrite the nav".into());
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     super::hold_nav_open(&view, cx);
     cx.simulate_resize(gpui::size(px(1600.), px(1000.)));
@@ -362,7 +362,7 @@ fn a_long_edit_diff_caps_and_folds(cx: &mut TestAppContext) {
 fn a_long_first_line_leaves_its_fold_in_the_row(cx: &mut TestAppContext) {
     let (mut core, fake) = cockpit("ct-fold-head", 1);
     let thread = core.threads()[0];
-    core.send(thread, "Summarise".into());
+    let _ = core.send(thread, "Summarise".into());
     let (_view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     let first = "a-p06 skip Tribe Market (Level Group OMO43465) ".repeat(4);
     fake.streams.borrow()[0]

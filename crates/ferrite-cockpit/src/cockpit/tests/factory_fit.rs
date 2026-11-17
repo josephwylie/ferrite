@@ -260,7 +260,7 @@ fn an_empty_projects_factory_is_one_palette_search_away(cx: &mut TestAppContext)
     tick(cx);
     view.read_with(cx, |view, _| {
         assert_eq!(
-            view.factory_view.as_ref().map(|view| view.project),
+            view.factory().map(|view| view.project),
             Some(empty)
         );
     });
@@ -324,8 +324,7 @@ fn an_answer_sent_lets_the_keyboard_go(cx: &mut TestAppContext) {
     cx.simulate_input("plan the week");
     tick(cx);
     let opening = view.read_with(cx, |view, cx| {
-        view.factory_view
-            .as_ref()
+        view.factory()
             .and_then(|view| view.opening.as_ref())
             .map(|field| field.read(cx).text().to_string())
     });
@@ -415,7 +414,7 @@ fn the_coordinators_pane_draws_without_a_click(cx: &mut TestAppContext) {
         view.open_factory(project, cx);
         // The surface already shows when the Coordinator's Pane arrives:
         // nothing moved the roster to it.
-        view.factory_view.as_mut().unwrap().surface = Surface::Coordinator;
+        view.factory_mut().unwrap().surface = Surface::Coordinator;
         cx.notify();
     });
     tick(cx);
@@ -593,8 +592,7 @@ fn the_new_task_sheet_closes_with_its_menu_and_keeps_its_words(cx: &mut TestAppC
     view.update(cx, |view, cx| view.open_new_task(cx));
     tick(cx);
     let typed = view.read_with(cx, |view, cx| {
-        view.factory_view
-            .as_ref()
+        view.factory()
             .and_then(|view| view.sheet.as_ref())
             .map(|sheet| sheet.instructions.read(cx).text().to_string())
     });
@@ -641,7 +639,7 @@ fn focusing_a_worker_by_id_brings_its_panel_forward_from_workflows(cx: &mut Test
     assert!(shows(cx, "task-worker"));
     view.read_with(cx, |view, _| {
         assert_eq!(
-            view.factory_view.as_ref().map(|view| view.surface),
+            view.factory().map(|view| view.surface),
             Some(Surface::Board)
         );
     });
@@ -817,6 +815,8 @@ fn the_workflow_menus_offer_what_applies_and_keep_the_selection_in_view(cx: &mut
     tick(cx);
 
     click(cx, "outline-row-s-1-selected");
+    cx.simulate_keystrokes("escape");
+    tick(cx);
     for _ in 0..5 {
         cx.simulate_keystrokes("down");
         tick(cx);

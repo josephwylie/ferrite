@@ -1,0 +1,61 @@
+Server listening on 127.0.0.1 port 56341.
+Connection from 127.0.0.1 port 56342 on 127.0.0.1 port 56341
+kex_exchange_identification: Connection closed by remote host [preauth]
+Connection closed by 127.0.0.1 port 56342 [preauth]
+srclimit_penalise: ipv4: new 127.0.0.1/32 deferred penalty of 1.000 seconds for penalty: connections without attempting authentication
+Connection from 127.0.0.1 port 56343 on 127.0.0.1 port 56341
+Accepted key ED25519 SHA256:L9d1ew2xO3y6+RWKOjF9Boi+B7H9rqjBMtH7gvKiRG8 found at /Users/josephwylie/Desktop/Projects/ferrite-remote-connections/docs/audits/2026-11-16-remote-connections/parity/native-7/ssh_authorized_keys:1
+Postponed publickey for josephwylie from 127.0.0.1 port 56343 ssh2 [preauth]
+Accepted key ED25519 SHA256:L9d1ew2xO3y6+RWKOjF9Boi+B7H9rqjBMtH7gvKiRG8 found at /Users/josephwylie/Desktop/Projects/ferrite-remote-connections/docs/audits/2026-11-16-remote-connections/parity/native-7/ssh_authorized_keys:1
+Accepted publickey for josephwylie from 127.0.0.1 port 56343 ssh2: ED25519 SHA256:L9d1ew2xO3y6+RWKOjF9Boi+B7H9rqjBMtH7gvKiRG8
+BSM audit: bsm_audit_session_setup: setaudit_addr failed: Operation not permitted
+User child is on pid 87593
+Starting session: forced-command (config) '/Users/josephwylie/.venvs/main/bin/python3 /Users/josephwylie/Desktop/Projects/ferrite-remote-connections/scripts/verify-remote-parity.py --output /Users/josephwylie/Desktop/Projects/ferrite-remote-connections/docs/audits/2026-11-16-remote-connections/parity/native-7 remote-entry' for josephwylie from 127.0.0.1 port 56343 id 0
+Received disconnect from 127.0.0.1 port 56343:11: disconnected by user
+Disconnected from user josephwylie 127.0.0.1 port 56343
+Connection from 127.0.0.1 port 56367 on 127.0.0.1 port 56341
+Accepted key ED25519 SHA256:73zP8mxG6DNUA7gSHm8z238IyeDeK96b+xfJDpokXC8 found at /Users/josephwylie/Desktop/Projects/ferrite-remote-connections/docs/audits/2026-11-16-remote-connections/parity/native-7/ssh_authorized_keys:2
+Postponed publickey for josephwylie from 127.0.0.1 port 56367 ssh2 [preauth]
+Accepted key ED25519 SHA256:73zP8mxG6DNUA7gSHm8z238IyeDeK96b+xfJDpokXC8 found at /Users/josephwylie/Desktop/Projects/ferrite-remote-connections/docs/audits/2026-11-16-remote-connections/parity/native-7/ssh_authorized_keys:2
+Accepted publickey for josephwylie from 127.0.0.1 port 56367 ssh2: ED25519 SHA256:73zP8mxG6DNUA7gSHm8z238IyeDeK96b+xfJDpokXC8
+BSM audit: bsm_audit_session_setup: setaudit_addr failed: Operation not permitted
+User child is on pid 99937
+Starting session: forced-command (config) '/Users/josephwylie/.venvs/main/bin/python3 /Users/josephwylie/Desktop/Projects/ferrite-remote-connections/scripts/verify-remote-parity.py --output /Users/josephwylie/Desktop/Projects/ferrite-remote-connections/docs/audits/2026-11-16-remote-connections/parity/native-7 remote-entry' for josephwylie from 127.0.0.1 port 56367 id 0
+Close session: user josephwylie from 127.0.0.1 port 56367 id 0
+Starting session: forced-command (config) '/Users/josephwylie/.venvs/main/bin/python3 /Users/josephwylie/Desktop/Projects/ferrite-remote-connections/scripts/verify-remote-parity.py --output /Users/josephwylie/Desktop/Projects/ferrite-remote-connections/docs/audits/2026-11-16-remote-connections/parity/native-7 remote-entry' for josephwylie from 127.0.0.1 port 56367 id 0
+Close session: user josephwylie from 127.0.0.1 port 56367 id 0
+Starting session: forced-command (config) '/Users/josephwylie/.venvs/main/bin/python3 /Users/josephwylie/Desktop/Projects/ferrite-remote-connections/scripts/verify-remote-parity.py --output /Users/josephwylie/Desktop/Projects/ferrite-remote-connections/docs/audits/2026-11-16-remote-connections/parity/native-7 remote-entry' for josephwylie from 127.0.0.1 port 56367 id 0
+Starting session: forced-command (config) '/Users/josephwylie/.venvs/main/bin/python3 /Users/josephwylie/Desktop/Projects/ferrite-remote-connections/scripts/verify-remote-parity.py --output /Users/josephwylie/Desktop/Projects/ferrite-remote-connections/docs/audits/2026-11-16-remote-connections/parity/native-7 remote-entry' for josephwylie from 127.0.0.1 port 56367 id 1
+Close session: user josephwylie from 127.0.0.1 port 56367 id 1
+Starting session: forced-command (config) '/Users/josephwylie/.venvs/main/bin/python3 /Users/josephwylie/Desktop/Projects/ferrite-remote-connections/scripts/verify-remote-parity.py --output /Users/josephwylie/Desktop/Projects/ferrite-remote-connections/docs/audits/2026-11-16-remote-connections/parity/native-7 remote-entry' for josephwylie from 127.0.0.1 port 56367 id 1
+Close session: user josephwylie from 127.0.0.1 port 56367 id 1
+Starting session: forced-command (config) '/Users/josephwylie/.venvs/main/bin/python3 /Users/josephwylie/Desktop/Projects/ferrite-remote-connections/scripts/verify-remote-parity.py --output /Users/josephwylie/Desktop/Projects/ferrite-remote-connections/docs/audits/2026-11-16-remote-connections/parity/native-7 remote-entry' for josephwylie from 127.0.0.1 port 56367 id 1
+Close session: user josephwylie from 127.0.0.1 port 56367 id 1
+Starting session: forced-command (config) '/Users/josephwylie/.venvs/main/bin/python3 /Users/josephwylie/Desktop/Projects/ferrite-remote-connections/scripts/verify-remote-parity.py --output /Users/josephwylie/Desktop/Projects/ferrite-remote-connections/docs/audits/2026-11-16-remote-connections/parity/native-7 remote-entry' for josephwylie from 127.0.0.1 port 56367 id 1
+Close session: user josephwylie from 127.0.0.1 port 56367 id 1
+Starting session: forced-command (config) '/Users/josephwylie/.venvs/main/bin/python3 /Users/josephwylie/Desktop/Projects/ferrite-remote-connections/scripts/verify-remote-parity.py --output /Users/josephwylie/Desktop/Projects/ferrite-remote-connections/docs/audits/2026-11-16-remote-connections/parity/native-7 remote-entry' for josephwylie from 127.0.0.1 port 56367 id 1
+Close session: user josephwylie from 127.0.0.1 port 56367 id 1
+Starting session: forced-command (config) '/Users/josephwylie/.venvs/main/bin/python3 /Users/josephwylie/Desktop/Projects/ferrite-remote-connections/scripts/verify-remote-parity.py --output /Users/josephwylie/Desktop/Projects/ferrite-remote-connections/docs/audits/2026-11-16-remote-connections/parity/native-7 remote-entry' for josephwylie from 127.0.0.1 port 56367 id 1
+Close session: user josephwylie from 127.0.0.1 port 56367 id 1
+Starting session: forced-command (config) '/Users/josephwylie/.venvs/main/bin/python3 /Users/josephwylie/Desktop/Projects/ferrite-remote-connections/scripts/verify-remote-parity.py --output /Users/josephwylie/Desktop/Projects/ferrite-remote-connections/docs/audits/2026-11-16-remote-connections/parity/native-7 remote-entry' for josephwylie from 127.0.0.1 port 56367 id 1
+Close session: user josephwylie from 127.0.0.1 port 56367 id 1
+Starting session: forced-command (config) '/Users/josephwylie/.venvs/main/bin/python3 /Users/josephwylie/Desktop/Projects/ferrite-remote-connections/scripts/verify-remote-parity.py --output /Users/josephwylie/Desktop/Projects/ferrite-remote-connections/docs/audits/2026-11-16-remote-connections/parity/native-7 remote-entry' for josephwylie from 127.0.0.1 port 56367 id 1
+Close session: user josephwylie from 127.0.0.1 port 56367 id 1
+Starting session: forced-command (config) '/Users/josephwylie/.venvs/main/bin/python3 /Users/josephwylie/Desktop/Projects/ferrite-remote-connections/scripts/verify-remote-parity.py --output /Users/josephwylie/Desktop/Projects/ferrite-remote-connections/docs/audits/2026-11-16-remote-connections/parity/native-7 remote-entry' for josephwylie from 127.0.0.1 port 56367 id 1
+Close session: user josephwylie from 127.0.0.1 port 56367 id 1
+Starting session: forced-command (config) '/Users/josephwylie/.venvs/main/bin/python3 /Users/josephwylie/Desktop/Projects/ferrite-remote-connections/scripts/verify-remote-parity.py --output /Users/josephwylie/Desktop/Projects/ferrite-remote-connections/docs/audits/2026-11-16-remote-connections/parity/native-7 remote-entry' for josephwylie from 127.0.0.1 port 56367 id 1
+Close session: user josephwylie from 127.0.0.1 port 56367 id 1
+Starting session: forced-command (config) '/Users/josephwylie/.venvs/main/bin/python3 /Users/josephwylie/Desktop/Projects/ferrite-remote-connections/scripts/verify-remote-parity.py --output /Users/josephwylie/Desktop/Projects/ferrite-remote-connections/docs/audits/2026-11-16-remote-connections/parity/native-7 remote-entry' for josephwylie from 127.0.0.1 port 56367 id 1
+Close session: user josephwylie from 127.0.0.1 port 56367 id 1
+Attempt to write login records by non-root user (aborting)
+Starting session: forced-command (config) '/Users/josephwylie/.venvs/main/bin/python3 /Users/josephwylie/Desktop/Projects/ferrite-remote-connections/scripts/verify-remote-parity.py --output /Users/josephwylie/Desktop/Projects/ferrite-remote-connections/docs/audits/2026-11-16-remote-connections/parity/native-7 remote-entry' on ttys001 for josephwylie from 127.0.0.1 port 56367 id 1
+Attempt to write login records by non-root user (aborting)
+Close session: user josephwylie from 127.0.0.1 port 56367 id 1
+Close session: user josephwylie from 127.0.0.1 port 56367 id 0
+Starting session: forced-command (config) '/Users/josephwylie/.venvs/main/bin/python3 /Users/josephwylie/Desktop/Projects/ferrite-remote-connections/scripts/verify-remote-parity.py --output /Users/josephwylie/Desktop/Projects/ferrite-remote-connections/docs/audits/2026-11-16-remote-connections/parity/native-7 remote-entry' for josephwylie from 127.0.0.1 port 56367 id 0
+Close session: user josephwylie from 127.0.0.1 port 56367 id 0
+Starting session: forced-command (config) '/Users/josephwylie/.venvs/main/bin/python3 /Users/josephwylie/Desktop/Projects/ferrite-remote-connections/scripts/verify-remote-parity.py --output /Users/josephwylie/Desktop/Projects/ferrite-remote-connections/docs/audits/2026-11-16-remote-connections/parity/native-7 remote-entry' for josephwylie from 127.0.0.1 port 56367 id 0
+Close session: user josephwylie from 127.0.0.1 port 56367 id 0
+Received signal 15; terminating.
+Received disconnect from 127.0.0.1 port 56367:11: disconnected by user
+Disconnected from user josephwylie 127.0.0.1 port 56367

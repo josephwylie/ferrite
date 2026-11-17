@@ -1,6 +1,7 @@
 # 0025 — Agents live in a headless Server; the window is its client
 
-Status: accepted 2026-10-15 (Herdr benchmark, Foundation #1).
+Status: accepted 2026-10-15 (Herdr benchmark, Foundation #1). Amended
+2026-11-17 by the Groups amendment below.
 
 ## Context
 
@@ -216,7 +217,7 @@ Client → Server:
 |---|---|
 | `hello {generation, client:{name, version}, capabilities[]}` | Gen-1 capabilities: `render_visual` (this client can draw Visuals); `parked_threads` (it lists the Server's parked Threads off `parked`, ADR 0026; every window says it, and a Server now publishes rows to every window). |
 | `watch {thread, resume?:{boot_id, after}}` / `unwatch {thread}` | Stream a Thread's inputs. Without `resume`, or when it cannot be met, the stream starts with its history. Only watched Threads stream; every Thread's `ThreadState` and `digest` are always sent. A window watches the Threads it draws at Transcript level, and unwatches one 30 seconds after it stops drawing it (ADR 0032). |
-| `command {id, op, …}` | One per act that changes shared or durable state: `open`, `bootstrap` (a Draft's first prompt; replied once the Thread starts), `cancel_bootstrap {request}`, `send`, `queue`, `unqueue`, `cancel_queued {edit?}`, `take_recovered`, `recall`, `interrupt`, `stop_subagent {thread, key}`, `answer {thread, handle, answer}`, `control`, `set_model`, `set_effort`, `set_provider`, `rename`, `park`, `revive`, `revive_group`, `delete`, `import`, `group` (replied with what dissolved), `layout`, `project`, `notice` (open, dismiss, read, seen), `show_subject`, `load_subject`, `say`, `worktrees_listed`, `cli_replaced`, `settings_changed`, `search_files`, `list_dir {path}`, `list_repo {project}` (ADR 0026), `review_diff {path, scope, commit?}` (replied `diff`), `review_read {path, scope, commit?, since?}` (replied `review`; a window falls back to `review_diff` on `unsupported`), `list_commits {path}`, `search_repo {path, query}`, `read_file {path, file}`, `review_pull_request {path}`, `list_files {path}`, `list_bases {path}`, `pick_base {path, base}` (ADR 0021), `pull_request {path}` (ADR 0026), `restart {when}`, `stop {when}`. Each gets exactly one `reply`. |
+| `command {id, op, …}` | One per act that changes shared or durable state: `open`, `bootstrap` (a Draft's first prompt; replied once the Thread starts), `cancel_bootstrap {request}`, `send`, `queue`, `unqueue`, `cancel_queued {edit?}`, `take_recovered`, `recall`, `interrupt`, `start_fresh {thread}` (a Thread whose provider lost its conversation starts a new one, the transcript's latest turns carried as context), `stop_subagent {thread, key}`, `answer {thread, handle, answer}`, `control`, `set_model`, `set_effort`, `set_provider`, `rename`, `park`, `revive`, `revive_group`, `delete`, `import`, `group` (replied with what dissolved), `layout`, `project`, `notice` (open, dismiss, read, seen), `show_subject`, `load_subject`, `say`, `worktrees_listed`, `cli_replaced`, `settings_changed`, `server_defaults {set?}` (replied with the Server's own file, reread; ADR 0026), `cli {action}` (`versions`, `check` or `update {provider}`: the Server's machine's CLIs, replied `clis` or `cli_updated`), `search_files`, `list_dir {path}`, `list_repo {project}` (ADR 0026), `review_diff {path, scope, commit?}` (replied `diff`), `review_read {path, scope, commit?, since?}` (replied `review`; a window falls back to `review_diff` on `unsupported`), `list_commits {path}`, `search_repo {path, query}`, `read_file {path, file}`, `review_pull_request {path}`, `list_files {path}`, `list_bases {path}`, `pick_base {path, base}` (ADR 0021), `pull_request {path}` (ADR 0026), `restart {when}`, `stop {when}`. Each gets exactly one `reply`. |
 | `rendered {request, png?, error?}` | The answer to a `render`. |
 
 Server → Client:
@@ -363,7 +364,11 @@ still pending means the operator answers again.
   A focused window reports a Thread seen only when looking at it would
   read something, since the check runs every frame.
 - Settings stay a file the window writes. `settings_changed` makes the
-  Engine reread it; it applies to the next Session, as today.
+  Engine reread it; it applies to the next Session, as today. That file is
+  this computer's: the defaults a Server's Sessions read (permissions, its
+  Factory limit, follow-up suggestions) and its provider CLIs belong to the
+  Server's machine, so a window on a machine reads and writes them through
+  `server_defaults` and `cli`, and Settings shows the machine's answer.
 
 ### Upgrading the Server
 
@@ -535,3 +540,14 @@ Never the `live_*` tests. Scripted Sessions throughout.
   memory is measured in step 9's smoke test.
 - Visuals need an attached window to be drawn; the agent is told so
   rather than kept waiting.
+
+## Amendment (2026-11-17): Groups are gone
+
+The window shows one Thread at a time, and Groups are removed. The Engine
+no longer loads, changes or publishes them. `groups.json` is left where it
+is, byte-for-byte, and never read, so a Thread that was in a Group is an
+ordinary Thread. Generation 1's spellings stay, as its rules require. A
+Server answers `group`, `layout` and `revive_group` with `unsupported`,
+sends no `groups` in its snapshot and never sends `groups` or
+`dissolved`. A `bootstrap` naming a Group starts a Thread in none. A
+window ignores the `groups` and `dissolved` an older Server sends.

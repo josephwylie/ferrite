@@ -1,3 +1,6 @@
+mod anchor;
+pub use anchor::{TextSelectionAnchor, TextSelectionSelector};
+
 use std::{
     cell::Cell,
     collections::HashMap,
@@ -1184,6 +1187,8 @@ struct SelectableTextState {
     content_key_resolver: Option<ContentKeyResolver>,
     document_position_resolver: Option<ContentKeyResolver>,
     document_member: Option<DocumentMemberBinding>,
+    retained: Vec<std::rc::Weak<anchor::RetainedPart>>,
+    anchor_sources: Option<Rc<dyn Fn(&App) -> std::collections::BTreeMap<usize, SharedString>>>,
 }
 
 impl EventEmitter<TextSelectionEvent> for SelectableTextState {}
@@ -1203,6 +1208,8 @@ impl SelectableTextState {
             content_key_resolver: None,
             document_position_resolver: None,
             document_member: None,
+            retained: Vec::new(),
+            anchor_sources: None,
         }
     }
 
@@ -1580,6 +1587,7 @@ struct WindowSelectionState {
     /// painted them, in window coordinates, by element: an element that
     /// paints again replaces its own, a cached one keeps what it drew.
     painted: HashMap<gpui::GlobalElementId, Vec<Bounds<Pixels>>>,
+    retained: Vec<std::rc::Weak<anchor::Anchor>>,
 }
 
 impl WindowSelectionState {
@@ -1758,6 +1766,7 @@ impl WindowSelectionState {
             }
         }
         self.publish_snapshots(cx);
+        self.finish_anchors(cx);
         self.frame_generation = self.frame_generation.wrapping_add(1);
         handlers
     }

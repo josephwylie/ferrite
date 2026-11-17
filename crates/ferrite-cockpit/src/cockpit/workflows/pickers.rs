@@ -68,7 +68,7 @@ impl CockpitView {
         at: Point<Pixels>,
         cx: &mut Context<Self>,
     ) {
-        let Some(view) = self.factory_view.as_mut() else {
+        let Some(view) = self.factory_mut() else {
             return;
         };
         view.picks = picks;
@@ -101,8 +101,7 @@ impl CockpitView {
 
     /// The rows of the open Factory picker.
     pub(in crate::cockpit) fn factory_pick_rows(&self) -> Vec<ferrite_ui::menu::Item> {
-        self.factory_view
-            .as_ref()
+        self.factory()
             .map(|view| view.picks.iter().map(|(item, _)| item.clone()).collect())
             .unwrap_or_default()
     }
@@ -110,8 +109,7 @@ impl CockpitView {
     /// A picker row pressed.
     pub(crate) fn factory_pick(&mut self, index: usize, cx: &mut Context<Self>) {
         let Some(pick) = self
-            .factory_view
-            .as_ref()
+            .factory()
             .and_then(|view| view.picks.get(index))
             .map(|(_, pick)| pick.clone())
         else {
@@ -175,8 +173,7 @@ impl CockpitView {
             Pick::Start(pick) => self.apply_start_pick(pick, cx),
             Pick::Process(workflow) => {
                 if let Some(sheet) = self
-                    .factory_view
-                    .as_mut()
+                    .factory_mut()
                     .and_then(|view| view.sheet.as_mut())
                 {
                     sheet.workflow = workflow;
@@ -374,8 +371,7 @@ impl CockpitView {
             return Vec::new();
         };
         let chosen = self
-            .factory_view
-            .as_ref()
+            .factory()
             .and_then(|view| view.sheet.as_ref())
             .and_then(|sheet| sheet.workflow.clone());
         let mut picks = vec![(

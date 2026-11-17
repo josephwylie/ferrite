@@ -10,7 +10,7 @@
 
 use std::time::{Duration, Instant};
 
-use ferrite_core::providers::update::{Status, Upgrade};
+use ferrite_core::providers::update::Status;
 use ferrite_core::store::Provider;
 use gpui::SharedString;
 
@@ -144,23 +144,22 @@ impl CliUpdates {
         }
     }
 
-    /// The upgrade to run for `provider` now, if one is ready, marking it
-    /// as running. `None` when there is nothing to install or Ferrite does
-    /// not know how.
-    pub fn begin_update(&mut self, provider: Provider) -> Option<Upgrade> {
+    /// Whether an upgrade is ready for `provider` now, marking it as
+    /// running. `false` when there is nothing to install or Ferrite does not
+    /// know how.
+    pub fn begin_update(&mut self, provider: Provider) -> bool {
         let State::Current(Status::Available {
             latest,
-            upgrade: Some(upgrade),
+            upgrade: Some(_),
             ..
         }) = self.state(provider)
         else {
-            return None;
+            return false;
         };
-        let upgrade = upgrade.clone();
         *self.state_mut(provider) = State::Updating {
             latest: latest.clone(),
         };
-        Some(upgrade)
+        true
     }
 
     /// Providers with an upgrade ready that automatic updating may run.
@@ -235,19 +234,21 @@ impl CliUpdates {
 }
 
 /// Settings' line under a provider's version, and its button's label when
-/// there is something to press. `live` is how many of that provider's
-/// Sessions are running.
+/// there is something to press. `place` names the machine whose copy it is
+/// ("this computer", or the machine's name); `live` is how many of that
+/// provider's Sessions are running there.
 pub fn describe(
     provider: Provider,
     state: &State,
     auto: bool,
     live: usize,
+    place: &str,
 ) -> (SharedString, Option<SharedString>) {
     let cli = name(provider);
     let (text, button) = match state {
         State::Unchecked => ("Not checked for updates yet".to_string(), None),
         State::Checking => ("Checking for updates…".to_string(), None),
-        State::Current(Status::Missing) => (format!("{cli} is not installed"), None),
+        State::Current(Status::Missing) => (format!("{cli} is not installed on {place}"), None),
         State::Current(Status::UpToDate { current }) => {
             (format!("{current} is the latest release"), None)
         }
@@ -276,13 +277,19 @@ pub fn describe(
                 String::new()
             };
             (
-                format!("{latest} is available via `{}`.{when}", upgrade.display()),
-                Some(format!("Update to {latest}")),
+                format!(
+                    "{latest} is available. {place} would run `{}`.{when}",
+                    upgrade.display()
+                ),
+                Some(format!("Update on {place} to {latest}")),
             )
         }
-        State::Updating { latest } => (format!("Installing {latest}…"), None),
+        State::Updating { latest } => (format!("Installing {latest} on {place}…"), None),
         State::Updated { version } => (
-            format!("Updated to {version}. Open Threads restart on it as each finishes its turn"),
+            format!(
+                "Updated to {version} on {place}. Its open Threads restart on it as each \
+                 finishes its turn"
+            ),
             None,
         ),
         State::Failed { detail } => (format!("The update failed: {detail}"), None),
@@ -293,6 +300,7 @@ pub fn describe(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ferrite_core::providers::update::Upgrade;
     use std::path::PathBuf;
 
     fn available(latest: &str) -> Status {
@@ -343,9 +351,9 @@ mod tests {
         updates.checked(Provider::Claude, Ok(available("2.1.270")), true);
         assert!(updates.take_toasts().is_empty());
         assert_eq!(updates.ready(), vec![Provider::Claude]);
-        assert!(updates.begin_update(Provider::Claude).is_some());
+        assert!(updates.begin_update(Provider::Claude));
         assert!(updates.ready().is_empty(), "an upgrade runs once");
-        assert!(updates.begin_update(Provider::Claude).is_none());
+        assert!(!updates.begin_update(Provider::Claude));
         updates.updated(Provider::Claude, Ok("2.1.270".into()));
         assert_eq!(
             updates.state(Provider::Claude),
@@ -404,7 +412,13 @@ mod tests {
             latest: "0.160.0".into(),
             upgrade: None,
         };
-        let (_, button) = describe(Provider::Codex, &State::Current(status), true, 0);
+        let (_, button) = describe(
+            Provider::Codex,
+            &State::Current(status),
+            true,
+            0,
+            "this computer",
+        );
         assert_eq!(button, None);
     }
 }

@@ -167,7 +167,7 @@ fn a_park_press_swept_across_three_cards_parks_all_three(cx: &mut TestAppContext
         cx.simulate_mouse_move(card.center(), Some(MouseButton::Left), gpui::Modifiers::none());
         tick(cx);
         assert!(
-            view.read_with(cx, |view, _| view.thread_row(*thread).picked),
+            view.read_with(cx, |view, cx| view.nav_view.read(cx).card_picked(*thread)),
             "a swept card wears the picked fill"
         );
     }
@@ -207,13 +207,13 @@ fn cmd_and_shift_click_pick_cards_and_park_takes_the_pick(cx: &mut TestAppContex
     cx.simulate_click(cards[2].1.center(), gpui::Modifiers::shift());
     tick(cx);
     let picked: Vec<ThreadId> = cards[..3].iter().map(|(thread, _)| *thread).collect();
-    assert_eq!(view.read_with(cx, |view, _| view.nav_picked.clone()), picked);
-    assert!(view.read_with(cx, |view, _| view.thread_row(picked[1]).picked));
+    assert_eq!(view.read_with(cx, |view, cx| view.nav_view.read(cx).picked.clone()), picked);
+    assert!(view.read_with(cx, |view, cx| view.nav_view.read(cx).card_picked(picked[1])));
 
     cx.simulate_mouse_down(cards[1].1.center(), MouseButton::Right, gpui::Modifiers::none());
     tick(cx);
-    let park = view.read_with(cx, |view, _| {
-        view.context_rows(MenuTarget::Thread(picked[1]))
+    let park = view.read_with(cx, |view, cx| {
+        view.context_rows(MenuTarget::Thread(picked[1]), cx)
             .into_iter()
             .flatten()
             .find(|(_, verb)| *verb == MenuVerb::Park)
@@ -241,7 +241,7 @@ fn a_working_card_counts_its_run_and_recedes(cx: &mut TestAppContext) {
     let clock = hold_wall_clock();
     let (mut core, _) = cockpit("nav-card-working", 2);
     let threads = sorted_threads(&core);
-    core.send(threads[0], "work".into());
+    let _ = core.send(threads[0], "work".into());
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     hide_panel(&view, cx);
     cx.simulate_resize(gpui::size(px(1000.), px(700.)));
@@ -270,7 +270,12 @@ fn a_working_card_counts_its_run_and_recedes(cx: &mut TestAppContext) {
     }
 
     view.update(cx, |view, cx| view.set_shelf_open(nav::Shelf::Working, true, cx));
-    tick(cx);
+    for _ in 0..3 {
+        cx.executor()
+            .advance_clock(Duration::from_millis(ferrite_ui::theme::MOTION_FOLD_MS));
+        cx.update(|window, cx| window.simulate_next_frame(cx));
+        cx.run_until_parked();
+    }
     let drawn = nav::testing::drawn_card(threads[0]).expect("drawn");
     assert!(drawn.receded);
     assert_eq!(drawn.opacity, NAV_CARD_RECEDED_OPACITY, "70% at rest");
@@ -302,10 +307,8 @@ fn a_working_card_counts_its_run_and_recedes(cx: &mut TestAppContext) {
 #[gpui::test]
 fn two_decisions_head_the_list_and_no_toast(cx: &mut TestAppContext) {
     use gpui::component::WindowExt as _;
-    let (mut core, fake) = cockpit("needs-you-rows", 3);
+    let (core, fake) = cockpit("needs-you-rows", 3);
     let threads = core.threads();
-    let group = group_all(&mut core);
-    core.enter_group(group).unwrap();
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     cx.simulate_resize(gpui::size(px(1440.), px(900.)));
     tick(cx);
@@ -362,13 +365,12 @@ fn two_decisions_head_the_list_and_no_toast(cx: &mut TestAppContext) {
 /// plus its hysteresis. cmd-B overrides it.
 #[gpui::test]
 fn a_narrow_window_folds_the_nav_without_saving_it(cx: &mut TestAppContext) {
-    use ferrite_ui::theme::{NAV_AUTO_FOLD_BOARD_W, NAV_AUTO_FOLD_HYSTERESIS, NAV_COLUMN_W};
+    use ferrite_ui::theme::{NAV_AUTO_FOLD_BOARD_W, NAV_AUTO_FOLD_HYSTERESIS};
     let (core, _fake) = cockpit("nav-auto-fold", 1);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     hide_panel(&view, cx);
     let saved = view.read_with(cx, |view, _| view.prefs.settings.nav_collapsed);
     // A Solo Pane leaves no gutter at the window's edge (theme rule 2).
-    let threshold = NAV_COLUMN_W + NAV_AUTO_FOLD_BOARD_W;
     cx.simulate_resize(gpui::size(px(720.), px(900.)));
     tick(cx);
     assert!(
@@ -388,6 +390,7 @@ fn a_narrow_window_folds_the_nav_without_saving_it(cx: &mut TestAppContext) {
         (false, saved),
         "nothing is saved"
     );
+    let threshold = view.read_with(cx, |view, _| view.nav_expanded_width()) + NAV_AUTO_FOLD_BOARD_W;
     cx.simulate_resize(gpui::size(px(threshold + 1.), px(900.)));
     tick(cx);
     assert!(view.read_with(cx, |view, _| view.nav_folded()), "held");
@@ -410,50 +413,6 @@ fn a_narrow_window_folds_the_nav_without_saving_it(cx: &mut TestAppContext) {
     assert_eq!(
         view.read_with(cx, |view, _| view.prefs.settings.nav_collapsed),
         saved
-    );
-}
-
-/// ⌘1…⌘9 (R5) focus the shown board's Panes in head order — reading
-/// order — whatever needs answering; a digit past the board does
-/// nothing, and in Solo ⌘1 is the Solo Pane.
-#[gpui::test]
-fn command_digits_focus_the_boards_panes_in_head_order(cx: &mut TestAppContext) {
-    let (mut core, fake) = cockpit("board-digits", 3);
-    let group = group_all(&mut core);
-    core.enter_group(group).unwrap();
-    bind_production_keys(cx);
-    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
-    cx.simulate_resize(gpui::size(px(1440.), px(900.)));
-    tick(cx);
-    fake.streams.borrow()[1].send(decision("perm_2")).unwrap();
-    tick(cx);
-    let order: Vec<ThreadId> = cx.update(|window, cx| {
-        let view = view.read(cx);
-        view.board_order(window)
-            .into_iter()
-            .map(|index| view.panes[index].thread().unwrap())
-            .collect()
-    });
-    assert_eq!(order.len(), 3);
-    cx.simulate_keystrokes("cmd-3");
-    tick(cx);
-    assert_eq!(
-        view.read_with(cx, |view, _| view.focused_thread()),
-        Some(order[2])
-    );
-    cx.simulate_keystrokes("cmd-1");
-    tick(cx);
-    assert_eq!(
-        view.read_with(cx, |view, _| view.focused_thread()),
-        Some(order[0]),
-        "the waiting Thread does not jump the order"
-    );
-    cx.simulate_keystrokes("cmd-9");
-    tick(cx);
-    assert_eq!(
-        view.read_with(cx, |view, _| view.focused_thread()),
-        Some(order[0]),
-        "a digit past the board does nothing"
     );
 }
 
@@ -585,7 +544,7 @@ fn the_parked_shelf_shows_its_rows_and_its_menu_deletes_them(cx: &mut TestAppCon
             2,
             "the open Threads are untouched"
         );
-        assert!(view.group_error.is_none(), "nothing refused");
+        assert!(view.nav_notice.text().is_none(), "nothing refused");
     });
     cx.run_until_parked();
     assert!(
@@ -610,9 +569,7 @@ fn cmd_i_hands_the_list_the_keys_on_its_first_card(cx: &mut TestAppContext) {
     fake.streams.borrow()[0].send(decision("perm_1")).unwrap();
     tick(cx);
     let held = |view: &Entity<CockpitView>, cx: &mut gpui::VisualTestContext| {
-        view.update_in(cx, |view, window, _| {
-            view.nav_keys_held && view.nav_focus.is_focused(window)
-        })
+        view.update_in(cx, |view, window, cx| view.nav_view.read(cx).holds_keys(window))
     };
     let row = |thread: ThreadId| -> &'static str { format!("nav-thread-{}", thread.get()).leak() };
     let oldest = cx.debug_bounds(row(threads[2])).expect("its card");
@@ -623,7 +580,7 @@ fn cmd_i_hands_the_list_the_keys_on_its_first_card(cx: &mut TestAppContext) {
     tick(cx);
     assert!(held(&view, cx));
     assert_eq!(
-        view.read_with(cx, |view, _| view.nav_cursor.clone().map(|cursor| cursor.item)),
+        view.read_with(cx, |view, cx| view.nav_view.read(cx).cursor.clone().map(|cursor| cursor.item)),
         Some(nav::NavItem::Thread(threads[2])),
         "on the first card"
     );
@@ -729,49 +686,36 @@ fn deleting_every_parked_thread_always_asks_first(cx: &mut TestAppContext) {
     });
 }
 
-/// #21 AC2: clicking a running nav row lands the operator on that Pane —
-/// through `focus_pane`, so a fullscreened cockpit re-aims to the
-/// clicked Thread instead of going stale on the one they left.
+/// #21 AC2: clicking a running nav row puts that Thread on screen, and
+/// clicking the other row puts it back.
 #[gpui::test]
-fn clicking_a_running_nav_row_focuses_its_pane_and_reaims_fullscreen(cx: &mut TestAppContext) {
+fn clicking_a_running_nav_row_shows_its_thread(cx: &mut TestAppContext) {
     let (core, _fake) = cockpit("nav-click", 2);
-    cx.update(|cx| {
-        cx.bind_keys([KeyBinding::new("cmd-shift-enter", ToggleFullscreen, None)]);
-    });
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     tick(cx);
-    view.read_with(cx, |view, _| assert_eq!(view.focused(), 0));
-
-    // Each Pane's row, where the nav drew it.
-    let row_at = |view: &Entity<CockpitView>, pane: usize, cx: &mut gpui::VisualTestContext| {
-        let thread = view.read_with(cx, |view, _| view.panes[pane].thread().unwrap());
+    let threads = view.read_with(cx, |view, _| {
+        [view.panes[0].thread().unwrap(), view.panes[1].thread().unwrap()]
+    });
+    let shown = |cx: &mut gpui::VisualTestContext| -> Vec<ThreadId> {
+        threads
+            .iter()
+            .copied()
+            .filter(|thread| debug_bounds(cx, format!("pane-root-{}", thread.get())).is_some())
+            .collect()
+    };
+    let row_at = |thread: ThreadId, cx: &mut gpui::VisualTestContext| {
         cx.debug_bounds(format!("nav-thread-{}", thread.get()).leak())
             .expect("every open Thread has a row")
             .center()
     };
-    let (second, first) = (row_at(&view, 1, cx), row_at(&view, 0, cx));
+    let (second, first) = (row_at(threads[1], cx), row_at(threads[0], cx));
     cx.simulate_click(second, gpui::Modifiers::none());
-    view.read_with(cx, |view, _| {
-        assert_eq!(view.focused(), 1, "the click moved focus to the row's Pane");
-    });
+    tick(cx);
+    assert_eq!(shown(cx), [threads[1]], "the click shows the row's Thread alone");
 
-    cx.simulate_keystrokes("cmd-shift-enter");
-    view.read_with(cx, |view, _| {
-        assert_eq!(
-            view.cockpit.roster().fullscreen(),
-            Some(PaneIdentity::Thread(view.panes[1].thread().unwrap()))
-        );
-    });
-    // And back to the other Pane's row.
     cx.simulate_click(first, gpui::Modifiers::none());
-    view.read_with(cx, |view, _| {
-        assert_eq!(view.focused(), 0, "the nav still answers while fullscreen");
-        assert_eq!(
-            view.cockpit.roster().fullscreen(),
-            Some(PaneIdentity::Thread(view.panes[0].thread().unwrap())),
-            "and the fullscreen re-aims with focus — the one door"
-        );
-    });
+    tick(cx);
+    assert_eq!(shown(cx), [threads[0]], "and the other row brings its Thread back");
 }
 
 /// #21 AC2: clicking a parked nav row revives that Thread — a Pane,
@@ -827,39 +771,6 @@ fn clicking_a_parked_nav_row_revives_that_thread(cx: &mut TestAppContext) {
     });
 }
 
-/// #21: the nav's width is part of the zoom input — cmd-b folding it
-/// away hands width back, so a Pane that could not hold a transcript
-/// beside the full nav can without it. cmd-b again takes the width back.
-#[gpui::test]
-fn cmd_b_collapses_the_nav_and_the_cells_grow_a_level(cx: &mut TestAppContext) {
-    let (core, _fake) = cockpit("nav-toggle", 1);
-    cx.update(|cx| {
-        cx.bind_keys([KeyBinding::new("cmd-b", ToggleNav, None)]);
-    });
-    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
-    hide_panel(&view, cx);
-    hold_nav_open(&view, cx);
-    // Sized so the Transcript threshold sits between the two nav
-    // widths: a wall tile beside the full column, Transcript without it.
-    cx.simulate_resize(gpui::size(px(550.), px(700.)));
-    tick(cx);
-    let expanded = cx.update(|window, cx| view.read(cx).level_now(window));
-    assert_eq!(
-        expanded,
-        Level::Wall,
-        "the premise: the full nav costs this cell its transcript"
-    );
-
-    cx.simulate_keystrokes("cmd-b");
-    let collapsed = cx.update(|window, cx| view.read(cx).level_now(window));
-    assert_eq!(collapsed, Level::Transcript, "folding hands width back");
-    tick(cx);
-
-    cx.simulate_keystrokes("cmd-b");
-    let reopened = cx.update(|window, cx| view.read(cx).level_now(window));
-    assert_eq!(reopened, Level::Wall, "cmd-b toggles back");
-}
-
 /// The Threads in creation order.
 fn in_order(view: &Entity<CockpitView>, cx: &mut gpui::VisualTestContext) -> Vec<ThreadId> {
     view.read_with(cx, |view, _| {
@@ -902,7 +813,7 @@ fn a_press_on_a_row_leaves_the_keys_with_the_composer(cx: &mut TestAppContext) {
         Some(other)
     );
     assert!(
-        !view.update_in(cx, |view, window, _| view.nav_focus.is_focused(window)),
+        !view.update_in(cx, |view, window, cx| view.nav_view.read(cx).focus.is_focused(window)),
         "the tree did not take the keys"
     );
     assert!(composer_has_keys(&view, cx), "the Composer types");
@@ -929,7 +840,7 @@ fn the_cursor_clears_when_the_tree_lets_go(cx: &mut TestAppContext) {
     cx.simulate_keystrokes("cmd-shift-e down");
     tick(cx);
     let key = view
-        .read_with(cx, |view, _| view.nav_cursor.clone())
+        .read_with(cx, |view, cx| view.nav_view.read(cx).cursor.clone())
         .expect("a cursor")
         .key;
     // The keys go to the board without Esc.
@@ -939,7 +850,7 @@ fn the_cursor_clears_when_the_tree_lets_go(cx: &mut TestAppContext) {
     });
     tick(cx);
     leap(cx, Duration::from_millis(500));
-    assert!(view.read_with(cx, |view, _| view.nav_cursor.is_none()));
+    assert!(view.read_with(cx, |view, cx| view.nav_view.read(cx).cursor.is_none()));
     assert_eq!(
         cx.update(|_, _| ferrite_ui::motion::hover_t(&key)),
         0.0,
@@ -958,14 +869,17 @@ fn f2_renames_the_cursors_card(cx: &mut TestAppContext) {
     cx.simulate_keystrokes("cmd-shift-e");
     tick(cx);
     let Some(nav::NavItem::Thread(thread)) =
-        view.read_with(cx, |view, _| view.nav_cursor.clone().map(|c| c.item))
+        view.read_with(cx, |view, cx| view.nav_view.read(cx).cursor.clone().map(|c| c.item))
     else {
         panic!("the cursor on a card");
     };
     cx.simulate_keystrokes("f2");
     tick(cx);
     assert!(
-        view.read_with(cx, |view, _| view.renaming_thread(thread)),
+        view.read_with(cx, |view, _| matches!(
+            &view.rename,
+            Some((RenameTarget::Thread(editing), _)) if *editing == thread
+        )),
         "the card's title is the rename field"
     );
 }
@@ -1015,8 +929,8 @@ fn a_pinned_thread_heads_the_list_until_unpinned(cx: &mut TestAppContext) {
     hide_panel(&view, cx);
     cx.simulate_resize(gpui::size(px(1000.), px(700.)));
     tick(cx);
-    let menu = |view: &CockpitView| -> Vec<String> {
-        view.context_rows(MenuTarget::Thread(threads[2]))
+    let menu = |view: &CockpitView, cx: &gpui::App| -> Vec<String> {
+        view.context_rows(MenuTarget::Thread(threads[2]), cx)
             .into_iter()
             .flatten()
             .map(|(item, _)| item.label.to_string())
@@ -1024,14 +938,14 @@ fn a_pinned_thread_heads_the_list_until_unpinned(cx: &mut TestAppContext) {
     };
     // Claude's order: where it opens, then its pin.
     assert_eq!(
-        view.read_with(cx, |view, _| menu(view))[..2],
+        view.read_with(cx, |view, cx| menu(view, cx))[..2],
         ["Open in", "Pin"]
     );
     view.update_in(cx, |view, window, cx| {
         view.run_menu_verb(MenuTarget::Thread(threads[2]), MenuVerb::Pin, window, cx)
     });
     tick(cx);
-    view.read_with(cx, |view, _| {
+    view.read_with(cx, |view, cx| {
         assert_eq!(view.prefs.settings.pinned_threads, vec![threads[2]]);
         let state = view.nav_state();
         assert_eq!(
@@ -1046,7 +960,7 @@ fn a_pinned_thread_heads_the_list_until_unpinned(cx: &mut TestAppContext) {
             state.active.iter().all(|row| row.thread != threads[2]),
             "listed once"
         );
-        assert_eq!(menu(view)[1], "Unpin");
+        assert_eq!(menu(view, cx)[1], "Unpin");
     });
     let card = |cx: &mut gpui::VisualTestContext, thread: ThreadId| {
         cx.debug_bounds(format!("nav-thread-{}", thread.get()).leak())

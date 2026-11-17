@@ -1,0 +1,147 @@
+warning: unreachable pattern
+   --> crates/ferrite-pane/src/link_target.rs:165:40
+    |
+142 |             Self::External(url) | Self::RepoPullRequest { url, .. } => {
+    |                                   --------------------------------- matches all the relevant values
+...
+165 |             Self::PullRequest { .. } | Self::RepoPullRequest { .. } | Self::Thread(_) => false,
+    |                                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^ no value can reach this
+    |
+    = note: `#[warn(unreachable_patterns)]` (part of `#[warn(unused)]`) on by default
+
+warning: `ferrite-pane` (lib) generated 1 warning
+   Compiling ferrite-cockpit v0.4.0 (/Users/josephwylie/Desktop/Projects/ferrite-remote-connections/crates/ferrite-cockpit)
+warning: unused variable: `open`
+     --> crates/ferrite-cockpit/src/cockpit.rs:11559:13
+      |
+11559 |         let open = self.cockpit.thread(thread).filter(|open| open.resume_lost())?;
+      |             ^^^^ help: if this is intentional, prefix it with an underscore: `_open`
+      |
+      = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+warning: variable does not need to be mutable
+   --> crates/ferrite-cockpit/src/cockpit/tests/changes.rs:310:13
+    |
+310 |     let mut again = |text: &str, cx: &mut gpui::VisualTestContext| {
+    |         ----^^^^^
+    |         |
+    |         help: remove this `mut`
+    |
+    = note: `#[warn(unused_mut)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused variable: `engine`
+   --> crates/ferrite-cockpit/src/cockpit/tests/browser_chrome.rs:467:10
+    |
+467 |     let (engine, view, thread, cx) = browser_window(cx, "bnt-draft");
+    |          ^^^^^^ help: if this is intentional, prefix it with an underscore: `_engine`
+
+warning: variable does not need to be mutable
+    --> crates/ferrite-cockpit/src/cockpit/tests/render_performance.rs:2779:13
+     |
+2779 |     let mut watch = |cx: &mut gpui::VisualTestContext, ms: u64| {
+     |         ----^^^^^
+     |         |
+     |         help: remove this `mut`
+
+warning: unused variable: `overview`
+   --> crates/ferrite-cockpit/src/cockpit/tests/tools.rs:111:9
+    |
+111 |     let overview = cx.debug_bounds("panel-tab-Overview").unwrap().center();
+    |         ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_overview`
+
+warning: unused `Admission` that must be used
+   --> crates/ferrite-cockpit/src/cockpit/tests/find.rs:265:5
+    |
+265 |     core.send(thread, "Look into it".into());
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = note: a refused or unconfirmed send leaves the draft with the caller
+    = note: `#[warn(unused_must_use)]` (part of `#[warn(unused)]`) on by default
+help: if you wish to disregard this recommendation, use `let _ = ...` to ignore the value
+    |
+265 |     let _ = core.send(thread, "Look into it".into());
+    |     +++++++
+
+warning: unused `Admission` that must be used
+   --> crates/ferrite-cockpit/src/cockpit/tests/find.rs:327:5
+    |
+327 |     core.send(thread, "Ship it".into());
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = note: a refused or unconfirmed send leaves the draft with the caller
+help: if you wish to disregard this recommendation, use `let _ = ...` to ignore the value
+    |
+327 |     let _ = core.send(thread, "Ship it".into());
+    |     +++++++
+
+warning: unused `Admission` that must be used
+   --> crates/ferrite-cockpit/src/cockpit/tests/retention.rs:159:5
+    |
+159 |     core.send(thread, "the very first question".into());
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = note: a refused or unconfirmed send leaves the draft with the caller
+help: if you wish to disregard this recommendation, use `let _ = ...` to ignore the value
+    |
+159 |     let _ = core.send(thread, "the very first question".into());
+    |     +++++++
+
+warning: unused `Admission` that must be used
+   --> crates/ferrite-cockpit/src/cockpit/tests/send_scroll.rs:788:9
+    |
+788 |         core.send(thread, "turn 0".into());
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = note: a refused or unconfirmed send leaves the draft with the caller
+help: if you wish to disregard this recommendation, use `let _ = ...` to ignore the value
+    |
+788 |         let _ = core.send(thread, "turn 0".into());
+    |         +++++++
+
+warning: unused `Admission` that must be used
+   --> crates/ferrite-cockpit/src/cockpit/tests/send_scroll.rs:795:13
+    |
+795 |             view.update(cx, |view, _| view.cockpit.send(thread, format!("turn {turn}")));
+    |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = note: a refused or unconfirmed send leaves the draft with the caller
+help: if you wish to disregard this recommendation, use `let _ = ...` to ignore the value
+    |
+795 |             let _ = view.update(cx, |view, _| view.cockpit.send(thread, format!("turn {turn}")));
+    |             +++++++
+
+warning: unused `Admission` that must be used
+   --> crates/ferrite-cockpit/src/cockpit/tests/send_scroll.rs:868:9
+    |
+868 |         core.send(thread, "turn 0".into());
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = note: a refused or unconfirmed send leaves the draft with the caller
+help: if you wish to disregard this recommendation, use `let _ = ...` to ignore the value
+    |
+868 |         let _ = core.send(thread, "turn 0".into());
+    |         +++++++
+
+warning: unused `Admission` that must be used
+   --> crates/ferrite-cockpit/src/cockpit/tests/send_scroll.rs:875:13
+    |
+875 |             view.update(cx, |view, _| view.cockpit.send(thread, format!("turn {turn}")));
+    |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = note: a refused or unconfirmed send leaves the draft with the caller
+help: if you wish to disregard this recommendation, use `let _ = ...` to ignore the value
+    |
+875 |             let _ = view.update(cx, |view, _| view.cockpit.send(thread, format!("turn {turn}")));
+    |             +++++++
+
+warning: `ferrite-cockpit` (lib test) generated 12 warnings (run `cargo fix --lib -p ferrite-cockpit --tests` to apply 5 suggestions)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 13.30s
+warning: the following packages contain code that will be rejected by a future version of Rust: block v0.1.6
+note: to see what the problems were, use the option `--future-incompat-report`, or run `cargo report future-incompatibilities --id 1`
+────────────
+ Nextest run ID 624e2c24-45ab-44df-83ea-97dafb7dc055 with nextest profile: default
+    Starting 2 tests across 1 binary (1247 tests skipped)
+        PASS [   0.190s] (1/2) ferrite-cockpit cockpit::tests::terminal::a_shell_that_cannot_start_says_so_and_retries
+        PASS [   0.225s] (2/2) ferrite-cockpit cockpit::tests::files::remote_files_failure_and_binary_never_fall_back_to_readable_local_text
+────────────
+     Summary [   0.228s] 2 tests run: 2 passed, 1247 skipped

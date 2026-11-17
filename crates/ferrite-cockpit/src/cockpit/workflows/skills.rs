@@ -6,7 +6,7 @@ use super::*;
 impl CockpitView {
     /// Ask the Provider which skills it has installed in the Project, once.
     pub(super) fn discover_skills(&mut self, provider: Provider) {
-        let Some(view) = self.factory_view.as_ref() else {
+        let Some(view) = self.factory() else {
             return;
         };
         if view
@@ -29,7 +29,7 @@ impl CockpitView {
         let error = pending
             .is_none()
             .then(|| "This window cannot list skills.".to_string());
-        if let Some(view) = self.factory_view.as_mut() {
+        if let Some(view) = self.factory_mut() {
             view.workflows.skills.push(SkillsFound {
                 provider,
                 pending,
@@ -42,7 +42,7 @@ impl CockpitView {
     /// A discovery that answered: its skills, for the picker and the check.
     pub(in crate::cockpit) fn poll_factory_skills(&mut self, cx: &mut Context<Self>) {
         self.poll_start_lists(cx);
-        let Some(view) = self.factory_view.as_mut() else {
+        let Some(view) = self.factory_mut() else {
             return;
         };
         let mut heard = false;
@@ -74,8 +74,7 @@ impl CockpitView {
 
     /// The skills found for `provider`, once its discovery answered.
     pub(super) fn skills_for(&self, provider: Provider) -> Option<&[ferrite_core::SessionCommand]> {
-        self.factory_view
-            .as_ref()?
+        self.factory()?
             .workflows
             .skills
             .iter()
@@ -151,7 +150,7 @@ impl CockpitView {
     }
 
     pub(crate) fn reveal_skills(&mut self, open: bool, cx: &mut Context<Self>) {
-        if let Some(view) = self.factory_view.as_mut() {
+        if let Some(view) = self.factory_mut() {
             view.workflows.skills_open = open;
             view.workflows.focused = open.then_some(Field::SkillSearch);
         }

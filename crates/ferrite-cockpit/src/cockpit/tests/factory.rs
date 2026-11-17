@@ -213,7 +213,7 @@ fn a_tasks_panel_shows_its_worker_and_offers_delete_only_at_rest(cx: &mut TestAp
     assert!(shows(cx, "task-worker"), "the Worker's Pane");
     view.read_with(cx, |view, _| {
         assert_eq!(view.focused_thread(), Some(worker));
-        assert!(view.factory_view.is_some(), "the board stays");
+        assert!(view.factory().is_some(), "the board stays");
     });
     assert_eq!(fake.streams.borrow().len(), streams, "no second run");
 
@@ -433,7 +433,7 @@ fn an_empty_projects_factory_opens_from_the_nav(cx: &mut TestAppContext) {
     assert!(shows(cx, "factory-board"));
     view.read_with(cx, |view, _| {
         assert_eq!(
-            view.factory_view.as_ref().map(|view| view.project),
+            view.factory().map(|view| view.project),
             Some(empty)
         );
     });
@@ -476,7 +476,7 @@ fn focusing_a_worker_by_id_opens_its_tasks_worker_tab(cx: &mut TestAppContext) {
     assert!(shows(cx, "task-panel"));
     assert!(shows(cx, "task-worker"), "the Worker tab");
     view.read_with(cx, |view, _| {
-        let factory = view.factory_view.as_ref().expect("the Factory shows");
+        let factory = view.factory().expect("the Factory shows");
         assert_eq!(factory.open.as_deref(), Some("t-1"));
         assert_eq!(factory.tab, crate::cockpit::factory::TaskTab::Worker);
     });

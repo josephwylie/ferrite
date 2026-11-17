@@ -1,0 +1,179 @@
+[
+  {
+    "id": "scroll-quality-001",
+    "title": "Scrollbar navigation does not consistently take ownership from automatic scrolling",
+    "priority": "P2",
+    "category": "defect",
+    "evidence_level": "source-proven",
+    "impact": "Track clicks during a send/latest ease can be overwritten by the next animation frame. Thumb movement after the ease can leave the sent-prompt anchor active, allowing the first tool event to snap back to the tail if runway remains. Extends the motion report's interruption inventory; does not duplicate motion-008.",
+    "ferrite_evidence": [
+      "crates/ferrite-ui/src/scrollbar.rs:871-905",
+      "vendor/gpui-base/src/scrollbar.rs:125-142",
+      "crates/ferrite-pane/src/transcript/scroll.rs:163-169",
+      "vendor/gpui-pre/src/elements/list.rs:1371-1416",
+      "crates/ferrite-pane/src/transcript.rs:1033-1055,3017-3023"
+    ],
+    "t3_evidence": [
+      "https://github.com/pingdotgg/t3code/blob/74573fc29b901bafbf8f1dbb2eb29606da1fa448/apps/web/src/components/chat/timelineViewport.ts#L91-L100",
+      "https://github.com/pingdotgg/t3code/blob/74573fc29b901bafbf8f1dbb2eb29606da1fa448/apps/web/src/components/chat/useTimelineFollow.ts#L238-L248",
+      "https://github.com/pingdotgg/t3code/blob/74573fc29b901bafbf8f1dbb2eb29606da1fa448/apps/web/src/components/chat/timelineViewport.browser.test.tsx#L83"
+    ],
+    "recommendation": "Emit a common reader-navigation transition from both scrollbar track clicks and thumb movement, independently of whether a tween exists. Cancel pending send anchoring before applying the user offset; preserve explicit drag-to-end reattachment.",
+    "acceptance": "Real track clicks and pointer drags interrupt movement at every tween phase. Repeat a short thumb drag after send settlement with runway remaining, then emit the first tool event. The chosen passage stays put after later frames/events; dragging to the bottom still resumes follow."
+  },
+  {
+    "id": "scroll-quality-002",
+    "title": "Scrollbar track clicks use the wrong scroll distance",
+    "priority": "P2",
+    "category": "defect",
+    "evidence_level": "source-proven",
+    "impact": "Track clicks overshoot the position corresponding to the painted thumb and clamp to the end early because the click branch multiplies by content height instead of content height minus viewport height.",
+    "ferrite_evidence": [
+      "crates/ferrite-ui/src/scrollbar.rs:544-554,571-575,860-903,959-978",
+      "vendor/gpui-base/src/scrollbar.rs:133-134",
+      "crates/ferrite-ui/src/components.rs:1904-1908"
+    ],
+    "t3_evidence": [
+      "https://github.com/pingdotgg/t3code/blob/74573fc29b901bafbf8f1dbb2eb29606da1fa448/apps/web/src/components/chat/MessagesTimeline.tsx#L1471-L1476"
+    ],
+    "recommendation": "Share one inverse coordinate conversion across thumb painting, dragging and track clicks. Handle insets and minimum thumb size explicitly, or define an intentional page-by-page track policy.",
+    "acceptance": "For fixed content and viewport sizes, clicking 25%, 50% and 75% of effective thumb travel centers the thumb at the clicked position within a specified tolerance. Repeat with minimum-size and horizontal thumbs. The 2000px content/500px viewport/0.5 fraction arithmetic yields 750px of scroll, not 1000px."
+  },
+  {
+    "id": "scroll-quality-003",
+    "title": "The latest button undercounts hidden content when send runway remains",
+    "priority": "P2",
+    "category": "defect",
+    "evidence_level": "source-proven",
+    "impact": "The latest button and lower fade can be absent while real answer lines remain below the viewport. rows_below subtracts normal padding and synthetic runway from a native maximum that already excludes padding.",
+    "ferrite_evidence": [
+      "vendor/gpui-pre/src/elements/list.rs:772-795,878-883",
+      "crates/ferrite-pane/src/transcript.rs:1063-1070,2204-2229,2980-2984,3069-3078,3219-3222"
+    ],
+    "t3_evidence": [
+      "https://github.com/pingdotgg/t3code/blob/74573fc29b901bafbf8f1dbb2eb29606da1fa448/apps/web/src/components/chat/MessagesTimeline.logic.ts#L319-L336",
+      "https://github.com/pingdotgg/t3code/blob/74573fc29b901bafbf8f1dbb2eb29606da1fa448/apps/web/src/components/chat/useTimelineFollow.ts#L305-L325"
+    ],
+    "recommendation": "Separate real content-end distance from padded scrollable-end distance, and audit consumers against the native list's actual treatment of padding and unmeasured heights.",
+    "acceptance": "With at least 200px of runway, position more than two lines of real content below the viewport. After the configured delay, the latest button and bottom fade are present. Latest removes the runway and reaches the final row. Repeat with no runway and with unmeasured rows."
+  },
+  {
+    "id": "scroll-quality-004",
+    "title": "Expanding finished work at the tail does not preserve the clicked heading",
+    "priority": "P2",
+    "category": "interaction",
+    "evidence_level": "source-proven",
+    "impact": "A completed fold or large tool detail expands while native tail follow remains enabled, moving the heading upward and possibly out of view. This concerns viewport ownership, distinct from motion.md inventory row 37 body animation and transcript-004 nested group height caps.",
+    "ferrite_evidence": [
+      "crates/ferrite-pane/src/transcript.rs:1364-1370,711-754,2932-2933",
+      "crates/ferrite-cockpit/src/cockpit.rs:2108-2114",
+      "vendor/gpui-pre/src/elements/list.rs:1043-1048",
+      "crates/ferrite-pane/src/transcript/scroll.rs:311-324"
+    ],
+    "t3_evidence": [
+      "https://github.com/pingdotgg/t3code/blob/74573fc29b901bafbf8f1dbb2eb29606da1fa448/apps/web/src/components/chat/MessagesTimeline.tsx#L535-L573",
+      "https://github.com/pingdotgg/t3code/blob/74573fc29b901bafbf8f1dbb2eb29606da1fa448/apps/web/src/components/chat/MessagesTimeline.tsx#L492-L523",
+      "https://github.com/pingdotgg/t3code/blob/74573fc29b901bafbf8f1dbb2eb29606da1fa448/apps/web/src/components/chat/MessagesTimeline.browser.test.tsx#L298-L340"
+    ],
+    "recommendation": "Capture the clicked disclosure's anchor before changing rows, cancel prior positioning, and reveal new content after measurement while retaining the heading. Define the working-turn follow exception explicitly.",
+    "acceptance": "At an idle tail, opening and closing a fold hiding several viewports leaves its heading at the same screen position. Repeat a long tool detail near the composer, expansion during a latest jump, rapid reversal, and a separately specified live-streaming case."
+  },
+  {
+    "id": "scroll-quality-005",
+    "title": "Keyboard End retains the send spacer that the latest button removes",
+    "priority": "P2",
+    "category": "defect",
+    "evidence_level": "source-proven",
+    "impact": "End can retain a large blank area below the newest message; during runway sizing a later layout callback can reassert the prompt position. The latest button clears this state, so explicit return-to-end actions disagree.",
+    "ferrite_evidence": [
+      "crates/ferrite-pane/src/transcript.rs:1073-1091,2323-2331,2980-2984,3042-3062",
+      "crates/ferrite-pane/src/transcript/scroll.rs:111-114",
+      "crates/ferrite-cockpit/src/cockpit.rs:2069-2076"
+    ],
+    "t3_evidence": [
+      "https://github.com/pingdotgg/t3code/blob/74573fc29b901bafbf8f1dbb2eb29606da1fa448/apps/web/src/components/chat/useTimelineFollow.ts#L305-L325"
+    ],
+    "recommendation": "Route every explicit return-to-end action through one state transition that releases send anchoring, pending runway placement and synthetic space before landing. Let the caller choose timing separately.",
+    "acceptance": "End and the latest pill from identical send states leave zero runway, the same final-row inset, and active following. End during the first sizing frame is not overwritten by a later runway callback. Repeat with reduced motion."
+  },
+  {
+    "id": "scroll-quality-006",
+    "title": "Find can compete with an existing jump or live follow inside a visible row",
+    "priority": "P2",
+    "category": "defect",
+    "evidence_level": "source-proven",
+    "impact": "Opening Find does not cancel follow/ease. Revealing a match only cancels when its entire row is offscreen; a tall intersecting row can let the old tween or stream move away from the result. Distinct from transcript-001 hidden-content search coverage.",
+    "ferrite_evidence": [
+      "crates/ferrite-pane/src/transcript/find.rs:40-51,136-172",
+      "crates/ferrite-pane/src/transcript/scroll.rs:229-233",
+      "crates/ferrite-pane/src/transcript.rs:2921-2933,3003-3009"
+    ],
+    "t3_evidence": [
+      "https://github.com/pingdotgg/t3code/blob/74573fc29b901bafbf8f1dbb2eb29606da1fa448/apps/web/src/components/chat/MessagesTimeline.browser.test.tsx#L1737-L1819",
+      "https://github.com/pingdotgg/t3code/blob/74573fc29b901bafbf8f1dbb2eb29606da1fa448/apps/web/src/components/chat/useTimelinePositionRestore.ts#L84-L99"
+    ],
+    "recommendation": "Treat Find navigation as a viewport-ownership transition regardless of whole-row visibility. Scope later reveal callbacks to the search request and transcript generation, and let manual navigation cancel them.",
+    "acceptance": "Find a result in a tall row halfway through a latest jump. The occurrence remains visible after the old tween would have ended and after later text/tool events. Repeat for a match already visible while following. Manual navigation after searching must win over delayed reveal corrections."
+  },
+  {
+    "id": "scroll-quality-007",
+    "title": "Width changes lack a reading anchor inside a tall row",
+    "priority": "P2",
+    "category": "partial-capability",
+    "evidence_level": "inferred",
+    "impact": "A right-panel toggle or resize can change which sentence is visible when the viewport lies entirely inside a long answer. Ferrite saves only a fully visible row start and otherwise retains a numeric pixel offset through rewrapping. Displacement is inferred and needs runtime measurement; T3 sentence-level preservation is also unverified.",
+    "ferrite_evidence": [
+      "crates/ferrite-pane/src/transcript/scroll.rs:238-281",
+      "vendor/gpui-pre/src/elements/list.rs:412-425,1041-1048,1082-1099,1549-1563",
+      "crates/ferrite-pane/src/transcript.rs:3147-3158"
+    ],
+    "t3_evidence": [
+      "https://github.com/pingdotgg/t3code/blob/74573fc29b901bafbf8f1dbb2eb29606da1fa448/apps/web/src/components/chat/MessagesTimeline.tsx#L909-L912",
+      "https://github.com/pingdotgg/t3code/blob/74573fc29b901bafbf8f1dbb2eb29606da1fa448/apps/web/src/components/chat/useTimelinePositionRestore.ts#L105-L144"
+    ],
+    "recommendation": "Preserve a text/sub-row anchor for tall content, while retaining row-inset anchoring when sufficient. Specify the fallback for content without a text anchor and verify both implementations before claiming parity superiority.",
+    "acceptance": "A distinctive sentence in a multi-viewport answer remains at a documented readable inset across panel open/close/maximize/restore and width changes. Repeat with a code fence and a visible row boundary. Confirm on the installed build before labeling it runtime-reproduced."
+  },
+  {
+    "id": "scroll-quality-008",
+    "title": "Saved jump, runway and resize indices are not rebased when rows change",
+    "priority": "P2",
+    "category": "defect",
+    "evidence_level": "inferred",
+    "impact": "Pending movement can use an obsolete numeric row index after disclosure changes, retention or history replacement. Native logical top is rebased, but EaseTarget::Row, Runway.index and resize_anchor are separate and are not rebased/reset together. The omission is source-proven; a wrong-row landing remains an inferred concurrent-transition outcome.",
+    "ferrite_evidence": [
+      "crates/ferrite-pane/src/transcript/scroll.rs:18-24,30-42,172-179,245-267,316-324",
+      "crates/ferrite-pane/src/transcript.rs:492-497,721-731,1013-1025,3035-3062",
+      "vendor/gpui-pre/src/elements/list.rs:537-547",
+      "crates/ferrite-pane/src/pane.rs:355-361,403-436",
+      "crates/ferrite-cockpit/src/cockpit.rs:2493-2499"
+    ],
+    "t3_evidence": [
+      "https://github.com/pingdotgg/t3code/blob/74573fc29b901bafbf8f1dbb2eb29606da1fa448/apps/web/src/components/chat/useTimelineFollow.ts#L48-L97",
+      "https://github.com/pingdotgg/t3code/blob/74573fc29b901bafbf8f1dbb2eb29606da1fa448/apps/web/src/components/chat/useTimelineFollow.ts#L374-L423",
+      "https://github.com/pingdotgg/t3code/blob/74573fc29b901bafbf8f1dbb2eb29606da1fa448/apps/web/src/components/chat/useTimelinePositionRestore.ts#L124-L144",
+      "https://github.com/pingdotgg/t3code/blob/74573fc29b901bafbf8f1dbb2eb29606da1fa448/apps/web/src/components/chat/timelineScrollAnchoring.test.tsx#L19-L66"
+    ],
+    "recommendation": "Store semantic RowId plus transcript generation for pending targets, resolve after each projection, and cancel missing targets. Reset or deliberately translate all geometry state on history replacement.",
+    "acceptance": "Insert/remove rows before a moving send target and verify it still lands on the same prompt ID. Repeat with width reflow, retention, target removal and generation replacement. Returning from another thread never revives a command against a different history generation."
+  },
+  {
+    "id": "scroll-quality-009",
+    "title": "Page navigation does not subtract the pinned prompt's covered area",
+    "priority": "P2",
+    "category": "defect",
+    "evidence_level": "source-proven",
+    "impact": "Page movement uses full viewport height minus one line even though the pinned prompt obscures the top. When the mask exceeds that line, content can be hidden on both adjacent pages. Existing keyboard tests verify offsets and follow state, not readable coverage.",
+    "ferrite_evidence": [
+      "crates/ferrite-pane/src/transcript/scroll.rs:128-133,284-297",
+      "crates/ferrite-pane/src/transcript.rs:1081-1087,2158-2173,3082-3085",
+      "crates/ferrite-ui/src/theme.rs:1928",
+      "crates/ferrite-pane/src/transcript/find.rs:167-171"
+    ],
+    "t3_evidence": [
+      "https://github.com/pingdotgg/t3code/blob/74573fc29b901bafbf8f1dbb2eb29606da1fa448/apps/web/src/components/chat/pageScrollController.ts#L115-L120"
+    ],
+    "recommendation": "Compute page travel from the unobscured viewport using the measured top mask, and retain a readable overlap. Define the transition when the pinned prompt changes height.",
+    "acceptance": "Page up/down through numbered answer lines under a two-line pinned prompt. Every line must appear unobscured and adjacent pages overlap. Repeat with a short prompt, no pinned prompt, and changing prompt height."
+  }
+]

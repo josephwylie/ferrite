@@ -12,17 +12,27 @@
 
 use std::path::PathBuf;
 
+use ferrite_core::activity::{ActivityView, AgentStatus};
+use ferrite_core::cockpit::Admission;
+use ferrite_core::transcript::BlockId;
 use ferrite_core::ThreadId;
+use ferrite_pane::pane::{AgentClock, AgentFace, AgentFaces, AgentRun};
+use ferrite_pane::transcript::{PromptAction, ScrollTarget, TranscriptTail};
 use gpui::{App, ClipboardItem, Context, IntoElement, SharedString, Window};
 
 use super::CockpitView;
-use ferrite_core::activity::{ActivityView, AgentStatus};
-use ferrite_core::transcript::BlockId;
-use ferrite_pane::pane::{AgentClock, AgentFace, AgentFaces, AgentRun};
-use ferrite_pane::transcript::{PromptAction, ScrollTarget, TranscriptTail};
+
+/// Where a prompt sent again went.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Handoff {
+    /// On the wire: the agent's turn began.
+    Sent,
+    /// Behind a running turn, or held for a Session still starting.
+    Queued,
+}
 
 /// Whether a sent prompt's Edit, Rewind and Fork can be asked of `open`
-/// now (`TranscriptInput::rewind`): not drawn when its agent offers none,
+/// now (`TranscriptPresentation::rewind`): not drawn when its agent offers none,
 /// disabled with the reason while a turn runs, prompts wait, a request
 /// waits for an answer, or the agent is changing — the cut never races
 /// them. Core refuses the same, in the same words.
@@ -179,7 +189,7 @@ impl CockpitView {
                 })
         });
         match prompt {
-            Some(prompt) => self.send_again(index, thread, prompt, cx),
+            Some(prompt) => self.send_again(index, thread, prompt, cx).is_ok(),
             None => false,
         }
     }
@@ -195,6 +205,9 @@ impl CockpitView {
         line: Option<u32>,
         cx: &mut Context<Self>,
     ) {
+        let Some(identity) = self.panes.get(index).map(|pane| pane.identity) else {
+            return;
+        };
         let Some(window) = cx.active_window() else {
             return;
         };
@@ -202,6 +215,9 @@ impl CockpitView {
         cx.defer(move |cx| {
             let _ = window.update(cx, |_, window, cx| {
                 let _ = cockpit.update(cx, |view, cx| {
+                    let Some(index) = view.index_of(identity) else {
+                        return;
+                    };
                     view.focus_pane(index);
                     view.open_preview(path, line, window, cx);
                 });
@@ -243,7 +259,7 @@ impl CockpitView {
         let Some(prompt) = self.reading_prompt(index, cx) else {
             return false;
         };
-        self.send_again(index, thread, prompt, cx)
+        self.send_again(index, thread, prompt, cx).is_ok()
     }
 
     /// A press on a sent prompt's Edit, Rewind or Fork in Pane `index`:
@@ -349,28 +365,40 @@ impl CockpitView {
     }
 
     /// Send `prompt` to Pane `index`'s Thread again, queued behind a
-    /// running turn.
+    /// running turn: where it went, or why it did not.
     pub(super) fn send_again(
         &mut self,
         index: usize,
         thread: ThreadId,
         prompt: String,
         cx: &mut Context<Self>,
-    ) -> bool {
+    ) -> Result<Handoff, String> {
         self.focus_pane(index);
-        if self
+        let handoff = if self
             .cockpit
             .thread(thread)
             .is_some_and(|open| open.needs_queue())
         {
-            self.cockpit.queue(thread, prompt);
+            if !self.cockpit.queue(thread, prompt) {
+                return Err("The agent's queue did not take it.".into());
+            }
+            Ok(Handoff::Queued)
         } else {
-            self.cockpit.send(thread, prompt);
-            self.scroll_transcript_to_new_prompt(index, cx);
-        }
+            match self.cockpit.send(thread, prompt) {
+                Admission::Delivered => {
+                    self.scroll_transcript_to_new_prompt(index, cx);
+                    Ok(Handoff::Sent)
+                }
+                Admission::Held => Ok(Handoff::Queued),
+                Admission::Refused(why) => Err(why),
+                Admission::Unconfirmed(why) => Err(format!(
+                    "It may or may not have been sent ({why}). Check the transcript before retrying."
+                )),
+            }
+        };
         self.facts.acted(&self.cockpit, thread);
         cx.notify();
-        true
+        handoff
     }
 
     /// Scroll Pane `index`'s transcript to `target`: the top, the live

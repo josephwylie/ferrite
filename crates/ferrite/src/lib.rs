@@ -3,6 +3,7 @@
 // Cockpit the window shows is `ferrite_cockpit`'s, in the frame
 // `ferrite_frame` draws (ADR 0035).
 mod entry;
+mod github_images;
 mod menus;
 #[cfg(all(windows, feature = "cef"))]
 mod windows_bootstrap;
@@ -21,6 +22,7 @@ use ferrite_core::server::{settings_dir, store_dir};
 use ferrite_core::settings::Settings;
 use ferrite_core::store::{Provider, Store};
 use ferrite_core::workspace::WorkspaceBinding;
+use ferrite_core::window_frame;
 use ferrite_core::ThreadId;
 
 use cockpit::CockpitView;
@@ -31,10 +33,9 @@ use ferrite_core::spawner::{self, ProcessRss, SessionDefaults};
 /// every request.
 fn http_client() -> std::sync::Arc<dyn gpui::http_client::HttpClient> {
     let agent = concat!("Ferrite/", env!("CARGO_PKG_VERSION"));
-    std::sync::Arc::new(
-        reqwest_client::ReqwestClient::user_agent(agent)
-            .unwrap_or_else(|_| reqwest_client::ReqwestClient::new()),
-    )
+    let client = reqwest_client::ReqwestClient::user_agent(agent)
+        .unwrap_or_else(|_| reqwest_client::ReqwestClient::new());
+    std::sync::Arc::new(github_images::GitHubImages::new(std::sync::Arc::new(client)))
 }
 
 /// GPUI defaults to hiding the OS pointer whenever a key is typed. In a
@@ -139,7 +140,7 @@ pub fn launch() {
     // (`ferrite_cockpit::headless`, ADR 0038).
     #[cfg(feature = "headless")]
     if std::env::args().nth(1).as_deref() == Some("--headless") {
-        ferrite_cockpit::headless::run();
+        ferrite_cockpit::headless::run(http_client());
         return;
     }
     // The operator's settings live beside the store (`~/.ferrite`), and
@@ -274,7 +275,7 @@ pub fn launch() {
                 // This computer's Server, or `--remote`'s machine's (ADR
                 // 0026); the nav lists the others.
                 let machines = cx.new(|_| {
-                    machines::Machines::new(
+                    machines::Machines::with_local_environment(
                         machines::Reach {
                             settings_dir: settings_dir.clone(),
                             store: store_dir(),
@@ -286,10 +287,11 @@ pub fn launch() {
                             renderer: Some(renderer),
                             driven: false,
                             defaults: defaults.clone(),
-                            bridge: ferrite_core::machine::Bridge::ssh,
+                            bridge: ferrite_core::machine::Bridge::for_machine,
                         },
                         &settings.machines,
                         remote.as_deref(),
+                        settings.local_environment_enabled,
                     )
                 });
                 let core = machines
@@ -323,19 +325,8 @@ pub fn launch() {
             // The Server restores the Threads that were open; an empty
             // store starts as a draft Pane (#29).
             if core.threads().is_empty() && (demo || panes > 1) {
-                demo::seed_panes(&mut core, panes, provider, demo && !load);
-                if load {
-                    demo::seed_load_group(&mut core);
-                }
+                demo::seed_panes(&mut core, panes, provider);
             }
-
-            // The demo's Group (above): the fixture opens *on* it. The default
-            // view is Solo (#28), which is right for a launch but wrong here —
-            // the board the demo exists to draw is a Group's membership, and
-            // Solo would show one Pane of it.
-            let seeded_group = (demo && !parity)
-                .then(|| core.groups().iter().next().map(|group| group.id))
-                .flatten();
 
             // Who posts the system notifications (ADR 0017): the bundle's
             // identifier, and on Windows the AppUserModelID.
@@ -346,7 +337,11 @@ pub fn launch() {
             if browser_smoke {
                 ferrite_core::log!("browser window smoke: opening native window; Threads {:?}", core.threads());
             }
-            let bounds = Bounds::centered(None, size(px(1440.), px(900.)), cx);
+            let opening = if demo {
+                WindowBounds::Windowed(Bounds::centered(None, size(px(1440.), px(900.)), cx))
+            } else {
+                saved_window_bounds(&settings_dir, cx)
+            };
             if browser_smoke {
                 ferrite_core::log!("browser window smoke: native bounds computed");
             }
@@ -354,7 +349,7 @@ pub fn launch() {
             let window = cx
                 .open_window(
                     WindowOptions {
-                        window_bounds: Some(WindowBounds::Windowed(bounds)),
+                        window_bounds: Some(opening),
                         // The titlebar blends into the app: on macOS the
                         // traffic lights sit in the nav's top chrome (#22
                         // D24). Windows has no
@@ -391,7 +386,7 @@ pub fn launch() {
                     },
                     |window, cx| {
                         let view = cx.new(|cx| {
-                            let mut view = CockpitView::new_with_settings(
+                            let view = CockpitView::new_with_settings(
                                 core,
                                 provider,
                                 cockpit::Preferences {
@@ -407,9 +402,6 @@ pub fn launch() {
                                 },
                                 cx,
                             );
-                            if let Some(group) = seeded_group {
-                                view.enter_group(group, cx);
-                            }
                             match machines {
                                 Some(machines) => view.with_machines(machines),
                                 None => view,
@@ -436,6 +428,9 @@ pub fn launch() {
                         });
                         cockpit_window = Some(content.downgrade());
                         cx.new(|cx| {
+                            if !demo {
+                                remember_window_bounds(settings_dir.clone(), window, cx);
+                            }
                             kit::component::Root::new(content, window, cx)
                                 .bordered(false)
                                 .bg(theme::paint::WINDOW)
@@ -582,7 +577,8 @@ mod tests {
         let mut core = Cockpit::new(store, Box::new(demo::Spawn::new(false)));
         assert_eq!(dock_launch_dir(&core), home, "an empty store: home");
 
-        let checkout = std::fs::canonicalize(std::env::current_dir().unwrap()).unwrap();
+        let checkout =
+            ferrite_core::workspace::follow::canonical(&std::env::current_dir().unwrap());
         core.register_project(&checkout).unwrap();
         assert_eq!(
             dock_launch_dir(&core),
@@ -652,4 +648,71 @@ mod tests {
             ("menus.rs", include_str!("menus.rs")),
         ]);
     }
+}
+
+fn frame_of(bounds: Bounds<Pixels>) -> window_frame::Frame {
+    window_frame::Frame {
+        x: bounds.origin.x.into(),
+        y: bounds.origin.y.into(),
+        width: bounds.size.width.into(),
+        height: bounds.size.height.into(),
+    }
+}
+
+/// Where the window opens: where it was left, on a display that is still
+/// there (`WindowFrame::fitted`), else centred as a first launch is.
+fn saved_window_bounds(dir: &std::path::Path, cx: &App) -> WindowBounds {
+    let displays: Vec<window_frame::Frame> = cx
+        .primary_display()
+        .into_iter()
+        .chain(cx.displays())
+        .map(|display| frame_of(display.visible_bounds()))
+        .collect();
+    let fitted = window_frame::WindowFrame::load(dir)
+        .and_then(|saved| saved.fitted(&displays, (theme::WINDOW_MIN_W, theme::WINDOW_MIN_H)));
+    let Some(fitted) = fitted else {
+        return WindowBounds::Windowed(Bounds::centered(None, size(px(1440.), px(900.)), cx));
+    };
+    let frame = fitted.frame;
+    let bounds = Bounds::new(
+        point(px(frame.x), px(frame.y)),
+        size(px(frame.width), px(frame.height)),
+    );
+    if fitted.maximized {
+        WindowBounds::Maximized(bounds)
+    } else {
+        WindowBounds::Windowed(bounds)
+    }
+}
+
+/// Keep the window's frame on disk as it moves, once it has been still.
+fn remember_window_bounds<T: 'static>(
+    dir: std::path::PathBuf,
+    window: &mut Window,
+    cx: &mut Context<T>,
+) {
+    let latest = std::rc::Rc::new(std::cell::Cell::new(0u64));
+    cx.observe_window_bounds(window, move |_, window, cx| {
+        let (bounds, maximized) = match window.window_bounds() {
+            WindowBounds::Windowed(bounds) => (bounds, false),
+            WindowBounds::Maximized(bounds) => (bounds, true),
+            WindowBounds::Fullscreen(bounds) => (bounds, false),
+        };
+        let frame = window_frame::WindowFrame { frame: frame_of(bounds), maximized };
+        let moved = latest.get() + 1;
+        latest.set(moved);
+        let (latest, dir) = (latest.clone(), dir.clone());
+        cx.spawn(async move |_, cx| {
+            cx.background_executor()
+                .timer(std::time::Duration::from_millis(500))
+                .await;
+            if latest.get() == moved {
+                if let Err(error) = frame.save(&dir) {
+                    ferrite_core::log!("window frame not saved: {error}");
+                }
+            }
+        })
+        .detach();
+    })
+    .detach();
 }

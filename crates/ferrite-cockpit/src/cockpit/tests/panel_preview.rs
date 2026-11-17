@@ -43,11 +43,16 @@ fn window<'a>(
     panes: usize,
     cx: &'a mut TestAppContext,
 ) -> (Entity<CockpitView>, Fake, &'a mut gpui::VisualTestContext) {
-    let (mut core, fake) = cockpit(name, panes);
-    if panes > 1 {
-        let group = group_all(&mut core);
-        core.enter_group(group).unwrap();
-    }
+    let (core, fake) = cockpit(name, panes);
+    open(core, fake, cx)
+}
+
+/// A window on `core`'s Threads at 1600, the first one focused.
+fn open(
+    core: Cockpit,
+    fake: Fake,
+    cx: &mut TestAppContext,
+) -> (Entity<CockpitView>, Fake, &mut gpui::VisualTestContext) {
     bind_production_keys(cx);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     hold_nav_open(&view, cx);
@@ -108,11 +113,15 @@ fn a_file_at_a_line_opens_wide_and_closes_back_to_the_sections(cx: &mut TestAppC
         cx.debug_bounds("panel-sections").is_some(),
         "back to the sections"
     );
-    assert_eq!(panel_w(cx), Some(wide), "narrowing back is the operator's");
+    assert_eq!(
+        panel_w(cx),
+        Some(ferrite_ui::theme::PANEL_W),
+        "the preview's floor was never the operator's width"
+    );
 }
 
 /// `Overview` picked while a preview is open keeps the preview's tab, and
-/// the Panel's width; its tab brings the document back.
+/// the Panel at the operator's width; its tab brings the document back.
 #[gpui::test]
 fn another_tab_keeps_the_preview_for_later(cx: &mut TestAppContext) {
     let (view, _fake, cx) = window("preview-tabs", 1, cx);
@@ -122,7 +131,7 @@ fn another_tab_keeps_the_preview_for_later(cx: &mut TestAppContext) {
     let overview = cx.debug_bounds("panel-tab-Overview").unwrap();
     cx.simulate_click(overview.center(), gpui::Modifiers::none());
     tick(cx);
-    assert_eq!(panel_w(cx), Some(wide));
+    assert_eq!(panel_w(cx), Some(ferrite_ui::theme::PANEL_W));
     assert!(cx.debug_bounds("panel-preview").is_none());
     let tab = cx.debug_bounds("panel-tab-File-lines.rs").expect("its tab stays");
     cx.simulate_click(tab.center(), gpui::Modifiers::none());
@@ -201,7 +210,8 @@ fn escape_and_cmd_w_in_the_preview_close_it_not_the_turn_or_the_pane(cx: &mut Te
 /// coming back finds it, wide.
 #[gpui::test]
 fn each_thread_keeps_its_own_preview(cx: &mut TestAppContext) {
-    let (view, _fake, cx) = window("preview-threads", 2, cx);
+    let (core, fake) = cockpit("preview-threads", 2);
+    let (view, _fake, cx) = open(core, fake, cx);
     let file = source("preview-threads-file", 20);
     preview(&view, &file, Some(3), cx);
     let wide = panel_w(cx).unwrap();
@@ -224,8 +234,8 @@ fn each_thread_keeps_its_own_preview(cx: &mut TestAppContext) {
     assert!(cx.debug_bounds("panel-preview").is_some());
 }
 
-/// An image holds the keyboard in its viewer — yet focus moving to the
-/// other Pane (⌘}) takes it there: typing reaches that Pane's Composer.
+/// An image holds the keyboard in its viewer — yet ⌘} showing the next
+/// Thread takes it there: typing reaches that Thread's Composer.
 #[gpui::test]
 fn focus_moving_to_another_pane_takes_the_keyboard_from_an_image(cx: &mut TestAppContext) {
     let (view, _fake, cx) = window("preview-image-focus", 2, cx);
@@ -251,7 +261,7 @@ fn focus_moving_to_another_pane_takes_the_keyboard_from_an_image(cx: &mut TestAp
             view.panes[index].composer.read(cx).text().to_string()
         })
     };
-    assert_eq!(typed(1, cx), "x", "the other Pane's Composer has it");
+    assert_eq!(typed(1, cx), "x", "the next Thread's Composer has it");
     assert_eq!(typed(0, cx), "");
 }
 

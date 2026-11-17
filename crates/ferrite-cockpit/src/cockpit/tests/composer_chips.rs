@@ -149,26 +149,6 @@ fn an_unreadable_tray_image_says_failed(cx: &mut TestAppContext) {
     assert!(gone.contains(&failed.center()) && !picture.contains(&failed.center()));
 }
 
-/// A Group Pane's Composer carries no chips (SPEC §5.9): the mode,
-/// model and effort are Solo's.
-#[gpui::test]
-fn a_group_panes_composer_carries_no_chips(cx: &mut TestAppContext) {
-    let (mut core, _fake) = cockpit("group-no-chips", 2);
-    let group = group_all(&mut core);
-    bind_production_keys(cx);
-    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
-    cx.simulate_resize(gpui::size(px(1400.), px(800.)));
-    view.update(cx, |view, cx| {
-        view.enter_group(group, cx);
-        view.focus_pane(1);
-        cx.notify();
-    });
-    tick(cx);
-    let thread = view.read_with(cx, |view, _| view.panes[1].thread().unwrap());
-    assert!(cx.debug_bounds("composer-footer").is_none());
-    assert!(debug_bounds(cx, format!("model-picker-{}", thread.get())).is_none());
-}
-
 /// A draft's Project menu hangs off its chip in the Composer's toolbar
 /// (SPEC §5.5): its left edge at the chip's, resting above it.
 #[gpui::test]
@@ -386,9 +366,9 @@ fn a_tray_image_is_a_thumbnail_card(cx: &mut TestAppContext) {
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     cx.simulate_resize(gpui::size(px(1400.), px(800.)));
     let files = [
-        std::path::PathBuf::from("/tmp/tray-a.png"),
-        std::path::PathBuf::from("/tmp/notes.md"),
-        std::path::PathBuf::from("/tmp/tray-b.jpg"),
+        real_file("tray-thumbnail-a", "tray-a.png"),
+        real_file("tray-thumbnail-notes", "notes.md"),
+        real_file("tray-thumbnail-b", "tray-b.jpg"),
     ];
     view.update(cx, |view, cx| {
         view.panes[0]

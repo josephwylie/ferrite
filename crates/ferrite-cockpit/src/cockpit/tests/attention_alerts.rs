@@ -36,7 +36,7 @@ fn a_window_crossing_its_threshold_toasts_once(cx: &mut TestAppContext) {
 #[gpui::test]
 fn cmd_i_holds_the_list_until_escape_gives_the_keys_back(cx: &mut TestAppContext) {
     let (mut core, fake) = cockpit("needs-you-escape", 1);
-    core.send(core.threads()[0], "keep working".into());
+    let _ = core.send(core.threads()[0], "keep working".into());
     bind_production_keys(cx);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     tick(cx);
@@ -45,7 +45,7 @@ fn cmd_i_holds_the_list_until_escape_gives_the_keys_back(cx: &mut TestAppContext
     // An unrelated render must leave the Popover's dismiss handler focused.
     view.update(cx, |_, cx| cx.notify());
     tick(cx);
-    view.read_with(cx, |view, _| assert!(view.nav_keys_held));
+    view.read_with(cx, |view, cx| assert!(view.nav_view.read(cx).keys_held));
     cx.simulate_keystrokes("escape");
     tick(cx);
     assert_eq!(
@@ -53,7 +53,7 @@ fn cmd_i_holds_the_list_until_escape_gives_the_keys_back(cx: &mut TestAppContext
         0,
         "Escape only gives the list's keys back"
     );
-    view.read_with(cx, |view, _| assert!(!view.nav_keys_held));
+    view.read_with(cx, |view, cx| assert!(!view.nav_view.read(cx).keys_held));
     cx.simulate_keystrokes("escape");
     assert_eq!(
         *fake.interrupts.borrow(),
@@ -69,7 +69,7 @@ fn the_list_scrolls_to_and_opens_its_last_card(cx: &mut TestAppContext) {
     const THREADS: usize = 24;
     let (mut core, fake) = cockpit("needs-you-scroll", THREADS);
     for index in 0..THREADS {
-        core.send(core.threads()[index], "go".into());
+        let _ = core.send(core.threads()[index], "go".into());
         fake.streams.borrow()[index]
             .send(SessionEvent::TurnEnded {
                 outcome: ferrite_core::TurnOutcome::Completed,
@@ -270,10 +270,8 @@ fn a_finish_on_the_focused_pane_is_read_at_once_and_never_toasts(cx: &mut TestAp
 /// operator on its Pane and preserves Inbox mode.
 #[gpui::test]
 fn opening_a_notice_lands_on_its_pane_and_reads_it(cx: &mut TestAppContext) {
-    let (mut core, fake) = cockpit("open-notice", 4);
-    let group = group_all(&mut core);
+    let (core, fake) = cockpit("open-notice", 4);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
-    view.update(cx, |view, cx| view.enter_group(group, cx));
     fake.streams.borrow()[2]
         .send(SessionEvent::TurnEnded {
             outcome: ferrite_core::TurnOutcome::Error("rate limited".into()),
@@ -438,28 +436,25 @@ fn a_request_off_the_board_posts_while_the_window_is_frontmost(cx: &mut TestAppC
     );
 }
 
-/// ADR 0017: with the window in the background, a finish on a Pane
-/// left on screen is news. It chimes, toasts and posts a system
-/// notification; clicking that brings the window forward and lands on
-/// the Thread, and everything on screen is read.
+/// ADR 0017: the Thread on screen finishing while the window is away posts
+/// a system notification, since nobody is looking at it; clicking it reads
+/// it, and read, it leaves the notification centre.
 #[gpui::test]
-fn away_from_the_window_a_finish_posts_a_system_notification(cx: &mut TestAppContext) {
-    let (mut core, fake) = cockpit("system-notification", 2);
-    let group = group_all(&mut core);
+fn away_from_the_window_the_shown_thread_s_finish_posts_a_notification(
+    cx: &mut TestAppContext,
+) {
+    let (core, fake) = cockpit("system-notification-shown", 1);
     cx.update(|cx| cx.set_app_identity("com.github.josephwylie.ferrite", "Ferrite"));
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
-    view.update(cx, |view, cx| view.enter_group(group, cx));
-    let threads = view.read_with(cx, |view, _| view.cockpit.threads());
+    let thread = view.read_with(cx, |view, _| view.cockpit.threads()[0]);
     let home = crate::machines::MachineKey(None);
     cx.deactivate_window();
-    for at in [0, 1] {
-        fake.streams.borrow()[at]
-            .send(SessionEvent::TurnEnded {
-                outcome: ferrite_core::TurnOutcome::Completed,
-                cost_usd: None,
-            })
-            .unwrap();
-    }
+    fake.streams.borrow()[0]
+        .send(SessionEvent::TurnEnded {
+            outcome: ferrite_core::TurnOutcome::Completed,
+            cost_usd: None,
+        })
+        .unwrap();
     tick(cx);
     ring(cx);
     let tags = |cx: &mut gpui::VisualTestContext| {
@@ -470,31 +465,22 @@ fn away_from_the_window_a_finish_posts_a_system_notification(cx: &mut TestAppCon
     };
     assert_eq!(
         tags(cx),
-        [system_tag(&home, threads[0]), system_tag(&home, threads[1])],
-        "both Panes are on the board, but nobody is looking"
+        [system_tag(&home, thread)],
+        "the Thread is on screen, but nobody is looking"
     );
-    view.read_with(cx, |view, _| {
-        assert_eq!(
-            view.chimed,
-            [Sound::Done],
-            "ringing together, they chime once"
-        );
-        assert_eq!(view.needs_you.toasts().len(), 2);
-    });
+    view.read_with(cx, |view, _| assert_eq!(view.chimed, [Sound::Done]));
 
     cx.simulate_system_notification_response(gpui::SystemNotificationResponse {
-        tag: system_tag(&home, threads[1]).into(),
+        tag: system_tag(&home, thread).into(),
         action_id: None,
     });
     tick(cx);
     view.read_with(cx, |view, _| {
-        assert_eq!(view.focused(), 1, "the click landed on its Thread");
-        assert!(!view.cockpit.notifications().attention(threads[1]));
-        assert!(view.needs_you.toasts().is_empty(), "both are in view now");
+        assert!(!view.cockpit.notifications().attention(thread));
     });
     assert!(
         tags(cx).is_empty(),
-        "read, they leave the notification centre"
+        "read, it leaves the notification centre"
     );
 }
 
@@ -503,11 +489,9 @@ fn away_from_the_window_a_finish_posts_a_system_notification(cx: &mut TestAppCon
 /// it leaves the notification centre.
 #[gpui::test]
 fn clicking_a_request_s_system_notification_opens_it(cx: &mut TestAppContext) {
-    let (mut core, fake) = cockpit("system-notification-request", 2);
-    let group = group_all(&mut core);
+    let (core, fake) = cockpit("system-notification-request", 2);
     cx.update(|cx| cx.set_app_identity("com.github.josephwylie.ferrite", "Ferrite"));
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
-    view.update(cx, |view, cx| view.enter_group(group, cx));
     let threads = view.read_with(cx, |view, _| view.cockpit.threads());
     let home = crate::machines::MachineKey(None);
     cx.deactivate_window();
@@ -540,52 +524,6 @@ fn clicking_a_request_s_system_notification_opens_it(cx: &mut TestAppContext) {
     );
 }
 
-/// ADR 0017: alerts ringing together chime once, needs-you over done;
-/// and with the window focused, a request on a Pane that is on the
-/// board but not focused rings nothing — it is seen where it is asked.
-#[gpui::test]
-fn alerts_chime_once_and_a_request_in_view_rings_nothing(cx: &mut TestAppContext) {
-    let (mut core, fake) = cockpit("alerts-together", 2);
-    let group = group_all(&mut core);
-    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
-    view.update(cx, |view, cx| view.enter_group(group, cx));
-    cx.deactivate_window();
-    fake.streams.borrow()[0]
-        .send(SessionEvent::TurnEnded {
-            outcome: ferrite_core::TurnOutcome::Completed,
-            cost_usd: None,
-        })
-        .unwrap();
-    fake.streams.borrow()[1].send(decision("away")).unwrap();
-    tick(cx);
-    ring(cx);
-    view.read_with(cx, |view, _| {
-        assert_eq!(view.chimed, [Sound::NeedsYou]);
-        assert_eq!(view.needs_you.toasts().len(), 2);
-    });
-
-    cx.update(|window, _| window.activate_window());
-    view.update(cx, |view, _| view.chimed.clear());
-    tick(cx);
-    let unfocused = view.read_with(cx, |view, _| {
-        assert!(view.needs_you.toasts().is_empty(), "both are in view now");
-        view.cockpit
-            .threads()
-            .into_iter()
-            .position(|thread| Some(thread) != view.focused_thread())
-            .unwrap()
-    });
-    fake.streams.borrow()[unfocused]
-        .send(decision("here"))
-        .unwrap();
-    tick(cx);
-    ring(cx);
-    view.read_with(cx, |view, _| {
-        assert!(view.needs_you.toasts().is_empty());
-        assert!(view.chimed.is_empty());
-    });
-}
-
 /// The Notifications page: sounds on and off, a provider's sounds, a
 /// chime played and a chosen file put back to the built-in, system
 /// notifications — each press a saved setting.
@@ -595,8 +533,10 @@ fn the_notifications_page_sets_every_alert_setting(cx: &mut TestAppContext) {
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     cx.simulate_resize(gpui::size(px(1000.), px(700.)));
     view.update(cx, |view, cx| {
-        view.settings_open = true;
-        view.settings_page = settings::PageKey::Notifications;
+        view.settings_view.update(cx, |settings, _| {
+            settings.open = true;
+            settings.page = settings::PageKey::Notifications;
+        });
         cx.notify();
     });
     tick(cx);
@@ -680,10 +620,8 @@ fn settings_silence_sounds_and_system_notifications(cx: &mut TestAppContext) {
 #[gpui::test]
 fn contract_request_notice_opens_its_owning_child(cx: &mut TestAppContext) {
     use ferrite_core::activity::{ActivityEvent, AgentInfo, AgentKey, Subject};
-    let (mut core, fake) = cockpit("request-child-contract", 2);
-    let group = group_all(&mut core);
+    let (core, fake) = cockpit("request-child-contract", 2);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
-    view.update(cx, |view, cx| view.enter_group(group, cx));
     let key = AgentKey::new(Provider::Claude, "native", "child");
     let mut info = AgentInfo::new(key.clone());
     info.parent = Some(Subject::Main);
@@ -720,14 +658,14 @@ fn contract_request_notice_opens_its_owning_child(cx: &mut TestAppContext) {
         view.notice_verb(Verb::OpenDecision(id.clone()), cx)
     });
     tick(cx);
-    view.read_with(cx, |view, _| {
+    view.read_with(cx, |view, cx| {
         assert_eq!(view.focused(), 1);
         assert_eq!(
             view.panes[view.focused()].selected,
             Subject::Subagent(key.clone())
         );
         assert!(view.cockpit.notifications().decision(&id).unwrap().read);
-        assert!(!view.nav_keys_held);
+        assert!(!view.nav_view.read(cx).keys_held);
     });
 }
 
@@ -783,7 +721,7 @@ fn the_list_empty_over_working_then_a_decision_parks_from_the_keyboard(cx: &mut 
     let (mut core, fake) = cockpit("inbox-empty-working", 3);
     let threads = core.threads();
     for thread in &threads {
-        core.send(*thread, "go".into());
+        let _ = core.send(*thread, "go".into());
     }
     bind_production_keys(cx);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
@@ -814,7 +752,7 @@ fn the_list_empty_over_working_then_a_decision_parks_from_the_keyboard(cx: &mut 
         1
     );
     // Park the only Active card; the two agents still working remain.
-    cx.simulate_keystrokes("home down cmd-w");
+    cx.simulate_keystrokes("home cmd-w");
     tick(cx);
     view.read_with(cx, |view, cx| {
         assert!(view.needs_you_rows(cx).is_empty());
@@ -844,7 +782,7 @@ fn the_keyboard_parks_the_cursors_card_and_the_cursor_follows_it(cx: &mut TestAp
         assert_eq!(view.cockpit.parked().unwrap(), vec![active[1]]);
         assert_eq!(view.needs_you_rows(cx).len(), 2);
         assert_eq!(
-            view.nav_cursor.as_ref().map(|cursor| cursor.item),
+            view.nav_view.read(cx).cursor.as_ref().map(|cursor| cursor.item),
             Some(nav::NavItem::Thread(active[1])),
             "the cursor follows its Thread into the Parked shelf"
         );
@@ -855,7 +793,7 @@ fn the_keyboard_parks_the_cursors_card_and_the_cursor_follows_it(cx: &mut TestAp
         view.read_with(cx, |view, cx| view.needs_you_rows(cx).len()),
         1
     );
-    cx.simulate_keystrokes("home down cmd-w");
+    cx.simulate_keystrokes("home cmd-w");
     tick(cx);
     view.read_with(cx, |view, cx| {
         assert!(view.needs_you_rows(cx).is_empty());
@@ -978,7 +916,7 @@ fn main_completion_waits_for_working_descendants_before_inbox(cx: &mut TestAppCo
 fn inbox_completion_keeps_keyboard_park_on_the_selected_thread(cx: &mut TestAppContext) {
     let (mut core, fake) = cockpit("inbox-cursor-identity", 3);
     let threads = core.threads();
-    core.send(threads[0], "go".into());
+    let _ = core.send(threads[0], "go".into());
     bind_production_keys(cx);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     tick(cx);
@@ -1074,7 +1012,7 @@ fn working_shelf_starts_folded_and_opens_to_cards(cx: &mut TestAppContext) {
     let (mut core, _) = cockpit("working-shelf", 2);
     let thread = core.threads()[0];
     let other = core.threads()[1];
-    core.send(thread, "work".into());
+    let _ = core.send(thread, "work".into());
     bind_production_keys(cx);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     tick(cx);

@@ -5,8 +5,8 @@
 
 use super::*;
 use crate::protocol::{
-    Done, ErrorCode, NoticeAction, Op, ProjectAction, WireAnswer, WireDirection, WireDissolved,
-    WireError, WireHandle,
+    Done, ErrorCode, NoticeAction, Op, ProjectAction, WireAnswer, WireDirection, WireError,
+    WireHandle,
 };
 
 /// What a command came to: a result to reply `ok` with, or why not.
@@ -60,8 +60,11 @@ impl Engine {
             }
             Op::Send { thread, text } => {
                 self.open_thread(thread)?;
-                self.send(*thread, text.clone());
-                Ok(None)
+                match self.send(*thread, text.clone()) {
+                    Admission::Held => Ok(Some(Done::Held)),
+                    Admission::Refused(refusal) => Err(failed(refusal)),
+                    Admission::Delivered | Admission::Unconfirmed(_) => Ok(None),
+                }
             }
             Op::Queue { thread, text } => {
                 if self.queue(*thread, text.clone()) {
@@ -170,6 +173,10 @@ impl Engine {
                 )
                 .map(|()| None)
                 .map_err(failed),
+            Op::StartFresh { thread } => self
+                .start_fresh_conversation(*thread)
+                .map(|()| None)
+                .map_err(failed),
             Op::Snooze { thread, until } => self
                 .snooze_thread(*thread, *until)
                 .map(|()| None)
@@ -180,39 +187,11 @@ impl Engine {
                 .map_err(failed),
             Op::Park { thread } => self.park(*thread).map(|()| None).map_err(failed),
             Op::Revive { thread } => self.revive(*thread).map(|()| None).map_err(failed),
-            Op::ReviveGroup { group } => self
-                .revive_group(*group)
-                .map(|threads| Some(Done::Threads { threads }))
-                .map_err(failed),
             Op::Delete { thread } => self.delete(*thread).map(|()| None).map_err(failed),
             Op::Import { path } => self
                 .import(path)
                 .map(|thread| Some(Done::Thread { thread }))
                 .map_err(failed),
-            Op::Group { change } => {
-                let change = change.try_into().map_err(|_| unknown())?;
-                self.apply_group(change)
-                    .map(|applied| {
-                        Some(Done::Grouped {
-                            group: applied.group,
-                            dissolved: applied
-                                .dissolved
-                                .iter()
-                                .map(|dissolved| WireDissolved {
-                                    group: dissolved.group,
-                                    survivor: dissolved.survivor,
-                                })
-                                .collect(),
-                        })
-                    })
-                    .map_err(failed)
-            }
-            Op::Layout { group, tree } => match tree {
-                Some(tree) => self.set_group_layout(*group, tree.clone()),
-                None => self.reset_group_layout(*group),
-            }
-            .map(|()| None)
-            .map_err(failed),
             Op::Project { action } => self.project(action),
             Op::Notice { action } => {
                 self.notice(action);
@@ -258,7 +237,8 @@ impl Engine {
                 self.apply_input(*thread, Input::Notice(text.clone()));
                 Ok(None)
             }
-            Op::BrowserCapture { .. }
+            Op::BrowserDispatch { .. }
+            | Op::BrowserCapture { .. }
             | Op::BrowserCaptureImage { .. }
             | Op::BrowserProtect { .. }
             | Op::BrowserRelease { .. }
@@ -270,19 +250,26 @@ impl Engine {
             | Op::BrowserAttach { .. }
             | Op::Browser { .. }
             | Op::SettingsChanged
+            | Op::ServerDefaults { .. }
+            | Op::Cli { .. }
             | Op::Bootstrap { .. }
             | Op::CancelBootstrap { .. }
             | Op::SearchFiles { .. }
             | Op::Focused { .. }
             | Op::Composing { .. }
             | Op::ListDir { .. }
+            | Op::FileOperation { .. }
+            | Op::Attachment { .. }
+            | Op::Changes { .. }
             | Op::ListRepo { .. }
             | Op::ReviewDiff { .. }
             | Op::ReviewRead { .. }
+            | Op::ReviewPullRequestDiff { .. }
             | Op::ListCommits { .. }
             | Op::SearchRepo { .. }
             | Op::ReadFile { .. }
             | Op::ReviewPullRequest { .. }
+            | Op::ListPullRequests { .. }
             | Op::ListFiles { .. }
             | Op::ListBases { .. }
             | Op::PickBase { .. }
@@ -293,13 +280,17 @@ impl Engine {
             | Op::Workflow { .. }
             | Op::GitHub { .. }
             | Op::Coordinator { .. }
+            // Groups are gone; an older window may still ask.
+            | Op::Group { .. }
+            | Op::Layout { .. }
+            | Op::ReviveGroup { .. }
             | Op::Unknown => Err(unknown()),
         }
     }
 
-    /// A window's first send, with the scope its Draft gave it, tagged
-    /// `tag` so its settling (`take_bootstrap_results`) names it. The
-    /// Thread, or `None` while it starts.
+    /// A window's first send, tagged `tag` so its settling
+    /// (`take_bootstrap_results`) names it. The Thread, or `None` while it
+    /// starts. A Group an older window names is not joined.
     pub fn bootstrap_command(
         &mut self,
         tag: DraftId,
@@ -311,8 +302,7 @@ impl Engine {
             effort,
             workspace,
             prompt,
-            group,
-            new_group_with,
+            ..
         } = op
         else {
             return Err(unknown());
@@ -322,12 +312,7 @@ impl Engine {
             provider: *provider,
             model: model.clone(),
         };
-        let scope = DraftScope {
-            group: *group,
-            new_group_with: *new_group_with,
-            pending_leave: None,
-        };
-        self.bootstrap_draft(tag, scope, choice, workspace, prompt, effort.clone())
+        self.bootstrap_draft(tag, choice, workspace, prompt, effort.clone())
             .map_err(failed)
     }
 

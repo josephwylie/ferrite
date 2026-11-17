@@ -399,6 +399,7 @@ it never covers or interrupts the user's. The `window` commands drive it:
 ```bash
 "$F" window key cmd-,
 "$F" window type "hello"
+"$F" window attach /tmp/screenshot.png
 "$F" window find settings-close
 "$F" window click --selector settings-close
 "$F" window shot /tmp/settings.png
@@ -409,6 +410,8 @@ nothing took). `window click` takes an element's debug selector (its
 `window find` bounds are where it was last drawn) or `--x` and `--y` in
 the window's 1440x900 logical pixels, with `--double` or `--right`.
 `window shot` writes a PNG (2880x1800) the window drew; look at it.
+`window attach` adds local files to the active composer through its normal
+attachment flow, including upload when connected to a remote environment.
 With no headless window attached the server refuses with
 `no_headless_window`.
 

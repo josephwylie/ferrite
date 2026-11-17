@@ -1,0 +1,263 @@
+[
+  {
+    "id": "projects-navigation-001",
+    "title": "Rename on Parked and Snoozed rows creates an editor that is never drawn",
+    "priority": "P1",
+    "category": "defect",
+    "evidence_level": "source-proven",
+    "impact": "An advertised rename action cannot be completed visibly on either slim shelf. The root also attempts to focus the absent editor, which creates a keyboard reliability risk.",
+    "ferrite_evidence": [
+      "crates/ferrite-cockpit/src/cockpit/context_menu.rs:431-434,671-672",
+      "crates/ferrite-cockpit/src/cockpit/nav_list.rs:285-295,435-451",
+      "crates/ferrite-cockpit/src/nav/list.rs:188-197,265",
+      "crates/ferrite-cockpit/src/cockpit.rs:3392-3409,5405-5412,10109-10112,10266-10273"
+    ],
+    "t3_evidence": [
+      "apps/web/src/components/sidebar/SidebarThreadRow.tsx:1033-1039,1218-1243"
+    ],
+    "recommendation": "Pass the same editable title into full and slim rows. Focus it only after the row has rendered. Keep Enter and Escape on the visible editor.",
+    "acceptance": "Right-click a Parked row and a Snoozed row, choose Rename, and see the existing title in a focused field. Type, save, reopen the app, and confirm the saved title. Escape must cancel without swallowing subsequent navigation keys."
+  },
+  {
+    "id": "projects-navigation-002",
+    "title": "Reopen failures produce a log entry without a visible error",
+    "priority": "P2",
+    "category": "defect",
+    "evidence_level": "source-proven",
+    "impact": "A parked thread can appear unresponsive when its stored history cannot be loaded. The search also clears before the failure, removing the user's recovery context.",
+    "ferrite_evidence": [
+      "crates/ferrite-cockpit/src/cockpit/nav_list.rs:418-426",
+      "crates/ferrite-cockpit/src/cockpit/nav_chrome.rs:261-264,420-430",
+      "crates/ferrite-cockpit/src/cockpit.rs:9063-9072,9135-9144",
+      "crates/ferrite-core/src/cockpit.rs:3099-3106",
+      "crates/ferrite-core/src/engine.rs:2360-2372"
+    ],
+    "t3_evidence": [
+      "apps/web/src/components/settings/ArchivedThreadsPanel.tsx:138-168",
+      "apps/web/src/hooks/useThreadActions.ts:363-381"
+    ],
+    "recommendation": "Return a visible per-thread recovery message and retain the row and query on failure. Let Undo report failed restores instead of consuming its notice silently.",
+    "acceptance": "With a controlled unreadable or missing thread log, click the parked row, invoke Reopen last, and undo Park. Each path identifies the failed thread, shows the failure, and leaves a retryable state."
+  },
+  {
+    "id": "projects-navigation-003",
+    "title": "Undo Park does not restore group membership or a dissolved group",
+    "priority": "P2",
+    "category": "defect",
+    "evidence_level": "source-proven",
+    "impact": "Undo restores a transcript but cannot restore the grouped workspace that Park changed. Users can lose their arrangement after what appears to be a reversible action.",
+    "ferrite_evidence": [
+      "crates/ferrite-core/src/cockpit.rs:3308-3332",
+      "crates/ferrite-cockpit/src/cockpit/nav_chrome.rs:20-24,420-430",
+      "crates/ferrite-cockpit/src/cockpit.rs:12830-12841"
+    ],
+    "t3_evidence": [
+      "apps/web/src/hooks/useThreadActions.ts:814-835"
+    ],
+    "recommendation": "Capture the group and placement before parking, then restore surviving membership and layout on Undo. Report conflicts when concurrent edits prevent exact restoration.",
+    "acceptance": "Create a two-thread group, park one member, then Undo. Both threads must return to the original group and arrangement. Repeat with multi-selection and a larger group."
+  },
+  {
+    "id": "projects-navigation-004",
+    "title": "Bulk Park discards individual failures and clears the selection",
+    "priority": "P2",
+    "category": "partial-capability",
+    "evidence_level": "source-proven",
+    "impact": "A mixed success/failure batch reports only Parked. The operator cannot tell which requested parks failed without inspecting the remaining list.",
+    "ferrite_evidence": [
+      "crates/ferrite-cockpit/src/cockpit.rs:12832-12842",
+      "crates/ferrite-cockpit/src/cockpit/context_menu.rs:692-696",
+      "crates/ferrite-cockpit/src/cockpit/nav_pick.rs:125-133",
+      "crates/ferrite-core/src/engine.rs:2308-2311"
+    ],
+    "t3_evidence": [
+      "apps/web/src/components/Sidebar.tsx:2433-2462,2528-2552"
+    ],
+    "recommendation": "Collect a result for every requested thread. Show the successful and failed counts, retain failures in the selection, and offer Undo only for the successful subset.",
+    "acceptance": "Force one of three selected threads to refuse Park. The UI says two parked and names the failure. The failing thread stays selected. Undo restores only the two successful parks."
+  },
+  {
+    "id": "projects-navigation-005",
+    "title": "Sidebar search matches titles only",
+    "priority": "P2",
+    "category": "partial-capability",
+    "evidence_level": "source-proven",
+    "impact": "A thread cannot be found from its branch, PR number, or remembered message text through the sidebar search, even though the result row itself displays a PR number.",
+    "ferrite_evidence": [
+      "crates/ferrite-cockpit/src/cockpit/nav_chrome.rs:71-83",
+      "crates/ferrite-cockpit/src/nav/chrome.rs:193-201"
+    ],
+    "t3_evidence": [
+      "apps/web/src/components/Sidebar.logic.ts:1122-1158",
+      "apps/web/src/components/Sidebar.tsx:1511-1520"
+    ],
+    "recommendation": "Extend a shared thread-search model to branch and PR metadata, then add cancellable content search with snippets and navigation to the matched message. Keep the current project scope explicit.",
+    "acceptance": "Search a unique branch, a PR number, and text found only inside a parked transcript. Each query returns the correct thread. A content result opens at the matching message."
+  },
+  {
+    "id": "projects-navigation-006",
+    "title": "Keyboard search navigation does not reveal the highlighted result",
+    "priority": "P2",
+    "category": "defect",
+    "evidence_level": "source-proven",
+    "impact": "Arrow-key navigation can move the highlighted search result beyond the viewport while the keyboard remains in the search field. Enter then opens an unseen row.",
+    "ferrite_evidence": [
+      "crates/ferrite-cockpit/src/cockpit/nav_chrome.rs:203-244",
+      "crates/ferrite-cockpit/src/nav/chrome.rs:160-213",
+      "crates/ferrite-cockpit/src/cockpit/nav_keys.rs:121-138"
+    ],
+    "t3_evidence": [
+      "apps/web/src/components/sidebar/SidebarThreadRow.tsx:1626-1630,1722-1724"
+    ],
+    "recommendation": "Give search results the same explicit reveal behavior as ordinary nav rows. Reveal on query reset and every highlight change without moving keyboard focus out of the field.",
+    "acceptance": "Populate enough matching threads to exceed the viewport. Press Down to the final result and Up to the first. Each highlighted row must remain visible throughout."
+  },
+  {
+    "id": "projects-navigation-007",
+    "title": "Live search results can change the Enter target or make Enter a no-op",
+    "priority": "P2",
+    "category": "defect",
+    "evidence_level": "source-proven",
+    "impact": "A background status change can reorder the results under the user's highlight. A result disappearing can leave a visibly selected row that Enter will not open.",
+    "ferrite_evidence": [
+      "crates/ferrite-cockpit/src/cockpit/nav_chrome.rs:57-59,79-83,208-210,237-255",
+      "crates/ferrite-cockpit/src/cockpit.rs:8841-8867"
+    ],
+    "t3_evidence": [
+      "apps/web/src/components/Sidebar.tsx:1429-1443,1541-1544"
+    ],
+    "recommendation": "Store the selected ThreadId and resolve its current index. Use one resolved selection for drawing and activation. Pick a documented fallback when that thread disappears.",
+    "acceptance": "Highlight a search result, then cause another matching thread to move between Active and Working. Enter must still open the highlighted identity. Remove the selected final result and confirm the visible fallback opens."
+  },
+  {
+    "id": "projects-navigation-008",
+    "title": "Project scope has no search, multi-project selection, or persistence",
+    "priority": "P2",
+    "category": "partial-capability",
+    "evidence_level": "source-proven",
+    "impact": "Large project lists require manual scanning. Users cannot watch a chosen subset of projects together, and the chosen project scope is lost on a new view.",
+    "ferrite_evidence": [
+      "crates/ferrite-cockpit/src/cockpit/nav_chrome.rs:280-309",
+      "crates/ferrite-cockpit/src/cockpit.rs:429,1503,7222-7237,8876-8884"
+    ],
+    "t3_evidence": [
+      "apps/web/src/components/Sidebar.tsx:1148-1173,1196-1208,3064-3067,3089-3094"
+    ],
+    "recommendation": "Use a searchable scope picker with explicit All and selected-project states. Persist the selection if the product intends it to survive restart. Multi-project scope should remain optional.",
+    "acceptance": "With 30 projects, type a project name into the filter, select two projects, and see only their threads. Reopen the application and confirm the selected scope is restored."
+  },
+  {
+    "id": "projects-navigation-009",
+    "title": "Opening a thread outside the project filter leaves its sidebar selection hidden",
+    "priority": "P2",
+    "category": "interaction",
+    "evidence_level": "source-proven",
+    "impact": "The main view can show a thread with no selected row in the nav. This weakens the orientation promise that selection follows the shown thread.",
+    "ferrite_evidence": [
+      "crates/ferrite-cockpit/src/cockpit.rs:8809-8826,8876-8884,9033-9041,9063-9069",
+      "crates/ferrite-cockpit/src/cockpit/history.rs:207-214",
+      "crates/ferrite-cockpit/src/cockpit/nav_list.rs:295-296"
+    ],
+    "t3_evidence": [
+      "apps/web/src/components/Sidebar.tsx:1148-1174"
+    ],
+    "recommendation": "On explicit cross-project navigation, reveal the destination by widening the filter or drawing a clearly labeled current-thread exception. Preserve the user's scope on background updates.",
+    "acceptance": "Filter to project A, then open a thread in B through history or the palette. The destination has a visible selected nav row or an explicit outside-filter indicator. Background updates alone must not change the scope."
+  },
+  {
+    "id": "projects-navigation-010",
+    "title": "Pinned rows cannot be reordered directly",
+    "priority": "P2",
+    "category": "missing-capability",
+    "evidence_level": "source-proven",
+    "impact": "Users cannot arrange persistent pinned priorities by dragging. Unpinning and repinning moves only to the end, which is a cumbersome ordering substitute.",
+    "ferrite_evidence": [
+      "crates/ferrite-cockpit/src/cockpit.rs:7240-7253,8841-8849",
+      "crates/ferrite-cockpit/src/cockpit/nav_list.rs:275-277,308-324"
+    ],
+    "t3_evidence": [
+      "apps/web/src/components/Sidebar.logic.ts:465-484"
+    ],
+    "recommendation": "Add an explicit reorder destination for pinned rows and persist the resulting order. Preserve the existing drag-to-board behavior by distinguishing its destination.",
+    "acceptance": "Pin three threads, drag the final one to the first slot, restart, and see the same order. Dragging into the board must still use the established grouping behavior."
+  },
+  {
+    "id": "projects-navigation-011",
+    "title": "Multi-selection applies only to Park and is absent from slim rows",
+    "priority": "P2",
+    "category": "partial-capability",
+    "evidence_level": "source-proven",
+    "impact": "The UI suggests a multi-thread selection model but Snooze, Mark unread, Unpin and Delete still act on one context-menu thread. Parked and Snoozed rows cannot join that selection with the same gesture.",
+    "ferrite_evidence": [
+      "crates/ferrite-cockpit/src/cockpit/nav_pick.rs:45-88",
+      "crates/ferrite-cockpit/src/cockpit/context_menu.rs:421-434,475-494,688-695,824",
+      "crates/ferrite-cockpit/src/cockpit/nav_list.rs:327-335,435-449"
+    ],
+    "t3_evidence": [
+      "apps/web/src/components/Sidebar.tsx:2352-2402,2467-2504,2528-2552"
+    ],
+    "recommendation": "Make the supported batch operations explicit and label them with their target count. Apply the selection model consistently to applicable shelves. Do not imply a batch for actions that remain singular.",
+    "acceptance": "Select three rows and invoke each supported batch action. Its label names all three targets and its outcome accounts for each. Cmd-click on a Snoozed or Parked row follows the same documented selection behavior."
+  },
+  {
+    "id": "projects-navigation-012",
+    "title": "Project editing and removal lack a contextual navigation entry point",
+    "priority": "P2",
+    "category": "interaction",
+    "evidence_level": "source-proven",
+    "impact": "After the project tree retired, users must discover the command palette to rename a project, manage its directories, or remove it. These capabilities exist but the normal project filter does not lead to them.",
+    "ferrite_evidence": [
+      "docs/adr/0040-the-nav-is-the-inbox.md:24-28",
+      "crates/ferrite-cockpit/src/cockpit/nav_chrome.rs:280-309",
+      "crates/ferrite-cockpit/src/cockpit/context_menu.rs:401-495",
+      "crates/ferrite-cockpit/src/cockpit/palette.rs:883-890,1174",
+      "crates/ferrite-cockpit/src/cockpit.rs:4883-4909,5140-5245"
+    ],
+    "t3_evidence": [
+      "apps/web/src/components/threadActionMenu.logic.ts:241",
+      "apps/web/src/hooks/useThreadActionMenu.ts:200-213"
+    ],
+    "recommendation": "Add Edit project to the selected project's filter entry or to the thread context menu. Reuse the existing editor and its validation.",
+    "acceptance": "Starting with a visible thread, reach its project editor with the pointer, rename the project, and manage its directories without opening the command palette."
+  },
+  {
+    "id": "projects-navigation-013",
+    "title": "New thread on the same branch or worktree requires manual reselection",
+    "priority": "P2",
+    "category": "partial-capability",
+    "evidence_level": "source-proven",
+    "impact": "Starting another conversation about the same checkout takes an extra workspace-selection step and can accidentally aim work at the main checkout if the user assumes the contextual action preserves the branch.",
+    "ferrite_evidence": [
+      "crates/ferrite-cockpit/src/cockpit/context_menu.rs:453-456,791-817",
+      "crates/ferrite-cockpit/src/cockpit.rs:7264-7275,7646-7725"
+    ],
+    "t3_evidence": [
+      "apps/web/src/components/threadActionMenu.logic.ts:123-130",
+      "apps/web/src/hooks/useThreadActionMenu.ts:215-221"
+    ],
+    "recommendation": "Offer an explicit New thread in this checkout action that carries the thread's workspace binding. Keep the existing project-level action accurately named.",
+    "acceptance": "From a thread in a non-main worktree, choose New thread in this checkout. The draft names the identical path and branch before send, and the new session starts there."
+  },
+  {
+    "id": "projects-navigation-014",
+    "title": "Park combines session closure and sidebar settlement, unlike T3",
+    "priority": "P2",
+    "category": "intentional-difference",
+    "evidence_level": "source-proven",
+    "impact": "Ferrite has no separate lightweight settled state or inactivity-based settlement control. Tidying a running thread by parking ends its session and can remove group membership. T3 users may expect settlement to be a list-placement action distinct from archive.",
+    "ferrite_evidence": [
+      "docs/adr/0040-the-nav-is-the-inbox.md:20-23",
+      "crates/ferrite-cockpit/src/cockpit/context_menu.rs:475-489",
+      "crates/ferrite-core/src/engine.rs:2276-2278,2313-2327",
+      "crates/ferrite-core/src/cockpit.rs:3308-3332",
+      "crates/ferrite-cockpit/src/cockpit.rs:8834-8867"
+    ],
+    "t3_evidence": [
+      "apps/web/src/components/threadActionMenu.logic.ts:139-145,206-224,241-247",
+      "apps/web/src/hooks/useThreadActions.ts:384-425,799-835",
+      "apps/web/src/components/settings/SettingsPanels.tsx:1872-1944"
+    ],
+    "recommendation": "Decide explicitly whether Park remains a session-lifecycle operation. If parity is wanted, add a separate settled placement and auto-settle policy. Explain the session effect before treating Park as the equivalent of T3 Settle.",
+    "acceptance": "Document and exercise Settle or Park during a running turn, while grouped, after inactivity and after merge. The observed session and membership behavior must match the labels and chosen product policy."
+  }
+]

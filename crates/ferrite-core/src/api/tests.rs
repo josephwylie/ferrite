@@ -233,6 +233,7 @@ fn the_operations_are_the_ones_declared_and_never_renamed() {
             "window.click",
             "window.find",
             "window.shot",
+            "window.attach",
         ]
     );
 }
@@ -590,12 +591,16 @@ fn samples() -> Vec<Request> {
         request(Method::WindowClick(drive::Click {
             at: drive::Target::Selector("settings-close".into()),
             press: drive::Press::Single,
+            command: false,
         })),
         request(Method::WindowFind(drive::Find {
             selector: "settings-close".into(),
         })),
         request(Method::WindowShot(drive::Shot {
             path: PathBuf::from("/tmp/shot.png"),
+        })),
+        request(Method::WindowAttach(drive::Attach {
+            paths: vec![PathBuf::from("/tmp/screenshot.png")],
         })),
     ]
 }
@@ -1434,6 +1439,15 @@ fn a_thread_starts_where_the_cli_runs_unless_told() {
 #[test]
 fn window_actions_read_as_the_window_takes_them() {
     assert_eq!(
+        parse("window.attach", &["/tmp/screenshot.png", "/tmp/notes.txt"]),
+        Ok(Method::WindowAttach(drive::Attach {
+            paths: vec![
+                PathBuf::from("/tmp/screenshot.png"),
+                PathBuf::from("/tmp/notes.txt"),
+            ],
+        }))
+    );
+    assert_eq!(
         parse("window.key", &["cmd-k", "cmd-s"]),
         Ok(Method::WindowKey(drive::Keys {
             keys: vec!["cmd-k".into(), "cmd-s".into()],
@@ -1447,6 +1461,7 @@ fn window_actions_read_as_the_window_takes_them() {
         Ok(Method::WindowClick(drive::Click {
             at: drive::Target::Selector("settings-close".into()),
             press: drive::Press::Double,
+            command: false,
         }))
     );
     assert_eq!(
@@ -1454,6 +1469,7 @@ fn window_actions_read_as_the_window_takes_them() {
         Ok(Method::WindowClick(drive::Click {
             at: drive::Target::Point { x: 40, y: 12 },
             press: drive::Press::Right,
+            command: false,
         }))
     );
     for wrong in [

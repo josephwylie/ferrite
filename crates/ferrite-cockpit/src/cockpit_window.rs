@@ -93,7 +93,7 @@ impl CockpitWindow {
     /// streams status from here on.
     fn go_to(
         &mut self,
-        index: usize,
+        index: Option<usize>,
         open: Option<crate::cockpit::Landing>,
         window: &mut Window,
         cx: &mut Context<Self>,
@@ -109,6 +109,11 @@ impl CockpitWindow {
                 view.launch_provider(),
             )
         };
+        if let Some(error) = self.cockpit.read(cx).files_leave_error(cx) {
+            use gpui::component::{notification::Notification, WindowExt};
+            window.push_notification(Notification::warning(error), cx);
+            return;
+        }
         let left = machines.read(cx).selected_key();
         let core = match machines.update(cx, |machines, _| machines.go_to(index)) {
             Some(Ok(core)) => core,
@@ -122,10 +127,11 @@ impl CockpitWindow {
         let needs_you = self
             .cockpit
             .update(cx, |view, _| std::mem::take(&mut view.needs_you))
-            .moved(&left, &arrived);
+            .moved(left.as_ref(), arrived.as_ref());
+        let panel = self.cockpit.update(cx, |view, _| view.successor_panel());
         let until = cx.background_executor().now() + LANDING_WAIT;
         let view = cx.new(|cx| {
-            CockpitView::new_with_settings(core, provider, prefs, cx)
+            CockpitView::new_with_panel(core, provider, prefs, panel, cx)
                 .with_machines(machines)
                 .with_needs_you(needs_you)
                 .with_landing(open, until)

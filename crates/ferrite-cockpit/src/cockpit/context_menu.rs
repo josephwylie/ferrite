@@ -1,11 +1,12 @@
 //! The context menu (theme WP-E, `menu`): what a right-click, a row's `⋯`
-//! or a title's ▾ offers for a Thread, a Pane, a Group, a Project, the
+//! or a title's ▾ offers for a Thread, a Pane, a Project, the
 //! Parked view, a Review line, a prompt's Rewind or a page — the rows each
 //! target offers (`context_rows`), their one-letter keys, a destructive
 //! row's arming, a parent row's submenu beside it (`Submenu`), and the
 //! verbs the rows run (`run_menu_verb`).
 
 use super::*;
+use ferrite_pane::link_target::{thread_link, Open};
 
 /// What a right-click was on.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -18,8 +19,7 @@ pub(super) enum MenuTarget {
     Pane(ThreadId),
     /// The Parked shelf's header at the foot of the nav.
     Parked,
-    /// The search row's Filter button: a Project to filter by, a Group to
-    /// open.
+    /// The search row's Filter button: a Project to filter by.
     NavFilter,
     /// The search row's Factory button: a Project's board to open.
     NavFactory,
@@ -52,9 +52,14 @@ pub(super) enum MenuTarget {
     /// A Panel tab's right-click, by its place in the strip.
     SurfaceTab { thread: ThreadId, at: usize },
     /// The pull request Surface's `⋯`.
-    PrMore(ThreadId),
+    PrMore(super::panel::pr_read::PrTarget),
+    /// The nav card's PR badge: the PR's own doors, not the Thread's.
+    PrLink(ThreadId),
     /// A Factory picker (#221): its rows are the Factory view's `picks`.
     Factory,
+    /// A right-click on the Thread's web page.
+    BrowserPage(ThreadId),
+    Details(ThreadId),
 }
 
 /// One thing a context-menu row does.
@@ -68,14 +73,13 @@ pub(super) enum MenuVerb {
     Pin,
     Unpin,
     Focus,
-    Fullscreen,
     /// Unfold or fold the Parked section.
     ToggleParked,
     /// Delete every Thread the Parked section lists — exactly those rows,
     /// so what the menu erases is what the operator can see.
     DeleteAllParked,
-    /// Park the Thread in one act, on screen or not: a Group member leaves
-    /// its Group and parks (`Cockpit::park_thread`), the same as cmd-w.
+    /// Park the Thread in one act, on screen or not (`Cockpit::park_thread`),
+    /// the same as cmd-w.
     Park,
     /// The transcript menu's own verbs: what is highlighted (in the
     /// Review, the pick), or all of it.
@@ -84,7 +88,6 @@ pub(super) enum MenuVerb {
     /// The Review's own verbs: comment on the pick, read the line's file.
     Comment,
     OpenAtLine,
-    LeaveGroup,
     NewThread,
     Reveal,
     CopyPath,
@@ -114,10 +117,10 @@ pub(super) enum MenuVerb {
     Changes(tools::ChangesVerb),
     /// A Terminal verb (`tools::TerminalVerb`).
     Terminal(tools::TerminalVerb),
+    /// A web page verb (`browser::page_menu::PageVerb`).
+    Browser(super::browser::PageVerb),
     /// The Thread's id in the form the CLI takes (`thread_link`).
     CopyLink,
-    /// Move the Thread into this Group (Claude's `Move to section ›`).
-    JoinGroup(GroupId),
     /// A `+` menu row: its Surface opens in the Panel.
     OpenSurface(panel::Opener),
     /// A Panel tab's closes.
@@ -126,12 +129,17 @@ pub(super) enum MenuVerb {
     CloseSurfacesRight,
     CloseAllSurfaces,
     FilterProject(Option<ProjectId>),
-    OpenGroup(GroupId),
     OpenFactory(ProjectId),
     /// A pull request Surface's row.
     Pr(panel::PrAction),
+    /// A PR link's rows (`MenuTarget::PrLink`): open it by a door, or copy
+    /// its forge address.
+    PrOpen(Open),
+    PrCopy,
     /// The Factory picker's row at this index.
     Factory(usize),
+    DetailsItem(ferrite_core::settings::ContextCardItem),
+    DetailsReset,
 }
 
 /// A parent row's submenu.
@@ -139,8 +147,6 @@ pub(super) enum MenuVerb {
 pub(super) enum Submenu {
     /// Where the Thread's checkout opens: Finder, a Terminal.
     OpenIn,
-    /// The other Groups the Thread can move to.
-    MoveToGroup,
     Snooze,
     /// The Files menus' parent rows: `Copy ›` and `Tab size ›`.
     Files(tools::FilesSub),
@@ -151,6 +157,7 @@ pub(super) enum Submenu {
 }
 
 /// The context menu up on screen.
+#[derive(Clone)]
 pub(super) struct ContextMenu {
     pub(super) target: MenuTarget,
     pub(super) at: Point<Pixels>,
@@ -159,8 +166,9 @@ pub(super) struct ContextMenu {
     pub(super) corner: gpui::Anchor,
     /// Opened from a `⋯`: `at` is `MENU_UNDER_GAP` over the button and
     /// this drops the menu to the same gap under it. Where the window has
-    /// no room below, the menu flips to hang over the button instead
-    /// (gpui's `SwitchAnchor` flips about `at`). None at the pointer.
+    /// less room below than the menu needs, the menu scrolls there, or
+    /// hangs over the button where even two rows would not fit (see
+    /// `context_menu_element`). None at the pointer.
     pub(super) drop: Option<Pixels>,
     pub(super) rows: Vec<Option<(menu::Item, MenuVerb)>>,
     /// The destructive row pressed once, waiting for its confirmation.
@@ -168,9 +176,63 @@ pub(super) struct ContextMenu {
     /// The submenu open beside its parent row: that row's index and the
     /// submenu's rows.
     pub(super) sub: Option<(usize, Vec<(menu::Item, MenuVerb)>)>,
+    /// Where the keyboard's cursor stands; none until a key moves it.
+    pub(super) cursor: MenuCursor,
+}
+
+/// The row the keyboard would press: in the menu, or in the submenu open
+/// beside it.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(super) enum MenuCursor {
+    Idle,
+    Row(usize),
+    SubRow(usize),
+}
+
+/// What heads a copy that is only the latest part of a conversation.
+const PARTIAL_HISTORY: &str =
+    "[Earlier messages are not included: this view keeps only the latest.]";
+
+/// Where the keyboard goes back to as an open menu closes.
+pub(super) enum MenuReturn {
+    /// The nav list held the keys, its cursor here.
+    Nav(Option<crate::nav::NavCursor>),
+    Focus(FocusHandle),
 }
 
 impl CockpitView {
+    /// `thread`'s conversation to the clipboard. Once the view dropped its
+    /// oldest Blocks, the whole of it is replayed from the Thread's log off
+    /// the window's thread; with no log to read here, or none readable, the
+    /// kept part is copied and says it is partial.
+    pub(super) fn copy_transcript(&mut self, thread: ThreadId, cx: &mut Context<Self>) {
+        let Some(open) = self.cockpit.thread(thread) else {
+            return;
+        };
+        let kept = plain_text(open.transcript().blocks());
+        if kept.is_empty() {
+            return;
+        }
+        if !open.transcript().earlier_dropped() {
+            cx.write_to_clipboard(ClipboardItem::new_string(kept));
+            return;
+        }
+        let partial = format!("{PARTIAL_HISTORY}\n\n{kept}");
+        let Some(store) = self.cockpit.history_log(thread).cloned() else {
+            cx.write_to_clipboard(ClipboardItem::new_string(partial));
+            return;
+        };
+        cx.spawn(async move |_, cx| {
+            let whole = cx
+                .background_executor()
+                .spawn(async move { store.full_history_text(thread) })
+                .await;
+            let text = whole.ok().filter(|text| !text.is_empty()).unwrap_or(partial);
+            cx.update(|cx| cx.write_to_clipboard(ClipboardItem::new_string(text)));
+        })
+        .detach();
+    }
+
     /// Summon the context menu for `target` at the pointer. Whatever else
     /// was up (a popover, a card, a rename) closes: one floating thing at a
     /// time.
@@ -184,8 +246,9 @@ impl CockpitView {
     }
 
     /// The menu a row's `⋯` opens, as Claude's: under the button, its right
-    /// edge on the button's, `MENU_UNDER_GAP` below it — over it, the same
-    /// gap above, only where the window has no room below.
+    /// edge on the button's, `MENU_UNDER_GAP` below it, scrolling where the
+    /// window has less room below than its rows need and over the button
+    /// where it has room for less than two.
     pub(super) fn open_context_menu_under(
         &mut self,
         target: MenuTarget,
@@ -228,7 +291,7 @@ impl CockpitView {
         if self.rename.is_some() {
             self.finish_rename(false, cx);
         }
-        let rows = self.context_rows(target);
+        let rows = self.context_rows(target, cx);
         self.context_menu = Some(ContextMenu {
             target,
             at,
@@ -237,29 +300,32 @@ impl CockpitView {
             rows,
             armed: None,
             sub: None,
+            cursor: MenuCursor::Idle,
         });
         cx.notify();
     }
 
     /// The rows a target offers. `None` is a gap between groups of rows.
-    pub(super) fn context_rows(&self, target: MenuTarget) -> Vec<Option<(menu::Item, MenuVerb)>> {
+    pub(super) fn context_rows(
+        &self,
+        target: MenuTarget,
+        cx: &gpui::App,
+    ) -> Vec<Option<(menu::Item, MenuVerb)>> {
+        use ferrite_ui::components::bound_chord;
         let mut rows: Vec<Option<(menu::Item, MenuVerb)>> = Vec::new();
-        let fullscreen =
-            ferrite_ui::components::bound_chord("cockpit::ToggleFullscreen").unwrap_or_default();
         match target {
             // The nav row: where a Thread lives in the roster — open it,
-            // park it, move it between Groups, delete it.
-            MenuTarget::Thread(thread) => self.thread_rows(thread, &mut rows),
+            // park it, delete it.
+            MenuTarget::Thread(thread) => self.thread_rows(thread, &mut rows, cx),
             MenuTarget::Snooze(_) => rows.extend(self.snooze_rows().into_iter().map(Some)),
             // The transcript: what is on screen — copy it, name it, size
             // it, and the Pane's own park/close. Deleting a Thread is the
             // nav's act; the transcript never offers it.
-            MenuTarget::Pane(thread) => {
-                let grouped = self.cockpit.groups().of(thread).is_some();
+            MenuTarget::Pane(_) => {
                 let selected = self.native_copy.is_some();
                 rows.push(Some((
                     menu::Item::new("Copy")
-                        .shortcut("cmd-C")
+                        .shortcut(bound_chord("cockpit::CopySelection").unwrap_or_default())
                         .disabled(!selected),
                     MenuVerb::CopySelection,
                 )));
@@ -269,10 +335,6 @@ impl CockpitView {
                 )));
                 rows.push(None);
                 rows.push(Some((menu::Item::new("Rename"), MenuVerb::Rename)));
-                rows.push(Some((
-                    menu::Item::new("Toggle fullscreen").shortcut(fullscreen),
-                    MenuVerb::Fullscreen,
-                )));
                 rows.push(None);
                 if !self.on_machine() {
                     rows.push(Some((
@@ -282,16 +344,12 @@ impl CockpitView {
                 }
                 rows.push(Some((menu::Item::new("Copy path"), MenuVerb::CopyPath)));
                 rows.push(None);
-                // cmd-w parks in one act, Group member or not
-                // (`Cockpit::park_thread`); leaving without parking is its
-                // own row.
+                // cmd-w parks in one act (`Cockpit::park_thread`).
                 rows.push(Some((
-                    menu::Item::new("Park thread").shortcut("cmd-W"),
+                    menu::Item::new("Park thread")
+                        .shortcut(bound_chord("cockpit::CloseThread").unwrap_or_default()),
                     MenuVerb::Park,
                 )));
-                if grouped {
-                    rows.push(Some((menu::Item::new("Leave group"), MenuVerb::LeaveGroup)));
-                }
             }
             // The Parked shelf's header: the shelf, and the one bulk act it
             // exists for — clearing the parked history it holds.
@@ -310,7 +368,7 @@ impl CockpitView {
                 rows.push(Some((
                     menu::Item::new("Delete parked threads")
                         .destructive()
-                        .disabled(self.deletable_parked().is_empty()),
+                        .disabled(self.parked_threads().is_empty()),
                     MenuVerb::DeleteAllParked,
                 )));
             }
@@ -360,11 +418,14 @@ impl CockpitView {
             MenuTarget::ChangesBase(diff) => {
                 rows = self.changes_branch_rows(diff).into_iter().map(Some).collect()
             }
+            MenuTarget::BrowserPage(thread) => rows = self.browser_page_rows(thread),
+            MenuTarget::Details(_) => rows = self.details_menu_rows(),
             MenuTarget::Terminal(_) => rows = self.terminal_context_rows(),
             MenuTarget::TerminalMore(_) => rows = self.terminal_more_rows(),
             MenuTarget::SurfaceMenu(thread) => rows = self.surface_menu_rows(thread),
             MenuTarget::SurfaceTab { thread, at } => rows = self.surface_tab_rows(thread, at),
-            MenuTarget::PrMore(thread) => rows = self.pr_menu_rows(thread),
+            MenuTarget::PrMore(target) => rows = self.pr_menu_rows(target),
+            MenuTarget::PrLink(thread) => rows = self.pr_link_rows(thread),
             MenuTarget::Factory => {
                 rows = self
                     .factory_pick_rows()
@@ -393,12 +454,41 @@ impl CockpitView {
         rows
     }
 
+    /// The PR badge's menu: the PR's native detail and the two browsers,
+    /// then its forge address. A PR the forge gave no address says so on
+    /// the rows that need one.
+    fn pr_link_rows(&self, thread: ThreadId) -> Vec<Option<(menu::Item, MenuVerb)>> {
+        let Some(target) = self.pr_target(thread) else {
+            return Vec::new();
+        };
+        let address = |label: &'static str, verb| {
+            let item = menu::Item::new(label);
+            let item = match target.address() {
+                Ok(_) => item,
+                Err(why) => item.disabled_because(why),
+            };
+            Some((item, verb))
+        };
+        vec![
+            Some((menu::Item::new("Open pull request"), MenuVerb::PrOpen(Open::Primary))),
+            address("Open in integrated browser", MenuVerb::PrOpen(Open::Integrated)),
+            address("Open in system browser", MenuVerb::PrOpen(Open::System)),
+            None,
+            address("Copy link address", MenuVerb::PrCopy),
+        ]
+    }
+
     /// The Thread's own menu, the nav row's and the title's ▾ alike, in
     /// Claude's order (claude/row-menu.png): where it opens, then the row's
     /// own verbs, its paths, its PR, its place, and its end. Every row is
     /// a one-letter key, pressed while the menu is up (`menu_mnemonic`); a
     /// parent row (`›`) has none.
-    fn thread_rows(&self, thread: ThreadId, rows: &mut Vec<Option<(menu::Item, MenuVerb)>>) {
+    fn thread_rows(
+        &self,
+        thread: ThreadId,
+        rows: &mut Vec<Option<(menu::Item, MenuVerb)>>,
+        cx: &gpui::App,
+    ) {
         let key =
             |label: &'static str, letter: &'static str| menu::Item::new(label).shortcut(letter);
         let rule = |rows: &mut Vec<Option<(menu::Item, MenuVerb)>>| {
@@ -406,9 +496,7 @@ impl CockpitView {
                 rows.push(None);
             }
         };
-        let shown = self.pane_for(thread).is_some();
         let open = self.cockpit.thread(thread);
-        let grouped = self.cockpit.groups().of(thread).is_some();
         // A machine's path is not in this computer's Finder or Terminal.
         if !self.on_machine() {
             rows.push(Some((
@@ -417,10 +505,9 @@ impl CockpitView {
             )));
             rule(rows);
         }
-        // A Group member's place is its Group.
         if self.prefs.settings.pinned_threads.contains(&thread) {
             rows.push(Some((key("Unpin", "P"), MenuVerb::Unpin)));
-        } else if !grouped {
+        } else {
             rows.push(Some((key("Pin", "P"), MenuVerb::Pin)));
         }
         // On screen, the Thread is seen again the next frame.
@@ -446,30 +533,17 @@ impl CockpitView {
                 MenuVerb::Focus,
             )));
         }
-        if shown {
-            rows.push(Some((key("Toggle fullscreen", "T"), MenuVerb::Fullscreen)));
-        }
         rule(rows);
         rows.push(Some((
             key("New thread in this project", "N"),
             MenuVerb::NewThread,
         )));
         rows.push(Some((key("Copy path", "C"), MenuVerb::CopyPath)));
-        rows.push(Some((key("Copy link", "K"), MenuVerb::CopyLink)));
+        rows.push(Some((key("Copy thread link", "K"), MenuVerb::CopyLink)));
         rule(rows);
         rows.push(Some((key("Refresh PR status", "S"), MenuVerb::RefreshPr)));
         if self.facts.pr(thread).is_some_and(|pr| pr.url.is_some()) {
             rows.push(Some((key("Open PR in browser", "B"), MenuVerb::OpenPr)));
-        }
-        rule(rows);
-        if !self.groups_to_join(thread).is_empty() {
-            rows.push(Some((
-                menu::Item::new("Move to group"),
-                MenuVerb::Submenu(Submenu::MoveToGroup),
-            )));
-        }
-        if grouped {
-            rows.push(Some((key("Leave group", "L"), MenuVerb::LeaveGroup)));
         }
         rule(rows);
         // Park is Ferrite's archive: Claude's `A`.
@@ -482,7 +556,7 @@ impl CockpitView {
                 rows.push(Some((menu::Item::new("Wake thread"), MenuVerb::Wake)));
             }
 
-            let park = match self.menu_threads(thread).len() {
+            let park = match self.nav_view.read(cx).menu_threads(thread).len() {
                 1 => key("Park thread", "A"),
                 count => menu::Item::new(format!("Park ({count})")).shortcut("A"),
             };
@@ -494,17 +568,6 @@ impl CockpitView {
         )));
     }
 
-    /// The Groups `thread` can move into: every Group but its home.
-    fn groups_to_join(&self, thread: ThreadId) -> Vec<(GroupId, String)> {
-        let home = self.cockpit.groups().of(thread).map(|group| group.id);
-        self.cockpit
-            .groups()
-            .iter()
-            .filter(|group| Some(group.id) != home && !group.members.contains(&thread))
-            .map(|group| (group.id, group.title.clone()))
-            .collect()
-    }
-
     /// A submenu's rows (`Submenu`).
     fn submenu_rows(&self, target: MenuTarget, kind: Submenu) -> Vec<(menu::Item, MenuVerb)> {
         match (kind, target) {
@@ -512,14 +575,8 @@ impl CockpitView {
                 (menu::Item::new("Finder"), MenuVerb::Reveal),
                 (menu::Item::new("Terminal"), MenuVerb::OpenTerminal),
             ],
-            (Submenu::MoveToGroup, MenuTarget::Thread(thread)) => self
-                .groups_to_join(thread)
-                .into_iter()
-                .map(|(group, title)| (menu::Item::new(title), MenuVerb::JoinGroup(group)))
-                .collect(),
             (Submenu::Snooze, MenuTarget::Thread(_) | MenuTarget::Pane(_)) => self.snooze_rows(),
             (Submenu::Snooze, _) => Vec::new(),
-            (Submenu::MoveToGroup, _) => Vec::new(),
             (Submenu::Files(sub), MenuTarget::File(thread) | MenuTarget::FilesMore(thread)) => {
                 self.files_sub_rows(thread, sub)
             }
@@ -603,6 +660,128 @@ impl CockpitView {
         })
     }
 
+    /// An open menu takes the keyboard whole: the root holds focus while it
+    /// is up, so no field's bindings (a Decision's, the Composer's history)
+    /// answer its keys. The focus it took comes back as it closes, unless
+    /// what it did moved focus elsewhere. Tended once a frame.
+    pub(super) fn tend_menu_focus(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.context_menu.is_some() {
+            if self.menu_return.is_none() {
+                let nav = self.nav_view.read(cx);
+                self.menu_return = Some(if nav.holds_keys(window) {
+                    MenuReturn::Nav(nav.cursor.clone())
+                } else {
+                    MenuReturn::Focus(window.focused(cx).unwrap_or_else(|| self.focus.clone()))
+                });
+            }
+            // A press that opened another menu over this one may have
+            // focused a field under it.
+            if !self.focus.is_focused(window) {
+                window.focus(&self.focus, cx);
+            }
+        } else if let Some(back) = self.menu_return.take() {
+            if self.focus.is_focused(window) {
+                match back {
+                    MenuReturn::Nav(cursor) => self.focus_nav_on(cursor, window, cx),
+                    MenuReturn::Focus(handle) => window.focus(&handle, cx),
+                }
+            }
+        }
+    }
+
+    /// ↑ ↓ ← → ⏎ on the open menu. Up and down walk the rows of the menu
+    /// (or of its submenu while the cursor is in it) and wrap past the
+    /// ends; → enters a submenu, ← leaves it; ⏎ presses the cursor row.
+    /// True when the key was the menu's.
+    pub(super) fn menu_navigate(
+        &mut self,
+        keystroke: &gpui::Keystroke,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let Some(open) = self.context_menu.as_mut() else {
+            return false;
+        };
+        if keystroke.modifiers.modified() {
+            return false;
+        }
+        let live = |rows: &[Option<(menu::Item, MenuVerb)>], at: usize| {
+            rows.get(at)
+                .and_then(Option::as_ref)
+                .is_some_and(|(item, _)| !item.disabled)
+        };
+        let step = |len: usize, from: Option<usize>, forward: bool, live: &dyn Fn(usize) -> bool| {
+            let first = if forward { 0 } else { len.saturating_sub(1) };
+            let mut at = from.map_or(first, |at| {
+                if forward { (at + 1) % len.max(1) } else { (at + len.max(1) - 1) % len.max(1) }
+            });
+            for _ in 0..len {
+                if live(at) {
+                    return Some(at);
+                }
+                at = if forward { (at + 1) % len } else { (at + len - 1) % len };
+            }
+            None
+        };
+        match (keystroke.key.as_str(), open.cursor) {
+            ("up" | "down", MenuCursor::SubRow(at)) => {
+                let Some((_, rows)) = open.sub.as_ref() else {
+                    return false;
+                };
+                let rows: Vec<_> = rows.iter().map(|(item, _)| item.disabled).collect();
+                let forward = keystroke.key == "down";
+                if let Some(next) = step(rows.len(), Some(at), forward, &|i| !rows[i]) {
+                    open.cursor = MenuCursor::SubRow(next);
+                }
+            }
+            ("up" | "down", cursor) => {
+                let from = match cursor {
+                    MenuCursor::Row(at) => Some(at),
+                    _ => None,
+                };
+                let forward = keystroke.key == "down";
+                let len = open.rows.len();
+                if let Some(next) = step(len, from, forward, &|i| live(&open.rows, i)) {
+                    open.cursor = MenuCursor::Row(next);
+                    open.armed = None;
+                    open.sub = None;
+                }
+            }
+            ("right", MenuCursor::Row(at)) => {
+                let Some(Some((_, MenuVerb::Submenu(kind)))) = open.rows.get(at) else {
+                    return true;
+                };
+                let kind = *kind;
+                self.open_submenu(at, kind, cx);
+                if let Some(open) = self.context_menu.as_mut() {
+                    if open.sub.as_ref().is_some_and(|(_, rows)| !rows.is_empty()) {
+                        open.cursor = MenuCursor::SubRow(0);
+                    }
+                }
+            }
+            ("left", MenuCursor::SubRow(_)) => {
+                if let Some((parent, _)) = open.sub.take() {
+                    open.cursor = MenuCursor::Row(parent);
+                }
+            }
+            ("enter", MenuCursor::Row(at)) => {
+                self.press_menu_row(at, window, cx);
+                return true;
+            }
+            ("enter", MenuCursor::SubRow(at)) => {
+                if let Some(parent) = open.sub.as_ref().map(|(parent, _)| *parent) {
+                    self.press_submenu_row(parent, at, window, cx);
+                }
+                return true;
+            }
+            ("escape", _) => self.context_menu = None,
+            ("left" | "right" | "enter", _) => return true,
+            _ => return false,
+        }
+        cx.notify();
+        true
+    }
+
     /// A row's press: a destructive row arms on the first press and runs
     /// on the second; anything else runs at once. The menu closes after
     /// a verb runs, and stays up while a row is armed.
@@ -649,6 +828,13 @@ impl CockpitView {
         cx: &mut Context<Self>,
     ) {
         match (target, verb) {
+            (MenuTarget::Details(_), MenuVerb::DetailsItem(item)) => self.change_settings(|settings| {
+                let visible = settings.context_card_preferences.visible(item);
+                settings.context_card_preferences.set(item, !visible);
+            }, cx),
+            (MenuTarget::Details(_), MenuVerb::DetailsReset) => self.change_settings(|settings| {
+                settings.context_card_preferences = Default::default();
+            }, cx),
             (_, MenuVerb::Factory(index)) => self.factory_pick(index, cx),
             (
                 MenuTarget::Thread(thread) | MenuTarget::Pane(thread) | MenuTarget::Snooze(thread),
@@ -657,8 +843,8 @@ impl CockpitView {
                 if let Some(until) = preset.until(ferrite_core::clock::system_time()) {
                     self.snooze_thread(thread, Some(until), cx);
                 } else {
-                    self.group_error =
-                        Some("That snooze time has passed. Choose another time.".into());
+                    self.nav_notice
+                        .hint("That snooze time has passed. Choose another time.");
                 }
             }
             (
@@ -672,7 +858,7 @@ impl CockpitView {
                 self.start_rename(RenameTarget::Thread(thread), cx)
             }
             (MenuTarget::Pane(thread), MenuVerb::Rename) => {
-                self.start_rename(RenameTarget::PaneTitle(thread), cx)
+                self.start_rename(RenameTarget::ViewTitle(thread), cx)
             }
             (MenuTarget::Thread(thread) | MenuTarget::Pane(thread), MenuVerb::Focus) => {
                 if self.pane_for(thread).is_some() {
@@ -681,17 +867,14 @@ impl CockpitView {
                     self.revive_thread(thread, cx);
                 }
             }
-            (MenuTarget::Thread(thread) | MenuTarget::Pane(thread), MenuVerb::Fullscreen) => {
-                self.focus_thread(thread, cx);
-                self.cockpit.toggle_fullscreen();
-            }
             (MenuTarget::Thread(thread), MenuVerb::Pin) => self.set_pinned(thread, true, cx),
             (MenuTarget::Thread(thread), MenuVerb::Unpin) => self.set_pinned(thread, false, cx),
-            // One act: a Group member leaves its Group and parks
-            // (`Cockpit::park_thread`), straight into the parked rows.
-            (MenuTarget::Thread(thread), MenuVerb::Park) if self.menu_threads(thread).len() > 1 => {
-                let threads = self.menu_threads(thread);
-                self.nav_picked.clear();
+            // One act (`Cockpit::park_thread`), straight into the parked
+            // rows.
+            (MenuTarget::Thread(thread), MenuVerb::Park)
+                if self.nav_view.read(cx).menu_threads(thread).len() > 1 =>
+            {
+                let threads = self.nav_view.read(cx).menu_threads(thread);
                 self.park_listed(&threads, cx);
                 self.parked_changed(cx);
             }
@@ -713,7 +896,15 @@ impl CockpitView {
             (MenuTarget::SurfaceTab { thread, at }, verb) => {
                 self.run_surface_tab_verb(thread, at, verb, cx)
             }
-            (MenuTarget::PrMore(thread), MenuVerb::Pr(action)) => self.run_pr_action(thread, action, cx),
+            (MenuTarget::PrMore(target), MenuVerb::Pr(action)) => self.run_pr_action(target, action, cx),
+            (MenuTarget::PrLink(thread), MenuVerb::PrOpen(how)) => {
+                self.open_pr_as(thread, how, window, cx)
+            }
+            (MenuTarget::PrLink(thread), MenuVerb::PrCopy) => {
+                if let Some(Ok(address)) = self.pr_target(thread).map(|target| target.address()) {
+                    cx.write_to_clipboard(ClipboardItem::new_string(address));
+                }
+            }
             (MenuTarget::File(thread) | MenuTarget::FilesMore(thread), MenuVerb::Files(verb)) => {
                 self.run_files_verb(thread, verb, cx)
             }
@@ -723,6 +914,9 @@ impl CockpitView {
                 | MenuTarget::ChangesBase(diff),
                 MenuVerb::Changes(verb),
             ) => self.run_changes_verb(diff, verb, cx),
+            (MenuTarget::BrowserPage(thread), MenuVerb::Browser(verb)) => {
+                self.run_browser_page_verb(thread, verb, cx)
+            }
             (
                 MenuTarget::Terminal(thread) | MenuTarget::TerminalMore(thread),
                 MenuVerb::Terminal(verb),
@@ -760,19 +954,7 @@ impl CockpitView {
                 }
             }
             (MenuTarget::Pane(thread), MenuVerb::CopyTranscript) => {
-                if let Some(open) = self.cockpit.thread(thread) {
-                    let text = plain_text(open.transcript().blocks());
-                    if !text.is_empty() {
-                        cx.write_to_clipboard(ClipboardItem::new_string(text));
-                    }
-                }
-            }
-            (MenuTarget::Thread(thread) | MenuTarget::Pane(thread), MenuVerb::LeaveGroup) => {
-                match self.cockpit.apply_group(GroupChange::Leave { thread }) {
-                    Ok(_) => self.group_error = None,
-                    Err(error) => self.group_error = Some(error.to_string().into()),
-                }
-                self.sync_panes(cx);
+                self.copy_transcript(thread, cx);
             }
             (MenuTarget::Parked, MenuVerb::ToggleParked) => {
                 let open = self.shelf_open(nav::Shelf::Parked);
@@ -781,7 +963,6 @@ impl CockpitView {
             (MenuTarget::NavFilter, MenuVerb::FilterProject(project)) => {
                 self.choose_nav_filter(project, cx)
             }
-            (MenuTarget::NavFilter, MenuVerb::OpenGroup(group)) => self.enter_group(group, cx),
             (MenuTarget::NavFactory, MenuVerb::OpenFactory(project)) => {
                 self.open_factory(project, cx)
             }
@@ -808,7 +989,10 @@ impl CockpitView {
                     | MenuTarget::SurfaceMenu(_)
                     | MenuTarget::SurfaceTab { .. }
                     | MenuTarget::PrMore(_)
+                    | MenuTarget::PrLink(_)
                     | MenuTarget::Factory
+                    | MenuTarget::BrowserPage(_)
+                    | MenuTarget::Details(_)
                     | MenuTarget::Page(_) => None,
                 };
                 self.open_draft(DraftTarget::Main, cx);
@@ -827,18 +1011,6 @@ impl CockpitView {
             }
             (MenuTarget::Thread(thread), MenuVerb::CopyLink) => {
                 cx.write_to_clipboard(ClipboardItem::new_string(thread_link(thread)));
-            }
-            (MenuTarget::Thread(thread), MenuVerb::JoinGroup(group)) => {
-                let change = GroupChange::Join {
-                    thread,
-                    group,
-                    index: None,
-                };
-                match self.cockpit.apply_group(change) {
-                    Ok(_) => self.group_error = None,
-                    Err(error) => self.group_error = Some(error.to_string().into()),
-                }
-                self.sync_panes(cx);
             }
             (_, MenuVerb::OpenTerminal) => {
                 if let Some(path) = self.target_path(target) {
@@ -860,10 +1032,9 @@ impl CockpitView {
                 }
             }
             (MenuTarget::Thread(thread) | MenuTarget::Pane(thread), MenuVerb::Delete) => {
-                if let Err(error) = self.cockpit.delete(thread) {
-                    self.group_error = Some(format!("delete refused: {error}").into());
-                } else {
-                    self.group_error = None;
+                match self.delete_thread(thread) {
+                    Err(error) => self.nav_notice.problem(format!("delete refused: {error}")),
+                    Ok(()) => self.nav_notice.clear(),
                 }
                 if self
                     .popover
@@ -887,7 +1058,13 @@ impl CockpitView {
         window: &Window,
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
-        let open = self.context_menu.as_ref()?;
+        let (open, left) = self.standing(
+            |exits| &mut exits.context_menu,
+            self.context_menu.clone(),
+            ferrite_ui::motion::MENU,
+            cx,
+        )?;
+        let open = &open;
         let mut shell = menu::shell().on_mouse_down(
             MouseButton::Left,
             cx.listener(|_, _: &MouseDownEvent, _, cx| cx.stop_propagation()),
@@ -895,6 +1072,12 @@ impl CockpitView {
         // Where the open submenu's parent row stands: the submenu's top.
         let mut parent_top = px(ferrite_ui::theme::FLOAT_PAD);
         let mut y = parent_top;
+        if matches!(open.target, MenuTarget::Details(_)) {
+            shell = shell.child(div().h(px(28.)).px(px(8.)).flex().items_center()
+                .text_size(px(11.)).text_color(rgb(ferrite_ui::theme::INK_SUBTLE))
+                .child("Show in thread details"));
+            y += px(28.);
+        }
         for (index, row) in open.rows.iter().enumerate() {
             shell = match row {
                 None => {
@@ -912,7 +1095,8 @@ impl CockpitView {
                     y += px(row_height(item));
                     let parent = matches!(verb, MenuVerb::Submenu(_));
                     let lit = open.sub.as_ref().is_some_and(|(at, _)| *at == index);
-                    let face = menu::row(index, item, open.armed == Some(index))
+                    let cursor = open.cursor == MenuCursor::Row(index);
+                    let face = menu::row(index, item, cursor, open.armed == Some(index))
                         .debug_selector(move || format!("context-menu-row-{index}"))
                         .when(lit, |row| row.bg(ferrite_ui::theme::paint::FLOAT_HOVER))
                         .when(parent, |row| {
@@ -949,13 +1133,23 @@ impl CockpitView {
                 }
             };
         }
-        // Hung under its trigger, a long menu keeps below it and scrolls,
-        // rather than flipping up over what stands above the trigger.
-        let below = open.drop.map(|drop| {
-            window.viewport_size().height - open.at.y - drop - px(ferrite_ui::theme::GRID_PAD)
+        // Hung under its trigger, a menu keeps below it and scrolls in the
+        // room it has. Where that room cannot show two rows, it hangs over
+        // the trigger instead (the same gap above), scrolling in the room
+        // there.
+        let pad = px(ferrite_ui::theme::GRID_PAD);
+        let usable = px(2. * (ferrite_ui::theme::FLOAT_ROW_H + ferrite_ui::theme::FLOAT_PAD));
+        let hang = open.drop.map(|drop| {
+            let below = window.viewport_size().height - open.at.y - drop - pad;
+            let above = open.at.y - pad;
+            if below < usable && above > below {
+                (ferrite_ui::motion::Opens::Up, above)
+            } else {
+                (ferrite_ui::motion::Opens::Down, below)
+            }
         });
-        let shell = match below {
-            Some(room) if y + px(ferrite_ui::theme::FLOAT_PAD) > room => shell
+        let shell = match hang {
+            Some((_, room)) if y + px(ferrite_ui::theme::FLOAT_PAD) > room => shell
                 .max_h(room)
                 .id("context-menu-scroll")
                 .overflow_y_scroll()
@@ -967,7 +1161,12 @@ impl CockpitView {
             for (index, (item, _)) in rows.iter().enumerate() {
                 let parent = *parent;
                 side = side.child(
-                    menu::item_row(("context-submenu-row", index), item, false, false)
+                    menu::item_row(
+                        ("context-submenu-row", index),
+                        item,
+                        open.cursor == MenuCursor::SubRow(index),
+                        false,
+                    )
                         .debug_selector(move || format!("context-submenu-row-{index}"))
                         .on_mouse_down(
                             MouseButton::Left,
@@ -992,21 +1191,38 @@ impl CockpitView {
             .debug_selector(|| "context-menu".into())
             .child(shell)
             .children(side);
-        let placed = anchored().anchor(open.corner).position(open.at);
-        let placed = match open.drop {
-            Some(drop) => placed.offset(gpui::point(px(0.), drop)),
-            None => placed.snap_to_window_with_margin(px(ferrite_ui::theme::GRID_PAD)),
+        let opens = hang.map_or(ferrite_ui::motion::Opens::Down, |(opens, _)| opens);
+        let placed = match (open.drop, opens) {
+            (Some(_), ferrite_ui::motion::Opens::Up) => anchored().anchor(bottom_of(open.corner)).position(open.at),
+            (Some(drop), _) => anchored()
+                .anchor(open.corner)
+                .position(open.at)
+                .offset(gpui::point(px(0.), drop)),
+            (None, _) => anchored()
+                .anchor(open.corner)
+                .position(open.at)
+                .snap_to_window_with_margin(pad),
         };
         Some(
-            deferred(placed.child(ferrite_ui::motion::menu_in(
+            deferred(placed.child(ferrite_ui::motion::float_at(
+                ferrite_ui::motion::MENU,
+                left,
                 "context-menu-in",
                 shell,
-                ferrite_ui::motion::Opens::Down,
+                opens,
             )))
             // Over the sheets (`VEIL_PRIORITY`), whose pickers open it.
             .with_priority(crate::float::FLOAT_PRIORITY)
             .into_any_element(),
         )
+    }
+}
+
+/// `corner`'s twin on the bottom edge: the menu hangs by it over its button.
+fn bottom_of(corner: gpui::Anchor) -> gpui::Anchor {
+    match corner {
+        gpui::Anchor::TopLeft | gpui::Anchor::BottomLeft => gpui::Anchor::BottomLeft,
+        _ => gpui::Anchor::BottomRight,
     }
 }
 
@@ -1017,13 +1233,6 @@ fn row_height(item: &menu::Item) -> f32 {
     } else {
         ferrite_ui::theme::FLOAT_ROW_H
     }
-}
-
-/// A Thread's link, in the form the CLI takes: there is no `ferrite://`
-/// scheme, so the command that lands every window on it (`thread.focus`,
-/// ADR 0027).
-pub(super) fn thread_link(thread: ThreadId) -> String {
-    format!("ferrite thread focus {}", thread.get())
 }
 
 /// A Terminal window at `path`: macOS's Terminal, else the desktop's

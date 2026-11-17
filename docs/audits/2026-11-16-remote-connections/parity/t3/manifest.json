@@ -1,0 +1,302 @@
+[
+  {
+    "path": "01-environments.jpg",
+    "sha256": "5fa293d2cb88c27dc54ca8fb0973e618abc9164e2e5299c90e106ac4aa40046b",
+    "logical_viewport": [
+      1470,
+      923
+    ],
+    "device_pixel_ratio": 2,
+    "pixel_dimensions": [
+      2940,
+      1846
+    ],
+    "image_format": "JPEG",
+    "crop_px": [
+      0,
+      0,
+      2940,
+      1846
+    ],
+    "surface": "Actual installed T3 native application",
+    "installed_version": "0.1.10-nightly.20261111.4544",
+    "capture_method": "cua_repl native getScreenshot; original bytes, no conversion"
+  },
+  {
+    "path": "02-add-remote-link.jpg",
+    "sha256": "39b8549b3fdc0588890b52df00e279269c1931244e04cf8ea2b5a5da71e10e0d",
+    "logical_viewport": [
+      1470,
+      923
+    ],
+    "device_pixel_ratio": 2,
+    "pixel_dimensions": [
+      2940,
+      1846
+    ],
+    "image_format": "JPEG",
+    "crop_px": [
+      0,
+      0,
+      2940,
+      1846
+    ],
+    "surface": "Actual installed T3 native application",
+    "installed_version": "0.1.10-nightly.20261111.4544",
+    "capture_method": "cua_repl native getScreenshot; original bytes, no conversion"
+  },
+  {
+    "path": "03-add-ssh.jpg",
+    "sha256": "41226ab0237bb16face6e7fe917869fb6fd5c91fcdf79d8e8c2653f5f1ef04dd",
+    "logical_viewport": [
+      1470,
+      923
+    ],
+    "device_pixel_ratio": 2,
+    "pixel_dimensions": [
+      2940,
+      1846
+    ],
+    "image_format": "JPEG",
+    "crop_px": [
+      0,
+      0,
+      2940,
+      1846
+    ],
+    "surface": "Actual installed T3 native application",
+    "installed_version": "0.1.10-nightly.20261111.4544",
+    "capture_method": "cua_repl native getScreenshot; original bytes, no conversion"
+  },
+  {
+    "path": "04-ssh-validation.jpg",
+    "sha256": "0edae5e8722937d66c91032ab5797339a9b003cbd1a977715918fa379cce93e7",
+    "logical_viewport": [
+      1470,
+      923
+    ],
+    "device_pixel_ratio": 2,
+    "pixel_dimensions": [
+      2940,
+      1846
+    ],
+    "image_format": "JPEG",
+    "crop_px": [
+      0,
+      0,
+      2940,
+      1846
+    ],
+    "surface": "Actual installed T3 native application",
+    "installed_version": "0.1.10-nightly.20261111.4544",
+    "capture_method": "cua_repl native getScreenshot; original bytes, no conversion"
+  },
+  {
+    "path": "05-attachment-ready.jpg",
+    "sha256": "c2ea2c6ffb998a83e8f6d0a5cb6c2f11810f0b897a3b450878833b30b99fb981",
+    "logical_viewport": [
+      1470,
+      923
+    ],
+    "device_pixel_ratio": 2,
+    "pixel_dimensions": [
+      2940,
+      1846
+    ],
+    "image_format": "JPEG",
+    "crop_px": [
+      0,
+      0,
+      2940,
+      1846
+    ],
+    "surface": "Actual installed T3 native application",
+    "installed_version": "0.1.10-nightly.20261111.4544",
+    "capture_method": "cua_repl native getScreenshot; original bytes, no conversion",
+    "provider": "Actual Codex GPT-6.1-Sol Low, synthetic local reference project; not a remote T3 connection",
+    "project": "/var/folders/5y/hnh41b2j29z8kqxy7ftzfdn80000gn/T/ferrite-parity-t3-wiwj0w7m",
+    "thread_url": "t3code://app/#/e10f8bba-80bf-4bb7-a23b-23a50cbf0e58/c6c04b8b-52d1-4eb7-8604-357ae2203e87"
+  },
+  {
+    "path": "06-chat-streaming.jpg",
+    "sha256": "84eb140f53ec380545479c1e07c47ddc0ae3374339fd53db3ecca02df8995320",
+    "logical_viewport": [
+      1470,
+      923
+    ],
+    "device_pixel_ratio": 2,
+    "pixel_dimensions": [
+      2940,
+      1846
+    ],
+    "image_format": "JPEG",
+    "crop_px": [
+      0,
+      0,
+      2940,
+      1846
+    ],
+    "surface": "Actual installed T3 native application",
+    "installed_version": "0.1.10-nightly.20261111.4544",
+    "capture_method": "cua_repl native getScreenshot; original bytes, no conversion",
+    "provider": "Actual Codex GPT-6.1-Sol Low, synthetic local reference project; not a remote T3 connection",
+    "project": "/var/folders/5y/hnh41b2j29z8kqxy7ftzfdn80000gn/T/ferrite-parity-t3-wiwj0w7m",
+    "thread_url": "t3code://app/#/e10f8bba-80bf-4bb7-a23b-23a50cbf0e58/c6c04b8b-52d1-4eb7-8604-357ae2203e87"
+  },
+  {
+    "path": "07-chat-completed.jpg",
+    "sha256": "53b5a7022551e25b4a88654a07d454d496df367a77049d646263fa42ed5c8a47",
+    "logical_viewport": [
+      1470,
+      923
+    ],
+    "device_pixel_ratio": 2,
+    "pixel_dimensions": [
+      2940,
+      1846
+    ],
+    "image_format": "JPEG",
+    "crop_px": [
+      0,
+      0,
+      2940,
+      1846
+    ],
+    "surface": "Actual installed T3 native application",
+    "installed_version": "0.1.10-nightly.20261111.4544",
+    "capture_method": "cua_repl native getScreenshot; original bytes, no conversion",
+    "provider": "Actual Codex GPT-6.1-Sol Low, synthetic local reference project; not a remote T3 connection",
+    "project": "/var/folders/5y/hnh41b2j29z8kqxy7ftzfdn80000gn/T/ferrite-parity-t3-wiwj0w7m",
+    "thread_url": "t3code://app/#/e10f8bba-80bf-4bb7-a23b-23a50cbf0e58/c6c04b8b-52d1-4eb7-8604-357ae2203e87"
+  },
+  {
+    "path": "08-chat-tool-activity.jpg",
+    "sha256": "1f08b26dbf6338cc79652cb8316cb470738af2a628a0ff89f065dface2ff1727",
+    "logical_viewport": [
+      1470,
+      923
+    ],
+    "device_pixel_ratio": 2,
+    "pixel_dimensions": [
+      2940,
+      1846
+    ],
+    "image_format": "JPEG",
+    "crop_px": [
+      0,
+      0,
+      2940,
+      1846
+    ],
+    "surface": "Actual installed T3 native application",
+    "installed_version": "0.1.10-nightly.20261111.4544",
+    "capture_method": "cua_repl native getScreenshot; original bytes, no conversion",
+    "provider": "Actual Codex GPT-6.1-Sol Low, synthetic local reference project; not a remote T3 connection",
+    "project": "/var/folders/5y/hnh41b2j29z8kqxy7ftzfdn80000gn/T/ferrite-parity-t3-wiwj0w7m",
+    "thread_url": "t3code://app/#/e10f8bba-80bf-4bb7-a23b-23a50cbf0e58/c6c04b8b-52d1-4eb7-8604-357ae2203e87"
+  },
+  {
+    "path": "09-changes.jpg",
+    "sha256": "04172cbf5eb8773ca8428b8cf5cfbb647e73e8722aacc52c5f846067927a44d8",
+    "logical_viewport": [
+      1470,
+      923
+    ],
+    "device_pixel_ratio": 2,
+    "pixel_dimensions": [
+      2940,
+      1846
+    ],
+    "image_format": "JPEG",
+    "crop_px": [
+      0,
+      0,
+      2940,
+      1846
+    ],
+    "surface": "Actual installed T3 native application",
+    "installed_version": "0.1.10-nightly.20261111.4544",
+    "capture_method": "cua_repl native getScreenshot; original bytes, no conversion",
+    "provider": "Actual Codex GPT-6.1-Sol Low, synthetic local reference project; not a remote T3 connection",
+    "project": "/var/folders/5y/hnh41b2j29z8kqxy7ftzfdn80000gn/T/ferrite-parity-t3-wiwj0w7m",
+    "thread_url": "t3code://app/#/e10f8bba-80bf-4bb7-a23b-23a50cbf0e58/c6c04b8b-52d1-4eb7-8604-357ae2203e87"
+  },
+  {
+    "path": "10-files-tree.jpg",
+    "sha256": "2f4adb22f904230c41f305c9b0b15a6b9e392beb73f397f08b9d1f5f5d7a6b91",
+    "logical_viewport": [
+      1470,
+      923
+    ],
+    "device_pixel_ratio": 2,
+    "pixel_dimensions": [
+      2940,
+      1846
+    ],
+    "image_format": "JPEG",
+    "crop_px": [
+      0,
+      0,
+      2940,
+      1846
+    ],
+    "surface": "Actual installed T3 native application",
+    "installed_version": "0.1.10-nightly.20261111.4544",
+    "capture_method": "cua_repl native getScreenshot; original bytes, no conversion",
+    "provider": "Actual Codex GPT-6.1-Sol Low, synthetic local reference project; not a remote T3 connection",
+    "project": "/var/folders/5y/hnh41b2j29z8kqxy7ftzfdn80000gn/T/ferrite-parity-t3-wiwj0w7m",
+    "thread_url": "t3code://app/#/e10f8bba-80bf-4bb7-a23b-23a50cbf0e58/c6c04b8b-52d1-4eb7-8604-357ae2203e87"
+  },
+  {
+    "path": "11-file-read.jpg",
+    "sha256": "c60a30e913ceddd50f8614110d990d1e513a3eeeb81a965a2d808af5601b56db",
+    "logical_viewport": [
+      1470,
+      923
+    ],
+    "device_pixel_ratio": 2,
+    "pixel_dimensions": [
+      2940,
+      1846
+    ],
+    "image_format": "JPEG",
+    "crop_px": [
+      0,
+      0,
+      2940,
+      1846
+    ],
+    "surface": "Actual installed T3 native application",
+    "installed_version": "0.1.10-nightly.20261111.4544",
+    "capture_method": "cua_repl native getScreenshot; original bytes, no conversion",
+    "provider": "Actual Codex GPT-6.1-Sol Low, synthetic local reference project; not a remote T3 connection",
+    "project": "/var/folders/5y/hnh41b2j29z8kqxy7ftzfdn80000gn/T/ferrite-parity-t3-wiwj0w7m",
+    "thread_url": "t3code://app/#/e10f8bba-80bf-4bb7-a23b-23a50cbf0e58/c6c04b8b-52d1-4eb7-8604-357ae2203e87"
+  },
+  {
+    "path": "12-terminal.jpg",
+    "sha256": "17d8d612f5cbdcb2df15c548d581ab9c489134a6bfb901433594ad02ef9cc5ba",
+    "logical_viewport": [
+      1470,
+      923
+    ],
+    "device_pixel_ratio": 2,
+    "pixel_dimensions": [
+      2940,
+      1846
+    ],
+    "image_format": "JPEG",
+    "crop_px": [
+      0,
+      0,
+      2940,
+      1846
+    ],
+    "surface": "Actual installed T3 native application",
+    "installed_version": "0.1.10-nightly.20261111.4544",
+    "capture_method": "cua_repl native getScreenshot; original bytes, no conversion",
+    "provider": "Actual Codex GPT-6.1-Sol Low, synthetic local reference project; not a remote T3 connection",
+    "project": "/var/folders/5y/hnh41b2j29z8kqxy7ftzfdn80000gn/T/ferrite-parity-t3-wiwj0w7m",
+    "thread_url": "t3code://app/#/e10f8bba-80bf-4bb7-a23b-23a50cbf0e58/c6c04b8b-52d1-4eb7-8604-357ae2203e87"
+  }
+]

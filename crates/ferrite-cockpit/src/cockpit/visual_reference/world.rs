@@ -17,7 +17,6 @@ use std::sync::mpsc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use ferrite_core::cockpit::{Cockpit, SpawnRequest, Spawner};
-use ferrite_core::groups::{GroupChange, GroupId};
 use ferrite_core::progress::{Phase, ProgressEvent};
 use ferrite_core::providers::{applied, Session, SettingAck};
 use ferrite_core::store::Provider;
@@ -718,7 +717,9 @@ pub(crate) fn play(
         clock.set(beat.at);
         last.insert(beat.who, beat.at);
         match beat.act {
-            Act::Prompt(text) => core.send(beat.who, text),
+            Act::Prompt(text) => {
+                let _ = core.send(beat.who, text);
+            }
             Act::Event(event) => {
                 if feed(beat.who).send(event).is_err() {
                     panic!(
@@ -733,35 +734,6 @@ pub(crate) fn play(
         core.pump();
     }
     last
-}
-
-/// A Group of `first`, `second` and then `rest`, titled `title`.
-pub(crate) fn group(
-    core: &mut Cockpit,
-    first: ThreadId,
-    second: ThreadId,
-    rest: &[ThreadId],
-    title: &str,
-) -> GroupId {
-    let group = core
-        .apply_group(GroupChange::Create { first, second })
-        .expect("create a fixture Group")
-        .group
-        .expect("a new Group");
-    for thread in rest {
-        core.apply_group(GroupChange::Join {
-            thread: *thread,
-            group,
-            index: None,
-        })
-        .expect("join a fixture Group");
-    }
-    core.apply_group(GroupChange::Rename {
-        group,
-        title: title.into(),
-    })
-    .expect("name a fixture Group");
-    group
 }
 
 /// Stamp `thread`'s log as last written at `at`: recency is the log's

@@ -39,7 +39,8 @@ use std::collections::HashSet;
 use std::ops::Range;
 
 use ferrite_core::protocol::{
-    ReviewPullRequest, WireCheckStatus, WireMerge, WirePr, WirePrCommentKind, WirePrState, WireSync,
+    ReviewPullRequest, WireCheckStatus, WireMerge, WirePr, WirePrComment, WirePrCommentKind,
+    WirePrState, WireSync,
 };
 use ferrite_reviewr::diff::{FileDiff, Row};
 use ferrite_reviewr::ferrite::{self as reviewr, Bases, FileSides};
@@ -1896,45 +1897,20 @@ impl ReviewView {
             }
         }
         for (index, comment) in pr.comments.iter().enumerate() {
-            let kind = match comment.kind {
-                WirePrCommentKind::Review => "review",
-                WirePrCommentKind::Finding => "finding",
-                WirePrCommentKind::Comment | WirePrCommentKind::Unknown => "comment",
-            };
-            let mut state = Vec::new();
-            if comment.resolved {
-                state.push("resolved");
-            }
-            if comment.outdated {
-                state.push("outdated");
-            }
             let mut card = div()
                 .debug_selector(move || format!("review-pr-comment-{index}"))
                 .mt(px(self.grid.half()))
                 .p(px(cell))
                 .rounded(px(R_CARD))
                 .bg(paint::RAISED)
-                // A review or a comment is anchored to its own kind's
-                // word: only a finding's place is worth a second mention.
-                .child(muted(format!(
-                    "{} \u{b7} {kind}{}{}",
-                    comment.author,
-                    if comment.anchor == kind {
-                        String::new()
-                    } else {
-                        format!(" \u{b7} {}", comment.anchor)
-                    },
-                    if state.is_empty() {
-                        String::new()
-                    } else {
-                        format!(" \u{b7} {}", state.join(", "))
-                    }
-                )))
-                .child(
-                    div()
-                        .text_color(rgb(INK_STRONG))
-                        .child(SharedString::from(comment.body.clone())),
-                );
+                .child(muted(pr_comment_head(comment)))
+                .when(!comment.body.is_empty(), |card| {
+                    card.child(
+                        div()
+                            .text_color(rgb(INK_STRONG))
+                            .child(SharedString::from(comment.body.clone())),
+                    )
+                });
             for reply in &comment.replies {
                 card = card.child(
                     div()
@@ -2516,6 +2492,33 @@ fn rows_max_number(rows: &[Row]) -> u32 {
         .unwrap_or(0)
 }
 
+/// A PR comment card's header: who, what kind, how a review ended, and
+/// where a finding sits.
+fn pr_comment_head(comment: &WirePrComment) -> String {
+    let kind = match comment.kind {
+        WirePrCommentKind::Review => "review",
+        WirePrCommentKind::Finding => "finding",
+        WirePrCommentKind::Comment | WirePrCommentKind::Unknown => "comment",
+    };
+    let mut head = format!("{} \u{b7} {kind}", comment.author);
+    if let Some((verdict, _)) = comment.verdict.and_then(crate::pr::review_verdict) {
+        head.push_str(&format!(" \u{b7} {}", verdict.to_lowercase()));
+    }
+    // A review or a comment is anchored to its own kind's word: only a
+    // finding's place is worth a second mention.
+    if comment.anchor != kind {
+        head.push_str(&format!(" \u{b7} {}", comment.anchor));
+    }
+    let state = [(comment.resolved, "resolved"), (comment.outdated, "outdated")]
+        .into_iter()
+        .filter_map(|(on, word)| on.then_some(word))
+        .collect::<Vec<_>>();
+    if !state.is_empty() {
+        head.push_str(&format!(" \u{b7} {}", state.join(", ")));
+    }
+    head
+}
+
 /// A pull request's facts on one line: state, branches, mergeability and
 /// how the checkout stands against it.
 fn pr_facts(pr: &WirePr) -> String {
@@ -2738,6 +2741,7 @@ impl Render for ReviewView {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ferrite_core::protocol::WireReviewState;
     use ferrite_reviewr::model::{ChangeKind, ChangedFile};
     use gpui::TestAppContext;
 
@@ -2969,6 +2973,76 @@ mod tests {
             !review.read_with(cx, |r, _| r.pr_open()),
             "back to the diff"
         );
+    }
+
+    /// A review that ended in a verdict with no words draws the verdict in
+    /// its card's header, not a blank card.
+    #[gpui::test]
+    fn an_empty_approval_shows_its_verdict_in_the_slot(cx: &mut TestAppContext) {
+        let (review, mut cx) = open(files(), cx);
+        let cx = &mut cx;
+        cx.simulate_keystrokes("p");
+        let approval = WirePrComment {
+            id: None,
+            author_is_bot: false,
+            place: None,
+            kind: WirePrCommentKind::Review,
+            author: "cy".into(),
+            anchor: "review".into(),
+            verdict: Some(WireReviewState::Approved),
+            body: String::new(),
+            snippet: None,
+            created_at: String::new(),
+            resolved: false,
+            outdated: false,
+            replies: Vec::new(),
+        };
+        let said = WirePrComment {
+            verdict: None,
+            body: "Looks good.".into(),
+            ..approval.clone()
+        };
+        review.update(cx, |review, cx| {
+            review.show_pr(
+                ReviewPullRequest {
+                    noun: "PR".into(),
+                    pr: Ok(WirePr {
+                        number: 3,
+                        title: "Ship it".into(),
+                        url: String::new(),
+                        body: String::new(),
+                        author: None,
+                        author_avatar_url: None,
+                        updated_at: None,
+                        changed_files: None,
+                        additions: None,
+                        deletions: None,
+                        state: WirePrState::Open,
+                        draft: false,
+                        head: "f".into(),
+                        base: "main".into(),
+                        merge: WireMerge::Clean,
+                        sync: WireSync::InSync,
+                        checks: Vec::new(),
+                        comments: vec![approval.clone(), said.clone()],
+                        truncated: false,
+                        checks_truncated: false,
+                        comments_truncated: false,
+                    }),
+                    unread: None,
+                },
+                cx,
+            )
+        });
+        cx.run_until_parked();
+        let mut height = |id| cx.debug_bounds(id).expect("its card").size.height;
+        let verdict_only = height("review-pr-comment-0");
+        let with_words = height("review-pr-comment-1");
+        assert!(
+            verdict_only < with_words,
+            "a verdict-only card has no blank body line"
+        );
+        assert_eq!(pr_comment_head(&approval), "cy \u{b7} review \u{b7} approved");
     }
 
     /// ⌘F finds in the rows and steps between occurrences.

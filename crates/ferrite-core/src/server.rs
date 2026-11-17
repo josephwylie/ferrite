@@ -22,7 +22,7 @@ use crate::protocol::{
     ServerMessage, When, WireError, WireFile, WireHandle,
 };
 use crate::roster::DraftId;
-use crate::settings::Settings;
+use crate::settings::{ServerDefaults, Settings};
 use crate::spawner::{ProcessRss, SessionDefaults, Spawn, RSS_LIMIT};
 use crate::store::{Provider, Store};
 use crate::ThreadId;
@@ -31,15 +31,19 @@ pub mod agent;
 mod bridge;
 mod browser;
 mod calls;
+pub mod clis;
 mod coordinator;
 mod drive;
 mod factory;
 pub mod github;
 mod render;
+pub mod remote;
 mod signals;
 
 /// How long the pump waits for a client while any Thread is open: a frame.
 const PUMP: Duration = Duration::from_millis(16);
+/// Yield to Sessions and pending replies even while clients keep sending.
+const INTAKE_BATCH: usize = 64;
 /// How long it waits with none: only to notice a signal.
 const IDLE: Duration = Duration::from_millis(250);
 /// How often the memory watchdog samples the Sessions.
@@ -88,6 +92,10 @@ pub fn settings_dir() -> PathBuf {
 pub fn ferrited(args: &[String]) -> i32 {
     let executable = std::env::current_exe().unwrap_or_else(|_| "ferrited".into());
     match args.get(1).map(String::as_str) {
+        Some("--version" | "-V") => {
+            println!("ferrited {}", env!("CARGO_PKG_VERSION"));
+            0
+        }
         Some("server") => run(Options {
             store: store_dir(),
             settings_dir: settings_dir(),
@@ -98,13 +106,15 @@ pub fn ferrited(args: &[String]) -> i32 {
                 .and_then(|at| args.get(at + 1))
                 .and_then(|pid| pid.parse().ok()),
         }),
+        Some("remote") => remote::cli(&args[2..], &store_dir(), &executable),
+        Some("--remote-terminal") => crate::machine::remote::terminal_dispatch(args).unwrap_or(2),
         Some("api-bridge") => bridge::api(&store_dir()),
         Some("bridge") => bridge::run(&store_dir(), &executable),
         #[cfg(target_os = "linux")]
         Some("service") => agent::service(&executable, args.get(2).map(String::as_str)),
         _ => {
             eprintln!(
-                "usage: ferrited server | ferrited bridge | ferrited api-bridge{USAGE_SERVICE}"
+                "usage: ferrited --version | ferrited server | ferrited bridge | ferrited api-bridge{USAGE_SERVICE}"
             );
             2
         }
@@ -121,7 +131,7 @@ const USAGE_SERVICE: &str = "";
 /// clean stop, and for a second Server that found the Store taken — a
 /// failure would have launchd (or systemd) start it again and again.
 pub fn run(options: Options) -> i32 {
-    crate::diagnostics::open_as(&options.settings_dir, "server.log");
+    crate::diagnostics::open_server(&options.settings_dir);
     crate::login_shell::adopt_login_environment();
     if let Some(pid) = options.after {
         wait_for_exit(pid);
@@ -293,7 +303,7 @@ fn launch_threads(store: &Store) -> Vec<ThreadId> {
 fn revive_launch(engine: &mut Engine, threads: Vec<ThreadId>) {
     engine.set_watched(BTreeSet::new());
     for thread in threads {
-        if let Err(error) = engine.revive(thread) {
+        if let Err(error) = engine.revive_unwatched(thread) {
             crate::log!("thread {thread} could not be revived: {error:?}");
         }
         // Nobody to tell: a window attaching reads the snapshot.
@@ -307,6 +317,7 @@ struct Client {
     welcomed: bool,
     renders_visuals: bool,
     browser_capable: bool,
+    browser_dispatch: bool,
     /// A `ferrite --headless` window: the `window.*` actions are its.
     driven: bool,
     watching: BTreeSet<ThreadId>,
@@ -327,6 +338,17 @@ type Search = (
 /// `review_pull_request`, `list_files`, `list_bases`, `pick_base`), `gh`'s for a `pull_request`, a folder's for a
 /// `list_dir`: who asked, in which command, and the reply it makes.
 type Read = (ClientId, u64, Receiver<Result<Option<Done>, WireError>>);
+
+/// An API request answered off the pump: who asked, under which id, and
+/// the reply with the Activity it read back, for the Engine to hold.
+type ApiRead = (
+    crate::api::CallerId,
+    String,
+    Receiver<(
+        Result<serde_json::Value, crate::api::ApiError>,
+        Option<crate::engine::ReadThread>,
+    )>,
+);
 
 struct Server {
     engine: Engine,
@@ -357,6 +379,8 @@ struct Server {
         BTreeMap<ThreadId, (crate::browser::Document, u64, crate::browser::Observation)>,
     searches: Vec<Search>,
     reads: Vec<Read>,
+    attachments: HashMap<ClientId, Arc<Mutex<crate::attachment_transfer::Session>>>,
+    api_reads: Vec<ApiRead>,
     /// First sends still starting, by the tag the Engine knows them by:
     /// who asked, in which command.
     starting: HashMap<DraftId, (ClientId, u64)>,
@@ -393,6 +417,9 @@ struct Server {
     /// What the Factory's GitHub starts are read through (#225): the
     /// operator's `gh`, or a test's scripted reader.
     github: Arc<dyn github::GitHub>,
+    /// The provider CLIs this machine has, as a window asks after them
+    /// (`Op::Cli`): the machine's own, or a test's scripted ones.
+    clis: Arc<dyn clis::Clis>,
     /// GitHub reads still out.
     github_reads: Vec<github::Reading>,
     /// Task PR head reads still out (#223).
@@ -437,6 +464,8 @@ impl Server {
             browser_observed: BTreeMap::new(),
             searches: Vec::new(),
             reads: Vec::new(),
+            attachments: HashMap::new(),
+            api_reads: Vec::new(),
             starting: HashMap::new(),
             next_start: 0,
             swept: Instant::now(),
@@ -455,6 +484,7 @@ impl Server {
             factory_agent: factory::default_agent(&Settings::default()),
             coordinators_tuned: Default::default(),
             github: Arc::new(github::Gh),
+            clis: Arc::new(clis::Host),
             github_reads: Vec::new(),
             head_reads: Vec::new(),
             skills_seen: Vec::new(),
@@ -479,7 +509,10 @@ impl Server {
                     return 1;
                 }
             }
-            while let Ok(heard) = hear.try_recv() {
+            for _ in 1..INTAKE_BATCH {
+                let Ok(heard) = hear.try_recv() else {
+                    break;
+                };
                 self.hear(heard);
             }
             self.tell_watched();
@@ -488,10 +521,14 @@ impl Server {
             if self.swept.elapsed() >= SWEEP_INTERVAL {
                 self.swept = Instant::now();
                 self.engine.sweep();
+                for uploads in self.attachments.values() {
+                    if let Ok(mut uploads) = uploads.try_lock() { uploads.expire(); }
+                }
             }
             self.answer_bootstraps();
             self.answer_searches();
             self.answer_reads();
+            self.answer_api_reads();
             self.answer_browser_disk();
             self.forward_renders();
             self.forward_browser_requests();
@@ -529,6 +566,7 @@ impl Server {
                         welcomed: false,
                         renders_visuals: false,
                         browser_capable: false,
+                        browser_dispatch: false,
                         driven: false,
                         watching: BTreeSet::new(),
                     },
@@ -571,6 +609,7 @@ impl Server {
                     client.renders_visuals = capabilities.contains(&Capability::RenderVisual);
                     client.browser_capable =
                         capabilities.contains(&Capability::ConversationBrowser);
+                    client.browser_dispatch = capabilities.contains(&Capability::BrowserDispatch);
                     client.driven = capabilities.contains(&Capability::Driven);
                     let mut snapshot = self.engine.snapshot();
                     snapshot.factory = Some(self.factory.board());
@@ -587,13 +626,14 @@ impl Server {
             ClientMessage::Command(command) => self.command(id, command),
             ClientMessage::BrowserReply {
                 request,
+                boot_id,
                 thread,
                 owner,
                 document,
                 revision,
                 outcome,
             } => {
-                self.answer_browser(id, request, thread, owner, document, revision, outcome);
+                self.answer_browser(id, request, boot_id.as_deref(), thread, owner, document, revision, outcome);
             }
             ClientMessage::BrowserPage {
                 thread,
@@ -681,13 +721,16 @@ impl Server {
             return;
         }
         let executed = match &op {
+            Op::BrowserDispatch { request, boot_id, thread, owner, document, revision } => {
+                self.dispatch_browser(id, *request, boot_id, *thread, *owner, *document, *revision)
+            }
             Op::BrowserCapture {
                 thread,
                 owner,
                 lease,
                 capture,
                 png,
-            } => self.browser_capture(id, request, *thread, *owner, *lease, capture.clone(), png),
+            } => self.browser_capture(id, request, *thread, *owner, *lease, capture.clone(), png.as_ref()),
             Op::BrowserCaptureImage { thread, hash } => {
                 self.browser_capture_image(id, request, *thread, hash)
             }
@@ -781,6 +824,11 @@ impl Server {
             }),
             Op::BrowserAttach { thread } => self.attach_browser(id, *thread),
             Op::Browser { thread, action } => self.browser_action(id, *thread, action.clone()),
+            Op::ServerDefaults { set } => self.server_defaults(set.as_ref()).map(Some),
+            Op::Cli { action } => {
+                self.cli(id, request, action);
+                return;
+            }
             Op::SettingsChanged => match Settings::load(&self.settings_dir) {
                 Ok(settings) => {
                     self.apply_settings(&settings);
@@ -805,6 +853,40 @@ impl Server {
                 }
                 None => Err(failed("no such Project")),
             },
+            Op::Attachment { request: operation } => {
+                if !self.attachments.contains_key(&id) && self.attachments.len() >= 16 {
+                    self.reply(id, request, Err(failed("Too many attachment transfers are active. Retry shortly.")));
+                    return;
+                }
+                let store = self.engine.browser_store().dir().to_path_buf();
+                let uploads = self.attachments.entry(id).or_insert_with(|| {
+                    Arc::new(Mutex::new(crate::attachment_transfer::Session::new(store)))
+                }).clone();
+                let operation = operation.clone();
+                self.read_off_pump(id, request, move || {
+                    uploads.lock().map_err(|_| failed("Attachment worker stopped"))?
+                        .execute(operation)
+                        .map(|reply| Some(Done::Attachment { reply })).map_err(failed)
+                });
+                return;
+            }
+            Op::Changes { request: operation } => {
+                let operation = operation.clone();
+                self.read_off_pump(id, request, move || {
+                    crate::changes::execute(operation)
+                        .map(|reply| Some(Done::Changes { reply })).map_err(failed)
+                });
+                return;
+            }
+            Op::FileOperation { request: operation } => {
+                let operation = operation.clone();
+                self.read_off_pump(id, request, move || {
+                    crate::file_operations::execute(operation)
+                        .map(|reply| Some(Done::FileOperation { reply }))
+                        .map_err(failed)
+                });
+                return;
+            }
             Op::ListDir { path } => {
                 let path = path.clone();
                 self.read_off_pump(id, request, move || {
@@ -886,12 +968,38 @@ impl Server {
                 });
                 return;
             }
-            Op::ReviewPullRequest { path } => {
-                let (path, forge) = (path.clone(), self.forge.clone());
+            Op::ReviewPullRequestDiff { path, number } => {
+                let (path, number, forge) = (path.clone(), *number, self.forge.clone());
                 self.read_off_pump(id, request, move || {
-                    let (view, noun) = ferrite_reviewr::ferrite::pull_request(&path, &forge);
+                    ferrite_reviewr::forge::diff_numbered(&path, &forge, number)
+                        .map(|files| Some(Done::Review {
+                            files: files.into_iter().map(Into::into).collect(),
+                        }))
+                        .map_err(failed)
+                });
+                return;
+            }
+            Op::ReviewPullRequest { path, number } => {
+                let (path, number, forge) = (path.clone(), *number, self.forge.clone());
+                self.read_off_pump(id, request, move || {
+                    let (view, noun) = match number {
+                        Some(number) => {
+                            ferrite_reviewr::ferrite::pull_request_numbered(&path, &forge, number)
+                        }
+                        None => ferrite_reviewr::ferrite::pull_request(&path, &forge),
+                    };
                     Ok(Some(
                         crate::protocol::ReviewPullRequest::of(view, noun).into(),
+                    ))
+                });
+                return;
+            }
+            Op::ListPullRequests { path, filter } => {
+                let (path, filter, forge) = (path.clone(), *filter, self.forge.clone());
+                self.read_off_pump(id, request, move || {
+                    let list = ferrite_reviewr::forge::list(&path, &forge, filter.into());
+                    Ok(Some(
+                        crate::protocol::ReviewPullRequests::of(list, "PR").into(),
                     ))
                 });
                 return;
@@ -1039,14 +1147,29 @@ impl Server {
         );
     }
 
+    /// This machine's defaults as its `settings.json` says: with `set`,
+    /// written first, so the answer is what a later read finds.
+    fn server_defaults(
+        &mut self,
+        set: Option<&ServerDefaults>,
+    ) -> Result<Done, WireError> {
+        let mut settings = Settings::load(&self.settings_dir).map_err(failed)?;
+        if let Some(defaults) = set {
+            settings.set_server_defaults(defaults.clone());
+            settings.save(&self.settings_dir).map_err(failed)?;
+            settings = Settings::load(&self.settings_dir).map_err(failed)?;
+            self.apply_settings(&settings);
+        }
+        Ok(Done::ServerDefaults {
+            defaults: settings.server_defaults(),
+        })
+    }
+
     /// Settings apply to the next Session, as they always have.
     fn apply_settings(&mut self, settings: &Settings) {
         *self.defaults.lock().unwrap_or_else(|e| e.into_inner()) =
             SessionDefaults::from_settings(settings);
-        self.engine
-            .set_suggestions_enabled(settings.placeholder_suggestions);
-        self.engine
-            .set_allowance_thresholds(settings.allowance_warnings.clone());
+        self.engine.apply_settings(settings);
         self.default_provider = settings.default_provider;
         self.forge = settings.forge_hosts.review_config();
         self.factory_agent = factory::default_agent(settings);
@@ -1305,6 +1428,7 @@ impl Server {
     /// A client's connection ended: what it held or was asked goes too.
     fn gone(&mut self, id: ClientId) {
         self.clients.remove(&id);
+        self.attachments.remove(&id);
         self.engine.window_gone(id);
         self.renders.client_gone(id);
         self.undriven(id);

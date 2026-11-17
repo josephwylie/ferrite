@@ -35,6 +35,22 @@ pub enum Platform {
     Windows,
 }
 
+impl Platform {
+    /// The primary modifier's key-table word: `cmd-w` on macOS, `ctrl-w`
+    /// on Windows.
+    pub fn primary(self) -> &'static str {
+        match self {
+            Platform::Mac => "cmd",
+            Platform::Windows => "ctrl",
+        }
+    }
+
+    /// `key` under the primary modifier: `cmd-w`, `ctrl-w`.
+    pub fn chord(self, key: &str) -> String {
+        format!("{}-{key}", self.primary())
+    }
+}
+
 /// The convention this build follows.
 #[cfg(target_os = "macos")]
 pub const PLATFORM: Platform = Platform::Mac;
@@ -42,14 +58,34 @@ pub const PLATFORM: Platform = Platform::Mac;
 pub const PLATFORM: Platform = Platform::Windows;
 
 /// The key context of a keystroke no text field takes: the cockpit's own
-/// root holds the keyboard (the transcript, the board, a wall), and neither
+/// root holds the keyboard (the transcript, the board), and neither
 /// a Composer nor a kit input is on the focus path.
-pub const NO_TEXT_FIELD: &str = "Ferrite && !Composer && !Input";
+pub const NO_TEXT_FIELD: &str = "Ferrite && !Composer && !Input && !ContextMenu";
 
-/// The Cockpit's own key context, on the window's root: a row bound in it
-/// acts anywhere in the Cockpit, and every deeper context — a Composer, a
-/// float, the kit's menus, popovers and dialogs — outranks it.
-pub const COCKPIT: &str = "Ferrite";
+/// The Composer's caret keys the context menu takes over while it is open.
+pub const COMPOSER_TEXT: &str = "Composer && !ContextMenu";
+
+/// The name of the window root's key context. It carries `ContextMenu`
+/// while a menu is open, beside it.
+pub const ROOT: &str = "Ferrite";
+
+/// The Cockpit's own key context: a row bound in it acts anywhere in the
+/// Cockpit, and every deeper context — a Composer, a float, the kit's menus,
+/// popovers and dialogs — outranks it. An open context menu takes the
+/// keyboard whole (↵ presses its row, ⎋ closes it, ⇥ goes nowhere), so the
+/// Cockpit's keys, this one's and `NO_TEXT_FIELD`'s, stand down.
+pub const COCKPIT: &str = "Ferrite && !ContextMenu";
+
+/// The root's key context, whole: `Ferrite`, with `ContextMenu` while a
+/// menu is open. A key context set on an element replaces the one before
+/// it, so the root builds this once.
+pub fn root_context(menu: bool) -> String {
+    let mut context = String::from(ROOT);
+    if menu {
+        context.push_str(" ContextMenu");
+    }
+    context
+}
 
 /// One row of the table: (keystroke, action name, key context).
 pub type Binding = (String, &'static str, Option<&'static str>);
@@ -58,10 +94,7 @@ pub type Binding = (String, &'static str, Option<&'static str>);
 /// context). Action names are the registered `namespace::Action` strings,
 /// so the table stays buildable without touching gpui.
 pub fn bindings(platform: Platform) -> Vec<Binding> {
-    let primary = match platform {
-        Platform::Mac => "cmd",
-        Platform::Windows => "ctrl",
-    };
+    let primary = platform.primary();
     // The word modifier: alt on macOS (alt-backspace, alt-left), ctrl on
     // Windows (ctrl-backspace, ctrl-left) — each platform's own text-field
     // grammar. On Windows ctrl-left is a word step and home is the line
@@ -83,8 +116,8 @@ pub fn bindings(platform: Platform) -> Vec<Binding> {
     let mut table = vec![
         ("backspace".into(), "composer::Backspace", Some("Composer")),
         ("delete".into(), "composer::Delete", Some("Composer")),
-        ("left".into(), "composer::Left", Some("Composer")),
-        ("right".into(), "composer::Right", Some("Composer")),
+        ("left".into(), "composer::Left", Some(COMPOSER_TEXT)),
+        ("right".into(), "composer::Right", Some(COMPOSER_TEXT)),
         ("home".into(), "composer::Home", Some("Composer")),
         ("end".into(), "composer::End", Some("Composer")),
         (with_primary("v"), "composer::Paste", Some("Composer")),
@@ -179,6 +212,8 @@ pub fn bindings(platform: Platform) -> Vec<Binding> {
         // Copy the transcript selection a drag made; with nothing selected
         // the key does nothing (the Composer has no selection of its own).
         (with_primary("c"), "cockpit::CopySelection", None),
+        // Quote the selection into the Composer, as the Cite button does.
+        (with_primary("shift-l"), "cockpit::CiteSelection", None),
         // The Cockpit's own, not every context's: a binding with none ranks
         // as deep as the deepest, so it outranked the kit's menus, popovers
         // and dialogs, whose Enter picks and Escape closes.
@@ -190,11 +225,9 @@ pub fn bindings(platform: Platform) -> Vec<Binding> {
         // Kit buttons synthesize clicks from Enter/Space; do not submit a prompt.
         ("enter".into(), "zed::NoAction", Some("PromptAttachment")),
         ("escape".into(), "cockpit::Interrupt", Some(COCKPIT)),
-        // Only while a Decision holds the keyboard: elsewhere these are
-        // just letters going into the Composer.
-        ("y".into(), "cockpit::Allow", Some("Decision")),
-        ("n".into(), "cockpit::Deny", Some("Decision")),
-        ("a".into(), "cockpit::Always", Some("Decision")),
+        // No bare y/n/a under a Decision: its Composer is a live text
+        // field, so those are the first letters of "yes", "no", "also". The
+        // approval's own keys are the chords below and its buttons.
         // The approval card's buttons (Claude's): ⌘⏎ allows once, ⇧⌘⏎
         // always allows — they act with text on the line too.
         (
@@ -207,37 +240,35 @@ pub fn bindings(platform: Platform) -> Vec<Binding> {
             "cockpit::AlwaysAllow",
             Some("Decision"),
         ),
-        // A question Decision's options, by number — digits again with
-        // text on the line, the y/n/a rule.
+        // Deny, the card's other button: ⌘. (stop this).
+        (with_primary("."), "cockpit::DenyOnce", Some("Decision")),
+        // A Subagent's tab has no Composer; its cards' own fields still type.
+        ("y".into(), "cockpit::Allow", Some(SUBAGENT_DECISION)),
+        ("n".into(), "cockpit::Deny", Some(SUBAGENT_DECISION)),
+        ("a".into(), "cockpit::Always", Some(SUBAGENT_DECISION)),
+        // A question Decision's options, by number.
         ("1".into(), "cockpit::PickOption1", Some("Decision")),
         ("2".into(), "cockpit::PickOption2", Some("Decision")),
         ("3".into(), "cockpit::PickOption3", Some("Decision")),
         ("4".into(), "cockpit::PickOption4", Some("Decision")),
-        // At wall range no Pane holds a Composer, so the same keys answer
-        // whichever Thread is flagged without focusing it first.
-        ("y".into(), "cockpit::Allow", Some("Wall")),
-        ("n".into(), "cockpit::Deny", Some("Wall")),
-        ("a".into(), "cockpit::Always", Some("Wall")),
-        // A tile's quick answers by their digits (F-7): `1` allow, `2`
-        // allow for this thread, `3` deny — the focused waiting tile, else
-        // the one that has waited longest.
-        ("1".into(), "cockpit::PickOption1", Some("Wall")),
-        ("2".into(), "cockpit::PickOption2", Some("Wall")),
-        ("3".into(), "cockpit::PickOption3", Some("Wall")),
         // Back and forward through where the operator has been, Claude's
         // and the browser's ⌘[ / ⌘].
         (with_primary("["), "cockpit::GoBack", None),
         (with_primary("]"), "cockpit::GoForward", None),
-        // The cockpit: walk the grid (the browser's next and previous tab,
-        // ⌘⇧] / ⌘⇧[, typed as their shifted faces), and jump to whoever
-        // needs answering.
-        (with_primary("}"), "cockpit::NextPane", None),
-        (with_primary("{"), "cockpit::PreviousPane", None),
+        // The cockpit: walk the sidebar's Threads (the browser's next and
+        // previous tab, ⌘⇧] / ⌘⇧[, typed as their shifted faces), and jump
+        // to whoever needs answering.
+        (with_primary("}"), "cockpit::NextThread", None),
+        // F6 walks the screen's areas (the conversation, the panel), as it
+        // does in a browser or an editor; ⇧F6 walks back.
+        ("f6".into(), "cockpit::FocusNextArea", None),
+        ("shift-f6".into(), "cockpit::FocusPreviousArea", None),
+        (with_primary("{"), "cockpit::PreviousThread", None),
         (with_primary("d"), "cockpit::NextDecision", None),
         // The Composer's `+` menu's first verb: attach files or photos.
         (with_primary("u"), "cockpit::AttachFiles", None),
-        // The board's ordinals: ⌘1…⌘9 focus the shown board's Panes in head
-        // order (Solo: ⌘1 is the Solo Pane).
+        // The sidebar's ordinals: ⌘1…⌘9 show its first nine open Threads,
+        // in its order.
         (with_primary("1"), "cockpit::FocusThread1", None),
         (with_primary("2"), "cockpit::FocusThread2", None),
         (with_primary("3"), "cockpit::FocusThread3", None),
@@ -251,17 +282,8 @@ pub fn bindings(platform: Platform) -> Vec<Binding> {
         // #20: browser-tab muscle memory — cmd-t is the same new Thread,
         // and cmd-n stays as an alias beside it.
         (with_primary("t"), "cockpit::NewThread", None),
-        // The focused Pane takes the whole cockpit at L1; the same chord
-        // restores the grid (iTerm's maximize-pane). Escape stays Interrupt
-        // (#20 design): stealing the panic key for "exit fullscreen" would
-        // make it ambiguous.
-        (
-            with_primary("shift-enter"),
-            "cockpit::ToggleFullscreen",
-            None,
-        ),
         // Find in the focused Pane's transcript (or its reader): the
-        // platform's find key, so fullscreen moved off it.
+        // platform's find key.
         (with_primary("f"), "find::Open", None),
         // #21: fold the nav to its LED rail and back — the VS Code sidebar
         // muscle memory (cmd-t/w are spoken for by #20, cmd-f by find).
@@ -269,6 +291,7 @@ pub fn bindings(platform: Platform) -> Vec<Binding> {
         // The right panel (SPEC §5.6) beside it: ⌥⌘B, the sidebar's chord
         // with the option key, as the editors pair their two sidebars.
         (with_primary("alt-b"), "cockpit::TogglePanel", None),
+        (with_primary("shift-b"), "cockpit::ToggleDetails", None),
         // The platform's own Settings chord.
         (with_primary(","), "cockpit::OpenSettings", None),
         // The Inbox: what finished while the operator looked elsewhere.
@@ -279,10 +302,6 @@ pub fn bindings(platform: Platform) -> Vec<Binding> {
         // Shift: the same draft, aimed straight at "new worktree" instead
         // of the checkout the operator is sitting in.
         (with_primary("shift-n"), "cockpit::NewWorktreeThread", None),
-        // ⌘G opens a Group: the palette scoped to Groups. New Group (the
-        // focused solo Thread plus a new one) moves to ⌘⇧G.
-        (with_primary("g"), "palette::OpenGroups", None),
-        (with_primary("shift-g"), "cockpit::NewGroup", None),
         // ⌘K: the command palette — every Thread, then every command.
         (with_primary("k"), "palette::Toggle", None),
         // The palette's two keyed commands: the parked Threads, and the
@@ -314,10 +333,9 @@ pub fn bindings(platform: Platform) -> Vec<Binding> {
             Some("ToolDisclosure"),
         ),
         // `?`: the shortcuts sheet, read from this table. Only on an empty
-        // Composer line or with no text field holding the keyboard; a `?`
-        // typed into text is just a character.
+        // Composer line; anywhere else a `?` is a character, and with the
+        // keyboard off the Composer it types into it like any other.
         ("?".into(), "shortcuts::Toggle", Some("ComposerEmpty")),
-        ("?".into(), "shortcuts::Toggle", Some(NO_TEXT_FIELD)),
         // A page of the transcript up and down, and its ends, wherever no
         // text needs the keys: an empty Composer line (bound after its
         // own home and end, so the empty line's context wins the tie) or
@@ -358,6 +376,8 @@ pub fn bindings(platform: Platform) -> Vec<Binding> {
             "cockpit::TranscriptBottom",
             Some(NO_TEXT_FIELD),
         ),
+        (with_primary("up"), "cockpit::TranscriptTop", Some(NO_TEXT_FIELD)),
+        (with_primary("down"), "cockpit::TranscriptBottom", Some(NO_TEXT_FIELD)),
         // ⌘/ anywhere, a text field's too: the desktop apps' shortcuts key,
         // and the Help menu's chord.
         (with_primary("/"), "shortcuts::Toggle", None),
@@ -421,14 +441,19 @@ pub fn bindings(platform: Platform) -> Vec<Binding> {
         ("up".into(), "empty_board::Previous", Some("EmptyBoard")),
         ("down".into(), "empty_board::Next", Some("EmptyBoard")),
         ("enter".into(), "empty_board::Run", Some("EmptyBoard")),
+        // The PRs destination: ↑↓ walk its list, ⏎ opens the marked PR, esc
+        // goes back to the list, then closes the view.
+        ("up".into(), "pull_requests::Previous", Some("PullRequests")),
+        ("down".into(), "pull_requests::Next", Some("PullRequests")),
+        ("enter".into(), "pull_requests::Open", Some("PullRequests")),
+        ("escape".into(), "pull_requests::Back", Some("PullRequests")),
         // The floats' own keys, each in its float's context, deeper than the
-        // Cockpit's: the palette (↑↓ select, ⏎ open, ⇥
-        // preview in a pane, esc), the notifications list (↑↓ select, ⏎
+        // Cockpit's: the palette (↑↓ or ⇥ select, ⏎ open, esc), the notifications list (↑↓ select, ⏎
         // open, ⌫ dismiss, esc) and the shortcuts sheet (↑↓ scroll, esc).
         ("up".into(), "palette::SelectPrevious", Some("Palette")),
         ("down".into(), "palette::SelectNext", Some("Palette")),
         ("enter".into(), "palette::Confirm", Some("Palette")),
-        ("tab".into(), "palette::Preview", Some("Palette")),
+        ("tab".into(), "palette::SelectNext", Some("Palette")),
         ("escape".into(), "palette::Dismiss", Some("Palette")),
         // ← → change ⌘K's type tab on an empty line; with text they move
         // the caret (`Palette::step_tab` hands them on). After the
@@ -461,6 +486,10 @@ pub fn bindings(platform: Platform) -> Vec<Binding> {
         ("right".into(), "nav::Unfold", Some("NavTree")),
         ("escape".into(), "nav::CloseView", Some("NavTree")),
         ("f2".into(), "nav::Rename", Some("NavTree")),
+        // A row's rename field lives under the tree, whose own ↵ and ⎋
+        // would open and close views: its deeper context keeps them.
+        ("enter".into(), "cockpit::Submit", Some("NavRename")),
+        ("escape".into(), "cockpit::Interrupt", Some("NavRename")),
         ("up".into(), "nav::SearchPrevious", Some("NavSearch")),
         ("down".into(), "nav::SearchNext", Some("NavSearch")),
         ("enter".into(), "nav::Open", Some("NavSearch")),
@@ -537,6 +566,10 @@ pub fn bindings(platform: Platform) -> Vec<Binding> {
         ("escape".into(), "reader::Close", Some(READER)),
         ("escape".into(), "lightbox::Close", Some(LIGHTBOX)),
         ("enter".into(), "review::SaveComment", Some("ReviewComment")),
+        ("enter".into(), "cite::SaveComment", Some("CiteComment")),
+        (with_primary("enter"), "cite::SaveAndSendComment", Some("CiteComment")),
+        ("escape".into(), "cite::CancelComment", Some("CiteComment")),
+        ("escape".into(), "cite::CancelComment", Some("CitationPopup")),
         (
             "escape".into(),
             "review::CancelComment",
@@ -575,12 +608,13 @@ pub fn bindings(platform: Platform) -> Vec<Binding> {
         ("right".into(), "image_viewer::Next", Some(IMAGE_VIEWER)),
         // The find bar's line: ⏎ and ⌘G step forward, ⇧⏎ and ⌘⇧G back, esc
         // closes it. Last, so its context wins every same-depth tie: the
-        // Composer's new line and Groups (⌘G, ⌘⇧G).
+        // Composer's new line.
         ("enter".into(), "find::Next", Some("Find")),
         (with_primary("g"), "find::Next", Some("Find")),
         ("shift-enter".into(), "find::Previous", Some("Find")),
         (with_primary("shift-g"), "find::Previous", Some("Find")),
         ("escape".into(), "find::Close", Some("Find")),
+        ("escape".into(), "cockpit::CloseDetails", Some("ThreadDetails")),
         // The side chat's line: ⏎ sends the question to its tab.
         ("enter".into(), "side_chat::Ask", Some("SideChat")),
     ];
@@ -614,6 +648,36 @@ pub fn bindings(platform: Platform) -> Vec<Binding> {
         ("escape".into(), "terminal::Escape", Some(TERMINAL)),
         // The Files tree's filter: ⏎ opens the first match.
         ("enter".into(), "files::OpenFirst", Some("FilesFilter")),
+        // A surface that reads its own keys: the keys the window binds
+        // (⏎, ⇥, ⇧⇥, esc, and the clipboard chords) stand down, so the raw
+        // key handler under them gets the keystroke. Last, so these win
+        // every same-depth tie.
+        ("enter".into(), NO_ACTION, Some(PANEL_EMPTY)),
+        ("enter".into(), NO_ACTION, Some(BROWSER)),
+        ("tab".into(), NO_ACTION, Some(BROWSER)),
+        ("shift-tab".into(), NO_ACTION, Some(BROWSER)),
+        ("escape".into(), NO_ACTION, Some(BROWSER)),
+        (with_primary("c"), NO_ACTION, Some(BROWSER)),
+        (with_primary("v"), NO_ACTION, Some(BROWSER)),
+        (with_primary("x"), NO_ACTION, Some(BROWSER)),
+        (with_primary("a"), NO_ACTION, Some(BROWSER)),
+        (with_primary("up"), NO_ACTION, Some(BROWSER)),
+        (with_primary("down"), NO_ACTION, Some(BROWSER)),
+        // A Panel control (a tab, `+`, maximize, a pull request's number or
+        // segment) is one stop of a roving row: ←→ ⇱ ⇲ move between stops,
+        // ⏎ presses (the button's own key-up click, so ⏎ stands down), ⌫ or
+        // ⌦ closes a tab, ⇧F10 opens its menu and ⇥ ⇧⇥ leave for the next
+        // or previous area.
+        ("enter".into(), NO_ACTION, Some(PANEL_CONTROL)),
+        ("left".into(), "cockpit::PanelControlPrevious", Some(PANEL_CONTROL)),
+        ("right".into(), "cockpit::PanelControlNext", Some(PANEL_CONTROL)),
+        ("home".into(), "cockpit::PanelControlFirst", Some(PANEL_CONTROL)),
+        ("end".into(), "cockpit::PanelControlLast", Some(PANEL_CONTROL)),
+        ("delete".into(), "cockpit::PanelControlClose", Some(PANEL_CONTROL)),
+        ("backspace".into(), "cockpit::PanelControlClose", Some(PANEL_CONTROL)),
+        ("shift-f10".into(), "cockpit::PanelControlMenu", Some(PANEL_CONTROL)),
+        ("tab".into(), "cockpit::FocusNextArea", Some(PANEL_CONTROL)),
+        ("shift-tab".into(), "cockpit::FocusPreviousArea", Some(PANEL_CONTROL)),
     ]);
     if platform == Platform::Mac {
         table.extend([
@@ -641,6 +705,17 @@ const REVIEW: &str = "Review && !Composer";
 /// binds its own keys deeper; this context's esc beats the Cockpit's
 /// interrupt.
 pub const READER: &str = "Reader";
+/// The embedded browser's page (`ferrite-pane`'s `WebView`): it forwards
+/// raw keys to the page, so the host's own bindings on them stand down.
+pub const BROWSER: &str = "Browser";
+/// A Subagent tab's body while its request pends. It has no Composer, so the
+/// bare answer letters bind there unless one of its cards' fields types.
+pub const SUBAGENT_DECISION: &str = "SubagentDecision && !Input && !Composer";
+/// The Panel's "Open a surface" list, which opens its highlighted row on ⏎.
+pub const PANEL_EMPTY: &str = "PanelEmpty";
+/// One control of the Panel's head or a pull request's header
+/// (`cockpit/panel/controls.rs`).
+pub const PANEL_CONTROL: &str = "PanelControl";
 /// The Files editor's key context (`cockpit/tools/editor.rs`).
 pub const FILE_EDITOR: &str = "FileEditor";
 /// The Terminal grid's key context (`ferrite_terminal::KEY_CONTEXT`'s first
@@ -653,7 +728,7 @@ pub const IMAGE_VIEWER: &str = "ImageViewer";
 
 /// The contexts where no text field takes typing (a Decision answers its
 /// own letters), so a plain key may act there.
-const LETTER_CONTEXTS: [&str; 4] = [NO_TEXT_FIELD, REVIEW, "Decision", "Wall"];
+const LETTER_CONTEXTS: [&str; 3] = [NO_TEXT_FIELD, REVIEW, SUBAGENT_DECISION];
 
 /// gpui's "no action": a row that keeps a key from the bindings under it.
 const NO_ACTION: &str = "zed::NoAction";
@@ -848,24 +923,22 @@ mod tests {
             ("composer::Undo", "z"),
             ("composer::Redo", "shift-z"),
             ("cockpit::CopySelection", "c"),
+            ("cockpit::CiteSelection", "shift-l"),
             ("cockpit::GoBack", "["),
             ("cockpit::GoForward", "]"),
-            ("cockpit::NextPane", "}"),
-            ("cockpit::PreviousPane", "{"),
+            ("cockpit::NextThread", "}"),
+            ("cockpit::PreviousThread", "{"),
             ("cockpit::NextDecision", "d"),
             ("cockpit::NewThread", "n"),
             // #20: cmd-t is the browser-tab spelling of the same new Thread.
             ("cockpit::NewThread", "t"),
-            ("cockpit::ToggleFullscreen", "shift-enter"),
             ("find::Open", "f"),
             // #21: the nav collapses to its rail on both platforms.
             ("cockpit::ToggleNav", "b"),
             ("cockpit::TogglePanel", "alt-b"),
+            ("cockpit::ToggleDetails", "shift-b"),
             ("cockpit::OpenSettings", ","),
             ("cockpit::NewWorktreeThread", "shift-n"),
-            // ⌘G opens a Group; New Group moves to ⌘⇧G.
-            ("palette::OpenGroups", "g"),
-            ("cockpit::NewGroup", "shift-g"),
             ("palette::Toggle", "k"),
             ("palette::ShowParked", "shift-p"),
             ("cockpit::ToggleChanges", "shift-d"),
@@ -915,13 +988,16 @@ mod tests {
     }
 
     #[test]
-    fn close_remains_and_the_invented_group_shortcuts_are_absent() {
+    fn close_remains_and_the_group_and_fullscreen_shortcuts_are_absent() {
         let removed = [
             "cockpit::ToggleGroup",
             "cockpit::MoveToGroup",
             "cockpit::RenameGroup",
             "cockpit::MoveGroupUp",
             "cockpit::MoveGroupDown",
+            "cockpit::NewGroup",
+            "cockpit::ToggleFullscreen",
+            "palette::OpenGroups",
         ];
         for platform in [Platform::Mac, Platform::Windows] {
             let actions: Vec<_> = bindings(platform)
@@ -961,6 +1037,31 @@ mod tests {
         }
     }
 
+    #[test]
+    fn f6_moves_between_areas_and_a_panel_control_roves_with_the_arrows() {
+        for platform in [Platform::Mac, Platform::Windows] {
+            let table = bindings(platform);
+            for row in [
+                ("f6", "cockpit::FocusNextArea", None),
+                ("shift-f6", "cockpit::FocusPreviousArea", None),
+                ("left", "cockpit::PanelControlPrevious", Some(PANEL_CONTROL)),
+                ("right", "cockpit::PanelControlNext", Some(PANEL_CONTROL)),
+                ("home", "cockpit::PanelControlFirst", Some(PANEL_CONTROL)),
+                ("end", "cockpit::PanelControlLast", Some(PANEL_CONTROL)),
+                ("delete", "cockpit::PanelControlClose", Some(PANEL_CONTROL)),
+                ("shift-f10", "cockpit::PanelControlMenu", Some(PANEL_CONTROL)),
+                ("tab", "cockpit::FocusNextArea", Some(PANEL_CONTROL)),
+                ("shift-tab", "cockpit::FocusPreviousArea", Some(PANEL_CONTROL)),
+                ("enter", "zed::NoAction", Some(PANEL_CONTROL)),
+            ] {
+                assert!(
+                    table.contains(&(row.0.into(), row.1, row.2)),
+                    "{platform:?} is missing {row:?}"
+                );
+            }
+        }
+    }
+
     /// The position of the first row binding `key` to `action`.
     fn at(
         table: &[(String, &'static str, Option<&'static str>)],
@@ -977,10 +1078,19 @@ mod tests {
     /// sit after the Composer rows they shadow, so gpui's same-depth
     /// tie-break hands them ↑↓ past history and the row walk. The
     /// ComposerMenu rows stay later still. The number keys answer by number in the Decision
-    /// context and on the wall.
+    /// context.
     /// Enter sends and Escape interrupts in the Cockpit's own context,
     /// never in none: a binding with none ranks as deep as the deepest and
     /// would take both keys from every float, menu, popover and dialog.
+    #[test]
+    fn the_root_context_carries_an_open_menu_beside_ferrite() {
+        assert_eq!(root_context(false), "Ferrite");
+        assert_eq!(root_context(true), "Ferrite ContextMenu");
+        for stands_down in [COCKPIT, NO_TEXT_FIELD] {
+            assert!(stands_down.ends_with("!ContextMenu"), "{stands_down}");
+        }
+    }
+
     #[test]
     fn enter_and_escape_are_the_cockpits_own() {
         for platform in [Platform::Mac, Platform::Windows] {
@@ -1034,15 +1144,17 @@ mod tests {
                 ("3", "cockpit::PickOption3"),
             ] {
                 assert!(table.contains(&(key.into(), action, Some("Decision"))));
-                assert!(table.contains(&(key.into(), action, Some("Wall"))));
             }
             for (key, action) in [
                 ("y", "cockpit::Allow"),
                 ("n", "cockpit::Deny"),
                 ("a", "cockpit::Always"),
             ] {
-                assert!(table.contains(&(key.into(), action, Some("Decision"))));
-                assert!(table.contains(&(key.into(), action, Some("Wall"))));
+                assert!(
+                    !table.contains(&(key.into(), action, Some("Decision"))),
+                    "{key} types under a Decision"
+                );
+                assert!(table.contains(&(key.into(), action, Some(SUBAGENT_DECISION))));
             }
         }
     }
@@ -1057,7 +1169,7 @@ mod tests {
                 ("up", "palette::SelectPrevious", "Palette"),
                 ("down", "palette::SelectNext", "Palette"),
                 ("enter", "palette::Confirm", "Palette"),
-                ("tab", "palette::Preview", "Palette"),
+                ("tab", "palette::SelectNext", "Palette"),
                 ("escape", "palette::Dismiss", "Palette"),
                 ("left", "palette::PreviousType", "Palette"),
                 ("right", "palette::NextType", "Palette"),
@@ -1079,7 +1191,6 @@ mod tests {
                 ("down", "empty_board::Next", "EmptyBoard"),
                 ("enter", "empty_board::Run", "EmptyBoard"),
                 ("?", "shortcuts::Toggle", "ComposerEmpty"),
-                ("?", "shortcuts::Toggle", NO_TEXT_FIELD),
             ] {
                 assert!(
                     table.contains(&(key.into(), action, Some(context))),
@@ -1311,10 +1422,7 @@ mod tests {
         );
         assert_eq!(
             rows("cockpit::Allow"),
-            [
-                ("shift-y".to_string(), Some("Decision")),
-                ("shift-y".to_string(), Some("Wall"))
-            ]
+            [("shift-y".to_string(), Some(SUBAGENT_DECISION))]
         );
         assert!(rows("cockpit::ToggleNav").is_empty());
         assert_eq!(
@@ -1412,8 +1520,7 @@ mod tests {
                 .iter()
                 .any(|refusal| refusal.contains(&format!("for {action} would take that key"))));
         }
-        assert!(table.contains(&("o".into(), "cockpit::Allow", Some("Decision"))));
-        assert!(table.contains(&("o".into(), "cockpit::Allow", Some("Wall"))));
+        assert!(table.contains(&("o".into(), "cockpit::Allow", Some(SUBAGENT_DECISION))));
         assert!(table.contains(&("g".into(), "review::Reread", Some(REVIEW))));
     }
 
@@ -1425,30 +1532,30 @@ mod tests {
             Platform::Windows,
             &user_keys(&[
                 ("cockpit::Nothing", Some("ctrl-j")),
-                ("cockpit::NextPane", Some("ctrl-j-k")),
-                ("cockpit::PreviousPane", Some("cmd-j")),
+                ("cockpit::NextThread", Some("ctrl-j-k")),
+                ("cockpit::PreviousThread", Some("cmd-j")),
                 ("cockpit::TextLarger", Some("ctrl-j")),
                 ("cockpit::TextSmaller", Some("ctrl-j")),
                 ("cockpit::ToggleNav", Some("j")),
-                ("cockpit::ToggleFullscreen", Some("shift-space")),
+                ("cockpit::ToggleNotifications", Some("shift-space")),
             ]),
         );
         assert_eq!(refused.len(), 6, "{refused:?}");
         let says = |words: &str| refused.iter().any(|refusal| refusal.contains(words));
         assert!(says("`cockpit::Nothing` is not an action"));
-        assert!(says("`ctrl-j-k` for cockpit::NextPane"));
+        assert!(says("`ctrl-j-k` for cockpit::NextThread"));
         assert!(says(
-            "`cmd-j` for cockpit::PreviousPane: Windows has no cmd key"
+            "`cmd-j` for cockpit::PreviousThread: Windows has no cmd key"
         ));
         assert!(says("both cockpit::TextLarger and cockpit::TextSmaller"));
         assert!(says(
             "`j` for cockpit::ToggleNav would take that key from typing"
         ));
         assert!(says(
-            "`shift-space` for cockpit::ToggleFullscreen would take"
+            "`shift-space` for cockpit::ToggleNotifications would take"
         ));
-        assert!(table.contains(&("ctrl-}".into(), "cockpit::NextPane", None)));
-        assert!(table.contains(&("ctrl-{".into(), "cockpit::PreviousPane", None)));
+        assert!(table.contains(&("ctrl-}".into(), "cockpit::NextThread", None)));
+        assert!(table.contains(&("ctrl-{".into(), "cockpit::PreviousThread", None)));
         assert!(table.contains(&("ctrl-j".into(), "cockpit::TextLarger", None)));
         assert!(table.contains(&("ctrl--".into(), "cockpit::TextSmaller", None)));
     }
@@ -1475,6 +1582,29 @@ mod tests {
             .all(|(_, action, _)| *action != "cockpit::OpenPrInBrowser"));
         assert_eq!(refused.len(), 1, "{refused:?}");
         assert!(refused[0].contains("would take that key from typing"));
+    }
+
+    /// ⌘↑ ⌘↓ go to the ends of the transcript, but not while the embedded
+    /// browser holds the keyboard: the page owns its caret and scroll keys,
+    /// so the later `Browser` row stands them down.
+    #[test]
+    fn the_end_chords_stand_down_for_the_browser() {
+        for platform in [Platform::Mac, Platform::Windows] {
+            let table = bindings(platform);
+            for (suffix, action) in [
+                ("-up", "cockpit::TranscriptTop"),
+                ("-down", "cockpit::TranscriptBottom"),
+            ] {
+                let at = |wanted: &str, context: &str| {
+                    table.iter().position(|(key, act, ctx)| {
+                        key.ends_with(suffix) && *act == wanted && *ctx == Some(context)
+                    })
+                };
+                let go = at(action, NO_TEXT_FIELD).expect("the chord goes to an end");
+                let stand_down = at(NO_ACTION, BROWSER).expect("the browser row exists");
+                assert!(stand_down > go, "{platform:?} {suffix}: the stand-down binds later");
+            }
+        }
     }
 
     #[test]

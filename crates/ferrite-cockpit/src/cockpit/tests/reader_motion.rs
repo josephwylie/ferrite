@@ -1,8 +1,7 @@
 //! The reader slot's slide (`beside.rs`), the Review's: it opens and
 //! closes beside its Pane as one move, the Pane giving way and taking the
 //! room back, turns around mid-flight, never slides again for a scope
-//! switched in place, stays inside a Group's or a fullscreen Pane's cell,
-//! lands for a seam drag, and snaps under reduced motion. Files open in
+//! switched in place, lands for a seam drag, and snaps under reduced motion. Files open in
 //! the Panel instead (`panel_preview.rs`).
 
 use super::*;
@@ -207,50 +206,6 @@ fn a_review_reopened_in_place_does_not_slide(cx: &mut TestAppContext) {
     }
 }
 
-/// In a Group the Pane's own cell splits as the reader slides in: its
-/// neighbour never moves, and at rest the Pane and its reader share the
-/// cell the Pane had.
-#[gpui::test]
-fn in_a_group_the_slide_stays_inside_the_pane_cell(cx: &mut TestAppContext) {
-    ferrite_ui::motion::testing::drive();
-    let (mut core, _fake) = cockpit("reader-slide-group", 2);
-    let group = group_all(&mut core);
-    core.enter_group(group).unwrap();
-    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
-    hold_nav_open(&view, cx);
-    cx.simulate_resize(gpui::size(px(1440.), px(900.)));
-    view.update(cx, |view, cx| {
-        view.focus_pane(0);
-        cx.notify();
-    });
-    tick(cx);
-    settle(cx);
-    let (cell, neighbour) = (pane(&view, 0, cx), pane(&view, 1, cx));
-
-    read(&view, cx);
-    for step in 1..=4 {
-        at(MOTION_SLOT_OPEN_MS / 4, cx);
-        assert_eq!(
-            pane(&view, 1, cx),
-            neighbour,
-            "step {step}: the neighbour holds"
-        );
-        let owner = pane(&view, 0, cx);
-        assert!(
-            owner.x == cell.x && owner.w <= cell.w,
-            "step {step}: {owner:?}"
-        );
-    }
-    settle(cx);
-    let owner = pane(&view, 0, cx);
-    let head = cx.debug_bounds("reader-head").expect("the reader is in");
-    assert!(
-        near(f32::from(head.right()), cell.x + cell.w),
-        "the reader ends where the cell did: {head:?} in {cell:?}"
-    );
-    assert!(near(owner.w, (cell.w - BOARD_SEAM) / 2.0), "{owner:?}");
-}
-
 /// A seam grabbed mid-slide lands the slide where it was going: the drag
 /// starts from the board at rest and is never tweened.
 #[gpui::test]
@@ -284,47 +239,4 @@ fn reduced_motion_snaps_the_reader(cx: &mut TestAppContext) {
     assert!(cx.debug_bounds("reader-head").is_none());
     assert!(view.read_with(cx, |view, _| view.panes[0].review.review().is_none()));
     assert_eq!(frame(cx), 0);
-}
-
-/// A fullscreen Pane's own cell fills the board, so a review opened from
-/// it splits that cell, where it can be seen, and slides like any other;
-/// closed, the Pane fills the board again.
-#[gpui::test]
-fn a_fullscreen_pane_splits_its_cell_with_its_reader(cx: &mut TestAppContext) {
-    ferrite_ui::motion::testing::drive();
-    let (mut core, _fake) = cockpit("reader-fullscreen", 2);
-    let group = group_all(&mut core);
-    core.enter_group(group).unwrap();
-    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
-    hold_nav_open(&view, cx);
-    cx.simulate_resize(gpui::size(px(1440.), px(900.)));
-    view.update(cx, |view, cx| {
-        view.focus_pane(0);
-        view.cockpit.toggle_fullscreen();
-        cx.notify();
-    });
-    tick(cx);
-    settle(cx);
-    let whole = pane(&view, 0, cx);
-
-    read(&view, cx);
-    at(MOTION_SLOT_OPEN_MS / 4, cx);
-    let opening = pane(&view, 0, cx).w;
-    assert!(opening < whole.w - 1.0, "the Pane gives way: {opening}");
-    settle(cx);
-    assert!(near(pane(&view, 0, cx).w, (whole.w - BOARD_SEAM) / 2.0));
-    assert!(
-        cx.debug_bounds("reader-head").is_some(),
-        "the reader is in sight"
-    );
-    assert_eq!(
-        cx.update(|window, cx| view.read(cx).pane_rects(window).len()),
-        1,
-        "still the one Pane"
-    );
-
-    close(&view, cx);
-    settle(cx);
-    assert_eq!(pane(&view, 0, cx), whole, "the Pane fills the board again");
-    assert!(cx.debug_bounds("reader-head").is_none());
 }

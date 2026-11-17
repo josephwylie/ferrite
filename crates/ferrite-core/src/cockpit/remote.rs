@@ -8,28 +8,28 @@
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::io;
 use std::path::{Path, PathBuf};
-use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender, TryRecvError};
 use std::sync::Arc;
+use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender, TryRecvError};
 use std::time::{Duration, Instant};
 
 use base64::Engine as _;
 
+use crate::ThreadId;
 use crate::engine::{BootstrapResult, Bootstrapped};
 use crate::link;
 use crate::machine::{self, Bridge, Failure};
-use crate::protocol::ReviewPullRequest;
 use crate::protocol::{
     self, Capability, ClientMessage, Command, Done, ErrorCode, Op, Peer, Resume, ServerInfo,
     ServerMessage, Snapshot, WireError, WirePng,
 };
+use crate::protocol::{ReviewPullRequest, ReviewPullRequests, WirePrFilter, WirePrList};
 use crate::providers::FileSuggestion;
 use crate::roster::DraftId;
 use crate::visual::{RenderRequest, Renderer};
 use crate::workspace::registry::ProjectId;
 use crate::workspace::{
-    parse_pr_json, DirEntry, ListedWorktree, Listing, PullRequest, RepoListing,
+    DirEntry, ListedWorktree, Listing, PullRequest, RepoListing, parse_pr_json,
 };
-use crate::ThreadId;
 use ferrite_reviewr::ferrite::{Bases, FileSides, Read};
 
 /// Where a review's read goes, and what it read: asked again as a
@@ -57,9 +57,8 @@ const RESTART_GRACE: Duration = Duration::from_secs(2);
 pub struct Attach {
     /// For this computer's Server, the Store it serves, its socket beside
     /// it, which the window reads an open Thread's header from. A
-    /// machine's path only names the window's copies of its Groups and
-    /// Projects. Either's parked Threads are what its Server publishes
-    /// (ADR 0026).
+    /// machine's path only names the window's copy of its Projects.
+    /// Either's parked Threads are what its Server publishes (ADR 0026).
     pub store: PathBuf,
     pub server: Endpoint,
     pub client: Peer,
@@ -79,6 +78,8 @@ pub struct Attach {
 /// Where the Server is.
 #[derive(Clone)]
 pub enum Endpoint {
+    /// No environment is enabled. This client never attempts a connection.
+    Unavailable,
     /// This computer's, started as `<executable> server` when none answers.
     Local { executable: PathBuf },
     /// A machine's, through its bridge (ADR 0026). Never started from here.
@@ -189,6 +190,7 @@ impl Remote {
     /// Detached, attaching from the first `poll`.
     pub(crate) fn new(attach: Attach) -> Self {
         let detached = match &attach.server {
+            Endpoint::Unavailable => "No environment selected".into(),
             Endpoint::Local { .. } => "attaching to the Ferrite server".into(),
             Endpoint::Machine(bridge) => format!("connecting to {}", bridge.name()),
         };
@@ -249,9 +251,13 @@ impl Remote {
     }
 
     /// The machine this window is on, when it is not this computer.
+    pub(crate) fn available(&self) -> bool {
+        !matches!(self.attach.server, Endpoint::Unavailable)
+    }
+
     pub(crate) fn bridge(&self) -> Option<&Arc<Bridge>> {
         match &self.attach.server {
-            Endpoint::Local { .. } => None,
+            Endpoint::Unavailable | Endpoint::Local { .. } => None,
             Endpoint::Machine(bridge) => Some(bridge),
         }
     }
@@ -285,7 +291,8 @@ impl Remote {
                 Err(TryRecvError::Disconnected) => self.attaching = None,
             }
         }
-        if self.attachment.is_none()
+        if self.available()
+            && self.attachment.is_none()
             && self.attaching.is_none()
             && Instant::now() >= self.retry_at
             && !self.waits_for_operator()
@@ -333,12 +340,19 @@ impl Remote {
     /// One act: sent, and its reply waited for. What the Server said
     /// before the reply waits in the inbox for the next `poll`.
     pub(crate) fn execute(&mut self, op: Op) -> Result<Option<Done>, WireError> {
+        let deadline = Instant::now() + REPLY_WAIT;
         let id = self.send_command(op)?;
         loop {
             let Some(attachment) = &self.attachment else {
                 return Err(gone(&self.detached));
             };
-            match attachment.client.messages.recv_timeout(REPLY_WAIT) {
+            let left = deadline.saturating_duration_since(Instant::now());
+            let received = if left.is_zero() {
+                Err(RecvTimeoutError::Timeout)
+            } else {
+                attachment.client.messages.recv_timeout(left)
+            };
+            match received {
                 Ok(ServerMessage::Reply {
                     id: replied,
                     ok,
@@ -347,14 +361,14 @@ impl Remote {
                     return match error {
                         Some(error) => Err(error),
                         None => Ok(ok),
-                    }
+                    };
                 }
                 Ok(message) => self.inbox.push_back(message),
                 Err(RecvTimeoutError::Timeout) => {
                     return Err(WireError {
-                        code: ErrorCode::Failed,
+                        code: ErrorCode::Unconfirmed,
                         message: "the Ferrite server did not answer in time".into(),
-                    })
+                    });
                 }
                 Err(RecvTimeoutError::Disconnected) => {
                     self.detach("the Ferrite server went away");
@@ -393,13 +407,13 @@ impl Remote {
                         io::ErrorKind::NotFound | io::ErrorKind::ConnectionRefused
                     ) =>
                 {
-                    return Ok(())
+                    return Ok(());
                 }
                 _ if Instant::now() >= deadline => {
                     return Err(io::Error::new(
                         io::ErrorKind::TimedOut,
                         "the Ferrite server is still running",
-                    ))
+                    ));
                 }
                 _ => std::thread::sleep(Duration::from_millis(25)),
             }
@@ -454,6 +468,81 @@ impl Remote {
         let (answer, answered) = mpsc::channel();
         self.searches.insert(id, answer);
         Ok(answered)
+    }
+
+    pub(crate) fn changes(&mut self, request: crate::changes::Request) -> io::Result<Receiver<io::Result<crate::changes::Snapshot>>> {
+        self.ask(Op::Changes { request }, |done| match done {
+            Done::Changes { reply } => reply.snapshot(),
+            _ => None,
+        })
+    }
+
+    pub(crate) fn set_file_staged(&mut self, request: crate::changes::Request) -> io::Result<Receiver<io::Result<()>>> {
+        self.ask(Op::Changes { request }, |done| match done {
+            Done::Changes { reply: crate::changes::Reply::Staged } => Some(()),
+            _ => None,
+        })
+    }
+
+    fn attachment_connection(&self) -> io::Result<impl FnOnce() -> io::Result<crate::attachment_transfer::Exchange> + Send + 'static> {
+        let expected_boot = self.attachment.as_ref().ok_or_else(|| io::Error::new(io::ErrorKind::NotConnected, &*self.detached))?.boot_id.clone();
+        let endpoint = self.attach.server.clone();
+        let store = self.attach.store.clone();
+        let hello = ClientMessage::Hello {
+            generation: protocol::GENERATION,
+            client: self.attach.client.clone(),
+            capabilities: Vec::new(),
+        };
+        Ok(move || {
+            let attached = attach_to(&store, &endpoint, hello)?;
+            if attached.snapshot.boot_id != expected_boot {
+                return Err(io::Error::new(io::ErrorKind::NotConnected, "The attachment server changed. Reconnect and retry."));
+            }
+            let mut client = attached.client;
+            let mut next = 0;
+            Ok(Box::new(move |request| {
+                let _route = &endpoint;
+                next += 1;
+                client.send(&ClientMessage::Command(Command { id: next, op: Op::Attachment { request } }))?;
+                let deadline = Instant::now() + Duration::from_secs(30);
+                loop {
+                    let remaining = deadline.saturating_duration_since(Instant::now());
+                    match client.messages.recv_timeout(remaining) {
+                        Ok(ServerMessage::Reply { id, ok, error }) if id == next => {
+                            if let Some(error) = error { return Err(error.into()); }
+                            return match ok {
+                                Some(Done::Attachment { reply }) => Ok(reply),
+                                _ => Err(io::Error::new(io::ErrorKind::InvalidData, "The server did not answer the attachment operation")),
+                            };
+                        }
+                        Ok(_) => {},
+                        Err(RecvTimeoutError::Timeout) => return Err(io::Error::new(io::ErrorKind::TimedOut, "Attachment transfer timed out")),
+                        Err(RecvTimeoutError::Disconnected) => return Err(io::Error::new(io::ErrorKind::NotConnected, "Attachment connection closed")),
+                    }
+                }
+            }) as crate::attachment_transfer::Exchange)
+        })
+    }
+
+    pub(crate) fn upload_attachment(&self, path: PathBuf) -> io::Result<crate::attachment_transfer::Upload> {
+        Ok(crate::attachment_transfer::upload(path, self.attachment_connection()?))
+    }
+
+    pub(crate) fn read_attachment(&self, path: PathBuf) -> io::Result<Receiver<io::Result<Vec<u8>>>> {
+        let connect = self.attachment_connection()?;
+        Ok(super::read_here(move || {
+            crate::attachment_transfer::read(path, connect().map_err(|error| error.to_string())?).map_err(|error| error.to_string())
+        }))
+    }
+
+    pub(crate) fn file_operation(
+        &mut self,
+        request: crate::file_operations::Request,
+    ) -> io::Result<Receiver<io::Result<crate::file_operations::Reply>>> {
+        self.ask(Op::FileOperation { request }, |done| match done {
+            Done::FileOperation { reply } => Some(reply),
+            _ => None,
+        })
     }
 
     pub(crate) fn list_dir(&mut self, path: &Path) -> io::Result<Receiver<io::Result<Listing>>> {
@@ -588,13 +677,31 @@ impl Remote {
         })
     }
 
+    pub(crate) fn browser_dispatch(
+        &mut self,
+        request: u64,
+        boot_id: String,
+        thread: ThreadId,
+        owner: crate::browser::Owner,
+        document: crate::browser::Document,
+        revision: u64,
+    ) -> io::Result<Receiver<io::Result<u64>>> {
+        self.ask(
+            Op::BrowserDispatch { request, boot_id, thread, owner, document, revision },
+            |done| match done {
+                Done::BrowserDispatch { remaining_ms } => Some(remaining_ms),
+                _ => None,
+            },
+        )
+    }
+
     pub(crate) fn browser_capture(
         &mut self,
         thread: ThreadId,
         owner: crate::browser::Owner,
         lease: crate::browser::Lease,
         capture: crate::browser_annotations::Capture,
-        png: crate::protocol::WirePng,
+        png: Option<crate::protocol::WirePng>,
     ) -> io::Result<Receiver<io::Result<crate::browser_annotations::Annotation>>> {
         let attachment = self
             .attachment
@@ -655,12 +762,31 @@ impl Remote {
         })
     }
 
+    pub(crate) fn review_pull_request_diff(
+        &mut self,
+        path: &Path,
+        number: u64,
+    ) -> io::Result<Receiver<io::Result<Vec<FileSides>>>> {
+        self.ask(
+            Op::ReviewPullRequestDiff {
+                path: path.to_path_buf(),
+                number,
+            },
+            |done| match done {
+                Done::Review { files } => Some(files.into_iter().map(Into::into).collect()),
+                _ => None,
+            },
+        )
+    }
+
     pub(crate) fn review_pull_request(
         &mut self,
         path: &Path,
+        number: Option<u64>,
     ) -> io::Result<Receiver<io::Result<ReviewPullRequest>>> {
         let op = Op::ReviewPullRequest {
             path: path.to_path_buf(),
+            number,
         };
         self.ask(op, |done| match done {
             Done::ReviewPullRequest {
@@ -671,6 +797,32 @@ impl Remote {
             } => Some(ReviewPullRequest {
                 noun,
                 pr: pr.ok_or_else(|| note.unwrap_or_default()),
+                unread,
+            }),
+            _ => None,
+        })
+    }
+
+    pub(crate) fn list_pull_requests(
+        &mut self,
+        path: &Path,
+        filter: WirePrFilter,
+    ) -> io::Result<Receiver<io::Result<ReviewPullRequests>>> {
+        let op = Op::ListPullRequests {
+            path: path.to_path_buf(),
+            filter,
+        };
+        self.ask(op, |done| match done {
+            Done::ReviewPullRequests {
+                rows,
+                more,
+                note,
+                unread,
+            } => Some(ReviewPullRequests {
+                list: match note {
+                    Some(note) => Err(note),
+                    None => Ok(WirePrList { rows, more }),
+                },
                 unread,
             }),
             _ => None,
@@ -739,6 +891,27 @@ impl Remote {
         })
     }
 
+    /// The Server's defaults as its own file says, or, with `set`, after
+    /// writing them there.
+    pub(crate) fn server_defaults(
+        &mut self,
+        set: Option<crate::settings::ServerDefaults>,
+    ) -> io::Result<Receiver<io::Result<crate::settings::ServerDefaults>>> {
+        self.ask(Op::ServerDefaults { set }, |done| match done {
+            Done::ServerDefaults { defaults } => Some(defaults),
+            _ => None,
+        })
+    }
+
+    /// What the Server's machine has of the provider CLIs, or the update it
+    /// ran: the Server's `Done`, for the caller to read.
+    pub(crate) fn cli(
+        &mut self,
+        action: crate::protocol::CliAction,
+    ) -> io::Result<Receiver<io::Result<Done>>> {
+        self.ask(Op::Cli { action }, Some)
+    }
+
     /// Send `op` and answer its reply later, as `read` makes of it.
     fn ask<T: Send + 'static>(
         &mut self,
@@ -802,7 +975,7 @@ impl Remote {
     }
 
     fn send_command(&mut self, op: Op) -> Result<u64, WireError> {
-        if self.attachment.is_none() {
+        if self.available() && self.attachment.is_none() {
             return Err(WireError {
                 code: ErrorCode::Failed,
                 message: self.detached.clone(),
@@ -835,6 +1008,7 @@ impl Remote {
             Ok(attached) => attached,
             Err(error) => {
                 let most = match &self.attach.server {
+                    Endpoint::Unavailable => return None,
                     Endpoint::Local { .. } => {
                         self.detached = format!("no Ferrite server: {error}");
                         RETRY_MOST
@@ -929,11 +1103,7 @@ impl Remote {
                 };
                 if let Some((draft, prompt)) = self.starting.remove(&id) {
                     let result = result.and_then(|done| match done {
-                        Some(Done::Thread { thread }) => Ok(Bootstrapped {
-                            thread,
-                            refused_leave: None,
-                            applied_leave: false,
-                        }),
+                        Some(Done::Thread { thread }) => Ok(Bootstrapped { thread }),
                         _ => Err(io::Error::other("the server started no Thread")),
                     });
                     return vec![Arrival::Started(BootstrapResult {
@@ -1119,6 +1289,10 @@ fn attach_to(
     hello: ClientMessage,
 ) -> io::Result<link::Attached> {
     match server {
+        Endpoint::Unavailable => Err(io::Error::new(
+            io::ErrorKind::NotConnected,
+            "No environment selected",
+        )),
         Endpoint::Local { executable } => {
             crate::server::agent::ensure_running(store, executable)?;
             link::Client::attach(&link::address(store), hello)
@@ -1137,6 +1311,7 @@ fn hello(attach: &Attach) -> ClientMessage {
     }
     if attach.browser {
         capabilities.push(Capability::ConversationBrowser);
+        capabilities.push(Capability::BrowserDispatch);
     }
     capabilities.push(Capability::ParkedThreads);
     if attach.driven {
@@ -1153,14 +1328,17 @@ fn hello(attach: &Attach) -> ClientMessage {
 /// it, and it is never sent again.
 fn gone(reason: &str) -> WireError {
     WireError {
-        code: ErrorCode::Failed,
+        code: ErrorCode::Unconfirmed,
         message: format!("{reason}; this may not have arrived"),
     }
 }
 
 impl From<WireError> for io::Error {
     fn from(error: WireError) -> Self {
-        io::Error::other(error.message)
+        match error.code {
+            ErrorCode::Unsupported => io::Error::new(io::ErrorKind::Unsupported, error.message),
+            _ => io::Error::other(error.message),
+        }
     }
 }
 

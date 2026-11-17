@@ -24,6 +24,7 @@
 //! lifecycle ([`engine`]) and the row's look ([`card`]).
 
 pub mod browser_control;
+pub mod live_annotation;
 mod card;
 pub mod diagram;
 pub mod element;

@@ -33,7 +33,7 @@ fn short_reasoning_has_no_empty_disclosure(cx: &mut TestAppContext) {
 fn the_prompt_being_read_copies_and_resends_from_commands(cx: &mut TestAppContext) {
     let (mut core, fake) = cockpit("sent-prompt-actions", 1);
     let thread = core.threads()[0];
-    core.send(thread, "Run the focused checks".into());
+    let _ = core.send(thread, "Run the focused checks".into());
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     cx.simulate_resize(gpui::size(px(1000.), px(700.)));
     fake.streams.borrow()[0]
@@ -247,7 +247,7 @@ fn the_prompt_echo_reads_at_the_answer_size_at_every_reading_size(cx: &mut TestA
     use ferrite_core::settings::ReadingSize;
     let (mut core, fake) = cockpit("echo-reading-size", 1);
     let thread = core.threads()[0];
-    core.send(thread, "Check the build".into());
+    let _ = core.send(thread, "Check the build".into());
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     cx.simulate_resize(gpui::size(px(1000.), px(700.)));
     fake.streams.borrow()[0]
@@ -305,7 +305,7 @@ fn the_prompt_echo_reads_at_the_answer_size_at_every_reading_size(cx: &mut TestA
 fn transcript_rows_share_one_content_edge_and_the_gap_table(cx: &mut TestAppContext) {
     let (mut core, fake) = cockpit("transcript-spacing", 1);
     let thread = core.threads()[0];
-    core.send(thread, "Check the build".into());
+    let _ = core.send(thread, "Check the build".into());
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     for index in 0..2 {
         fake.streams.borrow()[0]
@@ -838,7 +838,7 @@ fn native_progress_follows_the_tail_and_metadata_refreshes_the_wall(cx: &mut Tes
     use ferrite_core::progress::{Phase, ProgressEvent};
     let (mut core, fake) = cockpit("native-progress", 1);
     let thread = core.threads()[0];
-    core.send(thread, "Inspect progress".into());
+    let _ = core.send(thread, "Inspect progress".into());
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new_thinking(core, cx));
     cx.simulate_resize(gpui::size(px(1000.), px(700.)));
     for index in 0..70 {
@@ -1036,7 +1036,7 @@ fn edited_files_are_in_the_panel_and_one_click_away(cx: &mut TestAppContext) {
 fn keyboard_cycles_tool_controls_and_enter_toggles_without_submitting(cx: &mut TestAppContext) {
     let (mut core, fake) = cockpit("tool-disclosure-keyboard", 1);
     let thread = core.threads()[0];
-    core.send(thread, "prior prompt".into());
+    let _ = core.send(thread, "prior prompt".into());
     bind_production_keys(cx);
     let (root, cx) = cx.add_window_view(|window, cx| {
         let view = cx.new(|cx| CockpitView::new(core, cx));
@@ -1089,7 +1089,7 @@ fn keyboard_cycles_tool_controls_and_enter_toggles_without_submitting(cx: &mut T
     cx.simulate_keystrokes("tab");
     view.read_with(cx, |view, _| {
         assert!(view.panes[0].tool_targeted("toolu_9"));
-        assert!(!view.history_available(0, Level::Transcript));
+        assert!(!view.history_available(0));
     });
     cx.simulate_keystrokes("enter");
     view.read_with(cx, |view, _| {
@@ -1259,6 +1259,199 @@ fn a_drag_in_a_scrolled_back_transcript_selects_the_rows_under_the_pointer(
     assert_eq!(clipboard(cx).as_deref(), Some(expected.join("\n").as_str()));
 }
 
+fn expanded_tool_group_for_wheel(
+    cx: &mut TestAppContext,
+    calls: usize,
+) -> (Entity<CockpitView>, &mut gpui::VisualTestContext) {
+    let (core, fake) = cockpit("tool-group-wheel", 1);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(1000.), px(900.)));
+    let stream = fake.streams.borrow()[0].clone();
+    for line in 0..30 {
+        stream
+            .send(SessionEvent::TextDelta {
+                text: format!("Earlier paragraph {line}.\n\n"),
+            })
+            .unwrap();
+    }
+    for call in 0..calls {
+        stream
+            .send(SessionEvent::ToolStarted {
+                id: format!("wheel-{call}"),
+                name: "Bash".into(),
+                input: serde_json::json!({ "command": format!("echo {call}") }),
+            })
+            .unwrap();
+        stream
+            .send(SessionEvent::ToolCompleted {
+                id: format!("wheel-{call}"),
+                output: call.to_string(),
+                is_error: false,
+                result: ferrite_core::ToolResult::Opaque,
+            })
+            .unwrap();
+    }
+    for line in 0..3 {
+        stream
+            .send(SessionEvent::TextDelta {
+                text: format!("Later paragraph {line}.\n\n"),
+            })
+            .unwrap();
+    }
+    tick(cx);
+    view.update(cx, |view, cx| {
+        view.panes[0].toggle_tool(&pane::DisclosureId::Group("wheel-0".into()));
+        cx.notify();
+    });
+    tick(cx);
+    (view, cx)
+}
+
+#[gpui::test]
+fn wheel_inside_a_short_expanded_tool_group_scrolls_the_transcript(cx: &mut TestAppContext) {
+    let (view, cx) = expanded_tool_group_for_wheel(cx, 2);
+    let scroll = view.read_with(cx, |view, cx| {
+        view.panes[0]
+            .transcript()
+            .unwrap()
+            .read(cx)
+            .scroll()
+            .clone()
+    });
+    let group = cx.debug_bounds("tool-group-members").unwrap();
+    let viewport = scroll.bounds();
+    assert!(group.top() > viewport.top() && group.bottom() < viewport.bottom());
+    assert!(cx.debug_bounds("tool-group-fade-top").is_none());
+    assert!(cx.debug_bounds("tool-group-fade-bottom").is_none());
+    assert!(scroll.offset().y < px(0.));
+    let before = scroll.list_state().logical_scroll_top();
+    cx.simulate_event(gpui::ScrollWheelEvent {
+        position: group.center(),
+        delta: gpui::ScrollDelta::Pixels(gpui::point(px(0.), px(48.))),
+        ..Default::default()
+    });
+    cx.run_until_parked();
+    let after = scroll.list_state().logical_scroll_top();
+    assert_ne!(
+        (after.item_ix, after.offset_in_item),
+        (before.item_ix, before.offset_in_item),
+        "wheel over a tool list without overflow must scroll the transcript"
+    );
+}
+
+#[gpui::test]
+fn wheel_inside_an_expanded_tool_group_only_scrolls_its_tools(cx: &mut TestAppContext) {
+    let (view, cx) = expanded_tool_group_for_wheel(cx, 40);
+    let scroll = view.read_with(cx, |view, cx| {
+        view.panes[0]
+            .transcript()
+            .unwrap()
+            .read(cx)
+            .scroll()
+            .clone()
+    });
+    let viewport = scroll.bounds();
+    let outside = gpui::point(viewport.left() + px(2.), viewport.center().y);
+    let wheel = |cx: &mut gpui::VisualTestContext, position, delta| {
+        cx.simulate_event(gpui::ScrollWheelEvent {
+            position,
+            delta: gpui::ScrollDelta::Pixels(gpui::point(px(0.), px(delta))),
+            ..Default::default()
+        });
+        cx.run_until_parked();
+    };
+    wheel(cx, outside, -100000.);
+    wheel(cx, outside, 60.);
+    let group = cx.debug_bounds("tool-group-members").unwrap();
+    assert!(
+        group.top() > viewport.top() && group.bottom() < viewport.bottom(),
+        "the entire tool list must be visible: {group:?} in {viewport:?}"
+    );
+    assert!(
+        scroll.offset().y < px(0.) && scroll.offset().y > -scroll.max_offset().y,
+        "the transcript must be able to scroll in either direction"
+    );
+    let outer_anchor = || {
+        let top = scroll.list_state().logical_scroll_top();
+        (top.item_ix, top.offset_in_item)
+    };
+    let anchor = outer_anchor();
+    let first_top =
+        |cx: &mut gpui::VisualTestContext| cx.debug_bounds("tool-row-wheel-0").unwrap().top();
+    let start = first_top(cx);
+    wheel(cx, group.center(), -48.);
+    assert!(first_top(cx) < start, "wheel down moves the tools");
+    assert_eq!(
+        outer_anchor(),
+        anchor,
+        "wheel inside the group must not move the transcript"
+    );
+    wheel(cx, group.center(), 48.);
+    assert_eq!(first_top(cx), start, "wheel up returns the tools");
+    assert_eq!(outer_anchor(), anchor);
+
+    wheel(cx, group.center(), -100000.);
+    let bottom = first_top(cx);
+    assert!(bottom < start, "the tool list has overflowing content");
+    assert_eq!(outer_anchor(), anchor);
+    wheel(cx, group.center(), -48.);
+    assert_eq!(
+        first_top(cx),
+        bottom,
+        "the tool list stays at its bottom edge"
+    );
+    assert_eq!(
+        outer_anchor(),
+        anchor,
+        "the bottom edge must not pass wheel events to the transcript"
+    );
+
+    let top_fade = cx.debug_bounds("tool-group-fade-top").unwrap().center();
+    wheel(cx, top_fade, 48.);
+    assert!(
+        first_top(cx) > bottom,
+        "the top fade still scrolls the tools"
+    );
+    assert_eq!(outer_anchor(), anchor);
+    wheel(cx, group.center(), 100000.);
+    assert_eq!(first_top(cx), start);
+    assert_eq!(outer_anchor(), anchor);
+    wheel(cx, group.center(), 48.);
+    assert_eq!(first_top(cx), start, "the tool list stays at its top edge");
+    assert_eq!(
+        outer_anchor(),
+        anchor,
+        "the top edge must not pass wheel events to the transcript"
+    );
+    let bottom_fade = cx.debug_bounds("tool-group-fade-bottom").unwrap().center();
+    wheel(cx, bottom_fade, -48.);
+    assert!(
+        first_top(cx) < start,
+        "the bottom fade still scrolls the tools"
+    );
+    assert_eq!(outer_anchor(), anchor);
+
+    let before_padding = first_top(cx);
+    wheel(
+        cx,
+        gpui::point(group.center().x, group.bottom() - px(1.)),
+        -48.,
+    );
+    assert_eq!(first_top(cx), before_padding);
+    assert_eq!(
+        outer_anchor(),
+        anchor,
+        "the group padding must not pass wheel events to the transcript"
+    );
+
+    wheel(cx, outside, 48.);
+    assert_ne!(
+        outer_anchor(),
+        anchor,
+        "wheel outside the tool list still scrolls the transcript"
+    );
+}
+
 /// The live row stands for the running turn's trailing work (`Running
 /// sleep`); a press opens that work's own rows above it, and shuts them
 /// again.
@@ -1314,7 +1507,7 @@ fn the_live_row_opens_the_work_it_stands_for(cx: &mut TestAppContext) {
 fn a_turn_heads_with_working_for_and_settles_into_its_fold(cx: &mut TestAppContext) {
     let (mut core, fake) = cockpit("turn-fold", 1);
     let thread = core.threads()[0];
-    core.send(thread, "Edit the file".into());
+    let _ = core.send(thread, "Edit the file".into());
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     hide_panel(&view, cx);
     cx.simulate_resize(gpui::size(px(1000.), px(700.)));
@@ -1359,7 +1552,7 @@ fn a_turn_heads_with_working_for_and_settles_into_its_fold(cx: &mut TestAppConte
     assert!(call.top() > fold.bottom() && call.bottom() < cx.debug_bounds("transcript-answer").unwrap().top());
     // The open state is the turn's: a next turn projects the rows again
     // and leaves it open.
-    view.update(cx, |view, _| view.cockpit.send(thread, "And again".into()));
+    let _ = view.update(cx, |view, _| view.cockpit.send(thread, "And again".into()));
     send(SessionEvent::TextDelta {
         text: "Again.\n\n".into(),
     });
@@ -1388,7 +1581,7 @@ fn a_turn_heads_with_working_for_and_settles_into_its_fold(cx: &mut TestAppConte
 fn a_hovered_fold_shows_its_turns_start_time(cx: &mut TestAppContext) {
     let (mut core, fake) = cockpit("turn-fold-time", 1);
     let thread = core.threads()[0];
-    core.send(thread, "Run it".into());
+    let _ = core.send(thread, "Run it".into());
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     hide_panel(&view, cx);
     cx.simulate_resize(gpui::size(px(1000.), px(700.)));
@@ -1426,7 +1619,7 @@ fn a_hovered_fold_shows_its_turns_start_time(cx: &mut TestAppContext) {
 fn a_long_prompt_clamps_under_show_full_message(cx: &mut TestAppContext) {
     let (mut core, _fake) = cockpit("long-prompt", 1);
     let thread = core.threads()[0];
-    core.send(thread, (0..12).map(|n| format!("Line {n}\n")).collect());
+    let _ = core.send(thread, (0..12).map(|n| format!("Line {n}\n")).collect());
     let (_view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     cx.simulate_resize(gpui::size(px(1000.), px(700.)));
     tick(cx);

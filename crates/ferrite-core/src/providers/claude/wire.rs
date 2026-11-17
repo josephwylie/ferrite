@@ -18,14 +18,15 @@ pub(super) fn input_content(
     skills: &super::skill_mentions::Skills,
     cwd: Option<&std::path::Path>,
 ) -> Vec<serde_json::Value> {
+    use crate::attachment::{
+        INLINE_TOTAL as INLINE_ATTACHMENT_LIMIT, NATIVE_LIMIT as ATTACHMENT_LIMIT,
+    };
     use base64::Engine;
     use std::io::Read;
-    const ATTACHMENT_LIMIT: u64 = 5 * 1024 * 1024;
-    const INLINE_ATTACHMENT_LIMIT: u64 = 20 * 1024 * 1024;
     let mut content = skills.notes(text);
-    content.push(serde_json::json!({"type": "text", "text": text}));
+    content.push(serde_json::json!({"type": "text", "text": crate::replies::inert(text)}));
     let mut inline_bytes = 0;
-    for path in crate::prompt_files::paths(text, cwd) {
+    for path in crate::prompt_files::paths(&crate::replies::authored(text), cwd) {
         let Some((block, media_type)) = crate::prompt_files::image_type(&path)
             .map(|media_type| ("image", media_type))
             .or_else(|| {
@@ -1625,6 +1626,46 @@ mod tests {
     }
 
     #[test]
+    fn quoted_file_syntax_is_reference_text_not_input() {
+        use crate::replies::{compose, Reply};
+        let dir = std::env::temp_dir().join(format!("ferrite-claude-inert-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("pic.png"), b"fixture").unwrap();
+        std::fs::write(dir.join("doc.pdf"), b"fixture").unwrap();
+        let prompt = compose(
+            &[Reply::new("see @pic.png and @doc.pdf", "")],
+            "what is this?",
+        );
+        let blocks = input_content(&prompt, &Default::default(), Some(&dir));
+        assert_eq!(blocks.len(), 1);
+        assert_eq!(
+            blocks[0]["text"],
+            "> see @\u{2060}pic.png and @\u{2060}doc.pdf\n\nwhat is this?"
+        );
+
+        let trailer = crate::prompt_files::compose(&prompt, &[dir.join("pic.png")]);
+        let blocks = input_content(&trailer, &Default::default(), Some(&dir));
+        assert_eq!(blocks.len(), 2, "an explicit attachment still rides");
+        assert_eq!(blocks[1]["type"], "image");
+
+        let bare = crate::prompt_files::compose(
+            &compose(&[Reply::new("see @pic.png", "")], ""),
+            &[dir.join("doc.pdf")],
+        );
+        let blocks = input_content(&bare, &Default::default(), Some(&dir));
+        assert_eq!(blocks.len(), 2, "a quote and an attachment, no typed words");
+        assert_eq!(blocks[1]["type"], "document");
+
+        let own = compose(&[Reply::new("see @pic.png", "")], "and @doc.pdf");
+        assert_eq!(
+            input_content(&own, &Default::default(), Some(&dir)).len(),
+            2
+        );
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
     fn browser_annotation_native_image_reaches_claude() {
         use crate::browser::{Document, TabId};
         use crate::browser_annotations::{self, Capture, ElementContext, Rect, Selection, Viewport};
@@ -1687,7 +1728,7 @@ mod tests {
         );
         assert_eq!(
             crate::prompt_files::paths(&text, None),
-            [annotation.original().to_path_buf()],
+            [annotation.original().unwrap().to_path_buf()],
             "page text must never become a filesystem image reference"
         );
         assert_eq!(blocks[1]["type"], "image");
@@ -1877,7 +1918,7 @@ mod tests {
     fn variant(event: &SessionEvent) -> Option<&'static str> {
         Some(match event {
             // Shared progress is proved through the public Session replay in
-            // tests/provider_progress.rs, including captured native messages.
+            // tests/it/provider_progress.rs, including captured native messages.
             SessionEvent::ReasoningSummaryPart { .. }
             | SessionEvent::Progress { .. }
             | SessionEvent::ToolOutputDelta { .. }
@@ -1896,7 +1937,7 @@ mod tests {
             SessionEvent::DecisionRequested { .. } => "DecisionRequested",
             SessionEvent::TurnEnded { .. } => "TurnEnded",
             // No committed capture has one yet; proved through the public
-            // Session replay in tests/provider_progress.rs.
+            // Session replay in tests/it/provider_progress.rs.
             SessionEvent::ToolSummary { .. } => return None,
             // Proved by `a_mode_denial_is_a_refusal_not_a_failure`, on a capture.
             SessionEvent::ToolDenied { .. } => return None,
@@ -1935,8 +1976,10 @@ mod tests {
             // Read from `init` by the Activity decoder; proved on a capture there.
             SessionEvent::Handshake { .. } => return None,
             SessionEvent::HookRan { .. } => "HookRan",
+            // Answered by the control reader, proved in tests/it/contract_native_controls.rs.
+            SessionEvent::ControlRefused { .. } => return None,
             // A stateful stream read by the activity decoder (`drafts`),
-            // proved by the show-visual capture in tests/claude_session.rs.
+            // proved by the show-visual capture in tests/it/claude_session.rs.
             SessionEvent::ToolDraft { .. } => return None,
         })
     }

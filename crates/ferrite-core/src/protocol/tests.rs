@@ -245,6 +245,7 @@ fn state() -> ThreadState {
         thread: ThreadId::new(4),
         generation: 3,
         provider: Provider::Claude,
+        project: None,
         model: Some("sonnet".into()),
         effort: Some("high".into()),
         title: Some("Fix the parser".into()),
@@ -257,6 +258,7 @@ fn state() -> ThreadState {
         session_project_root: None,
         first_prompt_sent: true,
         has_prompt_history: true,
+        resume_lost: false,
         starting: false,
         working: true,
         tuning: false,
@@ -272,6 +274,7 @@ fn state() -> ThreadState {
         }],
         models: vec![model("sonnet")],
         permission_mode: Some("default".into()),
+        sandbox: None,
         permission_modes: vec![WirePermissionMode {
             value: "default".into(),
             label: "Default".into(),
@@ -298,6 +301,16 @@ fn live(seq: u64, live: Live) -> Sample {
     input(seq, WireInput::Live(live))
 }
 
+fn server_defaults() -> crate::settings::ServerDefaults {
+    crate::settings::ServerDefaults {
+        claude_permission_mode: Some("plan".into()),
+        codex_approval_policy: "on-request".into(),
+        codex_sandbox: Some("workspace-write".into()),
+        placeholder_suggestions: true,
+        factory_tasks_at_once: 3,
+    }
+}
+
 fn command(id: u64, op: Op) -> Sample {
     Sample::Client(ClientMessage::Command(Command { id, op }))
 }
@@ -310,6 +323,47 @@ fn samples() -> Vec<(&'static str, Sample)> {
         checkout: "/src/ferrite".into(),
     };
     vec![
+        (
+            "hello_browser_dispatch",
+            Sample::Client(ClientMessage::Hello {
+                generation: 1,
+                client: Peer { name: "ferrite".into(), version: "0.9.0".into() },
+                capabilities: vec![Capability::ConversationBrowser, Capability::BrowserDispatch],
+            }),
+        ),
+        (
+            "browser_dispatch",
+            Sample::Client(ClientMessage::Command(Command {
+                id: 9,
+                op: Op::BrowserDispatch {
+                    request: 2, boot_id: "b-1".into(), thread, owner: crate::browser::Owner { window: 3, epoch: 1 },
+                    document: crate::browser::Document { tab: crate::browser::TabId(5), generation: 1 },
+                    revision: 0,
+                },
+            })),
+        ),
+        (
+            "browser_dispatch_granted",
+            Sample::Server(ServerMessage::Reply {
+                id: 9, ok: Some(Done::BrowserDispatch { remaining_ms: 24000 }), error: None,
+            }),
+        ),
+        (
+            "browser_request_dispatch",
+            Sample::Server(ServerMessage::BrowserRequest {
+                request: 2, thread, owner: crate::browser::Owner { window: 3, epoch: 1 },
+                document: crate::browser::Document { tab: crate::browser::TabId(5), generation: 1 },
+                revision: 0, control: crate::browser::Control::Observe, dispatch: Some("b-1".into()),
+            }),
+        ),
+        (
+            "browser_request_legacy",
+            Sample::Server(ServerMessage::BrowserRequest {
+                request: 2, thread, owner: crate::browser::Owner { window: 3, epoch: 1 },
+                document: crate::browser::Document { tab: crate::browser::TabId(5), generation: 1 },
+                revision: 0, control: crate::browser::Control::Observe, dispatch: None,
+            }),
+        ),
         (
             "hello",
             Sample::Client(ClientMessage::Hello {
@@ -631,6 +685,7 @@ fn samples() -> Vec<(&'static str, Sample)> {
             ),
         ),
         ("command_interrupt", command(7, Op::Interrupt { thread })),
+        ("command_start_fresh", command(52, Op::StartFresh { thread })),
         (
             "command_stop_subagent",
             command(
@@ -1253,6 +1308,82 @@ fn samples() -> Vec<(&'static str, Sample)> {
         ),
         ("command_settings_changed", command(23, Op::SettingsChanged)),
         (
+            "command_server_defaults",
+            command(230, Op::ServerDefaults { set: None }),
+        ),
+        (
+            "command_server_defaults_set",
+            command(
+                231,
+                Op::ServerDefaults {
+                    set: Some(server_defaults()),
+                },
+            ),
+        ),
+        (
+            "command_cli_versions",
+            command(
+                232,
+                Op::Cli {
+                    action: CliAction::Versions,
+                },
+            ),
+        ),
+        (
+            "command_cli_update",
+            command(
+                233,
+                Op::Cli {
+                    action: CliAction::Update {
+                        provider: crate::store::Provider::Codex,
+                    },
+                },
+            ),
+        ),
+        (
+            "reply_server_defaults",
+            Sample::Server(ServerMessage::Reply {
+                id: 230,
+                ok: Some(Done::ServerDefaults {
+                    defaults: server_defaults(),
+                }),
+                error: None,
+            }),
+        ),
+        (
+            "reply_clis",
+            Sample::Server(ServerMessage::Reply {
+                id: 232,
+                ok: Some(Done::Clis {
+                    clis: vec![CliReport {
+                        provider: crate::store::Provider::Claude,
+                        binary: Some(CliBinary {
+                            version: "2.1.259".into(),
+                            path: "/opt/box/bin/claude".into(),
+                        }),
+                        status: Some(CliStatus::UpToDate {
+                            current: "2.1.259".into(),
+                        }),
+                    }],
+                }),
+                error: None,
+            }),
+        ),
+        (
+            "reply_cli_updated",
+            Sample::Server(ServerMessage::Reply {
+                id: 233,
+                ok: Some(Done::CliUpdated {
+                    provider: crate::store::Provider::Codex,
+                    binary: CliBinary {
+                        version: "0.160.0".into(),
+                        path: "/opt/box/bin/codex".into(),
+                    },
+                }),
+                error: None,
+            }),
+        ),
+        (
             "command_search_files",
             command(
                 24,
@@ -1267,6 +1398,29 @@ fn samples() -> Vec<(&'static str, Sample)> {
             command(25, Op::Restart { when: When::Idle }),
         ),
         ("command_stop", command(26, Op::Stop { when: When::Now })),
+        ("command_attachment_begin", command(310, Op::Attachment { request: crate::attachment_transfer::Request::Begin { name: "shot.png".into(), size: 3 } })),
+        ("command_attachment_chunk", command(311, Op::Attachment { request: crate::attachment_transfer::Request::Chunk { upload: 1, offset: 0, data: "YWJj".into() } })),
+        ("command_attachment_finish", command(312, Op::Attachment { request: crate::attachment_transfer::Request::Finish { upload: 1, sha256: "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad".into() } })),
+        ("command_attachment_cancel", command(313, Op::Attachment { request: crate::attachment_transfer::Request::Cancel { upload: 1 } })),
+        ("command_attachment_read", command(314, Op::Attachment { request: crate::attachment_transfer::Request::Read { path: "/store/attachments/hash/shot.png".into(), offset: 0 } })),
+        ("reply_attachment_begin", Sample::Server(ServerMessage::Reply { id: 310, ok: Some(Done::Attachment { reply: crate::attachment_transfer::Reply::Begun { upload: 1 } }), error: None })),
+        ("reply_attachment_chunk", Sample::Server(ServerMessage::Reply { id: 311, ok: Some(Done::Attachment { reply: crate::attachment_transfer::Reply::Written { offset: 3 } }), error: None })),
+        ("reply_attachment_finish", Sample::Server(ServerMessage::Reply { id: 312, ok: Some(Done::Attachment { reply: crate::attachment_transfer::Reply::Retained(crate::attachment_transfer::Retained { path: "/store/attachments/hash/shot.png".into(), sha256: "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad".into(), size: 3 }) }), error: None })),
+        ("reply_attachment_cancel", Sample::Server(ServerMessage::Reply { id: 313, ok: Some(Done::Attachment { reply: crate::attachment_transfer::Reply::Cancelled }), error: None })),
+        ("reply_attachment_read", Sample::Server(ServerMessage::Reply { id: 314, ok: Some(Done::Attachment { reply: crate::attachment_transfer::Reply::Bytes { data: "YWJj".into(), size: 3 } }), error: None })),
+        ("command_changes_read", command(315, Op::Changes { request: crate::changes::Request::Read { root: "/workspace".into(), scope: crate::changes::Scope::Against("main".into()) } })),
+        ("command_changes_stage", command(316, Op::Changes { request: crate::changes::Request::SetStaged { root: "/workspace".into(), path: "a.rs".into(), staged: true } })),
+        ("reply_changes_read", Sample::Server(ServerMessage::Reply { id: 315, ok: Some(Done::Changes { reply: crate::changes::Reply::Read { files: vec![], branches: vec!["main".into()], staged: vec!["a.rs".into()] } }), error: None })),
+        ("reply_changes_stage", Sample::Server(ServerMessage::Reply { id: 316, ok: Some(Done::Changes { reply: crate::changes::Reply::Staged }), error: None })),
+        ("command_file_operation_read", command(301, Op::FileOperation {
+            request: crate::file_operations::Request::Read { root: "/workspace".into(), path: "/workspace/main.rs".into() },
+        })),
+        ("command_file_operation_write", command(302, Op::FileOperation {
+            request: crate::file_operations::Request::Write { root: "/workspace".into(), path: "/workspace/main.rs".into(), text: "edited".into(), expected: Some(crate::file_operations::fingerprint(b"original")) },
+        })),
+        ("command_file_operation_snapshot", command(303, Op::FileOperation {
+            request: crate::file_operations::Request::Snapshot { root: "/workspace".into(), directories: vec!["/workspace".into()], search: true },
+        })),
         (
             "command_list_dir",
             command(
@@ -1358,6 +1512,7 @@ fn samples() -> Vec<(&'static str, Sample)> {
                 46,
                 Op::ReviewPullRequest {
                     path: "/home/me/src/ferrite".into(),
+                    number: None,
                 },
             ),
         ),
@@ -1584,6 +1739,21 @@ fn samples() -> Vec<(&'static str, Sample)> {
                 error: None,
             }),
         ),
+        ("reply_file_operation_text", Sample::Server(ServerMessage::Reply {
+            id: 301, ok: Some(Done::FileOperation { reply: crate::file_operations::Reply::Text { text: "original".into(), fingerprint: crate::file_operations::fingerprint(b"original") } }), error: None,
+        })),
+        ("reply_file_operation_written", Sample::Server(ServerMessage::Reply {
+            id: 302, ok: Some(Done::FileOperation { reply: crate::file_operations::Reply::Written { fingerprint: crate::file_operations::fingerprint(b"edited") } }), error: None,
+        })),
+        ("reply_file_operation_conflict", Sample::Server(ServerMessage::Reply {
+            id: 303, ok: Some(Done::FileOperation { reply: crate::file_operations::Reply::Conflict }), error: None,
+        })),
+        ("reply_file_operation_binary", Sample::Server(ServerMessage::Reply {
+            id: 304, ok: Some(Done::FileOperation { reply: crate::file_operations::Reply::Binary }), error: None,
+        })),
+        ("reply_file_operation_snapshot", Sample::Server(ServerMessage::Reply {
+            id: 305, ok: Some(Done::FileOperation { reply: crate::file_operations::Reply::Snapshot(crate::file_operations::Snapshot::default()) }), error: None,
+        })),
         (
             "reply_listing",
             Sample::Server(ServerMessage::Reply {
@@ -1776,6 +1946,12 @@ fn samples() -> Vec<(&'static str, Sample)> {
                         title: "Vendor herdr-reviewr".into(),
                         url: "https://github.com/josephwylie/ferrite/pull/118".into(),
                         body: "The Review slot's core.".into(),
+                        author: None,
+                        author_avatar_url: None,
+                        updated_at: None,
+                        changed_files: None,
+                        additions: None,
+                        deletions: None,
                         state: WirePrState::Open,
                         draft: false,
                         head: "vendor/reviewr".into(),
@@ -1785,17 +1961,24 @@ fn samples() -> Vec<(&'static str, Sample)> {
                         checks: vec![WireCheck {
                             name: "macOS (Metal)".into(),
                             status: WireCheckStatus::Running,
+                            url: None,
                         }],
                         comments: vec![WirePrComment {
+                            id: None,
+                            author_is_bot: false,
+                            place: None,
                             kind: WirePrCommentKind::Finding,
                             author: "reviewer".into(),
                             anchor: "src/a.rs:3-4".into(),
+                            verdict: None,
                             body: "Off by one?".into(),
                             snippet: Some("@@ -1,4 +1,4 @@\n-a\n+b".into()),
                             created_at: "2026-10-15T09:00:00Z".into(),
                             resolved: false,
                             outdated: false,
                             replies: vec![WireReply {
+                                id: None,
+                                author_is_bot: false,
                                 author: "joseph".into(),
                                 body: "Fixed.".into(),
                                 created_at: "2026-10-15T10:00:00Z".into(),
@@ -2102,6 +2285,7 @@ fn samples() -> Vec<(&'static str, Sample)> {
                 action: crate::drive::Action::Click(crate::drive::Click {
                     at: crate::drive::Target::Selector("settings-close".into()),
                     press: crate::drive::Press::Double,
+                    command: false,
                 }),
             }),
         ),
@@ -2604,6 +2788,33 @@ fn an_unknown_enum_value_decodes_to_unknown() {
 }
 
 #[test]
+fn a_cli_status_from_a_newer_server_decodes_to_unknown() {
+    let report: CliReport = serde_json::from_str(
+        r#"{"provider":"claude","status":{"kind":"quarantined","since":"yesterday"}}"#,
+    )
+    .unwrap();
+    assert_eq!(report.status, Some(CliStatus::Unknown));
+    assert_eq!(report.status.and_then(CliStatus::known), None);
+}
+
+#[test]
+fn server_defaults_a_server_leaves_out_take_their_defaults() {
+    let sparse: crate::settings::ServerDefaults =
+        serde_json::from_str(r#"{"factory_tasks_at_once":5}"#).unwrap();
+    assert_eq!(
+        sparse,
+        crate::settings::ServerDefaults {
+            factory_tasks_at_once: 5,
+            ..Default::default()
+        }
+    );
+    assert_eq!(
+        serde_json::from_str::<crate::settings::ServerDefaults>("{}").unwrap(),
+        Default::default()
+    );
+}
+
+#[test]
 fn an_unknown_message_type_is_ignored() {
     let message: ServerMessage = decode(&tolerance("unknown_message")).unwrap();
     assert_eq!(message, ServerMessage::Unknown);
@@ -2941,4 +3152,20 @@ fn review_diff_names_only_what_an_older_server_reads() {
     });
     assert_eq!(Op::review_diff(path, &run), None);
     assert_eq!(Op::review_diff(path, &Read::LastTurn), None);
+}
+
+/// A Server that names the sandbox its provider announced sends it with the
+/// Thread; an older one sends none, and the card then claims none.
+#[test]
+fn a_threads_announced_sandbox_crosses_the_wire_and_may_be_absent() {
+    let mut said = state();
+    said.sandbox = Some("workspace-write".into());
+    let wire = serde_json::to_value(&said).unwrap();
+    assert_eq!(wire["sandbox"], "workspace-write");
+    let heard: ThreadState = serde_json::from_value(wire).unwrap();
+    assert_eq!(heard.sandbox.as_deref(), Some("workspace-write"));
+    let older = serde_json::to_value(state()).unwrap();
+    assert!(older.get("sandbox").is_none());
+    let heard: ThreadState = serde_json::from_value(older).unwrap();
+    assert_eq!(heard.sandbox, None);
 }

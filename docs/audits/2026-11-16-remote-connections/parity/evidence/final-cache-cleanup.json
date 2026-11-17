@@ -1,0 +1,14 @@
+{
+  "removed_rebuildable_library_test_units": [
+    "/Users/josephwylie/Desktop/Projects/ferrite-remote-connections/target/debug/build/ferrite-core/f685b260b9e9c835",
+    "/Users/josephwylie/Desktop/Projects/ferrite-remote-connections/target/debug/build/ferrite-cockpit/3a8ef45e234656df",
+    "/Users/josephwylie/Desktop/Projects/ferrite-remote-connections/target/debug/build/ferrite-pane/4f104c5d66b8870e",
+    "/Users/josephwylie/Desktop/Projects/ferrite-remote-connections/target/debug/build/ferrite-pane/8744a87a60cb9237",
+    "/Users/josephwylie/Desktop/Projects/ferrite-remote-connections/target/debug/build/ferrite-pane/698863ffe733c9c9"
+  ],
+  "production_binaries_retained": [
+    "target/debug/ferrite",
+    "target/debug/ferrited"
+  ],
+  "other_worktree_caches_touched": false
+}

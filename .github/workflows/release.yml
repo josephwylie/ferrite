@@ -1,7 +1,6 @@
 name: Release
 
-# A pushed v* tag builds the release binary on both first-class platforms
-# (CONTEXT.md) and attaches both archives to a GitHub Release for that tag.
+# A pushed v* tag publishes desktop installers and headless server archives.
 on:
   push:
     tags: ["v*"]
@@ -196,11 +195,48 @@ jobs:
           path: ${{ env.WINDOWS_INSTALLER }}
           if-no-files-found: error
 
+  server:
+    name: Server (${{ matrix.target }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: aarch64-apple-darwin
+            runner: macos-15
+          - target: x86_64-unknown-linux-gnu
+            runner: ubuntu-22.04
+          - target: aarch64-unknown-linux-gnu
+            runner: ubuntu-22.04-arm
+    env:
+      SERVER_TARGET: ${{ matrix.target }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Check server packaging
+        run: bash scripts/tests/package-server.sh
+      - name: Build server
+        run: |
+          test "$(rustc -vV | sed -n 's/^host: //p')" = "$SERVER_TARGET"
+          cargo build -p ferrite-core --bin ferrited --release
+      - name: Package server
+        id: package
+        run: |
+          archive="$(scripts/package-server.sh "${GITHUB_REF_NAME#v}" "$SERVER_TARGET")"
+          echo "archive=$archive" >> "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: server-${{ matrix.target }}
+          path: ${{ steps.package.outputs.archive }}
+          if-no-files-found: error
+
   release:
     name: Publish GitHub Release
     # Fan-in: exactly one job touches the release, so the builds cannot race
     # each other creating it.
-    needs: [macos, windows]
+    needs: [macos, windows, server]
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -214,6 +250,13 @@ jobs:
         run: |
           tag="${{ github.ref_name }}"
           assets=("$MACOS_INSTALLER" "$WINDOWS_INSTALLER")
+          server_assets=(
+            "ferrited-${tag#v}-aarch64-apple-darwin.tar.gz"
+            "ferrited-${tag#v}-x86_64-unknown-linux-gnu.tar.gz"
+            "ferrited-${tag#v}-aarch64-unknown-linux-gnu.tar.gz"
+          )
+          sha256sum "${server_assets[@]}" > SHA256SUMS
+          assets+=("${server_assets[@]}" SHA256SUMS)
           # Checked first, so a create failure stays a create failure — an
           # unconditional fallback would bury a 5xx or token error under
           # upload's "release not found".

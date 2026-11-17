@@ -534,6 +534,7 @@ impl Element for InlineFlow {
                                             } else if let Ok(mut state) = state.lock() {
                                                 state.selection = None;
                                             }
+                                            projection.paint_retained_atomic(&view.read(cx).selection_adapter.handle(), ordinal, window, cx);
                                             view.update(cx, |view, _| {
                                                 view.selection_adapter
                                                     .register_projection(projection)

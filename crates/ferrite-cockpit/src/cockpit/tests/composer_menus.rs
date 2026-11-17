@@ -62,8 +62,8 @@ fn disabled_placeholder_suggestions_are_hidden_and_tab_does_not_accept_them(
 fn history_arrows_only_replace_the_composer_and_restore_the_exact_draft(cx: &mut TestAppContext) {
     let (mut core, fake) = cockpit("prompt-history-view", 1);
     let thread = core.threads()[0];
-    core.send(thread, "one".into());
-    core.send(thread, "two".into());
+    let _ = core.send(thread, "one".into());
+    let _ = core.send(thread, "two".into());
     fake.streams.borrow()[0]
         .send(SessionEvent::TurnEnded {
             outcome: ferrite_core::TurnOutcome::Completed,
@@ -130,8 +130,8 @@ fn history_arrows_only_replace_the_composer_and_restore_the_exact_draft(cx: &mut
 fn recalling_a_slash_prompt_does_not_open_its_menu_until_a_real_edit(cx: &mut TestAppContext) {
     let (mut core, _) = cockpit("prompt-history-slash", 1);
     let thread = core.threads()[0];
-    core.send(thread, "older".into());
-    core.send(thread, "/".into());
+    let _ = core.send(thread, "older".into());
+    let _ = core.send(thread, "/".into());
     bind_production_keys(cx);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     tick(cx);
@@ -165,15 +165,11 @@ fn recalling_a_slash_prompt_does_not_open_its_menu_until_a_real_edit(cx: &mut Te
 fn menu_and_decision_states_disarm_history_before_their_arrows_dispatch(cx: &mut TestAppContext) {
     let (mut core, fake) = cockpit("prompt-history-precedence", 1);
     let thread = core.threads()[0];
-    core.send(thread, "history".into());
+    let _ = core.send(thread, "history".into());
     bind_production_keys(cx);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     tick(cx);
-    cx.update(|window, cx| {
-        assert!(view
-            .read(cx)
-            .history_available(0, view.read(cx).level_now(window)))
-    });
+    view.read_with(cx, |view, _| assert!(view.history_available(0)));
 
     view.update(cx, |view, cx| {
         view.panes[0]
@@ -182,11 +178,7 @@ fn menu_and_decision_states_disarm_history_before_their_arrows_dispatch(cx: &mut
     });
     tick(cx);
     view.read_with(cx, |view, _| assert!(view.popover.is_some()));
-    cx.update(|window, cx| {
-        assert!(!view
-            .read(cx)
-            .history_available(0, view.read(cx).level_now(window)))
-    });
+    view.read_with(cx, |view, _| assert!(!view.history_available(0)));
     cx.simulate_keystrokes("up");
     assert_eq!(composer_text(&view, cx), "/", "menu owns the arrow");
 
@@ -200,11 +192,7 @@ fn menu_and_decision_states_disarm_history_before_their_arrows_dispatch(cx: &mut
         .send(decision("history-decision"))
         .unwrap();
     tick(cx);
-    cx.update(|window, cx| {
-        assert!(!view
-            .read(cx)
-            .history_available(0, view.read(cx).level_now(window)))
-    });
+    view.read_with(cx, |view, _| assert!(!view.history_available(0)));
     cx.simulate_keystrokes("up");
     assert_eq!(composer_text(&view, cx), "draft", "Decision owns its state");
 }
@@ -955,15 +943,11 @@ fn a_press_on_the_transcript_dismisses_the_open_menu(cx: &mut TestAppContext) {
 }
 
 /// #23: while a Decision pends at L1 the keyboard stays in the Composer
-/// — the input is live (typing queues, since the turn is running) and
-/// the empty line makes y the keycap's answer.
+/// — the input is live (typing queues, since the turn is running).
 #[gpui::test]
-fn a_pending_decision_keeps_the_composer_live_and_an_empty_line_answers(cx: &mut TestAppContext) {
+fn a_pending_decision_keeps_the_composer_live(cx: &mut TestAppContext) {
     let (core, fake) = cockpit("decision-live", 1);
     bind_production_keys(cx);
-    cx.update(|cx| {
-        cx.bind_keys([KeyBinding::new("y", Allow, Some("Decision"))]);
-    });
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     cx.simulate_resize(gpui::size(px(1000.), px(700.)));
     tick(cx);
@@ -994,8 +978,7 @@ fn a_pending_decision_keeps_the_composer_live_and_an_empty_line_answers(cx: &mut
     });
 
     // The input is still live: typing lands, enter queues behind the
-    // turn. (The first key of an empty line is where y/n/a mean their
-    // keycaps, so the sentence starts past them.)
+    // turn.
     cx.simulate_input("fix the tests too");
     cx.simulate_keystrokes("enter");
     tick(cx);
@@ -1012,57 +995,6 @@ fn a_pending_decision_keeps_the_composer_live_and_an_empty_line_answers(cx: &mut
                 .and_then(|open| open.pending())
                 .is_some(),
             "typing answered nothing"
-        );
-    });
-
-    // Emptied, y is the keycap's answer.
-    cx.simulate_keystrokes("y");
-    cx.run_until_parked();
-    view.read_with(cx, |view, _| {
-        assert!(
-            view.cockpit
-                .thread(thread)
-                .and_then(|open| open.pending())
-                .is_none(),
-            "y on the empty line answered the Decision"
-        );
-    });
-}
-
-/// The other half of the y/n/a rule: with text on the line they are
-/// letters — an operator half-way through a word keeps typing it.
-#[gpui::test]
-fn the_answer_keys_stay_letters_while_the_line_holds_text(cx: &mut TestAppContext) {
-    let (core, fake) = cockpit("decision-letters", 1);
-    bind_production_keys(cx);
-    cx.update(|cx| {
-        cx.bind_keys([KeyBinding::new("y", Allow, Some("Decision"))]);
-    });
-    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
-    cx.simulate_resize(gpui::size(px(1000.), px(700.)));
-    tick(cx);
-    let thread = view.read_with(cx, |view, _| view.panes[0].thread().unwrap());
-    fake.streams.borrow()[0]
-        .send(decision("perm_type"))
-        .unwrap();
-    tick(cx);
-
-    cx.simulate_input("wait");
-    cx.simulate_keystrokes("y");
-    cx.run_until_parked();
-
-    assert_eq!(
-        composer_text(&view, cx),
-        "waity",
-        "y typed instead of answering"
-    );
-    view.read_with(cx, |view, _| {
-        assert!(
-            view.cockpit
-                .thread(thread)
-                .and_then(|open| open.pending())
-                .is_some(),
-            "the Decision is still waiting"
         );
     });
 }

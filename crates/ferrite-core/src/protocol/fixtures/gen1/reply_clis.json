@@ -1,0 +1,1 @@
+{"type":"reply","id":232,"ok":{"kind":"clis","clis":[{"provider":"claude","binary":{"version":"2.1.259","path":"/opt/box/bin/claude"},"status":{"kind":"up_to_date","current":"2.1.259"}}]}}

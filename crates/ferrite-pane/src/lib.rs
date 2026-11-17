@@ -4,7 +4,10 @@ pub mod annotation_editor;
 mod attachments;
 pub mod composer;
 pub mod decision;
+pub mod details;
+mod draft_files;
 pub mod file_links;
+pub mod link_target;
 pub mod find;
 pub mod image_viewer;
 pub mod line;
@@ -29,10 +32,6 @@ mod tests {
             ("lib.rs", include_str!("lib.rs")),
             ("pane.rs", include_str!("pane.rs")),
             ("pane/text.rs", include_str!("pane/text.rs")),
-            (
-                "pane/compact_composer.rs",
-                include_str!("pane/compact_composer.rs"),
-            ),
             ("pane/composer.rs", include_str!("pane/composer.rs")),
             (
                 "pane/background_work.rs",
@@ -52,6 +51,7 @@ mod tests {
             ("attachments.rs", include_str!("attachments.rs")),
             ("image_viewer.rs", include_str!("image_viewer.rs")),
             ("decision.rs", include_str!("decision.rs")),
+            ("details.rs", include_str!("details.rs")),
             ("preview.rs", include_str!("preview.rs")),
             ("prompt_drop.rs", include_str!("prompt_drop.rs")),
             ("file_links.rs", include_str!("file_links.rs")),

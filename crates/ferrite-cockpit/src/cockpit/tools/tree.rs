@@ -14,6 +14,8 @@ const HIDDEN: &[&str] = &[".git"];
 const NOT_SEARCHED: &[&str] = &[".git", "target", "node_modules", ".worktrees"];
 /// The most files the filter looks through.
 const SEARCH_LIMIT: usize = 20_000;
+/// The most rows the tree draws.
+const ROW_LIMIT: usize = 1_000;
 
 /// What git says of a path (`git status`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -40,6 +42,13 @@ pub(crate) struct Row {
     pub status: Option<Status>,
 }
 
+/// The rows to draw, and what they leave out.
+pub(crate) struct Listing {
+    pub rows: Vec<Row>,
+    /// Why the rows are not everything there is, for the tree to say.
+    pub note: Option<String>,
+}
+
 pub(crate) struct FileTree {
     root: PathBuf,
     open: HashSet<PathBuf>,
@@ -47,32 +56,104 @@ pub(crate) struct FileTree {
     listed: RefCell<HashMap<PathBuf, Vec<Entry>>>,
     status: HashMap<PathBuf, Status>,
     filter: String,
+    remote: Option<RemoteSnapshot>,
+}
+
+struct RemoteSnapshot {
+    files: Vec<Entry>,
+    note: Option<String>,
 }
 
 impl FileTree {
     pub(crate) fn new(root: PathBuf) -> Self {
-        let mut tree = Self {
+        Self {
             root,
             open: HashSet::new(),
             listed: RefCell::default(),
             status: HashMap::new(),
             filter: String::new(),
-        };
-        tree.refresh();
+            remote: None,
+        }
+    }
+
+    pub(crate) fn remote(root: PathBuf) -> Self {
+        let mut tree = Self::new(root);
+        tree.remote = Some(RemoteSnapshot {
+            files: Vec::new(),
+            note: Some("Loading remote files…".into()),
+        });
         tree
+    }
+
+    pub(crate) fn remote_request(&self) -> (Vec<PathBuf>, bool) {
+        let mut directories: Vec<_> = self.open.iter().cloned().collect();
+        directories.sort();
+        directories.insert(0, self.root.clone());
+        (directories, !self.filter.trim().is_empty())
+    }
+
+    pub(crate) fn set_remote(
+        &mut self,
+        result: Result<ferrite_core::file_operations::Snapshot, String>,
+    ) {
+        let Some(remote) = &mut self.remote else {
+            return;
+        };
+        match result {
+            Ok(snapshot) => {
+                let convert = |entry: ferrite_core::file_operations::Entry| Entry {
+                    path: entry.path,
+                    name: entry.name,
+                    dir: entry.directory,
+                };
+                *self.listed.borrow_mut() = snapshot
+                    .directories
+                    .into_iter()
+                    .map(|dir| (dir.path, dir.entries.into_iter().map(convert).collect()))
+                    .collect();
+                remote.files = snapshot.files.into_iter().map(convert).collect();
+                remote.note = snapshot.truncated.then(|| {
+                    "Some remote files were omitted. Collapse folders or narrow the workspace."
+                        .into()
+                });
+                self.status = snapshot
+                    .status
+                    .into_iter()
+                    .filter_map(|(path, status)| {
+                        use ferrite_core::file_operations::Status as RemoteStatus;
+                        let status = match status {
+                            RemoteStatus::Modified => Status::Modified,
+                            RemoteStatus::Added => Status::Added,
+                            RemoteStatus::Deleted => Status::Deleted,
+                            RemoteStatus::Unknown => return None,
+                        };
+                        Some((self.root.join(path), status))
+                    })
+                    .collect();
+            }
+            Err(error) => remote.note = Some(error),
+        }
     }
 
     pub(crate) fn root(&self) -> &Path {
         &self.root
     }
 
-    /// Read git's word on every path again, and every open folder afresh.
+    /// Read every open folder afresh.
     pub(crate) fn refresh(&mut self) {
-        self.listed.borrow_mut().clear();
-        self.status = git_status(&self.root)
-            .into_iter()
-            .map(|(path, status)| (self.root.join(path), status))
-            .collect();
+        if self.remote.is_none() {
+            self.listed.borrow_mut().clear();
+        }
+    }
+
+    /// What `git status` says under `root`, to be read off the UI thread and
+    /// handed to `set_status`.
+    pub(crate) fn read_status(root: &Path) -> Vec<(PathBuf, Status)> {
+        git_status(root)
+    }
+
+    pub(crate) fn set_status(&mut self, status: Vec<(PathBuf, Status)>) {
+        self.status = status.into_iter().map(|(path, status)| (self.root.join(path), status)).collect();
     }
 
     pub(crate) fn set_filter(&mut self, filter: String) {
@@ -104,15 +185,37 @@ impl FileTree {
 
     /// The rows to draw: the tree as the open folders make it, or — while
     /// the filter holds words — the files whose paths match, best first.
-    pub(crate) fn rows(&self) -> Vec<Row> {
-        if self.filter.trim().is_empty() {
+    /// Past `ROW_LIMIT` rows, or `SEARCH_LIMIT` files searched, the note
+    /// says what is left out.
+    pub(crate) fn rows(&self) -> Listing {
+        let mut notes: Vec<String> = self
+            .remote
+            .as_ref()
+            .and_then(|remote| remote.note.clone())
+            .into_iter()
+            .collect();
+        let mut rows = if self.filter.trim().is_empty() {
             let mut rows = Vec::new();
             let root = self.root.clone();
             self.push_children(&root, 0, &mut rows);
             rows
         } else {
-            self.matching_files()
+            let (rows, searched_all) = self.matching_files();
+            if !searched_all {
+                notes.push(format!(
+                    "Searched the first {SEARCH_LIMIT} files only, so some matches may be missing."
+                ));
+            }
+            rows
+        };
+        if rows.len() > ROW_LIMIT {
+            notes.push(format!(
+                "Showing the first {ROW_LIMIT} of {} rows. Filter to reach the rest.",
+                rows.len()
+            ));
+            rows.truncate(ROW_LIMIT);
         }
+        Listing { rows, note: (!notes.is_empty()).then(|| notes.join(" ")) }
     }
 
     fn push_children(&self, dir: &Path, depth: usize, rows: &mut Vec<Row>) {
@@ -133,6 +236,9 @@ impl FileTree {
     }
 
     fn children(&self, dir: &Path) -> Vec<Entry> {
+        if self.remote.is_some() {
+            return self.listed.borrow().get(dir).cloned().unwrap_or_default();
+        }
         self.listed
             .borrow_mut()
             .entry(dir.to_path_buf())
@@ -140,9 +246,35 @@ impl FileTree {
             .clone()
     }
 
-    fn matching_files(&self) -> Vec<Row> {
+    /// The matching files, and whether every file was looked through.
+    fn matching_files(&self) -> (Vec<Row>, bool) {
+        if let Some(remote) = &self.remote {
+            let mut found: Vec<_> = remote
+                .files
+                .iter()
+                .filter_map(|entry| {
+                    let relative = entry.path.strip_prefix(&self.root).unwrap_or(&entry.path);
+                    crate::fuzzy::matches(&self.filter, &relative.to_string_lossy())
+                        .map(|(score, _)| (score, entry.clone()))
+                })
+                .collect();
+            found.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.path.cmp(&b.1.path)));
+            return (
+                found
+                    .into_iter()
+                    .map(|(_, entry)| Row {
+                        status: self.status_of(&entry.path),
+                        entry,
+                        depth: 0,
+                        expanded: false,
+                    })
+                    .collect(),
+                true,
+            );
+        }
         let mut found: Vec<(i64, Entry)> = Vec::new();
         let mut seen = 0;
+        let mut searched_all = true;
         let mut stack = vec![self.root.clone()];
         while let Some(dir) = stack.pop() {
             for entry in read_dir(&dir) {
@@ -154,6 +286,7 @@ impl FileTree {
                 }
                 seen += 1;
                 if seen > SEARCH_LIMIT {
+                    searched_all = false;
                     stack.clear();
                     break;
                 }
@@ -166,7 +299,7 @@ impl FileTree {
             }
         }
         found.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.path.cmp(&b.1.path)));
-        found
+        let rows = found
             .into_iter()
             .map(|(_, entry)| Row {
                 status: self.status_of(&entry.path),
@@ -174,7 +307,8 @@ impl FileTree {
                 depth: 0,
                 expanded: false,
             })
-            .collect()
+            .collect();
+        (rows, searched_all)
     }
 }
 
@@ -284,14 +418,34 @@ mod tests {
         std::fs::write(root.join("a.txt"), "").unwrap();
         std::fs::write(root.join("b/x.rs"), "").unwrap();
         let mut tree = FileTree::new(root.clone());
-        assert_eq!(names(&tree.rows()), [("b".into(), 0), ("a.txt".into(), 0)], ".git is never listed");
+        assert_eq!(names(&tree.rows().rows), [("b".into(), 0), ("a.txt".into(), 0)], ".git is never listed");
         tree.toggle(&root.join("b"));
         assert_eq!(
-            names(&tree.rows()),
+            names(&tree.rows().rows),
             [("b".into(), 0), ("inner".into(), 1), ("x.rs".into(), 1), ("a.txt".into(), 0)]
         );
         tree.collapse_all();
-        assert_eq!(tree.rows().len(), 2);
+        assert_eq!(tree.rows().rows.len(), 2);
+    }
+
+    #[test]
+    fn a_folder_past_the_row_limit_says_how_many_rows_it_leaves_out() {
+        let root = scratch("limit");
+        for n in 0..ROW_LIMIT + 100 {
+            std::fs::write(root.join(format!("f{n:04}.txt")), "").unwrap();
+        }
+        let tree = FileTree::new(root);
+        let listing = tree.rows();
+        assert_eq!(listing.rows.len(), ROW_LIMIT);
+        let note = listing.note.expect("the cut is announced");
+        assert!(note.contains("1100"), "{note}");
+    }
+
+    #[test]
+    fn a_folder_within_the_limit_has_no_note() {
+        let root = scratch("within");
+        std::fs::write(root.join("a.txt"), "").unwrap();
+        assert!(FileTree::new(root).rows().note.is_none());
     }
 
     #[test]
@@ -301,7 +455,7 @@ mod tests {
         std::fs::write(root.join("a/b/c.rs"), "").unwrap();
         let mut tree = FileTree::new(root.clone());
         tree.reveal(&root.join("a/b/c.rs"));
-        assert_eq!(names(&tree.rows()).last().unwrap(), &("c.rs".to_string(), 2));
+        assert_eq!(names(&tree.rows().rows).last().unwrap(), &("c.rs".to_string(), 2));
     }
 
     #[test]
@@ -314,6 +468,6 @@ mod tests {
         std::fs::write(root.join("target/motion.o"), "").unwrap();
         let mut tree = FileTree::new(root);
         tree.set_filter("motion".into());
-        assert_eq!(names(&tree.rows()), [("motion.rs".into(), 0)]);
+        assert_eq!(names(&tree.rows().rows), [("motion.rs".into(), 0)]);
     }
 }

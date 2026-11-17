@@ -2,8 +2,8 @@
 //! each cell's colours, a block cursor (blue and blinking while the grid
 //! holds the keyboard, a hollow outline while it does not), the scrollback
 //! under the wheel, a selection by press and drag (a double press takes a
-//! word, a triple a line), copy, paste and select all, and the shell's size
-//! following the pane's. The grid takes the keyboard as a text field does:
+//! word, a triple a line), ⌘-press on an address to open it, copy, paste
+//! and select all, and the shell's size following the pane's. The grid takes the keyboard as a text field does:
 //! no key of the window's reaches it but the command chords.
 //!
 //! The cockpit decides what the rest of a press means — the menu, the
@@ -77,10 +77,15 @@ pub enum TerminalEvent {
     Title(String),
     /// The shell ended.
     Exited,
+    /// The child ended with an unsuccessful status.
+    Failed(String),
     /// `Attach as context`: the selected text.
     Attach(String),
     /// A right-click, at this point of the window.
     ContextMenu(gpui::Point<Pixels>),
+    /// A ⌘-press on a web address or a path: what was written there, for
+    /// the cockpit to resolve.
+    Open(String),
 }
 
 pub struct TerminalView {
@@ -158,7 +163,11 @@ impl TerminalView {
             Event::Wakeup => {}
             Event::Title(title) => cx.emit(TerminalEvent::Title(title)),
             Event::PtyWrite(text) => self.terminal.write(text.into_bytes()),
-            Event::ChildExit(_) | Event::Exit => {
+            Event::ChildExit(status) if !self.exited && !status.success() => {
+                self.exited = true;
+                cx.emit(TerminalEvent::Failed(status.to_string()));
+            }
+            Event::ChildExit(_) | Event::Exit if !self.exited => {
                 self.exited = true;
                 cx.emit(TerminalEvent::Exited);
             }
@@ -280,6 +289,12 @@ impl TerminalView {
                 let Some((at, side)) = self.cell_at(event.position, metrics) else {
                     return;
                 };
+                if event.modifiers.secondary() {
+                    if let Some(address) = self.terminal.with(|term| crate::links::address_at(term, at)) {
+                        cx.emit(TerminalEvent::Open(address));
+                        return;
+                    }
+                }
                 let kind = match event.click_count {
                     1 => SelectionType::Simple,
                     2 => SelectionType::Semantic,

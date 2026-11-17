@@ -85,7 +85,8 @@ impl TranscriptView {
     /// Resolve an output against the Thread's checkout.
     fn opened(&self, output: &Output) -> Option<Opened> {
         let resolve = |path: &str| {
-            FileLink::resolve(path, self.input.workspace.as_deref()).map(|link| link.path)
+            FileLink::resolve(path, self.input.presentation.workspace.as_deref())
+                .map(|link| link.path)
         };
         Some(match output {
             Output::Page(Page::File(path)) => Opened::Page(PageSource::File(resolve(path)?)),
@@ -99,7 +100,7 @@ impl TranscriptView {
     /// An outputs row: its changed-files card, then its page cards, one
     /// under another.
     pub(super) fn render_outputs(&self, row: &TranscriptRow, cx: &mut Context<Self>) -> AnyElement {
-        let key = format!("{}-{:?}", self.input.namespace, row.id());
+        let key = format!("{}-{:?}", self.input.presentation.namespace, row.id());
         let end = match row.id() {
             RowId::Outputs(end) => Some(*end),
             _ => None,
@@ -137,8 +138,12 @@ impl TranscriptView {
         changes: &[Changed],
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let all = self.input.expanded.contains(&DisclosureId::Changes(end));
-        let nodes = tree(changes, self.input.workspace.as_deref());
+        let all = self
+            .input
+            .body
+            .expanded
+            .contains(&DisclosureId::Changes(end));
+        let nodes = tree(changes, self.input.presentation.workspace.as_deref());
         let mut rows = Vec::new();
         self.tree_rows(key, end, all, &nodes, 0, &mut rows, cx);
         let added: usize = changes.iter().map(|change| change.added).sum();
@@ -178,9 +183,9 @@ impl TranscriptView {
                     if all { "Collapse all" } else { "Expand all" },
                     false,
                 )
-                .on_click(cx.listener(move |_, _: &gpui::ClickEvent, _, cx| {
+                .on_click(cx.listener(move |view, _: &gpui::ClickEvent, _, cx| {
                     cx.stop_propagation();
-                    cx.emit(TranscriptEvent::ToggleDisclosure(toggle.clone()));
+                    view.toggle_disclosure(toggle.clone(), cx);
                 })),
             )
             .child(
@@ -236,7 +241,7 @@ impl TranscriptView {
                     children,
                 } => {
                     let id = DisclosureId::Folder(end, folder.clone());
-                    let open = all != self.input.expanded.contains(&id);
+                    let open = all != self.input.body.expanded.contains(&id);
                     let selector = format!("changes-folder-{folder}");
                     rows.push(
                         tree_row(&format!("{key}-dir-{folder}"), selector, depth)
@@ -247,8 +252,8 @@ impl TranscriptView {
                             ))
                             .child(icon(icons::FOLDER, theme::CHANGES_GLYPH, theme::INK_SUBTLE))
                             .child(name_cell(name.clone()))
-                            .on_click(cx.listener(move |_, _: &gpui::ClickEvent, _, cx| {
-                                cx.emit(TranscriptEvent::ToggleDisclosure(id.clone()));
+                            .on_click(cx.listener(move |view, _: &gpui::ClickEvent, _, cx| {
+                                view.toggle_disclosure(id.clone(), cx);
                             }))
                             .into_any_element(),
                     );
@@ -293,7 +298,7 @@ impl TranscriptView {
         for (index, (label, verb)) in open.target.verbs().iter().copied().enumerate() {
             let target = open.target.clone();
             shell = shell.child(
-                menu::row(index, &menu::Item::new(label), false)
+                menu::row(index, &menu::Item::new(label), false, false)
                     .debug_selector(move || format!("output-menu-row-{index}"))
                     .on_mouse_down(
                         MouseButton::Left,
@@ -334,7 +339,7 @@ fn card(row: &str, index: usize, opened: Opened, cx: &mut Context<TranscriptView
                 )
                 .on_click(cx.listener(move |view, _: &gpui::ClickEvent, window, cx| {
                     cx.stop_propagation();
-                    view.input.preview.open_page(shown.clone(), window);
+                    view.input.body.preview.open_page(shown.clone(), window);
                 }))
                 .into_any_element(),
                 more_door(&format!("{key}-more"), index, opened.clone(), cx),
@@ -389,7 +394,7 @@ fn card(row: &str, index: usize, opened: Opened, cx: &mut Context<TranscriptView
         .children(doors)
         .on_click(
             cx.listener(move |view, _: &gpui::ClickEvent, window, _| match &body {
-                Opened::Page(page) => view.input.preview.open_page(page.clone(), window),
+                Opened::Page(page) => view.input.body.preview.open_page(page.clone(), window),
             }),
         )
         .into_any_element()
@@ -666,9 +671,12 @@ mod tests {
         assert_eq!(names(&top), ["a/b/"]);
         // The agent names the file by its real path; the Thread stands in
         // the checkout through a symlink: the file is still under it.
-        let (real, link) = crate::file_links::tests::symlinked_checkout("changed-tree");
-        let linked = [change(&real.join("f01.txt").to_string_lossy())];
-        assert_eq!(names(&tree(&linked, Some(&link))), ["f01.txt"]);
+        #[cfg(unix)]
+        {
+            let (real, link) = crate::file_links::tests::symlinked_checkout("changed-tree");
+            let linked = [change(&real.join("f01.txt").to_string_lossy())];
+            assert_eq!(names(&tree(&linked, Some(&link))), ["f01.txt"]);
+        }
         assert_eq!(changed_label(1), "1 changed file");
         assert_eq!(changed_label(3), "3 changed files");
     }

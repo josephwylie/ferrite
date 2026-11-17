@@ -397,21 +397,19 @@ pub fn context_meter_segments(
     segments
 }
 
-/// The panel's Context section under its head (SPEC §5.6, Claude's): how
-/// full the window is (`27% used`, `109.9k / 400k`) over a bar stacked by
-/// category, then the legend, always open — each category in the window
-/// with its ink, its count and its share; the deferred ones apart, counted
-/// but taking no share; and the lists behind the categories that have
-/// them (`MCP tools`, `Skills`, `Memory files`), each folding open to its
-/// items. Counts are reported values, never estimates. The turn's usage
-/// closes it when the provider reports it.
-pub fn context_usage(
+/// How full the window is: the reading over its stacked bar, and what
+/// the categories' shares are of.
+struct Meter {
+    head: Div,
+    bar: Option<Div>,
+    denominator: u64,
+}
+
+fn context_meter(
     usage: ferrite_core::transcript::Usage,
-    details: Option<&ContextDetails>,
-    usage_details: Option<&ferrite_core::UsageDetails>,
-) -> impl IntoElement {
+    categories: &[ferrite_core::ContextCategory],
+) -> Meter {
     let current = usage.total_tokens;
-    let categories = details.map_or(&[][..], |details| details.categories.as_slice());
     let maximum = context_window(usage.context_window, categories);
     // Shares are of the whole window when it is known; of what the
     // categories add up to when it is not.
@@ -422,14 +420,6 @@ pub fn context_usage(
             .map(|category| category.tokens)
             .sum()
     });
-    let share_of = |tokens: u64| -> f32 {
-        if denominator == 0 {
-            0.
-        } else {
-            tokens as f32 / denominator as f32
-        }
-    };
-
     // The reading: the share used at the left, in its state's ink past
     // the warning (rule 6: colour on the word, the bar keeping its
     // categories' inks); the counts behind it at the right.
@@ -507,6 +497,40 @@ pub fn context_usage(
                     .bg(rgb(ink))
             }))
     });
+
+    Meter {
+        head,
+        bar,
+        denominator,
+    }
+}
+
+/// The panel's Context section under its head (SPEC §5.6, Claude's): how
+/// full the window is (`27% used`, `109.9k / 400k`) over a bar stacked by
+/// category, then the legend, always open — each category in the window
+/// with its ink, its count and its share; the deferred ones apart, counted
+/// but taking no share; and the lists behind the categories that have
+/// them (`MCP tools`, `Skills`, `Memory files`), each folding open to its
+/// items. Counts are reported values, never estimates. The turn's usage
+/// closes it when the provider reports it.
+pub fn context_usage(
+    usage: ferrite_core::transcript::Usage,
+    details: Option<&ContextDetails>,
+    usage_details: Option<&ferrite_core::UsageDetails>,
+) -> impl IntoElement {
+    let categories = details.map_or(&[][..], |details| details.categories.as_slice());
+    let Meter {
+        head,
+        bar,
+        denominator,
+    } = context_meter(usage, categories);
+    let share_of = |tokens: u64| -> f32 {
+        if denominator == 0 {
+            0.
+        } else {
+            tokens as f32 / denominator as f32
+        }
+    };
 
     let group = || {
         div()
@@ -630,6 +654,29 @@ pub fn context_usage(
     }
     // Counts and percentages tick while the panel is open.
     components::tabular(card)
+}
+
+/// The Context section at a glance (the details card): the reading and
+/// its bar, without the legend or the lists behind it.
+pub fn context_summary(
+    usage: ferrite_core::transcript::Usage,
+    details: Option<&ContextDetails>,
+) -> impl IntoElement {
+    let categories = details.map_or(&[][..], |details| details.categories.as_slice());
+    let Meter { head, bar, .. } = context_meter(usage, categories);
+    components::tabular(
+        div()
+            .id("context-usage-summary")
+            .flex()
+            .flex_col()
+            .w_full()
+            .px(px(theme::PANEL_ROW_ICON_X))
+            .text_size(px(theme::FS_META))
+            .line_height(px(theme::LH_UI))
+            .text_color(rgb(INK_STRONG))
+            .child(head)
+            .children(bar),
+    )
 }
 
 /// One legend row (`USAGE_LEGEND_ROW_H`): the category's square in the

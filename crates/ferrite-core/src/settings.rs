@@ -50,11 +50,15 @@ pub struct Settings {
     pub codex_sandbox: Option<String>,
     /// Whether the navigation rail is collapsed. Default: false.
     pub nav_collapsed: bool,
+    /// Preferred sidebar width. None uses the 256px default.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub nav_width_px: Option<f32>,
     /// Whether the Solo view's right panel (Changes, PR, Context) shows
     /// where the window has room for it; ⌥⌘B and its own hide button
     /// flip it. Default: false, as Claude opens with the transcript alone;
     /// a saved choice is kept.
     pub panel_shown: bool,
+    pub context_card_preferences: ContextCardPreferences,
     /// The Threads pinned to the top of the nav's list, in the order they
     /// were pinned (the row menu's `Pin`). An id whose Thread is gone is
     /// passed over. Default: none.
@@ -131,6 +135,8 @@ pub struct Settings {
     /// Other computers whose Servers the window can be on, over ssh (ADR
     /// 0026), in the nav's order. Default: none.
     pub machines: Vec<crate::machine::Machine>,
+    /// Whether this client can use this computer. Running agents are unaffected.
+    pub local_environment_enabled: bool,
     /// The self-hosted forges a review reads pull requests from, besides
     /// github.com, gitlab.com and Azure DevOps (reviewr's `*_host` keys,
     /// ADR 0021). Default: none.
@@ -142,6 +148,28 @@ pub struct Settings {
     /// starred: its Favourites tab, and the first rows of their provider's
     /// own tab. Default: none.
     pub favourite_models: Vec<FavouriteModel>,
+}
+
+/// The defaults a Server owns: what the machine whose Server runs the
+/// Sessions starts them with, kept in that machine's own `settings.json`.
+/// A window on another machine reads and writes them through the Server
+/// (`Op::ServerDefaults`), never through its own file. Every other
+/// setting is the window's: how it looks and what it starts new Threads
+/// with.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ServerDefaults {
+    pub claude_permission_mode: Option<String>,
+    pub codex_approval_policy: String,
+    pub codex_sandbox: Option<String>,
+    pub placeholder_suggestions: bool,
+    pub factory_tasks_at_once: usize,
+}
+
+impl Default for ServerDefaults {
+    fn default() -> Self {
+        Settings::default().server_defaults()
+    }
 }
 
 /// One starred model: its provider and the value the provider takes for it
@@ -236,6 +264,90 @@ pub enum NavShelf {
     Parked,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ContextCardItem {
+    Environment,
+    OpenIn,
+    Scripts,
+    Branch,
+    GitActions,
+    Changes,
+    Servers,
+    Automations,
+    Lineage,
+    SideChats,
+    Usage,
+    Context,
+}
+
+impl ContextCardItem {
+    pub const ALL: [Self; 12] = [
+        Self::Environment, Self::OpenIn, Self::Scripts, Self::Branch,
+        Self::GitActions, Self::Changes, Self::Servers, Self::Automations,
+        Self::Lineage, Self::SideChats, Self::Usage, Self::Context,
+    ];
+
+    pub fn id(self) -> &'static str {
+        match self {
+            Self::Environment => "environment",
+            Self::OpenIn => "openIn",
+            Self::Scripts => "scripts",
+            Self::Branch => "branch",
+            Self::GitActions => "gitActions",
+            Self::Changes => "changes",
+            Self::Servers => "servers",
+            Self::Automations => "automations",
+            Self::Lineage => "lineage",
+            Self::SideChats => "sideChats",
+            Self::Usage => "usage",
+            Self::Context => "context",
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Environment => "Environment and worktree",
+            Self::OpenIn => "Open in editor",
+            Self::Scripts => "Project scripts",
+            Self::Branch => "Branch and pull request",
+            Self::GitActions => "Git actions",
+            Self::Changes => "Changes",
+            Self::Servers => "Servers",
+            Self::Automations => "Automations",
+            Self::Lineage => "Lineage",
+            Self::SideChats => "Side chats",
+            Self::Usage => "Usage limits",
+            Self::Context => "Context window",
+        }
+    }
+
+    pub fn default_visible(self) -> bool {
+        !matches!(self, Self::Usage | Self::Context)
+    }
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct ContextCardPreferences(BTreeMap<String, bool>);
+
+impl ContextCardPreferences {
+    pub fn visible(&self, item: ContextCardItem) -> bool {
+        self.0.get(item.id()).copied().unwrap_or_else(|| item.default_visible())
+    }
+
+    pub fn set(&mut self, item: ContextCardItem, visible: bool) {
+        if visible == item.default_visible() {
+            self.0.remove(item.id());
+        } else {
+            self.0.insert(item.id().to_string(), visible);
+        }
+    }
+
+    pub fn is_default(&self) -> bool {
+        ContextCardItem::ALL.into_iter().all(|item| self.visible(item) == item.default_visible())
+    }
+}
+
 impl Default for Settings {
     fn default() -> Self {
         Settings {
@@ -248,7 +360,9 @@ impl Default for Settings {
             codex_approval_policy: "on-request".to_string(),
             codex_sandbox: None,
             nav_collapsed: false,
+            nav_width_px: None,
             panel_shown: false,
+            context_card_preferences: ContextCardPreferences::default(),
             pinned_threads: Vec::new(),
             open_shelves: Vec::new(),
             confirm_delete: true,
@@ -270,6 +384,7 @@ impl Default for Settings {
             system_notifications: true,
             allowance_warnings: vec![80, 95],
             machines: Vec::new(),
+            local_environment_enabled: true,
             forge_hosts: ForgeHosts::default(),
             factory_tasks_at_once: crate::factory::DEFAULT_LIMIT,
             favourite_models: Vec::new(),
@@ -324,6 +439,24 @@ impl Settings {
         )
     }
 
+    pub fn server_defaults(&self) -> ServerDefaults {
+        ServerDefaults {
+            claude_permission_mode: self.claude_permission_mode.clone(),
+            codex_approval_policy: self.codex_approval_policy.clone(),
+            codex_sandbox: self.codex_sandbox.clone(),
+            placeholder_suggestions: self.placeholder_suggestions,
+            factory_tasks_at_once: self.factory_tasks_at_once,
+        }
+    }
+
+    pub fn set_server_defaults(&mut self, defaults: ServerDefaults) {
+        self.claude_permission_mode = defaults.claude_permission_mode;
+        self.codex_approval_policy = defaults.codex_approval_policy;
+        self.codex_sandbox = defaults.codex_sandbox;
+        self.placeholder_suggestions = defaults.placeholder_suggestions;
+        self.factory_tasks_at_once = defaults.factory_tasks_at_once;
+    }
+
     /// The model choice for `provider`; `None` is that provider's own
     /// default.
     pub fn model_for(&self, provider: Provider) -> Option<&str> {
@@ -359,16 +492,6 @@ impl Settings {
         match provider {
             Provider::Claude => "auto",
             Provider::Codex => "never",
-        }
-    }
-
-    /// The sandbox `provider`'s Sessions run in, for a provider that has
-    /// one: Codex's (`read-only`, its own default, unless one is set).
-    /// Claude runs in none.
-    pub fn sandbox_for(&self, provider: Provider) -> Option<&str> {
-        match provider {
-            Provider::Claude => None,
-            Provider::Codex => Some(self.codex_sandbox.as_deref().unwrap_or("read-only")),
         }
     }
 
@@ -479,7 +602,12 @@ mod tests {
             codex_approval_policy: "never".to_string(),
             codex_sandbox: Some("workspace-write".to_string()),
             nav_collapsed: true,
+            nav_width_px: Some(320.0),
             panel_shown: true,
+            context_card_preferences: ContextCardPreferences(BTreeMap::from([
+                ("environment".to_string(), false),
+                ("usage".to_string(), true),
+            ])),
             pinned_threads: vec![crate::ThreadId::new(7)],
             open_shelves: vec![NavShelf::Working, NavShelf::Parked],
             confirm_delete: false,
@@ -507,6 +635,7 @@ mod tests {
             codex_sounds: false,
             system_notifications: false,
             allowance_warnings: vec![90],
+            local_environment_enabled: false,
             machines: vec![crate::machine::Machine {
                 name: "build box".into(),
                 target: "me@build.example.com".into(),
@@ -582,6 +711,7 @@ mod tests {
 
     #[test]
     fn the_defaults_are_the_documented_ones() {
+        assert!(Settings::default().local_environment_enabled);
         let settings = Settings::default();
 
         assert_eq!(settings.default_provider, Provider::Claude);
@@ -832,6 +962,25 @@ mod tests {
         settings.set_model_for(Provider::Claude, None);
         assert_eq!(settings.model_for(Provider::Claude), None);
         assert_eq!(settings.model_for(Provider::Codex), Some("gpt-5.4"));
+    }
+
+    #[test]
+    fn context_card_preferences_keep_only_explicit_departures_from_defaults() {
+        let mut prefs = ContextCardPreferences::default();
+        assert!(prefs.is_default());
+        for item in ContextCardItem::ALL {
+            assert_eq!(prefs.visible(item), !matches!(item, ContextCardItem::Usage | ContextCardItem::Context));
+        }
+        prefs.set(ContextCardItem::Environment, false);
+        prefs.set(ContextCardItem::Context, true);
+        assert!(!prefs.is_default());
+        let json = serde_json::to_value(&prefs).unwrap();
+        assert_eq!(json, serde_json::json!({"environment": false, "context": true}));
+        assert_eq!(serde_json::from_value::<ContextCardPreferences>(json).unwrap(), prefs);
+        prefs.set(ContextCardItem::Environment, true);
+        prefs.set(ContextCardItem::Context, false);
+        assert_eq!(serde_json::to_string(&prefs).unwrap(), "{}");
+        assert!(prefs.is_default());
     }
 
     #[test]

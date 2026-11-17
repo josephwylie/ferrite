@@ -481,6 +481,18 @@ pub struct WirePr {
     pub url: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub body: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub author: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub author_avatar_url: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub updated_at: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub changed_files: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub additions: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub deletions: Option<u64>,
     pub state: WirePrState,
     #[serde(default)]
     pub draft: bool,
@@ -558,6 +570,9 @@ pub enum WireSync {
 pub struct WireCheck {
     pub name: String,
     pub status: WireCheckStatus,
+    /// Where the run's log lives, when the forge names one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -575,10 +590,19 @@ pub enum WireCheckStatus {
 /// A review, a plain comment, or an inline finding on the pull request.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WirePrComment {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub author_is_bot: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub place: Option<WireFindingPlace>,
     pub kind: WirePrCommentKind,
     pub author: String,
     /// `path:start-end` for a finding, the kind's word otherwise.
     pub anchor: String,
+    /// How a review ended; absent on every other kind.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub verdict: Option<WireReviewState>,
     pub body: String,
     /// A finding's quoted hunk.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -592,6 +616,20 @@ pub struct WirePrComment {
     pub replies: Vec<WireReply>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WireFindingPlace {
+    pub path: String,
+    pub range: Option<(u32, u32)>,
+    pub side: Option<WireDiffSide>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WireDiffSide {
+    Old,
+    New,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum WirePrCommentKind {
@@ -602,8 +640,22 @@ pub enum WirePrCommentKind {
     Unknown,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WireReviewState {
+    Approved,
+    ChangesRequested,
+    Commented,
+    #[serde(other)]
+    Unknown,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WireReply {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub author_is_bot: bool,
     pub author: String,
     pub body: String,
     pub created_at: String,
@@ -616,6 +668,12 @@ impl From<forge::PrSnapshot> for WirePr {
             title: pr.title,
             url: pr.url,
             body: pr.body,
+            author: pr.author,
+            author_avatar_url: pr.author_avatar_url,
+            updated_at: pr.updated_at,
+            changed_files: pr.changed_files,
+            additions: pr.additions,
+            deletions: pr.deletions,
             state: match pr.state {
                 forge::PrState::Open => WirePrState::Open,
                 forge::PrState::Merged => WirePrState::Merged,
@@ -647,38 +705,167 @@ impl From<forge::PrSnapshot> for WirePr {
                         forge::CheckStatus::Pending => WireCheckStatus::Pending,
                         forge::CheckStatus::Skipped => WireCheckStatus::Skipped,
                     },
+                    url: check.url,
                 })
                 .collect(),
-            comments: pr
-                .comments
-                .into_iter()
-                .map(|comment| WirePrComment {
-                    kind: match comment.kind {
-                        forge::CommentKind::Review => WirePrCommentKind::Review,
-                        forge::CommentKind::Comment => WirePrCommentKind::Comment,
-                        forge::CommentKind::Finding => WirePrCommentKind::Finding,
-                    },
-                    author: comment.author,
-                    anchor: comment.anchor,
-                    body: comment.body,
-                    snippet: comment.snippet,
-                    created_at: comment.created_at,
-                    resolved: comment.is_resolved,
-                    outdated: comment.is_outdated,
-                    replies: comment
-                        .replies
-                        .into_iter()
-                        .map(|reply| WireReply {
-                            author: reply.author,
-                            body: reply.body,
-                            created_at: reply.created_at,
-                        })
-                        .collect(),
-                })
-                .collect(),
+            comments: pr.comments.into_iter().map(WirePrComment::from).collect(),
             truncated: pr.comments_truncated || pr.checks_truncated,
             checks_truncated: pr.checks_truncated,
             comments_truncated: pr.comments_truncated,
+        }
+    }
+}
+
+impl From<forge::Comment> for WirePrComment {
+    fn from(comment: forge::Comment) -> Self {
+        Self {
+            id: comment.id,
+            author_is_bot: comment.author_is_bot,
+            place: comment.place.map(|place| WireFindingPlace {
+                path: place.path,
+                range: place.range,
+                side: place.side.map(|side| match side {
+                    ferrite_reviewr::model::Side::Old => WireDiffSide::Old,
+                    ferrite_reviewr::model::Side::New => WireDiffSide::New,
+                }),
+            }),
+            kind: match comment.kind {
+                forge::CommentKind::Review => WirePrCommentKind::Review,
+                forge::CommentKind::Comment => WirePrCommentKind::Comment,
+                forge::CommentKind::Finding => WirePrCommentKind::Finding,
+            },
+            author: comment.author,
+            anchor: comment.anchor,
+            verdict: comment.verdict.map(|state| match state {
+                forge::ReviewState::Approved => WireReviewState::Approved,
+                forge::ReviewState::ChangesRequested => WireReviewState::ChangesRequested,
+                forge::ReviewState::Commented => WireReviewState::Commented,
+            }),
+            body: comment.body,
+            snippet: comment.snippet,
+            created_at: comment.created_at,
+            resolved: comment.is_resolved,
+            outdated: comment.is_outdated,
+            replies: comment
+                .replies
+                .into_iter()
+                .map(|reply| WireReply {
+                    id: reply.id,
+                    author_is_bot: reply.author_is_bot,
+                    author: reply.author,
+                    body: reply.body,
+                    created_at: reply.created_at,
+                })
+                .collect(),
+        }
+    }
+}
+
+/// Which of a repository's pull requests a list shows.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WirePrFilter {
+    #[default]
+    Open,
+    /// Merged and closed ones.
+    Closed,
+    #[serde(other)]
+    All,
+}
+
+impl From<WirePrFilter> for forge::ListFilter {
+    fn from(filter: WirePrFilter) -> Self {
+        match filter {
+            WirePrFilter::Open => Self::Open,
+            WirePrFilter::Closed => Self::Closed,
+            WirePrFilter::All => Self::All,
+        }
+    }
+}
+
+/// One pull request of a list.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WirePrRow {
+    pub number: u64,
+    pub title: String,
+    pub url: String,
+    pub state: WirePrState,
+    #[serde(default)]
+    pub draft: bool,
+    pub author: String,
+    pub head: String,
+    pub base: String,
+    pub updated_at: String,
+}
+
+impl From<forge::PrRow> for WirePrRow {
+    fn from(row: forge::PrRow) -> Self {
+        Self {
+            number: row.number,
+            title: row.title,
+            url: row.url,
+            state: match row.state {
+                forge::PrState::Open => WirePrState::Open,
+                forge::PrState::Merged => WirePrState::Merged,
+                forge::PrState::Closed => WirePrState::Closed,
+            },
+            draft: row.is_draft,
+            author: row.author,
+            head: row.head_ref,
+            base: row.base_ref,
+            updated_at: row.updated_at,
+        }
+    }
+}
+
+/// A repository's pull requests as the window draws them.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct WirePrList {
+    pub rows: Vec<WirePrRow>,
+    /// The forge holds more than the rows.
+    pub more: bool,
+}
+
+/// A `list_pull_requests`' answer: the list, or what stands in its place.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReviewPullRequests {
+    pub list: Result<WirePrList, String>,
+    pub unread: Option<WirePrUnread>,
+}
+
+impl ReviewPullRequests {
+    pub fn of(read: Result<forge::PrList, PrView>, noun: &str) -> Self {
+        match read {
+            Ok(list) => Self {
+                list: Ok(WirePrList {
+                    rows: list.rows.into_iter().map(Into::into).collect(),
+                    more: list.more,
+                }),
+                unread: None,
+            },
+            Err(view) => Self {
+                unread: WirePrUnread::of(&view),
+                list: Err(ferrite_reviewr::ferrite::pr_note(&view, noun)),
+            },
+        }
+    }
+}
+
+impl From<ReviewPullRequests> for Done {
+    fn from(ReviewPullRequests { list, unread }: ReviewPullRequests) -> Self {
+        match list {
+            Ok(list) => Done::ReviewPullRequests {
+                rows: list.rows,
+                more: list.more,
+                note: None,
+                unread,
+            },
+            Err(note) => Done::ReviewPullRequests {
+                rows: Vec::new(),
+                more: false,
+                note: Some(note),
+                unread,
+            },
         }
     }
 }
@@ -695,15 +882,22 @@ pub struct ReviewPullRequest {
 }
 
 /// Why a `review_pull_request` brought no pull request back, beyond its
-/// note: what the panel's PR tab tells apart from a branch with none.
+/// note: what the panel's PR tab tells apart from a branch with none, and
+/// the recovery each earns.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum WirePrUnread {
     /// The forge's CLI is not installed (or lacks its extension), or not
     /// signed in.
     NoCli,
-    /// The read failed (offline, a rate limit, a git error): the last
-    /// snapshot still stands.
+    /// The forge did not answer in time.
+    TimedOut,
+    /// The forge refused the read until its limit resets.
+    RateLimited,
+    /// The forge could not be reached.
+    Offline,
+    /// The read failed some other way (a git error, a forge error): the
+    /// last snapshot still stands.
     #[serde(other)]
     Failed,
 }
@@ -714,11 +908,15 @@ impl WirePrUnread {
     fn of(view: &PrView) -> Option<Self> {
         match view {
             PrView::NoCli(_) | PrView::NoExtension(_) | PrView::NotAuthed(..) => Some(Self::NoCli),
-            PrView::Pending
-            | PrView::Loading
-            | PrView::Held
-            | PrView::GitError(_)
-            | PrView::Error(..) => Some(Self::Failed),
+            PrView::TimedOut(_) => Some(Self::TimedOut),
+            PrView::Error(_, message) => Some(match forge::Failure::of(message) {
+                forge::Failure::RateLimited => Self::RateLimited,
+                forge::Failure::Offline => Self::Offline,
+                forge::Failure::Other => Self::Failed,
+            }),
+            PrView::Pending | PrView::Loading | PrView::Held | PrView::GitError(_) => {
+                Some(Self::Failed)
+            }
             PrView::Pr(_)
             | PrView::NoPr
             | PrView::Detached
@@ -735,11 +933,7 @@ impl ReviewPullRequest {
         let unread = WirePrUnread::of(&view);
         let pr = match view {
             PrView::Pr(snapshot) => Ok((*snapshot).into()),
-            view => Err(ferrite_reviewr::ferrite::pr_note(
-                &view,
-                noun,
-                ferrite_reviewr::keymap::Key::plain('r'),
-            )),
+            view => Err(ferrite_reviewr::ferrite::pr_note(&view, noun)),
         };
         Self {
             noun: noun.to_string(),
@@ -886,6 +1080,49 @@ mod tests {
     /// A pull request's snapshot becomes the wire's; with none, the note
     /// says why, in the forge's noun.
     #[test]
+    fn provider_activity_keeps_identity_bot_status_and_file_location_on_the_wire() {
+        let comment: WirePrComment = forge::Comment {
+            id: Some("comment-1".into()),
+            kind: forge::CommentKind::Finding,
+            author: "reviewer[bot]".into(),
+            author_is_bot: true,
+            anchor: "src/lib.rs:4".into(),
+            verdict: None,
+            place: Some(forge::FindingPlace::from_lines(
+                "src/lib.rs",
+                Some(4),
+                Some(4),
+                Some(ferrite_reviewr::model::Side::New),
+            )),
+            body: "Check this".into(),
+            snippet: None,
+            created_at: String::new(),
+            is_resolved: false,
+            is_outdated: false,
+            replies: vec![forge::Reply {
+                id: Some("reply-1".into()),
+                author: "ada".into(),
+                author_is_bot: false,
+                body: "Fixed".into(),
+                created_at: String::new(),
+            }],
+        }
+        .into();
+        assert_eq!(comment.id.as_deref(), Some("comment-1"));
+        assert!(comment.author_is_bot);
+        assert_eq!(comment.place.as_ref().unwrap().path, "src/lib.rs");
+        assert_eq!(comment.place.as_ref().unwrap().range, Some((4, 4)));
+        assert_eq!(
+            comment.place.as_ref().unwrap().side,
+            Some(WireDiffSide::New)
+        );
+        assert_eq!(comment.replies[0].id.as_deref(), Some("reply-1"));
+        let roundtrip: WirePrComment =
+            serde_json::from_str(&serde_json::to_string(&comment).unwrap()).unwrap();
+        assert_eq!(roundtrip, comment);
+    }
+
+    #[test]
     fn a_pull_request_carries_its_snapshot_or_its_note() {
         let note = ReviewPullRequest::of(PrView::NoPr, "MR");
         assert_eq!(note.pr, Err("No MR yet. Ready to ship?".into()));
@@ -906,9 +1143,23 @@ mod tests {
         let retry = ReviewPullRequest::of(PrView::NoCli(ferrite_reviewr::git::Forge::GitHub), "PR");
         assert_eq!(retry.unread, Some(WirePrUnread::NoCli), "no gh");
         assert!(
-            retry.pr.is_err_and(|note| note.contains("press r")),
-            "the remedy names r"
+            retry.pr.is_err_and(|note| note.contains("then retry")),
+            "the remedy names the way back"
         );
+        let github = ferrite_reviewr::git::Forge::GitHub;
+        for (view, kind) in [
+            (PrView::TimedOut(github), WirePrUnread::TimedOut),
+            (
+                PrView::Error(github, "API rate limit exceeded".into()),
+                WirePrUnread::RateLimited,
+            ),
+            (
+                PrView::Error(github, "dial tcp: no such host".into()),
+                WirePrUnread::Offline,
+            ),
+        ] {
+            assert_eq!(ReviewPullRequest::of(view, "PR").unread, Some(kind));
+        }
         let failed = ReviewPullRequest::of(
             PrView::Error(ferrite_reviewr::git::Forge::GitHub, "offline".into()),
             "PR",

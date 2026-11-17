@@ -28,7 +28,6 @@ use gpui::{
 
 use crate::cockpit::{CockpitView, Preferences};
 use crate::headless::Driver;
-use crate::palette::PaletteScope;
 use ferrite_pane::transcript::ScrollTarget;
 
 /// What a step waits on before it acts or shoots.
@@ -687,11 +686,11 @@ fn scenario(
         live.dump(claude, "claude after turn 3");
     }
 
-    if !wants("group") {
+    if !wants("codex") {
         return Some(claude);
     }
-    // ---- Group: ⌘⇧G founds a Group with a Codex Thread beside Claude.
-    live.key("cmd-shift-g");
+    // ---- Codex: ⌘T opens a second Thread, a Codex one, in Claude's Project.
+    live.key("cmd-t");
     aim_draft(
         live,
         project,
@@ -699,7 +698,7 @@ fn scenario(
         codex_model,
         Some(codex_effort),
     );
-    live.shot("group-draft");
+    live.shot("codex-draft");
     live.send(
         "Run `cargo test` in this repo. It has to build, so request escalated (write) permission for it up front. Then tell me in one sentence whether any test fails.",
     );
@@ -717,7 +716,7 @@ fn scenario(
         if !asks_or_ends(live, &format!("codex turn 1 asks ({round})"), codex, 1, 240) {
             break;
         }
-        live.shot(&format!("group-toast-{round}"));
+        live.shot(&format!("codex-toast-{round}"));
         live.dump(codex, "codex asking");
         // The toast's `1 allow`, clicked.
         let selector = format!("toast-allow-{}", codex.get());
@@ -727,14 +726,14 @@ fn scenario(
             focus_thread(live, claude);
         }
         if !allowed {
-            allowed = shoot_running_suite(live, codex, 1, "group-codex-running");
+            allowed = shoot_running_suite(live, codex, 1, "codex-running");
         }
     }
     live.wait("codex turn 1 ends", 300, &move |view| {
         turns(view, codex) >= 1 && !busy(view, codex)
     });
     live.scroll_bottom(codex);
-    live.shot("group-turn1");
+    live.shot("codex-turn1");
     live.dump(codex, "codex after turn 1");
 
     if wants("deny") {
@@ -744,13 +743,13 @@ fn scenario(
         focus_thread(live, claude);
         codex_turns += 1;
         if asks_or_ends(live, "codex asks to write (toast)", codex, codex_turns, 240) {
-            live.shot("group-toast-deny");
+            live.shot("codex-toast-deny");
             let selector = format!("toast-deny-{}", codex.get());
             if !live.click(&selector, Modifiers::default()) {
                 focus_thread(live, codex);
                 live.key("3");
             }
-            live.shot("group-toast-denied");
+            live.shot("codex-toast-denied");
         }
         live.wait("codex turn 2 ends", 240, &move |view| {
             turns(view, codex) >= 2 && !busy(view, codex)
@@ -778,7 +777,7 @@ fn scenario(
             turns(view, codex) >= target && !busy(view, codex)
         });
         live.scroll_bottom(codex);
-        live.shot("group-turn3");
+        live.shot("codex-turn3");
         live.dump(codex, "codex after turn 3");
         // ---- `3` from the Pane: deny, and the Composer takes the steer
         live.send("Delete NOTES.md.");
@@ -794,7 +793,7 @@ fn scenario(
             turns(view, codex) >= target && !busy(view, codex)
         });
         live.scroll_bottom(codex);
-        live.shot("group-turn4");
+        live.shot("codex-turn4");
         live.dump(codex, "codex after turn 4");
     }
 
@@ -813,23 +812,13 @@ fn scenario(
     live.key("cmd-i");
     live.key("escape");
 
-    // ---- the palette over the live Threads; ⇥ previews in a Pane
+    // ---- the palette over the live Threads
     live.key("cmd-k");
     live.shot("palette");
     live.type_text("fail");
     live.shot("palette-typed");
-    // ⇥: the highlighted Thread previewed in a Pane beside the current one.
-    live.key("down");
-    live.key("tab");
-    for _ in 0..6 {
-        live.tick(60);
-    }
-    live.shot("palette-preview");
     live.key("escape");
     focus_thread(live, claude);
-    live.act(|view, window, cx| view.open_palette(PaletteScope::Groups, "", window, cx));
-    live.shot("palette-groups");
-    live.key("escape");
 
     // ---- the Codex model picker and its effort
     live.act(move |view, _, cx| view.open_provider_picker(codex, cx));
@@ -839,45 +828,6 @@ fn scenario(
         cx.notify();
     });
 
-    // ---- the wall: this run's Threads beside the CLI sessions this repo
-    // already holds, adopted as parked Threads; Codex asks meanwhile, and
-    // its tile's `3` answers.
-    if wants("wall") {
-        let group = live.read(move |view| view.cockpit.groups().of(codex).map(|group| group.id));
-        let adopted = adopt_sessions(live);
-        if let Some(group) = group {
-            live.act(move |view, _, cx| {
-                for thread in adopted {
-                    let _ = view
-                        .cockpit
-                        .apply_group(ferrite_core::groups::GroupChange::Join {
-                            thread,
-                            group,
-                            index: None,
-                        });
-                }
-                view.enter_group(group, cx);
-                view.sync_panes(cx);
-            });
-            focus_thread(live, codex);
-            live.send("Delete README.md.");
-            codex_turns += 1;
-            let target = codex_turns;
-            focus_thread(live, claude);
-            if asks_or_ends(live, "codex asks on the wall", codex, target, 240) {
-                live.shot("wall");
-                live.key("3");
-                live.shot("wall-answered");
-            } else {
-                live.shot("wall");
-            }
-            live.wait("codex wall turn ends", 240, &move |view| {
-                turns(view, codex) >= target && !busy(view, codex)
-            });
-            live.shot("wall-settled");
-        }
-    }
-
     live.key("cmd-b");
     for _ in 0..6 {
         live.tick(60);
@@ -885,85 +835,21 @@ fn scenario(
     live.shot("collapsed");
     live.key("cmd-b");
 
-    // ---- the empty board over this store: its real recent Threads and
-    // the CLIs found on this machine
-    live.act(|view, _, cx| view.show_empty_board(cx));
+    live.dump(claude, "claude final");
+    live.dump(codex, "codex final");
+
+    // ---- the empty board over this store, every Pane closed as ⌘W
+    // closes it: its real recent Threads and the CLIs found on this machine
+    for _ in 0..8 {
+        if live.read(|view| view.empty_board_shown()) {
+            break;
+        }
+        live.key("cmd-w");
+        live.tick(60);
+    }
     for _ in 0..20 {
         live.tick(100);
     }
     live.shot("empty-board");
-    live.dump(claude, "claude final");
-    live.dump(codex, "codex final");
     Some(claude)
-}
-
-/// The CLI sessions this repo already holds (earlier live runs, probes),
-/// adopted as parked Threads: real histories for the wall's other tiles.
-fn adopt_sessions(live: &mut Live) -> Vec<ThreadId> {
-    let home = std::env::var_os("HOME")
-        .map(PathBuf::from)
-        .unwrap_or_default();
-    let repo = std::env::current_dir().unwrap_or_default();
-    let slug: String = repo
-        .to_string_lossy()
-        .chars()
-        .map(|ch| if ch.is_ascii_alphanumeric() { ch } else { '-' })
-        .collect();
-    let mut files: Vec<PathBuf> = std::fs::read_dir(home.join(".claude/projects").join(&slug))
-        .into_iter()
-        .flatten()
-        .flatten()
-        .map(|entry| entry.path())
-        .filter(|path| path.extension().is_some_and(|ext| ext == "jsonl"))
-        .collect();
-    let codex_day = home.join(".codex/sessions");
-    let mut stack = vec![codex_day];
-    while let Some(dir) = stack.pop() {
-        for entry in std::fs::read_dir(&dir).into_iter().flatten().flatten() {
-            let path = entry.path();
-            if path.is_dir() {
-                stack.push(path);
-            } else if path.extension().is_some_and(|ext| ext == "jsonl")
-                && std::fs::read_to_string(&path)
-                    .map(|text| {
-                        text.lines()
-                            .next()
-                            .is_some_and(|first| first.contains(&*repo.to_string_lossy()))
-                    })
-                    .unwrap_or(false)
-            {
-                files.push(path);
-            }
-        }
-    }
-    let live_sessions: Vec<String> = live.read(|view| {
-        view.cockpit
-            .threads()
-            .into_iter()
-            .filter_map(|thread| {
-                view.cockpit
-                    .thread(thread)
-                    .and_then(|open| open.transcript().session_id().map(str::to_owned))
-            })
-            .collect()
-    });
-    files.retain(|file| {
-        !live_sessions
-            .iter()
-            .any(|id| file.to_string_lossy().contains(id.as_str()))
-    });
-    files.sort();
-    files.truncate(7);
-    let mut adopted = Vec::new();
-    for file in files {
-        let result = live.act(|view, _, _| view.cockpit.import(&file));
-        match result {
-            Ok(thread) => {
-                live.note(format!("adopted {} as thread {thread}", file.display()));
-                adopted.push(thread);
-            }
-            Err(error) => live.note(format!("could not adopt {}: {error}", file.display())),
-        }
-    }
-    adopted
 }

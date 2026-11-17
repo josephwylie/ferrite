@@ -1,0 +1,2073 @@
+{
+  "goal": "Reconcile browser presentations as rendered compositions and transitions, separating installed source, newer source, native observations, Ferrite counterparts, and untested contracts.",
+  "scope": "Browser presentation map. Thread details belongs to the shell map and is mentioned only at the coexistence boundary.",
+  "recorded_at": "2026-11-13T16:28:45.291646+00:00",
+  "versions": {
+    "installed_t3": "1264c206aee0dce805d6279809118bc091f29d2f",
+    "installed_version": "0.1.10-nightly.20261111.4544",
+    "newer_comparison": "74573fc29b901bafbf8f1dbb2eb29606da1fa448",
+    "ferrite_source": "62947f91d5cd6ee494aaae9ed09d794a853e5bab"
+  },
+  "evidence": {
+    "native_ledger": "../evidence/t3-live/observations.md",
+    "ledger_sha256": "ee2739e94e1d8d6b0fa3c924debebf8b6228f2c96d969af347bf33c80eb9630b",
+    "ledger_size_bytes": 25492,
+    "native_evidence_author": "Parent agent. This worker used no UI or models.",
+    "prior_browser_correspondence": "t3-browser-live-source-match.md",
+    "browser_export": "../evidence/t3-live/browser-content-export.png"
+  },
+  "sources": {
+    "annotationKeys": {
+      "path": "apps/desktop/src/preview/AnnotationKeyboard.ts",
+      "repository": "pingdotgg/t3code",
+      "revision": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "raw_url": "https://raw.githubusercontent.com/pingdotgg/t3code/1264c206aee0dce805d6279809118bc091f29d2f/apps/desktop/src/preview/AnnotationKeyboard.ts",
+      "blob_url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/desktop/src/preview/AnnotationKeyboard.ts",
+      "sha256": "c93040a8a5206dfe869413ebe9185c04bf594ee43363620ef1673ca636d2faa7",
+      "line_count": 17,
+      "identical_to_newer_checkout": true
+    },
+    "auto": {
+      "path": "apps/web/src/components/preview/agentOpenedPreviews.ts",
+      "repository": "pingdotgg/t3code",
+      "revision": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "raw_url": "https://raw.githubusercontent.com/pingdotgg/t3code/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/preview/agentOpenedPreviews.ts",
+      "blob_url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/preview/agentOpenedPreviews.ts",
+      "sha256": "ecd798ab7e89eea1a3349fe9d0f25a30a8550dd8bf6742d05965672214640d97",
+      "line_count": 274,
+      "identical_to_newer_checkout": true
+    },
+    "canvas": {
+      "path": "apps/web/src/components/chat/chatCanvasLayout.ts",
+      "repository": "pingdotgg/t3code",
+      "revision": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "raw_url": "https://raw.githubusercontent.com/pingdotgg/t3code/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/chatCanvasLayout.ts",
+      "blob_url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/chatCanvasLayout.ts",
+      "sha256": "bf36cf15042d8ee52c0030d1d6f71eec9e5281f829a4968ba694dcf4bb6adeed",
+      "line_count": 180,
+      "identical_to_newer_checkout": true
+    },
+    "chat": {
+      "path": "apps/web/src/components/ChatView.tsx",
+      "repository": "pingdotgg/t3code",
+      "revision": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "raw_url": "https://raw.githubusercontent.com/pingdotgg/t3code/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/ChatView.tsx",
+      "blob_url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/ChatView.tsx",
+      "sha256": "c04f7ebfbed10af5afc938609ab3eada4d767a60a6ab483d875973fff50b49c4",
+      "line_count": 4019,
+      "identical_to_newer_checkout": false
+    },
+    "chrome": {
+      "path": "apps/web/src/components/preview/PreviewChromeRow.tsx",
+      "repository": "pingdotgg/t3code",
+      "revision": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "raw_url": "https://raw.githubusercontent.com/pingdotgg/t3code/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/preview/PreviewChromeRow.tsx",
+      "blob_url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/preview/PreviewChromeRow.tsx",
+      "sha256": "b21c76b5038ec0b63b0248d826024d083e10dc3d4c3aa4c2a954f83be8c29f06",
+      "line_count": 298,
+      "identical_to_newer_checkout": false
+    },
+    "close": {
+      "path": "apps/web/src/components/preview/closePreviewSession.ts",
+      "repository": "pingdotgg/t3code",
+      "revision": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "raw_url": "https://raw.githubusercontent.com/pingdotgg/t3code/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/preview/closePreviewSession.ts",
+      "blob_url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/preview/closePreviewSession.ts",
+      "sha256": "d670b0b5c1759eb5a77582c6994500842c04bb4ee82e0834b845d6ef7c7bcf81",
+      "line_count": 40,
+      "identical_to_newer_checkout": true
+    },
+    "context": {
+      "path": "apps/web/src/components/composerContextPresentation.tsx",
+      "repository": "pingdotgg/t3code",
+      "revision": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "raw_url": "https://raw.githubusercontent.com/pingdotgg/t3code/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/composerContextPresentation.tsx",
+      "blob_url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/composerContextPresentation.tsx",
+      "sha256": "6e0cb04daf85f51f74bfbed8c78dae394457c3c8991a5f4f836d76b18bc85b5b",
+      "line_count": 496,
+      "identical_to_newer_checkout": true
+    },
+    "css": {
+      "path": "apps/web/src/index.css",
+      "repository": "pingdotgg/t3code",
+      "revision": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "raw_url": "https://raw.githubusercontent.com/pingdotgg/t3code/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/index.css",
+      "blob_url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/index.css",
+      "sha256": "d723ccee7571f98bc1bc931a880d7d856b5c5f660703845e4f5b66d7f56310ef",
+      "line_count": 2594,
+      "identical_to_newer_checkout": false
+    },
+    "device": {
+      "path": "apps/web/src/browser/BrowserDeviceToolbar.tsx",
+      "repository": "pingdotgg/t3code",
+      "revision": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "raw_url": "https://raw.githubusercontent.com/pingdotgg/t3code/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/browser/BrowserDeviceToolbar.tsx",
+      "blob_url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/browser/BrowserDeviceToolbar.tsx",
+      "sha256": "f636690745bc8cd354cacc21b9ccfe9b057bcb8898bcab62ea33b01f209978ba",
+      "line_count": 341,
+      "identical_to_newer_checkout": true
+    },
+    "empty": {
+      "path": "apps/web/src/components/preview/PreviewEmptyState.tsx",
+      "repository": "pingdotgg/t3code",
+      "revision": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "raw_url": "https://raw.githubusercontent.com/pingdotgg/t3code/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/preview/PreviewEmptyState.tsx",
+      "blob_url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/preview/PreviewEmptyState.tsx",
+      "sha256": "aed6b1f399c6b09f6b9e91363559c05c47f43841b302732d95d652994f0e9b0a",
+      "line_count": 96,
+      "identical_to_newer_checkout": true
+    },
+    "error": {
+      "path": "apps/web/src/components/preview/PreviewUnreachable.tsx",
+      "repository": "pingdotgg/t3code",
+      "revision": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "raw_url": "https://raw.githubusercontent.com/pingdotgg/t3code/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/preview/PreviewUnreachable.tsx",
+      "blob_url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/preview/PreviewUnreachable.tsx",
+      "sha256": "acba86c938528ae1388ff28b990ffa0169690bb87942ad100392f409513eeb2d",
+      "line_count": 135,
+      "identical_to_newer_checkout": true
+    },
+    "fannotations": {
+      "path": "crates/ferrite-cockpit/src/cockpit/browser/annotations.rs",
+      "repository": "josephwylie/ferrite",
+      "revision": "62947f91d5cd6ee494aaae9ed09d794a853e5bab",
+      "raw_url": null,
+      "blob_url": "https://github.com/josephwylie/ferrite/blob/62947f91d5cd6ee494aaae9ed09d794a853e5bab/crates/ferrite-cockpit/src/cockpit/browser/annotations.rs",
+      "sha256": "4d23ea9a5ba3445126e2445527ac6ecf2f45dade667b0a0ea4ff00149e6571c2",
+      "line_count": 724,
+      "identical_to_newer_checkout": null
+    },
+    "fbrowser": {
+      "path": "crates/ferrite-cockpit/src/cockpit/browser.rs",
+      "repository": "josephwylie/ferrite",
+      "revision": "62947f91d5cd6ee494aaae9ed09d794a853e5bab",
+      "raw_url": null,
+      "blob_url": "https://github.com/josephwylie/ferrite/blob/62947f91d5cd6ee494aaae9ed09d794a853e5bab/crates/ferrite-cockpit/src/cockpit/browser.rs",
+      "sha256": "d3c0e0b6f5c5f77d0a54f87751be564825e7c4f3a550715ae6fb1b6fdf9eb5be",
+      "line_count": 1579,
+      "identical_to_newer_checkout": null
+    },
+    "fcef": {
+      "path": "crates/ferrite-pane/src/visual/web/cef/handlers.rs",
+      "repository": "josephwylie/ferrite",
+      "revision": "62947f91d5cd6ee494aaae9ed09d794a853e5bab",
+      "raw_url": null,
+      "blob_url": "https://github.com/josephwylie/ferrite/blob/62947f91d5cd6ee494aaae9ed09d794a853e5bab/crates/ferrite-pane/src/visual/web/cef/handlers.rs",
+      "sha256": "f84653eee29e8901b8cba792c67b77341ed41b538bd20baeebb01d3d17af4ed0",
+      "line_count": 698,
+      "identical_to_newer_checkout": null
+    },
+    "feditor": {
+      "path": "crates/ferrite-pane/src/annotation_editor.rs",
+      "repository": "josephwylie/ferrite",
+      "revision": "62947f91d5cd6ee494aaae9ed09d794a853e5bab",
+      "raw_url": null,
+      "blob_url": "https://github.com/josephwylie/ferrite/blob/62947f91d5cd6ee494aaae9ed09d794a853e5bab/crates/ferrite-pane/src/annotation_editor.rs",
+      "sha256": "9efd23da40f168efaa8ca05ff423a0b18f24e0ae5f8904d787d0b0cacc6329b1",
+      "line_count": 681,
+      "identical_to_newer_checkout": null
+    },
+    "felement": {
+      "path": "crates/ferrite-pane/src/visual/element.rs",
+      "repository": "josephwylie/ferrite",
+      "revision": "62947f91d5cd6ee494aaae9ed09d794a853e5bab",
+      "raw_url": null,
+      "blob_url": "https://github.com/josephwylie/ferrite/blob/62947f91d5cd6ee494aaae9ed09d794a853e5bab/crates/ferrite-pane/src/visual/element.rs",
+      "sha256": "4510c62f93f9256cf5e347c032224064c122287aa3aca2052a4313bdc2191094",
+      "line_count": 1198,
+      "identical_to_newer_checkout": null
+    },
+    "find": {
+      "path": "apps/web/src/components/preview/PreviewFindBar.tsx",
+      "repository": "pingdotgg/t3code",
+      "revision": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "raw_url": "https://raw.githubusercontent.com/pingdotgg/t3code/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/preview/PreviewFindBar.tsx",
+      "blob_url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/preview/PreviewFindBar.tsx",
+      "sha256": "7213ab00de725b0717035a2303be7e8ee4cb5331b606fef7b8d604e5c5c813ee",
+      "line_count": 139,
+      "identical_to_newer_checkout": true
+    },
+    "flightbox": {
+      "path": "crates/ferrite-cockpit/src/cockpit/lightbox.rs",
+      "repository": "josephwylie/ferrite",
+      "revision": "62947f91d5cd6ee494aaae9ed09d794a853e5bab",
+      "raw_url": null,
+      "blob_url": "https://github.com/josephwylie/ferrite/blob/62947f91d5cd6ee494aaae9ed09d794a853e5bab/crates/ferrite-cockpit/src/cockpit/lightbox.rs",
+      "sha256": "ca1914160beeec4fd88420e17127f7bb4ba72ffeb14d6a31a7f9c000c47fdfe8",
+      "line_count": 352,
+      "identical_to_newer_checkout": null
+    },
+    "fpanel": {
+      "path": "crates/ferrite-cockpit/src/cockpit/panel.rs",
+      "repository": "josephwylie/ferrite",
+      "revision": "62947f91d5cd6ee494aaae9ed09d794a853e5bab",
+      "raw_url": null,
+      "blob_url": "https://github.com/josephwylie/ferrite/blob/62947f91d5cd6ee494aaae9ed09d794a853e5bab/crates/ferrite-cockpit/src/cockpit/panel.rs",
+      "sha256": "f95a3a9e7a7bae8b0f56fb108d2b7d283fd654b9d282dc1c0c8014546deca653",
+      "line_count": 803,
+      "identical_to_newer_checkout": null
+    },
+    "fpreview": {
+      "path": "crates/ferrite-cockpit/src/cockpit/panel/preview.rs",
+      "repository": "josephwylie/ferrite",
+      "revision": "62947f91d5cd6ee494aaae9ed09d794a853e5bab",
+      "raw_url": null,
+      "blob_url": "https://github.com/josephwylie/ferrite/blob/62947f91d5cd6ee494aaae9ed09d794a853e5bab/crates/ferrite-cockpit/src/cockpit/panel/preview.rs",
+      "sha256": "53da7cd5f787340cafbf5728c3ff8753bb4bc854eda2c09d9d96850b33d174e0",
+      "line_count": 1084,
+      "identical_to_newer_checkout": null
+    },
+    "guest": {
+      "path": "apps/web/src/browser/HostedBrowserWebview.tsx",
+      "repository": "pingdotgg/t3code",
+      "revision": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "raw_url": "https://raw.githubusercontent.com/pingdotgg/t3code/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/browser/HostedBrowserWebview.tsx",
+      "blob_url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/browser/HostedBrowserWebview.tsx",
+      "sha256": "bacfd94c84c28eebb2ea7c1b2ace00d516d20e77a3d0848d5f2e3e4af6b49900",
+      "line_count": 402,
+      "identical_to_newer_checkout": false
+    },
+    "host": {
+      "path": "apps/web/src/browser/ElectronBrowserHost.tsx",
+      "repository": "pingdotgg/t3code",
+      "revision": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "raw_url": "https://raw.githubusercontent.com/pingdotgg/t3code/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/browser/ElectronBrowserHost.tsx",
+      "blob_url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/browser/ElectronBrowserHost.tsx",
+      "sha256": "d51b105071f4c1d8cde227d5d75eddae87f86a0609d9040bb52afb255318e6f7",
+      "line_count": 184,
+      "identical_to_newer_checkout": true
+    },
+    "imageDialog": {
+      "path": "apps/web/src/components/chat/ExpandedImageDialog.tsx",
+      "repository": "pingdotgg/t3code",
+      "revision": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "raw_url": "https://raw.githubusercontent.com/pingdotgg/t3code/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/ExpandedImageDialog.tsx",
+      "blob_url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/ExpandedImageDialog.tsx",
+      "sha256": "012d1608b2badcf2495cc261c9f40d7ab85d531f2507466392a4c66bcad6571e",
+      "line_count": 340,
+      "identical_to_newer_checkout": true
+    },
+    "lifetime": {
+      "path": "apps/web/src/browser/desktopTabLifetime.ts",
+      "repository": "pingdotgg/t3code",
+      "revision": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "raw_url": "https://raw.githubusercontent.com/pingdotgg/t3code/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/browser/desktopTabLifetime.ts",
+      "blob_url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/browser/desktopTabLifetime.ts",
+      "sha256": "23b530e50e59820a08e1197e4f857c6e700b242fbba340ee541a80f7159b7330",
+      "line_count": 84,
+      "identical_to_newer_checkout": true
+    },
+    "linkMenu": {
+      "path": "apps/web/src/components/chat/externalLinkContextMenu.ts",
+      "repository": "pingdotgg/t3code",
+      "revision": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "raw_url": "https://raw.githubusercontent.com/pingdotgg/t3code/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/externalLinkContextMenu.ts",
+      "blob_url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/externalLinkContextMenu.ts",
+      "sha256": "2c5145dab6db2208694890265cda100919fdb83a71066524163cbedd6761359a",
+      "line_count": 124,
+      "identical_to_newer_checkout": true
+    },
+    "manager": {
+      "path": "apps/desktop/src/preview/Manager.ts",
+      "repository": "pingdotgg/t3code",
+      "revision": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "raw_url": "https://raw.githubusercontent.com/pingdotgg/t3code/1264c206aee0dce805d6279809118bc091f29d2f/apps/desktop/src/preview/Manager.ts",
+      "blob_url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/desktop/src/preview/Manager.ts",
+      "sha256": "59c6e4976f4493ba3aca460757c6e10729c09c67509c9bc5e9b35dee2f4afe02",
+      "line_count": 3960,
+      "identical_to_newer_checkout": false
+    },
+    "mini": {
+      "path": "apps/web/src/components/preview/ThreadPreviewMiniPlayer.tsx",
+      "repository": "pingdotgg/t3code",
+      "revision": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "raw_url": "https://raw.githubusercontent.com/pingdotgg/t3code/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/preview/ThreadPreviewMiniPlayer.tsx",
+      "blob_url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/preview/ThreadPreviewMiniPlayer.tsx",
+      "sha256": "21126b9bcd9773c2665efa0e37bd2429db1f4868ef4bd4fa2d29da319db1688e",
+      "line_count": 632,
+      "identical_to_newer_checkout": false
+    },
+    "miniLayout": {
+      "path": "apps/web/src/components/preview/previewMiniPlayerLayout.ts",
+      "repository": "pingdotgg/t3code",
+      "revision": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "raw_url": "https://raw.githubusercontent.com/pingdotgg/t3code/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/preview/previewMiniPlayerLayout.ts",
+      "blob_url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/preview/previewMiniPlayerLayout.ts",
+      "sha256": "2ab8d856ece4a4d960c229c743b2662ada524580b0c0797878dfb94d50e71cff",
+      "line_count": 327,
+      "identical_to_newer_checkout": true
+    },
+    "miniStore": {
+      "path": "apps/web/src/previewMiniPlayerStore.ts",
+      "repository": "pingdotgg/t3code",
+      "revision": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "raw_url": "https://raw.githubusercontent.com/pingdotgg/t3code/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/previewMiniPlayerStore.ts",
+      "blob_url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/previewMiniPlayerStore.ts",
+      "sha256": "986f5c66eb1be78fe040547afcba08d275685d3b9a3c1d279c8df066f04a6560",
+      "line_count": 159,
+      "identical_to_newer_checkout": true
+    },
+    "more": {
+      "path": "apps/web/src/components/preview/PreviewMoreMenu.tsx",
+      "repository": "pingdotgg/t3code",
+      "revision": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "raw_url": "https://raw.githubusercontent.com/pingdotgg/t3code/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/preview/PreviewMoreMenu.tsx",
+      "blob_url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/preview/PreviewMoreMenu.tsx",
+      "sha256": "19271002358b95717a6a4072a13d0517cd844ee3ee940f50aa0dd513d46a9151",
+      "line_count": 187,
+      "identical_to_newer_checkout": true
+    },
+    "panel": {
+      "path": "apps/web/src/components/preview/PreviewPanel.tsx",
+      "repository": "pingdotgg/t3code",
+      "revision": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "raw_url": "https://raw.githubusercontent.com/pingdotgg/t3code/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/preview/PreviewPanel.tsx",
+      "blob_url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/preview/PreviewPanel.tsx",
+      "sha256": "d02116350803b9653ef869fab1d6e3722f7a73856176809e4c1a2dcc4e352e54",
+      "line_count": 61,
+      "identical_to_newer_checkout": true
+    },
+    "pick": {
+      "path": "apps/desktop/src/preview/PickPreload.ts",
+      "repository": "pingdotgg/t3code",
+      "revision": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "raw_url": "https://raw.githubusercontent.com/pingdotgg/t3code/1264c206aee0dce805d6279809118bc091f29d2f/apps/desktop/src/preview/PickPreload.ts",
+      "blob_url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/desktop/src/preview/PickPreload.ts",
+      "sha256": "a3164ad7e395bd06ce9397643574df7ffdf0e27a239bc1e5fbb1c8e28621659a",
+      "line_count": 1832,
+      "identical_to_newer_checkout": false
+    },
+    "remotePip": {
+      "path": "apps/web/src/browser/serverPictureInPicture.ts",
+      "repository": "pingdotgg/t3code",
+      "revision": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "raw_url": "https://raw.githubusercontent.com/pingdotgg/t3code/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/browser/serverPictureInPicture.ts",
+      "blob_url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/browser/serverPictureInPicture.ts",
+      "sha256": "58978ea59c9ce3336961301a08448e3cb733d090f141bc9faaf4ae8711804fb0",
+      "line_count": 197,
+      "identical_to_newer_checkout": false
+    },
+    "reopen": {
+      "path": "apps/web/src/reopenClosedView.ts",
+      "repository": "pingdotgg/t3code",
+      "revision": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "raw_url": "https://raw.githubusercontent.com/pingdotgg/t3code/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/reopenClosedView.ts",
+      "blob_url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/reopenClosedView.ts",
+      "sha256": "0086b93706ea358b98374556ec79d3c4eabcb4809ffde548e56ac0576d1f0709",
+      "line_count": 164,
+      "identical_to_newer_checkout": true
+    },
+    "right": {
+      "path": "apps/web/src/components/chat/ChatRightPanel.tsx",
+      "repository": "pingdotgg/t3code",
+      "revision": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "raw_url": "https://raw.githubusercontent.com/pingdotgg/t3code/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/ChatRightPanel.tsx",
+      "blob_url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/ChatRightPanel.tsx",
+      "sha256": "f149a30f1ab8aa193cfbfd995971198410f6adb0c250d97d4fbaefad900a2513",
+      "line_count": 51,
+      "identical_to_newer_checkout": true
+    },
+    "sentContext": {
+      "path": "apps/web/src/components/chat/UserMessageContextChips.tsx",
+      "repository": "pingdotgg/t3code",
+      "revision": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "raw_url": "https://raw.githubusercontent.com/pingdotgg/t3code/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/UserMessageContextChips.tsx",
+      "blob_url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/UserMessageContextChips.tsx",
+      "sha256": "7450f054a0ddf845c3b481ee99de7ee1c1aeae6b0247ff53e6488c71ac27a9af",
+      "line_count": 602,
+      "identical_to_newer_checkout": false
+    },
+    "session": {
+      "path": "apps/desktop/src/preview/BrowserSession.ts",
+      "repository": "pingdotgg/t3code",
+      "revision": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "raw_url": "https://raw.githubusercontent.com/pingdotgg/t3code/1264c206aee0dce805d6279809118bc091f29d2f/apps/desktop/src/preview/BrowserSession.ts",
+      "blob_url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/desktop/src/preview/BrowserSession.ts",
+      "sha256": "9e66dd7d6c8d6e376d7f9a35ae1f58d82225fb5a5549781551baaba89adc3f03",
+      "line_count": 422,
+      "identical_to_newer_checkout": false
+    },
+    "shell": {
+      "path": "apps/web/src/components/preview/PreviewPanelShell.tsx",
+      "repository": "pingdotgg/t3code",
+      "revision": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "raw_url": "https://raw.githubusercontent.com/pingdotgg/t3code/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/preview/PreviewPanelShell.tsx",
+      "blob_url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/preview/PreviewPanelShell.tsx",
+      "sha256": "d54df2ef4ea19d539a4853b6ed616659ac316df69ddff9f20b7d687dbf34409c",
+      "line_count": 211,
+      "identical_to_newer_checkout": false
+    },
+    "slot": {
+      "path": "apps/web/src/browser/BrowserSurfaceSlot.tsx",
+      "repository": "pingdotgg/t3code",
+      "revision": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "raw_url": "https://raw.githubusercontent.com/pingdotgg/t3code/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/browser/BrowserSurfaceSlot.tsx",
+      "blob_url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/browser/BrowserSurfaceSlot.tsx",
+      "sha256": "aa9faf743b4e0318b6fbb377026aa93803bd31d803489ecbf73e70657f08bdbc",
+      "line_count": 93,
+      "identical_to_newer_checkout": true
+    },
+    "stream": {
+      "path": "apps/web/src/browser/ServerBrowserSurface.tsx",
+      "repository": "pingdotgg/t3code",
+      "revision": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "raw_url": "https://raw.githubusercontent.com/pingdotgg/t3code/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/browser/ServerBrowserSurface.tsx",
+      "blob_url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/browser/ServerBrowserSurface.tsx",
+      "sha256": "54bcee87158596b7593adc1d79d206828807f38b1a9c1fe3f066b5a3dac079a5",
+      "line_count": 957,
+      "identical_to_newer_checkout": true
+    },
+    "surface": {
+      "path": "apps/web/src/components/chat/RightPanelSurfaceContent.tsx",
+      "repository": "pingdotgg/t3code",
+      "revision": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "raw_url": "https://raw.githubusercontent.com/pingdotgg/t3code/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/RightPanelSurfaceContent.tsx",
+      "blob_url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/RightPanelSurfaceContent.tsx",
+      "sha256": "5cbe5a9ad8e0c7a9fa9fab78d0d8673045442c22a774eb58d70b0d74130aa13e",
+      "line_count": 242,
+      "identical_to_newer_checkout": true
+    },
+    "surfaceStore": {
+      "path": "apps/web/src/browser/browserSurfaceStore.ts",
+      "repository": "pingdotgg/t3code",
+      "revision": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "raw_url": "https://raw.githubusercontent.com/pingdotgg/t3code/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/browser/browserSurfaceStore.ts",
+      "blob_url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/browser/browserSurfaceStore.ts",
+      "sha256": "8568c6cd008d6596cdc11b6a47311306ac2589e23b0251456ed0ccb6be125e45",
+      "line_count": 231,
+      "identical_to_newer_checkout": true
+    },
+    "tabs": {
+      "path": "apps/web/src/components/RightPanelTabs.tsx",
+      "repository": "pingdotgg/t3code",
+      "revision": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "raw_url": "https://raw.githubusercontent.com/pingdotgg/t3code/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/RightPanelTabs.tsx",
+      "blob_url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/RightPanelTabs.tsx",
+      "sha256": "de3aeb1ec4c7c10e5aefba9a7ca4a0514b10a3e41d11231359545ac683d2f0a3",
+      "line_count": 1582,
+      "identical_to_newer_checkout": false
+    },
+    "view": {
+      "path": "apps/web/src/components/preview/PreviewView.tsx",
+      "repository": "pingdotgg/t3code",
+      "revision": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "raw_url": "https://raw.githubusercontent.com/pingdotgg/t3code/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/preview/PreviewView.tsx",
+      "blob_url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/preview/PreviewView.tsx",
+      "sha256": "08c06eca1c239f1ff56d718eadc34b1dfb245d28abb053caecfd2f7fc24d8756",
+      "line_count": 1139,
+      "identical_to_newer_checkout": false
+    },
+    "window": {
+      "path": "apps/desktop/src/window/DesktopWindow.ts",
+      "repository": "pingdotgg/t3code",
+      "revision": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "raw_url": "https://raw.githubusercontent.com/pingdotgg/t3code/1264c206aee0dce805d6279809118bc091f29d2f/apps/desktop/src/window/DesktopWindow.ts",
+      "blob_url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/desktop/src/window/DesktopWindow.ts",
+      "sha256": "105e436339f0be888e88206517116cdba92c6d528534016096308ece0616d20e",
+      "line_count": 1131,
+      "identical_to_newer_checkout": false
+    },
+    "appRoot": {
+      "path": "apps/web/src/AppRoot.tsx",
+      "repository": "pingdotgg/t3code",
+      "revision": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "raw_url": "https://raw.githubusercontent.com/pingdotgg/t3code/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/AppRoot.tsx",
+      "blob_url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/AppRoot.tsx",
+      "sha256": "e607f62e31416e12bcbcd48bbb199d976ad1bb63dfacbdcdf07a2bc5791427a8",
+      "line_count": 17,
+      "identical_to_newer_checkout": false
+    },
+    "chatLogic": {
+      "path": "apps/web/src/components/ChatView.logic.ts",
+      "repository": "pingdotgg/t3code",
+      "revision": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "raw_url": "https://raw.githubusercontent.com/pingdotgg/t3code/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/ChatView.logic.ts",
+      "blob_url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/ChatView.logic.ts",
+      "sha256": "b01e54a27a10f0e3d446945de231e80a7a0764d36938ccd3a4b93fe8b81a1654",
+      "line_count": 1508,
+      "identical_to_newer_checkout": false
+    },
+    "package": {
+      "path": "apps/desktop/package.json",
+      "repository": "pingdotgg/t3code",
+      "revision": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "raw_url": "https://raw.githubusercontent.com/pingdotgg/t3code/1264c206aee0dce805d6279809118bc091f29d2f/apps/desktop/package.json",
+      "blob_url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/desktop/package.json",
+      "sha256": "77449a7ae6e1cb8511cf7a20796e95a060e28b7e22c5520c38b3611790caaf82",
+      "line_count": 45,
+      "identical_to_newer_checkout": false
+    },
+    "electron": {
+      "path": "lib/renderer/window-setup.ts",
+      "repository": "electron/electron",
+      "revision": "v44.10.1",
+      "raw_url": "https://raw.githubusercontent.com/electron/electron/v44.10.1/lib/renderer/window-setup.ts",
+      "blob_url": "https://github.com/electron/electron/blob/v44.10.1/lib/renderer/window-setup.ts",
+      "sha256": "d0cb7e3b0f20f8676acb00286d88c64f9bb0fe1430e16ae33fda3e0c8ecd23de",
+      "line_count": 64,
+      "identical_to_newer_checkout": null
+    }
+  },
+  "surfaces": [
+    {
+      "id": "BP-01",
+      "title": "Root ownership and retained browser host",
+      "render_parent_and_gate": "AppRoot mounts ElectronBrowserHost outside RouterProvider and inside AppAtomRegistryProvider, so a route change does not itself unmount the native guests. ChatView separately mounts the selected Workspace surface, thread mini-player, and Thread details card. A server-owned tab can render natively or as a remote stream; server-owned does not always mean streamed.",
+      "composition": "The docked and mini-player components describe presentation rectangles. BrowserSurfaceSlot acquires an owner lease and presents the same runtimeTabId at its measured bounds. The fixed HostedBrowserWebview supplies the actual native page, viewport wrapper, and optional device controls. Remote ServerBrowserSurface supplies a canvas, input bridge, and control UI instead.",
+      "state_and_transitions": "Only the current surface owner can update or release a local tab rectangle. Hosted guest lifetime is distinct from a slot lifetime. Desktop-tab reference count reaching zero schedules tab closure; this is not a promise to preserve every hidden or restarted session.",
+      "native_evidence": {
+        "status": "native-partial",
+        "observed": "Local browser navigation, form input, hide/reopen, target-blank, scripted popup, tab close/reopen, and mini-player coexistence were observed. No remote-stream run was performed.",
+        "limits": "The native run does not reveal every lease, mount, ownership, or reference-count transition."
+      },
+      "ferrite_counterpart": "Ferrite open_browser attaches the thread-owned service, selects its saved active tab, calls preview.show_browser, and upserts one SurfaceId::Browser. The outer panel routes Browser through panel_preview, then Body::Browser through browser_body. Native CEF WebView entities live in a per-thread page map, separate from persisted tab identity.",
+      "prior_audit_coverage": "Browser ownership and page lifetime were traced in browser.md. The original findings count does not enumerate this complete presentation graph.",
+      "omitted_or_unverified_contracts": [
+        "Exercise same-tab dock-to-float-to-dock handoff while preserving form values, scroll, history, selection, and the unsent chat draft.",
+        "Measure or inspect which presentation owns pointer and keyboard input during a handoff, route switch, and guest remount.",
+        "Keep runtimeTabId identity, local native rendering, remote streaming, and source-tab session lifetime distinct in evidence."
+      ],
+      "anchors": [
+        {
+          "source": "appRoot",
+          "line": 8,
+          "label": "Native guests live outside route-owned components",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/AppRoot.tsx#L8",
+          "line_checked": true
+        },
+        {
+          "source": "chat",
+          "line": 3179,
+          "label": "Selected Workspace content",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/ChatView.tsx#L3179",
+          "line_checked": true
+        },
+        {
+          "source": "chat",
+          "line": 3815,
+          "label": "Independent mini-player root",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/ChatView.tsx#L3815",
+          "line_checked": true
+        },
+        {
+          "source": "chat",
+          "line": 3832,
+          "label": "Separate Thread details boundary",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/ChatView.tsx#L3832",
+          "line_checked": true
+        },
+        {
+          "source": "view",
+          "line": 206,
+          "label": "Native versus streamed runtime selection",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/preview/PreviewView.tsx#L206",
+          "line_checked": true
+        },
+        {
+          "source": "host",
+          "line": 128,
+          "label": "Retained native guest host",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/browser/ElectronBrowserHost.tsx#L128",
+          "line_checked": true
+        },
+        {
+          "source": "slot",
+          "line": 29,
+          "label": "Presentation lease",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/browser/BrowserSurfaceSlot.tsx#L29",
+          "line_checked": true
+        },
+        {
+          "source": "surfaceStore",
+          "line": 210,
+          "label": "Exclusive local presentation owner",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/browser/browserSurfaceStore.ts#L210",
+          "line_checked": true
+        },
+        {
+          "source": "lifetime",
+          "line": 44,
+          "label": "Native tab lifetime",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/browser/desktopTabLifetime.ts#L44",
+          "line_checked": true
+        },
+        {
+          "source": "fbrowser",
+          "line": 195,
+          "label": "Ferrite browser entry",
+          "url": "https://github.com/josephwylie/ferrite/blob/62947f91d5cd6ee494aaae9ed09d794a853e5bab/crates/ferrite-cockpit/src/cockpit/browser.rs#L195",
+          "line_checked": true
+        },
+        {
+          "source": "fpanel",
+          "line": 685,
+          "label": "Ferrite preview route",
+          "url": "https://github.com/josephwylie/ferrite/blob/62947f91d5cd6ee494aaae9ed09d794a853e5bab/crates/ferrite-cockpit/src/cockpit/panel.rs#L685",
+          "line_checked": true
+        },
+        {
+          "source": "fpreview",
+          "line": 383,
+          "label": "Ferrite Browser body",
+          "url": "https://github.com/josephwylie/ferrite/blob/62947f91d5cd6ee494aaae9ed09d794a853e5bab/crates/ferrite-cockpit/src/cockpit/panel/preview.rs#L383",
+          "line_checked": true
+        }
+      ]
+    },
+    {
+      "id": "BP-02",
+      "title": "Docked Workspace browser and responsive sheet",
+      "render_parent_and_gate": "ChatView renders ChatRightPanel when rightPanelPresent, an active thread, and a non-embedded chat are present. RightPanelSurfaceContent selects preview, which mounts PreviewPanel in embedded mode inside the shared panel.",
+      "composition": "ChatRightPanel chooses an inline shared tab host or RightPanelSheet. The shared strip owns each T3 browser tab alongside Files, Terminal, Diff, PR, and Side chat. Embedded PreviewPanel adds the browser body without another shared strip. PreviewPanelShell owns collapsible width and retained content.",
+      "state_and_transitions": "Panel visibility, active surface, and browser-session closure are separate operations. Inline collapse returns focus and sets inert before painting. Closing a browser tab remembers a successful snapshot; reopening creates a session from URL, viewport, and profile. It does not restore a captured DOM.",
+      "native_evidence": {
+        "status": "native-partial",
+        "observed": "The local browser opened in the right panel. Command-Option-B hid and reopened it with its active tab and draft retained. Command-W and Command-Shift-T closed and restored its title and URL.",
+        "limits": "The native browser run did not establish narrow-sheet behavior, divider dragging, first-frame width, or browser-specific maximize geometry."
+      },
+      "ferrite_counterpart": "Ferrite has one outer Browser surface with a second browser tab strip inside its Reader-style card. The outer panel has fixed-column/minimum-width rules and a maximized state. Browser pages are not independent peers of Files and Terminal in the outer strip. Existing runtime evidence reproduces sticky Overview width after visiting wide tools.",
+      "prior_audit_coverage": "panel-tools.md explicitly mentions the internal browser strip, and panel-tools-018 plus panel-runtime-correction.md cover sizing. No original browser finding owns the entire nested chrome and close-command hierarchy.",
+      "omitted_or_unverified_contracts": [
+        "Compare outer tabs, inner tabs, Reader header, navigation row, viewport origin, and consumed vertical space at ordinary laptop widths.",
+        "Verify independent hide, close-tab, close-panel, maximize, restore, and narrow-sheet transitions. Record which control each shortcut targets.",
+        "Closing and restoring browser presentation must preserve or clearly reload page state; closing a tab must not close its conversation."
+      ],
+      "anchors": [
+        {
+          "source": "chat",
+          "line": 3931,
+          "label": "Workspace panel root gate",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/ChatView.tsx#L3931",
+          "line_checked": true
+        },
+        {
+          "source": "right",
+          "line": 34,
+          "label": "Inline versus sheet branch",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/ChatRightPanel.tsx#L34",
+          "line_checked": true
+        },
+        {
+          "source": "surface",
+          "line": 85,
+          "label": "Preview surface dispatch",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/RightPanelSurfaceContent.tsx#L85",
+          "line_checked": true
+        },
+        {
+          "source": "panel",
+          "line": 50,
+          "label": "Embedded browser shell",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/preview/PreviewPanel.tsx#L50",
+          "line_checked": true
+        },
+        {
+          "source": "tabs",
+          "line": 1324,
+          "label": "Shared Workspace strip host",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/RightPanelTabs.tsx#L1324",
+          "line_checked": true
+        },
+        {
+          "source": "shell",
+          "line": 132,
+          "label": "Focus and inert on collapse",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/preview/PreviewPanelShell.tsx#L132",
+          "line_checked": true
+        },
+        {
+          "source": "close",
+          "line": 22,
+          "label": "Remember successful browser close",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/preview/closePreviewSession.ts#L22",
+          "line_checked": true
+        },
+        {
+          "source": "reopen",
+          "line": 104,
+          "label": "Recreate browser session",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/reopenClosedView.ts#L104",
+          "line_checked": true
+        },
+        {
+          "source": "fbrowser",
+          "line": 1492,
+          "label": "Ferrite internal browser strip",
+          "url": "https://github.com/josephwylie/ferrite/blob/62947f91d5cd6ee494aaae9ed09d794a853e5bab/crates/ferrite-cockpit/src/cockpit/browser.rs#L1492",
+          "line_checked": true
+        },
+        {
+          "source": "fpreview",
+          "line": 498,
+          "label": "Ferrite Reader-style browser card",
+          "url": "https://github.com/josephwylie/ferrite/blob/62947f91d5cd6ee494aaae9ed09d794a853e5bab/crates/ferrite-cockpit/src/cockpit/panel/preview.rs#L498",
+          "line_checked": true
+        },
+        {
+          "source": "fpanel",
+          "line": 149,
+          "label": "Ferrite tool width floor",
+          "url": "https://github.com/josephwylie/ferrite/blob/62947f91d5cd6ee494aaae9ed09d794a853e5bab/crates/ferrite-cockpit/src/cockpit/panel.rs#L149",
+          "line_checked": true
+        }
+      ]
+    },
+    {
+      "id": "BP-03",
+      "title": "Browser chrome and address editing",
+      "render_parent_and_gate": "PreviewView places PreviewChromeRow before its relative browser body. Its trailing action is PreviewMoreMenu. Availability follows the current tab, runtime, rendered page, and control ownership.",
+      "composition": "T3 has one compact navigation row containing Back, Forward, Refresh or loading status, an expanding address field, annotate/capture/float controls, and More. Open in system browser appears inside the address area on hover/focus when the address is not being edited. The loading track is absolutely positioned under this row. The active address draft is separate from the committed URL.",
+      "state_and_transitions": "Submit navigates the displayed target. Escape cancels address editing. Annotation, capture, and float remain recognizable controls but can be disabled on a failed page. Menu actions are capability-filtered instead of assuming every runtime exposes local DevTools or Find.",
+      "native_evidence": {
+        "status": "native-partial",
+        "observed": "Browser chrome, menus, error-disabled controls, navigation, and committed URL changes were observed. Form input left the chat draft intact.",
+        "limits": "Address-edit survival through redirects, focus order, narrow overflow, hover-only discoverability, and every menu action were not verified."
+      },
+      "ferrite_counterpart": "Ferrite renders its internal browser tabs, then a toolbar with Back/Forward/Reload, conditionally inserted Annotate, Address composer, and Go. A Reader header remains above it. Loading and errors add rows. It has no browser-specific More menu or explicit system-browser escape in that toolbar.",
+      "prior_audit_coverage": "BROWSER-05 through BROWSER-08, BROWSER-10, BROWSER-15, and BROWSER-16 cover selected behavior. They do not establish complete chrome density, hierarchy, focus order, collision, or stable hit targets.",
+      "omitted_or_unverified_contracts": [
+        "Keep the page origin and address bounds stable across loading, errors, annotation availability, and narrow layouts.",
+        "Make external opening and other primary actions discoverable without relying solely on a hover state.",
+        "Resolve address input focus, committed URL, and submitted draft separately, including redirects and Escape."
+      ],
+      "anchors": [
+        {
+          "source": "view",
+          "line": 948,
+          "label": "Browser chrome before body",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/preview/PreviewView.tsx#L948",
+          "line_checked": true
+        },
+        {
+          "source": "chrome",
+          "line": 91,
+          "label": "Navigation row structure",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/preview/PreviewChromeRow.tsx#L91",
+          "line_checked": true
+        },
+        {
+          "source": "chrome",
+          "line": 159,
+          "label": "Address edit draft",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/preview/PreviewChromeRow.tsx#L159",
+          "line_checked": true
+        },
+        {
+          "source": "chrome",
+          "line": 188,
+          "label": "Conditional external-open reveal",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/preview/PreviewChromeRow.tsx#L188",
+          "line_checked": true
+        },
+        {
+          "source": "chrome",
+          "line": 292,
+          "label": "Reserved loading track",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/preview/PreviewChromeRow.tsx#L292",
+          "line_checked": true
+        },
+        {
+          "source": "view",
+          "line": 478,
+          "label": "Runtime-specific More actions",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/preview/PreviewView.tsx#L478",
+          "line_checked": true
+        },
+        {
+          "source": "fbrowser",
+          "line": 1406,
+          "label": "Ferrite browser toolbar",
+          "url": "https://github.com/josephwylie/ferrite/blob/62947f91d5cd6ee494aaae9ed09d794a853e5bab/crates/ferrite-cockpit/src/cockpit/browser.rs#L1406",
+          "line_checked": true
+        },
+        {
+          "source": "fbrowser",
+          "line": 1452,
+          "label": "Ferrite conditional annotation control",
+          "url": "https://github.com/josephwylie/ferrite/blob/62947f91d5cd6ee494aaae9ed09d794a853e5bab/crates/ferrite-cockpit/src/cockpit/browser.rs#L1452",
+          "line_checked": true
+        },
+        {
+          "source": "fbrowser",
+          "line": 1522,
+          "label": "Ferrite loading row",
+          "url": "https://github.com/josephwylie/ferrite/blob/62947f91d5cd6ee494aaae9ed09d794a853e5bab/crates/ferrite-cockpit/src/cockpit/browser.rs#L1522",
+          "line_checked": true
+        }
+      ]
+    },
+    {
+      "id": "BP-04",
+      "title": "Local guest, remote stream, and control overlays",
+      "render_parent_and_gate": "PreviewView chooses ServerBrowserSurface only for server-owned tabs that do not render natively. Otherwise it presents a local BrowserSurfaceSlot when a desktop bridge exists. A missing bridge has its own explanation.",
+      "composition": "The local guest receives native form and page input. The remote branch renders a control bar, canvas, hidden text-input bridge, file chooser, JavaScript-dialog card, host setup, and reconnect/denied states. The control bar can sit at the bottom in the mini-player. The remote page owns a server session and streamed input rather than a local Electron DOM.",
+      "state_and_transitions": "Control ownership gates input and the main browser toolbar. Take control and Release control are explicit server messages. Local and streamed branches cannot share a blanket assertion about prompts, permissions, IME, or popup implementation.",
+      "native_evidence": {
+        "status": "source-only-for-stream",
+        "observed": "Native local input and form behavior were exercised.",
+        "limits": "Remote control transfer, stream reconnect, file chooser, streamed dialogs, and denied access were not exercised."
+      },
+      "ferrite_counterpart": "Ferrite exposes manual-intervention ownership and a local CEF host through browser.rs and visual/element.rs. The inspected Browser surface has no equivalent remotely streamed canvas/control-bar branch. This does not classify all Ferrite remote execution features as missing.",
+      "prior_audit_coverage": "Input ownership is partly covered by input-focus-001 and input-focus-006. No original browser finding maps every remote-stream child or presentation state.",
+      "omitted_or_unverified_contracts": [
+        "Record local-native and streamed browser observations under separate capability gates.",
+        "Verify control ownership is visible, inputs are rejected or delivered to the correct owner, and reconnect does not act on a stale page.",
+        "Do not generalize the observed local Electron Prompt exception to the remote stream, whose installed source has a Prompt input."
+      ],
+      "anchors": [
+        {
+          "source": "view",
+          "line": 207,
+          "label": "Native server-tab versus streamed branch",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/preview/PreviewView.tsx#L207",
+          "line_checked": true
+        },
+        {
+          "source": "view",
+          "line": 225,
+          "label": "Remote input gating",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/preview/PreviewView.tsx#L225",
+          "line_checked": true
+        },
+        {
+          "source": "view",
+          "line": 1019,
+          "label": "Remote body conditional",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/preview/PreviewView.tsx#L1019",
+          "line_checked": true
+        },
+        {
+          "source": "view",
+          "line": 1066,
+          "label": "Local guest or missing-bridge conditional",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/preview/PreviewView.tsx#L1066",
+          "line_checked": true
+        },
+        {
+          "source": "stream",
+          "line": 743,
+          "label": "Remote control and canvas root",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/browser/ServerBrowserSurface.tsx#L743",
+          "line_checked": true
+        },
+        {
+          "source": "stream",
+          "line": 797,
+          "label": "Remote text input bridge",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/browser/ServerBrowserSurface.tsx#L797",
+          "line_checked": true
+        },
+        {
+          "source": "stream",
+          "line": 825,
+          "label": "Remote file chooser",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/browser/ServerBrowserSurface.tsx#L825",
+          "line_checked": true
+        },
+        {
+          "source": "stream",
+          "line": 856,
+          "label": "Remote JavaScript dialog card",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/browser/ServerBrowserSurface.tsx#L856",
+          "line_checked": true
+        },
+        {
+          "source": "stream",
+          "line": 911,
+          "label": "Remote denied/reconnect state",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/browser/ServerBrowserSurface.tsx#L911",
+          "line_checked": true
+        },
+        {
+          "source": "felement",
+          "line": 270,
+          "label": "Ferrite native input forwarding",
+          "url": "https://github.com/josephwylie/ferrite/blob/62947f91d5cd6ee494aaae9ed09d794a853e5bab/crates/ferrite-pane/src/visual/element.rs#L270",
+          "line_checked": true
+        }
+      ]
+    },
+    {
+      "id": "BP-05",
+      "title": "Interactive in-app browser mini-player",
+      "render_parent_and_gate": "ChatView renders ThreadPreviewMiniPlayer separately within the chat canvas when the active thread has a visible mini-player and preview access. This component can also host a device stream; that device branch is not browser device emulation. The visibility helper suppresses the mini-player while the rendered right-panel surface is that same source tab, so one page is not shown in two interactive positions.",
+      "composition": "The browser mini-player presents the same local runtime tab through BrowserSurfaceSlot with fitSourceContent, rounded corners, and z-index 48. Its shell has a shadow layer at 47, ring and controls at 49, eight resize handles, and a small top-right handle. Hover/focus reveals an action pill with Open in right panel, a separate-window action when available, and Close. Touch tap reveals the pill. Remote streams use their own control bar below the content.",
+      "state_and_transitions": "Float from docked chrome opens the mini-player and hides the whole right panel. Open in right panel closes the mini-player and opens that same browser tab. Close deletes mini-player presentation state, not the browser session. A separate source switch while still open can retain position and width. Store state is not persisted through a persistence middleware here. The actual chat-canvas caller initially places a new player near the lower right, then adjusts around chat, composer, Find, and the separate Thread details card.",
+      "native_evidence": {
+        "status": "native-partial",
+        "observed": "A floating preview existed alongside another right-panel tab. Its dedicated Close control worked.",
+        "limits": "Initial activation was confounded. Drag, eight resize directions, page interaction while floating, dock return, touch pill, focus, auto-placement, retained geometry, and state continuity were not certified."
+      },
+      "ferrite_counterpart": "No mini-player entry or matching render branch exists in the inspected Ferrite Browser toolbar, Reader browser body, or SurfaceId browser route. Ferrite generic float windows are not proof of an interactive browser mini-player.",
+      "prior_audit_coverage": "Original browser.md mentions floating preview in its supported-capabilities paragraph. Checklist BROWSER-26 plans the lifecycle. No standalone original finding or acceptance suite captures its complete placement and interaction contract.",
+      "omitted_or_unverified_contracts": [
+        "Treat the mini-player as a distinct presentation, not as Thread details or a resized docked panel.",
+        "Exercise explicit float, automatic appearance, drag, aspect-preserving resize, pill reveal, interaction, dock return, Close, and reopen with the same page sentinel.",
+        "Verify no overlap blocks composer, Find, details controls, dialogs, or sidebar menus, including short and narrow windows.",
+        "Verify whether Close/reopen intentionally resets geometry and whether switching browser sources retains it."
+      ],
+      "anchors": [
+        {
+          "source": "chat",
+          "line": 1921,
+          "label": "Mini-player visibility and access gate",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/ChatView.tsx#L1921",
+          "line_checked": true
+        },
+        {
+          "source": "chat",
+          "line": 3815,
+          "label": "Independent mini-player root",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/ChatView.tsx#L3815",
+          "line_checked": true
+        },
+        {
+          "source": "view",
+          "line": 465,
+          "label": "Float hides docked panel",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/preview/PreviewView.tsx#L465",
+          "line_checked": true
+        },
+        {
+          "source": "mini",
+          "line": 230,
+          "label": "Return same tab to dock",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/preview/ThreadPreviewMiniPlayer.tsx#L230",
+          "line_checked": true
+        },
+        {
+          "source": "mini",
+          "line": 270,
+          "label": "Browser mini-player composition",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/preview/ThreadPreviewMiniPlayer.tsx#L270",
+          "line_checked": true
+        },
+        {
+          "source": "mini",
+          "line": 336,
+          "label": "Interactive native surface slot",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/preview/ThreadPreviewMiniPlayer.tsx#L336",
+          "line_checked": true
+        },
+        {
+          "source": "mini",
+          "line": 460,
+          "label": "Presentation-only Close",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/preview/ThreadPreviewMiniPlayer.tsx#L460",
+          "line_checked": true
+        },
+        {
+          "source": "mini",
+          "line": 483,
+          "label": "Drag and resize updates",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/preview/ThreadPreviewMiniPlayer.tsx#L483",
+          "line_checked": true
+        },
+        {
+          "source": "mini",
+          "line": 526,
+          "label": "Mini-player shell and controls",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/preview/ThreadPreviewMiniPlayer.tsx#L526",
+          "line_checked": true
+        },
+        {
+          "source": "mini",
+          "line": 616,
+          "label": "Eight resize handles",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/preview/ThreadPreviewMiniPlayer.tsx#L616",
+          "line_checked": true
+        },
+        {
+          "source": "miniStore",
+          "line": 64,
+          "label": "Mini-player state lifecycle",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/previewMiniPlayerStore.ts#L64",
+          "line_checked": true
+        },
+        {
+          "source": "miniLayout",
+          "line": 12,
+          "label": "Geometry and stacking constants",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/preview/previewMiniPlayerLayout.ts#L12",
+          "line_checked": true
+        },
+        {
+          "source": "canvas",
+          "line": 66,
+          "label": "Actual initial bottom placement",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/chatCanvasLayout.ts#L66",
+          "line_checked": true
+        },
+        {
+          "source": "canvas",
+          "line": 172,
+          "label": "Details-card overlap output",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/chatCanvasLayout.ts#L172",
+          "line_checked": true
+        },
+        {
+          "source": "fbrowser",
+          "line": 1406,
+          "label": "Inspected Ferrite browser entry controls",
+          "url": "https://github.com/josephwylie/ferrite/blob/62947f91d5cd6ee494aaae9ed09d794a853e5bab/crates/ferrite-cockpit/src/cockpit/browser.rs#L1406",
+          "line_checked": true
+        },
+        {
+          "source": "chatLogic",
+          "line": 134,
+          "label": "Suppress duplicate same-source presentation",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/ChatView.logic.ts#L134",
+          "line_checked": true
+        }
+      ]
+    },
+    {
+      "id": "BP-06",
+      "title": "Automatic browser reveal and presentation selection",
+      "render_parent_and_gate": "agentOpenedPreviews watches preview-session changes beyond the current thread. A fresh revealed server session can open a floating preview, while a forced reveal can focus an existing panel tab. This is a different entry path from clicking Float.",
+      "composition": "An automatic reveal is gated by browserAutoShowFloatingPreview unless force is set. Freshness is computed after the first loaded baseline, so an initial reload does not automatically resurrect dismissed previews. Session reconciliation closes a mini-player whose source session disappeared. Popup routing preserves whether a streamed popup originated in the panel or floating presentation.",
+      "state_and_transitions": "Only one mini-player source is stored per thread. Automatic source changes can therefore replace which preview appears without creating another independent mini-player frame.",
+      "native_evidence": {
+        "status": "source-only",
+        "observed": "Browser settings exposed auto-floating preview configuration.",
+        "limits": "No agent-opened browser auto-reveal, forced reveal, baseline reload, or automatic source replacement was exercised."
+      },
+      "ferrite_counterpart": "Ferrite browser requests can reveal its Browser panel while checking the surface selected since the request. This is a docked reveal path, not floating presentation. Browser source state remains thread-owned.",
+      "prior_audit_coverage": "Original reports mention broader agent browser capabilities, but do not independently verify this automatic presentation workflow. The browser mini-player lifecycle has no dedicated original finding.",
+      "omitted_or_unverified_contracts": [
+        "Test explicit float and auto-reveal separately. Respect disabled auto-preview and distinguish a forced operator reveal.",
+        "Do not resurrect dismissed previews on a baseline reload. Replace or retain the intended source when another session appears.",
+        "Verify background-thread reveals do not steal the currently focused conversation or draft."
+      ],
+      "anchors": [
+        {
+          "source": "auto",
+          "line": 37,
+          "label": "Auto-floating and forced reveal",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/preview/agentOpenedPreviews.ts#L37",
+          "line_checked": true
+        },
+        {
+          "source": "auto",
+          "line": 64,
+          "label": "Session reconciliation",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/preview/agentOpenedPreviews.ts#L64",
+          "line_checked": true
+        },
+        {
+          "source": "auto",
+          "line": 87,
+          "label": "Fresh-reveal baseline",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/preview/agentOpenedPreviews.ts#L87",
+          "line_checked": true
+        },
+        {
+          "source": "auto",
+          "line": 101,
+          "label": "Watched reveal changes",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/preview/agentOpenedPreviews.ts#L101",
+          "line_checked": true
+        },
+        {
+          "source": "auto",
+          "line": 240,
+          "label": "All-thread reveal lifecycle",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/preview/agentOpenedPreviews.ts#L240",
+          "line_checked": true
+        },
+        {
+          "source": "miniStore",
+          "line": 64,
+          "label": "One mini-player source per thread",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/previewMiniPlayerStore.ts#L64",
+          "line_checked": true
+        },
+        {
+          "source": "fbrowser",
+          "line": 637,
+          "label": "Ferrite guarded docked reveal",
+          "url": "https://github.com/josephwylie/ferrite/blob/62947f91d5cd6ee494aaae9ed09d794a853e5bab/crates/ferrite-cockpit/src/cockpit/browser.rs#L637",
+          "line_checked": true
+        }
+      ]
+    },
+    {
+      "id": "BP-07",
+      "title": "Native picture-in-picture preview mirror and remote video PiP",
+      "render_parent_and_gate": "The docked More menu and mini-player pill can request a separate window. This is distinct from the in-app mini-player and from a website-script popup.",
+      "composition": "For native guests Manager creates an always-on-top BrowserWindow, with native resizing, minimum dimensions, no maximize or minimize, skipped taskbar, and macOS panel behavior. Its document contains an image that receives captured JPEG frames. The inspected separate-window document does not forward website input. It is a visual mirror, not another interactive browser tab. Remote server picture-in-picture instead uses canvas-to-video capture and an interactive:false stream, subject to browser support.",
+      "state_and_transitions": "Opening a native mirror validates the source webContents and reuses an existing mirror for that tab. Closing releases its mirror session and updates pictureInPicture without navigating or closing the source tab. Frame delivery adjusts the native window aspect ratio. The remote stream survives React panel unmounting through module-level ownership.",
+      "native_evidence": {
+        "status": "source-only",
+        "observed": "Separate-window actions were visible.",
+        "limits": "No separate preview window was opened or verified during the recorded browser sequence. Native geometry, stacking, other-workspace visibility, source continuity, failure, and closure remain untested."
+      },
+      "ferrite_counterpart": "No corresponding separate-preview action appears in the inspected Ferrite Browser toolbar or browser SurfaceId dispatch. Generic app windows and the image lightbox are different presentation types.",
+      "prior_audit_coverage": "Original browser.md names separate preview windows and checklist BROWSER-27 plans inspection. There is no standalone original finding or complete lifecycle record.",
+      "omitted_or_unverified_contracts": [
+        "Do not describe the native image mirror as an interactive browser window or confuse it with window.open.",
+        "Open from docked and floating presentations, resize, switch threads, close the source, and close the mirror. Verify no orphan window or capture activity remains.",
+        "Distinguish the source-supported disabled minimization from a product requirement to add it. Verify current page, title, aspect ratio, and return route."
+      ],
+      "anchors": [
+        {
+          "source": "view",
+          "line": 519,
+          "label": "Native separate-window request",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/preview/PreviewView.tsx#L519",
+          "line_checked": true
+        },
+        {
+          "source": "mini",
+          "line": 235,
+          "label": "Mini-player separate-window action",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/preview/ThreadPreviewMiniPlayer.tsx#L235",
+          "line_checked": true
+        },
+        {
+          "source": "manager",
+          "line": 167,
+          "label": "Mirror document contains frame image",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/desktop/src/preview/Manager.ts#L167",
+          "line_checked": true
+        },
+        {
+          "source": "manager",
+          "line": 2933,
+          "label": "Native mirror lifecycle",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/desktop/src/preview/Manager.ts#L2933",
+          "line_checked": true
+        },
+        {
+          "source": "manager",
+          "line": 2961,
+          "label": "Native mirror BrowserWindow shape",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/desktop/src/preview/Manager.ts#L2961",
+          "line_checked": true
+        },
+        {
+          "source": "manager",
+          "line": 3024,
+          "label": "Native close and floating level",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/desktop/src/preview/Manager.ts#L3024",
+          "line_checked": true
+        },
+        {
+          "source": "manager",
+          "line": 2864,
+          "label": "Mirror release without tab closure",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/desktop/src/preview/Manager.ts#L2864",
+          "line_checked": true
+        },
+        {
+          "source": "remotePip",
+          "line": 25,
+          "label": "Remote mirror ownership outside React",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/browser/serverPictureInPicture.ts#L25",
+          "line_checked": true
+        },
+        {
+          "source": "remotePip",
+          "line": 67,
+          "label": "Remote video PiP path",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/browser/serverPictureInPicture.ts#L67",
+          "line_checked": true
+        },
+        {
+          "source": "remotePip",
+          "line": 115,
+          "label": "Remote mirror non-interactive stream",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/browser/serverPictureInPicture.ts#L115",
+          "line_checked": true
+        },
+        {
+          "source": "fbrowser",
+          "line": 1406,
+          "label": "Inspected Ferrite toolbar",
+          "url": "https://github.com/josephwylie/ferrite/blob/62947f91d5cd6ee494aaae9ed09d794a853e5bab/crates/ferrite-cockpit/src/cockpit/browser.rs#L1406",
+          "line_checked": true
+        }
+      ]
+    },
+    {
+      "id": "BP-08",
+      "title": "Detached DevTools window",
+      "render_parent_and_gate": "More exposes DevTools for a local native tab, including server-owned tabs rendered natively. A pure remote stream without a native guest does not receive that action through this branch.",
+      "composition": "Manager opens Chromium DevTools in detach mode for the exact guest webContents. This is its own native development window, not a browser tab, in-app floating preview, or image mirror.",
+      "state_and_transitions": "An already-open inspector receives focus. Opening detaches the control session; closing restores it. The source tab remains the inspected target.",
+      "native_evidence": {
+        "status": "native-completed-bounded",
+        "observed": "After separately confirming the Amber page URL, DevTools Console displayed the actual unsupported Prompt error twice. Both inspected DevTools windows were closed.",
+        "limits": "The initial unsettled tab selection targeted Cobalt and is not recorded as a targeting defect. No all-runtime, repeated-open, debug-pause, or control-restoration proof follows from this one Console check."
+      },
+      "ferrite_counterpart": "BROWSER-10 records no browser DevTools control in Ferrite. Agent browser observation is not a human DevTools UI.",
+      "prior_audit_coverage": "BROWSER-10 owns the capability candidate. Earlier menu-only coverage has been upgraded only for the confirmed native Console sequence.",
+      "omitted_or_unverified_contracts": [
+        "Match the inspector to a separately verified tab identity. Reopen focuses one inspector rather than multiplying it.",
+        "Close the inspector and verify page input and agent/manual control resume on the same tab."
+      ],
+      "anchors": [
+        {
+          "source": "view",
+          "line": 487,
+          "label": "Native-server DevTools gate",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/preview/PreviewView.tsx#L487",
+          "line_checked": true
+        },
+        {
+          "source": "view",
+          "line": 513,
+          "label": "Local native DevTools action",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/preview/PreviewView.tsx#L513",
+          "line_checked": true
+        },
+        {
+          "source": "manager",
+          "line": 2165,
+          "label": "Detached inspector ownership and restoration",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/desktop/src/preview/Manager.ts#L2165",
+          "line_checked": true
+        },
+        {
+          "source": "manager",
+          "line": 2178,
+          "label": "Detached DevTools window",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/desktop/src/preview/Manager.ts#L2178",
+          "line_checked": true
+        },
+        {
+          "source": "more",
+          "line": 99,
+          "label": "DevTools menu branch",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/preview/PreviewMoreMenu.tsx#L99",
+          "line_checked": true
+        }
+      ]
+    },
+    {
+      "id": "BP-09",
+      "title": "Browser device viewport inside the selected presentation",
+      "render_parent_and_gate": "A non-fill viewport adds device controls. For native guests HostedBrowserWebview owns the toolbar and resize handles. For remote streams PreviewView inserts the toolbar above the streamed body. Mini-player fitSourceContent suppresses the native device toolbar.",
+      "composition": "The docked viewport can be a centered/scaled constrained page within a larger browser area, with preset, width, height, aspect lock, rotation, eight resize handles, and a drag-size label. The outer panel width and actual page viewport are separate dimensions. This is browser viewport emulation, not the device-stream mini-player branch.",
+      "state_and_transitions": "Choosing a preset updates shared viewport state. Rotation swaps dimensions and adjusts a locked ratio. Closing returns to fill. A mini-player fits the chosen source content without recreating that docked toolbar.",
+      "native_evidence": {
+        "status": "native-partial",
+        "observed": "iPhone 12 Pro displayed 390 by 844, rotation displayed 844 by 390, and closing restored normal browser view. Controls for dimensions, lock, and handles were exposed.",
+        "limits": "Actual innerWidth, media-query behavior, touch/user-agent emulation, custom dimensions, aspect-lock behavior, drag resizing, zoom scaling, and handoff were not measured."
+      },
+      "ferrite_counterpart": "Ferrite native browser bounds follow the rendered WebView area. Browser Action and the toolbar lack an independent page viewport setting. Panel resizing changes page dimensions.",
+      "prior_audit_coverage": "BROWSER-09 owns the missing independent viewport capability. Original acceptance did not map every native/stream/floating placement variant.",
+      "omitted_or_unverified_contracts": [
+        "Verify actual CSS viewport dimensions independently of displayed controls, including rotation, zoom, and constrained panel fitting.",
+        "Preserve chosen viewport across float/dock and distinguish it from native window size.",
+        "Check toolbar and handles remain reachable near edges and under remote control gating."
+      ],
+      "anchors": [
+        {
+          "source": "guest",
+          "line": 237,
+          "label": "Native toolbar suppressed for fitted mini-player",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/browser/HostedBrowserWebview.tsx#L237",
+          "line_checked": true
+        },
+        {
+          "source": "guest",
+          "line": 317,
+          "label": "Native viewport wrapper and toolbar",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/browser/HostedBrowserWebview.tsx#L317",
+          "line_checked": true
+        },
+        {
+          "source": "guest",
+          "line": 377,
+          "label": "Native resize handles and drag label",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/browser/HostedBrowserWebview.tsx#L377",
+          "line_checked": true
+        },
+        {
+          "source": "view",
+          "line": 1021,
+          "label": "Stream viewport toolbar",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/preview/PreviewView.tsx#L1021",
+          "line_checked": true
+        },
+        {
+          "source": "device",
+          "line": 145,
+          "label": "Preset application",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/browser/BrowserDeviceToolbar.tsx#L145",
+          "line_checked": true
+        },
+        {
+          "source": "device",
+          "line": 153,
+          "label": "Viewport rotation",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/browser/BrowserDeviceToolbar.tsx#L153",
+          "line_checked": true
+        },
+        {
+          "source": "mini",
+          "line": 341,
+          "label": "Mini-player fits source content",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/preview/ThreadPreviewMiniPlayer.tsx#L341",
+          "line_checked": true
+        },
+        {
+          "source": "felement",
+          "line": 525,
+          "label": "Ferrite native viewport follows bounds",
+          "url": "https://github.com/josephwylie/ferrite/blob/62947f91d5cd6ee494aaae9ed09d794a853e5bab/crates/ferrite-pane/src/visual/element.rs#L525",
+          "line_checked": true
+        }
+      ]
+    },
+    {
+      "id": "BP-10",
+      "title": "Annotation overlay and movable annotation editor",
+      "render_parent_and_gate": "The docked annotation control starts the installed guest preload overlay when a usable native page and bridge exist. PreviewView separately coordinates voice and restores prior host focus. A failed page disables the entry.",
+      "composition": "PickPreload attaches a fixed full-viewport host with a closed shadow root. It paints outlines, regions, and freehand SVG above the webpage. A compact tool strip is fixed near the top center. Selecting targets opens a bounded note editor placed beside the target using candidate positions and viewport clamping. Expanded editing enables a drag handle and style controls. These floating controls live inside the guest, not in the host Thread details card.",
+      "state_and_transitions": "Capture-phase page handlers keep annotation input from activating page content. Escape cancels. Plain Enter in the note attaches, Command/Control-Enter requests direct send when allowed, and Shift-Enter remains text. A successful accepted pick outlives later clicks/unmount for draft insertion; screenshot failure retains the note with visible feedback.",
+      "native_evidence": {
+        "status": "native-partial",
+        "observed": "Select/Region/Draw/Erase controls were exposed. Selecting h1, writing a note, attaching with Enter, expanding its composer chip, and sending produced real Sonnet receipt of metadata and screenshot.",
+        "limits": "Editor drag/expand geometry, region/draw/erase execution, edge collision, cancellation, voice, direct-send shortcut, screenshot failure, and transition interruption were not certified."
+      },
+      "ferrite_counterpart": "Ferrite browser annotation first adds Region/Select element/Cancel controls and an occluding selection layer above the WebView. After capture, Phase::Editing replaces the browser body with AnnotationEditor. It does not use T3 guest-local floating note/style-editor composition. Its editor already has drawing tools, comment text, undo/redo, and retained capture evidence.",
+      "prior_audit_coverage": "Original browser report described annotation as supported Ferrite behavior. BROWSER-14 concerns direct export, not absence of annotation. The original tally does not independently cover overlay placement, Editor-phase body replacement, or annotation keyboard/geometry contracts.",
+      "omitted_or_unverified_contracts": [
+        "Compare selection chrome, target visibility, editor placement, viewport consumption, cancel/return, and keyboard ownership as explicit visual contracts.",
+        "Verify overlay input cannot click the underlying website or send the unrelated chat draft.",
+        "Exercise the same target/note/screenshot through draft inspection and actual provider receipt, including cancel and failed capture."
+      ],
+      "anchors": [
+        {
+          "source": "view",
+          "line": 771,
+          "label": "Annotation entry and coordination",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/preview/PreviewView.tsx#L771",
+          "line_checked": true
+        },
+        {
+          "source": "view",
+          "line": 793,
+          "label": "Focus restoration after pick",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/preview/PreviewView.tsx#L793",
+          "line_checked": true
+        },
+        {
+          "source": "pick",
+          "line": 564,
+          "label": "Guest-local fixed annotation overlay",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/desktop/src/preview/PickPreload.ts#L564",
+          "line_checked": true
+        },
+        {
+          "source": "pick",
+          "line": 604,
+          "label": "Top-center tool strip and note editor",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/desktop/src/preview/PickPreload.ts#L604",
+          "line_checked": true
+        },
+        {
+          "source": "pick",
+          "line": 1260,
+          "label": "Editor clamping and target-adjacent placement",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/desktop/src/preview/PickPreload.ts#L1260",
+          "line_checked": true
+        },
+        {
+          "source": "pick",
+          "line": 1335,
+          "label": "Expanded editor and dragging",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/desktop/src/preview/PickPreload.ts#L1335",
+          "line_checked": true
+        },
+        {
+          "source": "pick",
+          "line": 1657,
+          "label": "Annotation keyboard ownership",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/desktop/src/preview/PickPreload.ts#L1657",
+          "line_checked": true
+        },
+        {
+          "source": "annotationKeys",
+          "line": 11,
+          "label": "Attach versus direct-send Enter policy",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/desktop/src/preview/AnnotationKeyboard.ts#L11",
+          "line_checked": true
+        },
+        {
+          "source": "view",
+          "line": 828,
+          "label": "Accepted annotation draft and image",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/preview/PreviewView.tsx#L828",
+          "line_checked": true
+        },
+        {
+          "source": "fannotations",
+          "line": 556,
+          "label": "Ferrite selection/editor body phases",
+          "url": "https://github.com/josephwylie/ferrite/blob/62947f91d5cd6ee494aaae9ed09d794a853e5bab/crates/ferrite-cockpit/src/cockpit/browser/annotations.rs#L556",
+          "line_checked": true
+        },
+        {
+          "source": "fannotations",
+          "line": 629,
+          "label": "Ferrite occluding selection overlay",
+          "url": "https://github.com/josephwylie/ferrite/blob/62947f91d5cd6ee494aaae9ed09d794a853e5bab/crates/ferrite-cockpit/src/cockpit/browser/annotations.rs#L629",
+          "line_checked": true
+        },
+        {
+          "source": "feditor",
+          "line": 205,
+          "label": "Ferrite full annotation editor",
+          "url": "https://github.com/josephwylie/ferrite/blob/62947f91d5cd6ee494aaae9ed09d794a853e5bab/crates/ferrite-pane/src/annotation_editor.rs#L205",
+          "line_checked": true
+        }
+      ]
+    },
+    {
+      "id": "BP-11",
+      "title": "Annotation detail cards and expanded image preview",
+      "render_parent_and_gate": "An attached annotation becomes a composer context chip with an expandable detail view and optional screenshot. Sent context uses its own detail card. Clicking its image can open the shared ExpandedImageDialogHost mounted by ChatView.",
+      "composition": "Composer and sent cards show page identity, note, target counts, selected element details, and a bounded image crop. The expanded image is a modal media viewer with close, zoom/pan, and gallery navigation when applicable. This image dialog is distinct from browser presentation, separate-window frame mirroring, and the live annotation editor.",
+      "state_and_transitions": "The annotation record and screenshot attachment are related but separate payloads. Missing screenshots receive explicit text. Expanding and closing media must return to the same draft/history state.",
+      "native_evidence": {
+        "status": "native-partial",
+        "observed": "The annotation chip detail card showed title, note, and element count. A prior ordinary composer attachment preview opened a centered image at 100% and Escape preserved the draft. Real annotation send and screenshot receipt were observed.",
+        "limits": "The ordinary attachment preview is not proof that the annotation screenshot itself was expanded. Gallery, zoom/pan, failed image loading, and modal coexistence with an active mini-player were not exercised."
+      },
+      "ferrite_counterpart": "Ferrite retained BrowserAnnotation previews render capture URL, comment, and annotation stage through the Reader card. Ordinary image links/attachments open the whole-window lightbox, which has filename, zoom, Save a copy, Open in app, close, and gallery navigation. The browser annotation editor and retained review stage are distinct from that lightbox.",
+      "prior_audit_coverage": "Attachment and quote reports cover some modal/draft behavior. Original browser.md did not fully map composer detail, sent detail, retained annotation review, and lightbox as separate presentations.",
+      "omitted_or_unverified_contracts": [
+        "Identify exactly which image was expanded. Do not count an ordinary attachment as annotation-preview coverage.",
+        "Verify detail expansion, image modal, Escape, remove, send, and reopen preserve note/image association and draft contents.",
+        "Keep the modal above local webview and mini-player input layers and restore focus without transcript jump."
+      ],
+      "anchors": [
+        {
+          "source": "context",
+          "line": 442,
+          "label": "Composer annotation context detail",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/composerContextPresentation.tsx#L442",
+          "line_checked": true
+        },
+        {
+          "source": "sentContext",
+          "line": 142,
+          "label": "Sent annotation card and image expansion",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/UserMessageContextChips.tsx#L142",
+          "line_checked": true
+        },
+        {
+          "source": "imageDialog",
+          "line": 161,
+          "label": "Expanded media modal",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/ExpandedImageDialog.tsx#L161",
+          "line_checked": true
+        },
+        {
+          "source": "imageDialog",
+          "line": 329,
+          "label": "Thread-scoped expanded image host",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/ExpandedImageDialog.tsx#L329",
+          "line_checked": true
+        },
+        {
+          "source": "fpreview",
+          "line": 384,
+          "label": "Ferrite retained annotation review",
+          "url": "https://github.com/josephwylie/ferrite/blob/62947f91d5cd6ee494aaae9ed09d794a853e5bab/crates/ferrite-cockpit/src/cockpit/panel/preview.rs#L384",
+          "line_checked": true
+        },
+        {
+          "source": "flightbox",
+          "line": 27,
+          "label": "Ferrite whole-window lightbox",
+          "url": "https://github.com/josephwylie/ferrite/blob/62947f91d5cd6ee494aaae9ed09d794a853e5bab/crates/ferrite-cockpit/src/cockpit/lightbox.rs#L27",
+          "line_checked": true
+        },
+        {
+          "source": "flightbox",
+          "line": 60,
+          "label": "Ferrite media viewer controls",
+          "url": "https://github.com/josephwylie/ferrite/blob/62947f91d5cd6ee494aaae9ed09d794a853e5bab/crates/ferrite-cockpit/src/cockpit/lightbox.rs#L60",
+          "line_checked": true
+        }
+      ]
+    },
+    {
+      "id": "BP-12",
+      "title": "Direct screenshot export and recording feedback",
+      "render_parent_and_gate": "The browser capture button is available on supported native tabs. Plain click captures a still image; Shift-click follows a distinct recording path. The mini-player shell mirrors recording status but does not add the full docked capture toolbar.",
+      "composition": "A still capture writes a PNG artifact and produces a toast with Copy image, Copy path, and Reveal in Finder actions. This artifact is page content, not app chrome. Recording adds an active camera/indicator state and separate start/stop/export handling. The two output types cannot be verified by the same screenshot result.",
+      "state_and_transitions": "The saved artifact has its own durable path. Capturing does not imply attaching to the composer. Annotation capture is a separate operation with different crop and context ownership.",
+      "native_evidence": {
+        "status": "native-partial",
+        "observed": "A direct screenshot was saved, its path was copied and pasted, and the exported PNG was independently retained and inspected as browser content only.",
+        "limits": "Copy image and Reveal were visible but not exercised. Recording start/stop, active-state continuity, playback, and export failure were not verified."
+      },
+      "ferrite_counterpart": "Ferrite Browser toolbar enters annotation-oriented capture. Retained captures and its lightbox already support later image viewing/export actions, but the inspected browser chrome has no direct plain screenshot or recording command. Existing screenshot-capable agent operations are not equivalent operator entry points.",
+      "prior_audit_coverage": "BROWSER-14 owns direct export/recording capability. It does not fully map capture feedback placement, ordinary versus annotation output, or recording across presentations.",
+      "omitted_or_unverified_contracts": [
+        "Verify a direct screenshot without entering annotation, its exact artifact path, clipboard image data, and recovery from failure.",
+        "Treat recording as an independent flow with visible active state, stop, playable output, and cleanup across dock/float/window transitions."
+      ],
+      "anchors": [
+        {
+          "source": "chrome",
+          "line": 239,
+          "label": "Capture and recording button state",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/preview/PreviewChromeRow.tsx#L239",
+          "line_checked": true
+        },
+        {
+          "source": "view",
+          "line": 533,
+          "label": "Separate recording versus still path",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/preview/PreviewView.tsx#L533",
+          "line_checked": true
+        },
+        {
+          "source": "manager",
+          "line": 2587,
+          "label": "PNG capture and artifact ownership",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/desktop/src/preview/Manager.ts#L2587",
+          "line_checked": true
+        },
+        {
+          "source": "view",
+          "line": 735,
+          "label": "Saved screenshot toast actions",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/preview/PreviewView.tsx#L735",
+          "line_checked": true
+        },
+        {
+          "source": "mini",
+          "line": 556,
+          "label": "Floating recording indicator",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/preview/ThreadPreviewMiniPlayer.tsx#L556",
+          "line_checked": true
+        },
+        {
+          "source": "fbrowser",
+          "line": 1452,
+          "label": "Ferrite annotation-only toolbar entry",
+          "url": "https://github.com/josephwylie/ferrite/blob/62947f91d5cd6ee494aaae9ed09d794a853e5bab/crates/ferrite-cockpit/src/cockpit/browser.rs#L1452",
+          "line_checked": true
+        },
+        {
+          "source": "flightbox",
+          "line": 107,
+          "label": "Ferrite existing Save a copy route",
+          "url": "https://github.com/josephwylie/ferrite/blob/62947f91d5cd6ee494aaae9ed09d794a853e5bab/crates/ferrite-cockpit/src/cockpit/lightbox.rs#L107",
+          "line_checked": true
+        }
+      ]
+    },
+    {
+      "id": "BP-13",
+      "title": "Empty, unavailable, and failed page presentations",
+      "render_parent_and_gate": "PreviewPanel first checks preview access and availability. PreviewView then distinguishes an empty destination, active local or streamed page, missing bridge, load failure, and downloaded content that cannot render.",
+      "composition": "T3 empty content offers URL guidance and, when present, recent destinations and discovered local servers. An unauthorized or unavailable preview gets a centered explanation. A LoadFailed overlay replaces meaningful page presentation with friendly text, expandable diagnostics, and Reload. File/download failures have a separate not-shown state. Page-only tools are disabled when content did not render.",
+      "state_and_transitions": "Back/Reload/URL entry remain recovery routes. Empty/new-tab state is not equivalent to leaving the old page as an active toolbar target. Error rendering and resource lifetime remain separate concerns.",
+      "native_evidence": {
+        "status": "native-partial",
+        "observed": "Refused connection showed themed message, ERR_CONNECTION_REFUSED, Details, and Reload. Back recovered the fixture. Annotation, capture, and float were disabled.",
+        "limits": "Empty recent/local-server variants, denied access, unavailable bridge, download-not-shown, TLS, profile failure, browser crash, and Reload recovery were not exercised."
+      },
+      "ferrite_counterpart": "Ferrite has no-thread and address-entry guidance branches, a blank new-tab body, a CEF-disabled explanation in headless builds, and raw error text appended above the page. Its annotations can remain eligible on a non-loading errored page. BROWSER-07 traces old-page controls behind new-tab presentation.",
+      "prior_audit_coverage": "BROWSER-07, BROWSER-12, and BROWSER-15 own parts of this. The original audit did not enumerate every branch and its full visual composition or floating error behavior.",
+      "omitted_or_unverified_contracts": [
+        "Map every failure and empty state to one concise explanation and a reachable recovery action.",
+        "Verify no hidden old page receives navigation actions from an empty new tab.",
+        "Inspect error propagation while floated or mirrored separately from the docked error overlay."
+      ],
+      "anchors": [
+        {
+          "source": "panel",
+          "line": 34,
+          "label": "Capability/access fallback",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/preview/PreviewPanel.tsx#L34",
+          "line_checked": true
+        },
+        {
+          "source": "view",
+          "line": 237,
+          "label": "Empty/failure derivation",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/preview/PreviewView.tsx#L237",
+          "line_checked": true
+        },
+        {
+          "source": "empty",
+          "line": 35,
+          "label": "Empty guidance branch",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/preview/PreviewEmptyState.tsx#L35",
+          "line_checked": true
+        },
+        {
+          "source": "empty",
+          "line": 50,
+          "label": "Recent and local-server cards",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/preview/PreviewEmptyState.tsx#L50",
+          "line_checked": true
+        },
+        {
+          "source": "view",
+          "line": 1074,
+          "label": "Missing desktop bridge explanation",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/preview/PreviewView.tsx#L1074",
+          "line_checked": true
+        },
+        {
+          "source": "view",
+          "line": 1114,
+          "label": "Download and page failure overlays",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/preview/PreviewView.tsx#L1114",
+          "line_checked": true
+        },
+        {
+          "source": "error",
+          "line": 54,
+          "label": "Failure content composition",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/preview/PreviewUnreachable.tsx#L54",
+          "line_checked": true
+        },
+        {
+          "source": "view",
+          "line": 962,
+          "label": "Page-only action gating",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/preview/PreviewView.tsx#L962",
+          "line_checked": true
+        },
+        {
+          "source": "fbrowser",
+          "line": 1332,
+          "label": "Ferrite initial guidance",
+          "url": "https://github.com/josephwylie/ferrite/blob/62947f91d5cd6ee494aaae9ed09d794a853e5bab/crates/ferrite-cockpit/src/cockpit/browser.rs#L1332",
+          "line_checked": true
+        },
+        {
+          "source": "fbrowser",
+          "line": 1479,
+          "label": "Ferrite selected body and new-tab filter",
+          "url": "https://github.com/josephwylie/ferrite/blob/62947f91d5cd6ee494aaae9ed09d794a853e5bab/crates/ferrite-cockpit/src/cockpit/browser.rs#L1479",
+          "line_checked": true
+        },
+        {
+          "source": "fbrowser",
+          "line": 1533,
+          "label": "Ferrite raw error row",
+          "url": "https://github.com/josephwylie/ferrite/blob/62947f91d5cd6ee494aaae9ed09d794a853e5bab/crates/ferrite-cockpit/src/cockpit/browser.rs#L1533",
+          "line_checked": true
+        }
+      ]
+    },
+    {
+      "id": "BP-14",
+      "title": "Loading, Find, zoom, cursor, and local feedback layers",
+      "render_parent_and_gate": "PreviewChromeRow owns loading progress. PreviewView layers the empty state, ZoomIndicator, AgentBrowserCursor, active Find bar, and failure overlays around the content body. Each has a different condition.",
+      "composition": "The loading track is absolutely positioned and animated synthetically from 4% to 90% over a fixed 5.3 seconds. Find is an upper-right page-local overlay with query, count, previous/next, and close. Zoom is transient feedback. Agent cursor visibility excludes empty, failed, and active-recording states. These are not the Thread details card.",
+      "state_and_transitions": "Find is bound to one runtime tab and resets on tab change. Enter/Shift-Enter cycle matches and Escape closes and returns page focus. Source progress and pulse animations respect reduced-motion branches; the native captures do not establish frame rate or exact timing.",
+      "native_evidence": {
+        "status": "native-partial",
+        "observed": "Browser Find showed 1/60, Enter advanced to 2/60, and Escape closed it. Three delayed-refresh captures showed the old page retained under an advancing blue bar.",
+        "limits": "Previous/zero-match/tab-switch Find, zoom feedback, agent cursor behavior, exact stable geometry, reduced motion, and intermediate panel animation were not verified."
+      },
+      "ferrite_counterpart": "Ferrite inserts a Loading text row, conditionally removes Annotate, and appends error text. Browser-native Find/zoom/cursor feedback controls are absent from the inspected toolbar. Existing Reader Find is a different dispatch path and cannot establish browser Find parity.",
+      "prior_audit_coverage": "BROWSER-08 and BROWSER-10 cover loading geometry and browser utilities. motion-010 addresses feedback more generally. Original coverage did not map stacking among Find, cursor, device controls, annotation editor, and floating presentations.",
+      "omitted_or_unverified_contracts": [
+        "Measure bounds and layer ownership during loading, Find, viewport resizing, errors, and annotation.",
+        "Keep Find scoped to the active page and distinguish it from transcript Find and file-editor Find.",
+        "Use timed native frames for motion claims. A moving synthetic activity bar is not network percentage or smoothness proof."
+      ],
+      "anchors": [
+        {
+          "source": "chrome",
+          "line": 292,
+          "label": "Fixed loading layer",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/preview/PreviewChromeRow.tsx#L292",
+          "line_checked": true
+        },
+        {
+          "source": "css",
+          "line": 2390,
+          "label": "Installed loading animation",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/index.css#L2390",
+          "line_checked": true
+        },
+        {
+          "source": "view",
+          "line": 1092,
+          "label": "Zoom/cursor/Find conditions",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/preview/PreviewView.tsx#L1092",
+          "line_checked": true
+        },
+        {
+          "source": "find",
+          "line": 26,
+          "label": "Tab-scoped Find subscription",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/preview/PreviewFindBar.tsx#L26",
+          "line_checked": true
+        },
+        {
+          "source": "find",
+          "line": 63,
+          "label": "Find keyboard ownership",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/preview/PreviewFindBar.tsx#L63",
+          "line_checked": true
+        },
+        {
+          "source": "find",
+          "line": 83,
+          "label": "Find overlay placement",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/preview/PreviewFindBar.tsx#L83",
+          "line_checked": true
+        },
+        {
+          "source": "fbrowser",
+          "line": 1522,
+          "label": "Ferrite loading row",
+          "url": "https://github.com/josephwylie/ferrite/blob/62947f91d5cd6ee494aaae9ed09d794a853e5bab/crates/ferrite-cockpit/src/cockpit/browser.rs#L1522",
+          "line_checked": true
+        },
+        {
+          "source": "fpreview",
+          "line": 434,
+          "label": "Ferrite Reader Find placement",
+          "url": "https://github.com/josephwylie/ferrite/blob/62947f91d5cd6ee494aaae9ed09d794a853e5bab/crates/ferrite-cockpit/src/cockpit/panel/preview.rs#L434",
+          "line_checked": true
+        }
+      ]
+    },
+    {
+      "id": "BP-15",
+      "title": "Link menus, browser menus, and website popups",
+      "render_parent_and_gate": "Chat Markdown links use a custom app menu. Guest webpage context menus come from DesktopWindow. More is host browser chrome. Website window.open and target-blank destinations are handled by Manager. Native HTML select menus are another distinct page-owned popup type.",
+      "composition": "The chat menu exposes integrated opening, system opening, and Copy Link. The native webpage menu adds link-copy and editing roles without those Open actions. More exposes browser operations and nested appearance/zoom/clear menus. Manager classifies new-tab versus popup-window versus in-place routing. Native select controls do not share the website window-open handler.",
+      "state_and_transitions": "Menu dismissal, right-click focus, target URL, hit region, and popup destinations require explicit checks. Right-clicking a native guest focuses that guest before editing roles execute. A T3 omission does not excuse Ferrite missing both Open destinations on webpage links.",
+      "native_evidence": {
+        "status": "native-partial",
+        "observed": "Chat integrated opening, webpage Copy Link menu visibility, More visibility, same-tab navigation, target-blank, and scripted popup creating a correct Cobalt second.html tab were observed.",
+        "limits": "Middle-click, popup OAuth opener, nested popup policy, clipboard menu actions, select dropdown geometry, menu collision, and keyboard selection were not fully exercised."
+      },
+      "ferrite_counterpart": "Ferrite clears CEF context menus, denies website new-window requests, and has no replacement browser More menu. It does composite external HTML select popup pixels into the bounded WebView. Therefore blocked window.open does not mean every select control is absent. The browser internal tab bar remains distinct from outer panel tabs.",
+      "prior_audit_coverage": "BROWSER-01, BROWSER-03, BROWSER-10, BROWSER-16, and link-affordances-01 cover selected failures. Native source/reference behavior does not replace the user requirement for basic link actions.",
+      "omitted_or_unverified_contracts": [
+        "Offer Open in integrated browser, Open in system browser, and Copy Link for both chat and webpage links.",
+        "Test native menu focus, editing roles, pointer and keyboard dismissal, edge flipping, and exact copied/opened URL.",
+        "Keep HTML select popup, website script popup, separate preview mirror, and in-app mini-player separate in the coverage matrix."
+      ],
+      "anchors": [
+        {
+          "source": "linkMenu",
+          "line": 26,
+          "label": "Chat destination menu",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/externalLinkContextMenu.ts#L26",
+          "line_checked": true
+        },
+        {
+          "source": "window",
+          "line": 567,
+          "label": "Generic guest menu",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/desktop/src/window/DesktopWindow.ts#L567",
+          "line_checked": true
+        },
+        {
+          "source": "window",
+          "line": 576,
+          "label": "Context-menu guest focus",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/desktop/src/window/DesktopWindow.ts#L576",
+          "line_checked": true
+        },
+        {
+          "source": "more",
+          "line": 90,
+          "label": "Host browser More branches",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/preview/PreviewMoreMenu.tsx#L90",
+          "line_checked": true
+        },
+        {
+          "source": "manager",
+          "line": 488,
+          "label": "Website new-window destination policy",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/desktop/src/preview/Manager.ts#L488",
+          "line_checked": true
+        },
+        {
+          "source": "manager",
+          "line": 1632,
+          "label": "Native popup and new-tab dispatch",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/desktop/src/preview/Manager.ts#L1632",
+          "line_checked": true
+        },
+        {
+          "source": "fcef",
+          "line": 589,
+          "label": "Ferrite clears native context menu",
+          "url": "https://github.com/josephwylie/ferrite/blob/62947f91d5cd6ee494aaae9ed09d794a853e5bab/crates/ferrite-pane/src/visual/web/cef/handlers.rs#L589",
+          "line_checked": true
+        },
+        {
+          "source": "fcef",
+          "line": 384,
+          "label": "Ferrite denies website popup",
+          "url": "https://github.com/josephwylie/ferrite/blob/62947f91d5cd6ee494aaae9ed09d794a853e5bab/crates/ferrite-pane/src/visual/web/cef/handlers.rs#L384",
+          "line_checked": true
+        },
+        {
+          "source": "fcef",
+          "line": 233,
+          "label": "Ferrite composites HTML select popup",
+          "url": "https://github.com/josephwylie/ferrite/blob/62947f91d5cd6ee494aaae9ed09d794a853e5bab/crates/ferrite-pane/src/visual/web/cef/handlers.rs#L233",
+          "line_checked": true
+        }
+      ]
+    },
+    {
+      "id": "BP-16",
+      "title": "Browser permission sheets and JavaScript dialogs",
+      "render_parent_and_gate": "Native guest session permissions are handled by BrowserSession; local alert/confirm use Electron native UI. Remote ServerBrowserSurface has an app-rendered dialog branch, including Prompt. These are distinct from agent approval cards in the conversation.",
+      "composition": "Installed native permissions explicitly allow a bounded set, prompt for clipboard reads and external protocols, and deny other permission requests through the allowlist. Native permission sheets are parented to the preview host, default to deny, and allow only one concurrent question. The remote dialog card requires control to respond and can collect Prompt text. Local Electron Prompt instead throws an unsupported error.",
+      "state_and_transitions": "Origin, native-sheet parenting, keyboard defaults, remembered clipboard decisions, control ownership, and dialog return value determine whether the operator can safely continue the website flow.",
+      "native_evidence": {
+        "status": "native-partial",
+        "observed": "Native Alert displayed Amber alert and Enter dismissed it. Confirm Escape returned false. Prompt recheck on confirmed Amber left status unchanged and DevTools Console showed the unsupported error twice.",
+        "limits": "Confirm OK, Prompt input/cancel, clipboard permission, external-protocol permission, camera/microphone/geolocation, remembered decisions, concurrent sheets, and remote dialogs were not exercised."
+      },
+      "ferrite_counterpart": "Ferrite NoDialogs suppresses alert/confirm/prompt and refuses external beforeunload navigation while reporting unfinished work. The inspected browser renderer supplies no native-origin permission sheet. Other CEF permission plumbing was not fully traced, so this is not a blanket claim that every permission is denied.",
+      "prior_audit_coverage": "BROWSER-02 covers suppressed JavaScript dialogs. Original audit listed native permissions as unverified and did not map local versus streamed dialog presentation. Agent command approvals are a separate audit area.",
+      "omitted_or_unverified_contracts": [
+        "Test positive and negative website dialog branches and distinguish local guest versus remote streamed behavior.",
+        "Verify requesting origin, correct parent window, deny-by-default keyboard behavior, explicit consent, cancellation, and recovery.",
+        "Do not copy the local T3 unsupported Prompt failure as a Ferrite requirement."
+      ],
+      "anchors": [
+        {
+          "source": "session",
+          "line": 22,
+          "label": "Native permission allowlist",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/desktop/src/preview/BrowserSession.ts#L22",
+          "line_checked": true
+        },
+        {
+          "source": "session",
+          "line": 198,
+          "label": "Native permission sheet serialization",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/desktop/src/preview/BrowserSession.ts#L198",
+          "line_checked": true
+        },
+        {
+          "source": "session",
+          "line": 309,
+          "label": "Clipboard permission question",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/desktop/src/preview/BrowserSession.ts#L309",
+          "line_checked": true
+        },
+        {
+          "source": "session",
+          "line": 322,
+          "label": "Native request/check policy",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/desktop/src/preview/BrowserSession.ts#L322",
+          "line_checked": true
+        },
+        {
+          "source": "stream",
+          "line": 856,
+          "label": "Remote Prompt-capable dialog card",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/browser/ServerBrowserSurface.tsx#L856",
+          "line_checked": true
+        },
+        {
+          "source": "fcef",
+          "line": 643,
+          "label": "Ferrite JavaScript suppression",
+          "url": "https://github.com/josephwylie/ferrite/blob/62947f91d5cd6ee494aaae9ed09d794a853e5bab/crates/ferrite-pane/src/visual/web/cef/handlers.rs#L643",
+          "line_checked": true
+        },
+        {
+          "source": "fcef",
+          "line": 664,
+          "label": "Ferrite beforeunload handling",
+          "url": "https://github.com/josephwylie/ferrite/blob/62947f91d5cd6ee494aaae9ed09d794a853e5bab/crates/ferrite-pane/src/visual/web/cef/handlers.rs#L664",
+          "line_checked": true
+        },
+        {
+          "source": "package",
+          "line": 25,
+          "label": "Installed native Electron dependency",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/desktop/package.json#L25",
+          "line_checked": true
+        },
+        {
+          "source": "electron",
+          "line": 17,
+          "label": "Native Electron Prompt compatibility limit",
+          "url": "https://github.com/electron/electron/blob/v44.10.1/lib/renderer/window-setup.ts#L17",
+          "line_checked": true
+        }
+      ]
+    },
+    {
+      "id": "BP-17",
+      "title": "Cross-presentation focus, stacking, and motion",
+      "render_parent_and_gate": "Browser slot placement follows host layout changes. Panel shells own collapse focus/inert state. Mini-player gesture controls and annotation controls own their separate pointer streams. Image dialogs, native sheets, DevTools, and native mirrors have separate modal or window lifecycles.",
+      "composition": "Docked native content defaults to z-index 30. Mini-player content uses 48 with its chrome at 49; the layout constant explicitly places it below dialogs. Host sheets, popovers, tooltip/menu portals, guest-local overlays, and native windows do not form one interchangeable overlay system. BrowserSurfaceSlot observes shell and sidebar movement so native content follows their rectangles.",
+      "state_and_transitions": "Panel width animation is enabled for open/close and intentionally suppressed for direct resize/maximize changes. Closing returns focus before inert. Guest editing shortcuts and page-first forwarding differ from workspace shortcuts. No animation guarantee follows merely from a CSS transition or an endpoint screenshot.",
+      "native_evidence": {
+        "status": "native-partial",
+        "observed": "Browser form input preserved the draft, Find closed, browser/sidebar toggles retained state, image Escape preserved a draft, and floating Close worked. Separate shell evidence observed left-sidebar interpolation only after temporarily selecting 400 ms and restoring 0 ms.",
+        "limits": "No complete browser handoff focus trace, modal/mini-player collision, panel timing, reduced-motion run, rapid reversal, or IME composition test was performed."
+      },
+      "ferrite_counterpart": "Ferrite WebView raw event forwarding sits inside a Reader action context, which existing source findings identify as an input-dispatch risk. Its annotation selection layer has an explicit capture context. Its image lightbox has priority above floats and returns focus. Generic motion helpers elsewhere do not prove browser handoff motion.",
+      "prior_audit_coverage": "input-focus-001, input-focus-005, input-focus-006, panel-tools-018, and motion findings cover related contracts. They do not establish every pairwise browser presentation combination.",
+      "omitted_or_unverified_contracts": [
+        "Verify focused page, URL field, Find, annotation note, image modal, mini-player, and native window each consume only their intended keys.",
+        "Test overlay ordering and click-through with active menu, sheet, dialog, annotation, mini-player, and full Workspace panel combinations.",
+        "Use intermediate native captures for animations and rapid reversals; verify hidden native pages cannot intercept input."
+      ],
+      "anchors": [
+        {
+          "source": "slot",
+          "line": 63,
+          "label": "Presentation tracks moving panel shell",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/browser/BrowserSurfaceSlot.tsx#L63",
+          "line_checked": true
+        },
+        {
+          "source": "shell",
+          "line": 78,
+          "label": "Only open/close width transitions",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/preview/PreviewPanelShell.tsx#L78",
+          "line_checked": true
+        },
+        {
+          "source": "shell",
+          "line": 132,
+          "label": "Collapse focus before inert",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/preview/PreviewPanelShell.tsx#L132",
+          "line_checked": true
+        },
+        {
+          "source": "miniLayout",
+          "line": 14,
+          "label": "Mini-player stacking contract",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/preview/previewMiniPlayerLayout.ts#L14",
+          "line_checked": true
+        },
+        {
+          "source": "mini",
+          "line": 544,
+          "label": "Gesture handle layer",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/preview/ThreadPreviewMiniPlayer.tsx#L544",
+          "line_checked": true
+        },
+        {
+          "source": "manager",
+          "line": 1535,
+          "label": "Local guest key forwarding",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/desktop/src/preview/Manager.ts#L1535",
+          "line_checked": true
+        },
+        {
+          "source": "imageDialog",
+          "line": 161,
+          "label": "Modal image layer",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/ExpandedImageDialog.tsx#L161",
+          "line_checked": true
+        },
+        {
+          "source": "flightbox",
+          "line": 27,
+          "label": "Ferrite lightbox priority",
+          "url": "https://github.com/josephwylie/ferrite/blob/62947f91d5cd6ee494aaae9ed09d794a853e5bab/crates/ferrite-cockpit/src/cockpit/lightbox.rs#L27",
+          "line_checked": true
+        },
+        {
+          "source": "fannotations",
+          "line": 693,
+          "label": "Ferrite annotation input context",
+          "url": "https://github.com/josephwylie/ferrite/blob/62947f91d5cd6ee494aaae9ed09d794a853e5bab/crates/ferrite-cockpit/src/cockpit/browser/annotations.rs#L693",
+          "line_checked": true
+        },
+        {
+          "source": "felement",
+          "line": 270,
+          "label": "Ferrite raw native input",
+          "url": "https://github.com/josephwylie/ferrite/blob/62947f91d5cd6ee494aaae9ed09d794a853e5bab/crates/ferrite-pane/src/visual/element.rs#L270",
+          "line_checked": true
+        }
+      ]
+    }
+  ],
+  "tally_policy": "BP identifiers are coverage-map rows, not added issue findings. No old finding count is increased by this report.",
+  "render_tree": [
+    "AppRoot mounts RouterProvider and ElectronBrowserHost as siblings inside AppAtomRegistryProvider. ElectronBrowserHost owns authorized HostedBrowserWebview guests, their fixed native pages, and optional device wrappers.",
+    "ChatView -> ChatRightPanel -> shared RightPanelTabs -> RightPanelSurfaceContent preview -> embedded PreviewPanel -> PreviewView chrome and conditional body.",
+    "ChatView chat canvas -> ThreadPreviewMiniPlayer -> BrowserMiniPlayer -> MiniPlayerShell -> local BrowserSurfaceSlot or ServerBrowserSurface.",
+    "ChatView chat canvas -> ThreadDetailsPanel is a distinct shell component. It is only a layout obstacle in this browser map.",
+    "PreviewView -> guest PickPreload annotation overlay -> composer context detail -> sent context detail -> optional ExpandedImageDialog.",
+    "PreviewView or mini-player action -> native mirror BrowserWindow or remote video PiP. More -> detached DevTools is a different window."
+  ],
+  "coexistence": [
+    {
+      "pair": "Different docked browser tab and in-app mini-player",
+      "source": "Supported by independent roots and surface leases.",
+      "native": "Existence/coexistence observed; handoff and interactive state continuity not certified."
+    },
+    {
+      "pair": "Same native browser page in docked and floating positions",
+      "source": "One presentation owner per runtime tab; do not describe two independently interactive copies.",
+      "native": "Handoff not fully certified."
+    },
+    {
+      "pair": "Thread details and browser mini-player",
+      "source": "Separate roots with chat-canvas obstacle/overlap calculations.",
+      "native": "No complete overlap/avoidance lifecycle evidence in this worker."
+    },
+    {
+      "pair": "Docked/floating browser and separate native mirror",
+      "source": "Mirror captures the source guest while separate window state owns its presentation.",
+      "native": "Not exercised."
+    },
+    {
+      "pair": "Image modal or permission sheet over local guest/mini-player",
+      "source": "Different host/dialog/native window systems; local stacking constants express intended ordering.",
+      "native": "No full click-through/focus verification."
+    },
+    {
+      "pair": "Guest annotation overlay and host menus/modals",
+      "source": "Guest-local shadow-root overlay plus host-side annotation lifecycle.",
+      "native": "Single successful h1 note/send observed; interruption and combined overlay cases not certified."
+    }
+  ],
+  "coverage_conclusion": {
+    "original_issue_inventory": "Selected browser failures and capability candidates are covered by BROWSER-01 through BROWSER-16 plus input/link/panel/motion findings. That inventory was not a complete rendered-surface map.",
+    "standalone_mentions_without_complete_lifecycle": [
+      "In-app mini-player",
+      "Automatic browser reveal",
+      "Separate native preview mirror",
+      "Local versus remote streamed control/dialog presentations",
+      "Annotation overlay/editor placement and image-detail chain",
+      "Combined overlay/focus/motion contracts"
+    ],
+    "existing_native_boundary": "Local native browser flows are bounded successes. The mini-player only has existence/coexistence/Close evidence. Separate preview windows and remote streams remain source-only.",
+    "shell_boundary": "Do not answer a Thread details card question with browser mini-player coverage. Shell agent owns that card."
+  },
+  "verification": {
+    "source": "Every T3 reference fetched at exact installed SHA. File hashes and byte comparisons to newer checkout recorded. Ferrite HEAD confirmed and scoped product diff empty.",
+    "report_checks": "Seventeen unique map rows, exact source revisions and hashes, semantic source-anchor inspection, source/anchor line existence, JSON round trip, relative links, explicit evidence status per row.",
+    "tests": "Not run. Documentation-only task.",
+    "typecheck": "Not run. No app code changed.",
+    "builds": "Not run.",
+    "runtime": "No UI, models, or fixture processes used by this worker.",
+    "writes": [
+      "reports/surface-reconciliation-browser.md",
+      "reports/surface-reconciliation-browser.json"
+    ]
+  },
+  "principle": {
+    "name": "Prove It Works",
+    "choice": "A source-rendered branch and a visible action do not count as a completed native journey. Distinct presentations require their own evidence."
+  }
+}

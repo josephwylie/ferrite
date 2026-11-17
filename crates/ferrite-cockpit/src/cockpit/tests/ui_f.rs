@@ -2,82 +2,8 @@
 #[allow(unused_imports)]
 use super::*;
 
-/// A wall tile's Decision answers from the keyboard: `y` at the wall
-/// allows the waiting tile without focusing it (the L2 cell it once
-/// answered in is gone, R12).
-#[gpui::test]
-fn a_wall_tile_decision_answers_from_the_keyboard(cx: &mut TestAppContext) {
-    let (core, fake) = cockpit("l2-decision-keys", 1);
-    bind_production_keys(cx);
-    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
-    super::hold_nav_open(&view, cx);
-    cx.simulate_resize(gpui::size(px(560.), px(700.)));
-    tick(cx);
-    assert_eq!(
-        cx.update(|window, cx| view.read(cx).level_now(window)),
-        Level::Wall,
-        "the premise: the cell is a wall tile"
-    );
-    fake.streams.borrow()[0].send(decision("l2-perm")).unwrap();
-    tick(cx);
-    cx.simulate_keystrokes("y");
-    tick(cx);
-    assert!(
-        matches!(
-            fake.answered.borrow().last(),
-            Some((id, DecisionAnswer::Allow { .. })) if id == "l2-perm"
-        ),
-        "y answers the tile's Decision: {:?}",
-        fake.answered.borrow()
-    );
-}
-
 fn answered(fake: &Fake) -> Vec<(String, DecisionAnswer)> {
     fake.answered.borrow().clone()
-}
-
-/// An approval card on an empty Composer line answers in one key: `y`
-/// allows, `n` denies, and `a` sends the provider's standing answer.
-#[gpui::test]
-fn an_approval_answers_y_a_and_n_in_one_key(cx: &mut TestAppContext) {
-    for (key, id) in [("y", "one-key-y"), ("n", "one-key-n"), ("a", "one-key-a")] {
-        let (core, fake) = cockpit(id, 1);
-        bind_production_keys(cx);
-        let (_view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
-        cx.simulate_resize(gpui::size(px(1000.), px(800.)));
-        let SessionEvent::DecisionRequested { mut decision } = decision(id) else {
-            unreachable!()
-        };
-        decision.suggestions = vec![ferrite_core::DecisionChoice {
-            label: "Always allow Write".into(),
-            value: serde_json::json!({ "rule": "Write" }),
-            standing: true,
-        }];
-        fake.streams.borrow()[0]
-            .send(SessionEvent::DecisionRequested { decision })
-            .unwrap();
-        tick(cx);
-        assert!(
-            cx.debug_bounds("question-island").is_some(),
-            "the card is up"
-        );
-        cx.simulate_keystrokes(key);
-        tick(cx);
-        let answered = answered(&fake);
-        let [(answered_id, answer)] = answered.as_slice() else {
-            panic!("`{key}` answers exactly once: {answered:?}");
-        };
-        assert_eq!(answered_id, id);
-        match key {
-            "y" => assert!(matches!(answer, DecisionAnswer::Allow { .. })),
-            "n" => assert!(matches!(answer, DecisionAnswer::Deny { .. })),
-            _ => assert!(
-                matches!(answer, DecisionAnswer::AllowAlways { suggestion, .. }
-                    if *suggestion == serde_json::json!({ "rule": "Write" })),
-                "{answer:?}"
-            ),
-        }
-    }
 }
 
 /// Every approval offers exactly three options and a digit picks one of

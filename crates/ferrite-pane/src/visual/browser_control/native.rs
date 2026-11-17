@@ -23,8 +23,13 @@ const LIMIT: u64 = 24 * 1024 * 1024;
 const TEXT: usize = 128 * 1024;
 
 pub enum Event {
-    Ready(mpsc::SyncSender<bool>),
+    Ready(mpsc::SyncSender<Permission>),
     Finished(Outcome),
+}
+
+pub enum Permission {
+    Grant { deadline: Instant },
+    Deny,
 }
 
 pub struct Worker {
@@ -80,6 +85,8 @@ impl Worker {
                         if restart {
                             controller.take();
                         }
+                        #[cfg(feature = "browser-smoke")]
+                        super::completion_gate::before_attachment(&stopping);
                         let deadline = Instant::now() + Duration::from_secs(30);
                         let result = (|| {
                             if !job.control.supported() {
@@ -93,7 +100,7 @@ impl Worker {
                                     stopping.clone(),
                                 )
                                 .map_err(failure)?;
-                                authorize(&job, &stopping)?;
+                                page.deadline = authorize(&job, &stopping, deadline)?;
                                 return page.capture(job.point.as_ref()).map_err(failure);
                             }
                             if controller.is_none() {
@@ -107,7 +114,7 @@ impl Worker {
                             let controller = controller.as_mut().unwrap();
                             controller.deadline = deadline;
                             let switched = controller.select(&job.target)?;
-                            authorize(&job, &stopping)?;
+                            controller.deadline = authorize(&job, &stopping, deadline)?;
                             // No launch, reconnect, or target selection after
                             // the GUI authorizes this established attachment.
                             controller.perform_selected(&job, switched)
@@ -214,18 +221,25 @@ impl Worker {
         Some(answer)
     }
 }
-fn authorize(job: &Job, stopping: &AtomicBool) -> Result<(), Error> {
+fn authorize(job: &Job, stopping: &AtomicBool, deadline: Instant) -> Result<Instant, Error> {
     let (authorize, permission) = mpsc::sync_channel(1);
     job.reply
         .send(Event::Ready(authorize))
         .map_err(|_| failure("owning window disappeared before dispatch"))?;
-    let until = Instant::now() + Duration::from_secs(5);
+    let until = deadline.min(Instant::now() + Duration::from_secs(5));
     loop {
         if stopping.load(Ordering::Acquire) || Instant::now() >= until {
             return Err(failure("Browser owner shut down before dispatch"));
         }
         match permission.recv_timeout(Duration::from_millis(50)) {
-            Ok(true) => return Ok(()),
+            Ok(Permission::Grant { deadline: granted }) => {
+                let deadline = deadline.min(granted);
+                return if Instant::now() < deadline {
+                    Ok(deadline)
+                } else {
+                    Err(failure("Browser dispatch authorization expired before native input"))
+                };
+            }
             Err(mpsc::RecvTimeoutError::Timeout) => continue,
             _ => {
                 return Err(failure(
@@ -1176,5 +1190,47 @@ impl ReadOnlyPage {
 impl Drop for ReadOnlyPage {
     fn drop(&mut self) {
         let _ = self.socket.close(None);
+    }
+}
+
+#[cfg(test)]
+mod dispatch_tests {
+    use super::*;
+
+    fn permission(permission: Permission, budget: Instant) -> Result<Instant, String> {
+        let (reply, events) = mpsc::sync_channel(1);
+        let job = Job {
+            endpoint: ControllerEndpoint { url: String::new(), authorization: String::new() },
+            target: "exact-target".into(),
+            document: Document { tab: ferrite_core::browser::TabId(1), generation: 1 },
+            revision: 0,
+            epoch: 0,
+            control: Control::Click { reference: "@save".into() },
+            point: None,
+            reply,
+        };
+        let worker = std::thread::spawn(move || {
+            authorize(&job, &AtomicBool::new(false), budget).map_err(|error| error.message)
+        });
+        let Event::Ready(answer) = events.recv_timeout(Duration::from_secs(1)).unwrap() else {
+            panic!("native input must wait at Ready");
+        };
+        answer.send(permission).unwrap();
+        worker.join().unwrap()
+    }
+
+    #[test]
+    fn a_refused_or_expired_grant_never_authorizes_native_input() {
+        let budget = Instant::now() + Duration::from_secs(30);
+        assert!(permission(Permission::Deny, budget).is_err());
+        assert!(permission(Permission::Grant { deadline: Instant::now() - Duration::from_secs(1) }, budget).is_err());
+    }
+
+    #[test]
+    fn a_server_grant_cannot_restart_or_extend_the_native_budget() {
+        let budget = Instant::now() + Duration::from_secs(20);
+        assert_eq!(permission(Permission::Grant { deadline: budget + Duration::from_secs(30) }, budget).unwrap(), budget);
+        let shorter = budget - Duration::from_secs(10);
+        assert_eq!(permission(Permission::Grant { deadline: shorter }, budget).unwrap(), shorter);
     }
 }

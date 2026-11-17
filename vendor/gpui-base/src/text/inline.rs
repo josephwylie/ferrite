@@ -1,15 +1,18 @@
 use gpui::Corners;
 use std::{
+    collections::HashMap,
     ops::Range,
     rc::Rc,
     sync::{Arc, Mutex, Weak},
 };
 
 use gpui::{
-    App, BorderStyle, Bounds, ClickEvent, CursorStyle, Edges, Element, ElementId, Global,
-    GlobalElementId, Half, HighlightStyle, Hitbox, HitboxBehavior, InspectorElementId, IntoElement,
-    LayoutId, MouseButton, MouseClickEvent, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels,
-    Point, SharedString, StyledText, TextLayout, Window, point, px, quad,
+    AnyElement, App, AvailableSpace, BorderStyle, Bounds, BoxShadow, ClickEvent, CursorStyle,
+    Edges, Element, ElementId, FocusHandle, Global, GlobalElementId, Half, HighlightStyle, Hitbox,
+    HitboxBehavior, InspectorElementId, InteractiveElement as _, IntoElement, LayoutId,
+    MouseButton, MouseClickEvent, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point,
+    Role, SharedString, StatefulInteractiveElement as _, StyledText, Styled as _, TextLayout,
+    Window, div, point, px, quad, size,
 };
 
 use crate::{
@@ -221,6 +224,21 @@ impl InlineSelectionProjection {
         }
     }
 
+    pub(super) fn paint_retained_atomic(&self, handle: &crate::TextSelectionHandle, ordinal: usize, window: &mut Window, cx: &App) {
+        for retained in handle.retained_ranges(cx) {
+            let selected = selection_for_document_range(&self.text, ordinal, self.source_offset, retained.range.get()).is_some();
+            if selected {
+                window.paint_quad(gpui::fill(self.bounds, crate::Theme::global(cx).tokens.colors.selection));
+            }
+            retained.record(ordinal, self.source_offset, self.source_text(), selected.then_some(self.bounds));
+        }
+    }
+
+    pub(super) fn source_text(&self) -> SharedString {
+        let (root, _) = InlineState::source_metadata(&self.state);
+        root.upgrade().and_then(|root| root.lock().ok().map(|state| state.text.clone())).unwrap_or_else(|| self.text.clone())
+    }
+
     pub(super) fn source_root(&self) -> usize {
         self.source_root
     }
@@ -282,7 +300,7 @@ impl InlineSelectionProjection {
     }
 }
 
-fn selection_for_document_range(
+pub(super) fn selection_for_document_range(
     text: &str,
     ordinal: usize,
     source_offset: usize,
@@ -346,17 +364,35 @@ fn code_line_bounds(
     range: Range<usize>,
     line_height: Pixels,
 ) -> Vec<Bounds<Pixels>> {
+    line_bounds(
+        text,
+        range,
+        line_height,
+        text_layout.bounds().left(),
+        |index| text_layout.position_for_index(index),
+    )
+}
+
+/// `code_line_bounds` over a layout given as its `left` edge and its index
+/// → `position`.
+fn line_bounds(
+    text: &str,
+    range: Range<usize>,
+    line_height: Pixels,
+    left: Pixels,
+    position: impl Fn(usize) -> Option<Point<Pixels>>,
+) -> Vec<Bounds<Pixels>> {
     let mut lines: Vec<Bounds<Pixels>> = Vec::new();
-    let end = range.end.min(text.len());
-    let mut offset = range.start.min(end);
-    for c in text[offset..end].chars() {
+    let range = char_range(text, range);
+    let mut offset = range.start;
+    for c in text[range].chars() {
         let next = offset + c.len_utf8();
-        if let Some(mut pos) = text_layout.position_for_index(offset) {
-            let next_pos = text_layout.position_for_index(next);
+        if let Some(mut pos) = position(offset) {
+            let next_pos = position(next);
             // At a soft wrap the index resolves to the end of the earlier
             // line, but the glyph is drawn at the start of the next one.
             if let Some(next_pos) = next_pos.filter(|next_pos| next_pos.y > pos.y) {
-                pos = point(text_layout.bounds().left(), next_pos.y);
+                pos = point(left, next_pos.y);
             }
             let right = next_pos
                 .filter(|next_pos| next_pos.y == pos.y)
@@ -389,9 +425,9 @@ fn underline_spans(
     // The line being walked: its top, its first glyph's left, and the right
     // edge of its last non-whitespace glyph so far.
     let mut line: Option<(Pixels, Pixels, Option<Pixels>)> = None;
-    let end = range.end.min(text.len());
-    let mut offset = range.start.min(end);
-    for c in text[offset..end].chars() {
+    let range = char_range(text, range);
+    let mut offset = range.start;
+    for c in text[range].chars() {
         let next = offset + c.len_utf8();
         if let Some(mut pos) = position(offset) {
             let next_pos = position(next);
@@ -419,6 +455,15 @@ fn underline_spans(
         spans.push((top, start, stop));
     }
     spans
+}
+
+/// `range` clipped to `text` and moved back onto character boundaries. A
+/// range counted against another frame's text (`FreshTally`'s runs are) can
+/// start or end inside a character of this one's.
+fn char_range(text: &str, range: Range<usize>) -> Range<usize> {
+    let end = utf8_boundary_before(text, range.end.min(text.len()));
+    let start = utf8_boundary_before(text, range.start.min(end));
+    start..end
 }
 
 fn utf8_boundary_before(text: &str, mut offset: usize) -> usize {
@@ -465,6 +510,114 @@ impl Inline {
         self.code_font = font;
         self.code_wash = wash;
         self
+    }
+
+    /// Ferrite: each link is a tab stop. A transparent, focusable element
+    /// sits over the link's first line; Tab lands on it, its ring says so,
+    /// and ⏎ or space clicks it through the link handler. The pointer keeps
+    /// its own press path (`paint`), and a press never focuses the stop.
+    fn link_stops(
+        &self,
+        id: Option<&GlobalElementId>,
+        bounds: Bounds<Pixels>,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> Vec<AnyElement> {
+        let mut runs: Vec<(Range<usize>, &LinkMark)> = Vec::new();
+        for (range, link) in self.links.iter() {
+            match runs.last_mut() {
+                Some((prior, mark)) if prior.end == range.start && *mark == link => {
+                    prior.end = range.end
+                }
+                _ => runs.push((range.clone(), link)),
+            }
+        }
+        let Some(id) = id.filter(|_| !runs.is_empty()) else {
+            return Vec::new();
+        };
+        // Keyed by the link's URL and which occurrence of it this is, so a
+        // streamed-in link before the focused one leaves focus where it was.
+        let mut seen: HashMap<SharedString, usize> = HashMap::new();
+        let keys: Vec<(SharedString, usize)> = runs
+            .iter()
+            .map(|(_, link)| {
+                let nth = seen.entry(link.url.clone()).or_default();
+                *nth += 1;
+                (link.url.clone(), *nth)
+            })
+            .collect();
+        let handles = window.with_element_state::<HashMap<(SharedString, usize), FocusHandle>, _>(
+            id,
+            |handles, _| {
+                let mut handles = handles.unwrap_or_default();
+                handles.retain(|key, _| keys.contains(key));
+                let ordered: Vec<FocusHandle> = keys
+                    .iter()
+                    .map(|key| {
+                        handles
+                            .entry(key.clone())
+                            .or_insert_with(|| cx.focus_handle().tab_stop(true))
+                            .clone()
+                    })
+                    .collect();
+                (ordered, handles)
+            },
+        );
+        let ring = GlobalState::global(cx)
+            .text_view_state()
+            .map(|state| {
+                let style = &state.read(cx).text_view_style;
+                style.link_focus().unwrap_or(style.link())
+            })
+            .unwrap_or_else(|| crate::Theme::global(cx).tokens.colors.primary);
+        let text_layout = self.styled_text.layout();
+        let line_height = text_layout.line_height();
+        let left = bounds.left();
+        let mut stops = Vec::new();
+        for (ix, ((range, link), handle)) in runs.iter().zip(handles).enumerate() {
+            let Some((top, start, stop)) = underline_spans(&self.text, range.clone(), left, |at| {
+                text_layout.position_for_index(at)
+            })
+            .into_iter()
+            .next() else {
+                continue;
+            };
+            let handler = self.link_click_handler.clone();
+            let url = link.url.clone();
+            let mut stop = div()
+                .id(("link-stop", ix))
+                .track_focus(&handle)
+                .key_context("LinkStop")
+                .role(Role::Link)
+                .aria_label(self.text[range.clone()].to_owned())
+                .capture_any_mouse_down(|_, window, _| window.prevent_default())
+                .focus_visible(move |style| {
+                    style.shadow(vec![BoxShadow {
+                        inset: true,
+                        color: ring,
+                        offset: point(px(0.), px(0.)),
+                        blur_radius: px(0.),
+                        spread_radius: px(1.5),
+                    }])
+                })
+                .rounded(px(3.))
+                .w(stop - start + px(4.))
+                .h(line_height)
+                .on_click(move |event, window, cx| {
+                    if event.is_keyboard() {
+                        handle_link_click(&handler, url.clone(), event.clone(), window, cx);
+                    }
+                })
+                .into_any_element();
+            stop.prepaint_as_root(
+                point(start - px(2.), top),
+                size(AvailableSpace::MinContent, AvailableSpace::MinContent),
+                window,
+                cx,
+            );
+            stops.push(stop);
+        }
+        stops
     }
 
     /// Get link at given mouse position.
@@ -859,7 +1012,7 @@ pub(super) fn highlight_fits(text: &str, ix: usize, range: &Range<usize>) -> boo
 
 impl Element for Inline {
     type RequestLayoutState = ();
-    type PrepaintState = Hitbox;
+    type PrepaintState = (Hitbox, Vec<AnyElement>);
 
     fn id(&self) -> Option<ElementId> {
         Some(self.id.clone())
@@ -965,7 +1118,8 @@ impl Element for Inline {
         }
 
         let hitbox = window.insert_hitbox(bounds, HitboxBehavior::Normal);
-        hitbox
+        let stops = self.link_stops(id, bounds, window, cx);
+        (hitbox, stops)
     }
 
     fn paint(
@@ -979,8 +1133,9 @@ impl Element for Inline {
         cx: &mut App,
     ) {
         let current_view = window.current_view();
-        let hitbox = prepaint;
+        let (hitbox, stops) = prepaint;
         let (source_root, source_offset) = InlineState::source_metadata(&self.state);
+        let retained_source = source_root.upgrade().and_then(|root| root.lock().ok().map(|root| root.text.clone())).unwrap_or_else(|| self.text.clone());
         let Ok(mut state) = self.state.lock() else {
             return;
         };
@@ -1014,6 +1169,17 @@ impl Element for Inline {
                 )
             })
             .unwrap_or((None, 0, 0));
+
+        if let Some(view) = GlobalState::global(cx).text_view_state() {
+            let handle = view.read(cx).selection_adapter.handle();
+            for retained in handle.retained_ranges(cx) {
+                let selected = selection_for_document_range(&self.text, ordinal, source_offset, retained.range.get());
+                let last = selected.as_ref().and_then(|selected| {
+                    Self::paint_selection(selected, &text_layout, &bounds, window, if document_range.is_some() { gpui::transparent_black() } else { crate::Theme::global(cx).tokens.colors.selection }).last().copied()
+                });
+                retained.record(ordinal, source_offset, retained_source.clone(), last);
+            }
+        }
 
         // layout selections
         let (is_selectable, is_selection, selection) = self.layout_selections(
@@ -1054,6 +1220,10 @@ impl Element for Inline {
         // metadata, so release the paint-time guard first.
         let hovered_index = state.hovered_index;
         drop(state);
+
+        for stop in stops.iter_mut() {
+            stop.paint(window, cx);
+        }
 
         if is_selectable {
             if let Some(text_view_state) = GlobalState::global(cx).text_view_state().cloned() {
@@ -1425,6 +1595,30 @@ mod tests {
             vec![(px(0.), px(0.), px(10.)), (px(20.), px(0.), px(10.))],
             "the first line's stroke stops at `b`'s right edge, not the space's"
         );
+    }
+
+    /// A veil's range is counted against the text an earlier frame painted
+    /// (`FreshTally`), so it can split a character of this frame's. The box
+    /// moves back to that character's start; the paint does not panic.
+    #[test]
+    fn a_range_that_splits_a_character_is_boxed_from_its_start() {
+        // "a→b": `a` at byte 0, `→` at 1..4, `b` at 4; each glyph 10 wide.
+        let text = "a→b";
+        let at = |index: usize| -> Option<Point<Pixels>> {
+            let x = match index {
+                0 => 0.,
+                1 => 10.,
+                4 => 20.,
+                _ => 30.,
+            };
+            Some(point(px(x), px(0.)))
+        };
+        let boxes = |range| super::line_bounds(text, range, px(20.), px(0.), at);
+        let line = |left: f32, right: f32| {
+            Bounds::from_corners(point(px(left), px(0.)), point(px(right), px(20.)))
+        };
+        assert_eq!(boxes(0..2), vec![line(0., 10.)], "the run ends before `→`");
+        assert_eq!(boxes(2..5), vec![line(10., 30.)], "the next takes `→` whole");
     }
 
     #[test]

@@ -17,8 +17,7 @@ impl CockpitView {
             return self.start_inspector(workflow, window, cx);
         }
         if self
-            .factory_view
-            .as_ref()
+            .factory()
             .is_some_and(|view| view.workflows.approval)
         {
             return self.approval_inspector(workflow, window, cx);
@@ -32,7 +31,7 @@ impl CockpitView {
                 .child("Add an agent to begin.")
                 .into_any_element();
         };
-        let Some(view) = self.factory_view.as_ref() else {
+        let Some(view) = self.factory() else {
             return div().into_any_element();
         };
         let catalog = self.factory_catalog();
@@ -188,8 +187,7 @@ impl CockpitView {
                 })
                 .on_click(cx.listener(|view, _: &ClickEvent, _, cx| {
                     let open = view
-                        .factory_view
-                        .as_ref()
+                        .factory()
                         .is_some_and(|view| view.workflows.skills_open);
                     view.reveal_skills(!open, cx);
                 })),

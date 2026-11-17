@@ -1,0 +1,219 @@
+[
+  {
+    "id": "PS-01",
+    "title": "Approval cards can state the wrong Codex sandbox",
+    "priority": "P1",
+    "category": "defect",
+    "evidence_level": "source-proven",
+    "impact": "The operator can approve a command while the card claims a more restrictive sandbox than the process actually has. This is an incorrect permission description, not evidence that Ferrite escapes the provider sandbox.",
+    "ferrite_evidence": [
+      "crates/ferrite-cockpit/src/cockpit/decisions.rs:65-79",
+      "crates/ferrite-core/src/settings.rs:365-372",
+      "crates/ferrite-pane/src/decision.rs:113-123",
+      "crates/ferrite-core/src/spawner.rs:453-464",
+      "crates/ferrite-core/src/providers/codex.rs:504-522",
+      "crates/ferrite-core/src/providers/codex.rs:239-251",
+      "crates/ferrite-core/src/providers/codex.rs:1048-1055"
+    ],
+    "t3_evidence": [],
+    "recommendation": "Project the negotiated sandbox through session events, thread state and the wire snapshot, and render that value. Keep requested defaults distinct from effective values.",
+    "acceptance": "With a stub Codex handshake returning workspaceWrite while Settings is CLI default, an actual clicked approval card says workspace-write. Change the default to read-only and verify the existing card remains workspace-write. Repeat for a remote thread and dangerFullAccess. No real destructive command is needed."
+  },
+  {
+    "id": "PS-02",
+    "title": "Remote permission and server defaults save to the local machine",
+    "priority": "P1",
+    "category": "defect",
+    "evidence_level": "source-proven",
+    "impact": "On an SSH machine, settings can appear saved while new remote sessions continue using the remote server's old permission and sandbox defaults. Factory concurrency and other server-side preferences have the same ownership problem.",
+    "ferrite_evidence": [
+      "crates/ferrite/src/lib.rs:274-301",
+      "crates/ferrite/src/lib.rs:394-406",
+      "crates/ferrite-cockpit/src/cockpit.rs:4319-4334",
+      "crates/ferrite-core/src/cockpit.rs:2477-2488",
+      "crates/ferrite-core/src/server.rs:784-789",
+      "crates/ferrite-core/src/server.rs:1042-1053",
+      "crates/ferrite-core/src/cockpit.rs:3216-3224"
+    ],
+    "t3_evidence": [
+      "https://github.com/pingdotgg/t3code/blob/74573fc29b901bafbf8f1dbb2eb29606da1fa448/apps/web/src/hooks/useSettings.ts#L602",
+      "https://github.com/pingdotgg/t3code/blob/74573fc29b901bafbf8f1dbb2eb29606da1fa448/apps/web/src/components/settings/SettingsScopeContext.tsx#L58"
+    ],
+    "recommendation": "Separate window preferences from server settings. Add a targeted server-settings read/write operation with an acknowledgement and display the machine whose defaults are edited. Do not silently synchronize unrelated local values.",
+    "acceptance": "Use two isolated settings directories with different permission/sandbox defaults. Through a remote window change one default, create a thread and inspect its provider launch arguments/handshake. Only the selected machine changes, relaunch retains it, and denied/offline writes display an unsaved state."
+  },
+  {
+    "id": "PS-03",
+    "title": "Provider version checks and updates target local binaries while a remote server is active",
+    "priority": "P2",
+    "category": "defect",
+    "evidence_level": "source-proven",
+    "impact": "A user trying to repair a remote CLI sees the local CLI version and can update the local installation. Ferrite then tells the remote server that its CLI was replaced, causing unnecessary remote session retirement without upgrading that remote CLI.",
+    "ferrite_evidence": [
+      "crates/ferrite-cockpit/src/cockpit.rs:4033-4044",
+      "crates/ferrite-cockpit/src/cockpit.rs:4083-4115",
+      "crates/ferrite-cockpit/src/cockpit.rs:12968-12975",
+      "crates/ferrite-core/src/providers/discover.rs:170-184",
+      "crates/ferrite-core/src/cockpit.rs:1624-1636",
+      "crates/ferrite-core/src/providers/update.rs:214-231"
+    ],
+    "t3_evidence": [
+      "https://github.com/pingdotgg/t3code/blob/74573fc29b901bafbf8f1dbb2eb29606da1fa448/apps/web/src/components/settings/ProviderSettingsPanel.tsx#L635",
+      "https://github.com/pingdotgg/t3code/blob/74573fc29b901bafbf8f1dbb2eb29606da1fa448/apps/web/src/components/settings/ProviderSettingsPanel.tsx#L657"
+    ],
+    "recommendation": "Route remote provider inspection and upgrades through the selected server, with machine-labelled progress. If remote upgrades remain unsupported, label local controls and never invalidate remote sessions after a local update.",
+    "acceptance": "Use fake local and remote provider executables with distinct versions and update markers. In a remote window, update the selected remote provider and verify only its marker changes and only its sessions retire. A local-only fallback must name this computer and leave remote sessions intact."
+  },
+  {
+    "id": "PS-04",
+    "title": "Provider setup stops at CLI presence and update status",
+    "priority": "P2",
+    "category": "partial-capability",
+    "evidence_level": "source-proven",
+    "impact": "A new user or a user with expired credentials cannot complete provider setup, identify the active account, or retry provider sign-in from Ferrite settings. Existing native CLI authentication can still work.",
+    "ferrite_evidence": [
+      "crates/ferrite-cockpit/src/cockpit.rs:4743-4753",
+      "crates/ferrite-cockpit/src/cockpit.rs:4804-4835",
+      "crates/ferrite-cockpit/src/cockpit.rs:12968-12975",
+      "crates/ferrite-cockpit/src/cli_updates.rs:240-263",
+      "crates/ferrite-core/src/providers/update.rs:194-218",
+      "crates/ferrite-core/src/providers/codex.rs:184-227"
+    ],
+    "t3_evidence": [
+      "https://github.com/pingdotgg/t3code/blob/74573fc29b901bafbf8f1dbb2eb29606da1fa448/apps/web/src/components/settings/ProviderAuthenticationSection.tsx#L43",
+      "https://github.com/pingdotgg/t3code/blob/74573fc29b901bafbf8f1dbb2eb29606da1fa448/apps/web/src/components/settings/ProviderAuthenticationSection.tsx#L279",
+      "https://github.com/pingdotgg/t3code/blob/74573fc29b901bafbf8f1dbb2eb29606da1fa448/apps/web/src/components/settings/ProviderInstanceCard.tsx#L750",
+      "https://github.com/pingdotgg/t3code/blob/74573fc29b901bafbf8f1dbb2eb29606da1fa448/apps/web/src/components/settings/ProviderSetupSection.tsx#L110",
+      "https://github.com/pingdotgg/t3code/blob/74573fc29b901bafbf8f1dbb2eb29606da1fa448/apps/server/src/provider/ProviderAuthService.ts#L93"
+    ],
+    "recommendation": "Add a compact provider readiness/setup panel with the correct machine, detected binary, version, account/auth status where supported, setup instructions or managed install, recheck, and sign-in/retry actions. Preserve externally managed CLI installs.",
+    "acceptance": "Exercise absent CLI, signed-out CLI, expired auth, supported logged-in CLI and CLI version rejection. Each state has a distinct message and working next action. Rechecking reflects changed credentials without starting a paid prompt. Account switching must not leave existing helpers using the old credential binding."
+  },
+  {
+    "id": "PS-05",
+    "title": "An unavailable native conversation has no same-thread context recovery path",
+    "priority": "P2",
+    "category": "partial-capability",
+    "evidence_level": "source-proven",
+    "impact": "If a provider's saved conversation disappears or cannot be resumed, the Ferrite transcript can remain readable while sending another prompt repeats the same failed resume. Users must reconstruct the conversation or switch providers through a separate workflow.",
+    "ferrite_evidence": [
+      "crates/ferrite-core/src/engine.rs:622-625",
+      "crates/ferrite-core/src/engine.rs:1051-1054",
+      "crates/ferrite-core/src/engine.rs:2583-2590",
+      "crates/ferrite-core/src/engine.rs:2635-2644",
+      "crates/ferrite-core/src/engine.rs:3236-3241",
+      "crates/ferrite-core/src/providers/codex.rs:504-508"
+    ],
+    "t3_evidence": [
+      "https://github.com/pingdotgg/t3code/blob/74573fc29b901bafbf8f1dbb2eb29606da1fa448/apps/server/src/orchestration-v2/ProviderTurnStartService.ts#L983",
+      "https://github.com/pingdotgg/t3code/blob/74573fc29b901bafbf8f1dbb2eb29606da1fa448/apps/server/src/orchestration-v2/ProviderTurnStartService.ts#L1307"
+    ],
+    "recommendation": "Classify resume errors, preserve the failed prompt, and provide an explicit fresh-conversation recovery action with a context preview or clear disclosure. Keep provider-lock contention as a refusal.",
+    "acceptance": "With a provider stub that rejects the old native id, recover within the same Ferrite thread and send the preserved prompt once to a new native id with retained context. The old transcript remains. A thread-in-use refusal must not silently fork. Live-provider behavior remains to be checked."
+  },
+  {
+    "id": "PS-06",
+    "title": "Provider choices do not include T3's additional drivers or named provider instances",
+    "priority": "P2",
+    "category": "missing-capability",
+    "evidence_level": "source-proven",
+    "impact": "Users of Cursor, Grok, OpenCode, Antigravity, Kiro, Muse, Pi, FX or registry ACP agents cannot select those drivers in Ferrite. Users cannot configure separate named instances of one driver with different credentials, environments or binaries.",
+    "ferrite_evidence": [
+      "crates/ferrite-core/src/store.rs:146-157",
+      "crates/ferrite-core/src/spawner.rs:408-420",
+      "crates/ferrite-core/src/providers/discover.rs:170-198",
+      "crates/ferrite-core/src/settings.rs:28-50",
+      "crates/ferrite-cockpit/src/cockpit.rs:4485-4504"
+    ],
+    "t3_evidence": [
+      "https://github.com/pingdotgg/t3code/blob/74573fc29b901bafbf8f1dbb2eb29606da1fa448/packages/client-runtime/src/providerClients.ts#L30",
+      "https://github.com/pingdotgg/t3code/blob/74573fc29b901bafbf8f1dbb2eb29606da1fa448/packages/contracts/src/providerInstance.ts#L74",
+      "https://github.com/pingdotgg/t3code/blob/74573fc29b901bafbf8f1dbb2eb29606da1fa448/apps/web/src/components/settings/ProviderSettingsPanel.tsx#L974"
+    ],
+    "recommendation": "Decide which additional providers the product actually wants before expanding. If multiple configurations matter first, introduce instance identity separately from driver kind and retain per-driver capability gates.",
+    "acceptance": "For any adopted driver, complete setup, new thread, stream, approval, stop, reopen and failure recovery. For instances, run two named configurations concurrently, restart Ferrite and verify each resumes with its original config. Do not mark an icon or model-list entry as support."
+  },
+  {
+    "id": "PS-07",
+    "title": "Claude Auto and Don't ask are available per session but absent from new-thread defaults",
+    "priority": "P2",
+    "category": "partial-capability",
+    "evidence_level": "source-proven",
+    "impact": "An operator who consistently uses Claude Auto or Don't ask must change each new thread or edit JSON/native CLI configuration. Settings cannot express all permission modes that Ferrite already supports.",
+    "ferrite_evidence": [
+      "crates/ferrite-core/src/providers/claude.rs:533-551",
+      "crates/ferrite-cockpit/src/cockpit.rs:4580-4595",
+      "crates/ferrite-core/src/settings.rs:354-361",
+      "crates/ferrite-core/src/spawner.rs:427-430"
+    ],
+    "t3_evidence": [
+      "https://github.com/pingdotgg/t3code/blob/74573fc29b901bafbf8f1dbb2eb29606da1fa448/apps/web/src/components/settings/ProjectDefaultsSettings.tsx#L335"
+    ],
+    "recommendation": "Build defaults from a provider-specific launch-mode catalog that includes supported Auto and Don't ask, while retaining live-only restrictions for mode changes and a visible representation for unknown saved values.",
+    "acceptance": "Select Auto in Settings through the UI, relaunch and create a Claude thread. The provider receives auto and the setting remains selected. Repeat for dontAsk and a previously saved unsupported value. This is an internal Ferrite inconsistency; T3's unified modes are only a related comparison."
+  },
+  {
+    "id": "PS-08",
+    "title": "Provider defaults have no project override or fallback-model settings",
+    "priority": "P2",
+    "category": "missing-capability",
+    "evidence_level": "source-proven",
+    "impact": "Users who work across projects with different model/permission needs must keep changing thread choices or global defaults. A chosen default provider exhausting its allowance does not have a configured fallback model for new threads.",
+    "ferrite_evidence": [
+      "crates/ferrite-core/src/settings.rs:28-50",
+      "crates/ferrite-core/src/workspace/registry.rs:35-51",
+      "crates/ferrite-core/src/workspace/registry.rs:87-95",
+      "crates/ferrite-cockpit/src/cockpit.rs:4485-4566"
+    ],
+    "t3_evidence": [
+      "https://github.com/pingdotgg/t3code/blob/74573fc29b901bafbf8f1dbb2eb29606da1fa448/apps/web/src/components/settings/ProjectDefaultsSettings.tsx#L250",
+      "https://github.com/pingdotgg/t3code/blob/74573fc29b901bafbf8f1dbb2eb29606da1fa448/apps/web/src/components/settings/ProjectDefaultsSettings.tsx#L335",
+      "https://github.com/pingdotgg/t3code/blob/74573fc29b901bafbf8f1dbb2eb29606da1fa448/apps/web/src/components/settings/SettingsScopeContext.tsx#L58"
+    ],
+    "recommendation": "Prioritize project defaults only if repeated manual changes are a real workflow. Use a small inheritance model and show the resolved source. Treat allowance-triggered fallback as a separate opt-in policy.",
+    "acceptance": "Configure two projects with different defaults, create a thread in each and verify the right provider/model/permission after restart. Existing threads retain their own choices. A synthetic exhausted allowance selects only the configured fallback for new threads and visibly explains that selection."
+  },
+  {
+    "id": "PS-09",
+    "title": "Appearance is deliberately dark-only with fixed font families",
+    "priority": "P3",
+    "category": "intentional-difference",
+    "evidence_level": "source-proven",
+    "impact": "Users cannot choose a light/system theme, import a theme, or adjust interface and monospace font families independently. Transcript size and notification customization do exist.",
+    "ferrite_evidence": [
+      "crates/ferrite-ui/src/theme.rs:172-173",
+      "crates/ferrite-ui/src/theme.rs:1263-1276",
+      "crates/ferrite-core/src/settings.rs:28-147",
+      "crates/ferrite-core/src/settings.rs:188-205"
+    ],
+    "t3_evidence": [
+      "https://github.com/pingdotgg/t3code/blob/74573fc29b901bafbf8f1dbb2eb29606da1fa448/apps/web/src/components/settings/AppearanceSettingsPanel.tsx#L87",
+      "https://github.com/pingdotgg/t3code/blob/74573fc29b901bafbf8f1dbb2eb29606da1fa448/apps/web/src/components/settings/AppearanceSettingsPanel.tsx#L145",
+      "https://github.com/pingdotgg/t3code/blob/74573fc29b901bafbf8f1dbb2eb29606da1fa448/apps/web/src/components/settings/TypographySettings.tsx#L74",
+      "https://github.com/pingdotgg/t3code/blob/74573fc29b901bafbf8f1dbb2eb29606da1fa448/apps/web/src/components/settings/TypographySettings.tsx#L144"
+    ],
+    "recommendation": "Keep the distinction visible in the parity inventory. Revisit dark-only and typography scope based on user preference rather than copying T3's whole theme editor.",
+    "acceptance": "If expanded, change appearance and fonts, restart and inspect transcript, composer, menus, terminal and settings at representative sizes. If scope stays fixed, documentation accurately states the supported choices."
+  },
+  {
+    "id": "PS-10",
+    "title": "Remote access supports SSH, not T3's pairing links and alternate routes",
+    "priority": "P2",
+    "category": "intentional-difference",
+    "evidence_level": "source-proven",
+    "impact": "A machine reachable through a T3 pairing URL or relay cannot be added through Ferrite's machine settings. Ferrite also expects ferrited to be installed on the remote PATH before connection.",
+    "ferrite_evidence": [
+      "crates/ferrite-core/src/machine.rs:1-7",
+      "crates/ferrite-core/src/machine.rs:80-128",
+      "crates/ferrite-core/src/machine.rs:379-385",
+      "crates/ferrite-cockpit/src/cockpit/machines.rs:354-385",
+      "docs/adr/0026-machines-over-ssh.md:8-29"
+    ],
+    "t3_evidence": [
+      "https://github.com/pingdotgg/t3code/blob/74573fc29b901bafbf8f1dbb2eb29606da1fa448/apps/web/src/components/settings/AddEnvironmentDialog.tsx#L635",
+      "https://github.com/pingdotgg/t3code/blob/74573fc29b901bafbf8f1dbb2eb29606da1fa448/apps/web/src/components/settings/AddEnvironmentDialog.tsx#L438"
+    ],
+    "recommendation": "Do not describe remote support as absent. Document the existing SSH prerequisite and decide whether pairing/relay or assisted bootstrap is needed. Keep these optional expansions separate from the real remote settings/update defects.",
+    "acceptance": "For present scope, a configured SSH target reconnects and names an absent daemon clearly. If alternate routes are added, pair once, force direct-route failure and verify failover preserves machine/thread identity and requires no duplicate environment."
+  }
+]

@@ -1,0 +1,38 @@
+{
+  "version": 1,
+  "groups": [
+    {
+      "id": 1,
+      "title": "WORK",
+      "members": [
+        1,
+        2
+      ],
+      "layout": {
+        "root": {
+          "Split": {
+            "axis": "Column",
+            "ratio": 0.5,
+            "first": {
+              "Leaf": 2
+            },
+            "second": {
+              "Leaf": 1
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": 2,
+      "title": "",
+      "members": [
+        4,
+        1
+      ],
+      "guests": [
+        1
+      ]
+    }
+  ]
+}

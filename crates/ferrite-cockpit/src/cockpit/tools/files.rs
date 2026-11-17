@@ -11,10 +11,16 @@
 //! - **Tree** (`tree`): a filter field, folders that open on a press, git's
 //!   colour on each name; a right-click offers `Attach as context`, `Copy ›`
 //!   and `Show in Finder`.
-//! - **Editor** (`editor`): a code file edits, with Auto save; prose (a
-//!   `.md` or `.txt`) is read as the reader reads it — the reading face,
-//!   Markdown rendered — not in the code face. A file that is no text
-//!   says so.
+//! - **Editor** (`editor`): a text file edits, with Auto save. Prose (a
+//!   `.md` or `.txt`) opens as the reader reads it — the reading face,
+//!   Markdown rendered — and `Show source` swaps in the editor; a line to
+//!   go to opens the source. An image opens in the Pane's lightbox, as one
+//!   in the conversation does; any other file that is no text names its
+//!   kind and offers its own app.
+//! - **Tabs:** they scroll sideways when they overflow, a chevron at each
+//!   end with more, and the shown one is always brought into view. Each is
+//!   a stop in the Panel's keyboard row (`panel/controls.rs`): ←→ step, ⏎
+//!   shows, ⌫ and ⌘W close.
 //! - **Empty:** `Open files appear here`.
 //! - **`⋯`:** Show file tree, Preview tabs, Auto save, Word wrap, Tab size.
 //!
@@ -23,21 +29,30 @@
 
 use std::path::{Path, PathBuf};
 
+#[path = "remote_files.rs"]
+pub(in crate::cockpit::tools) mod remote_files;
+use ferrite_core::file_operations::Reply as FileReply;
+use remote_files::RemoteFiles;
+
 use ferrite_pane::composer::{Composer, Role};
-use ferrite_pane::preview::{head_door, Body as DocBody, Document, Text};
+use ferrite_pane::preview::{head_door, open_original, reading_markup, Body as DocBody};
 use ferrite_ui::icons::{self, icon};
 use ferrite_ui::theme::{self};
 
 use super::editor::{self, Editor};
+use super::save::SaveState;
 use super::tree::{FileTree, Row, Status};
+use super::working_set::{OpenFile, WorkingSet};
 use super::*;
-use crate::cockpit::surfaces::SurfaceId;
 use crate::cockpit::context_menu::Submenu;
+use crate::cockpit::panel::controls::focusable;
+use crate::cockpit::panel::preview::{settle_markdown_found, PreviewFind};
+use crate::cockpit::panel::{PanelControl, Semantics};
+use crate::cockpit::surfaces::SurfaceId;
+use crate::cockpit::tab_scroll::{self, Side, TabScroll};
 
 /// The filter field's key context: ⏎ opens the first match.
 pub(crate) const FILTER_CONTEXT: &str = "FilesFilter";
-/// The most rows a filter's list draws.
-const FILTER_ROWS: usize = 200;
 
 gpui::actions!(files, [OpenFirst]);
 
@@ -46,6 +61,8 @@ gpui::actions!(files, [OpenFirst]);
 pub(crate) enum Verb {
     ToggleTree,
     CollapseAll,
+    /// Read the tree and git's word again.
+    Refresh,
     TogglePreviewTabs,
     ToggleAutoSave,
     ToggleWrap,
@@ -69,13 +86,66 @@ pub(crate) const TAB_SIZES: [usize; 3] = [2, 4, 8];
 
 enum TabBody {
     Code(Entity<Editor>),
-    /// Prose, read as the reader reads it.
-    Prose {
-        document: Document,
-        rich: ferrite_pane::rich::TextCache,
-        scroll: ScrollHandle,
-    },
-    Unshown(&'static str),
+    Unshown(Unshown),
+}
+
+#[derive(Clone, PartialEq, Eq)]
+enum Unshown {
+    Loading,
+    Remote(String),
+    Unreadable,
+    /// Not text: what kind of file it looks like, by its extension.
+    Binary(&'static str),
+}
+
+impl Unshown {
+    fn note(&self) -> &str {
+        match self {
+            Self::Loading => "Loading remote file…",
+            Self::Remote(error) => error,
+            Self::Unreadable => "Could not read this file",
+            Self::Binary(kind) => kind,
+        }
+    }
+}
+
+/// What a file of known extension is, for the note that stands where no
+/// text can.
+fn file_kind(path: &Path) -> &'static str {
+    if ferrite_pane::image_viewer::is_image(path) {
+        return "Image";
+    }
+    let extension = path
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .map(str::to_ascii_lowercase);
+    match extension.as_deref() {
+        Some("pdf") => "PDF document",
+        Some("mp3" | "wav" | "m4a" | "flac" | "ogg" | "aac") => "Audio file",
+        Some("mp4" | "mov" | "webm" | "mkv" | "avi") => "Video file",
+        Some("zip" | "tar" | "gz" | "tgz" | "bz2" | "xz" | "7z" | "rar") => "Archive",
+        Some("doc" | "docx" | "xls" | "xlsx" | "ppt" | "pptx" | "pages" | "numbers" | "key") => {
+            "Office document"
+        }
+        _ => "Binary file",
+    }
+}
+
+/// How a text file is shown. Markdown and prose read rendered until the
+/// reader asks for the source, which is the one that edits.
+enum Reading {
+    /// Code: the editor, with no rendered form.
+    Plain,
+    Source,
+    Rendered(Rendered),
+}
+
+struct Rendered {
+    markup: SharedString,
+    cache: ferrite_pane::rich::TextCache,
+    scroll: ScrollHandle,
+    /// ⌘F's bar over the document, while it is open.
+    find: Option<PreviewFind>,
 }
 
 struct Tab {
@@ -84,10 +154,31 @@ struct Tab {
     /// opened twice.
     preview: bool,
     body: TabBody,
+    reading: Reading,
+    load: u64,
+    pending_line: Option<u32>,
+}
+
+impl Tab {
+    /// The editor, while the source is what shows.
+    fn shown_editor(&self) -> Option<&Entity<Editor>> {
+        match (&self.body, &self.reading) {
+            (TabBody::Code(editor), Reading::Plain | Reading::Source) => Some(editor),
+            _ => None,
+        }
+    }
+
+    /// The source shows, for a line to stand out in.
+    fn show_source(&mut self) {
+        if matches!(self.reading, Reading::Rendered(_)) {
+            self.reading = Reading::Source;
+        }
+    }
 }
 
 pub(crate) struct Files {
     tree: FileTree,
+    remote: Option<RemoteFiles>,
     filter: Entity<Composer>,
     tabs: Vec<Tab>,
     active: Option<usize>,
@@ -95,19 +186,197 @@ pub(crate) struct Files {
     preview_tabs: bool,
     show_tree: bool,
     tree_scroll: ScrollHandle,
+    tab_scroll: TabScroll,
     /// The tree row a right-click is on, for the menu's verbs.
     pressed: Option<PathBuf>,
+    /// Counts the git status reads started; only the latest one lands.
+    status_reads: u64,
 }
 
 impl Files {
     fn active_path(&self) -> Option<&Path> {
         self.active.map(|at| self.tabs[at].path.as_path())
     }
+
+    fn working_set(&self) -> WorkingSet {
+        WorkingSet {
+            files: self
+                .tabs
+                .iter()
+                .map(|tab| OpenFile {
+                    path: tab.path.clone(),
+                    preview: tab.preview,
+                })
+                .collect(),
+            active: self.active,
+            settings: self.settings,
+            preview_tabs: self.preview_tabs,
+            show_tree: self.show_tree,
+        }
+    }
 }
 
 impl CockpitView {
+    /// The code tab ⌘F finds in: the shown Files surface's, when the
+    /// keyboard is anywhere in that surface (its tree, tab strip or file) or
+    /// on the Panel's controls over it. A Panel showing another surface, or
+    /// the keyboard in the conversation, is not Files' to answer.
+    fn files_find_target(
+        &self,
+        thread: ThreadId,
+        on_controls: bool,
+        window: &Window,
+        cx: &gpui::App,
+    ) -> Option<Entity<Editor>> {
+        if self.active_surface(thread) != Some(SurfaceId::Files) {
+            return None;
+        }
+        let files = self.files_ref(thread)?;
+        let editor = files.tabs[files.active?].shown_editor()?;
+        let held = on_controls
+            || self.panel_keys_held(window, cx)
+            || editor.read(cx).holds_keyboard(window, cx);
+        held.then(|| editor.clone())
+    }
+
+    /// ⌘F with the keyboard in the shown Files surface: the find bar opens
+    /// over its file, source or rendered. Whether it did.
+    pub(in crate::cockpit) fn open_files_find(
+        &mut self,
+        thread: ThreadId,
+        on_controls: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        if let Some(editor) = self.files_find_target(thread, on_controls, window, cx) {
+            editor.update(cx, |editor, cx| editor.open_find(window, cx));
+            return true;
+        }
+        if self.active_surface(thread) != Some(SurfaceId::Files)
+            || !(on_controls || self.panel_keys_held(window, cx))
+        {
+            return false;
+        }
+        let Some((path, rendered)) = self.shown_rendered(thread) else {
+            return false;
+        };
+        let find = rendered.find.get_or_insert_with(|| {
+            PreviewFind::new(
+                ferrite_pane::find::Find::new(cx, move |view: &mut Self, cx| {
+                    view.refind_rendered(thread, cx)
+                }),
+                path,
+            )
+        });
+        find.bar.focus(window, cx);
+        cx.notify();
+        true
+    }
+
+    /// The shown tab's path and rendered face, while it reads rendered.
+    fn shown_rendered(&mut self, thread: ThreadId) -> Option<(PathBuf, &mut Rendered)> {
+        let files = self.files_of(thread)?;
+        let tab = &mut files.tabs[files.active?];
+        match &mut tab.reading {
+            Reading::Rendered(rendered) => Some((tab.path.clone(), rendered)),
+            _ => None,
+        }
+    }
+
+    /// The rendered bar's line changed: search the document again, a new
+    /// query starting on its first occurrence in view.
+    fn refind_rendered(&mut self, thread: ThreadId, cx: &mut Context<Self>) {
+        let Some((_, Rendered { markup, find: Some(find), .. })) = self.shown_rendered(thread) else {
+            return;
+        };
+        let source = gpui::base::text::TextView::markdown_find_text(markup);
+        if find.bar.search([source.as_str()], 0, cx) && find.bar.active().is_some() {
+            find.reveal_when_painted(true);
+        }
+        cx.notify();
+    }
+
+    fn step_rendered_find(&mut self, thread: ThreadId, forward: bool, cx: &mut Context<Self>) {
+        let Some((_, Rendered { find: Some(find), .. })) = self.shown_rendered(thread) else {
+            return;
+        };
+        if find.bar.step(forward).is_some() {
+            find.reveal_when_painted(false);
+            cx.notify();
+        }
+    }
+
+    fn close_rendered_find(&mut self, thread: ThreadId, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some((_, rendered)) = self.shown_rendered(thread) {
+            rendered.find = None;
+            window.blur(cx);
+            cx.notify();
+        }
+    }
+
+    /// What the shown rendered file's bar reads, and where its occurrence painted.
+    #[cfg(test)]
+    pub(crate) fn prose_find_for_test(
+        &mut self,
+        thread: ThreadId,
+    ) -> Option<(Option<SharedString>, Option<gpui::Bounds<Pixels>>)> {
+        let (_, rendered) = self.shown_rendered(thread)?;
+        rendered.find.as_ref().map(PreviewFind::state)
+    }
+
+    /// Once per frame: settle the shown rendered file's active occurrence into view.
+    pub(in crate::cockpit) fn tend_prose_find(&mut self, window: &mut Window) {
+        let Some(thread) = self.panel_thread() else {
+            return;
+        };
+        if let Some((_, Rendered { scroll, find: Some(find), .. })) = self.shown_rendered(thread) {
+            settle_markdown_found(find, scroll, window);
+        }
+    }
+
+    /// Bring file tab `at` into view in the tabs row.
+    pub(in crate::cockpit) fn reveal_files_tab(&mut self, thread: ThreadId, at: usize) {
+        if let Some(files) = self.files_of(thread) {
+            files.tab_scroll.reveal(at);
+        }
+    }
+
     fn files_of(&mut self, thread: ThreadId) -> Option<&mut Files> {
         self.tools.files.get_mut(&thread)
+    }
+
+    /// Whether the find bar over the Panel's shown file holds the keyboard.
+    pub(in crate::cockpit) fn files_find_holds_focus(&self, window: &Window, cx: &gpui::App) -> bool {
+        let Some(thread) = self.panel_thread() else {
+            return false;
+        };
+        self.active_surface(thread) == Some(SurfaceId::Files)
+            && self.files_ref(thread).is_some_and(|files| {
+                files.active.is_some_and(|active| {
+                    let tab = &files.tabs[active];
+                    match &tab.reading {
+                        Reading::Rendered(Rendered { find: Some(find), .. }) => find.holds_focus(window, cx),
+                        _ => tab
+                            .shown_editor()
+                            .is_some_and(|editor| editor.read(cx).find_holds_focus(window, cx)),
+                    }
+                })
+            })
+    }
+
+    /// The editors of `thread`'s open Files tabs.
+    pub(in crate::cockpit) fn files_editors(&self, thread: ThreadId) -> Vec<Entity<Editor>> {
+        let tabs = self.files_ref(thread).map(|files| files.tabs.as_slice()).unwrap_or_default();
+        tabs.iter()
+            .filter_map(|tab| match &tab.body {
+                TabBody::Code(editor) => Some(editor.clone()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    pub(in crate::cockpit) fn uses_remote_files(&self, thread: ThreadId) -> bool {
+        self.on_machine() || self.files_ref(thread).is_some_and(|files| files.remote.is_some())
     }
 
     pub(in crate::cockpit) fn files_ref(&self, thread: ThreadId) -> Option<&Files> {
@@ -122,33 +391,72 @@ impl CockpitView {
     ) -> Option<&mut Files> {
         if !self.tools.files.contains_key(&thread) {
             let root = self.thread_path(thread)?;
+            let remote =
+                self.cockpit.machine().cloned().map(|machine| {
+                    RemoteFiles::new(root.clone(), cx.entity().downgrade(), machine)
+                });
             let filter = cx.new(|cx| {
                 let mut field = Composer::new(cx);
                 field.set_role(Role::Field(Some(FILTER_CONTEXT)), cx);
                 field
             });
-            cx.subscribe(&filter, move |view, field, _: &ferrite_pane::composer::Edited, cx| {
-                let text = field.read(cx).text().to_string();
-                if let Some(files) = view.files_of(thread) {
-                    files.tree.set_filter(text);
-                    cx.notify();
-                }
-            })
-            .detach();
-            self.tools.files.insert(
-                thread,
-                Files {
-                    tree: FileTree::new(root),
-                    filter,
-                    tabs: Vec::new(),
-                    active: None,
-                    settings: editor::Settings::default(),
-                    preview_tabs: true,
-                    show_tree: true,
-                    tree_scroll: ScrollHandle::new(),
-                    pressed: None,
+            cx.subscribe(
+                &filter,
+                move |view, field, _: &ferrite_pane::composer::Edited, cx| {
+                    let text = field.read(cx).text().to_string();
+                    if let Some(files) = view.files_of(thread) {
+                        files.tree.set_filter(text);
+                        if files.remote.is_some() {
+                            view.refresh_file_tree(thread, cx);
+                        }
+                        cx.notify();
+                    }
                 },
-            );
+            )
+            .detach();
+            let stored = self.panel.working_sets.get(thread.get()).cloned();
+            let mut files = Files {
+                tree: if remote.is_some() {
+                    FileTree::remote(root)
+                } else {
+                    FileTree::new(root)
+                },
+                remote,
+                filter,
+                tabs: Vec::new(),
+                active: None,
+                settings: editor::Settings::default(),
+                preview_tabs: true,
+                show_tree: true,
+                tree_scroll: ScrollHandle::new(),
+                tab_scroll: TabScroll::default(),
+                pressed: None,
+                status_reads: 0,
+            };
+            if let Some(stored) = stored {
+                files.settings = stored.settings;
+                files.preview_tabs = stored.preview_tabs;
+                files.show_tree = stored.show_tree;
+                for open in stored.files {
+                    let tab = Self::read_tab(
+                        open.path,
+                        open.preview,
+                        files.settings,
+                        files.remote.clone(),
+                        thread,
+                        cx,
+                    );
+                    files.tabs.push(tab);
+                }
+                files.active = stored.active.filter(|at| *at < files.tabs.len());
+                if let Some(active) = files.active {
+                    files.tab_scroll.reveal(active);
+                    let path = files.tabs[active].path.clone();
+                    files.tree.reveal(&path);
+                }
+            }
+            self.tools.files.insert(thread, files);
+            self.refresh_file_tree(thread, cx);
         }
         self.files_of(thread)
     }
@@ -175,9 +483,8 @@ impl CockpitView {
         } else {
             let preview = files.preview_tabs && !keep;
             let settings = files.settings;
-            let Some(body) = Self::tab_body(&path, settings, thread, cx) else {
-                return;
-            };
+            let remote = files.remote.clone();
+            let tab = Self::read_tab(path, preview, settings, remote, thread, cx);
             let Some(files) = self.files_of(thread) else {
                 return;
             };
@@ -186,59 +493,191 @@ impl CockpitView {
                     files.tabs.remove(at);
                 }
             }
-            files.tabs.push(Tab { path: path.clone(), preview, body });
+            files.tabs.push(tab);
             files.active = Some(files.tabs.len() - 1);
         }
-        if let (Some(line), Some(Tab { body: TabBody::Code(editor), .. })) = (
-            line,
-            self.files_of(thread).and_then(|files| files.active.map(|at| &files.tabs[at])),
-        ) {
-            editor.update(cx, |editor, cx| editor.go_to_line(line as usize, cx));
+        if !self.files_tree_beside() {
+            if let Some(files) = self.files_of(thread) {
+                files.show_tree = false;
+            }
+        }
+        let Some(files) = self.files_of(thread) else {
+            return;
+        };
+        let at = files.active.unwrap_or_default();
+        files.tab_scroll.reveal(at);
+        if let Some(line) = line {
+            let tab = &mut files.tabs[at];
+            tab.pending_line = Some(line);
+            tab.show_source();
+            if let Some(editor) = tab.shown_editor() {
+                editor.update(cx, |editor, cx| editor.go_to_line(line as usize, cx));
+            }
+        }
+        if files.remote.is_some() {
+            self.refresh_file_tree(thread, cx);
         }
         cx.notify();
     }
 
-    fn tab_body(
+    /// A press in the tree, the filter's ⏎: an image opens in the Pane's
+    /// lightbox as one in the conversation does, a file in a tab.
+    fn open_from_tree(
+        &mut self,
+        thread: ThreadId,
+        path: PathBuf,
+        keep: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        match self.pane_for(thread) {
+            Some(index) if !self.uses_remote_files(thread) && ferrite_pane::image_viewer::is_image(&path) => {
+                self.panes[index].preview.open(path, None, &[], window, cx);
+                cx.notify();
+            }
+            _ => self.open_in_files(thread, path, None, keep, cx),
+        }
+    }
+
+    fn read_tab(
+        path: PathBuf,
+        preview: bool,
+        settings: editor::Settings,
+        remote: Option<RemoteFiles>,
+        thread: ThreadId,
+        cx: &mut Context<Self>,
+    ) -> Tab {
+        static LOADS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+        let load = LOADS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        if let Some(remote) = remote {
+            let answer = remote.read(&path, cx);
+            let opened = path.clone();
+            cx.spawn(async move |view, cx| {
+                let result = cx.background_executor().spawn(async move { remote_files::receive(answer).await }).await;
+                let _ = view.update(cx, |view, cx| {
+                    let Some(files) = view.files_ref(thread).filter(|files| files.remote.as_ref().is_some_and(|current| current.same_workspace(&remote))) else { return; };
+                    let Some(at) = files.tabs.iter().position(|tab| tab.load == load && tab.path == opened) else { return; };
+                    let settings = files.settings;
+                    let line = files.tabs[at].pending_line;
+                    let (body, reading) = match result {
+                        Ok(FileReply::Text { text, .. }) => {
+                            let editor = Self::editor_for(&opened, text, settings, thread, cx);
+                            editor.update(cx, |editor, cx| {
+                                editor.set_remote(remote);
+                                if let Some(line) = line { editor.go_to_line(line as usize, cx); }
+                            });
+                            (TabBody::Code(editor), Reading::Plain)
+                        }
+                        Ok(FileReply::Binary) => (TabBody::Unshown(Unshown::Remote("This remote file is not text. Use the remote terminal to open or copy it.".into())), Reading::Plain),
+                        Ok(_) => (TabBody::Unshown(Unshown::Remote("Update Ferrite on this machine to open remote files.".into())), Reading::Plain),
+                        Err(error) => (TabBody::Unshown(Unshown::Remote(error.to_string())), Reading::Plain),
+                    };
+                    if let Some(tab) = view.files_of(thread).and_then(|files| files.tabs.get_mut(at)) {
+                        tab.body = body;
+                        tab.reading = reading;
+                    }
+                    cx.notify();
+                });
+            }).detach();
+            return Tab {
+                path,
+                preview,
+                body: TabBody::Unshown(Unshown::Loading),
+                reading: Reading::Plain,
+                load,
+                pending_line: None,
+            };
+        }
+        let (body, reading) = match std::fs::read(&path) {
+            Err(_) => (TabBody::Unshown(Unshown::Unreadable), Reading::Plain),
+            Ok(bytes) => match String::from_utf8(bytes) {
+                Err(_) => (TabBody::Unshown(Unshown::Binary(file_kind(&path))), Reading::Plain),
+                Ok(source) => {
+                    let reading = reading_markup(&path, &source).map_or(Reading::Plain, |markup| {
+                        Reading::Rendered(Rendered {
+                            markup: markup.into(),
+                            cache: Default::default(),
+                            scroll: ScrollHandle::new(),
+                            find: None,
+                        })
+                    });
+                    (TabBody::Code(Self::editor_for(&path, source, settings, thread, cx)), reading)
+                }
+            },
+        };
+        Tab {
+            path,
+            preview,
+            body,
+            reading,
+            load,
+            pending_line: None,
+        }
+    }
+
+    fn editor_for(
         path: &Path,
+        source: String,
         settings: editor::Settings,
         thread: ThreadId,
         cx: &mut Context<Self>,
-    ) -> Option<TabBody> {
-        let Ok(bytes) = std::fs::read(path) else {
-            return Some(TabBody::Unshown("Could not read this file"));
-        };
-        let Ok(source) = String::from_utf8(bytes) else {
-            return Some(TabBody::Unshown("This is not a text file"));
-        };
-        let document = Document {
-            path: path.to_path_buf(),
-            name: None,
-            body: DocBody::Text {
-                text: std::sync::Arc::new(Text::new(source.clone())),
-                line: None,
-            },
-        };
-        if document.rich_source().is_some() {
-            return Some(TabBody::Prose {
-                document,
-                rich: Default::default(),
-                scroll: ScrollHandle::new(),
-            });
-        }
+    ) -> Entity<Editor> {
         let editor = cx.new(|cx| Editor::new(path, source, settings, cx));
-        cx.subscribe(&editor, move |view, editor, _: &editor::Edited, cx| {
-            // Typing keeps a preview tab.
-            if let Some(files) = view.files_of(thread) {
-                for tab in &mut files.tabs {
-                    if matches!(&tab.body, TabBody::Code(own) if *own == editor) {
-                        tab.preview = false;
-                    }
+        cx.subscribe(&editor, move |view, editor, event: &editor::Event, cx| {
+            let Some(files) = view.files_of(thread) else {
+                return;
+            };
+            let Some(at) = files
+                .tabs
+                .iter()
+                .position(|tab| matches!(&tab.body, TabBody::Code(own) if *own == editor))
+            else {
+                return;
+            };
+            match event {
+                // Typing keeps a preview tab.
+                editor::Event::Edited => files.tabs[at].preview = false,
+                editor::Event::Settled if editor.read(cx).is_closing_clean() => {
+                    return view.remove_tab(thread, at, cx);
                 }
+                editor::Event::Settled => {}
+                editor::Event::Discard => return view.remove_tab(thread, at, cx),
             }
             cx.notify();
         })
         .detach();
-        Some(TabBody::Code(editor))
+        editor
+    }
+
+    /// Swap a Markdown or prose file between its rendered face and its
+    /// source, which edits and takes the keyboard.
+    fn toggle_reading(&mut self, thread: ThreadId, at: usize, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(tab) = self.files_of(thread).and_then(|files| files.tabs.get_mut(at)) else {
+            return;
+        };
+        let TabBody::Code(editor) = &tab.body else {
+            return;
+        };
+        match &tab.reading {
+            Reading::Plain => return,
+            Reading::Source => {
+                let Some(markup) = reading_markup(&tab.path, editor.read(cx).text()) else {
+                    return;
+                };
+                tab.reading = Reading::Rendered(Rendered {
+                    markup: markup.into(),
+                    cache: Default::default(),
+                    scroll: ScrollHandle::new(),
+                    find: None,
+                });
+            }
+            Reading::Rendered(_) => {
+                tab.reading = Reading::Source;
+                let focus = editor.read(cx).focus_handle(cx);
+                window.focus(&focus, cx);
+            }
+        }
+        cx.notify();
     }
 
     /// Show the Files pane for `thread` (the Files door, opened).
@@ -246,25 +685,179 @@ impl CockpitView {
         self.upsert_surface(thread, SurfaceId::Files, cx);
     }
 
-    fn select_tab(&mut self, thread: ThreadId, at: usize, cx: &mut Context<Self>) {
+    /// The Files tab is brought forward again: what changed in the checkout
+    /// while it was away shows.
+    pub(in crate::cockpit) fn refresh_file_tree(&mut self, thread: ThreadId, cx: &mut Context<Self>) {
+        let Some(files) = self.files_of(thread) else {
+            return;
+        };
+        files.tree.refresh();
+        files.status_reads += 1;
+        let read = files.status_reads;
+        let root = files.tree.root().to_path_buf();
+        if let Some(remote) = files.remote.clone() {
+            let (directories, search) = files.tree.remote_request();
+            let answer = remote.snapshot(directories, search, cx);
+            cx.spawn(async move |view, cx| {
+                let result = cx
+                    .background_executor()
+                    .spawn(async move { remote_files::receive(answer).await })
+                    .await;
+                let result = match result {
+                    Ok(FileReply::Snapshot(snapshot)) => Ok(snapshot),
+                    Ok(_) => Err("Update Ferrite on this machine to browse remote files.".into()),
+                    Err(error) => Err(error.to_string()),
+                };
+                let _ = view.update(cx, |view, cx| {
+                    if let Some(files) = view.files_of(thread).filter(|files| {
+                        files.status_reads == read
+                            && files
+                                .remote
+                                .as_ref()
+                                .is_some_and(|current| current.same_workspace(&remote))
+                    }) {
+                        files.tree.set_remote(result);
+                        cx.notify();
+                    }
+                });
+            })
+            .detach();
+            cx.notify();
+            return;
+        }
+        cx.spawn(async move |view, cx| {
+            let status = {
+                let root = root.clone();
+                cx.background_executor().spawn(async move { FileTree::read_status(&root) }).await
+            };
+            view.update(cx, |view, cx| {
+                if let Some(files) = view
+                    .files_of(thread)
+                    .filter(|files| files.status_reads == read && files.tree.root() == root)
+                {
+                    files.tree.set_status(status);
+                    cx.notify();
+                }
+            })
+            .ok();
+        })
+        .detach();
+        cx.notify();
+    }
+
+    pub(in crate::cockpit) fn select_tab(&mut self, thread: ThreadId, at: usize, cx: &mut Context<Self>) {
         if let Some(files) = self.files_of(thread) {
             files.active = Some(at);
+            files.tab_scroll.reveal(at);
             cx.notify();
         }
     }
 
-    fn close_tab(&mut self, thread: ThreadId, at: usize, cx: &mut Context<Self>) {
+    /// Close a tab, unless its text is not on disk: it is written first, and
+    /// stays with its status bar when that fails.
+    pub(in crate::cockpit) fn close_tab(&mut self, thread: ThreadId, at: usize, cx: &mut Context<Self>) {
         let Some(files) = self.files_of(thread) else {
             return;
         };
-        let tab = files.tabs.remove(at);
-        if let TabBody::Code(editor) = &tab.body {
-            editor.update(cx, |editor, _| editor.save());
+        if let TabBody::Code(editor) = &files.tabs[at].body {
+            if !editor.update(cx, |editor, cx| editor.request_close(cx)) {
+                return;
+            }
         }
+        self.remove_tab(thread, at, cx);
+    }
+
+    fn reload_tab(&mut self, thread: ThreadId, at: usize, cx: &mut Context<Self>) {
+        let Some(files) = self.files_of(thread) else {
+            return;
+        };
+        let (path, settings) = (files.tabs[at].path.clone(), files.settings);
+        let preview = files.tabs[at].preview;
+        let remote = files.remote.clone();
+        let tab = Self::read_tab(path, preview, settings, remote, thread, cx);
+        if let Some(slot) = self
+            .files_of(thread)
+            .and_then(|files| files.tabs.get_mut(at))
+        {
+            *slot = tab;
+        }
+        cx.notify();
+    }
+
+    pub(in crate::cockpit) fn files_tab_count(&self, thread: ThreadId) -> usize {
+        self.files_ref(thread).map_or(0, |files| files.tabs.len())
+    }
+
+    pub(in crate::cockpit) fn files_tabs_scrolling(&self, cx: &gpui::App) -> bool {
+        self.tools.files.values().any(|files| files.tab_scroll.running(cx))
+    }
+
+    /// A quit's last chance for text auto save has not yet written.
+    pub(in crate::cockpit) fn flush_unsaved_files(&mut self, cx: &mut Context<Self>) {
+        let editors: Vec<_> = self
+            .tools
+            .files
+            .values()
+            .flat_map(|files| files.tabs.iter())
+            .filter_map(|tab| match &tab.body {
+                TabBody::Code(editor) => Some(editor.clone()),
+                TabBody::Unshown(_) => None,
+            })
+            .collect();
+        for editor in editors {
+            editor.update(cx, |editor, _| editor.flush_for_quit());
+        }
+    }
+
+    /// How many open buffers leaving would lose, or `None` when none.
+    pub(in crate::cockpit) fn unsaved_files_at_leaving(&self, cx: &gpui::App) -> Option<usize> {
+        let lost = self
+            .tools
+            .files
+            .values()
+            .flat_map(|files| files.tabs.iter())
+            .filter(|tab| match &tab.body {
+                TabBody::Code(editor) => editor.read(cx).lost_by_leaving(),
+                TabBody::Unshown(_) => false,
+            })
+            .count();
+        (lost > 0).then_some(lost)
+    }
+
+    pub(crate) fn files_leave_error(&self, cx: &gpui::App) -> Option<&'static str> {
+        self.unsaved_files_at_leaving(cx)
+            .map(|_| "Save or close edited files before switching environments.")
+    }
+
+    pub(in crate::cockpit) fn sync_working_sets(&mut self) {
+        let live = self
+            .tools
+            .files
+            .iter()
+            .map(|(thread, files)| (thread.get(), files.working_set()));
+        if !self.panel.working_sets.sync(live) {
+            return;
+        }
+        let known = self
+            .known_threads()
+            .into_iter()
+            .map(ThreadId::get)
+            .collect();
+        self.panel.working_sets.retain(&known);
+    }
+
+    fn remove_tab(&mut self, thread: ThreadId, at: usize, cx: &mut Context<Self>) {
+        let Some(files) = self.files_of(thread) else {
+            return;
+        };
+        files.tabs.remove(at);
         files.active = match files.tabs.len() {
             0 => None,
             len => Some(files.active.map_or(0, |active| active.min(len - 1))),
         };
+        if let Some(active) = files.active {
+            files.tab_scroll.reveal(active);
+        }
         cx.notify();
     }
 
@@ -304,12 +897,12 @@ impl CockpitView {
         cx.notify();
     }
 
-    fn open_first_match(&mut self, thread: ThreadId, cx: &mut Context<Self>) {
+    fn open_first_match(&mut self, thread: ThreadId, window: &mut Window, cx: &mut Context<Self>) {
         let first = self.files_of(thread).and_then(|files| {
-            files.tree.rows().into_iter().find(|row| !row.entry.dir).map(|row| row.entry.path)
+            files.tree.rows().rows.into_iter().find(|row| !row.entry.dir).map(|row| row.entry.path)
         });
         if let Some(path) = first {
-            self.open_in_files(thread, path, None, false, cx);
+            self.open_from_tree(thread, path, false, window, cx);
         }
     }
 
@@ -326,9 +919,11 @@ impl CockpitView {
             return;
         };
         let pressed = files.pressed.clone();
+        let remote = files.remote.is_some();
         match verb {
             Verb::ToggleTree => files.show_tree = !files.show_tree,
             Verb::CollapseAll => files.tree.collapse_all(),
+            Verb::Refresh => self.refresh_file_tree(thread, cx),
             Verb::TogglePreviewTabs => files.preview_tabs = !files.preview_tabs,
             Verb::ToggleAutoSave => files.settings.auto_save = !files.settings.auto_save,
             Verb::ToggleWrap => files.settings.wrap = !files.settings.wrap,
@@ -336,9 +931,16 @@ impl CockpitView {
             Verb::Attach => {
                 if let Some(path) = pressed {
                     if let Some(index) = self.pane_for(thread) {
-                        self.panes[index]
-                            .composer
-                            .update(cx, |composer, cx| composer.add_files(&[path], cx));
+                        self.panes[index].composer.update(cx, |composer, cx| {
+                            if remote {
+                                composer.insert(
+                                    &format!("\nPlease use the file at {} on this machine.\n", path.display()),
+                                    cx,
+                                );
+                            } else {
+                                composer.add_files(&[path], cx);
+                            }
+                        });
                     }
                 }
             }
@@ -436,7 +1038,7 @@ impl CockpitView {
             Some((menu::Item::new("Attach as context"), MenuVerb::Files(Verb::Attach))),
             Some((menu::Item::new("Copy"), MenuVerb::Submenu(Submenu::Files(Sub::Copy)))),
             None,
-            Some((menu::Item::new("Show in Finder"), MenuVerb::Reveal)),
+            (!self.on_machine()).then(|| (menu::Item::new("Show in Finder"), MenuVerb::Reveal)),
         ]
     }
 
@@ -447,6 +1049,8 @@ impl CockpitView {
         let Some(files) = self.files_ref(thread) else {
             return div().flex_1();
         };
+        let beside = self.files_tree_beside();
+        let tree = files.show_tree.then(|| self.files_tree(thread, files, cx));
         div()
             .debug_selector(|| "files".into())
             .flex()
@@ -456,16 +1060,32 @@ impl CockpitView {
             .child(self.files_head(thread, files, cx))
             .child(
                 div()
+                    .relative()
                     .flex()
                     .flex_1()
                     .min_h_0()
                     .child(self.files_editor(thread, files, cx))
-                    .children(files.show_tree.then(|| self.files_tree(thread, files, cx))),
+                    .children(tree.map(|tree| {
+                        if beside {
+                            tree.w(px(theme::FILES_TREE_W))
+                        } else {
+                            tree.absolute().inset_0().bg(theme::paint::PANEL)
+                        }
+                    })),
             )
+    }
+
+    /// Whether the Panel is wide enough for the tree beside a readable
+    /// editor. Narrower, the tree is a page over the editor, and a file
+    /// picked from it shows the editor again.
+    fn files_tree_beside(&self) -> bool {
+        self.panel_pane()
+            .is_some_and(|index| self.panel_rest_w(index) >= theme::FILES_TREE_W + theme::FILES_EDITOR_MIN_W)
     }
 
     fn files_head(&self, thread: ThreadId, files: &Files, cx: &mut Context<Self>) -> Div {
         use theme::*;
+        files.tab_scroll.settle(cx);
         let tabs = files.tabs.iter().enumerate().map(|(at, tab)| {
             let active = files.active == Some(at);
             let dirty = matches!(&tab.body, TabBody::Code(editor) if editor.read(cx).is_dirty());
@@ -474,8 +1094,9 @@ impl CockpitView {
                 .file_name()
                 .map_or_else(String::new, |name| name.to_string_lossy().into_owned());
             let id = SharedString::from(format!("files-tab-{at}"));
-            div()
-                .id(id.clone())
+            let semantics = Semantics::tab(name.clone(), active);
+            let handle = self.panel_control(PanelControl::FileTab(at), semantics.clone(), cx);
+            focusable(div().id(id.clone()), &handle, &semantics)
                 .debug_selector(move || id.to_string())
                 .flex()
                 .flex_shrink_0()
@@ -520,7 +1141,7 @@ impl CockpitView {
                         view.close_tab(thread, at, cx);
                     })),
                 )
-        });
+        }).collect::<Vec<_>>();
         let door = |key: &'static str, glyph: &'static str, tip: &'static str, chord: Option<&'static str>| {
             let door = head_door(key, key.into(), glyph);
             match chord {
@@ -528,25 +1149,67 @@ impl CockpitView {
                 None => door.tooltip(ferrite_ui::menu::tooltip(tip)),
             }
         };
+        let chevron = |side: Side| {
+            tab_scroll::chevron(
+                "files-tabs",
+                side,
+                &files.tab_scroll,
+                cx.listener(move |view, _: &ClickEvent, _, cx| {
+                    if let Some(files) = view.files_of(thread) {
+                        files.tab_scroll.ease(side, cx);
+                    }
+                    cx.notify();
+                }),
+            )
+        };
         super::surface_bar()
             .child(
                 div()
-                    .debug_selector(|| "files-tabs".into())
                     .flex()
                     .flex_1()
                     .min_w_0()
-                    .gap(px(SPACE_0_5))
-                    .overflow_hidden()
-                    .when(files.tabs.is_empty(), |strip| {
-                        strip.text_size(px(FS_LABEL)).text_color(rgb(INK_SUBTLE)).child("Files")
-                    })
-                    .children(tabs),
+                    .items_center()
+                    .children(chevron(Side::Left))
+                    .child(
+                        div()
+                            .id("files-tabs")
+                            .debug_selector(|| "files-tabs".into())
+                            .flex()
+                            .flex_1()
+                            .min_w_0()
+                            .gap(px(SPACE_0_5))
+                            .overflow_x_scroll()
+                            .track_scroll(&*files.tab_scroll)
+                            .on_scroll_wheel(cx.listener(
+                                move |view, event: &gpui::ScrollWheelEvent, window, cx| {
+                                    let wheeled = view
+                                        .files_of(thread)
+                                        .is_some_and(|files| files.tab_scroll.wheel(event, window));
+                                    if wheeled {
+                                        cx.stop_propagation();
+                                        cx.notify();
+                                    }
+                                },
+                            ))
+                            .when(files.tabs.is_empty(), |strip| {
+                                strip.text_size(px(FS_LABEL)).text_color(rgb(INK_SUBTLE)).child("Files")
+                            })
+                            .children(tabs),
+                    )
+                    .children(chevron(Side::Right)),
             )
             .child(
                 door("files-go", icons::SEARCH, "Go to file or search", Some("cockpit::GoToFile"))
                     .on_click(cx.listener(move |view, _: &ClickEvent, window, cx| {
                         cx.stop_propagation();
                         view.go_to_file(thread, window, cx);
+                    })),
+            )
+            .child(
+                door("files-refresh", icons::REFRESH, "Refresh file tree", None)
+                    .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
+                        cx.stop_propagation();
+                        view.run_files_verb(thread, Verb::Refresh, cx);
                     })),
             )
             .child(
@@ -576,6 +1239,7 @@ impl CockpitView {
     fn files_editor(&self, thread: ThreadId, files: &Files, cx: &mut Context<Self>) -> Div {
         use theme::*;
         let column = div()
+            .debug_selector(|| "files-editor".into())
             .flex()
             .flex_col()
             .flex_1()
@@ -588,15 +1252,20 @@ impl CockpitView {
                     .flex()
                     .flex_col()
                     .flex_1()
+                    .w_full()
                     .items_center()
                     .justify_center()
                     .gap(px(SPACE_2))
                     .px(px(SPACE_6))
+                    .min_w_0()
                     .text_center()
                     .child(icon(icons::FOLDER, ICON_BUTTON_GLYPH + 4., INK_SUBTLE))
-                    .child(div().text_size(px(FS_LABEL)).child("Open files appear here"))
+                    .child(div().w_full().text_size(px(FS_LABEL)).child("Open files appear here"))
                     .child(
                         div()
+                            .w_full()
+                            .min_w_0()
+                            .whitespace_normal()
                             .text_size(px(FS_META))
                             .text_color(rgb(INK_SUBTLE))
                             .child("Pick a file in the tree, or click a file path in the conversation."),
@@ -649,13 +1318,32 @@ impl CockpitView {
                         ]
                     }).flatten()),
             )
+            .children(match &tab.body {
+                TabBody::Code(editor) => match editor.read(cx).save_state() {
+                    SaveState::Saving(_) => Some("Saving"),
+                    SaveState::Saved => Some("Saved"),
+                    _ => None,
+                },
+                _ => None,
+            }
+            .map(|word| div().debug_selector(|| "files-save-state".into()).flex_shrink_0().child(word)))
+            .children((!matches!(tab.reading, Reading::Plain)).then(|| {
+                let (key, label) = match tab.reading {
+                    Reading::Rendered(_) => ("files-show-source", "Show source"),
+                    _ => ("files-show-rendered", "Show rendered"),
+                };
+                let at = files.active.unwrap_or_default();
+                text_action(key, label).on_click(cx.listener(move |view, _: &ClickEvent, window, cx| {
+                    view.toggle_reading(thread, at, window, cx)
+                }))
+            }))
             .children(changed.then(|| {
                 let path = relative_path.clone();
                 text_action("files-show-changes", "Show changes").on_click(cx.listener(
                     move |view, _: &ClickEvent, _, cx| view.show_changes_of(thread, &path, cx),
                 ))
             }))
-            .child({
+            .children((files.remote.is_none()).then(|| {
                 let file = tab.path.clone();
                 text_action("files-open", "Open").on_click(cx.listener(
                     move |_, _: &ClickEvent, _, cx| {
@@ -664,36 +1352,108 @@ impl CockpitView {
                         }
                     },
                 ))
-            });
-        let body = match &tab.body {
-            TabBody::Code(editor) => div().flex_1().min_h_0().child(editor.clone()).into_any_element(),
-            TabBody::Prose { document, rich, scroll } => div()
-                .id("files-prose")
-                .debug_selector(|| "files-prose".into())
+            }));
+        let retry_path = tab.path.clone();
+        let open_path = tab.path.clone();
+        let body = match (&tab.body, &tab.reading) {
+            (TabBody::Code(_), Reading::Rendered(rendered)) => div()
+                .relative()
+                .flex()
+                .flex_col()
                 .flex_1()
                 .min_h_0()
-                .overflow_y_scroll()
-                .track_scroll(scroll)
-                .px(px(TX_INSET_SOLO))
-                .pt(px(BODY_PAD_T))
-                .pb(px(HALF_ROW))
-                .text_size(px(FS_PROSE))
-                .line_height(px(LH_PROSE))
-                .child(ferrite_pane::rich::Markdown::new(
-                    format!("files-{}", document.path.display()),
-                    document.rich_source().unwrap_or_default(),
-                    rich.clone(),
-                ))
+                .child(
+                    div()
+                        .id("files-prose")
+                        .debug_selector(|| "files-prose".into())
+                        .flex_1()
+                        .min_h_0()
+                        .overflow_y_scroll()
+                        .track_scroll(&rendered.scroll)
+                        .px(px(TX_INSET_SOLO))
+                        .pt(px(BODY_PAD_T))
+                        .pb(px(HALF_ROW))
+                        .text_size(px(FS_PROSE))
+                        .line_height(px(LH_PROSE))
+                        .child(
+                            ferrite_pane::rich::Markdown::new(
+                                format!("files-{}", tab.path.display()),
+                                rendered.markup.clone(),
+                                rendered.cache.clone(),
+                            )
+                            .find(rendered.find.as_ref().and_then(|find| find.bar.marks(0))),
+                        ),
+                )
+                .children(rendered.find.as_ref().map(|find| find.bar.bar()))
+                .on_action(cx.listener(move |view, _: &ferrite_pane::find::Next, _, cx| {
+                    view.step_rendered_find(thread, true, cx)
+                }))
+                .on_action(cx.listener(move |view, _: &ferrite_pane::find::Previous, _, cx| {
+                    view.step_rendered_find(thread, false, cx)
+                }))
+                .on_action(cx.listener(move |view, _: &ferrite_pane::find::Close, window, cx| {
+                    view.close_rendered_find(thread, window, cx)
+                }))
                 .into_any_element(),
-            TabBody::Unshown(why) => div()
-                .flex()
-                .flex_1()
-                .items_center()
-                .justify_center()
-                .text_size(px(FS_LABEL))
-                .text_color(rgb(INK_SUBTLE))
-                .child(*why)
-                .into_any_element(),
+            (TabBody::Code(editor), _) => div().flex_1().min_h_0().child(editor.clone()).into_any_element(),
+            (TabBody::Unshown(why), _) => {
+                let why = why.clone();
+                div()
+                    .debug_selector(|| "files-unshown".into())
+                    .flex()
+                    .flex_col()
+                    .flex_1()
+                    .w_full()
+                    .min_w_0()
+                    .items_center()
+                    .justify_center()
+                    .gap(px(SPACE_2))
+                    .px(px(SPACE_6))
+                    .text_center()
+                    .text_size(px(FS_LABEL))
+                    .text_color(rgb(INK_SUBTLE))
+                    .child(div().w_full().whitespace_normal().child(why.note().to_owned()))
+                    .when(
+                        matches!(why, Unshown::Binary(_)) && files.remote.is_none(),
+                        |note| {
+                            note.child(
+                                div()
+                                    .text_size(px(FS_META))
+                                    .child("It has no text to show here."),
+                            )
+                            .child(
+                                ferrite_ui::components::form_button_on("files-open-original", theme::paint::RAISED, cx)
+                                    .debug_selector(|| "files-open-original".into())
+                                    .h(px(ROW))
+                                    .px(px(CH))
+                                    .child(ferrite_ui::components::form_label("Open in default app", INK_STRONG))
+                                    .on_click({
+                                        let file = open_path.clone();
+                                        cx.listener(move |_, _: &ClickEvent, window, cx| {
+                                            open_original(&file, window, cx)
+                                        })
+                                    }),
+                            )
+                        },
+                    )
+                    .when(matches!(why, Unshown::Unreadable | Unshown::Remote(_)), |note| {
+                        note.child(
+                            ferrite_ui::components::form_button("files-retry", cx)
+                                .debug_selector(|| "files-retry".into())
+                                .h(px(ROW))
+                                .px(px(CH))
+                                .child(ferrite_ui::components::form_label("Try again", INK_SUBTLE))
+                                .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
+                                    if let Some(at) = view.files_ref(thread).and_then(|files| {
+                                        files.tabs.iter().position(|tab| tab.path == retry_path)
+                                    }) {
+                                        view.reload_tab(thread, at, cx);
+                                    }
+                                })),
+                        )
+                    })
+                    .into_any_element()
+            }
         };
         column.child(breadcrumb).child(body)
     }
@@ -712,7 +1472,9 @@ impl CockpitView {
             .px(px(SPACE_2))
             .rounded(px(R_CONTROL))
             .bg(paint::FIELD)
-            .on_action(cx.listener(move |view, _: &OpenFirst, _, cx| view.open_first_match(thread, cx)))
+            .on_action(cx.listener(move |view, _: &OpenFirst, window, cx| {
+                view.open_first_match(thread, window, cx)
+            }))
             .child(icon(icons::SEARCH, ICON_BUTTON_GLYPH, INK_SUBTLE))
             .child(
                 div()
@@ -733,7 +1495,7 @@ impl CockpitView {
                         )
                     }),
             );
-                let rows = files.tree.rows();
+        let listing = files.tree.rows();
         let active = files.active_path().map(Path::to_path_buf);
         let body = div()
             .id("files-tree-scroll")
@@ -744,17 +1506,26 @@ impl CockpitView {
             .track_scroll(&files.tree_scroll)
             .px(px(SPACE_2))
             .children(
-                rows.into_iter()
-                    .take(FILTER_ROWS.max(1_000))
+                listing
+                    .rows
+                    .into_iter()
                     .enumerate()
                     .map(|(at, row)| self.tree_row(thread, at, row, active.as_deref(), cx)),
-            );
+            )
+            .children(listing.note.map(|note| {
+                div()
+                    .debug_selector(|| "files-tree-note".into())
+                    .flex_shrink_0()
+                    .p(px(SPACE_2))
+                    .text_size(px(FS_META))
+                    .text_color(rgb(INK_SUBTLE))
+                    .child(SharedString::from(note))
+            }));
         div()
             .debug_selector(|| "files-tree-column".into())
             .flex()
             .flex_col()
             .flex_shrink_0()
-            .w(px(FILES_TREE_W))
             .h_full()
             .gap(px(SPACE_1))
             .child(div().h(px(ICON_BUTTON - SPACE_2)).flex_shrink_0())
@@ -824,17 +1595,20 @@ impl CockpitView {
                     .rounded_full()
                     .bg(rgb(ink))
             }))
-            .on_click(cx.listener(move |view, event: &ClickEvent, _, cx| {
+            .on_click(cx.listener(move |view, event: &ClickEvent, window, cx| {
                 let Some(files) = view.files_of(thread) else {
                     return;
                 };
                 if dir {
                     files.tree.toggle(&press);
+                    if files.remote.is_some() {
+                        view.refresh_file_tree(thread, cx);
+                    }
                     cx.notify();
                 } else {
                     // A second press keeps the tab (`ClickEvent::click_count`).
                     let keep = event.click_count() >= 2;
-                    view.open_in_files(thread, press.clone(), None, keep, cx);
+                    view.open_from_tree(thread, press.clone(), keep, window, cx);
                 }
             }))
             .on_mouse_down(
@@ -847,6 +1621,39 @@ impl CockpitView {
                     view.open_context_menu(MenuTarget::File(thread), event.position, cx);
                 }),
             )
+    }
+
+    #[cfg(test)]
+    pub(in crate::cockpit) fn remote_files_for_test(
+        &mut self,
+        thread: ThreadId,
+        answer: impl Fn(ferrite_core::file_operations::Request) -> std::io::Result<FileReply> + 'static,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(files) = self.ensure_files(thread, cx) {
+            let root = files.tree.root().to_path_buf();
+            files.tree = FileTree::remote(root.clone());
+            files.remote = Some(RemoteFiles::fake(root, answer));
+            files.tabs.clear();
+            files.active = None;
+        }
+        if let Some(index) = self.pane_for(thread) {
+            self.panes[index].preview.set_remote_files(true);
+        }
+    }
+
+    /// The shown tab's editor, while its source is what shows.
+    pub(in crate::cockpit) fn files_editor_of(&self, thread: ThreadId) -> Option<Entity<Editor>> {
+        let files = self.files_ref(thread)?;
+        files.tabs[files.active?].shown_editor().cloned()
+    }
+
+    pub(in crate::cockpit) fn files_prose_scroll(&self, thread: ThreadId) -> Option<ScrollHandle> {
+        let files = self.files_ref(thread)?;
+        match &files.tabs[files.active?].reading {
+            Reading::Rendered(rendered) => Some(rendered.scroll.clone()),
+            _ => None,
+        }
     }
 }
 
@@ -869,17 +1676,47 @@ impl CockpitView {
     }
 
     /// The path of the shown tab.
+    #[cfg(test)]
+    pub(in crate::cockpit) fn files_wraps(&self, thread: ThreadId) -> Option<bool> {
+        self.files_ref(thread).map(|files| files.settings.wrap)
+    }
+
+    #[cfg(test)]
+    pub(in crate::cockpit) fn files_row_names(&self, thread: ThreadId) -> Vec<String> {
+        self.files_ref(thread)
+            .map(|files| files.tree.rows().rows.into_iter().map(|row| row.entry.name).collect())
+            .unwrap_or_default()
+    }
+
+    #[cfg(test)]
+    pub(in crate::cockpit) fn files_rendered_markup(&self, thread: ThreadId) -> Option<String> {
+        let files = self.files_ref(thread)?;
+        match &files.tabs[files.active?].reading {
+            Reading::Rendered(rendered) => Some(rendered.markup.to_string()),
+            _ => None,
+        }
+    }
+
+    #[cfg(test)]
+    pub(in crate::cockpit) fn files_unshown_note(&self, thread: ThreadId) -> Option<String> {
+        let files = self.files_ref(thread)?;
+        match &files.tabs[files.active?].body {
+            TabBody::Unshown(why) => Some(why.note().to_string()),
+            _ => None,
+        }
+    }
+
     pub(in crate::cockpit) fn files_active_path(&self, thread: ThreadId) -> Option<PathBuf> {
         self.files_ref(thread)?.active_path().map(Path::to_path_buf)
     }
 
-    /// The shown tab's editor, when it is a code file.
-    pub(in crate::cockpit) fn files_editor_of(&self, thread: ThreadId) -> Option<Entity<Editor>> {
-        let files = self.files_ref(thread)?;
-        match &files.tabs[files.active?].body {
-            TabBody::Code(editor) => Some(editor.clone()),
-            _ => None,
-        }
+    pub(in crate::cockpit) fn files_status_for_test(&self, thread: ThreadId, path: &Path) -> Option<Status> {
+        self.files_ref(thread)?.tree.status_of(path)
+    }
+
+    pub(in crate::cockpit) fn files_filter_text_for_test(&self, thread: ThreadId, cx: &gpui::App) -> String {
+        self.files_ref(thread)
+            .map_or_else(String::new, |files| files.filter.read(cx).text().to_string())
     }
 
     pub(in crate::cockpit) fn set_files_filter_for_test(

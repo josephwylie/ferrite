@@ -1,0 +1,438 @@
+[
+  {
+    "id": "pr-operations-001",
+    "title": "PR detail stays stale after status refresh and agent actions",
+    "priority": "P1",
+    "category": "defect",
+    "evidence_level": "source-proven",
+    "impact": "Users cannot trust the displayed checks, comments, description, or generated guide to reflect the current PR. A running check can remain running after completion.",
+    "ferrite_evidence": [
+      "crates/ferrite-cockpit/src/cockpit/panel/pull_request.rs:283-305",
+      "crates/ferrite-cockpit/src/cockpit/panel/pull_request.rs:319-335",
+      "crates/ferrite-cockpit/src/cockpit/palette.rs:1302-1305",
+      "crates/ferrite-cockpit/src/cockpit.rs:1813-1823",
+      "crates/ferrite-cockpit/src/cockpit/panel.rs:254-266"
+    ],
+    "t3_evidence": [
+      "apps/web/src/components/pullRequest/usePullRequestDetail.ts:65-84",
+      "apps/web/src/components/pullRequest/PullRequestDetailPanel.tsx:624-676"
+    ],
+    "recommendation": "Give detail a refresh command and invalidation keyed by repository, PR and head/revision. Refresh activity after writes and checks while pending. Preserve a timestamp and stale state.",
+    "acceptance": "Open a PR with a pending check, finish the check remotely, add a comment, and invoke Refresh PR status. The same panel shows the new result and comment. A new guide appears after its agent completes without reopening the PR."
+  },
+  {
+    "id": "pr-operations-002",
+    "title": "Reload discards the last good PR and replaces it with a transient error",
+    "priority": "P2",
+    "category": "defect",
+    "evidence_level": "source-proven",
+    "impact": "A temporary network or authentication failure removes previously readable review context, including access to the Code tab body.",
+    "ferrite_evidence": [
+      "crates/ferrite-cockpit/src/cockpit/panel/pull_request.rs:32-36",
+      "crates/ferrite-cockpit/src/cockpit/panel/pull_request.rs:293-305",
+      "crates/ferrite-cockpit/src/cockpit/panel/pull_request.rs:461-469",
+      "crates/ferrite-core/src/protocol/review.rs:689-708"
+    ],
+    "t3_evidence": [
+      "apps/web/src/components/pullRequest/usePullRequestDetail.ts:56-74",
+      "apps/web/src/components/pullRequest/PullRequestDetailPanel.tsx:624-672"
+    ],
+    "recommendation": "Store last-success, pending and error separately. Preserve content on retriable failures and clear it only when authoritative identity or absence changes.",
+    "acceptance": "Load a PR, simulate a failed refresh, and verify that title, discussion and diff remain visible with an actionable stale/error indicator. Retry succeeds without closing the tab."
+  },
+  {
+    "id": "pr-operations-003",
+    "title": "Authentication and retry guidance do not form a working recovery flow",
+    "priority": "P2",
+    "category": "defect",
+    "evidence_level": "source-proven",
+    "impact": "Users see no PR or a dead-end instruction instead of a recoverable authentication error. Missing CLI, expired credentials and a branch with no PR look identical during discovery.",
+    "ferrite_evidence": [
+      "crates/ferrite-core/src/workspace/mod.rs:724-749",
+      "crates/ferrite-core/src/protocol/review.rs:732-747",
+      "crates/ferrite-reviewr/src/forge.rs:44-75",
+      "crates/ferrite-cockpit/src/cockpit/panel/pull_request.rs:294-305",
+      "crates/ferrite-cockpit/src/cockpit/panel/pull_request.rs:867-878",
+      "crates/ferrite-cockpit/src/cockpit.rs:10483-10486",
+      "crates/ferrite-ui/src/keymap.rs:631"
+    ],
+    "t3_evidence": [
+      "packages/source-control-github/src/server/GitHubPullRequestProvider.ts:64-69",
+      "packages/source-control-github/src/server/GitHubRequestPolicy.ts:36-64",
+      "apps/web/src/components/pullRequest/PullRequestDetailPanel.tsx:624-676"
+    ],
+    "recommendation": "Propagate typed discovery failures to the PR opener and panel. Add a retry button bound to detail reload and make the displayed shortcut match the real binding. Keep host-specific login commands.",
+    "acceptance": "With a mocked missing executable and then an expired login, show distinct remedies. After restoring authentication, clicking Retry must load the PR. The documented keyboard action must do the same."
+  },
+  {
+    "id": "pr-operations-004",
+    "title": "Rewrite guide displays the oldest matching guide",
+    "priority": "P2",
+    "category": "defect",
+    "evidence_level": "source-proven",
+    "impact": "A rewritten guide can appear not to have changed, and reviewers can read superseded instructions.",
+    "ferrite_evidence": [
+      "crates/ferrite-reviewr/src/forge.rs:1025-1028",
+      "crates/ferrite-core/src/protocol/review.rs:652-678",
+      "crates/ferrite-cockpit/src/cockpit/panel/pull_request.rs:224-235",
+      "crates/ferrite-cockpit/src/cockpit/panel/pull_request.rs:749-756"
+    ],
+    "t3_evidence": [
+      "apps/web/src/components/pullRequest/PullRequestGuideTab.tsx:89-99",
+      "packages/contracts/src/pullRequestReviewGuide.ts:45-69"
+    ],
+    "recommendation": "Select the newest by timestamp or honor the canonical newest-first contract. Add a fixture with multiple guides in real backend order.",
+    "acceptance": "With older and newer guide comments from a human account, Guide displays the newer one. Rewriting and refreshing must replace it with the latest text."
+  },
+  {
+    "id": "pr-operations-005",
+    "title": "Timeline reverses the backend order and has no ordering control",
+    "priority": "P3",
+    "category": "defect",
+    "evidence_level": "source-proven",
+    "impact": "New activity appears at the bottom of a long discussion despite the panel documenting newest-first behavior.",
+    "ferrite_evidence": [
+      "crates/ferrite-reviewr/src/forge.rs:1025-1028",
+      "crates/ferrite-core/src/protocol/review.rs:652-678",
+      "crates/ferrite-cockpit/src/cockpit/panel/pull_request.rs:789-795"
+    ],
+    "t3_evidence": [
+      "apps/web/src/components/pullRequest/PullRequestTimelineTab.tsx:753-797"
+    ],
+    "recommendation": "Remove the accidental reversal or define a shared order contract and add a user preference.",
+    "acceptance": "With comments at 09:00 and 10:00, the default Timeline begins with 10:00. Any oldest-first option visibly changes the order."
+  },
+  {
+    "id": "pr-operations-006",
+    "title": "Timeline drops review replies, resolution state and quoted code",
+    "priority": "P2",
+    "category": "defect",
+    "evidence_level": "source-proven",
+    "impact": "Reviewers cannot see answers or distinguish open findings from already resolved or outdated discussions. A finding loses the code context needed to evaluate it.",
+    "ferrite_evidence": [
+      "crates/ferrite-core/src/protocol/review.rs:575-610",
+      "crates/ferrite-cockpit/src/cockpit/panel/pull_request.rs:789-840",
+      "crates/ferrite-cockpit/src/review.rs:1898-1953"
+    ],
+    "t3_evidence": [
+      "apps/web/src/components/pullRequest/PullRequestTimelineTab.tsx:462-543",
+      "packages/source-control-github/src/server/GitHubPullRequestProvider.ts:620-631"
+    ],
+    "recommendation": "Render complete review threads and their state. Reuse the canonical thread model for Summary, Timeline and inline code comments.",
+    "acceptance": "A fixture with a resolved, outdated thread and two replies exposes all four facts. The user can open the associated code location and distinguish it from an unresolved thread."
+  },
+  {
+    "id": "pr-operations-007",
+    "title": "Capped PR data is presented as a complete conversation and check result",
+    "priority": "P2",
+    "category": "defect",
+    "evidence_level": "source-proven",
+    "impact": "A reviewer can mistake a partial list for all findings or all checks. Missing failure data can make the summary appear more reassuring than the complete PR.",
+    "ferrite_evidence": [
+      "crates/ferrite-reviewr/src/forge.rs:853-865",
+      "crates/ferrite-reviewr/src/forge.rs:964-974",
+      "crates/ferrite-core/src/protocol/review.rs:496-517",
+      "crates/ferrite-cockpit/src/cockpit/panel/pull_request.rs:246-263",
+      "crates/ferrite-cockpit/src/cockpit/panel/pull_request.rs:689-745",
+      "crates/ferrite-cockpit/src/cockpit/panel/pull_request.rs:789-840",
+      "crates/ferrite-cockpit/src/review.rs:1952-1953"
+    ],
+    "t3_evidence": [
+      "apps/web/src/components/pullRequest/PullRequestDetailPanel.tsx:1219-1221",
+      "packages/source-control-github/src/server/GitHubPullRequestProvider.ts:620-623"
+    ],
+    "recommendation": "Show explicit partial-data notices separately for checks and discussion. Page remaining data where supported and withhold a complete-pass claim until coverage is known.",
+    "acceptance": "Inject checks_truncated and comments_truncated independently. Each produces its own notice and route to more data. A truncated success-only subset never claims all checks pass."
+  },
+  {
+    "id": "pr-operations-008",
+    "title": "Checks stop at names and icons without a route to failure details",
+    "priority": "P2",
+    "category": "partial-capability",
+    "evidence_level": "source-proven",
+    "impact": "A failed job requires manually finding the run on the forge. Users cannot inspect the result from the displayed check or distinguish some important status categories.",
+    "ferrite_evidence": [
+      "crates/ferrite-reviewr/src/forge.rs:859-860",
+      "crates/ferrite-reviewr/src/forge.rs:1047-1064",
+      "crates/ferrite-core/src/protocol/review.rs:557-572",
+      "crates/ferrite-cockpit/src/cockpit/panel/pull_request.rs:702-716"
+    ],
+    "t3_evidence": [
+      "apps/web/src/components/pullRequest/PullRequestChecksPopover.tsx:55-109",
+      "apps/web/src/components/pullRequest/PullRequestDetailPanel.tsx:1263-1279"
+    ],
+    "recommendation": "Carry check URLs and useful status distinctions through the model. Add a Details action with visible open failure handling.",
+    "acceptance": "A failed job opens its own run page from the PR panel. Cancelled and approval-required runs have distinct labels and appropriate next actions."
+  },
+  {
+    "id": "pr-operations-009",
+    "title": "Descriptions, comments and guides render as raw text",
+    "priority": "P2",
+    "category": "partial-capability",
+    "evidence_level": "source-proven",
+    "impact": "PR templates, code fences, tables, checklists, image evidence and linked documents lose their intended presentation and interaction.",
+    "ferrite_evidence": [
+      "crates/ferrite-cockpit/src/cockpit/panel/pull_request.rs:727-733",
+      "crates/ferrite-cockpit/src/cockpit/panel/pull_request.rs:752-756",
+      "crates/ferrite-cockpit/src/cockpit/panel/pull_request.rs:832-837"
+    ],
+    "t3_evidence": [
+      "apps/web/src/components/pullRequest/PullRequestMarkdown.tsx:17-28",
+      "apps/web/src/components/pullRequest/PullRequestMarkdown.tsx:30-113",
+      "apps/web/src/components/pullRequest/PullRequestSummaryTab.tsx:647-663"
+    ],
+    "recommendation": "Use a shared Markdown component with forge-relative links, image handling, code copy and safe task-list interaction.",
+    "acceptance": "An example PR with a linked issue, fenced code, table, checklist and image renders each correctly. Links open their actual destinations and long code remains usable."
+  },
+  {
+    "id": "pr-operations-010",
+    "title": "No native comment, reply, review verdict or resolution workflow",
+    "priority": "P2",
+    "category": "missing-capability",
+    "evidence_level": "source-proven",
+    "impact": "Users must leave the PR pane or ask an agent to conduct the review. They cannot prepare a batch of inline comments and submit an approval or request changes in the UI.",
+    "ferrite_evidence": [
+      "crates/ferrite-cockpit/src/cockpit/panel/pull_request.rs:99-116",
+      "crates/ferrite-cockpit/src/cockpit/panel/pull_request.rs:429-449",
+      "crates/ferrite-cockpit/src/cockpit/panel/pull_request.rs:789-840",
+      "crates/ferrite-core/src/protocol/review.rs:575-610"
+    ],
+    "t3_evidence": [
+      "apps/web/src/components/pullRequest/PullRequestReviewForm.tsx:27-48",
+      "apps/web/src/components/pullRequest/PullRequestReviewForm.tsx:100-148",
+      "packages/source-control-github/src/server/GitHubPullRequestProvider.ts:755-805"
+    ],
+    "recommendation": "Add typed, permission-aware native review operations or explicitly label the limited workflow and provide reliable forge handoff. Keep failed review drafts.",
+    "acceptance": "Compose an inline comment and approval, fail the submit once, retry without losing text, then see the posted review. Reply and resolve a thread and verify the new state after refresh."
+  },
+  {
+    "id": "pr-operations-011",
+    "title": "PR metadata cannot be edited or managed in the native panel",
+    "priority": "P2",
+    "category": "missing-capability",
+    "evidence_level": "source-proven",
+    "impact": "Users cannot correct a title or description, request reviewers, or apply labels while reviewing in Ferrite.",
+    "ferrite_evidence": [
+      "crates/ferrite-core/src/protocol/review.rs:478-505",
+      "crates/ferrite-cockpit/src/cockpit/panel/pull_request.rs:99-116",
+      "crates/ferrite-cockpit/src/cockpit/panel/pull_request.rs:717-745"
+    ],
+    "t3_evidence": [
+      "apps/web/src/components/pullRequest/PullRequestSummaryTab.tsx:647-663",
+      "apps/web/src/components/pullRequest/PullRequestReviewerPicker.tsx:66-107",
+      "apps/web/src/components/pullRequest/PullRequestLabelPicker.tsx:35-51",
+      "packages/source-control-github/src/server/GitHubPullRequestProvider.ts:740-753"
+    ],
+    "recommendation": "Extend the domain model and add focused editors with explicit saving/error states and permission checks.",
+    "acceptance": "Edit title/body and change labels/review requests without leaving the panel. A rejected save retains the draft and shows the reason."
+  },
+  {
+    "id": "pr-operations-012",
+    "title": "Agent-backed PR operations have no panel-level pending, success or failure lifecycle",
+    "priority": "P2",
+    "category": "partial-capability",
+    "evidence_level": "source-proven",
+    "impact": "Clicking Merge, Ready, Write guide or Create PR can appear to do nothing while work queues behind another turn. Repeated clicks can enqueue repeated requests.",
+    "ferrite_evidence": [
+      "crates/ferrite-cockpit/src/cockpit/panel/pull_request.rs:9-15",
+      "crates/ferrite-cockpit/src/cockpit/panel/pull_request.rs:429-449",
+      "crates/ferrite-cockpit/src/cockpit/panel/pull_request.rs:593-602",
+      "crates/ferrite-cockpit/src/cockpit/transcript_glue.rs:358-380",
+      "crates/ferrite-cockpit/src/cockpit/panel/changes.rs:119-134"
+    ],
+    "t3_evidence": [
+      "apps/web/src/components/pullRequest/usePullRequestActions.ts:127-186",
+      "apps/server/src/git/GitManager.ts:2457-2497"
+    ],
+    "recommendation": "Keep agent execution if desired, but model an operation with a target, state and result. Show that state beside the initiating control and deduplicate repeated requests.",
+    "acceptance": "Click an action while a turn is busy. Show Queued and the target PR, block duplicate enqueue, then transition through Running to success/failure and refresh the affected data."
+  },
+  {
+    "id": "pr-operations-013",
+    "title": "Lifecycle actions lack inverse operations and branch maintenance",
+    "priority": "P2",
+    "category": "missing-capability",
+    "evidence_level": "source-proven",
+    "impact": "A user can enable auto-merge or close a PR but cannot undo those choices from the same UI. Updating a stale branch and approving blocked workflows also require leaving the panel.",
+    "ferrite_evidence": [
+      "crates/ferrite-cockpit/src/cockpit/panel/pull_request.rs:99-116",
+      "crates/ferrite-cockpit/src/cockpit/panel/pull_request.rs:147-155",
+      "crates/ferrite-cockpit/src/cockpit/panel/pull_request.rs:189-197",
+      "crates/ferrite-core/src/protocol/review.rs:478-505"
+    ],
+    "t3_evidence": [
+      "apps/web/src/components/pullRequest/usePullRequestActions.ts:79-104",
+      "apps/web/src/components/pullRequest/PullRequestActionsMenu.tsx:288-311",
+      "apps/web/src/components/pullRequest/PullRequestActionsMenu.tsx:341-344",
+      "apps/web/src/components/pullRequest/PullRequestActionsMenu.tsx:434-440"
+    ],
+    "recommendation": "Model the current settings and complete reversible lifecycle actions. Gate them by actual host capability and permission.",
+    "acceptance": "Enable then disable auto-merge, close then reopen a PR, toggle maintainer edits both ways, and update an eligible branch. Each result appears after refresh."
+  },
+  {
+    "id": "pr-operations-014",
+    "title": "PR action prompts lose canonical host and repository identity",
+    "priority": "P2",
+    "category": "partial-capability",
+    "evidence_level": "inferred",
+    "impact": "For forks, multiple remotes, enterprise hosts or non-GitHub forges, the agent must reconstruct the target and may fail or act in the wrong repository. No wrong-target mutation was performed in this audit.",
+    "ferrite_evidence": [
+      "crates/ferrite-cockpit/src/cockpit/panel/pull_request.rs:159-205",
+      "crates/ferrite-core/src/protocol/review.rs:612-626",
+      "crates/ferrite-reviewr/src/forge.rs:522-540",
+      "crates/ferrite-reviewr/src/ferrite.rs:649-659"
+    ],
+    "t3_evidence": [
+      "packages/source-control-github/src/server/GitHubPullRequestProvider.ts:722-780",
+      "packages/source-control-core/src/server/PullRequestProvider.ts:495-515"
+    ],
+    "recommendation": "Carry an explicit target identity through every operation. For agent handoffs, include the URL and provider-specific command plus a target-verification step. Resolve branch deletion from the PR head repository.",
+    "acceptance": "With origin=fork and upstream=base, generated operations target the named PR and correct remote branch. GitLab/Azure reads generate matching provider operations or clearly unavailable controls."
+  },
+  {
+    "id": "pr-operations-015",
+    "title": "Concurrent PR reads can land out of order and retire the current tab",
+    "priority": "P2",
+    "category": "defect",
+    "evidence_level": "inferred",
+    "impact": "A slow old response can overwrite newer details, or remove the tab for the PR now on the branch. The source permits this race; timing was not reproduced.",
+    "ferrite_evidence": [
+      "crates/ferrite-cockpit/src/cockpit/panel.rs:81",
+      "crates/ferrite-cockpit/src/cockpit/panel/pull_request.rs:283-309",
+      "crates/ferrite-cockpit/src/cockpit/panel/pull_request.rs:338-351",
+      "crates/ferrite-cockpit/src/cockpit/panel.rs:254-266"
+    ],
+    "t3_evidence": [
+      "apps/web/src/components/pullRequest/usePullRequestDetail.ts:49-68",
+      "apps/web/src/components/pullRequest/usePullRequestActions.ts:144-160"
+    ],
+    "recommendation": "Capture canonical target and request generation, deduplicate pending reads, and reject stale completions before they modify cache or surfaces.",
+    "acceptance": "Delay read A, start read B for a different current PR, complete B then A. B stays visible and its tab remains. Repeated open of one pending PR creates one request."
+  },
+  {
+    "id": "pr-operations-016",
+    "title": "PR read workers have no effective cancellation or deadline",
+    "priority": "P2",
+    "category": "defect",
+    "evidence_level": "source-proven",
+    "impact": "A hung forge process can leave Reading visible indefinitely and retain a worker after the pane is closed. Repeated forced opens can accumulate stuck reads.",
+    "ferrite_evidence": [
+      "crates/ferrite-cockpit/src/cockpit/panel/pull_request.rs:294-309",
+      "crates/ferrite-reviewr/src/ferrite.rs:652-659",
+      "crates/ferrite-reviewr/src/forge.rs:338-352",
+      "crates/ferrite-reviewr/src/forge.rs:484-485",
+      "crates/ferrite-core/src/server.rs:1118-1129",
+      "crates/ferrite-core/src/cockpit.rs:1251-1259"
+    ],
+    "t3_evidence": [
+      "packages/source-control-github/src/server/GitHubRequestPolicy.ts:21-24",
+      "packages/source-control-github/src/server/GitHubRequestPolicy.ts:427-434"
+    ],
+    "recommendation": "Thread cancellation and a deadline through the one-shot adapter; cancel on supersession and release the process tree. Share equivalent safeguards with badge discovery.",
+    "acceptance": "A fake gh that never exits reaches a visible timeout. Closing or superseding the request terminates its process tree, and repeated retries do not leave worker processes behind."
+  },
+  {
+    "id": "pr-operations-017",
+    "title": "Review verdicts and empty-body approvals are absent from the snapshot",
+    "priority": "P2",
+    "category": "partial-capability",
+    "evidence_level": "source-proven",
+    "impact": "Reviewers cannot tell who approved, requested changes, or had a review dismissed. An approval with no written body disappears entirely.",
+    "ferrite_evidence": [
+      "crates/ferrite-reviewr/src/forge.rs:861",
+      "crates/ferrite-reviewr/src/forge.rs:1072-1078",
+      "crates/ferrite-core/src/protocol/review.rs:575-603",
+      "crates/ferrite-cockpit/src/cockpit/panel/pull_request.rs:795-804"
+    ],
+    "t3_evidence": [
+      "apps/web/src/components/pullRequest/PullRequestSummaryTab.tsx:522-542",
+      "apps/web/src/components/pullRequest/PullRequestSummaryTab.tsx:723-747",
+      "packages/source-control-github/src/server/GitHubPullRequestProvider.ts:600-609"
+    ],
+    "recommendation": "Preserve structured review outcomes, including empty-body verdicts and whether the review applies to the latest head.",
+    "acceptance": "An approval with an empty body appears with author and verdict. A later push marks an old review appropriately. Changes requested and dismissed reviews remain distinguishable."
+  },
+  {
+    "id": "pr-operations-018",
+    "title": "PR panel omits the checkout-versus-host sync warning",
+    "priority": "P2",
+    "category": "defect",
+    "evidence_level": "source-proven",
+    "impact": "Users may confuse local changes shown in Code with what reviewers can actually see on the host, because the PR view drops the unpushed/behind warning.",
+    "ferrite_evidence": [
+      "crates/ferrite-core/src/protocol/review.rs:490-491",
+      "crates/ferrite-core/src/protocol/review.rs:540-554",
+      "crates/ferrite-cockpit/src/cockpit/panel/pull_request.rs:466",
+      "crates/ferrite-cockpit/src/cockpit/panel/pull_request.rs:689-701",
+      "crates/ferrite-cockpit/src/cockpit/tools/changes.rs:71-84",
+      "crates/ferrite-cockpit/src/review.rs:2519-2541"
+    ],
+    "t3_evidence": [
+      "apps/web/src/components/pullRequest/PullRequestCodeTab.tsx:435-464",
+      "apps/web/src/components/pullRequest/PullRequestCodeTab.tsx:649-652"
+    ],
+    "recommendation": "Restore the sync notice and explicitly identify which revision Code displays. Prefer the hosted PR revisions for hosted review operations.",
+    "acceptance": "With two unpushed commits, the PR panel says so and identifies the displayed code revision. With a behind checkout, it does not silently present the local diff as the current hosted PR."
+  },
+  {
+    "id": "pr-operations-019",
+    "title": "Guide is a comment convention without revision-aware review workflow",
+    "priority": "P2",
+    "category": "partial-capability",
+    "evidence_level": "source-proven",
+    "impact": "A guide can remain apparently current after a push, and its file references cannot act as a structured review tour. Guide generation has no local run or failure state.",
+    "ferrite_evidence": [
+      "crates/ferrite-cockpit/src/cockpit/panel/pull_request.rs:176-179",
+      "crates/ferrite-cockpit/src/cockpit/panel/pull_request.rs:224-235",
+      "crates/ferrite-cockpit/src/cockpit/panel/pull_request.rs:749-784",
+      "crates/ferrite-core/src/protocol/review.rs:478-505"
+    ],
+    "t3_evidence": [
+      "packages/contracts/src/pullRequestReviewGuide.ts:12-69",
+      "apps/web/src/components/pullRequest/PullRequestGuideTab.tsx:89-145"
+    ],
+    "recommendation": "Decide whether a comment guide is an intentional reduced feature. At minimum record head identity, generation state and stale status. Full parity needs ordered stops with linked excerpts.",
+    "acceptance": "After generating a guide, push a new commit. The guide is visibly stale. A failed rewrite retains the old guide and offers retry; successful stops open the corresponding file and lines."
+  },
+  {
+    "id": "pr-operations-020",
+    "title": "Create PR is unavailable for branch work absent from the current thread transcript",
+    "priority": "P1",
+    "category": "defect",
+    "evidence_level": "source-proven",
+    "impact": "A user who opens a prepared branch, makes manual edits, or imports work from another session cannot use the native Create PR button unless this thread has recorded file edits.",
+    "ferrite_evidence": [
+      "crates/ferrite-cockpit/src/cockpit/panel/changes.rs:19-45",
+      "crates/ferrite-cockpit/src/cockpit/panel/changes.rs:114-133",
+      "crates/ferrite-cockpit/src/facts.rs:85-87",
+      "crates/ferrite-core/src/digest.rs:355-376"
+    ],
+    "t3_evidence": [
+      "apps/web/src/components/GitActionsControl.logic.ts:117-136",
+      "apps/web/src/components/GitActionsControl.logic.ts:164-174"
+    ],
+    "recommendation": "Offer Create PR from repository state or a stable command, independent of transcript-derived change cards. Preserve the current agent handoff if that is the chosen creation design.",
+    "acceptance": "Open a fresh thread on a branch with an ahead-of-base commit created outside Ferrite. Create PR is discoverable and targets that branch. No synthetic agent edit is required."
+  },
+  {
+    "id": "pr-operations-021",
+    "title": "Merge controls ignore permissions, allowed methods and readiness",
+    "priority": "P2",
+    "category": "partial-capability",
+    "evidence_level": "source-proven",
+    "impact": "The panel offers actions the user cannot perform and always presents Merge on an open PR, even with conflicts or blocked checks. The user cannot choose a supported merge method.",
+    "ferrite_evidence": [
+      "crates/ferrite-cockpit/src/cockpit/panel/pull_request.rs:147-155",
+      "crates/ferrite-cockpit/src/cockpit/panel/pull_request.rs:185-191",
+      "crates/ferrite-cockpit/src/cockpit/panel/pull_request.rs:568-601",
+      "crates/ferrite-core/src/protocol/review.rs:478-505"
+    ],
+    "t3_evidence": [
+      "apps/web/src/components/pullRequest/PullRequestDetailPanel.tsx:1267-1291",
+      "apps/web/src/components/pullRequest/usePullRequestActions.ts:49-76",
+      "packages/source-control-github/src/server/GitHubPullRequestProvider.ts:76-105"
+    ],
+    "recommendation": "Fetch viewer permissions, available merge methods and readiness. Disable or relabel unavailable actions, let users select a method, and bind confirmation to the intended target/revision.",
+    "acceptance": "For a read-only viewer there is no enabled Merge. A conflicting PR displays the blocker. A squash-only repository offers the correct method and the operation reports its actual result."
+  }
+]

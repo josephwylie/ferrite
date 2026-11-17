@@ -1,6 +1,6 @@
 //! The Decision's answer paths and keys (WP-F). One door answers an
-//! approval whatever surface asked — the transcript's Decision row, the
-//! wall's quick answers, a toast — and one door answers a question's
+//! approval whatever surface asked — the transcript's Decision row or a
+//! toast — and one door answers a question's
 //! option. The per-Decision cursor and amend note live in each Pane's
 //! `RequestForms`; Ferrite's own thread rules live here.
 
@@ -36,9 +36,21 @@ impl DecisionState {
     }
 }
 
+fn card_tail(cards: subagents::Cards) -> ferrite_pane::transcript::TranscriptTail {
+    let key = cards.key();
+    ferrite_pane::transcript::TranscriptTail {
+        key,
+        render: std::rc::Rc::new(move |window: &mut Window, cx: &mut App| -> AnyElement {
+            cards
+                .render(window, cx)
+                .unwrap_or_else(|| div().into_any_element())
+        }),
+    }
+}
+
 impl CockpitView {
     /// The Decision row(s) this Pane's transcript draws after its last row
-    /// (`TranscriptInput.tail`): every request its selected Subject shows,
+    /// (`TranscriptPresentation.tail`): every request its selected Subject shows,
     /// as one transcript row each. `key` changes whenever what they draw
     /// does — a request, its sending state, the cursor, a note, a pick, an
     /// error, the head's words.
@@ -47,21 +59,32 @@ impl CockpitView {
         index: usize,
         _cx: &App,
     ) -> Option<ferrite_pane::transcript::TranscriptTail> {
-        let cards = self.decision_cards(index, false, false)?;
-        let key = cards.key();
-        Some(ferrite_pane::transcript::TranscriptTail {
-            key,
-            render: std::rc::Rc::new(move |window: &mut Window, cx: &mut App| -> AnyElement {
-                cards
-                    .render(window, cx)
-                    .unwrap_or_else(|| div().into_any_element())
-            }),
-        })
+        Some(card_tail(self.decision_cards(index, false, false)?))
+    }
+
+    /// The Decision row(s) `subject`'s compact transcript draws after its
+    /// last row, answered through the Pane that holds `thread`. None while
+    /// that Pane shows `subject` itself: it draws the cards, and a second
+    /// copy would share their fields and focus.
+    pub(super) fn compact_decision_tail(
+        &self,
+        thread: ThreadId,
+        subject: &Subject,
+    ) -> Option<ferrite_pane::transcript::TranscriptTail> {
+        let index = self.pane_for(thread)?;
+        if self.panes[index].selected == *subject {
+            return None;
+        }
+        let mut cards = self.decision_cards_of(index, subject, false, false)?;
+        cards.narrow = true;
+        cards.inset = ferrite_ui::theme::tx_inset_at(0., false);
+        Some(card_tail(cards))
     }
 
     /// The head's provider and its context word: the sandbox its provider
-    /// runs in, else its permission mode (the Session's, else the one it
-    /// was spawned with).
+    /// announced for this Thread, else its permission mode (the Session's,
+    /// else the one it was spawned with). Settings' defaults are for the
+    /// next Session and never relabel this one.
     pub(super) fn decision_context(
         &self,
         thread: ThreadId,
@@ -74,7 +97,7 @@ impl CockpitView {
         let context = decision::context_label(
             open.permission_mode()
                 .unwrap_or(settings.permission_mode_for(provider)),
-            settings.sandbox_for(provider),
+            open.sandbox(),
         );
         (Some(provider), Some(context))
     }

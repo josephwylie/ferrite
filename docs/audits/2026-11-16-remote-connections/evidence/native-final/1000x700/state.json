@@ -1,0 +1,249 @@
+{
+  "root": "/private/tmp/ferrite-remote-21dqievx",
+  "store": "/private/tmp/ferrite-remote-21dqievx/client/threads",
+  "remote_store": "/private/tmp/ferrite-remote-21dqievx/remote/threads",
+  "binary": "/Users/josephwylie/Desktop/Projects/ferrite-remote-connections/target/debug/ferrite",
+  "server": "/Users/josephwylie/Desktop/Projects/ferrite-remote-connections/target/debug/ferrited",
+  "processes": [
+    {
+      "name": "sshd",
+      "pid": 44640,
+      "identity": "Mon 16 Nov 21:40:21 2026",
+      "termination_sent": true,
+      "stopped": true
+    },
+    {
+      "name": "remote-server",
+      "pid": 44713,
+      "identity": "Mon 16 Nov 21:40:21 2026",
+      "termination_sent": true,
+      "stopped": true
+    },
+    {
+      "name": "server",
+      "pid": 45190,
+      "identity": "Mon 16 Nov 21:40:22 2026",
+      "termination_sent": true,
+      "stopped": true
+    },
+    {
+      "name": "headless",
+      "pid": 45211,
+      "identity": "Mon 16 Nov 21:40:22 2026",
+      "termination_sent": true,
+      "stopped": true
+    },
+    {
+      "name": "sshd",
+      "pid": 80812,
+      "identity": "Mon 16 Nov 21:48:53 2026",
+      "termination_sent": true,
+      "stopped": true
+    },
+    {
+      "name": "remote-server",
+      "pid": 81012,
+      "identity": "Mon 16 Nov 21:48:53 2026",
+      "termination_sent": true,
+      "stopped": true
+    },
+    {
+      "name": "server",
+      "pid": 81506,
+      "identity": "Mon 16 Nov 21:48:54 2026",
+      "termination_sent": true,
+      "stopped": true
+    },
+    {
+      "name": "headless",
+      "pid": 81833,
+      "identity": "Mon 16 Nov 21:48:54 2026",
+      "termination_sent": true,
+      "stopped": true
+    },
+    {
+      "name": "sshd",
+      "pid": 95916,
+      "identity": "Mon 16 Nov 21:49:47 2026",
+      "termination_sent": true,
+      "stopped": true
+    },
+    {
+      "name": "remote-server",
+      "pid": 95926,
+      "identity": "Mon 16 Nov 21:49:47 2026",
+      "termination_sent": true,
+      "stopped": true
+    },
+    {
+      "name": "server",
+      "pid": 96324,
+      "identity": "Mon 16 Nov 21:49:47 2026",
+      "termination_sent": true,
+      "stopped": true
+    },
+    {
+      "name": "headless",
+      "pid": 96405,
+      "identity": "Mon 16 Nov 21:49:48 2026",
+      "termination_sent": true,
+      "stopped": true
+    },
+    {
+      "name": "sshd",
+      "pid": 75401,
+      "identity": "Mon 16 Nov 21:54:29 2026",
+      "termination_sent": true,
+      "stopped": true
+    },
+    {
+      "name": "remote-server",
+      "pid": 75457,
+      "identity": "Mon 16 Nov 21:54:29 2026",
+      "termination_sent": true,
+      "stopped": true
+    },
+    {
+      "name": "server",
+      "pid": 75554,
+      "identity": "Mon 16 Nov 21:54:30 2026",
+      "termination_sent": true,
+      "stopped": true
+    },
+    {
+      "name": "headless",
+      "pid": 75905,
+      "identity": "Mon 16 Nov 21:54:30 2026",
+      "termination_sent": true,
+      "stopped": true
+    },
+    {
+      "name": "sshd",
+      "pid": 88804,
+      "identity": "Mon 16 Nov 21:55:15 2026",
+      "termination_sent": true,
+      "stopped": true
+    },
+    {
+      "name": "remote-server",
+      "pid": 88814,
+      "identity": "Mon 16 Nov 21:55:16 2026",
+      "termination_sent": true,
+      "stopped": true
+    },
+    {
+      "name": "server",
+      "pid": 88894,
+      "identity": "Mon 16 Nov 21:55:16 2026",
+      "termination_sent": true,
+      "stopped": true
+    },
+    {
+      "name": "headless",
+      "pid": 89317,
+      "identity": "Mon 16 Nov 21:55:17 2026",
+      "termination_sent": true,
+      "stopped": true
+    },
+    {
+      "name": "sshd",
+      "pid": 7882,
+      "identity": "Mon 16 Nov 21:56:27 2026",
+      "termination_sent": true,
+      "stopped": true
+    },
+    {
+      "name": "remote-server",
+      "pid": 8118,
+      "identity": "Mon 16 Nov 21:56:27 2026",
+      "termination_sent": true,
+      "stopped": true
+    },
+    {
+      "name": "server",
+      "pid": 8218,
+      "identity": "Mon 16 Nov 21:56:27 2026",
+      "termination_sent": true,
+      "stopped": true
+    },
+    {
+      "name": "headless",
+      "pid": 8238,
+      "identity": "Mon 16 Nov 21:56:28 2026",
+      "termination_sent": true,
+      "stopped": true
+    },
+    {
+      "name": "sshd",
+      "pid": 81413,
+      "identity": "Mon 16 Nov 22:00:51 2026",
+      "termination_sent": true,
+      "stopped": true
+    },
+    {
+      "name": "remote-server",
+      "pid": 81658,
+      "identity": "Mon 16 Nov 22:00:52 2026",
+      "termination_sent": true,
+      "stopped": true
+    },
+    {
+      "name": "server",
+      "pid": 81820,
+      "identity": "Mon 16 Nov 22:00:52 2026",
+      "termination_sent": true,
+      "stopped": true
+    },
+    {
+      "name": "headless",
+      "pid": 81822,
+      "identity": "Mon 16 Nov 22:00:53 2026",
+      "termination_sent": true,
+      "stopped": true
+    }
+  ],
+  "ssh_transport": "actual OpenSSH localhost",
+  "filesystem": "localhost SSH fixture shares the host filesystem; SSH request logs prove routing",
+  "credentials": "fixture-passphrase is a synthetic, task-only test credential",
+  "provider": "simulated Codex app-server, no model API calls",
+  "port": 61646,
+  "ssh_smoke": {
+    "passed": true,
+    "nonroot": true,
+    "strict_modes": true,
+    "pid": 81413
+  },
+  "binary_sha256": "8cd22b04f06fed6b576559e7bf2f411e1498cbaaae8ef46fa00f8ce1a4aac63d",
+  "server_sha256": "edb4c09f92c2d19d460780b5eb2a71f136cb7211015ed74fb290caed49c43272",
+  "source_commit": "5e5aa24ce1b5bde1b3c6ca8140a94cb9df4fc9f1",
+  "flow": {
+    "passed": true,
+    "size": "1000x700",
+    "binary_sha256": "858f3afc9e73ed7b9c9abc05ead32bea4caebfcb5da4cd1f7ff8536d913dfe28",
+    "source_commit": "7cef3de1594d65f1d85891692942e952029a134f"
+  },
+  "files_recapture": {
+    "passed": true,
+    "size": "1000x700",
+    "binary_sha256": "c428a4e5597e1d339471c45ab7c67aba1bb413715fd7bfd0e2c807db55396bf6",
+    "source_commit": "92087e9e28d1bae3bb69ff92ab56d48aeb968362"
+  },
+  "recovery": {
+    "passed": true,
+    "binary_sha256": "8cd22b04f06fed6b576559e7bf2f411e1498cbaaae8ef46fa00f8ce1a4aac63d",
+    "source_commit": "5e5aa24ce1b5bde1b3c6ca8140a94cb9df4fc9f1",
+    "setup_warning": "synthetic stderr diagnostic through actual setup SSH",
+    "files": "real remote binary/read failure/retry/conflict/reload/overwrite",
+    "terminal": "actual SSH shell exit 23 then Retry and SSH_CONNECTION marker"
+  },
+  "recovery_history": [
+    {
+      "passed": true,
+      "binary_sha256": "c428a4e5597e1d339471c45ab7c67aba1bb413715fd7bfd0e2c807db55396bf6",
+      "source_commit": "92087e9e28d1bae3bb69ff92ab56d48aeb968362",
+      "setup_warning": "synthetic stderr diagnostic through actual setup SSH",
+      "files": "real remote binary/read failure/retry/conflict/reload/overwrite",
+      "terminal": "actual SSH shell exit 23 then Retry and SSH_CONNECTION marker"
+    }
+  ]
+}

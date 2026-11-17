@@ -61,6 +61,8 @@ fn queued_prompts_pile_up_a_row_each(cx: &mut TestAppContext) {
 /// line it stays an editing key and the queue survives.
 #[gpui::test]
 fn backspace_on_an_empty_line_unqueues_the_held_prompt(cx: &mut TestAppContext) {
+    let held_png = real_file("queued-held", "held.png");
+    let new_png = real_file("queued-new", "new.png");
     let (core, fake) = cockpit("unqueue-key", 1);
     cx.update(|cx| {
         cx.bind_keys([
@@ -142,10 +144,7 @@ fn backspace_on_an_empty_line_unqueues_the_held_prompt(cx: &mut TestAppContext) 
     view.update(cx, |view, cx| {
         view.panes[0].composer.update(cx, |composer, cx| {
             composer.set(
-                ferrite_core::prompt_files::compose(
-                    "held",
-                    &[std::path::PathBuf::from("/tmp/held.png")],
-                ),
+                ferrite_core::prompt_files::compose("held", std::slice::from_ref(&held_png)),
                 cx,
             )
         });
@@ -156,10 +155,7 @@ fn backspace_on_an_empty_line_unqueues_the_held_prompt(cx: &mut TestAppContext) 
     view.update(cx, |view, cx| {
         view.panes[0].composer.update(cx, |composer, cx| {
             composer.set(
-                ferrite_core::prompt_files::compose(
-                    "new draft",
-                    &[std::path::PathBuf::from("/tmp/new.png")],
-                ),
+                ferrite_core::prompt_files::compose("new draft", std::slice::from_ref(&new_png)),
                 cx,
             )
         });
@@ -169,13 +165,9 @@ fn backspace_on_an_empty_line_unqueues_the_held_prompt(cx: &mut TestAppContext) 
         let (text, files) =
             ferrite_core::prompt_files::split(view.panes[0].composer.read(cx).prompt());
         assert_eq!(text, "new draft\n\nheld");
-        assert_eq!(
-            files,
-            [
-                std::path::PathBuf::from("/tmp/new.png"),
-                std::path::PathBuf::from("/tmp/held.png")
-            ]
-        );
+        let names: Vec<_> = files.iter().map(|file| file.file_name().unwrap()).collect();
+        assert_eq!(names, ["new.png", "held.png"]);
+        assert_eq!(files[0], new_png);
     });
 
     // Up walks rows first, then edits the visible newest native prompt.

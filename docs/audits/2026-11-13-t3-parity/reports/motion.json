@@ -1,0 +1,219 @@
+[
+  {
+    "id": "motion-001",
+    "title": "The main sidebar opens and closes in a single layout change",
+    "priority": "P2",
+    "category": "motion",
+    "evidence_level": "source-proven",
+    "impact": "The entire workspace changes width without an intermediate visual state. This directly matches the user's snapping-sidebar complaint.",
+    "ferrite_evidence": [
+      "crates/ferrite-cockpit/src/cockpit.rs:2829-2838",
+      "crates/ferrite-ui/src/motion.rs:33",
+      "crates/ferrite-ui/src/theme.rs:3531-3537"
+    ],
+    "t3_evidence": [
+      "https://github.com/pingdotgg/t3code/blob/74573fc29b901bafbf8f1dbb2eb29606da1fa448/apps/web/src/components/ui/sidebar.tsx#L388",
+      "https://github.com/pingdotgg/t3code/blob/74573fc29b901bafbf8f1dbb2eb29606da1fa448/apps/web/src/panelAnimations.ts#L31",
+      "https://github.com/pingdotgg/t3code/blob/74573fc29b901bafbf8f1dbb2eb29606da1fa448/packages/contracts/src/settings.ts#L155"
+    ],
+    "recommendation": "Give sidebar open and close a shared interruptible layout transition. Keep pointer resize immediate, skip restored layouts, retain a closing face until it finishes, and honor reduced motion. Replace the documented prohibition on sidebar motion with the user's requested policy.",
+    "acceptance": "With motion enabled, record sidebar toggles from toolbar and shortcut. At least one intermediate width must appear, the board must follow without stale hit regions, and reversing before completion must continue from the displayed width. Reduced motion and restored startup layouts must settle immediately."
+  },
+  {
+    "id": "motion-002",
+    "title": "The right panel snaps open, closed, maximized and between width floors",
+    "priority": "P2",
+    "category": "motion",
+    "evidence_level": "source-proven",
+    "impact": "Files, browser, terminal, PR, agents and other panel tools abruptly take or return workspace area.",
+    "ferrite_evidence": [
+      "crates/ferrite-cockpit/src/cockpit/panel.rs:25-27",
+      "crates/ferrite-cockpit/src/cockpit/panel.rs:399-420",
+      "crates/ferrite-cockpit/src/cockpit/panel.rs:433-456",
+      "crates/ferrite-cockpit/src/cockpit/panel.rs:550-620"
+    ],
+    "t3_evidence": [
+      "https://github.com/pingdotgg/t3code/blob/74573fc29b901bafbf8f1dbb2eb29606da1fa448/apps/web/src/components/preview/PreviewPanelShell.tsx#L81",
+      "https://github.com/pingdotgg/t3code/blob/74573fc29b901bafbf8f1dbb2eb29606da1fa448/apps/web/src/components/preview/PreviewPanelShell.tsx#L169",
+      "https://github.com/pingdotgg/t3code/blob/74573fc29b901bafbf8f1dbb2eb29606da1fa448/apps/web/src/panelAnimations.ts#L41"
+    ],
+    "recommendation": "Use an interruptible panel presence state and a visual width separate from the saved resting width. Animate open/close and deliberate maximize changes under the user's policy. Clip content at its final reading width where appropriate; do not animate hand-driven resize.",
+    "acceptance": "Open and close each panel kind, reverse mid-transition, switch to a wider kind, maximize, then drag its seam. Intermediate geometry must be visible only for discrete transitions, outgoing content must lose input ownership at once, and browser/terminal dimensions must stay correct."
+  },
+  {
+    "id": "motion-003",
+    "title": "Most panel tab bodies have no transition despite the motion catalog",
+    "priority": "P2",
+    "category": "motion",
+    "evidence_level": "source-proven",
+    "impact": "Tab changes replace large bodies instantly and differ from document previews. The catalog incorrectly promises broader coverage.",
+    "ferrite_evidence": [
+      "crates/ferrite-cockpit/src/cockpit/panel.rs:657-694",
+      "crates/ferrite-cockpit/src/cockpit/panel/preview.rs:244-257",
+      "crates/ferrite-cockpit/src/cockpit/panel/preview.rs:444-449",
+      "crates/ferrite-ui/src/motion.rs:53",
+      "crates/ferrite-cockpit/src/cockpit/panel/pull_request.rs:460-486"
+    ],
+    "t3_evidence": [
+      "https://github.com/pingdotgg/t3code/blob/74573fc29b901bafbf8f1dbb2eb29606da1fa448/apps/web/src/components/preview/PreviewPanelShell.tsx#L169"
+    ],
+    "recommendation": "Give surface activation one transition owner keyed by thread and surface identity. Apply the agreed body transition to Overview, Background, Files, Changes, Terminal, SideChat, Agent and PR, and coordinate document preview fades to avoid double animation. Correct the catalog.",
+    "acceptance": "Switch through every panel kind and PR subview using both mouse and keyboard. Confirm one visible transition per activation, no replay on unrelated updates, no outgoing input target, and no lost terminal/browser focus."
+  },
+  {
+    "id": "motion-004",
+    "title": "Popover and menu entrances are globally disabled",
+    "priority": "P3",
+    "category": "motion",
+    "evidence_level": "source-proven",
+    "impact": "Model and other popovers, context menus, slash commands and mention menus appear and disappear instantly.",
+    "ferrite_evidence": [
+      "crates/ferrite-ui/src/theme.rs:3662",
+      "crates/ferrite-ui/src/motion.rs:473-489",
+      "crates/ferrite-cockpit/src/cockpit/context_menu.rs:1001",
+      "crates/ferrite-cockpit/src/cockpit.rs:3333-3336",
+      "crates/ferrite-pane/src/transcript.rs:2392-2395"
+    ],
+    "t3_evidence": [
+      "https://github.com/pingdotgg/t3code/blob/74573fc29b901bafbf8f1dbb2eb29606da1fa448/apps/web/src/components/ui/popover.tsx#L95",
+      "https://github.com/pingdotgg/t3code/blob/74573fc29b901bafbf8f1dbb2eb29606da1fa448/apps/web/src/components/ui/popover.tsx#L114",
+      "https://github.com/pingdotgg/t3code/blob/74573fc29b901bafbf8f1dbb2eb29606da1fa448/apps/web/src/components/ui/menu.tsx#L56",
+      "https://github.com/pingdotgg/t3code/blob/74573fc29b901bafbf8f1dbb2eb29606da1fa448/apps/web/src/components/ui/combobox.tsx#L170"
+    ],
+    "recommendation": "Separate menus and popovers in the policy, add a short origin-aware entrance and retained noninteractive exit where requested, and preserve immediate keyboard selection. A global MENU_IN duration change alone does not implement exits.",
+    "acceptance": "Open and close model, attachment, slash, mention, project-filter and context menus at every window edge. Verify the entrance originates at the anchor, closing immediately releases input, and rapid reopen does not show duplicate faces."
+  },
+  {
+    "id": "motion-005",
+    "title": "Shelves and connector details reveal their bodies instantly",
+    "priority": "P2",
+    "category": "motion",
+    "evidence_level": "source-proven",
+    "impact": "Expanding a shelf or connector section moves neighboring content without showing the relationship between the header and revealed rows.",
+    "ferrite_evidence": [
+      "crates/ferrite-cockpit/src/cockpit/nav_list.rs:69-84",
+      "crates/ferrite-cockpit/src/nav/list.rs:114-117",
+      "crates/ferrite-cockpit/src/cockpit/panel/sections.rs:249-278",
+      "crates/ferrite-ui/src/motion.rs:57-70"
+    ],
+    "t3_evidence": [
+      "https://github.com/pingdotgg/t3code/blob/74573fc29b901bafbf8f1dbb2eb29606da1fa448/apps/web/src/components/ui/collapsible.tsx#L21",
+      "https://github.com/pingdotgg/t3code/blob/74573fc29b901bafbf8f1dbb2eb29606da1fa448/apps/web/src/components/Sidebar.tsx#L2040",
+      "https://github.com/pingdotgg/t3code/blob/74573fc29b901bafbf8f1dbb2eb29606da1fa448/apps/web/src/components/chat/TimelineV2EventRow.tsx#L145"
+    ],
+    "recommendation": "Add measured, clipped body reveal for nonvirtualized shelves and connector sections. Treat virtualized transcript disclosures separately so visible bounds, scroll anchoring and hit testing agree throughout the transition. Keep chevron timing coordinated with body motion.",
+    "acceptance": "Expand and collapse every shelf and Connectors, including rapid reversal and a long list. Rows must remain clipped to the displayed body, adjacent headings must move continuously, and reduced motion must reveal the final content immediately."
+  },
+  {
+    "id": "motion-006",
+    "title": "System reduced-motion changes are not observed while Ferrite runs",
+    "priority": "P2",
+    "category": "defect",
+    "evidence_level": "source-proven",
+    "impact": "A user who enables Reduce Motion after launch keeps the previous animation policy until restarting. Turning it off also is not observed.",
+    "ferrite_evidence": [
+      "crates/ferrite-ui/src/motion.rs:2152-2177",
+      "vendor/gpui-pre/src/app.rs:864",
+      "vendor/gpui-pre/src/app.rs:1065-1067"
+    ],
+    "t3_evidence": [
+      "https://github.com/pingdotgg/t3code/blob/74573fc29b901bafbf8f1dbb2eb29606da1fa448/apps/web/src/hooks/useMediaQuery.ts#L63",
+      "https://github.com/pingdotgg/t3code/blob/74573fc29b901bafbf8f1dbb2eb29606da1fa448/apps/web/src/panelAnimations.ts#L35"
+    ],
+    "recommendation": "Subscribe to platform accessibility preference changes and route them through set_reduce_motion. Resolve the initial preference before animated content is presented, or adopt a conservative initial state until it is known. Ensure active scroll and layout transitions land when the setting changes.",
+    "acceptance": "While a loop, panel reveal and smooth scroll are active, toggle the OS preference without restarting. All animation must reach a static state promptly; toggling back must affect subsequent transitions. Repeat with the environment override."
+  },
+  {
+    "id": "motion-007",
+    "title": "Non-macOS builds do not read the system reduced-motion preference",
+    "priority": "P2",
+    "category": "partial-capability",
+    "evidence_level": "source-proven",
+    "impact": "Windows and other supported non-macOS users cannot rely on their system animation preference reaching Ferrite through this integration.",
+    "ferrite_evidence": [
+      "crates/ferrite-ui/src/motion.rs:2155-2165",
+      "vendor/gpui-pre/src/app.rs:864",
+      "crates/ferrite-ui/src/motion.rs:2081-2082"
+    ],
+    "t3_evidence": [
+      "https://github.com/pingdotgg/t3code/blob/74573fc29b901bafbf8f1dbb2eb29606da1fa448/apps/web/src/hooks/useMediaQuery.ts#L63",
+      "https://github.com/pingdotgg/t3code/blob/74573fc29b901bafbf8f1dbb2eb29606da1fa448/apps/web/src/panelAnimations.ts#L35"
+    ],
+    "recommendation": "Implement the relevant platform setting bridge and change observation on supported operating systems. Preserve the explicit environment override for test and operator control.",
+    "acceptance": "On each supported non-macOS platform, launch with the system animation setting disabled and then change it while running. Built-in transitions and continuous indicators must follow the setting without an environment variable."
+  },
+  {
+    "id": "motion-008",
+    "title": "Streaming tail follow still jumps with content growth",
+    "priority": "P2",
+    "category": "motion",
+    "evidence_level": "source-proven",
+    "impact": "The answer can move in provider-update increments even though its new text fades in. Send scrolling and jump-to-end already animate, which makes continuous follow inconsistent.",
+    "ferrite_evidence": [
+      "crates/ferrite-pane/src/transcript/scroll.rs:78-80",
+      "crates/ferrite-pane/src/transcript/scroll.rs:111-114",
+      "crates/ferrite-pane/src/transcript.rs:2932-2933",
+      "crates/ferrite-ui/src/motion.rs:64-70"
+    ],
+    "t3_evidence": [
+      "https://github.com/pingdotgg/t3code/blob/74573fc29b901bafbf8f1dbb2eb29606da1fa448/apps/web/src/components/chat/MessagesTimeline.tsx#L195",
+      "https://github.com/pingdotgg/t3code/blob/74573fc29b901bafbf8f1dbb2eb29606da1fa448/apps/web/src/components/chat/MessagesTimeline.tsx#L1449"
+    ],
+    "recommendation": "Introduce a dedicated interruptible live-follow policy while work is running. Keep idle growth, history restoration and user-driven scroll separate. Preserve the reading anchor and stop following immediately on wheel, scrollbar or page navigation.",
+    "acceptance": "With a long answer visible at the tail, stream uneven chunks and tool rows. Record intermediate scroll positions, then interrupt with wheel and scrollbar. The transcript must stop exactly where the user takes control and resume only when requested."
+  },
+  {
+    "id": "motion-009",
+    "title": "Long programmatic scrolls can snap before their final ease",
+    "priority": "P3",
+    "category": "partial-capability",
+    "evidence_level": "source-proven",
+    "impact": "A distant jump to the latest content can teleport across most history and animate only the last viewport. A send target that has no measured bounds can land immediately.",
+    "ferrite_evidence": [
+      "crates/ferrite-pane/src/transcript/scroll.rs:159-203"
+    ],
+    "t3_evidence": [
+      "https://github.com/pingdotgg/t3code/blob/74573fc29b901bafbf8f1dbb2eb29606da1fa448/apps/web/src/components/chat/useTimelineFollow.ts#L408"
+    ],
+    "recommendation": "Decide and document a long-distance policy. If full spatial continuity is required, use measured estimates or staged movement that respects virtualization. If a shortened jump is desired, make that intentional and verify it visually instead of describing every jump as smooth.",
+    "acceptance": "From several screens above the tail, activate Scroll to end and record the first frame through completion. Repeat a send with an unmeasured target. The observed path must match the chosen policy and remain interruptible."
+  },
+  {
+    "id": "motion-010",
+    "title": "Browser navigation feedback is static and changes the content stack",
+    "priority": "P3",
+    "category": "motion",
+    "evidence_level": "source-proven",
+    "impact": "A loading page adds and removes a plain text row rather than showing persistent progress feedback in the browser chrome.",
+    "ferrite_evidence": [
+      "crates/ferrite-cockpit/src/cockpit/browser.rs:1521-1531",
+      "crates/ferrite-cockpit/src/cockpit/browser.rs:1491-1497"
+    ],
+    "t3_evidence": [
+      "https://github.com/pingdotgg/t3code/blob/74573fc29b901bafbf8f1dbb2eb29606da1fa448/apps/web/src/index.css#L2424",
+      "https://github.com/pingdotgg/t3code/blob/74573fc29b901bafbf8f1dbb2eb29606da1fa448/apps/web/src/components/preview/PreviewChromeRow.tsx#L196"
+    ],
+    "recommendation": "Give navigation a stable loading indicator in the chrome with an explicit loading, completed and failed sequence. Use a static equivalent under reduced motion and avoid displacing the page viewport merely to show status.",
+    "acceptance": "Navigate a deliberately slow page, then a fast page, failure, reload and back/forward. Loading feedback must remain visible, finish once, and not shift the page bounds. Under reduced motion status must remain legible without travel."
+  },
+  {
+    "id": "motion-011",
+    "title": "Several transient elements animate in but disappear immediately",
+    "priority": "P3",
+    "category": "motion",
+    "evidence_level": "source-proven",
+    "impact": "Find bars, notices and background-work lines have asymmetric lifecycle feedback; layout can change abruptly on dismissal or completion.",
+    "ferrite_evidence": [
+      "crates/ferrite-ui/src/motion.rs:31-32",
+      "crates/ferrite-ui/src/motion.rs:48-51",
+      "crates/ferrite-pane/src/find.rs:322-325",
+      "crates/ferrite-pane/src/pane/background_work.rs:167-170",
+      "crates/ferrite-pane/src/pane/composer.rs:548-558"
+    ],
+    "t3_evidence": [
+      "https://github.com/pingdotgg/t3code/blob/74573fc29b901bafbf8f1dbb2eb29606da1fa448/apps/web/src/components/chat/ThreadNow.tsx#L24"
+    ],
+    "recommendation": "Use a small retained exit where it helps the user track completion or dismissal. Release hit testing immediately, and collapse occupied space in the same transition. Keep high-frequency text updates and direct manipulation immediate.",
+    "acceptance": "Dismiss find, resolve a notice, finish background work, and remove an attachment while the composer is populated. Verify stable focus and intentional exit behavior without duplicate controls or hidden clickable remnants."
+  }
+]

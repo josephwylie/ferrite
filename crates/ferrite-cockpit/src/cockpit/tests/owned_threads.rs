@@ -65,7 +65,7 @@ fn owned_threads_are_out_of_the_lists_and_ring_nothing(cx: &mut TestAppContext) 
         assert!(!listed(view, coordinator, cx), "nor the parked Coordinator");
         assert!(view.cockpit.needs_you().is_empty(), "⌘D has nothing");
     });
-    let rows = cx.update(|window, cx| view.read(cx).palette_thread_rows(window));
+    let rows = cx.update(|_, cx| view.read(cx).palette_thread_rows(cx));
     assert!(rows.iter().any(|row| row.act == Act::Thread(mine)));
     assert!(
         !rows

@@ -15,7 +15,8 @@
 //!
 //! Rows move as T3's do (`flip::ListMotion`): one that moves slides from
 //! its old place over 150ms, one that enters drops in, one that leaves is
-//! drawn as a fading ghost. Shelf folds snap.
+//! drawn as a fading ghost. A shelf's body eases open and shut
+//! (`motion::fold_body`), the list's own motion standing still for it.
 //!
 //! Drawing only, like `pane.rs`: the cockpit assembles a `NavState` per
 //! frame from O(1) reads plus its project/branch/parked caches —
@@ -136,6 +137,7 @@ impl NavCursor {
     }
 }
 
+#[cfg(test)]
 const INNER_W: f32 = WIDTH - 2.0 * NAV_COL_PAD;
 
 /// A shelf at the foot of the list (ADR 0040), in drawing order.
@@ -189,7 +191,7 @@ pub fn roll_up<'a>(rows: impl IntoIterator<Item = &'a ThreadRow>) -> Option<RowS
 }
 
 /// One Thread's row — its card (`card::thread_card`), identical whether
-/// it is a loose Thread, a Group member or a parked one; only the
+/// it is an open Thread or a parked one; only the
 /// container differs. Every field is a cache read (`CockpitView::thread_row`).
 #[derive(Clone)]
 pub struct ThreadRow {
@@ -200,8 +202,7 @@ pub struct ThreadRow {
     /// The Project's name, from the facts cache: the badge's monogram and
     /// hue read it.
     pub project: Option<SharedString>,
-    /// The board shows this Thread (Solo), or it is the shown Group's
-    /// focused member: the row carries the selection.
+    /// The board shows this Thread: the row carries the selection.
     pub selected: bool,
     /// Its state's word (C10), which the status label says.
     pub tail: NavTail,
@@ -253,6 +254,7 @@ impl ThreadRow {
 
 /// The width a card's lines have, from its content inset to its right
 /// padding.
+#[cfg(test)]
 const TEXT_W: f32 = INNER_W - 2.0 * NAV_ROW_PAD_X;
 
 // ------------------------------------------------------------- measuring
@@ -266,21 +268,29 @@ const TEXT_W: f32 = INNER_W - 2.0 * NAV_ROW_PAD_X;
 /// keeps a name whole.
 #[derive(Clone, Copy)]
 pub enum Measure<'a> {
-    Text(&'a App),
+    Text(&'a App, f32),
     /// A fixed advance per character, for unit tests.
     #[cfg(test)]
     Cells(f32),
 }
 
 impl Measure<'_> {
-    /// `text` in Geist at `size` and `weight`.
+    pub fn inner_width(&self) -> f32 {
+        match self {
+            Self::Text(_, width) => *width - 2.0 * NAV_COL_PAD,
+            #[cfg(test)]
+            Self::Cells(_) => INNER_W,
+        }
+    }
+
+    /// `text` in the platform UI font at `size` and `weight`.
     pub fn ui(&self, text: &str, size: f32, weight: FontWeight) -> f32 {
         self.width(FONT_UI, text, size, weight)
     }
 
     fn width(&self, family: &'static str, text: &str, size: f32, weight: FontWeight) -> f32 {
         match self {
-            Measure::Text(cx) => {
+            Measure::Text(cx, _) => {
                 let system = cx.text_system();
                 let font = gpui::Font {
                     weight,
@@ -387,8 +397,7 @@ fn trailing(text: impl Into<SharedString>, size: f32, ink: u32) -> Div {
 
 /// The nav's one pointer role: nothing at rest, white 8% under the
 /// pointer at once (T3's rows snap), and the selected row white 11%
-/// whatever the pointer does: no ring, the fill alone. The pointer stays
-/// the arrow.
+/// whatever the pointer does: no ring, the fill alone.
 fn wash<E: Styled + InteractiveElement>(mut element: E, key: SharedString, selected: bool) -> E {
     if selected {
         element = element.bg(rgba(NAV_CARD_ACTIVE));
@@ -417,6 +426,7 @@ fn row_frame(id: impl Into<gpui::ElementId>, key: SharedString, selected: bool) 
             .flex()
             .flex_shrink_0()
             .rounded(px(R_CONTROL))
+            .cursor_pointer()
             .whitespace_nowrap()
             .text_size(px(FS_NAV))
             .line_height(px(NAV_LINE)),
@@ -491,8 +501,7 @@ pub fn column(ground: Paint) -> Div {
         )
 }
 
-pub const CARD_TOP: f32 = WIN_CHROME_H + NAV_INSET_Y;
-pub const EDGE_TAB_OPEN_X_OVER_RING: f32 = NAV_INSET + WIDTH - HAIRLINE_W;
+pub const CARD_TOP: f32 = NAV_HEADER_H + NAV_INSET_Y;
 
 pub fn card(content: impl IntoElement) -> Div {
     div()
@@ -506,20 +515,19 @@ pub fn card(content: impl IntoElement) -> Div {
         .flex_col()
         .overflow_hidden()
         .rounded(px(NAV_R))
-        .bg(paint::SIDEBAR)
-        .shadow(components::float_shadow())
+        .bg(NAV_BACKGROUND)
         .font_family(FONT_UI)
         .text_size(px(FS_NAV))
         .line_height(px(NAV_LINE))
         .text_color(rgb(INK_STRONG))
-        .child(content)
         .child(list::grain(NAV_R))
+        .child(content)
         .child(
             div()
                 .absolute()
                 .inset_0()
                 .rounded(px(NAV_R))
-                .border_1()
+                .border_r_1()
                 .border_color(rgba(NAV_BORDER)),
         )
 }
@@ -542,7 +550,8 @@ pub fn head(arrows: impl IntoElement) -> Div {
         .flex_shrink_0()
         .items_center()
         .h(px(ICON_BUTTON))
-        .mb(px(NAV_SEARCH_ROW_GAP))
+        .gap(px(SPACE_1))
+        .child(div().debug_selector(|| "nav-brand".into()).text_size(px(FS_NAV_TITLE)).font_weight(W_LABEL).child("Ferrite"))
         .child(arrows)
 }
 
@@ -564,6 +573,7 @@ pub fn icon_button(
         .items_center()
         .justify_center()
         .size(px(size))
+        .cursor_pointer()
         .rounded(px(radius))
         .when(t > 0.0, |door| {
             door.bg(motion::mix(
@@ -599,7 +609,7 @@ pub fn edge_tab(open: bool) -> Stateful<Div> {
         .h(px(NAV_EDGE_TAB_H))
         .rounded_tr(r)
         .rounded_br(r)
-        .bg(paint::SIDEBAR)
+        .bg(NAV_BACKGROUND)
         .border_t_1()
         .border_r_1()
         .border_b_1()
@@ -666,7 +676,7 @@ pub fn scrollbar(scroll: &ScrollHandle, revealed: bool) -> Div {
 pub fn edge_fades(scroll: &ScrollHandle) -> Vec<Div> {
     let y = scroll.offset().y;
     let below = scroll.max_offset().y + y > px(0.);
-    let fill = paint::SIDEBAR.hsla();
+    let fill = NAV_BACKGROUND.hsla();
     let top = (y < px(0.)).then(|| {
         div()
             .debug_selector(|| "nav-fade-top".into())
@@ -729,7 +739,7 @@ pub fn notice_row(index: usize, row: &NoticeRow, cursor: bool, measure: &Measure
     } else {
         format!("{} \u{b7} {detail}", row.word())
     };
-    let text_w = INNER_W - NAV_TITLE_X - NAV_ROW_PAD_X;
+    let text_w = measure.inner_width() - NAV_TITLE_X - NAV_ROW_PAD_X;
     // In its first minute a Notice has no age to say: the title takes the
     // line.
     let age = (!row.when.is_empty()).then(|| row.when.clone());
@@ -786,7 +796,7 @@ pub fn notice_row(index: usize, row: &NoticeRow, cursor: bool, measure: &Measure
         )))
 }
 
-/// A refusal from the last change (a Group's, a Snooze's), at the top of
+/// A refusal from the last change (a Park's, a Snooze's), at the top of
 /// the list, until the next change succeeds: a `BLOCKED` dot and the refusal, dim, wrapping.
 /// Colour on the dot, never the row.
 pub fn notice(text: SharedString) -> Div {
@@ -920,24 +930,6 @@ pub fn rename_target_thread(thread: ThreadId, title: SharedString) -> Stateful<D
         .child(title)
 }
 
-/// A nav row lifted off the list while it is dragged: the same row the
-/// list draws, at the column's inner width, on the float ground with its
-/// ring and the one float shadow.
-pub fn drag_row(row: Stateful<Div>) -> Div {
-    div()
-        .w(px(INNER_W))
-        .font_family(FONT_UI)
-        .text_size(px(FS_NAV))
-        .line_height(px(NAV_LINE))
-        .text_color(rgb(INK_STRONG))
-        .bg(paint::FLOAT)
-        .rounded(px(R_CONTROL))
-        .border_1()
-        .border_color(paint::FLOAT_EDGE)
-        .shadow(ferrite_ui::components::float_shadow())
-        .child(row)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1030,6 +1022,10 @@ mod tests {
             ..selected_thread(true)
         };
         assert!(!shown.receded(), "the shown Thread never recedes");
+        let mut picked = row(RowStatus::Working);
+        picked.picked = true;
+        assert!(!picked.receded(), "a selected working Thread never recedes");
+        assert_eq!(card::title_face(&picked, 0.0), (rgb(INK_STRONG).into(), W_LABEL));
         assert_eq!(
             card::title_face(&row(RowStatus::Working), 1.0),
             (rgb(INK_STRONG).into(), W_BODY),
@@ -1125,11 +1121,11 @@ mod tests {
         );
     }
 
-    /// N-13: the pointer stays the arrow over every row.
+    /// Interactive rows use the reference sidebar pointer.
     #[test]
-    fn every_nav_row_keeps_the_arrow() {
+    fn every_nav_row_uses_the_pointer() {
         let cursor = |mut drawn: Stateful<Div>| drawn.style().mouse_cursor;
-        assert_eq!(cursor(thread_row(&thread())), None);
+        assert_eq!(cursor(thread_row(&thread())), Some(gpui::CursorStyle::PointingHand));
     }
 
     /// The word says one thing, in priority order, and the Pane's head slot
@@ -1163,19 +1159,6 @@ mod tests {
         for quiet in [None, Some(&HeadSlot::Interrupted), Some(&HeadSlot::Parked)] {
             assert_eq!(of(quiet), NavTail::Age(age()));
         }
-        assert_eq!(
-            NavTail::Waiting(words::APPROVAL).member_word(),
-            Some((words::NEEDS_YOU.into(), ATTENTION))
-        );
-        assert_eq!(
-            NavTail::Failed.member_word(),
-            Some((words::FAILED.into(), BLOCKED))
-        );
-        assert_eq!(
-            NavTail::Working("1m".into()).member_word(),
-            Some(("1m".into(), ferrite_ui::theme::INK_SUBTLE))
-        );
-        assert_eq!(NavTail::Age(age()).member_word(), None);
     }
 
     /// The nav never says `now` (C10).
@@ -1261,23 +1244,23 @@ mod tests {
     }
 
     #[test]
-    fn the_nav_is_a_card_floating_under_the_head_row() {
+    fn the_nav_is_a_flat_column_under_native_window_chrome() {
         let mut column = column(Paint::solid(TX_GROUND));
         assert_eq!(
             column.style().size.width,
-            Some(px(280.).into()),
-            "the card and a 12px gap either side"
+            Some(px(256.).into()),
+            "the reference sidebar has no exterior horizontal inset"
         );
         let mut drawn = card(div());
         let style = drawn.style();
-        assert_eq!(style.inset.top, Some(px(WIN_CHROME_H + 40.).into()), "under the head row");
-        assert_eq!(style.inset.left, Some(px(12.).into()));
-        assert_eq!(style.inset.bottom, Some(px(40.).into()), "short of the window's foot");
+        assert_eq!(style.inset.top, Some(px(NAV_HEADER_H).into()), "under the sidebar topbar");
+        assert_eq!(style.inset.left, Some(px(0.).into()));
+        assert_eq!(style.inset.bottom, Some(px(0.).into()), "extends to the window foot");
         assert_eq!(style.size.width, Some(px(256.).into()));
-        assert_eq!(style.corner_radii.top_left, Some(px(18.).into()));
-        assert_eq!(style.corner_radii.bottom_right, Some(px(18.).into()));
-        assert_eq!(style.background, Some(paint::SIDEBAR.into()));
-        assert_eq!(style.box_shadow, Some(components::float_shadow()), "it floats");
+        assert_eq!(style.corner_radii.top_left, Some(px(0.).into()));
+        assert_eq!(style.corner_radii.bottom_right, Some(px(0.).into()));
+        assert_eq!(style.background, Some(NAV_BACKGROUND.into()));
+        assert_eq!(style.box_shadow, None);
         let mut inner = content();
         let style = inner.style();
         assert_eq!(style.size.width, Some(px(WIDTH).into()));
@@ -1290,7 +1273,7 @@ mod tests {
         for open in [true, false] {
             let mut tab = edge_tab(open);
             let style = tab.style();
-            assert_eq!(style.background, Some(paint::SIDEBAR.into()));
+            assert_eq!(style.background, Some(NAV_BACKGROUND.into()));
             assert_eq!(style.border_color, Some(gpui::Hsla::from(rgba(NAV_BORDER))));
             assert_eq!(style.border_widths.left, None, "no edge on the card's side");
             assert_eq!(style.corner_radii.top_right, Some(px(8.).into()));
@@ -1322,9 +1305,9 @@ mod tests {
     #[test]
     fn a_title_fades_into_its_cards_ground() {
         let key = SharedString::from("nav-thread-0-fade");
-        assert_ne!(card::card_ground(&key, true, false), paint::SIDEBAR.hsla());
-        assert_eq!(card::card_ground(&key, false, false), paint::SIDEBAR.hsla());
-        assert_eq!(paint::SIDEBAR, paint::PANEL);
+        assert_ne!(card::card_ground(&key, true, false), NAV_BACKGROUND.hsla());
+        assert_eq!(card::card_ground(&key, false, false), NAV_BACKGROUND.hsla());
+        assert_eq!(NAV_BACKGROUND, Paint::solid(0x000000));
     }
 
     /// CP7 regression 1: the fade is drawn only over a line that runs
@@ -1333,7 +1316,7 @@ mod tests {
     #[test]
     fn only_a_cut_line_fades() {
         let measure = Measure::Cells(7.0);
-        let ground = paint::SIDEBAR.hsla();
+        let ground = NAV_BACKGROUND.hsla();
         let cut = |width| cut_ground(&measure, "ferrite", FS_META, W_BODY, width, ground);
         assert_eq!(cut(49.0), None, "a name that fits is whole");
         assert_eq!(cut(120.0), None);

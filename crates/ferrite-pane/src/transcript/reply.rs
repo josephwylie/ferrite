@@ -17,15 +17,18 @@
 //! does (a press anywhere else), on Escape, and a scroll fades it out over
 //! `FADE_QUICK`.
 
+use std::rc::Rc;
 use std::time::{Duration, Instant};
 
 use gpui::{
-    prelude::*, px, AnyElement, Bounds, Context, MouseButton, MouseDownEvent, MouseUpEvent,
-    Pixels, Point, SharedString, Size, Window,
+    prelude::*, px, AnyElement, Bounds, Context, MouseButton, MouseDownEvent, MouseUpEvent, Pixels,
+    Point, SharedString, Size, Window,
 };
 
-use super::{TranscriptEvent, TranscriptView};
-use crate::quote::Reply;
+use super::{Navigate, TranscriptEvent, TranscriptView};
+use crate::select::FindMarks;
+use ferrite_core::replies::Reply;
+use ferrite_core::transcript::BlockId;
 use ferrite_ui::{icons, motion, theme};
 
 /// The button on offer: the passage it quotes (none when the selection is
@@ -35,10 +38,28 @@ use ferrite_ui::{icons, motion, theme};
 pub(super) struct SelectionReply {
     /// A reference scene's, offered with no selection behind it.
     staged: bool,
+    anchor: Option<gpui::base::TextSelectionAnchor>,
     passage: Option<String>,
+    /// The Block under the selection's first line, the citation's source.
+    block: Option<BlockId>,
     at: Point<Pixels>,
     appears: Instant,
     fading: Option<Instant>,
+}
+
+/// What a Go to source landed on within its row: the cited words, marked
+/// as a Find occurrence (`FindMarks`), and the frames left to wait for them
+/// to paint and report where.
+pub(super) struct CitedPassage {
+    pub(super) marks: FindMarks,
+    reveal: u8,
+}
+
+/// The row holding `block`.
+pub(super) fn row_of(rows: &super::TranscriptRows, block: BlockId) -> Option<usize> {
+    rows.rows()
+        .iter()
+        .position(|row| row.blocks().iter().any(|candidate| candidate.id == block))
 }
 
 impl TranscriptView {
@@ -63,7 +84,7 @@ impl TranscriptView {
         cx: &mut Context<Self>,
     ) {
         self.pressed_at = None;
-        if !self.input.focused || !self.input.quotes {
+        if !self.input.presentation.focused || !self.input.presentation.quotes {
             return;
         }
         let at = event.position;
@@ -75,15 +96,19 @@ impl TranscriptView {
         cx.defer_in(window, move |view, window, cx| {
             let selected = gpui::base::TextSelection::selected_text(window, cx);
             let passage = crate::quote::passage(&selected);
-            view.reply = (passage.is_some() || crate::quote::too_long(&selected)).then(|| {
-                SelectionReply {
+            let block = gpui::base::TextSelection::painted_bounds(window, cx)
+                .first()
+                .and_then(|first| view.block_at(first.center().y));
+            view.reply =
+                (passage.is_some() || crate::quote::too_long(&selected)).then(|| SelectionReply {
                     staged: false,
+                    anchor: gpui::base::TextSelection::retain_range(window, cx),
                     passage,
+                    block,
                     at,
                     appears: cx.background_executor().now() + delay,
                     fading: None,
-                }
-            });
+                });
             if !delay.is_zero() {
                 cx.spawn(async move |view, cx| {
                     cx.background_executor().timer(delay).await;
@@ -125,11 +150,204 @@ impl TranscriptView {
         }
     }
 
-    /// Escape: the button goes. Whether one was on offer.
+    /// Escape: the button goes, else an open message or link menu. Whether
+    /// either was up.
     pub fn dismiss_offer(&mut self, cx: &mut Context<Self>) -> bool {
         let offered = self.reply.is_some();
         self.dismiss_reply(cx);
-        offered
+        if offered {
+            return true;
+        }
+        let menu_open = self.message_menu.take().is_some();
+        if menu_open {
+            cx.notify();
+        }
+        menu_open
+    }
+
+    fn cite_passage(
+        &mut self,
+        passage: String,
+        block: Option<BlockId>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let anchor = self.reply.as_ref().and_then(|reply| reply.anchor.clone())
+            .or_else(|| gpui::base::TextSelection::retain_range(window, cx));
+        gpui::base::TextSelection::clear(window, cx);
+        self.reply = None;
+        let mut reply = Reply::new(passage, "");
+        if let Some((key, selector)) = anchor.as_ref().and_then(|anchor| anchor.selector()) {
+            let part = block.and_then(|block| self.row_holding(block)).and_then(|row| {
+                self.texts.iter().filter(|(at, _)| *at == row).position(|(_, text)| text.key == key)
+            }).unwrap_or(0);
+            reply.selector = Some(ferrite_core::replies::Selector { part, start: selector.start, end: selector.end, prefix: selector.prefix, suffix: selector.suffix });
+        }
+        cx.emit(TranscriptEvent::Reply(reply, block, anchor));
+        cx.notify();
+    }
+
+    /// Cite from the keyboard: the passage on offer, else the selection as
+    /// it stands. Whether there was a passage to quote.
+    pub fn cite_selection(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        if !self.input.presentation.quotes {
+            return false;
+        }
+        let offered = self
+            .reply
+            .as_ref()
+            .and_then(|reply| reply.passage.clone().map(|passage| (passage, reply.block)));
+        let (passage, block) = match offered {
+            Some(offered) => offered,
+            None => {
+                let selected = gpui::base::TextSelection::selected_text(window, cx);
+                let Some(passage) = crate::quote::passage(&selected) else {
+                    return false;
+                };
+                let block = gpui::base::TextSelection::painted_bounds(window, cx)
+                    .first()
+                    .and_then(|first| self.block_at(first.center().y));
+                (passage, block)
+            }
+        };
+        self.cite_passage(passage, block, window, cx);
+        true
+    }
+
+    /// The Block the row under window `y` begins with: what a citation
+    /// there names as its source.
+    fn block_at(&self, y: Pixels) -> Option<BlockId> {
+        let state = self.scroll.list_state();
+        let first = state.logical_scroll_top().item_ix;
+        (first..self.rows.rows().len()).find_map(|index| {
+            let bounds = state.bounds_for_item(index)?;
+            (bounds.top() <= y && y < bounds.bottom())
+                .then(|| self.rows.get(index)?.blocks().first().map(|block| block.id))
+                .flatten()
+        })
+    }
+
+    pub fn comment_source(&self, block: BlockId) -> Option<(gpui::base::TextSelectionDocument, Vec<SharedString>)> {
+        let row = self.row_holding(block)?;
+        Some((self.document.clone(), self.texts.iter().filter(|(at, _)| *at == row).map(|(_, text)| text.key.clone()).collect()))
+    }
+
+    /// Bring the cited `passage` of the row holding `block` into view: left
+    /// where it lies when it is fully readable, else settled a third of the
+    /// way down the view as a Find hit is, and marked. A passage the row's
+    /// text does not hold lands the row's top below the pinned band instead.
+    /// Says whether the Block is still in this transcript (a replayed or
+    /// evicted history may have dropped it).
+    pub fn reveal_passage(&mut self, block: BlockId, quote: &str, cx: &mut Context<Self>) -> bool {
+        let Some(row) = self.row_holding(block) else {
+            return false;
+        };
+        let query = crate::find::Query::new(quote);
+        let holder = self
+            .texts
+            .iter()
+            .find(|(at, text)| {
+                *at == row
+                    && !query.needle.is_empty()
+                    && !query.matches(&text.find_text()).is_empty()
+            })
+            .map(|(_, text)| text.key.clone());
+        match holder {
+            Some(key) => {
+                let report = Rc::new(gpui::base::text::FindReport::default());
+                self.navigate(Navigate::Reveal { row }, cx);
+                self.cited = Some(CitedPassage {
+                    marks: FindMarks {
+                        query,
+                        active: Some((key, 0)),
+                        report,
+                    },
+                    reveal: crate::find::REVEAL_FRAMES,
+                });
+            }
+            None => self.navigate(Navigate::Cite { row }, cx),
+        }
+        cx.notify();
+        true
+    }
+
+    /// Each render while a landing is due: scroll the passage into the
+    /// reading band once it has painted (`settle_hit`). The settle is this
+    /// landing's own movement, so the mark it set survives it.
+    pub(super) fn settle_cited(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(cited) = self.cited.as_mut() else {
+            return;
+        };
+        let found = super::find::painted(&mut cited.reveal, &cited.marks.report, window);
+        if found.is_none() && cited.reveal > 0 {
+            // An animation frame alone can reuse this cached view before the mark reports.
+            cx.defer_in(window, |_, _, cx| cx.notify());
+        }
+        if let Some(found) = found {
+            let cited = self.cited.take();
+            self.settle_hit(found, cx);
+            self.cited = cited;
+        }
+    }
+
+    /// Where the landed passage last painted, as the tests read it.
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn cited_painted(&self) -> Option<gpui::Bounds<Pixels>> {
+        self.cited.as_ref()?.marks.report.revealed.get()
+    }
+
+    /// Whether `block` is in this transcript, as the tests read it.
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn holds_block(&self, block: BlockId) -> bool {
+        self.row_holding(block).is_some()
+    }
+
+    fn row_holding(&self, block: BlockId) -> Option<usize> {
+        row_of(&self.rows, block)
+    }
+
+    /// Where the row holding `block` is drawn, as the tests read it.
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn block_row_bounds(&self, block: BlockId) -> Option<gpui::Bounds<Pixels>> {
+        self.scroll
+            .list_state()
+            .bounds_for_item(self.row_holding(block)?)
+    }
+
+    /// A sent Quote row's Go to source: scroll to the Block it was cited
+    /// from, or have the row say it is gone.
+    fn open_cited(&mut self, block: BlockId, quote: &str, cx: &mut Context<Self>) {
+        if !self.reveal_passage(block, quote, cx) {
+            self.missing_sources.insert(block);
+            cx.notify();
+        }
+    }
+
+    /// Where each Quote row of the prompt `line` was cited from.
+    pub(super) fn quote_sources(
+        &self,
+        line: &str,
+        view: Option<&gpui::Entity<Self>>,
+    ) -> Vec<Option<crate::attachments::QuoteSource>> {
+        let Some(view) = view.map(gpui::Entity::downgrade) else {
+            return Vec::new();
+        };
+        ferrite_core::replies::split(line)
+            .0
+            .iter()
+            .map(|reply| {
+                let key = ferrite_core::cited_sources::key(&reply.quote);
+                let block = *self.input.presentation.cited.get(&key)?;
+                let view = view.clone();
+                let quote = reply.quote.clone();
+                Some(crate::attachments::QuoteSource {
+                    missing: self.missing_sources.contains(&block),
+                    go: std::rc::Rc::new(move |_, cx| {
+                        let _ = view.update(cx, |transcript, cx| transcript.open_cited(block, &quote, cx));
+                    }),
+                })
+            })
+            .collect()
     }
 
     /// The button on offer at `at` for `passage` (a reference scene's: no
@@ -138,7 +356,9 @@ impl TranscriptView {
     pub fn fixture_cite(&mut self, passage: &str, at: Point<Pixels>, cx: &mut Context<Self>) {
         self.reply = Some(SelectionReply {
             staged: true,
+            anchor: None,
             passage: Some(passage.to_string()),
+            block: None,
             at,
             appears: cx.background_executor().now(),
             fading: None,
@@ -165,7 +385,8 @@ impl TranscriptView {
         }
         let staged = self.reply.as_ref().is_some_and(|reply| reply.staged);
         if !staged
-            && (!self.input.focused || !gpui::base::TextSelection::has_selection(window, cx))
+            && (!self.input.presentation.focused
+                || !gpui::base::TextSelection::has_selection(window, cx))
         {
             self.reply = None;
             return None;
@@ -182,7 +403,7 @@ impl TranscriptView {
             }
             None => 1.,
         };
-        let side_chat_shown = self.input.rewind.is_some();
+        let side_chat_shown = self.input.presentation.rewind.is_some();
         let size = cite_size(reply.passage.is_none(), side_chat_shown, window);
         let rects = gpui::base::TextSelection::painted_bounds(window, cx);
         let place = cite_place(
@@ -193,13 +414,14 @@ impl TranscriptView {
             window.viewport_size(),
         );
         let passage = reply.passage.clone();
+        let block = reply.block;
         let fading = reply.fading.is_some();
         let weak = cx.entity().downgrade();
         let away = weak.clone();
-        let namespace = self.input.namespace.clone();
+        let namespace = self.input.presentation.namespace.clone();
         let id = gpui::ElementId::from(SharedString::from(format!(
             "selection-reply-{}",
-            self.input.namespace
+            self.input.presentation.namespace
         )));
         // On the press, not the click: the press clears the selection,
         // and with it this button, before a release could land on it.
@@ -212,46 +434,56 @@ impl TranscriptView {
                         MouseButton::Left,
                         move |_: &MouseDownEvent, window: &mut Window, cx: &mut gpui::App| {
                             cx.stop_propagation();
-                            gpui::base::TextSelection::clear(window, cx);
                             let passage = passage.clone();
                             let _ = weak.update(cx, |view, cx| {
-                                view.reply = None;
-                                cx.emit(TranscriptEvent::Reply(Reply::new(passage, "")));
-                                cx.notify();
+                                view.cite_passage(passage, block, window, cx)
                             });
                         },
                     )
                 }),
-            None => glass_button(&namespace, "selection-reply-quote", "Shorten selection", false)
-                .opacity(0.5)
-                .tooltip(ferrite_ui::menu::tooltip("Selection is too long to cite")),
+            None => glass_button(
+                &namespace,
+                "selection-reply-quote",
+                "Shorten selection",
+                false,
+            )
+            .opacity(0.5)
+            .tooltip(ferrite_ui::menu::tooltip("Selection is too long to cite")),
         };
-        let side_chat = passage.clone().zip(self.input.rewind.as_ref()).map(|(passage, allowed)| {
-            let button = glass_button(&namespace, "selection-side-chat", "Start a side chat", false);
-            match allowed {
-                Err(why) => button
-                    .opacity(0.4)
-                    .tooltip(ferrite_ui::menu::tooltip(format!(
-                        "Start a side chat \u{b7} {why}"
-                    ))),
-                Ok(()) => button.when(!fading, |button| {
-                    let weak = weak.clone();
-                    button.cursor_pointer().on_mouse_down(
-                        MouseButton::Left,
-                        move |_: &MouseDownEvent, window: &mut Window, cx: &mut gpui::App| {
-                            cx.stop_propagation();
-                            gpui::base::TextSelection::clear(window, cx);
-                            let passage = passage.clone();
-                            let _ = weak.update(cx, |view, cx| {
-                                view.reply = None;
-                                cx.emit(TranscriptEvent::SideChat(passage));
-                                cx.notify();
-                            });
-                        },
-                    )
-                }),
-            }
-        });
+        let side_chat = passage
+            .clone()
+            .zip(self.input.presentation.rewind.as_ref())
+            .map(|(passage, allowed)| {
+                let button = glass_button(
+                    &namespace,
+                    "selection-side-chat",
+                    "Start a side chat",
+                    false,
+                );
+                match allowed {
+                    Err(why) => button
+                        .opacity(0.4)
+                        .tooltip(ferrite_ui::menu::tooltip(format!(
+                            "Start a side chat \u{b7} {why}"
+                        ))),
+                    Ok(()) => button.when(!fading, |button| {
+                        let weak = weak.clone();
+                        button.cursor_pointer().on_mouse_down(
+                            MouseButton::Left,
+                            move |_: &MouseDownEvent, window: &mut Window, cx: &mut gpui::App| {
+                                cx.stop_propagation();
+                                gpui::base::TextSelection::clear(window, cx);
+                                let passage = passage.clone();
+                                let _ = weak.update(cx, |view, cx| {
+                                    view.reply = None;
+                                    cx.emit(TranscriptEvent::SideChat(passage));
+                                    cx.notify();
+                                });
+                            },
+                        )
+                    }),
+                }
+            });
         let row = gpui::div()
             .id(id)
             .debug_selector(|| "selection-reply".into())
@@ -299,9 +531,10 @@ fn cite_place(
             && pointer.y <= rect.bottom() + near
     });
     let preferred = match rects.last() {
-        Some(last) if !on_text => {
-            gpui::point(last.right(), last.bottom() + px(theme::SELECTION_CITE_BELOW))
-        }
+        Some(last) if !on_text => gpui::point(
+            last.right(),
+            last.bottom() + px(theme::SELECTION_CITE_BELOW),
+        ),
         _ => pointer,
     };
     let edge = px(theme::SELECTION_CITE_EDGE);
@@ -310,8 +543,20 @@ fn cite_place(
         value.min(limit - extent - edge).max(edge)
     };
     gpui::point(
-        held(preferred.x, column.left(), column.right(), window.width, size.width),
-        held(preferred.y, column.top(), column.bottom(), window.height, size.height),
+        held(
+            preferred.x,
+            column.left(),
+            column.right(),
+            window.width,
+            size.width,
+        ),
+        held(
+            preferred.y,
+            column.top(),
+            column.bottom(),
+            window.height,
+            size.height,
+        ),
     )
 }
 
@@ -334,7 +579,11 @@ fn cite_size(too_long: bool, side_chat: bool, window: &mut Window) -> Size<Pixel
             .width()
     };
     let pad = px(2. * theme::SELECTION_CITE_PAD_X + 2.);
-    let first = if too_long { "Shorten selection" } else { "Cite" };
+    let first = if too_long {
+        "Shorten selection"
+    } else {
+        "Cite"
+    };
     let mut width = shaped(first) + pad;
     if !too_long {
         width += px(theme::SELECTION_CITE_ICON + theme::SELECTION_CITE_ICON_GAP);

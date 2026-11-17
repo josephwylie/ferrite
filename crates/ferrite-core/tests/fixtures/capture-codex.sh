@@ -2,7 +2,7 @@
 # Record the `codex app-server` JSON-RPC wire protocol into committed fixtures.
 #
 # The fixtures next to this script are the protocol contract: the replay tests
-# in `tests/codex_session.rs` and `src/providers/codex/wire.rs` assert against
+# in `tests/it/codex_session.rs` and `src/providers/codex/wire.rs` assert against
 # them, so a vendor release that changes the wire breaks the build loudly.
 # Re-run this after a CLI upgrade, diff the result, and fix the parser — never
 # the other way round.

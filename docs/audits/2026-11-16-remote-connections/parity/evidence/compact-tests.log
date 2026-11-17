@@ -1,0 +1,90 @@
+warning: variable does not need to be mutable
+   --> crates/ferrite-core/src/server/tests/drive.rs:121:13
+    |
+121 |     let mut driven = attach_driven(&harness.address);
+    |         ----^^^^^^
+    |         |
+    |         help: remove this `mut`
+    |
+    = note: `#[warn(unused_mut)]` (part of `#[warn(unused)]`) on by default
+
+warning: `ferrite-core` (lib test) generated 1 warning (run `cargo fix --lib -p ferrite-core --tests` to apply 1 suggestion)
+warning: unreachable pattern
+   --> crates/ferrite-pane/src/link_target.rs:165:40
+    |
+142 |             Self::External(url) | Self::RepoPullRequest { url, .. } => {
+    |                                   --------------------------------- matches all the relevant values
+...
+165 |             Self::PullRequest { .. } | Self::RepoPullRequest { .. } | Self::Thread(_) => false,
+    |                                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^ no value can reach this
+    |
+    = note: `#[warn(unreachable_patterns)]` (part of `#[warn(unused)]`) on by default
+
+   Compiling ferrite-frame v0.4.0 (/Users/josephwylie/Desktop/Projects/ferrite-remote-connections/crates/ferrite-frame)
+warning: `ferrite-pane` (lib) generated 1 warning
+warning: `ferrite-pane` (lib test) generated 1 warning (1 duplicate)
+error[E0277]: the trait bound `SharedString: From<impl Fn(&mut Window, &mut App) -> AnyView>` is not satisfied
+   --> crates/ferrite-frame/src/settings/connections.rs:158:24
+    |
+158 |         button.tooltip(ferrite_ui::menu::tooltip(description))
+    |                ------- ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ unsatisfied trait bound
+    |                |
+    |                required by a bound introduced by this call
+    |
+    = help: the trait `From<impl for<'a, 'b> Fn(&'a mut gpui_kit::Window, &'b mut gpui_kit::App) -> AnyView + 'static>` is not implemented for `gpui_kit::SharedString`
+    = help: `gpui_kit::SharedString` implements trait `From<T>`:
+              From<&gpui_kit::SharedString>
+              From<&mut str>
+              From<&std::string::String>
+              From<&std::sync::Arc<str>>
+              From<&str>
+              From<Box<str>>
+              From<Cow<'_, str>>
+              From<char>
+            and 2 others
+    = note: required for `impl for<'a, 'b> Fn(&'a mut gpui_kit::Window, &'b mut gpui_kit::App) -> AnyView + 'static` to implement `Into<gpui_kit::SharedString>`
+note: required by a bound in `gpui_kit::gpui_component::button::Button::tooltip`
+   --> vendor/gpui-component/src/button/button.rs:360:44
+    |
+229 | impl Button {
+...
+360 |     pub fn tooltip(mut self, tooltip: impl Into<SharedString>) -> Self {
+    |                                            ^^^^^^^^^^^^^^^^^^ required by this bound in `Button::tooltip`
+    = note: the full name for the type has been written to '/Users/josephwylie/Desktop/Projects/ferrite-remote-connections/target/debug/build/ferrite-frame/4c8b32d81f66c95a/out/ferrite_frame-4c8b32d81f66c95a.long-type-1390893677853203490.txt'
+    = note: consider using `--verbose` to print the full type name to the console
+
+error[E0277]: the trait bound `SharedString: From<impl Fn(&mut Window, &mut App) -> AnyView>` is not satisfied
+   --> crates/ferrite-frame/src/settings/connections.rs:158:24
+    |
+158 |         button.tooltip(ferrite_ui::menu::tooltip(description))
+    |                ------- ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ unsatisfied trait bound
+    |                |
+    |                required by a bound introduced by this call
+    |
+    = help: the trait `From<impl for<'a, 'b> Fn(&'a mut gpui_kit::Window, &'b mut gpui_kit::App) -> AnyView + 'static>` is not implemented for `gpui_kit::SharedString`
+    = help: `gpui_kit::SharedString` implements trait `From<T>`:
+              From<&gpui_kit::SharedString>
+              From<&mut str>
+              From<&std::string::String>
+              From<&std::sync::Arc<str>>
+              From<&str>
+              From<Box<str>>
+              From<Cow<'_, str>>
+              From<char>
+            and 2 others
+    = note: required for `impl for<'a, 'b> Fn(&'a mut gpui_kit::Window, &'b mut gpui_kit::App) -> AnyView + 'static` to implement `Into<gpui_kit::SharedString>`
+note: required by a bound in `gpui_kit::gpui_component::button::Button::tooltip`
+   --> vendor/gpui-component/src/button/button.rs:360:44
+    |
+229 | impl Button {
+...
+360 |     pub fn tooltip(mut self, tooltip: impl Into<SharedString>) -> Self {
+    |                                            ^^^^^^^^^^^^^^^^^^ required by this bound in `Button::tooltip`
+    = note: the full name for the type has been written to '/Users/josephwylie/Desktop/Projects/ferrite-remote-connections/target/debug/build/ferrite-frame/ac536dc96b2529af/out/ferrite_frame-ac536dc96b2529af.long-type-9178737850930879709.txt'
+    = note: consider using `--verbose` to print the full type name to the console
+
+For more information about this error, try `rustc --explain E0277`.
+error: could not compile `ferrite-frame` (lib) due to 1 previous error
+warning: build failed, waiting for other jobs to finish...
+error: could not compile `ferrite-frame` (lib test) due to 1 previous error
+error: command `/Users/josephwylie/.rustup/toolchains/beta-aarch64-apple-darwin/bin/cargo '--color=auto' test --no-run '--message-format=json-render-diagnostics' '--package=ferrite-core' '--package=ferrite-pane' '--package=ferrite-cockpit' '--package=ferrite-frame' --lib '--features=ferrite-core/test-support'` exited with code 101

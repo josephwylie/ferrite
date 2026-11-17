@@ -1,0 +1,160 @@
+[
+  {
+    "id": "coverage-quality-01",
+    "title": "UI interaction tests do not gate ordinary PR CI",
+    "priority": "P1",
+    "category": "verification-gap",
+    "evidence_level": "source-proven",
+    "impact": "Core tests and an app build can be green while cockpit and pane interaction tests never execute.",
+    "ferrite_evidence": [
+      ".github/workflows/ci.yml:73-93,95-133",
+      "crates/ferrite-cockpit/Cargo.toml:56-65"
+    ],
+    "t3_evidence": [],
+    "recommendation": "Run the affected UI crate test targets in required PR CI; retain narrow local verification.",
+    "acceptance": "A deliberate failing cockpit interaction regression fails the required PR check, and restoring it makes that same check green."
+  },
+  {
+    "id": "coverage-quality-02",
+    "title": "Some UI tests bypass real keyboard and opener dispatch",
+    "priority": "P2",
+    "category": "verification-gap",
+    "evidence_level": "source-proven",
+    "impact": "Direct handler calls can pass when binding precedence, focus or the visible opener prevents the user reaching that handler.",
+    "ferrite_evidence": [
+      "crates/ferrite-cockpit/src/cockpit/tests/tools.rs:190-220",
+      "crates/ferrite-cockpit/src/cockpit/panel/strip.rs:687-691",
+      "crates/ferrite-cockpit/src/cockpit/tests/pr.rs:201-247",
+      "crates/ferrite-cockpit/src/cockpit/tests/pr.rs:92-134"
+    ],
+    "t3_evidence": [
+      "https://github.com/pingdotgg/t3code/blob/74573fc29b901bafbf8f1dbb2eb29606da1fa448/scripts/scenarios/add-project-tab-reaches-submit.e2e.ts#L12-L20"
+    ],
+    "recommendation": "Add real click/key regression paths with production bindings, normal viewport and a populated composer. Keep helper tests but do not count them as entry-point verification.",
+    "acceptance": "Empty-panel Enter opens its highlighted panel without sending a prompt. Each PR entry point visibly opens its intended target through normal event dispatch."
+  },
+  {
+    "id": "coverage-quality-03",
+    "title": "Required-form editability coverage never proves valid typed submission",
+    "priority": "P2",
+    "category": "verification-gap",
+    "evidence_level": "source-proven",
+    "impact": "The negative-only test can pass if typing never edits the required field, because both an invalid value and an untouched empty field are rejected.",
+    "ferrite_evidence": [
+      "crates/ferrite-cockpit/src/cockpit/tests/provider_forms.rs:306-359",
+      "crates/ferrite-cockpit/src/cockpit/tests/provider_forms.rs:229-276",
+      "docs/audits/2026-09-14-full-ux/findings.md:50-68"
+    ],
+    "t3_evidence": [],
+    "recommendation": "Type a valid value through the real field, repaint, submit, assert the exact typed answer and unchanged composer.",
+    "acceptance": "A typed 2 survives repaint and reaches the correct decision as integer 2; invalid 9 produces a visible error and no answer."
+  },
+  {
+    "id": "coverage-quality-04",
+    "title": "Default UI checks do not establish native Chromium behavior",
+    "priority": "P2",
+    "category": "verification-gap",
+    "evidence_level": "source-proven",
+    "impact": "Synthetic browser frames and a non-CEF app build cannot prove native page input, focus transfer, navigation or frame delivery.",
+    "ferrite_evidence": [
+      ".github/workflows/ci.yml:3-7,92-93",
+      "crates/ferrite-pane/src/visual/web/mod.rs:14-29",
+      "crates/ferrite-cockpit/Cargo.toml:11-23"
+    ],
+    "t3_evidence": [],
+    "recommendation": "Use a feature-aware native smoke gate for browser changes against a local fixture page and temporary profile.",
+    "acceptance": "A CEF-enabled app accepts a real page-input click, text and Enter; back/forward change the visible document; host focus returns correctly. Fake-engine tests cannot satisfy this gate."
+  },
+  {
+    "id": "coverage-quality-05",
+    "title": "Window geometry still resets at launch",
+    "priority": "P2",
+    "category": "interaction",
+    "evidence_level": "source-proven",
+    "impact": "Users must repeatedly resize and reposition Ferrite because launch always supplies centered 1440 by 900 bounds.",
+    "ferrite_evidence": [
+      "crates/ferrite/src/lib.rs:349-357",
+      "docs/audits/2026-09-14-full-ux/findings.md:711-724"
+    ],
+    "t3_evidence": [
+      "https://github.com/pingdotgg/t3code/blob/74573fc29b901bafbf8f1dbb2eb29606da1fa448/apps/desktop/src/window/DesktopWindow.ts#L452-L470",
+      "https://github.com/pingdotgg/t3code/blob/74573fc29b901bafbf8f1dbb2eb29606da1fa448/apps/desktop/src/window/DesktopWindow.ts#L535-L565",
+      "https://github.com/pingdotgg/t3code/blob/74573fc29b901bafbf8f1dbb2eb29606da1fa448/apps/desktop/src/window/DesktopWindow.ts#L983"
+    ],
+    "recommendation": "Persist normal bounds and maximized state, validate restored geometry against attached displays, and use a fitting fallback.",
+    "acceptance": "Temporary-profile relaunch restores usable size, position and maximization; a disconnected saved monitor never strands the window."
+  },
+  {
+    "id": "coverage-quality-06",
+    "title": "Factory schedules do not offer one-time or sub-hour scheduled prompts",
+    "priority": "P3",
+    "category": "partial-capability",
+    "evidence_level": "source-proven",
+    "impact": "Optional T3 parity gap for lightweight reminders or frequent prompts. Ferrite already supports recurring Factory automation and should not be described as lacking scheduling.",
+    "ferrite_evidence": [
+      "crates/ferrite-core/src/factory/starts.rs:80-153",
+      "crates/ferrite-core/src/api/schema.rs:204-213"
+    ],
+    "t3_evidence": [
+      "https://github.com/pingdotgg/t3code/blob/74573fc29b901bafbf8f1dbb2eb29606da1fa448/packages/contracts/src/scheduledTask.ts#L25-L74",
+      "https://github.com/pingdotgg/t3code/blob/74573fc29b901bafbf8f1dbb2eb29606da1fa448/packages/contracts/src/scheduledTask.ts#L202-L215",
+      "https://github.com/pingdotgg/t3code/blob/74573fc29b901bafbf8f1dbb2eb29606da1fa448/apps/web/src/components/settings/ScheduledTasksSettings.tsx#L1250-L1283"
+    ],
+    "recommendation": "Make an explicit product decision about lightweight thread scheduling. If adopted, add one-time scheduling and destination selection while preserving missed/overlap policies.",
+    "acceptance": "An adopted one-time task runs once after restart, shows its destination and result, and does not silently repeat or duplicate an active run."
+  },
+  {
+    "id": "coverage-quality-07",
+    "title": "No first-class guest thread participation was found",
+    "priority": "P3",
+    "category": "missing-capability",
+    "evidence_level": "inferred",
+    "impact": "Optional collaboration gap. No discovered Ferrite entry point lets another person view one thread and propose owner-approved messages.",
+    "ferrite_evidence": [
+      "crates/ferrite-core/src/api/schema.rs:118-137,244-257",
+      "crates/ferrite-cockpit/src/palette.rs:139-190",
+      "crates/ferrite-ui/src/frame/settings.rs:15-43",
+      "Repository search over application crates, API/protocol, palette and settings found no guest-share route; absence is bounded and inferred."
+    ],
+    "t3_evidence": [
+      "https://github.com/pingdotgg/t3code/blob/74573fc29b901bafbf8f1dbb2eb29606da1fa448/packages/contracts/src/guestShare.ts#L13-L70",
+      "https://github.com/pingdotgg/t3code/blob/74573fc29b901bafbf8f1dbb2eb29606da1fa448/apps/web/src/components/chat/GuestShareControls.tsx#L73-L202"
+    ],
+    "recommendation": "Prioritize after broken primary workflows. If collaboration is adopted, define read scope, expiry, revocation and owner approval before exposing a share control.",
+    "acceptance": "If adopted, the guest sees only the intended thread, proposed messages await owner action, and revocation ends access. Otherwise document the deliberate product boundary."
+  },
+  {
+    "id": "coverage-quality-08",
+    "title": "T3 device panels have no Ferrite panel counterpart",
+    "priority": "P3",
+    "category": "missing-capability",
+    "evidence_level": "source-proven",
+    "impact": "Optional mobile-development parity gap. Ferrite's panel model has no embedded iOS or Android device tab; external provider device tools remain possible.",
+    "ferrite_evidence": [
+      "crates/ferrite-cockpit/src/cockpit/surfaces.rs:25-46"
+    ],
+    "t3_evidence": [
+      "https://github.com/pingdotgg/t3code/blob/74573fc29b901bafbf8f1dbb2eb29606da1fa448/apps/web/src/rightPanelStore.ts#L30-L40",
+      "https://github.com/pingdotgg/t3code/blob/74573fc29b901bafbf8f1dbb2eb29606da1fa448/apps/web/src/components/chat/RightPanelSurfaceContent.tsx#L187-L201"
+    ],
+    "recommendation": "Treat as a product boundary until current panel/browser interactions are reliable. If adopted, use the existing tab identity and focus model.",
+    "acceptance": "An adopted device opens one identified tab, repeated opens activate it, device input remains scoped, and disconnect/reconnect is visible without breaking other panel focus."
+  },
+  {
+    "id": "coverage-quality-09",
+    "title": "CLI help advertises variadic provider arguments that the parser rejects",
+    "priority": "P2",
+    "category": "interaction",
+    "evidence_level": "runtime-reproduced",
+    "impact": "Parent reproduced a provider launch failure when following the apparent list syntax. Repeated --args flags work, but help does not make that invocation clear.",
+    "ferrite_evidence": [
+      "crates/ferrite-core/src/api/cli.rs:448-469",
+      "crates/ferrite-core/src/api/cli.rs:252-270",
+      "crates/ferrite-core/src/api/tests.rs:1629-1656",
+      "docs/audits/2026-11-13-t3-parity/evidence/runtime-observations.md:8,30-45 (parent-observed installed CLI reproduction)"
+    ],
+    "t3_evidence": [],
+    "recommendation": "Print repeatable-list syntax and a provider-argument example in generated help, or explicitly define a trailing passthrough boundary. Correct callers relying on unsupported syntax.",
+    "acceptance": "The generated thread-start help example parses to args [\"--model\", \"fable\", \"--effort\", \"high\"] without launching a provider; unknown Ferrite flags retain precise errors."
+  }
+]

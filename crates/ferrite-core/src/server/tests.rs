@@ -19,12 +19,16 @@ use crate::transcript::Body;
 use crate::{Decision, DecisionAnswer, SessionEvent};
 
 mod browser_annotations;
+mod browser_lifetime;
 #[cfg(unix)]
 mod browser_providers;
 mod drive;
+mod environment;
 mod factory;
+mod file_operations;
+mod remote_operations;
 mod owned;
-mod park;
+mod progress;
 mod publish;
 mod starts;
 
@@ -800,7 +804,7 @@ fn a_review_is_read_by_git_where_the_server_runs() {
         "{found:?}"
     );
 
-    let asked = window.review_pull_request(&repo);
+    let asked = window.review_pull_request(&repo, None);
     let pr = landed(&mut window, asked).unwrap();
     assert!(
         pr.pr
@@ -816,20 +820,18 @@ fn a_review_is_read_by_git_where_the_server_runs() {
     );
 }
 
-/// A Thread row's PR is read by `gh` where the Server runs: a window asks
-/// for a checkout's PR and hears the Server's reading. A checkout with no
-/// GitHub remote has none to say, and that silence is an answer, not an
-/// error.
+/// A Thread row's PR is read where the Server runs: a window asks for a
+/// checkout's PR and hears the Server's reading. A checkout `gh` cannot
+/// read has none to say, and that silence is an answer, not an error.
 #[test]
 fn a_pull_request_is_read_by_gh_where_the_server_runs() {
     let harness = start("pull-request");
-    let repo = repository(&harness.dir);
     let mut window = cockpit(&harness);
-    let answer = window.pull_request(&repo).unwrap();
+    let answer = window
+        .pull_request(&harness.dir.join("no-such-checkout"))
+        .unwrap();
     let landed = std::cell::RefCell::new(None);
-    // This request starts the runner's installed gh (and its git subprocesses),
-    // unlike in-process fixture replies. Allow cold CLI startup under CI load.
-    pump_until_within(&mut window, Duration::from_secs(30), |_| {
+    pump_until(&mut window, |_| {
         if let Ok(read) = answer.try_recv() {
             *landed.borrow_mut() = Some(read);
         }
@@ -1125,16 +1127,32 @@ fn a_resume_never_crosses_a_reopened_thread() {
     back.until(|window| window.said(thread) == other.said(thread));
 }
 
+/// An unknown command, and an older window's Group commands, which this
+/// Server no longer carries out.
 #[test]
 fn a_command_this_server_does_not_know_is_answered_unsupported() {
     let harness = start("unknown");
     let mut window = attach(&harness.address);
-    let reply = window.command(5, Op::Unknown);
-    assert!(
-        matches!(&reply, ServerMessage::Reply { error: Some(error), .. }
-            if error.code == ErrorCode::Unsupported),
-        "{reply:?}"
-    );
+    let group = crate::protocol::GroupId::new(1);
+    let ops = [
+        Op::Unknown,
+        Op::Group {
+            change: crate::protocol::WireGroupChange::Create {
+                first: ThreadId::new(1),
+                second: ThreadId::new(2),
+            },
+        },
+        Op::Layout { group, tree: None },
+        Op::ReviveGroup { group },
+    ];
+    for (id, op) in (5..).zip(ops) {
+        let reply = window.command(id, op);
+        assert!(
+            matches!(&reply, ServerMessage::Reply { error: Some(error), .. }
+                if error.code == ErrorCode::Unsupported),
+            "{reply:?}"
+        );
+    }
 }
 
 #[test]
@@ -1325,6 +1343,24 @@ fn pump_until(
     pump_until_within(window, Duration::from_secs(5), done);
 }
 
+/// Pump a window until what it was asked holds `done`, for at most five
+/// seconds, answering all it was asked. A Task's alert follows the board
+/// that shows it, so a wait on the board alone can end before the alert.
+fn pump_until_asked(
+    window: &mut crate::cockpit::Cockpit,
+    done: impl Fn(&[crate::cockpit::Asked]) -> bool,
+) -> Vec<crate::cockpit::Asked> {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let mut asked = window.take_asked();
+    while !done(&asked) {
+        assert!(Instant::now() < deadline, "timed out: {asked:?}");
+        window.pump();
+        asked.extend(window.take_asked());
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    asked
+}
+
 fn pump_until_within(
     window: &mut crate::cockpit::Cockpit,
     limit: Duration,
@@ -1384,7 +1420,7 @@ fn a_window_attached_over_the_socket_drives_the_servers_threads() {
     assert!(window
         .visible()
         .contains(&crate::roster::PaneIdentity::Thread(thread)));
-    window.send(thread, "go".into());
+    let _ = window.send(thread, "go".into());
     provider.send(text("on it")).unwrap();
     pump_until(&mut window, |window| shows(window, thread, "on it"));
     let project = window.register_project(&harness.dir).unwrap();
@@ -1614,6 +1650,24 @@ fn restored_after(
     (next, thread)
 }
 
+/// A Thread the operator spoke in, left open, after the next Server's
+/// start, with no window attached.
+fn restored_unwatched(name: &str) -> (Engine, ThreadId) {
+    let dir = scratch(name);
+    let store = dir.join("threads");
+    let (spawner, providers) = spawn();
+    let mut first = engine(&store, spawner);
+    let thread = open_in(&mut first, &dir);
+    let agent = providers.recv().unwrap();
+    spoken(&mut first, thread, &agent);
+    first.halt_sessions();
+    drop(first);
+    let (spawner, _providers) = spawn();
+    let mut next = engine(&store, spawner);
+    revive_launch(&mut next, launch_threads(&Store::open(&store).unwrap()));
+    (next, thread)
+}
+
 /// The operator spoke to the agent, which named its conversation `claude-1`.
 fn spoken(engine: &mut Engine, thread: ThreadId, agent: &Sender<SessionEvent>) {
     agent
@@ -1622,7 +1676,7 @@ fn spoken(engine: &mut Engine, thread: ThreadId, agent: &Sender<SessionEvent>) {
             model: "claude-model".into(),
         })
         .unwrap();
-    engine.send(thread, "first".into());
+    let _ = engine.send(thread, "first".into());
     pump_engine_until(engine, "the Init never landed", |engine| {
         engine.thread(thread).unwrap().provider_session() == Some("claude-1")
     });
@@ -1671,7 +1725,7 @@ fn threads_the_operator_parked_stay_parked_at_the_next_boot() {
     let mut first = engine(&store, spawner);
     let older = open_in(&mut first, &dir);
     let newer = open_in(&mut first, &dir);
-    first.send(older, "worked here last".into());
+    let _ = first.send(older, "worked here last".into());
     first.park(older).unwrap();
     first.park(newer).unwrap();
     drop(first);
@@ -1829,7 +1883,7 @@ fn a_restored_thread_starts_its_agent_on_send_without_a_trace() {
         "{before:?}"
     );
 
-    next.send(thread, "carry on".into());
+    let _ = next.send(thread, "carry on".into());
     next.pump();
     assert_eq!(
         *started.lock().unwrap(),
@@ -1911,7 +1965,7 @@ fn an_agent_settled_its_span_stops_without_a_trace() {
     assert_eq!(seen(&engine), before);
 
     started.lock().unwrap().clear();
-    engine.send(thread, "carry on".into());
+    let _ = engine.send(thread, "carry on".into());
     engine.pump();
     assert_eq!(
         *started.lock().unwrap(),
@@ -2063,7 +2117,7 @@ fn a_choice_made_without_an_agent_is_the_next_agents() {
     assert!(started.lock().unwrap().is_empty(), "no agent started");
     let view = engine.thread(thread).unwrap();
     assert_eq!((view.model(), view.effort()), (Some("opus"), Some("high")));
-    engine.send(thread, "carry on".into());
+    let _ = engine.send(thread, "carry on".into());
     engine.pump();
     assert_eq!(
         *started.lock().unwrap(),
@@ -2090,7 +2144,7 @@ fn a_choice_made_without_an_agent_is_the_next_agents() {
     engine.pump();
     assert!(started.lock().unwrap().is_empty(), "no agent started");
     assert_eq!(engine.thread(thread).unwrap().provider(), Provider::Codex);
-    engine.send(thread, "carry on".into());
+    let _ = engine.send(thread, "carry on".into());
     engine.pump();
     assert_eq!(*started.lock().unwrap(), vec![Start::bare(Provider::Codex)]);
 }
@@ -2117,7 +2171,7 @@ fn a_choice_made_while_the_agent_starts_unseen_is_kept() {
 fn escape_while_the_agent_starts_gives_the_prompt_back() {
     let (spawner, started, _gate) = spawn_gated();
     let (mut engine, thread) = restored("restored-escape", spawner);
-    engine.send(thread, "go".into());
+    let _ = engine.send(thread, "go".into());
     started
         .recv_timeout(Duration::from_secs(5))
         .expect("the send started the agent");
@@ -2238,7 +2292,7 @@ fn writing_to_a_restored_thread_starts_its_agent_unseen() {
         "and invalidates nothing a window holds"
     );
 
-    engine.send(thread, "go".into());
+    let _ = engine.send(thread, "go".into());
     assert!(
         engine.thread(thread).unwrap().starting(),
         "a prompt waiting on it shows it starting"
@@ -2361,7 +2415,7 @@ fn prompts_queued_while_the_agent_starts_wait_for_it() {
             installed: Installed::default(),
         }),
     );
-    engine.send(thread, "first".into());
+    let _ = engine.send(thread, "first".into());
     assert!(engine.thread(thread).unwrap().starting());
     assert!(engine.queue(thread, "second".into()), "queued, not refused");
     assert_eq!(
@@ -2400,7 +2454,7 @@ fn prompts_wait_for_a_provider_that_cannot_queue_yet() {
             installed: Installed::default(),
         }),
     );
-    engine.send(thread, "first".into());
+    let _ = engine.send(thread, "first".into());
     assert!(engine.queue(thread, "second".into()));
     assert!(engine.queue(thread, "third".into()));
 
@@ -2577,7 +2631,7 @@ fn a_thread_parked_again_is_read_again() {
     assert_eq!(next_parked(&mut engine)[0].turns, Some(0));
 
     engine.revive(thread).unwrap();
-    engine.send(thread, "again".into());
+    let _ = engine.send(thread, "again".into());
     engine.park(thread).unwrap();
     assert_eq!(next_parked(&mut engine)[0].turns, Some(1));
 }
@@ -2724,7 +2778,7 @@ fn a_window_on_a_machine_drives_its_threads_through_the_bridge() {
         .sessions
         .recv_timeout(Duration::from_secs(5))
         .unwrap();
-    window.send(thread, "go".into());
+    let _ = window.send(thread, "go".into());
     provider.send(text("on it")).unwrap();
     pump_until(&mut window, |window| shows(window, thread, "on it"));
     assert!(said(&sent).contains(&"watch".to_string()));
@@ -2768,7 +2822,7 @@ fn a_machine_off_screen_streams_status_and_never_a_transcript() {
     until(&mut status, &|rows| {
         rows.iter().any(|row| row.thread == thread)
     });
-    window.send(thread, "go".into());
+    let _ = window.send(thread, "go".into());
     provider.send(text("on it")).unwrap();
     until(&mut status, &|rows| rows.iter().any(|row| row.working));
     provider.send(decision()).unwrap();
@@ -4334,7 +4388,7 @@ fn a_window_mirrors_only_the_threads_it_draws() {
     let mut other = attach(&harness.address);
     let (thread, provider) = open(&mut other, &harness);
     let mut window = cockpit(&harness);
-    window.send(thread, "go".into());
+    let _ = window.send(thread, "go".into());
     provider.send(text("on it\n\n")).unwrap();
     turn_ends(&provider);
 
@@ -4378,7 +4432,7 @@ fn a_thread_at_work_stays_mirrored_off_screen() {
     let (thread, provider) = open(&mut other, &harness);
     let mut window = cockpit(&harness);
     window.draws_transcripts([thread]);
-    window.send(thread, "go".into());
+    let _ = window.send(thread, "go".into());
     provider.send(text("on it\n\n")).unwrap();
     pump_until(&mut window, |window| shows(window, thread, "on it"));
     pump_until(&mut window, |window| {
@@ -4869,6 +4923,102 @@ fn a_thread_read_back_stays_held_a_minute() {
     assert!(said_in(&engine, thread).is_empty(), "let go again");
 }
 
+/// A window that revives a Thread watches it next. The watch finds it
+/// still held, so the revive is the only read of its log on the pump.
+#[test]
+fn a_revived_thread_is_still_held_when_its_window_watches_it() {
+    let (mut engine, thread, _, clock, _providers) = let_go("revive-then-watch");
+    engine.park(thread).unwrap();
+    engine.take_messages();
+
+    let start = engine.log_bytes_read();
+    engine.revive(thread).unwrap();
+    engine.take_messages();
+    let revived = engine.log_bytes_read() - start;
+    assert!(revived > 0, "the revive reads the log");
+    clock.advance(Duration::from_secs(59));
+    engine.pump();
+    engine.take_messages();
+    assert!(!said_in(&engine, thread).is_empty(), "held until its window watches it");
+    let history = engine.history(thread).expect("its history");
+    assert_eq!(
+        engine.log_bytes_read() - start,
+        revived,
+        "the watch reads none of the log on the pump"
+    );
+    history.send(&mut |_| Ok(())).unwrap();
+    assert!(
+        engine.log_bytes_read() - start <= 2 * revived,
+        "its history is the second and last read"
+    );
+}
+
+/// The API's read of a let-go Thread takes its log to read on another
+/// thread: the pump reads none of it, and the Thread stays let go.
+#[test]
+fn a_read_of_a_let_go_thread_reads_nothing_on_the_pump() {
+    let (mut engine, thread, before, _clock, _providers) = let_go("read-off-pump");
+
+    let start = engine.log_bytes_read();
+    let read_back = engine.read_back_later(thread).expect("let go").unwrap();
+    engine.pump();
+    engine.take_messages();
+    assert_eq!(engine.log_bytes_read(), start, "the pump read none of the log");
+    assert!(said_in(&engine, thread).is_empty(), "still let go");
+
+    let said = std::thread::spawn(move || {
+        let read = read_back.read().unwrap();
+        let blocks = read.view().main().transcript().blocks();
+        blocks.iter().map(|block| format!("{:?}", block.body)).collect::<Vec<_>>()
+    })
+    .join()
+    .unwrap();
+    assert_eq!(said, before, "it reads as a hold would read it");
+    assert!(engine.log_bytes_read() > start);
+
+    engine.set_watched([thread].into());
+    assert!(engine.read_back_later(thread).is_none(), "a held Thread is read where it is");
+}
+
+/// What a read off the pump read back is held, so the next read reads
+/// none of the log, as a read on the pump held it before.
+#[test]
+fn a_thread_read_off_the_pump_is_held_for_the_next_read() {
+    let (mut engine, thread, before, _clock, _providers) = let_go("read-then-read");
+
+    let read_back = engine.read_back_later(thread).expect("let go").unwrap();
+    let read = std::thread::spawn(move || read_back.read().unwrap()).join().unwrap();
+    let start = engine.log_bytes_read();
+    engine.adopt(read);
+    assert_eq!(said_in(&engine, thread), before, "held as a hold reads it");
+    assert!(engine.read_back_later(thread).is_none(), "the next read is read where it is");
+    engine.set_watched([thread].into());
+    assert_eq!(engine.log_bytes_read(), start, "and reads none of the log");
+}
+
+/// A read off the pump that a hold overtook is dropped: the Thread holds
+/// what the hold read.
+#[test]
+fn a_read_off_the_pump_is_dropped_once_the_thread_is_held() {
+    let (mut engine, thread, before, _clock, _providers) = let_go("read-overtaken");
+
+    let read_back = engine.read_back_later(thread).expect("let go").unwrap();
+    engine.set_watched([thread].into());
+    engine.adopt(read_back.read().unwrap());
+    assert_eq!(said_in(&engine, thread), before);
+}
+
+/// A Server's start reopens each open Thread and lets it go at once, so it
+/// holds one Thread's history at a time, however many are open (ADR 0032).
+#[test]
+fn a_boot_lets_each_thread_go_once_it_is_read() {
+    let (mut engine, thread) = restored_unwatched("boot-lets-go");
+    engine.take_messages();
+    assert!(said_in(&engine, thread).is_empty(), "let go to its digest");
+    engine.set_watched([thread].into());
+    assert!(!said_in(&engine, thread).is_empty(), "read back when watched");
+}
+
 /// An act that writes to a let-go Thread reads it back first, so what it
 /// writes lands on its history and stays: an effort change says so.
 #[test]
@@ -5086,7 +5236,7 @@ fn browser_test_window(harness: &Harness, thread: ThreadId) -> crate::link::Clie
                 name: "browser-owner".into(),
                 version: "0".into(),
             },
-            capabilities: vec![Capability::ConversationBrowser],
+            capabilities: vec![Capability::ConversationBrowser, Capability::BrowserDispatch],
         },
     )
     .unwrap();
@@ -5128,15 +5278,19 @@ fn browser_test_answer(
             document,
             revision,
             control,
+            dispatch,
         } = client
             .messages
             .recv_timeout(Duration::from_secs(5))
             .unwrap()
         {
             assert_eq!(control, expected);
+            let boot_id = dispatch.expect("dispatch capability");
+            browser_test_dispatch(client, request, &boot_id, thread, owner, document, revision);
             client
                 .send(&ClientMessage::BrowserReply {
                     request,
+                    boot_id: Some(boot_id),
                     thread,
                     owner,
                     document,
@@ -5147,6 +5301,23 @@ fn browser_test_answer(
             return;
         }
     }
+}
+
+fn browser_test_dispatch(
+    client: &mut crate::link::Client,
+    request: u64,
+    boot_id: &str,
+    thread: ThreadId,
+    owner: crate::browser::Owner,
+    document: crate::browser::Document,
+    revision: u64,
+) {
+    assert!(matches!(
+        browser_test_command(client, 10_000 + request, Op::BrowserDispatch {
+            request, boot_id: boot_id.into(), thread, owner, document, revision,
+        }),
+        ServerMessage::Reply { ok: Some(Done::BrowserDispatch { remaining_ms: 1.. }), error: None, .. }
+    ));
 }
 
 #[test]
@@ -5952,6 +6123,7 @@ fn browser_requests_allow_operator_recovery_without_discarding_annotation_protec
             break (request, revision);
         }
     };
+    browser_test_dispatch(&mut owner_window, number, &window.boot_id, thread, owner, document, revision);
     assert!(
         agent
             .submit(Operation::Action {
@@ -5990,6 +6162,7 @@ fn browser_requests_allow_operator_recovery_without_discarding_annotation_protec
     owner_window
         .send(&ClientMessage::BrowserReply {
             request: number,
+            boot_id: Some(window.boot_id.clone()),
             thread,
             owner,
             document,
@@ -6153,6 +6326,7 @@ fn browser_requests_cannot_promote_reads_started_before_operator_settlement() {
             break request;
         }
     };
+    browser_test_dispatch(&mut owner_window, request, &window.boot_id, thread, owner, document, revision);
     browser_test_command(
         &mut owner_window,
         602,
@@ -6166,6 +6340,7 @@ fn browser_requests_cannot_promote_reads_started_before_operator_settlement() {
     owner_window
         .send(&ClientMessage::BrowserReply {
             request,
+            boot_id: Some(window.boot_id.clone()),
             thread,
             owner,
             document,
@@ -6223,6 +6398,7 @@ fn browser_requests_cannot_promote_reads_started_before_operator_settlement() {
             break request;
         }
     };
+    browser_test_dispatch(&mut owner_window, request, &window.boot_id, thread, owner, document, revision);
     let ServerMessage::Reply {
         ok: Some(Done::BrowserProtection { lease }),
         error: None,
@@ -6243,6 +6419,7 @@ fn browser_requests_cannot_promote_reads_started_before_operator_settlement() {
     owner_window
         .send(&ClientMessage::BrowserReply {
             request,
+            boot_id: Some(window.boot_id.clone()),
             thread,
             owner,
             document,

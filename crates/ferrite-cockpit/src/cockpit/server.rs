@@ -91,6 +91,9 @@ impl CockpitView {
     /// Say when there is no Server, or offer to restart one running an
     /// older build from this window's executable.
     pub(super) fn present_server(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.cockpit.environment_available() {
+            return;
+        }
         match self.cockpit.server() {
             None => {}
             // Down mid-restart: the restart's own notice says so.
@@ -398,7 +401,7 @@ impl CockpitView {
     ) {
         let done = move |view: &mut Self, result: std::io::Result<()>| {
             if let Err(error) = result {
-                view.group_error = Some(format!("the server did not {verb}: {error}").into());
+                view.nav_notice.problem(format!("the server did not {verb}: {error}"));
             }
         };
         let Some(busy) = self.in_flight() else {
@@ -494,8 +497,8 @@ impl CockpitView {
                             if let Err(error) = std::env::current_exe()
                                 .and_then(|exe| agent::start_at_login(&exe, on))
                             {
-                                view.group_error =
-                                    Some(format!("start at login not changed: {error}").into());
+                                view.nav_notice
+                                    .problem(format!("start at login not changed: {error}"));
                             }
                         });
                     }

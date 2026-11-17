@@ -66,6 +66,7 @@ pub fn shelf_heading(shelf: Shelf, count: usize, open: bool, cursor: bool) -> St
     let name = shelf_label(shelf).to_lowercase();
     div()
         .id(key.clone())
+        .cursor_pointer()
         .debug_selector(move || selector.to_string())
         .flex()
         .flex_shrink_0()
@@ -128,6 +129,13 @@ pub enum SlimTime {
     Snoozed(SharedString),
 }
 
+/// What fills a slim row's title: the row's name, or the live rename field
+/// while the operator renames it (a card's `editing` title).
+pub enum SlimTitle {
+    Row,
+    Editor(AnyElement),
+}
+
 /// The blend a slim row's time-to-action crossfade and its badge ride,
 /// apart from its fill's.
 pub(crate) fn slim_fade_key(key: &str) -> SharedString {
@@ -143,20 +151,22 @@ pub(crate) fn slim_fade_key(key: &str) -> SharedString {
 /// card's. The cockpit wires the press.
 pub fn slim_row(
     row: &ThreadRow,
+    title: SlimTitle,
     time: SlimTime,
     action: AnyElement,
     measure: &Measure,
 ) -> Stateful<Div> {
-    slim(row, time, Some(action), measure, true)
+    slim(row, title, time, Some(action), measure, true)
 }
 
 /// A slim row that has left the list, for its ghost.
 pub fn ghost_slim(row: &ThreadRow, time: SlimTime, measure: &Measure) -> Stateful<Div> {
-    slim(row, time, None, measure, false)
+    slim(row, SlimTitle::Row, time, None, measure, false)
 }
 
 fn slim(
     row: &ThreadRow,
+    title: SlimTitle,
     time: SlimTime,
     action: Option<AnyElement>,
     measure: &Measure,
@@ -180,21 +190,31 @@ fn slim(
     };
     let fill: Option<Hsla> = if row.selected {
         Some(rgba(NAV_CARD_ACTIVE).into())
+    } else if row.picked {
+        Some(rgba(NAV_CARD_SELECTED).into())
     } else if hover > 0.0 {
         Some(rgba(NAV_CARD_HOVER).into())
     } else {
-        row.picked.then(|| rgba(NAV_CARD_SELECTED).into())
+        None
     };
     let ground = card::card_ground(&key, row.selected, row.picked);
-    let title_w = INNER_SLIM_TITLE_W;
-    let title = fitted_in(
-        title_w,
-        FS_NAV_TITLE,
-        ink,
-        W_BODY,
-        row.name.clone(),
-        super::cut_ground(measure, &row.name, FS_NAV_TITLE, W_BODY, title_w, ground),
-    );
+    let title_w = measure.inner_width()
+        - 2.0 * NAV_SLIM_PAD_X
+        - NAV_BADGE
+        - NAV_SLIM_SLOT_MIN_W
+        - 2.0 * NAV_SLIM_GAP;
+    let title = match title {
+        SlimTitle::Editor(field) => div().w(px(title_w)).child(field).into_any_element(),
+        SlimTitle::Row => fitted_in(
+            title_w,
+            FS_NAV_TITLE,
+            ink,
+            W_BODY,
+            row.name.clone(),
+            super::cut_ground(measure, &row.name, FS_NAV_TITLE, W_BODY, title_w, ground),
+        )
+        .into_any_element(),
+    };
     let rest = match &time {
         SlimTime::Parked(age) => div()
             .flex()
@@ -248,6 +268,7 @@ fn slim(
     };
     frame
         .relative()
+        .cursor_pointer()
         .flex()
         .flex_shrink_0()
         .items_center()
@@ -266,13 +287,6 @@ fn slim(
         .child(slot)
 }
 
-/// What a slim row's title is left: the row, less its padding, its badge
-/// and its slot, each with its gap.
-const INNER_SLIM_TITLE_W: f32 = super::INNER_W
-    - 2.0 * NAV_SLIM_PAD_X
-    - NAV_BADGE
-    - NAV_SLIM_SLOT_MIN_W
-    - 2.0 * NAV_SLIM_GAP;
 
 /// A parked row's Revive (T3's Un-settle): `Undo2` at 14px.
 pub fn revive_button(thread: ThreadId) -> Stateful<Div> {
@@ -296,6 +310,7 @@ fn slim_action(
     let t = motion::hover_t(&key);
     div()
         .id(key.clone())
+        .cursor_pointer()
         .debug_selector(move || selector.to_string())
         .flex()
         .items_center()
@@ -395,26 +410,34 @@ pub fn parked_link() -> Stateful<Div> {
 }
 
 thread_local! {
-    static GRAIN: Arc<RenderImage> = grain_tile();
+    static GRAIN: std::cell::RefCell<Option<(u32, Arc<RenderImage>)>> = const { std::cell::RefCell::new(None) };
 }
 
-/// T3's surface grain: one tile of noise, white at random levels, its
-/// alpha baked to `NAV_GRAIN_OPACITY` (gpui paints an image at full
-/// opacity). BGRA, as `RenderImage` holds it.
-fn grain_tile() -> Arc<RenderImage> {
-    let side = NAV_GRAIN_TILE as u32;
-    let alpha = (NAV_GRAIN_OPACITY * 255.0).round() as u8;
-    let mut seed: u32 = 0x9e37_79b9;
-    let mut bytes = Vec::with_capacity((side * side * 4) as usize);
-    for _ in 0..side * side {
-        seed ^= seed << 13;
-        seed ^= seed >> 17;
-        seed ^= seed << 5;
-        let level = (seed >> 24) as u8;
-        bytes.extend_from_slice(&[level, level, level, alpha]);
-    }
-    let buffer = image::RgbaImage::from_raw(side, side, bytes).expect("a square tile");
-    Arc::new(RenderImage::new(vec![image::Frame::new(buffer)]))
+fn grain_tile(window: &gpui::Window, cx: &gpui::App) -> Arc<RenderImage> {
+    let side = (NAV_GRAIN_TILE * window.scale_factor()).round() as u32;
+    GRAIN.with(|cache| {
+        let mut cache = cache.borrow_mut();
+        if let Some((cached_side, tile)) = &*cache {
+            if *cached_side == side {
+                return tile.clone();
+            }
+        }
+        let renderer = cx.svg_renderer();
+        let svg = renderer
+            .parse_svg(include_bytes!("../../assets/t3-surface-grain.svg"))
+            .expect("the bundled T3 surface grain is valid SVG");
+        let tile = renderer
+            .render_parsed(
+                &svg,
+                gpui::SvgSize::ExactSize(gpui::size(
+                    gpui::DevicePixels(side as i32),
+                    gpui::DevicePixels(side as i32),
+                )),
+            )
+            .expect("the bundled T3 surface grain renders");
+        *cache = Some((side, tile.clone()));
+        tile
+    })
 }
 
 /// Rounds its own corners to `radius`: gpui's content mask is a plain
@@ -422,11 +445,11 @@ fn grain_tile() -> Arc<RenderImage> {
 pub fn grain(radius: f32) -> impl IntoElement {
     gpui::canvas(
         |_, _, _| {},
-        move |bounds, _, window, _| {
-            let tile = GRAIN.with(Arc::clone);
+        move |bounds, _, window, cx| {
+            let tile = grain_tile(window, cx);
             let side = px(NAV_GRAIN_TILE);
             let r = px(radius);
-            let mut y = bounds.top();
+            let mut y = px((f32::from(bounds.top()) / NAV_GRAIN_TILE).floor() * NAV_GRAIN_TILE);
             while y < bounds.bottom() {
                 let mut x = bounds.left();
                 while x < bounds.right() {

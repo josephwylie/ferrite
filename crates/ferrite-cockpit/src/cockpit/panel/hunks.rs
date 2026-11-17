@@ -21,9 +21,19 @@ use std::collections::{HashMap, HashSet};
 /// Context lines kept beside each change. Hunks closer than this merge.
 const CONTEXT: usize = 1;
 
-/// The most lines a file's hunks draw; past them, `… +N lines` (the whole
-/// diff is a click away, in `Review changes`).
+/// The most lines an abbreviated file's hunks draw; past them, `… +N lines`
+/// (the whole diff is the Changes Surface's).
 const MAX_LINES: usize = 120;
+
+/// How a file's hunks are drawn.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Layout {
+    /// The Overview's block: the first `MAX_LINES` lines, each cut at the edge.
+    Abbreviated,
+    /// The Changes Surface: every line. A long line wraps, or, unwrapped,
+    /// scrolls sideways.
+    Whole { wrap: bool },
+}
 
 /// A file in the panel: its Thread and the path its facts carry.
 type FileKey = (ThreadId, String);
@@ -32,7 +42,7 @@ type FileKey = (ThreadId, String);
 type Stat = (usize, usize);
 
 /// What a file's block shows under its head once its read lands.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub(crate) enum Shown {
     /// Its hunks, in file order, each a run of lines.
     Hunks(Vec<Vec<Line>>),
@@ -42,13 +52,13 @@ pub(crate) enum Shown {
 }
 
 /// One drawn line of a hunk.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub(crate) struct Line {
     pub sign: Sign,
     pub text: SharedString,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) enum Sign {
     Context,
     Added,
@@ -240,7 +250,7 @@ impl CockpitView {
         unfolded
             .then(|| self.panel.hunks.shown(&(thread, path.to_string())))
             .flatten()
-            .map(|shown| hunks_element(index, shown, false))
+            .map(|shown| hunks_element(index, shown, Layout::Abbreviated))
     }
 }
 
@@ -331,10 +341,13 @@ fn flatten(rows: &[Row], out: &mut Vec<Line>) {
 /// The hunk area (`BLOCK`, the panel's diff face): each line on a 2.5ch sign
 /// column inset 1ch, changed lines on their wash in body ink, context in
 /// `INK_SUBTLE`; a hairline between hunks.
-pub(crate) fn hunks_element(index: usize, shown: &Shown, wrap: bool) -> Div {
+pub(crate) fn hunks_element(index: usize, shown: &Shown, layout: Layout) -> Div {
     use ferrite_ui::theme::*;
     let cell = FS_PANEL_DIFF * CODE_ADVANCE;
-    // A wrapped line grows by rows; an unwrapped one is cut at the edge.
+    let wrap = layout == Layout::Whole { wrap: true };
+    let scrolls = layout == Layout::Whole { wrap: false };
+    // A wrapped line grows by rows; an unwrapped one is cut at the edge, or
+    // keeps its width for the area to scroll.
     let row = || {
         div()
             .flex()
@@ -342,7 +355,7 @@ pub(crate) fn hunks_element(index: usize, shown: &Shown, wrap: bool) -> Div {
             .when(wrap, |row| row.min_h(px(LH_PANEL_DIFF)))
             .when(!wrap, |row| row.h(px(LH_PANEL_DIFF)))
             .pl(px(PANEL_HUNK_INSET_CELLS * cell))
-            .overflow_hidden()
+            .when(!scrolls, |row| row.overflow_hidden())
     };
     let area = div()
         .debug_selector(move || format!("panel-hunks-{index}"))
@@ -362,7 +375,7 @@ pub(crate) fn hunks_element(index: usize, shown: &Shown, wrap: bool) -> Div {
         }
     };
     let total: usize = hunks.iter().map(Vec::len).sum();
-    let mut left = MAX_LINES;
+    let mut left = if layout == Layout::Abbreviated { MAX_LINES } else { usize::MAX };
     let mut drawn = 0;
     let mut area = area;
     for (at, hunk) in hunks.iter().enumerate() {
@@ -403,16 +416,15 @@ pub(crate) fn hunks_element(index: usize, shown: &Shown, wrap: bool) -> Div {
                     )
                     .child(
                         div()
-                            .flex_1()
-                            .min_w_0()
-                            .overflow_hidden()
+                            .when(scrolls, |text| text.flex_none())
+                            .when(!scrolls, |text| text.flex_1().min_w_0().overflow_hidden())
                             .text_color(rgb(ink))
                             .child(line.text.clone()),
                     ),
             );
             drawn += 1;
         }
-        left = MAX_LINES - drawn;
+        left = left.saturating_sub(hunk.len());
     }
     if total > drawn {
         area = area.child(
@@ -423,6 +435,18 @@ pub(crate) fn hunks_element(index: usize, shown: &Shown, wrap: bool) -> Div {
                     "\u{2026} +{} lines",
                     total - drawn
                 ))),
+        );
+    }
+    if scrolls {
+        // The area is as wide as its longest line (at least the column);
+        // the scroller carries it sideways.
+        return div().flex().flex_col().child(
+            div()
+                .id(SharedString::from(format!("panel-hunks-scroll-{index}")))
+                .debug_selector(move || format!("panel-hunks-scroll-{index}"))
+                .flex()
+                .overflow_x_scroll()
+                .child(area.flex_none().min_w_full()),
         );
     }
     area
