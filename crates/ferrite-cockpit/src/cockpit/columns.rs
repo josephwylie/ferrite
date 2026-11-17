@@ -215,7 +215,12 @@ impl CockpitView {
                     cx.notify();
                 }),
             )
-            .on_click(|_, _, cx| cx.stop_propagation())
+            // The rail follows the edge, so a drag ends on it, and its
+            // click stops the release before the root's handler hears it.
+            .on_click(cx.listener(|view, _, _, cx| {
+                cx.stop_propagation();
+                view.finish_nav_resize(cx);
+            }))
     }
 
     /// Each frame, once the nav's auto-fold and the panel's Pane are
