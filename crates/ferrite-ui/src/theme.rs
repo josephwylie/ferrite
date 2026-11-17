@@ -910,6 +910,9 @@ pub const R_TIGHT: f32 = 2.0;
 // --------------------------------------------------------- shell and board
 
 pub const NAV_WIDTH: f32 = 256.0;
+/// 208px — the narrowest the nav resizes to, and its width in a window
+/// too narrow to leave the board 640px beside the default.
+pub const NAV_MIN_W: f32 = 208.0;
 pub const NAV_COLUMN_W: f32 = NAV_WIDTH + 2.0 * NAV_INSET;
 /// 44px — the head row (SPEC §4), ADR 0014's titlebar grown into the row
 /// that holds the traffic lights over the nav, the view head over the board

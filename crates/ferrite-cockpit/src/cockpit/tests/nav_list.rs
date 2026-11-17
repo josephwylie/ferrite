@@ -844,9 +844,12 @@ fn cmd_b_collapses_the_nav_and_the_cells_grow_a_level(cx: &mut TestAppContext) {
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     hide_panel(&view, cx);
     hold_nav_open(&view, cx);
-    // Sized so the Transcript threshold sits between the two nav
-    // widths: a wall tile beside the full column, Transcript without it.
-    cx.simulate_resize(gpui::size(px(550.), px(700.)));
+    // A narrow window holds the nav at its minimum: the cell beside it
+    // falls short of the Transcript threshold, and folded clears it by
+    // the hysteresis.
+    let width = ferrite_ui::theme::NAV_MIN_W + ferrite_core::docview::TRANSCRIPT_WIDTH
+        - ferrite_ui::theme::LEVEL_HYSTERESIS;
+    cx.simulate_resize(gpui::size(px(width), px(700.)));
     tick(cx);
     let expanded = cx.update(|window, cx| view.read(cx).level_now(window));
     assert_eq!(

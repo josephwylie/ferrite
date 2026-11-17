@@ -86,7 +86,7 @@ impl Columns {
 }
 
 fn clamp_nav_width(preferred: f32, viewport: f32, brand: f32) -> f32 {
-    let minimum = 208.0_f32.max(brand.ceil());
+    let minimum = ferrite_ui::theme::NAV_MIN_W.max(brand.ceil());
     let maximum = minimum.max(viewport.floor() - 640.0);
     let preferred = if preferred.is_finite() {
         preferred

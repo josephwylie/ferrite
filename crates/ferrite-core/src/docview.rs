@@ -224,7 +224,7 @@ pub enum Level {
 /// The zoom ladder, by both axes: a transcript with its Composer reads
 /// from 300px wide and 360px tall — a 2x2 board on a laptop window is that
 /// size; a 3x3 board is not, and its cells are wall tiles.
-const TRANSCRIPT_WIDTH: f32 = 300.0;
+pub const TRANSCRIPT_WIDTH: f32 = 300.0;
 const TRANSCRIPT_HEIGHT: f32 = 360.0;
 /// The tile floor: the narrowest a wall tile still reads at. The UI folds
 /// the nav to its rail rather than let a board cell drop under it.
