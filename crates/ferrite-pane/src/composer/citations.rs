@@ -558,60 +558,56 @@ fn chip_view(
                 let _ = removed.update(cx, |composer, cx| composer.remove_reply(index, window, cx));
             });
     }
-    let edit = entity.zip(index).map(|(entity, index)| {
+    let commented = !reply.text.is_empty();
+    let mut edit = components::button(SharedString::from(format!(
+        "cite-comment-trigger-{}",
+        index.map_or_else(|| "gone".to_string(), |index| index.to_string())
+    )))
+    .tab_stop(live)
+    .h(px(theme::ATTACH_CHIP_H))
+    .w(px(theme::ATTACH_CHIP_H))
+    .p_0()
+    .child(
+        div()
+            .when_some(index.filter(|_| commented), |mark, index| {
+                mark.debug_selector(move || format!("cite-chip-{index}-comment"))
+            })
+            .child(icons::icon(
+                icons::PENCIL,
+                theme::ATTACH_THUMB,
+                theme::INK_SUBTLE,
+            )),
+    );
+    if let (Some(entity), Some(index)) = (entity, index) {
         let edited = entity.downgrade();
-        let button = components::button(("cite-comment-trigger", index))
+        edit = edit
             .debug_selector(move || format!("cite-chip-{index}-comment-trigger"))
-            .when(!reply.text.is_empty(), |button| {
-                button.child(
-                    div()
-                        .debug_selector(move || format!("cite-chip-{index}-comment"))
-                        .child(icons::icon(
-                            icons::PENCIL,
-                            theme::ATTACH_THUMB,
-                            theme::INK_SUBTLE,
-                        )),
-                )
-            })
-            .when(reply.text.is_empty(), |button| {
-                button.child(icons::icon(
-                    icons::PENCIL,
-                    theme::ATTACH_THUMB,
-                    theme::INK_SUBTLE,
-                ))
-            })
-            .tab_stop(true)
-            .h(px(theme::ATTACH_CHIP_H))
-            .w(px(theme::ATTACH_CHIP_H))
-            .p_0()
-            .accessibility_label(if reply.text.is_empty() {
-                "Add comment to citation"
-            } else {
+            .accessibility_label(if commented {
                 "Edit citation comment"
+            } else {
+                "Add comment to citation"
             })
             .on_click(move |_, window, cx| {
                 cx.stop_propagation();
                 let _ = edited.update(cx, |composer, cx| composer.edit_comment(index, window, cx));
             });
-        if open {
-            if let Some(trigger) = trigger.clone() {
-                return components::on_bounds(button, move |bounds, _, cx| {
-                    if trigger.replace(Some(bounds)) != Some(bounds) {
-                        cx.refresh_windows();
-                    }
-                })
-                .into_any_element();
+    }
+    let edit = match trigger.filter(|_| open) {
+        Some(trigger) => components::on_bounds(edit, move |bounds, _, cx| {
+            if trigger.replace(Some(bounds)) != Some(bounds) {
+                cx.refresh_windows();
             }
-        }
-        button.into_any_element()
-    });
+        })
+        .into_any_element(),
+        None => edit.into_any_element(),
+    };
     let drawn = chip_shell()
         .when_some(index, |chip, index| {
             chip.debug_selector(move || format!("cite-chip-{index}"))
         })
         .when(open, |chip| chip.bg(theme::paint::SELECTED))
         .child(open_chip)
-        .children(edit)
+        .child(edit)
         .child(remove);
     drawn.into_any_element()
 }
