@@ -95,7 +95,9 @@ impl PrView {
                     "{} CLI extension missing. Run {hint}, then retry.",
                     forge.display_name()
                 ),
-                None => format!("{} CLI extension missing. Retry to try again.", forge.display_name()),
+                None => {
+                    format!("{} CLI extension missing. Retry to try again.", forge.display_name())
+                }
             }),
             Self::NotAuthed(forge, host) => Some(format!(
                 "Not signed in to {host}. Run {}, then retry.",
@@ -123,7 +125,10 @@ impl PrView {
                         forge.display_name()
                     ),
                     Failure::Other => {
-                        format!("{} unavailable: {message}. Retry to try again.", forge.display_name())
+                        format!(
+                            "{} unavailable: {message}. Retry to try again.",
+                            forge.display_name()
+                        )
                     }
                 })
             }
@@ -161,6 +166,12 @@ pub struct PrSnapshot {
     pub url: String,
     /// The PR description as the forge returns it, empty when none.
     pub body: String,
+    pub author: Option<String>,
+    pub author_avatar_url: Option<String>,
+    pub updated_at: Option<String>,
+    pub changed_files: Option<u64>,
+    pub additions: Option<u64>,
+    pub deletions: Option<u64>,
     pub state: PrState,
     pub is_draft: bool,
     /// The PR's head branch name, which may differ from the local one.
@@ -230,6 +241,7 @@ pub enum CheckStatus {
 /// One incoming comment: a PR-level review, a plain comment, or an inline finding.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Comment {
+    pub id: Option<String>,
     pub kind: CommentKind,
     pub author: String,
     pub author_is_bot: bool,
@@ -254,6 +266,7 @@ pub struct Comment {
 /// One reply on a thread. The root lives on [`Comment`].
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Reply {
+    pub id: Option<String>,
     pub author: String,
     pub author_is_bot: bool,
     pub body: String,
@@ -571,7 +584,9 @@ pub fn fetch(repo: &Path, input: &PrFetchInput) -> PrView {
         crate::git::RepositoryIdentity::Repository(target) => target.forge(),
         _ => crate::git::Forge::GitHub,
     };
-    within(READ_DEADLINE, PrView::TimedOut(forge), |cancelled| fetch_cancellable(repo, input, cancelled))
+    within(READ_DEADLINE, PrView::TimedOut(forge), |cancelled| {
+        fetch_cancellable(repo, input, cancelled)
+    })
 }
 
 /// Which of a repository's pull requests a list shows.
@@ -659,11 +674,17 @@ pub fn fetch_numbered(repo: &Path, config: &crate::config::PluginConfig, number:
         };
         match read_pr(repo, &input, &target, number, cancelled) {
             Ok(Some(view)) => view,
-            Ok(None) => PrView::Error(forge, format!("no pull request #{number} in {}/{}", target.owner(), target.name())),
+            Ok(None) => PrView::Error(
+                forge,
+                format!("no pull request #{number} in {}/{}", target.owner(), target.name()),
+            ),
             Err(error) => error.into(),
         }
     })
 }
+
+mod code;
+pub use code::diff_numbered;
 
 /// The newest of the repository's pull requests that `filter` admits, as many as one read holds.
 pub fn list(
@@ -685,10 +706,13 @@ pub fn list(
             ("o".to_string(), target.owner().to_string()),
             ("n".to_string(), target.name().to_string()),
         ];
-        let answer = graphql(repo, target.host(), &query, &vars, cancelled)
-            .map_err(PrView::from)?;
+        let answer =
+            graphql(repo, target.host(), &query, &vars, cancelled).map_err(PrView::from)?;
         parse_list(&answer["data"]["repository"]["pullRequests"]).ok_or_else(|| {
-            PrView::Error(forge, "the forge did not answer with a list of pull requests".to_string())
+            PrView::Error(
+                forge,
+                "the forge did not answer with a list of pull requests".to_string(),
+            )
         })
     })
 }
@@ -717,11 +741,7 @@ fn parse_list(connection: &Value) -> Option<PrList> {
 
 /// Run `read` with a cancellation flag raised once `limit` has passed; a read the deadline
 /// stopped is `timed_out`, whatever it made of being stopped.
-fn within<T>(
-    limit: std::time::Duration,
-    timed_out: T,
-    read: impl FnOnce(&AtomicBool) -> T,
-) -> T {
+fn within<T>(limit: std::time::Duration, timed_out: T, read: impl FnOnce(&AtomicBool) -> T) -> T {
     use std::sync::atomic::Ordering;
     let cancelled = AtomicBool::new(false);
     let (finished, deadline) = std::sync::mpsc::channel::<()>();
@@ -734,11 +754,7 @@ fn within<T>(
         });
         let view = read(&cancelled);
         drop(finished);
-        if cancelled.load(Ordering::Acquire) {
-            timed_out
-        } else {
-            view
-        }
+        if cancelled.load(Ordering::Acquire) { timed_out } else { view }
     })
 }
 
@@ -1112,14 +1128,14 @@ fn build_detail_query(number: u64) -> String {
         "query($o:String!,$n:String!){{repository(owner:$o,name:$n){{\
          pullRequest(number:{number}){{\
          number title url body isDraft state mergeable mergeStateStatus baseRefName headRefName \
-         headRefOid isCrossRepository \
+         headRefOid isCrossRepository author{{login avatarUrl}} updatedAt changedFiles additions deletions \
          commits(last:1){{nodes{{commit{{statusCheckRollup{{contexts(first:100){{pageInfo{{hasNextPage}} nodes{{__typename \
          ... on CheckRun{{name status conclusion detailsUrl}} ... on StatusContext{{context state targetUrl}}}}}}}}}}}}}} \
-         reviews(last:100){{pageInfo{{hasPreviousPage}} nodes{{author{{login}} state body submittedAt}}}} \
-         comments(last:100){{pageInfo{{hasPreviousPage}} nodes{{author{{login}} body createdAt}}}} \
+         reviews(last:100){{pageInfo{{hasPreviousPage}} nodes{{id author{{login}} state body submittedAt}}}} \
+         comments(last:100){{pageInfo{{hasPreviousPage}} nodes{{id author{{login}} body createdAt}}}} \
          reviewThreads(last:100){{pageInfo{{hasPreviousPage}} nodes{{id isResolved isOutdated path \
          startLine line originalStartLine originalLine diffSide \
-         comments(first:100){{pageInfo{{hasNextPage endCursor}} nodes{{author{{login}} body createdAt diffHunk}}}}}}}}}}}}}}"
+         comments(first:100){{pageInfo{{hasNextPage endCursor}} nodes{{id author{{login}} body createdAt diffHunk}}}}}}}}}}}}}}"
     )
 }
 
@@ -1189,7 +1205,7 @@ fn append_thread_comment_page(thread: &mut Value, page: &Value) -> Result<(), Gh
 fn thread_comments_page(target: &FetchTarget<'_>, id: &str, after: &str) -> Result<Value, GhError> {
     let q = "query($id:ID!,$after:String!){node(id:$id){... on PullRequestReviewThread{\
              comments(first:100, after:$after){pageInfo{hasNextPage endCursor} \
-             nodes{author{login} body createdAt}}}}}";
+             nodes{id author{login} body createdAt}}}}}";
     graphql(
         target.repo,
         target.host,
@@ -1234,6 +1250,12 @@ fn build_snapshot(node: &Value, sync: Sync) -> PrSnapshot {
         title: node["title"].as_str().unwrap_or_default().to_string(),
         url: node["url"].as_str().unwrap_or_default().to_string(),
         body: node["body"].as_str().unwrap_or_default().to_string(),
+        author: node["author"]["login"].as_str().map(str::to_string),
+        author_avatar_url: node["author"]["avatarUrl"].as_str().map(str::to_string),
+        updated_at: node["updatedAt"].as_str().map(str::to_string),
+        changed_files: node["changedFiles"].as_u64(),
+        additions: node["additions"].as_u64(),
+        deletions: node["deletions"].as_u64(),
         state: parse_state(node["state"].as_str().unwrap_or("OPEN")),
         is_draft: node["isDraft"].as_bool().unwrap_or(false),
         head_ref: node["headRefName"].as_str().unwrap_or_default().to_string(),
@@ -1279,9 +1301,8 @@ pub(crate) fn upsert_latest(checks: &mut Vec<Check>, check: Check) {
     }
 }
 
-/// Keep each bot's latest PR-level post, then order newest first.
+/// Keep the full conversation in newest-first order.
 pub(crate) fn finish_comments(out: &mut Vec<Comment>) {
-    dedup_bot_prose(out);
     out.sort_by(|a, b| b.created_at.cmp(&a.created_at));
 }
 
@@ -1340,6 +1361,7 @@ fn merge_comments(reviews: &Value, issues: &Value, threads: &Value) -> Vec<Comme
         }
         let mut review =
             prose_comment(CommentKind::Review, &r["author"], body, r["submittedAt"].as_str());
+        review.id = provider_id(&r["id"]);
         review.verdict = verdict;
         out.push(review);
     }
@@ -1350,7 +1372,10 @@ fn merge_comments(reviews: &Value, issues: &Value, threads: &Value) -> Vec<Comme
         if body.is_empty() {
             continue;
         }
-        out.push(prose_comment(CommentKind::Comment, &c["author"], body, c["createdAt"].as_str()));
+        let mut comment =
+            prose_comment(CommentKind::Comment, &c["author"], body, c["createdAt"].as_str());
+        comment.id = provider_id(&c["id"]);
+        out.push(comment);
     }
 
     // Inline review threads (the `finding` cards), with resolved/outdated and replies.
@@ -1379,6 +1404,7 @@ fn merge_comments(reviews: &Value, issues: &Value, threads: &Value) -> Vec<Comme
             finding_side(diff_side == Some("RIGHT"), diff_side == Some("LEFT")),
         );
         out.push(Comment {
+            id: provider_id(&root["id"]),
             kind: CommentKind::Finding,
             verdict: None,
             author_is_bot: is_bot(&login),
@@ -1464,6 +1490,7 @@ pub(crate) fn prose_row(
         _ => "comment",
     };
     Comment {
+        id: None,
         kind,
         author_is_bot,
         author,
@@ -1491,6 +1518,7 @@ fn replies_from_nodes(nodes: &[Value]) -> Vec<Reply> {
             }
             let login = n["author"]["login"].as_str().unwrap_or("").to_string();
             Some(Reply {
+                id: provider_id(&n["id"]),
                 author_is_bot: is_bot(&login),
                 author: login,
                 body: body.to_string(),
@@ -1500,28 +1528,8 @@ fn replies_from_nodes(nodes: &[Value]) -> Vec<Reply> {
         .collect()
 }
 
-/// Keep only the latest PR-level (`review`/`comment`) post per bot author; humans keep all.
-/// A bot's verdict-only reviews (no words) are deduped apart from its prose, so a fresh
-/// approval stands in for its older ones and never evicts its real comment.
-fn dedup_bot_prose(out: &mut Vec<Comment>) {
-    let is_bot_post = |c: &Comment| c.author_is_bot && c.kind != CommentKind::Finding;
-    let verdict_only = |c: &Comment| c.body.is_empty() && c.verdict.is_some();
-    let mut keep_newest: std::collections::HashMap<(String, bool), String> =
-        std::collections::HashMap::new();
-    for c in out.iter().filter(|c| is_bot_post(c)) {
-        let e = keep_newest
-            .entry((c.author.clone(), verdict_only(c)))
-            .or_default();
-        if c.created_at > *e {
-            e.clone_from(&c.created_at);
-        }
-    }
-    out.retain(|c| {
-        !is_bot_post(c)
-            // An undated review is a standing verdict, never lost to a newer post.
-            || (c.kind == CommentKind::Review && c.created_at.is_empty())
-            || keep_newest.get(&(c.author.clone(), verdict_only(c))) == Some(&c.created_at)
-    });
+pub(crate) fn provider_id(value: &Value) -> Option<String> {
+    value.as_str().map(str::to_string).or_else(|| value.as_u64().map(|id| id.to_string()))
 }
 
 /// Percent-encode one URL path or query value, `/` included.
@@ -1607,6 +1615,29 @@ mod tests {
     }
 
     #[test]
+    fn snapshot_carries_header_metadata_without_inventing_missing_values() {
+        let node = serde_json::json!({
+            "author": { "login": "ada", "avatarUrl": "https://example.test/ada.png" },
+            "updatedAt": "2026-11-16T08:00:00Z", "changedFiles": 3,
+            "additions": 0, "deletions": 12
+        });
+        let pr = build_snapshot(&node, Sync::Unknown);
+        assert_eq!(pr.author.as_deref(), Some("ada"));
+        assert_eq!(pr.author_avatar_url.as_deref(), Some("https://example.test/ada.png"));
+        assert_eq!(pr.updated_at.as_deref(), Some("2026-11-16T08:00:00Z"));
+        assert_eq!((pr.changed_files, pr.additions, pr.deletions), (Some(3), Some(0), Some(12)));
+        let missing = build_snapshot(&Value::Null, Sync::Unknown);
+        assert_eq!(
+            (missing.author, missing.author_avatar_url, missing.updated_at),
+            (None, None, None)
+        );
+        assert_eq!(
+            (missing.changed_files, missing.additions, missing.deletions),
+            (None, None, None)
+        );
+    }
+
+    #[test]
     fn truncated_flips_when_any_capped_surface_has_a_next_page() {
         let base = serde_json::json!({
             "number": 1, "title": "t", "url": "u", "state": "OPEN", "isDraft": false,
@@ -1681,6 +1712,12 @@ mod tests {
             title: String::new(),
             url: String::new(),
             body: String::new(),
+            author: None,
+            author_avatar_url: None,
+            updated_at: None,
+            changed_files: None,
+            additions: None,
+            deletions: None,
             state: PrState::Open,
             is_draft: false,
             head_ref: String::new(),
@@ -1689,7 +1726,10 @@ mod tests {
             base_ref: String::new(),
             merge: Merge::Clean,
             sync: Sync::InSync,
-            checks: statuses.iter().map(|&s| Check { name: "c".into(), status: s, url: None }).collect(),
+            checks: statuses
+                .iter()
+                .map(|&s| Check { name: "c".into(), status: s, url: None })
+                .collect(),
             comments: Vec::new(),
             comments_truncated: false,
             checks_truncated: false,
@@ -2001,6 +2041,24 @@ mod tests {
     }
 
     #[test]
+    fn comment_and_reply_identity_survives_the_provider_read() {
+        let comments = merge_comments(
+            &serde_json::json!([]),
+            &serde_json::json!([]),
+            &serde_json::json!([{
+                "path":"src/lib.rs", "line":4, "diffSide":"RIGHT", "comments":{"nodes":[
+                    {"id":"comment-1", "author":{"login":"reviewer[bot]"}, "body":"Check this"},
+                    {"id":"comment-2", "author":{"login":"ada"}, "body":"Fixed"}
+                ]}
+            }]),
+        );
+        assert_eq!(comments[0].id.as_deref(), Some("comment-1"));
+        assert!(comments[0].author_is_bot);
+        assert_eq!(comments[0].place.as_ref().unwrap().range, Some((4, 4)));
+        assert_eq!(comments[0].replies[0].id.as_deref(), Some("comment-2"));
+    }
+
+    #[test]
     fn comments_merge_three_surfaces_newest_first() {
         let reviews = serde_json::json!([
             {"author": {"login": "codex[bot]"}, "state": "COMMENTED", "body": "Codex review.", "submittedAt": "2026-06-27T10:00:00Z"}
@@ -2080,7 +2138,7 @@ mod tests {
     }
 
     #[test]
-    fn a_bots_prose_collapses_to_its_latest_a_humans_is_kept() {
+    fn every_bot_and_human_post_is_kept() {
         let reviews = serde_json::json!([
             {"author": {"login": "claude[bot]"}, "body": "old review", "submittedAt": "2026-06-27T09:00:00Z"},
             {"author": {"login": "claude[bot]"}, "body": "new review", "submittedAt": "2026-06-27T10:00:00Z"},
@@ -2089,14 +2147,14 @@ mod tests {
         ]);
         let cs = merge_comments(&reviews, &serde_json::json!([]), &serde_json::json!([]));
         let claude: Vec<_> = cs.iter().filter(|c| c.author == "claude[bot]").collect();
-        assert_eq!(claude.len(), 1); // only the latest bot review
+        assert_eq!(claude.len(), 2);
         assert_eq!(claude[0].body, "new review");
         assert_eq!(cs.iter().filter(|c| c.author == "persijano").count(), 2); // both human notes
     }
 
     #[test]
-    fn a_bots_findings_are_each_kept_even_as_its_prose_collapses() {
-        // A bot's prose folds to one; its findings never do.
+    fn bot_findings_and_prose_are_all_kept() {
+        // Every post remains available in the timeline.
         let reviews = serde_json::json!([
             {"author": {"login": "claude[bot]"}, "body": "old prose", "submittedAt": "2026-06-27T09:00:00Z"},
             {"author": {"login": "claude[bot]"}, "body": "new prose", "submittedAt": "2026-06-27T09:30:00Z"}
@@ -2109,7 +2167,7 @@ mod tests {
         ]);
         let cs = merge_comments(&reviews, &serde_json::json!([]), &threads);
         assert_eq!(cs.iter().filter(|c| c.kind == CommentKind::Finding).count(), 2);
-        assert_eq!(cs.iter().filter(|c| c.kind == CommentKind::Review).count(), 1); // prose collapsed
+        assert_eq!(cs.iter().filter(|c| c.kind == CommentKind::Review).count(), 2);
         assert_eq!(cs.iter().find(|c| c.body == "finding one").unwrap().anchor, "a.py:10");
     }
 
@@ -2125,10 +2183,7 @@ mod tests {
         let verdicts: Vec<_> = cs.iter().map(|c| (c.author.as_str(), c.verdict)).collect();
         assert_eq!(
             verdicts,
-            [
-                ("bob", Some(ReviewState::ChangesRequested)),
-                ("ann", Some(ReviewState::Approved)),
-            ]
+            [("bob", Some(ReviewState::ChangesRequested)), ("ann", Some(ReviewState::Approved)),]
         );
     }
 
@@ -2147,10 +2202,8 @@ mod tests {
     }
 
     #[test]
-    fn a_bots_stacked_approvals_keep_only_the_newest() {
-        let approval = |at: &str| {
-            serde_json::json!({"author": {"login": "claude[bot]"}, "state": "APPROVED", "body": "", "submittedAt": at})
-        };
+    fn a_bots_stacked_approvals_are_all_kept() {
+        let approval = |at: &str| serde_json::json!({"author": {"login": "claude[bot]"}, "state": "APPROVED", "body": "", "submittedAt": at});
         let reviews = serde_json::json!([
             approval("2026-06-27T10:00:00Z"),
             approval("2026-06-27T12:00:00Z"),
@@ -2163,7 +2216,12 @@ mod tests {
         let posts: Vec<_> = cs.iter().map(|c| (c.body.as_str(), c.created_at.as_str())).collect();
         assert_eq!(
             posts,
-            [("", "2026-06-27T12:00:00Z"), ("Real findings.", "2026-06-27T09:00:00Z")]
+            [
+                ("", "2026-06-27T12:00:00Z"),
+                ("", "2026-06-27T11:00:00Z"),
+                ("", "2026-06-27T10:00:00Z"),
+                ("Real findings.", "2026-06-27T09:00:00Z")
+            ]
         );
     }
 
@@ -2237,8 +2295,9 @@ mod tests {
 
     #[test]
     fn an_undated_bot_review_survives_beside_the_bots_dated_prose() {
-        // Undated reviews (approvals, votes) survive newest-wins dedup.
+        // Undated reviews sort after dated activity.
         let row = |kind, anchor: &str, body: &str, created_at: &str| Comment {
+            id: None,
             kind,
             author: "claude[bot]".to_string(),
             author_is_bot: true,
@@ -2257,9 +2316,9 @@ mod tests {
             row(CommentKind::Comment, "comment", "old prose", "2026-06-27T09:00:00Z"),
             row(CommentKind::Comment, "comment", "new prose", "2026-06-27T10:00:00Z"),
         ];
-        dedup_bot_prose(&mut out);
+        finish_comments(&mut out);
         let bodies: Vec<_> = out.iter().map(|c| c.body.as_str()).collect();
-        assert_eq!(bodies, ["approved", "new prose"]);
+        assert_eq!(bodies, ["new prose", "old prose", "approved"]);
     }
 
     #[test]

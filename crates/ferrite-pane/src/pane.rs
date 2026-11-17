@@ -555,15 +555,12 @@ impl PaneView {
         }
     }
 
-    pub fn transcript_disclosure_snapshot(
-        &self,
-    ) -> (HashSet<DisclosureId>, Option<DisclosureId>, FocusHandle) {
+    pub fn transcript_disclosure_snapshot(&self) -> (HashSet<DisclosureId>, Option<DisclosureId>) {
         // The retained renderer receives a snapshot; its display revision
         // changes for every state transition above.
         (
             self.disclosure.expanded.clone(),
             self.disclosure.target.clone(),
-            self.disclosure.focus.clone(),
         )
     }
 
@@ -678,6 +675,7 @@ pub struct PaneWiring {
     pub start: Option<Hero>,
     /// The Thread details card, laid over the body's top right.
     pub details: Option<AnyElement>,
+    pub details_lane_width: f32,
     /// What the Thread offers when its provider lost the conversation it
     /// saved (`resume_offer`), the first row of the Composer's stack.
     pub resume_offer: Option<AnyElement>,
@@ -930,6 +928,7 @@ pub fn render_pane(
         fill,
         start,
         details,
+        details_lane_width,
         resume_offer,
     } = wiring;
     let has_activity_decisions = activity_decisions.is_some() || expand_question;
@@ -1080,7 +1079,8 @@ pub fn render_pane(
                         .iter()
                         .any(|request| request.subject.as_ref() == Some(&view.selected))
                 });
-            pane = pane.child(
+            let details_canvas = view.details.canvas.clone();
+            pane = pane.child(components::on_bounds(
                 div()
                     .debug_selector(move || format!("pane-body-{key}"))
                     .relative()
@@ -1097,7 +1097,9 @@ pub fn render_pane(
                         body.key_context("Decision SubagentDecision")
                     })
                     .child(
-                        retained_transcript.expect("L1 transcript entity is wired by CockpitView"),
+                        div().flex().flex_col().flex_1().min_h_0().min_w_0()
+                            .pr(px(details_lane_width))
+                            .child(retained_transcript.expect("L1 transcript entity is wired by CockpitView")),
                     )
                     .children(start.map(|project| {
                         // An empty Thread, as a draft: the hero at the
@@ -1114,7 +1116,12 @@ pub fn render_pane(
                     }))
                     .children(question_measurement)
                     .children(details),
-            );
+                move |bounds, _, cx| {
+                    if details_canvas.replace(Some(bounds)) != Some(bounds) {
+                        cx.refresh_windows();
+                    }
+                },
+            ));
             // The order is head · body · progress · dock · composer.
             pane = pane.children(l1_dock(&mut cx));
             // A question too big for this body answers in fullscreen: the
@@ -5292,65 +5299,17 @@ mod tests {
                         .then_some(DisclosureId::Reasoning(block.id))
                 }));
             }
-            let input = crate::transcript::TranscriptInput {
-                thread: self.thread,
-                namespace: "pane-block-test".into(),
-                content_revision: (0, 0),
-                display_revision: self.display_revision,
-                blocks: self.blocks.clone(),
-                signal_status: Some(Status::Idle),
-                focused: true,
-                reading_size: Default::default(),
-                selection_scope: gpui::base::TextSelectionScopeId::new(),
-                preview: crate::preview::Preview::new(cx),
-                expanded,
-                target: None,
-                disclosure_focus: cx.focus_handle(),
-                working: None,
-                tail: None,
-                pending_call: None,
-                workspace: None,
-                solo: false,
-                thinking: true,
-                agents: Default::default(),
-                rewind: None,
-                quotes: true,
-                reply_to: "Claude".into(),
-                skills: Default::default(),
-                cited: Default::default(),
-                cited_revision: 0,
-                note: None,
-                earlier: None,
-                queued: 0,
-            };
-            let selection = self.selection.clone();
-            self.transcript.update(cx, |transcript, cx| {
-                transcript.sync(input, selection, cx);
-                transcript.assert_text_projection(cx);
-            });
-            self.transcript.clone()
-        }
-    }
-
-    fn shows_blocks(blocks: Vec<Block>, cx: &mut Context<ShowsBlocks>) -> ShowsBlocks {
-        let thread = ThreadId::new(1);
-        let selection = crate::select::TranscriptText::default();
-        let transcript = cx.new(|cx| {
-            crate::transcript::TranscriptView::new(
-                crate::transcript::TranscriptInput {
-                    thread,
+            let (presentation, body) = (
+                crate::transcript::TranscriptPresentation {
+                    disclosure_focus: cx.focus_handle(),
+                    selection_scope: gpui::base::TextSelectionScopeId::new(),
+                    thread: self.thread,
                     namespace: "pane-block-test".into(),
                     content_revision: (0, 0),
-                    display_revision: 0,
-                    blocks: blocks.clone(),
+                    display_revision: self.display_revision,
                     signal_status: Some(Status::Idle),
                     focused: true,
                     reading_size: Default::default(),
-                    selection_scope: gpui::base::TextSelectionScopeId::new(),
-                    preview: crate::preview::Preview::new(cx),
-                    expanded: HashSet::new(),
-                    target: None,
-                    disclosure_focus: cx.focus_handle(),
                     working: None,
                     tail: None,
                     pending_call: None,
@@ -5363,13 +5322,35 @@ mod tests {
                     reply_to: "Claude".into(),
                     skills: Default::default(),
                     cited: Default::default(),
-                    cited_revision: 0,
                     note: None,
                     earlier: None,
                     queued: 0,
                 },
+                crate::transcript::TranscriptBody {
+                    blocks: self.blocks.clone(),
+                    preview: crate::preview::Preview::new(cx),
+                    expanded,
+                    target: None,
+                },
+            );
+            let selection = self.selection.clone();
+            self.transcript.update(cx, |transcript, cx| {
+                transcript.reconcile(presentation, || body, selection, cx);
+                transcript.assert_text_projection(cx);
+            });
+            self.transcript.clone()
+        }
+    }
+
+    fn shows_blocks(blocks: Vec<Block>, cx: &mut Context<ShowsBlocks>) -> ShowsBlocks {
+        let thread = ThreadId::new(1);
+        let selection = crate::select::TranscriptText::default();
+        let transcript = cx.new(|cx| {
+            crate::transcript::TranscriptView::empty(
+                thread,
+                "pane-block-test".into(),
+                crate::preview::Preview::new(cx),
                 crate::rich::TextCache::default(),
-                selection.clone(),
                 cx,
             )
         });

@@ -145,6 +145,12 @@ pub fn pr_snapshot() -> ferrite_reviewr::forge::PrSnapshot {
         number: 1,
         title: "t".into(),
         body: String::new(),
+        author: None,
+        author_avatar_url: None,
+        updated_at: None,
+        changed_files: None,
+        additions: None,
+        deletions: None,
         url: "u".into(),
         state: PrState::Open,
         is_draft: false,
@@ -165,6 +171,7 @@ pub fn pr_snapshot() -> ferrite_reviewr::forge::PrSnapshot {
 pub fn comment() -> ferrite_reviewr::forge::Comment {
     use ferrite_reviewr::forge::{Comment, CommentKind};
     Comment {
+        id: None,
         kind: CommentKind::Comment,
         author: "ann".into(),
         author_is_bot: false,

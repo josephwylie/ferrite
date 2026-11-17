@@ -37,7 +37,7 @@ use gpui::{
 
 mod citations;
 mod departed;
-pub use citations::{CancelComment, OpenSource, SaveComment};
+pub use citations::{CancelComment, CommentOpened, OpenSource, SaveAndSendComment, SaveComment};
 
 use crate::line::Line;
 use ferrite_core::draft_content::{DraftContent, ReviewNote};
@@ -2779,7 +2779,7 @@ mod tests {
             assert_eq!(composer.attachment_count(), 1);
             assert_eq!(browser_annotations::split(composer.editable()).2, [second]);
         });
-        assert_eq!(std::fs::read(first.original()).unwrap(), png);
+        assert_eq!(std::fs::read(first.original().unwrap()).unwrap(), png);
         std::fs::remove_dir_all(root).unwrap();
     }
 

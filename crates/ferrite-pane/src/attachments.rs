@@ -394,12 +394,8 @@ fn annotation_card(
     remove: Option<RemoveAnnotation>,
 ) -> gpui::AnyElement {
     use ferrite_ui::{pointer::Pointer as _, theme};
-    let original = annotation.original().to_path_buf();
-    let image = if original.is_file() {
-        Some(original)
-    } else {
-        annotation.cached_image()
-    };
+    let image = annotation.original().filter(|path| path.is_file()).map(Path::to_path_buf)
+        .or_else(|| annotation.cached_image());
     let host = preview.clone();
     let id = annotation.id().to_owned();
     let comment = annotation.comment().to_owned();

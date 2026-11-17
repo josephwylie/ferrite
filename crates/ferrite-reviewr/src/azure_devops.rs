@@ -433,6 +433,12 @@ fn build_snapshot(
             crate::forge::urlencode(target.name())
         ),
         body: pr["description"].as_str().unwrap_or_default().to_string(),
+        author: pr["createdBy"]["displayName"].as_str().map(str::to_string),
+        author_avatar_url: pr["createdBy"]["imageUrl"].as_str().map(str::to_string),
+        updated_at: None,
+        changed_files: None,
+        additions: None,
+        deletions: None,
         // A missing status reads as closed, never reviewable.
         state: parse_state(pr["status"].as_str().unwrap_or_default()),
         is_draft: pr["isDraft"].as_bool().unwrap_or(false),
@@ -573,6 +579,7 @@ fn replies_from_thread(thread: &Value) -> Vec<Reply> {
         .map(|comment| {
             let author = comment["author"]["displayName"].as_str().unwrap_or("").to_string();
             Reply {
+                id: comment_id(thread, comment),
                 author_is_bot: is_azure_bot(&comment["author"]),
                 author,
                 body: comment["content"].as_str().unwrap_or("").trim().to_string(),
@@ -580,6 +587,14 @@ fn replies_from_thread(thread: &Value) -> Vec<Reply> {
             }
         })
         .collect()
+}
+
+fn comment_id(thread: &Value, comment: &Value) -> Option<String> {
+    Some(format!(
+        "{}/{}",
+        crate::forge::provider_id(&thread["id"])?,
+        crate::forge::provider_id(&comment["id"])?
+    ))
 }
 
 fn thread_line_range(context: &Value) -> (Option<u64>, Option<u64>) {
@@ -624,6 +639,7 @@ fn merge_comments(threads: &[&Value], pr: &Value) -> Vec<Comment> {
             None => (CommentKind::Comment, "comment".to_string(), None, false),
         };
         out.push(Comment {
+            id: comment_id(thread, root),
             kind,
             author_is_bot: is_azure_bot(&root["author"]),
             author,
@@ -903,6 +919,32 @@ mod tests {
         assert!(branch_admitted(&forked("fix", "Proj", "app-fork"), &server, &target).is_none());
         let legacy = [head(&host("org.visualstudio.com"), "fix")];
         assert!(branch_admitted(&forked("fix", "Proj", "app-fork"), &legacy, &target).is_some());
+    }
+
+    #[test]
+    fn snapshot_carries_available_header_metadata_without_fabricated_counts() {
+        let target = crate::git::RepoTarget::with_path(
+            crate::git::Forge::AzureDevOps,
+            "dev.azure.com",
+            &["org", "project", "app"],
+        )
+        .unwrap();
+        let node = json!({"pullRequestId": 7, "createdBy": {"displayName": "Ada", "imageUrl": "https://example.test/ada.png"}});
+        let pr = build_snapshot(
+            &node,
+            &target,
+            "https://dev.azure.com/org",
+            Sync::Unknown,
+            Vec::new(),
+            &[],
+            &Value::Null,
+            false,
+            false,
+        );
+        assert_eq!(pr.author.as_deref(), Some("Ada"));
+        assert_eq!(pr.author_avatar_url.as_deref(), Some("https://example.test/ada.png"));
+        assert_eq!(pr.updated_at, None);
+        assert_eq!((pr.changed_files, pr.additions, pr.deletions), (None, None, None));
     }
 
     #[test]

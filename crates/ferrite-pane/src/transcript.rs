@@ -66,6 +66,12 @@ pub struct TranscriptTail {
     pub render: TailRender,
 }
 
+impl PartialEq for TranscriptTail {
+    fn eq(&self, other: &Self) -> bool {
+        self.key == other.key
+    }
+}
+
 impl std::fmt::Debug for TranscriptTail {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("TranscriptTail")
@@ -145,10 +151,10 @@ pub enum ScrollTarget {
 /// prints them — Claude reports every
 /// path absolute. A path outside the checkout stays whole.
 fn relative_paths(input: &mut TranscriptInput) {
-    let Some(root) = input.workspace.clone() else {
+    let Some(root) = input.presentation.workspace.clone() else {
         return;
     };
-    for block in &mut input.blocks {
+    for block in &mut input.body.blocks {
         if let Body::Tool(tool) = &mut block.body {
             relative_call(tool, &root);
         }
@@ -170,22 +176,19 @@ pub(crate) fn relative_call(tool: &mut ferrite_core::transcript::ToolBlock, root
     }
 }
 
-/// Owned input for one selected Subject. Cockpit clones only its retained L1
-/// render window when this revision changes; rendering never borrows core.
-pub struct TranscriptInput {
+/// The presentation itself is the cache identity. Catalogues and cited sources
+/// stay borrowed until a change requires a retained snapshot.
+#[derive(Clone, Debug, PartialEq)]
+pub struct TranscriptPresentation<'a> {
+    pub disclosure_focus: FocusHandle,
+    pub selection_scope: gpui::base::TextSelectionScopeId,
     pub thread: ThreadId,
     pub namespace: SharedString,
     pub content_revision: (u64, u64),
     pub display_revision: u64,
-    pub blocks: Vec<Block>,
     pub signal_status: Option<Status>,
     pub focused: bool,
     pub reading_size: ferrite_core::settings::ReadingSize,
-    pub selection_scope: gpui::base::TextSelectionScopeId,
-    pub preview: Preview,
-    pub expanded: HashSet<DisclosureId>,
-    pub target: Option<DisclosureId>,
-    pub disclosure_focus: FocusHandle,
     /// The running turn's header and live row (`pane::working_tail`): the
     /// header under its prompt, the live row after the last row.
     pub working: Option<WorkingTail>,
@@ -201,8 +204,8 @@ pub struct TranscriptInput {
     /// Whether the model's thinking shows as `∴` rows (Settings'
     /// `show_thinking`, the palette's `show thinking`).
     pub thinking: bool,
-    /// The subagents this transcript's calls started, by call: the blocks
-    /// already carry their standing (`AgentFaces::apply`); a call with a
+    /// The subagents this transcript's calls started, by call. Reconciliation
+    /// applies their standing to the blocks; a call with a
     /// face opens its agent (`TranscriptEvent::OpenAgent`).
     pub agents: pane::AgentFaces,
     /// Whether a sent prompt's Edit, Rewind and Fork can be asked now:
@@ -216,12 +219,10 @@ pub struct TranscriptInput {
     pub reply_to: SharedString,
     /// The Session's commands and skills: a sent prompt's `/name` that
     /// names one is drawn blue, its description on hover.
-    pub skills: std::sync::Arc<[ferrite_core::SessionCommand]>,
+    pub skills: std::borrow::Cow<'a, [ferrite_core::SessionCommand]>,
     /// The Block each sent Quote row was cited from, by its words
     /// (`ferrite_core::cited_sources`): the row offers Go to source.
-    pub cited: std::sync::Arc<std::collections::BTreeMap<String, BlockId>>,
-    /// Changes whenever a source in `cited` is added, re-pointed or dropped.
-    pub cited_revision: u64,
+    pub cited: std::borrow::Cow<'a, std::collections::BTreeMap<String, BlockId>>,
     /// A muted line standing under the first prompt, which no block says:
     /// `Model Haiku 5.5` in a subagent's drill-in.
     pub note: Option<SharedString>,
@@ -232,6 +233,31 @@ pub struct TranscriptInput {
     pub queued: usize,
 }
 
+impl TranscriptPresentation<'_> {
+    fn into_owned(self) -> TranscriptPresentation<'static> {
+        TranscriptPresentation {
+            skills: std::borrow::Cow::Owned(self.skills.into_owned()),
+            cited: std::borrow::Cow::Owned(self.cited.into_owned()),
+            ..self
+        }
+    }
+}
+
+/// Built only when the presentation changes. The retained render window and
+/// disclosure snapshot never need cloning for an unchanged root render.
+pub struct TranscriptBody {
+    pub blocks: Vec<Block>,
+    /// The handle retained for the Pane's lifetime, shared by its Subjects.
+    pub preview: Preview,
+    pub expanded: HashSet<DisclosureId>,
+    pub target: Option<DisclosureId>,
+}
+
+struct TranscriptInput {
+    presentation: TranscriptPresentation<'static>,
+    body: TranscriptBody,
+}
+
 /// The conversation began before the first block this transcript draws.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Earlier {
@@ -240,72 +266,28 @@ pub struct Earlier {
     pub copyable: bool,
 }
 
-/// Everything a transcript's render depends on besides its blocks and its
-/// disclosures, compared every root render before any block is cloned.
-#[derive(Clone, Debug, PartialEq)]
-pub struct TranscriptKey {
-    pub namespace: SharedString,
-    pub content_revision: (u64, u64),
-    pub display_revision: u64,
-    pub focused: bool,
-    pub signal_status: Option<Status>,
-    pub reading_size: ferrite_core::settings::ReadingSize,
-    pub working: Option<u64>,
-    pub tail: Option<u64>,
-    pub pending_call: Option<String>,
-    pub workspace: Option<PathBuf>,
-    pub solo: bool,
-    pub thinking: bool,
-    pub agents: pane::AgentFaces,
-    pub rewind: Option<Result<(), SharedString>>,
-    pub quotes: bool,
-    /// How many skills the prompts can name: a late catalogue redraws them.
-    pub skills: usize,
-    /// Which state of the sent quotes' sources the rows were drawn from.
-    pub cited: u64,
-    pub note: Option<SharedString>,
-    pub earlier: Option<Earlier>,
-    pub queued: usize,
-}
-
 impl TranscriptInput {
-    pub(crate) fn key(&self) -> TranscriptKey {
-        TranscriptKey {
-            namespace: self.namespace.clone(),
-            content_revision: self.content_revision,
-            display_revision: self.display_revision,
-            focused: self.focused,
-            signal_status: self.signal_status,
-            reading_size: self.reading_size,
-            working: self.working.as_ref().map(|working| working.key),
-            tail: self.tail.as_ref().map(|tail| tail.key),
-            pending_call: self.pending_call.clone(),
-            workspace: self.workspace.clone(),
-            solo: self.solo,
-            thinking: self.thinking,
-            agents: self.agents.clone(),
-            rewind: self.rewind.clone(),
-            quotes: self.quotes,
-            skills: self.skills.len(),
-            cited: self.cited_revision,
-            note: self.note.clone(),
-            earlier: self.earlier,
-            queued: self.queued,
-        }
-    }
-
     /// What the rows are projected with.
     fn shape(&self) -> RowShape {
         let mut shape = RowShape {
-            top_pad: if self.solo {
+            top_pad: if self.presentation.solo {
                 theme::TX_PAD_T
             } else {
                 theme::TX_PAD_T_BOARD
             },
-            working: self.working.as_ref().and_then(|working| working.header_key()),
-            live: self.working.as_ref().map(|working| working.key),
+            working: self
+                .presentation
+                .working
+                .as_ref()
+                .and_then(|working| working.header_key()),
+            live: self
+                .presentation
+                .working
+                .as_ref()
+                .map(|working| working.key),
             live_open: false,
             open_folds: self
+                .body
                 .expanded
                 .iter()
                 .filter_map(|id| match id {
@@ -313,14 +295,14 @@ impl TranscriptInput {
                     _ => None,
                 })
                 .collect(),
-            tail: self.tail.as_ref().map(|tail| tail.key),
-            pending_call: self.pending_call.clone(),
-            thinking: self.thinking,
-            note: self.note.clone(),
-            earlier: self.earlier,
+            tail: self.presentation.tail.as_ref().map(|tail| tail.key),
+            pending_call: self.presentation.pending_call.clone(),
+            thinking: self.presentation.thinking,
+            note: self.presentation.note.clone(),
+            earlier: self.presentation.earlier,
         };
-        shape.live_open =
-            live_anchor(&self.blocks, &shape).is_some_and(|anchor| self.expanded.contains(&anchor));
+        shape.live_open = live_anchor(&self.body.blocks, &shape)
+            .is_some_and(|anchor| self.body.expanded.contains(&anchor));
         shape
     }
 }
@@ -345,7 +327,7 @@ pub enum TranscriptEvent {
     /// A selection's `Cite` (or a message's Attach), its words empty, and
     /// the Block that showed the passage: a Reply chip in the Pane's tray
     /// (`Composer::reply`).
-    Reply(ferrite_core::replies::Reply, Option<BlockId>),
+    Reply(ferrite_core::replies::Reply, Option<BlockId>, Option<gpui::base::TextSelectionAnchor>),
     /// An answer's Fork: a new Thread holding the conversation through
     /// the answer whose last block is `after`.
     Fork {
@@ -589,20 +571,16 @@ impl TranscriptView {
         cx: &mut Context<Self>,
     ) -> Self {
         Self::new(
-            TranscriptInput {
+            TranscriptPresentation {
+                disclosure_focus: cx.focus_handle(),
+                selection_scope: gpui::base::TextSelectionScopeId::new(),
                 thread,
                 namespace,
                 content_revision: (0, 0),
                 display_revision: 0,
-                blocks: Vec::new(),
                 signal_status: None,
                 focused: false,
                 reading_size: Default::default(),
-                selection_scope: gpui::base::TextSelectionScopeId::new(),
-                preview,
-                expanded: HashSet::new(),
-                target: None,
-                disclosure_focus: cx.focus_handle(),
                 working: None,
                 tail: None,
                 pending_call: None,
@@ -615,10 +593,15 @@ impl TranscriptView {
                 reply_to: SharedString::default(),
                 skills: Default::default(),
                 cited: Default::default(),
-                cited_revision: 0,
                 note: None,
                 earlier: None,
                 queued: 0,
+            },
+            TranscriptBody {
+                blocks: Vec::new(),
+                preview,
+                expanded: HashSet::new(),
+                target: None,
             },
             rich,
             TranscriptText::default(),
@@ -627,26 +610,32 @@ impl TranscriptView {
     }
 
     pub(crate) fn new(
-        mut input: TranscriptInput,
+        presentation: TranscriptPresentation<'_>,
+        body: TranscriptBody,
         rich: TextCache,
         selection_source: TranscriptText,
         cx: &mut Context<Self>,
     ) -> Self {
+        let mut input = TranscriptInput {
+            presentation: presentation.into_owned(),
+            body,
+        };
+        input.presentation.agents.apply(&mut input.body.blocks);
         relative_paths(&mut input);
         let rows = TranscriptRows::new(
-            &input.blocks,
+            &input.body.blocks,
             &input.shape(),
-            Grid::pane(input.reading_size, input.solo).size,
+            Grid::pane(input.presentation.reading_size, input.presentation.solo).size,
         );
         let scroll = TranscriptScroll::new(rows.len());
         scroll.scroll_to_bottom();
-        let scope = if input.focused {
+        let scope = if input.presentation.focused {
             gpui::base::TextSelectionScopeId::default()
         } else {
-            input.selection_scope
+            input.presentation.selection_scope
         };
         let targets = target_context(&input);
-        let times = answer_times(&input.blocks);
+        let times = answer_times(&input.body.blocks);
         // Chromium came up (the first visual asked for it): draw the
         // visuals that were waiting.
         cx.observe_global::<crate::visual::engine::Visuals>(|_, cx| cx.notify())
@@ -711,7 +700,7 @@ impl TranscriptView {
     fn register_scope(&self, cx: &mut Context<Self>) {
         let weak = cx.entity().downgrade();
         crate::file_links::register_scope(
-            self.input.namespace.clone(),
+            self.input.presentation.namespace.clone(),
             cx.entity_id(),
             crate::file_links::ScopeRoute {
                 reader: Rc::new({
@@ -746,41 +735,47 @@ impl TranscriptView {
     /// native text, unless another transcript has taken the namespace.
     /// A Subject switch keeps both transcripts and their namespaces.
     fn forget_namespace(&self, owner: gpui::EntityId, cx: &mut App) {
-        if crate::file_links::release_scope(&self.input.namespace, owner, cx) {
-            self.rich.forget_namespace(&self.input.namespace);
+        if crate::file_links::release_scope(&self.input.presentation.namespace, owner, cx) {
+            self.rich
+                .forget_namespace(&self.input.presentation.namespace);
         }
     }
 
-    /// Whether this view already shows `key` (the cockpit compares it every
-    /// root render before cloning a block).
-    pub fn matches(&self, key: &TranscriptKey) -> bool {
-        &self.input.key() == key
-    }
-
-    /// Reconcile only when Cockpit's revision key changes. Ordinary Cockpit
-    /// redraws compare that key without cloning rows or notifying this entity.
-    pub fn sync(
+    /// Compare the presentation before building its body. Unchanged root
+    /// renders preserve this entity, its selection and its viewport.
+    pub fn reconcile(
         &mut self,
-        mut input: TranscriptInput,
+        presentation: TranscriptPresentation<'_>,
+        body: impl FnOnce() -> TranscriptBody,
         selection_source: TranscriptText,
         cx: &mut Context<Self>,
-    ) {
+    ) -> bool {
+        if self.input.presentation == presentation {
+            return false;
+        }
+        let mut input = TranscriptInput {
+            presentation: presentation.into_owned(),
+            body: body(),
+        };
+        input.presentation.agents.apply(&mut input.body.blocks);
         relative_paths(&mut input);
         self.reader_took_scrollbar(cx);
-        let before = self.input.key();
-        let after = input.key();
+        let before = &self.input.presentation;
+        let after = &input.presentation;
         let namespace_changed = before.namespace != after.namespace;
         // An agent's standing is its call's: it changes the blocks.
         let content_changed = namespace_changed
+            || before.thread != after.thread
             || before.content_revision != after.content_revision
             || before.agents != after.agents
             || before.skills != after.skills;
-        let disclosure_changed =
-            self.input.expanded != input.expanded || self.input.target != input.target;
+        let disclosure_changed = self.input.body.expanded != input.body.expanded
+            || self.input.body.target != input.body.target;
         let reading_changed = before.reading_size != after.reading_size;
         // The answer above the working row drops its actions row while the
         // turn runs: its height changes when the turn starts or ends.
         let working_toggled = before.working.is_some() != after.working.is_some();
+        let working_ended = working_toggled && after.working.is_none();
         let shape_changed = self.input.shape() != input.shape();
         let display_changed = before != after || disclosure_changed;
         let workspace_changed = before.workspace != after.workspace;
@@ -796,10 +791,10 @@ impl TranscriptView {
             self.targets = target_context(&self.input);
         }
         if content_changed {
-            self.answer_times = answer_times(&self.input.blocks);
+            self.answer_times = answer_times(&self.input.body.blocks);
         }
         // The turn ended: what still fades lands quickly from here.
-        if working_toggled && after.working.is_none() {
+        if working_ended {
             self.landed_at = Some(cx.background_executor().now());
         }
         // The gap table is part of the rows: a reading-size change
@@ -815,9 +810,11 @@ impl TranscriptView {
                 .rev()
                 .find(|row| !matches!(row.kind(), RowKind::Working | RowKind::LiveTail | RowKind::Tail))
                 .map(|row| row.id().clone());
-            let delta =
-                self.rows
-                    .reconcile(&self.input.blocks, &self.input.shape(), self.grid().size);
+            let delta = self.rows.reconcile(
+                &self.input.body.blocks,
+                &self.input.shape(),
+                self.grid().size,
+            );
             self.scroll.reconcile(&delta);
             let send_pending = std::mem::take(&mut self.jump_to_new_prompt);
             // What was moving the old history's viewport has nothing to
@@ -832,7 +829,7 @@ impl TranscriptView {
             }
             // The newest row grew in place while the turn runs: its new
             // words fade in by the run.
-            if self.input.working.is_some()
+            if self.input.presentation.working.is_some()
                 && !namespace_changed
                 && self.newest_content().is_some_and(|row| {
                     Some(row.id()) == tail.as_ref() && matches!(row.kind(), RowKind::Answer { .. })
@@ -843,6 +840,7 @@ impl TranscriptView {
             self.note_arrivals(tail, cx);
             let live: HashSet<&str> = self
                 .input
+                .body
                 .blocks
                 .iter()
                 .filter_map(|block| crate::visual::visual_of(block).map(|v| v.id.as_str()))
@@ -853,10 +851,10 @@ impl TranscriptView {
             if disclosure_changed || reading_changed || working_toggled {
                 self.scroll.remeasure_all();
             }
-            let scope = if self.input.focused {
+            let scope = if self.input.presentation.focused {
                 gpui::base::TextSelectionScopeId::default()
             } else {
-                self.input.selection_scope
+                self.input.presentation.selection_scope
             };
             self.document.set_scope(scope, cx);
             if content_changed || disclosure_changed || shape_changed || workspace_changed {
@@ -869,6 +867,7 @@ impl TranscriptView {
             }
             cx.notify();
         }
+        true
     }
 
     /// Stamp the content rows that now follow what was the newest: appended
@@ -1000,7 +999,7 @@ impl TranscriptView {
     fn answer_landing(&self, cx: &App) -> Option<Instant> {
         let now = cx.background_executor().now();
         self.landed_at
-            .filter(|_| self.input.working.is_none() && self.streaming_fade(now))
+            .filter(|_| self.input.presentation.working.is_none() && self.streaming_fade(now))
     }
 
     /// Whether a fade is still running (a row arriving, the streaming
@@ -1081,17 +1080,18 @@ impl TranscriptView {
     }
 
     pub(crate) fn tool_state(&self, call: impl Into<DisclosureId>) -> DisclosureState {
-        if self.input.expanded.contains(&call.into()) {
+        if self.input.body.expanded.contains(&call.into()) {
             DisclosureState::Expanded
         } else {
             DisclosureState::Collapsed
         }
     }
     pub(crate) fn tool_targeted(&self, call: impl Into<DisclosureId>) -> bool {
-        self.input.target.as_ref() == Some(&call.into())
+        self.input.body.target.as_ref() == Some(&call.into())
     }
     fn clear_output_selection(&self, cx: &mut App) {
-        self.rich.clear_output_selection(&self.input.namespace, cx)
+        self.rich
+            .clear_output_selection(&self.input.presentation.namespace, cx)
     }
     #[cfg(any(test, feature = "test-support"))]
     pub fn is_following_tail(&self) -> bool {
@@ -1308,6 +1308,7 @@ impl TranscriptView {
             });
         pinned.or_else(|| {
             self.input
+                .body
                 .blocks
                 .iter()
                 .rev()
@@ -1323,7 +1324,7 @@ impl TranscriptView {
     /// mouse at one.
     #[cfg(feature = "visual-reference")]
     pub fn namespace(&self) -> SharedString {
-        self.input.namespace.clone()
+        self.input.presentation.namespace.clone()
     }
 
     /// The hover key the newest answer's actions blend under: a headless
@@ -1341,16 +1342,19 @@ impl TranscriptView {
 
     /// An answer row's id, by its first block.
     fn answer_id(&self, first: BlockId) -> SharedString {
-        SharedString::from(format!("answer-{}-{first:?}", self.input.namespace))
+        SharedString::from(format!(
+            "answer-{}-{first:?}",
+            self.input.presentation.namespace
+        ))
     }
 
     fn text_runs(&self) -> TextRuns {
         self.selection_source
             .clone()
             .overlay_scoped(
-                self.input.thread,
-                self.input.namespace.clone(),
-                &self.input.blocks,
+                self.input.presentation.thread,
+                self.input.presentation.namespace.clone(),
+                &self.input.body.blocks,
                 self.rich.clone(),
             )
             .with_document(self.document.clone())
@@ -1420,7 +1424,7 @@ impl TranscriptView {
                 Body::Thinking(_) => shown(DisclosureId::Reasoning(block.id)),
                 _ => false,
             };
-            pane::collect_block_text(block, expanded, &self.input.skills, selection);
+            pane::collect_block_text(block, expanded, &self.input.presentation.skills, selection);
         }
     }
 
@@ -1436,7 +1440,9 @@ impl TranscriptView {
                 self.collect_row_text(row, &selection, false);
             }
         });
-        let logical = self.selection_source.registered(self.input.thread);
+        let logical = self
+            .selection_source
+            .registered(self.input.presentation.thread);
         let _ = selection.capture_members(|| {
             for row in self.rows.rows() {
                 selection.begin_row();
@@ -1445,7 +1451,8 @@ impl TranscriptView {
         });
         assert_eq!(
             logical,
-            self.selection_source.registered(self.input.thread),
+            self.selection_source
+                .registered(self.input.presentation.thread),
             "logical copy fragments must match rendered row identities and text"
         );
     }
@@ -1455,10 +1462,10 @@ impl TranscriptView {
         pane::RowCx {
             selection,
             rich: &self.rich,
-            preview: &self.input.preview,
+            preview: &self.input.body.preview,
             grid: self.grid(),
-            scope: &self.input.namespace,
-            skills: &self.input.skills,
+            scope: &self.input.presentation.namespace,
+            skills: &self.input.presentation.skills,
         }
     }
 
@@ -1475,10 +1482,13 @@ impl TranscriptView {
 
     /// The blocks after the wrap-up of `call`.
     fn after_wrap_up(&self, call: &str) -> &[ferrite_core::transcript::Block] {
-        let at = self.input.blocks.iter().rposition(
-            |block| matches!(&block.body, Body::WrapUp(wrap) if wrap.call == call),
-        );
-        at.map_or(&[], |at| &self.input.blocks[at + 1..])
+        let at = self
+            .input
+            .body
+            .blocks
+            .iter()
+            .rposition(|block| matches!(&block.body, Body::WrapUp(wrap) if wrap.call == call));
+        at.map_or(&[], |at| &self.input.body.blocks[at + 1..])
     }
 
     /// Whether the Thread has gone past the wrap-up of `call`: a prompt
@@ -1518,7 +1528,7 @@ impl TranscriptView {
     /// The live row's press, when the running turn has trailing work: it
     /// opens that work's rows above it (`rows::live_anchor`).
     fn line_disclosure(&self, view: Entity<Self>) -> Option<LineDisclosure> {
-        let call = live_anchor(&self.input.blocks, &self.input.shape())?;
+        let call = live_anchor(&self.input.body.blocks, &self.input.shape())?;
         Some(LineDisclosure {
             open: self.tool_state(&call) == DisclosureState::Expanded,
             toggle: Rc::new(move |_, cx| {
@@ -1534,7 +1544,7 @@ impl TranscriptView {
         let open = self.tool_state(&id) == DisclosureState::Expanded;
         let targeted = self
             .tool_targeted(&id)
-            .then_some(&self.input.disclosure_focus);
+            .then_some(&self.input.presentation.disclosure_focus);
         let toggle = view.map(|view| -> Rc<dyn Fn(&mut Window, &mut App)> {
             let id = id.clone();
             Rc::new(move |_, cx| {
@@ -1546,7 +1556,10 @@ impl TranscriptView {
         });
         pane::turn_fold(
             pane::FoldFace {
-                key: SharedString::from(format!("turn-fold-{}-{id:?}", self.input.namespace)),
+                key: SharedString::from(format!(
+                    "turn-fold-{}-{id:?}",
+                    self.input.presentation.namespace
+                )),
                 label: &fold.label,
                 started: fold.started.as_deref(),
                 open,
@@ -1565,16 +1578,16 @@ impl TranscriptView {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         if row.kind() == RowKind::Working {
-            return match &self.input.working {
+            return match &self.input.presentation.working {
                 Some(working) => working.header(),
                 None => div().into_any_element(),
             };
         }
         if row.kind() == RowKind::Boundary {
-            return earlier_boundary(self.input.earlier, view);
+            return earlier_boundary(self.input.presentation.earlier, view);
         }
         if row.kind() == RowKind::LiveTail {
-            return match &self.input.working {
+            return match &self.input.presentation.working {
                 Some(working) => {
                     let disclosure = view.and_then(|view| self.line_disclosure(view));
                     working.live(row.blocks(), disclosure)
@@ -1589,7 +1602,7 @@ impl TranscriptView {
             return self.render_outputs(row, cx);
         }
         if row.kind() == RowKind::Tail {
-            return match (&self.input.tail, window) {
+            return match (&self.input.presentation.tail, window) {
                 (Some(tail), Some(window)) => div()
                     .debug_selector(|| "transcript-tail".into())
                     .w_full()
@@ -1623,7 +1636,7 @@ impl TranscriptView {
             let newest = self
                 .newest_content()
                 .is_some_and(|last| last.id() == row.id());
-            let streaming = self.input.working.is_some() && newest;
+            let streaming = self.input.presentation.working.is_some() && newest;
             let landing = self.answer_landing(cx).filter(|_| newest);
             let id = self.answer_id(first);
             let shown = self.actions_shown(&id);
@@ -1644,7 +1657,7 @@ impl TranscriptView {
                     ))
                     .child(self.copy_action(row.id(), source.to_owned()))
                     .children(view.as_ref().and_then(|view| {
-                        let allowed = self.input.rewind.as_ref()?;
+                        let allowed = self.input.presentation.rewind.as_ref()?;
                         Some(self.message_door(
                             row.id(),
                             ("answer-fork", ferrite_ui::icons::BRANCH, "Fork from here"),
@@ -1730,7 +1743,7 @@ impl TranscriptView {
                 block.id,
                 visual,
                 self.content_width(),
-                self.input.reading_size,
+                self.input.presentation.reading_size,
                 selection,
                 cx,
             );
@@ -1746,9 +1759,12 @@ impl TranscriptView {
             let cuts = block
                 .prompt_id
                 .as_ref()
-                .zip(self.input.rewind.as_ref())
+                .zip(self.input.presentation.rewind.as_ref())
                 .zip(view.as_ref());
-            let id = SharedString::from(format!("prompt-{}-{:?}", self.input.namespace, block.id));
+            let id = SharedString::from(format!(
+                "prompt-{}-{:?}",
+                self.input.presentation.namespace, block.id
+            ));
             let time = block.sent_at.as_deref().map(|at| {
                 message_time(
                     SharedString::from(format!("{id}-time")),
@@ -1842,8 +1858,13 @@ impl TranscriptView {
         let call = matches!(&block.body, Body::Thinking(text) if !text.trim().is_empty())
             .then_some(DisclosureId::Reasoning(block.id));
         // Still being thought: the running turn's last block.
-        let live = self.input.working.is_some()
-            && self.input.blocks.last().is_some_and(|last| last.id == block.id);
+        let live = self.input.presentation.working.is_some()
+            && self
+                .input
+                .body
+                .blocks
+                .last()
+                .is_some_and(|last| last.id == block.id);
         pane::render_block(
             block,
             row_cx,
@@ -1859,13 +1880,16 @@ impl TranscriptView {
     /// A row's width (the list's, less the row insets), once laid out.
     fn content_width(&self) -> Option<f32> {
         let width = self.list_w.get();
-        (width > 0.).then_some(theme::tx_column(width, self.input.solo))
+        (width > 0.).then_some(theme::tx_column(width, self.input.presentation.solo))
     }
 
     /// The transcript's grid: the reading size in Solo, a half step under
     /// it in a Group Pane (`theme::tx_size`).
     fn grid(&self) -> Grid {
-        Grid::pane(self.input.reading_size, self.input.solo)
+        Grid::pane(
+            self.input.presentation.reading_size,
+            self.input.presentation.solo,
+        )
     }
 
     /// A visual's page changed height: the list re-measures its row (off
@@ -1897,13 +1921,13 @@ impl TranscriptView {
     ) -> AnyElement {
         let block = stamped.id;
         if pane::is_agent(tool) {
-            let face = self.input.agents.get(&tool.call);
+            let face = self.input.presentation.agents.get(&tool.call);
             let open = view
                 .filter(|_| face.is_some())
                 .map(|view| agent_opener(&tool.call, view.clone()));
             let targeted = self
                 .tool_targeted(DisclosureId::Tool(tool.call.clone()))
-                .then_some(&self.input.disclosure_focus);
+                .then_some(&self.input.presentation.disclosure_focus);
             return pane::render_agent(
                 block,
                 tool,
@@ -1913,7 +1937,7 @@ impl TranscriptView {
                     open,
                     targeted,
                     live: background_opener(tool, view),
-                    ground: theme::tx_ground(self.input.solo),
+                    ground: theme::tx_ground(self.input.presentation.solo),
                 },
             );
         }
@@ -1975,7 +1999,7 @@ impl TranscriptView {
         if pane::is_agent_card(row.blocks()) {
             let clock = pane::AgentClock::longest(
                 pane::group_tools(row.blocks())
-                    .filter_map(|tool| self.input.agents.get(&tool.call)?.clock),
+                    .filter_map(|tool| self.input.presentation.agents.get(&tool.call)?.clock),
             );
             let rows = if expanded {
                 row.blocks()
@@ -1993,7 +2017,7 @@ impl TranscriptView {
                     open: expanded,
                     clock,
                     rows,
-                    ground: theme::tx_ground(self.input.solo),
+                    ground: theme::tx_ground(self.input.presentation.solo),
                 },
             );
         }
@@ -2025,7 +2049,7 @@ impl TranscriptView {
                 members: Box::new(members),
                 list: list.as_deref().map(|list| (list, opened)),
                 view_h: self.list_h.get(),
-                ground: theme::tx_ground(self.input.solo),
+                ground: theme::tx_ground(self.input.presentation.solo),
             },
         );
         if let (Some(list), Some(window)) = (list.as_deref(), window) {
@@ -2065,7 +2089,7 @@ impl TranscriptView {
                     // An agent's row has no details: it is a stop while it
                     // opens its agent (↵), which the keyboard can stop too.
                     let stop = if pane::is_agent(tool) {
-                        self.input.agents.get(&tool.call).is_some()
+                        self.input.presentation.agents.get(&tool.call).is_some()
                     } else {
                         pane::tool_has_details(tool)
                     };
@@ -2131,7 +2155,7 @@ impl TranscriptView {
             &call,
             expanded,
             targeted,
-            &self.input.disclosure_focus,
+            &self.input.presentation.disclosure_focus,
             self.grid().gutter(),
         )
         // The disclosure overlay fills the rendered header. Keep the handler
@@ -2173,7 +2197,7 @@ impl TranscriptView {
     fn copy_action(&self, row: &RowId, text: String) -> AnyElement {
         let id = gpui::ElementId::from(SharedString::from(format!(
             "message-copy-{}-{row:?}",
-            self.input.namespace
+            self.input.presentation.namespace
         )));
         // The hover blend draws through this cached view: ask for its next
         // frame.
@@ -2195,7 +2219,7 @@ impl TranscriptView {
         div()
             .id(SharedString::from(format!(
                 "prompt-clamp-{}-{clamp:?}",
-                self.input.namespace
+                self.input.presentation.namespace
             )))
             .debug_selector(|| "prompt-clamp-toggle".into())
             .flex()
@@ -2249,7 +2273,7 @@ impl TranscriptView {
     ) -> AnyElement {
         let id = gpui::ElementId::from(SharedString::from(format!(
             "{selector}-{}-{row:?}",
-            self.input.namespace
+            self.input.presentation.namespace
         )));
         let door = div()
             .id(id.clone())
@@ -2317,7 +2341,7 @@ impl TranscriptView {
         let remask = weak.clone();
         let id = gpui::ElementId::from(SharedString::from(format!(
             "transcript-pinned-{}",
-            self.input.namespace
+            self.input.presentation.namespace
         )));
         let key = ferrite_ui::pointer::hover_key(&id);
         let t = ferrite_ui::motion::hover_t(&key);
@@ -2360,16 +2384,19 @@ impl TranscriptView {
                     div()
                         .id(SharedString::from(format!(
                             "transcript-pinned-plane-{}",
-                            self.input.namespace
+                            self.input.presentation.namespace
                         )))
                         .block_mouse_except_scroll()
                         .cursor_default()
                         .flex()
                         .justify_center()
                         .w_full()
-                        .px(px(theme::tx_inset_at(self.list_w.get(), self.input.solo)))
+                        .px(px(theme::tx_inset_at(
+                            self.list_w.get(),
+                            self.input.presentation.solo,
+                        )))
                         .py(px(theme::PINNED_PROMPT_PAD_Y))
-                        .bg(gpui::rgb(theme::tx_ground(self.input.solo)))
+                        .bg(gpui::rgb(theme::tx_ground(self.input.presentation.solo)))
                         .child(
                             div()
                                 .flex()
@@ -2379,7 +2406,7 @@ impl TranscriptView {
                                 .child(bubble),
                         ),
                 )
-                .child(top_fade(self.input.solo))
+                .child(top_fade(self.input.presentation.solo))
                 .into_any_element(),
         )
     }
@@ -2389,7 +2416,7 @@ impl TranscriptView {
     fn rows_below(&self) -> gpui::Pixels {
         let state = self.scroll.list_state();
         let below = state.max_offset_for_scrollbar().y + state.scroll_px_offset_for_scrollbar().y;
-        below - px(theme::body_pad_b(self.input.solo) + self.runway.get().room)
+        below - px(theme::body_pad_b(self.input.presentation.solo) + self.runway.get().room)
     }
 
     /// How far a message's actions are shown: under the pointer, or (a
@@ -2417,9 +2444,9 @@ impl TranscriptView {
         let now = cx.background_executor().now();
         let delay = std::time::Duration::from_millis(theme::SCROLL_END_SHOW_DELAY_MS);
         let since = match &self.scroll_end_wanted {
-            Some((namespace, since)) if *namespace == self.input.namespace => *since,
+            Some((namespace, since)) if *namespace == self.input.presentation.namespace => *since,
             _ => {
-                self.scroll_end_wanted = Some((self.input.namespace.clone(), now));
+                self.scroll_end_wanted = Some((self.input.presentation.namespace.clone(), now));
                 cx.spawn(async move |view, cx| {
                     cx.background_executor().timer(delay).await;
                     let _ = view.update(cx, |_, cx| cx.notify());
@@ -2433,7 +2460,7 @@ impl TranscriptView {
         }
         let id = gpui::ElementId::from(SharedString::from(format!(
             "transcript-scroll-end-{}",
-            self.input.namespace
+            self.input.presentation.namespace
         )));
         let key = ferrite_ui::pointer::hover_key(&id);
         let t = ferrite_ui::motion::hover_t(&key);
@@ -2441,11 +2468,11 @@ impl TranscriptView {
             crate::file_links::mark_fading();
         }
         let weak = cx.entity().downgrade();
-        let queued = (self.input.queued > 0).then(|| {
+        let queued = (self.input.presentation.queued > 0).then(|| {
             div()
                 .debug_selector(|| "scroll-to-end-queued".into())
                 .text_color(gpui::rgb(theme::INK_SUBTLE))
-                .child(format!("· {} queued", self.input.queued))
+                .child(format!("· {} queued", self.input.presentation.queued))
         });
         Some(
             div()
@@ -2651,7 +2678,7 @@ fn message_time(
 /// A long thread's date divider (`RowKind::Divider`) over the first prompt
 /// of a new day: the day, centred and quiet in `INK_SUBTLE` at the meta
 /// size, between `LINE` hairlines.
-/// The owner's note under the first prompt (`TranscriptInput::note`): one
+/// The owner's note under the first prompt (`TranscriptPresentation::note`): one
 /// quiet line.
 fn note_line(text: &str) -> gpui::Div {
     div()
@@ -2833,7 +2860,7 @@ fn answer_times(blocks: &[Block]) -> HashMap<BlockId, String> {
 /// this window's calls named (their arguments and their diffs).
 fn target_context(input: &TranscriptInput) -> TargetContext {
     let mut known: Vec<String> = Vec::new();
-    for block in &input.blocks {
+    for block in &input.body.blocks {
         let Body::Tool(tool) = &block.body else {
             continue;
         };
@@ -2847,7 +2874,7 @@ fn target_context(input: &TranscriptInput) -> TargetContext {
         }
     }
     TargetContext {
-        workspace: input.workspace.clone(),
+        workspace: input.presentation.workspace.clone(),
         known,
     }
 }
@@ -2931,7 +2958,7 @@ impl TranscriptView {
             tops.push(at);
             at += heights.get(row.id()).copied().unwrap_or(fallback);
         }
-        (tops, at + theme::body_pad_b(self.input.solo))
+        (tops, at + theme::body_pad_b(self.input.presentation.solo))
     }
 
     /// Where the viewport's top is, in the estimated tops' space.
@@ -3018,7 +3045,10 @@ impl TranscriptView {
                 )
             })
             .collect();
-        let rail = SharedString::from(format!("transcript-minimap-{}", self.input.namespace));
+        let rail = SharedString::from(format!(
+            "transcript-minimap-{}",
+            self.input.presentation.namespace
+        ));
         let band_key = SharedString::from(format!("{rail}-band"));
         let band_t = ferrite_ui::motion::hover_t(&band_key);
         let band_ink = ferrite_ui::motion::mix(
@@ -3122,9 +3152,10 @@ impl Render for TranscriptView {
         // draws them, so their steps rebuild nothing of this transcript.
         ferrite_ui::loops_overlay::begin(window, cx.entity_id());
         self.document.begin_viewport_update(cx);
-        crate::file_links::begin_layout(&self.input.namespace, cx);
+        crate::file_links::begin_layout(&self.input.presentation.namespace, cx);
         // The answers' file links are this transcript's path targets.
-        self.rich.set_path_scope(self.input.namespace.clone());
+        self.rich
+            .set_path_scope(self.input.presentation.namespace.clone());
         self.settle_found(window, cx);
         self.settle_cited(window, cx);
         if self.fading(cx) {
@@ -3141,7 +3172,7 @@ impl Render for TranscriptView {
             self.scroll.scroll_to_bottom();
         }
         let grid = self.grid();
-        let solo = self.input.solo;
+        let solo = self.input.presentation.solo;
         let row_inset = theme::tx_inset_at(self.list_w.get(), solo);
         let list = list(
             self.scroll.list_state().clone(),
@@ -3188,7 +3219,7 @@ impl Render for TranscriptView {
         // The bottom padding is the list's own: it counts in the scroll
         // extent and the tail follow. A band jump's room rides it.
         .pb(px(
-            theme::body_pad_b(self.input.solo) + self.runway.get().room
+            theme::body_pad_b(self.input.presentation.solo) + self.runway.get().room
         ))
         .size_full()
         .min_h_0();
@@ -3204,7 +3235,7 @@ impl Render for TranscriptView {
         let shelf = self.visuals.clone();
         let list_w = self.list_w.clone();
         let list_h = self.list_h.clone();
-        let reading = self.input.reading_size;
+        let reading = self.input.presentation.reading_size;
         let inset = row_inset;
         let pad_b = theme::body_pad_b(solo);
         let list = div()
@@ -3359,10 +3390,11 @@ impl Render for TranscriptView {
                         });
                     }
                 }
-                // Ask once per position: a layout that keeps moving the band
-                // (it cannot, but a loop must never be possible) waits for the
-                // next ordinary render.
-                if moved && pinned_asked.get() != Some(now) {
+                // Suppress duplicate requests until the band settles, then
+                // allow a later visit to the same position to redraw it.
+                if !moved {
+                    pinned_asked.set(None);
+                } else if pinned_asked.get() != Some(now) {
                     pinned_asked.set(Some(now));
                     let weak = weak.clone();
                     window.defer(cx, move |_, cx| {
@@ -3399,7 +3431,7 @@ impl Render for TranscriptView {
             })
             .id(SharedString::from(format!(
                 "transcript-{}",
-                self.input.namespace
+                self.input.presentation.namespace
             )))
             .flex()
             .flex_col()
@@ -3430,10 +3462,10 @@ impl Render for TranscriptView {
                     .id("transcript-controls-end")
                     .track_focus(&self.controls_end),
             )
-            .text_selection_scope(if self.input.focused {
+            .text_selection_scope(if self.input.presentation.focused {
                 gpui::base::TextSelectionScopeId::default()
             } else {
-                self.input.selection_scope
+                self.input.presentation.selection_scope
             });
         let pinned = pinned.and_then(|(index, shift)| self.pinned_band(index, shift, cx));
         // Scrolled past the body's top padding: a fade over the padding
@@ -3470,7 +3502,10 @@ impl Render for TranscriptView {
                 ferrite_ui::components::scrollbar_layer()
                     .debug_selector(|| "transcript-scrollbar".into())
                     .child(ferrite_ui::components::scrollbar_bar(
-                        SharedString::from(format!("transcript-scrollbar-{}", self.input.namespace)),
+                        SharedString::from(format!(
+                            "transcript-scrollbar-{}",
+                            self.input.presentation.namespace
+                        )),
                         self.scroll.list_state(),
                     )),
             )
@@ -3488,7 +3523,7 @@ impl Render for TranscriptView {
                             .top_0()
                             .left_0()
                             .right_0()
-                            .child(top_fade(self.input.solo))
+                            .child(top_fade(self.input.presentation.solo))
                     }),
             )
             .children(pinned)
@@ -3499,7 +3534,7 @@ impl Render for TranscriptView {
                     .bottom_0()
                     .left_0()
                     .right_0()
-                    .child(bottom_fade(self.input.solo))
+                    .child(bottom_fade(self.input.presentation.solo))
             }))
             .children(latest)
             .children(minimap)
@@ -3520,6 +3555,143 @@ mod tests {
     use super::{answer_times, Arrival};
     use ferrite_ui::motion::{BUBBLE_IN, STREAM_FADE};
     use std::time::{Duration, Instant};
+
+    #[gpui::test]
+    fn an_unchanged_presentation_does_not_build_a_body(cx: &mut gpui::TestAppContext) {
+        use gpui::AppContext;
+        let view = cx.new(|cx| {
+            super::TranscriptView::empty(
+                ferrite_core::ThreadId::new(1),
+                "lazy-transcript".into(),
+                crate::preview::Preview::new(cx),
+                crate::rich::TextCache::default(),
+                cx,
+            )
+        });
+        view.update(cx, |view, cx| {
+            let presentation = view.input.presentation.clone();
+            assert!(!view.reconcile(
+                presentation,
+                || panic!("unchanged presentation cloned its body"),
+                crate::select::TranscriptText::default(),
+                cx,
+            ));
+        });
+    }
+
+    #[gpui::test]
+    fn an_equal_length_skill_catalogue_change_redraws_the_sent_prompt(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let (view, cx) = cx.add_window_view(|_, cx| {
+            gpui::component::init(cx);
+            super::TranscriptView::empty(
+                ferrite_core::ThreadId::new(1),
+                "catalogue-transcript".into(),
+                crate::preview::Preview::new(cx),
+                crate::rich::TextCache::default(),
+                cx,
+            )
+        });
+        cx.simulate_resize(gpui::size(gpui::px(900.), gpui::px(600.)));
+        let mut transcript = Transcript::default();
+        transcript.apply(Input::Prompt("/before /after".into()));
+        for (name, present, absent) in [
+            ("before", "prompt-skill-before", "prompt-skill-after"),
+            ("after", "prompt-skill-after", "prompt-skill-before"),
+        ] {
+            let commands = vec![ferrite_core::SessionCommand {
+                name: name.into(),
+                description: format!("Use {name}"),
+                path: None,
+                source: None,
+            }];
+            view.update(cx, |view, cx| {
+                let presentation = super::TranscriptPresentation {
+                    content_revision: (1, 0),
+                    skills: std::borrow::Cow::Borrowed(&commands),
+                    ..view.input.presentation.clone()
+                };
+                let body = super::TranscriptBody {
+                    blocks: transcript.blocks().to_vec(),
+                    preview: view.input.body.preview.clone(),
+                    expanded: Default::default(),
+                    target: None,
+                };
+                assert!(view.reconcile(
+                    presentation,
+                    || body,
+                    crate::select::TranscriptText::default(),
+                    cx,
+                ));
+            });
+            cx.run_until_parked();
+            assert!(
+                cx.debug_bounds(present).is_some(),
+                "the named skill is linked"
+            );
+            assert!(
+                cx.debug_bounds(absent).is_none(),
+                "the unlisted word is plain"
+            );
+        }
+    }
+
+    #[gpui::test]
+    fn returning_to_the_tail_keeps_the_pinned_prompt_visible(cx: &mut gpui::TestAppContext) {
+        let (view, cx) = cx.add_window_view(|_, cx| {
+            gpui::component::init(cx);
+            super::TranscriptView::empty(
+                ferrite_core::ThreadId::new(1),
+                "pinned-transcript".into(),
+                crate::preview::Preview::new(cx),
+                crate::rich::TextCache::default(),
+                cx,
+            )
+        });
+        cx.simulate_resize(gpui::size(gpui::px(900.), gpui::px(600.)));
+        let mut transcript = Transcript::default();
+        let answer = "A paragraph in a long answer.\n\n".repeat(80);
+        turn(&mut transcript, "Keep this prompt visible.", &answer, None);
+        view.update(cx, |view, cx| {
+            let presentation = super::TranscriptPresentation {
+                content_revision: (1, 0),
+                ..view.input.presentation.clone()
+            };
+            let body = super::TranscriptBody {
+                blocks: transcript.blocks().to_vec(),
+                preview: view.input.body.preview.clone(),
+                expanded: Default::default(),
+                target: None,
+            };
+            view.reconcile(
+                presentation,
+                || body,
+                crate::select::TranscriptText::default(),
+                cx,
+            );
+        });
+        cx.run_until_parked();
+        assert!(cx.debug_bounds("transcript-pinned-prompt").is_some());
+
+        for _ in 0..2 {
+            for (page, visible) in [
+                (super::Page::Bottom, true),
+                (super::Page::Up, true),
+                (super::Page::Top, false),
+                (super::Page::Down, true),
+                (super::Page::Bottom, true),
+            ] {
+                view.update(cx, |view, cx| view.page(page, cx));
+                cx.run_until_parked();
+                assert_eq!(
+                    cx.debug_bounds("transcript-pinned-prompt").is_some(),
+                    visible,
+                    "the pinned prompt follows navigation to {page:?}"
+                );
+            }
+        }
+    }
 
     /// A row's entrance starts on the frame that first draws it, however
     /// long the frame after its arrival took: the whole entrance plays.

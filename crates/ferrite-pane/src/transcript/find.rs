@@ -174,18 +174,18 @@ impl TranscriptView {
     fn find_units(&self) -> Vec<FindUnit> {
         let shape: RowShape = self.input.shape();
         let open = TranscriptRows::new(
-            &self.input.blocks,
-            &shape.opened(&self.input.blocks),
+            &self.input.body.blocks,
+            &shape.opened(&self.input.body.blocks),
             self.grid().size,
         );
         let selection = crate::select::TranscriptText::default()
             .overlay_scoped(
-                self.input.thread,
-                self.input.namespace.clone(),
-                &self.input.blocks,
+                self.input.presentation.thread,
+                self.input.presentation.namespace.clone(),
+                &self.input.body.blocks,
                 self.rich.clone(),
             )
-            .with_hidden(super::rows::hidden_by(&self.input.blocks, &shape));
+            .with_hidden(super::rows::hidden_by(&self.input.body.blocks, &shape));
         let (_, texts) = selection.capture_members(|| {
             for row in open.rows() {
                 selection.begin_row();

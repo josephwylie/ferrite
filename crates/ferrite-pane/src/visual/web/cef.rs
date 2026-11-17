@@ -28,6 +28,7 @@
 //! - **Main-thread budget.** Browsers are created from `pump()`, at most one
 //!   per call, so a scroll that brings several views back staggers them.
 
+mod annotations;
 mod control;
 mod document;
 mod handlers;
@@ -522,7 +523,13 @@ impl ViewState {
             callback.cont(0, None);
             return;
         }
-        if let Some(earlier) = self.requests.lock().unwrap().dialog.replace(MainThread(callback)) {
+        if let Some(earlier) = self
+            .requests
+            .lock()
+            .unwrap()
+            .dialog
+            .replace(MainThread(callback))
+        {
             earlier.0.cont(0, None);
         }
         self.navigation(generation, |state| state.dialog = Some(request));
@@ -704,6 +711,12 @@ impl Engine for CefEngine {
         let views = engine.live_views();
         for view in &views {
             view.finish_deferred_hide();
+            if let (Some(browser), Some(annotation)) = (
+                view.browser.borrow().as_ref(),
+                view.annotation.borrow_mut().as_mut(),
+            ) {
+                annotation.pump(browser, &view.state);
+            }
             if let (Some(browser), Some(observation)) = (
                 view.browser.borrow().as_ref(),
                 view.observation.borrow_mut().as_mut(),
@@ -822,6 +835,7 @@ impl CefEngine {
             doc,
             browser: RefCell::new(None),
             observation: RefCell::new(None),
+            annotation: RefCell::new(None),
             failed: Cell::new(false),
             agent_access: Arc::new(AgentAccess::default()),
             protected: Cell::new(false),
@@ -856,6 +870,7 @@ impl EngineInner {
             view.agent_access.epoch.fetch_add(1, Ordering::SeqCst);
             view.state.retire_dialog();
             view.state.generation.fetch_add(1, Ordering::SeqCst);
+            view.annotation.borrow_mut().take();
             view.observation.borrow_mut().take();
             if let Some(browser) = view.browser.borrow_mut().take() {
                 if let Some(host) = browser.host() {
@@ -919,6 +934,7 @@ struct ViewInner {
     /// initialised yet when the host opens), and again once released.
     browser: RefCell<Option<Browser>>,
     observation: RefCell<Option<observation::Observation>>,
+    annotation: RefCell<Option<annotations::AnnotationSession>>,
     failed: Cell<bool>,
     agent_access: Arc<AgentAccess>,
     protected: Cell<bool>,
@@ -1157,6 +1173,7 @@ impl ViewInner {
 
 impl Drop for ViewInner {
     fn drop(&mut self) {
+        self.annotation.get_mut().take();
         self.observation.get_mut().take();
         if let Some(host) = self.host() {
             host.close_browser(1);
@@ -1451,6 +1468,51 @@ impl BrowserView for CefView {
         }
         Ok(())
     }
+    fn start_annotation(&self, generation: u64, send_enabled: bool) -> Result<(), String> {
+        if !self.0.protected.get()
+            || !self.0.agent_access.paused.load(Ordering::SeqCst)
+            || self.state().document_generation != generation
+            || self.state().loading
+        {
+            return Err("The browser document changed before annotation could start".into());
+        }
+        if self
+            .0
+            .annotation
+            .borrow()
+            .as_ref()
+            .is_some_and(|session| !session.closed())
+        {
+            return Err("Finish the current annotation first".into());
+        }
+        let browser = self.0.browser.borrow();
+        let browser = browser.as_ref().ok_or("The browser is unavailable")?;
+        *self.0.annotation.borrow_mut() = Some(annotations::AnnotationSession::new(
+            browser,
+            generation,
+            send_enabled,
+        )?);
+        Ok(())
+    }
+    fn take_annotation_event(&self) -> Option<crate::visual::live_annotation::Event> {
+        self.0.annotation.borrow_mut().as_mut()?.take_event()
+    }
+    fn set_annotation_send_enabled(&self, enabled: bool) {
+        if let (Some(browser), Some(session)) = (
+            self.0.browser.borrow().as_ref(),
+            self.0.annotation.borrow_mut().as_mut(),
+        ) {
+            session.set_send_enabled(browser, enabled);
+        }
+    }
+    fn finish_annotation(&self, _generation: u64) {
+        if let (Some(browser), Some(session)) = (
+            self.0.browser.borrow().as_ref(),
+            self.0.annotation.borrow_mut().as_mut(),
+        ) {
+            session.finish(browser);
+        }
+    }
     fn take_new_windows(&self) -> Vec<String> {
         std::mem::take(&mut self.0.state.requests.lock().unwrap().windows)
     }
@@ -1504,6 +1566,7 @@ impl BrowserView for CefView {
         {
             return Ok(false);
         }
+        view.annotation.borrow_mut().take();
         view.observation.borrow_mut().take();
         view.state.generation.fetch_add(1, Ordering::SeqCst);
         *view.state.layers.lock().unwrap() = BrowserLayers::default();
@@ -1531,7 +1594,11 @@ mod tests {
             external: true,
             navigation: Mutex::new(BrowserState::default()),
             requests: Mutex::default(),
-            geometry: Mutex::new(Geometry { width: 1, height: 1, scale: 1.0 }),
+            geometry: Mutex::new(Geometry {
+                width: 1,
+                height: 1,
+                scale: 1.0,
+            }),
             layers: Mutex::new(BrowserLayers::default()),
             updates: Mutex::new(Updates::default()),
             last_cursor: Mutex::new(Cursor::Arrow),

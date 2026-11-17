@@ -3277,3 +3277,50 @@ mod cache_cost_tests {
         }
     }
 }
+
+#[cfg(test)]
+mod stream_fade_tests {
+    use super::*;
+    use gpui::{div, Context, Render, TestAppContext};
+
+    struct Stream {
+        cache: TextCache,
+        source: String,
+    }
+
+    impl Render for Stream {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            div().w(px(360.)).child(
+                Markdown::new("stream", self.source.clone(), self.cache.clone()).streaming(true),
+            )
+        }
+    }
+
+    /// The fade counts a view's text in bytes from one frame to the next,
+    /// and Markdown that closes shrinks what the last frame counted: `**a`
+    /// is three bytes until its `**` closes. The old end then falls inside
+    /// the `→` that follows, which crashed the window (Nov 2026, five
+    /// reports in two days).
+    #[gpui::test]
+    fn a_fade_paints_when_closing_markdown_leaves_its_start_inside_a_character(
+        cx: &mut TestAppContext,
+    ) {
+        cx.update(crate::pane::init_components);
+        let (stream, cx) = cx.add_window_view(|_, _| Stream {
+            cache: TextCache::default(),
+            source: "**a".into(),
+        });
+        let draw = |cx: &mut gpui::VisualTestContext| {
+            cx.run_until_parked();
+            cx.update(|window, cx| {
+                let _ = window.draw(cx);
+            });
+        };
+        draw(cx);
+        stream.update(cx, |stream, cx| {
+            stream.source = "**a** →b".into();
+            cx.notify();
+        });
+        draw(cx);
+    }
+}

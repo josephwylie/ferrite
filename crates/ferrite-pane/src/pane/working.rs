@@ -27,6 +27,12 @@ pub struct WorkingTail {
     state: Rc<Working>,
 }
 
+impl PartialEq for WorkingTail {
+    fn eq(&self, other: &Self) -> bool {
+        self.key == other.key
+    }
+}
+
 impl WorkingTail {
     /// The header's key while a turn runs; `None` with no turn running (a
     /// Session starting, a plan left by a turn cut short).

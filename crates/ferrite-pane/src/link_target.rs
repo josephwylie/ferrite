@@ -74,7 +74,10 @@ impl LinkTarget {
     pub fn resolve(raw: &str, cwd: Option<&Path>) -> Self {
         let raw = raw.strip_prefix(PATH_SCHEME).unwrap_or(raw);
         let base = cwd.and_then(origin_base);
-        if let Some(pr) = base.as_deref().and_then(|base| repo_pull_request(raw, base)) {
+        if let Some(pr) = base
+            .as_deref()
+            .and_then(|base| repo_pull_request(raw, base))
+        {
             return pr;
         }
         if let Some(number) = raw.strip_prefix(ISSUE_SCHEME) {
@@ -159,7 +162,7 @@ impl LinkTarget {
                 notify_unavailable(why, window, cx);
                 true
             }
-            Self::PullRequest { .. } | Self::RepoPullRequest { .. } | Self::Thread(_) => false,
+            Self::PullRequest { .. } | Self::Thread(_) => false,
         }
     }
 }
@@ -204,7 +207,12 @@ mod tests {
 
     #[test]
     fn the_renderers_schemes_never_become_an_address_for_the_os() {
-        for raw in ["issue:212", "ferrite-chip:/a", "ferrite-skill:x", "ferrite-thread:x"] {
+        for raw in [
+            "issue:212",
+            "ferrite-chip:/a",
+            "ferrite-skill:x",
+            "ferrite-thread:x",
+        ] {
             assert!(
                 matches!(LinkTarget::resolve(raw, None), LinkTarget::Unavailable(_)),
                 "{raw}"
@@ -219,7 +227,9 @@ mod tests {
     #[test]
     fn an_address_is_what_the_link_names_not_what_it_shows() {
         assert_eq!(
-            LinkTarget::resolve("https://example.com/a?b=c#d", None).address().as_deref(),
+            LinkTarget::resolve("https://example.com/a?b=c#d", None)
+                .address()
+                .as_deref(),
             Ok("https://example.com/a?b=c#d")
         );
         assert_eq!(

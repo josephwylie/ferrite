@@ -3192,9 +3192,13 @@ pub const SUBAGENT_NAME_GAP: f32 = SPACE_2;
 // truncating box is pinned to what its row leaves it, measured from the
 // face's own advances (`nav::Measure`).
 
-pub const NAV_INSET: f32 = SPACE_3;
-pub const NAV_INSET_Y: f32 = 40.0;
-pub const NAV_R: f32 = 18.0;
+/// T3 Code dark navigation, independent of the global panel paint.
+pub const NAV_BACKGROUND: Paint = Paint::solid(0x000000);
+/// T3 workspace topbar height, including brand and history controls.
+pub const NAV_HEADER_H: f32 = 52.0;
+pub const NAV_INSET: f32 = 0.0;
+pub const NAV_INSET_Y: f32 = 0.0;
+pub const NAV_R: f32 = 0.0;
 pub const NAV_COL_PAD: f32 = SPACE_2;
 pub const NAV_EDGE_TAB_W: f32 = 14.0;
 pub const NAV_EDGE_TAB_H: f32 = 44.0;
