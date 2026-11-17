@@ -155,17 +155,18 @@ class Boundary:
     def concurrent_start(self,state,*_):
         self.b=state
         def waited(state,text,answer):
-            self.concurrent['wait']=True;self.concurrent_done()
+            self.concurrent['wait']=state is not None;self.concurrent_done()
         def scrolled(state,text,answer):
-            self.concurrent['scroll']=True;self.concurrent_done()
+            self.concurrent['scroll']=state is not None;self.concurrent_done()
         # Either serialized completion or an explicit busy refusal is valid;
         # neither caller may redirect the other to another page.
-        self.control(self.b,{'kind':'wait','selector':'#concurrent-ready','state':'attached'},waited)
+        self.control(self.b,{'kind':'wait','selector':'#concurrent-ready','state':'attached'},waited,None)
         self.number+=1;name='boundary-'+str(self.number)
         op={'kind':'control',**self.identity(self.b),'observation':self.b['observation'],'control':{'kind':'scroll','x':0,'y':1}}
         self.handlers[name]=(scrolled,None,op);self.call(name,op)
     def concurrent_done(self):
         if len(self.concurrent)!=2:return
+        if not any(self.concurrent.values()):raise ValueError('Neither concurrent caller made progress')
         self.checks.append('concurrent callers finish serially or refuse busy work without retargeting')
         self.action(self.b,{'kind':'select','tab':self.a_tab},self.selected_a)
     def selected_a(self,*_):self.control(self.old_a,{'kind':'click','reference':self.ref(self.old_a,'Boundary target')},self.old_a_refused,True)
@@ -190,7 +191,21 @@ class Boundary:
     def failed_recovery(self,state,text,answer):
         if 'initial_failures=1' not in text or 'recovery_attempts=1' not in text:raise ValueError('Failed click lost its bounded recovery counters')
         self.checks.append('failed recovery retains both attempt counters and does not dispatch a click')
-        self.observe(self.uncertain_begin)
+        self.observe(self.queued_begin)
+    def queued_begin(self,state,*_):
+        for suffix in ('arm','waiting','release'):(self.output/('dispatch-gate-'+suffix)).unlink(missing_ok=True)
+        (self.output/'dispatch-gate-arm').write_text('hold native attachment before server dispatch authorization')
+        self.control(state,{'kind':'click','reference':self.ref(state,'Commit boundary write')},self.queued_expired,True)
+    def queued_expired(self,state,text,answer):
+        if 'before dispatch authorization' not in text.lower() or not (self.output/'dispatch-gate-waiting').exists():raise ValueError('Queued native request did not expire before dispatch authorization: '+text)
+        (self.output/'dispatch-gate-release').write_text('release expired request to the native Ready boundary')
+        self.observe(self.queued_reconciled)
+    def queued_reconciled(self,state,*_):
+        parsed=urlsplit(self.base);url=urlunsplit((parsed.scheme,parsed.netloc,'/boundaries-oracle','',''))
+        oracle=json.loads(urlopen(url,timeout=5).read())
+        if oracle['saves']:raise ValueError('Expired queued write executed after native attachment resumed')
+        self.checks.append('server-queued request expires before native attachment and cannot dispatch after release')
+        self.uncertain_begin(state)
     def uncertain_begin(self,state,*_):
         self.a=state
         for suffix in ('arm','dispatched','release'):(self.output/('completion-gate-'+suffix)).unlink(missing_ok=True)
@@ -216,6 +231,7 @@ class Boundary:
     def fail(self,error):
         if self.failed:return
         self.failed=True
+        (self.output/'dispatch-gate-release').write_text('failure cleanup')
         (self.output/'completion-gate-release').write_text('failure cleanup')
         (self.output/'boundary-results.json').write_text(json.dumps({'success':False,'error':error,'checks':self.checks},indent=2))
         self.finish({'isError':True,'success':False,'content':[{'type':'text','text':error}],'contentItems':[{'type':'text','text':error}]})

@@ -10,7 +10,8 @@ import base64
 
 provider = sys.argv[sys.argv.index('--provider') + 1]
 if '--version' in sys.argv:
-    print('2.1.318 (Claude Code)' if provider == 'claude' else 'codex-cli 0.167.0')
+    # Discovery chooses the newest installation, including copies outside PATH.
+    print('9999.0.0 (Claude Code)' if provider == 'claude' else 'codex-cli 9999.0.0')
     sys.exit(0)
 
 output = Path(os.environ['FERRITE_BROWSER_WINDOW_OUTPUT'])
