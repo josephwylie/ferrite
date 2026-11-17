@@ -263,7 +263,10 @@ fn a_menu_shortcut_is_a_bound_chord(cx: &mut TestAppContext) {
             .find(|(_, verb)| *verb == MenuVerb::Fullscreen)
             .and_then(|(item, _)| item.shortcut)
     });
-    assert_eq!(fullscreen.as_deref(), Some("cmd-shift-⏎"));
+    assert_eq!(
+        fullscreen.as_deref(),
+        Some(ferrite_ui::keymap::PLATFORM.chord("shift-⏎").as_str())
+    );
 }
 
 /// A right-click on a Pane summons the menu for its Thread; escape
@@ -856,20 +859,20 @@ fn connection_pairing_url_paste_fills_host_and_code_after_replacing_text(cx: &mu
     bind_production_keys(cx);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     tick(cx);
-    cx.simulate_keystrokes("cmd-,");
+    cx.simulate_keystrokes(&ferrite_ui::keymap::PLATFORM.chord(","));
     tick(cx);
     view.update_in(cx, |view, window, cx| view.edit_connection(None, window, cx));
     tick(cx);
     let fields = connection_fields(&view, cx);
     cx.simulate_input("https://backend.example.com");
     cx.run_until_parked();
-    cx.simulate_keystrokes("cmd-a");
+    cx.simulate_keystrokes(&ferrite_ui::keymap::PLATFORM.chord("a"));
     cx.update(|_, cx| {
         cx.write_to_clipboard(gpui::ClipboardItem::new_string(
             "https://backend.example.com/pair#code=0123456789abcdef0123456789abcdef&server=fedcba9876543210fedcba9876543210".into(),
         ))
     });
-    cx.simulate_keystrokes("cmd-v");
+    cx.simulate_keystrokes(&ferrite_ui::keymap::PLATFORM.chord("v"));
     cx.run_until_parked();
     view.read_with(cx, |_, cx| {
         assert_eq!(

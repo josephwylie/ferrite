@@ -133,7 +133,7 @@ fn status(branch: &str, ahead: u32, behind: u32, dirty: u32) -> BranchStatus {
 /// request reading `pr`. Nothing global is touched: the caller points HOME
 /// at `World::home` and owns the clock.
 pub(crate) fn build(root: &Path, look: Look, pr: Pr, clock: Clock) -> World {
-    let root = std::fs::canonicalize(root).expect("a canonical disposable root");
+    let root = ferrite_core::workspace::follow::canonical(root);
     let home = root.join("home");
     let launch = home.join("Desktop").join("Projects");
     let project = |name: &str| launch.join(name);

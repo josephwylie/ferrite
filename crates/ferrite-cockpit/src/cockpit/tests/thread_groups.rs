@@ -419,7 +419,7 @@ fn multi_project_groups_keep_bindings_and_filter_only_navigation(cx: &mut TestAp
                 .workspace()
                 .unwrap()
                 .cwd(),
-            repo.canonicalize().unwrap()
+            ferrite_core::workspace::follow::canonical(&repo)
         );
         assert_eq!(view.cockpit.project_id(original[0]), Some(first_project));
         assert_eq!(view.cockpit.project_id(joined), Some(second_project));
@@ -469,7 +469,7 @@ fn multi_project_groups_keep_bindings_and_filter_only_navigation(cx: &mut TestAp
                 .workspace()
                 .unwrap()
                 .cwd(),
-            repo.canonicalize().unwrap()
+            ferrite_core::workspace::follow::canonical(&repo)
         );
     });
 }

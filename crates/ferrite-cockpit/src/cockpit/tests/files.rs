@@ -381,10 +381,11 @@ fn the_filter_lists_matches_and_a_row_menu_copies_paths(cx: &mut TestAppContext)
             .collect();
         assert_eq!(names, ["Attach as context", "Copy", "Show in Finder"]);
     });
-    let lib = checkout.join("src/lib.rs");
+    let relative = std::path::Path::new("src").join("lib.rs");
+    let lib = checkout.join(&relative);
     for (verb, expect) in [
         (FilesVerb::CopyAbsolute, lib.to_string_lossy().into_owned()),
-        (FilesVerb::CopyRelative, "src/lib.rs".to_string()),
+        (FilesVerb::CopyRelative, relative.to_string_lossy().into_owned()),
         (FilesVerb::CopyName, "lib.rs".to_string()),
     ] {
         view.update(cx, |view, cx| view.run_files_verb(thread, verb, cx));

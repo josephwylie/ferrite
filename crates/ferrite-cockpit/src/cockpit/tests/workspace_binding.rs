@@ -132,7 +132,7 @@ fn a_new_thread_binds_to_the_main_checkout(cx: &mut TestAppContext) {
         assert!(matches!(binding, WorkspaceBinding::Main { .. }));
         // The registry canonicalizes what it registers; the binding is
         // the registered root.
-        assert_eq!(binding.cwd(), repo.canonicalize().unwrap());
+        assert_eq!(binding.cwd(), ferrite_core::workspace::follow::canonical(&repo));
     });
 }
 

@@ -59,7 +59,7 @@ impl FileLink {
                 if path.is_absolute() {
                     path
                 } else {
-                    cwd?.join(path)
+                    under(cwd?, &path)
                 }
             }
         };
@@ -102,6 +102,12 @@ impl FileLink {
             cx.open_url(&url);
         }
     }
+}
+
+/// `relative` under `root` in the platform's separators: an agent writes
+/// `src/main.rs` on Windows too, and Copy and the editor get `src\main.rs`.
+fn under(root: &Path, relative: &Path) -> PathBuf {
+    root.join(relative.components().collect::<PathBuf>())
 }
 
 fn split_location(value: &str) -> (&str, Option<&str>) {
@@ -534,7 +540,7 @@ impl TargetContext {
         }) {
             let path = PathBuf::from(known);
             return Some(match (&self.workspace, path.is_absolute()) {
-                (Some(root), false) => root.join(path),
+                (Some(root), false) => under(root, &path),
                 _ => path,
             });
         }
@@ -542,7 +548,7 @@ impl TargetContext {
         let path = if Path::new(raw).is_absolute() {
             PathBuf::from(raw)
         } else {
-            root.join(raw)
+            under(root, Path::new(raw))
         };
         (inside_checkout(&path, root).is_some() && is_file(&path)).then_some(path)
     }
@@ -835,7 +841,7 @@ pub(crate) mod tests {
         let cwd = checkout.as_path();
         assert_eq!(
             FileLink::resolve("docs/report.md", Some(cwd)).unwrap().path,
-            cwd.join("docs/report.md")
+            cwd.join("docs").join("report.md")
         );
         assert!(FileLink::resolve("report.md", None).is_none());
         for url in [
