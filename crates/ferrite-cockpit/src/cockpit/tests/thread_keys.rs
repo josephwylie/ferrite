@@ -120,3 +120,35 @@ fn the_walk_steps_over_a_parked_thread(cx: &mut TestAppContext) {
     }
     assert_eq!(shown(&threads, cx), [open[1]], "three steps over two Threads");
 }
+
+/// A Group saved before the window showed one Thread at a time loses no
+/// Thread: each member keeps its own row and shows alone.
+#[gpui::test]
+fn a_saved_groups_threads_are_listed_and_show_alone(cx: &mut TestAppContext) {
+    bind_production_keys(cx);
+    let (mut core, _fake) = cockpit("thread-keys-saved-group", 3);
+    let threads = core.threads();
+    core.apply_group(ferrite_core::groups::GroupChange::Create {
+        first: threads[0],
+        second: threads[1],
+    })
+    .unwrap();
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    hold_nav_open(&view, cx);
+    hide_panel(&view, cx);
+    cx.simulate_resize(gpui::size(px(1200.), px(800.)));
+    tick(cx);
+    let order = listed(&threads, cx);
+    assert_eq!(order.len(), 3, "the Group's members keep their rows");
+
+    for thread in &order {
+        view.update(cx, |view, cx| view.focus_thread(*thread, cx));
+        tick(cx);
+        assert_eq!(shown(&threads, cx), [*thread], "a member shows alone");
+    }
+    for expected in &order {
+        cx.simulate_keystrokes("cmd-}");
+        tick(cx);
+        assert_eq!(shown(&threads, cx), [*expected], "the walk shows one Thread");
+    }
+}
