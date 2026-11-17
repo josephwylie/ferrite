@@ -239,13 +239,16 @@ impl CockpitView {
             )
             .child(
                 div()
+                    .id(("changes-viewed", at))
                     .debug_selector(move || format!("changes-reviewed-{at}"))
                     .flex_shrink_0()
+                    .tooltip(ferrite_ui::menu::tooltip(
+                        "Viewed marks are kept in this Ferrite panel, not on the host",
+                    ))
                     .child(
                         Checkbox::new(SharedString::from(key))
                             .checked(reviewed)
                             .accessibility_label(format!("Viewed {}", file.path))
-                            .tooltip("Viewed marks are kept in this Ferrite panel, not on the host")
                             .text_size(px(12.))
                             .text_color(rgb(INK_SUBTLE))
                             .items_center()
