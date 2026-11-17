@@ -307,10 +307,8 @@ fn a_working_card_counts_its_run_and_recedes(cx: &mut TestAppContext) {
 #[gpui::test]
 fn two_decisions_head_the_list_and_no_toast(cx: &mut TestAppContext) {
     use gpui::component::WindowExt as _;
-    let (mut core, fake) = cockpit("needs-you-rows", 3);
+    let (core, fake) = cockpit("needs-you-rows", 3);
     let threads = core.threads();
-    let group = group_all(&mut core);
-    core.enter_group(group).unwrap();
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     cx.simulate_resize(gpui::size(px(1440.), px(900.)));
     tick(cx);

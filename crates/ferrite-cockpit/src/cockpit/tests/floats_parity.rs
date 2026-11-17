@@ -189,8 +189,6 @@ fn palette_keys_wrap_and_land_on_a_thread(cx: &mut TestAppContext) {
     let (mut core, _fake) = cockpit("palette-keys", 2);
     let threads = core.threads();
     core.rename_thread(threads[1], "Second thread").unwrap();
-    let group = group_all(&mut core);
-    core.enter_group(group).unwrap();
     bind_production_keys(cx);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     cx.simulate_resize(gpui::size(px(1440.), px(900.)));
