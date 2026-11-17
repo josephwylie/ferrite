@@ -88,8 +88,8 @@ fn the_badges_menu_copies_the_pr_and_the_row_copies_the_thread(cx: &mut TestAppC
     let (view, [a, b], cx) = two_prs("link-pr-badge-menu", Some(REPO_B), cx);
 
     press(badge(b), MouseButton::Right, gpui::Modifiers::none(), cx);
-    let labels: Vec<String> = view.read_with(cx, |view, _| {
-        view.context_rows(MenuTarget::PrLink(b))
+    let labels: Vec<String> = view.read_with(cx, |view, cx| {
+        view.context_rows(MenuTarget::PrLink(b), cx)
             .into_iter()
             .flatten()
             .map(|(item, _)| item.label.to_string())
@@ -105,8 +105,8 @@ fn the_badges_menu_copies_the_pr_and_the_row_copies_the_thread(cx: &mut TestAppC
     assert_eq!(clipboard(cx).as_deref(), Some(REPO_B), "B's forge URL");
 
     press(format!("nav-thread-{}", a.get()), MouseButton::Right, gpui::Modifiers::none(), cx);
-    let labels: Vec<String> = view.read_with(cx, |view, _| {
-        view.context_rows(MenuTarget::Thread(a))
+    let labels: Vec<String> = view.read_with(cx, |view, cx| {
+        view.context_rows(MenuTarget::Thread(a), cx)
             .into_iter()
             .flatten()
             .map(|(item, _)| item.label.to_string())
@@ -135,7 +135,7 @@ fn a_command_press_on_the_badge_opens_the_forge_in_the_system_browser(cx: &mut T
 #[gpui::test]
 fn a_pr_without_an_address_says_why_on_its_rows(cx: &mut TestAppContext) {
     let (view, [_, b], cx) = two_prs("link-pr-badge-no-url", None, cx);
-    let rows = view.read_with(cx, |view, _| view.context_rows(MenuTarget::PrLink(b)));
+    let rows = view.read_with(cx, |view, cx| view.context_rows(MenuTarget::PrLink(b), cx));
     let disabled: Vec<(String, bool)> = rows
         .into_iter()
         .flatten()

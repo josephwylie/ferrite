@@ -4,8 +4,8 @@
 #[allow(unused_imports)]
 use super::*;
 
-fn labels(view: &CockpitView, thread: ThreadId) -> Vec<String> {
-    view.context_rows(MenuTarget::Thread(thread))
+fn labels(view: &CockpitView, thread: ThreadId, cx: &gpui::App) -> Vec<String> {
+    view.context_rows(MenuTarget::Thread(thread), cx)
         .into_iter()
         .flatten()
         .map(|(item, _)| item.label.to_string())
@@ -24,10 +24,10 @@ fn the_row_menu_reads_in_claudes_order(cx: &mut TestAppContext) {
     let (core, _fake) = cockpit("row-menu-order", 1);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     tick(cx);
-    view.read_with(cx, |view, _| {
+    view.read_with(cx, |view, cx| {
         let thread = view.panes[0].thread().unwrap();
         assert_eq!(
-            labels(view, thread),
+            labels(view, thread, cx),
             [
                 "Open in",
                 "Pin",
@@ -41,7 +41,7 @@ fn the_row_menu_reads_in_claudes_order(cx: &mut TestAppContext) {
                 "Delete thread",
             ]
         );
-        let rows = view.context_rows(MenuTarget::Thread(thread));
+        let rows = view.context_rows(MenuTarget::Thread(thread), cx);
         assert!(rows[1].is_none(), "a rule under `Open in`");
         assert!(rows
             .windows(2)
@@ -352,8 +352,8 @@ fn mark_as_unread_brings_back_a_read_threads_notice(cx: &mut TestAppContext) {
     tick(cx);
     assert!(
         row_of(
-            &view.read_with(cx, |view, _| view
-                .context_rows(MenuTarget::Thread(threads[2]))),
+            &view.read_with(cx, |view, cx| view
+                .context_rows(MenuTarget::Thread(threads[2]), cx)),
             MenuVerb::MarkUnread
         )
         .is_none(),
@@ -361,10 +361,10 @@ fn mark_as_unread_brings_back_a_read_threads_notice(cx: &mut TestAppContext) {
     );
     view.update(cx, |view, _| view.cockpit.mark_notices_read());
     tick(cx);
-    let row = view.read_with(cx, |view, _| {
+    let row = view.read_with(cx, |view, cx| {
         assert!(!view.cockpit.notifications().attention(threads[2]), "read");
         row_of(
-            &view.context_rows(MenuTarget::Thread(threads[2])),
+            &view.context_rows(MenuTarget::Thread(threads[2]), cx),
             MenuVerb::MarkUnread,
         )
         .expect("offered once read")

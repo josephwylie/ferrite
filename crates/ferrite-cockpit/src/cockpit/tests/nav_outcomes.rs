@@ -27,7 +27,7 @@ fn a_bulk_park_of_loose_threads_names_the_thread_that_failed(cx: &mut TestAppCon
     tick(cx);
     let both = [threads[0], threads[2]];
     view.update(cx, |view, cx| {
-        view.nav_picked = both.to_vec();
+        view.nav_view.update(cx, |nav, _| nav.picked = both.to_vec());
         view.park_listed(&both, cx);
     });
     tick(cx);
@@ -37,8 +37,8 @@ fn a_bulk_park_of_loose_threads_names_the_thread_that_failed(cx: &mut TestAppCon
     assert!(said.starts_with(&format!("Couldn't park {name}: ")), "{said}");
     assert_eq!(said.matches(';').count(), 0, "one failure, one entry: {said}");
     assert!(cx.debug_bounds("nav-notice").is_some(), "drawn in the list");
-    view.read_with(cx, |view, _| {
-        assert_eq!(view.nav_picked, vec![threads[0]], "the failed one stays picked");
+    view.read_with(cx, |view, cx| {
+        assert_eq!(view.nav_view.read(cx).picked, vec![threads[0]], "the failed one stays picked");
         assert!(view.facts.parked().contains(&threads[2]));
     });
 

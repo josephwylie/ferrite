@@ -36,6 +36,7 @@ mod nav_keys;
 mod nav_list;
 mod nav_pick;
 mod nav_undo;
+mod nav_view;
 mod palette;
 pub(crate) mod panel;
 mod parts;
@@ -427,27 +428,8 @@ pub struct CockpitView {
     nav_auto_fold: std::cell::Cell<bool>,
     nav_forced_open: bool,
     nav_measure_full: std::cell::Cell<bool>,
-    /// The pointer is inside the nav column: its scrollbar shows.
-    nav_hovered: bool,
-    /// A drag is live this frame: the nav's rows stand still.
-    nav_drag_live: std::cell::Cell<bool>,
-    /// The nav list's motion (`nav::flip`): where each row was laid last
-    /// frame, and the ghosts of rows that left.
-    nav_motion: nav_list::NavMotion,
-    /// The next frame of the list lands at once: a shelf just opened or
-    /// folded.
-    nav_snap: std::cell::Cell<bool>,
-    /// How far each shelf's body is open on screen (`nav_list`).
-    shelf_folds: std::cell::RefCell<Vec<(nav::Shelf, ferrite_ui::motion::Reveal)>>,
-    /// The window the list was last laid out in. A resize moves the
-    /// shelves anchored over the foot, and that is no change to the list:
-    /// it lands at once.
-    nav_viewport: std::cell::Cell<gpui::Size<Pixels>>,
     /// The breadcrumb parent's room, as the last frame laid it out.
     head_parent_room: std::rc::Rc<std::cell::Cell<view_head::ParentRoom>>,
-    /// How many Parked rows the open shelf draws: ten, then 25 more per
-    /// `Show 25 more`.
-    nav_parked_shown: usize,
     /// What the nav and the Pane head say about a Thread beyond an O(1)
     /// read — checkout, Project, a parked row's provider, the Wall card —
     /// refreshed by moment, never per frame.
@@ -457,34 +439,12 @@ pub struct CockpitView {
     /// to that Project's section — which Panes the Cockpit flies is never
     /// touched by it.
     nav_filter: Option<ProjectId>,
-    /// The nav tree's scroll, shared with the hand-drawn scrollbar beside
-    /// it — gpui 0.2.2 paints none of its own.
-    nav_scroll: ScrollHandle,
-    /// The list's keyboard (⌘I, ⌘⇧E, `nav_keys`): Esc gives it back to
-    /// the board.
-    nav_focus: FocusHandle,
-    /// Where the list's keyboard stands (`nav_keys`), while it has one.
-    nav_cursor: Option<nav::NavCursor>,
-    /// ⌘I or ⌘⇧E handed the list the keys, and it has not let go: only
-    /// then does render's focus rule leave them on the list.
-    nav_keys_held: bool,
-    /// Clears the cursor when the list lets go of the keys (`focus_nav`).
-    nav_blur: Option<gpui::Subscription>,
-    /// Set by a cursor move until its row has scrolled into view
-    /// (`cursor_reveal`).
-    nav_reveal: std::rc::Rc<std::cell::Cell<bool>>,
-    /// Where the cursor's row was last drawn: ⇧F10 opens its menu there.
-    nav_cursor_bounds: std::rc::Rc<std::cell::Cell<Option<gpui::Bounds<Pixels>>>>,
-    /// The Thread whose card last scrolled into view for being shown
-    /// (`shown_reveal`): a focus change scrolls the new one's.
-    nav_shown: std::rc::Rc<std::cell::Cell<Option<ThreadId>>>,
-    /// The nav's search field (`nav_chrome`), and the Thread its ↑/↓ stand
-    /// on: a Thread, not a place in the results, which live updates reorder.
-    nav_search: Entity<ferrite_pane::composer::Composer>,
-    nav_search_pick: std::cell::Cell<Option<ThreadId>>,
-    /// The foot's undo notice: what the last Park or Snooze did, until it
-    /// fades (`nav_chrome::NavUndo`).
-    nav_undo: Option<nav_chrome::NavUndo>,
+    /// The nav, a view of its own (ADR 0041): it owns its list's motion,
+    /// scroll, keyboard, search, picks and undo notice, and asks the
+    /// Cockpit for the rest through `NavEvent`.
+    nav_view: Entity<nav_view::NavView>,
+    /// The Cockpit hearing the nav's events, from its first frame.
+    nav_events: Option<gpui::Subscription>,
     /// The window's activation, followed into the Cockpit
     /// (`Cockpit::set_window_active`) once the first frame has a window.
     activation: Option<gpui::Subscription>,
@@ -558,13 +518,6 @@ pub struct CockpitView {
     /// The Threads the titler is naming right now: their cards draw the
     /// title at `NAV_CARD_RETITLING_OPACITY` until its answer lands.
     titling: std::collections::HashSet<ThreadId>,
-    /// The cards ⌘- and ⇧-click picked (`nav_pick`), in picking order.
-    nav_picked: Vec<ThreadId>,
-    /// A Park press held down and sweeping across cards.
-    park_sweep: Option<nav_pick::ParkSweep>,
-    /// The Thread cards in the order the nav last drew them: what a ⇧-click
-    /// and a sweep span.
-    nav_drawn: std::cell::RefCell<Vec<ThreadId>>,
     /// Each bar card trigger's bounds as last laid out (a draft's band
     /// chips), recorded in prepaint: what a bar card hangs from.
     float_triggers: FloatTriggers,
@@ -1503,6 +1456,7 @@ impl CockpitView {
             gpui::KeyBinding::new("escape", browser::CancelAnnotation, Some("BrowserAnnotationCapture")),
             gpui::KeyBinding::new("escape", ferrite_pane::annotation_editor::Cancel, Some("AnnotationEditor")),
         ]);
+        let cockpit_weak = cx.weak_entity();
         let mut view = Self {
             cockpit,
             browsers: Default::default(),
@@ -1529,17 +1483,8 @@ impl CockpitView {
             agent_drills: Default::default(),
             native_copy: None,
             nav_filter: None,
-            nav_scroll: ScrollHandle::new(),
-            nav_focus: cx.focus_handle(),
-            nav_cursor_bounds: Default::default(),
-            nav_shown: Default::default(),
-            nav_search: nav_chrome::search_line(cx),
-            nav_search_pick: Default::default(),
-            nav_undo: None,
-            nav_cursor: None,
-            nav_keys_held: false,
-            nav_blur: None,
-            nav_reveal: Default::default(),
+            nav_view: cx.new(|cx| nav_view::NavView::new(cockpit_weak, cx)),
+            nav_events: None,
             activation: None,
             popover: None,
             menu_muted: false,
@@ -1571,9 +1516,6 @@ impl CockpitView {
             session_control_error: None,
             context_checks: None,
             titling: std::collections::HashSet::new(),
-            nav_picked: Vec::new(),
-            park_sweep: None,
-            nav_drawn: Default::default(),
             float_triggers: FloatTriggers::default(),
             band_from_hero: false,
             card_waits: Default::default(),
@@ -1581,14 +1523,7 @@ impl CockpitView {
             nav_auto_fold: std::cell::Cell::new(false),
             nav_forced_open: false,
             nav_measure_full: std::cell::Cell::new(false),
-            nav_hovered: false,
-            nav_drag_live: std::cell::Cell::new(false),
-            nav_motion: Default::default(),
-            nav_snap: std::cell::Cell::new(false),
-            shelf_folds: Default::default(),
-            nav_viewport: Default::default(),
             head_parent_room: Default::default(),
-            nav_parked_shown: ferrite_ui::theme::NAV_PARKED_PAGE_FIRST,
             facts: Facts::with_auto_title(prefs.settings.auto_title),
             seam_drag: None,
             board: std::cell::Cell::new(layout::Rect::default()),
@@ -5047,48 +4982,6 @@ impl CockpitView {
         cx.notify();
     }
 
-    /// Whether the rename field is open on `thread`'s title.
-    fn renaming_thread(&self, thread: ThreadId) -> bool {
-        matches!(
-            &self.rename,
-            Some((RenameTarget::Thread(editing), _)) if *editing == thread
-        )
-    }
-
-    /// A Thread's title cell — `editable_group_title`'s twin.
-    fn editable_thread_title(
-        &self,
-        thread: ThreadId,
-        title: SharedString,
-        hint: bool,
-        cx: &mut Context<Self>,
-    ) -> AnyElement {
-        if let Some((RenameTarget::Thread(editing), editor)) = &self.rename {
-            if *editing == thread {
-                return rename_field(editor.clone(), hint)
-                    .on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(|_, _: &MouseDownEvent, _, cx| cx.stop_propagation()),
-                    )
-                    .into_any_element();
-            }
-        }
-        nav::rename_target_thread(thread, title)
-            .on_mouse_down(
-                MouseButton::Left,
-                cx.listener(move |view, event: &MouseDownEvent, _, cx| {
-                    // The first click focuses the Thread, the second
-                    // renames it.
-                    if event.click_count < 2 {
-                        return;
-                    }
-                    cx.stop_propagation();
-                    view.start_rename(RenameTarget::Thread(thread), cx);
-                }),
-            )
-            .into_any_element()
-    }
-
     fn pane_for(&self, thread: ThreadId) -> Option<usize> {
         self.panes
             .iter()
@@ -8493,7 +8386,8 @@ impl CockpitView {
                 .and_then(|open| open.turn().started),
             pinned: self.prefs.settings.pinned_threads.contains(&thread),
             retitling: self.titling.contains(&thread),
-            picked: self.card_picked(thread),
+            // The nav wears its own picks (`NavView::card_picked`).
+            picked: false,
         };
         #[cfg(test)]
         drawn::record_row(
@@ -8660,7 +8554,7 @@ impl CockpitView {
     /// Close the focused Pane — cmd-w. The core decides what that means
     /// (park, leave, defer onto a draft, discard); the mirror follows.
     fn close_thread(&mut self, _: &CloseThread, window: &mut Window, cx: &mut Context<Self>) {
-        if self.nav_keys_held && self.nav_focus.is_focused(window) {
+        if self.nav_view.read(cx).holds_keys(window) {
             self.park_nav_cursor(cx);
             return;
         }
@@ -9271,6 +9165,7 @@ impl Render for CockpitView {
                 }
             }));
         }
+        self.hear_nav(window, cx);
         self.tend_history();
         self.tend_menu_focus(window, cx);
         let root = self.render_cockpit(window, cx);
@@ -9367,7 +9262,7 @@ impl CockpitView {
                 let view = self
                     .parts
                     .borrow()
-                    .view_id(parts::Part::Pane(pane.identity));
+                    .view_id(pane.identity);
                 if let Some(view) = view {
                     ferrite_ui::motion::ride(view, now + next, cx);
                 }
@@ -9386,9 +9281,8 @@ impl CockpitView {
             }
             return;
         }
-        let nav_view = self.parts.borrow().view_id(parts::Part::Nav);
-        if let (Some(view), Some(next)) = (nav_view, nav) {
-            ferrite_ui::motion::ride(view, now + next, cx);
+        if let Some(next) = nav {
+            ferrite_ui::motion::ride(self.nav_view.entity_id(), now + next, cx);
         }
         if let Some(frame) = frame {
             ferrite_ui::motion::ride(self.frame_tick_id(), now + frame, cx);
@@ -9415,7 +9309,6 @@ impl CockpitView {
         if self.nav_folded() {
             self.snooze_editor = None;
         }
-        self.nav_drag_live.set(cx.has_active_drag());
         self.present_cli_updates(window, cx);
         self.present_ferrite_update(window, cx);
         self.present_server(window, cx);
@@ -9590,8 +9483,9 @@ impl CockpitView {
             })
             // The nav's search field keeps the keys it was handed.
             .or_else(|| {
-                self.search_focused(window, cx)
-                    .then(|| self.nav_search.focus_handle(cx))
+                let nav = self.nav_view.read(cx);
+                nav.search_focused(window, cx)
+                    .then(|| nav.search.focus_handle(cx))
             })
             // An open Decision note (⇥) holds the keyboard until it closes.
             .or_else(|| self.decision_note_focus(cx))
@@ -9701,7 +9595,7 @@ impl CockpitView {
         });
         // The list keeps the keyboard it was handed until the operator
         // takes it elsewhere.
-        let nav_list_focused = self.nav_keys_held && self.nav_focus.is_focused(window);
+        let nav_list_focused = self.nav_view.read(cx).holds_keys(window);
         if self.closing_holds_focus(window, cx) {
             window.focus(&wanted, cx);
         }
@@ -9997,11 +9891,8 @@ impl CockpitView {
                 // The pointer inside the nav column holds the tree's order
                 // still (C8); leaving it re-ranks.
                 let inside = f32::from(event.position.x) < view.nav_width();
-                if inside != view.nav_hovered {
-                    view.nav_hovered = inside;
-                    // Only the nav's order reads it.
-                    view.notify_part(parts::Part::Nav, cx);
-                }
+                view.nav_view
+                    .update(cx, |nav, cx| nav.set_hovered(inside, cx));
                 view.nav_pointer_moved(event.position, event.dragging(), cx);
                 view.panel_pointer_moved(event.position, event.dragging(), cx);
                 if view.seam_drag.is_some() {
@@ -10089,7 +9980,7 @@ impl CockpitView {
                     .flex_1()
                     .min_h_0()
                     .w_full()
-                    .children(self.nav(window, cx))
+                    .children(self.nav())
                     // The board lies from its own left edge — the column's
                     // width this frame — so it rides cmd-B with the column,
                     // every frame (F-12).
@@ -11478,8 +11369,8 @@ impl CockpitView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.nav_keys_held && self.nav_focus.is_focused(window) {
-            self.leave_nav(window, cx);
+        if self.nav_view.read(cx).holds_keys(window) {
+            self.nav_view.update(cx, |nav, cx| nav.leave(window, cx));
             return;
         }
         self.popover = None;
@@ -11956,100 +11847,10 @@ impl CockpitView {
         rows
     }
 
-    /// What a Thread's card wires (`nav::CardDoors`): its hover strip —
-    /// Snooze, whose menu opens under it (hidden while a turn is queued),
-    /// and Park — for an open Thread; the pin's unpin; and the PR chip,
-    /// whose press opens the PR in the Panel's preview (⌘-press, in the
-    /// browser). Pin stays in the context menu.
-    fn card_doors(&self, thread: ThreadId, cx: &mut Context<Self>) -> nav::CardDoors {
-        let open = self.cockpit.thread(thread);
-        let held = matches!(
-            self.context_menu.as_ref().map(|menu| menu.target),
-            Some(MenuTarget::Snooze(snoozing)) if snoozing == thread
-        );
-        let strip = open.map(|open| {
-            let mut buttons = Vec::new();
-            if open.queue().is_empty() {
-                let drawn = std::rc::Rc::new(std::cell::Cell::new(None::<gpui::Bounds<Pixels>>));
-                buttons.push(
-                    nav::snooze_button(thread)
-                        .relative()
-                        .child({
-                            let drawn = drawn.clone();
-                            gpui::canvas(move |bounds, _, _| drawn.set(Some(bounds)), |_, _, _, _| {})
-                                .absolute()
-                                .size_full()
-                        })
-                        .on_mouse_down(
-                            MouseButton::Left,
-                            cx.listener(move |view, event: &MouseDownEvent, _, cx| {
-                                cx.stop_propagation();
-                                let target = MenuTarget::Snooze(thread);
-                                match drawn.get() {
-                                    Some(button) => view.open_context_menu_under(target, button, cx),
-                                    None => view.open_context_menu(target, event.position, cx),
-                                }
-                            }),
-                        )
-                        .on_click(|_, _, cx| cx.stop_propagation())
-                        .into_any_element(),
-                );
-            }
-            buttons.push(
-                nav::park_button(thread)
-                    .on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(move |view, _: &MouseDownEvent, _, cx| {
-                            cx.stop_propagation();
-                            view.arm_park_sweep(thread, cx);
-                        }),
-                    )
-                    .on_click(|_, _, cx| cx.stop_propagation())
-                    .into_any_element(),
-            );
-            nav::strip(buttons, nav::strip_w(open.queue().is_empty(), &nav::Measure::Text(cx, self.nav_expanded_width())))
-        });
-        let pin = nav::pin_glyph(thread, true)
-            .on_mouse_down(
-                MouseButton::Left,
-                cx.listener(move |view, _: &MouseDownEvent, _, cx| {
-                    cx.stop_propagation();
-                    view.set_pinned(thread, false, cx);
-                }),
-            )
-            .on_click(|_, _, cx| cx.stop_propagation())
-            .into_any_element();
-        let pr = self.facts.pr(thread).map(|pr| {
-            nav::pr_chip(thread, &nav::NavPr::of(pr))
-                .on_mouse_down(
-                    MouseButton::Left,
-                    cx.listener(move |view, event: &MouseDownEvent, window, cx| {
-                        cx.stop_propagation();
-                        view.open_pr_as(thread, Open::of_modifiers(event.modifiers), window, cx);
-                    }),
-                )
-                .on_mouse_down(
-                    MouseButton::Right,
-                    cx.listener(move |view, event: &MouseDownEvent, _, cx| {
-                        cx.stop_propagation();
-                        view.open_context_menu(MenuTarget::PrLink(thread), event.position, cx);
-                    }),
-                )
-                .on_click(|_, _, cx| cx.stop_propagation())
-                .into_any_element()
-        });
-        nav::CardDoors {
-            strip,
-            strip_held: held,
-            pr,
-            pin: Some(pin),
-        }
-    }
-
     /// The nav column as far in as it is this frame, its face pinned to the
     /// board's edge and clipped as it slides, under a veil that takes the
     /// pointer while it slides out.
-    fn nav(&self, window: &Window, cx: &mut Context<Self>) -> Option<AnyElement> {
+    fn nav(&self) -> Option<AnyElement> {
         let drawn = self.nav_width();
         if drawn <= 0.0 {
             return None;
@@ -12060,7 +11861,7 @@ impl CockpitView {
             .absolute()
             .top_0()
             .right_0()
-            .child(nav::card(self.nav_rows(window, cx)).w(px(width)));
+            .child(nav::card(self.nav_rows()).w(px(width)));
         Some(
             div()
                 .relative()

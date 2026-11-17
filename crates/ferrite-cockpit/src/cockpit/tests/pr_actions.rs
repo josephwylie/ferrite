@@ -250,8 +250,8 @@ fn a_conflicting_pr_cannot_be_merged(cx: &mut TestAppContext) {
     assert!(cx.debug_bounds("pr-action").is_some(), "the reason shows");
     merge(cx);
     assert_eq!(sent(&fake), 0);
-    let rows = view.read_with(cx, |view, _| {
-        view.context_rows(MenuTarget::PrMore(PrTarget::thread(thread, 48)))
+    let rows = view.read_with(cx, |view, cx| {
+        view.context_rows(MenuTarget::PrMore(PrTarget::thread(thread, 48)), cx)
             .into_iter()
             .flatten()
             .filter(|(item, _)| item.label.as_ref() == "Merge now")

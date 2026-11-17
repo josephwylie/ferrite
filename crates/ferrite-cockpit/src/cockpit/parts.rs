@@ -1,21 +1,23 @@
-//! The Cockpit's cached parts: its nav and each Pane, each drawn by a view
-//! of its own (`PartView`) and rebuilt only when something it shows
+//! The Cockpit's cached parts: its nav (`NavView`, ADR 0041) and each Pane,
+//! each drawn by a view of its own and rebuilt only when something it shows
 //! changes.
 //!
-//! A part's view draws by calling back into the Cockpit (`render_part`), so
-//! every element and listener in it is the Cockpit's own, as before; it is
-//! mounted cached and tracking what it reads (vendored gpui,
-//! `ViewElement::tracking_reads`). That makes the Cockpit's own notify the
-//! conservative case: every part read the Cockpit, so a change anywhere in
-//! its state rebuilds them all, exactly as when they were drawn inline. The
+//! A Pane's view (`PartView`) draws by calling back into the Cockpit
+//! (`render_part`), so every element and listener in it is the Cockpit's
+//! own, as before; the nav draws itself from what it reads of the Cockpit
+//! (`nav_inputs`). Each is mounted cached and tracking what it reads
+//! (vendored gpui, `ViewElement::tracking_reads`). That makes the Cockpit's
+//! own notify the conservative case: every part read the Cockpit, so a
+//! change anywhere in its state rebuilds them all, exactly as when they
+//! were drawn inline. The
 //! hot paths are precise instead (`notify_part`, `notify_frame`): a stream
 //! delta rebuilds its Pane and the nav, a keystroke its Pane, a working
 //! clock the Panes and nav rows that show it, a hover the part it is in.
 //! The frame around the parts (titlebar, bottom bar, floats) is rebuilt
 //! whenever any part is, without rebuilding the others.
 //!
-//! Under `FERRITE_LOOPS_OVERLAY=0` (no cached Cockpit) the parts are drawn
-//! inline, as before.
+//! Under `FERRITE_LOOPS_OVERLAY=0` (no cached Cockpit) the Panes are drawn
+//! inline and the nav's view is mounted uncached.
 
 use std::collections::HashMap;
 
@@ -36,19 +38,19 @@ pub(crate) enum Part {
     Pane(PaneIdentity),
 }
 
-/// The view that draws one part, by asking the Cockpit for it.
+/// The view that draws one Pane's cell, by asking the Cockpit for it.
 pub(crate) struct PartView {
     cockpit: WeakEntity<CockpitView>,
-    part: Part,
+    pane: PaneIdentity,
 }
 
 impl Render for PartView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         // This part's loops are laid out afresh for the loops overlay.
         ferrite_ui::loops_overlay::begin(window, cx.entity_id());
-        let part = self.part;
+        let pane = self.pane;
         self.cockpit
-            .update(cx, |view, cx| view.render_part(part, window, cx))
+            .update(cx, |view, cx| view.render_part(pane, window, cx))
             .unwrap_or_else(|_| div().into_any_element())
     }
 }
@@ -59,13 +61,13 @@ pub(crate) struct Parts {
     /// Whether the nav and the Panes are cached parts: with the loops
     /// overlay, over a cached Cockpit.
     pub on: bool,
-    views: HashMap<Part, Entity<PartView>>,
+    views: HashMap<PaneIdentity, Entity<PartView>>,
 }
 
 impl Parts {
-    /// The view drawing `part`, once it has been mounted.
-    pub(crate) fn view_id(&self, part: Part) -> Option<gpui::EntityId> {
-        self.views.get(&part).map(Entity::entity_id)
+    /// The view drawing `pane`'s cell, once it has been mounted.
+    pub(crate) fn view_id(&self, pane: PaneIdentity) -> Option<gpui::EntityId> {
+        self.views.get(&pane).map(Entity::entity_id)
     }
 }
 
@@ -84,24 +86,22 @@ impl CockpitView {
         }
     }
 
-    fn part_view(&self, part: Part, cx: &mut Context<Self>) -> Entity<PartView> {
-        if let Some(view) = self.parts.borrow().views.get(&part) {
+    fn part_view(&self, pane: PaneIdentity, cx: &mut Context<Self>) -> Entity<PartView> {
+        if let Some(view) = self.parts.borrow().views.get(&pane) {
             return view.clone();
         }
         let cockpit = cx.entity().downgrade();
-        let view = cx.new(|_| PartView { cockpit, part });
-        self.parts.borrow_mut().views.insert(part, view.clone());
+        let view = cx.new(|_| PartView { cockpit, pane });
+        self.parts.borrow_mut().views.insert(pane, view.clone());
         view
     }
 
-    /// `frame`, holding the part's cached view: the frame is the box the
+    /// `frame`, holding a part's cached view: the frame is the box the
     /// part had in the Cockpit's layout when it was drawn inline, the view
     /// fills it.
-    fn mount_part(&self, part: Part, frame: Div, cx: &mut Context<Self>) -> Div {
-        let view = self.part_view(part, cx);
+    fn mount_part(frame: Div, view: AnyView) -> Div {
         frame.child(
-            AnyView::from(view)
-                .cached(StyleRefinement::default().size_full())
+            view.cached(StyleRefinement::default().size_full())
                 .tracking_reads(),
         )
     }
@@ -121,56 +121,55 @@ impl CockpitView {
             .flex_1()
             .min_w_0()
             .min_h_0();
-        self.mount_part(Part::Pane(identity), frame, cx)
+        let view = self.part_view(identity, cx);
+        Self::mount_part(frame, view.into())
     }
 
-    pub(super) fn nav_rows(&self, window: &Window, cx: &mut Context<Self>) -> Div {
-        if !self.parts.borrow().on {
-            return self.nav_content(&self.nav_state(), window, cx);
-        }
+    /// The nav's column of rows: its view, cached as a part with parts on.
+    pub(super) fn nav_rows(&self) -> Div {
         let frame = div().flex_shrink_0().h_full().w(px(self.nav_expanded_width()));
-        self.mount_part(Part::Nav, frame, cx)
+        if !self.parts.borrow().on {
+            return frame.child(self.nav_view.clone());
+        }
+        Self::mount_part(frame, self.nav_view.clone().into())
     }
 
     /// Forget the parts of Panes no longer open.
     pub(super) fn prune_parts(&self) {
         let mut parts = self.parts.borrow_mut();
         let open: Vec<PaneIdentity> = self.panes.iter().map(|pane| pane.identity).collect();
-        parts.views.retain(|part, _| match part {
-            Part::Nav => true,
-            Part::Pane(identity) => open.contains(identity),
-        });
+        parts.views.retain(|identity, _| open.contains(identity));
     }
 
-    /// What a part's view draws.
+    /// What a Pane's view draws.
     fn render_part(
         &mut self,
-        part: Part,
+        pane: PaneIdentity,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        match part {
-            Part::Nav => self
-                .nav_content(&self.nav_state(), window, cx)
+        match self.index_of(pane) {
+            Some(index) => div()
+                .size_full()
+                .flex()
+                .flex_col()
+                .child(self.pane_cell(index, window, cx))
                 .into_any_element(),
-            Part::Pane(identity) => match self.index_of(identity) {
-                Some(index) => div()
-                    .size_full()
-                    .flex()
-                    .flex_col()
-                    .child(self.pane_cell(index, window, cx))
-                    .into_any_element(),
-                None => div().into_any_element(),
-            },
+            None => div().into_any_element(),
         }
     }
 
     /// Redraw `part` and the frame around it — not the other parts. Without
     /// parts, the whole Cockpit.
     pub(super) fn notify_part(&self, part: Part, cx: &mut Context<Self>) {
+        let identity = match part {
+            // The nav is always a view of its own.
+            Part::Nav => return self.nav_view.update(cx, |_, cx| cx.notify()),
+            Part::Pane(identity) => identity,
+        };
         let (on, view) = {
             let parts = self.parts.borrow();
-            (parts.on, parts.views.get(&part).cloned())
+            (parts.on, parts.views.get(&identity).cloned())
         };
         match view {
             Some(view) => view.update(cx, |_, cx| cx.notify()),

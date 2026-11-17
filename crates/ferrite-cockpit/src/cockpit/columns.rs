@@ -177,7 +177,7 @@ impl CockpitView {
         );
         if drag.width != width {
             drag.width = width;
-            self.nav_snap.set(true);
+            self.nav_view.read(cx).snap.set(true);
             self.notify_part(parts::Part::Nav, cx);
             cx.notify();
         }
@@ -331,7 +331,7 @@ impl CockpitView {
     pub(super) fn closing_holds_focus(&self, window: &Window, cx: &gpui::App) -> bool {
         let panel_closing =
             self.panel_pane().is_none() && self.panel_closing_focus.contains_focused(window, cx);
-        let nav_closing = self.nav_folded() && self.nav_focus.contains_focused(window, cx);
+        let nav_closing = self.nav_folded() && self.nav_view.read(cx).focus.contains_focused(window, cx);
         panel_closing || nav_closing
     }
 }

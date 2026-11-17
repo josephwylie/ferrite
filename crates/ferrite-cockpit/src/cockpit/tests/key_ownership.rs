@@ -164,8 +164,8 @@ fn a_menu_from_the_nav_list_gives_the_list_back_its_keys(cx: &mut TestAppContext
     tick(cx);
     let held = |cx: &mut gpui::VisualTestContext| {
         cx.update(|window, cx| {
-            let view = view.read(cx);
-            (view.nav_keys_held && view.nav_focus.is_focused(window), view.nav_cursor.clone())
+            let nav = view.read(cx).nav_view.read(cx);
+            (nav.holds_keys(window), nav.cursor.clone())
         })
     };
     let (before, cursor) = held(cx);
