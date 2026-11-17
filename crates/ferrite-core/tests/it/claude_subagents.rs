@@ -140,7 +140,7 @@ fn forwarding_is_enabled_only_through_the_scoped_reader() {
             .count(),
         2
     );
-    let fixture = include_str!("fixtures/subagents/claude-overlap-2.1.261.jsonl");
+    let fixture = include_str!("../fixtures/subagents/claude-overlap-2.1.261.jsonl");
     let expected_main_usage = fixture
         .lines()
         .map(|line| serde_json::from_str::<Value>(line).unwrap())

@@ -1,10 +1,7 @@
 #![cfg(unix)]
-#[allow(dead_code)]
-#[path = "support/provider_contract.rs"]
-mod support;
 use ferrite_core::{SessionEvent, ToolResult};
 use serde_json::json;
-use support::*;
+use crate::support::*;
 #[test]
 fn codex_command_completion_preserves_native_output_as_a_command_result() {
     let r = Replay::new(

@@ -241,7 +241,7 @@ jobs:
         run: cargo nextest run -p ferrite-core --locked --features test-support browser
       - name: Actual provider serialization regressions
         if: always() && steps.focused-build.outcome == 'success'
-        run: cargo nextest run -p ferrite-core --locked --features test-support --test visuals --test claude_session --test codex_session
+        run: cargo nextest run -p ferrite-core --locked --features test-support --test it -E 'test(/^(visuals|claude_session|codex_session)::/)'
       - name: Native view input and full viewport regressions
         if: always() && steps.focused-build.outcome == 'success'
         run: cargo nextest run -p ferrite-pane --locked --lib visual::element::tests

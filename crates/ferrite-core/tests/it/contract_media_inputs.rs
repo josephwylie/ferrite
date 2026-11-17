@@ -1,10 +1,7 @@
 #![cfg(unix)]
-#[allow(dead_code)]
-#[path = "support/provider_contract.rs"]
-mod support;
 use base64::Engine;
 use std::fs;
-use support::*;
+use crate::support::*;
 
 #[test]
 fn attachments_use_native_pdf_and_audio_only_where_supported() {

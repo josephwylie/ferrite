@@ -1,9 +1,6 @@
 #![cfg(unix)]
-#[allow(dead_code)]
-#[path = "support/provider_contract.rs"]
-mod support;
 use serde_json::json;
-use support::*;
+use crate::support::*;
 #[test]
 fn claude_renames_the_live_native_session() {
     let mut r = Replay::new("claude", vec![]);

@@ -1,10 +1,7 @@
 #![cfg(unix)]
-#[allow(dead_code)]
-#[path = "support/provider_contract.rs"]
-mod support;
 use ferrite_core::{SessionEvent, TurnOutcome};
 use serde_json::json;
-use support::*;
+use crate::support::*;
 
 #[test]
 fn claude_background_snapshots_replace_tasks_and_exclude_hidden_work() {

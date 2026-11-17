@@ -1,10 +1,7 @@
 #![cfg(unix)]
-#[allow(dead_code)]
-#[path = "support/provider_contract.rs"]
-mod support;
 use ferrite_core::SessionEvent;
 use serde_json::json;
-use support::*;
+use crate::support::*;
 
 #[test]
 fn live_model_catalog_paginates_before_publishing() {

@@ -1,10 +1,7 @@
 #![cfg(unix)]
-#[allow(dead_code)]
-#[path = "support/provider_contract.rs"]
-mod support;
 use ferrite_core::progress::StepStatus;
 use serde_json::json;
-use support::*;
+use crate::support::*;
 
 #[test]
 fn proposed_tool_input_does_not_create_or_complete_a_native_plan() {
