@@ -153,7 +153,7 @@ impl CockpitView {
             return;
         }
         if self.on_machine() {
-            self.nav_notice = Some("Start a Thread in this remote workspace before opening its files.".into());
+            self.nav_notice.hint("Start a Thread in this remote workspace before opening its files.");
             cx.notify();
             return;
         }
@@ -254,7 +254,7 @@ impl CockpitView {
         for (thread, request) in requests {
             match thread {
                 Some(thread) => self.open_in_files(thread, request.path, request.line, true, cx),
-                None => self.nav_notice = Some("Start a Thread in this remote workspace before opening its files.".into()),
+                None => self.nav_notice.hint("Start a Thread in this remote workspace before opening its files."),
             }
         }
         let mut image_pending = false;

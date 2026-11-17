@@ -112,7 +112,7 @@ impl Persistence {
                 self.failures = self.failures.saturating_add(1);
                 let seconds = (1_u64 << self.failures.saturating_sub(1).min(5)).min(30);
                 self.retry_at = Some(now + Duration::from_secs(seconds));
-                eprintln!("ferrite: the Panel was not saved, retrying in {seconds}s: {error}");
+                ferrite_core::log!("the Panel was not saved, retrying in {seconds}s: {error}");
             }
         }
     }

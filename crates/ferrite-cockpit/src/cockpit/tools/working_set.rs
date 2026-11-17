@@ -59,7 +59,7 @@ impl WorkingSets {
             Ok(stored.threads)
         };
         let sets = read().unwrap_or_else(|error| {
-            eprintln!("ferrite: the Files tabs were not read: {error}");
+            ferrite_core::log!("the Files tabs were not read: {error}");
             BTreeMap::new()
         });
         Self { sets, revision: 0 }

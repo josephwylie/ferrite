@@ -24,11 +24,15 @@ impl CockpitView {
         until: Option<std::time::SystemTime>,
         cx: &mut Context<Self>,
     ) {
-        let snoozed = self.cockpit.snooze_thread(thread, until);
-        if snoozed.is_ok() && until.is_some() {
-            self.offer_undo(super::nav_chrome::UndoAct::Snoozed(thread), cx);
+        match self.cockpit.snooze_thread(thread, until) {
+            Ok(()) => {
+                if until.is_some() {
+                    self.offer_undo(super::nav_chrome::UndoAct::Snoozed(thread), cx);
+                }
+                self.nav_notice.clear();
+            }
+            Err(error) => self.nav_notice.problem(error.to_string()),
         }
-        self.nav_notice = snoozed.err().map(|error| error.to_string().into());
         cx.notify();
     }
 
@@ -62,7 +66,7 @@ impl CockpitView {
                 ferrite_core::clock::system_time(),
             ) {
                 Ok(until) => match self.cockpit.snooze_thread(editor.thread, Some(until)) {
-                    Ok(()) => self.nav_notice = None,
+                    Ok(()) => self.nav_notice.clear(),
                     Err(error) => {
                         self.snooze_editor = Some(Editor {
                             error: Some(error.to_string().into()),

@@ -668,8 +668,8 @@ pub struct CockpitView {
     /// Whether "Quit Ferrite?" is on screen (`leaving`).
     leave_asked: bool,
     /// What the last nav act has to say (a failed Park, a refused
-    /// rename), drawn in the list as `nav-notice`.
-    nav_notice: Option<SharedString>,
+    /// rename).
+    nav_notice: nav_list::Notice,
     /// The Inbox: whether its list is down, its cursor, and which Notices
     /// and requests stand as toasts. The Notices themselves are core's.
     pub(crate) needs_you: NeedsYou,
@@ -1623,7 +1623,7 @@ impl CockpitView {
             unreadable_told: false,
             user_commands: Default::default(),
             leave_asked: false,
-            nav_notice: None,
+            nav_notice: Default::default(),
             needs_you: NeedsYou::new(),
             toast_stage: Default::default(),
             landing: None,
@@ -3376,11 +3376,11 @@ impl CockpitView {
         }
         let (RenameTarget::Thread(thread) | RenameTarget::ViewTitle(thread)) = target;
         match self.cockpit.rename_thread(thread, &title) {
-            Err(error) => self.nav_notice = Some(error.to_string().into()),
+            Err(error) => self.nav_notice.problem(error.to_string()),
             Ok(_) => {
                 self.facts.renamed(&self.cockpit, thread);
                 self.refresh_names();
-                self.nav_notice = None;
+                self.nav_notice.clear();
             }
         }
         cx.notify();
@@ -3467,13 +3467,15 @@ impl CockpitView {
                 reason = Some(error.to_string());
             }
         }
-        self.nav_notice = match (refused, reason) {
-            (0, _) | (_, None) => None,
-            (1, Some(reason)) => Some(format!("1 parked thread not deleted: {reason}").into()),
-            (count, Some(reason)) => {
-                Some(format!("{count} parked threads not deleted, last: {reason}").into())
-            }
-        };
+        match (refused, reason) {
+            (0, _) | (_, None) => self.nav_notice.clear(),
+            (1, Some(reason)) => self
+                .nav_notice
+                .problem(format!("1 parked thread not deleted: {reason}")),
+            (count, Some(reason)) => self
+                .nav_notice
+                .problem(format!("{count} parked threads not deleted, last: {reason}")),
+        }
         self.sync_panes(cx);
         self.parked_changed(cx);
     }
@@ -4106,7 +4108,7 @@ impl CockpitView {
         change(&mut self.prefs.settings);
         if self.prefs.unreadable.is_none() {
             if let Err(e) = self.prefs.settings.save(&self.prefs.dir) {
-                self.nav_notice = Some(SharedString::from(format!("settings not saved: {e}")));
+                self.nav_notice.problem(format!("settings not saved: {e}"));
             }
         }
         // Saved first: a Server rereads the file.
@@ -4701,7 +4703,7 @@ impl CockpitView {
                         cx,
                     );
                 }
-                self.nav_notice = None;
+                self.nav_notice.clear();
                 self.refresh_names();
                 self.leave_project_editor(editor, cx);
             }
@@ -4948,7 +4950,7 @@ impl CockpitView {
                                 if view.nav_filter == Some(project) {
                                     view.nav_filter = None;
                                 }
-                                view.nav_notice = None;
+                                view.nav_notice.clear();
                                 view.close_project_editor(cx);
                             }
                         }

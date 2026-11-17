@@ -28,6 +28,33 @@ pub(crate) enum NavFace {
 /// The list's motion, shared with its elements.
 pub(crate) type NavMotion = flip::Motion<NavKey, NavFace>;
 
+/// What the last nav act has to say, drawn in the list as `nav-notice`.
+/// Its text is private: a problem the operator sees also reaches the log.
+#[derive(Default)]
+pub(super) struct Notice(Option<SharedString>);
+
+impl Notice {
+    /// Something went wrong: shown, and logged in the same words.
+    pub(super) fn problem(&mut self, text: impl Into<SharedString>) {
+        let text = text.into();
+        ferrite_core::log!("{text}");
+        self.0 = Some(text);
+    }
+
+    /// Guidance on what the operator asked for, not a failure: shown only.
+    pub(super) fn hint(&mut self, text: impl Into<SharedString>) {
+        self.0 = Some(text.into());
+    }
+
+    pub(super) fn clear(&mut self) {
+        self.0 = None;
+    }
+
+    pub(super) fn text(&self) -> Option<&SharedString> {
+        self.0.as_ref()
+    }
+}
+
 impl CockpitView {
     pub(super) fn nav_content(
         &self,
@@ -149,7 +176,7 @@ impl CockpitView {
         let mut faces: Vec<(NavKey, NavFace)> = Vec::new();
         rows.extend(
             self.nav_notice
-                .as_ref()
+                .text()
                 .map(|error| nav::notice(error.clone()).into_any_element()),
         );
         // With machines (ADR 0026): the one the window is on heads the

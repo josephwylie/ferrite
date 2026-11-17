@@ -10,7 +10,7 @@ fn sorted_threads(core: &Cockpit) -> Vec<ThreadId> {
 }
 
 fn notice(view: &Entity<CockpitView>, cx: &mut gpui::VisualTestContext) -> Option<String> {
-    view.read_with(cx, |view, _| view.nav_notice.as_ref().map(|error| error.to_string()))
+    view.read_with(cx, |view, _| view.nav_notice.text().map(|error| error.to_string()))
 }
 
 /// A Park of two where the Engine refuses one: the failed one is named in
@@ -83,6 +83,32 @@ fn a_failed_reopen_is_reported(cx: &mut TestAppContext) {
     view.read_with(cx, |view, _| {
         assert!(view.facts.parked().contains(&threads[0]), "still parked");
     });
+}
+
+/// A refusal the list shows is in the log too, in the same words, so
+/// Copy diagnostics carries it after the notice is gone.
+#[gpui::test]
+fn a_refused_park_reaches_the_log(cx: &mut TestAppContext) {
+    let (mut core, _fake) = cockpit("nav-park-logged", 2);
+    let threads = sorted_threads(&core);
+    core.refuse_park(threads[0]);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    let dir = view.read_with(cx, |view, _| view.prefs.dir.clone());
+    ferrite_core::diagnostics::open(&dir);
+    tick(cx);
+
+    view.update(cx, |view, cx| view.park_listed(&[threads[0]], cx));
+    tick(cx);
+    let said = notice(&view, cx).expect("the failure is reported");
+    view.update(cx, |view, cx| view.copy_diagnostics(cx));
+    cx.run_until_parked();
+
+    let report = cx
+        .read_from_clipboard()
+        .and_then(|item| item.text())
+        .unwrap();
+    let log = &report[report.find("--- ferrite.log").unwrap()..];
+    assert!(log.contains(&said), "{said:?} not in\n{report}");
 }
 
 /// ⌘O reopens a parked Thread the nav's Project scope hides: the scope
