@@ -341,23 +341,24 @@ impl CockpitView {
     /// The right-click menu's rows.
     pub(in crate::cockpit) fn terminal_context_rows(&self) -> Vec<Option<(menu::Item, MenuVerb)>> {
         let selected = self.tools.terminal_selected;
-        let row = |label: &'static str, chord: &'static str, verb: Verb, enabled: bool| {
-            let mut item = menu::Item::new(label);
-            if !chord.is_empty() {
-                item = item.shortcut(chord);
-            }
+        let row = |label: &'static str, action: &str, verb: Verb, enabled: bool| {
+            let chord = ferrite_ui::components::bound_chord_in(
+                action,
+                Some(ferrite_ui::keymap::TERMINAL),
+            );
+            let mut item = menu::Item::new(label).shortcut(chord.unwrap_or_default());
             item.disabled = !enabled;
             Some((item, MenuVerb::Terminal(verb)))
         };
         let mut rows = Vec::new();
         if selected {
-            rows.push(row("Attach selection as context", "shift-cmd-L", Verb::Attach, true));
+            rows.push(row("Attach selection as context", "terminal::Attach", Verb::Attach, true));
             rows.push(None);
         }
         rows.extend([
-            row("Copy", "cmd-C", Verb::Copy, selected),
-            row("Paste", "cmd-V", Verb::Paste, true),
-            row("Select all", "cmd-A", Verb::SelectAll, true),
+            row("Copy", "terminal::Copy", Verb::Copy, selected),
+            row("Paste", "terminal::Paste", Verb::Paste, true),
+            row("Select all", "terminal::SelectAll", Verb::SelectAll, true),
             None,
             row("Clear terminal", "", Verb::Clear, true),
         ]);
@@ -582,7 +583,7 @@ mod destination_tests {
         let Some(Destination::File(file)) = Destination::of("src/main.rs:12", Some(folder)) else {
             panic!("a path opens in the editor");
         };
-        assert_eq!(file.path, folder.join("src/main.rs"));
+        assert_eq!(file.path, folder.join("src").join("main.rs"));
         assert_eq!(file.line(), Some(12));
     }
 

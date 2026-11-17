@@ -307,6 +307,7 @@ impl CockpitView {
 
     /// The rows a target offers. `None` is a gap between groups of rows.
     pub(super) fn context_rows(&self, target: MenuTarget) -> Vec<Option<(menu::Item, MenuVerb)>> {
+        use ferrite_ui::components::bound_chord;
         let mut rows: Vec<Option<(menu::Item, MenuVerb)>> = Vec::new();
         match target {
             // The nav row: where a Thread lives in the roster — open it,
@@ -320,7 +321,7 @@ impl CockpitView {
                 let selected = self.native_copy.is_some();
                 rows.push(Some((
                     menu::Item::new("Copy")
-                        .shortcut("cmd-C")
+                        .shortcut(bound_chord("cockpit::CopySelection").unwrap_or_default())
                         .disabled(!selected),
                     MenuVerb::CopySelection,
                 )));
@@ -341,7 +342,8 @@ impl CockpitView {
                 rows.push(None);
                 // cmd-w parks in one act (`Cockpit::park_thread`).
                 rows.push(Some((
-                    menu::Item::new("Park thread").shortcut("cmd-W"),
+                    menu::Item::new("Park thread")
+                        .shortcut(bound_chord("cockpit::CloseThread").unwrap_or_default()),
                     MenuVerb::Park,
                 )));
             }

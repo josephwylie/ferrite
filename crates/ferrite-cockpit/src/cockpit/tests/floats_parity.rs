@@ -178,7 +178,11 @@ fn par_keeps_two_commands_and_the_parked_thread(cx: &mut TestAppContext) {
             .iter()
             .find(|row| row.name.as_ref() == "Park thread")
             .unwrap();
-        assert_eq!(park.keys.as_deref(), Some("cmd-W"), "existing Park binding");
+        assert_eq!(
+            park.keys.as_deref(),
+            Some(ferrite_ui::keymap::PLATFORM.chord("W").as_str()),
+            "existing Park binding"
+        );
     });
 }
 

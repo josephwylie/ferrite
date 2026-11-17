@@ -577,7 +577,8 @@ mod tests {
         let mut core = Cockpit::new(store, Box::new(demo::Spawn::new(false)));
         assert_eq!(dock_launch_dir(&core), home, "an empty store: home");
 
-        let checkout = std::fs::canonicalize(std::env::current_dir().unwrap()).unwrap();
+        let checkout =
+            ferrite_core::workspace::follow::canonical(&std::env::current_dir().unwrap());
         core.register_project(&checkout).unwrap();
         assert_eq!(
             dock_launch_dir(&core),

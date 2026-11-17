@@ -480,7 +480,7 @@ fn project_completion_stays_visible_while_a_compact_form_scrolls(cx: &mut TestAp
         .map(|index| {
             let path = base.join(format!("directory-{index}"));
             std::fs::create_dir_all(&path).unwrap();
-            path.canonicalize().unwrap()
+            ferrite_core::workspace::follow::canonical(&path)
         })
         .collect();
     let mut created = None;

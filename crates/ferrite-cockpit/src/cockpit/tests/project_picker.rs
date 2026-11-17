@@ -112,8 +112,8 @@ fn the_project_card_stages_directories_and_registers_on_confirm(cx: &mut TestApp
             .registry()
             .project(view.nav_filter.expect("the new Project is the filter"))
             .unwrap();
-        assert_eq!(project.root, main.canonicalize().unwrap());
-        assert_eq!(project.additional_roots, [extra.canonicalize().unwrap()]);
+        assert_eq!(project.root, ferrite_core::workspace::follow::canonical(&main));
+        assert_eq!(project.additional_roots, [ferrite_core::workspace::follow::canonical(&extra)]);
         assert_eq!(project.title, "primary");
     });
 }
@@ -138,7 +138,7 @@ fn the_project_card_edits_an_existing_project(cx: &mut TestAppContext) {
                 .project(project)
                 .unwrap()
                 .additional_roots,
-            [extra.canonicalize().unwrap()],
+            [ferrite_core::workspace::follow::canonical(&extra)],
             "the edit card attaches without waiting for Done"
         );
 
@@ -214,7 +214,10 @@ fn a_draft_starts_on_the_filtered_project(cx: &mut TestAppContext) {
         let project = view.cockpit.registry().project(chosen).unwrap();
         assert_eq!(
             project.directories().collect::<Vec<_>>(),
-            [repo.canonicalize().unwrap(), extra.canonicalize().unwrap()],
+            [
+                ferrite_core::workspace::follow::canonical(&repo),
+                ferrite_core::workspace::follow::canonical(&extra)
+            ],
             "and that Project brings all of its directories"
         );
     });

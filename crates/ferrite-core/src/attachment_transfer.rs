@@ -319,7 +319,8 @@ pub fn is_retained_path(path: &Path) -> bool {
     let Some(hash) = parent.file_name().and_then(|name| name.to_str()) else {
         return false;
     };
-    path.is_absolute()
+    // A Windows desktop checks a Unix Server's receipt, rooted but driveless.
+    path.has_root()
         && matches!(hash.len(), 24 | 64)
         && hash.bytes().all(|byte| byte.is_ascii_hexdigit())
         && parent
