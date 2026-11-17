@@ -1728,7 +1728,7 @@ impl Engine {
     /// forgotten once its first start fails: no later start remakes it on a
     /// branch git refused or the operator never chose.
     fn forget_unmade(&mut self, reserved: Option<PathBuf>) {
-        let Some(path) = reserved.filter(|path| !path.exists()) else {
+        let Some(path) = reserved.filter(|path| !path.join(".git").exists()) else {
             return;
         };
         if let Err(error) = self.registry.remove_worktree(&path) {
