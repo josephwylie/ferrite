@@ -32,6 +32,12 @@ that happened to touch it, and nothing in the code said whose a field was.
   whether the nav is collapsed or forced open, its width measurements, the
   Project filter, its notice line. The other features follow one at a
   time, each in its own change.
+- **Settings is the second.** `SettingsView` (`cockpit/settings_view.rs`)
+  owns whether the sheet is up, its exit, its page, its search field and
+  its focus. It emits `SettingsEvent`. Rows of a feature that has no view
+  of its own yet (Connections, Permissions, Machine defaults, Server,
+  Ferrite updates) the root still builds, with its own listeners, and
+  hands over with the inputs. Each moves when its feature does.
 
 ## Precedent
 
