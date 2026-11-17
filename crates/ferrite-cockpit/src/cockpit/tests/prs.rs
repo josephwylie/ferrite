@@ -430,12 +430,21 @@ fn the_list_reads_again_each_time_the_view_opens(cx: &mut TestAppContext) {
 /// stays with a mark while the read is out, then follows the forge.
 #[gpui::test]
 fn a_pr_opened_again_is_read_again_and_follows_the_forge(cx: &mut TestAppContext) {
+    use crate::cockpit::panel::pr_read::PrTarget;
+
     let (world, cx) = world("prs-detail-refresh", 0, two_rows(), false, cx);
+    let target = PrTarget::project(world.project, 7);
+    let state = |cx: &mut gpui::VisualTestContext| {
+        world.view.read_with(cx, |view, _| {
+            view.panel.pr_reads.snapshot(target).map(|pr| pr.state)
+        })
+    };
     click(cx, "nav-pull-requests");
     lands(cx, "prs-row-7");
     click(cx, "prs-row-7");
     lands(cx, "pr-body");
-    assert!(shows(cx, "pr-merge"), "open: whether it can merge");
+    assert!(shows(cx, "pr-pill"), "the header shows the PR lifecycle");
+    assert_eq!(state(cx), Some(WirePrState::Open));
     click(cx, "prs-back");
 
     world.view.update(cx, |view, _| {
@@ -444,6 +453,11 @@ fn a_pr_opened_again_is_read_again_and_follows_the_forge(cx: &mut TestAppContext
     click(cx, "prs-row-7");
     assert!(shows(cx, "pr-body"), "the last read stays");
     assert!(shows(cx, "pr-refreshing"), "while the new one is out");
+    assert_eq!(
+        state(cx),
+        Some(WirePrState::Open),
+        "the last state stays too"
+    );
     let mut merged = full_pr();
     merged.state = WirePrState::Merged;
     let reads = world
@@ -458,7 +472,13 @@ fn a_pr_opened_again_is_read_again_and_follows_the_forge(cx: &mut TestAppContext
         });
     }
     until(cx, |cx| !shows(cx, "pr-refreshing"));
+    assert_eq!(
+        state(cx),
+        Some(WirePrState::Merged),
+        "the new forge state lands"
+    );
     assert!(shows(cx, "pr-body"));
+    assert!(shows(cx, "pr-pill"));
 }
 
 /// A merged PR says it is merged and does not offer to merge; an open one
