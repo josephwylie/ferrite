@@ -1116,9 +1116,12 @@ pub fn render_pane(
                     }))
                     .children(question_measurement)
                     .children(details),
-                move |bounds, _, cx| {
+                // The card is placed on the bounds the frame before measured:
+                // a change redraws this Pane on the next frame, as a slide
+                // does anyway, and no other part.
+                move |bounds, window, _| {
                     if details_canvas.replace(Some(bounds)) != Some(bounds) {
-                        cx.refresh_windows();
+                        window.request_animation_frame();
                     }
                 },
             ));
