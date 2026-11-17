@@ -885,15 +885,22 @@ fn scenario(
     live.shot("collapsed");
     live.key("cmd-b");
 
-    // ---- the empty board over this store: its real recent Threads and
-    // the CLIs found on this machine
-    live.act(|view, _, cx| view.show_empty_board(cx));
+    live.dump(claude, "claude final");
+    live.dump(codex, "codex final");
+
+    // ---- the empty board over this store, every Pane closed as ⌘W
+    // closes it: its real recent Threads and the CLIs found on this machine
+    for _ in 0..8 {
+        if live.read(|view| view.empty_board_shown()) {
+            break;
+        }
+        live.key("cmd-w");
+        live.tick(60);
+    }
     for _ in 0..20 {
         live.tick(100);
     }
     live.shot("empty-board");
-    live.dump(claude, "claude final");
-    live.dump(codex, "codex final");
     Some(claude)
 }
 

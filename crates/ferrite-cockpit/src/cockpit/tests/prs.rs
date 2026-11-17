@@ -188,7 +188,7 @@ fn two_rows() -> Vec<WirePrRow> {
 #[gpui::test]
 fn the_footer_opens_the_prs_from_an_empty_board(cx: &mut TestAppContext) {
     let (world, cx) = world("prs-empty-board", 0, two_rows(), false, cx);
-    world.view.update(cx, |view, cx| view.show_empty_board(cx));
+    cx.simulate_keystrokes("cmd-w");
     tick(cx);
     assert!(shows(cx, "empty-board"));
     click(cx, "nav-pull-requests");

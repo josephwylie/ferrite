@@ -29,9 +29,9 @@ impl CockpitView {
     /// — a Thread in Solo, or a Group.
     pub(super) fn view_head(&self, cx: &mut Context<Self>) -> AnyElement {
         let mut parts = Vec::new();
-        if self.factory_view.is_some() {
+        if self.factory().is_some() {
             parts.extend(self.factory_head());
-        } else if self.prs.shown {
+        } else if self.prs_shown() {
             parts.extend(self.prs_head());
         } else if !self.empty_board_shown() {
             let named = match self.cockpit.roster().view() {
@@ -186,7 +186,7 @@ impl CockpitView {
     /// The Factory's breadcrumb: its Project, `Factory`, then the Task
     /// whose panel is on screen.
     fn factory_head(&self) -> Vec<AnyElement> {
-        let Some(view) = self.factory_view.as_ref() else {
+        let Some(view) = self.factory() else {
             return Vec::new();
         };
         let project = self

@@ -72,8 +72,7 @@ fn the_coordinator_is_empty_until_the_operator_speaks(cx: &mut TestAppContext) {
     click(cx, "coordinator-provider");
     assert!(shows(cx, "context-menu"));
     let codex = view.read_with(cx, |view, _| {
-        view.factory_view
-            .as_ref()
+        view.factory()
             .unwrap()
             .picks
             .iter()
@@ -108,7 +107,7 @@ fn the_coordinator_is_empty_until_the_operator_speaks(cx: &mut TestAppContext) {
         let coordinator = board.coordinator(project).unwrap();
         assert!(coordinator.starting, "the Factory starts it");
         assert!(board.tasks.is_empty(), "talking starts nothing");
-        let field = view.factory_view.as_ref().unwrap().opening.clone().unwrap();
+        let field = view.factory().unwrap().opening.clone().unwrap();
         assert_eq!(field.read(cx).text(), "", "sent");
     });
 }
@@ -187,7 +186,7 @@ fn proposals_are_cards_accepted_or_dismissed_beside_the_conversation(cx: &mut Te
 
     click(cx, "proposal-p-1-open");
     view.read_with(cx, |view, _| {
-        let factory = view.factory_view.as_ref().unwrap();
+        let factory = view.factory().unwrap();
         assert_eq!(factory.surface, Surface::Board);
         assert_eq!(factory.open.as_deref(), Some(task.as_str()));
     });
@@ -222,7 +221,7 @@ fn focusing_a_coordinator_by_id_opens_its_projects_coordinator_tab(cx: &mut Test
     tick(cx);
     assert!(shows(cx, "coordinator-pane"));
     view.read_with(cx, |view, _| {
-        let factory = view.factory_view.as_ref().expect("the Factory shows");
+        let factory = view.factory().expect("the Factory shows");
         assert_eq!(factory.project, project);
         assert_eq!(factory.surface, Surface::Coordinator);
     });

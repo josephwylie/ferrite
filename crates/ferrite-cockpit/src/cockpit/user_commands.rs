@@ -143,7 +143,6 @@ impl CockpitView {
         let pane = self.index_of(owner);
         if command.output == Output::Reader {
             if let Some(index) = pane {
-                self.empty_shown = false;
                 // Named as a log in the directory it ran in, so the
                 // preview reads it as plain text; nothing is written there.
                 self.panes[index].preview.open_source(

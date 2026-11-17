@@ -222,7 +222,6 @@ impl CockpitView {
     /// keyboard. A review already open there switches scope (and reads it
     /// afresh) rather than opening another.
     fn open_review(&mut self, scope: Scope, window: &mut Window, cx: &mut Context<Self>) {
-        self.empty_shown = false;
         let Some(pane) = self.panes.get(self.focused()) else {
             return;
         };
@@ -494,7 +493,6 @@ impl CockpitView {
 
     /// Another Thread as its own Pane beside the focused one (F-15).
     fn open_thread_beside(&mut self, thread: ThreadId, cx: &mut Context<Self>) {
-        self.empty_shown = false;
         let Some(owner) = self.cockpit.roster().focused() else {
             return;
         };
