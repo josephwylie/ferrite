@@ -1302,10 +1302,6 @@ impl Engine {
 
     /// Register a project root (idempotent, canonicalized) — the selector's
     /// type-a-path row and the launch seed both land here.
-    pub fn register_project(&mut self, root: &Path) -> io::Result<ProjectId> {
-        self.registry.register(root)
-    }
-
     pub fn register_project_directories(&mut self, roots: &[PathBuf]) -> io::Result<ProjectId> {
         self.registry.register_directories(roots)
     }

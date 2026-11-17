@@ -4,7 +4,8 @@
 //! keep running without a window is the Engine's, and the Cockpit changes
 //! it only through the Engine's acts. The Engine runs in the Server, and
 //! the acts are commands over its socket (`remote`); in `--demo`, `--load`
-//! and every test it runs in this process, and an act is a direct call.
+//! and every test it runs in this process, and an act is the same command,
+//! answered by the same Engine code the Server runs (`Link::execute`).
 //! Either way the window reads what the Engine's messages built: each open
 //! Thread's mirror, and the shared state's copies. The open Threads are
 //! shared: the Roster follows them (`sync_roster`).
@@ -17,8 +18,8 @@ use std::time::{Duration, Instant};
 
 use crate::activity::{AgentKey, DecisionHandle, Subject};
 pub use crate::engine::{
-    title_from_prompt, Admission, AgentLaunch, BootstrapResult, Bootstrapped, DeleteError, Engine,
-    HistoryDirection, PaneUpdate, Preparation, ProviderChoice, ProvisionError, Restart,
+    title_from_prompt, Admission, AgentLaunch, BootstrapResult, Bootstrapped, Engine,
+    HistoryDirection, PaneUpdate, Preparation, ProviderChoice, Restart,
     RssSampler, SpawnRequest, Spawner, SubjectUpdate, ToolTiming,
 };
 use crate::notifications::{DecisionNoticeId, NoticeId, Notifications};
@@ -638,26 +639,10 @@ impl Cockpit {
         }
     }
 
-    /// One act where the Engine runs: a direct call in this process, a
-    /// command to the Server. Either way the window is up to date with
-    /// what it changed when it returns.
-    fn act<T>(
-        &mut self,
-        local: impl FnOnce(&mut Engine) -> T,
-        remote: impl FnOnce(&mut remote::Remote) -> T,
-    ) -> T {
-        let result = match &mut self.link {
-            Link::InProcess(engine) => local(engine),
-            Link::Server(server) => remote(server),
-        };
-        self.settle();
-        result
-    }
-
     /// One act where the Engine runs, as a command: the Engine in this
     /// process answers it as the Server's does. Either way the window is up
     /// to date with what it changed when it returns.
-    fn act_op(&mut self, op: Op) -> Executed {
+    fn act(&mut self, op: Op) -> Executed {
         let executed = self.link.execute(op);
         self.settle();
         executed
@@ -994,7 +979,7 @@ impl Cockpit {
     /// Close a Pane: the Session ends, the log is flushed, and the Thread
     /// keeps nothing in memory until it is opened again.
     pub fn park(&mut self, thread: ThreadId) -> io::Result<()> {
-        let parked = done(self.act_op(Op::Park { thread }));
+        let parked = done(self.act(Op::Park { thread }));
         if !self.shared.open.contains(&thread) {
             self.roster.remove_thread(thread);
         }
@@ -1027,7 +1012,7 @@ impl Cockpit {
         subject: &Subject,
         retry: bool,
     ) -> io::Result<bool> {
-        changed(self.act_op(Op::LoadSubject {
+        changed(self.act(Op::LoadSubject {
             thread,
             subject: subject.into(),
             retry,
@@ -1060,7 +1045,7 @@ impl Cockpit {
             .notifications
             .get(id)
             .map(|notice| notice.thread);
-        notice(self.act_op(Op::Notice {
+        notice(self.act(Op::Notice {
             action: NoticeAction::Open { notice: id.get() },
         }));
         self.land_on(known?)
@@ -1070,7 +1055,7 @@ impl Cockpit {
     /// the operator lands on its Thread as `open_notice` does.
     pub fn open_decision_notice(&mut self, id: &DecisionNoticeId) -> Option<ThreadId> {
         let live = self.shared.notifications.decision(id).is_some();
-        notice(self.act_op(Op::Notice {
+        notice(self.act(Op::Notice {
             action: NoticeAction::OpenDecision {
                 thread: id.thread,
                 handle: (&id.handle).into(),
@@ -1177,11 +1162,6 @@ impl HeldRead {
     pub fn fail(self, why: &str) {
         let _ = self.answer.send(Err(io::Error::other(why.to_string())));
     }
-}
-
-/// A command whose reply carries nothing the window needs.
-fn run(server: &mut remote::Remote, op: Op) -> io::Result<()> {
-    done(server.execute(op))
 }
 
 /// A command whose reply carries nothing the window needs.
@@ -1386,7 +1366,7 @@ impl Cockpit {
     }
 
     pub fn register_project_directories(&mut self, roots: &[PathBuf]) -> io::Result<ProjectId> {
-        registered(self.act_op(Op::Project {
+        registered(self.act(Op::Project {
             action: ProjectAction::Register {
                 roots: roots.to_vec(),
             },
@@ -1398,7 +1378,7 @@ impl Cockpit {
         project: ProjectId,
         roots: &[PathBuf],
     ) -> io::Result<()> {
-        done(self.act_op(Op::Project {
+        done(self.act(Op::Project {
             action: ProjectAction::AddDirectories {
                 project,
                 roots: roots.to_vec(),
@@ -1412,7 +1392,7 @@ impl Cockpit {
         index: usize,
         root: &Path,
     ) -> io::Result<()> {
-        done(self.act_op(Op::Project {
+        done(self.act(Op::Project {
             action: ProjectAction::ReplaceDirectory {
                 project,
                 index,
@@ -1422,19 +1402,19 @@ impl Cockpit {
     }
 
     pub fn remove_project_directory(&mut self, project: ProjectId, index: usize) -> io::Result<()> {
-        done(self.act_op(Op::Project {
+        done(self.act(Op::Project {
             action: ProjectAction::RemoveDirectory { project, index },
         }))
     }
 
     pub fn remove_project(&mut self, project: ProjectId) -> io::Result<()> {
-        done(self.act_op(Op::Project {
+        done(self.act(Op::Project {
             action: ProjectAction::Remove { project },
         }))
     }
 
     pub fn rename_project(&mut self, project: ProjectId, title: &str) -> io::Result<()> {
-        done(self.act_op(Op::Project {
+        done(self.act(Op::Project {
             action: ProjectAction::Rename {
                 project,
                 title: title.to_string(),
@@ -1463,7 +1443,7 @@ impl Cockpit {
     /// settle, so the next start runs the new release, and its models are
     /// asked for again.
     pub fn cli_replaced(&mut self, provider: Provider) {
-        if let Err(error) = self.act_op(Op::CliReplaced { provider }) {
+        if let Err(error) = self.act(Op::CliReplaced { provider }) {
             crate::log!(
                 "the server did not hear of the new {provider} CLI: {}",
                 error.message
@@ -1472,7 +1452,7 @@ impl Cockpit {
     }
 
     pub fn open(&mut self, provider: Provider, workspace: WorkspaceChoice) -> io::Result<ThreadId> {
-        started(self.act_op(Op::Open {
+        started(self.act(Op::Open {
             provider,
             workspace: (&workspace).into(),
         }))
@@ -1497,7 +1477,7 @@ impl Cockpit {
         thread: ThreadId,
         choice: ProviderChoice,
     ) -> io::Result<()> {
-        done(self.act_op(Op::SetProvider {
+        done(self.act(Op::SetProvider {
             thread,
             provider: choice.provider,
             model: choice.model,
@@ -1507,7 +1487,7 @@ impl Cockpit {
     /// Continue a Thread whose provider lost its saved conversation on a
     /// fresh one, the earlier turns going with the next prompt as context.
     pub fn start_fresh_conversation(&mut self, thread: ThreadId) -> io::Result<()> {
-        done(self.act_op(Op::StartFresh { thread }))
+        done(self.act(Op::StartFresh { thread }))
     }
 
     pub fn project_id(&self, thread: ThreadId) -> Option<ProjectId> {
@@ -1524,7 +1504,7 @@ impl Cockpit {
     /// Delete a Thread for good. Its parked row goes at once, not when the
     /// Server next publishes the rows.
     pub fn delete(&mut self, thread: ThreadId) -> io::Result<()> {
-        let deleted = done(self.act_op(Op::Delete { thread }));
+        let deleted = done(self.act(Op::Delete { thread }));
         if deleted.is_ok() {
             self.parked.forget(thread);
         }
@@ -1532,17 +1512,17 @@ impl Cockpit {
     }
 
     pub fn revive(&mut self, thread: ThreadId) -> io::Result<()> {
-        done(self.act_op(Op::Revive { thread }))
+        done(self.act(Op::Revive { thread }))
     }
 
     pub fn import(&mut self, path: &Path) -> io::Result<ThreadId> {
-        started(self.act_op(Op::Import {
+        started(self.act(Op::Import {
             path: path.to_path_buf(),
         }))
     }
 
     pub fn send(&mut self, thread: ThreadId, text: String) -> Admission {
-        match self.act_op(Op::Send { thread, text }) {
+        match self.act(Op::Send { thread, text }) {
             Ok(Some(Done::Held)) => Admission::Held,
             Ok(_) => Admission::Delivered,
             Err(error) if error.code == ErrorCode::Unconfirmed => {
@@ -1561,7 +1541,7 @@ impl Cockpit {
         files: bool,
         edit: bool,
     ) -> Result<(), String> {
-        self.act_op(Op::Rewind {
+        self.act(Op::Rewind {
             thread,
             prompt: prompt.to_string(),
             files,
@@ -1579,7 +1559,7 @@ impl Cockpit {
         prompt: Option<&str>,
         draft: Option<String>,
     ) -> Result<(), String> {
-        self.act_op(Op::Fork {
+        self.act(Op::Fork {
             thread,
             prompt: prompt.map(str::to_string),
             draft,
@@ -1589,12 +1569,12 @@ impl Cockpit {
     }
 
     pub fn interrupt(&mut self, thread: ThreadId) {
-        said(self.act_op(Op::Interrupt { thread }));
+        said(self.act(Op::Interrupt { thread }));
     }
 
     /// Stop one Subagent of `thread`; Main's turn and the others run on.
     pub fn stop_subagent(&mut self, thread: ThreadId, key: &AgentKey) {
-        said(self.act_op(Op::StopSubagent {
+        said(self.act(Op::StopSubagent {
             thread,
             key: key.as_str().into(),
         }));
@@ -1622,7 +1602,7 @@ impl Cockpit {
         handle: &DecisionHandle,
         answer: DecisionAnswer,
     ) -> io::Result<bool> {
-        match self.act_op(Op::Answer {
+        match self.act(Op::Answer {
             thread,
             handle: handle.into(),
             answer: (&answer).into(),
@@ -1641,7 +1621,7 @@ impl Cockpit {
 
     /// Ferrite's own words in a Thread's Pane.
     pub fn say(&mut self, thread: ThreadId, text: String) {
-        said(self.act_op(Op::Say { thread, text }));
+        said(self.act(Op::Say { thread, text }));
     }
 
     pub fn search_files(
@@ -2003,7 +1983,7 @@ impl Cockpit {
     }
 
     pub fn control(&mut self, thread: ThreadId, action: crate::SessionControl) -> io::Result<()> {
-        done(self.act_op(Op::Control {
+        done(self.act(Op::Control {
             thread,
             control: (&action).into(),
         }))
@@ -2048,7 +2028,7 @@ impl Cockpit {
         taken_at: Instant,
     ) -> bool {
         let age = crate::clock::instant().saturating_duration_since(taken_at);
-        changed(self.act_op(Op::WorktreesListed {
+        changed(self.act(Op::WorktreesListed {
             thread,
             listed,
             age_ms: age.as_millis() as u64,
@@ -2195,22 +2175,22 @@ impl Cockpit {
         thread: ThreadId,
         until: Option<std::time::SystemTime>,
     ) -> io::Result<()> {
-        done(self.act_op(Op::Snooze { thread, until }))
+        done(self.act(Op::Snooze { thread, until }))
     }
 
     pub fn rename_thread(&mut self, thread: ThreadId, title: &str) -> io::Result<()> {
-        done(self.act_op(Op::Rename {
+        done(self.act(Op::Rename {
             thread,
             title: title.to_string(),
         }))
     }
 
     pub fn queue(&mut self, thread: ThreadId, text: String) -> bool {
-        self.act_op(Op::Queue { thread, text }).is_ok()
+        self.act(Op::Queue { thread, text }).is_ok()
     }
 
     pub fn unqueue(&mut self, thread: ThreadId) -> Option<String> {
-        match self.act_op(Op::Unqueue { thread }) {
+        match self.act(Op::Unqueue { thread }) {
             Ok(Some(Done::Text { text })) => Some(text),
             _ => None,
         }
@@ -2224,7 +2204,7 @@ impl Cockpit {
 
     /// Send the queued prompt `id` names next (`Engine::send_queued_now`).
     pub fn send_queued_now(&mut self, thread: ThreadId, id: &str) {
-        said(self.act_op(Op::SendQueuedNow {
+        said(self.act(Op::SendQueuedNow {
             thread,
             item: id.to_string(),
         }));
@@ -2239,7 +2219,7 @@ impl Cockpit {
         // A Server too old to send ids listed its queue by text alone
         // (`mirror::queue_of`): its items take back the latest.
         let id = (!id.is_empty()).then_some(id);
-        said(self.act_op(Op::CancelQueued {
+        said(self.act(Op::CancelQueued {
             thread,
             restore,
             edit,
@@ -2252,7 +2232,7 @@ impl Cockpit {
     pub fn take_retrieved_prompt(&mut self, thread: ThreadId) -> Option<(String, bool)> {
         // Asked every frame: only a Thread holding one is asked.
         self.thread(thread)?.recovered()?;
-        match self.act_op(Op::TakeRecovered { thread }) {
+        match self.act(Op::TakeRecovered { thread }) {
             Ok(Some(Done::Recovered { text, prepend })) => Some((text, prepend)),
             _ => None,
         }
@@ -2268,7 +2248,7 @@ impl Cockpit {
             HistoryDirection::Older => crate::protocol::WireDirection::Older,
             HistoryDirection::Newer => crate::protocol::WireDirection::Newer,
         };
-        match self.act_op(Op::Recall {
+        match self.act(Op::Recall {
             thread,
             direction,
             draft: current_draft.to_string(),
@@ -2456,7 +2436,7 @@ impl Cockpit {
         thread: ThreadId,
         model: Option<String>,
     ) -> io::Result<()> {
-        done(self.act_op(Op::SetModel { thread, model }))
+        done(self.act(Op::SetModel { thread, model }))
     }
 
     pub fn set_effort(
@@ -2464,7 +2444,7 @@ impl Cockpit {
         thread: ThreadId,
         effort: Option<String>,
     ) -> io::Result<()> {
-        done(self.act_op(Op::SetEffort { thread, effort }))
+        done(self.act(Op::SetEffort { thread, effort }))
     }
 
     pub fn next_blocked(&self, from: Option<ThreadId>) -> Option<ThreadId> {
@@ -2524,7 +2504,7 @@ impl Cockpit {
 
     pub fn dismiss_notice(&mut self, id: NoticeId) -> bool {
         let known = self.shared.notifications.get(id).is_some();
-        notice(self.act_op(Op::Notice {
+        notice(self.act(Op::Notice {
             action: NoticeAction::Dismiss { notice: id.get() },
         }));
         known
@@ -2532,7 +2512,7 @@ impl Cockpit {
 
     pub fn dismiss_decision_notice(&mut self, id: &DecisionNoticeId) -> bool {
         let shown = self.shared.notifications.decision(id).is_some();
-        notice(self.act_op(Op::Notice {
+        notice(self.act(Op::Notice {
             action: NoticeAction::DismissDecision {
                 thread: id.thread,
                 handle: (&id.handle).into(),
@@ -2542,20 +2522,20 @@ impl Cockpit {
     }
 
     pub fn clear_notices(&mut self) {
-        notice(self.act_op(Op::Notice {
+        notice(self.act(Op::Notice {
             action: NoticeAction::Clear,
         }));
     }
 
     pub fn mark_notices_read(&mut self) {
-        notice(self.act_op(Op::Notice {
+        notice(self.act(Op::Notice {
             action: NoticeAction::Read,
         }));
     }
 
     /// Claude's `Mark as unread` (`Notifications::mark_unread`).
     pub fn mark_unread(&mut self, thread: ThreadId) {
-        notice(self.act_op(Op::Notice {
+        notice(self.act(Op::Notice {
             action: NoticeAction::Unseen { thread },
         }));
     }
@@ -2834,7 +2814,7 @@ impl Cockpit {
         } else {
             self.visible_subjects.insert(thread, subject.clone());
         }
-        said(self.act_op(Op::ShowSubject {
+        said(self.act(Op::ShowSubject {
             thread,
             subject: (&subject).into(),
         }));
