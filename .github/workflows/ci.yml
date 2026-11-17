@@ -78,11 +78,8 @@ jobs:
         env:
           PACKAGES: ${{ needs.scope.outputs.packages }}
         run: |
-          args=(--workspace)
-          if [ -n "$PACKAGES" ]; then
-            args=()
-            for package in $PACKAGES; do args+=(-p "$package"); done
-          fi
+          args=()
+          for package in $PACKAGES; do args+=(-p "$package"); done
           cargo nextest run "${args[@]}" --locked --no-fail-fast --status-level all --final-status-level fail
       # Its own run: gpui-pre-macos's tests need its test-support feature,
       # which must not reach the app's test builds above.
@@ -142,11 +139,8 @@ jobs:
         env:
           PACKAGES: ${{ needs.scope.outputs.packages }}
         run: |
-          args=(--workspace)
-          if [ -n "$PACKAGES" ]; then
-            args=()
-            for package in $PACKAGES; do args+=(-p "$package"); done
-          fi
+          args=()
+          for package in $PACKAGES; do args+=(-p "$package"); done
           cargo nextest run "${args[@]}" --locked --no-fail-fast --status-level all --final-status-level fail
       - name: Build app
         working-directory: ${{ env.DEV_DRIVE_WORKSPACE }}
