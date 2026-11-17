@@ -18,12 +18,14 @@ class SelectionTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.packages = workspace(ROOT)
+        cls.vendored = sorted(name for name, package in cls.packages.items() if package.directory.startswith("vendor/"))
+        cls.ferrite = sorted(set(cls.packages) - set(cls.vendored))
 
     def test_every_workspace_member_selects_its_tests(self):
         for name, package in self.packages.items():
             with self.subTest(package=name):
                 result = select(self.packages, [f"{package.directory}/src/lib.rs"])
-                self.assertIn(name, result["packages"])
+                self.assertIn(name, result["packages"] + result["vendored"])
                 self.assertEqual(set(result["decisions"]), set(self.packages))
 
     def test_app_change_does_not_select_dependencies(self):
@@ -64,14 +66,31 @@ class SelectionTests(unittest.TestCase):
         for path in paths:
             with self.subTest(path=path):
                 result = select(self.packages, [path])
-                self.assertEqual(result["packages"], sorted(self.packages))
+                self.assertEqual(result["packages"], self.ferrite)
+                self.assertEqual(result["vendored"], self.vendored)
                 self.assertTrue(result["browser"])
+
+    def test_vendored_crates_are_members_kept_out_of_package_runs(self):
+        self.assertEqual(self.vendored, ["gpui-base", "gpui-component", "gpui-pre", "gpui-pre-macos", "taffy"])
+        self.assertFalse(set(self.vendored) & set(self.ferrite))
+
+    def test_vendored_source_selects_every_package(self):
+        # Ferrite reaches the vendored crates through crates.io gpui-kit, not a workspace edge.
+        result = select(self.packages, ["vendor/gpui-pre/src/window.rs"])
+        self.assertEqual(result["packages"], self.ferrite)
+        self.assertEqual(result["vendored"], self.vendored)
+
+    def test_crate_change_does_not_select_vendored_tests(self):
+        result = select(self.packages, ["crates/ferrite-ui/src/lib.rs"])
+        self.assertEqual(result["vendored"], [])
+        self.assertIn("ferrite-ui", result["packages"])
 
     def test_documentation_only_explicitly_skips_checks(self):
         result = select(self.packages, ["README.md", "AGENTS.md", "docs/audit.md", "docs/image.png"])
         self.assertFalse(result["code"])
         self.assertFalse(result["browser"])
         self.assertEqual(result["packages"], [])
+        self.assertEqual(result["vendored"], [])
         self.assertFalse(any(result["decisions"].values()))
         self.assertEqual(result["reasons"], ["documentation only"])
 
@@ -84,7 +103,8 @@ class SelectionTests(unittest.TestCase):
         for paths, full in [([], False), (["README.md"], True)]:
             with self.subTest(paths=paths, full=full):
                 result = select(self.packages, paths, full)
-                self.assertEqual(result["packages"], sorted(self.packages))
+                self.assertEqual(result["packages"], self.ferrite)
+                self.assertEqual(result["vendored"], self.vendored)
                 self.assertTrue(result["browser"])
 
     def test_new_member_receives_a_decision_without_selector_changes(self):
@@ -182,7 +202,8 @@ renamed = { package = "helper", path = "crates/helper" }
             main()
         result = json.loads(stdout.getvalue())
         self.assertEqual(result["packages"], ["ferrite-cockpit", "ferrite-core", "ferrite-frame"])
-        self.assertEqual(output.read_text(), "code=true\nbrowser=true\nfull=true\npackages=ferrite-cockpit ferrite-core ferrite-frame\n")
+        self.assertEqual(output.read_text(), "code=true\nbrowser=true\nfull=true\npackages=ferrite-cockpit ferrite-core ferrite-frame\n"
+                         "vendored=\n")
 
     def test_invalid_boundary_writes_no_skip_outputs(self):
         self.write_package("ferrite-core", '[dependencies]\ngpui = "1"\n')

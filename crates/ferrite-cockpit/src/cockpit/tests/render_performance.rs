@@ -1839,6 +1839,7 @@ fn solo_board<'a>(
 /// Cockpit or any Pane being rebuilt for it.
 #[gpui::test]
 fn an_open_palette_does_not_rebuild_the_cockpit(cx: &mut TestAppContext) {
+    let _clock = hold_wall_clock();
     let (view, _fake, threads, cx) = solo_board("palette-parts", cx);
     view.update_in(cx, |view, window, cx| {
         view.open_palette(crate::palette::PaletteScope::All, "", window, cx)

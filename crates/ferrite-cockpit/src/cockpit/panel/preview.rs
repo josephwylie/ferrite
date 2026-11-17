@@ -257,6 +257,7 @@ impl CockpitView {
                 None => self.nav_notice = Some("Start a Thread in this remote workspace before opening its files.".into()),
             }
         }
+        let mut image_pending = false;
         for pane in &mut self.panes {
             for annotation in pane.preview.take_annotation_requests() {
                 if annotation.original().is_none() {
@@ -294,11 +295,23 @@ impl CockpitView {
                     match pending.image.try_recv() {
                         Ok(Ok(image)) => pane.preview.open_annotation(pending.annotation, image, window),
                         Ok(Err(error)) => pane.preview.annotation_error(&pending.annotation, format!("The retained capture could not be opened: {error}. Reopen the annotation to try again."), window),
-                        Err(std::sync::mpsc::TryRecvError::Empty) => pane.preview_tab.annotation_image = Some(pending),
+                        Err(std::sync::mpsc::TryRecvError::Empty) => {
+                            pane.preview_tab.annotation_image = Some(pending);
+                            image_pending = true;
+                        }
                         Err(std::sync::mpsc::TryRecvError::Disconnected) => pane.preview.annotation_error(&pending.annotation, "The retained capture could not be loaded. Reopen the annotation to try again.".into(), window),
                     }
                 }
             }
+        }
+        if image_pending {
+            // The image is read on a thread of its own, and only a frame
+            // looks for it: ask for another, or an idle window never shows it.
+            cx.spawn(async move |this, cx| {
+                cx.background_executor().timer(crate::cockpit::beside::ANSWER_POLL).await;
+                this.update(cx, |_, cx| cx.notify()).ok();
+            })
+            .detach();
         }
         let first = !std::mem::replace(&mut self.panel.tended, true);
         let mut opened_surfaces = Vec::new();

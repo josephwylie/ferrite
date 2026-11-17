@@ -85,14 +85,20 @@ pub fn wait_past(seen: u64) -> bool {
 }
 
 /// Run `look` until it says done, waiting for a landing between looks.
+/// Every landing gets two looks after it: a window polls on a timer, so
+/// the look that starts its poll may not yet be the one that reads it.
 /// Panics with `lost` when nothing lands for [`LOST_AFTER`].
 #[cfg(any(test, feature = "test-support"))]
 pub fn until(lost: &str, mut look: impl FnMut() -> bool) {
+    let mut seen = None;
     loop {
-        let seen = rung();
+        let before = rung();
         if look() {
             return;
         }
-        assert!(wait_past(seen), "{lost}");
+        if let Some(seen) = seen {
+            assert!(wait_past(seen), "{lost}");
+        }
+        seen = Some(before);
     }
 }
