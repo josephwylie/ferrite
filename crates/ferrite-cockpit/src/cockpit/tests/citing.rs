@@ -20,14 +20,11 @@ fn conversation<'a>(
 }
 
 /// Pasted, not typed: one edit, where typing it is thousands of keystrokes
-/// and a frame for each.
+/// and a frame for each. `cmd-v` on every OS: these tests bind the mac key
+/// table everywhere.
 fn paste(cx: &mut gpui::VisualTestContext, text: String) {
     cx.update(|_, cx| cx.write_to_clipboard(ClipboardItem::new_string(text)));
-    cx.simulate_keystrokes(if cfg!(target_os = "macos") {
-        "cmd-v"
-    } else {
-        "ctrl-v"
-    });
+    cx.simulate_keystrokes("cmd-v");
 }
 
 /// `conversation`, and the prompts the provider is sent.
