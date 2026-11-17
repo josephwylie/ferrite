@@ -5162,3 +5162,37 @@ fn a_thread_started_on_a_provider_conversation_resumes_it() {
     let view = core.engine().thread(thread).unwrap();
     assert_eq!(view.provider_session(), Some("sess-9"));
 }
+
+/// A Store from before Groups went: its `groups.json` (as that code wrote
+/// it for these six Threads, two of them parked) is left exactly as it was,
+/// and every Thread it named is listed and opens alone.
+#[test]
+fn a_store_with_groups_lists_every_thread_and_opens_each_alone() {
+    const LEGACY: &[u8] = include_bytes!("tests/legacy-groups.json");
+    let dir = scratch("legacy-groups");
+    let mut cockpit = Cockpit::new(Store::open(&dir).unwrap(), Box::new(Fake::default()));
+    let threads: Vec<ThreadId> = (0..6)
+        .map(|_| cockpit.open(Provider::Claude, main_choice()).unwrap())
+        .collect();
+    assert_eq!(threads, (1..=6).map(ThreadId::new).collect::<Vec<_>>());
+    cockpit.park_thread(threads[2]).unwrap();
+    cockpit.park_thread(threads[4]).unwrap();
+    drop(cockpit);
+    std::fs::write(dir.join("groups.json"), LEGACY).unwrap();
+
+    let mut cockpit = Cockpit::new(Store::open(&dir).unwrap(), Box::new(Fake::default()));
+    let mut listed = cockpit.threads();
+    listed.extend(cockpit.parked().unwrap());
+    listed.sort();
+    assert_eq!(listed, threads);
+    for &thread in &threads {
+        if cockpit.thread(thread).is_some() {
+            assert!(cockpit.focus_thread(thread));
+        } else {
+            cockpit.reopen(thread).unwrap();
+        }
+        assert_eq!(cockpit.visible(), [PaneIdentity::Thread(thread)]);
+    }
+    drop(cockpit);
+    assert_eq!(std::fs::read(dir.join("groups.json")).unwrap(), LEGACY);
+}

@@ -2050,7 +2050,7 @@ fn log_stamp(path: &Path) -> Option<(u64, u128)> {
 }
 
 /// Put `bytes` in place of a small whole-file document (the settings, the
-/// registry, the Groups) so that a crash or power cut at any moment leaves
+/// registry) so that a crash or power cut at any moment leaves
 /// the old file or the new one, never a torn one: written beside, synced
 /// behind a barrier so the contents reach the drive before the rename can
 /// (ADR 0009), renamed over, the rename made durable by syncing the

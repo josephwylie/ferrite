@@ -1,10 +1,11 @@
-//! A Group's Pane layout: a binary split tree.
+//! A board's layout: a binary split tree.
 //!
 //! SwarmDeck parity — the shape is react-mosaic's `MosaicNode`: a leaf is one
-//! Pane, a split hands its area to two children along an axis, `first` taking
-//! `ratio` of it. One tree is persisted per Group and drives three things: the
-//! rect each Pane paints in, seam drags (resizing the two sides of a split),
-//! and dropping one Pane on another (swap at the centre, split at an edge).
+//! slot (the Pane, or its reader), a split hands its area to two children
+//! along an axis, `first` taking `ratio` of it. The tree drives three things:
+//! the rect each slot paints in, seam drags (resizing the two sides of a
+//! split), and dropping one slot on another (swap at the centre, split at an
+//! edge).
 //!
 //! Geometry is plain `f32` in the caller's units; nothing here knows gpui.
 //! Paths address nodes: `false` steps into `first`, `true` into `second`.
@@ -89,7 +90,7 @@ pub enum Node {
     },
 }
 
-/// One Group's arrangement. `root: None` is the empty layout.
+/// One board's arrangement. `root: None` is the empty layout.
 #[derive(Clone, Debug, PartialEq, Default, Serialize, Deserialize)]
 pub struct Tree {
     #[serde(default)]
@@ -1078,8 +1079,7 @@ pub fn zone_rect(rect: Rect, zone: Zone) -> Rect {
     }
 }
 
-/// Leaves persist as the Thread's number, the way `groups.json` writes
-/// members.
+/// A leaf is spelled as the Thread's number, as generation 1 sends it.
 mod thread_id {
     use super::*;
 
