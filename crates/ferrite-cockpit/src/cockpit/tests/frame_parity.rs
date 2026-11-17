@@ -27,6 +27,20 @@ fn board_of<'a>(
     (view, fake, cx, group)
 }
 
+/// One Thread, Solo, at the app's size.
+fn solo_of<'a>(
+    name: &str,
+    cx: &'a mut TestAppContext,
+) -> (Entity<CockpitView>, Fake, &'a mut gpui::VisualTestContext) {
+    let (core, fake) = cockpit(name, 1);
+    bind_production_keys(cx);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    hold_nav_open(&view, cx);
+    cx.simulate_resize(gpui::size(px(1440.), px(900.)));
+    tick(cx);
+    (view, fake, cx)
+}
+
 /// F-1: the Pane's edge is an overlay, so its content starts at the Pane's
 /// own edges: the head at the Pane's left and top (SPEC §5.9).
 #[gpui::test]
@@ -341,8 +355,7 @@ fn the_empty_board_walks_its_rows(cx: &mut TestAppContext) {
 /// the board.
 #[gpui::test]
 fn the_foot_is_the_account_row_alone(cx: &mut TestAppContext) {
-    let (mut core, _fake) = cockpit("frame-foot-alone", 2);
-    group_all(&mut core);
+    let (core, _fake) = cockpit("frame-foot-alone", 2);
     let (_view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     cx.simulate_resize(gpui::size(px(1440.), px(900.)));
     tick(cx);
@@ -355,7 +368,7 @@ fn the_foot_is_the_account_row_alone(cx: &mut TestAppContext) {
 /// unknown.
 #[gpui::test]
 fn the_foot_says_free_disk_only_when_it_runs_low(cx: &mut TestAppContext) {
-    let (view, _fake, cx, _group) = board_of("frame-foot-disk", 2, cx);
+    let (view, _fake, cx) = solo_of("frame-foot-disk", cx);
     for (free, shown) in [
         (None, false),
         (Some(30_000_000_000), false),
@@ -664,14 +677,14 @@ fn a_group_panes_decision_box_answers_by_digit_and_press(cx: &mut TestAppContext
 /// its `Retry` sends the failed turn's prompt again.
 #[gpui::test]
 fn retry_re_sends_the_failed_turns_prompt(cx: &mut TestAppContext) {
-    let (view, fake, cx, _group) = board_of("frame-retry", 2, cx);
-    let thread = view.read_with(cx, |view, _| view.panes[1].thread().unwrap());
+    let (view, fake, cx) = solo_of("frame-retry", cx);
+    let thread = view.read_with(cx, |view, _| view.panes[0].thread().unwrap());
     view.update(cx, |view, cx| {
         let _ = view.cockpit.send(thread, "build the range sheet".into());
         cx.notify();
     });
     tick(cx);
-    fake.streams.borrow()[1]
+    fake.streams.borrow()[0]
         .send(SessionEvent::TurnEnded {
             outcome: ferrite_core::TurnOutcome::Error("boom".into()),
             cost_usd: None,
@@ -701,19 +714,19 @@ fn retry_re_sends_the_failed_turns_prompt(cx: &mut TestAppContext) {
 /// and offers no `Retry`, there being no Session to send to.
 #[gpui::test]
 fn a_session_closed_mid_turn_leaves_the_strip_without_retry(cx: &mut TestAppContext) {
-    let (view, fake, cx, _group) = board_of("frame-closed-mid-turn", 2, cx);
-    let thread = view.read_with(cx, |view, _| view.panes[1].thread().unwrap());
+    let (view, fake, cx) = solo_of("frame-closed-mid-turn", cx);
+    let thread = view.read_with(cx, |view, _| view.panes[0].thread().unwrap());
     view.update(cx, |view, cx| {
         let _ = view.cockpit.send(thread, "build the range sheet".into());
         cx.notify();
     });
     tick(cx);
-    fake.streams.borrow()[1]
+    fake.streams.borrow()[0]
         .send(SessionEvent::TextDelta {
             text: "Working on it".into(),
         })
         .unwrap();
-    fake.streams.borrow()[1]
+    fake.streams.borrow()[0]
         .send(SessionEvent::Closed {
             reason: "exited".into(),
         })
