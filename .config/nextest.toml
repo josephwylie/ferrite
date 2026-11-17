@@ -2,15 +2,16 @@
 #
 # Each line is a debt: fix the test or the product, then delete the line. A
 # `full-ci` label runs the Windows check on a PR.
+#
+# After the browser-annotation test, the Panel's tab strip: a click lands on
+# the wrong tab or nothing, and the chevron never shows. Likely cause,
+# unmeasured: Windows reserves 138px of the 320px Panel head for its caption
+# buttons.
 [[profile.default.overrides]]
 platform = 'cfg(windows)'
 default-filter = '''
 not (
     test(=cockpit::tests::browser_annotations::browser_annotation_history_keeps_a_distinct_reviewable_capture)
-
-    # The Panel's tab strip: a click lands on the wrong tab or nothing, and
-    # the chevron never shows. Likely cause, unmeasured: Windows reserves
-    # 138px of the 320px Panel head for its caption buttons.
   | test(=cockpit::tests::panel_preview::another_tab_keeps_the_preview_for_later)
   | test(=cockpit::tests::provider_controls::background_work_lives_in_its_row_the_rail_and_the_pane)
   | test(=cockpit::tests::side_chat::side_chat_tabs_are_separate_conversations)
