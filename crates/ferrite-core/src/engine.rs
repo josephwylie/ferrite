@@ -1246,8 +1246,8 @@ pub struct Engine {
     /// and this Engine's feed into it.
     turn_agents: Vec<ferrite_reviewr::ferrite::Agent>,
     turns: ferrite_reviewr::ferrite::TurnSource,
-    #[cfg(test)]
-    refuse_park: std::collections::HashSet<ThreadId>,
+    #[cfg(any(test, feature = "test-support"))]
+    pub(crate) refuse_park: std::collections::HashSet<ThreadId>,
     /// How many Thread states `publish` has built (`states_built`).
     #[cfg(test)]
     states_built: usize,
@@ -1313,7 +1313,7 @@ impl Engine {
             attention_count: Default::default(),
             turn_agents: Vec::new(),
             turns: Default::default(),
-            #[cfg(test)]
+            #[cfg(any(test, feature = "test-support"))]
             refuse_park: std::collections::HashSet::new(),
             #[cfg(test)]
             states_built: 0,
@@ -2382,7 +2382,7 @@ impl Engine {
         self.open.retain(|open| *open != thread);
         state.session = None;
         state.replacement = None;
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-support"))]
         if self.refuse_park.contains(&thread) {
             return Err(io::Error::other("stub refused to park"));
         }

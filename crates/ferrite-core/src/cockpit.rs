@@ -1350,6 +1350,15 @@ fn notice(server: &mut remote::Remote, action: NoticeAction) {
 /// Mirror parity (ADR 0025): after every message, each open Thread's
 /// mirror reads exactly as the Engine's own Thread does. Every Cockpit
 /// test checks it as it runs.
+#[cfg(feature = "test-support")]
+impl Cockpit {
+    /// A UI test's park that fails: the Engine reports this Thread's park
+    /// as refused.
+    pub fn refuse_park(&mut self, thread: ThreadId) {
+        self.in_process().refuse_park.insert(thread);
+    }
+}
+
 #[cfg(test)]
 impl Cockpit {
     pub(crate) fn set_session_project_root(

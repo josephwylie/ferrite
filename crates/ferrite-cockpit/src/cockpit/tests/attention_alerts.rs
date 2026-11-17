@@ -496,6 +496,54 @@ fn away_from_the_window_a_finish_posts_a_system_notification(cx: &mut TestAppCon
     );
 }
 
+/// ADR 0017: the Thread on screen finishing while the window is away posts
+/// a system notification, since nobody is looking at it; clicking it reads
+/// it, and read, it leaves the notification centre.
+#[gpui::test]
+fn away_from_the_window_the_shown_thread_s_finish_posts_a_notification(
+    cx: &mut TestAppContext,
+) {
+    let (core, fake) = cockpit("system-notification-shown", 1);
+    cx.update(|cx| cx.set_app_identity("com.github.josephwylie.ferrite", "Ferrite"));
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    let thread = view.read_with(cx, |view, _| view.cockpit.threads()[0]);
+    let home = crate::machines::MachineKey(None);
+    cx.deactivate_window();
+    fake.streams.borrow()[0]
+        .send(SessionEvent::TurnEnded {
+            outcome: ferrite_core::TurnOutcome::Completed,
+            cost_usd: None,
+        })
+        .unwrap();
+    tick(cx);
+    ring(cx);
+    let tags = |cx: &mut gpui::VisualTestContext| {
+        cx.delivered_system_notifications()
+            .iter()
+            .map(|notification| notification.tag.to_string())
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        tags(cx),
+        [system_tag(&home, thread)],
+        "the Thread is on screen, but nobody is looking"
+    );
+    view.read_with(cx, |view, _| assert_eq!(view.chimed, [Sound::Done]));
+
+    cx.simulate_system_notification_response(gpui::SystemNotificationResponse {
+        tag: system_tag(&home, thread).into(),
+        action_id: None,
+    });
+    tick(cx);
+    view.read_with(cx, |view, _| {
+        assert!(!view.cockpit.notifications().attention(thread));
+    });
+    assert!(
+        tags(cx).is_empty(),
+        "read, it leaves the notification centre"
+    );
+}
+
 /// ADR 0017: a request waiting while the window is away posts a system
 /// notification too; clicking it lands on the request, and once read
 /// it leaves the notification centre.

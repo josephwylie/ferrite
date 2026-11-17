@@ -30,6 +30,32 @@ fn one_key_jumps_to_the_pane_that_needs_answering(cx: &mut TestAppContext) {
     view.read_with(cx, |view, _| assert_eq!(view.focused(), 3));
 }
 
+/// AC3, one Thread at a time: ⌘D puts the Thread that needs answering on
+/// screen in place of the one the operator was reading.
+#[gpui::test]
+fn one_key_shows_the_thread_that_needs_answering(cx: &mut TestAppContext) {
+    bind_production_keys(cx);
+    let (core, fake) = cockpit("jump-solo", 3);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    let threads = view.read_with(cx, |view, _| view.cockpit.threads());
+    view.update(cx, |view, cx| view.focus_thread(threads[0], cx));
+    fake.streams.borrow()[2].send(decision("perm_03")).unwrap();
+    tick(cx);
+    let shown = |cx: &mut gpui::VisualTestContext| -> Vec<ThreadId> {
+        threads
+            .iter()
+            .copied()
+            .filter(|thread| debug_bounds(cx, format!("pane-root-{}", thread.get())).is_some())
+            .collect()
+    };
+    assert_eq!(shown(cx), [threads[0]]);
+
+    cx.simulate_keystrokes("cmd-d");
+    tick(cx);
+
+    assert_eq!(shown(cx), [threads[2]], "the waiting Thread alone is on screen");
+}
+
 /// #20: cmd-t is the browser-tab spelling of a new Thread, and cmd-n —
 /// the original — still works beside it. Both keys ride the same
 /// cockpit::NewThread; the keymap table carries both rows.

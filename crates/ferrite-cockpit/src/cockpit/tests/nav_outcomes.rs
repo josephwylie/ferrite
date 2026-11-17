@@ -54,6 +54,45 @@ fn a_bulk_park_names_the_thread_that_failed(cx: &mut TestAppContext) {
     });
 }
 
+/// A Park of two where the Engine refuses one: the failed one is named in
+/// the list and stays picked, the other parks, and ⌘Z takes back the one
+/// that parked.
+#[gpui::test]
+fn a_bulk_park_of_loose_threads_names_the_thread_that_failed(cx: &mut TestAppContext) {
+    bind_production_keys(cx);
+    let (mut core, _fake) = cockpit("nav-park-refused", 3);
+    let threads = sorted_threads(&core);
+    core.refuse_park(threads[0]);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    hide_panel(&view, cx);
+    tick(cx);
+    let both = [threads[0], threads[2]];
+    view.update(cx, |view, cx| {
+        view.nav_picked = both.to_vec();
+        view.park_listed(&both, cx);
+    });
+    tick(cx);
+
+    let said = notice(&view, cx).expect("the failure is reported");
+    let name = view.read_with(cx, |view, _| view.facts.name(threads[0]).to_string());
+    assert!(said.starts_with(&format!("Couldn't park {name}: ")), "{said}");
+    assert_eq!(said.matches(';').count(), 0, "one failure, one entry: {said}");
+    assert!(cx.debug_bounds("nav-notice").is_some(), "drawn in the list");
+    view.read_with(cx, |view, _| {
+        assert_eq!(view.nav_picked, vec![threads[0]], "the failed one stays picked");
+        assert!(view.facts.parked().contains(&threads[2]));
+    });
+
+    cx.simulate_keystrokes("cmd-shift-e cmd-z");
+    tick(cx);
+    view.read_with(cx, |view, _| {
+        assert!(
+            !view.facts.parked().contains(&threads[2]),
+            "Undo revived the one that parked"
+        );
+    });
+}
+
 /// Reviving a parked Thread whose log has gone bad says so, in the list,
 /// and the Thread stays parked.
 #[gpui::test]
