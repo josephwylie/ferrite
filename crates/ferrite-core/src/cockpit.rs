@@ -23,7 +23,8 @@ pub use crate::engine::{
 };
 use crate::notifications::{DecisionNoticeId, NoticeId, Notifications};
 use crate::protocol::{
-    Done, ErrorCode, NoticeAction, Op, ProjectAction, ServerMessage, When, WireError,
+    ClientMessage, Command, Done, ErrorCode, NoticeAction, Op, ProjectAction, ServerMessage, When,
+    WireError,
 };
 use crate::roster::{DraftId, PaneIdentity, Roster};
 use crate::store::{LoadError, Provider, Store};
@@ -178,6 +179,49 @@ enum Link {
     InProcess(Box<Engine>),
     /// In the Server, over its socket.
     Server(Box<remote::Remote>),
+}
+
+impl Link {
+    /// One command, carried out where the Engine runs and answered as the
+    /// Server answers it. In debug builds an in-process command and its
+    /// reply cross as their encoded lines, so nothing escapes the contract.
+    fn execute(&mut self, op: Op) -> Executed {
+        match self {
+            Link::InProcess(engine) => {
+                let ClientMessage::Command(Command { op, .. }) =
+                    crossed(ClientMessage::Command(Command { id: 0, op }))
+                else {
+                    unreachable!("a command decodes as a command")
+                };
+                let (ok, error) = match engine.execute(&op) {
+                    Ok(ok) => (ok, None),
+                    Err(error) => (None, Some(error)),
+                };
+                let ServerMessage::Reply { ok, error, .. } =
+                    crossed(ServerMessage::Reply { id: 0, ok, error })
+                else {
+                    unreachable!("a reply decodes as a reply")
+                };
+                error.map_or(Ok(ok), Err)
+            }
+            Link::Server(server) => server.execute(op),
+        }
+    }
+}
+
+/// What a command came to, as its reply says.
+type Executed = Result<Option<Done>, WireError>;
+
+/// A message as the other end of a socket reads it: in debug builds, its
+/// encoded line decoded again.
+fn crossed<T: serde::Serialize + serde::de::DeserializeOwned>(message: T) -> T {
+    #[cfg(debug_assertions)]
+    let message = {
+        let line = crate::protocol::encode(&message);
+        crate::protocol::decode(&line[..line.len() - 1])
+            .expect("every message decodes as it encoded")
+    };
+    message
 }
 
 impl Cockpit {
@@ -603,6 +647,15 @@ impl Cockpit {
         result
     }
 
+    /// One act where the Engine runs, as a command: the Engine in this
+    /// process answers it as the Server's does. Either way the window is up
+    /// to date with what it changed when it returns.
+    fn act_op(&mut self, op: Op) -> Executed {
+        let executed = self.link.execute(op);
+        self.settle();
+        executed
+    }
+
     /// The Engine in this process: what only `--demo`, `--load` and the
     /// tests drive — fixtures, injected inputs, the launch-time revival a
     /// Server does for itself.
@@ -647,15 +700,7 @@ impl Cockpit {
             Link::InProcess(engine) => engine
                 .take_messages()
                 .into_iter()
-                .map(|message| {
-                    #[cfg(debug_assertions)]
-                    let message = {
-                        let line = crate::protocol::encode(&message);
-                        crate::protocol::decode(&line[..line.len() - 1])
-                            .expect("every message decodes as it encoded")
-                    };
-                    remote::Arrival::Message(message)
-                })
+                .map(|message| remote::Arrival::Message(crossed(message)))
                 .chain(
                     engine
                         .take_bootstrap_results()
@@ -942,10 +987,7 @@ impl Cockpit {
     /// Close a Pane: the Session ends, the log is flushed, and the Thread
     /// keeps nothing in memory until it is opened again.
     pub fn park(&mut self, thread: ThreadId) -> io::Result<()> {
-        let parked = self.act(
-            |engine| engine.park(thread),
-            |server| run(server, Op::Park { thread }),
-        );
+        let parked = done(self.act_op(Op::Park { thread }));
         if !self.shared.open.contains(&thread) {
             self.roster.remove_thread(thread);
         }
@@ -1173,7 +1215,12 @@ impl HeldRead {
 
 /// A command whose reply carries nothing the window needs.
 fn run(server: &mut remote::Remote, op: Op) -> io::Result<()> {
-    server.execute(op).map(drop).map_err(io::Error::from)
+    done(server.execute(op))
+}
+
+/// A command whose reply carries nothing the window needs.
+fn done(executed: Executed) -> io::Result<()> {
+    executed.map(drop).map_err(io::Error::from)
 }
 
 /// A command whose reply says whether it changed anything.
