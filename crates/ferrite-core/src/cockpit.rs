@@ -1102,14 +1102,17 @@ impl Cockpit {
             .filter_map(PaneIdentity::thread)
             .filter(|thread| self.would_read(*thread))
             .collect();
-        for &thread in &unread {
+        if unread.is_empty() {
+            return false;
+        }
+        for thread in unread {
             notice(self.link.execute(Op::Notice {
                 action: NoticeAction::Seen { thread },
             }));
         }
         // Received, not settled: the frame being pumped keeps its updates.
         self.receive();
-        !unread.is_empty()
+        true
     }
 
     /// Whether looking at `thread` reads anything: an unread Notice, or an
