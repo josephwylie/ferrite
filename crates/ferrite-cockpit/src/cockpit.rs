@@ -71,7 +71,7 @@ pub mod visual_reference;
 
 use std::time::Duration;
 
-use ferrite_core::cockpit::{CloseError, Cockpit, HistoryDirection, ProviderChoice, ThreadView};
+use ferrite_core::cockpit::{Cockpit, HistoryDirection, ProviderChoice, ThreadView};
 use ferrite_core::docview::{Cell, Level};
 use ferrite_core::draft::DraftTarget;
 use ferrite_core::followup;
@@ -3463,22 +3463,6 @@ impl CockpitView {
             .collect()
     }
 
-    /// What "Delete parked threads" deletes: the parked Threads no stored
-    /// Group lists. The UI shows no Groups, but a legacy member stays in
-    /// `groups.json`, and the menu never deletes a Thread out of one.
-    fn deletable_parked(&self) -> Vec<ThreadId> {
-        let grouped: std::collections::HashSet<ThreadId> = self
-            .cockpit
-            .groups()
-            .iter()
-            .flat_map(|group| group.members.iter().copied())
-            .collect();
-        self.parked_threads()
-            .into_iter()
-            .filter(|thread| !grouped.contains(thread))
-            .collect()
-    }
-
     /// Whether any Thread, open or parked, records this Project.
     fn project_in_use(&self, project: ProjectId) -> bool {
         self.cockpit
@@ -3539,7 +3523,7 @@ impl CockpitView {
     /// into the nav's banner, with the last reason, and the survivors stay
     /// listed where the operator can deal with them one at a time.
     fn delete_parked_threads(&mut self, cx: &mut Context<Self>) {
-        let parked = self.deletable_parked();
+        let parked = self.parked_threads();
         let mut refused = 0usize;
         let mut reason = None;
         for thread in parked {
@@ -5269,22 +5253,6 @@ impl CockpitView {
         let Some(thread) = self.focused_thread() else {
             return;
         };
-        // ⏎ on a parked Thread's tile reopens it in place (F-8):
-        // `⏎ reopens it`.
-        if self.cockpit.thread(thread).is_none() {
-            match self.cockpit.wake(thread) {
-                Ok(()) => {
-                    self.sync_panes(cx);
-                    self.thread_opened(thread, cx);
-                    self.parked_changed(cx);
-                }
-                Err(error) => {
-                    ferrite_core::log!("thread {thread} could not be woken: {error:?}")
-                }
-            }
-            cx.notify();
-            return;
-        }
         if !self.panes[self.focused()].is_main() {
             return;
         }
@@ -7000,9 +6968,6 @@ impl CockpitView {
                     draft.error = None;
                 }
             }
-            if let Some(draft) = identity.draft() {
-                self.cockpit.aim_draft_loose(draft);
-            }
             self.cockpit.focus(identity);
             self.sync_panes(cx);
             cx.notify();
@@ -8484,12 +8449,6 @@ impl CockpitView {
             .panes
             .iter()
             .filter_map(|pane| pane.thread())
-            .chain(
-                self.cockpit
-                    .groups()
-                    .iter()
-                    .flat_map(|group| group.members.iter().copied()),
-            )
             .filter(|thread| self.cockpit.thread(*thread).is_some() && self.admitted(*thread))
             .collect();
         threads.sort();
@@ -8817,15 +8776,8 @@ impl CockpitView {
     fn close_pane(&mut self, identity: PaneIdentity, cx: &mut Context<Self>) {
         let result = self.cockpit.close(identity);
         let closed = result.is_ok();
-        match result {
-            Ok(()) => {}
-            Err(CloseError::Park(e)) => {
-                ferrite_core::log!("pane {identity:?} did not park cleanly: {e}")
-            }
-            Err(CloseError::Group(error)) => {
-                ferrite_core::log!("group change refused: {error}");
-                self.nav_notice = Some(error.to_string().into());
-            }
+        if let Err(error) = result {
+            ferrite_core::log!("pane {identity:?} did not close cleanly: {error}");
         }
         // A popover on the closed Pane goes with it.
         if self

@@ -61,7 +61,7 @@ fn cmd_t_opens_a_new_thread_and_cmd_n_still_does(cx: &mut TestAppContext) {
 /// cmd-t on a Thread opens the new draft in that Thread's Project, not
 /// wherever the last draft ran: the operator is in that Project now.
 #[gpui::test]
-fn cmd_t_from_a_solo_thread_starts_in_its_project(cx: &mut TestAppContext) {
+fn cmd_t_from_a_thread_starts_in_its_project(cx: &mut TestAppContext) {
     let (mut core, _fake) = cockpit("cmd-t-project", 1);
     let elsewhere = core
         .register_project(&std::env::temp_dir().canonicalize().unwrap())
@@ -75,7 +75,6 @@ fn cmd_t_from_a_solo_thread_starts_in_its_project(cx: &mut TestAppContext) {
 
     cx.simulate_keystrokes("cmd-t");
     view.read_with(cx, |view, _| {
-        assert_eq!(view.cockpit.roster().view(), View::Solo);
         let draft = view.panes[view.focused()]
             .draft()
             .expect("cmd-t opened a draft");

@@ -1,5 +1,5 @@
 ---
-status: accepted
+status: accepted, amended by the 2026-11-17 update below (Groups removed)
 date: 2026-10-21
 ---
 
@@ -201,3 +201,10 @@ The cards and sections variants were declined: cards add surfaces to the
 frame, and sections separate Projects without tying a Group to its
 Project. SPEC §5.1.2 and §5.1.4–5.1.6 (and the new §5.1.9) carry the
 values.
+
+## Amendment (2026-11-17): Groups are gone
+
+The window shows one Thread at a time, and Groups are removed (ADR 0025's
+2026-11-17 amendment). What this ADR says of Group Panes, the Group
+gutter, Group heads and Group rows in the nav no longer applies. A Thread
+that was in a Group shows as an ordinary row.

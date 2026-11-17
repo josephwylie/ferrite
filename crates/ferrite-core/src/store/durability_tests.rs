@@ -67,7 +67,7 @@ fn a_second_process_reads_the_store_but_never_writes_it() {
 }
 
 /// Within one process every spelling of a store shares one claim, so a
-/// second handle on it (a reader thread, the Groups file) is not mistaken
+/// second handle on it (a reader thread, say) is not mistaken
 /// for a second Ferrite.
 #[test]
 fn every_spelling_of_a_store_shares_one_claim() {

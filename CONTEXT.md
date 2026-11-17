@@ -100,18 +100,17 @@ context and changes are the Panel's.
 _Avoid_: status bar, status line (both are gone).
 
 **Group**
-A durable, operator-ordered set of two or more Threads, from before the
-window showed one Thread at a time. Still stored, so no member is lost, but
-the window never opens, makes or changes one: the nav lists each member as
-an ordinary Thread.
+Gone (ADR 0025's 2026-11-17 amendment). An older Store's `groups.json` is
+left as it was and never read, so its members are ordinary Threads. Only
+generation 1's protocol still spells the word.
 _Avoid_: folder (the nav has none).
 
 **Roster**
 The Cockpit's state, headless: the open Panes in order, the one holding the
-keyboard, the view, and this launch's park order. Changed only by the
-operator's acts on the Cockpit (close, reopen, focus); the window mirrors it
-and paints.
-_Avoid_: layout (that is what the Roster's grid computes), tab list.
+keyboard (the one on screen), the drafts, and this launch's park order.
+Changed only by the operator's acts on the Cockpit (close, reopen, focus);
+the window mirrors it and paints.
+_Avoid_: layout (that is the board's split), tab list.
 
 **Layout**
 The board's split while a Review is open beside the shown Pane: the Pane
@@ -348,8 +347,8 @@ would be a new concept, not a revival of this one.
 - Name kept: Ferrite (iOS audio app collision accepted — distant category).
 - v1 providers: Claude + Codex, minimal.
 - v1 cockpit: Solo by default; an opened Group shows its exact membership with
-  semantic zoom. Amended 2026-11-17: one Thread at a time; the window no
-  longer opens Groups, and their members are ordinary nav Threads.
+  semantic zoom. Amended 2026-11-17: one Thread at a time, and Groups are
+  gone; their members are ordinary Threads.
 - v1 git: workspace binding only (worktree or main); no checkpoints yet.
 - Issue-tracker/board integration: later, not v1. Amended 2026-11-10 (ADR 0037):
   a Project has a Factory; the operator's tracker stays the tracker.

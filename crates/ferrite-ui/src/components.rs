@@ -1619,7 +1619,7 @@ pub fn home_relative(path: &std::path::Path) -> String {
     }
 }
 
-/// A fold's chevron, every surface's (the nav's sections and Groups, the
+/// A fold's chevron, every surface's (the nav's sections, the
 /// panel's file blocks, the usage card's folds): `chevron-right` while
 /// folded, a quarter turn down while open. The turn eases over
 /// `motion::CHEVRON` (Claude's 60ms) when the fold flips under it, keyed

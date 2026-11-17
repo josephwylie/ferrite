@@ -1,5 +1,5 @@
 //! The Cockpit: one window's hold on the Engine (ADR 0025). What a window
-//! keeps for itself — its Roster's focus, View and fullscreen, its Drafts,
+//! keeps for itself — its Roster's focus and its Drafts,
 //! whether it has the operator's focus — lives here; everything that must
 //! keep running without a window is the Engine's, and the Cockpit changes
 //! it only through the Engine's acts. The Engine runs in the Server, and
@@ -19,16 +19,13 @@ use crate::activity::{AgentKey, DecisionHandle, Subject};
 pub use crate::engine::{
     title_from_prompt, Admission, AgentLaunch, BootstrapResult, Bootstrapped, DeleteError, Engine,
     HistoryDirection, PaneUpdate, Preparation, ProviderChoice, ProvisionError, Restart,
-    ReviveGroupError, RssSampler, SpawnRequest, Spawner, SubjectUpdate, ToolTiming,
-};
-use crate::groups::{
-    Applied, ApplyError, Dissolved, Drag, DropTarget, GroupChange, GroupId, Groups, Plan,
+    RssSampler, SpawnRequest, Spawner, SubjectUpdate, ToolTiming,
 };
 use crate::notifications::{DecisionNoticeId, NoticeId, Notifications};
 use crate::protocol::{
     Done, ErrorCode, NoticeAction, Op, ProjectAction, ServerMessage, When, WireError,
 };
-use crate::roster::{DraftId, DraftScope, PaneIdentity, Roster, View};
+use crate::roster::{DraftId, PaneIdentity, Roster};
 use crate::store::{LoadError, Provider, Store};
 use crate::transcript::Input;
 use crate::workspace::registry::{ProjectId, Registry};
@@ -45,14 +42,6 @@ mod remote;
 mod shared;
 mod status;
 
-/// The focused member of the Group on view before an arrival: the Group,
-/// the member, and where it sat (`sync_roster`).
-struct FocusedMember {
-    group: GroupId,
-    thread: ThreadId,
-    ordinal: usize,
-}
-
 pub struct Cockpit {
     link: Link,
     /// What a parked Thread says: the rows its Server published.
@@ -60,12 +49,10 @@ pub struct Cockpit {
     /// This computer's logs, read-only, for what an open Thread's header
     /// and last write say, which no message carries; `None` on a machine.
     logs: Option<Store>,
-    /// What is on screen (#28): the roster of Panes, focus, view, fullscreen
-    /// and park order. Read through `roster()`; changed only by the acts
+    /// What is on screen (#28): the roster of Panes, focus and park order. Read through `roster()`; changed only by the acts
     /// below, which keep it showing exactly the open Threads plus drafts.
     pub(crate) roster: Roster,
-    /// The Threads the Roster holds a Pane for, as it last followed them:
-    /// the open ones, and the closed ones still seated (`sync_roster`).
+    /// The open Threads, as the Roster last followed them (`sync_roster`).
     synced: Vec<ThreadId>,
     /// Each open Thread as the Engine's messages built it: what `thread`
     /// reads and `pump` reports.
@@ -238,7 +225,7 @@ impl Cockpit {
             .unwrap_or_default();
         Self {
             link,
-            shared: shared::Shared::new(dir, logs.is_some()),
+            shared: shared::Shared::new(dir),
             parked: parked::Parked::default(),
             logs,
             roster: Roster::default(),
@@ -626,22 +613,13 @@ impl Cockpit {
         }
     }
 
-    /// The Roster follows the open Threads and the Groups, whoever changed
-    /// them — this window, another, or an API caller. A Thread that opened
-    /// gets a Pane at the end (a Thread a Draft is starting takes the
-    /// Draft's slot when it settles instead); one that closed loses its
-    /// own unless it still sits in the Group on view (`seated`), where its
-    /// Pane draws it parked, as entering the Group does (`enter_group`):
-    /// the Group's Layout never holds a slot with no Pane to paint. The
-    /// focus follows the focused member (`follow_focused_member`).
-    fn sync_roster(&mut self, focused: Option<FocusedMember>) {
+    /// The Roster follows the open Threads, whoever changed them — this
+    /// window, another, or an API caller. A Thread that opened gets a Pane
+    /// at the end (a Thread a Draft is starting takes the Draft's slot when
+    /// it settles instead); one that closed loses its Pane.
+    fn sync_roster(&mut self) {
         let open = self.shared.open.clone();
-        let seated = self.seated();
-        for gone in self
-            .synced
-            .iter()
-            .filter(|thread| !open.contains(thread) && !seated.contains(thread))
-        {
+        for gone in self.synced.iter().filter(|thread| !open.contains(thread)) {
             self.roster.remove_thread(*gone);
         }
         for thread in open.iter().filter(|thread| !self.synced.contains(thread)) {
@@ -649,76 +627,7 @@ impl Cockpit {
                 self.roster.insert_thread(*thread);
             }
         }
-        // A closed Thread its seat kept stays synced, so its Pane goes once
-        // the seat does, whichever of the two the window hears first.
-        let kept: Vec<ThreadId> = self
-            .synced
-            .iter()
-            .copied()
-            .filter(|thread| !open.contains(thread) && seated.contains(thread))
-            .collect();
         self.synced = open;
-        self.synced.extend(kept);
-        if let Some(focused) = focused {
-            self.follow_focused_member(focused);
-        }
-        self.roster.heal_focus(&self.shared.groups);
-    }
-
-    /// The members sitting in the Group on view, each holding a slot of its
-    /// Layout: none in Solo, and not the one whose leave waits on a draft.
-    fn seated(&self) -> Vec<ThreadId> {
-        let View::Group(group) = self.roster.view() else {
-            return Vec::new();
-        };
-        let leaving = self.roster.pending_leave(group);
-        self.shared
-            .groups
-            .get(group)
-            .map(|group| {
-                group
-                    .members
-                    .iter()
-                    .copied()
-                    .filter(|member| Some(*member) != leaving)
-                    .collect()
-            })
-            .unwrap_or_default()
-    }
-
-    /// The Group on view's focused member, before an arrival.
-    fn focused_member(&self) -> Option<FocusedMember> {
-        let View::Group(group) = self.roster.view() else {
-            return None;
-        };
-        let thread = self.roster.focused_thread()?;
-        let ordinal = self
-            .shared
-            .groups
-            .get(group)?
-            .members
-            .iter()
-            .position(|member| *member == thread)?;
-        Some(FocusedMember {
-            group,
-            thread,
-            ordinal,
-        })
-    }
-
-    /// The focused member that left the Group on view hands focus to its
-    /// ordinal survivor, as closing its Pane does (`close_thread`). A pair
-    /// it dissolved already landed on its survivor (`land_on_survivor`).
-    fn follow_focused_member(&mut self, before: FocusedMember) {
-        if self.roster.view() == View::Group(before.group)
-            && self
-                .shared
-                .groups
-                .get(before.group)
-                .is_some_and(|group| !group.members.contains(&before.thread))
-        {
-            self.focus_ordinal_survivor(before.group, before.ordinal);
-        }
     }
 
     /// Bring this window up to the Engine after one of its own acts. What
@@ -768,7 +677,6 @@ impl Cockpit {
 
     fn arrive(&mut self, arrived: Vec<remote::Arrival>) {
         let open_before = self.shared.open.clone();
-        let focused = self.focused_member();
         let attached = arrived
             .iter()
             .any(|arrival| matches!(arrival, remote::Arrival::Attached { .. }));
@@ -804,8 +712,8 @@ impl Cockpit {
             }
         }
         // A settled first send completes its Draft in this window — its
-        // slot becomes the Thread and its deferred leave applies — once
-        // the window holds what the Engine said before it.
+        // slot becomes the Thread — once the window holds what the Engine
+        // said before it.
         for mut result in settled {
             if let (Some(draft), Ok(done)) = (result.draft, &result.result) {
                 let thread = done.thread;
@@ -813,7 +721,7 @@ impl Cockpit {
             }
             self.bootstrap_results.push(result);
         }
-        self.sync_roster(focused);
+        self.sync_roster();
         // What a Server's snapshot lists is not new.
         if !attached {
             let now = crate::clock::instant();
@@ -925,9 +833,6 @@ impl Cockpit {
         }
         match &message {
             ServerMessage::Focus { thread } => self.asked.push(Asked::Focus(*thread)),
-            ServerMessage::Dissolved { group, survivor } => {
-                self.land_on_survivor(*group, *survivor);
-            }
             ServerMessage::Notification {
                 title,
                 body,
@@ -971,7 +876,7 @@ impl Cockpit {
         self.receive();
         // What is on screen while the window has focus is seen. Here
         // rather than only at the focus doors, so a Thread that finishes in
-        // view, or a focus moved by a close or a Group entry, reads the same.
+        // view, or a focus moved by a close, reads the same.
         self.acknowledge_seen();
         self.tell_window();
         self.mirrors.take_updates()
@@ -1034,71 +939,14 @@ impl Cockpit {
         self.mirrors.view(thread)
     }
 
-    /// A Group change (#28), and what it does to the view: the Group the
-    /// operator was looking at may just have dissolved under them. Its
-    /// survivor is the one Thread still on screen, so that is where they
-    /// land — never the Thread that left, and never a blank Cockpit.
-    pub fn apply_group(&mut self, change: GroupChange) -> Result<Applied, ApplyError> {
-        // The act's `dissolved` arrival lands a dissolved Group on its
-        // survivor (`land_on_survivor`), here as in every window. A Server
-        // older than that message says so only in its reply; by then the
-        // arrival may have healed the view to Solo, so the view the act
-        // found decides.
-        let view = self.roster.view();
-        let applied = self.act(
-            |engine| engine.apply_group(change.clone()),
-            |server| match server.execute(Op::Group {
-                change: (&change).into(),
-            }) {
-                Ok(Some(Done::Grouped { group, dissolved })) => Ok(Applied {
-                    group,
-                    dissolved: dissolved
-                        .into_iter()
-                        .map(|dissolved| Dissolved {
-                            group: dissolved.group,
-                            survivor: dissolved.survivor,
-                        })
-                        .collect(),
-                }),
-                Ok(_) => Ok(Applied::default()),
-                Err(error) => Err(ApplyError::Io(error.message)),
-            },
-        )?;
-        if let Some(dissolved) = applied
-            .dissolved
-            .iter()
-            .find(|dissolved| view == View::Group(dissolved.group))
-        {
-            self.solo_on(dissolved.survivor);
-        }
-        self.roster.heal_focus(&self.shared.groups);
-        Ok(applied)
-    }
-
-    /// The Group on view dissolved, by whoever's act: Solo, on its
-    /// survivor, the one Thread of it still on screen.
-    fn land_on_survivor(&mut self, group: GroupId, survivor: ThreadId) {
-        if self.roster.view() == View::Group(group) {
-            self.solo_on(survivor);
-        }
-    }
-
-    fn solo_on(&mut self, thread: ThreadId) {
-        self.roster.set_view(View::Solo);
-        self.roster.focus(PaneIdentity::Thread(thread));
-    }
-
     /// Close a Pane: the Session ends, the log is flushed, and the Thread
-    /// keeps nothing in memory until it is opened again. A parked Group
-    /// member's Pane (`enter_group`) has no Session: parking it again
-    /// takes the Pane away once it no longer sits in the Group on view
-    /// (`park_thread` leaves first); while it does, its slot keeps it.
+    /// keeps nothing in memory until it is opened again.
     pub fn park(&mut self, thread: ThreadId) -> io::Result<()> {
         let parked = self.act(
             |engine| engine.park(thread),
             |server| run(server, Op::Park { thread }),
         );
-        if !self.shared.open.contains(&thread) && !self.seated().contains(&thread) {
+        if !self.shared.open.contains(&thread) {
             self.roster.remove_thread(thread);
         }
         parked
@@ -1231,19 +1079,16 @@ impl Cockpit {
 
     /// Everything on screen while the window has focus is seen: each
     /// visible Thread's Notices are read, and so are the live Decisions of
-    /// the Subject its Pane shows. Fullscreen shows its one Pane. True when
-    /// anything was read.
+    /// the Subject its Pane shows. True when anything was read.
     fn acknowledge_seen(&mut self) -> bool {
         if !self.window_active {
             return false;
         }
-        let shown: Vec<ThreadId> = match self.roster.fullscreen() {
-            Some(fullscreen) => vec![fullscreen],
-            None => self.visible(),
-        }
-        .into_iter()
-        .filter_map(PaneIdentity::thread)
-        .collect();
+        let shown: Vec<ThreadId> = self
+            .visible()
+            .into_iter()
+            .filter_map(PaneIdentity::thread)
+            .collect();
         match &mut self.link {
             Link::InProcess(engine) => {
                 let read = engine.acknowledge_seen(&shown);
@@ -1388,7 +1233,6 @@ impl Cockpit {
             return;
         };
         let engine: &Engine = engine;
-        assert_eq!(self.shared.groups.to_wire(), engine.groups().to_wire());
         assert_eq!(self.shared.registry.to_wire(), engine.registry().to_wire());
         assert_eq!(
             self.shared.notifications.to_wire(),
@@ -1524,14 +1368,6 @@ impl Cockpit {
         &self.shared.registry
     }
 
-    pub fn groups(&self) -> &Groups {
-        &self.shared.groups
-    }
-
-    pub fn plan_group_drop(&self, drag: Drag, target: DropTarget) -> Plan {
-        self.shared.groups.preview_drop(drag, target)
-    }
-
     pub fn register_project(&mut self, root: &Path) -> io::Result<ProjectId> {
         self.act(
             |engine| engine.register_project(root),
@@ -1612,44 +1448,6 @@ impl Cockpit {
                         action: ProjectAction::RemoveDirectory { project, index },
                     },
                 )
-            },
-        )
-    }
-
-    pub fn group_layout(
-        &self,
-        group: GroupId,
-        bounds: crate::layout::Rect,
-    ) -> Option<crate::layout::Tree> {
-        self.shared.groups.layout(group, bounds)
-    }
-
-    pub fn reset_group_layout(&mut self, group: GroupId) -> Result<(), ApplyError> {
-        self.act(
-            |engine| engine.reset_group_layout(group),
-            |server| {
-                run(server, Op::Layout { group, tree: None })
-                    .map_err(|error| ApplyError::Io(error.to_string()))
-            },
-        )
-    }
-
-    pub fn set_group_layout(
-        &mut self,
-        group: GroupId,
-        tree: crate::layout::Tree,
-    ) -> Result<(), ApplyError> {
-        self.act(
-            |engine| engine.set_group_layout(group, tree.clone()),
-            |server| {
-                run(
-                    server,
-                    Op::Layout {
-                        group,
-                        tree: Some(tree.clone()),
-                    },
-                )
-                .map_err(|error| ApplyError::Io(error.to_string()))
             },
         )
     }
@@ -1740,21 +1538,6 @@ impl Cockpit {
         started
     }
 
-    #[cfg(test)]
-    pub fn bootstrap_in_group(
-        &mut self,
-        choice: ProviderChoice,
-        workspace: WorkspaceChoice,
-        prompt: &str,
-        group: GroupId,
-    ) -> io::Result<ThreadId> {
-        let started = self
-            .in_process()
-            .bootstrap_in_group(choice, workspace, prompt, group);
-        self.settle();
-        started
-    }
-
     pub fn set_provider(
         &mut self,
         thread: ThreadId,
@@ -1810,14 +1593,6 @@ impl Cockpit {
             |engine| engine.revive(thread),
             |server| run(server, Op::Revive { thread }).map_err(LoadError::Io),
         )
-    }
-
-    /// The tests' own: no window revives a whole Group.
-    #[cfg(test)]
-    pub fn revive_group(&mut self, group: GroupId) -> Result<Vec<ThreadId>, ReviveGroupError> {
-        let revived = self.in_process().revive_group(group);
-        self.settle();
-        revived
     }
 
     pub fn import(&mut self, path: &Path) -> Result<ThreadId, crate::import::ImportError> {
@@ -3213,26 +2988,6 @@ pub enum Asked {
     },
 }
 
-/// What `Cockpit::close` can refuse: the park that ends a Solo Thread's
-/// Session — the Pane is gone either way — or the Group change that takes
-/// a member out of the view.
-#[derive(Debug)]
-pub enum CloseError {
-    Park(io::Error),
-    Group(ApplyError),
-}
-
-impl std::fmt::Display for CloseError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            CloseError::Park(error) => write!(f, "did not park cleanly: {error}"),
-            CloseError::Group(error) => write!(f, "{error}"),
-        }
-    }
-}
-
-impl std::error::Error for CloseError {}
-
 /// A session file adopted through `adopt_into` (#11): durable the moment
 /// this exists, and open unless `not_opened` says why not.
 #[derive(Debug)]
@@ -3246,38 +3001,34 @@ pub struct Adopted {
     pub blank_kept: Option<DeleteError>,
 }
 
-/// The operator's acts on what is on screen (#28): every rule about Solo,
-/// Group, focus, fullscreen and park order runs here, against the roster,
-/// with the reviving, parking and Group changes it takes. The window only
-/// mirrors the roster and paints.
+/// The operator's acts on what is on screen (#28): every rule about focus
+/// and park order runs here, against the roster, with the reviving and
+/// parking it takes. The window only mirrors the roster and paints.
 impl Cockpit {
     /// What is on screen: read-only. Every change is one of the acts below.
     pub fn roster(&self) -> &Roster {
         &self.roster
     }
 
-    /// The Panes on screen, in order — see `Roster::visible`.
+    /// The Pane on screen — see `Roster::visible`.
     pub fn visible(&self) -> Vec<PaneIdentity> {
-        self.roster.visible(&self.shared.groups)
+        self.roster.visible()
     }
 
     /// The one door to focus: every move — keys, clicks, nav rows — lands
-    /// here, so fullscreen re-aims with focus. False for a Pane that is not
-    /// open.
+    /// here. False for a Pane that is not open.
     pub fn focus(&mut self, identity: PaneIdentity) -> bool {
         let landed = self.roster.focus(identity);
         self.acknowledge_seen();
         landed
     }
 
-    /// A running nav row's click (#21): land on that Thread's Pane, alone
-    /// on screen.
+    /// A running nav row's click (#21): land on that Thread's Pane.
     pub fn focus_thread(&mut self, thread: ThreadId) -> bool {
         let identity = PaneIdentity::Thread(thread);
         if self.roster.index_of(identity).is_none() {
             return false;
         }
-        self.roster.set_view(View::Solo);
         let landed = self.roster.focus(identity);
         self.acknowledge_seen();
         landed
@@ -3307,69 +3058,15 @@ impl Cockpit {
         self.acknowledge_seen();
     }
 
-    /// cmd-] / cmd-[: walk the visible Panes, wrapping.
-    pub fn step_focus(&mut self, delta: isize) {
-        self.roster.step(delta, &self.shared.groups);
-    }
-
-    /// ⌘⇧⏎ (#20): the focused Pane takes the whole cockpit; ⌘⇧⏎ again
-    /// restores the grid.
-    pub fn toggle_fullscreen(&mut self) {
-        self.roster.toggle_fullscreen();
-    }
-
-    /// Jump to the next Thread waiting on the operator — the whole point of
-    /// a Group you cannot read all of at once. The Thread landed on, if any.
+    /// Jump to the next Thread waiting on the operator. The Thread landed
+    /// on, if any.
     pub fn next_decision(&mut self) -> Option<ThreadId> {
         let next = self.next_blocked(self.roster.focused_thread())?;
         self.focus_thread(next).then_some(next)
     }
 
-    /// Open a Group (#28): every member gets a Pane, parked ones included.
-    /// A Group *is* its membership on screen, so entering one that has a
-    /// parked member and showing the rest would be showing a different
-    /// Group — but entering spends no Session on a Thread the operator put
-    /// away: a parked member's Pane is its parked tile (`Parked 2h ago ·
-    /// 11 turns`), and ⏎ on it wakes it (`wake`). Focus stays put when the
-    /// operator was already on a member, so entering from one of its own
-    /// rows does not jump them.
-    pub fn enter_group(&mut self, group: GroupId) -> Result<(), ReviveGroupError> {
-        let members = self
-            .shared
-            .groups
-            .get(group)
-            .ok_or(ReviveGroupError::MissingGroup)?
-            .members
-            .clone();
-        let retain = self
-            .roster
-            .focused_thread()
-            .filter(|thread| members.contains(thread));
-        for thread in &members {
-            // Open or parked, the member holds its slot on the board.
-            self.roster.insert_thread(*thread);
-        }
-        self.roster.set_view(View::Group(group));
-        if let Some(thread) = retain.or_else(|| members.first().copied()) {
-            self.roster.focus(PaneIdentity::Thread(thread));
-        }
-        Ok(())
-    }
-
-    /// ⏎ on a parked Group member's tile: revive it in place — its Pane keeps the slot the board gave it, takes focus, and
-    /// the park order forgets it. An open Thread is left alone.
-    pub fn wake(&mut self, thread: ThreadId) -> Result<(), LoadError> {
-        if self.thread(thread).is_some() {
-            return Ok(());
-        }
-        self.revive(thread)?;
-        self.roster.note_revived(thread);
-        self.roster.focus(PaneIdentity::Thread(thread));
-        Ok(())
-    }
-
     /// Take an open Thread out of the roster: it stays open and mirrored,
-    /// but has no Pane, no focus and no place in a view. A window's side
+    /// but has no Pane and no focus. A window's side
     /// chat holds the fork it asked for this way.
     pub fn set_aside(&mut self, thread: ThreadId) {
         self.roster.remove_thread(thread);
@@ -3385,7 +3082,6 @@ impl Cockpit {
             self.revive(thread)?;
             self.roster.note_revived(thread);
         }
-        self.roster.set_view(View::Solo);
         self.roster.focus(PaneIdentity::Thread(thread));
         Ok(())
     }
@@ -3405,71 +3101,18 @@ impl Cockpit {
         Some((thread, self.reopen(thread)))
     }
 
-    /// cmd-t (#29): open a loose Draft and switch the Cockpit to Solo, even
-    /// when the action is invoked from inside a Group. Nothing durable exists
-    /// until the first send; the Draft takes focus.
+    /// cmd-t (#29): open a Draft. Nothing durable exists until the first
+    /// send; the Draft takes focus.
     pub fn open_draft(&mut self) -> DraftId {
-        let draft = self.roster.open_draft(DraftScope::default());
-        self.roster.set_view(View::Solo);
-        draft
-    }
-
-    /// Open a Draft in the current view. Shortcuts use this path so invoking
-    /// one from a Group preserves that context and the Thread joins the Group
-    /// after its first send succeeds.
-    pub fn open_draft_in_current_view(&mut self) -> DraftId {
-        let group = match self.roster.view() {
-            View::Group(group) => Some(group),
-            View::Solo => None,
-        };
-        self.roster.open_draft(DraftScope {
-            group,
-            new_group_with: None,
-            pending_leave: None,
-        })
-    }
-
-    /// Open a focused draft beside one loose Thread as a provisional pair.
-    /// Its first successful send creates the durable Group.
-    pub fn open_draft_for_new_group(&mut self, first: ThreadId) -> DraftId {
-        self.roster.open_draft(DraftScope {
-            group: None,
-            new_group_with: Some(first),
-            pending_leave: None,
-        })
-    }
-
-    /// Re-aim the standing draft the way `open_draft` would have aimed a
-    /// fresh one: loose, and the Cockpit back to Solo.
-    pub fn aim_draft_loose(&mut self, draft: DraftId) {
-        self.roster.rescope_draft(draft, None, None);
-        self.roster.set_view(View::Solo);
-    }
-
-    /// Re-aim the standing draft at the current view — the Group the
-    /// operator is looking at, or nothing when they are Solo.
-    pub fn aim_draft_at_current_view(&mut self, draft: DraftId) {
-        let group = match self.roster.view() {
-            View::Group(group) => Some(group),
-            View::Solo => None,
-        };
-        self.roster.rescope_draft(draft, group, None);
-    }
-
-    /// Re-aim the standing draft beside one loose Thread as a provisional
-    /// pair, as `open_draft_for_new_group` would have.
-    pub fn aim_draft_at_new_group(&mut self, draft: DraftId, first: ThreadId) {
-        self.roster.rescope_draft(draft, None, Some(first));
+        self.roster.open_draft()
     }
 
     /// The first send (#29): bootstrap the Thread — create, worktree, spawn
     /// — and only then let the prompt go; the Thread takes the draft's own
-    /// slot, and joins the Group the draft was pending in. The leave the
-    /// draft was holding open (see `close`) applies now, and only now: the
-    /// new member is already in, so the pair never dissolves. On any
-    /// failure nothing is half-born: no Thread, the Pane stays draft, and
-    /// the prompt stays with the caller. `None` means startup is pending;
-    /// the draft stays in place until `take_bootstrap_results` reports it.
+    /// slot. On any failure nothing is half-born: no Thread, the Pane stays
+    /// draft, and the prompt stays with the caller. `None` means startup is
+    /// pending; the draft stays in place until `take_bootstrap_results`
+    /// reports it.
     pub fn bootstrap_draft(
         &mut self,
         draft: DraftId,
@@ -3481,15 +3124,13 @@ impl Cockpit {
         if self.draft_starting(draft) {
             return Ok(None);
         }
-        let scope = self
-            .roster
-            .draft_scope(draft)
-            .ok_or_else(|| io::Error::other("no such draft"))?;
+        if !self.roster.has_draft(draft) {
+            return Err(io::Error::other("no such draft"));
+        }
         let started = self.act(
             |engine| {
                 engine.bootstrap_draft(
                     draft,
-                    scope,
                     choice.clone(),
                     workspace.clone(),
                     prompt,
@@ -3503,8 +3144,8 @@ impl Cockpit {
                     effort: effort.clone(),
                     workspace: (&workspace).into(),
                     prompt: prompt.to_string(),
-                    group: scope.group,
-                    new_group_with: scope.new_group_with,
+                    group: None,
+                    new_group_with: None,
                 };
                 server.bootstrap(draft, prompt, op).map(|()| None)
             },
@@ -3513,26 +3154,8 @@ impl Cockpit {
     }
 
     fn complete_draft(&mut self, draft: DraftId, thread: ThreadId) -> Bootstrapped {
-        let scope = self
-            .roster
-            .draft_scope(draft)
-            .expect("draft retained during startup");
         self.roster.draft_became(draft, thread);
-        if scope.new_group_with.is_some() {
-            if let Some(group) = self.shared.groups.home(thread).map(|group| group.id) {
-                self.roster.set_view(View::Group(group));
-                self.roster.focus(PaneIdentity::Thread(thread));
-            }
-        }
-        let refused_leave = scope.pending_leave.and_then(|leaving| {
-            self.apply_group(GroupChange::Leave { thread: leaving })
-                .err()
-        });
-        Bootstrapped {
-            thread,
-            applied_leave: scope.pending_leave.is_some() && refused_leave.is_none(),
-            refused_leave,
-        }
+        Bootstrapped { thread }
     }
 
     /// Cancel a submitted startup before changing a draft's choices. The
@@ -3551,171 +3174,29 @@ impl Cockpit {
         std::mem::take(&mut self.bootstrap_results)
     }
 
-    /// Discard a draft Pane (#29): nothing durable dies with it. A leave it
-    /// was holding open applies now — nothing came to replace the leaving
-    /// Thread, so the pair dissolves exactly as closing that Pane would
-    /// have done without a draft in the way.
-    pub fn discard_draft(&mut self, draft: DraftId) -> Result<(), ApplyError> {
-        self.cancel_draft_start(draft)
-            .map_err(|error| ApplyError::Io(error.to_string()))?;
-        let Some(scope) = self.roster.remove_draft(draft) else {
-            return Ok(());
-        };
-        if let (Some(_), Some(leaving)) = (scope.group, scope.pending_leave) {
-            self.apply_group(GroupChange::Leave { thread: leaving })?;
-        }
+    /// Discard a draft Pane (#29): nothing durable dies with it.
+    pub fn discard_draft(&mut self, draft: DraftId) -> io::Result<()> {
+        self.cancel_draft_start(draft)?;
+        self.roster.remove_draft(draft);
         Ok(())
     }
 
-    /// Close a Pane — cmd-w. A draft is discarded. A Thread is taken out of
-    /// whatever the operator is looking at: in Solo that is a park, plain —
-    /// the Session ends, the log stays, and reopening revives it. In a
-    /// Group it is a Leave, and the Thread stays open — and the survivor
-    /// the operator lands on is the Thread that took this one's ordinal,
-    /// not the first member: closing the middle Pane of three should leave
-    /// the pointer where it was, the way closing a browser tab does.
-    ///
-    /// The exception is a pair with a draft pending in it. A Group needs
-    /// two members, so leaving a pair dissolves it — which would tear down
-    /// the very Group the draft is waiting to join. The leave is therefore
-    /// *deferred* onto the draft, and the Group stays whole and visible
-    /// until the draft either sends (`bootstrap_draft` applies the leave;
-    /// membership never dips below two) or is discarded (the leave applies
-    /// then, and the pair dissolves as it always would).
-    pub fn close(&mut self, identity: PaneIdentity) -> Result<(), CloseError> {
+    /// Close a Pane — cmd-w. A draft is discarded; a Thread is parked.
+    pub fn close(&mut self, identity: PaneIdentity) -> io::Result<()> {
         match identity {
-            PaneIdentity::Draft(draft) => self.discard_draft(draft).map_err(CloseError::Group),
+            PaneIdentity::Draft(draft) => self.discard_draft(draft),
             PaneIdentity::Thread(thread) => self.park_thread(thread),
         }
     }
 
-    /// Park a Thread in one act, wherever it sits — cmd-w and every "Park
-    /// thread". A Group member leaves its Group first (onto the ordinal
-    /// survivor when its Group is on screen, deferred onto a pending draft
-    /// in a pair), then parks: it lands in the parked rows at once, never
-    /// as a loose open Thread that needs a second park.
-    pub fn park_thread(&mut self, thread: ThreadId) -> Result<(), CloseError> {
-        if self.shared.groups.of(thread).is_some() {
-            // Leave takes the Thread out of every Group; when the Group on
-            // screen held it, its ordinal survivor takes focus.
-            let on_screen = matches!(
-                self.roster.view(),
-                View::Group(group) if self
-                    .shared
-            .groups
-                    .get(group)
-                    .is_some_and(|group| group.members.contains(&thread))
-            );
-            if on_screen {
-                self.close_thread(thread)?;
-            } else {
-                self.apply_group(GroupChange::Leave { thread })
-                    .map_err(CloseError::Group)?;
-            }
-        }
-        self.park_noted(thread)
-    }
-
-    /// Close a Thread's Pane in the view it is in: in a Group that is a
-    /// leave (the drag-out door, which follows the Thread to Solo), in Solo
-    /// a park. cmd-w goes through `park_thread`, which always parks.
-    fn close_thread(&mut self, thread: ThreadId) -> Result<(), CloseError> {
-        if let View::Group(group) = self.roster.view() {
-            let members = self
-                .shared
-                .groups
-                .get(group)
-                .map(|group| group.members.clone())
-                .unwrap_or_default();
-            let ordinal = members
-                .iter()
-                .position(|member| *member == thread)
-                .unwrap_or(0);
-            if members.len() == 2 {
-                if let Some(draft) = self.roster.pending_draft(group) {
-                    self.roster.defer_leave(draft, thread);
-                    let survivor = members[usize::from(members[0] == thread)];
-                    self.roster.focus(PaneIdentity::Thread(survivor));
-                    return Ok(());
-                }
-            }
-            let applied = self
-                .apply_group(GroupChange::Leave { thread })
-                .map_err(CloseError::Group)?;
-            // A dissolved Group already landed on its survivor.
-            if !applied.dissolved.iter().any(|item| item.group == group) {
-                self.focus_ordinal_survivor(group, ordinal);
-            }
-            return Ok(());
-        }
-        self.park_noted(thread)
-    }
-
-    /// Focus the member of `group` that took `ordinal` when one left it
-    /// (the last, when the leaver was): closing the middle Pane of three
-    /// leaves the pointer where it was, the way closing a browser tab does.
-    fn focus_ordinal_survivor(&mut self, group: GroupId, ordinal: usize) {
-        if let Some(group) = self.shared.groups.get(group) {
-            let next = group.members[ordinal.min(group.members.len() - 1)];
-            self.roster.focus(PaneIdentity::Thread(next));
-        }
-    }
-
-    /// Solo's park. Parked even on a flush error — the Session is gone
-    /// either way, so cmd-o should still bring this Thread back first —
-    /// and the clamped survivor takes focus and, while fullscreen, the
-    /// screen (#20).
-    fn park_noted(&mut self, thread: ThreadId) -> Result<(), CloseError> {
-        let re_aim = self.roster.fullscreen() == Some(PaneIdentity::Thread(thread));
+    /// Park a Thread — cmd-w and every "Park thread": the Session ends, the
+    /// log stays, and reopening revives it. Parked even on a flush error —
+    /// the Session is gone either way, so cmd-o should still bring this
+    /// Thread back first.
+    pub fn park_thread(&mut self, thread: ThreadId) -> io::Result<()> {
         let parked = self.park(thread);
         self.roster.note_parked(thread);
-        if re_aim {
-            self.roster.fullscreen_focused();
-        }
-        parked.map_err(CloseError::Park)
-    }
-
-    /// A nav drag's drop (#28): the plan the Groups module makes of it,
-    /// applied in the View the drag started from — the row's own mouse-down
-    /// fires before the drag does, so by the time the drop lands the view
-    /// is wherever the *press* took the operator, not where they picked the
-    /// row up. Dragging a member out of a Group is the pointer's spelling
-    /// of closing its Pane, so it takes the same door — which defers the
-    /// leave when a draft is pending in a pair, and keeps the
-    /// ordinal-preserving focus. A refused or empty plan changes nothing.
-    pub fn drop(&mut self, drag: Drag, origin: View, target: DropTarget) -> Result<(), ApplyError> {
-        self.roster.set_view(origin);
-        let outcome = match self.shared.groups.preview_drop(drag, target) {
-            Plan::Change(GroupChange::Leave { thread })
-                if matches!(drag, Drag::Thread { group: Some(_), .. }) =>
-            {
-                let Drag::Thread {
-                    group: Some(group), ..
-                } = drag
-                else {
-                    unreachable!("the guard above matched this exact shape");
-                };
-                self.roster.set_view(View::Group(group));
-                let closed = self.close_thread(thread).map_err(|error| match error {
-                    CloseError::Group(error) => error,
-                    CloseError::Park(error) => error.into(),
-                });
-                // Out of the Group for real — either the leave applied, or
-                // it is parked on a draft. Either way the dragged Thread is
-                // no longer a member, so the operator follows it to Solo.
-                if self.roster.pending_leave(group) == Some(thread)
-                    || self.shared.groups.of(thread).is_none()
-                {
-                    self.roster.set_view(View::Solo);
-                    self.roster.focus(PaneIdentity::Thread(thread));
-                }
-                closed
-            }
-            Plan::Change(change) => self.apply_group(change).map(|_| ()),
-            Plan::Refused(_) | Plan::Nothing => Ok(()),
-        };
-        self.roster.heal_focus(&self.shared.groups);
-        outcome
+        parked
     }
 
     /// Adopt a CLI session file (#11), in place of the Pane it was picked

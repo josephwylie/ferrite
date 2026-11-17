@@ -57,9 +57,8 @@ const RESTART_GRACE: Duration = Duration::from_secs(2);
 pub struct Attach {
     /// For this computer's Server, the Store it serves, its socket beside
     /// it, which the window reads an open Thread's header from. A
-    /// machine's path only names the window's copies of its Groups and
-    /// Projects. Either's parked Threads are what its Server publishes
-    /// (ADR 0026).
+    /// machine's path only names the window's copy of its Projects.
+    /// Either's parked Threads are what its Server publishes (ADR 0026).
     pub store: PathBuf,
     pub server: Endpoint,
     pub client: Peer,
@@ -1104,11 +1103,7 @@ impl Remote {
                 };
                 if let Some((draft, prompt)) = self.starting.remove(&id) {
                     let result = result.and_then(|done| match done {
-                        Some(Done::Thread { thread }) => Ok(Bootstrapped {
-                            thread,
-                            refused_leave: None,
-                            applied_leave: false,
-                        }),
+                        Some(Done::Thread { thread }) => Ok(Bootstrapped { thread }),
                         _ => Err(io::Error::other("the server started no Thread")),
                     });
                     return vec![Arrival::Started(BootstrapResult {

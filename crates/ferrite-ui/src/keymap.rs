@@ -626,7 +626,7 @@ pub fn bindings(platform: Platform) -> Vec<Binding> {
         ("right".into(), "image_viewer::Next", Some(IMAGE_VIEWER)),
         // The find bar's line: ⏎ and ⌘G step forward, ⇧⏎ and ⌘⇧G back, esc
         // closes it. Last, so its context wins every same-depth tie: the
-        // Composer's new line and Groups (⌘G, ⌘⇧G).
+        // Composer's new line.
         ("enter".into(), "find::Next", Some("Find")),
         (with_primary("g"), "find::Next", Some("Find")),
         ("shift-enter".into(), "find::Previous", Some("Find")),

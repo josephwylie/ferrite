@@ -26,7 +26,6 @@ pub mod drive;
 pub mod engine;
 pub mod factory;
 pub mod followup;
-pub mod groups;
 pub mod import;
 pub mod layout;
 pub mod link;

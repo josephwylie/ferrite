@@ -3196,7 +3196,7 @@ pub const NAV_ICON: f32 = 16.0;
 pub const NAV_ICON_GAP: f32 = 10.0;
 /// 14px — under the views, before the tree.
 pub const NAV_VIEWS_GAP: f32 = 14.0;
-/// 26px — a section heading (`Projects`, `Groups`, `Recent`): 12/500
+/// 26px — a section heading (`Projects`, `Recent`): 12/500
 /// `INK_SUBTLE`, padding 0 6 0 10, its 22px `+` at the right.
 pub const NAV_HEADING_H: f32 = 26.0;
 pub const NAV_HEADING_PAD_R: f32 = SPACE_1_5;

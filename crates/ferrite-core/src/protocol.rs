@@ -24,7 +24,6 @@ use std::time::Duration;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use crate::activity::{ActivityEvent, ActivityInput, AgentKey, DecisionHandle, Subject};
-use crate::groups::{GroupChange, GroupId};
 use crate::store::{LogRecord, Provider};
 use crate::transcript::Input;
 use crate::workspace::registry::ProjectId;
@@ -233,9 +232,10 @@ pub enum Op {
         effort: Option<String>,
         workspace: WireChoice,
         prompt: String,
+        /// Retired with Groups: never sent, and ignored.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         group: Option<GroupId>,
-        /// The loose Thread the new one makes a Group with once it starts.
+        /// Retired with Groups: never sent, and ignored.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         new_group_with: Option<ThreadId>,
     },
@@ -362,7 +362,7 @@ pub enum Op {
     Revive {
         thread: ThreadId,
     },
-    /// Every member of a Group opened.
+    /// Retired with Groups: answered `unsupported`.
     ReviveGroup {
         group: GroupId,
     },
@@ -372,10 +372,11 @@ pub enum Op {
     Import {
         path: PathBuf,
     },
+    /// Retired with Groups: answered `unsupported`.
     Group {
         change: WireGroupChange,
     },
-    /// A Group's arrangement; none puts it back on the default grid.
+    /// Retired with Groups: answered `unsupported`.
     Layout {
         group: GroupId,
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -808,6 +809,23 @@ pub enum WireControl {
     Unknown,
 }
 
+/// A Group's number. Groups are gone; generation 1 still spells the
+/// commands and messages that named one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct GroupId(u64);
+
+impl GroupId {
+    pub fn new(value: u64) -> Self {
+        Self(value)
+    }
+
+    pub fn get(self) -> u64 {
+        self.0
+    }
+}
+
+/// Retired with Groups: `Op::Group`'s change, decoded and refused.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum WireGroupChange {
@@ -1266,13 +1284,12 @@ pub enum ServerMessage {
         revision: u64,
         roster: SharedRoster,
     },
+    /// Retired with Groups: never sent, and ignored.
     Groups {
         revision: u64,
         groups: serde_json::Value,
     },
-    /// A Group left with one member, gone: ahead of the Groups without it,
-    /// so every window showing it lands on its survivor, as the window
-    /// that dissolved it does, whatever else it hears in between.
+    /// Retired with Groups: never sent, and ignored.
     Dissolved {
         group: GroupId,
         survivor: ThreadId,
@@ -1406,7 +1423,7 @@ pub struct Snapshot {
     pub threads: Vec<ThreadState>,
     pub roster: SharedRoster,
     pub decisions: Vec<PendingEntry>,
-    /// `groups.json`, as the Store writes it.
+    /// Retired with Groups: never sent, and ignored.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub groups: Option<serde_json::Value>,
     /// `registry.json`, as the Store writes it.
@@ -1592,8 +1609,7 @@ pub enum Done {
         text: String,
         prepend: bool,
     },
-    /// A Group change: the Group it made or changed, and the Groups it
-    /// left with a single member, gone.
+    /// Retired with Groups: never sent.
     Grouped {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         group: Option<GroupId>,
@@ -3406,84 +3422,6 @@ impl TryFrom<&WireBinding> for WorkspaceBinding {
                 path: path.clone(),
             },
             WireBinding::Unknown => return Err(Unknown),
-        })
-    }
-}
-
-impl From<&GroupChange> for WireGroupChange {
-    fn from(change: &GroupChange) -> Self {
-        match change.clone() {
-            GroupChange::Create { first, second } => Self::Create { first, second },
-            GroupChange::Join {
-                thread,
-                group,
-                index,
-            } => Self::Join {
-                thread,
-                group,
-                index,
-            },
-            GroupChange::Include {
-                thread,
-                group,
-                index,
-            } => Self::Include {
-                thread,
-                group,
-                index,
-            },
-            GroupChange::Leave { thread } => Self::Leave { thread },
-            GroupChange::ReorderMember {
-                group,
-                thread,
-                index,
-            } => Self::ReorderMember {
-                group,
-                thread,
-                index,
-            },
-            GroupChange::MoveGroup { group, index } => Self::MoveGroup { group, index },
-            GroupChange::Rename { group, title } => Self::Rename { group, title },
-        }
-    }
-}
-
-impl TryFrom<&WireGroupChange> for GroupChange {
-    type Error = Unknown;
-    fn try_from(change: &WireGroupChange) -> Result<Self, Unknown> {
-        Ok(match change.clone() {
-            WireGroupChange::Create { first, second } => Self::Create { first, second },
-            WireGroupChange::Join {
-                thread,
-                group,
-                index,
-            } => Self::Join {
-                thread,
-                group,
-                index,
-            },
-            WireGroupChange::Include {
-                thread,
-                group,
-                index,
-            } => Self::Include {
-                thread,
-                group,
-                index,
-            },
-            WireGroupChange::Leave { thread } => Self::Leave { thread },
-            WireGroupChange::ReorderMember {
-                group,
-                thread,
-                index,
-            } => Self::ReorderMember {
-                group,
-                thread,
-                index,
-            },
-            WireGroupChange::MoveGroup { group, index } => Self::MoveGroup { group, index },
-            WireGroupChange::Rename { group, title } => Self::Rename { group, title },
-            WireGroupChange::Unknown => return Err(Unknown),
         })
     }
 }

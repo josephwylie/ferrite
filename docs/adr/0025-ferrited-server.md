@@ -1,6 +1,7 @@
 # 0025 — Agents live in a headless Server; the window is its client
 
-Status: accepted 2026-10-15 (Herdr benchmark, Foundation #1).
+Status: accepted 2026-10-15 (Herdr benchmark, Foundation #1). Amended
+2026-11-17 by the Groups amendment below.
 
 ## Context
 
@@ -539,3 +540,14 @@ Never the `live_*` tests. Scripted Sessions throughout.
   memory is measured in step 9's smoke test.
 - Visuals need an attached window to be drawn; the agent is told so
   rather than kept waiting.
+
+## Amendment (2026-11-17): Groups are gone
+
+The window shows one Thread at a time, and Groups are removed. The Engine
+no longer loads, changes or publishes them. `groups.json` is left where it
+is, byte-for-byte, and never read, so a Thread that was in a Group is an
+ordinary Thread. Generation 1's spellings stay, as its rules require. A
+Server answers `group`, `layout` and `revive_group` with `unsupported`,
+sends no `groups` in its snapshot and never sends `groups` or
+`dissolved`. A `bootstrap` naming a Group starts a Thread in none. A
+window ignores the `groups` and `dissolved` an older Server sends.
