@@ -1,0 +1,159 @@
+[
+  {
+    "id": "link-affordances-01",
+    "title": "Transcript web-link menus cannot explicitly open the system browser",
+    "priority": "P2",
+    "category": "missing-capability",
+    "evidence_level": "source-proven",
+    "impact": "Users cannot choose their normal browser, authenticated profile or extensions from the link itself. The only Open action requests Ferrite Browser. Copying and manually pasting the address is the available escape.",
+    "ferrite_evidence": [
+      "crates/ferrite-pane/src/transcript/message_menu.rs:67-84",
+      "crates/ferrite-pane/src/transcript/message_menu.rs:132-139",
+      "crates/ferrite-pane/src/transcript/message_menu.rs:192-198",
+      "crates/ferrite-pane/src/preview.rs:322-331",
+      "crates/ferrite-cockpit/src/cockpit/tests/link_clicks.rs:267-289"
+    ],
+    "t3_evidence": [
+      "https://github.com/pingdotgg/t3code/blob/74573fc29b901bafbf8f1dbb2eb29606da1fa448/apps/web/src/components/chat/externalLinkContextMenu.ts#L26-L30",
+      "https://github.com/pingdotgg/t3code/blob/74573fc29b901bafbf8f1dbb2eb29606da1fa448/apps/web/src/components/chat/externalLinkContextMenu.ts#L111-L124",
+      "https://github.com/pingdotgg/t3code/blob/74573fc29b901bafbf8f1dbb2eb29606da1fa448/apps/web/src/components/ChatMarkdown.tsx#L1299-L1328"
+    ],
+    "recommendation": "Add an explicit system-browser verb to the shared link interaction, preserving the resolved address. Name browser destinations consistently. This is separate from BROWSER-16, which owns opening the already active browser page externally.",
+    "acceptance": "Right-click [Example](https://example.com/a?b=c#d). Open in system browser launches that exact URL without creating or selecting a Ferrite tab. Open in integrated browser opens it in the owning thread. Copy link address copies the URL, not Example. Repeat while text is selected and while streaming."
+  },
+  {
+    "id": "link-affordances-02",
+    "title": "Modified and middle clicks on transcript web links ignore destination intent",
+    "priority": "P2",
+    "category": "interaction",
+    "evidence_level": "source-proven",
+    "impact": "Cmd/Ctrl-click and middle-click cannot bypass Ferrite Browser. The same gesture works differently on a sidebar PR badge, creating an unpredictable everyday navigation rule.",
+    "ferrite_evidence": [
+      "crates/ferrite-pane/src/rich.rs:605-645",
+      "vendor/gpui-base/src/text/inline.rs:1200-1241",
+      "crates/ferrite-pane/src/preview.rs:324-330",
+      "crates/ferrite-cockpit/src/cockpit/browser.rs:342-355",
+      "crates/ferrite-cockpit/src/cockpit.rs:12806-12819"
+    ],
+    "t3_evidence": [
+      "https://github.com/pingdotgg/t3code/blob/74573fc29b901bafbf8f1dbb2eb29606da1fa448/apps/web/src/browser/browserLinkTarget.ts#L11-L27",
+      "https://github.com/pingdotgg/t3code/blob/74573fc29b901bafbf8f1dbb2eb29606da1fa448/apps/web/src/components/ChatMarkdown.tsx#L1263-L1297",
+      "https://github.com/pingdotgg/t3code/blob/74573fc29b901bafbf8f1dbb2eb29606da1fa448/apps/desktop/src/window/DesktopWindow.ts#L742-L760"
+    ],
+    "recommendation": "Resolve link activation once from target, button, modifiers and user preference. Keep the gesture distinct from browser-page target=_blank handling, already owned by BROWSER-01. T3 supports a saved app/system preference; Ferrite can choose a different default without ignoring overrides.",
+    "acceptance": "Exercise plain, Cmd/Ctrl, Shift and middle clicks on the same transcript URL and sidebar PR. Assert the documented destination and whether selection changes. Dragging still selects without opening, and right-click never navigates."
+  },
+  {
+    "id": "link-affordances-03",
+    "title": "Issue-reference context menus open and copy an internal scheme instead of the real URL",
+    "priority": "P2",
+    "category": "defect",
+    "evidence_level": "source-proven",
+    "impact": "A generated #212 reference can work on left click but fail through Open link. Copy link yields issue:212 rather than a shareable repository issue URL.",
+    "ferrite_evidence": [
+      "crates/ferrite-pane/src/file_links.rs:607-614",
+      "crates/ferrite-pane/src/file_links.rs:653-664",
+      "crates/ferrite-pane/src/rich.rs:617-625",
+      "crates/ferrite-pane/src/transcript/message_menu.rs:278-282",
+      "crates/ferrite-pane/src/transcript/message_menu.rs:192-198",
+      "crates/ferrite-pane/src/file_links.rs:38-42"
+    ],
+    "t3_evidence": [
+      "https://github.com/pingdotgg/t3code/blob/74573fc29b901bafbf8f1dbb2eb29606da1fa448/apps/web/src/components/ChatMarkdown.tsx#L1192-L1214",
+      "https://github.com/pingdotgg/t3code/blob/74573fc29b901bafbf8f1dbb2eb29606da1fa448/apps/web/src/components/ChatMarkdown.tsx#L1221-L1228",
+      "https://github.com/pingdotgg/t3code/blob/74573fc29b901bafbf8f1dbb2eb29606da1fa448/apps/web/src/components/ChatMarkdown.tsx#L1312-L1328"
+    ],
+    "recommendation": "Represent resolved target identity separately from display text and internal renderer schemes. Share decoding between clicks, menus and copy. Audit ferrite-path:, ferrite-thread:, ferrite-chip: and ferrite-skill: at the same boundary; do not advertise OS actions for app-only targets.",
+    "acceptance": "For origin git@github.com:owner/repo.git and #212, plain click and both browser menu actions use https://github.com/owner/repo/issues/212; Copy link address copies that URL. Missing origin produces an unavailable reason rather than issuing issue:212 to the OS."
+  },
+  {
+    "id": "link-affordances-04",
+    "title": "Custom file chips lose target-aware context actions",
+    "priority": "P2",
+    "category": "partial-capability",
+    "evidence_level": "source-proven",
+    "impact": "An inline source-file chip supports opening but lacks reliable right-click actions for its full path, relative path, editor or file manager. A user cannot copy the actual destination from an abbreviated label with the confidence provided by a normal URL link.",
+    "ferrite_evidence": [
+      "crates/ferrite-pane/src/rich.rs:567-575",
+      "vendor/gpui-base/src/text/inline_flow.rs:193-233",
+      "vendor/gpui-base/src/text/inline_flow.rs:470-481",
+      "crates/ferrite-pane/src/attachments.rs:795-855",
+      "crates/ferrite-pane/src/file_links.rs:354-380",
+      "crates/ferrite-pane/src/transcript/message_menu.rs:269-284",
+      "crates/ferrite-pane/src/transcript/message_menu.rs:199-203"
+    ],
+    "t3_evidence": [
+      "https://github.com/pingdotgg/t3code/blob/74573fc29b901bafbf8f1dbb2eb29606da1fa448/apps/web/src/components/chat/MarkdownFileLink.tsx#L247-L309",
+      "https://github.com/pingdotgg/t3code/blob/74573fc29b901bafbf8f1dbb2eb29606da1fa448/apps/web/src/components/chat/MarkdownFileLink.logic.ts#L32-L49",
+      "https://github.com/pingdotgg/t3code/blob/74573fc29b901bafbf8f1dbb2eb29606da1fa448/apps/web/src/components/ChatMarkdown.tsx#L835-L840"
+    ],
+    "recommendation": "Pass a typed file target through custom rendering and install its own context menu. Offer Copy full path and Copy relative path where meaningful, Open in Files at the referenced line, and supported editor/reveal actions. Keep display-label copying as text selection.",
+    "acceptance": "Right-click a chip whose visible label differs from its path. Copy full/relative path returns the intended path with documented position suffix. Open in Files reveals line 42. Repeat after right-clicking an unrelated URL to ensure no stale target is reused, and for missing files and image chips."
+  },
+  {
+    "id": "link-affordances-05",
+    "title": "Markdown section links are sent to the OS instead of scrolling within the document",
+    "priority": "P2",
+    "category": "defect",
+    "evidence_level": "source-proven",
+    "impact": "Tables of contents and section references in generated explanations or plans do not navigate to their headings.",
+    "ferrite_evidence": [
+      "crates/ferrite-pane/src/rich.rs:628-644",
+      "crates/ferrite-pane/src/file_links.rs:25-28",
+      "crates/ferrite-pane/src/preview.rs:324-326",
+      "vendor/gpui-base/src/text/text_view.rs:95-112"
+    ],
+    "t3_evidence": [
+      "https://github.com/pingdotgg/t3code/blob/74573fc29b901bafbf8f1dbb2eb29606da1fa448/apps/web/src/components/ChatMarkdown.tsx#L1215-L1233",
+      "https://github.com/pingdotgg/t3code/blob/74573fc29b901bafbf8f1dbb2eb29606da1fa448/apps/web/src/components/chat/markdownFragments.ts#L24-L61",
+      "https://github.com/pingdotgg/t3code/blob/74573fc29b901bafbf8f1dbb2eb29606da1fa448/apps/web/src/components/chat/markdownFragments.ts#L83-L105"
+    ],
+    "recommendation": "Add document-scoped heading identity and fragment navigation before file or external URL dispatch. Preserve a stable heading target across streaming updates and avoid selecting a heading in another answer with the same name.",
+    "acceptance": "A local fixture with two answers containing Details headings scrolls to the clicked answer's heading. Percent-encoded fragments and duplicate heading suffixes work. Missing anchors give a defined result and never launch an external application."
+  },
+  {
+    "id": "link-affordances-06",
+    "title": "Ordinary Markdown links and their transcript menus have no keyboard activation path",
+    "priority": "P2",
+    "category": "interaction",
+    "evidence_level": "source-proven",
+    "impact": "Keyboard users cannot traverse and activate the same web links available to pointer users, or choose a link menu action after opening the pointer-only transcript menu.",
+    "ferrite_evidence": [
+      "vendor/gpui-base/src/text/inline.rs:1132-1241",
+      "vendor/gpui-base/src/text/state.rs:39-49",
+      "vendor/gpui-base/src/text/text_view.rs:701-718",
+      "crates/ferrite-pane/src/rich.rs:605-613",
+      "crates/ferrite-pane/src/transcript/message_menu.rs:210-243",
+      "crates/ferrite-pane/src/link_chip.rs:119-134"
+    ],
+    "t3_evidence": [
+      "https://github.com/pingdotgg/t3code/blob/74573fc29b901bafbf8f1dbb2eb29606da1fa448/apps/web/src/components/ChatMarkdown.tsx#L1221-L1229",
+      "https://github.com/pingdotgg/t3code/blob/74573fc29b901bafbf8f1dbb2eb29606da1fa448/apps/web/src/components/chat/MarkdownFileLink.tsx#L329-L377",
+      "https://github.com/pingdotgg/t3code/blob/74573fc29b901bafbf8f1dbb2eb29606da1fa448/apps/web/src/components/pullRequest/PullRequestDetailCrumbs.tsx#L69-L85"
+    ],
+    "recommendation": "Give inline links stable focusable semantic targets and reuse the app's accessible menu implementation. Keep this scoped to transcript links; input-focus-003 already owns right-panel control accessibility.",
+    "acceptance": "Without a pointer, focus a link, activate it with Enter, open its context menu and choose Open in system browser or Copy address. Escape closes the menu and restores link focus. Re-rendering streaming text does not lose the focused target or submit the composer."
+  },
+  {
+    "id": "link-affordances-07",
+    "title": "Right-clicking a sidebar PR badge can offer Copy link for the thread instead of the PR",
+    "priority": "P2",
+    "category": "defect",
+    "evidence_level": "source-proven",
+    "impact": "A user who right-clicks an underlined PR number and selects Copy link can copy a Ferrite thread link rather than the forge PR address. The menu does not represent the clicked link.",
+    "ferrite_evidence": [
+      "crates/ferrite-cockpit/src/cockpit.rs:12806-12819",
+      "crates/ferrite-cockpit/src/cockpit/nav_list.rs:339-344",
+      "crates/ferrite-cockpit/src/cockpit/context_menu.rs:457-462",
+      "crates/ferrite-cockpit/src/cockpit/context_menu.rs:828-829"
+    ],
+    "t3_evidence": [
+      "https://github.com/pingdotgg/t3code/blob/74573fc29b901bafbf8f1dbb2eb29606da1fa448/apps/web/src/components/pullRequest/PullRequestRow.tsx#L143-L154",
+      "https://github.com/pingdotgg/t3code/blob/74573fc29b901bafbf8f1dbb2eb29606da1fa448/apps/web/src/components/pullRequest/PullRequestDetailCrumbs.tsx#L69-L76",
+      "https://github.com/pingdotgg/t3code/blob/74573fc29b901bafbf8f1dbb2eb29606da1fa448/apps/web/src/components/pullRequest/pullRequestLinkContextMenu.ts#L17-L23",
+      "https://github.com/pingdotgg/t3code/blob/74573fc29b901bafbf8f1dbb2eb29606da1fa448/apps/web/src/components/pullRequest/pullRequestLinkContextMenu.ts#L39-L45"
+    ],
+    "recommendation": "Handle the PR badge context gesture and stop propagation after capturing its explicit PR target. Label any thread action Copy thread link. Existing pr-navigation findings own the primary route and visibility behavior; this finding only adds wrong clipboard/context identity.",
+    "acceptance": "Right-click B's PR while A is focused. Copy PR link returns B's exact forge URL without changing focus. Right-click the remainder of B's row and Copy thread link returns B's Ferrite link. A missing PR URL disables URL actions with a reason."
+  }
+]

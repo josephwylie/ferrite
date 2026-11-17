@@ -554,7 +554,11 @@ fn a_wall_tile_truncates_a_long_call_inside_the_tile(cx: &mut TestAppContext) {
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     hide_panel(&view, cx);
     super::hold_nav_open(&view, cx);
-    cx.simulate_resize(gpui::size(px(550.), px(700.)));
+    // A narrow window holds the nav at its minimum, the cell beside it
+    // short of the Transcript threshold.
+    let width = ferrite_ui::theme::NAV_MIN_W + ferrite_core::docview::TRANSCRIPT_WIDTH
+        - ferrite_ui::theme::LEVEL_HYSTERESIS;
+    cx.simulate_resize(gpui::size(px(width), px(700.)));
     fake.streams.borrow()[0]
         .send(SessionEvent::ToolStarted {
             id: "long".into(),

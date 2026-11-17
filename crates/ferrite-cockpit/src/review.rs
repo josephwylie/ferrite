@@ -2983,6 +2983,9 @@ mod tests {
         let cx = &mut cx;
         cx.simulate_keystrokes("p");
         let approval = WirePrComment {
+            id: None,
+            author_is_bot: false,
+            place: None,
             kind: WirePrCommentKind::Review,
             author: "cy".into(),
             anchor: "review".into(),
@@ -3008,6 +3011,12 @@ mod tests {
                         title: "Ship it".into(),
                         url: String::new(),
                         body: String::new(),
+                        author: None,
+                        author_avatar_url: None,
+                        updated_at: None,
+                        changed_files: None,
+                        additions: None,
+                        deletions: None,
                         state: WirePrState::Open,
                         draft: false,
                         head: "f".into(),

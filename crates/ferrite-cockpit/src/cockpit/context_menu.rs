@@ -60,6 +60,7 @@ pub(super) enum MenuTarget {
     Factory,
     /// A right-click on the Thread's web page.
     BrowserPage(ThreadId),
+    Details(ThreadId),
 }
 
 /// One thing a context-menu row does.
@@ -143,6 +144,8 @@ pub(super) enum MenuVerb {
     PrCopy,
     /// The Factory picker's row at this index.
     Factory(usize),
+    DetailsItem(ferrite_core::settings::ContextCardItem),
+    DetailsReset,
 }
 
 /// A parent row's submenu.
@@ -430,6 +433,7 @@ impl CockpitView {
                 rows = self.changes_branch_rows(diff).into_iter().map(Some).collect()
             }
             MenuTarget::BrowserPage(thread) => rows = self.browser_page_rows(thread),
+            MenuTarget::Details(_) => rows = self.details_menu_rows(),
             MenuTarget::Terminal(_) => rows = self.terminal_context_rows(),
             MenuTarget::TerminalMore(_) => rows = self.terminal_more_rows(),
             MenuTarget::SurfaceMenu(thread) => rows = self.surface_menu_rows(thread),
@@ -865,6 +869,13 @@ impl CockpitView {
         cx: &mut Context<Self>,
     ) {
         match (target, verb) {
+            (MenuTarget::Details(_), MenuVerb::DetailsItem(item)) => self.change_settings(|settings| {
+                let visible = settings.context_card_preferences.visible(item);
+                settings.context_card_preferences.set(item, !visible);
+            }, cx),
+            (MenuTarget::Details(_), MenuVerb::DetailsReset) => self.change_settings(|settings| {
+                settings.context_card_preferences = Default::default();
+            }, cx),
             (_, MenuVerb::Factory(index)) => self.factory_pick(index, cx),
             (
                 MenuTarget::Thread(thread) | MenuTarget::Pane(thread) | MenuTarget::Snooze(thread),
@@ -1032,6 +1043,7 @@ impl CockpitView {
                     | MenuTarget::PrLink(_)
                     | MenuTarget::Factory
                     | MenuTarget::BrowserPage(_)
+                    | MenuTarget::Details(_)
                     | MenuTarget::Page(_) => None,
                 };
                 self.open_draft(DraftTarget::Main, cx);
@@ -1124,6 +1136,12 @@ impl CockpitView {
         // Where the open submenu's parent row stands: the submenu's top.
         let mut parent_top = px(ferrite_ui::theme::FLOAT_PAD);
         let mut y = parent_top;
+        if matches!(open.target, MenuTarget::Details(_)) {
+            shell = shell.child(div().h(px(28.)).px(px(8.)).flex().items_center()
+                .text_size(px(11.)).text_color(rgb(ferrite_ui::theme::INK_SUBTLE))
+                .child("Show in thread details"));
+            y += px(28.);
+        }
         for (index, row) in open.rows.iter().enumerate() {
             shell = match row {
                 None => {

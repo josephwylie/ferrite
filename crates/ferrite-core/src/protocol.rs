@@ -64,6 +64,8 @@ pub enum ClientMessage {
     Command(Command),
     BrowserReply {
         request: u64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        boot_id: Option<String>,
         thread: ThreadId,
         owner: crate::browser::Owner,
         document: crate::browser::Document,
@@ -108,6 +110,8 @@ pub enum Capability {
     /// This client can draw Visuals for an agent.
     RenderVisual,
     ConversationBrowser,
+    /// Browser controls require a server grant at the native Ready boundary.
+    BrowserDispatch,
     /// This client lists the Server's parked Threads off its `parked`
     /// message: a window on a machine, whose logs stay there (ADR 0026).
     ParkedThreads,
@@ -151,12 +155,21 @@ pub enum Op {
     FileOperation {
         request: crate::file_operations::Request,
     },
+    BrowserDispatch {
+        request: u64,
+        boot_id: String,
+        thread: ThreadId,
+        owner: crate::browser::Owner,
+        document: crate::browser::Document,
+        revision: u64,
+    },
     BrowserCapture {
         thread: ThreadId,
         owner: crate::browser::Owner,
         lease: crate::browser::Lease,
         capture: crate::browser_annotations::Capture,
-        png: WirePng,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        png: Option<WirePng>,
     },
     BrowserCaptureImage {
         thread: ThreadId,
@@ -487,6 +500,11 @@ pub enum Op {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         since: Option<String>,
     },
+    /// The published diff of one pull request in `path`'s repository. Replied `review`.
+    ReviewPullRequestDiff {
+        path: PathBuf,
+        number: u64,
+    },
     /// The branch's commits since its base at `path`, for a review's
     /// commits scope (ADR 0021). Replied `commits`.
     ListCommits {
@@ -561,7 +579,8 @@ impl Op {
     /// a new one is placed here on purpose.
     pub fn thread(&self) -> Option<ThreadId> {
         match self {
-            Op::BrowserCapture { thread, .. }
+            Op::BrowserDispatch { thread, .. }
+            | Op::BrowserCapture { thread, .. }
             | Op::BrowserCaptureImage { thread, .. }
             | Op::BrowserProtect { thread, .. }
             | Op::BrowserRelease { thread, .. }
@@ -625,6 +644,7 @@ impl Op {
             | Op::ListRepo { .. }
             | Op::ReviewDiff { .. }
             | Op::ReviewRead { .. }
+            | Op::ReviewPullRequestDiff { .. }
             | Op::ListCommits { .. }
             | Op::SearchRepo { .. }
             | Op::ReadFile { .. }
@@ -1157,6 +1177,9 @@ pub enum ServerMessage {
         document: crate::browser::Document,
         revision: u64,
         control: crate::browser::Control,
+        /// A dispatch-capable server's boot identity. Absent on legacy peers.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        dispatch: Option<String>,
     },
     Browser {
         thread: ThreadId,
@@ -1494,6 +1517,9 @@ pub enum Done {
     Changes { reply: crate::changes::Reply },
     FileOperation {
         reply: crate::file_operations::Reply,
+    },
+    BrowserDispatch {
+        remaining_ms: u64,
     },
     BrowserCapture {
         annotation: crate::browser_annotations::Annotation,
@@ -2399,7 +2425,7 @@ pub fn welcome(
         generation: GENERATION,
         server,
         boot_id,
-        capabilities: Vec::new(),
+        capabilities: vec![Capability::BrowserDispatch],
         error: (generation != GENERATION).then(|| WireError {
             code: ErrorCode::UnsupportedGeneration,
             message: format!("this server speaks generation {GENERATION}, not {generation}"),

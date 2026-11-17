@@ -20,9 +20,9 @@ use ferrite_reviewr::model::{ChangeKind, ChangedFile, Comment, Rev, Scope as Rev
 use ferrite_reviewr::search::{CodeHit, FileHit, SearchResults};
 use gpui::{AppContext, Focusable};
 
-use super::{conversation, Feed, Scene, Setup};
+use super::{Feed, Scene, Setup, conversation};
 use crate::cockpit::panel::Opener;
-use crate::cockpit::surfaces::{SurfaceId, ThreadSurfaces};
+use crate::cockpit::surfaces::SurfaceId;
 use crate::review::ReviewView;
 
 /// Every state this module draws, at the app size.
@@ -68,6 +68,8 @@ pub(super) const STATES: &[&str] = &[
     "compaction",
     "long-prompt",
     "cite",
+    "annotation-editor",
+    "cite-comment",
     "factory",
     "factory-workflows",
     "factory-start-schedule",
@@ -82,6 +84,8 @@ pub(super) fn handles(state: &str) -> bool {
 
 pub(super) fn build(state: &str) -> (Scene, Setup) {
     match state {
+        "annotation-editor" => annotation_editor(),
+        "cite-comment" => cite_comment(),
         "review-uncommitted" => review(Staged::Uncommitted),
         "review-commits" => review(Staged::Commits),
         "review-pr" => review(Staged::Pr),
@@ -113,9 +117,17 @@ pub(super) fn build(state: &str) -> (Scene, Setup) {
         }
         "page-pane" => page_pane(),
         "lightbox" => lightbox(),
-        "files-code" => tools("files-code", &[Opener::Files], Some("crates/ferrite-ui/src/motion.rs")),
+        "files-code" => tools(
+            "files-code",
+            &[Opener::Files],
+            Some("crates/ferrite-ui/src/motion.rs"),
+        ),
         "files-empty" => tools("files-empty", &[Opener::Files], None),
-        "changes-split" => tools("changes-split", &[Opener::Files, Opener::Changes], Some("crates/ferrite-ui/src/motion.rs")),
+        "changes-split" => tools(
+            "changes-split",
+            &[Opener::Files, Opener::Changes],
+            Some("crates/ferrite-ui/src/motion.rs"),
+        ),
         "terminal" => tools("terminal", &[Opener::Terminal], None),
         "panel-tabs" => panel("panel-tabs", PanelStaged::Tabs),
         "panel-plusmenu" => panel("panel-plusmenu", PanelStaged::PlusMenu),
@@ -362,6 +374,12 @@ fn pull_request() -> ReviewPullRequest {
             body: "Live rows reserve their status line from the first frame, so a \
                    Thread that starts streaming no longer shifts the tree."
                 .into(),
+            author: Some("josephwylie".into()),
+            author_avatar_url: None,
+            updated_at: Some("2026-10-15T09:20:00Z".into()),
+            changed_files: Some(3),
+            additions: Some(42),
+            deletions: Some(12),
             state: WirePrState::Open,
             draft: false,
             head: "fix/nav-jitter".into(),
@@ -376,6 +394,9 @@ fn pull_request() -> ReviewPullRequest {
             ],
             comments: vec![
                 WirePrComment {
+                    id: None,
+                    author_is_bot: false,
+                    place: None,
                     kind: WirePrCommentKind::Review,
                     author: "maria".into(),
                     anchor: "review".into(),
@@ -388,6 +409,9 @@ fn pull_request() -> ReviewPullRequest {
                     replies: Vec::new(),
                 },
                 WirePrComment {
+                    id: None,
+                    author_is_bot: false,
+                    place: None,
                     kind: WirePrCommentKind::Finding,
                     author: "maria".into(),
                     anchor: "crates/ferrite/src/nav.rs:439-442".into(),
@@ -398,6 +422,8 @@ fn pull_request() -> ReviewPullRequest {
                     resolved: false,
                     outdated: false,
                     replies: vec![WireReply {
+                        id: None,
+                        author_is_bot: false,
                         author: "joseph".into(),
                         body: "No: the next commit keeps it to open Threads.".into(),
                         created_at: "2026-10-15T09:20:00Z".into(),
@@ -550,7 +576,8 @@ fn send_landed() -> (Scene, Setup) {
         let Some(thread) = view.focused_thread() else {
             return;
         };
-        let _ = view.cockpit
+        let _ = view
+            .cockpit
             .send(thread, "Push the branch with the nav fix.".into());
         view.scroll_transcript_to_new_prompt(view.focused(), cx);
     });
@@ -637,7 +664,7 @@ fn panel(state: &str, staged: PanelStaged) -> (Scene, Setup) {
         match staged {
             PanelStaged::Tabs => {}
             PanelStaged::PlusMenu => view.open_surface_menu(cx),
-            PanelStaged::Empty => view.close_surfaces(thread, ThreadSurfaces::close_all, cx),
+            PanelStaged::Empty => view.close_surfaces(thread, crate::cockpit::surfaces::CloseSelection::All, cx),
             PanelStaged::Maximized => view.toggle_panel_maximized(thread, cx),
         }
     });
@@ -675,7 +702,11 @@ fn panel_pr(label: &'static str, staged: PrStaged) -> (Scene, Setup) {
             thread,
             Some(PullRequest {
                 number: pr.number,
-                state: if merged { PrState::Merged } else { PrState::Open },
+                state: if merged {
+                    PrState::Merged
+                } else {
+                    PrState::Open
+                },
                 draft: false,
                 url: Some(pr.url.clone()),
                 title: Some(pr.title.clone()),
@@ -1086,8 +1117,7 @@ fn lightbox() -> (Scene, Setup) {
     let scene = conversation("lightbox");
     let shots = scene.root.join("shots");
     std::fs::create_dir_all(&shots).unwrap();
-    let source = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("fixtures");
+    let source = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("fixtures");
     let gallery: Vec<std::path::PathBuf> = ["approval-wide", "decision-wide", "edges-wide"]
         .iter()
         .map(|name| {
@@ -1145,9 +1175,9 @@ fn composer_stop() -> (Scene, Setup) {
         .text("Checking how the stack clips when three or more rows are held");
     scene.core.pump();
     let setup: Setup = Box::new(|view, _, cx| {
-        view.panes[0]
-            .composer
-            .update(cx, |composer, cx| composer.set("Also keep the take-back key".into(), cx));
+        view.panes[0].composer.update(cx, |composer, cx| {
+            composer.set("Also keep the take-back key".into(), cx)
+        });
     });
     (scene, setup)
 }
@@ -1158,9 +1188,9 @@ fn head_breadcrumb() -> (Scene, Setup) {
     let scene = conversation("head-breadcrumb");
     let setup: Setup = Box::new(|view, window, cx| {
         if let Some(thread) = view.focused_thread() {
-            ferrite_ui::motion::hover_listener(
-                format!("view-title-hover-{}", thread.get()).into(),
-            )(&true, window, cx);
+            ferrite_ui::motion::hover_listener(format!("view-title-hover-{}", thread.get()).into())(
+                &true, window, cx,
+            );
         }
     });
     (scene, setup)
@@ -1428,6 +1458,64 @@ fn factory_coordinator() -> (Scene, Setup) {
         view.factory_surface(crate::cockpit::workflows::Surface::Coordinator, cx);
         view.accept_proposal("p-1", cx);
         view.dismiss_proposal("p-2", cx);
+    });
+    (scene, setup)
+}
+
+fn annotation_editor() -> (Scene, Setup) {
+    use ferrite_core::browser::{Document, TabId};
+    use ferrite_core::browser_annotations::{self, Capture, Selection, Viewport};
+    let scene = conversation("annotation-editor");
+    let image = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("fixtures/approval-wide.png");
+    let png = std::fs::read(&image).unwrap();
+    let dimensions = image::load_from_memory(&png).unwrap();
+    let annotation = browser_annotations::retain(
+        &scene.root.join("annotation"),
+        Capture {
+            document: Document {
+                tab: TabId(1),
+                generation: 1,
+            },
+            native_generation: 1,
+            url: "https://example.test/review".into(),
+            viewport: Viewport {
+                width_css: dimensions.width() as f64,
+                height_css: dimensions.height() as f64,
+                device_scale: 1.,
+            },
+            selection: Selection::Region {
+                x: 20.,
+                y: 20.,
+                width: 150.,
+                height: 80.,
+            },
+        },
+        &png,
+        "Make the primary action clearer".into(),
+        vec![],
+    )
+    .unwrap();
+    let setup: Setup = Box::new(move |view, _, cx| {
+        let thread = view.panes[view.focused()].thread().unwrap();
+        view.fixture_annotation_editor(thread, annotation, image, cx);
+    });
+    (scene, setup)
+}
+
+fn cite_comment() -> (Scene, Setup) {
+    let scene = conversation("cite-comment");
+    let setup: Setup = Box::new(|view, _, cx| {
+        let index = view.focused();
+        view.panes[index].composer.update(cx, |composer, cx| {
+            composer.cite_with_comment(
+                ferrite_core::replies::Reply::new(
+                    "The nav rows jump by a line when a Thread starts streaming.",
+                    "",
+                ),
+                None,
+                cx,
+            );
+        });
     });
     (scene, setup)
 }

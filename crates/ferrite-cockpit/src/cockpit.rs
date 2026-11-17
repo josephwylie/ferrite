@@ -930,12 +930,12 @@ impl PaneGhost {
 impl Render for PaneGhost {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         use ferrite_ui::theme;
-        if let Some((_, chip)) = self
+        if let Some((width, chip)) = self
             .row_left_of
             .as_ref()
             .filter(|(edge, _)| f32::from(window.mouse_position().x) < *edge)
         {
-            return chip.element(&nav::Measure::Text(cx));
+            return chip.element(&nav::Measure::Text(cx, *width));
         }
         let scale = self.scale();
         let (w, h) = self.face.size;
@@ -1136,7 +1136,7 @@ impl NavChip {
                 false,
                 measure,
             ),
-        })
+        }, measure.inner_width())
     }
 }
 
@@ -1465,9 +1465,20 @@ impl CockpitView {
     }
 
     pub fn new_with_settings(
+        cockpit: Cockpit,
+        launch_provider: Provider,
+        prefs: Preferences,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let panel = panel::Panel::load(&prefs.dir);
+        Self::new_with_panel(cockpit, launch_provider, prefs, panel, cx)
+    }
+
+    pub(crate) fn new_with_panel(
         mut cockpit: Cockpit,
         launch_provider: Provider,
         prefs: Preferences,
+        panel: panel::Panel,
         cx: &mut Context<Self>,
     ) -> Self {
         ferrite_pane::pane::init_components(cx);
@@ -1510,11 +1521,11 @@ impl CockpitView {
         if prefs.ferrite_updates {
             updating::schedule_checks(cx);
         }
+        cx.on_release(|view, _| view.flush_panel_persistence()).detach();
         cx.on_app_quit(|view, cx| {
             view.save_drafts(cx);
             view.flush_unsaved_files(cx);
-            view.save_surfaces();
-            view.save_working_sets();
+            view.flush_panel_persistence();
             view.cockpit.halt_sessions();
             #[cfg(feature = "cef")]
             let browser = view.browsers.controller.clone();
@@ -1611,7 +1622,7 @@ impl CockpitView {
             snooze_editor: None,
             context_menu: None,
             menu_return: None,
-            panel: panel::Panel::load(&prefs.dir),
+            panel,
             panel_empty_focus: cx.focus_handle(),
             panel_keys: cx.focus_handle(),
             panel_closing_focus: cx.focus_handle(),
@@ -1805,6 +1816,7 @@ impl CockpitView {
             self.aim_attachments(&pane.composer, cx);
             cx.subscribe(&pane.composer, Self::composer_edited).detach();
             cx.subscribe(&pane.composer, Self::composer_opens_source).detach();
+            cx.subscribe(&pane.composer, Self::composer_comment_opened).detach();
             self.restore_draft(thread, &pane.composer.clone(), cx);
             self.panes.push(pane);
             self.thread_opened(thread, cx);
@@ -2060,72 +2072,16 @@ impl CockpitView {
         let quotes = self.panes[index].is_main();
         let queued = open.queue().len();
         let earlier = self.earlier_history(thread, subject_view.transcript(), quotes);
-        let cited = self
-            .cited_sources
-            .of(thread)
-            .cloned()
-            .map(std::sync::Arc::new)
-            .unwrap_or_default();
-        let key = ferrite_pane::transcript::TranscriptKey {
-            namespace: namespace.clone(),
-            content_revision: revision,
-            display_revision: disclosure_revision,
-            focused,
-            signal_status: Some(status),
-            reading_size,
-            working: working.as_ref().map(|working| working.key),
-            tail: tail.as_ref().map(|tail| tail.key),
-            pending_call: pending_call.clone(),
-            workspace: workspace.clone(),
-            solo,
-            thinking: self.prefs.settings.show_thinking,
-            agents: agents.clone(),
-            rewind: rewind.clone(),
-            quotes,
-            skills: open.commands().len(),
-            cited: self.cited_sources.revision(),
-            note: None,
-            earlier,
-            queued,
-        };
-        let entity = self.panes[index]
-            .ensure_transcript(cx)
-            .expect("thread Pane has a transcript entity");
-        if self.transcript_entities.insert(entity.entity_id()) {
-            cx.subscribe(&entity, Self::transcript_event).detach();
-        }
-        if entity.read(cx).matches(&key) {
-            return;
-        }
-        let Some(open) = self.cockpit.thread(thread) else {
-            return;
-        };
-        let Some(subject_view) = open.activity().subject(&subject) else {
-            return;
-        };
-        let transcript = subject_view.transcript();
-        let pane = &self.panes[index];
-        let preview = pane.preview.clone();
-        let disclosure = pane.transcript_disclosure_snapshot();
-        let input = ferrite_pane::transcript::TranscriptInput {
+        let presentation = ferrite_pane::transcript::TranscriptPresentation {
             thread,
+            selection_scope,
+            disclosure_focus: self.panes[index].tool_focus(),
             namespace,
             content_revision: revision,
             display_revision: disclosure_revision,
-            blocks: {
-                let mut blocks =
-                    pane::rendered_window(transcript.blocks(), Level::Transcript).to_vec();
-                agents.apply(&mut blocks);
-                blocks
-            },
-            signal_status: Some(status),
             focused,
+            signal_status: Some(status),
             reading_size,
-            selection_scope,
-            preview,
-            expanded: disclosure.0,
-            target: disclosure.1,
-            disclosure_focus: disclosure.2,
             working,
             tail,
             pending_call,
@@ -2137,14 +2093,41 @@ impl CockpitView {
             quotes,
             reply_to: open.provider().to_string().into(),
             skills: open.commands().into(),
-            cited,
-            cited_revision: self.cited_sources.revision(),
+            cited: self
+                .cited_sources
+                .of(thread)
+                .map(std::borrow::Cow::Borrowed)
+                .unwrap_or_default(),
             note: None,
             earlier,
             queued,
         };
+        let entity = self.panes[index]
+            .ensure_transcript(cx)
+            .expect("thread Pane has a transcript entity");
+        if self.transcript_entities.insert(entity.entity_id()) {
+            cx.subscribe(&entity, Self::transcript_event).detach();
+        }
+        let transcript = subject_view.transcript();
+        let pane = &self.panes[index];
         let selection = self.selection.clone();
-        entity.update(cx, |transcript, cx| transcript.sync(input, selection, cx));
+        entity.update(cx, |view, cx| {
+            view.reconcile(
+                presentation,
+                || {
+                    let disclosure = pane.transcript_disclosure_snapshot();
+                    ferrite_pane::transcript::TranscriptBody {
+                        blocks: pane::rendered_window(transcript.blocks(), Level::Transcript)
+                            .to_vec(),
+                        preview: pane.preview.clone(),
+                        expanded: disclosure.0,
+                        target: disclosure.1,
+                    }
+                },
+                selection,
+                cx,
+            );
+        });
     }
 
     /// Whether the Thread began before the first row `transcript` draws: its
@@ -2358,7 +2341,7 @@ impl CockpitView {
             }
             // The reply waits in the Pane's tray as a quote chip, naming its
             // source; the focus pump hands the Composer the keyboard.
-            ferrite_pane::transcript::TranscriptEvent::Reply(reply, block) => {
+            ferrite_pane::transcript::TranscriptEvent::Reply(reply, block, anchor) => {
                 let mut reply = reply.clone();
                 if let Some((thread, block)) = self.panes[index].thread().zip(*block) {
                     reply = reply.cited_from(ferrite_core::replies::Source { thread, block });
@@ -2366,7 +2349,7 @@ impl CockpitView {
                 self.focus_pane(index);
                 self.panes[index]
                     .composer
-                    .update(cx, |composer, cx| composer.reply(reply, cx));
+                    .update(cx, |composer, cx| composer.cite_with_comment(reply, anchor.clone(), cx));
                 cx.notify();
             }
             ferrite_pane::transcript::TranscriptEvent::Fork { after } => {
@@ -2447,6 +2430,33 @@ impl CockpitView {
 
     /// A quote chip's Go to source: the Pane's transcript scrolls to the
     /// message it was cited from, or the chip says that message is gone.
+    fn composer_comment_opened(&mut self, composer: Entity<Composer>, opened: &ferrite_pane::composer::CommentOpened, cx: &mut Context<Self>) {
+        let Some(reply) = composer.read(cx).replies().get(opened.index).cloned() else { return; };
+        let Some(source) = reply.source else { return; };
+        let Some(transcript) = self.panes.iter().find(|pane| pane.composer == composer && pane.thread() == Some(source.thread)).and_then(|pane| pane.transcript()) else { return; };
+        let Some((document, mut keys)) = transcript.read(cx).comment_source(source.block) else { return; };
+        let selector = gpui::base::TextSelectionSelector {
+            text: reply.quote,
+            start: reply.selector.as_ref().map_or(0, |selector| selector.start),
+            end: reply.selector.as_ref().map_or(0, |selector| selector.end),
+            prefix: reply.selector.as_ref().map_or_else(String::new, |selector| selector.prefix.clone()),
+            suffix: reply.selector.as_ref().map_or_else(String::new, |selector| selector.suffix.clone()),
+        };
+        if let Some(part) = reply.selector.as_ref().map(|selector| selector.part) {
+            if part < keys.len() { keys.swap(0, part); }
+        }
+        let window = opened.window;
+        let index = opened.index;
+        cx.defer(move |cx| {
+            let _ = window.update(cx, |_, window, cx| {
+                let anchors = keys.iter().filter_map(|key| document.anchor_text(key, &selector, window, cx)).collect::<Vec<_>>();
+                if anchors.len() == 1 {
+                    composer.update(cx, |composer, cx| composer.highlight_comment_source(index, anchors.into_iter().next().unwrap(), cx));
+                }
+            });
+        });
+    }
+
     fn composer_opens_source(
         &mut self,
         composer: Entity<Composer>,
@@ -2729,6 +2739,7 @@ impl CockpitView {
             // up to two seconds, so the header follows without a pause.
             self.refresh_branches(cx);
         }
+        self.pump_panel_persistence(cx);
         // A restart writes a Notice even when no Session streamed this frame —
         // and a failed respawn will never stream again, so this notify is that
         // notice's only ride to the screen.
@@ -3112,7 +3123,7 @@ impl CockpitView {
         let slack = if held { NAV_AUTO_FOLD_HYSTERESIS } else { 0.0 };
         let width = f32::from(window.viewport_size().width);
         let right = self.panel_target_w().max(self.board_pad());
-        let board = width - nav::COLUMN_WIDTH - right;
+        let board = width - self.nav_expanded_width() - right;
         let narrowest = |view: &Self| {
             view.pane_rects(window)
                 .iter()
@@ -3768,6 +3779,7 @@ impl CockpitView {
             | MenuTarget::PrMore(_)
             | MenuTarget::PrLink(_)
             | MenuTarget::BrowserPage(_) => None,
+            MenuTarget::Details(_) => None,
             MenuTarget::Parked
             | MenuTarget::NavFilter
             | MenuTarget::NavFactory
@@ -5632,6 +5644,9 @@ impl CockpitView {
     }
 
     fn submit(&mut self, _: &Submit, window: &mut Window, cx: &mut Context<Self>) {
+        if self.panes.get(self.focused()).is_some_and(|pane| !pane.composer.read(cx).comment_valid(cx)) {
+            return;
+        }
         // The card's ↵ is its confirm — but in a machine's path field that
         // holds a path, it adds that directory.
         if self.project_editor.is_some() {
@@ -6334,6 +6349,7 @@ impl CockpitView {
         }
         self.nav_collapsed = collapsed;
         if collapsed {
+            self.cancel_nav_resize();
             self.snooze_editor = None;
         }
         cx.notify();
@@ -7510,6 +7526,7 @@ impl CockpitView {
         self.aim_attachments(&pane.composer, cx);
         cx.subscribe(&pane.composer, Self::composer_edited).detach();
         cx.subscribe(&pane.composer, Self::composer_opens_source).detach();
+            cx.subscribe(&pane.composer, Self::composer_comment_opened).detach();
         self.panes.push(pane);
         self.sync_panes(cx);
         draft
@@ -8834,7 +8851,7 @@ impl CockpitView {
         // the longest name shown, measured in the row's face (a match
         // draws at `W_LABEL`), so no name is ever cut.
         let label_w = matches!(open.kind, Kind::Commands).then(|| {
-            let measure = nav::Measure::Text(cx);
+            let measure = nav::Measure::Text(cx, self.nav_expanded_width());
             open.rows
                 .iter()
                 .map(|row| {
@@ -10114,12 +10131,13 @@ impl CockpitView {
         // so it never stands as a File tab of its own.
         self.redirect_previews_to_files(cx);
         self.tend_panel(window, cx);
-        self.tend_details(window, cx);
         if self.solo_beside.is_some() && self.solo_pair().is_none() {
             self.solo_beside = None;
         }
+        self.measure_nav_width(window, cx);
         self.update_auto_fold(window);
         self.tend_columns(cx);
+        self.tend_details(window, cx);
         if self.nav_folded() {
             self.snooze_editor = None;
         }
@@ -10613,6 +10631,12 @@ impl CockpitView {
             // until it is back (ADR 0026).
             .when(!lost, |root| {
                 root.on_action(cx.listener(Self::submit))
+                    .on_action(cx.listener(|view, _: &ferrite_pane::composer::SaveAndSendComment, window, cx| {
+                        let composer = view.panes[view.focused()].composer.clone();
+                        if composer.update(cx, |composer, cx| composer.save_comment(window, cx)) {
+                            view.submit(&Submit, window, cx);
+                        }
+                    }))
                     .on_action(cx.listener(Self::unqueue_from_backspace))
                     .on_action(cx.listener(Self::allow))
                     .on_action(cx.listener(Self::deny))
@@ -10758,6 +10782,7 @@ impl CockpitView {
                 MouseButton::Left,
                 cx.listener(|view, event: &MouseUpEvent, _, cx| {
                     view.end_seam_drag(cx);
+                    view.finish_nav_resize(cx);
                     view.panel_pointer_released(event.position, cx);
                     if view.drop_preview.take().is_some()
                         | view.dragging.take().is_some()
@@ -10787,6 +10812,7 @@ impl CockpitView {
                     // Only the nav's order reads it.
                     view.notify_part(parts::Part::Nav, cx);
                 }
+                view.nav_pointer_moved(event.position, event.dragging(), cx);
                 view.panel_pointer_moved(event.position, event.dragging(), cx);
                 if view.seam_drag.is_some() {
                     if event.dragging() {
@@ -10900,6 +10926,7 @@ impl CockpitView {
             .child(crate::frame().titlebar(!self.overlay_open(), self.maximized))
             .child(self.view_head(cx))
             .children(self.history_arrows_element(cx))
+            .when(!self.nav_folded(), |root| root.child(self.nav_resize_rail(cx)))
             .child(self.nav_edge_tab(cx))
             // The panel over the strip's right end: its tabs take
             // their presses, the gaps between them still drag. Its toggle
@@ -11180,6 +11207,7 @@ impl CockpitView {
                 .then(|| self.activity_question_measurement(index, cx))
                 .flatten(),
             details: l1.then(|| self.details_card(index, window, cx)).flatten(),
+            details_lane_width: if l1 { self.details_lane_width(index) } else { 0. },
             head_drag: self
                 .board_is_movable()
                 .then(|| head_drag(pane_leaf(pane.identity), self.pane_ghost(index))),
@@ -13085,7 +13113,7 @@ impl CockpitView {
                     .on_click(|_, _, cx| cx.stop_propagation())
                     .into_any_element(),
             );
-            nav::strip(buttons, nav::strip_w(open.queue().is_empty(), &nav::Measure::Text(cx)))
+            nav::strip(buttons, nav::strip_w(open.queue().is_empty(), &nav::Measure::Text(cx, self.nav_expanded_width())))
         });
         let pin = nav::pin_glyph(thread, true)
             .on_mouse_down(
@@ -13132,11 +13160,13 @@ impl CockpitView {
         if drawn <= 0.0 {
             return None;
         }
+        let width = self.nav_expanded_width();
         let face = nav::column(self.board_ground())
+            .w(px(width))
             .absolute()
             .top_0()
             .right_0()
-            .child(nav::card(self.nav_rows(window, cx)));
+            .child(nav::card(self.nav_rows(window, cx)).w(px(width)));
         Some(
             div()
                 .relative()
@@ -13158,7 +13188,8 @@ impl CockpitView {
     fn nav_edge_tab(&self, cx: &mut Context<Self>) -> AnyElement {
         use ferrite_ui::theme::NAV_INSET_Y;
         let open = !self.nav_folded();
-        let left = nav::EDGE_TAB_OPEN_X_OVER_RING * self.nav_width() / nav::COLUMN_WIDTH;
+        let left = (self.nav_expanded_width() - ferrite_ui::theme::HAIRLINE_W)
+            * self.nav_width() / self.nav_expanded_width();
         div()
             .absolute()
             .top(px(nav::CARD_TOP))

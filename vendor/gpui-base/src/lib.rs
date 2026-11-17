@@ -165,6 +165,7 @@ pub use text::{
     TextViewDefaults, TextViewPlugin, TextViewState, TextViewStyle, html, markdown,
 };
 pub use text_selection::{
+    TextSelectionAnchor, TextSelectionSelector,
     TextSelection, TextSelectionContentKey, TextSelectionCoverage, TextSelectionDocument,
     TextSelectionDocumentMember, TextSelectionDocumentOwner, TextSelectionEndpoint,
     TextSelectionEvent, TextSelectionHandle, TextSelectionLayer,

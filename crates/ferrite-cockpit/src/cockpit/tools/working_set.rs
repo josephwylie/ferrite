@@ -35,9 +35,10 @@ struct Persisted {
     threads: BTreeMap<u64, WorkingSet>,
 }
 
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub(crate) struct WorkingSets {
     sets: BTreeMap<u64, WorkingSet>,
+    revision: u64,
 }
 
 impl WorkingSets {
@@ -61,7 +62,7 @@ impl WorkingSets {
             eprintln!("ferrite: the Files tabs were not read: {error}");
             BTreeMap::new()
         });
-        Self { sets }
+        Self { sets, revision: 0 }
     }
 
     pub(super) fn get(&self, thread: u64) -> Option<&WorkingSet> {
@@ -76,13 +77,24 @@ impl WorkingSets {
                 changed = true;
             }
         }
+        if changed {
+            self.revision += 1;
+        }
         changed
     }
 
     pub(super) fn retain(&mut self, known: &HashSet<u64>) {
         if !known.is_empty() {
+            let before = self.sets.len();
             self.sets.retain(|thread, _| known.contains(thread));
+            if self.sets.len() != before {
+                self.revision += 1;
+            }
         }
+    }
+
+    pub(crate) fn revision(&self) -> u64 {
+        self.revision
     }
 
     pub(crate) fn save(&self, dir: &Path) -> io::Result<()> {

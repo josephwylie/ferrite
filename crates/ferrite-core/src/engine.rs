@@ -2791,23 +2791,6 @@ impl Engine {
         }
     }
 
-    /// Compatibility entry point. The app uses generation-scoped handles via
-    /// `respond_decision`; this accepts only a still-pending identical request.
-    pub fn respond(&mut self, thread: ThreadId, decision: &Decision, answer: DecisionAnswer) {
-        let handle = self.threads.get(&thread).and_then(|state| {
-            state
-                .activity
-                .view()
-                .decisions()
-                .iter()
-                .find(|pending| pending.decision == *decision)
-                .map(|pending| pending.handle.clone())
-        });
-        if let Some(handle) = handle {
-            let _ = self.respond_decision(thread, &handle, answer);
-        }
-    }
-
     /// Answer exactly the request the operator saw. A tab change cannot
     /// redirect it, and an old Session's handle cannot match its replacement.
     /// A failed write retains the Decision so the operator can retry.

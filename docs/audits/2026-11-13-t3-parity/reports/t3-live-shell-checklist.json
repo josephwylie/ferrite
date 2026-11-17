@@ -1,0 +1,3588 @@
+{
+  "schema_version": 1,
+  "title": "T3 live shell checklist",
+  "date": "2026-11-13",
+  "source_repository": "https://github.com/pingdotgg/t3code",
+  "source_commit": "74573fc29b901bafbf8f1dbb2eb29606da1fa448",
+  "source_root": "/tmp/ferrite-t3-audit-source-20261113",
+  "scope": [
+    "browser",
+    "right panel",
+    "left sidebar",
+    "window and layout",
+    "motion",
+    "keyboard and mouse"
+  ],
+  "runtime_claim": "Coverage design only. Every item starts not_exercised. No UI input, app launch, model request, build, setting change or process was performed by this author.",
+  "status_vocabulary": [
+    "not_exercised",
+    "inspected",
+    "pass",
+    "fail",
+    "blocked",
+    "not_applicable",
+    "version_mismatch"
+  ],
+  "support_vocabulary": {
+    "source_supported": "Visible component/handler/menu or default binding exists in pinned source; installed availability still must be observed.",
+    "discovery_probe": "Question deliberately left open; expected behavior is not claimed as implemented.",
+    "quality_probe": "Interaction quality acceptance probe; source does not guarantee the outcome."
+  },
+  "execution_notes": [
+    "Parent alone owns all native/UI control.",
+    "Existing GPT-6.1 Sol subscription may be used by parent for its live audit; this checklist makes no model request.",
+    "Installed/custom shortcuts override defaults below; Cmd means macOS Mod.",
+    "Every conditional item needs a recorded availability reason; do not mark invisible/version-gated features failed by assumption.",
+    "Destructive/account/share/update paths are inspection only on existing data; use disposable audit state for reversible mutations.",
+    "A screenshot proves visible state; timed frames/video are needed for motion; interaction sequences are needed for routing, persistence and focus."
+  ],
+  "short_run": [
+    "Record installed version, active thread/model label, window size, theme, current animation ms, and current surfaces (BASE-01–04).",
+    "Cycle left sidebar, right panel, thread details and terminal using their mouse controls and Cmd+B / Cmd+Option+B / Cmd+Shift+B / Cmd+J; capture before/intermediate/after and restore (SIDE-01, PANEL-01, WINDOW-08, MOTION-01–02).",
+    "Open right-panel launcher; inspect every available entry and disabled reason. Open Browser; focus it then Cmd+L; load a harmless public page with text and links (PANEL-02–04, BROWSER-01–02).",
+    "Exercise page history/reload/Stop; capture loaded versus loading geometry. Compare URL-hover Open in system browser with webpage/transcript link right-click menus (BROWSER-04–09).",
+    "Open More: Find with Enter/Shift+Enter/Escape, zoom/reset, appearance, device toolbar/presets/custom dimensions/rotate/lock; restore original page settings (BROWSER-15–25).",
+    "Float preview over chat and return; inspect separate-window/move-runtime availability. Capture screenshot and annotation comment into audit draft without sending from this checklist (BROWSER-26–33).",
+    "Add second Browser plus Files/Diff/PR/Linked PRs/Terminal/Device/Side chat as enabled; verify actual body and routing for each. Reorder/overflow/context-menu tabs, close and Cmd+Shift+T restore (PANEL-05–15).",
+    "Resize compact/wide, switch Browser→Files→Browser, close/reopen, A→B→A; maximize/restore and interrupt a drag. Record widths, focus and page bounds (PANEL-16–20, MOTION-03–07).",
+    "Work through sidebar search, project filter, thread selection/rename/context menu, shelves and footer PR/Usage/Settings routes. Use only audit rows for reversible state changes (SIDE-03–22).",
+    "Test window resize around980/767/760px when allowed, app/page focus and history boundaries, native menus, overlay click capture, narrow popups; restore initial geometry and leave no audit recording/overlay running (WINDOW-01–13)."
+  ],
+  "default_mac_shortcuts": [
+    {
+      "keys": "Cmd+B",
+      "action": "Left sidebar",
+      "context": "Global; selected-text/editor precedence may apply"
+    },
+    {
+      "keys": "Cmd+Option+B",
+      "action": "Right panel",
+      "context": "Global"
+    },
+    {
+      "keys": "Cmd+Shift+B",
+      "action": "Thread details",
+      "context": "Outside terminal"
+    },
+    {
+      "keys": "Cmd+J",
+      "action": "Terminal drawer",
+      "context": "Global"
+    },
+    {
+      "keys": "Cmd+T",
+      "action": "New panel surface",
+      "context": "Right panel open, outside terminal"
+    },
+    {
+      "keys": "Cmd+W",
+      "action": "Close surface",
+      "context": "Outside terminal; terminal focus closes terminal"
+    },
+    {
+      "keys": "Cmd+Shift+T",
+      "action": "Reopen closed view",
+      "context": "Reopen stack required"
+    },
+    {
+      "keys": "Cmd+Shift+J",
+      "action": "Browser toggle",
+      "context": "Default binding"
+    },
+    {
+      "keys": "Cmd+L / Cmd+R / Cmd+F",
+      "action": "URL / refresh / find",
+      "context": "Preview focus"
+    },
+    {
+      "keys": "Cmd+= / Cmd+- / Cmd+0",
+      "action": "Page zoom / reset",
+      "context": "Preview focus; native menu app zoom is separate"
+    },
+    {
+      "keys": "F6 / Shift+F6; Cmd+F6 variants",
+      "action": "Next/previous workspace area",
+      "context": "Only available areas"
+    },
+    {
+      "keys": "Cmd+[ / Cmd+]",
+      "action": "App route history",
+      "context": "Outside terminal; compare browser mouse history"
+    },
+    {
+      "keys": "Cmd+Shift+[ / Cmd+Shift+]",
+      "action": "Previous/next thread",
+      "context": "Default binding"
+    },
+    {
+      "keys": "Cmd+1…9",
+      "action": "Jump to thread",
+      "context": "Desktop; model picker changes meaning"
+    },
+    {
+      "keys": "Cmd+K / Cmd+P / Cmd+Shift+F",
+      "action": "Command palette / file picker / project search",
+      "context": "Outside terminal"
+    },
+    {
+      "keys": "Cmd+N / Cmd+Shift+N",
+      "action": "New thread / new current-project thread",
+      "context": "Outside terminal"
+    },
+    {
+      "keys": "Cmd+Shift+P / Cmd+Shift+S",
+      "action": "Pin / settle thread",
+      "context": "Audit thread only"
+    },
+    {
+      "keys": "Cmd+Z",
+      "action": "Thread action undo",
+      "context": "Outside editable/terminal focus"
+    },
+    {
+      "keys": "Cmd+,",
+      "action": "Settings",
+      "context": "Native desktop menu"
+    }
+  ],
+  "groups": [
+    {
+      "id": "BASE",
+      "title": "Baseline and evidence discipline",
+      "sources": [
+        "apps/desktop/src/window/DesktopApplicationMenu.ts:169–191",
+        "apps/web/src/components/settings/AppearanceSettingsPanel.tsx:350–411",
+        "packages/shared/src/keybindings.ts:58–140"
+      ],
+      "items": [
+        {
+          "id": "BASE-01",
+          "title": "Identify the actual installed build",
+          "steps": "Open About T3 Code; record version/build, platform, window logical dimensions, display scale, theme, and source-pin match if known.",
+          "expected_or_question": "Record the installed version independently of source commit74573fc29b901bafbf8f1dbb2eb29606da1fa448. A source-only feature absent in an older installed build is version-gated, not a runtime failure.",
+          "availability": "Always inspect; execute when enabled.",
+          "source_support": "source_supported",
+          "execution_mode": "exercise",
+          "runtime_status": "not_exercised",
+          "observations": [],
+          "evidence_paths": [],
+          "source_references": [
+            {
+              "path": "apps/desktop/src/window/DesktopApplicationMenu.ts",
+              "line": 116,
+              "symbol": "make",
+              "relation": "implementation under test"
+            }
+          ],
+          "state_transition": {
+            "before": "Version unrecorded",
+            "event": "Open About and inspect session metadata",
+            "after": "Installed build and window baseline recorded"
+          },
+          "observation_rule": "fresh_after_action"
+        },
+        {
+          "id": "BASE-02",
+          "title": "Keep the existing subscription visible",
+          "steps": "In the parent-owned audit thread, inspect the provider/model selection and existing GPT-6.1 Sol subscription before its live interaction; record displayed labels.",
+          "expected_or_question": "This checklist creates no provider configuration or model request. A successful live model run is evidence the parent must capture separately.",
+          "availability": "Existing authenticated app.",
+          "source_support": "discovery_probe",
+          "execution_mode": "inspect",
+          "runtime_status": "not_exercised",
+          "observations": [],
+          "evidence_paths": [],
+          "source_references": [
+            {
+              "path": "apps/web/src/components/chat/ModelPickerSidebar.tsx",
+              "line": 32,
+              "symbol": "ModelPickerSidebar",
+              "relation": "subject of probe; outcome not asserted by this reference"
+            }
+          ],
+          "state_transition": {
+            "before": "Audit draft selected",
+            "event": "Inspect provider and model",
+            "after": "Displayed subscription and model recorded without sending"
+          },
+          "observation_rule": "fresh_after_action"
+        },
+        {
+          "id": "BASE-03",
+          "title": "Record animation and shortcut settings",
+          "steps": "Open Settings→Appearance advanced Panel animations; record current ms without changing it. Inspect relevant keyboard shortcuts if tooltips differ from defaults.",
+          "expected_or_question": "Pinned source defaults to0ms; configured and effective duration can differ because reduced motion and navigation suppression apply. Use displayed/custom bindings in the live run.",
+          "availability": "Settings accessible.",
+          "source_support": "source_supported",
+          "execution_mode": "inspect",
+          "runtime_status": "not_exercised",
+          "observations": [],
+          "evidence_paths": [],
+          "source_references": [
+            {
+              "path": "apps/web/src/components/settings/AppearanceSettingsPanel.tsx",
+              "line": 87,
+              "symbol": "AppearanceSettingsPanel",
+              "relation": "implementation under test"
+            },
+            {
+              "path": "packages/shared/src/keybindings.ts",
+              "line": 57,
+              "symbol": "DEFAULT_KEYBINDINGS",
+              "relation": "implementation under test"
+            },
+            {
+              "path": "apps/web/src/panelAnimations.ts",
+              "line": 31,
+              "symbol": "usePanelAnimationSettings",
+              "relation": "implementation under test"
+            }
+          ],
+          "state_transition": {
+            "before": "Settings unknown",
+            "event": "Inspect current duration and bindings",
+            "after": "Configured duration and effective gates recorded"
+          },
+          "observation_rule": "fresh_after_action"
+        },
+        {
+          "id": "BASE-04",
+          "title": "Record current surface inventory",
+          "steps": "Capture left sidebar, all open right-panel tabs, details panel, bottom terminal, floating browser, and active thread before the loop.",
+          "expected_or_question": "Subsequent opens, closes, restores, and cleanup can be attributed to this audit rather than existing user state.",
+          "availability": "Existing session.",
+          "source_support": "quality_probe",
+          "execution_mode": "inspect",
+          "runtime_status": "not_exercised",
+          "observations": [],
+          "evidence_paths": [],
+          "source_references": [
+            {
+              "path": "apps/web/src/components/AppSidebarLayout.tsx",
+              "line": 410,
+              "symbol": "AppSidebarLayout",
+              "relation": "subject of probe; outcome not asserted by this reference"
+            },
+            {
+              "path": "apps/web/src/components/RightPanelTabs.tsx",
+              "line": 1032,
+              "symbol": "RightPanelTabs",
+              "relation": "subject of probe; outcome not asserted by this reference"
+            },
+            {
+              "path": "apps/web/src/components/chat/PanelLayoutControls.tsx",
+              "line": 38,
+              "symbol": "PanelLayoutControls",
+              "relation": "subject of probe; outcome not asserted by this reference"
+            }
+          ],
+          "state_transition": {
+            "before": "Existing layout untouched",
+            "event": "Capture current thread and open controls",
+            "after": "Initial layout available as restoration baseline"
+          },
+          "observation_rule": "fresh_after_action"
+        },
+        {
+          "id": "BASE-05",
+          "title": "Capture outcomes rather than click acknowledgements",
+          "steps": "For every exercised item, record before, action, visible after, and any error; attach screenshot/video/time sequence as appropriate.",
+          "expected_or_question": "Only then replace not_exercised with pass/fail/blocked/not_applicable/version_mismatch. A menu item being visible is only inspect evidence.",
+          "availability": "All items.",
+          "source_support": "quality_probe",
+          "execution_mode": "inspect",
+          "runtime_status": "not_exercised",
+          "observations": [],
+          "evidence_paths": [],
+          "source_references": [
+            {
+              "path": "apps/web/src/components/AppSidebarLayout.tsx",
+              "line": 410,
+              "symbol": "AppSidebarLayout",
+              "relation": "subject of probe; outcome not asserted by this reference"
+            }
+          ],
+          "state_transition": {
+            "before": "Action acknowledged but result unconfirmed",
+            "event": "Obtain fresh post-action UI evidence",
+            "after": "Fresh visible state recorded or observation remains pending"
+          },
+          "observation_rule": "fresh_after_action"
+        },
+        {
+          "id": "BASE-06",
+          "title": "Use disposable state for persistent/destructive actions",
+          "steps": "Use the parent-created audit thread/page and audit files for rename/pin/settle/snooze/close. Inspect Delete, Archive, Clear cookies/cache, Share with guest, update/install, and quit paths without executing against existing user data.",
+          "expected_or_question": "Coverage can record a reachable menu/confirmation without claiming the resulting destructive operation succeeded. Do not send or publish via these menu explorations.",
+          "availability": "All state-changing items.",
+          "source_support": "quality_probe",
+          "execution_mode": "inspect",
+          "runtime_status": "not_exercised",
+          "observations": [],
+          "evidence_paths": [],
+          "source_references": [
+            {
+              "path": "apps/web/src/components/threadActionMenu.logic.ts",
+              "line": 116,
+              "symbol": "buildThreadActionMenuItems",
+              "relation": "subject of probe; outcome not asserted by this reference"
+            },
+            {
+              "path": "apps/web/src/components/preview/PreviewMoreMenu.tsx",
+              "line": 72,
+              "symbol": "PreviewMoreMenu",
+              "relation": "subject of probe; outcome not asserted by this reference"
+            },
+            {
+              "path": "apps/desktop/src/window/DesktopApplicationMenu.ts",
+              "line": 116,
+              "symbol": "make",
+              "relation": "subject of probe; outcome not asserted by this reference"
+            }
+          ],
+          "state_transition": {
+            "before": "Existing user data present",
+            "event": "Inspect irreversible paths and choose disposable audit state",
+            "after": "No existing user data modified by coverage setup"
+          },
+          "observation_rule": "fresh_after_action"
+        }
+      ]
+    },
+    {
+      "id": "SIDE",
+      "title": "Left sidebar, projects, thread rows and footer",
+      "sources": [
+        "apps/web/src/components/sidebar/SidebarChrome.tsx:65–74,225–300",
+        "apps/web/src/components/sidebar/SidebarThreadHeader.tsx:60–115",
+        "apps/web/src/components/Sidebar.tsx:1284–1293,1510–1607,2111–2175,2335–2404,2950–3120,3200–3334,3485–3678",
+        "apps/web/src/components/sidebar/SidebarThreadRow.tsx:608–637,858–940",
+        "apps/web/src/components/threadActionMenu.logic.ts:39–275",
+        "apps/web/src/components/AppSidebarLayout.tsx:428–490",
+        "apps/web/src/components/ui/sidebar.tsx:109,324–403,473–542"
+      ],
+      "items": [
+        {
+          "id": "SIDE-01",
+          "title": "Toggle left sidebar by mouse and key",
+          "steps": "Use Toggle main sidebar, reopen, then Cmd+B; repeat from composer, browser page, and an input with selected text.",
+          "expected_or_question": "Sidebar visibility changes without misrouting to another panel; selected text and global-shortcut precedence are observed rather than assumed.",
+          "availability": "Always inspect; execute when enabled.",
+          "source_support": "source_supported",
+          "execution_mode": "exercise",
+          "runtime_status": "not_exercised",
+          "observations": [],
+          "evidence_paths": [],
+          "source_references": [
+            {
+              "path": "apps/web/src/components/sidebar/SidebarChrome.tsx",
+              "line": 43,
+              "symbol": "SidebarChromeHeader",
+              "relation": "implementation under test"
+            },
+            {
+              "path": "apps/web/src/components/ui/sidebar.tsx",
+              "line": 281,
+              "symbol": "Sidebar",
+              "relation": "implementation under test"
+            },
+            {
+              "path": "packages/shared/src/keybindings.ts",
+              "line": 57,
+              "symbol": "DEFAULT_KEYBINDINGS",
+              "relation": "implementation under test"
+            }
+          ],
+          "state_transition": {
+            "before": "Sidebar open or closed",
+            "event": "Toggle by pointer and key",
+            "after": "Opposite visibility then original visibility restored"
+          },
+          "observation_rule": "fresh_after_action"
+        },
+        {
+          "id": "SIDE-02",
+          "title": "Resize left sidebar and reset",
+          "steps": "Drag its rail smaller/larger; record width and remaining main width. Double-click rail to reset. Close/reopen and revisit thread.",
+          "expected_or_question": "Default256px; source minimum208px or measured brand minimum; bounds preserve640px main area where space permits; reset clears chosen width. No stuck drag.",
+          "availability": "Always inspect; execute when enabled.",
+          "source_support": "source_supported",
+          "execution_mode": "exercise",
+          "runtime_status": "not_exercised",
+          "observations": [],
+          "evidence_paths": [],
+          "source_references": [
+            {
+              "path": "apps/web/src/components/AppSidebarLayout.tsx",
+              "line": 410,
+              "symbol": "AppSidebarLayout",
+              "relation": "implementation under test"
+            },
+            {
+              "path": "apps/web/src/components/ui/sidebar.tsx",
+              "line": 281,
+              "symbol": "Sidebar",
+              "relation": "implementation under test"
+            }
+          ],
+          "state_transition": {
+            "before": "Sidebar at remembered width",
+            "event": "Drag rail then double-click reset",
+            "after": "Chosen width persists until reset returns default width"
+          },
+          "observation_rule": "fresh_after_action"
+        },
+        {
+          "id": "SIDE-03",
+          "title": "Home and app navigation",
+          "steps": "Click T3 Code home, then return to audit thread through sidebar/history.",
+          "expected_or_question": "Visible route and active-row treatment agree; existing draft/thread state remains reachable.",
+          "availability": "Always inspect; execute when enabled.",
+          "source_support": "source_supported",
+          "execution_mode": "exercise",
+          "runtime_status": "not_exercised",
+          "observations": [],
+          "evidence_paths": [],
+          "source_references": [
+            {
+              "path": "apps/web/src/components/sidebar/SidebarChrome.tsx",
+              "line": 43,
+              "symbol": "SidebarChromeHeader",
+              "relation": "implementation under test"
+            },
+            {
+              "path": "apps/web/src/components/AppSidebarLayout.tsx",
+              "line": 151,
+              "symbol": "registerNavigationHistoryCommands",
+              "relation": "implementation under test"
+            }
+          ],
+          "state_transition": {
+            "before": "Audit thread active",
+            "event": "Navigate home then back",
+            "after": "Audit thread becomes active again"
+          },
+          "observation_rule": "fresh_after_action"
+        },
+        {
+          "id": "SIDE-04",
+          "title": "New thread entry points",
+          "steps": "Open header New thread, project-folder New thread, and Cmd+N/Cmd+Shift+N entry points; cancel unneeded drafts.",
+          "expected_or_question": "Context chooses current project or project chooser as applicable; do not assume every New thread entry means the same project.",
+          "availability": "Use audit project; terminal focus changes Cmd+N meaning.",
+          "source_support": "source_supported",
+          "execution_mode": "exercise",
+          "runtime_status": "not_exercised",
+          "observations": [],
+          "evidence_paths": [],
+          "source_references": [
+            {
+              "path": "apps/web/src/components/sidebar/SidebarThreadHeader.tsx",
+              "line": 34,
+              "symbol": "SidebarThreadHeader",
+              "relation": "implementation under test"
+            },
+            {
+              "path": "apps/web/src/components/Sidebar.tsx",
+              "line": 902,
+              "symbol": "Sidebar",
+              "relation": "implementation under test"
+            },
+            {
+              "path": "packages/shared/src/keybindings.ts",
+              "line": 57,
+              "symbol": "DEFAULT_KEYBINDINGS",
+              "relation": "implementation under test"
+            }
+          ],
+          "state_transition": {
+            "before": "Current project or unscoped context",
+            "event": "Invoke each New thread entry",
+            "after": "Draft or project chooser corresponds to entry context"
+          },
+          "observation_rule": "fresh_after_action"
+        },
+        {
+          "id": "SIDE-05",
+          "title": "Add project chooser",
+          "steps": "Open Add project from header or empty state; inspect chooser, folder drop affordance and cancel.",
+          "expected_or_question": "Chooser appears, can be dismissed, and focus returns without adding an unintended project.",
+          "availability": "Header/empty-state availability varies.",
+          "source_support": "source_supported",
+          "execution_mode": "inspect",
+          "runtime_status": "not_exercised",
+          "observations": [],
+          "evidence_paths": [],
+          "source_references": [
+            {
+              "path": "apps/web/src/components/sidebar/SidebarThreadHeader.tsx",
+              "line": 34,
+              "symbol": "SidebarThreadHeader",
+              "relation": "implementation under test"
+            },
+            {
+              "path": "apps/web/src/components/Sidebar.tsx",
+              "line": 902,
+              "symbol": "Sidebar",
+              "relation": "implementation under test"
+            }
+          ],
+          "state_transition": {
+            "before": "Project chooser closed",
+            "event": "Open Add project then cancel",
+            "after": "Chooser closes and prior focus returns"
+          },
+          "observation_rule": "fresh_after_action"
+        },
+        {
+          "id": "SIDE-06",
+          "title": "Project filtering and keyboard menu",
+          "steps": "Open Filter threads by project; search; select one; Shift-click or Shift+Enter a second; choose All projects. Open highlighted project context menu using Shift+F10 if supported.",
+          "expected_or_question": "Multi-project selection does not prematurely close/freeze search; current filter is represented in trigger; no-match state is legible.",
+          "availability": "Always inspect; execute when enabled.",
+          "source_support": "source_supported",
+          "execution_mode": "exercise",
+          "runtime_status": "not_exercised",
+          "observations": [],
+          "evidence_paths": [],
+          "source_references": [
+            {
+              "path": "apps/web/src/components/Sidebar.tsx",
+              "line": 902,
+              "symbol": "Sidebar",
+              "relation": "implementation under test"
+            }
+          ],
+          "state_transition": {
+            "before": "All projects selected",
+            "event": "Search and select one or several projects then clear",
+            "after": "Filtered list then all-project list appears"
+          },
+          "observation_rule": "fresh_after_action"
+        },
+        {
+          "id": "SIDE-07",
+          "title": "Project context actions",
+          "steps": "Right-click project in filter/folder: inspect New thread, Copy path, Pin/Unpin project when supported, Project settings; open/cancel settings.",
+          "expected_or_question": "Actions target the intended project; Copy path can be verified via disposable field; no sibling click fires.",
+          "availability": "Project available; pin capability conditional.",
+          "source_support": "source_supported",
+          "execution_mode": "exercise",
+          "runtime_status": "not_exercised",
+          "observations": [],
+          "evidence_paths": [],
+          "source_references": [
+            {
+              "path": "apps/web/src/components/Sidebar.tsx",
+              "line": 902,
+              "symbol": "Sidebar",
+              "relation": "implementation under test"
+            },
+            {
+              "path": "apps/web/src/components/sidebar/SidebarProjectFolderHeader.tsx",
+              "line": 38,
+              "symbol": "SidebarProjectFolderHeader",
+              "relation": "implementation under test"
+            }
+          ],
+          "state_transition": {
+            "before": "Project row available",
+            "event": "Open its context menu and settings",
+            "after": "Menu or settings targets same project and dismisses"
+          },
+          "observation_rule": "fresh_after_action"
+        },
+        {
+          "id": "SIDE-08",
+          "title": "Folder collapse and hover affordances",
+          "steps": "If folder-grouped sidebar is active, collapse/expand project; hover/focus it.",
+          "expected_or_question": "Collapsed count/status dot remains informative; chevron changes; New thread action replaces count without overlapping; clicking it does not merely toggle folder.",
+          "availability": "Folder grouping enabled; do not change global grouping merely to manufacture a pass.",
+          "source_support": "source_supported",
+          "execution_mode": "exercise",
+          "runtime_status": "not_exercised",
+          "observations": [],
+          "evidence_paths": [],
+          "source_references": [
+            {
+              "path": "apps/web/src/components/sidebar/SidebarProjectFolderHeader.tsx",
+              "line": 38,
+              "symbol": "SidebarProjectFolderHeader",
+              "relation": "implementation under test"
+            }
+          ],
+          "state_transition": {
+            "before": "Project folder expanded",
+            "event": "Collapse then expand and use hover action",
+            "after": "Hidden count/status shown while collapsed and rows restored"
+          },
+          "observation_rule": "fresh_after_action"
+        },
+        {
+          "id": "SIDE-09",
+          "title": "Thread search success and message matches",
+          "steps": "Search known title, then known message text; use ArrowDown/Up and Enter.",
+          "expected_or_question": "Result highlight remains visible; selected message match opens the thread find context; clear search returns normal list.",
+          "availability": "Always inspect; execute when enabled.",
+          "source_support": "source_supported",
+          "execution_mode": "exercise",
+          "runtime_status": "not_exercised",
+          "observations": [],
+          "evidence_paths": [],
+          "source_references": [
+            {
+              "path": "apps/web/src/components/Sidebar.tsx",
+              "line": 902,
+              "symbol": "Sidebar",
+              "relation": "implementation under test"
+            }
+          ],
+          "state_transition": {
+            "before": "Normal thread list",
+            "event": "Search known content and activate result",
+            "after": "Matching thread active with find context when match is a message"
+          },
+          "observation_rule": "fresh_after_action"
+        },
+        {
+          "id": "SIDE-10",
+          "title": "Thread search empty, pending and cancel",
+          "steps": "Search a deliberately unmatched term; observe Searching thread messages… versus No threads found; Escape and Clear.",
+          "expected_or_question": "Distinct pending/empty states, no stale highlight; Escape clears search without closing unrelated surfaces.",
+          "availability": "Always inspect; execute when enabled.",
+          "source_support": "source_supported",
+          "execution_mode": "exercise",
+          "runtime_status": "not_exercised",
+          "observations": [],
+          "evidence_paths": [],
+          "source_references": [
+            {
+              "path": "apps/web/src/components/Sidebar.tsx",
+              "line": 902,
+              "symbol": "Sidebar",
+              "relation": "implementation under test"
+            }
+          ],
+          "state_transition": {
+            "before": "Search query present",
+            "event": "Search unmatched term then Escape",
+            "after": "Pending or empty result appears then normal list returns"
+          },
+          "observation_rule": "fresh_after_action"
+        },
+        {
+          "id": "SIDE-11",
+          "title": "Thread activation and nested click targets",
+          "steps": "Click row body, focus row and Enter/Space, then click a nested link/status action.",
+          "expected_or_question": "Body activates intended thread; nested links/actions do not also activate the row. Capture any unwanted jump to background work.",
+          "availability": "Use available row links/statuses.",
+          "source_support": "source_supported",
+          "execution_mode": "exercise",
+          "runtime_status": "not_exercised",
+          "observations": [],
+          "evidence_paths": [],
+          "source_references": [
+            {
+              "path": "apps/web/src/components/sidebar/SidebarThreadRow.tsx",
+              "line": 642,
+              "symbol": "SidebarThreadRow",
+              "relation": "implementation under test"
+            },
+            {
+              "path": "apps/web/src/components/Sidebar.tsx",
+              "line": 902,
+              "symbol": "Sidebar",
+              "relation": "implementation under test"
+            }
+          ],
+          "state_transition": {
+            "before": "Inactive thread row or nested action visible",
+            "event": "Activate row then nested action separately",
+            "after": "Only intended activation path fires"
+          },
+          "observation_rule": "fresh_after_action"
+        },
+        {
+          "id": "SIDE-12",
+          "title": "Rename with mouse and keyboard",
+          "steps": "On audit thread: double-click title or F2; edit; Escape; repeat and Enter; test blank title; restore original.",
+          "expected_or_question": "Cancel preserves original; Enter/blur commits once; blank title shows warning; trailing double-click does not navigate twice.",
+          "availability": "Always inspect; execute when enabled.",
+          "source_support": "source_supported",
+          "execution_mode": "exercise",
+          "runtime_status": "not_exercised",
+          "observations": [],
+          "evidence_paths": [],
+          "source_references": [
+            {
+              "path": "apps/web/src/components/sidebar/SidebarThreadRow.tsx",
+              "line": 642,
+              "symbol": "SidebarThreadRow",
+              "relation": "implementation under test"
+            },
+            {
+              "path": "apps/web/src/components/Sidebar.tsx",
+              "line": 902,
+              "symbol": "Sidebar",
+              "relation": "implementation under test"
+            }
+          ],
+          "state_transition": {
+            "before": "Thread title not editing",
+            "event": "F2 or double-click then cancel or commit",
+            "after": "Original or changed title reflects selected outcome once"
+          },
+          "observation_rule": "fresh_after_action"
+        },
+        {
+          "id": "SIDE-13",
+          "title": "Modifier selection and bulk context menu",
+          "steps": "Cmd-click two audit rows; Shift-click range; right-click selection. Inspect bulk Settle/Snooze/Unpin/Regenerate title/Mark unread/Delete.",
+          "expected_or_question": "Selection differs from normal navigation; bulk count and enabled states match selected rows.",
+          "availability": "At least two audit rows.",
+          "source_support": "source_supported",
+          "execution_mode": "inspect",
+          "runtime_status": "not_exercised",
+          "observations": [],
+          "evidence_paths": [],
+          "source_references": [
+            {
+              "path": "apps/web/src/components/Sidebar.tsx",
+              "line": 902,
+              "symbol": "Sidebar",
+              "relation": "implementation under test"
+            }
+          ],
+          "state_transition": {
+            "before": "No multi-selection",
+            "event": "Cmd-click or Shift-click rows then context menu",
+            "after": "Selection and bulk count reflect intended range"
+          },
+          "observation_rule": "fresh_after_action"
+        },
+        {
+          "id": "SIDE-14",
+          "title": "Thread context menu inventory",
+          "steps": "Right-click audit thread and record complete menu plus Copy and Auto-settle submenus.",
+          "expected_or_question": "Source supports conditional Find, New thread on branch, Pin/Unpin, Settle/Un-settle, Snooze/Wake, Rename, Regenerate title, Mark unread, Share with guest, project filter/promotion, Auto-settle, Copy Path/Branch/Thread/ID, Project settings, Archive, Delete. Record capability-gated omissions.",
+          "availability": "Backend permissions/capabilities and branch determine items.",
+          "source_support": "source_supported",
+          "execution_mode": "inspect",
+          "runtime_status": "not_exercised",
+          "observations": [],
+          "evidence_paths": [],
+          "source_references": [
+            {
+              "path": "apps/web/src/components/threadActionMenu.logic.ts",
+              "line": 116,
+              "symbol": "buildThreadActionMenuItems",
+              "relation": "implementation under test"
+            },
+            {
+              "path": "apps/web/src/components/Sidebar.tsx",
+              "line": 902,
+              "symbol": "Sidebar",
+              "relation": "implementation under test"
+            }
+          ],
+          "state_transition": {
+            "before": "Thread context menu closed",
+            "event": "Right-click and inspect submenus",
+            "after": "Capability-gated actions are visible for same thread"
+          },
+          "observation_rule": "fresh_after_action"
+        },
+        {
+          "id": "SIDE-15",
+          "title": "Pin, unpin, settle and undo",
+          "steps": "On audit thread, pin/unpin; settle then invoke visible Undo or Cmd+Z outside editable focus; restore original state.",
+          "expected_or_question": "Correct row moves/restores, selected-thread navigation is understandable, undo notice is reachable, typing Undo does not trigger thread undo.",
+          "availability": "Always inspect; execute when enabled.",
+          "source_support": "source_supported",
+          "execution_mode": "exercise",
+          "runtime_status": "not_exercised",
+          "observations": [],
+          "evidence_paths": [],
+          "source_references": [
+            {
+              "path": "apps/web/src/components/threadActionMenu.logic.ts",
+              "line": 116,
+              "symbol": "buildThreadActionMenuItems",
+              "relation": "implementation under test"
+            },
+            {
+              "path": "apps/web/src/components/Sidebar.tsx",
+              "line": 902,
+              "symbol": "Sidebar",
+              "relation": "implementation under test"
+            },
+            {
+              "path": "packages/shared/src/keybindings.ts",
+              "line": 57,
+              "symbol": "DEFAULT_KEYBINDINGS",
+              "relation": "implementation under test"
+            }
+          ],
+          "state_transition": {
+            "before": "Audit row active or unpinned",
+            "event": "Pin or settle then undo",
+            "after": "Original row state and navigation restored"
+          },
+          "observation_rule": "fresh_after_action"
+        },
+        {
+          "id": "SIDE-16",
+          "title": "Snooze custom and wake path",
+          "steps": "Inspect preset labels/dates and Custom… dialog; cancel. If using disposable audit state, snooze then Wake immediately.",
+          "expected_or_question": "Unavailable-running/queued states explain themselves; wake returns intended thread and status.",
+          "availability": "Snooze capability and eligible thread; never alter production thread schedule.",
+          "source_support": "source_supported",
+          "execution_mode": "exercise",
+          "runtime_status": "not_exercised",
+          "observations": [],
+          "evidence_paths": [],
+          "source_references": [
+            {
+              "path": "apps/web/src/components/threadActionMenu.logic.ts",
+              "line": 116,
+              "symbol": "buildThreadActionMenuItems",
+              "relation": "implementation under test"
+            },
+            {
+              "path": "apps/web/src/components/sidebar/SidebarThreadRow.tsx",
+              "line": 642,
+              "symbol": "SidebarThreadRow",
+              "relation": "implementation under test"
+            }
+          ],
+          "state_transition": {
+            "before": "Eligible audit row awake",
+            "event": "Inspect snooze then optionally snooze and wake",
+            "after": "Custom dialog cancels or row returns awake"
+          },
+          "observation_rule": "fresh_after_action"
+        },
+        {
+          "id": "SIDE-17",
+          "title": "Draft row actions",
+          "steps": "Inspect an unsent audit draft row and its context menu; switch away/back with draft text; inspect Discard.",
+          "expected_or_question": "Draft marker and text survive navigation; Copy Path/Branch and Project settings are appropriately conditional; do not discard unrelated drafts.",
+          "availability": "Always inspect; execute when enabled.",
+          "source_support": "source_supported",
+          "execution_mode": "exercise",
+          "runtime_status": "not_exercised",
+          "observations": [],
+          "evidence_paths": [],
+          "source_references": [
+            {
+              "path": "apps/web/src/components/sidebar/SidebarDraftBlock.tsx",
+              "line": 145,
+              "symbol": "SidebarDraftBlock",
+              "relation": "implementation under test"
+            }
+          ],
+          "state_transition": {
+            "before": "Unsent audit draft with text",
+            "event": "Navigate away and back and inspect menu",
+            "after": "Same unsent draft and text retained"
+          },
+          "observation_rule": "fresh_after_action"
+        },
+        {
+          "id": "SIDE-18",
+          "title": "Shelves and older settled rows",
+          "steps": "Expand/collapse Working, Snoozed and Settled shelves that exist; use Show more for old settled rows.",
+          "expected_or_question": "Counts and chevrons match; Loading, retry/error and more labels are distinguishable; scrolling remains stable.",
+          "availability": "Shelves/data may be absent; record unavailable reason.",
+          "source_support": "source_supported",
+          "execution_mode": "exercise",
+          "runtime_status": "not_exercised",
+          "observations": [],
+          "evidence_paths": [],
+          "source_references": [
+            {
+              "path": "apps/web/src/components/Sidebar.tsx",
+              "line": 902,
+              "symbol": "Sidebar",
+              "relation": "implementation under test"
+            }
+          ],
+          "state_transition": {
+            "before": "Working or snoozed or settled shelf present",
+            "event": "Expand then collapse and load older entries",
+            "after": "Rows and counts change with visible pending or retry state"
+          },
+          "observation_rule": "fresh_after_action"
+        },
+        {
+          "id": "SIDE-19",
+          "title": "Thread drag and cancellation",
+          "steps": "On audit rows in an eligible flat list, drag within pinned/active sections or toward section boundaries; cancel once with Escape and once by dropping outside.",
+          "expected_or_question": "Supported drop targets show feedback; canceled drag changes nothing. Source has conditional drag disabling/grouped-list restrictions, so do not promise every list permits reorder.",
+          "availability": "Flat/list mode and supported row; use audit rows.",
+          "source_support": "source_supported",
+          "execution_mode": "exercise",
+          "runtime_status": "not_exercised",
+          "observations": [],
+          "evidence_paths": [],
+          "source_references": [
+            {
+              "path": "apps/web/src/components/Sidebar.tsx",
+              "line": 902,
+              "symbol": "Sidebar",
+              "relation": "implementation under test"
+            },
+            {
+              "path": "apps/web/src/components/sidebar/SidebarThreadRow.tsx",
+              "line": 642,
+              "symbol": "SidebarThreadRow",
+              "relation": "implementation under test"
+            }
+          ],
+          "state_transition": {
+            "before": "Eligible audit row at initial order",
+            "event": "Drag then cancel or drop",
+            "after": "Canceled move leaves order unchanged or supported target commits"
+          },
+          "observation_rule": "fresh_after_action"
+        },
+        {
+          "id": "SIDE-20",
+          "title": "Pointer stability during list changes",
+          "steps": "Hover a row/action while a live audit thread changes running→done status; move slightly, click the intended row, then scroll.",
+          "expected_or_question": "Rows should not shift into an unrelated action beneath the held pointer; capture any wrong-row activation.",
+          "availability": "Parent-owned live model turn provides status changes.",
+          "source_support": "quality_probe",
+          "execution_mode": "exercise",
+          "runtime_status": "not_exercised",
+          "observations": [],
+          "evidence_paths": [],
+          "source_references": [
+            {
+              "path": "apps/web/src/components/Sidebar.shiftGuard.ts",
+              "line": 37,
+              "symbol": "createSidebarShiftGuard",
+              "relation": "subject of probe; outcome not asserted by this reference"
+            },
+            {
+              "path": "apps/web/src/components/Sidebar.motion.ts",
+              "line": 15,
+              "symbol": "createSidebarListMotion",
+              "relation": "subject of probe; outcome not asserted by this reference"
+            }
+          ],
+          "state_transition": {
+            "before": "Pointer over row while status may update",
+            "event": "Observe status transition then click",
+            "after": "Click still targets intended row or defect is captured"
+          },
+          "observation_rule": "fresh_after_action"
+        },
+        {
+          "id": "SIDE-21",
+          "title": "Sidebar footer routes and return",
+          "steps": "Click Settings, Pull requests when present, Usage; use Back from each utility page.",
+          "expected_or_question": "Each destination is accessible, has an actual body, and returns to the expected app/thread context; PR icon absence records capability/version, not assumed failure.",
+          "availability": "Always inspect; execute when enabled.",
+          "source_support": "source_supported",
+          "execution_mode": "exercise",
+          "runtime_status": "not_exercised",
+          "observations": [],
+          "evidence_paths": [],
+          "source_references": [
+            {
+              "path": "apps/web/src/components/sidebar/SidebarChrome.tsx",
+              "line": 221,
+              "symbol": "SidebarUtilityMenu",
+              "relation": "implementation under test"
+            }
+          ],
+          "state_transition": {
+            "before": "Main app route",
+            "event": "Open Settings or PRs or Usage then Back",
+            "after": "Utility body then prior main app context appears"
+          },
+          "observation_rule": "fresh_after_action"
+        },
+        {
+          "id": "SIDE-22",
+          "title": "Update/provider notice affordances",
+          "steps": "If update/provider pills exist, inspect tooltip, release notes and dismiss affordance; do not install updates/restart.",
+          "expected_or_question": "Long notice text fits; release notes open and close; update state is not confused with a thread control.",
+          "availability": "A notice must actually exist.",
+          "source_support": "source_supported",
+          "execution_mode": "inspect",
+          "runtime_status": "not_exercised",
+          "observations": [],
+          "evidence_paths": [],
+          "source_references": [
+            {
+              "path": "apps/web/src/components/sidebar/SidebarUpdatePill.tsx",
+              "line": 195,
+              "symbol": "SidebarUpdatePill",
+              "relation": "implementation under test"
+            },
+            {
+              "path": "apps/web/src/components/sidebar/SidebarProviderUpdatePill.tsx",
+              "line": 45,
+              "symbol": "SidebarProviderUpdatePill",
+              "relation": "implementation under test"
+            }
+          ],
+          "state_transition": {
+            "before": "Update notice present",
+            "event": "Open tooltip or notes and dismiss inspection",
+            "after": "Notice/details state changes without installing update"
+          },
+          "observation_rule": "fresh_after_action"
+        }
+      ]
+    },
+    {
+      "id": "PANEL",
+      "title": "Right panel, surface launcher and shared tabs",
+      "sources": [
+        "apps/web/src/components/RightPanelTabs.tsx:330–480,1019–1025,1100–1271,1325–1539",
+        "apps/web/src/components/chat/PanelLayoutControls.tsx:55–146,151–182,205–259",
+        "apps/web/src/components/chat/ChatRightPanel.tsx:30–49",
+        "apps/web/src/components/ChatView.tsx:1064,3976",
+        "apps/web/src/hooks/usePreviewPanelInlineSize.ts:13–73",
+        "apps/web/src/hooks/useResizableWidth.ts:38–108",
+        "apps/web/src/components/preview/PreviewPanelShell.tsx:55–219"
+      ],
+      "items": [
+        {
+          "id": "PANEL-01",
+          "title": "Open right panel and distinguish details panel",
+          "steps": "Toggle right panel with mouse and Cmd+Option+B; separately toggle thread details with Cmd+Shift+B.",
+          "expected_or_question": "Controls target different surfaces; active/pressed states match visible panel; closing one does not silently open the other.",
+          "availability": "Always inspect; execute when enabled.",
+          "source_support": "source_supported",
+          "execution_mode": "exercise",
+          "runtime_status": "not_exercised",
+          "observations": [],
+          "evidence_paths": [],
+          "source_references": [
+            {
+              "path": "apps/web/src/components/chat/PanelLayoutControls.tsx",
+              "line": 38,
+              "symbol": "PanelLayoutControls",
+              "relation": "implementation under test"
+            },
+            {
+              "path": "packages/shared/src/keybindings.ts",
+              "line": 57,
+              "symbol": "DEFAULT_KEYBINDINGS",
+              "relation": "implementation under test"
+            }
+          ],
+          "state_transition": {
+            "before": "Right panel and details visibility known",
+            "event": "Toggle each independently",
+            "after": "Only intended visibility state changes"
+          },
+          "observation_rule": "fresh_after_action"
+        },
+        {
+          "id": "PANEL-02",
+          "title": "Empty launcher and keyboard navigation",
+          "steps": "In empty audit right panel, focus Open a surface; use arrows/Enter; test B/T/F/D/P/L/M/S letters when launcher is focused and when a text input owns focus.",
+          "expected_or_question": "Available actions correspond to Browser/Terminal/Files/Diff/PR/Linked PRs/Device/Side chat; letters do not hijack typing or another blocking menu.",
+          "availability": "Always inspect; execute when enabled.",
+          "source_support": "source_supported",
+          "execution_mode": "exercise",
+          "runtime_status": "not_exercised",
+          "observations": [],
+          "evidence_paths": [],
+          "source_references": [
+            {
+              "path": "apps/web/src/components/RightPanelTabs.tsx",
+              "line": 1032,
+              "symbol": "RightPanelTabs",
+              "relation": "implementation under test"
+            }
+          ],
+          "state_transition": {
+            "before": "Panel has no active surface",
+            "event": "Use launcher arrow or letter shortcut",
+            "after": "Selected available kind opens and typing remains protected"
+          },
+          "observation_rule": "fresh_after_action"
+        },
+        {
+          "id": "PANEL-03",
+          "title": "Plus menu and all surface entry points",
+          "steps": "Open Add panel surface; record each visible item, disabled reason, submenus, keyboard hover/focus state.",
+          "expected_or_question": "No dead launcher item; unavailable surfaces have a meaningful reason. Record actual installed menu rather than projecting source inventory.",
+          "availability": "Always inspect; execute when enabled.",
+          "source_support": "source_supported",
+          "execution_mode": "exercise",
+          "runtime_status": "not_exercised",
+          "observations": [],
+          "evidence_paths": [],
+          "source_references": [
+            {
+              "path": "apps/web/src/components/RightPanelTabs.tsx",
+              "line": 1032,
+              "symbol": "RightPanelTabs",
+              "relation": "implementation under test"
+            }
+          ],
+          "state_transition": {
+            "before": "Add menu closed",
+            "event": "Open and inspect each branch",
+            "after": "Menu entries reflect capabilities and disabled reasons"
+          },
+          "observation_rule": "fresh_after_action"
+        },
+        {
+          "id": "PANEL-04",
+          "title": "Browser and profile submenu",
+          "steps": "Open Browser in default profile; open Browser submenu and inspect configured profiles; optionally open second audit browser in an existing profile.",
+          "expected_or_question": "Correct tab activates with appropriate identity; no new profile/account configuration is created.",
+          "availability": "Profiles conditional.",
+          "source_support": "source_supported",
+          "execution_mode": "exercise",
+          "runtime_status": "not_exercised",
+          "observations": [],
+          "evidence_paths": [],
+          "source_references": [
+            {
+              "path": "apps/web/src/components/RightPanelTabs.tsx",
+              "line": 1032,
+              "symbol": "RightPanelTabs",
+              "relation": "implementation under test"
+            },
+            {
+              "path": "apps/web/src/components/chat/useRightPanelActions.ts",
+              "line": 68,
+              "symbol": "useRightPanelActions",
+              "relation": "implementation under test"
+            }
+          ],
+          "state_transition": {
+            "before": "Current active surface",
+            "event": "Open browser or existing profile browser",
+            "after": "New or selected browser resource becomes active"
+          },
+          "observation_rule": "fresh_after_action"
+        },
+        {
+          "id": "PANEL-05",
+          "title": "Terminal surface routing",
+          "steps": "Open Terminal from plus menu and compare to bottom terminal drawer.",
+          "expected_or_question": "Terminal surface has a usable body, focus and controls; it is distinguished from the separately toggled drawer.",
+          "availability": "Terminal capability; no shell command required for routing check.",
+          "source_support": "source_supported",
+          "execution_mode": "exercise",
+          "runtime_status": "not_exercised",
+          "observations": [],
+          "evidence_paths": [],
+          "source_references": [
+            {
+              "path": "apps/web/src/components/chat/useRightPanelActions.ts",
+              "line": 68,
+              "symbol": "useRightPanelActions",
+              "relation": "implementation under test"
+            },
+            {
+              "path": "apps/web/src/components/chat/RightPanelSurfaceContent.tsx",
+              "line": 62,
+              "symbol": "RightPanelSurfaceContent",
+              "relation": "implementation under test"
+            },
+            {
+              "path": "apps/web/src/components/chat/ChatTerminalDrawers.tsx",
+              "line": 41,
+              "symbol": "ChatTerminalDrawers",
+              "relation": "implementation under test"
+            }
+          ],
+          "state_transition": {
+            "before": "Non-terminal surface active",
+            "event": "Open Terminal from launcher",
+            "after": "Terminal surface active independently of drawer"
+          },
+          "observation_rule": "fresh_after_action"
+        },
+        {
+          "id": "PANEL-06",
+          "title": "Files surface routing",
+          "steps": "Open Files; select one known safe file; use Copy path on file tab if present; return to Files.",
+          "expected_or_question": "Tree/file body is reachable, selected file tab is correctly identified, navigation does not unexpectedly jump to another thread.",
+          "availability": "Workspace files available.",
+          "source_support": "source_supported",
+          "execution_mode": "exercise",
+          "runtime_status": "not_exercised",
+          "observations": [],
+          "evidence_paths": [],
+          "source_references": [
+            {
+              "path": "apps/web/src/components/chat/useRightPanelActions.ts",
+              "line": 68,
+              "symbol": "useRightPanelActions",
+              "relation": "implementation under test"
+            },
+            {
+              "path": "apps/web/src/components/chat/RightPanelSurfaceContent.tsx",
+              "line": 62,
+              "symbol": "RightPanelSurfaceContent",
+              "relation": "implementation under test"
+            }
+          ],
+          "state_transition": {
+            "before": "Files tree available",
+            "event": "Open Files then safe file",
+            "after": "File resource tab becomes active and returns to tree"
+          },
+          "observation_rule": "fresh_after_action"
+        },
+        {
+          "id": "PANEL-07",
+          "title": "Diff surface routing",
+          "steps": "Open Diff; inspect clean/changed state and switch back to Browser.",
+          "expected_or_question": "Diff has an actual appropriate body/empty state; opening it does not silently steal a different resource tab.",
+          "availability": "Diff capability; no repository edits required.",
+          "source_support": "source_supported",
+          "execution_mode": "exercise",
+          "runtime_status": "not_exercised",
+          "observations": [],
+          "evidence_paths": [],
+          "source_references": [
+            {
+              "path": "apps/web/src/components/chat/useRightPanelActions.ts",
+              "line": 68,
+              "symbol": "useRightPanelActions",
+              "relation": "implementation under test"
+            },
+            {
+              "path": "apps/web/src/components/chat/RightPanelSurfaceContent.tsx",
+              "line": 62,
+              "symbol": "RightPanelSurfaceContent",
+              "relation": "implementation under test"
+            }
+          ],
+          "state_transition": {
+            "before": "Browser active",
+            "event": "Open Diff then Browser",
+            "after": "Correct bodies swap and original browser remains"
+          },
+          "observation_rule": "fresh_after_action"
+        },
+        {
+          "id": "PANEL-08",
+          "title": "Current PR and linked PR entry points",
+          "steps": "Open Pull request and Linked pull requests from launcher; also compare sidebar PR route.",
+          "expected_or_question": "Each route displays correct PR/list/empty/unavailable state and links are actually clickable. Capture unreachable/dead paths, not just visible tab labels.",
+          "availability": "PR capabilities and repository association conditional.",
+          "source_support": "source_supported",
+          "execution_mode": "exercise",
+          "runtime_status": "not_exercised",
+          "observations": [],
+          "evidence_paths": [],
+          "source_references": [
+            {
+              "path": "apps/web/src/components/chat/useRightPanelActions.ts",
+              "line": 68,
+              "symbol": "useRightPanelActions",
+              "relation": "implementation under test"
+            },
+            {
+              "path": "apps/web/src/components/chat/RightPanelSurfaceContent.tsx",
+              "line": 62,
+              "symbol": "RightPanelSurfaceContent",
+              "relation": "implementation under test"
+            },
+            {
+              "path": "apps/web/src/components/sidebar/SidebarChrome.tsx",
+              "line": 221,
+              "symbol": "SidebarUtilityMenu",
+              "relation": "implementation under test"
+            }
+          ],
+          "state_transition": {
+            "before": "No PR body selected",
+            "event": "Use current PR then linked PR then sidebar PR entry",
+            "after": "Distinct target body or supported empty state appears"
+          },
+          "observation_rule": "fresh_after_action"
+        },
+        {
+          "id": "PANEL-09",
+          "title": "Device surface routing",
+          "steps": "Open Device if enabled; inspect empty/select-device state, available simulator/emulator choices and tab naming.",
+          "expected_or_question": "No fabricated connected device; unsupported/absent hardware is recorded, and Escape/close returns cleanly.",
+          "availability": "Device capability/hardware conditional; do not launch emulator for this checklist alone.",
+          "source_support": "source_supported",
+          "execution_mode": "inspect",
+          "runtime_status": "not_exercised",
+          "observations": [],
+          "evidence_paths": [],
+          "source_references": [
+            {
+              "path": "apps/web/src/components/chat/useRightPanelActions.ts",
+              "line": 68,
+              "symbol": "useRightPanelActions",
+              "relation": "implementation under test"
+            },
+            {
+              "path": "apps/web/src/components/chat/RightPanelSurfaceContent.tsx",
+              "line": 62,
+              "symbol": "RightPanelSurfaceContent",
+              "relation": "implementation under test"
+            }
+          ],
+          "state_transition": {
+            "before": "No Device selected",
+            "event": "Open Device and inspect chooser",
+            "after": "Device body or no-device state appears"
+          },
+          "observation_rule": "fresh_after_action"
+        },
+        {
+          "id": "PANEL-10",
+          "title": "Side chat routing",
+          "steps": "Open Side chat if enabled; inspect provider/thread binding and empty state without sending.",
+          "expected_or_question": "The side chat is distinct and retains parent-thread context; disabled reason is visible when unavailable.",
+          "availability": "Capability and provider state conditional.",
+          "source_support": "source_supported",
+          "execution_mode": "inspect",
+          "runtime_status": "not_exercised",
+          "observations": [],
+          "evidence_paths": [],
+          "source_references": [
+            {
+              "path": "apps/web/src/components/chat/useRightPanelActions.ts",
+              "line": 68,
+              "symbol": "useRightPanelActions",
+              "relation": "implementation under test"
+            },
+            {
+              "path": "apps/web/src/components/chat/RightPanelSurfaceContent.tsx",
+              "line": 62,
+              "symbol": "RightPanelSurfaceContent",
+              "relation": "implementation under test"
+            }
+          ],
+          "state_transition": {
+            "before": "No side chat selected",
+            "event": "Open Side chat without sending",
+            "after": "Side-chat body reflects parent thread"
+          },
+          "observation_rule": "fresh_after_action"
+        },
+        {
+          "id": "PANEL-11",
+          "title": "Activate, reorder and overflow tabs",
+          "steps": "Create several disposable surfaces; click each; drag reorder; overflow horizontally; use chevrons and vertical wheel over strip.",
+          "expected_or_question": "Active tab/body agree; drag target and final order are clear; overflow controls stay reachable; wheel does not unexpectedly move conversation.",
+          "availability": "Always inspect; execute when enabled.",
+          "source_support": "source_supported",
+          "execution_mode": "exercise",
+          "runtime_status": "not_exercised",
+          "observations": [],
+          "evidence_paths": [],
+          "source_references": [
+            {
+              "path": "apps/web/src/components/RightPanelTabs.tsx",
+              "line": 1032,
+              "symbol": "RightPanelTabs",
+              "relation": "implementation under test"
+            }
+          ],
+          "state_transition": {
+            "before": "Several tabs at known order",
+            "event": "Activate and drag then overflow scroll",
+            "after": "Correct active body and new order visible"
+          },
+          "observation_rule": "fresh_after_action"
+        },
+        {
+          "id": "PANEL-12",
+          "title": "Tab close by x, middle click and keyboard",
+          "steps": "Close disposable tab with x; another with middle click if input hardware supports it; another with Cmd+W outside terminal focus.",
+          "expected_or_question": "Only target surface closes; next active surface is sensible; Cmd+W does not close app window. Mark unavailable hardware rather than inventing a middle-click pass.",
+          "availability": "Always inspect; execute when enabled.",
+          "source_support": "source_supported",
+          "execution_mode": "exercise",
+          "runtime_status": "not_exercised",
+          "observations": [],
+          "evidence_paths": [],
+          "source_references": [
+            {
+              "path": "apps/web/src/components/RightPanelTabs.tsx",
+              "line": 1032,
+              "symbol": "RightPanelTabs",
+              "relation": "implementation under test"
+            },
+            {
+              "path": "packages/shared/src/keybindings.ts",
+              "line": 57,
+              "symbol": "DEFAULT_KEYBINDINGS",
+              "relation": "implementation under test"
+            }
+          ],
+          "state_transition": {
+            "before": "Disposable tab active",
+            "event": "Close by x or middle click or shortcut",
+            "after": "Target removed and app window remains open"
+          },
+          "observation_rule": "fresh_after_action"
+        },
+        {
+          "id": "PANEL-13",
+          "title": "Reopen closed view",
+          "steps": "After each supported close, use Cmd+Shift+T and verify reopened resource and active tab.",
+          "expected_or_question": "Actual reopen behavior is captured by surface type; do not claim native/live resources all restore identically.",
+          "availability": "Reopen stack has audit entries.",
+          "source_support": "source_supported",
+          "execution_mode": "exercise",
+          "runtime_status": "not_exercised",
+          "observations": [],
+          "evidence_paths": [],
+          "source_references": [
+            {
+              "path": "apps/web/src/components/ReopenClosedViewShortcut.tsx",
+              "line": 62,
+              "symbol": "ReopenClosedViewShortcut",
+              "relation": "implementation under test"
+            },
+            {
+              "path": "packages/shared/src/keybindings.ts",
+              "line": 57,
+              "symbol": "DEFAULT_KEYBINDINGS",
+              "relation": "implementation under test"
+            }
+          ],
+          "state_transition": {
+            "before": "Supported audit view recently closed",
+            "event": "Invoke reopen closed view",
+            "after": "Same closed resource reappears according to supported type"
+          },
+          "observation_rule": "fresh_after_action"
+        },
+        {
+          "id": "PANEL-14",
+          "title": "Tab context menu and conditional actions",
+          "steps": "Right-click browser, file, device tabs; inspect Close/Close others/Close to right/Close all, Mute/Unmute, Copy path, Rename.",
+          "expected_or_question": "Disabled edge cases match tab position/count; conditional actions target correct surface. Use disposable tabs for close groups.",
+          "availability": "Type-specific actions conditional.",
+          "source_support": "source_supported",
+          "execution_mode": "exercise",
+          "runtime_status": "not_exercised",
+          "observations": [],
+          "evidence_paths": [],
+          "source_references": [
+            {
+              "path": "apps/web/src/components/RightPanelTabs.tsx",
+              "line": 1032,
+              "symbol": "RightPanelTabs",
+              "relation": "implementation under test"
+            }
+          ],
+          "state_transition": {
+            "before": "Type-specific tab visible",
+            "event": "Open context action and optionally close disposable tabs",
+            "after": "Only targeted resource group changes"
+          },
+          "observation_rule": "fresh_after_action"
+        },
+        {
+          "id": "PANEL-15",
+          "title": "Rename a device tab",
+          "steps": "If audit Device exists, Rename; Enter commit and Escape cancel; restore name.",
+          "expected_or_question": "Title editing does not activate/drag/close wrong tab; only this surface name changes.",
+          "availability": "Device tab and rename capability.",
+          "source_support": "source_supported",
+          "execution_mode": "exercise",
+          "runtime_status": "not_exercised",
+          "observations": [],
+          "evidence_paths": [],
+          "source_references": [
+            {
+              "path": "apps/web/src/components/RightPanelTabs.tsx",
+              "line": 1032,
+              "symbol": "RightPanelTabs",
+              "relation": "implementation under test"
+            }
+          ],
+          "state_transition": {
+            "before": "Device title not editing",
+            "event": "Rename then cancel or commit",
+            "after": "Device title follows selected outcome"
+          },
+          "observation_rule": "fresh_after_action"
+        },
+        {
+          "id": "PANEL-16",
+          "title": "Resize width and reopen",
+          "steps": "Drag right edge handle to chosen compact/wide values; close/open; switch Browser→Files→Diff→Browser; record width each time.",
+          "expected_or_question": "Source uses per-thread shared width; a tool switch alone does not impose Ferrite-style tool floors. Record first paint and settled bounds, not just final width.",
+          "availability": "Always inspect; execute when enabled.",
+          "source_support": "source_supported",
+          "execution_mode": "exercise",
+          "runtime_status": "not_exercised",
+          "observations": [],
+          "evidence_paths": [],
+          "source_references": [
+            {
+              "path": "apps/web/src/hooks/usePreviewPanelInlineSize.ts",
+              "line": 20,
+              "symbol": "usePreviewPanelInlineSize",
+              "relation": "implementation under test"
+            },
+            {
+              "path": "apps/web/src/hooks/useResizableWidth.ts",
+              "line": 31,
+              "symbol": "useResizableWidth",
+              "relation": "implementation under test"
+            },
+            {
+              "path": "apps/web/src/components/chat/ChatRightPanel.tsx",
+              "line": 19,
+              "symbol": "ChatRightPanel",
+              "relation": "implementation under test"
+            }
+          ],
+          "state_transition": {
+            "before": "Panel at initial chosen width",
+            "event": "Resize then reopen and change tool",
+            "after": "Width and resource restoration can be measured"
+          },
+          "observation_rule": "fresh_after_action"
+        },
+        {
+          "id": "PANEL-17",
+          "title": "Cross-thread width and tab restoration",
+          "steps": "Set different audit widths/surface selections on two threads; navigate A→B→A; close/reopen panel.",
+          "expected_or_question": "Correct thread owns its stored width and surfaces; no preview/tab from B remains in A.",
+          "availability": "Two audit threads available.",
+          "source_support": "source_supported",
+          "execution_mode": "exercise",
+          "runtime_status": "not_exercised",
+          "observations": [],
+          "evidence_paths": [],
+          "source_references": [
+            {
+              "path": "apps/web/src/components/chat/ChatRightPanel.tsx",
+              "line": 19,
+              "symbol": "ChatRightPanel",
+              "relation": "implementation under test"
+            },
+            {
+              "path": "apps/web/src/hooks/useResizableWidth.ts",
+              "line": 31,
+              "symbol": "useResizableWidth",
+              "relation": "implementation under test"
+            }
+          ],
+          "state_transition": {
+            "before": "Thread A has different panel state from B",
+            "event": "Navigate A to B to A",
+            "after": "Each thread restores its own width and selected resource"
+          },
+          "observation_rule": "fresh_after_action"
+        },
+        {
+          "id": "PANEL-18",
+          "title": "Resize interruption",
+          "steps": "Start resize; release outside; start again then collapse or switch thread; reopen and drag once more.",
+          "expected_or_question": "No stuck resize, wrong-thread persistence, or animated lag during drag. Test real pointer sequence only.",
+          "availability": "Always inspect; execute when enabled.",
+          "source_support": "source_supported",
+          "execution_mode": "exercise",
+          "runtime_status": "not_exercised",
+          "observations": [],
+          "evidence_paths": [],
+          "source_references": [
+            {
+              "path": "apps/web/src/hooks/useResizableWidth.ts",
+              "line": 31,
+              "symbol": "useResizableWidth",
+              "relation": "implementation under test"
+            },
+            {
+              "path": "apps/web/src/components/preview/PreviewPanelShell.tsx",
+              "line": 38,
+              "symbol": "PreviewPanelShell",
+              "relation": "implementation under test"
+            }
+          ],
+          "state_transition": {
+            "before": "Resize not active",
+            "event": "Start drag then release outside or collapse",
+            "after": "Drag ends without persistent capture or wrong-thread commit"
+          },
+          "observation_rule": "fresh_after_action"
+        },
+        {
+          "id": "PANEL-19",
+          "title": "Maximize and restore",
+          "steps": "Use Maximize panel, inspect browser/Files/body and title controls, then Restore panel size; repeat with sidebar collapsed.",
+          "expected_or_question": "Maximize actually changes content allocation; restore returns prior width; controls do not overlap or become covered.",
+          "availability": "Always inspect; execute when enabled.",
+          "source_support": "source_supported",
+          "execution_mode": "exercise",
+          "runtime_status": "not_exercised",
+          "observations": [],
+          "evidence_paths": [],
+          "source_references": [
+            {
+              "path": "apps/web/src/components/chat/PanelLayoutControls.tsx",
+              "line": 140,
+              "symbol": "RightPanelMaximizeControl",
+              "relation": "implementation under test"
+            },
+            {
+              "path": "apps/web/src/components/preview/PreviewPanelShell.tsx",
+              "line": 38,
+              "symbol": "PreviewPanelShell",
+              "relation": "implementation under test"
+            }
+          ],
+          "state_transition": {
+            "before": "Panel restored to chosen width",
+            "event": "Maximize then restore",
+            "after": "Full panel allocation then prior width returns"
+          },
+          "observation_rule": "fresh_after_action"
+        },
+        {
+          "id": "PANEL-20",
+          "title": "Focus order and collapse return",
+          "steps": "F6/Shift+F6 between workspace areas; focus input in panel, collapse with shortcut, then type in expected returned target.",
+          "expected_or_question": "Hidden panel cannot retain keyboard input; focus returns without scrolling conversation unexpectedly. Separator keyboard resize is a discovery probe: source shell does not wire it by default.",
+          "availability": "Use visible focus indication; Cmd+F6 variants if plain F6 is captured.",
+          "source_support": "source_supported",
+          "execution_mode": "exercise",
+          "runtime_status": "not_exercised",
+          "observations": [],
+          "evidence_paths": [],
+          "source_references": [
+            {
+              "path": "apps/web/src/lib/workspaceFocus.ts",
+              "line": 100,
+              "symbol": "createWorkspaceFocusController",
+              "relation": "implementation under test"
+            },
+            {
+              "path": "apps/web/src/components/preview/PreviewPanelShell.tsx",
+              "line": 38,
+              "symbol": "PreviewPanelShell",
+              "relation": "implementation under test"
+            }
+          ],
+          "state_transition": {
+            "before": "Keyboard focus inside panel",
+            "event": "Cycle focus then collapse",
+            "after": "Focus moves to a visible valid area"
+          },
+          "observation_rule": "fresh_after_action"
+        }
+      ]
+    },
+    {
+      "id": "BROWSER",
+      "title": "Browser navigation, chrome, menus, page states and capture",
+      "sources": [
+        "apps/web/src/components/preview/PreviewChromeRow.tsx:80–299",
+        "apps/web/src/components/preview/PreviewView.tsx:430–490,549–776,787–890,964–1165",
+        "apps/web/src/components/preview/PreviewMoreMenu.tsx:80–185",
+        "apps/web/src/components/preview/PreviewFindBar.tsx:14–138",
+        "apps/web/src/browser/BrowserDeviceToolbar.tsx:173–337",
+        "apps/web/src/components/preview/ThreadPreviewMiniPlayer.tsx:541–619",
+        "apps/web/src/components/preview/PreviewEmptyState.tsx:35–110",
+        "apps/web/src/components/preview/PreviewUnreachable.tsx:61–140",
+        "apps/web/src/components/preview/thumbButtons.ts:1–21",
+        "apps/desktop/src/window/DesktopWindow.ts:654–735"
+      ],
+      "items": [
+        {
+          "id": "BROWSER-01",
+          "title": "Blank browser composition",
+          "steps": "Open a fresh Browser; capture whole panel before navigation and inspect recent/local destinations if present.",
+          "expected_or_question": "Empty title/description or structured recent/local cards are rendered; URL entry remains available; no page/header overlaps.",
+          "availability": "Always inspect; execute when enabled.",
+          "source_support": "source_supported",
+          "execution_mode": "exercise",
+          "runtime_status": "not_exercised",
+          "observations": [],
+          "evidence_paths": [],
+          "source_references": [
+            {
+              "path": "apps/web/src/components/preview/PreviewEmptyState.tsx",
+              "line": 21,
+              "symbol": "PreviewEmptyState",
+              "relation": "implementation under test"
+            },
+            {
+              "path": "apps/web/src/components/preview/PreviewView.tsx",
+              "line": 162,
+              "symbol": "PreviewView",
+              "relation": "implementation under test"
+            }
+          ],
+          "state_transition": {
+            "before": "Fresh browser has no URL",
+            "event": "Open browser",
+            "after": "Empty or recent/local destination content visible"
+          },
+          "observation_rule": "fresh_after_action"
+        },
+        {
+          "id": "BROWSER-02",
+          "title": "URL editing, cancellation and Enter",
+          "steps": "Focus page, Cmd+L; type safe public URL, Escape; repeat Enter. Click address and select/copy text.",
+          "expected_or_question": "Focus selects editable URL; Escape restores actual URL and blurs; Enter navigates once; clicking address does not route elsewhere.",
+          "availability": "Always inspect; execute when enabled.",
+          "source_support": "source_supported",
+          "execution_mode": "exercise",
+          "runtime_status": "not_exercised",
+          "observations": [],
+          "evidence_paths": [],
+          "source_references": [
+            {
+              "path": "apps/web/src/components/preview/PreviewChromeRow.tsx",
+              "line": 53,
+              "symbol": "PreviewChromeRow",
+              "relation": "implementation under test"
+            }
+          ],
+          "state_transition": {
+            "before": "URL input not focused",
+            "event": "Focus URL then Escape or Enter",
+            "after": "Draft cancels to URL or one navigation starts"
+          },
+          "observation_rule": "fresh_after_action"
+        },
+        {
+          "id": "BROWSER-03",
+          "title": "Search and malformed input",
+          "steps": "Try a harmless search phrase, hostname without scheme, whitespace, then an invalid address; record normalization/error.",
+          "expected_or_question": "Placeholder promises Search or enter URL, but exact installed behavior must be observed; invalid input should recover through address edit.",
+          "availability": "Use public/disposable navigation.",
+          "source_support": "discovery_probe",
+          "execution_mode": "exercise",
+          "runtime_status": "not_exercised",
+          "observations": [],
+          "evidence_paths": [],
+          "source_references": [
+            {
+              "path": "apps/web/src/components/preview/PreviewChromeRow.tsx",
+              "line": 53,
+              "symbol": "PreviewChromeRow",
+              "relation": "subject of probe; outcome not asserted by this reference"
+            },
+            {
+              "path": "apps/web/src/components/preview/PreviewView.tsx",
+              "line": 162,
+              "symbol": "PreviewView",
+              "relation": "subject of probe; outcome not asserted by this reference"
+            }
+          ],
+          "state_transition": {
+            "before": "Valid current page",
+            "event": "Submit search or malformed URL",
+            "after": "Actual normalization or recoverable error recorded"
+          },
+          "observation_rule": "fresh_after_action"
+        },
+        {
+          "id": "BROWSER-04",
+          "title": "Navigation and history buttons",
+          "steps": "Visit two public pages in same tab; Back, Forward, refresh; inspect disabled states at history ends.",
+          "expected_or_question": "Correct page history, title/URL and button states move together; app/thread history remains unchanged.",
+          "availability": "Always inspect; execute when enabled.",
+          "source_support": "source_supported",
+          "execution_mode": "exercise",
+          "runtime_status": "not_exercised",
+          "observations": [],
+          "evidence_paths": [],
+          "source_references": [
+            {
+              "path": "apps/web/src/components/preview/PreviewView.tsx",
+              "line": 162,
+              "symbol": "PreviewView",
+              "relation": "implementation under test"
+            },
+            {
+              "path": "apps/web/src/components/preview/PreviewChromeRow.tsx",
+              "line": 53,
+              "symbol": "PreviewChromeRow",
+              "relation": "implementation under test"
+            }
+          ],
+          "state_transition": {
+            "before": "Browser tab has history",
+            "event": "Navigate back then forward and reload",
+            "after": "Page history and URL controls agree"
+          },
+          "observation_rule": "fresh_after_action"
+        },
+        {
+          "id": "BROWSER-05",
+          "title": "Loading and Stop geometry",
+          "steps": "Reload a page; capture loading and settled frames, then press Stop during a visible load if possible.",
+          "expected_or_question": "Refresh becomes Stop in same slot;2px progress overlays toolbar without inserting a new row; page top and address/control positions stay stable.",
+          "availability": "Always inspect; execute when enabled.",
+          "source_support": "source_supported",
+          "execution_mode": "exercise",
+          "runtime_status": "not_exercised",
+          "observations": [],
+          "evidence_paths": [],
+          "source_references": [
+            {
+              "path": "apps/web/src/components/preview/PreviewChromeRow.tsx",
+              "line": 53,
+              "symbol": "PreviewChromeRow",
+              "relation": "implementation under test"
+            },
+            {
+              "path": "apps/web/src/components/preview/PreviewView.tsx",
+              "line": 162,
+              "symbol": "PreviewView",
+              "relation": "implementation under test"
+            }
+          ],
+          "state_transition": {
+            "before": "Page loaded",
+            "event": "Refresh then Stop during load",
+            "after": "Same control slot changes and progress stops"
+          },
+          "observation_rule": "fresh_after_action"
+        },
+        {
+          "id": "BROWSER-06",
+          "title": "Keyboard refresh and focus scope",
+          "steps": "Cmd+R while browser page focused; repeat after composer/app focus and compare to native View→Reload.",
+          "expected_or_question": "Record what reloads in each context. Browser command is previewFocus-gated; native menu targets app. No broad claim from one chord in one focus context.",
+          "availability": "Always inspect; execute when enabled.",
+          "source_support": "source_supported",
+          "execution_mode": "exercise",
+          "runtime_status": "not_exercised",
+          "observations": [],
+          "evidence_paths": [],
+          "source_references": [
+            {
+              "path": "apps/web/src/components/preview/PreviewView.tsx",
+              "line": 162,
+              "symbol": "PreviewView",
+              "relation": "implementation under test"
+            },
+            {
+              "path": "packages/shared/src/keybindings.ts",
+              "line": 57,
+              "symbol": "DEFAULT_KEYBINDINGS",
+              "relation": "implementation under test"
+            },
+            {
+              "path": "apps/desktop/src/window/DesktopApplicationMenu.ts",
+              "line": 116,
+              "symbol": "make",
+              "relation": "implementation under test"
+            }
+          ],
+          "state_transition": {
+            "before": "Focus is in browser or app",
+            "event": "Invoke refresh in each focus context",
+            "after": "Correct target reloads and focus scope is recorded"
+          },
+          "observation_rule": "fresh_after_action"
+        },
+        {
+          "id": "BROWSER-07",
+          "title": "Open in system browser",
+          "steps": "Hover URL group while unfocused; activate Open in system browser; return to T3.",
+          "expected_or_question": "External browser opens the current URL; preview stays intact; action remains accessible through keyboard focus/tooltip.",
+          "availability": "OS external browser handler present.",
+          "source_support": "source_supported",
+          "execution_mode": "exercise",
+          "runtime_status": "not_exercised",
+          "observations": [],
+          "evidence_paths": [],
+          "source_references": [
+            {
+              "path": "apps/web/src/components/preview/PreviewChromeRow.tsx",
+              "line": 53,
+              "symbol": "PreviewChromeRow",
+              "relation": "implementation under test"
+            },
+            {
+              "path": "apps/web/src/components/preview/PreviewView.tsx",
+              "line": 162,
+              "symbol": "PreviewView",
+              "relation": "implementation under test"
+            }
+          ],
+          "state_transition": {
+            "before": "Current page loaded and URL unfocused",
+            "event": "Reveal external-open control and click",
+            "after": "System browser opens current URL while preview remains"
+          },
+          "observation_rule": "fresh_after_action"
+        },
+        {
+          "id": "BROWSER-08",
+          "title": "Webpage link context menu versus toolbar external-open",
+          "steps": "Right-click a known hyperlink inside page and a transcript hyperlink separately; record exact menu and whether an external-open option exists.",
+          "expected_or_question": "Pinned generic desktop menu proves Copy Link, not Open Link in Browser. This is a discovery probe, independent of the supported toolbar external-open action.",
+          "availability": "Actual link needed.",
+          "source_support": "discovery_probe",
+          "execution_mode": "inspect",
+          "runtime_status": "not_exercised",
+          "observations": [],
+          "evidence_paths": [],
+          "source_references": [
+            {
+              "path": "apps/desktop/src/window/DesktopWindow.ts",
+              "line": 648,
+              "symbol": "installContextMenu",
+              "relation": "subject of probe; outcome not asserted by this reference"
+            },
+            {
+              "path": "apps/web/src/components/preview/PreviewChromeRow.tsx",
+              "line": 53,
+              "symbol": "PreviewChromeRow",
+              "relation": "subject of probe; outcome not asserted by this reference"
+            }
+          ],
+          "state_transition": {
+            "before": "Link under pointer",
+            "event": "Open context menu",
+            "after": "Actual link menu observed independently of toolbar action"
+          },
+          "observation_rule": "fresh_after_action"
+        },
+        {
+          "id": "BROWSER-09",
+          "title": "Context menu text, image and email",
+          "steps": "Right-click selected page text, editable input, image and mailto link; inspect Copy Image/Copy Email Address/edit roles where present; verify copy into disposable field if useful.",
+          "expected_or_question": "Editing roles target guest page rather than host composer; disabled Cut/Paste/Select All accurately match context.",
+          "availability": "Use harmless public/test content.",
+          "source_support": "source_supported",
+          "execution_mode": "exercise",
+          "runtime_status": "not_exercised",
+          "observations": [],
+          "evidence_paths": [],
+          "source_references": [
+            {
+              "path": "apps/desktop/src/window/DesktopWindow.ts",
+              "line": 648,
+              "symbol": "installContextMenu",
+              "relation": "implementation under test"
+            }
+          ],
+          "state_transition": {
+            "before": "Selection or image or mailto link under pointer",
+            "event": "Open context menu and copy safe content",
+            "after": "Context-specific roles and clipboard output agree"
+          },
+          "observation_rule": "fresh_after_action"
+        },
+        {
+          "id": "BROWSER-10",
+          "title": "Page links, new windows and modifier clicks",
+          "steps": "Click same-tab and target-blank links; try Cmd-click/middle-click if supported; inspect where new content appears.",
+          "expected_or_question": "Discover actual installed policy and tab/window identity; do not assume conventional browser-tab creation from source toolbar alone.",
+          "availability": "Public page with links.",
+          "source_support": "discovery_probe",
+          "execution_mode": "exercise",
+          "runtime_status": "not_exercised",
+          "observations": [],
+          "evidence_paths": [],
+          "source_references": [
+            {
+              "path": "apps/web/src/components/preview/PreviewView.tsx",
+              "line": 162,
+              "symbol": "PreviewView",
+              "relation": "subject of probe; outcome not asserted by this reference"
+            },
+            {
+              "path": "apps/desktop/src/window/DesktopWindow.ts",
+              "line": 648,
+              "symbol": "installContextMenu",
+              "relation": "subject of probe; outcome not asserted by this reference"
+            }
+          ],
+          "state_transition": {
+            "before": "Page has navigation links",
+            "event": "Click same-tab and new-window links",
+            "after": "Actual destination policy recorded without assumption"
+          },
+          "observation_rule": "fresh_after_action"
+        },
+        {
+          "id": "BROWSER-11",
+          "title": "Mouse thumb-button routing",
+          "steps": "With real thumb-button input, navigate back/forward over page, toolbar, and panel tab strip.",
+          "expected_or_question": "Browser surface history changes without moving the application route; URL-field focus is not stolen.",
+          "availability": "Hardware/tool support needed; otherwise blocked, not pass.",
+          "source_support": "source_supported",
+          "execution_mode": "exercise",
+          "runtime_status": "not_exercised",
+          "observations": [],
+          "evidence_paths": [],
+          "source_references": [
+            {
+              "path": "apps/web/src/components/preview/thumbButtons.ts",
+              "line": 12,
+              "symbol": "takeThumbButtonNavigation",
+              "relation": "implementation under test"
+            }
+          ],
+          "state_transition": {
+            "before": "Browser has back or forward history",
+            "event": "Use mouse thumb button over browser area",
+            "after": "Page history changes without app route change"
+          },
+          "observation_rule": "fresh_after_action"
+        },
+        {
+          "id": "BROWSER-12",
+          "title": "Page title, favicon, long URL and localhost ports",
+          "steps": "Inspect real page title/favicon; compare long titles/URLs and two distinct local ports if already available.",
+          "expected_or_question": "Tabs identify page with title/host including port; labels ellipsize while close/mute controls remain reachable.",
+          "availability": "No local server launch required; port comparison conditional.",
+          "source_support": "source_supported",
+          "execution_mode": "exercise",
+          "runtime_status": "not_exercised",
+          "observations": [],
+          "evidence_paths": [],
+          "source_references": [
+            {
+              "path": "apps/web/src/components/RightPanelTabs.tsx",
+              "line": 1032,
+              "symbol": "RightPanelTabs",
+              "relation": "implementation under test"
+            },
+            {
+              "path": "apps/web/src/components/preview/PreviewView.tsx",
+              "line": 162,
+              "symbol": "PreviewView",
+              "relation": "implementation under test"
+            }
+          ],
+          "state_transition": {
+            "before": "Loaded page with title or URL",
+            "event": "Inspect tab label and compare resources",
+            "after": "Identity and truncation remain readable"
+          },
+          "observation_rule": "fresh_after_action"
+        },
+        {
+          "id": "BROWSER-13",
+          "title": "Multiple tabs and browser state",
+          "steps": "Open two pages through Browser launcher; type unsent text in one page field, switch tabs/thread and return.",
+          "expected_or_question": "Active page, history, URL and form state follow correct tab; background page does not steal focus.",
+          "availability": "Disposable public/test page form only.",
+          "source_support": "source_supported",
+          "execution_mode": "exercise",
+          "runtime_status": "not_exercised",
+          "observations": [],
+          "evidence_paths": [],
+          "source_references": [
+            {
+              "path": "apps/web/src/components/RightPanelTabs.tsx",
+              "line": 1032,
+              "symbol": "RightPanelTabs",
+              "relation": "implementation under test"
+            },
+            {
+              "path": "apps/web/src/components/preview/PreviewView.tsx",
+              "line": 162,
+              "symbol": "PreviewView",
+              "relation": "implementation under test"
+            }
+          ],
+          "state_transition": {
+            "before": "Two browser resources with distinct state",
+            "event": "Switch tab and thread then return",
+            "after": "Correct history and form state restored"
+          },
+          "observation_rule": "fresh_after_action"
+        },
+        {
+          "id": "BROWSER-14",
+          "title": "Unreachable page and retry",
+          "steps": "Navigate to a known invalid .invalid hostname or an unused local endpoint; inspect explanatory body, Details and Reload; then navigate valid URL.",
+          "expected_or_question": "Error is composed in page body with useful recovery; toolbar remains usable; no raw error line shifts chrome.",
+          "availability": "Use safe deliberately unreachable target.",
+          "source_support": "source_supported",
+          "execution_mode": "exercise",
+          "runtime_status": "not_exercised",
+          "observations": [],
+          "evidence_paths": [],
+          "source_references": [
+            {
+              "path": "apps/web/src/components/preview/PreviewUnreachable.tsx",
+              "line": 54,
+              "symbol": "PreviewUnreachable",
+              "relation": "implementation under test"
+            },
+            {
+              "path": "apps/web/src/components/preview/PreviewView.tsx",
+              "line": 162,
+              "symbol": "PreviewView",
+              "relation": "implementation under test"
+            }
+          ],
+          "state_transition": {
+            "before": "Valid loaded page",
+            "event": "Navigate unreachable URL then valid URL",
+            "after": "Error body and recovery return to usable page"
+          },
+          "observation_rule": "fresh_after_action"
+        },
+        {
+          "id": "BROWSER-15",
+          "title": "Browser More menu inventory",
+          "steps": "Open More and capture all enabled/disabled items and nested Appearance.",
+          "expected_or_question": "Find, Hard reload, conditional DevTools/separate window/move-runtime, Device toolbar, Appearance, Zoom and Clear cookies/cache are correctly scoped to selected page.",
+          "availability": "Bridge/runtime capability affects items.",
+          "source_support": "source_supported",
+          "execution_mode": "inspect",
+          "runtime_status": "not_exercised",
+          "observations": [],
+          "evidence_paths": [],
+          "source_references": [
+            {
+              "path": "apps/web/src/components/preview/PreviewMoreMenu.tsx",
+              "line": 72,
+              "symbol": "PreviewMoreMenu",
+              "relation": "implementation under test"
+            }
+          ],
+          "state_transition": {
+            "before": "More menu closed",
+            "event": "Open and inspect branches",
+            "after": "Selected page actions and availability recorded"
+          },
+          "observation_rule": "fresh_after_action"
+        },
+        {
+          "id": "BROWSER-16",
+          "title": "Find success and zero matches",
+          "steps": "More→Find or Cmd+F in page; search frequent text then unique unmatched term.",
+          "expected_or_question": "Search bar opens selected/focused, shows active/total count, zero-results styling and disabled navigation.",
+          "availability": "Always inspect; execute when enabled.",
+          "source_support": "source_supported",
+          "execution_mode": "exercise",
+          "runtime_status": "not_exercised",
+          "observations": [],
+          "evidence_paths": [],
+          "source_references": [
+            {
+              "path": "apps/web/src/components/preview/PreviewFindBar.tsx",
+              "line": 14,
+              "symbol": "PreviewFindBar",
+              "relation": "implementation under test"
+            },
+            {
+              "path": "apps/web/src/components/preview/PreviewMoreMenu.tsx",
+              "line": 72,
+              "symbol": "PreviewMoreMenu",
+              "relation": "implementation under test"
+            }
+          ],
+          "state_transition": {
+            "before": "Find closed",
+            "event": "Search matching then unmatched text",
+            "after": "Visible result count then zero-match state"
+          },
+          "observation_rule": "fresh_after_action"
+        },
+        {
+          "id": "BROWSER-17",
+          "title": "Find keyboard and tab isolation",
+          "steps": "Enter next, Shift+Enter previous, repeat Cmd+F to select query, Escape close; reopen then switch browser tab.",
+          "expected_or_question": "One command advances one match; Escape closes only find; query/highlights do not leak into unrelated page; focus returns usefully.",
+          "availability": "Always inspect; execute when enabled.",
+          "source_support": "source_supported",
+          "execution_mode": "exercise",
+          "runtime_status": "not_exercised",
+          "observations": [],
+          "evidence_paths": [],
+          "source_references": [
+            {
+              "path": "apps/web/src/components/preview/PreviewFindBar.tsx",
+              "line": 14,
+              "symbol": "PreviewFindBar",
+              "relation": "implementation under test"
+            }
+          ],
+          "state_transition": {
+            "before": "Find query active",
+            "event": "Step forward/backward and Escape or switch tab",
+            "after": "Match or closed state changes without cross-tab leakage"
+          },
+          "observation_rule": "fresh_after_action"
+        },
+        {
+          "id": "BROWSER-18",
+          "title": "Hard reload",
+          "steps": "Use More→Hard reload on audit page.",
+          "expected_or_question": "Actual refresh occurs with stable chrome and recoverable state; distinguish from app Force Reload.",
+          "availability": "Public/disposable page.",
+          "source_support": "source_supported",
+          "execution_mode": "exercise",
+          "runtime_status": "not_exercised",
+          "observations": [],
+          "evidence_paths": [],
+          "source_references": [
+            {
+              "path": "apps/web/src/components/preview/PreviewMoreMenu.tsx",
+              "line": 72,
+              "symbol": "PreviewMoreMenu",
+              "relation": "implementation under test"
+            },
+            {
+              "path": "apps/web/src/components/preview/PreviewView.tsx",
+              "line": 162,
+              "symbol": "PreviewView",
+              "relation": "implementation under test"
+            }
+          ],
+          "state_transition": {
+            "before": "Page loaded",
+            "event": "Invoke Hard reload",
+            "after": "Page begins loading and recovers"
+          },
+          "observation_rule": "fresh_after_action"
+        },
+        {
+          "id": "BROWSER-19",
+          "title": "DevTools routing",
+          "steps": "Open DevTools from browser More if present; inspect correct inspected URL then close.",
+          "expected_or_question": "Tools inspect browser page, not T3 shell; closing tools does not close current page/app.",
+          "availability": "Desktop bridge exposes action.",
+          "source_support": "source_supported",
+          "execution_mode": "exercise",
+          "runtime_status": "not_exercised",
+          "observations": [],
+          "evidence_paths": [],
+          "source_references": [
+            {
+              "path": "apps/web/src/components/preview/PreviewMoreMenu.tsx",
+              "line": 72,
+              "symbol": "PreviewMoreMenu",
+              "relation": "implementation under test"
+            },
+            {
+              "path": "apps/web/src/components/preview/PreviewView.tsx",
+              "line": 162,
+              "symbol": "PreviewView",
+              "relation": "implementation under test"
+            }
+          ],
+          "state_transition": {
+            "before": "Browser DevTools closed",
+            "event": "Open then close DevTools",
+            "after": "Correct page inspected and preview remains"
+          },
+          "observation_rule": "fresh_after_action"
+        },
+        {
+          "id": "BROWSER-20",
+          "title": "Page appearance menu",
+          "steps": "Inspect System/Light/Dark; on disposable preview cycle Light/Dark/System, restore original.",
+          "expected_or_question": "Selected value and webpage appearance update; app theme is not accidentally changed.",
+          "availability": "Page may not react to prefers-color-scheme; record actual behavior.",
+          "source_support": "source_supported",
+          "execution_mode": "exercise",
+          "runtime_status": "not_exercised",
+          "observations": [],
+          "evidence_paths": [],
+          "source_references": [
+            {
+              "path": "apps/web/src/components/preview/PreviewMoreMenu.tsx",
+              "line": 72,
+              "symbol": "PreviewMoreMenu",
+              "relation": "implementation under test"
+            },
+            {
+              "path": "apps/web/src/components/preview/PreviewView.tsx",
+              "line": 162,
+              "symbol": "PreviewView",
+              "relation": "implementation under test"
+            }
+          ],
+          "state_transition": {
+            "before": "Page color scheme recorded",
+            "event": "Change scheme then restore",
+            "after": "Page preference returns to original value"
+          },
+          "observation_rule": "fresh_after_action"
+        },
+        {
+          "id": "BROWSER-21",
+          "title": "Page zoom and keyboard scope",
+          "steps": "Use More minus/plus/reset, then Cmd+/Cmd-/Cmd+0 while preview focused; repeat after returning app focus.",
+          "expected_or_question": "Page zoom count and rendered page agree; reset works; app and page zoom scopes are distinguished.",
+          "availability": "Always inspect; execute when enabled.",
+          "source_support": "source_supported",
+          "execution_mode": "exercise",
+          "runtime_status": "not_exercised",
+          "observations": [],
+          "evidence_paths": [],
+          "source_references": [
+            {
+              "path": "apps/web/src/components/preview/PreviewMoreMenu.tsx",
+              "line": 72,
+              "symbol": "PreviewMoreMenu",
+              "relation": "implementation under test"
+            },
+            {
+              "path": "packages/shared/src/keybindings.ts",
+              "line": 57,
+              "symbol": "DEFAULT_KEYBINDINGS",
+              "relation": "implementation under test"
+            },
+            {
+              "path": "apps/desktop/src/window/DesktopApplicationMenu.ts",
+              "line": 116,
+              "symbol": "make",
+              "relation": "implementation under test"
+            }
+          ],
+          "state_transition": {
+            "before": "Page and app zoom recorded",
+            "event": "Change page zoom then reset and compare app menu",
+            "after": "Correct zoom target and value restored"
+          },
+          "observation_rule": "fresh_after_action"
+        },
+        {
+          "id": "BROWSER-22",
+          "title": "Device toolbar presets",
+          "steps": "More→Show device toolbar; open Responsive/Standard preset list; inspect all installed preset labels; choose phone and wide preset.",
+          "expected_or_question": "Viewport dimensions and page framing change together, presets menu stays inside window; no app-level resize mistaken for page emulation.",
+          "availability": "Always inspect; execute when enabled.",
+          "source_support": "source_supported",
+          "execution_mode": "exercise",
+          "runtime_status": "not_exercised",
+          "observations": [],
+          "evidence_paths": [],
+          "source_references": [
+            {
+              "path": "apps/web/src/browser/BrowserDeviceToolbar.tsx",
+              "line": 43,
+              "symbol": "BrowserDeviceToolbar",
+              "relation": "implementation under test"
+            },
+            {
+              "path": "apps/web/src/components/preview/PreviewMoreMenu.tsx",
+              "line": 72,
+              "symbol": "PreviewMoreMenu",
+              "relation": "implementation under test"
+            }
+          ],
+          "state_transition": {
+            "before": "Page viewport fill mode",
+            "event": "Show device toolbar and choose preset",
+            "after": "Preset geometry and selector agree"
+          },
+          "observation_rule": "fresh_after_action"
+        },
+        {
+          "id": "BROWSER-23",
+          "title": "Custom viewport dimensions and invalid values",
+          "steps": "Edit width/height, Enter and blur; try blank/out-of-range value then valid value.",
+          "expected_or_question": "Validation and pending state are visible; accepted dimensions apply once; invalid dimensions do not strand page or overflow toolbar.",
+          "availability": "Always inspect; execute when enabled.",
+          "source_support": "source_supported",
+          "execution_mode": "exercise",
+          "runtime_status": "not_exercised",
+          "observations": [],
+          "evidence_paths": [],
+          "source_references": [
+            {
+              "path": "apps/web/src/browser/BrowserDeviceToolbar.tsx",
+              "line": 43,
+              "symbol": "BrowserDeviceToolbar",
+              "relation": "implementation under test"
+            }
+          ],
+          "state_transition": {
+            "before": "Device size valid",
+            "event": "Enter invalid then valid dimensions",
+            "after": "Validation state then accepted viewport dimensions"
+          },
+          "observation_rule": "fresh_after_action"
+        },
+        {
+          "id": "BROWSER-24",
+          "title": "Aspect lock, rotate and viewport drag",
+          "steps": "Lock aspect ratio; edit one dimension; rotate; unlock; drag viewport handles if visible.",
+          "expected_or_question": "Ratio/rotation/dimensions remain coherent; pointer resizing tracks; narrow toolbar still exposes essential controls.",
+          "availability": "Rendered viewport handles/presets supported.",
+          "source_support": "source_supported",
+          "execution_mode": "exercise",
+          "runtime_status": "not_exercised",
+          "observations": [],
+          "evidence_paths": [],
+          "source_references": [
+            {
+              "path": "apps/web/src/browser/BrowserDeviceToolbar.tsx",
+              "line": 43,
+              "symbol": "BrowserDeviceToolbar",
+              "relation": "implementation under test"
+            }
+          ],
+          "state_transition": {
+            "before": "Viewport unlocked or locked",
+            "event": "Toggle aspect lock then edit and rotate",
+            "after": "Dimension relation and orientation update coherently"
+          },
+          "observation_rule": "fresh_after_action"
+        },
+        {
+          "id": "BROWSER-25",
+          "title": "Hide device toolbar and restore fill",
+          "steps": "Use Close device toolbar or More→Hide.",
+          "expected_or_question": "Page returns to fill mode and remaining chrome does not retain blank reserved space.",
+          "availability": "Always inspect; execute when enabled.",
+          "source_support": "source_supported",
+          "execution_mode": "exercise",
+          "runtime_status": "not_exercised",
+          "observations": [],
+          "evidence_paths": [],
+          "source_references": [
+            {
+              "path": "apps/web/src/browser/BrowserDeviceToolbar.tsx",
+              "line": 43,
+              "symbol": "BrowserDeviceToolbar",
+              "relation": "implementation under test"
+            },
+            {
+              "path": "apps/web/src/components/preview/PreviewMoreMenu.tsx",
+              "line": 72,
+              "symbol": "PreviewMoreMenu",
+              "relation": "implementation under test"
+            }
+          ],
+          "state_transition": {
+            "before": "Device toolbar visible",
+            "event": "Close toolbar",
+            "after": "Viewport returns to fill mode"
+          },
+          "observation_rule": "fresh_after_action"
+        },
+        {
+          "id": "BROWSER-26",
+          "title": "Floating preview lifecycle",
+          "steps": "Click Float preview over chat; drag/resize floating preview if available; interact with page; Open in right panel; float again then Close.",
+          "expected_or_question": "Floating and right-panel states hand off same page; controls remain reachable; source floating action closes right panel, which must not be misreported as accidental panel loss.",
+          "availability": "Always inspect; execute when enabled.",
+          "source_support": "source_supported",
+          "execution_mode": "exercise",
+          "runtime_status": "not_exercised",
+          "observations": [],
+          "evidence_paths": [],
+          "source_references": [
+            {
+              "path": "apps/web/src/components/preview/PreviewView.tsx",
+              "line": 162,
+              "symbol": "PreviewView",
+              "relation": "implementation under test"
+            },
+            {
+              "path": "apps/web/src/components/preview/ThreadPreviewMiniPlayer.tsx",
+              "line": 195,
+              "symbol": "ThreadPreviewMiniPlayer",
+              "relation": "implementation under test"
+            }
+          ],
+          "state_transition": {
+            "before": "Browser in right panel",
+            "event": "Float then reopen in right panel then close float",
+            "after": "Same page moves between presentations without orphan"
+          },
+          "observation_rule": "fresh_after_action"
+        },
+        {
+          "id": "BROWSER-27",
+          "title": "Separate native preview window",
+          "steps": "If More offers Open separate preview window, open it; inspect title/focus/close; return.",
+          "expected_or_question": "This is distinct from in-app floating preview; correct page is shown and closing separate window does not quit app.",
+          "availability": "Desktop action conditional.",
+          "source_support": "source_supported",
+          "execution_mode": "exercise",
+          "runtime_status": "not_exercised",
+          "observations": [],
+          "evidence_paths": [],
+          "source_references": [
+            {
+              "path": "apps/web/src/components/preview/PreviewMoreMenu.tsx",
+              "line": 72,
+              "symbol": "PreviewMoreMenu",
+              "relation": "implementation under test"
+            },
+            {
+              "path": "apps/web/src/components/preview/PreviewView.tsx",
+              "line": 162,
+              "symbol": "PreviewView",
+              "relation": "implementation under test"
+            }
+          ],
+          "state_transition": {
+            "before": "Separate preview window absent",
+            "event": "Open and close separate preview",
+            "after": "Main app and page remain usable"
+          },
+          "observation_rule": "fresh_after_action"
+        },
+        {
+          "id": "BROWSER-28",
+          "title": "Move browser runtime",
+          "steps": "If More offers Open on this computer or Open in environment browser, inspect target; exercise only on disposable page in existing configured environment.",
+          "expected_or_question": "New runtime opens correct URL/profile/viewport and old session closes only after success; failed move shows recoverable message.",
+          "availability": "Requires alternate runtime; otherwise not_applicable.",
+          "source_support": "source_supported",
+          "execution_mode": "exercise",
+          "runtime_status": "not_exercised",
+          "observations": [],
+          "evidence_paths": [],
+          "source_references": [
+            {
+              "path": "apps/web/src/components/preview/PreviewView.tsx",
+              "line": 162,
+              "symbol": "PreviewView",
+              "relation": "implementation under test"
+            },
+            {
+              "path": "apps/web/src/components/preview/PreviewMoreMenu.tsx",
+              "line": 72,
+              "symbol": "PreviewMoreMenu",
+              "relation": "implementation under test"
+            }
+          ],
+          "state_transition": {
+            "before": "Preview in current runtime",
+            "event": "Move to existing alternate runtime",
+            "after": "Success changes runtime or failure preserves recoverable state"
+          },
+          "observation_rule": "fresh_after_action"
+        },
+        {
+          "id": "BROWSER-29",
+          "title": "Screenshot capture",
+          "steps": "Capture screenshot of disposable audit page; inspect returned attachment/toast/path without sending.",
+          "expected_or_question": "Image corresponds to current page and is legible; attachment affordance is usable; failure communicates itself.",
+          "availability": "Desktop capture capability; may add draft attachment.",
+          "source_support": "source_supported",
+          "execution_mode": "exercise",
+          "runtime_status": "not_exercised",
+          "observations": [],
+          "evidence_paths": [],
+          "source_references": [
+            {
+              "path": "apps/web/src/components/preview/PreviewView.tsx",
+              "line": 162,
+              "symbol": "PreviewView",
+              "relation": "implementation under test"
+            },
+            {
+              "path": "apps/web/src/components/preview/PreviewChromeRow.tsx",
+              "line": 53,
+              "symbol": "PreviewChromeRow",
+              "relation": "implementation under test"
+            }
+          ],
+          "state_transition": {
+            "before": "Capture idle",
+            "event": "Capture screenshot",
+            "after": "Current-page image or explicit failure appears"
+          },
+          "observation_rule": "fresh_after_action"
+        },
+        {
+          "id": "BROWSER-30",
+          "title": "Recording start/stop",
+          "steps": "Shift-click camera to record briefly; click Stop recording; inspect resulting artifact/toast; leave no recording running.",
+          "expected_or_question": "Recording indicator/Stop label agree; stop succeeds and correct artifact is reachable.",
+          "availability": "Desktop recording capability; audit page only.",
+          "source_support": "source_supported",
+          "execution_mode": "exercise",
+          "runtime_status": "not_exercised",
+          "observations": [],
+          "evidence_paths": [],
+          "source_references": [
+            {
+              "path": "apps/web/src/components/preview/PreviewView.tsx",
+              "line": 162,
+              "symbol": "PreviewView",
+              "relation": "implementation under test"
+            },
+            {
+              "path": "apps/web/src/components/preview/PreviewChromeRow.tsx",
+              "line": 53,
+              "symbol": "PreviewChromeRow",
+              "relation": "implementation under test"
+            }
+          ],
+          "state_transition": {
+            "before": "Recording idle",
+            "event": "Shift-click capture then stop",
+            "after": "Recording indicator starts then ends with artifact or error"
+          },
+          "observation_rule": "fresh_after_action"
+        },
+        {
+          "id": "BROWSER-31",
+          "title": "Annotation select and cancel",
+          "steps": "Annotate preview; select an element; inspect overlay/comment controls; cancel by offered control or shortcut; reopen and cancel via toolbar.",
+          "expected_or_question": "Pick state and focus reset cleanly; ordinary page clicks work again; current page/tab remains correct.",
+          "availability": "Desktop element-pick capability.",
+          "source_support": "source_supported",
+          "execution_mode": "exercise",
+          "runtime_status": "not_exercised",
+          "observations": [],
+          "evidence_paths": [],
+          "source_references": [
+            {
+              "path": "apps/web/src/components/preview/PreviewView.tsx",
+              "line": 162,
+              "symbol": "PreviewView",
+              "relation": "implementation under test"
+            },
+            {
+              "path": "apps/web/src/components/preview/PreviewChromeRow.tsx",
+              "line": 53,
+              "symbol": "PreviewChromeRow",
+              "relation": "implementation under test"
+            }
+          ],
+          "state_transition": {
+            "before": "Element pick idle",
+            "event": "Start pick then cancel",
+            "after": "Pick mode ends and prior focus returns"
+          },
+          "observation_rule": "fresh_after_action"
+        },
+        {
+          "id": "BROWSER-32",
+          "title": "Annotation with comment and attachment handoff",
+          "steps": "Pick a known element and enter audit comment; use add-to-composer path if offered; inspect text and image attachment; do not submit model request from this checklist.",
+          "expected_or_question": "Comment/element context and optional screenshot survive handoff; screenshot failure retains text/context with explicit notice. Parent may verify model send in its own live task.",
+          "availability": "Capability and UI submission choices conditional; audit draft.",
+          "source_support": "source_supported",
+          "execution_mode": "exercise",
+          "runtime_status": "not_exercised",
+          "observations": [],
+          "evidence_paths": [],
+          "source_references": [
+            {
+              "path": "apps/web/src/components/preview/PreviewView.tsx",
+              "line": 162,
+              "symbol": "PreviewView",
+              "relation": "implementation under test"
+            }
+          ],
+          "state_transition": {
+            "before": "Picked element and comment prepared",
+            "event": "Add annotation to composer without send",
+            "after": "Annotation context and optional image added to audit draft"
+          },
+          "observation_rule": "fresh_after_action"
+        },
+        {
+          "id": "BROWSER-33",
+          "title": "Annotation interruption and focus",
+          "steps": "Begin pick, switch tab or close panel, then return; repeat with accepted annotation and another click.",
+          "expected_or_question": "Canceled pick does not leak overlay; accepted annotation survives later clicks/unmount; focus restores without jump-scroll.",
+          "availability": "Audit page and annotations only.",
+          "source_support": "source_supported",
+          "execution_mode": "exercise",
+          "runtime_status": "not_exercised",
+          "observations": [],
+          "evidence_paths": [],
+          "source_references": [
+            {
+              "path": "apps/web/src/components/preview/PreviewView.tsx",
+              "line": 162,
+              "symbol": "PreviewView",
+              "relation": "implementation under test"
+            }
+          ],
+          "state_transition": {
+            "before": "Pick active or accepted",
+            "event": "Change tab or close panel",
+            "after": "Unaccepted pick cancels and accepted annotation remains"
+          },
+          "observation_rule": "fresh_after_action"
+        },
+        {
+          "id": "BROWSER-34",
+          "title": "Mute and audio state",
+          "steps": "If page emits audio, inspect tab audio indicator and Mute/Unmute in context menu; toggle and restore.",
+          "expected_or_question": "Icon, menu label and actual sound state agree; inactive tabs remain identifiable.",
+          "availability": "Existing harmless audio source; do not autoplay arbitrary external media.",
+          "source_support": "source_supported",
+          "execution_mode": "exercise",
+          "runtime_status": "not_exercised",
+          "observations": [],
+          "evidence_paths": [],
+          "source_references": [
+            {
+              "path": "apps/web/src/components/RightPanelTabs.tsx",
+              "line": 1032,
+              "symbol": "RightPanelTabs",
+              "relation": "implementation under test"
+            }
+          ],
+          "state_transition": {
+            "before": "Page audio playing or muted",
+            "event": "Mute then unmute",
+            "after": "Actual sound and tab state agree"
+          },
+          "observation_rule": "fresh_after_action"
+        },
+        {
+          "id": "BROWSER-35",
+          "title": "Cookie/cache actions visibility",
+          "steps": "Inspect Clear cookies and Clear cache with profile label. Do not execute on existing authenticated profiles.",
+          "expected_or_question": "Action scope is visible; inspection is not recorded as a successful data-clearing test.",
+          "availability": "Existing profile; destructive storage change.",
+          "source_support": "source_supported",
+          "execution_mode": "inspect",
+          "runtime_status": "not_exercised",
+          "observations": [],
+          "evidence_paths": [],
+          "source_references": [
+            {
+              "path": "apps/web/src/components/preview/PreviewMoreMenu.tsx",
+              "line": 72,
+              "symbol": "PreviewMoreMenu",
+              "relation": "implementation under test"
+            }
+          ],
+          "state_transition": {
+            "before": "Profile data unchanged",
+            "event": "Inspect clear-storage commands only",
+            "after": "Profile data remains unchanged"
+          },
+          "observation_rule": "fresh_after_action"
+        },
+        {
+          "id": "BROWSER-36",
+          "title": "Browser input and selection fundamentals",
+          "steps": "In a disposable page input, click insertion point, select by drag/double-click, use arrows/Home/End where appropriate, copy/paste, Tab/Shift+Tab, scroll and horizontal scroll.",
+          "expected_or_question": "Input goes to intended guest control; host shortcuts do not hijack typing/selection; scroll stays in hovered/active surface.",
+          "availability": "Test page/input needed.",
+          "source_support": "quality_probe",
+          "execution_mode": "exercise",
+          "runtime_status": "not_exercised",
+          "observations": [],
+          "evidence_paths": [],
+          "source_references": [
+            {
+              "path": "apps/web/src/components/preview/PreviewView.tsx",
+              "line": 162,
+              "symbol": "PreviewView",
+              "relation": "subject of probe; outcome not asserted by this reference"
+            },
+            {
+              "path": "apps/desktop/src/window/DesktopWindow.ts",
+              "line": 648,
+              "symbol": "installContextMenu",
+              "relation": "subject of probe; outcome not asserted by this reference"
+            }
+          ],
+          "state_transition": {
+            "before": "Page input focused",
+            "event": "Edit select paste tab and scroll",
+            "after": "Guest page receives intended input and host state stays unchanged"
+          },
+          "observation_rule": "fresh_after_action"
+        }
+      ]
+    },
+    {
+      "id": "WINDOW",
+      "title": "Window, navigation, overlays and responsive layout",
+      "sources": [
+        "apps/desktop/src/window/DesktopApplicationMenu.ts:169–339",
+        "packages/shared/src/keybindings.ts:58–140",
+        "apps/web/src/components/chat/PanelLayoutControls.tsx:55–146,205–259",
+        "apps/web/src/rightPanelLayout.ts:1",
+        "apps/web/src/components/RightPanelSheet.tsx:20–25",
+        "apps/web/src/components/ui/sidebar.tsx:109,324–350",
+        "apps/web/src/lib/workspaceFocus.ts",
+        "apps/web/src/components/ReopenClosedViewShortcut.tsx"
+      ],
+      "items": [
+        {
+          "id": "WINDOW-01",
+          "title": "Native menu inventory",
+          "steps": "Open T3 Code, File, Edit, View, Window, Help menus; record visible menu items and disabled states.",
+          "expected_or_question": "About/Settings/update; close; editing/Paste as Text; reload/devtools/app zoom/fullscreen; minimize/zoom/front; help update are reachable as installed. Hidden accelerators need not appear.",
+          "availability": "Native desktop app.",
+          "source_support": "source_supported",
+          "execution_mode": "inspect",
+          "runtime_status": "not_exercised",
+          "observations": [],
+          "evidence_paths": [],
+          "source_references": [
+            {
+              "path": "apps/desktop/src/window/DesktopApplicationMenu.ts",
+              "line": 116,
+              "symbol": "make",
+              "relation": "implementation under test"
+            }
+          ],
+          "state_transition": {
+            "before": "Native menu closed",
+            "event": "Open each native menu",
+            "after": "Installed labels and enabled states recorded"
+          },
+          "observation_rule": "fresh_after_action"
+        },
+        {
+          "id": "WINDOW-02",
+          "title": "Settings shortcut and menu return",
+          "steps": "Cmd+, and native Settings menu; close/Back and return to audit thread.",
+          "expected_or_question": "Both reach same settings context; focus/state recover; no unintentional preference change.",
+          "availability": "Always inspect; execute when enabled.",
+          "source_support": "source_supported",
+          "execution_mode": "exercise",
+          "runtime_status": "not_exercised",
+          "observations": [],
+          "evidence_paths": [],
+          "source_references": [
+            {
+              "path": "apps/desktop/src/window/DesktopApplicationMenu.ts",
+              "line": 116,
+              "symbol": "make",
+              "relation": "implementation under test"
+            },
+            {
+              "path": "apps/web/src/components/sidebar/SidebarChrome.tsx",
+              "line": 221,
+              "symbol": "SidebarUtilityMenu",
+              "relation": "implementation under test"
+            }
+          ],
+          "state_transition": {
+            "before": "Main app route active",
+            "event": "Open Settings then return",
+            "after": "Settings then original route visible"
+          },
+          "observation_rule": "fresh_after_action"
+        },
+        {
+          "id": "WINDOW-03",
+          "title": "Native editing focus",
+          "steps": "Copy harmless text and use Edit→Paste as Text in disposable composer/page input; compare shortcut once.",
+          "expected_or_question": "Exactly one paste occurs; native editing roles affect intended focused surface, not another thread/page.",
+          "availability": "Always inspect; execute when enabled.",
+          "source_support": "source_supported",
+          "execution_mode": "exercise",
+          "runtime_status": "not_exercised",
+          "observations": [],
+          "evidence_paths": [],
+          "source_references": [
+            {
+              "path": "apps/desktop/src/window/DesktopApplicationMenu.ts",
+              "line": 116,
+              "symbol": "make",
+              "relation": "implementation under test"
+            },
+            {
+              "path": "apps/desktop/src/window/DesktopWindow.ts",
+              "line": 648,
+              "symbol": "installContextMenu",
+              "relation": "implementation under test"
+            }
+          ],
+          "state_transition": {
+            "before": "Disposable input focused",
+            "event": "Paste as Text once",
+            "after": "Exactly one plain-text insertion in intended target"
+          },
+          "observation_rule": "fresh_after_action"
+        },
+        {
+          "id": "WINDOW-04",
+          "title": "App zoom versus browser zoom",
+          "steps": "Native View→Zoom In/Out/Actual Size once each; inspect entire shell then restore initial app zoom.",
+          "expected_or_question": "Whole shell changes, while browser More zoom remains separate. Capture control clipping at larger shell scale.",
+          "availability": "Always inspect; execute when enabled.",
+          "source_support": "source_supported",
+          "execution_mode": "exercise",
+          "runtime_status": "not_exercised",
+          "observations": [],
+          "evidence_paths": [],
+          "source_references": [
+            {
+              "path": "apps/desktop/src/window/DesktopApplicationMenu.ts",
+              "line": 116,
+              "symbol": "make",
+              "relation": "implementation under test"
+            }
+          ],
+          "state_transition": {
+            "before": "Initial app zoom recorded",
+            "event": "Native zoom then reset or restore",
+            "after": "Whole app geometry changes then original scale returns"
+          },
+          "observation_rule": "fresh_after_action"
+        },
+        {
+          "id": "WINDOW-05",
+          "title": "Window move, resize and native controls",
+          "steps": "Drag empty title region; click nearby tabs/buttons; resize wide/narrow; use native maximize/restore/fullscreen only if straightforward to restore.",
+          "expected_or_question": "Drag region moves window; interactive tab/control region remains clickable; no accidental window dragging when clicking panel tabs.",
+          "availability": "Always inspect; execute when enabled.",
+          "source_support": "source_supported",
+          "execution_mode": "exercise",
+          "runtime_status": "not_exercised",
+          "observations": [],
+          "evidence_paths": [],
+          "source_references": [
+            {
+              "path": "apps/web/src/components/AppSidebarLayout.tsx",
+              "line": 410,
+              "symbol": "AppSidebarLayout",
+              "relation": "implementation under test"
+            },
+            {
+              "path": "apps/web/src/components/chat/PanelLayoutControls.tsx",
+              "line": 38,
+              "symbol": "PanelLayoutControls",
+              "relation": "implementation under test"
+            }
+          ],
+          "state_transition": {
+            "before": "Window geometry recorded",
+            "event": "Drag titlebar then resize and restore",
+            "after": "Window moves or resizes without swallowing control clicks"
+          },
+          "observation_rule": "fresh_after_action"
+        },
+        {
+          "id": "WINDOW-06",
+          "title": "App history versus browser history",
+          "steps": "Navigate thread→Settings→thread and use Cmd+[ / Cmd+] outside terminal; compare to browser toolbar history.",
+          "expected_or_question": "App history changes route; browser history changes page. Browser-focused mouse buttons do not jump app route.",
+          "availability": "Always inspect; execute when enabled.",
+          "source_support": "source_supported",
+          "execution_mode": "exercise",
+          "runtime_status": "not_exercised",
+          "observations": [],
+          "evidence_paths": [],
+          "source_references": [
+            {
+              "path": "apps/web/src/components/AppSidebarLayout.tsx",
+              "line": 151,
+              "symbol": "registerNavigationHistoryCommands",
+              "relation": "implementation under test"
+            },
+            {
+              "path": "apps/web/src/components/preview/thumbButtons.ts",
+              "line": 12,
+              "symbol": "takeThumbButtonNavigation",
+              "relation": "implementation under test"
+            }
+          ],
+          "state_transition": {
+            "before": "Application route and page histories differ",
+            "event": "Use app history then page history",
+            "after": "Only selected history changes"
+          },
+          "observation_rule": "fresh_after_action"
+        },
+        {
+          "id": "WINDOW-07",
+          "title": "Workspace focus cycle",
+          "steps": "Cycle F6/Shift+F6 and Cmd+F6 variants through sidebar, conversation, terminal and right panel when open; repeat with one area hidden.",
+          "expected_or_question": "Visible focus target advances among available areas; hidden areas skipped; opening/closing overlays preserves a sensible return target.",
+          "availability": "Always inspect; execute when enabled.",
+          "source_support": "source_supported",
+          "execution_mode": "exercise",
+          "runtime_status": "not_exercised",
+          "observations": [],
+          "evidence_paths": [],
+          "source_references": [
+            {
+              "path": "apps/web/src/lib/workspaceFocus.ts",
+              "line": 100,
+              "symbol": "createWorkspaceFocusController",
+              "relation": "implementation under test"
+            },
+            {
+              "path": "packages/shared/src/keybindings.ts",
+              "line": 57,
+              "symbol": "DEFAULT_KEYBINDINGS",
+              "relation": "implementation under test"
+            }
+          ],
+          "state_transition": {
+            "before": "Visible workspace areas known",
+            "event": "Cycle focus forward and back",
+            "after": "Next available area receives focus"
+          },
+          "observation_rule": "fresh_after_action"
+        },
+        {
+          "id": "WINDOW-08",
+          "title": "Terminal drawer combination",
+          "steps": "Toggle bottom drawer with Cmd+J; combine with right panel and details; close in alternate orders.",
+          "expected_or_question": "Drawer and right-panel terminal remain distinct; content sizes stay usable; terminal-focus-specific Cmd+N/W/D bindings do not target app tabs.",
+          "availability": "Always inspect; execute when enabled.",
+          "source_support": "source_supported",
+          "execution_mode": "exercise",
+          "runtime_status": "not_exercised",
+          "observations": [],
+          "evidence_paths": [],
+          "source_references": [
+            {
+              "path": "apps/web/src/components/chat/ChatTerminalDrawers.tsx",
+              "line": 41,
+              "symbol": "ChatTerminalDrawers",
+              "relation": "implementation under test"
+            },
+            {
+              "path": "apps/web/src/components/chat/PanelLayoutControls.tsx",
+              "line": 38,
+              "symbol": "PanelLayoutControls",
+              "relation": "implementation under test"
+            },
+            {
+              "path": "packages/shared/src/keybindings.ts",
+              "line": 57,
+              "symbol": "DEFAULT_KEYBINDINGS",
+              "relation": "implementation under test"
+            }
+          ],
+          "state_transition": {
+            "before": "Terminal drawer closed or open",
+            "event": "Toggle drawer alongside right panel",
+            "after": "Independent drawer and panel state retained"
+          },
+          "observation_rule": "fresh_after_action"
+        },
+        {
+          "id": "WINDOW-09",
+          "title": "Command/file/search overlay coexistence",
+          "steps": "Open Cmd+K palette, Cmd+P file picker, Cmd+Shift+F project search with browser/sidebar visible; dismiss by Escape/click outside.",
+          "expected_or_question": "Overlay is topmost, keyboard belongs to it, underlying webview does not cover it or consume clicks; focus returns.",
+          "availability": "Workspace/capability conditional.",
+          "source_support": "source_supported",
+          "execution_mode": "exercise",
+          "runtime_status": "not_exercised",
+          "observations": [],
+          "evidence_paths": [],
+          "source_references": [
+            {
+              "path": "apps/web/src/components/ReopenClosedViewShortcut.tsx",
+              "line": 62,
+              "symbol": "ReopenClosedViewShortcut",
+              "relation": "implementation under test"
+            },
+            {
+              "path": "apps/web/src/components/AppSidebarLayout.tsx",
+              "line": 410,
+              "symbol": "AppSidebarLayout",
+              "relation": "implementation under test"
+            },
+            {
+              "path": "packages/shared/src/keybindings.ts",
+              "line": 57,
+              "symbol": "DEFAULT_KEYBINDINGS",
+              "relation": "implementation under test"
+            }
+          ],
+          "state_transition": {
+            "before": "Browser visible and overlay closed",
+            "event": "Open palette or picker or search then dismiss",
+            "after": "Overlay receives input and returns focus on dismissal"
+          },
+          "observation_rule": "fresh_after_action"
+        },
+        {
+          "id": "WINDOW-10",
+          "title": "Right panel responsive switch",
+          "steps": "Resize across980px while right panel is non-maximized; inspect inline→sheet and back; maximize/restore and repeat.",
+          "expected_or_question": "Source switches non-maximized panel to sheet at<=980px; preserve resource/state and provide reachable close. Installed behavior may differ with version.",
+          "availability": "Always inspect; execute when enabled.",
+          "source_support": "source_supported",
+          "execution_mode": "exercise",
+          "runtime_status": "not_exercised",
+          "observations": [],
+          "evidence_paths": [],
+          "source_references": [
+            {
+              "path": "apps/web/src/components/chat/ChatRightPanel.tsx",
+              "line": 19,
+              "symbol": "ChatRightPanel",
+              "relation": "implementation under test"
+            },
+            {
+              "path": "apps/web/src/components/RightPanelSheet.tsx",
+              "line": 5,
+              "symbol": "RightPanelSheet",
+              "relation": "implementation under test"
+            }
+          ],
+          "state_transition": {
+            "before": "Viewport above980 and panel not maximized",
+            "event": "Resize below980 then above",
+            "after": "Panel switches inline to sheet then inline retaining resource"
+          },
+          "observation_rule": "fresh_after_action"
+        },
+        {
+          "id": "WINDOW-11",
+          "title": "Small sheet and sidebar coexistence",
+          "steps": "If native window permits, resize below760px/767px; open left mobile sheet and right sheet; close via available outside/Escape controls.",
+          "expected_or_question": "Right sheet uses88vw cap384px below760; left mobile sidebar activates<=767; no trapped invisible layer or titlebar controls above the wrong sheet.",
+          "availability": "Window minimum dimensions may block thresholds; record blocked dimensions.",
+          "source_support": "source_supported",
+          "execution_mode": "exercise",
+          "runtime_status": "not_exercised",
+          "observations": [],
+          "evidence_paths": [],
+          "source_references": [
+            {
+              "path": "apps/web/src/components/ui/sidebar.tsx",
+              "line": 281,
+              "symbol": "Sidebar",
+              "relation": "implementation under test"
+            },
+            {
+              "path": "apps/web/src/components/RightPanelSheet.tsx",
+              "line": 5,
+              "symbol": "RightPanelSheet",
+              "relation": "implementation under test"
+            }
+          ],
+          "state_transition": {
+            "before": "Viewport permits small layout",
+            "event": "Resize below thresholds and open/close sheets",
+            "after": "Mobile/sidebar presentation dismisses without invisible layer"
+          },
+          "observation_rule": "fresh_after_action"
+        },
+        {
+          "id": "WINDOW-12",
+          "title": "Popup collision and narrow layouts",
+          "steps": "At compact width open tab context menu, More submenus, project filter, tooltip and selector near each edge.",
+          "expected_or_question": "Menus flip/shift within viewport, text remains readable, submenu can be entered without disappearing, rightmost buttons remain clickable.",
+          "availability": "Use actual visible targets.",
+          "source_support": "quality_probe",
+          "execution_mode": "exercise",
+          "runtime_status": "not_exercised",
+          "observations": [],
+          "evidence_paths": [],
+          "source_references": [
+            {
+              "path": "apps/web/src/components/RightPanelTabs.tsx",
+              "line": 1032,
+              "symbol": "RightPanelTabs",
+              "relation": "subject of probe; outcome not asserted by this reference"
+            },
+            {
+              "path": "apps/web/src/components/preview/PreviewMoreMenu.tsx",
+              "line": 72,
+              "symbol": "PreviewMoreMenu",
+              "relation": "subject of probe; outcome not asserted by this reference"
+            },
+            {
+              "path": "apps/web/src/components/Sidebar.tsx",
+              "line": 902,
+              "symbol": "Sidebar",
+              "relation": "subject of probe; outcome not asserted by this reference"
+            }
+          ],
+          "state_transition": {
+            "before": "Compact viewport and menu closed",
+            "event": "Open menus near edges",
+            "after": "Actual collision handling and reachable content recorded"
+          },
+          "observation_rule": "fresh_after_action"
+        },
+        {
+          "id": "WINDOW-13",
+          "title": "Reload/close/update paths inspection",
+          "steps": "Inspect native Reload/Force Reload, Close Window/Quit, Check for Updates and installation prompts without disrupting live session.",
+          "expected_or_question": "Cmd+W renderer tab-close is distinct from native Close Window. Do not count reload/restart/update success from menu visibility.",
+          "availability": "Session-preserving inspection only.",
+          "source_support": "source_supported",
+          "execution_mode": "inspect",
+          "runtime_status": "not_exercised",
+          "observations": [],
+          "evidence_paths": [],
+          "source_references": [
+            {
+              "path": "apps/desktop/src/window/DesktopApplicationMenu.ts",
+              "line": 116,
+              "symbol": "make",
+              "relation": "implementation under test"
+            }
+          ],
+          "state_transition": {
+            "before": "Live session remains active",
+            "event": "Inspect reload close quit update commands",
+            "after": "No disruptive operation executed during inspection"
+          },
+          "observation_rule": "fresh_after_action"
+        }
+      ]
+    },
+    {
+      "id": "MOTION",
+      "title": "Motion, first paint, interruption and visual continuity",
+      "sources": [
+        "packages/contracts/src/settings.ts:155–164,414",
+        "apps/web/src/panelAnimations.ts:11–68",
+        "apps/web/src/components/ui/sidebar.tsx:387–403,473–542",
+        "apps/web/src/components/preview/PreviewPanelShell.tsx:55–219",
+        "apps/web/src/components/chat/PanelLayoutControls.tsx:205–259",
+        "apps/web/src/components/settings/AppearanceSettingsPanel.tsx:350–411",
+        "apps/web/src/components/Sidebar.motion.ts",
+        "apps/web/src/components/Sidebar.shiftGuard.ts",
+        "apps/web/src/index.css:2424–2455"
+      ],
+      "items": [
+        {
+          "id": "MOTION-01",
+          "title": "Measure current left-sidebar motion",
+          "steps": "Record timed frames/video of mouse and shortcut open/close under current recorded settings; repeat twice.",
+          "expected_or_question": "Report observed duration and intermediate geometry;0ms is consistent with pinned default but does not satisfy user-requested Ferrite motion. A still cannot establish smoothness.",
+          "availability": "Always inspect; execute when enabled.",
+          "source_support": "source_supported",
+          "execution_mode": "exercise",
+          "runtime_status": "not_exercised",
+          "observations": [],
+          "evidence_paths": [],
+          "source_references": [
+            {
+              "path": "apps/web/src/components/ui/sidebar.tsx",
+              "line": 281,
+              "symbol": "Sidebar",
+              "relation": "implementation under test"
+            },
+            {
+              "path": "apps/web/src/panelAnimations.ts",
+              "line": 31,
+              "symbol": "usePanelAnimationSettings",
+              "relation": "implementation under test"
+            }
+          ],
+          "state_transition": {
+            "before": "Sidebar visible at current effective duration",
+            "event": "Toggle twice and record frames",
+            "after": "Measured visibility transition recorded"
+          },
+          "observation_rule": "fresh_after_action"
+        },
+        {
+          "id": "MOTION-02",
+          "title": "Measure current right-panel motion",
+          "steps": "Capture open/close from compact and wide remembered widths, with browser inside.",
+          "expected_or_question": "When configured>0 and effective, content stays pinned right while clip/width uncovers chat; titlebar controls do not slide under native controls.",
+          "availability": "Always inspect; execute when enabled.",
+          "source_support": "source_supported",
+          "execution_mode": "exercise",
+          "runtime_status": "not_exercised",
+          "observations": [],
+          "evidence_paths": [],
+          "source_references": [
+            {
+              "path": "apps/web/src/components/preview/PreviewPanelShell.tsx",
+              "line": 38,
+              "symbol": "PreviewPanelShell",
+              "relation": "implementation under test"
+            },
+            {
+              "path": "apps/web/src/panelAnimations.ts",
+              "line": 41,
+              "symbol": "usePanelPresence",
+              "relation": "implementation under test"
+            }
+          ],
+          "state_transition": {
+            "before": "Right panel open at recorded width",
+            "event": "Close and reopen with frames",
+            "after": "Clip and width progression recorded when enabled"
+          },
+          "observation_rule": "fresh_after_action"
+        },
+        {
+          "id": "MOTION-03",
+          "title": "Reverse transitions before completion",
+          "steps": "If duration>0 already enabled, rapidly close→open→close each sidebar/panel; click target after settling.",
+          "expected_or_question": "No stuck width, orphan overlay, retained pointer interception or stale content. If0ms, record not_applicable for animated reversal rather than pass.",
+          "availability": "Always inspect; execute when enabled.",
+          "source_support": "source_supported",
+          "execution_mode": "exercise",
+          "runtime_status": "not_exercised",
+          "observations": [],
+          "evidence_paths": [],
+          "source_references": [
+            {
+              "path": "apps/web/src/panelAnimations.ts",
+              "line": 41,
+              "symbol": "usePanelPresence",
+              "relation": "implementation under test"
+            },
+            {
+              "path": "apps/web/src/components/ui/sidebar.tsx",
+              "line": 281,
+              "symbol": "Sidebar",
+              "relation": "implementation under test"
+            }
+          ],
+          "state_transition": {
+            "before": "Animation enabled and transition running",
+            "event": "Reverse transition before completion",
+            "after": "Final requested state reached without stale input layer"
+          },
+          "observation_rule": "fresh_after_action"
+        },
+        {
+          "id": "MOTION-04",
+          "title": "Route switch during closing",
+          "steps": "With nonzero motion, close panel and immediately navigate another audit thread; reopen there.",
+          "expected_or_question": "Old thread content does not remain visible; route navigation suppresses transition until new route paints.",
+          "availability": "Nonzero effective duration; otherwise record gate.",
+          "source_support": "source_supported",
+          "execution_mode": "exercise",
+          "runtime_status": "not_exercised",
+          "observations": [],
+          "evidence_paths": [],
+          "source_references": [
+            {
+              "path": "apps/web/src/panelAnimations.ts",
+              "line": 41,
+              "symbol": "usePanelPresence",
+              "relation": "implementation under test"
+            },
+            {
+              "path": "apps/web/src/panelAnimations.ts",
+              "line": 11,
+              "symbol": "usePanelNavigationSuppression",
+              "relation": "implementation under test"
+            }
+          ],
+          "state_transition": {
+            "before": "Old thread panel closing",
+            "event": "Switch to next thread",
+            "after": "Retained old content excluded by scope"
+          },
+          "observation_rule": "fresh_after_action"
+        },
+        {
+          "id": "MOTION-05",
+          "title": "Width/maximize changes versus open/close",
+          "steps": "Record direct drag, a saved-width thread switch, maximize and restore separately from toggle.",
+          "expected_or_question": "T3 intentionally suppresses inline width transitions for ordinary resize/maximize changes; do not label all snaps as failed open/close animation.",
+          "availability": "Always inspect; execute when enabled.",
+          "source_support": "source_supported",
+          "execution_mode": "exercise",
+          "runtime_status": "not_exercised",
+          "observations": [],
+          "evidence_paths": [],
+          "source_references": [
+            {
+              "path": "apps/web/src/components/preview/PreviewPanelShell.tsx",
+              "line": 38,
+              "symbol": "PreviewPanelShell",
+              "relation": "implementation under test"
+            },
+            {
+              "path": "apps/web/src/hooks/useResizableWidth.ts",
+              "line": 31,
+              "symbol": "useResizableWidth",
+              "relation": "implementation under test"
+            }
+          ],
+          "state_transition": {
+            "before": "Panel open at stored width",
+            "event": "Resize or maximize or switch width",
+            "after": "Ordinary width updates remain direct; open/close is separate"
+          },
+          "observation_rule": "fresh_after_action"
+        },
+        {
+          "id": "MOTION-06",
+          "title": "Focus during animated collapse",
+          "steps": "Focus page/address/find; close panel during typing readiness; Tab/type after closure.",
+          "expected_or_question": "Before-paint inert state prevents hidden target focus; focus returns outside panel without transcript scroll jump.",
+          "availability": "Use safe disposable text.",
+          "source_support": "source_supported",
+          "execution_mode": "exercise",
+          "runtime_status": "not_exercised",
+          "observations": [],
+          "evidence_paths": [],
+          "source_references": [
+            {
+              "path": "apps/web/src/components/preview/PreviewPanelShell.tsx",
+              "line": 38,
+              "symbol": "PreviewPanelShell",
+              "relation": "implementation under test"
+            },
+            {
+              "path": "apps/web/src/lib/workspaceFocus.ts",
+              "line": 100,
+              "symbol": "createWorkspaceFocusController",
+              "relation": "implementation under test"
+            }
+          ],
+          "state_transition": {
+            "before": "Input inside closing panel",
+            "event": "Collapse then type or Tab",
+            "after": "Inert hidden panel cannot receive new focus"
+          },
+          "observation_rule": "fresh_after_action"
+        },
+        {
+          "id": "MOTION-07",
+          "title": "First paint oversized flash",
+          "steps": "Open panel at narrow available width with wide saved value; record first frames and settled width.",
+          "expected_or_question": "Host measures actual shared row before paint and clamps; no momentary giant panel or repeated layout flash.",
+          "availability": "Always inspect; execute when enabled.",
+          "source_support": "source_supported",
+          "execution_mode": "exercise",
+          "runtime_status": "not_exercised",
+          "observations": [],
+          "evidence_paths": [],
+          "source_references": [
+            {
+              "path": "apps/web/src/hooks/usePreviewPanelInlineSize.ts",
+              "line": 20,
+              "symbol": "usePreviewPanelInlineSize",
+              "relation": "implementation under test"
+            }
+          ],
+          "state_transition": {
+            "before": "Saved panel width exceeds available row",
+            "event": "Open panel at smaller available row",
+            "after": "First paint already clamped to row constraint"
+          },
+          "observation_rule": "fresh_after_action"
+        },
+        {
+          "id": "MOTION-08",
+          "title": "Motion settings preview and restoration design",
+          "steps": "Inspect Panel animations setting preview and current value. If parent elects a controlled settings test, record original, test supported25ms increments0–400, then restore exactly; this child makes no changes.",
+          "expected_or_question": "Preview communicates speed; actual panels follow effective duration; test restores initial settings.",
+          "availability": "Parent-controlled optional setting change only.",
+          "source_support": "source_supported",
+          "execution_mode": "inspect",
+          "runtime_status": "not_exercised",
+          "observations": [],
+          "evidence_paths": [],
+          "source_references": [
+            {
+              "path": "apps/web/src/components/settings/AppearanceSettingsPanel.tsx",
+              "line": 87,
+              "symbol": "AppearanceSettingsPanel",
+              "relation": "implementation under test"
+            }
+          ],
+          "state_transition": {
+            "before": "Original panel duration known",
+            "event": "Inspect preview; optional parent-controlled adjustment",
+            "after": "Actual duration tested then original restored if changed"
+          },
+          "observation_rule": "fresh_after_action"
+        },
+        {
+          "id": "MOTION-09",
+          "title": "Reduced motion observation",
+          "steps": "Record whether reduced motion is already active/visible in environment; inspect motion with current state.",
+          "expected_or_question": "Active reduced motion suppresses panel transitions regardless of configured ms. Do not change OS preference just to manufacture coverage.",
+          "availability": "Observable OS/app state; otherwise unknown.",
+          "source_support": "source_supported",
+          "execution_mode": "inspect",
+          "runtime_status": "not_exercised",
+          "observations": [],
+          "evidence_paths": [],
+          "source_references": [
+            {
+              "path": "apps/web/src/panelAnimations.ts",
+              "line": 31,
+              "symbol": "usePanelAnimationSettings",
+              "relation": "implementation under test"
+            }
+          ],
+          "state_transition": {
+            "before": "Current reduced-motion state known or unknown",
+            "event": "Observe effective transition gating",
+            "after": "Reduced motion suppresses transition or gate remains unverified"
+          },
+          "observation_rule": "fresh_after_action"
+        },
+        {
+          "id": "MOTION-10",
+          "title": "Cross-surface state motion",
+          "steps": "Observe tooltip/menu appearances, sidebar shelf/folder chevrons, tab reorder, loading progress, recording indicator and browser floating handoff.",
+          "expected_or_question": "Record each actual transition and disruption; source does not promise every surface animates. Look for snap/overlap/focus problems rather than treating animation presence as quality by itself.",
+          "availability": "Only currently reachable states.",
+          "source_support": "quality_probe",
+          "execution_mode": "exercise",
+          "runtime_status": "not_exercised",
+          "observations": [],
+          "evidence_paths": [],
+          "source_references": [
+            {
+              "path": "apps/web/src/components/Sidebar.motion.ts",
+              "line": 15,
+              "symbol": "createSidebarListMotion",
+              "relation": "subject of probe; outcome not asserted by this reference"
+            },
+            {
+              "path": "apps/web/src/components/Sidebar.shiftGuard.ts",
+              "line": 37,
+              "symbol": "createSidebarShiftGuard",
+              "relation": "subject of probe; outcome not asserted by this reference"
+            },
+            {
+              "path": "apps/web/src/components/preview/PreviewChromeRow.tsx",
+              "line": 53,
+              "symbol": "PreviewChromeRow",
+              "relation": "subject of probe; outcome not asserted by this reference"
+            }
+          ],
+          "state_transition": {
+            "before": "Hovered or loading or floating state active",
+            "event": "Trigger supported state changes",
+            "after": "Actual frame sequence and any disruption recorded"
+          },
+          "observation_rule": "fresh_after_action"
+        }
+      ]
+    }
+  ],
+  "observation_protocol": {
+    "id": "fresh_after_action",
+    "steps": [
+      "Record the pre-action route, selected thread, selected tab, focus target and observation timestamp or receipt.",
+      "Perform one intended action. Do not repeat an uncertain write automatically.",
+      "Request a fresh observation or capture after the action. Native accessibility snapshots may lag the screen.",
+      "If accessibility and screenshot disagree, record observation_lag and obtain a fresh capture or observable settled condition before classifying.",
+      "Confirm the target state in two consistent fresh observations when the first result is ambiguous.",
+      "Mark a product failure only when fresh visual or interaction evidence contradicts the expected transition. Preserve action and observation timestamps."
+    ],
+    "not_failure_by_itself": [
+      "stale accessibility tree",
+      "screenshot taken before action completed",
+      "missing source-only feature in different installed version",
+      "disabled capability without required account/runtime/hardware"
+    ]
+  },
+  "applied_principles": [
+    {
+      "name": "Experience First",
+      "skill": "/Users/josephwylie/.codex/pstack/skills/principle-experience-first/SKILL.md",
+      "choice": "Test complete interactions, motion, focus, spacing, loading and recovery rather than treating visible feature labels as completion."
+    },
+    {
+      "name": "Prove It Works",
+      "skill": "/Users/josephwylie/.codex/pstack/skills/principle-prove-it-works/SKILL.md",
+      "choice": "Require fresh post-action evidence matched to source transitions. Keep all 107 runtime cases unexercised until parent records real outcomes."
+    }
+  ],
+  "throughput_checkpoint": "n/a, read-only investigation"
+}

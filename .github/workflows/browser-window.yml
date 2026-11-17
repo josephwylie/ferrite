@@ -13,28 +13,6 @@ env:
 
 on:
   pull_request:
-    paths:
-      - 'scripts/*agent-browser*'
-      - 'scripts/native_browser_service.py'
-      - 'scripts/browser_processes.py'
-      - 'scripts/browser_resources.py'
-      - 'scripts/browser-window-*.py'
-      - 'scripts/bench/browser-controllers/**'
-      - 'scripts/probe-embedded-browser.py'
-      - 'scripts/patches/agent-browser*'
-      - 'scripts/test_package_agent_browser.py'
-      - '.github/workflows/browser-window.yml'
-      - 'scripts/probe-browser-window.py'
-      - 'scripts/*windows.ps1'
-      - 'scripts/install-app.sh'
-      - 'crates/ferrite-pane/src/visual/**'
-      - 'crates/ferrite-cockpit/src/cockpit/browser.rs'
-      - 'crates/ferrite-cockpit/src/cockpit/browser/**'
-      - 'crates/ferrite-core/src/browser*'
-      - 'crates/ferrite-core/src/browser*/**'
-      - 'crates/ferrite/src/lib.rs'
-      - 'crates/ferrite/Cargo.toml'
-      - 'vendor/gpui-pre*/**'
   workflow_dispatch:
 
 concurrency:
@@ -42,7 +20,30 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  scope:
+    runs-on: ubuntu-latest
+    outputs:
+      browser: ${{ steps.scope.outputs.browser }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - id: scope
+        name: Check architecture and select browser verification
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE: ${{ github.event.pull_request.base.sha }}
+        run: |
+          args=()
+          if [ "$EVENT" = pull_request ]; then args+=(--base "$BASE"); fi
+          python scripts/ci_scope.py "${args[@]}" --github-output "$GITHUB_OUTPUT"
+
   packaged-cef:
+    needs: scope
+    if: ${{ !cancelled() && needs.scope.outputs.browser != 'false' }}
     name: CEF pass, production Cockpit window (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: 75
@@ -209,6 +210,8 @@ jobs:
           if-no-files-found: warn
 
   focused-regressions:
+    needs: scope
+    if: ${{ !cancelled() && needs.scope.outputs.browser != 'false' }}
     name: Synthetic-engine pass, focused browser, provider and GPUI regressions
     runs-on: macos-latest
     timeout-minutes: 60
@@ -228,24 +231,49 @@ jobs:
         with:
           shared-key: browser-focused
           cache-on-failure: true
+      - name: Install nextest
+        uses: taiki-e/install-action@nextest
       - name: Compile the focused packages once
         id: focused-build
-        run: cargo test -p ferrite-core -p ferrite-pane -p ferrite-cockpit --locked --features ferrite-core/test-support --no-run
+        run: cargo nextest run -p ferrite-core -p ferrite-pane -p ferrite-cockpit --locked --features ferrite-core/test-support --no-run
       - name: Public browser, ownership, unknown-wire and annotation service regressions
         if: always() && steps.focused-build.outcome == 'success'
-        run: cargo test -p ferrite-core --locked --features test-support browser
+        run: cargo nextest run -p ferrite-core --locked --features test-support browser
       - name: Actual provider serialization regressions
         if: always() && steps.focused-build.outcome == 'success'
-        run: cargo test -p ferrite-core --locked --features test-support --test visuals --test claude_session --test codex_session
+        run: cargo nextest run -p ferrite-core --locked --features test-support --test visuals --test claude_session --test codex_session
       - name: Native view input and full viewport regressions
         if: always() && steps.focused-build.outcome == 'success'
-        run: cargo test -p ferrite-pane --locked --lib visual::element::tests
+        run: cargo nextest run -p ferrite-pane --locked --lib visual::element::tests
       - name: All annotation editor controls
         if: always() && steps.focused-build.outcome == 'success'
-        run: cargo test -p ferrite-pane --locked --lib annotation_editor
+        run: cargo nextest run -p ferrite-pane --locked --lib annotation_editor
       - name: Actual Cockpit annotation and browser host regressions
         if: always() && steps.focused-build.outcome == 'success'
-        run: cargo test -p ferrite-cockpit --locked --lib browser
+        run: cargo nextest run -p ferrite-cockpit --locked --lib browser
       - name: Existing preview shell regression boundary
         if: always() && steps.focused-build.outcome == 'success'
-        run: cargo test -p ferrite-cockpit --locked --lib cockpit::tests::panel_preview
+        run: cargo nextest run -p ferrite-cockpit --locked --lib cockpit::tests::panel_preview
+
+  verification:
+    name: Browser verification decisions
+    needs: [scope, packaged-cef, focused-regressions]
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require selected checks and explain intentional skips
+        env:
+          SCOPE: ${{ needs.scope.result }}
+          BROWSER: ${{ needs.scope.outputs.browser }}
+          PACKAGED: ${{ needs.packaged-cef.result }}
+          FOCUSED: ${{ needs.focused-regressions.result }}
+        run: |
+          test "$SCOPE" = success
+          if [ "$BROWSER" = false ]; then
+            test "$PACKAGED" = skipped
+            test "$FOCUSED" = skipped
+            echo 'No packaged browser inputs changed. Browser checks intentionally skipped.'
+          else
+            test "$PACKAGED" = success
+            test "$FOCUSED" = success
+          fi

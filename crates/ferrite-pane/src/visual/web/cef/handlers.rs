@@ -85,7 +85,12 @@ wrap_app! {
             // isolated packaged smoke opts into Chromium's mock implementation.
             command_line.remove_switch(Some(&"use-mock-keychain".into()));
             if cfg!(target_os = "macos")
-                && std::env::args().any(|argument| argument == "--visual-smoke")
+                && std::env::args().any(|argument| {
+                    argument == "--visual-smoke"
+                        || (cfg!(feature = "browser-smoke")
+                            && argument == "--browser-window-smoke"
+                            && std::env::var_os("FERRITE_BROWSER_PROFILE").is_some())
+                })
                 && std::env::var("FERRITE_BROWSER_SMOKE_MOCK_KEYCHAIN").as_deref() == Ok("1")
             {
                 command_line.append_switch(Some(&"use-mock-keychain".into()));

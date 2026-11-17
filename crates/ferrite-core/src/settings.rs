@@ -50,11 +50,15 @@ pub struct Settings {
     pub codex_sandbox: Option<String>,
     /// Whether the navigation rail is collapsed. Default: false.
     pub nav_collapsed: bool,
+    /// Preferred sidebar width. None uses the 256px default.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub nav_width_px: Option<f32>,
     /// Whether the Solo view's right panel (Changes, PR, Context) shows
     /// where the window has room for it; ⌥⌘B and its own hide button
     /// flip it. Default: false, as Claude opens with the transcript alone;
     /// a saved choice is kept.
     pub panel_shown: bool,
+    pub context_card_preferences: ContextCardPreferences,
     /// The Threads pinned to the top of the nav's list, in the order they
     /// were pinned (the row menu's `Pin`). An id whose Thread is gone is
     /// passed over. Default: none.
@@ -260,6 +264,90 @@ pub enum NavShelf {
     Parked,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ContextCardItem {
+    Environment,
+    OpenIn,
+    Scripts,
+    Branch,
+    GitActions,
+    Changes,
+    Servers,
+    Automations,
+    Lineage,
+    SideChats,
+    Usage,
+    Context,
+}
+
+impl ContextCardItem {
+    pub const ALL: [Self; 12] = [
+        Self::Environment, Self::OpenIn, Self::Scripts, Self::Branch,
+        Self::GitActions, Self::Changes, Self::Servers, Self::Automations,
+        Self::Lineage, Self::SideChats, Self::Usage, Self::Context,
+    ];
+
+    pub fn id(self) -> &'static str {
+        match self {
+            Self::Environment => "environment",
+            Self::OpenIn => "openIn",
+            Self::Scripts => "scripts",
+            Self::Branch => "branch",
+            Self::GitActions => "gitActions",
+            Self::Changes => "changes",
+            Self::Servers => "servers",
+            Self::Automations => "automations",
+            Self::Lineage => "lineage",
+            Self::SideChats => "sideChats",
+            Self::Usage => "usage",
+            Self::Context => "context",
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Environment => "Environment and worktree",
+            Self::OpenIn => "Open in editor",
+            Self::Scripts => "Project scripts",
+            Self::Branch => "Branch and pull request",
+            Self::GitActions => "Git actions",
+            Self::Changes => "Changes",
+            Self::Servers => "Servers",
+            Self::Automations => "Automations",
+            Self::Lineage => "Lineage",
+            Self::SideChats => "Side chats",
+            Self::Usage => "Usage limits",
+            Self::Context => "Context window",
+        }
+    }
+
+    pub fn default_visible(self) -> bool {
+        !matches!(self, Self::Usage | Self::Context)
+    }
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct ContextCardPreferences(BTreeMap<String, bool>);
+
+impl ContextCardPreferences {
+    pub fn visible(&self, item: ContextCardItem) -> bool {
+        self.0.get(item.id()).copied().unwrap_or_else(|| item.default_visible())
+    }
+
+    pub fn set(&mut self, item: ContextCardItem, visible: bool) {
+        if visible == item.default_visible() {
+            self.0.remove(item.id());
+        } else {
+            self.0.insert(item.id().to_string(), visible);
+        }
+    }
+
+    pub fn is_default(&self) -> bool {
+        ContextCardItem::ALL.into_iter().all(|item| self.visible(item) == item.default_visible())
+    }
+}
+
 impl Default for Settings {
     fn default() -> Self {
         Settings {
@@ -272,7 +360,9 @@ impl Default for Settings {
             codex_approval_policy: "on-request".to_string(),
             codex_sandbox: None,
             nav_collapsed: false,
+            nav_width_px: None,
             panel_shown: false,
+            context_card_preferences: ContextCardPreferences::default(),
             pinned_threads: Vec::new(),
             open_shelves: Vec::new(),
             confirm_delete: true,
@@ -512,7 +602,12 @@ mod tests {
             codex_approval_policy: "never".to_string(),
             codex_sandbox: Some("workspace-write".to_string()),
             nav_collapsed: true,
+            nav_width_px: Some(320.0),
             panel_shown: true,
+            context_card_preferences: ContextCardPreferences(BTreeMap::from([
+                ("environment".to_string(), false),
+                ("usage".to_string(), true),
+            ])),
             pinned_threads: vec![crate::ThreadId::new(7)],
             open_shelves: vec![NavShelf::Working, NavShelf::Parked],
             confirm_delete: false,
@@ -867,6 +962,25 @@ mod tests {
         settings.set_model_for(Provider::Claude, None);
         assert_eq!(settings.model_for(Provider::Claude), None);
         assert_eq!(settings.model_for(Provider::Codex), Some("gpt-5.4"));
+    }
+
+    #[test]
+    fn context_card_preferences_keep_only_explicit_departures_from_defaults() {
+        let mut prefs = ContextCardPreferences::default();
+        assert!(prefs.is_default());
+        for item in ContextCardItem::ALL {
+            assert_eq!(prefs.visible(item), !matches!(item, ContextCardItem::Usage | ContextCardItem::Context));
+        }
+        prefs.set(ContextCardItem::Environment, false);
+        prefs.set(ContextCardItem::Context, true);
+        assert!(!prefs.is_default());
+        let json = serde_json::to_value(&prefs).unwrap();
+        assert_eq!(json, serde_json::json!({"environment": false, "context": true}));
+        assert_eq!(serde_json::from_value::<ContextCardPreferences>(json).unwrap(), prefs);
+        prefs.set(ContextCardItem::Environment, true);
+        prefs.set(ContextCardItem::Context, false);
+        assert_eq!(serde_json::to_string(&prefs).unwrap(), "{}");
+        assert!(prefs.is_default());
     }
 
     #[test]

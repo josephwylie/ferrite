@@ -111,7 +111,24 @@ impl CockpitView {
 
     pub(super) fn history_arrows_element(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         if !self.nav_folded() {
-            return None;
+            return Some(
+                div()
+                    .debug_selector(|| "nav-titlebar".into())
+                    .absolute()
+                    .top_0()
+                    .left_0()
+                    .w(px(self.nav_width()))
+                    .h(px(theme::NAV_HEADER_H))
+                    .bg(theme::NAV_BACKGROUND)
+                    .flex()
+                    .items_center()
+                    .pl(px(theme::HISTORY_X))
+                    .font_family(theme::FONT_UI)
+                    .text_color(rgb(theme::INK_STRONG))
+                    .child(nav::list::grain(0.0))
+                    .child(nav::head(self.history_arrows(cx)))
+                    .into_any_element(),
+            );
         }
         let arrows = div()
             .absolute()
@@ -390,7 +407,7 @@ impl CockpitView {
 
     /// The parent's title drawn whole, as wide as the head would draw it.
     fn parent_title_w(&self, parent: ThreadId, cx: &gpui::App) -> f32 {
-        crate::nav::Measure::Text(cx).ui(self.facts.name(parent).as_ref(), theme::FS_TITLE, theme::W_LABEL)
+        crate::nav::Measure::Text(cx, self.nav_expanded_width()).ui(self.facts.name(parent).as_ref(), theme::FS_TITLE, theme::W_LABEL)
     }
 
     /// The head's spare width after the breadcrumb, laid out: once it says

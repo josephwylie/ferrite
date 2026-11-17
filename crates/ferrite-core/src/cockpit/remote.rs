@@ -8,12 +8,13 @@
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::io;
 use std::path::{Path, PathBuf};
-use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender, TryRecvError};
 use std::sync::Arc;
+use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender, TryRecvError};
 use std::time::{Duration, Instant};
 
 use base64::Engine as _;
 
+use crate::ThreadId;
 use crate::engine::{BootstrapResult, Bootstrapped};
 use crate::link;
 use crate::machine::{self, Bridge, Failure};
@@ -27,9 +28,8 @@ use crate::roster::DraftId;
 use crate::visual::{RenderRequest, Renderer};
 use crate::workspace::registry::ProjectId;
 use crate::workspace::{
-    parse_pr_json, DirEntry, ListedWorktree, Listing, PullRequest, RepoListing,
+    DirEntry, ListedWorktree, Listing, PullRequest, RepoListing, parse_pr_json,
 };
-use crate::ThreadId;
 use ferrite_reviewr::ferrite::{Bases, FileSides, Read};
 
 /// Where a review's read goes, and what it read: asked again as a
@@ -341,12 +341,19 @@ impl Remote {
     /// One act: sent, and its reply waited for. What the Server said
     /// before the reply waits in the inbox for the next `poll`.
     pub(crate) fn execute(&mut self, op: Op) -> Result<Option<Done>, WireError> {
+        let deadline = Instant::now() + REPLY_WAIT;
         let id = self.send_command(op)?;
         loop {
             let Some(attachment) = &self.attachment else {
                 return Err(gone(&self.detached));
             };
-            match attachment.client.messages.recv_timeout(REPLY_WAIT) {
+            let left = deadline.saturating_duration_since(Instant::now());
+            let received = if left.is_zero() {
+                Err(RecvTimeoutError::Timeout)
+            } else {
+                attachment.client.messages.recv_timeout(left)
+            };
+            match received {
                 Ok(ServerMessage::Reply {
                     id: replied,
                     ok,
@@ -355,14 +362,14 @@ impl Remote {
                     return match error {
                         Some(error) => Err(error),
                         None => Ok(ok),
-                    }
+                    };
                 }
                 Ok(message) => self.inbox.push_back(message),
                 Err(RecvTimeoutError::Timeout) => {
                     return Err(WireError {
                         code: ErrorCode::Unconfirmed,
                         message: "the Ferrite server did not answer in time".into(),
-                    })
+                    });
                 }
                 Err(RecvTimeoutError::Disconnected) => {
                     self.detach("the Ferrite server went away");
@@ -401,13 +408,13 @@ impl Remote {
                         io::ErrorKind::NotFound | io::ErrorKind::ConnectionRefused
                     ) =>
                 {
-                    return Ok(())
+                    return Ok(());
                 }
                 _ if Instant::now() >= deadline => {
                     return Err(io::Error::new(
                         io::ErrorKind::TimedOut,
                         "the Ferrite server is still running",
-                    ))
+                    ));
                 }
                 _ => std::thread::sleep(Duration::from_millis(25)),
             }
@@ -671,13 +678,31 @@ impl Remote {
         })
     }
 
+    pub(crate) fn browser_dispatch(
+        &mut self,
+        request: u64,
+        boot_id: String,
+        thread: ThreadId,
+        owner: crate::browser::Owner,
+        document: crate::browser::Document,
+        revision: u64,
+    ) -> io::Result<Receiver<io::Result<u64>>> {
+        self.ask(
+            Op::BrowserDispatch { request, boot_id, thread, owner, document, revision },
+            |done| match done {
+                Done::BrowserDispatch { remaining_ms } => Some(remaining_ms),
+                _ => None,
+            },
+        )
+    }
+
     pub(crate) fn browser_capture(
         &mut self,
         thread: ThreadId,
         owner: crate::browser::Owner,
         lease: crate::browser::Lease,
         capture: crate::browser_annotations::Capture,
-        png: crate::protocol::WirePng,
+        png: Option<crate::protocol::WirePng>,
     ) -> io::Result<Receiver<io::Result<crate::browser_annotations::Annotation>>> {
         let attachment = self
             .attachment
@@ -736,6 +761,23 @@ impl Remote {
             Done::Text { text } => Some(text),
             _ => None,
         })
+    }
+
+    pub(crate) fn review_pull_request_diff(
+        &mut self,
+        path: &Path,
+        number: u64,
+    ) -> io::Result<Receiver<io::Result<Vec<FileSides>>>> {
+        self.ask(
+            Op::ReviewPullRequestDiff {
+                path: path.to_path_buf(),
+                number,
+            },
+            |done| match done {
+                Done::Review { files } => Some(files.into_iter().map(Into::into).collect()),
+                _ => None,
+            },
+        )
     }
 
     pub(crate) fn review_pull_request(
@@ -1274,6 +1316,7 @@ fn hello(attach: &Attach) -> ClientMessage {
     }
     if attach.browser {
         capabilities.push(Capability::ConversationBrowser);
+        capabilities.push(Capability::BrowserDispatch);
     }
     capabilities.push(Capability::ParkedThreads);
     if attach.driven {

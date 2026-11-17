@@ -179,8 +179,7 @@ fn an_older_answer_never_replaces_a_newer_one(cx: &mut TestAppContext) {
     assert_eq!(title(&view, thread, cx).as_deref(), Some("After the merge"));
 }
 
-/// The branch moves to another PR while #48's read is out: #48's tab goes,
-/// and its late answer neither brings it back nor changes what shows.
+/// A branch change preserves explicit PR tabs and a late answer leaves the selected tab alone.
 #[gpui::test]
 fn a_pr_that_moved_on_mid_read_does_not_come_back(cx: &mut TestAppContext) {
     let (view, threads, cx) = held("pr-reads-moved", 1, cx);
@@ -193,14 +192,20 @@ fn a_pr_that_moved_on_mid_read_does_not_come_back(cx: &mut TestAppContext) {
         view.open_pr_surface(thread, cx);
     });
     tick(cx);
-    assert!(!tab_open(&view, thread, 48, cx), "the old PR's tab went");
+    assert!(
+        tab_open(&view, thread, 48, cx),
+        "an explicitly opened PR remains available"
+    );
     assert!(tab_open(&view, thread, 49, cx));
     let shown = view.read_with(cx, |view, _| view.active_surface(thread));
 
     late.answer(read_of(pr_at(48, "o/r", "The old PR")));
     tick(cx);
 
-    assert!(!tab_open(&view, thread, 48, cx), "not resurrected");
+    assert!(
+        tab_open(&view, thread, 48, cx),
+        "the prior PR remains available"
+    );
     assert_eq!(
         view.read_with(cx, |view, _| view.active_surface(thread)),
         shown
@@ -339,4 +344,17 @@ fn refresh_pr_status_rereads_the_open_tab(cx: &mut TestAppContext) {
     });
     assert_eq!(checks, ferrite_core::protocol::WireCheckStatus::Success);
     assert_eq!(comments, 0);
+}
+
+#[gpui::test]
+fn a_wrong_number_never_replaces_the_requested_pr(cx: &mut TestAppContext) {
+    let (view, threads, cx) = held("pr-reads-wrong-number", 1, cx);
+    let thread = threads[0];
+    open(&view, thread, cx);
+    let read = waiting(&view, cx).pop().unwrap();
+    read.answer(read_of(pr_at(99, "o/r", "Another pull request")));
+    until(cx, |cx| cx.debug_bounds("pr-failed").is_some());
+    assert!(tab_open(&view, thread, 48, cx));
+    assert!(cx.debug_bounds("pr-body").is_none());
+    assert!(view.read_with(cx, |view, _| view.pr_snapshot(thread).is_none()));
 }

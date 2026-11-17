@@ -42,6 +42,8 @@ mod signals;
 
 /// How long the pump waits for a client while any Thread is open: a frame.
 const PUMP: Duration = Duration::from_millis(16);
+/// Yield to Sessions and pending replies even while clients keep sending.
+const INTAKE_BATCH: usize = 64;
 /// How long it waits with none: only to notice a signal.
 const IDLE: Duration = Duration::from_millis(250);
 /// How often the memory watchdog samples the Sessions.
@@ -129,7 +131,7 @@ const USAGE_SERVICE: &str = "";
 /// clean stop, and for a second Server that found the Store taken — a
 /// failure would have launchd (or systemd) start it again and again.
 pub fn run(options: Options) -> i32 {
-    crate::diagnostics::open_as(&options.settings_dir, "server.log");
+    crate::diagnostics::open_server(&options.settings_dir);
     crate::login_shell::adopt_login_environment();
     if let Some(pid) = options.after {
         wait_for_exit(pid);
@@ -315,6 +317,7 @@ struct Client {
     welcomed: bool,
     renders_visuals: bool,
     browser_capable: bool,
+    browser_dispatch: bool,
     /// A `ferrite --headless` window: the `window.*` actions are its.
     driven: bool,
     watching: BTreeSet<ThreadId>,
@@ -506,7 +509,10 @@ impl Server {
                     return 1;
                 }
             }
-            while let Ok(heard) = hear.try_recv() {
+            for _ in 1..INTAKE_BATCH {
+                let Ok(heard) = hear.try_recv() else {
+                    break;
+                };
                 self.hear(heard);
             }
             self.tell_watched();
@@ -560,6 +566,7 @@ impl Server {
                         welcomed: false,
                         renders_visuals: false,
                         browser_capable: false,
+                        browser_dispatch: false,
                         driven: false,
                         watching: BTreeSet::new(),
                     },
@@ -602,6 +609,7 @@ impl Server {
                     client.renders_visuals = capabilities.contains(&Capability::RenderVisual);
                     client.browser_capable =
                         capabilities.contains(&Capability::ConversationBrowser);
+                    client.browser_dispatch = capabilities.contains(&Capability::BrowserDispatch);
                     client.driven = capabilities.contains(&Capability::Driven);
                     let mut snapshot = self.engine.snapshot();
                     snapshot.factory = Some(self.factory.board());
@@ -618,13 +626,14 @@ impl Server {
             ClientMessage::Command(command) => self.command(id, command),
             ClientMessage::BrowserReply {
                 request,
+                boot_id,
                 thread,
                 owner,
                 document,
                 revision,
                 outcome,
             } => {
-                self.answer_browser(id, request, thread, owner, document, revision, outcome);
+                self.answer_browser(id, request, boot_id.as_deref(), thread, owner, document, revision, outcome);
             }
             ClientMessage::BrowserPage {
                 thread,
@@ -712,13 +721,16 @@ impl Server {
             return;
         }
         let executed = match &op {
+            Op::BrowserDispatch { request, boot_id, thread, owner, document, revision } => {
+                self.dispatch_browser(id, *request, boot_id, *thread, *owner, *document, *revision)
+            }
             Op::BrowserCapture {
                 thread,
                 owner,
                 lease,
                 capture,
                 png,
-            } => self.browser_capture(id, request, *thread, *owner, *lease, capture.clone(), png),
+            } => self.browser_capture(id, request, *thread, *owner, *lease, capture.clone(), png.as_ref()),
             Op::BrowserCaptureImage { thread, hash } => {
                 self.browser_capture_image(id, request, *thread, hash)
             }
@@ -953,6 +965,17 @@ impl Server {
                     ferrite_reviewr::ferrite::read_file(&path, &file)
                         .map(|text| Some(Done::Text { text }))
                         .map_err(|notice| failed(notice.message()))
+                });
+                return;
+            }
+            Op::ReviewPullRequestDiff { path, number } => {
+                let (path, number, forge) = (path.clone(), *number, self.forge.clone());
+                self.read_off_pump(id, request, move || {
+                    ferrite_reviewr::forge::diff_numbered(&path, &forge, number)
+                        .map(|files| Some(Done::Review {
+                            files: files.into_iter().map(Into::into).collect(),
+                        }))
+                        .map_err(failed)
                 });
                 return;
             }

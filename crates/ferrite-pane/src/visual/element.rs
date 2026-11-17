@@ -68,6 +68,12 @@ pub struct WebView {
     browser_blur: Option<gpui::Subscription>,
 }
 
+impl gpui::Focusable for WebView {
+    fn focus_handle(&self, _: &App) -> gpui::FocusHandle {
+        self.inner.focus.clone()
+    }
+}
+
 /// How close to the screen the host says the view is. A list knows; the view
 /// can't, since an element that isn't painted is never laid out.
 #[derive(Clone, Copy, Debug, PartialEq)]

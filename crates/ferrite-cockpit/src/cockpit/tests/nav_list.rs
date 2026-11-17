@@ -367,13 +367,12 @@ fn two_decisions_head_the_list_and_no_toast(cx: &mut TestAppContext) {
 /// plus its hysteresis. cmd-B overrides it.
 #[gpui::test]
 fn a_narrow_window_folds_the_nav_without_saving_it(cx: &mut TestAppContext) {
-    use ferrite_ui::theme::{NAV_AUTO_FOLD_BOARD_W, NAV_AUTO_FOLD_HYSTERESIS, NAV_COLUMN_W};
+    use ferrite_ui::theme::{NAV_AUTO_FOLD_BOARD_W, NAV_AUTO_FOLD_HYSTERESIS};
     let (core, _fake) = cockpit("nav-auto-fold", 1);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     hide_panel(&view, cx);
     let saved = view.read_with(cx, |view, _| view.prefs.settings.nav_collapsed);
     // A Solo Pane leaves no gutter at the window's edge (theme rule 2).
-    let threshold = NAV_COLUMN_W + NAV_AUTO_FOLD_BOARD_W;
     cx.simulate_resize(gpui::size(px(720.), px(900.)));
     tick(cx);
     assert!(
@@ -393,6 +392,7 @@ fn a_narrow_window_folds_the_nav_without_saving_it(cx: &mut TestAppContext) {
         (false, saved),
         "nothing is saved"
     );
+    let threshold = view.read_with(cx, |view, _| view.nav_expanded_width()) + NAV_AUTO_FOLD_BOARD_W;
     cx.simulate_resize(gpui::size(px(threshold + 1.), px(900.)));
     tick(cx);
     assert!(view.read_with(cx, |view, _| view.nav_folded()), "held");
@@ -844,9 +844,12 @@ fn cmd_b_collapses_the_nav_and_the_cells_grow_a_level(cx: &mut TestAppContext) {
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     hide_panel(&view, cx);
     hold_nav_open(&view, cx);
-    // Sized so the Transcript threshold sits between the two nav
-    // widths: a wall tile beside the full column, Transcript without it.
-    cx.simulate_resize(gpui::size(px(550.), px(700.)));
+    // A narrow window holds the nav at its minimum: the cell beside it
+    // falls short of the Transcript threshold, and folded clears it by
+    // the hysteresis.
+    let width = ferrite_ui::theme::NAV_MIN_W + ferrite_core::docview::TRANSCRIPT_WIDTH
+        - ferrite_ui::theme::LEVEL_HYSTERESIS;
+    cx.simulate_resize(gpui::size(px(width), px(700.)));
     tick(cx);
     let expanded = cx.update(|window, cx| view.read(cx).level_now(window));
     assert_eq!(

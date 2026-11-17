@@ -62,16 +62,23 @@ fn cite_alpha(view: &gpui::Entity<CockpitView>, cx: &mut gpui::VisualTestContext
         .expect("Cite draws");
     cx.simulate_click(cite.center(), gpui::Modifiers::none());
     tick(cx);
+    assert!(
+        cx.debug_bounds("cite-comment-field").is_some(),
+        "Cite opens the comment popover directly"
+    );
+    cx.simulate_keystrokes("enter");
+    tick(cx);
 }
 
-fn open_chip(cx: &mut gpui::VisualTestContext, index: usize) {
-    let selector = ["cite-chip-0", "cite-chip-1"][index];
-    let chip = cx.debug_bounds(selector).expect("a chip");
-    cx.simulate_click(
-        gpui::point(chip.left() + px(24.), chip.center().y),
-        gpui::Modifiers::none(),
+fn open_comment(cx: &mut gpui::VisualTestContext, index: usize) {
+    if cx.debug_bounds("cite-comment-field").is_some() {
+        cx.simulate_keystrokes("escape");
+        tick(cx);
+    }
+    click(
+        cx,
+        ["cite-chip-0-comment-trigger", "cite-chip-1-comment-trigger"][index],
     );
-    tick(cx);
 }
 
 fn click(cx: &mut gpui::VisualTestContext, selector: &'static str) {
@@ -89,15 +96,15 @@ fn click(cx: &mut gpui::VisualTestContext, selector: &'static str) {
 fn a_citation_is_commented_edited_and_removed_through_its_controls(cx: &mut TestAppContext) {
     let (view, cx) = conversation("cite-comment", cx, PARAGRAPHS);
     cite_alpha(&view, cx);
-    open_chip(cx, 0);
-    assert!(cx.debug_bounds("cite-panel").is_some(), "the chip opens");
+    open_comment(cx, 0);
     assert!(
-        cx.debug_bounds("cite-quote").is_some(),
-        "to its whole quote"
+        cx.debug_bounds("cite-panel").is_some(),
+        "the pencil opens the editor"
     );
-    assert!(cx.debug_bounds("cite-source").is_some(), "and its source");
-
-    click(cx, "cite-edit");
+    assert!(
+        cx.debug_bounds("cite-quote").is_none(),
+        "no inspection step"
+    );
     assert!(cx.debug_bounds("cite-comment-field").is_some());
     cx.simulate_input("first line");
     cx.simulate_keystrokes("shift-enter");
@@ -108,16 +115,13 @@ fn a_citation_is_commented_edited_and_removed_through_its_controls(cx: &mut Test
         quotes(&replies(&view, cx)),
         [("alph", "first line\nsecond line")]
     );
-    assert!(
-        cx.debug_bounds("cite-comment").is_some(),
-        "the comment shows"
-    );
+    open_comment(cx, 0);
     assert!(
         cx.debug_bounds("cite-chip-0-comment").is_some(),
         "the chip marks it"
     );
 
-    click(cx, "cite-edit");
+    open_comment(cx, 0);
     cx.simulate_input(" and more");
     cx.simulate_keystrokes("escape");
     tick(cx);
@@ -131,7 +135,7 @@ fn a_citation_is_commented_edited_and_removed_through_its_controls(cx: &mut Test
         "esc keeps what was saved"
     );
 
-    click(cx, "cite-edit");
+    open_comment(cx, 0);
     cx.simulate_input(" and more");
     cx.simulate_keystrokes("enter");
     tick(cx);
@@ -141,7 +145,8 @@ fn a_citation_is_commented_edited_and_removed_through_its_controls(cx: &mut Test
         [("alph", "first line\nsecond line and more")]
     );
 
-    click(cx, "cite-remove");
+    open_comment(cx, 0);
+    click(cx, "cite-chip-0-remove");
     assert!(replies(&view, cx).is_empty());
     assert!(cx.debug_bounds("cite-chip-0").is_none());
 }
@@ -152,8 +157,7 @@ fn a_citation_is_commented_edited_and_removed_through_its_controls(cx: &mut Test
 fn a_click_on_the_main_line_leaves_the_comment_field(cx: &mut TestAppContext) {
     let (view, cx) = conversation("cite-main-line", cx, PARAGRAPHS);
     cite_alpha(&view, cx);
-    open_chip(cx, 0);
-    click(cx, "cite-edit");
+    open_comment(cx, 0);
     cx.simulate_input("note");
 
     let line = cx
@@ -164,7 +168,10 @@ fn a_click_on_the_main_line_leaves_the_comment_field(cx: &mut TestAppContext) {
     tick(cx);
     cx.simulate_input(" MAINTEXT");
     tick(cx);
-    click(cx, "cite-save");
+    assert!(
+        cx.debug_bounds("cite-panel").is_none(),
+        "outside press closes and saves the comment"
+    );
 
     let main = view.read_with(cx, |view, cx| {
         view.panes[0].composer.read(cx).text().to_string()
@@ -213,8 +220,7 @@ fn a_citation_keeps_its_comment_and_source_across_a_restart(cx: &mut TestAppCont
         .unwrap();
     tick(cx);
     cite_alpha(&view, cx);
-    open_chip(cx, 0);
-    click(cx, "cite-edit");
+    open_comment(cx, 0);
     cx.simulate_input("why this?");
     cx.simulate_keystrokes("enter");
     tick(cx);
@@ -270,12 +276,14 @@ fn go_to_source_returns_to_the_message_or_says_it_is_gone(cx: &mut TestAppContex
     tick(cx);
     let away = transcript.read_with(cx, |transcript, _| transcript.scroll().offset());
 
-    open_chip(cx, 0);
-    click(cx, "cite-source");
+    click(cx, "cite-chip-0-source");
     assert!(
         cx.debug_bounds("cite-source-missing").is_none(),
         "the message is there"
     );
+    for _ in 0..8 {
+        tick(cx);
+    }
     let back = transcript.read_with(cx, |transcript, _| transcript.scroll().offset());
     assert_ne!(back, away, "the transcript scrolled to it");
 
@@ -293,15 +301,13 @@ fn go_to_source_returns_to_the_message_or_says_it_is_gone(cx: &mut TestAppContex
         })
     });
     tick(cx);
-    open_chip(cx, 1);
-    click(cx, "cite-source");
+    click(cx, "cite-chip-1-source");
+    assert!(view.read_with(cx, |view, cx| {
+        view.panes[0].composer.read(cx).is_source_missing(1)
+    }));
     assert!(
-        cx.debug_bounds("cite-source-missing").is_some(),
-        "the chip says so"
-    );
-    assert!(
-        cx.debug_bounds("cite-source").is_some(),
-        "and can ask again once the history arrives"
+        cx.debug_bounds("cite-chip-1-source").is_some(),
+        "the source can be retried"
     );
     assert_eq!(
         quotes(&replies(&view, cx))[1],
@@ -327,6 +333,8 @@ fn the_tray_stays_bounded_in_a_narrow_pane(cx: &mut TestAppContext) {
             .debug_bounds("selection-reply-quote")
             .unwrap_or_else(|| panic!("Cite draws after {from:?} {to:?}"));
         cx.simulate_click(cite.center(), gpui::Modifiers::none());
+        tick(cx);
+        cx.simulate_keystrokes("enter");
         tick(cx);
     }
     assert_eq!(replies(&view, cx).len(), 5);
@@ -359,8 +367,7 @@ fn the_tray_stays_bounded_in_a_narrow_pane(cx: &mut TestAppContext) {
 fn send_keeps_a_comment_still_open_in_its_field(cx: &mut TestAppContext) {
     let (view, sent, cx) = conversation_sent("cite-send-open", cx, PARAGRAPHS);
     cite_alpha(&view, cx);
-    open_chip(cx, 0);
-    click(cx, "cite-edit");
+    open_comment(cx, 0);
     cx.simulate_input("note to keep");
     let line = cx
         .debug_bounds("focused-prompt-editor")
@@ -377,23 +384,17 @@ fn send_keeps_a_comment_still_open_in_its_field(cx: &mut TestAppContext) {
     assert!(replies(&view, cx).is_empty(), "the draft is sent");
 }
 
-/// An open chip's controls stand in the order Tab walks them (paint
-/// order): the comment action, then where it came from, then Close, and
-/// Remove, which deletes the quote, last.
 #[gpui::test]
-fn an_open_chips_controls_end_with_remove(cx: &mut TestAppContext) {
+fn citation_editor_controls_place_cancel_before_save(cx: &mut TestAppContext) {
     let (view, cx) = conversation("cite-tab-order", cx, PARAGRAPHS);
     cite_alpha(&view, cx);
-    open_chip(cx, 0);
-    let at = |cx: &mut gpui::VisualTestContext, selector: &'static str| {
-        cx.debug_bounds(selector)
-            .unwrap_or_else(|| panic!("{selector} is drawn"))
-    };
-    let (edit, source) = (at(cx, "cite-edit"), at(cx, "cite-source"));
-    let (close, remove) = (at(cx, "cite-close"), at(cx, "cite-remove"));
-    assert!(edit.top() < source.top(), "comment before source");
-    assert!(source.top() < close.top(), "source before Close");
-    assert!(close.left() < remove.left(), "Remove after Close");
+    open_comment(cx, 0);
+    let cancel = cx.debug_bounds("cite-cancel").unwrap();
+    let save = cx.debug_bounds("cite-save").unwrap();
+    assert!(cancel.left() < save.left());
+    assert_eq!(cancel.top(), save.top());
+    assert!(cx.debug_bounds("cite-source").is_none());
+    assert!(cx.debug_bounds("cite-close").is_none());
 }
 
 /// Only the field that holds the keyboard shows a caret: the main line's
@@ -429,8 +430,7 @@ fn only_the_field_holding_the_keyboard_shows_a_caret(cx: &mut TestAppContext) {
     tick(cx);
     assert!(carets(cx) > 0, "the premise: the main line draws a caret");
     cite_alpha(&view, cx);
-    open_chip(cx, 0);
-    click(cx, "cite-edit");
+    open_comment(cx, 0);
     assert_eq!(
         carets(cx),
         0,
@@ -529,7 +529,10 @@ fn a_sent_quote_says_when_its_source_is_gone(cx: &mut TestAppContext) {
     assert!(sent.borrow().last().is_some());
     click(cx, "quote-row-0-go");
     assert!(cx.debug_bounds("quote-row-0-go").is_none());
-    assert!(cx.debug_bounds("quote-row-0-source").is_some(), "it says so");
+    assert!(
+        cx.debug_bounds("quote-row-0-source").is_some(),
+        "it says so"
+    );
 }
 
 /// A source the transcript does not hold yet is "unavailable" only until it
@@ -544,7 +547,9 @@ fn a_source_that_arrives_later_is_no_longer_unavailable(cx: &mut TestAppContext)
     cx.simulate_resize(gpui::size(px(1000.), px(700.)));
     let stream = fake.streams.borrow()[0].clone();
     let answer = |text: &str| {
-        stream.send(SessionEvent::TextDelta { text: text.into() }).unwrap();
+        stream
+            .send(SessionEvent::TextDelta { text: text.into() })
+            .unwrap();
         stream
             .send(SessionEvent::TurnEnded {
                 outcome: ferrite_core::TurnOutcome::Completed,
@@ -557,9 +562,12 @@ fn a_source_that_arrives_later_is_no_longer_unavailable(cx: &mut TestAppContext)
     cite_alpha(&view, cx);
     let cited = replies(&view, cx)[0].source.expect("cited").block;
     let id: u64 = serde_json::to_string(&cited).unwrap().parse().unwrap();
-    let later: ferrite_core::transcript::BlockId = serde_json::from_str(&(id + 20).to_string()).unwrap();
-    let reply = ferrite_core::replies::Reply::new("a passage to come", "")
-        .cited_from(Source { thread, block: later });
+    let later: ferrite_core::transcript::BlockId =
+        serde_json::from_str(&(id + 20).to_string()).unwrap();
+    let reply = ferrite_core::replies::Reply::new("a passage to come", "").cited_from(Source {
+        thread,
+        block: later,
+    });
     view.update(cx, |view, cx| {
         view.panes[0]
             .composer
@@ -572,13 +580,18 @@ fn a_source_that_arrives_later_is_no_longer_unavailable(cx: &mut TestAppContext)
     cx.simulate_keystrokes("enter");
     tick(cx);
     click(cx, "quote-row-1-go");
-    assert!(cx.debug_bounds("quote-row-1-go").is_none(), "it says it is unavailable");
+    assert!(
+        cx.debug_bounds("quote-row-1-go").is_none(),
+        "it says it is unavailable"
+    );
     let transcript = view.read_with(cx, |view, _| view.panes[0].transcript().unwrap());
     for round in 0..30 {
         if transcript.read_with(cx, |transcript, _| transcript.holds_block(later)) {
             break;
         }
-        let _ = view.update(cx, |view, _| view.cockpit.send(thread, format!("more {round}")));
+        let _ = view.update(cx, |view, _| {
+            view.cockpit.send(thread, format!("more {round}"))
+        });
         answer(&format!("answer {round}\n\n"));
         tick(cx);
     }
@@ -598,7 +611,7 @@ fn a_source_that_arrives_later_is_no_longer_unavailable(cx: &mut TestAppContext)
 }
 
 /// A prompt, then an answer of `lines` paragraphs, the last one cited and
-/// the tray's chip opened: the pinned band covers the top of the view.
+/// saved. The pinned band covers the top of the view.
 fn cited_answer<'a>(
     name: &str,
     lines: usize,
@@ -628,9 +641,17 @@ fn cited_answer<'a>(
         .unwrap();
     tick(cx);
     drag(&view, cx, (lines, 0), (lines, 8));
-    let cite = cx.debug_bounds("selection-reply-quote").expect("Cite draws");
+    let cite = cx
+        .debug_bounds("selection-reply-quote")
+        .expect("Cite draws");
     cx.simulate_click(cite.center(), gpui::Modifiers::none());
     tick(cx);
+    cx.simulate_keystrokes("enter");
+    tick(cx);
+    assert!(
+        cx.debug_bounds("cite-panel").is_none(),
+        "save the citation before navigating"
+    );
     let block = replies(&view, cx)[0].source.expect("cited").block;
     let transcript = view.read_with(cx, |view, _| view.panes[0].transcript().unwrap());
     (transcript, block, cx)
@@ -645,9 +666,15 @@ fn row_against_band(
 ) -> (gpui::Pixels, gpui::Pixels, gpui::Pixels) {
     transcript.read_with(cx, |transcript, _| {
         let scroll = transcript.scroll();
-        let row = transcript.block_row_bounds(block).expect("the row is laid out");
+        let row = transcript
+            .block_row_bounds(block)
+            .expect("the row is laid out");
         let viewport = scroll.bounds();
-        (row.top(), viewport.top() + scroll.top_mask(), viewport.bottom())
+        (
+            row.top(),
+            viewport.top() + scroll.top_mask(),
+            viewport.bottom(),
+        )
     })
 }
 
@@ -655,7 +682,11 @@ fn row_against_band(
 fn passage_against_view(
     transcript: &gpui::Entity<ferrite_pane::transcript::TranscriptView>,
     cx: &mut gpui::VisualTestContext,
-) -> (Option<gpui::Bounds<gpui::Pixels>>, gpui::Pixels, gpui::Pixels) {
+) -> (
+    Option<gpui::Bounds<gpui::Pixels>>,
+    gpui::Pixels,
+    gpui::Pixels,
+) {
     transcript.read_with(cx, |transcript, _| {
         let scroll = transcript.scroll();
         let viewport = scroll.bounds();
@@ -678,8 +709,7 @@ fn go_to_source_lands_the_cited_passage_in_view(cx: &mut TestAppContext) {
     tick(cx);
     let (top, _, bottom) = row_against_band(&transcript, block, cx);
     assert!(top < bottom, "the answer is on screen");
-    open_chip(cx, 0);
-    click(cx, "cite-source");
+    click(cx, "cite-chip-0-source");
     for _ in 0..4 {
         tick(cx);
     }
@@ -696,11 +726,12 @@ fn go_to_source_lands_the_cited_passage_in_view(cx: &mut TestAppContext) {
 fn go_to_source_leaves_a_visible_passage_where_it_is(cx: &mut TestAppContext) {
     let (transcript, block, cx) = cited_answer("cite-passage-in-place", 40, cx);
     let (top, floor, _) = row_against_band(&transcript, block, cx);
-    assert!(top < floor, "the answer's top is under the band; the passage is in view");
-    open_chip(cx, 0);
-    tick(cx);
+    assert!(
+        top < floor,
+        "the answer's top is under the band; the passage is in view"
+    );
     let before = transcript.read_with(cx, |transcript, _| transcript.scroll().offset());
-    click(cx, "cite-source");
+    click(cx, "cite-chip-0-source");
     for _ in 0..4 {
         tick(cx);
     }
@@ -720,8 +751,7 @@ fn a_wheel_right_after_go_to_source_is_not_undone(cx: &mut TestAppContext) {
         transcript.scroll_to(ferrite_pane::transcript::ScrollTarget::Top, cx)
     });
     tick(cx);
-    open_chip(cx, 0);
-    click(cx, "cite-source");
+    click(cx, "cite-chip-0-source");
     let viewport = transcript.read_with(cx, |transcript, _| transcript.scroll().bounds());
     cx.simulate_event(gpui::ScrollWheelEvent {
         position: viewport.center(),
@@ -734,7 +764,10 @@ fn a_wheel_right_after_go_to_source_is_not_undone(cx: &mut TestAppContext) {
         tick(cx);
     }
     let (found, ..) = passage_against_view(&transcript, cx);
-    assert!(found.is_none(), "the wheel dropped the landing and its mark");
+    assert!(
+        found.is_none(),
+        "the wheel dropped the landing and its mark"
+    );
     let after = transcript.read_with(cx, |transcript, _| transcript.scroll().offset());
     assert_eq!(after, held, "the landing did not pull the view back");
 }
@@ -772,14 +805,15 @@ fn go_to_source_clears_the_band_of_the_turn_it_lands_in(cx: &mut TestAppContext)
     });
     tick(cx);
     drag(&view, cx, (5, 0), (5, 7));
-    let cite = cx.debug_bounds("selection-reply-quote").expect("Cite draws");
+    let cite = cx
+        .debug_bounds("selection-reply-quote")
+        .expect("Cite draws");
     cx.simulate_click(cite.center(), gpui::Modifiers::none());
     tick(cx);
     transcript.update(cx, |transcript, cx| transcript.scroll_to_bottom(cx));
     tick(cx);
     let later_floor = transcript.read_with(cx, |transcript, _| transcript.scroll().top_mask());
-    open_chip(cx, 0);
-    click(cx, "cite-source");
+    click(cx, "cite-chip-0-source");
     for _ in 0..4 {
         tick(cx);
     }
@@ -791,4 +825,289 @@ fn go_to_source_clears_the_band_of_the_turn_it_lands_in(cx: &mut TestAppContext)
     );
     let mask = transcript.read_with(cx, |transcript, _| transcript.scroll().top_mask());
     assert!(mask > later_floor, "the earlier turn's band is the taller");
+}
+
+#[gpui::test]
+fn cite_opens_an_anchored_comment_popover_without_growing_the_tray(cx: &mut TestAppContext) {
+    let (view, cx) = conversation("cite-popover", cx, PARAGRAPHS);
+    let line_before = cx.debug_bounds("focused-prompt-editor").unwrap();
+    drag(&view, cx, (3, 0), (3, 4));
+    click(cx, "selection-reply-quote");
+    let popup = cx.debug_bounds("cite-panel").expect("Cite opens a popover");
+    assert_eq!(popup.size.width, px(320.));
+    assert!(
+        cx.debug_bounds("cite-quote").is_none(),
+        "the popup opens directly to the editor"
+    );
+    assert!(
+        cx.debug_bounds("cite-edit").is_none(),
+        "there is no second Add comment step"
+    );
+    let field = cx.debug_bounds("cite-comment-field").unwrap();
+    assert!(field.size.height >= px(64.));
+    assert_eq!(cx.debug_bounds("cite-save").unwrap().size.height, px(28.));
+    assert!(
+        popup.bottom() < line_before.top(),
+        "the popup floats by the selected answer"
+    );
+    cx.simulate_input("This belongs to the selected text");
+    cx.simulate_keystrokes("enter");
+    tick(cx);
+    assert!(
+        cx.debug_bounds("cite-panel").is_none(),
+        "saving closes the popup"
+    );
+    assert_eq!(
+        quotes(&replies(&view, cx)),
+        [("alph", "This belongs to the selected text")]
+    );
+    let tray = cx.debug_bounds("pending-attachment-body").unwrap();
+    assert!(
+        tray.size.height <= px(40.),
+        "the tray holds the chip, not the popup"
+    );
+    click(cx, "cite-chip-0-comment-trigger");
+    let popup = cx.debug_bounds("cite-panel").unwrap();
+    let chip = cx.debug_bounds("cite-chip-0").unwrap();
+    assert!(
+        popup.bottom() <= chip.top(),
+        "reopened comment hangs above its chip"
+    );
+    cx.simulate_input(" discard");
+    cx.simulate_keystrokes("escape");
+    tick(cx);
+    assert_eq!(
+        quotes(&replies(&view, cx)),
+        [("alph", "This belongs to the selected text")]
+    );
+}
+
+#[gpui::test]
+fn citation_comment_limit_blocks_save_send_and_outside_dismissal(cx: &mut TestAppContext) {
+    let (view, sent, cx) = conversation_sent("cite-comment-limit", cx, PARAGRAPHS);
+    cite_alpha(&view, cx);
+    open_comment(cx, 0);
+    cx.simulate_input(&"😀".repeat(4_001));
+    tick(cx);
+    assert!(cx.debug_bounds("cite-comment-too-long").is_some());
+    cx.simulate_keystrokes("enter");
+    cx.simulate_keystrokes("cmd-enter");
+    tick(cx);
+    assert!(sent.borrow().is_empty());
+    assert_eq!(replies(&view, cx)[0].text, "");
+    let line = cx
+        .debug_bounds("focused-prompt-editor")
+        .or_else(|| cx.debug_bounds("prompt-editor"))
+        .unwrap();
+    cx.simulate_click(line.center(), gpui::Modifiers::none());
+    tick(cx);
+    assert!(
+        cx.debug_bounds("cite-panel").is_some(),
+        "an invalid draft remains open"
+    );
+    click(cx, "cite-cancel");
+    assert!(cx.debug_bounds("cite-panel").is_none());
+    assert_eq!(replies(&view, cx)[0].text, "");
+}
+
+#[gpui::test]
+fn command_enter_saves_the_comment_and_sends_the_prompt(cx: &mut TestAppContext) {
+    let (view, sent, cx) = conversation_sent("cite-comment-send", cx, PARAGRAPHS);
+    cite_alpha(&view, cx);
+    open_comment(cx, 0);
+    cx.simulate_input("Please explain this");
+    cx.simulate_keystrokes("cmd-enter");
+    tick(cx);
+    assert_eq!(
+        sent.borrow().last().map(String::as_str),
+        Some("> alph\n\n↩ Please explain this")
+    );
+    assert!(cx.debug_bounds("cite-panel").is_none());
+}
+
+#[gpui::test]
+fn citation_body_navigates_without_opening_an_inspection_popup(cx: &mut TestAppContext) {
+    let (view, cx) = conversation("cite-direct-source", cx, PARAGRAPHS);
+    cite_alpha(&view, cx);
+    click(cx, "cite-chip-0-source");
+    assert!(cx.debug_bounds("cite-panel").is_none());
+    assert_eq!(replies(&view, cx)[0].quote, "alph");
+}
+
+#[gpui::test]
+fn cancelling_a_new_citation_removes_it(cx: &mut TestAppContext) {
+    let (view, cx) = conversation("cite-cancel-new", cx, PARAGRAPHS);
+    drag(&view, cx, (3, 0), (3, 4));
+    click(cx, "selection-reply-quote");
+    cx.simulate_input("discard this");
+    cx.simulate_keystrokes("escape");
+    tick(cx);
+    assert!(replies(&view, cx).is_empty());
+    assert!(cx.debug_bounds("cite-panel").is_none());
+}
+
+#[gpui::test]
+fn citation_popup_follows_the_source_after_scrolling(cx: &mut TestAppContext) {
+    let text = (0..35)
+        .map(|n| format!("Paragraph {n:02} with enough words to identify it.\n\n"))
+        .collect::<String>();
+    let (view, cx) = conversation("cite-moving-source", cx, &text);
+    let transcript = view.read_with(cx, |view, _| view.panes[0].transcript().unwrap());
+    transcript.update(cx, |transcript, cx| {
+        transcript.scroll_to(ferrite_pane::transcript::ScrollTarget::Top, cx)
+    });
+    tick(cx);
+    drag(&view, cx, (5, 0), (5, 12));
+    click(cx, "selection-reply-quote");
+    let before = cx.debug_bounds("cite-panel").unwrap();
+    let viewport = transcript.read_with(cx, |transcript, _| transcript.scroll().bounds());
+    cx.simulate_event(gpui::ScrollWheelEvent {
+        position: gpui::point(viewport.left() + px(20.), viewport.top() + px(20.)),
+        delta: gpui::ScrollDelta::Pixels(gpui::point(px(0.), px(-40.))),
+        ..Default::default()
+    });
+    tick(cx);
+    let after = cx
+        .debug_bounds("cite-panel")
+        .expect("source remains mounted");
+    assert!(
+        after.top() < before.top(),
+        "the popup follows native source geometry"
+    );
+    assert_eq!(replies(&view, cx)[0].quote, "Paragraph 05");
+}
+
+#[gpui::test]
+fn citation_comment_survives_source_text_appends(cx: &mut TestAppContext) {
+    let (core, fake) = cockpit("cite-streaming-source", 1);
+    bind_production_keys(cx);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(1000.), px(700.)));
+    fake.streams.borrow()[0]
+        .send(SessionEvent::TextDelta {
+            text: PARAGRAPHS.into(),
+        })
+        .unwrap();
+    tick(cx);
+    drag(&view, cx, (3, 0), (3, 4));
+    click(cx, "selection-reply-quote");
+    cx.simulate_input("keep this draft");
+    fake.streams.borrow()[0]
+        .send(SessionEvent::TextDelta {
+            text: "more source text\n\n".into(),
+        })
+        .unwrap();
+    tick(cx);
+    assert!(
+        cx.debug_bounds("cite-comment-field").is_some(),
+        "streaming repairs source membership"
+    );
+    cx.simulate_keystrokes("enter");
+    tick(cx);
+    assert_eq!(replies(&view, cx)[0].text, "keep this draft");
+}
+
+#[gpui::test]
+fn clicking_an_open_pencil_commits_and_closes_the_comment(cx: &mut TestAppContext) {
+    let (view, cx) = conversation("cite-toggle-pencil", cx, PARAGRAPHS);
+    cite_alpha(&view, cx);
+    open_comment(cx, 0);
+    cx.simulate_input("save on toggle");
+    click(cx, "cite-chip-0-comment-trigger");
+    assert!(cx.debug_bounds("cite-panel").is_none());
+    assert_eq!(replies(&view, cx)[0].text, "save on toggle");
+}
+
+fn remove_citation_source(view: &gpui::Entity<CockpitView>, cx: &mut gpui::VisualTestContext) {
+    let document = view.read_with(cx, |view, cx| {
+        view.panes[0]
+            .transcript()
+            .unwrap()
+            .read(cx)
+            .selection_document()
+    });
+    cx.update(|window, cx| {
+        document.sync_members(Vec::new(), cx);
+        window.refresh();
+    });
+    tick(cx);
+}
+
+#[gpui::test]
+fn disappearing_source_saves_a_valid_comment_and_restores_focus(cx: &mut TestAppContext) {
+    let (view, cx) = conversation("cite-source-disappears", cx, PARAGRAPHS);
+    drag(&view, cx, (3, 0), (3, 4));
+    click(cx, "selection-reply-quote");
+    cx.simulate_input("keep when source disappears");
+    remove_citation_source(&view, cx);
+    assert!(cx.debug_bounds("cite-panel").is_none());
+    assert_eq!(replies(&view, cx)[0].text, "keep when source disappears");
+    cx.simulate_input("main prompt");
+    assert_eq!(
+        view.read_with(cx, |view, cx| view.panes[0]
+            .composer
+            .read(cx)
+            .text()
+            .to_owned()),
+        "main prompt"
+    );
+}
+
+#[gpui::test]
+fn disappearing_source_keeps_an_invalid_comment_above_its_pencil(cx: &mut TestAppContext) {
+    let (view, cx) = conversation("cite-source-invalid", cx, PARAGRAPHS);
+    drag(&view, cx, (3, 0), (3, 4));
+    click(cx, "selection-reply-quote");
+    cx.simulate_input(&"x".repeat(8_001));
+    remove_citation_source(&view, cx);
+    let popup = cx
+        .debug_bounds("cite-panel")
+        .expect("invalid comment remains editable");
+    let pencil = cx.debug_bounds("cite-chip-0-comment-trigger").unwrap();
+    assert!(popup.bottom() <= pencil.top());
+    assert!(cx.debug_bounds("cite-comment-too-long").is_some());
+    assert_eq!(replies(&view, cx)[0].text, "");
+}
+
+#[gpui::test]
+fn reopened_citation_highlights_the_contextual_repeated_passage(cx: &mut TestAppContext) {
+    let text = "first context repeated passage ends here\n\nsecond context repeated passage ends differently\n\n";
+    let (view, cx) = conversation("cite-repeated-source", cx, text);
+    drag(&view, cx, (1, 15), (1, 31));
+    click(cx, "selection-reply-quote");
+    cx.simulate_keystrokes("enter");
+    tick(cx);
+    let reply = replies(&view, cx)[0].clone();
+    assert_eq!(reply.quote, "repeated passage");
+    assert!(
+        reply
+            .selector
+            .as_ref()
+            .is_some_and(|selector| selector.prefix.contains("second context"))
+    );
+    let composer = view.read_with(cx, |view, _| view.panes[0].composer.clone());
+    let mut content = composer.read_with(cx, |composer, _| composer.content());
+    content.replies =
+        serde_json::from_str(&serde_json::to_string(&content.replies).unwrap()).unwrap();
+    composer.update(cx, |composer, cx| composer.put(content, cx));
+    tick(cx);
+    open_comment(cx, 0);
+    let marked = composer
+        .read_with(cx, |composer, _| composer.comment_source_bounds())
+        .expect("restored selector highlights its source");
+    let transcript = view.read_with(cx, |view, _| view.panes[0].transcript().unwrap());
+    let source = transcript.read_with(cx, |transcript, _| transcript.scroll().bounds());
+    assert!(marked.top() >= source.top());
+    let expected = caret(&view, cx, 1, 15);
+    assert!(
+        marked.top() <= expected.y && marked.bottom() >= expected.y,
+        "the second occurrence is highlighted"
+    );
+    assert!(
+        cx.debug_bounds("cite-panel").unwrap().bottom()
+            <= cx
+                .debug_bounds("cite-chip-0-comment-trigger")
+                .unwrap()
+                .top()
+    );
 }

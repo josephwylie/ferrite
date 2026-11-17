@@ -1,0 +1,304 @@
+[
+  {
+    "id": "BROWSER-01",
+    "title": "New-window links and scripted popups are silently discarded",
+    "priority": "P1",
+    "category": "defect",
+    "evidence_level": "source-proven",
+    "impact": "Ordinary website links that request another tab do nothing. Popup-based authentication cannot complete through this handler.",
+    "ferrite_evidence": [
+      "crates/ferrite-pane/src/visual/web/cef/handlers.rs:151-165",
+      "crates/ferrite-pane/src/visual/web/cef/handlers.rs:384-401",
+      "crates/ferrite-pane/src/visual/web/cef/handlers.rs:442-450"
+    ],
+    "t3_evidence": [
+      "apps/desktop/src/preview/Manager.ts:488-504",
+      "apps/desktop/src/preview/Manager.ts:1637-1658"
+    ],
+    "recommendation": "Separate external website navigation policy from sealed visualization policy. Dispatch ordinary new-tab requests through the service and explicitly support or explain authentication popups.",
+    "acceptance": "In one local fixture, same-tab navigation, target=_blank, middle-click, and a scripted popup each produce the documented destination or a visible actionable refusal. The opener-based fixture can report a successful callback."
+  },
+  {
+    "id": "BROWSER-02",
+    "title": "Website JavaScript dialogs are always dismissed",
+    "priority": "P1",
+    "category": "defect",
+    "evidence_level": "source-proven",
+    "impact": "An action gated by confirm cannot receive affirmative consent; prompt cannot collect input, and alert messages never reach the operator.",
+    "ferrite_evidence": [
+      "crates/ferrite-pane/src/visual/web/cef/handlers.rs:151-165",
+      "crates/ferrite-pane/src/visual/web/cef/handlers.rs:643-661"
+    ],
+    "t3_evidence": [],
+    "recommendation": "Keep sealed visualization restrictions, but supply a native or GPUI dialog bridge for external pages, with a deliberate suppression state when appropriate.",
+    "acceptance": "A local confirm fixture executes its positive branch after the user chooses OK; Cancel returns false. Prompt returns entered text, and alert is visible. No website can replace the app window."
+  },
+  {
+    "id": "BROWSER-03",
+    "title": "Right-click has no browser context menu",
+    "priority": "P2",
+    "category": "interaction",
+    "evidence_level": "source-proven",
+    "impact": "Operators cannot discover normal link, image, selection, and editable-field actions through right-click.",
+    "ferrite_evidence": [
+      "crates/ferrite-pane/src/visual/web/cef/handlers.rs:589-603",
+      "crates/ferrite-pane/src/visual/element.rs:643-689",
+      "crates/ferrite-pane/src/visual/element.rs:713-719"
+    ],
+    "t3_evidence": [],
+    "recommendation": "Introduce a browser-specific context menu using native hit-test details. Do not apply arbitrary website menus to sealed content.",
+    "acceptance": "Right-click a link and copy its destination; right-click selected page text and copy it; paste into an input through the menu. Each action operates on the clicked page."
+  },
+  {
+    "id": "BROWSER-04",
+    "title": "Browser tabs discard page titles and show only hostnames",
+    "priority": "P2",
+    "category": "interaction",
+    "evidence_level": "source-proven",
+    "impact": "Two pages on the same host, including two localhost apps on different ports, have indistinguishable tab labels. Favicons are absent.",
+    "ferrite_evidence": [
+      "crates/ferrite-cockpit/src/cockpit/browser.rs:1355-1388",
+      "crates/ferrite-cockpit/src/cockpit/browser.rs:744-763",
+      "crates/ferrite-core/src/browser.rs:44-56",
+      "crates/ferrite-pane/src/visual/web/mod.rs:69-77",
+      "crates/ferrite-pane/src/visual/web/cef/handlers.rs:320-321"
+    ],
+    "t3_evidence": [
+      "apps/web/src/components/RightPanelTabs.tsx:599-619",
+      "apps/web/src/components/RightPanelTabs.tsx:631-641"
+    ],
+    "recommendation": "Carry page identity metadata through service state and render title, favicon, and a full-address tooltip. Keep port in the fallback.",
+    "acceptance": "Tabs titled Docs and Dashboard on one origin remain distinguishable; two untitled localhost ports show distinct fallback labels. Title changes update the correct tab."
+  },
+  {
+    "id": "BROWSER-05",
+    "title": "Address entry rejects normal schemeless hostnames",
+    "priority": "P2",
+    "category": "partial-capability",
+    "evidence_level": "source-proven",
+    "impact": "Common development addresses such as localhost:3000 require manual http:// entry.",
+    "ferrite_evidence": [
+      "crates/ferrite-cockpit/src/cockpit/browser.rs:1304-1323",
+      "crates/ferrite-core/src/browser.rs:817-829"
+    ],
+    "t3_evidence": [
+      "packages/shared/src/preview.ts:183-218",
+      "apps/web/src/components/preview/PreviewView.tsx:310-327"
+    ],
+    "recommendation": "Normalize human address input separately from the service authorization policy. Do not weaken scheme restrictions or silently turn arbitrary text into a network destination.",
+    "acceptance": "localhost:3000 opens http://localhost:3000; example.com opens https://example.com. Explicit unsupported schemes still produce clear errors."
+  },
+  {
+    "id": "BROWSER-06",
+    "title": "Page navigation can overwrite an unfinished address edit",
+    "priority": "P2",
+    "category": "defect",
+    "evidence_level": "source-proven",
+    "impact": "A redirect or same-page URL change can replace the address the user is currently typing.",
+    "ferrite_evidence": [
+      "crates/ferrite-cockpit/src/cockpit/browser.rs:667-672",
+      "crates/ferrite-cockpit/src/cockpit/browser.rs:180-186",
+      "crates/ferrite-cockpit/src/cockpit/browser.rs:1304-1323"
+    ],
+    "t3_evidence": [
+      "apps/web/src/components/preview/PreviewChromeRow.tsx:79-88",
+      "apps/web/src/components/preview/PreviewChromeRow.tsx:157-180"
+    ],
+    "recommendation": "Introduce explicit address editing state. Show committed URL while idle; preserve and validate the draft while editing; Escape should restore the committed URL.",
+    "acceptance": "Type a new URL during a delayed redirect and a history.pushState update. The draft survives both. Escape restores the final page URL, and Enter navigates to the draft."
+  },
+  {
+    "id": "BROWSER-07",
+    "title": "New-tab mode leaves navigation controls pointed at the hidden old page",
+    "priority": "P2",
+    "category": "defect",
+    "evidence_level": "source-proven",
+    "impact": "Clicking Reload or Back while an empty new tab is shown unexpectedly acts on the previous tab and abandons new-tab entry.",
+    "ferrite_evidence": [
+      "crates/ferrite-cockpit/src/cockpit/browser.rs:275-276",
+      "crates/ferrite-cockpit/src/cockpit/browser.rs:1407-1445",
+      "crates/ferrite-cockpit/src/cockpit/browser.rs:1479-1481",
+      "crates/ferrite-cockpit/src/cockpit/browser.rs:1505-1515"
+    ],
+    "t3_evidence": [],
+    "recommendation": "Model the displayed target explicitly or consistently derive toolbar state from the displayed page. Keep draft new-tab state independent of the previous document.",
+    "acceptance": "After clicking plus, Back, Forward, and Reload cannot affect the old page. The address draft remains until explicit submission, cancel, or tab selection."
+  },
+  {
+    "id": "BROWSER-08",
+    "title": "Loading changes browser geometry and shifts the address field",
+    "priority": "P2",
+    "category": "interaction",
+    "evidence_level": "source-proven",
+    "impact": "Loading moves the page and changes its actual viewport size. The Annotate button also appears and disappears, changing address width.",
+    "ferrite_evidence": [
+      "crates/ferrite-cockpit/src/cockpit/browser.rs:1452-1466",
+      "crates/ferrite-cockpit/src/cockpit/browser.rs:1521-1530",
+      "crates/ferrite-pane/src/visual/element.rs:525-532"
+    ],
+    "t3_evidence": [
+      "apps/web/src/components/preview/PreviewChromeRow.tsx:94-95",
+      "apps/web/src/components/preview/PreviewChromeRow.tsx:132-147",
+      "apps/web/src/components/preview/PreviewChromeRow.tsx:295-300"
+    ],
+    "recommendation": "Reserve one compact navigation row; keep annotation visible but disabled during loading and place progress in an overlay or fixed-height track.",
+    "acceptance": "Record the page origin, page viewport size, and address bounds before and during a slow navigation. All remain stable, and loading remains visible. Narrow-width controls stay operable."
+  },
+  {
+    "id": "BROWSER-09",
+    "title": "Viewport size is inseparable from panel size",
+    "priority": "P2",
+    "category": "missing-capability",
+    "evidence_level": "source-proven",
+    "impact": "The operator cannot verify a site at a precise mobile or desktop viewport, rotate a preset, or compare a large layout while keeping the chat readable.",
+    "ferrite_evidence": [
+      "crates/ferrite-pane/src/visual/element.rs:504-505",
+      "crates/ferrite-pane/src/visual/element.rs:525-532",
+      "crates/ferrite-core/src/browser.rs:77-101",
+      "crates/ferrite-cockpit/src/cockpit/browser.rs:1406-1478"
+    ],
+    "t3_evidence": [
+      "apps/web/src/browser/BrowserDeviceToolbar.tsx:29-84",
+      "apps/web/src/components/preview/PreviewView.tsx:1049-1054",
+      "apps/web/src/components/preview/PreviewMoreMenu.tsx:112-173"
+    ],
+    "recommendation": "Add a user-selected viewport mode distinct from host size and device pixel ratio, plus explicit page zoom. Validate dimensions and preserve selection per browser tab.",
+    "acceptance": "A 390 by 844 preset reports those CSS dimensions in the page while the right panel is resized; rotate swaps dimensions; Fill restores host-sized layout. Zoom has a visible reset."
+  },
+  {
+    "id": "BROWSER-10",
+    "title": "Find, DevTools, hard reload, and page appearance controls are absent",
+    "priority": "P2",
+    "category": "missing-capability",
+    "evidence_level": "source-proven",
+    "impact": "Long-page search and normal web development inspection require leaving the embedded browser. Cache bypass and theme checks have no operator controls.",
+    "ferrite_evidence": [
+      "crates/ferrite-core/src/browser.rs:77-101",
+      "crates/ferrite-pane/src/visual/web/mod.rs:82-103",
+      "crates/ferrite-cockpit/src/cockpit/browser.rs:1406-1478"
+    ],
+    "t3_evidence": [
+      "apps/web/src/components/preview/PreviewMoreMenu.tsx:90-128",
+      "apps/web/src/components/preview/PreviewView.tsx:494-532",
+      "apps/web/src/components/preview/PreviewFindBar.tsx:1-40"
+    ],
+    "recommendation": "Add typed page operations and a browser menu. Keep find scoped to the website rather than transcript search; surface supported runtime distinctions.",
+    "acceptance": "Find highlights matches and cycles next/previous in the current page; DevTools targets the correct tab; hard reload bypasses a fixture cache; light/dark setting updates a media-query fixture."
+  },
+  {
+    "id": "BROWSER-11",
+    "title": "Inactive-page reclamation restores only a URL, losing navigation and page position",
+    "priority": "P2",
+    "category": "partial-capability",
+    "evidence_level": "source-proven",
+    "impact": "A clean tab can lose its Back/Forward stack, scroll position, and transient UI state merely because it was hidden. Restart also restores only URLs and selection.",
+    "ferrite_evidence": [
+      "crates/ferrite-cockpit/src/cockpit/browser.rs:1222-1259",
+      "crates/ferrite-cockpit/src/cockpit/browser.rs:1284-1294",
+      "crates/ferrite-cockpit/src/cockpit/browser.rs:708-715",
+      "crates/ferrite-pane/src/visual/web/cef.rs:1397-1433",
+      "crates/ferrite-core/src/browser.rs:728-785"
+    ],
+    "t3_evidence": [],
+    "recommendation": "Preserve native tabs for normal switching or retain a navigation/session snapshot before reclaiming. Define the resource policy explicitly instead of immediate hidden-state disposal. Do not claim full T3 session restoration without checking its host lifetime.",
+    "acceptance": "Visit A then B, scroll B, switch away and back through actual reclamation, and verify Back returns to A and B restores its scroll. Repeat after restart according to the documented persistence contract."
+  },
+  {
+    "id": "BROWSER-12",
+    "title": "An empty browser provides neither useful guidance nor recent/local destinations",
+    "priority": "P2",
+    "category": "missing-capability",
+    "evidence_level": "source-proven",
+    "impact": "Opening the browser or a new tab leaves the user to recover a URL manually from terminal output or memory.",
+    "ferrite_evidence": [
+      "crates/ferrite-cockpit/src/cockpit/browser.rs:195-196",
+      "crates/ferrite-cockpit/src/cockpit/browser.rs:1338-1342",
+      "crates/ferrite-cockpit/src/cockpit/browser.rs:1479-1545",
+      "crates/ferrite-cockpit/src/cockpit/browser/annotations.rs:563-570",
+      "crates/ferrite-core/src/browser.rs:728-745"
+    ],
+    "t3_evidence": [
+      "apps/web/src/components/preview/PreviewEmptyState.tsx:29-45",
+      "apps/web/src/components/preview/PreviewEmptyState.tsx:50-89"
+    ],
+    "recommendation": "Render an actual empty/new-tab page with address guidance, scoped recent destinations, and discovered local servers. Reuse existing terminal/server discovery if available rather than introducing another scanner.",
+    "acceptance": "First open and last-tab close show guidance. Starting a local development server yields a clearly labeled destination, and a recently visited URL can be reopened and removed."
+  },
+  {
+    "id": "BROWSER-13",
+    "title": "Persistent website profiles have no operator management controls",
+    "priority": "P2",
+    "category": "partial-capability",
+    "evidence_level": "source-proven",
+    "impact": "Cookies survive sessions, but the operator cannot clear broken authentication/cache or choose isolated browser identities from the browser UI.",
+    "ferrite_evidence": [
+      "crates/ferrite-pane/src/visual/web/cef/profile.rs:17-28",
+      "crates/ferrite-pane/src/visual/web/cef/profile.rs:55-77",
+      "crates/ferrite-core/src/browser.rs:77-101",
+      "crates/ferrite-cockpit/src/cockpit/browser.rs:1406-1478"
+    ],
+    "t3_evidence": [
+      "apps/web/src/components/preview/PreviewMoreMenu.tsx:175-182",
+      "apps/web/src/components/preview/PreviewView.tsx:521-528",
+      "apps/web/src/components/settings/IntegrationsSettings.tsx:1111-1185",
+      "apps/web/src/components/settings/BrowserImportWizard.tsx:464"
+    ],
+    "recommendation": "First add visible active-profile identity and scoped clear-cookie/cache operations. Treat multi-profile, private sessions, and cookie import as separate product choices; do not import credentials without an explicit user action.",
+    "acceptance": "A fixture cookie persists normally, clears through the named profile action, and stays isolated from another chosen profile if multi-profile support is adopted. The UI states which data will be cleared."
+  },
+  {
+    "id": "BROWSER-14",
+    "title": "Browser capture is annotation-oriented and lacks direct recording/export affordances",
+    "priority": "P2",
+    "category": "missing-capability",
+    "evidence_level": "source-proven",
+    "impact": "An operator cannot directly record a browser interaction or capture a plain screenshot through the browser chrome for external sharing.",
+    "ferrite_evidence": [
+      "crates/ferrite-cockpit/src/cockpit/browser.rs:1452-1463",
+      "crates/ferrite-cockpit/src/cockpit/browser/annotations.rs:556-627",
+      "crates/ferrite-core/src/browser.rs:77-101"
+    ],
+    "t3_evidence": [
+      "apps/web/src/components/preview/PreviewChromeRow.tsx:244-265",
+      "apps/web/src/components/preview/PreviewView.tsx:549-780"
+    ],
+    "recommendation": "Reuse the existing capture pipeline for a plain screenshot command with output feedback. Decide recording scope separately; show active recording and its destination rather than hiding it behind a modifier-only gesture.",
+    "acceptance": "A direct screenshot contains the current page at the chosen scale and can be opened from the reported destination. If recording is added, start/stop yields a playable file with a visible active-state indicator."
+  },
+  {
+    "id": "BROWSER-15",
+    "title": "Errors occupy an inline text row with repetitive recovery copy",
+    "priority": "P3",
+    "category": "interaction",
+    "evidence_level": "source-proven",
+    "impact": "Failure details compete with the page and can wrap through much of a narrow panel. The recovery action is described in text rather than placed beside the message.",
+    "ferrite_evidence": [
+      "crates/ferrite-cockpit/src/cockpit/browser.rs:1452-1453",
+      "crates/ferrite-cockpit/src/cockpit/browser.rs:1533-1545",
+      "crates/ferrite-pane/src/visual/web/cef/handlers.rs:628-638"
+    ],
+    "t3_evidence": [
+      "apps/web/src/components/preview/PreviewUnreachable.tsx:54-106"
+    ],
+    "recommendation": "Classify load, HTTP, engine, and profile errors. Give each a short summary and relevant action, with details behind disclosure. Keep layout stable and decide whether the failed page is meaningfully annotatable.",
+    "acceptance": "Offline, refused connection, HTTP error, and unavailable engine each show one concise explanation and the correct retry/repair action at narrow panel widths, without repeated recovery sentences."
+  },
+  {
+    "id": "BROWSER-16",
+    "title": "No browser-chrome escape to the system browser",
+    "priority": "P2",
+    "category": "missing-capability",
+    "evidence_level": "source-proven",
+    "impact": "When a website needs unsupported authentication, downloads, permissions, or development tools, the operator must manually copy the address and leave the app.",
+    "ferrite_evidence": [
+      "crates/ferrite-cockpit/src/cockpit/browser.rs:1406-1478",
+      "crates/ferrite-cockpit/src/cockpit/browser.rs:1490-1519"
+    ],
+    "t3_evidence": [
+      "apps/web/src/components/preview/PreviewChromeRow.tsx:193-213",
+      "apps/web/src/components/preview/PreviewView.tsx:437-440"
+    ],
+    "recommendation": "Add Open in system browser for the committed page URL, with an error if launching fails. Do not send the unsubmitted address draft.",
+    "acceptance": "The action opens the current page in the configured browser; an unfinished address draft does not change the launched destination."
+  }
+]

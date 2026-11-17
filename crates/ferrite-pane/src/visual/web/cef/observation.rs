@@ -137,7 +137,11 @@ impl Observation {
 
     fn send(&mut self, browser: &Browser, document: u64, step: Step, method: &str, params: Value) {
         let id = self.next;
-        self.next = if id == i32::MAX { FIRST_ID } else { id + 1 };
+        self.next = if id + 1 >= super::annotations::FIRST_ID {
+            FIRST_ID
+        } else {
+            id + 1
+        };
         let message = json!({ "id": id, "method": method, "params": params }).to_string();
         if browser
             .host()
@@ -338,7 +342,7 @@ wrap_dev_tools_message_observer! {
             let mut inbox = self.inbox.lock().unwrap();
             if bytes.len() > LIMIT { inbox.overflow = true; return 1; }
             if let Ok(value) = serde_json::from_slice::<Value>(bytes) {
-                if value["id"].as_i64().is_some_and(|id| id >= FIRST_ID as i64) {
+                if value["id"].as_i64().is_some_and(|id| id >= FIRST_ID as i64 && id < super::annotations::FIRST_ID as i64) {
                     if inbox.messages.len() < 16 { inbox.messages.push_back(value); }
                     else { inbox.overflow = true; }
                 }

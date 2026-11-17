@@ -1,20 +1,19 @@
-//! The draft's replies in the tray: each a one-line chip that opens, in
-//! place, to the whole quote, where it came from, and the operator's
-//! comment, which a multiline field edits (⏎ saves, ⇧⏎ breaks the line,
-//! esc cancels). The replies themselves are the draft's (`Composer::replies`);
-//! this holds only what the tray is showing of them.
+//! Citation chips navigate to their source. Their pencil opens the comment editor.
 
+use std::cell::Cell;
 use std::collections::HashSet;
+use std::rc::Rc;
 use std::time::Instant;
 
-use gpui::{div, prelude::*, px, rgb, AnyElement, App, ElementId, Entity, SharedString, Window};
+use gpui::component::Disableable;
+use gpui::{AnyElement, App, ElementId, Entity, SharedString, Window, div, prelude::*, px, rgb};
 
-use super::departed::{Gone, Place};
 use super::Composer;
+use super::departed::{Gone, Place};
 use ferrite_core::replies::{Reply, Source};
 use ferrite_ui::{components, icons, motion, theme};
 
-gpui::actions!(cite, [SaveComment, CancelComment]);
+gpui::actions!(cite, [SaveComment, SaveAndSendComment, CancelComment]);
 
 /// The operator asked to see a reply's source: the Pane's transcript
 /// scrolls to it, or says it is gone (`Composer::source_missing`).
@@ -25,9 +24,16 @@ pub struct OpenSource {
 
 impl gpui::EventEmitter<OpenSource> for Composer {}
 
+pub struct CommentOpened {
+    pub index: usize,
+    pub window: gpui::AnyWindowHandle,
+}
+impl gpui::EventEmitter<CommentOpened> for Composer {}
+
 #[derive(Default)]
 pub(super) struct Citations {
-    open: Option<usize>,
+    source_anchor: Option<gpui::base::TextSelectionAnchor>,
+    trigger: Rc<Cell<Option<gpui::Bounds<gpui::Pixels>>>>,
     editing: Option<Editing>,
     /// Sources a jump found no longer in the transcript.
     missing: HashSet<Source>,
@@ -36,23 +42,41 @@ pub(super) struct Citations {
 struct Editing {
     index: usize,
     field: Entity<Composer>,
+    focus_pending: Rc<Cell<bool>>,
+    remove_on_cancel: bool,
+    source_highlight: Option<gpui::base::TextSelectionAnchor>,
 }
 
-const LABEL_HEAD: usize = 24;
-const LABEL_TAIL: usize = 14;
+const MAX_COMMENT_LENGTH: usize = 8_000;
 
-/// A quote on one line for its chip: its words with their line breaks
-/// squeezed, a long one cut in the middle so two passages that begin
-/// alike still read apart by their ends.
-pub(super) fn label(quote: &str) -> String {
-    let words = quote.split_whitespace().collect::<Vec<_>>().join(" ");
-    let chars: Vec<char> = words.chars().collect();
-    if chars.len() <= LABEL_HEAD + LABEL_TAIL + 1 {
+fn valid_comment(text: &str) -> bool {
+    text.encode_utf16().count() <= MAX_COMMENT_LENGTH
+}
+
+pub(super) fn label(text: &str) -> String {
+    let words = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    if words.encode_utf16().count() <= 64 {
         return words;
     }
-    let head: String = chars[..LABEL_HEAD].iter().collect();
-    let tail: String = chars[chars.len() - LABEL_TAIL..].iter().collect();
-    format!("{head}\u{2026}{tail}")
+    let mut units = 0;
+    let mut label = String::new();
+    for ch in words.chars() {
+        if units + ch.len_utf16() > 64 {
+            break;
+        }
+        units += ch.len_utf16();
+        label.push(ch);
+    }
+    label.push('…');
+    label
+}
+
+fn reply_label(reply: &Reply) -> String {
+    label(if reply.text.trim().is_empty() {
+        &reply.quote
+    } else {
+        reply.text.trim()
+    })
 }
 
 impl Composer {
@@ -64,30 +88,51 @@ impl Composer {
         };
     }
 
-    pub fn toggle_citation(&mut self, index: usize, cx: &mut gpui::Context<Self>) {
-        if self.citations.open == Some(index) {
-            self.citations.open = None;
-            self.citations.editing = None;
-        } else if index < self.replies.len() {
-            self.citations.open = Some(index);
-            if self
-                .citations
-                .editing
-                .as_ref()
-                .is_some_and(|edit| edit.index != index)
-            {
-                self.citations.editing = None;
-            }
-        }
-        cx.notify();
-    }
-
-    pub fn edit_comment(
+    pub fn cite_with_comment(
         &mut self,
-        index: usize,
-        window: &mut Window,
+        reply: Reply,
+        anchor: Option<gpui::base::TextSelectionAnchor>,
         cx: &mut gpui::Context<Self>,
     ) {
+        if !self.dismiss_comment(cx) {
+            return;
+        }
+        self.reply(reply, cx);
+        self.begin_comment(self.replies.len() - 1, cx);
+        self.citations.editing.as_mut().unwrap().remove_on_cancel = true;
+        if let Some(anchor) = &anchor {
+            let editor = self.citations.editing.as_ref().unwrap().field.entity_id();
+            let composer = cx.entity().downgrade();
+            anchor.on_change(move |bounds, window, cx| {
+                let _ = composer.update(cx, |composer, cx| {
+                    if !composer
+                        .citations
+                        .editing
+                        .as_ref()
+                        .is_some_and(|edit| edit.field.entity_id() == editor)
+                    {
+                        return;
+                    }
+                    if bounds.is_none() {
+                        let restore = composer.comment_focus(window, cx).is_some();
+                        if composer.dismiss_comment(cx) {
+                            if restore {
+                                composer.focus_handle.focus(window, cx);
+                            }
+                        } else {
+                            composer.citations.source_anchor = None;
+                        }
+                    }
+                    cx.notify();
+                    cx.refresh_windows();
+                });
+            });
+        }
+        self.citations.source_anchor = anchor;
+        cx.refresh_windows();
+    }
+
+    fn begin_comment(&mut self, index: usize, cx: &mut gpui::Context<Self>) {
         let Some(reply) = self.replies.get(index) else {
             return;
         };
@@ -96,12 +141,76 @@ impl Composer {
             let mut field = Composer::new(cx);
             field.set_role(super::Role::Field(Some("CiteComment")), cx);
             field.set(words, cx);
+            field.set_visible_row_limit(7, cx);
             field
         });
-        window.focus(&gpui::Focusable::focus_handle(field.read(cx), cx), cx);
-        self.citations.open = Some(index);
-        self.citations.editing = Some(Editing { index, field });
+        cx.subscribe(&field, |_, _, _: &super::Edited, cx| cx.notify())
+            .detach();
+        self.citations.editing = Some(Editing {
+            index,
+            field,
+            focus_pending: Rc::new(Cell::new(true)),
+            remove_on_cancel: false,
+            source_highlight: None,
+        });
+    }
+
+    pub fn edit_comment(
+        &mut self,
+        index: usize,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if self
+            .citations
+            .editing
+            .as_ref()
+            .is_some_and(|edit| edit.index == index)
+        {
+            self.dismiss_comment(cx);
+            return;
+        }
+        if !self.dismiss_comment(cx) {
+            return;
+        }
+        self.begin_comment(index, cx);
+        self.citations.source_anchor = None;
+        cx.emit(CommentOpened {
+            index,
+            window: window.window_handle(),
+        });
+        if let Some(edit) = &self.citations.editing {
+            window.focus(&gpui::Focusable::focus_handle(edit.field.read(cx), cx), cx);
+            edit.focus_pending.set(false);
+        }
         cx.notify();
+    }
+
+    pub fn highlight_comment_source(
+        &mut self,
+        index: usize,
+        anchor: gpui::base::TextSelectionAnchor,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if let Some(edit) = self
+            .citations
+            .editing
+            .as_mut()
+            .filter(|edit| edit.index == index)
+        {
+            edit.source_highlight = Some(anchor);
+            cx.refresh_windows();
+        }
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn comment_source_bounds(&self) -> Option<gpui::Bounds<gpui::Pixels>> {
+        self.citations
+            .editing
+            .as_ref()?
+            .source_highlight
+            .as_ref()?
+            .bounds()
     }
 
     /// The open comment field's focus, while it holds the keyboard. A click
@@ -113,29 +222,76 @@ impl Composer {
         focus.contains_focused(window, cx).then_some(focus)
     }
 
-    /// The comment field's words onto its reply, and the field closed.
-    /// Whether one was open.
+    pub fn comment_valid(&self, cx: &App) -> bool {
+        self.citations
+            .editing
+            .as_ref()
+            .is_none_or(|edit| valid_comment(edit.field.read(cx).text()))
+    }
+
     pub(super) fn commit_comment(&mut self, cx: &App) -> bool {
-        let Some(Editing { index, field }) = self.citations.editing.take() else {
+        if !self.comment_valid(cx) {
+            return false;
+        }
+        let Some(Editing { index, field, .. }) = self.citations.editing.take() else {
             return false;
         };
-        let words = field.read(cx).text().trim().to_string();
         if let Some(reply) = self.replies.get_mut(index) {
-            reply.text = words;
+            reply.text = field.read(cx).text().trim().to_string();
         }
         true
     }
 
-    pub fn save_comment(&mut self, window: &mut Window, cx: &mut gpui::Context<Self>) {
-        if !self.commit_comment(cx) {
-            return;
+    fn dismiss_comment(&mut self, cx: &mut gpui::Context<Self>) -> bool {
+        if let Some(edit) = self.citations.editing.as_ref() {
+            let draft = edit.field.read(cx).text();
+            let saved = self
+                .replies
+                .get(edit.index)
+                .map_or("", |reply| reply.text.as_str());
+            if draft.trim() != saved.trim() && !self.commit_comment(cx) {
+                return false;
+            }
         }
+        self.citations.editing = None;
+        self.citations.source_anchor = None;
+        cx.refresh_windows();
+        self.edited(cx);
+        true
+    }
+
+    pub fn save_comment(&mut self, window: &mut Window, cx: &mut gpui::Context<Self>) -> bool {
+        if self
+            .citations
+            .editing
+            .as_ref()
+            .is_some_and(|edit| edit.field.read(cx).line.marked().is_some())
+            || !self.commit_comment(cx)
+        {
+            return false;
+        }
+        self.citations.source_anchor = None;
+        cx.refresh_windows();
         self.focus_handle.focus(window, cx);
         self.edited(cx);
+        true
     }
 
     pub fn cancel_comment(&mut self, window: &mut Window, cx: &mut gpui::Context<Self>) {
-        if self.citations.editing.take().is_some() {
+        if self
+            .citations
+            .editing
+            .as_ref()
+            .is_some_and(|edit| edit.field.read(cx).line.marked().is_some())
+        {
+            return;
+        }
+        if let Some(edit) = self.citations.editing.take() {
+            if edit.remove_on_cancel {
+                self.remove_reply(edit.index, window, cx);
+            }
+            self.citations.source_anchor = None;
+            cx.refresh_windows();
             self.focus_handle.focus(window, cx);
             cx.notify();
         }
@@ -159,12 +315,15 @@ impl Composer {
             Some(open) if open > index => *at = Some(open - 1),
             _ => {}
         };
-        shift(&mut self.citations.open);
         let mut editing = self.citations.editing.as_ref().map(|edit| edit.index);
         shift(&mut editing);
         match (editing, self.citations.editing.as_mut()) {
             (Some(now), Some(edit)) => edit.index = now,
             _ => self.citations.editing = None,
+        }
+        if self.citations.editing.is_none() {
+            self.citations.source_anchor = None;
+            cx.refresh_windows();
         }
         self.refocus_after_removal(tray_held, window, cx);
         self.edited(cx);
@@ -211,7 +370,7 @@ pub(super) fn tray(entity: &Entity<Composer>, now: Instant, cx: &App) -> Option<
         .reply_added
         .filter(|(_, at)| now.saturating_duration_since(*at) < motion::CHIP_IN.duration())
         .map(|(index, _)| index);
-    let open = composer.citations.open;
+    let open = composer.citations.editing.as_ref().map(|edit| edit.index);
     let chips: Vec<_> = places
         .into_iter()
         .filter_map(|place| match place {
@@ -220,7 +379,13 @@ pub(super) fn tray(entity: &Entity<Composer>, now: Instant, cx: &App) -> Option<
                 Gone::File { .. } => None,
             },
             Place::Kept(index) => {
-                let chip = chip(entity, index, &composer.replies[index], open == Some(index));
+                let chip = chip(
+                    entity,
+                    index,
+                    &composer.replies[index],
+                    open == Some(index),
+                    composer.citations.trigger.clone(),
+                );
                 Some(if growing == Some(index) {
                     motion::chip_in(
                         SharedString::from(format!("reply-in-{index}")),
@@ -235,7 +400,28 @@ pub(super) fn tray(entity: &Entity<Composer>, now: Instant, cx: &App) -> Option<
         .collect();
     let panel = open
         .and_then(|index| composer.replies.get(index).map(|reply| (index, reply)))
-        .map(|(index, reply)| panel(entity, index, reply, cx));
+        .map(|(index, reply)| {
+            let source = composer
+                .citations
+                .source_anchor
+                .as_ref()
+                .and_then(|anchor| anchor.bounds());
+            let trigger = composer.citations.trigger.get();
+            gpui::deferred(
+                gpui::base::Positioner::side(source.or(trigger).unwrap_or_default())
+                    .placement(if source.is_some() {
+                        gpui::base::Placement::Bottom
+                    } else {
+                        gpui::base::Placement::Top
+                    })
+                    .align(gpui::base::Align::End)
+                    .offset(px(4.))
+                    .margin(px(16.))
+                    .child(panel(entity, index, reply, cx)),
+            )
+            .with_priority(4)
+            .into_any_element()
+        });
     Some(
         div()
             .debug_selector(|| "tray-replies".into())
@@ -261,30 +447,15 @@ pub(super) fn tray(entity: &Entity<Composer>, now: Instant, cx: &App) -> Option<
 
 /// What a chip shows of its reply: the quote's mark and words, and a pencil
 /// when it carries a comment.
-fn chip_face(index: Option<usize>, reply: &Reply) -> Vec<AnyElement> {
-    let mut face = vec![
+fn chip_face(_index: Option<usize>, reply: &Reply) -> Vec<AnyElement> {
+    let face = vec![
         icons::icon(icons::QUOTE, theme::ATTACH_THUMB, theme::LINK_INK).into_any_element(),
         div()
             .min_w_0()
             .truncate()
-            .child(SharedString::from(label(&reply.quote)))
+            .child(SharedString::from(reply_label(reply)))
             .into_any_element(),
     ];
-    if !reply.text.is_empty() {
-        face.push(
-            div()
-                .when_some(index, |mark, index| {
-                    mark.debug_selector(move || format!("cite-chip-{index}-comment"))
-                })
-                .flex_shrink_0()
-                .child(icons::icon(
-                    icons::PENCIL,
-                    theme::ATTACH_THUMB,
-                    theme::INK_SUBTLE,
-                ))
-                .into_any_element(),
-        );
-    }
     face
 }
 
@@ -317,18 +488,25 @@ fn ghost_chip(left: Instant, reply: &Reply) -> AnyElement {
         left,
         motion::CHIP_OUT,
         theme::CH,
-        chip_view(id, None, reply, false, None),
+        chip_view(id, None, reply, false, None, None),
     )
     .into_any_element()
 }
 
-fn chip(entity: &Entity<Composer>, index: usize, reply: &Reply, open: bool) -> AnyElement {
+fn chip(
+    entity: &Entity<Composer>,
+    index: usize,
+    reply: &Reply,
+    open: bool,
+    trigger: Rc<Cell<Option<gpui::Bounds<gpui::Pixels>>>>,
+) -> AnyElement {
     chip_view(
         ElementId::from(("cite-open", index)),
         Some(index),
         reply,
         open,
         Some(entity),
+        Some(trigger),
     )
 }
 
@@ -341,6 +519,7 @@ fn chip_view(
     reply: &Reply,
     open: bool,
     entity: Option<&Entity<Composer>>,
+    trigger: Option<Rc<Cell<Option<gpui::Bounds<gpui::Pixels>>>>>,
 ) -> AnyElement {
     let live = entity.is_some();
     let mut open_chip = components::button(id)
@@ -363,15 +542,12 @@ fn chip_view(
         let toggle = entity.downgrade();
         let removed = entity.downgrade();
         open_chip = open_chip
-            .accessibility_label(format!("Quote: {}", reply.quote))
-            .tooltip_builder(ferrite_ui::menu::tooltip(if open {
-                "Hide the quote"
-            } else {
-                "Show the quote and comment"
-            }))
+            .debug_selector(move || format!("cite-chip-{index}-source"))
+            .accessibility_label(format!("View cited assistant text: {}", reply_label(reply)))
+            .tooltip_builder(ferrite_ui::menu::tooltip("Go to quoted response"))
             .on_click(move |_, _, cx| {
                 cx.stop_propagation();
-                let _ = toggle.update(cx, |composer, cx| composer.toggle_citation(index, cx));
+                let _ = toggle.update(cx, |composer, cx| composer.open_source(index, cx));
             });
         remove = remove
             .debug_selector(move || format!("cite-chip-{index}-remove"))
@@ -382,202 +558,222 @@ fn chip_view(
                 let _ = removed.update(cx, |composer, cx| composer.remove_reply(index, window, cx));
             });
     }
-    chip_shell()
+    let commented = !reply.text.is_empty();
+    let mut edit = components::button(SharedString::from(format!(
+        "cite-comment-trigger-{}",
+        index.map_or_else(|| "gone".to_string(), |index| index.to_string())
+    )))
+    .tab_stop(live)
+    .h(px(theme::ATTACH_CHIP_H))
+    .w(px(theme::ATTACH_CHIP_H))
+    .p_0()
+    .child(
+        div()
+            .when_some(index.filter(|_| commented), |mark, index| {
+                mark.debug_selector(move || format!("cite-chip-{index}-comment"))
+            })
+            .child(icons::icon(
+                icons::PENCIL,
+                theme::ATTACH_THUMB,
+                theme::INK_SUBTLE,
+            )),
+    );
+    if let (Some(entity), Some(index)) = (entity, index) {
+        let edited = entity.downgrade();
+        edit = edit
+            .debug_selector(move || format!("cite-chip-{index}-comment-trigger"))
+            .accessibility_label(if commented {
+                "Edit citation comment"
+            } else {
+                "Add comment to citation"
+            })
+            .on_click(move |_, window, cx| {
+                cx.stop_propagation();
+                let _ = edited.update(cx, |composer, cx| composer.edit_comment(index, window, cx));
+            });
+    }
+    let edit = match trigger.filter(|_| open) {
+        Some(trigger) => components::on_bounds(edit, move |bounds, _, cx| {
+            if trigger.replace(Some(bounds)) != Some(bounds) {
+                cx.refresh_windows();
+            }
+        })
+        .into_any_element(),
+        None => edit.into_any_element(),
+    };
+    let drawn = chip_shell()
         .when_some(index, |chip, index| {
             chip.debug_selector(move || format!("cite-chip-{index}"))
         })
         .when(open, |chip| chip.bg(theme::paint::SELECTED))
         .child(open_chip)
-        .child(remove)
-        .into_any_element()
+        .child(edit)
+        .child(remove);
+    drawn.into_any_element()
 }
 
-fn panel(entity: &Entity<Composer>, index: usize, reply: &Reply, cx: &App) -> AnyElement {
+fn comment_button(id: impl Into<ElementId>, cx: &App) -> gpui::component::button::Button {
+    components::form_button(id, cx)
+        .h(px(28.))
+        .px(px(8.))
+        .rounded(px(6.))
+        .border_1()
+        .border_color(theme::paint::LINE)
+        .text_size(px(12.))
+        .line_height(px(16.))
+}
+
+fn panel(entity: &Entity<Composer>, index: usize, _reply: &Reply, cx: &App) -> AnyElement {
     let composer = entity.read(cx);
-    let editing = composer
-        .citations
-        .editing
-        .as_ref()
-        .filter(|edit| edit.index == index)
-        .map(|edit| edit.field.clone());
-    let missing = composer.is_source_missing(index);
-    let muted = |text: &'static str| div().text_color(rgb(theme::INK_SUBTLE)).child(text);
-    let source = match reply.source {
-        None => muted("Source not recorded").into_any_element(),
-        Some(_) => {
-            let go = entity.downgrade();
-            // A missing source keeps its button: the history may have arrived since.
-            let button = components::form_button(("cite-source", index), cx)
-                .debug_selector(|| "cite-source".into())
-                .key_context("PromptAttachment")
-                .child(if missing { "Try again" } else { "Go to source" })
-                .on_click(move |_, _, cx| {
-                    let _ = go.update(cx, |composer, cx| composer.open_source(index, cx));
-                });
-            div()
-                .flex()
-                .items_center()
-                .gap_2()
-                .when(missing, |row| {
-                    row.child(
-                        div()
-                            .debug_selector(|| "cite-source-missing".into())
-                            .text_color(rgb(theme::INK_SUBTLE))
-                            .child("Source unavailable. The quote is kept."),
-                    )
-                })
-                .child(button)
-                .into_any_element()
-        }
+    let Some(edit) = composer.citations.editing.as_ref() else {
+        return div().into_any_element();
     };
-    let comment = match editing {
-        Some(field) => {
-            let save = entity.downgrade();
-            let cancel = entity.downgrade();
-            div()
-                .flex()
-                .flex_col()
-                .gap(px(theme::SPACE_1_5))
-                .child(
+    let field = edit.field.clone();
+    let pending = edit.focus_pending.clone();
+    let empty = field.read(cx).text().is_empty();
+    let invalid = !composer.comment_valid(cx);
+    let focused_field = field.clone();
+    let field = components::on_bounds(
+        div()
+            .relative()
+            .min_h(px(52.))
+            .max_h(px(148.))
+            .when(empty, |body| {
+                body.child(
                     div()
-                        .debug_selector(|| "cite-comment-field".into())
-                        .px(px(theme::SPACE_2))
-                        .rounded(px(theme::R_CONTROL))
-                        .border_1()
-                        .border_color(theme::paint::LINE)
-                        .child(field),
+                        .absolute()
+                        .top_0()
+                        .left_0()
+                        .text_color(rgb(theme::INK_SUBTLE))
+                        .child("Add an optional comment..."),
                 )
-                .child(
-                    div()
-                        .flex()
-                        .gap(px(theme::SPACE_2))
-                        .child(
-                            components::primary_button(("cite-save", index), false, cx)
-                                .debug_selector(|| "cite-save".into())
-                                .key_context("PromptAttachment")
-                                .child("Save")
-                                .on_click(move |_, window, cx| {
-                                    let _ = save.update(cx, |composer, cx| {
-                                        composer.save_comment(window, cx)
-                                    });
-                                }),
-                        )
-                        .child(
-                            components::form_button(("cite-cancel", index), cx)
-                                .debug_selector(|| "cite-cancel".into())
-                                .key_context("PromptAttachment")
-                                .child("Cancel")
-                                .on_click(move |_, window, cx| {
-                                    let _ = cancel.update(cx, |composer, cx| {
-                                        composer.cancel_comment(window, cx)
-                                    });
-                                }),
-                        ),
-                )
-                .into_any_element()
-        }
-        None => {
-            let edit = entity.downgrade();
-            let verb = if reply.text.is_empty() {
-                "Add comment"
-            } else {
-                "Edit comment"
-            };
-            div()
-                .flex()
-                .flex_col()
-                .gap(px(theme::SPACE_1))
-                .when(!reply.text.is_empty(), |column| {
-                    column.child(
-                        div()
-                            .debug_selector(|| "cite-comment".into())
-                            .text_color(rgb(theme::INK_STRONG))
-                            .child(SharedString::from(reply.text.clone())),
-                    )
-                })
-                .child(
-                    div().flex().child(
-                        components::form_button(("cite-edit", index), cx)
-                            .debug_selector(|| "cite-edit".into())
-                            .key_context("PromptAttachment")
-                            .child(verb)
-                            .on_click(move |_, window, cx| {
-                                let _ = edit.update(cx, |composer, cx| {
-                                    composer.edit_comment(index, window, cx)
-                                });
-                            }),
-                    ),
-                )
-                .into_any_element()
-        }
-    };
-    let remove = entity.downgrade();
-    let close = entity.downgrade();
+            })
+            .child(field),
+        move |_, window, cx| {
+            if pending.replace(false) {
+                window.focus(
+                    &gpui::Focusable::focus_handle(focused_field.read(cx), cx),
+                    cx,
+                );
+            }
+        },
+    );
     let save = entity.downgrade();
     let cancel = entity.downgrade();
+    let save_key = entity.downgrade();
+    let cancel_key = entity.downgrade();
     div()
         .id(("cite-panel", index))
         .debug_selector(|| "cite-panel".into())
+        .occlude()
+        .key_context("CitationPopup")
+        .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
+        .on_mouse_down_out({
+            let outside = entity.downgrade();
+            move |event, _, cx| {
+                let _ = outside.update(cx, |composer, cx| {
+                    if composer
+                        .citations
+                        .trigger
+                        .get()
+                        .is_some_and(|bounds| bounds.contains(&event.position))
+                    {
+                        return;
+                    }
+                    composer.dismiss_comment(cx);
+                });
+            }
+        })
         .on_action(move |_: &SaveComment, window: &mut Window, cx: &mut App| {
-            let _ = save.update(cx, |composer, cx| composer.save_comment(window, cx));
+            let _ = save_key.update(cx, |composer, cx| {
+                composer.save_comment(window, cx);
+            });
         })
         .on_action(
             move |_: &CancelComment, window: &mut Window, cx: &mut App| {
-                let _ = cancel.update(cx, |composer, cx| composer.cancel_comment(window, cx));
+                let _ = cancel_key.update(cx, |composer, cx| composer.cancel_comment(window, cx));
             },
         )
         .flex()
         .flex_col()
-        .gap(px(theme::SPACE_1_5))
-        .w_full()
+        .w(px(320.))
+        .max_w_full()
         .min_w_0()
-        .p(px(theme::SPACE_2))
-        .rounded(px(theme::R_CARD))
-        .bg(theme::paint::RAISED)
+        .px(px(12.))
+        .py(px(8.))
+        .rounded(px(8.))
+        .bg(rgb(0x111111))
+        .shadow(components::float_shadow())
         .border_1()
         .border_color(theme::paint::LINE)
         .font_family(theme::FONT_UI)
-        .text_size(px(theme::FS_META))
-        .line_height(px(theme::LH_META))
+        .text_size(px(14.))
+        .line_height(px(20.))
         .font_weight(theme::W_BODY)
         .child(
             div()
-                .id(("cite-quote", index))
-                .debug_selector(|| "cite-quote".into())
-                .max_h(px(theme::CITE_QUOTE_MAX_H))
-                .overflow_y_scroll()
-                .border_l(px(theme::QUOTE_RULE_W))
-                .border_color(theme::paint::LINE)
-                .pl(px(theme::SPACE_2))
-                .text_color(rgb(theme::INK_STRONG))
-                .child(SharedString::from(reply.quote.clone())),
+                .debug_selector(|| "cite-comment-field".into())
+                .px(px(4.))
+                .py(px(6.))
+                .child(field),
         )
-        .child(comment)
-        .child(source)
+        .when(invalid, |panel| {
+            panel.child(
+                div()
+                    .debug_selector(|| "cite-comment-too-long".into())
+                    .pt(px(4.))
+                    .text_size(px(12.))
+                    .line_height(px(16.))
+                    .text_color(rgb(theme::RED))
+                    .child("Comments can contain up to 8,000 characters."),
+            )
+        })
         .child(
             div()
                 .flex()
-                .gap(px(theme::SPACE_2))
+                .flex_wrap()
+                .items_center()
+                .justify_end()
+                .mt(px(8.))
+                .gap(px(8.))
                 .child(
-                    components::form_button(("cite-close", index), cx)
-                        .debug_selector(|| "cite-close".into())
+                    comment_button(("cite-cancel", index), cx)
+                        .debug_selector(|| "cite-cancel".into())
                         .key_context("PromptAttachment")
-                        .child("Close")
-                        .on_click(move |_, _, cx| {
-                            let _ = close
-                                .update(cx, |composer, cx| composer.toggle_citation(index, cx));
+                        .child("Cancel")
+                        .on_click(move |_, window, cx| {
+                            let _ = cancel
+                                .update(cx, |composer, cx| composer.cancel_comment(window, cx));
                         }),
                 )
                 .child(
-                    components::form_button(("cite-remove", index), cx)
-                        .debug_selector(|| "cite-remove".into())
-                        .key_context("PromptAttachment")
-                        .child("Remove")
-                        .on_click(move |_, window, cx| {
-                            let _ = remove.update(cx, |composer, cx| {
-                                composer.remove_reply(index, window, cx)
-                            });
-                        }),
+                    components::faded_button(
+                        ("cite-save", index),
+                        rgb(theme::SEND_LIT).into(),
+                        rgb(theme::SEND_LIT_HOVER).into(),
+                        rgb(theme::SEND_LIT_HOVER).into(),
+                        rgb(theme::ON_SEND_LIT).into(),
+                        cx,
+                    )
+                    .disabled(invalid)
+                    .when(invalid, |button| button.opacity(0.5))
+                    .tab_stop(true)
+                    .h(px(28.))
+                    .px(px(8.))
+                    .text_size(px(12.))
+                    .debug_selector(|| "cite-save".into())
+                    .key_context("PromptAttachment")
+                    .child(
+                        div()
+                            .text_size(px(12.))
+                            .text_color(rgb(theme::ON_SEND_LIT))
+                            .child(if invalid { "Shorten comment" } else { "Save" }),
+                    )
+                    .on_click(move |_, window, cx| {
+                        let _ = save.update(cx, |composer, cx| {
+                            composer.save_comment(window, cx);
+                        });
+                    }),
                 ),
         )
         .into_any_element()
@@ -585,7 +781,16 @@ fn panel(entity: &Entity<Composer>, index: usize, reply: &Reply, cx: &App) -> An
 
 #[cfg(test)]
 mod tests {
-    use super::label;
+    use super::{label, valid_comment};
+
+    #[test]
+    fn comment_limit_counts_javascript_utf16_units() {
+        assert!(valid_comment(&"x".repeat(8_000)));
+        assert!(!valid_comment(&"x".repeat(8_001)));
+        assert!(valid_comment(&"😀".repeat(4_000)));
+        assert!(!valid_comment(&"😀".repeat(4_001)));
+        assert!(!valid_comment(&format!("{} ", "x".repeat(8_000))));
+    }
 
     #[test]
     fn a_short_quote_is_its_words_on_one_line() {
@@ -593,16 +798,11 @@ mod tests {
     }
 
     #[test]
-    fn a_long_quote_keeps_its_head_and_its_tail() {
-        let a = label(
-            "The migration plan covers every table in the main database and then the replica",
+    fn a_long_label_truncates_at_64_utf16_units_without_splitting_a_surrogate() {
+        assert_eq!(
+            label(&format!("{}😀tail", "x".repeat(63))),
+            format!("{}…", "x".repeat(63))
         );
-        let b = label(
-            "The migration plan covers every table in the main database and then the archive",
-        );
-        assert_ne!(a, b);
-        assert!(a.starts_with("The migration plan cove"));
-        assert!(a.ends_with("the replica"));
-        assert!(a.contains('\u{2026}'));
+        assert_eq!(label(&"x".repeat(65)), format!("{}…", "x".repeat(64)));
     }
 }

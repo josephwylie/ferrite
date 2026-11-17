@@ -68,7 +68,7 @@ fn browser_annotation_history_keeps_a_distinct_reviewable_capture(cx: &mut TestA
         "review opens the retained capture and drawings without a live browser"
     );
     assert!(cx.debug_bounds("annotation-stage").is_some());
-    assert_eq!(std::fs::read(annotation.original()).unwrap(), png);
+    assert_eq!(std::fs::read(annotation.original().unwrap()).unwrap(), png);
     std::fs::remove_dir_all(root).unwrap();
 }
 
@@ -124,6 +124,10 @@ fn browser_annotation_retained_editor_adds_original_evidence_without_a_live_page
         leap(cx, super::super::user_commands::ENDED_POLL);
         cx.debug_bounds("annotation-editor").is_some()
     });
+    assert!(
+        cx.debug_bounds("browser-notice").is_none(),
+        "the empty-page notice must not cover the retained editor"
+    );
     let comment = cx.debug_bounds("annotation-comment").unwrap();
     cx.simulate_click(comment.center(), gpui::Modifiers::none());
     cx.simulate_input("Keep this feedback on the closed page");
@@ -136,11 +140,11 @@ fn browser_annotation_retained_editor_adds_original_evidence_without_a_live_page
     let (_, _, annotations) = browser_annotations::split(prompt);
     assert_eq!(annotations.len(), 1);
     assert_eq!(annotations[0].capture(), original.capture());
-    assert_eq!(annotations[0].original_hash(), original.original_hash());
+    assert_eq!(annotations[0].original_hash().unwrap(), original.original_hash().unwrap());
     assert_eq!(
         annotations[0].comment(),
         "Keep this feedback on the closed page"
     );
-    assert_eq!(std::fs::read(original.original()).unwrap(), png);
+    assert_eq!(std::fs::read(original.original().unwrap()).unwrap(), png);
     std::fs::remove_dir_all(root).unwrap();
 }

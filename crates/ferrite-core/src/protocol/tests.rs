@@ -324,6 +324,47 @@ fn samples() -> Vec<(&'static str, Sample)> {
     };
     vec![
         (
+            "hello_browser_dispatch",
+            Sample::Client(ClientMessage::Hello {
+                generation: 1,
+                client: Peer { name: "ferrite".into(), version: "0.9.0".into() },
+                capabilities: vec![Capability::ConversationBrowser, Capability::BrowserDispatch],
+            }),
+        ),
+        (
+            "browser_dispatch",
+            Sample::Client(ClientMessage::Command(Command {
+                id: 9,
+                op: Op::BrowserDispatch {
+                    request: 2, boot_id: "b-1".into(), thread, owner: crate::browser::Owner { window: 3, epoch: 1 },
+                    document: crate::browser::Document { tab: crate::browser::TabId(5), generation: 1 },
+                    revision: 0,
+                },
+            })),
+        ),
+        (
+            "browser_dispatch_granted",
+            Sample::Server(ServerMessage::Reply {
+                id: 9, ok: Some(Done::BrowserDispatch { remaining_ms: 24000 }), error: None,
+            }),
+        ),
+        (
+            "browser_request_dispatch",
+            Sample::Server(ServerMessage::BrowserRequest {
+                request: 2, thread, owner: crate::browser::Owner { window: 3, epoch: 1 },
+                document: crate::browser::Document { tab: crate::browser::TabId(5), generation: 1 },
+                revision: 0, control: crate::browser::Control::Observe, dispatch: Some("b-1".into()),
+            }),
+        ),
+        (
+            "browser_request_legacy",
+            Sample::Server(ServerMessage::BrowserRequest {
+                request: 2, thread, owner: crate::browser::Owner { window: 3, epoch: 1 },
+                document: crate::browser::Document { tab: crate::browser::TabId(5), generation: 1 },
+                revision: 0, control: crate::browser::Control::Observe, dispatch: None,
+            }),
+        ),
+        (
             "hello",
             Sample::Client(ClientMessage::Hello {
                 generation: 1,
@@ -1905,6 +1946,12 @@ fn samples() -> Vec<(&'static str, Sample)> {
                         title: "Vendor herdr-reviewr".into(),
                         url: "https://github.com/josephwylie/ferrite/pull/118".into(),
                         body: "The Review slot's core.".into(),
+                        author: None,
+                        author_avatar_url: None,
+                        updated_at: None,
+                        changed_files: None,
+                        additions: None,
+                        deletions: None,
                         state: WirePrState::Open,
                         draft: false,
                         head: "vendor/reviewr".into(),
@@ -1917,6 +1964,9 @@ fn samples() -> Vec<(&'static str, Sample)> {
                             url: None,
                         }],
                         comments: vec![WirePrComment {
+                            id: None,
+                            author_is_bot: false,
+                            place: None,
                             kind: WirePrCommentKind::Finding,
                             author: "reviewer".into(),
                             anchor: "src/a.rs:3-4".into(),
@@ -1927,6 +1977,8 @@ fn samples() -> Vec<(&'static str, Sample)> {
                             resolved: false,
                             outdated: false,
                             replies: vec![WireReply {
+                                id: None,
+                                author_is_bot: false,
                                 author: "joseph".into(),
                                 body: "Fixed.".into(),
                                 created_at: "2026-10-15T10:00:00Z".into(),

@@ -34,9 +34,9 @@ use ferrite_reviewr::forge::{
 };
 
 use super::world::{
-    apply, approval, bash_approval, claude_menu, filler, git, git_command, group, hms, init,
-    last_used, limits, mode, phase, play, question, quiet, started, text, tokens, write_lines,
-    Clock, Run, Script, Secs, Sessions, DAY, HOUR, MINUTE,
+    Clock, DAY, HOUR, MINUTE, Run, Script, Secs, Sessions, apply, approval, bash_approval,
+    claude_menu, filler, git, git_command, group, hms, init, last_used, limits, mode, phase, play,
+    question, quiet, started, text, tokens, write_lines,
 };
 
 // ------------------------------------------------------------------ clock
@@ -1129,6 +1129,7 @@ impl Pr {
     fn view(self, clock: Clock) -> PrView {
         let ago = |secs: Secs| rfc3339(clock.instant(CAPTURE - secs));
         let finding = |anchor: &str, body: &str, age: Secs, resolved: bool| Comment {
+            id: None,
             kind: CommentKind::Finding,
             author: "claude".into(),
             author_is_bot: true,
@@ -1173,6 +1174,7 @@ impl Pr {
                 vec![
                     retries(6 * MINUTE, false),
                     Comment {
+                        id: None,
                         kind: CommentKind::Comment,
                         author: "josephwylie".into(),
                         author_is_bot: false,
@@ -1229,6 +1231,12 @@ impl Pr {
             title: title.into(),
             url: format!("https://github.com/josephwylie/ferrite/pull/{number}"),
             body: body.into(),
+            author: Some("josephwylie".into()),
+            author_avatar_url: None,
+            updated_at: Some(ago(4 * MINUTE)),
+            changed_files: Some(3),
+            additions: Some(42),
+            deletions: Some(12),
             state,
             is_draft: false,
             head_ref: head.into(),

@@ -97,9 +97,6 @@ pub(crate) enum Answer {
     Read(Box<WirePr>),
     /// The read failed; whatever was known still stands.
     Failed(PrFailure),
-    /// The branch's PR is another now: this target's has nothing left to
-    /// read.
-    Moved(u64),
     /// The forge says there is no such PR (not a failure to ask): nothing
     /// known of it stands.
     Gone(PrFailure),
@@ -171,16 +168,11 @@ impl PrReads {
         if read.status != (Status::Reading { request }) {
             return false;
         }
-        if matches!(answer, Answer::Moved(_)) {
-            self.reads.remove(&target);
-            return true;
-        }
         match answer {
             Answer::Read(pr) => {
                 read.snapshot = Some(*pr);
                 read.status = Status::Settled;
             }
-            Answer::Moved(_) => unreachable!("handled above"),
             Answer::Failed(failure) => read.status = Status::Failed(failure),
             Answer::Gone(failure) => {
                 read.snapshot = None;

@@ -116,6 +116,15 @@ pub struct BrowserState {
 pub trait BrowserView: View {
     fn state(&self) -> BrowserState;
     fn target_id(&self) -> Option<String>;
+    fn start_annotation(&self, _generation: u64, _send_enabled: bool) -> Result<(), String> {
+        Err("Live annotation requires Chromium".into())
+    }
+    fn take_annotation_event(&self) -> Option<super::live_annotation::Event> {
+        None
+    }
+    fn finish_annotation(&self, _generation: u64) {}
+    fn set_annotation_send_enabled(&self, _enabled: bool) {}
+
     fn browser_viewport(&self) -> Option<BrowserViewport> {
         None
     }

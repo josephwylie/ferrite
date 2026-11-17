@@ -7,7 +7,7 @@ pub(super) enum Job {
     Save(Store, crate::browser::Saved, Answer),
     #[cfg(test)]
     Hold(Receiver<()>, mpsc::Sender<()>),
-    Capture(PathBuf, Capture, Vec<u8>, Answer),
+    Capture(PathBuf, Capture, Option<Vec<u8>>, Answer),
     Image(PathBuf, String, Answer),
 }
 
@@ -36,10 +36,10 @@ impl Disk {
                         let _ = answer.send(result);
                     }
                     Job::Capture(dir, capture, bytes, answer) => {
-                        let result = crate::browser_annotations::retain(
+                        let result = crate::browser_annotations::retain_optional(
                             &dir,
                             capture,
-                            &bytes,
+                            bytes.as_deref(),
                             String::new(),
                             vec![],
                         )

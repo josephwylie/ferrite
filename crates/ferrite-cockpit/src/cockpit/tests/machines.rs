@@ -562,6 +562,46 @@ fn going_to_a_machine_that_needs_a_sign_in_says_so_and_holds_still(cx: &mut Test
     });
 }
 
+#[gpui::test]
+fn switching_machines_transfers_unsaved_panel_state_and_retires_the_previous_writer(cx: &mut TestAppContext) {
+    use crate::cockpit::surfaces::{SurfaceAction, SurfaceId, Surfaces};
+    let (core, _fake, checkout) = bound_cockpit("machines-panel-transfer", Provider::Claude);
+    let machines = cx.new(|_| machines("panel-transfer", None));
+    let (root, cx) = machine_window(cx, core, machines);
+    let first = shown(&root, cx);
+    let dir = scratch("machines-panel-transfer-prefs");
+    std::fs::write(&dir, "the settings directory is temporarily unavailable").unwrap();
+    let thread = first.update(cx, |view, cx| {
+        view.prefs.dir = dir.clone();
+        let thread = view.panes[0].thread().unwrap();
+        view.open_in_files(thread, checkout.join("src/lib.rs"), None, true, cx);
+        view.pump(cx);
+        view.flush_panel_persistence();
+        view.apply_surface(thread, SurfaceAction::Open(SurfaceId::Browser));
+        view.apply_surface(thread, SurfaceAction::Open(SurfaceId::Changes));
+        cx.emit(GoToMachine { index: Some(1), open: None });
+        thread
+    });
+    cx.run_until_parked();
+    let successor = shown(&root, cx);
+    assert_ne!(successor.entity_id(), first.entity_id());
+    successor.read_with(cx, |view, _| {
+        let state = view.panel.surfaces.get(thread).unwrap();
+        assert_eq!(state.active, Some(SurfaceId::Changes));
+        assert!(!state.tabs.contains(&SurfaceId::Browser), "live resources end with their owner");
+    });
+    std::fs::remove_file(&dir).unwrap();
+    successor.update(cx, |view, _| view.flush_panel_persistence());
+    first.update(cx, |view, cx| {
+        view.apply_surface(thread, SurfaceAction::Open(SurfaceId::Overview));
+        view.pump(cx);
+        view.flush_panel_persistence();
+    });
+    assert_eq!(Surfaces::load(&dir, |_, _| true).unwrap().get(thread).unwrap().active, Some(SurfaceId::Changes));
+    let files: serde_json::Value = serde_json::from_slice(&std::fs::read(dir.join("files.json")).unwrap()).unwrap();
+    assert_eq!(files["threads"][thread.get().to_string()]["files"][0]["path"], checkout.join("src/lib.rs").to_str().unwrap());
+}
+
 /// A machine with no `ferrited` says so, and while it is away its board,
 /// its tree and the keyboard are held: the root keeps the keys, so no
 /// Composer or answer reaches it.
@@ -1697,10 +1737,15 @@ fn remote_inbox_uses_digests_and_follows_another_clients_park(cx: &mut TestAppCo
 }
 
 #[gpui::test]
-fn browser_annotation_host_intercepts_selection_and_releases_cancelled_capture(cx: &mut TestAppContext) {
+fn browser_live_annotation_keeps_focus_and_protection_until_guest_cleanup(cx: &mut TestAppContext) {
     use ferrite_core::browser::Action;
     use ferrite_core::cockpit::{Attach, Endpoint, ServerState};
-    use ferrite_pane::visual::{engine::Visuals, web::{fake::{Call, FakeEngine}, Input}};
+    use ferrite_pane::visual::{
+        engine::Visuals,
+        live_annotation::{Event, Submission},
+        web::{fake::{Call, FakeEngine}, Input},
+    };
+    use ferrite_core::browser_annotations::{LiveFeedback, LiveScreenshot, Rect, RegionTarget, Selection, Viewport};
     // Short: the machine's socket under it must fit macOS's 104-byte SUN_LEN.
     let dir = scratch("annotation-host");
     let dial = ferrite_core::server::fixture_machine(dir.join("box"), Box::new(OnBox(Default::default()))).unwrap();
@@ -1721,56 +1766,92 @@ fn browser_annotation_host_intercepts_selection_and_releases_cancelled_capture(c
     cx.update(|cx| Visuals::install(engine.clone(), cx));
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     cx.simulate_resize(gpui::size(px(1600.), px(900.)));
-    until(cx, |cx| engine.live_views() == 1 && cx.debug_bounds("browser-preview").is_some());
-    let activation = || engine.journal().into_iter().filter(|call| {
-        matches!(call, Call::Input(input) if !matches!(input, Input::Leave))
-    }).collect::<Vec<_>>();
-    let before = activation();
-    let wait = |cx: &mut gpui::VisualTestContext, label: &str, done: fn(&mut gpui::VisualTestContext) -> bool| {
-        ferrite_core::doorbell::until(label, || { leap(cx, super::super::user_commands::ENDED_POLL); done(cx) });
+    // Native callbacks and remote retention use several threads. Bound the
+    // whole condition: repeated socket replies must not reset its deadline.
+    let wait = |cx: &mut gpui::VisualTestContext, label: &str, done: &mut dyn FnMut(&mut gpui::VisualTestContext) -> bool| {
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        loop {
+            leap(cx, super::super::user_commands::ENDED_POLL);
+            if done(cx) { break; }
+            assert!(std::time::Instant::now() < deadline, "{label}; native journal: {:?}", engine.journal().into_iter().rev().take(24).collect::<Vec<_>>());
+            std::thread::yield_now();
+        }
     };
-    let annotate = cx.debug_bounds("browser-annotate").expect("live browser offers annotation capture");
-    cx.simulate_click(annotate.center(), gpui::Modifiers::none());
-    wait(cx, "region selection opens", |cx| cx.debug_bounds("browser-annotation-overlay").is_some());
-    let protected = view.update(cx, |view, _| view.cockpit.browser_attach(thread).unwrap());
-    assert!(protected.tabs[0].protected, "selection protects the exact live page");
-    let cancel = cx.debug_bounds("browser-annotation-cancel").unwrap();
-    cx.simulate_click(cancel.center(), gpui::Modifiers::none());
-    wait(cx, "Cancel closes selection", |cx| cx.debug_bounds("browser-annotation-overlay").is_none());
-    let released = view.update(cx, |view, _| view.cockpit.browser_attach(thread).unwrap());
-    assert!(!released.tabs[0].protected, "cancel releases capture protection");
-    let annotate = cx.debug_bounds("browser-annotate").unwrap();
-    cx.simulate_click(annotate.center(), gpui::Modifiers::none());
-    wait(cx, "element controls open", |cx| cx.debug_bounds("browser-annotation-element").is_some());
-    let element = cx.debug_bounds("browser-annotation-element").unwrap();
-    cx.simulate_click(element.center(), gpui::Modifiers::none());
+    wait(cx, "browser becomes visible", &mut |cx| engine.live_views() == 1 && cx.debug_bounds("browser-preview").is_some());
+    wait(cx, "page finishes loading", &mut |cx| view.update(cx, |view, _| {
+        !view.cockpit.browser_attach(thread).unwrap().tabs[0].loading
+    }));
+    let finished = || engine.journal().iter().filter(|call| matches!(call, Call::AnnotationFinished(_))).count();
+    let protected = |cx: &mut gpui::VisualTestContext| view.update(cx, |view, _| {
+        view.cockpit.browser_attach(thread).unwrap().tabs[0].protected
+    });
+    let begin = |cx: &mut gpui::VisualTestContext| {
+        let annotate = cx.debug_bounds("browser-annotate").expect("live page offers annotation");
+        cx.simulate_click(annotate.center(), gpui::Modifiers::none());
+        tick(cx);
+    };
+
+    begin(cx);
+    assert!(protected(cx), "the live editor protects the exact page");
+    assert!(cx.debug_bounds("browser-annotation-overlay").is_none(), "the editor lives in the guest page");
+    assert!(cx.update(|window, cx| view.read(cx).browser_annotation_focus(thread, cx).is_some_and(|focus| focus.is_focused(window))), "starting annotation focuses the rendered WebView");
     cx.simulate_keystrokes("escape");
-    wait(cx, "Escape closes selection", |cx| cx.debug_bounds("browser-annotation-overlay").is_none());
-    let annotate = cx.debug_bounds("browser-annotate").unwrap();
-    cx.simulate_click(annotate.center(), gpui::Modifiers::none());
-    wait(cx, "region retry opens", |cx| cx.debug_bounds("browser-annotation-overlay").is_some());
-    let overlay = cx.debug_bounds("browser-annotation-overlay").unwrap();
-    let from = overlay.origin + gpui::point(px(20.), px(20.));
-    let to = from + gpui::point(px(80.), px(60.));
-    cx.simulate_mouse_down(from, MouseButton::Left, gpui::Modifiers::none());
-    cx.simulate_mouse_move(to, MouseButton::Left, gpui::Modifiers::none());
-    cx.simulate_mouse_up(to, MouseButton::Left, gpui::Modifiers::none());
-    wait(cx, "unavailable capture releases overlay", |cx| cx.debug_bounds("browser-annotation-overlay").is_none());
-    let released = view.update(cx, |view, _| view.cockpit.browser_attach(thread).unwrap());
-    assert!(!released.tabs[0].protected, "unavailable capture releases protection");
-    let annotate = cx.debug_bounds("browser-annotate").unwrap();
-    cx.simulate_click(annotate.center(), gpui::Modifiers::none());
-    wait(cx, "selection opens before new tab", |cx| cx.debug_bounds("browser-annotation-overlay").is_some());
+    wait(cx, "Escape reaches the guest", &mut |_| engine.journal().iter().any(|call| matches!(call, Call::Input(Input::Key { key, down: true, .. }) if key == "escape")));
+    // simulate_keystrokes sends only key-down; a real release ends the
+    // independent operator gesture after the annotation lease is released.
+    cx.simulate_event(gpui::KeyUpEvent { keystroke: gpui::Keystroke::parse("escape").unwrap() });
+    engine.annotation_event(Event::Cancelled);
+    wait(cx, "Cancel requests guest cleanup", &mut |_| finished() == 1);
+    assert!(protected(cx), "cancel waits for CSS restoration");
+    engine.annotation_event(Event::Closed);
+    wait(cx, "cancelled session releases protection", &mut |cx| !protected(cx));
+
+    begin(cx);
+    let viewport = engine.browser_viewport().unwrap();
+    let bounds = Rect { x: 12., y: 20., width: 80., height: 60. };
+    engine.annotation_event(Event::Attach {
+        feedback: LiveFeedback {
+            id: "live-region".into(),
+            page_url: "http://localhost:5173/start".into(),
+            page_title: Some("Fixture".into()),
+            comment: "Keep this region even without a screenshot".into(),
+            elements: vec![],
+            regions: vec![RegionTarget { id: "region-1".into(), rect: bounds.clone() }],
+            strokes: vec![],
+            style_changes: vec![],
+            screenshot: LiveScreenshot::Unavailable { reason: "Not captured yet".into() },
+            bounds,
+            created_at: "2026-11-16T00:00:00.000Z".into(),
+        },
+        viewport: Viewport {
+            width_css: f64::from(viewport.width),
+            height_css: f64::from(viewport.height),
+            device_scale: f64::from(viewport.scale),
+        },
+        submission: Submission::Attach,
+    });
+    wait(cx, "Attach capture requests guest cleanup", &mut |_| finished() == 2);
+    assert!(protected(cx), "Attach keeps its lease while the guest restores styles");
+    assert!(cx.debug_bounds("browser-annotation-attachment").is_none(), "no receipt is exposed before cleanup");
+    engine.annotation_event(Event::Closed);
+    wait(cx, "cleaned capture reaches the composer", &mut |cx| cx.debug_bounds("browser-annotation-attachment").is_some());
+    assert!(!protected(cx), "durable retention releases the lease");
+    let annotations = view.read_with(cx, |view, cx| view.panes[0].composer.read(cx).browser_annotations().to_vec());
+    assert_eq!(annotations.len(), 1);
+    assert!(annotations[0].original().is_none(), "an unavailable capture creates no fake image");
+    assert_eq!(annotations[0].comment(), "Keep this region even without a screenshot");
+    assert!(matches!(&annotations[0].capture().selection, Selection::Live { feedback } if feedback.regions[0].id == "region-1" && matches!(feedback.screenshot, LiveScreenshot::Unavailable { .. })));
+
+    begin(cx);
     let new_tab = cx.debug_bounds("browser-new-tab").unwrap();
     cx.simulate_click(new_tab.center(), gpui::Modifiers::none());
-    tick(cx);
-    let released = view.update(cx, |view, _| view.cockpit.browser_attach(thread).unwrap());
-    assert!(!released.tabs[0].protected, "starting another tab must release hidden selection protection");
-    let annotate = cx.debug_bounds("browser-annotate").unwrap();
-    cx.simulate_click(annotate.center(), gpui::Modifiers::none());
-    tick(cx);
-    assert!(cx.debug_bounds("browser-annotation-overlay").is_none(), "new address mode has no visible page to annotate");
-    assert_eq!(activation(), before, "annotation selection never forwards page activation input");
+    wait(cx, "New Tab requests guest cleanup", &mut |_| finished() == 3);
+    assert!(protected(cx), "hiding the page still waits for restoration");
+    engine.annotation_event(Event::Closed);
+    wait(cx, "hidden session releases protection", &mut |cx| !protected(cx));
+    let started = engine.journal().iter().filter(|call| matches!(call, Call::AnnotationStarted(..))).count();
+    begin(cx);
+    assert_eq!(engine.journal().iter().filter(|call| matches!(call, Call::AnnotationStarted(..))).count(), started, "new address mode has no visible page to annotate");
 }
 
 /// A window on a machine whose own `settings.json` is `there`, with its

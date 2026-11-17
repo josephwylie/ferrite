@@ -1,6 +1,6 @@
 //! Packaged feature-fixture gate, compiled only with `browser-smoke`.
-//! It delays an actual successful write acknowledgement, never page dispatch
-//! or page state, to exercise the Server's real uncertain-reply deadline.
+//! It holds native attachment or an actual write acknowledgement to exercise
+//! both sides of the Server's dispatch authorization deadline.
 use std::{
     path::PathBuf,
     sync::atomic::{AtomicBool, Ordering},
@@ -8,6 +8,24 @@ use std::{
 };
 
 pub(super) fn after_write(stopping: &AtomicBool) {
+    wait(
+        stopping,
+        "completion-gate",
+        "dispatched",
+        b"actual native write acknowledged before completion gate",
+    );
+}
+
+pub(super) fn before_attachment(stopping: &AtomicBool) {
+    wait(
+        stopping,
+        "dispatch-gate",
+        "waiting",
+        b"native worker reserved before attachment and dispatch authorization",
+    );
+}
+
+fn wait(stopping: &AtomicBool, name: &str, ready: &str, message: &[u8]) {
     let Some(directory) = std::env::var_os("FERRITE_BROWSER_WINDOW_OUTPUT").map(PathBuf::from)
     else {
         return;
@@ -19,22 +37,17 @@ pub(super) fn after_write(stopping: &AtomicBool) {
     {
         return;
     }
-    let arm = directory.join("completion-gate-arm");
+    let arm = directory.join(format!("{name}-arm"));
     if !arm.is_file() || std::fs::remove_file(&arm).is_err() {
         return;
     }
-    if std::fs::write(
-        directory.join("completion-gate-dispatched"),
-        b"actual native write acknowledged before completion gate",
-    )
-    .is_err()
-    {
+    if std::fs::write(directory.join(format!("{name}-{ready}")), message).is_err() {
         return;
     }
     let until = Instant::now() + Duration::from_secs(50);
     while !stopping.load(Ordering::Acquire)
         && Instant::now() < until
-        && !directory.join("completion-gate-release").exists()
+        && !directory.join(format!("{name}-release")).exists()
     {
         std::thread::sleep(Duration::from_millis(20));
     }

@@ -22,6 +22,7 @@
 //! tests can check what the host forwarded without reaching into the host.
 
 use std::cell::{Cell, RefCell};
+use std::collections::VecDeque;
 use std::rc::{Rc, Weak};
 use std::time::{Duration, Instant};
 
@@ -57,6 +58,8 @@ pub enum Call {
     BrowserOpen(String, BrowserViewport),
     BrowserResize(BrowserViewport),
     BrowserNavigate(String),
+    AnnotationStarted(u64, bool),
+    AnnotationFinished(u64),
     /// The operator replied to a script dialog.
     DialogAnswered(DialogAnswer),
     Resize(Viewport),
@@ -151,6 +154,22 @@ impl FakeEngine {
             page.windows.borrow_mut().push(url.into());
             (page.wake)();
         }
+    }
+
+    /// Deliver a guest event. Cleanup stays pending until the test supplies
+    /// `Closed`, so a host cannot accidentally release protection early.
+    pub fn annotation_event(&self, event: crate::visual::live_annotation::Event) {
+        let page = self.page().expect("a browser page is open");
+        assert!(page.annotation.get().is_some(), "a live annotation is active");
+        if matches!(event, crate::visual::live_annotation::Event::Closed) {
+            page.annotation.set(None);
+        }
+        page.annotation_events.borrow_mut().push_back(event);
+        (page.wake)();
+    }
+
+    pub fn browser_viewport(&self) -> Option<BrowserViewport> {
+        self.page().map(|page| page.viewport.get())
     }
 
     /// The newest browser page reports a right-click.
@@ -248,6 +267,10 @@ impl Engine for FakeEngine {
             dialog: RefCell::default(),
             windows: RefCell::default(),
             context: RefCell::default(),
+            viewport: Cell::new(viewport),
+            annotation: Cell::new(None),
+            annotation_finishing: Cell::new(false),
+            annotation_events: RefCell::default(),
             wake,
         });
         self.navigation
@@ -304,6 +327,10 @@ struct BrowserNavigation {
     dialog: RefCell<Option<DialogRequest>>,
     windows: RefCell<Vec<String>>,
     context: RefCell<Option<PageContext>>,
+    viewport: Cell<BrowserViewport>,
+    annotation: Cell<Option<u64>>,
+    annotation_finishing: Cell<bool>,
+    annotation_events: RefCell<VecDeque<crate::visual::live_annotation::Event>>,
     wake: Rc<dyn Fn()>,
 }
 impl View for BrowserHandle {
@@ -343,7 +370,33 @@ impl BrowserView for BrowserHandle {
     fn target_id(&self) -> Option<String> {
         None
     }
+    fn start_annotation(&self, generation: u64, send_enabled: bool) -> Result<(), String> {
+        if generation != self.navigation.generation.get() || self.navigation.annotation.get().is_some() {
+            return Err("The annotation document is unavailable".into());
+        }
+        self.navigation.annotation.set(Some(generation));
+        self.navigation.annotation_finishing.set(false);
+        self.navigation.annotation_events.borrow_mut().push_back(crate::visual::live_annotation::Event::Ready);
+        self.journal.borrow_mut().push(Call::AnnotationStarted(generation, send_enabled));
+        (self.navigation.wake)();
+        Ok(())
+    }
+    fn take_annotation_event(&self) -> Option<crate::visual::live_annotation::Event> {
+        self.navigation.annotation_events.borrow_mut().pop_front()
+    }
+    fn finish_annotation(&self, generation: u64) {
+        if self.navigation.annotation.get() == Some(generation)
+            && !self.navigation.annotation_finishing.replace(true)
+        {
+            self.journal.borrow_mut().push(Call::AnnotationFinished(generation));
+            (self.navigation.wake)();
+        }
+    }
+    fn browser_viewport(&self) -> Option<BrowserViewport> {
+        Some(self.navigation.viewport.get())
+    }
     fn resize_browser(&self, viewport: BrowserViewport) {
+        self.navigation.viewport.set(viewport);
         self.journal
             .borrow_mut()
             .push(Call::BrowserResize(viewport));

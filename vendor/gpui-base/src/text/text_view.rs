@@ -807,7 +807,7 @@ impl Element for TextView {
     ) {
         let state = &request_layout.state;
         if self.selectable {
-            state.update(cx, |state, _| state.selection_adapter.begin_frame());
+            state.update(cx, |state, cx| state.selection_adapter.begin_frame(cx));
         }
         // Ferrite: the occurrences (and the streamed runs) count afresh in
         // this frame's paint order.

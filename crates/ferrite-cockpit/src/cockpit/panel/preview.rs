@@ -260,6 +260,10 @@ impl CockpitView {
         }
         for pane in &mut self.panes {
             for annotation in pane.preview.take_annotation_requests() {
+                if annotation.original().is_none() {
+                    pane.preview.loading_annotation(annotation, window);
+                    continue;
+                }
                 let image = pane
                     .thread()
                     .ok_or_else(|| {
@@ -343,7 +347,7 @@ impl CockpitView {
         }
         for (thread, id) in opened_surfaces {
             if self.active_surface(thread).as_ref() != Some(&id) || !self.panel_open(thread) {
-                self.surfaces_mut(thread).upsert(id);
+                self.apply_surface(thread, SurfaceAction::Open(id));
             }
         }
         // After the opened ones take their tabs, or the tab shown before
@@ -457,10 +461,12 @@ impl CockpitView {
                             .child(annotation.comment().to_owned()),
                     )
                 })
+                .child(ferrite_pane::annotation_editor::annotation_context(annotation))
                 .child(match image {
                     Some(image) => {
                         ferrite_pane::annotation_editor::annotation_stage(annotation, image.clone())
                     }
+                    None if annotation.original().is_none() => div().into_any_element(),
                     None => div().child("Loading capture…").into_any_element(),
                 })
                 .into_any_element(),
@@ -523,7 +529,7 @@ impl CockpitView {
                 Body::BrowserAnnotation {
                     annotation,
                     image: Some(image),
-                } => Some((image.clone(), annotation.original().display().to_string())),
+                } => annotation.original().map(|original| (image.clone(), original.display().to_string())),
                 _ => (document.name.is_none() && document.page().is_none())
                     .then(|| (document.path.clone(), title.clone())),
             };

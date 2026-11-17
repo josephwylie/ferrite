@@ -132,6 +132,47 @@ fn scratch(name: &str) -> std::path::PathBuf {
     store
 }
 
+#[test]
+fn unrelated_messages_do_not_extend_a_commands_reply_deadline() {
+    let store = scratch("reply-deadline");
+    let taken = server_answering_nothing(&store, 0);
+    let mut remote = remote(&store);
+    let id = remote.next_request + 1;
+    let (send, messages) = mpsc::channel();
+    remote.attachment.as_mut().unwrap().client.messages = messages;
+    let traffic = std::thread::spawn(move || {
+        let until = Instant::now() + REPLY_WAIT + Duration::from_millis(500);
+        while Instant::now() < until {
+            send.send(ServerMessage::Focus {
+                thread: ThreadId::new(99),
+            })
+            .unwrap();
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        send.send(ServerMessage::Reply {
+            id,
+            ok: None,
+            error: None,
+        })
+        .unwrap();
+    });
+
+    let result = remote.execute(Op::SettingsChanged);
+    traffic.join().unwrap();
+
+    assert!(
+        matches!(result, Err(WireError { code: ErrorCode::Unconfirmed, .. })),
+        "unrelated traffic must not keep a command waiting: {result:?}"
+    );
+    assert!(remote.poll().iter().any(|arrival| matches!(
+        arrival,
+        Arrival::Message(ServerMessage::Focus { thread }) if *thread == ThreadId::new(99)
+    )));
+    assert!(matches!(taken.try_recv(), Ok(Op::SettingsChanged)));
+    assert!(taken.try_recv().is_err(), "a timed out command was resent");
+    let _ = std::fs::remove_dir_all(&store);
+}
+
 /// A first send in flight when an act finds the Server gone is settled
 /// at the next poll: its Draft hears it may not have started, and is no
 /// longer starting, so it can be sent again.
@@ -341,6 +382,42 @@ fn a_review_falls_back_to_review_diff_on_an_older_server() {
     assert!(
         taken.recv_timeout(Duration::from_millis(100)).is_err(),
         "a run or a last turn is never asked as a review_diff"
+    );
+    let _ = std::fs::remove_dir_all(&store);
+}
+
+#[test]
+fn a_pull_request_diff_sends_its_repository_and_number_without_local_fallback() {
+    let store = scratch("numbered-pr-diff");
+    let taken = server_answering(&store, 0, |op| match op {
+        Op::ReviewPullRequestDiff { number: 7, .. } => Some(Ok(Done::Review { files: Vec::new() })),
+        _ => Some(Err(WireError {
+            code: ErrorCode::Unsupported,
+            message: "unsupported".into(),
+        })),
+    });
+    let mut remote = remote(&store);
+    for number in [7, 8] {
+        let answered = remote
+            .review_pull_request_diff(Path::new("/requested/repo"), number)
+            .unwrap();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let result = loop {
+            assert!(Instant::now() < deadline, "never answered");
+            remote.poll();
+            if let Ok(result) = answered.try_recv() {
+                break result;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        };
+        assert_eq!(result.is_ok(), number == 7);
+        assert!(
+            matches!(taken.recv().unwrap(), Op::ReviewPullRequestDiff { path, number: asked } if path == Path::new("/requested/repo") && asked == number)
+        );
+    }
+    assert!(
+        taken.recv_timeout(Duration::from_millis(100)).is_err(),
+        "an unsupported PR read never asks for the local branch"
     );
     let _ = std::fs::remove_dir_all(&store);
 }

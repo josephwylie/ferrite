@@ -252,13 +252,13 @@ impl CockpitView {
         match verb {
             MenuVerb::CloseSurface => self.close_surface(thread, &id, cx),
             MenuVerb::CloseOtherSurfaces => {
-                self.close_surfaces(thread, |state| state.close_others(&id), cx)
+                self.close_surfaces(thread, CloseSelection::Others(id), cx)
             }
             MenuVerb::CloseSurfacesRight => {
-                self.close_surfaces(thread, |state| state.close_right(&id), cx)
+                self.close_surfaces(thread, CloseSelection::Right(id), cx)
             }
             MenuVerb::CloseAllSurfaces => {
-                self.close_surfaces(thread, ThreadSurfaces::close_all, cx)
+                self.close_surfaces(thread, CloseSelection::All, cx)
             }
             MenuVerb::CopyPath => {
                 if let SurfaceId::File(path) = &id {
@@ -614,7 +614,7 @@ impl CockpitView {
             return;
         };
         if !self.panel_open(thread) {
-            self.surfaces_mut(thread).set_open(true);
+            self.apply_surface(thread, SurfaceAction::SetOpen(true));
         }
         let window = self.panel.window_w;
         let left = window - self.panel_target_w() + ferrite_ui::theme::SURFACE_HEAD_PAD_L;

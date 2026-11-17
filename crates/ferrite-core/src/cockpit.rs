@@ -107,6 +107,7 @@ pub struct Cockpit {
     forge_fixture: HashMap<PathBuf, ferrite_reviewr::forge::PrView>,
     /// A fixture world's pull requests read by number, and its lists.
     forge_numbered: HashMap<(PathBuf, u64), crate::protocol::ReviewPullRequest>,
+    forge_diffs: HashMap<(PathBuf, u64), Vec<ferrite_reviewr::ferrite::FileSides>>,
     forge_lists:
         HashMap<(PathBuf, crate::protocol::WirePrFilter), crate::protocol::ReviewPullRequests>,
     /// The checkouts whose whole-PR reads wait for a test's answer
@@ -255,6 +256,7 @@ impl Cockpit {
             forge: Default::default(),
             forge_fixture: HashMap::new(),
             forge_numbered: HashMap::new(),
+            forge_diffs: HashMap::new(),
             forge_lists: HashMap::new(),
             forge_held: Default::default(),
             held_reads: Vec::new(),
@@ -304,7 +306,7 @@ impl Cockpit {
         owner: crate::browser::Owner,
         lease: crate::browser::Lease,
         capture: crate::browser_annotations::Capture,
-        png: crate::protocol::WirePng,
+        png: Option<crate::protocol::WirePng>,
     ) -> io::Result<Receiver<io::Result<crate::browser_annotations::Annotation>>> {
         self.remote()?
             .browser_capture(thread, owner, lease, capture, png)
@@ -319,8 +321,10 @@ impl Cockpit {
     ) -> io::Result<Receiver<io::Result<PathBuf>>> {
         match &mut self.link {
             Link::Server(server) => {
-                let image =
-                    server.browser_capture_image(thread, annotation.original_hash().to_owned())?;
+                let hash = annotation
+                    .original_hash()
+                    .ok_or_else(|| io::Error::other("This annotation has no screenshot"))?;
+                let image = server.browser_capture_image(thread, hash.to_owned())?;
                 Ok(read_here(move || {
                     let png = image
                         .recv_timeout(std::time::Duration::from_secs(30))
@@ -430,9 +434,22 @@ impl Cockpit {
         })
     }
 
+    pub fn browser_dispatch(
+        &mut self,
+        request: u64,
+        boot_id: String,
+        thread: ThreadId,
+        owner: crate::browser::Owner,
+        document: crate::browser::Document,
+        revision: u64,
+    ) -> io::Result<Receiver<io::Result<u64>>> {
+        self.remote()?.browser_dispatch(request, boot_id, thread, owner, document, revision)
+    }
+
     pub fn browser_reply(
         &mut self,
         request: u64,
+        boot_id: Option<String>,
         thread: ThreadId,
         owner: crate::browser::Owner,
         document: crate::browser::Document,
@@ -442,6 +459,7 @@ impl Cockpit {
         if let Ok(remote) = self.remote() {
             remote.say(&crate::protocol::ClientMessage::BrowserReply {
                 request,
+                boot_id,
                 thread,
                 owner,
                 document,
@@ -2116,6 +2134,32 @@ impl Cockpit {
         }
     }
 
+    pub fn review_pull_request_diff(
+        &mut self,
+        path: &Path,
+        number: u64,
+    ) -> io::Result<Receiver<io::Result<Vec<ferrite_reviewr::ferrite::FileSides>>>> {
+        if let Some(files) = self.forge_diffs.get(&(path.to_path_buf(), number)).cloned() {
+            return Ok(read_here(move || Ok(files)));
+        }
+        if self.has_forge_fixture(path) {
+            return Ok(read_here(|| Err("No published diff fixture for this pull request".to_string())));
+        }
+        match &mut self.link {
+            Link::Server(server) => server.review_pull_request_diff(path, number),
+            Link::InProcess(_) => {
+                let (path, forge) = (path.to_path_buf(), self.forge.clone());
+                Ok(read_here(move || {
+                    ferrite_reviewr::forge::diff_numbered(&path, &forge, number)
+                }))
+            }
+        }
+    }
+
+    pub fn fixture_forge_diff(&mut self, path: PathBuf, number: u64, files: Vec<ferrite_reviewr::ferrite::FileSides>) {
+        self.forge_diffs.insert((path, number), files);
+    }
+
     /// The pull request of the branch checked out at `path`, whole, read by
     /// its forge's CLI for a review, where `review_diff` reads.
     pub fn review_pull_request(
@@ -2137,12 +2181,12 @@ impl Cockpit {
             let read = read.clone();
             return Ok(read_here(move || Ok(read)));
         }
-        if let Some(view) = number
-            .is_none()
-            .then(|| self.forge_fixture.get(path))
-            .flatten()
-            .cloned()
-        {
+        if let Some(view) = self.forge_fixture.get(path).cloned() {
+            let view = if number.is_none_or(|number| matches!(&view, ferrite_reviewr::forge::PrView::Pr(pr) if pr.number == number)) {
+                view
+            } else {
+                ferrite_reviewr::forge::PrView::NoPr
+            };
             return Ok(read_here(move || {
                 Ok(crate::protocol::ReviewPullRequest::of(view, "PR"))
             }));
@@ -2675,7 +2719,10 @@ impl Cockpit {
     /// The provider CLIs of the machine whose Sessions this window shows:
     /// asked of its Server, or of this computer when the window runs its
     /// agents itself. The answer is `Done::Clis` or `Done::CliUpdated`.
-    pub fn cli(&mut self, action: crate::protocol::CliAction) -> io::Result<Receiver<io::Result<Done>>> {
+    pub fn cli(
+        &mut self,
+        action: crate::protocol::CliAction,
+    ) -> io::Result<Receiver<io::Result<Done>>> {
         match &mut self.link {
             Link::Server(server) => server.cli(action),
             Link::InProcess(_) => Ok(read_here(move || {
@@ -3002,6 +3049,7 @@ impl Cockpit {
                 .keys()
                 .any(|(fixture, _)| fixture == path)
             || self.forge_lists.keys().any(|(fixture, _)| fixture == path)
+            || self.forge_diffs.keys().any(|(fixture, _)| fixture == path)
     }
 
     /// The Server's message about a browser, as a window linked to it

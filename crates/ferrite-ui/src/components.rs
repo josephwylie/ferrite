@@ -1708,6 +1708,23 @@ pub fn on_bounds<E: ParentElement>(
     })
 }
 
+/// From a prepaint or paint callback: draw the view being drawn once more,
+/// and no other part of the window. What a measurement asks for when it comes
+/// out different from the one its frame was built on.
+///
+/// While an animation is asking for frames, the redraw joins its next one. A
+/// window at rest gets the view marked dirty once the draw ends (a view
+/// cannot be marked during one) and no frame request, so a column that has
+/// landed leaves nothing waiting on a frame.
+pub fn redraw_drawn_view(window: &Window, cx: &mut App) {
+    if window.frame_requested() {
+        window.request_animation_frame();
+    } else {
+        let view = window.current_view();
+        cx.defer(move |cx| cx.notify(view));
+    }
+}
+
 type Record = Box<dyn FnOnce(gpui::Bounds<gpui::Pixels>, &mut Window, &mut App)>;
 
 /// An absolute box pinned to its parent's padding box that reports the

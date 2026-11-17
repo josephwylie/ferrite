@@ -27,7 +27,6 @@ use gpui::{
 };
 
 use super::CockpitView;
-use crate::nav;
 
 /// A part of the Cockpit drawn as a cached view of its own.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -139,7 +138,7 @@ impl CockpitView {
         if !self.parts.borrow().on {
             return self.nav_content(&self.nav_state(), window, cx);
         }
-        let frame = div().flex_shrink_0().h_full().w(px(nav::WIDTH));
+        let frame = div().flex_shrink_0().h_full().w(px(self.nav_expanded_width()));
         self.mount_part(Part::Nav, frame, cx)
     }
 

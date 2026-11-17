@@ -197,7 +197,7 @@ pub(crate) struct RowShape {
     pub pending_call: Option<String>,
     /// The model's thinking drawn as `∴` rows; off, it draws nothing.
     pub thinking: bool,
-    /// A muted line under the first prompt (`TranscriptInput::note`).
+    /// A muted line under the first prompt (`TranscriptPresentation::note`).
     pub note: Option<gpui::SharedString>,
     /// Earlier history exists that these blocks do not hold: a boundary
     /// row heads the window.

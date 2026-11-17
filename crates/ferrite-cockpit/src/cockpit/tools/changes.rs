@@ -30,9 +30,10 @@ use ferrite_ui::theme::{self, paint};
 use ferrite_pane::composer::{Composer, Role};
 
 use super::*;
-use crate::cockpit::surfaces::SurfaceId;
 use crate::cockpit::context_menu::Submenu;
-use crate::cockpit::panel::hunks::{hunks_element, shown, Layout, Line, Shown, Sign};
+use crate::cockpit::panel::hunks::{Layout, Line, Shown, Sign, hunks_element, shown};
+use crate::cockpit::panel::pr_read::PrTarget;
+use crate::cockpit::surfaces::SurfaceId;
 
 /// What the Changes diff is against.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -65,17 +66,18 @@ impl Scope {
 
 /// One of a Thread's diffs, each with its own scope, folds and filter: the
 /// Changes Surface's, in the scope the operator picks, and a pull request's
-/// Code view, always the branch's whole diff.
+/// Code view, keyed by the requested PR and read from its published revisions.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) enum Diff {
     Changes(ThreadId),
-    PullRequest(ThreadId),
+    PullRequest(PrTarget),
 }
 
 impl Diff {
-    pub(crate) fn thread(self) -> ThreadId {
+    pub(crate) fn local_thread(self) -> Option<ThreadId> {
         match self {
-            Diff::Changes(thread) | Diff::PullRequest(thread) => thread,
+            Diff::Changes(thread) => Some(thread),
+            Diff::PullRequest(_) => None,
         }
     }
 
@@ -123,6 +125,25 @@ struct File {
     revision: u64,
 }
 
+impl File {
+    fn of(sides: &ferrite_reviewr::ferrite::FileSides, staged: bool) -> Self {
+        let hunks = shown(Some(sides));
+        let hunks_without_whitespace = match &hunks {
+            Shown::Hunks(hunks) => Shown::Hunks(without_whitespace(hunks.clone())),
+            other => other.clone(),
+        };
+        Self {
+            path: sides.file.path.clone(),
+            added: sides.file.additions,
+            removed: sides.file.deletions,
+            revision: revision_of(&hunks),
+            hunks,
+            hunks_without_whitespace,
+            staged,
+        }
+    }
+}
+
 fn revision_of(hunks: &Shown) -> u64 {
     let mut hasher = DefaultHasher::new();
     hunks.hash(&mut hasher);
@@ -157,6 +178,8 @@ pub(crate) struct Changes {
     /// The last stage or unstage git refused, until the next one replaces it
     /// or Refresh clears it.
     stage_failure: Option<StageFailure>,
+    refreshing: bool,
+    refresh_failure: Option<SharedString>,
 }
 
 /// A stage or unstage git refused: the file it was for, and git's word.
@@ -170,8 +193,10 @@ impl Changes {
     /// A mark made on content other than what `files` now holds goes, and its
     /// file opens again so the new hunks show.
     fn forget_stale_reviews(&mut self, files: &[File]) {
-        let current: HashMap<&str, u64> =
-            files.iter().map(|file| (file.path.as_str(), file.revision)).collect();
+        let current: HashMap<&str, u64> = files
+            .iter()
+            .map(|file| (file.path.as_str(), file.revision))
+            .collect();
         let stale: Vec<String> = self
             .reviewed
             .iter()
@@ -199,6 +224,8 @@ impl Changes {
             stage_generation: 0,
             filter,
             stage_failure: None,
+            refreshing: false,
+            refresh_failure: None,
         }
     }
 }
@@ -209,7 +236,10 @@ impl Changes {
 pub(crate) fn is_test_path(path: &str) -> bool {
     let mut parts = path.split('/').collect::<Vec<_>>();
     let name = parts.pop().unwrap_or_default();
-    if parts.iter().any(|dir| matches!(*dir, "test" | "tests" | "__tests__" | "spec")) {
+    if parts
+        .iter()
+        .any(|dir| matches!(*dir, "test" | "tests" | "__tests__" | "spec"))
+    {
         return true;
     }
     let stem = name.split('.').next().unwrap_or(name);
@@ -291,7 +321,10 @@ fn unchanged_in_block(block: Vec<Line>) -> Vec<Line> {
         if removed_keys[i] == added_keys[j] {
             removed.next();
             let line = added.next().expect("j < columns");
-            out.push(Line { sign: Sign::Context, ..line });
+            out.push(Line {
+                sign: Sign::Context,
+                ..line
+            });
             i += 1;
             j += 1;
         } else if common[i + 1][j] >= common[i][j + 1] {
@@ -329,10 +362,13 @@ impl CockpitView {
         self.ensure_diff(Diff::Changes(thread), cx);
     }
 
-    /// The branch's whole diff of `thread`: what a pull request's Code view
-    /// shows, whatever the Changes Surface was left on.
-    pub(in crate::cockpit) fn ensure_branch_changes(&mut self, thread: ThreadId, cx: &mut Context<Self>) {
-        self.ensure_diff(Diff::PullRequest(thread), cx);
+    /// A pull request's published files, independent of the local Changes scope.
+    pub(in crate::cockpit) fn ensure_pr_changes(
+        &mut self,
+        target: PrTarget,
+        cx: &mut Context<Self>,
+    ) {
+        self.ensure_diff(Diff::PullRequest(target), cx);
     }
 
     fn ensure_diff(&mut self, diff: Diff, cx: &mut Context<Self>) {
@@ -342,11 +378,75 @@ impl CockpitView {
                 field.set_role(Role::Field(None), cx);
                 field
             });
-            cx.subscribe(&filter, |_, _, _: &ferrite_pane::composer::Edited, cx| cx.notify())
-                .detach();
-            self.tools.changes.insert(diff, Changes::new(diff.scope(), filter));
+            cx.subscribe(&filter, |_, _, _: &ferrite_pane::composer::Edited, cx| {
+                cx.notify()
+            })
+            .detach();
+            self.tools
+                .changes
+                .insert(diff, Changes::new(diff.scope(), filter));
             self.refresh_changes(diff, cx);
         }
+    }
+
+    fn read_pr_changes(&mut self, target: PrTarget, _keep_shown: bool, cx: &mut Context<Self>) {
+        let Some(root) = self.pr_source_path(target.source) else {
+            return;
+        };
+        let diff = Diff::PullRequest(target);
+        let Some(changes) = self.changes_of(diff) else {
+            return;
+        };
+        changes.generation += 1;
+        let generation = changes.generation;
+        changes.refreshing = matches!(changes.load, Load::Read(_));
+        changes.refresh_failure = None;
+        if !changes.refreshing {
+            changes.load = Load::Reading;
+        }
+        let answer = if cfg!(any(test, feature = "visual-reference"))
+            && !self.cockpit.has_forge_fixture(&root)
+        {
+            Err(std::io::Error::other(
+                "No published diff fixture for this pull request",
+            ))
+        } else {
+            self.cockpit.review_pull_request_diff(&root, target.number)
+        };
+        cx.spawn(async move |view, cx| {
+            let files = crate::cockpit::beside::answered(answer, cx).await;
+            let files = cx
+                .background_executor()
+                .spawn(async move {
+                    files.map(|files| files.iter().map(|sides| File::of(sides, false)).collect::<Vec<_>>())
+                })
+                .await;
+            view.update(cx, |view, cx| {
+                if view.pr_source_path(target.source).as_ref() != Some(&root) {
+                    return;
+                }
+                if let Some(changes) = view
+                    .changes_of(diff)
+                    .filter(|changes| changes.generation == generation)
+                {
+                    changes.refreshing = false;
+                    match files {
+                        Ok(files) => {
+                            changes.forget_stale_reviews(&files);
+                            changes.load = Load::Read(files);
+                        }
+                        Err(error) if matches!(changes.load, Load::Read(_)) => {
+                            changes.refresh_failure = Some(error.to_string().into());
+                        }
+                        Err(error) => changes.load = Load::Failed(error.to_string().into()),
+                    }
+                    cx.notify();
+                }
+            })
+            .ok();
+        })
+        .detach();
+        cx.notify();
     }
 
     /// Whether the last read of `thread`'s Changes lists the file at `path`
@@ -360,7 +460,12 @@ impl CockpitView {
 
     /// A Files tab's `Show changes`: the Changes column opens on that file,
     /// its diff unfolded and in view.
-    pub(in crate::cockpit) fn show_changes_of(&mut self, thread: ThreadId, path: &str, cx: &mut Context<Self>) {
+    pub(in crate::cockpit) fn show_changes_of(
+        &mut self,
+        thread: ThreadId,
+        path: &str,
+        cx: &mut Context<Self>,
+    ) {
         self.upsert_surface(thread, SurfaceId::Changes, cx);
         let Some(changes) = self.changes_of(Diff::Changes(thread)) else {
             return;
@@ -377,7 +482,10 @@ impl CockpitView {
     /// A file's stage button: its change goes into git's index, or comes
     /// out of it, and the list is read again.
     fn stage_file(&mut self, diff: Diff, path: String, stage: bool, cx: &mut Context<Self>) {
-        let Some(root) = self.thread_path(diff.thread()) else {
+        let Some(thread) = diff.local_thread() else {
+            return;
+        };
+        let Some(root) = self.thread_path(thread) else {
             return;
         };
         let machine = self.cockpit.machine().cloned();
@@ -391,7 +499,7 @@ impl CockpitView {
             let outcome = crate::cockpit::beside::answered(outcome, cx).await;
             view.update(cx, |view, cx| {
                 if !same_machine(view.cockpit.machine(), machine.as_ref())
-                    || view.thread_path(diff.thread()).as_ref() != Some(&root)
+                    || view.thread_path(thread).as_ref() != Some(&root)
                 {
                     return;
                 }
@@ -402,11 +510,7 @@ impl CockpitView {
                         message: message.to_string().into(),
                     });
                 }
-                for changed in [Diff::Changes(diff.thread()), Diff::PullRequest(diff.thread())] {
-                    if view.tools.changes.contains_key(&changed) {
-                        view.reread_changes(changed, cx);
-                    }
-                }
+                view.reread_changes(diff, cx);
             }).ok();
         }).detach();
     }
@@ -423,7 +527,14 @@ impl CockpitView {
     }
 
     fn read_changes(&mut self, diff: Diff, keep_shown: bool, cx: &mut Context<Self>) {
-        let Some(root) = self.thread_path(diff.thread()) else {
+        if let Diff::PullRequest(target) = diff {
+            self.read_pr_changes(target, keep_shown, cx);
+            return;
+        }
+        let Some(thread) = diff.local_thread() else {
+            return;
+        };
+        let Some(root) = self.thread_path(thread) else {
             return;
         };
         let Some(changes) = self.changes_of(diff) else {
@@ -441,28 +552,17 @@ impl CockpitView {
             let snapshot = crate::cockpit::beside::answered(answer, cx).await;
             let outcome = cx.background_executor().spawn(async move {
                 snapshot.map(|snapshot| {
-                    let files = snapshot.files.iter().map(|sides| {
-                        let hunks = shown(Some(sides));
-                        let hunks_without_whitespace = match &hunks {
-                            Shown::Hunks(hunks) => Shown::Hunks(without_whitespace(hunks.clone())),
-                            other => other.clone(),
-                        };
-                        File {
-                            path: sides.file.path.clone(),
-                            added: sides.file.additions,
-                            removed: sides.file.deletions,
-                            revision: revision_of(&hunks),
-                            hunks,
-                            hunks_without_whitespace,
-                            staged: snapshot.staged.contains(&sides.file.path),
-                        }
-                    }).collect::<Vec<_>>();
+                    let files = snapshot
+                        .files
+                        .iter()
+                        .map(|sides| File::of(sides, snapshot.staged.contains(&sides.file.path)))
+                        .collect::<Vec<_>>();
                     (files, snapshot.branches.into_iter().take(BRANCHES_LISTED).collect())
                 })
             }).await;
             view.update(cx, |view, cx| {
                 if !same_machine(view.cockpit.machine(), machine.as_ref())
-                    || view.thread_path(diff.thread()).as_ref() != Some(&root)
+                    || view.thread_path(thread).as_ref() != Some(&root)
                 {
                     return;
                 }
@@ -547,7 +647,10 @@ impl CockpitView {
     }
 
     /// The rows of the scope dropdown.
-    pub(in crate::cockpit) fn changes_scope_rows(&self, diff: Diff) -> Vec<Option<(menu::Item, MenuVerb)>> {
+    pub(in crate::cockpit) fn changes_scope_rows(
+        &self,
+        diff: Diff,
+    ) -> Vec<Option<(menu::Item, MenuVerb)>> {
         let Some(changes) = self.tools.changes.get(&diff) else {
             return Vec::new();
         };
@@ -567,7 +670,10 @@ impl CockpitView {
     }
 
     /// `Compare against ›`: the branches, the standing one ticked.
-    pub(in crate::cockpit) fn changes_branch_rows(&self, diff: Diff) -> Vec<(menu::Item, MenuVerb)> {
+    pub(in crate::cockpit) fn changes_branch_rows(
+        &self,
+        diff: Diff,
+    ) -> Vec<(menu::Item, MenuVerb)> {
         let Some(changes) = self.tools.changes.get(&diff) else {
             return Vec::new();
         };
@@ -584,7 +690,10 @@ impl CockpitView {
     }
 
     /// The Changes `⋯` menu's rows.
-    pub(in crate::cockpit) fn changes_more_rows(&self, diff: Diff) -> Vec<Option<(menu::Item, MenuVerb)>> {
+    pub(in crate::cockpit) fn changes_more_rows(
+        &self,
+        diff: Diff,
+    ) -> Vec<Option<(menu::Item, MenuVerb)>> {
         let Some(changes) = self.tools.changes.get(&diff) else {
             return Vec::new();
         };
@@ -598,7 +707,11 @@ impl CockpitView {
             row("Expand all files", false, Verb::ExpandAll),
             None,
             row("Word wrap", changes.wrap, Verb::ToggleWrap),
-            row("Hide whitespace changes", changes.hide_whitespace, Verb::ToggleWhitespace),
+            row(
+                "Hide whitespace changes",
+                changes.hide_whitespace,
+                Verb::ToggleWhitespace,
+            ),
             row("Hide test files", changes.hide_tests, Verb::ToggleTests),
             None,
             row("Refresh", false, Verb::Refresh),
@@ -612,17 +725,21 @@ impl CockpitView {
             return div().flex_1();
         };
         let body = match &changes.load {
-            Load::Reading => self.changes_note("Reading changes\u{2026}").into_any_element(),
+            Load::Reading => self
+                .changes_note("Reading changes\u{2026}")
+                .into_any_element(),
             Load::Failed(why) => self.changes_note(why.clone()).into_any_element(),
-            Load::Read(files) if files.is_empty() => {
-                self.changes_empty(diff, &changes.scope, cx).into_any_element()
-            }
+            Load::Read(files) if files.is_empty() => self
+                .changes_empty(diff, &changes.scope, cx)
+                .into_any_element(),
             Load::Read(files) => {
                 let wanted = changes.filter.read(cx).text().trim().to_lowercase();
                 let listed: Vec<_> = files
                     .iter()
                     .enumerate()
-                    .filter(|(_, file)| wanted.is_empty() || file.path.to_lowercase().contains(&wanted))
+                    .filter(|(_, file)| {
+                        wanted.is_empty() || file.path.to_lowercase().contains(&wanted)
+                    })
                     .filter(|(_, file)| !changes.hide_tests || !is_test_path(&file.path))
                     .collect();
                 let list = if listed.is_empty() {
@@ -637,7 +754,11 @@ impl CockpitView {
                         .min_h_0()
                         .overflow_y_scroll()
                         .track_scroll(&changes.scroll)
-                        .children(listed.into_iter().map(|(at, file)| self.changes_file(diff, changes, at, file, cx)))
+                        .children(
+                            listed
+                                .into_iter()
+                                .map(|(at, file)| self.changes_file(diff, changes, at, file, cx)),
+                        )
                         .into_any_element()
                 };
                 let empty = wanted.is_empty();
@@ -659,7 +780,11 @@ impl CockpitView {
                             .px(px(theme::SPACE_2))
                             .rounded(px(theme::R_CONTROL))
                             .bg(paint::FIELD)
-                            .child(icons::icon(icons::SEARCH, theme::ICON_BUTTON_GLYPH, theme::INK_SUBTLE))
+                            .child(icons::icon(
+                                icons::SEARCH,
+                                theme::ICON_BUTTON_GLYPH,
+                                theme::INK_SUBTLE,
+                            ))
                             .child(
                                 div()
                                     .relative()
@@ -690,6 +815,24 @@ impl CockpitView {
             .flex_1()
             .min_h_0()
             .child(self.changes_head(diff, changes, cx))
+            .when(changes.refreshing, |pane| {
+                pane.child(
+                    div()
+                        .debug_selector(|| "pr-code-refreshing".into())
+                        .px(px(theme::SPACE_2))
+                        .py(px(theme::SPACE_1))
+                        .text_color(rgb(theme::INK_SUBTLE))
+                        .child("Refreshing changes…"),
+                )
+            })
+            .children(changes.refresh_failure.as_ref().map(|why| {
+                div()
+                    .debug_selector(|| "pr-code-refresh-failure".into())
+                    .px(px(theme::SPACE_2))
+                    .py(px(theme::SPACE_1))
+                    .text_color(rgb(theme::RED))
+                    .child(why.clone())
+            }))
             .child(body)
     }
 
@@ -732,7 +875,11 @@ impl CockpitView {
             .child(SharedString::from(format!(
                 "Couldn't {verb} {}: {}",
                 failure.path,
-                if failure.message.is_empty() { "git refused" } else { &failure.message },
+                if failure.message.is_empty() {
+                    "git refused"
+                } else {
+                    &failure.message
+                },
             )))
     }
 
@@ -753,26 +900,31 @@ impl CockpitView {
         use theme::*;
         let all_folded = matches!(&changes.load, Load::Read(files)
             if !files.is_empty() && files.iter().all(|file| changes.folded.contains(&file.path)));
-        let tool = |key: &'static str, glyph: &'static str, tip: &'static str, on: bool, verb: Verb| {
-            div()
-                .id(key)
-                .debug_selector(move || key.into())
-                .flex()
-                .flex_shrink_0()
-                .items_center()
-                .justify_center()
-                .size(px(SURFACE_PLUS))
-                .rounded(px(R_CONTROL))
-                .when(on, |tool| tool.bg(paint::SELECTED))
-                .hover_control(key)
-                .child(icons::icon(glyph, SURFACE_PLUS_GLYPH, if on { INK_STRONG } else { INK_SUBTLE }))
-                .tooltip(ferrite_ui::menu::tooltip(tip))
-                .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
-                    cx.stop_propagation();
-                    view.run_changes_verb(diff, verb, cx);
-                }))
-        };
+        let tool =
+            |key: &'static str, glyph: &'static str, tip: &'static str, on: bool, verb: Verb| {
+                div()
+                    .id(key)
+                    .debug_selector(move || key.into())
+                    .flex()
+                    .flex_shrink_0()
+                    .items_center()
+                    .justify_center()
+                    .size(px(SURFACE_PLUS))
+                    .rounded(px(R_CONTROL))
+                    .when(on, |tool| tool.bg(paint::SELECTED))
+                    .hover_control(key)
+                    .child(icons::icon(
+                        glyph,
+                        SURFACE_PLUS_GLYPH,
+                        if on { INK_STRONG } else { INK_SUBTLE },
+                    ))
+                    .tooltip(ferrite_ui::menu::tooltip(tip))
+                    .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                    .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
+                        cx.stop_propagation();
+                        view.run_changes_verb(diff, verb, cx);
+                    }))
+            };
         let (fold_tip, fold_verb) = if all_folded {
             ("Expand all files", Verb::ExpandAll)
         } else {
@@ -783,9 +935,27 @@ impl CockpitView {
             .flex_shrink_0()
             .items_center()
             .gap(px(SPACE_0_5))
-            .child(tool("changes-refresh", icons::REFRESH, "Refresh", false, Verb::Refresh))
-            .child(tool("changes-fold-all", icons::COLLAPSE_ALL, fold_tip, false, fold_verb))
-            .child(tool("changes-wrap", icons::TEXT_WRAP, "Word wrap", changes.wrap, Verb::ToggleWrap))
+            .child(tool(
+                "changes-refresh",
+                icons::REFRESH,
+                "Refresh",
+                false,
+                Verb::Refresh,
+            ))
+            .child(tool(
+                "changes-fold-all",
+                icons::COLLAPSE_ALL,
+                fold_tip,
+                false,
+                fold_verb,
+            ))
+            .child(tool(
+                "changes-wrap",
+                icons::TEXT_WRAP,
+                "Word wrap",
+                changes.wrap,
+                Verb::ToggleWrap,
+            ))
             .child(tool(
                 "changes-whitespace",
                 icons::PILCROW,
@@ -803,16 +973,17 @@ impl CockpitView {
         let base = match &changes.scope {
             Scope::Uncommitted => None,
             Scope::All => Some(
-                self.facts
-                    .get(diff.thread())
+                diff.local_thread()
+                    .and_then(|thread| self.facts.get(thread))
                     .and_then(|facts| facts.default_branch.clone())
                     .map_or_else(|| "the base".to_string(), |base| base.to_string()),
             ),
             Scope::Against(branch) => Some(branch.clone()),
         };
-        let comparing = base.map(|base| {
-            let head = self
-                .thread_branch(diff.thread())
+        let comparing = base.filter(|_| diff.local_thread().is_some()).map(|base| {
+            let head = diff
+                .local_thread()
+                .and_then(|thread| self.thread_branch(thread))
                 .map_or_else(|| "HEAD".to_string(), |head| head.to_string());
             div()
                 .debug_selector(|| "changes-comparing".into())
@@ -822,7 +993,12 @@ impl CockpitView {
                 .gap(px(SPACE_1))
                 .text_size(px(FS_BADGE))
                 .text_color(rgb(INK_SUBTLE))
-                .child(div().min_w_0().truncate().child(SharedString::from(format!("Comparing {head} against"))))
+                .child(
+                    div()
+                        .min_w_0()
+                        .truncate()
+                        .child(SharedString::from(format!("Comparing {head} against"))),
+                )
                 .child(
                     div()
                         .id("changes-base")
@@ -840,7 +1016,11 @@ impl CockpitView {
                         .child(icons::icon(icons::CHEVRON_DOWN, ICON_CHEVRON, INK_SUBTLE))
                         .on_click(cx.listener(move |view, event: &ClickEvent, _, cx| {
                             cx.stop_propagation();
-                            view.open_context_menu(MenuTarget::ChangesBase(diff), event.position(), cx);
+                            view.open_context_menu(
+                                MenuTarget::ChangesBase(diff),
+                                event.position(),
+                                cx,
+                            );
                         })),
                 )
         });
@@ -860,41 +1040,60 @@ impl CockpitView {
                     .min_w_0()
                     .items_center()
                     .gap(px(SPACE_2))
-                    // A pull request's Code view is the branch's diff: no
-                    // scope to pick, nothing else to compare against.
-                    .when(matches!(diff, Diff::Changes(_)), |left| left.child(
-                        div()
-                            .id("changes-scope")
-                            .debug_selector(|| "changes-scope".into())
-                            .flex()
-                            .flex_shrink_0()
-                            .items_center()
-                            .gap(px(SPACE_1))
-                            .h(px(SURFACE_TAB_H))
-                            .px(px(SPACE_2))
-                            .rounded(px(R_CONTROL))
-                            .bg(paint::RAISED)
-                            .text_size(px(FS_BADGE))
-                            .font_weight(W_LABEL)
-                            .cursor_pointer()
-                            .hover(|scope| scope.bg(paint::SELECTED))
-                            .child(SharedString::from(changes.scope.label()))
-                            .child(icons::icon(icons::CHEVRON_DOWN, SURFACE_PLUS_GLYPH, INK_SUBTLE))
-                            .on_click(cx.listener(move |view, event: &ClickEvent, _, cx| {
-                                cx.stop_propagation();
-                                view.open_context_menu(MenuTarget::ChangesScope(diff), event.position(), cx);
-                            })),
-                    )
-                    .children(comparing)),
+                    // A published PR cannot switch to a local checkout scope.
+                    .when(matches!(diff, Diff::Changes(_)), |left| {
+                        left.child(
+                            div()
+                                .id("changes-scope")
+                                .debug_selector(|| "changes-scope".into())
+                                .flex()
+                                .flex_shrink_0()
+                                .items_center()
+                                .gap(px(SPACE_1))
+                                .h(px(SURFACE_TAB_H))
+                                .px(px(SPACE_2))
+                                .rounded(px(R_CONTROL))
+                                .bg(paint::RAISED)
+                                .text_size(px(FS_BADGE))
+                                .font_weight(W_LABEL)
+                                .cursor_pointer()
+                                .hover(|scope| scope.bg(paint::SELECTED))
+                                .child(SharedString::from(changes.scope.label()))
+                                .child(icons::icon(
+                                    icons::CHEVRON_DOWN,
+                                    SURFACE_PLUS_GLYPH,
+                                    INK_SUBTLE,
+                                ))
+                                .on_click(cx.listener(move |view, event: &ClickEvent, _, cx| {
+                                    cx.stop_propagation();
+                                    view.open_context_menu(
+                                        MenuTarget::ChangesScope(diff),
+                                        event.position(),
+                                        cx,
+                                    );
+                                })),
+                        )
+                        .children(comparing)
+                    }),
             )
             .child(
                 tools.child(
-                    ferrite_pane::preview::head_door("changes-more", "changes-more".into(), icons::ELLIPSIS)
-                        .tooltip(ferrite_ui::menu::tooltip("More"))
-                        .on_click(cx.listener(move |view, event: &ClickEvent, _, cx| {
+                    ferrite_pane::preview::head_door(
+                        "changes-more",
+                        "changes-more".into(),
+                        icons::ELLIPSIS,
+                    )
+                    .tooltip(ferrite_ui::menu::tooltip("More"))
+                    .on_click(cx.listener(
+                        move |view, event: &ClickEvent, _, cx| {
                             cx.stop_propagation();
-                            view.open_context_menu(MenuTarget::ChangesMore(diff), event.position(), cx);
-                        })),
+                            view.open_context_menu(
+                                MenuTarget::ChangesMore(diff),
+                                event.position(),
+                                cx,
+                            );
+                        },
+                    )),
                 ),
             )
     }
@@ -914,14 +1113,19 @@ impl CockpitView {
             Some((dir, name)) => (name.to_string(), dir.to_string()),
             None => (file.path.clone(), String::new()),
         };
-        let (fold_path, review_path, open_path) = (file.path.clone(), file.path.clone(), file.path.clone());
+        let (fold_path, review_path, open_path) =
+            (file.path.clone(), file.path.clone(), file.path.clone());
         let (stage_path, staged) = (file.path.clone(), file.staged);
         let stat = div()
             .flex()
             .flex_shrink_0()
             .gap(px(SPACE_1))
             .text_size(px(FS_META))
-            .child(div().text_color(rgb(GREEN)).child(SharedString::from(format!("+{}", file.added))))
+            .child(
+                div()
+                    .text_color(rgb(GREEN))
+                    .child(SharedString::from(format!("+{}", file.added))),
+            )
             .children((file.removed > 0).then(|| {
                 div()
                     .text_color(rgb(RED))
@@ -976,26 +1180,46 @@ impl CockpitView {
                             .text_color(rgb(if reviewed { INK_SUBTLE } else { LINK_INK }))
                             .child(SharedString::from(name)),
                     )
-                    .child(div().text_color(rgb(INK_SUBTLE)).child(SharedString::from(dir))),
+                    .child(
+                        div()
+                            .text_color(rgb(INK_SUBTLE))
+                            .child(SharedString::from(dir)),
+                    ),
             )
             .child(stat)
-            .child(
-                door(
-                    format!("changes-stage-{at}"),
-                    if file.staged { icons::CHECK } else { icons::PLUS },
-                    if file.staged { "Unstage" } else { "Stage" },
-                    if file.staged { GREEN } else { INK_SUBTLE },
+            .when(diff.local_thread().is_some(), |head| {
+                head.child(
+                    door(
+                        format!("changes-stage-{at}"),
+                        if file.staged {
+                            icons::CHECK
+                        } else {
+                            icons::PLUS
+                        },
+                        if file.staged { "Unstage" } else { "Stage" },
+                        if file.staged { GREEN } else { INK_SUBTLE },
+                    )
+                    .on_click(cx.listener(
+                        move |view, _: &ClickEvent, _, cx| {
+                            cx.stop_propagation();
+                            view.stage_file(diff, stage_path.clone(), !staged, cx);
+                        },
+                    )),
                 )
-                .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
-                    cx.stop_propagation();
-                    view.stage_file(diff, stage_path.clone(), !staged, cx);
-                })),
-            )
+            })
             .child(
                 door(
                     format!("changes-reviewed-{at}"),
-                    if reviewed { icons::CHECK_CIRCLE } else { icons::CIRCLE_DASHED },
-                    if reviewed { "Mark as not reviewed" } else { "Mark as reviewed" },
+                    if reviewed {
+                        icons::CHECK_CIRCLE
+                    } else {
+                        icons::CIRCLE_DASHED
+                    },
+                    if reviewed {
+                        "Mark as not reviewed"
+                    } else {
+                        "Mark as reviewed"
+                    },
                     if reviewed { GREEN } else { INK_SUBTLE },
                 )
                 .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
@@ -1003,21 +1227,46 @@ impl CockpitView {
                     view.toggle_reviewed(diff, &review_path, cx);
                 })),
             )
-            .child(
-                door(format!("changes-open-{at}"), icons::EXTERNAL, "Open file", INK_SUBTLE).on_click(
-                    cx.listener(move |view, _: &ClickEvent, _, cx| {
-                        cx.stop_propagation();
-                        if let Some(root) = view.thread_path(diff.thread()) {
-                            view.open_in_files(diff.thread(), root.join(&open_path), None, false, cx);
-                        }
-                    }),
-                ),
-            );
+            .when(diff.local_thread().is_some(), |head| {
+                head.child(
+                    door(
+                        format!("changes-open-{at}"),
+                        icons::EXTERNAL,
+                        "Open file",
+                        INK_SUBTLE,
+                    )
+                    .on_click(cx.listener(
+                        move |view, _: &ClickEvent, _, cx| {
+                            cx.stop_propagation();
+                            if let Some(thread) = diff.local_thread() {
+                                if let Some(root) = view.thread_path(thread) {
+                                    view.open_in_files(
+                                        thread,
+                                        root.join(&open_path),
+                                        None,
+                                        false,
+                                        cx,
+                                    );
+                                }
+                            }
+                        },
+                    )),
+                )
+            });
         let hunks = (!folded).then(|| {
-            let hunks = if changes.hide_whitespace { &file.hunks_without_whitespace } else { &file.hunks };
+            let hunks = if changes.hide_whitespace {
+                &file.hunks_without_whitespace
+            } else {
+                &file.hunks
+            };
             hunks_element(at, hunks, Layout::Whole { wrap: changes.wrap })
         });
-        div().flex().flex_col().flex_shrink_0().child(head).children(hunks)
+        div()
+            .flex()
+            .flex_col()
+            .flex_shrink_0()
+            .child(head)
+            .children(hunks)
     }
 }
 
@@ -1032,7 +1281,10 @@ impl CockpitView {
     }
 
     pub(in crate::cockpit) fn changes_reviewed_for_test(&self, diff: Diff, path: &str) -> bool {
-        self.tools.changes.get(&diff).is_some_and(|changes| changes.reviewed.contains_key(path))
+        self.tools
+            .changes
+            .get(&diff)
+            .is_some_and(|changes| changes.reviewed.contains_key(path))
     }
 
     pub(in crate::cockpit) fn changes_stage_failure_for_test(&self, diff: Diff) -> Option<String> {
@@ -1054,7 +1306,10 @@ mod tests {
     use super::*;
 
     fn line(sign: Sign, text: &str) -> Line {
-        Line { sign, text: text.to_string().into() }
+        Line {
+            sign,
+            text: text.to_string().into(),
+        }
     }
 
     #[test]
@@ -1089,17 +1344,27 @@ mod tests {
             line(Sign::Added, "    let a = 1;"),
         ];
         let out = without_whitespace(vec![block]);
-        let shown: Vec<_> = out[0].iter().map(|l| (l.sign, l.text.trim().to_string())).collect();
+        let shown: Vec<_> = out[0]
+            .iter()
+            .map(|l| (l.sign, l.text.trim().to_string()))
+            .collect();
         assert_eq!(
             shown,
-            [(Sign::Context, "let a = 1;".into()), (Sign::Removed, "let b = 2;".into())]
+            [
+                (Sign::Context, "let a = 1;".into()),
+                (Sign::Removed, "let b = 2;".into())
+            ]
         );
     }
 
     #[test]
     fn hiding_whitespace_drops_blank_changes_and_the_hunks_they_leave_bare() {
         let kept = vec![line(Sign::Context, "a"), line(Sign::Added, "b")];
-        let bare = vec![line(Sign::Context, "c"), line(Sign::Added, "  "), line(Sign::Removed, "")];
+        let bare = vec![
+            line(Sign::Context, "c"),
+            line(Sign::Added, "  "),
+            line(Sign::Removed, ""),
+        ];
         let mixed = vec![line(Sign::Added, ""), line(Sign::Removed, "x")];
         let out = without_whitespace(vec![kept.clone(), bare, mixed]);
         assert_eq!(out, [kept, vec![line(Sign::Removed, "x")]]);
@@ -1132,14 +1397,26 @@ mod tests {
         let out = without_whitespace(vec![hunk]);
         assert_eq!(
             out,
-            [vec![line(Sign::Context, "a"), line(Sign::Removed, "b"), line(Sign::Added, "c")]]
+            [vec![
+                line(Sign::Context, "a"),
+                line(Sign::Removed, "b"),
+                line(Sign::Added, "c")
+            ]]
         );
     }
 
     #[test]
     fn test_files_are_told_by_their_path() {
         use super::is_test_path;
-        for test in ["tests/a.rs", "src/cockpit/tests/pr.rs", "a_test.go", "test_a.py", "a.test.ts", "a.spec.js", "src/tests.rs"] {
+        for test in [
+            "tests/a.rs",
+            "src/cockpit/tests/pr.rs",
+            "a_test.go",
+            "test_a.py",
+            "a.test.ts",
+            "a.spec.js",
+            "src/tests.rs",
+        ] {
             assert!(is_test_path(test), "{test}");
         }
         for code in ["src/attest.rs", "contest.md", "src/testing.rs", "a.rs"] {

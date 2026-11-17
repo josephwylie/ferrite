@@ -278,6 +278,7 @@ pub(crate) fn label(action: &str, context: Option<&str>) -> Option<Entry> {
         | "review::Search"
         | "review::SaveComment"
         | "cite::SaveComment"
+        | "cite::SaveAndSendComment"
         | "cite::CancelComment"
         | "review::CancelComment"
         | "review::OpenFound"

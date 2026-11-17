@@ -829,7 +829,7 @@ impl CockpitView {
             .map(|_| "Save or close edited files before switching environments.")
     }
 
-    pub(in crate::cockpit) fn save_working_sets(&mut self) {
+    pub(in crate::cockpit) fn sync_working_sets(&mut self) {
         let live = self
             .tools
             .files
@@ -844,9 +844,6 @@ impl CockpitView {
             .map(ThreadId::get)
             .collect();
         self.panel.working_sets.retain(&known);
-        if let Err(error) = self.panel.working_sets.save(&self.prefs.dir) {
-            eprintln!("ferrite: the Files tabs were not saved: {error}");
-        }
     }
 
     fn remove_tab(&mut self, thread: ThreadId, at: usize, cx: &mut Context<Self>) {

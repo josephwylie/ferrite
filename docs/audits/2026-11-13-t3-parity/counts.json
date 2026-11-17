@@ -1,0 +1,51 @@
+{
+  "raw_records": 181,
+  "consolidated_records": 177,
+  "merged_records": 4,
+  "priorities": {
+    "P1": 30,
+    "P2": 133,
+    "P3": 14
+  },
+  "categories": {
+    "defect": 62,
+    "intentional-difference": 6,
+    "interaction": 26,
+    "missing-capability": 29,
+    "motion": 6,
+    "partial-capability": 42,
+    "verification-gap": 6
+  },
+  "evidence_levels": {
+    "inferred": 9,
+    "runtime-reproduced": 16,
+    "source-proven": 150,
+    "unverified": 2
+  },
+  "dispositions": {
+    "capability-candidate": 27,
+    "product-choice": 6,
+    "repair-or-quality": 138,
+    "verification-gap": 6
+  },
+  "slices": {
+    "browser": 16,
+    "composer": 15,
+    "coverage-quality": 9,
+    "input-focus": 9,
+    "link-affordances": 7,
+    "motion": 9,
+    "panel-tools": 18,
+    "pr-navigation": 6,
+    "pr-operations": 21,
+    "projects-navigation": 14,
+    "providers-settings": 10,
+    "quality-correction": 5,
+    "quote-attachments": 12,
+    "scroll-quality": 9,
+    "subagents-background": 9,
+    "transcript": 8
+  },
+  "validated_source_references": 1014,
+  "unparsed_evidence": []
+}

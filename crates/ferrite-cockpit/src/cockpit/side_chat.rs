@@ -529,52 +529,16 @@ impl CockpitView {
         let workspace =
             ferrite_core::workspace::effective_cwd(open.session_project_root(), open.workspace())
                 .map(std::path::Path::to_path_buf);
-        let key = ferrite_pane::transcript::TranscriptKey {
-            namespace: namespace.clone(),
-            content_revision: revision,
-            display_revision: pane.disclosure_revision(),
-            focused: true,
-            signal_status: Some(status),
-            reading_size,
-            working: working.as_ref().map(|working| working.key),
-            tail: decisions.as_ref().map(|tail| tail.key),
-            pending_call: pending_call.clone(),
-            workspace: workspace.clone(),
-            solo: false,
-            thinking: self.prefs.settings.show_thinking,
-            agents: Default::default(),
-            rewind: None,
-            quotes: false,
-            skills: open.commands().len(),
-            cited: 0,
-            note: note.clone(),
-            earlier: None,
-            queued: 0,
-        };
-        let Some(entity) = pane.transcript() else {
-            return;
-        };
-        if entity.read(cx).matches(&key) {
-            return;
-        }
-        let mut blocks = pane::rendered_window(transcript.blocks(), Level::Transcript).to_vec();
-        let first = transcript.blocks().len() - blocks.len();
-        blocks.drain(..skip.saturating_sub(first).min(blocks.len()));
-        let disclosure = pane.transcript_disclosure_snapshot();
-        let input = ferrite_pane::transcript::TranscriptInput {
+        let presentation = ferrite_pane::transcript::TranscriptPresentation {
             thread,
+            selection_scope: pane.selection_scope,
+            disclosure_focus: pane.tool_focus(),
             namespace,
             content_revision: revision,
             display_revision: pane.disclosure_revision(),
-            blocks,
-            signal_status: Some(status),
             focused: true,
+            signal_status: Some(status),
             reading_size,
-            selection_scope: pane.selection_scope,
-            preview: pane.preview.clone(),
-            expanded: disclosure.0,
-            target: disclosure.1,
-            disclosure_focus: disclosure.2,
             working,
             tail: decisions,
             pending_call,
@@ -587,13 +551,34 @@ impl CockpitView {
             reply_to: open.provider().to_string().into(),
             skills: open.commands().into(),
             cited: Default::default(),
-            cited_revision: 0,
             note,
             earlier: None,
             queued: 0,
         };
+        let Some(entity) = pane.transcript() else {
+            return;
+        };
         let selection = self.selection.clone();
-        entity.update(cx, |transcript, cx| transcript.sync(input, selection, cx));
+        entity.update(cx, |view, cx| {
+            view.reconcile(
+                presentation,
+                || {
+                    let mut blocks =
+                        pane::rendered_window(transcript.blocks(), Level::Transcript).to_vec();
+                    let first = transcript.blocks().len() - blocks.len();
+                    blocks.drain(..skip.saturating_sub(first).min(blocks.len()));
+                    let disclosure = pane.transcript_disclosure_snapshot();
+                    ferrite_pane::transcript::TranscriptBody {
+                        blocks,
+                        preview: pane.preview.clone(),
+                        expanded: disclosure.0,
+                        target: disclosure.1,
+                    }
+                },
+                selection,
+                cx,
+            );
+        });
     }
 
     /// A tab's transcript asks for something: a tool row folds or unfolds

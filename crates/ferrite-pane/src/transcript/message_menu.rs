@@ -13,8 +13,8 @@
 //! subtitle is a smaller muted line under its label. The menu opens in one
 //! frame and a right-click on a message clears the selection, as Claude's.
 //! Attach is a Reply card in the Composer's tray, so it is offered only
-//! where the Pane has a Composer (`TranscriptInput::quotes`); Rewind and
-//! Fork only where the agent can (`TranscriptInput::rewind`), disabled
+//! where the Pane has a Composer (`TranscriptPresentation::quotes`); Rewind and
+//! Fork only where the agent can (`TranscriptPresentation::rewind`), disabled
 //! with the reason while it cannot be asked now.
 //!
 //! Pin as chapter marks the answer in this transcript only: the minimum
@@ -107,7 +107,7 @@ type Row = (Verb, Option<SharedString>);
 impl TranscriptView {
     /// A menu's rows, `None` a rule between groups (Claude's).
     pub(super) fn menu_rows(&self, menu: &MessageMenu) -> Vec<Option<Row>> {
-        let attach = self.input.quotes.then(|| {
+        let attach = self.input.presentation.quotes.then(|| {
             let too_long = crate::quote::too_long(&menu.markdown);
             (
                 Verb::Attach,
@@ -126,7 +126,7 @@ impl TranscriptView {
                     Verb::Pin
                 };
                 groups.push(vec![attach.clone(), Some((pin, None))]);
-                if let Some(allowed) = &self.input.rewind {
+                if let Some(allowed) = &self.input.presentation.rewind {
                     groups.push(vec![Some((Verb::Fork, allowed.clone().err()))]);
                 }
             }
@@ -199,7 +199,7 @@ impl TranscriptView {
                         Target::Prompt { block, .. } => Some(*block),
                         Target::Link(_) => None,
                     };
-                    cx.emit(TranscriptEvent::Reply(Reply::new(passage, ""), block));
+                    cx.emit(TranscriptEvent::Reply(Reply::new(passage, ""), block, None));
                 }
             }
             (Verb::Pin, Target::Answer { last }) => {
@@ -222,7 +222,7 @@ impl TranscriptView {
                 at: menu.at,
             }),
             (Verb::OpenLink(how), Target::Link(target)) => {
-                if !target.open(how, Some(&self.input.preview), window, cx) {
+                if !target.open(how, Some(&self.input.body.preview), window, cx) {
                     if let LinkTarget::RepoPullRequest { number, url } = target {
                         cx.emit(TranscriptEvent::OpenPullRequest {
                             number: *number,
@@ -317,7 +317,10 @@ impl TranscriptView {
     ) {
         gpui::base::TextSelection::clear(window, cx);
         if let Some(url) = gpui::base::text::pressed_link(cx) {
-            menu.target = Target::Link(LinkTarget::resolve(&url, self.input.workspace.as_deref()));
+            menu.target = Target::Link(LinkTarget::resolve(
+                &url,
+                self.input.presentation.workspace.as_deref(),
+            ));
         }
         self.open_message_menu(menu, cx);
     }

@@ -50,7 +50,7 @@ fn card_tail(cards: subagents::Cards) -> ferrite_pane::transcript::TranscriptTai
 
 impl CockpitView {
     /// The Decision row(s) this Pane's transcript draws after its last row
-    /// (`TranscriptInput.tail`): every request its selected Subject shows,
+    /// (`TranscriptPresentation.tail`): every request its selected Subject shows,
     /// as one transcript row each. `key` changes whenever what they draw
     /// does — a request, its sending state, the cursor, a note, a pick, an
     /// error, the head's words.

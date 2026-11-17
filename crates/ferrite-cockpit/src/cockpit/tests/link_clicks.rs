@@ -379,26 +379,25 @@ fn issue_answer<'a>(
     (view, cx)
 }
 
-/// The PR tab `thread`'s Panel shows, if it shows one.
+/// The PR the Panel shows beside the conversation, if it shows one.
 fn shown_pr(view: &Entity<CockpitView>, cx: &mut gpui::VisualTestContext) -> Option<u64> {
     view.read_with(cx, |view, _| {
-        (view.prs.shown && view.prs.detail)
-            .then_some(view.prs.selected)
-            .flatten()
+        assert!(!view.destination_shown(), "the conversation keeps the board");
+        match view.shown_surface(0)? {
+            crate::cockpit::surfaces::SurfaceId::PullRequest(number) => Some(number),
+            _ => None,
+        }
     })
 }
 
-fn back_to_transcript(view: &Entity<CockpitView>, cx: &mut gpui::VisualTestContext) {
-    view.update(cx, |view, cx| {
-        view.leave_destination();
-        cx.notify();
-    });
+fn close_panel(view: &Entity<CockpitView>, cx: &mut gpui::VisualTestContext) {
+    hide_panel(view, cx);
     tick(cx);
 }
 
 /// `#212` in a GitHub checkout is that repository's PR: a press opens its
-/// native detail in the PRs destination, not a browser; the menu still offers both browsers, and
-/// Copy gives the forge address.
+/// native detail beside the conversation, not a browser; the menu still
+/// offers both browsers, and Copy gives the forge address.
 #[gpui::test]
 fn a_pr_number_opens_its_native_detail_and_copies_its_forge_address(cx: &mut TestAppContext) {
     let page = "https://github.com/owner/repo/issues/212";
@@ -407,7 +406,7 @@ fn a_pr_number_opens_its_native_detail_and_copies_its_forge_address(cx: &mut Tes
     cx.simulate_click(at, gpui::Modifiers::none());
     assert_eq!(shown_pr(&view, cx), Some(212));
     browser_closed(&view, cx);
-    back_to_transcript(&view, cx);
+    close_panel(&view, cx);
 
     let at = caret(&view, cx, 0, 11);
     right_click(at, cx);
@@ -443,7 +442,7 @@ fn a_pr_address_of_this_repository_opens_its_native_detail(cx: &mut TestAppConte
     cx.simulate_click(at, gpui::Modifiers::none());
     assert_eq!(shown_pr(&view, cx), Some(305));
     assert_eq!(cx.opened_url(), None);
-    back_to_transcript(&view, cx);
+    close_panel(&view, cx);
 
     let at = caret(&view, cx, 1, 8);
     cx.simulate_click(at, gpui::Modifiers::none());

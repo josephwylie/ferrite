@@ -142,10 +142,8 @@ impl CockpitView {
         cx.notify();
     }
 
-    /// A PR `thread`'s checkout names: the Thread's own in its Panel, with
-    /// its actions and its diff; any other read whole in the PRs
-    /// destination of the Thread's Project when that Project is the same
-    /// repository, else its forge `url` in the Thread's browser.
+    /// A checkout's PR opens beside its conversation. Links to another
+    /// repository use the browser rather than the checkout's forge reader.
     pub(crate) fn open_named_pr(
         &mut self,
         thread: ThreadId,
@@ -153,26 +151,28 @@ impl CockpitView {
         url: String,
         cx: &mut Context<Self>,
     ) {
-        if self.facts.pr(thread).is_some_and(|pr| pr.number == number) {
-            self.upsert_surface(thread, surfaces::SurfaceId::PullRequest(number), cx);
-            return;
-        }
         let origin = |path: &std::path::Path| ferrite_pane::file_links::origin_base(path);
-        let checkout = self.thread_path(thread).and_then(|path| origin(&path));
-        let project = self
-            .facts
-            .get(thread)
-            .and_then(|facts| facts.project)
-            .filter(|project| {
-                let root = self.cockpit.registry().project(*project).map(|p| p.root.clone());
-                checkout.is_some() && root.and_then(|root| origin(&root)) == checkout
+        let checkout = self
+            .thread_path(thread)
+            .and_then(|path| origin(&path))
+            .or_else(|| {
+                self.facts
+                    .pr(thread)
+                    .and_then(|pr| pr.url.as_ref())
+                    .and_then(|url| {
+                        url.rsplit_once("/pull/")
+                            .map(|(repository, _)| repository.to_owned())
+                    })
             });
-        match project {
-            Some(project) => {
-                self.open_prs(Some(project), cx);
-                self.open_pr_detail(number, cx);
-            }
-            None => self.browser_action(thread, ferrite_core::browser::Action::Open { url }, cx),
+        let same_repository = checkout
+            .as_ref()
+            .is_some_and(|repository| {
+                ["pull", "issues"].iter().any(|kind| url.starts_with(&format!("{repository}/{kind}/")))
+            });
+        if same_repository {
+            self.upsert_surface(thread, surfaces::SurfaceId::PullRequest(number), cx);
+        } else {
+            self.browser_action(thread, ferrite_core::browser::Action::Open { url }, cx);
         }
     }
 
@@ -353,6 +353,11 @@ impl CockpitView {
     }
 
     pub(super) fn select_prs_tab(&mut self, tab: PrTab, cx: &mut Context<Self>) {
+        if tab == PrTab::Code {
+            if let (Some(project), Some(number)) = (self.prs.project, self.prs.selected) {
+                self.ensure_pr_changes(PrTarget::project(project, number), cx);
+            }
+        }
         self.prs.tab = tab;
         cx.notify();
     }

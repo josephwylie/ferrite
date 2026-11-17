@@ -487,6 +487,18 @@ pub(super) fn offered(view: &gpui::Entity<CockpitView>, cx: &mut gpui::VisualTes
     })
 }
 
+/// The comment popover a Cite opened is there, and ⏎ closes it, keeping
+/// the citation as it stands.
+fn save_comment(cx: &mut gpui::VisualTestContext) {
+    assert!(
+        cx.debug_bounds("cite-comment-field").is_some(),
+        "Cite opens the comment popover"
+    );
+    cx.simulate_keystrokes("enter");
+    tick(cx);
+    assert!(cx.debug_bounds("cite-panel").is_none(), "⏎ closes it");
+}
+
 /// Drag from block `from`'s byte to block `to`'s, and let go.
 pub(super) fn drag(
     view: &gpui::Entity<CockpitView>,
@@ -505,7 +517,8 @@ pub(super) fn drag(
 
 /// A selection's Cite (T3's): a drag offers the glass button where the
 /// mouse went up; Cite makes a Reply card in the Composer's tray (the
-/// draft's words untouched) without sending a message. Cites stack, each
+/// draft's words untouched) and opens its comment popover, without sending
+/// a message; ⏎ saves it with no comment. Cites stack, each
 /// card's × removes it, and the sent prompt carries them ahead of its words
 /// as block quotes, its bubble drawing the quote rows.
 #[gpui::test]
@@ -549,7 +562,8 @@ fn a_selections_cite_becomes_a_tray_card_and_sends(cx: &mut TestAppContext) {
     );
     assert!((cite.size.height - px(ferrite_ui::theme::SELECTION_CITE_H)).abs() < px(1.));
 
-    // Cite hands the passage to the tray at once: no card, no message.
+    // Cite hands the passage to the tray at once and opens its comment
+    // popover: no message.
     let sent_before = fake.sent.borrow().len();
     cx.simulate_click(cite.center(), gpui::Modifiers::none());
     tick(cx);
@@ -566,12 +580,14 @@ fn a_selections_cite_becomes_a_tray_card_and_sends(cx: &mut TestAppContext) {
         (chip.size.height - px(ferrite_ui::theme::ATTACH_CHIP_H)).abs() < px(1.),
         "a one-line chip, not a tile: {chip:?}"
     );
+    save_comment(cx);
 
     // A second passage, across lines, stacks beside the first.
     drag(&view, cx, (4, 3), (5, 4));
     let cite = cx.debug_bounds("selection-reply-quote").expect("Cite");
     cx.simulate_click(cite.center(), gpui::Modifiers::none());
     tick(cx);
+    save_comment(cx);
     view.read_with(cx, |view, cx| {
         assert_eq!(
             quotes(view.panes[0].composer.read(cx).replies()),
@@ -899,6 +915,7 @@ fn the_cite_button_stays_under_the_pointer_and_its_press_fires(cx: &mut TestAppC
             "its press quotes the passage"
         );
     });
+    save_comment(cx);
 
     // A double-click's word offers it too, after T3's multi-click wait.
     let word = caret(&view, cx, 1, 8);

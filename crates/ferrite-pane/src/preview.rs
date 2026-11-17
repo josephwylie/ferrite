@@ -365,7 +365,7 @@ impl Preview {
         window: &mut Window,
     ) {
         self.set(Document {
-            path: annotation.original().to_path_buf(),
+            path: annotation.original().map(Path::to_path_buf).unwrap_or_default(),
             name: Some("Browser annotation".into()),
             body: Body::BrowserAnnotation {
                 annotation: Arc::new(annotation),
@@ -382,7 +382,7 @@ impl Preview {
         window: &mut Window,
     ) {
         self.set(Document {
-            path: annotation.original().to_path_buf(),
+            path: annotation.original().map(Path::to_path_buf).unwrap_or_default(),
             name: Some("Browser annotation".into()),
             body: Body::BrowserAnnotation {
                 annotation: Arc::new(annotation),
@@ -399,7 +399,7 @@ impl Preview {
         window: &mut Window,
     ) {
         self.set(Document {
-            path: annotation.original().to_path_buf(),
+            path: annotation.original().map(Path::to_path_buf).unwrap_or_default(),
             name: Some("Browser annotation".into()),
             body: Body::Unshown(Unshown::Unreadable(error.into())),
         });

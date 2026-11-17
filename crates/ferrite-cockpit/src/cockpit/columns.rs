@@ -45,7 +45,16 @@ impl ColumnSlide {
     }
 }
 
+struct NavResize {
+    start_x: f32,
+    start_width: f32,
+    width: f32,
+}
+
 pub(crate) struct Columns {
+    nav_viewport_width: f32,
+    nav_brand_width: f32,
+    nav_resize: Option<NavResize>,
     nav: ColumnSlide,
     panel: ColumnSlide,
     /// Whose panel the slide draws: the Pane whose panel is open, or was
@@ -60,6 +69,9 @@ impl Columns {
     pub(super) fn new() -> Self {
         let now = Instant::now();
         Self {
+            nav_viewport_width: f32::INFINITY,
+            nav_brand_width: 0.0,
+            nav_resize: None,
             nav: ColumnSlide::at_rest(true, now),
             panel: ColumnSlide::at_rest(false, now),
             panel_owner: None,
@@ -73,7 +85,144 @@ impl Columns {
     }
 }
 
+fn clamp_nav_width(preferred: f32, viewport: f32, brand: f32) -> f32 {
+    let minimum = ferrite_ui::theme::NAV_MIN_W.max(brand.ceil());
+    let maximum = minimum.max(viewport.floor() - 640.0);
+    let preferred = if preferred.is_finite() {
+        preferred
+    } else {
+        nav::WIDTH
+    };
+    preferred.clamp(minimum, maximum)
+}
+
 impl CockpitView {
+    pub(super) fn nav_expanded_width(&self) -> f32 {
+        let preferred = self.columns.nav_resize.as_ref().map_or_else(
+            || self.prefs.settings.nav_width_px.unwrap_or(nav::WIDTH),
+            |drag| drag.width,
+        );
+        clamp_nav_width(
+            preferred,
+            self.columns.nav_viewport_width,
+            self.columns.nav_brand_width,
+        )
+    }
+
+    pub(super) fn measure_nav_width(&mut self, window: &Window, cx: &mut Context<Self>) {
+        use ferrite_ui::theme::{
+            FONT_UI, FS_NAV_TITLE, HISTORY_X, ICON_BUTTON, INK_STRONG, SPACE_1, W_LABEL,
+        };
+        let previous = self.nav_expanded_width();
+        let width = f32::from(window.viewport_size().width);
+        if self.columns.nav_viewport_width != width {
+            self.cancel_nav_resize();
+        }
+        self.columns.nav_viewport_width = width;
+        let brand = window.text_system().shape_line(
+            "Ferrite".into(),
+            px(FS_NAV_TITLE),
+            &[gpui::TextRun {
+                len: "Ferrite".len(),
+                font: gpui::Font {
+                    weight: W_LABEL,
+                    ..gpui::font(FONT_UI)
+                },
+                color: rgb(INK_STRONG).into(),
+                background_color: None,
+                underline: None,
+                strikethrough: None,
+            }],
+            None,
+        );
+        self.columns.nav_brand_width =
+            HISTORY_X + f32::from(brand.width) + SPACE_1 + 2.0 * ICON_BUTTON + 12.0 + 1.0;
+        if previous != self.nav_expanded_width() {
+            self.notify_part(parts::Part::Nav, cx);
+        }
+    }
+
+    pub(super) fn cancel_nav_resize(&mut self) {
+        self.columns.nav_resize = None;
+    }
+
+    pub(super) fn finish_nav_resize(&mut self, cx: &mut Context<Self>) {
+        let Some(drag) = self.columns.nav_resize.take() else {
+            return;
+        };
+        self.change_settings(|settings| settings.nav_width_px = Some(drag.width), cx);
+        cx.notify();
+    }
+
+    pub(super) fn nav_pointer_moved(
+        &mut self,
+        position: Point<Pixels>,
+        dragging: bool,
+        cx: &mut Context<Self>,
+    ) {
+        if !dragging {
+            if self.columns.nav_resize.take().is_some() {
+                self.notify_part(parts::Part::Nav, cx);
+                cx.notify();
+            }
+            return;
+        }
+        let Some(drag) = &mut self.columns.nav_resize else {
+            return;
+        };
+        let width = clamp_nav_width(
+            drag.start_width + f32::from(position.x) - drag.start_x,
+            self.columns.nav_viewport_width,
+            self.columns.nav_brand_width,
+        );
+        if drag.width != width {
+            drag.width = width;
+            self.nav_snap.set(true);
+            self.notify_part(parts::Part::Nav, cx);
+            cx.notify();
+        }
+    }
+
+    pub(super) fn nav_resize_rail(&self, cx: &mut Context<Self>) -> Stateful<Div> {
+        div()
+            .id("nav-resize-rail")
+            .debug_selector(|| "nav-resize-rail".into())
+            .absolute()
+            .top_0()
+            .bottom_0()
+            .left(px(self.nav_width() - 8.0))
+            .w(px(16.0))
+            .occlude()
+            .cursor(gpui::CursorStyle::ResizeLeftRight)
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|view, event: &MouseDownEvent, _, cx| {
+                    cx.stop_propagation();
+                    if event.click_count == 2 {
+                        view.cancel_nav_resize();
+                        view.change_settings(|settings| settings.nav_width_px = None, cx);
+                        view.notify_part(parts::Part::Nav, cx);
+                    } else {
+                        let width = view.nav_expanded_width();
+                        view.columns.nav =
+                            ColumnSlide::at_rest(true, cx.background_executor().now());
+                        view.columns.nav_resize = Some(NavResize {
+                            start_x: f32::from(event.position.x),
+                            start_width: width,
+                            width,
+                        });
+                    }
+                    cx.notify();
+                }),
+            )
+            // The rail follows the edge, so a drag ends on it, and its
+            // click stops the release before the root's handler hears it.
+            .on_click(cx.listener(|view, _, _, cx| {
+                cx.stop_propagation();
+                view.finish_nav_resize(cx);
+            }))
+    }
+
     /// Each frame, once the nav's auto-fold and the panel's Pane are
     /// settled and before the board is measured: a column that opened or
     /// shut starts sliding from where it is on screen; a panel sliding shut
@@ -82,6 +231,9 @@ impl CockpitView {
         let now = cx.background_executor().now();
         let reduced = ferrite_ui::motion::reduced_motion(cx);
         let nav_open = !self.nav_folded();
+        if !nav_open {
+            self.cancel_nav_resize();
+        }
         let wanted = self.panel_pane().map(|index| self.panes[index].identity);
         let owner_present = self
             .columns
@@ -136,7 +288,7 @@ impl CockpitView {
         if !self.nav_measure_full.get() && self.nav_folded() {
             0.0
         } else {
-            nav::COLUMN_WIDTH
+            self.nav_expanded_width()
         }
     }
 
@@ -145,7 +297,7 @@ impl CockpitView {
         if self.measuring_rest() {
             self.nav_rest_w()
         } else {
-            nav::COLUMN_WIDTH * self.columns.nav.drawn
+            self.nav_expanded_width() * self.columns.nav.drawn
         }
     }
 
@@ -193,4 +345,20 @@ pub(super) fn veil() -> Div {
         .left_0()
         .size_full()
         .occlude()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::clamp_nav_width;
+
+    #[test]
+    fn sidebar_width_preserves_the_brand_and_main_content() {
+        assert_eq!(clamp_nav_width(256.0, 1440.0, 180.0), 256.0);
+        assert_eq!(clamp_nav_width(100.0, 1440.0, 180.0), 208.0);
+        assert_eq!(clamp_nav_width(100.0, 1440.0, 226.2), 227.0);
+        assert_eq!(clamp_nav_width(1000.0, 1440.9, 180.0), 800.0);
+        assert_eq!(clamp_nav_width(256.0, 700.0, 226.2), 227.0);
+        assert_eq!(clamp_nav_width(f32::NAN, 1440.0, 180.0), 256.0);
+        assert_eq!(clamp_nav_width(f32::INFINITY, 1440.0, 180.0), 256.0);
+    }
 }

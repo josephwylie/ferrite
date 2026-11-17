@@ -1,0 +1,2089 @@
+{
+  "schema_version": 1,
+  "scope": "Installed T3 shell composition reconciliation; read-only source mapping, with prior parent runtime observations explicitly attributed.",
+  "t3_installed_sha": "1264c206aee0dce805d6279809118bc091f29d2f",
+  "ferrite_sha": "62947f91d5cd6ee494aaae9ed09d794a853e5bab",
+  "newer_checkout": {
+    "path": "/tmp/ferrite-t3-audit-source-20261113",
+    "sha": "74573fc29b901bafbf8f1dbb2eb29606da1fa448",
+    "status": "Separate later reference only; no installed behavior in this report is inferred from this checkout."
+  },
+  "runtime_status": "No UI or runtime exercised by this worker. Source-supported state transitions are not runtime passes. Earlier native observations are referenced by report; stale AX is not a defect.",
+  "surfaces": [
+    {
+      "id": "SH01",
+      "name": "Application ancestors, route gates and recovery",
+      "purpose": "Own application-wide lifetime and choose between authenticated app, welcome/connect flows and recovery.",
+      "placement": "Root service hosts; auth/onboarding and errors occupy the main route, outside the ordinary thread shell.",
+      "triggers": "Startup; authentication and local/hosted mode; first-run decision; route loading/error/not-found.",
+      "coexistence": "AppRoot keeps ElectronBrowserHost and QuitHoldOverlay beside RouterProvider. __root keeps ToastProvider/AnchoredToastProvider above all route branches. The ordinary AppSidebarLayout is only in the application/welcome shell; ThemeEditorHost is a sibling outside that gate.",
+      "responsive": "ManagedAuthShell chooses Electron or browser implementation. Root standalone pages and FirstRunGate recovery replace the main shell; no claim that every auth screen is a modal.",
+      "visibility_persistence": "Root route state and first-run decision own visibility; global service lifetime is separate from a selected thread. FirstRunGate can render children, recovery, or an interim blank shell.",
+      "motion_focus_lifetime": "AppRoot browser host survives router changes. Recovery has Retry/reload actions; root error provides router retry, reload and copy. No runtime recovery exercise in this work.",
+      "t3": [
+        {
+          "path": "apps/web/src/AppRoot.tsx",
+          "start": 8,
+          "end": 16,
+          "symbol": "AppRoot",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/AppRoot.tsx#L8-L16"
+        },
+        {
+          "path": "apps/web/src/main.tsx",
+          "start": 27,
+          "end": 51,
+          "symbol": "ManagedAuthShell selection",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/main.tsx#L27-L51"
+        },
+        {
+          "path": "apps/web/src/routes/__root.tsx",
+          "start": 130,
+          "end": 230,
+          "symbol": "RootRouteBranch",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/routes/__root.tsx#L130-L230"
+        },
+        {
+          "path": "apps/web/src/routes/__root.tsx",
+          "start": 234,
+          "end": 262,
+          "symbol": "RootRouteErrorView",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/routes/__root.tsx#L234-L262"
+        },
+        {
+          "path": "apps/web/src/components/onboarding/FirstRunGate.tsx",
+          "start": 170,
+          "end": 218,
+          "symbol": "FirstRunGate / Recovery",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/onboarding/FirstRunGate.tsx#L170-L218"
+        }
+      ],
+      "ferrite": {
+        "relation": "Native shell has a different route/lifetime model; no auth-flow equivalence established.",
+        "anchors": [
+          {
+            "path": "crates/ferrite-cockpit/src/cockpit.rs",
+            "start": 10618,
+            "end": 10673,
+            "symbol": "CockpitView::render_cockpit root children"
+          }
+        ],
+        "notes": "Root dialog and notification layers are infrastructure, not proof of corresponding onboarding workflows."
+      },
+      "earlier_audit": "providers-settings.md covers connection capabilities; earlier shell inventory did not enumerate these root branches.",
+      "missing_coverage": "Exact root branches are now enumerated; auth, pairing, welcome and recovery workflows still require their owner’s runtime/source audit.",
+      "ferrite_acceptance": "Navigation must preserve unrelated browser/workspace lifetime; a recoverable connection failure must retain a usable retry surface rather than strand the app."
+    },
+    {
+      "id": "SH02",
+      "name": "Left navigation frame and collapse control",
+      "purpose": "Allocate navigation space and allow collapse, width resize and reopening without stealing input.",
+      "placement": "Desktop left off-canvas navigation plus fixed toggle/rail; mobile left Sheet.",
+      "triggers": "Mouse toggle, Cmd+B subject to editor/keybinding guards, menu action; edge drag; rail double-click resets width.",
+      "coexistence": "Sits beside the routed main surface; BackgroundThreadAnnouncer and history feedback remain siblings outside the inert collapsed content.",
+      "responsive": "Mobile <=767 px uses Sheet. Desktop default 256 px, minimum max(208 px, measured brand width); maximum preserves 640 px main width where possible. Drag growth is rejected when the wrapper would leave less than 640 px.",
+      "visibility_persistence": "Desktop open state stored as chat_thread_sidebar_open; width stored separately as chat_thread_sidebar_width. Mobile open state is separate. Reset removes the width override.",
+      "motion_focus_lifetime": "Width/left/right transitions only when panel animation settings are active; collapse makes content inert. Rail drag disables transition. Cmd+B capture avoids taking a rich-text Bold selection. Panel animations can be zero and are suppressed around route changes.",
+      "t3": [
+        {
+          "path": "apps/web/src/components/AppSidebarLayout.tsx",
+          "start": 329,
+          "end": 405,
+          "symbol": "SidebarControl",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/AppSidebarLayout.tsx#L329-L405"
+        },
+        {
+          "path": "apps/web/src/components/AppSidebarLayout.tsx",
+          "start": 410,
+          "end": 496,
+          "symbol": "AppSidebarLayout",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/AppSidebarLayout.tsx#L410-L496"
+        },
+        {
+          "path": "apps/web/src/components/threadSidebarWidth.ts",
+          "start": 1,
+          "end": 34,
+          "symbol": "width resolution",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/threadSidebarWidth.ts#L1-L34"
+        },
+        {
+          "path": "apps/web/src/components/ui/sidebar.tsx",
+          "start": 143,
+          "end": 178,
+          "symbol": "SidebarProvider state",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/ui/sidebar.tsx#L143-L178"
+        },
+        {
+          "path": "apps/web/src/components/ui/sidebar.tsx",
+          "start": 313,
+          "end": 403,
+          "symbol": "Sidebar mobile/desktop branches",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/ui/sidebar.tsx#L313-L403"
+        },
+        {
+          "path": "apps/web/src/panelAnimations.ts",
+          "start": 11,
+          "end": 38,
+          "symbol": "usePanelAnimationSettings",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/panelAnimations.ts#L11-L38"
+        }
+      ],
+      "ferrite": {
+        "relation": "Existing navigation capability with a concrete motion mismatch.",
+        "anchors": [
+          {
+            "path": "crates/ferrite-cockpit/src/cockpit.rs",
+            "start": 2829,
+            "end": 2855,
+            "symbol": "nav_width / nav_folded / auto_fold_nav"
+          },
+          {
+            "path": "crates/ferrite-cockpit/src/cockpit.rs",
+            "start": 6170,
+            "end": 6198,
+            "symbol": "toggle_nav_now / set_nav_collapsed"
+          },
+          {
+            "path": "crates/ferrite-cockpit/src/cockpit.rs",
+            "start": 12845,
+            "end": 12880,
+            "symbol": "nav / nav_edge_tab"
+          }
+        ],
+        "notes": "Ferrite switches width between zero and COLUMN_WIDTH and boolean collapse state. No interpolated collapse width is established in this path; the user’s snapping report is not refuted."
+      },
+      "earlier_audit": "motion.md, input-focus.md and t3-live-shell-checklist.md covered collapse; keep their known issue rather than recounting it as newly discovered.",
+      "missing_coverage": "Intermediate-frame proof, interrupted reversal, natural drag/click targets during transition and reduced-motion behavior remain required.",
+      "ferrite_acceptance": "Record before/intermediate/after opening and closing, including rapid reversal. The main column and controls must move coherently, retain focus, and settle without a sudden replacement or click-through."
+    },
+    {
+      "id": "SH03",
+      "name": "Navigation contents, shelves and footer doors",
+      "purpose": "Expose thread destinations and workspace/account commands within the navigation frame.",
+      "placement": "Scrollable sidebar content with header/project scope, thread/draft/group rows, shelf sections and footer.",
+      "triggers": "Search, project scope, row selection, shelf expansion, drag/drop, Show more/Retry; footer commands.",
+      "coexistence": "Navigation groups and placeholders share one scroll lane; the footer is a separate sibling. Search results replace the normal sortable list instead of becoming an extra workspace tab.",
+      "responsive": "Inherits sidebar desktop/mobile frame; list is scrollable. Empty states distinguish no projects, no threads and scoped project emptiness.",
+      "visibility_persistence": "Shelf/filter/order state belongs to sidebar stores; this report verifies rendered branches, not every persistence backend. Older-settled loading/failure has its own button state.",
+      "motion_focus_lifetime": "Interactive rows and menus are inside the navigation area. Empty/drop placeholders and retry buttons are separate rendered states, not thread surfaces.",
+      "t3": [
+        {
+          "path": "apps/web/src/components/Sidebar.tsx",
+          "start": 2967,
+          "end": 2985,
+          "symbol": "Sidebar root/header",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/Sidebar.tsx#L2967-L2985"
+        },
+        {
+          "path": "apps/web/src/components/Sidebar.tsx",
+          "start": 3205,
+          "end": 3245,
+          "symbol": "search/list branch",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/Sidebar.tsx#L3205-L3245"
+        },
+        {
+          "path": "apps/web/src/components/Sidebar.tsx",
+          "start": 3438,
+          "end": 3499,
+          "symbol": "draft/project/drop rows",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/Sidebar.tsx#L3438-L3499"
+        },
+        {
+          "path": "apps/web/src/components/Sidebar.tsx",
+          "start": 3503,
+          "end": 3653,
+          "symbol": "shelves / show more / empty / footer",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/Sidebar.tsx#L3503-L3653"
+        }
+      ],
+      "ferrite": {
+        "relation": "Existing navigation and footer; labels do not establish identical destinations.",
+        "anchors": [
+          {
+            "path": "crates/ferrite-cockpit/src/cockpit.rs",
+            "start": 8807,
+            "end": 8840,
+            "symbol": "nav_state"
+          },
+          {
+            "path": "crates/ferrite-cockpit/src/cockpit/nav_chrome.rs",
+            "start": 314,
+            "end": 350,
+            "symbol": "nav_foot"
+          }
+        ],
+        "notes": "Ferrite footer PR opens the shown thread’s PR only when one is present; Usage is the shown provider’s account-limit popover. Neither label proves a global PR or aggregate Usage destination."
+      },
+      "earlier_audit": "projects-navigation.md covered navigation; PR and Usage destination scope was already a substantive mismatch.",
+      "missing_coverage": "Global destinations must be checked separately from thread-level content. Search/drag/empty/error branch walkthrough is not certified by visiting one populated sidebar.",
+      "ferrite_acceptance": "Every apparent navigation link must reach its named destination. Show distinct disabled/empty/error feedback and retain selection/scroll after return."
+    },
+    {
+      "id": "SH04",
+      "name": "Main route, draft and background conversation",
+      "purpose": "Render the selected full conversation and retain it safely behind route modals.",
+      "placement": "Main SidebarInset; Settings/Usage overlay a retained inert thread.",
+      "triggers": "Thread route navigation; draft selection/promotion; hidden-thread redirect; opening and closing an app modal.",
+      "coexistence": "_chat renders the retained ThreadRouteView plus modal Outlet when Settings/Usage opens. A valid draft promotion preserves the ChatView slot/key. Ordinary thread navigation uses the same unkeyed ChatView shell with explicit ownership updates.",
+      "responsive": "Main inset owns viewport height and overflow. Draft forces expanded mobile composer. No selected thread has separate empty/new-project/draft-landing branches.",
+      "visibility_persistence": "Router target and retained backgroundTarget govern visibility; hidden/off-shell routes may redirect or wait. A missing active thread returns NoActiveThreadState rather than rendering ordinary chat children.",
+      "motion_focus_lifetime": "Background conversation is inert and does not perform foreground redirect. Local per-thread state must be changed by explicit scope ownership, not accidental component remount assumptions.",
+      "t3": [
+        {
+          "path": "apps/web/src/routes/_chat.tsx",
+          "start": 18,
+          "end": 44,
+          "symbol": "ChatLayout",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/routes/_chat.tsx#L18-L44"
+        },
+        {
+          "path": "apps/web/src/components/ThreadRouteView.tsx",
+          "start": 34,
+          "end": 52,
+          "symbol": "route lifetime contract",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/ThreadRouteView.tsx#L34-L52"
+        },
+        {
+          "path": "apps/web/src/components/ThreadRouteView.tsx",
+          "start": 159,
+          "end": 234,
+          "symbol": "draft/server/render branches",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/ThreadRouteView.tsx#L159-L234"
+        },
+        {
+          "path": "apps/web/src/routes/_chat.index.tsx",
+          "start": 25,
+          "end": 90,
+          "symbol": "IndexDraftLanding",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/routes/_chat.index.tsx#L25-L90"
+        },
+        {
+          "path": "apps/web/src/components/ChatView.tsx",
+          "start": 3176,
+          "end": 3183,
+          "symbol": "no active thread",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/ChatView.tsx#L3176-L3183"
+        }
+      ],
+      "ferrite": {
+        "relation": "Full Pane and board composition exist; route model differs.",
+        "anchors": [
+          {
+            "path": "crates/ferrite-cockpit/src/cockpit.rs",
+            "start": 10618,
+            "end": 10640,
+            "symbol": "board grid layer"
+          },
+          {
+            "path": "crates/ferrite-pane/src/pane.rs",
+            "start": 403,
+            "end": 428,
+            "symbol": "PaneView::select_subject"
+          },
+          {
+            "path": "crates/ferrite-pane/src/pane.rs",
+            "start": 881,
+            "end": 939,
+            "symbol": "render_pane"
+          }
+        ],
+        "notes": "Ferrite supports selected Subject in a full Pane; that does not establish that ordinary child navigation uses it."
+      },
+      "earlier_audit": "projects-navigation.md and live conclusions covered main routes; earlier recommendations failed to preserve their significance for provider children.",
+      "missing_coverage": "Draft promotion, modal return, thread switch and selected-subject viewport restoration must be tested as a sequence.",
+      "ferrite_acceptance": "Open another thread, Settings, and return: preserve the correct transcript/scroll, make only the foreground surface interactive, and avoid accidental background selection."
+    },
+    {
+      "id": "SH05",
+      "name": "Provider child as full main conversation",
+      "purpose": "Inspect a provider-created subagent using the primary transcript layout with parent navigation and status.",
+      "placement": "Main ChatView route; ProviderSubagentBar replaces the editable composer.",
+      "triggers": "Child relationship/tool-output navigation follows the child route; parent breadcrumb returns to the owner. Side-chat targets explicitly take a different tab-opening branch.",
+      "coexistence": "Owns the primary conversation lane. The workspace and Thread details remain separate surfaces. This is not the embedded SideChat right-panel surface.",
+      "responsive": "Same main canvas/responsive header as a normal conversation. Child status bar condenses labels at narrow widths.",
+      "visibility_persistence": "Thread route and provider-child classification select the surface. Child main route is not an additional top-level thread row requirement.",
+      "motion_focus_lifetime": "Lifecycle checks stale/unavailable targets; side-chat target branches before ordinary child navigate. Child status/footer appears without implying it accepts user input.",
+      "t3": [
+        {
+          "path": "apps/web/src/components/chat/useThreadLifecycle.tsx",
+          "start": 480,
+          "end": 497,
+          "symbol": "onNavigateToRelatedThread",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/useThreadLifecycle.tsx#L480-L497"
+        },
+        {
+          "path": "apps/web/src/components/ChatView.tsx",
+          "start": 1713,
+          "end": 1714,
+          "symbol": "showProviderSubagentBar / composerMounted",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/ChatView.tsx#L1713-L1714"
+        },
+        {
+          "path": "apps/web/src/components/ChatView.tsx",
+          "start": 3535,
+          "end": 3567,
+          "symbol": "ProviderSubagentBar branch",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/ChatView.tsx#L3535-L3567"
+        },
+        {
+          "path": "apps/web/src/components/chat/ProviderSubagentBar.tsx",
+          "start": 14,
+          "end": 79,
+          "symbol": "ProviderSubagentBar",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/ProviderSubagentBar.tsx#L14-L79"
+        },
+        {
+          "path": "apps/web/src/components/chat/ChatHeader.tsx",
+          "start": 287,
+          "end": 319,
+          "symbol": "parent breadcrumb",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/ChatHeader.tsx#L287-L319"
+        }
+      ],
+      "ferrite": {
+        "relation": "Confirmed composition mismatch; capability exists but ordinary entry uses the wrong-sized surface for this contract.",
+        "anchors": [
+          {
+            "path": "crates/ferrite-cockpit/src/cockpit/agent_pane.rs",
+            "start": 69,
+            "end": 110,
+            "symbol": "open_agent_from / open_agent_drill"
+          },
+          {
+            "path": "crates/ferrite-cockpit/src/cockpit/panel.rs",
+            "start": 691,
+            "end": 693,
+            "symbol": "Agent panel body"
+          },
+          {
+            "path": "crates/ferrite-pane/src/pane.rs",
+            "start": 403,
+            "end": 428,
+            "symbol": "select_subject"
+          }
+        ],
+        "notes": "Ferrite ordinary child row calls open_agent_drill and upserts SurfaceId::Agent. Existing full Pane subject support is a feasible basis; the compact drill is not equivalent to full main navigation."
+      },
+      "earlier_audit": "subagent-placement-correction.md records original source/live observation and the repair recommendation’s mistaken compact-panel assumption.",
+      "missing_coverage": "Full child transcript, parent return, child status, nested child navigation, unavailable child and scroll preservation remain acceptance dimensions. Do not relabel the compact drill as parity.",
+      "ferrite_acceptance": "Click a provider child from the transcript: it should occupy the main conversation lane, retain full transcript behaviors, visibly show parent/status, and return to the parent’s previous position. Keep side chat distinct."
+    },
+    {
+      "id": "SH06",
+      "name": "Conversation header and independent layout controls",
+      "purpose": "Name/navigate the conversation and operate details, terminal and workspace independently.",
+      "placement": "Top breadcrumb/title/menu, no-drag controls; workspace-owned titlebar controls when docked.",
+      "triggers": "Project/parent click; title menu/context menu; title double-click rename; Enter commits/Escape cancels; separate details, terminal drawer, right-panel and maximize controls.",
+      "coexistence": "Details control may relocate when workspace owns the header; workspace maximize can make chat width zero/inert. Controls are not four labels for one shared surface.",
+      "responsive": "Measured breadcrumb truncation; desktop traffic-light clearance; controls suppressed while mobile sidebar sheet is mounted. Separate root/inline/sheet control ownership prevents duplicate hit areas.",
+      "visibility_persistence": "Title edit local state; panel/terminal/details visibility in separate stores. Maximize is distinct from close/open.",
+      "motion_focus_lifetime": "Explicit no-drag regions and focus handling. Opening details requests details workspace focus; closing while details owns focus returns content focus. Header control entry motion is conditional.",
+      "t3": [
+        {
+          "path": "apps/web/src/components/chat/ChatHeader.tsx",
+          "start": 199,
+          "end": 245,
+          "symbol": "title/menu/rename",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/ChatHeader.tsx#L199-L245"
+        },
+        {
+          "path": "apps/web/src/components/chat/ChatHeader.tsx",
+          "start": 247,
+          "end": 397,
+          "symbol": "breadcrumb assembly",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/ChatHeader.tsx#L247-L397"
+        },
+        {
+          "path": "apps/web/src/components/chat/PanelLayoutControls.tsx",
+          "start": 57,
+          "end": 170,
+          "symbol": "independent toggles/maximize",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/PanelLayoutControls.tsx#L57-L170"
+        },
+        {
+          "path": "apps/web/src/components/chat/PanelLayoutControls.tsx",
+          "start": 174,
+          "end": 230,
+          "symbol": "header control placement",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/PanelLayoutControls.tsx#L174-L230"
+        },
+        {
+          "path": "apps/web/src/components/ChatView.tsx",
+          "start": 3231,
+          "end": 3332,
+          "symbol": "header ownership",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/ChatView.tsx#L3231-L3332"
+        }
+      ],
+      "ferrite": {
+        "relation": "Ferrite intentionally consolidates tools behind one Panel toggle; independent T3 placement is not implemented by labels in that menu.",
+        "anchors": [
+          {
+            "path": "crates/ferrite-cockpit/src/cockpit/view_head.rs",
+            "start": 1,
+            "end": 22,
+            "symbol": "documented single-toggle design"
+          },
+          {
+            "path": "crates/ferrite-cockpit/src/cockpit/view_head.rs",
+            "start": 226,
+            "end": 280,
+            "symbol": "title_tools_element / solo_head"
+          }
+        ],
+        "notes": "Parent breadcrumb in this header path is described for side chats. Provider-child main-route behavior needs its own verified wiring."
+      },
+      "earlier_audit": "input-focus.md covered hit testing; thread-details-card-correction.md corrects the missed independent surface.",
+      "missing_coverage": "Click/drag boundary around titlebar, narrowed breadcrumb, control relocation and maximize focus return remain unproven as a combined journey.",
+      "ferrite_acceptance": "Each visible control must operate its own named surface. Opening context details must not automatically take a large workspace lane or replace the current tool; titlebar gaps must still drag while controls click."
+    },
+    {
+      "id": "SH07",
+      "name": "Thread details anchored card and popover",
+      "purpose": "Expose workspace/git/scripts/relationships and optional metrics beside the transcript without occupying the tool workspace.",
+      "placement": "Independent upper-right canvas card; anchored header popover when inline placement cannot fit. It is not draggable and not a workspace tab.",
+      "triggers": "Details toggle or Cmd+Shift+B; right-click card customization; section actions. Responsive placement switches presentation.",
+      "coexistence": "May coexist with the right workspace, Find, composer and floating preview. Layout accounts for preview overlap and Find inset. Inline and popover visibility are separate per-thread flags.",
+      "responsive": "280 px width, 12 px gap; inline placement requires chat-lane clearance and at least 160 px height. Full/compact/essential densities prune content; otherwise header popover with collision shift.",
+      "visibility_persistence": "Default inline open, popover closed. Only closed-inline exceptions are persisted; popover open is reset. Item choices stored in client settings; Usage and Context are opt-in.",
+      "motion_focus_lifetime": "Inline card has only a conditional 150 ms top-inset transition here; no general entry/exit animation is proven. Popover remains in tree for clean exit; opening requests details focus, Find interaction does not auto-dismiss; closing returns content focus where appropriate.",
+      "t3": [
+        {
+          "path": "apps/web/src/components/chat/ThreadDetailsCard.tsx",
+          "start": 38,
+          "end": 105,
+          "symbol": "mode / visibility / density",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/ThreadDetailsCard.tsx#L38-L105"
+        },
+        {
+          "path": "apps/web/src/components/chat/ThreadDetailsCard.tsx",
+          "start": 115,
+          "end": 196,
+          "symbol": "card / inline / popover",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/ThreadDetailsCard.tsx#L115-L196"
+        },
+        {
+          "path": "apps/web/src/components/chat/threadDetailsCardLayout.ts",
+          "start": 4,
+          "end": 45,
+          "symbol": "layout thresholds",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/threadDetailsCardLayout.ts#L4-L45"
+        },
+        {
+          "path": "apps/web/src/components/chat/ThreadDetailsPanel.tsx",
+          "start": 151,
+          "end": 269,
+          "symbol": "conditional details sections",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/ThreadDetailsPanel.tsx#L151-L269"
+        },
+        {
+          "path": "apps/web/src/components/chat/threadDetailsItems.ts",
+          "start": 4,
+          "end": 53,
+          "symbol": "item defaults/persistence",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/threadDetailsItems.ts#L4-L53"
+        },
+        {
+          "path": "apps/web/src/rightPanelStore.ts",
+          "start": 211,
+          "end": 214,
+          "symbol": "visibility defaults",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/rightPanelStore.ts#L211-L214"
+        },
+        {
+          "path": "apps/web/src/rightPanelStore.ts",
+          "start": 1188,
+          "end": 1210,
+          "symbol": "persisted visibility",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/rightPanelStore.ts#L1188-L1210"
+        },
+        {
+          "path": "apps/web/src/components/chat/useRightPanelActions.ts",
+          "start": 222,
+          "end": 235,
+          "symbol": "focus transition",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/useRightPanelActions.ts#L222-L235"
+        }
+      ],
+      "ferrite": {
+        "relation": "Confirmed composition mismatch; content overlap does not make Overview equivalent.",
+        "anchors": [
+          {
+            "path": "crates/ferrite-cockpit/src/cockpit/panel.rs",
+            "start": 461,
+            "end": 463,
+            "symbol": "open_panel opens Overview"
+          },
+          {
+            "path": "crates/ferrite-cockpit/src/cockpit/panel.rs",
+            "start": 550,
+            "end": 626,
+            "symbol": "docked panel_element"
+          },
+          {
+            "path": "crates/ferrite-cockpit/src/cockpit/panel.rs",
+            "start": 657,
+            "end": 693,
+            "symbol": "single active surface body"
+          },
+          {
+            "path": "crates/ferrite-cockpit/src/cockpit/panel/sections.rs",
+            "start": 25,
+            "end": 74,
+            "symbol": "panel_sections"
+          }
+        ],
+        "notes": "Ferrite Overview consumes the shared docked panel and cannot be counted as the independent anchored card. Existing Plan/context popovers are different purposes and do not substitute for it."
+      },
+      "earlier_audit": "thread-details-card-correction.md corrects the earlier toggle-only inventory and records parent native observations of independent toggle, workspace coexistence, Escape return and inline restoration.",
+      "missing_coverage": "Customize/density, narrow windows, every tool combination, Find/preview clearance, live values and motion are not fully verified. Native correction captures were viewed in conversation, not exported as report artifacts.",
+      "ferrite_acceptance": "Open/close details while Browser or Files remains selected. Details should use a compact measured card or anchored fallback; preserve tool, transcript width and keyboard focus. Test Escape, resize, Find, floating preview and thread switching independently."
+    },
+    {
+      "id": "SH08",
+      "name": "Tool workspace: docked, sheet and maximized",
+      "purpose": "Host one selected tool surface among retained per-thread tabs.",
+      "placement": "Resizable right dock; responsive right Sheet; maximized workspace; empty launcher.",
+      "triggers": "Right-panel toggle/Cmd+Option+B, plus/tool command, tab selection/close/drag/rename, maximize/restore.",
+      "coexistence": "Separate sibling of chat column and bottom terminal drawer; maximized workspace hides/inerts chat. Details can remain independently accessible depending on presentation.",
+      "responsive": "Sheet at <=980 px unless maximized. Inline defaults 540 px, min 360 px, max 70% viewport constrained to retain 360 px sibling. Sheet width min(42vw,28rem), min320/max448; <=760 uses min(88vw,24rem), min0.",
+      "visibility_persistence": "Per-thread surfaces/active/open/maximized state persisted; panel width key is thread-scoped. Closing uses presence retention tied to scope, preventing a closing panel from carrying another thread’s content.",
+      "motion_focus_lifetime": "Inline width transition conditional on motion; close returns focus before subtree becomes inert. Resize handle only inline/nonmaximized. Keep-mounted sheet supports exit; browser/tool lifetime must not be equated to selected tab visibility.",
+      "t3": [
+        {
+          "path": "apps/web/src/components/ChatView.tsx",
+          "start": 1029,
+          "end": 1086,
+          "symbol": "workspace state/presentation",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/ChatView.tsx#L1029-L1086"
+        },
+        {
+          "path": "apps/web/src/components/ChatView.tsx",
+          "start": 3931,
+          "end": 3993,
+          "symbol": "workspace assembly",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/ChatView.tsx#L3931-L3993"
+        },
+        {
+          "path": "apps/web/src/components/chat/ChatRightPanel.tsx",
+          "start": 19,
+          "end": 49,
+          "symbol": "inline vs sheet",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/ChatRightPanel.tsx#L19-L49"
+        },
+        {
+          "path": "apps/web/src/hooks/usePreviewPanelInlineSize.ts",
+          "start": 13,
+          "end": 39,
+          "symbol": "size defaults",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/hooks/usePreviewPanelInlineSize.ts#L13-L39"
+        },
+        {
+          "path": "apps/web/src/hooks/usePreviewPanelInlineSize.ts",
+          "start": 68,
+          "end": 73,
+          "symbol": "width cap",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/hooks/usePreviewPanelInlineSize.ts#L68-L73"
+        },
+        {
+          "path": "apps/web/src/components/RightPanelSheet.tsx",
+          "start": 12,
+          "end": 28,
+          "symbol": "responsive sheet",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/RightPanelSheet.tsx#L12-L28"
+        },
+        {
+          "path": "apps/web/src/components/preview/PreviewPanelShell.tsx",
+          "start": 132,
+          "end": 206,
+          "symbol": "focus/transition/resize",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/preview/PreviewPanelShell.tsx#L132-L206"
+        },
+        {
+          "path": "apps/web/src/components/chat/RightPanelSurfaceContent.tsx",
+          "start": 86,
+          "end": 233,
+          "symbol": "surface cases",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/RightPanelSurfaceContent.tsx#L86-L233"
+        },
+        {
+          "path": "apps/web/src/rightPanelStore.ts",
+          "start": 1188,
+          "end": 1204,
+          "symbol": "persisted surface state",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/rightPanelStore.ts#L1188-L1204"
+        }
+      ],
+      "ferrite": {
+        "relation": "Existing tool panel, with different size and composition rules; not missing wholesale.",
+        "anchors": [
+          {
+            "path": "crates/ferrite-cockpit/src/cockpit/panel.rs",
+            "start": 144,
+            "end": 180,
+            "symbol": "floor_w / most_w / panel_w"
+          },
+          {
+            "path": "crates/ferrite-cockpit/src/cockpit/panel.rs",
+            "start": 550,
+            "end": 626,
+            "symbol": "panel_element"
+          },
+          {
+            "path": "crates/ferrite-cockpit/src/cockpit/panel.rs",
+            "start": 657,
+            "end": 693,
+            "symbol": "surface body switch"
+          },
+          {
+            "path": "crates/ferrite-ui/src/theme.rs",
+            "start": 1069,
+            "end": 1071,
+            "symbol": "browser/file/PR width"
+          },
+          {
+            "path": "crates/ferrite-ui/src/theme.rs",
+            "start": 2027,
+            "end": 2029,
+            "symbol": "files width / transcript minimum"
+          }
+        ],
+        "notes": "Ferrite Browser/File/PR floor uses 42% viewport clamped420–820; Files/Changes uses 60% remaining width with420 minimum. These are not the T3 540 default. Source sizing can explain large openings; a screenshot measurement is needed per tool."
+      },
+      "earlier_audit": "panel-tools.md and t3-surface-contracts.md cover capabilities/sizing; user’s 'massive thing every time' is a concrete opening/restore journey, not a feature request.",
+      "missing_coverage": "Measure first open versus saved reopen for each tool, narrow-window clamping, active tool after details toggles, focus ownership, click hit regions and motion reversal.",
+      "ferrite_acceptance": "Record viewport/nav/transcript/panel rectangles on first open, resize, close and reopen. The chosen tool must stay active, preserve a useful reading lane and restore an intentional width without obscuring natural clicks."
+    },
+    {
+      "id": "SH09",
+      "name": "Bottom terminal drawer versus workspace Terminal",
+      "purpose": "Run a shell below the conversation while another tool remains visible.",
+      "placement": "Bottom drawer inside chat column; separately, Terminal may be a right-workspace tab using shared terminal engine.",
+      "triggers": "Drawer control/Cmd+J; workspace plus Terminal is a different placement. Open/close/split/terminal-session actions are not interchangeable.",
+      "coexistence": "Bottom drawer coexists with the right workspace. Maximized workspace hides the active drawer. Recently opened inactive-thread terminal views can remain mounted for continuity.",
+      "responsive": "Drawer uses height/constraints and grid track expansion; panel-mode terminal takes the workspace dimensions.",
+      "visibility_persistence": "Terminal UI store persists open/height/session UI; drawer rendering retains recently used thread terminals and chooses active scope. Process/session lifetime is separate from visibility.",
+      "motion_focus_lifetime": "Drawer grid animates 0fr/1fr only with active panel animation. Closing can retain presence for exit; inactive drawers are hidden. Panel terminal is separate mode of PersistentThreadTerminals.",
+      "t3": [
+        {
+          "path": "apps/web/src/components/chat/ChatTerminalDrawers.tsx",
+          "start": 36,
+          "end": 106,
+          "symbol": "retained per-thread drawers",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/ChatTerminalDrawers.tsx#L36-L106"
+        },
+        {
+          "path": "apps/web/src/components/PersistentThreadTerminals.tsx",
+          "start": 237,
+          "end": 280,
+          "symbol": "drawer layout",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/PersistentThreadTerminals.tsx#L237-L280"
+        },
+        {
+          "path": "apps/web/src/components/PersistentThreadTerminals.tsx",
+          "start": 380,
+          "end": 414,
+          "symbol": "workspace panel mode",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/PersistentThreadTerminals.tsx#L380-L414"
+        },
+        {
+          "path": "apps/web/src/terminalUiStateStore.ts",
+          "start": 583,
+          "end": 594,
+          "symbol": "persist setup",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/terminalUiStateStore.ts#L583-L594"
+        },
+        {
+          "path": "apps/web/src/terminalUiStateStore.ts",
+          "start": 769,
+          "end": 776,
+          "symbol": "storage version",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/terminalUiStateStore.ts#L769-L776"
+        },
+        {
+          "path": "apps/web/src/components/ChatView.tsx",
+          "start": 3915,
+          "end": 3929,
+          "symbol": "drawer sibling",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/ChatView.tsx#L3915-L3929"
+        }
+      ],
+      "ferrite": {
+        "relation": "Existing working terminal capability, missing this distinct placement/coexistence contract.",
+        "anchors": [
+          {
+            "path": "crates/ferrite-cockpit/src/cockpit/tools.rs",
+            "start": 1,
+            "end": 7,
+            "symbol": "all tools share Panel"
+          },
+          {
+            "path": "crates/ferrite-cockpit/src/cockpit/tools.rs",
+            "start": 42,
+            "end": 68,
+            "symbol": "toggle_terminal"
+          },
+          {
+            "path": "crates/ferrite-cockpit/src/cockpit/panel.rs",
+            "start": 688,
+            "end": 690,
+            "symbol": "Terminal body"
+          }
+        ],
+        "notes": "Ferrite Command-J brings a SurfaceId::Terminal into the shared right panel. It does not reveal a bottom drawer alongside the existing Files/Browser tab."
+      },
+      "earlier_audit": "motion.md explicitly noted no separate Ferrite drawer; checklist PANEL-05/WINDOW-08 called for comparison. Earlier repair framing still risked treating the two terminal placements as one capability.",
+      "missing_coverage": "Need coexistence and focus test in addition to already exercised terminal output/split/termination journeys.",
+      "ferrite_acceptance": "With Browser active, open the shell without replacing Browser; close/reopen the shell while preserving command output and process state. Distinguish interrupt, close-tab, hide-drawer and terminate."
+    },
+    {
+      "id": "SH10",
+      "name": "Floating browser/device mini-player",
+      "purpose": "Keep a preview visible within the conversation when it is not the active docked source.",
+      "placement": "Movable/resizable frame in the chat canvas with hover/focus/touch controls.",
+      "triggers": "Float preview/device from its workspace flow; drag header; edge/corner resize; close pill.",
+      "coexistence": "Independent from details and drawer. Duplicate display of the same active workspace source is suppressed; the frame participates in canvas/details clearance.",
+      "responsive": "Resolved within measured canvas; drag/resize constraints account for available space. Eight resize handles, separate header grab area.",
+      "visibility_persistence": "Plain per-thread source-keyed store (not persisted in the inspected store); position/size retained while the entry exists, close deletes entry. Source key guards stale writes.",
+      "motion_focus_lifetime": "Pointer-capture drag/resize; controls reveal on hover/focus/touch and outside press dismisses pill. Not the same surface as the anchored details card.",
+      "t3": [
+        {
+          "path": "apps/web/src/components/ChatView.tsx",
+          "start": 1075,
+          "end": 1086,
+          "symbol": "mini-player eligibility",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/ChatView.tsx#L1075-L1086"
+        },
+        {
+          "path": "apps/web/src/components/ChatView.tsx",
+          "start": 3812,
+          "end": 3824,
+          "symbol": "preview sync/mini-player render",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/ChatView.tsx#L3812-L3824"
+        },
+        {
+          "path": "apps/web/src/components/preview/ThreadPreviewMiniPlayer.tsx",
+          "start": 194,
+          "end": 211,
+          "symbol": "browser/device branch",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/preview/ThreadPreviewMiniPlayer.tsx#L194-L211"
+        },
+        {
+          "path": "apps/web/src/components/preview/ThreadPreviewMiniPlayer.tsx",
+          "start": 416,
+          "end": 455,
+          "symbol": "shell state",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/preview/ThreadPreviewMiniPlayer.tsx#L416-L455"
+        },
+        {
+          "path": "apps/web/src/components/preview/ThreadPreviewMiniPlayer.tsx",
+          "start": 460,
+          "end": 633,
+          "symbol": "drag/resize/control assembly",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/preview/ThreadPreviewMiniPlayer.tsx#L460-L633"
+        },
+        {
+          "path": "apps/web/src/previewMiniPlayerStore.ts",
+          "start": 62,
+          "end": 143,
+          "symbol": "per-thread source/frame store",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/previewMiniPlayerStore.ts#L62-L143"
+        }
+      ],
+      "ferrite": {
+        "relation": "No independently verified floating browser/device counterpart in the inspected Ferrite shell; closest is docked Browser.",
+        "anchors": [
+          {
+            "path": "crates/ferrite-cockpit/src/cockpit/panel.rs",
+            "start": 550,
+            "end": 626,
+            "symbol": "docked panel"
+          },
+          {
+            "path": "crates/ferrite-cockpit/src/cockpit/panel.rs",
+            "start": 685,
+            "end": 685,
+            "symbol": "Browser surface body"
+          }
+        ],
+        "notes": "This is a bounded source comparison, not a repository-wide claim that no preview capability exists. Browser visual/function details belong to surface-reconciliation-browser."
+      },
+      "earlier_audit": "Earlier browser investigation covered docked browser extensively; whole floating composition was not established by those findings.",
+      "missing_coverage": "Native floating preview, collision, resize, focus and return-to-dock behavior are not certified by this report.",
+      "ferrite_acceptance": "If a floating preview is part of the intended scope, verify independent visibility, source identity and canvas clearance. Do not replace the reported browser styling/interaction repairs with a new float feature."
+    },
+    {
+      "id": "SH11",
+      "name": "Conversation canvas, composer and approvals",
+      "purpose": "Compose in the conversation while keeping transcript, pending approvals and status understandable.",
+      "placement": "Timeline in main canvas; absolute centered draft-hero or bottom composer overlay; child approvals above composer; provider-child status substitutes for editable composer.",
+      "triggers": "Draft versus active thread; composer contents; provider-child classification; pending approvals; queue/handoff/status.",
+      "coexistence": "ThreadFindCanvas measures composer/Find/preview/details. The composer overlay leaves pointer events through outside its own content; it does not replace the bottom terminal drawer.",
+      "responsive": "Hero centers where height allows, with short-height bottom fallback. Ordinary composer remains bottom positioned with maximum-height constraint; transcript clearances come from canvas measurement.",
+      "visibility_persistence": "Draft/server state, approval and queue atoms determine children. Revert/queued-saving states can make composer inert; this is not a new navigation route.",
+      "motion_focus_lifetime": "Composer pointer/focus ownership is explicit. Timeline footer conditionally shows handoff, ThreadNow, status, guest pending messages and queued runs. Detailed transcript/editor internals belong to conversation worker.",
+      "t3": [
+        {
+          "path": "apps/web/src/components/ChatView.tsx",
+          "start": 3091,
+          "end": 3124,
+          "symbol": "timelineFooter",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/ChatView.tsx#L3091-L3124"
+        },
+        {
+          "path": "apps/web/src/components/ChatView.tsx",
+          "start": 3336,
+          "end": 3380,
+          "symbol": "ThreadFindCanvas/timeline",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/ChatView.tsx#L3336-L3380"
+        },
+        {
+          "path": "apps/web/src/components/ChatView.tsx",
+          "start": 3480,
+          "end": 3567,
+          "symbol": "composer/approval/subagent composition",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/ChatView.tsx#L3480-L3567"
+        },
+        {
+          "path": "apps/web/src/components/ChatView.tsx",
+          "start": 3733,
+          "end": 3810,
+          "symbol": "context strip/hero banners",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/ChatView.tsx#L3733-L3810"
+        },
+        {
+          "path": "apps/web/src/components/chat/ChatCanvas.tsx",
+          "start": 32,
+          "end": 116,
+          "symbol": "canvas measurement",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/ChatCanvas.tsx#L32-L116"
+        }
+      ],
+      "ferrite": {
+        "relation": "Full Pane/composer exists; compact Agent/SideChat and main Pane are not interchangeable.",
+        "anchors": [
+          {
+            "path": "crates/ferrite-pane/src/pane.rs",
+            "start": 881,
+            "end": 939,
+            "symbol": "render_pane"
+          },
+          {
+            "path": "crates/ferrite-cockpit/src/cockpit/panel.rs",
+            "start": 691,
+            "end": 692,
+            "symbol": "compact related conversation bodies"
+          }
+        ],
+        "notes": "Conversation worker owns citation, attachments, jump-scroll and full transcript controls; this row records their containing surface."
+      },
+      "earlier_audit": "Transcript/composer reports existed; subagent-placement-correction.md documents how compact composition lost those affordances.",
+      "missing_coverage": "Hero/ordinary/child/approval transitions with workspace, drawer and narrow height remain a combined layout check.",
+      "ferrite_acceptance": "Visible approval and composer controls must remain reachable and natural to click with the sidebar/workspace open; selected child must retain full transcript affordances."
+    },
+    {
+      "id": "SH12",
+      "name": "Conversation Find bar",
+      "purpose": "Search the conversation without changing destination or losing search context.",
+      "placement": "Absolute upper-right canvas overlay, z40, width bounded to available space.",
+      "triggers": "Find shortcut/action opens search; input focus/select; next/previous and close.",
+      "coexistence": "Shares canvas with details and preview. Details excludes Find interactions from popover outside-dismiss; ScrollToEndButton is suppressed while Find is visible.",
+      "responsive": "Width min(280 px, available canvas width); canvas reserves Find inset for overlapping details.",
+      "visibility_persistence": "ThreadFindProvider owns store; open and focus-request state govern bar; close invokes caller’s focus callback.",
+      "motion_focus_lifetime": "150 ms fade with reduced-motion override; focused input selected on open/request. This is distinct from file editor Find or project search.",
+      "t3": [
+        {
+          "path": "apps/web/src/components/chat/ThreadFindProvider.tsx",
+          "start": 10,
+          "end": 46,
+          "symbol": "ThreadFindProvider/close",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/ThreadFindProvider.tsx#L10-L46"
+        },
+        {
+          "path": "apps/web/src/components/chat/ThreadFindBar.tsx",
+          "start": 29,
+          "end": 65,
+          "symbol": "focus / conditional overlay",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/ThreadFindBar.tsx#L29-L65"
+        },
+        {
+          "path": "apps/web/src/components/ChatView.tsx",
+          "start": 3337,
+          "end": 3356,
+          "symbol": "Find mount",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/ChatView.tsx#L3337-L3356"
+        },
+        {
+          "path": "apps/web/src/components/chat/ThreadDetailsCard.tsx",
+          "start": 135,
+          "end": 146,
+          "symbol": "Find dismissal exception",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/ThreadDetailsCard.tsx#L135-L146"
+        }
+      ],
+      "ferrite": {
+        "relation": "Find exists; route/focus ownership must be verified per surface.",
+        "anchors": [
+          {
+            "path": "crates/ferrite-cockpit/src/cockpit.rs",
+            "start": 6144,
+            "end": 6168,
+            "symbol": "open_find"
+          }
+        ],
+        "notes": "Ferrite focuses the selected pane’s Find path here; do not infer editor/browser Find routing from conversation Find."
+      },
+      "earlier_audit": "input-focus.md and t3-files-terminal-live-source-match.md cover separate Find contexts.",
+      "missing_coverage": "Find/detail collision and return focus; command routing across conversation/editor/browser still need fresh observations.",
+      "ferrite_acceptance": "Cmd+F should search the focused surface, leave other panes intact, and return focus on Escape. Search UI must not cover required title controls or reset transcript position unexpectedly."
+    },
+    {
+      "id": "SH13",
+      "name": "Provider/error banner lane",
+      "purpose": "Report actionable provider status and thread error above the conversation.",
+      "placement": "Absolute top canvas lane, z30, with independent dismiss/refresh paths.",
+      "triggers": "Provider status/error atoms and thread error state; dismiss or provider refresh.",
+      "coexistence": "Remains in the current conversation; not a replacement project/browser screen. Hero draft can render a detached banner stack.",
+      "responsive": "Banners use bounded lane geometry and pointer-events isolation outside interactive content; short-height hero fallback is separate.",
+      "visibility_persistence": "Provider and thread error dismissal keys differ; refresh request and payload determine whether the underlying condition cleared.",
+      "motion_focus_lifetime": "No universal entrance animation established in inspected lane. A disappeared banner after refresh is an observation, not proof of root cause.",
+      "t3": [
+        {
+          "path": "apps/web/src/components/chat/ChatBannerLane.tsx",
+          "start": 43,
+          "end": 61,
+          "symbol": "ChatBannerLane",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/ChatBannerLane.tsx#L43-L61"
+        },
+        {
+          "path": "apps/web/src/components/ChatView.tsx",
+          "start": 3357,
+          "end": 3374,
+          "symbol": "banner props",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/ChatView.tsx#L3357-L3374"
+        },
+        {
+          "path": "apps/web/src/components/ChatView.tsx",
+          "start": 3794,
+          "end": 3810,
+          "symbol": "detached hero banner stack",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/ChatView.tsx#L3794-L3810"
+        }
+      ],
+      "ferrite": {
+        "relation": "Notices/failure surfaces exist, but exact provider routing/refresh equivalence is not established.",
+        "anchors": [
+          {
+            "path": "crates/ferrite-cockpit/src/cockpit.rs",
+            "start": 10669,
+            "end": 10673,
+            "symbol": "toast/dialog/notification layers"
+          },
+          {
+            "path": "crates/ferrite-cockpit/src/cockpit/palette.rs",
+            "start": 1504,
+            "end": 1562,
+            "symbol": "toast_float"
+          }
+        ],
+        "notes": "A global toast is not automatically equivalent to a persistent in-conversation provider status with a refresh action."
+      },
+      "earlier_audit": "t3-files-terminal-live-source-match.md records provider timeout/banner disappearance after refresh, explicitly without a proven backend cause.",
+      "missing_coverage": "Timeout payload, refresh request/outcome, repeated failure and narrow layout remain unproven.",
+      "ferrite_acceptance": "A provider failure must show a relevant action and preserve conversation input/context; refresh success/failure must be visible without unrelated navigation."
+    },
+    {
+      "id": "SH14",
+      "name": "Drag feedback and scroll-to-end affordance",
+      "purpose": "Give local drop feedback and a safe return to the live transcript end.",
+      "placement": "Transient canvas overlay and floating transcript-edge button.",
+      "triggers": "Workspace file drag enters/leaves; scroll state enables Jump/scroll-to-end.",
+      "coexistence": "Drop overlay is pointer-events-none status feedback. Scroll button is hidden during Find and clears the composer; neither is a modal.",
+      "responsive": "Overlay is inset within canvas; scroll button position includes composer clearance.",
+      "visibility_persistence": "Derived transient drag/scroll state; no independent persisted surface.",
+      "motion_focus_lifetime": "Scroll button pointer-down prevents default to retain focus; content remains mounted. Jump correctness/virtualization is conversation-worker scope.",
+      "t3": [
+        {
+          "path": "apps/web/src/components/chat/TimelineOverlays.tsx",
+          "start": 5,
+          "end": 54,
+          "symbol": "WorkspaceFileDropOverlay / ScrollToEndButton",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/TimelineOverlays.tsx#L5-L54"
+        },
+        {
+          "path": "apps/web/src/components/ChatView.tsx",
+          "start": 3355,
+          "end": 3356,
+          "symbol": "drop render",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/ChatView.tsx#L3355-L3356"
+        },
+        {
+          "path": "apps/web/src/components/ChatView.tsx",
+          "start": 3480,
+          "end": 3488,
+          "symbol": "scroll affordance condition",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/ChatView.tsx#L3480-L3488"
+        }
+      ],
+      "ferrite": {
+        "relation": "Existing transcript/drop/jump behavior, with user-reported correctness concerns; not missing-feature evidence.",
+        "anchors": [
+          {
+            "path": "crates/ferrite-pane/src/pane.rs",
+            "start": 881,
+            "end": 939,
+            "symbol": "main pane container"
+          }
+        ],
+        "notes": "Exact scroll mechanics and defects are delegated to surface-reconciliation-conversation; this row owns placement/focus only."
+      },
+      "earlier_audit": "Transcript investigation and user jump-scrolling report already cover behavior; no new defect count here.",
+      "missing_coverage": "Dropped text/file target and focus retention while a panel is present; jump under streaming/large transcript must be replayed.",
+      "ferrite_acceptance": "Natural drop/click should land in the visible target, preserve input focus, and scroll predictably without an obscured or stale button."
+    },
+    {
+      "id": "SH15",
+      "name": "Thread-owned dialogs and media overlay",
+      "purpose": "Keep consequential actions and media tied to the selected conversation.",
+      "placement": "Modal dialogs: device setup, PR preparation, branch restore, revert/edit-from-here, link PR; expanded image/media overlay.",
+      "triggers": "Explicit thread action, image click, PR/device setup flow; close/cancel/confirm.",
+      "coexistence": "Most hosts mount only for nonembedded ChatView; RevertConfirmHost and ExpandedImageDialogHost also mount for embedded chat. They overlay the existing route.",
+      "responsive": "Shared dialog viewport; expanded media uses 92vw/92vh with narrower device rules. Details do not become a dialog merely because some items open dialogs.",
+      "visibility_persistence": "ChatOverlayHosts atom values include thread identity and register cleanup on thread change. Expanded media owns/revokes blob URLs. Link PR has its own thread-ref atom and pending close guard; do not assume all hosts have identical lifetime.",
+      "motion_focus_lifetime": "Action focus uses shared Dialog behavior; thread-scoped dialogs close on scope change where registered. Media and confirmations use their own close/complete cleanup.",
+      "t3": [
+        {
+          "path": "apps/web/src/components/chat/ChatOverlayHosts.tsx",
+          "start": 37,
+          "end": 237,
+          "symbol": "thread-scoped hosts",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/ChatOverlayHosts.tsx#L37-L237"
+        },
+        {
+          "path": "apps/web/src/components/chat/ExpandedImageDialog.tsx",
+          "start": 162,
+          "end": 174,
+          "symbol": "media dialog",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/ExpandedImageDialog.tsx#L162-L174"
+        },
+        {
+          "path": "apps/web/src/components/chat/ExpandedImageDialog.tsx",
+          "start": 298,
+          "end": 332,
+          "symbol": "thread ownership/blob lifecycle",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/ExpandedImageDialog.tsx#L298-L332"
+        },
+        {
+          "path": "apps/web/src/components/pullRequest/LinkPullRequestDialog.tsx",
+          "start": 27,
+          "end": 54,
+          "symbol": "link PR atom/host",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/pullRequest/LinkPullRequestDialog.tsx#L27-L54"
+        },
+        {
+          "path": "apps/web/src/components/pullRequest/LinkPullRequestDialog.tsx",
+          "start": 123,
+          "end": 139,
+          "symbol": "pending/initial focus",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/pullRequest/LinkPullRequestDialog.tsx#L123-L139"
+        },
+        {
+          "path": "apps/web/src/components/ChatView.tsx",
+          "start": 3995,
+          "end": 4003,
+          "symbol": "final overlay host children",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/ChatView.tsx#L3995-L4003"
+        }
+      ],
+      "ferrite": {
+        "relation": "Generic dialogs/media and action flows exist; specific workflow equivalence must be proved individually.",
+        "anchors": [
+          {
+            "path": "crates/ferrite-cockpit/src/cockpit/lightbox.rs",
+            "start": 60,
+            "end": 95,
+            "symbol": "lightbox_element"
+          },
+          {
+            "path": "crates/ferrite-cockpit/src/cockpit.rs",
+            "start": 10657,
+            "end": 10673,
+            "symbol": "overlay/dialog layers"
+          }
+        ],
+        "notes": "A common modal layer is not proof that PR preparation/linking, restore and revert workflows work."
+      },
+      "earlier_audit": "PR/media reports cover individual capabilities; prior broad inventory did not enumerate per-thread host ownership.",
+      "missing_coverage": "Cancel/confirm, thread switch, stale data, focus restoration and loading close guards for each host.",
+      "ferrite_acceptance": "A dialog must retain the originating thread identity, prevent stale confirmation after switching threads, return focus and expose failure without silently closing."
+    },
+    {
+      "id": "SH16",
+      "name": "Command palette and search modes",
+      "purpose": "Offer global commands and file/content search without becoming a main route.",
+      "placement": "Modal CommandDialog with command/files/content modes over inert app children.",
+      "triggers": "Palette command/shortcut; nested mode selection; Escape backs out of a mode before closing where handled.",
+      "coexistence": "Wraps AppSidebarLayout children; ThreadContextDragGhost is a sibling overlay. Settings/app-modal return is handled separately from composer focus.",
+      "responsive": "Content mode uses a fixed-height layout; command/files modes share modal framing. Detailed result rendering is outside shell scope.",
+      "visibility_persistence": "Palette open/mode state owns visibility; local result lifecycle not equated to route navigation.",
+      "motion_focus_lifetime": "App subtree becomes inert while open; close restores workspace/composer except during app modal. Escape mode handling differs from dismiss-all.",
+      "t3": [
+        {
+          "path": "apps/web/src/components/CommandPalette.tsx",
+          "start": 309,
+          "end": 400,
+          "symbol": "CommandPalette / CommandDialog",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/CommandPalette.tsx#L309-L400"
+        }
+      ],
+      "ferrite": {
+        "relation": "Palette exists, with its own focus and exit motion.",
+        "anchors": [
+          {
+            "path": "crates/ferrite-cockpit/src/cockpit/palette.rs",
+            "start": 190,
+            "end": 250,
+            "symbol": "toggle/open/close palette"
+          },
+          {
+            "path": "crates/ferrite-cockpit/src/cockpit/palette.rs",
+            "start": 1415,
+            "end": 1499,
+            "symbol": "sheet_floats"
+          }
+        ],
+        "notes": "Ferrite palette is board-bounded overlay with its own retained exit view. Mode/command coverage is separate."
+      },
+      "earlier_audit": "projects-navigation.md/input-focus.md cover palette commands; live source report covers project search.",
+      "missing_coverage": "Nested Escape, cancellation from another modal, panel-focused commands and stale-result selection.",
+      "ferrite_acceptance": "Palette should accept keys immediately, route actions to the intended thread/tool, and restore the same input or pane after cancel."
+    },
+    {
+      "id": "SH17",
+      "name": "Settings route modal and settings child routes",
+      "purpose": "Configure the app while preserving the underlying working conversation.",
+      "placement": "AppRouteModal with settings sidebar, breadcrumb/header and route Outlet.",
+      "triggers": "Settings navigation/shortcut; section selection; Escape/backdrop close navigates to remembered nonmodal page after exit.",
+      "coexistence": "Background ThreadRouteView stays mounted inert. Theme editor may be a separate floating sibling. A route does not automatically mean an independent screen design.",
+      "responsive": "AppRouteModal is full-screen at small sizes; larger viewport has padding, max80rem width/max60rem height. Setting section scope notices can replace its content.",
+      "visibility_persistence": "Location and remembered return href own visibility; settings scope/project availability determine section branch. Beta/Integrations/Storage are redirect aliases; Access/Connections share one component with different view props.",
+      "motion_focus_lifetime": "Initial focus stays on dialog popup rather than a field; close blurs field and waits for exit before return. Popup fades/scales over150ms; finalFocus is deliberately false because route restoration owns focus.",
+      "t3": [
+        {
+          "path": "apps/web/src/components/AppRouteModal.tsx",
+          "start": 11,
+          "end": 82,
+          "symbol": "route modal lifetime/focus/layout",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/AppRouteModal.tsx#L11-L82"
+        },
+        {
+          "path": "apps/web/src/routes/_chat.settings.tsx",
+          "start": 45,
+          "end": 143,
+          "symbol": "settings route/scope/body",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/routes/_chat.settings.tsx#L45-L143"
+        },
+        {
+          "path": "apps/web/src/components/sidebar/mainAppLocation.ts",
+          "start": 6,
+          "end": 44,
+          "symbol": "modal route/return href",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/sidebar/mainAppLocation.ts#L6-L44"
+        },
+        {
+          "path": "apps/web/src/routes/_chat.settings.secrets.tsx",
+          "start": 6,
+          "end": 10,
+          "symbol": "Secrets feature gate",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/routes/_chat.settings.secrets.tsx#L6-L10"
+        },
+        {
+          "path": "apps/web/src/routes/_chat.settings.access.tsx",
+          "start": 4,
+          "end": 10,
+          "symbol": "Access view",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/routes/_chat.settings.access.tsx#L4-L10"
+        },
+        {
+          "path": "apps/web/src/routes/_chat.settings.connections.tsx",
+          "start": 4,
+          "end": 10,
+          "symbol": "Environments view",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/routes/_chat.settings.connections.tsx#L4-L10"
+        },
+        {
+          "path": "apps/web/src/routes/_chat.settings.labs.tsx",
+          "start": 1,
+          "end": 4,
+          "symbol": "Labs route",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/routes/_chat.settings.labs.tsx#L1-L4"
+        },
+        {
+          "path": "apps/web/src/routes/_chat.settings.snap-shot.tsx",
+          "start": 5,
+          "end": 10,
+          "symbol": "Snap Shot route",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/routes/_chat.settings.snap-shot.tsx#L5-L10"
+        },
+        {
+          "path": "apps/web/src/routes/_chat.settings.open-source-licenses.tsx",
+          "start": 3,
+          "end": 7,
+          "symbol": "licenses route",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/routes/_chat.settings.open-source-licenses.tsx#L3-L7"
+        }
+      ],
+      "ferrite": {
+        "relation": "Settings surface exists; route-modal lifetime, return destination and child inventory are not equivalent by name.",
+        "anchors": [
+          {
+            "path": "crates/ferrite-cockpit/src/cockpit.rs",
+            "start": 4456,
+            "end": 4495,
+            "symbol": "settings_element"
+          },
+          {
+            "path": "crates/ferrite-cockpit/src/cockpit.rs",
+            "start": 10664,
+            "end": 10664,
+            "symbol": "settings layer"
+          }
+        ],
+        "notes": "This anchor describes the in-cockpit settings surface; it is not a claim that every Ferrite settings launch uses only this path."
+      },
+      "earlier_audit": "providers-settings.md and parent live run inspected many sections; '21 inspected' is a runtime count, not the installed route count or proof of all conditionals.",
+      "missing_coverage": "Labs availability, feature-gated Secrets, licenses child page, Snap Shot and aliases must be tracked distinctly; inner panels remain the settings worker’s boundary.",
+      "ferrite_acceptance": "Open Settings from a tool, change section and cancel: return to the same work with state/focus intact. Test deep link/disabled-section fallback and small window independently."
+    },
+    {
+      "id": "SH18",
+      "name": "Usage route modal and subordinate dialogs",
+      "purpose": "Provide aggregate usage/limits analysis as its own destination.",
+      "placement": "AppRouteModal separate from Settings; nested UsageModelDialogHost and price override dialog.",
+      "triggers": "Usage navigation; model breakdown/price customization; limits versus overview selection.",
+      "coexistence": "Background conversation is preserved like Settings. Usage model dialog is mounted only outside limits mode; price dialog has separate state.",
+      "responsive": "Same responsive AppRouteModal; body distinguishes no environment, loading skeleton, inaccessible data, limits and overview.",
+      "visibility_persistence": "Route owns surface; data/mode and dialog state own subordinate visibility. No persistence assertion for uninspected inner controls.",
+      "motion_focus_lifetime": "Same route close/focus model; loading/empty/error are distinct visible branches, not evidence of a missing Usage page.",
+      "t3": [
+        {
+          "path": "apps/web/src/routes/_chat.usage.tsx",
+          "start": 1,
+          "end": 8,
+          "symbol": "Usage route",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/routes/_chat.usage.tsx#L1-L8"
+        },
+        {
+          "path": "apps/web/src/components/usage/UsagePage.tsx",
+          "start": 504,
+          "end": 581,
+          "symbol": "UsagePage modal branches",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/usage/UsagePage.tsx#L504-L581"
+        }
+      ],
+      "ferrite": {
+        "relation": "Different scope and placement: Ferrite footer Usage is a provider limits popover.",
+        "anchors": [
+          {
+            "path": "crates/ferrite-cockpit/src/cockpit/nav_chrome.rs",
+            "start": 341,
+            "end": 350,
+            "symbol": "plan_usage_popover"
+          }
+        ],
+        "notes": "Shared account-limit content does not equal the aggregate Usage route."
+      },
+      "earlier_audit": "Earlier providers/settings inventory includes usage capability gaps; this reconciliation makes destination/subdialog composition explicit.",
+      "missing_coverage": "Data freshness, empty/access-denied states and nested close/return are not covered by opening one usage popover.",
+      "ferrite_acceptance": "Keep account-limit quick access distinct from any aggregate Usage destination; navigation labels must describe the reachable surface and data scope."
+    },
+    {
+      "id": "SH19",
+      "name": "Theme editor floating session",
+      "purpose": "Preview/edit theme while viewing the actual app underneath.",
+      "placement": "Movable/resizable fixed floating panel, z110; minimizable dialog semantics, no modal backdrop in this component.",
+      "triggers": "Theme-edit session opened from settings; drag header, resize handle, minimize, close.",
+      "coexistence": "Mounted beside welcome/app/first-run branches, so navigation does not discard an active editor session. It can coexist with the live app and route modals.",
+      "responsive": "Default width min(26rem, viewport minus2rem), max height min(42rem, viewport minus6rem); local position/size move the panel.",
+      "visibility_persistence": "Host uses session store; per-session local minimized/position/size. No geometry persistence is established in this file. Closing restores or applies session theme through host logic.",
+      "motion_focus_lifetime": "Lazy/Suspense panel; session key remounts a different session, not every route. This is not the same surface as an Appearance settings form.",
+      "t3": [
+        {
+          "path": "apps/web/src/routes/__root.tsx",
+          "start": 208,
+          "end": 230,
+          "symbol": "ThemeEditorHost sibling",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/routes/__root.tsx#L208-L230"
+        },
+        {
+          "path": "apps/web/src/components/settings/ThemeEditorHost.tsx",
+          "start": 25,
+          "end": 113,
+          "symbol": "session host",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/settings/ThemeEditorHost.tsx#L25-L113"
+        },
+        {
+          "path": "apps/web/src/components/settings/ThemeEditorPanel.tsx",
+          "start": 352,
+          "end": 360,
+          "symbol": "local geometry",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/settings/ThemeEditorPanel.tsx#L352-L360"
+        },
+        {
+          "path": "apps/web/src/components/settings/ThemeEditorPanel.tsx",
+          "start": 1113,
+          "end": 1140,
+          "symbol": "floating dialog/header",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/settings/ThemeEditorPanel.tsx#L1113-L1140"
+        },
+        {
+          "path": "apps/web/src/components/settings/ThemeEditorPanel.tsx",
+          "start": 1235,
+          "end": 1241,
+          "symbol": "resize handle",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/settings/ThemeEditorPanel.tsx#L1235-L1241"
+        }
+      ],
+      "ferrite": {
+        "relation": "No equivalent independently verified in inspected Ferrite shell; existing settings is only a partial content counterpart.",
+        "anchors": [
+          {
+            "path": "crates/ferrite-cockpit/src/cockpit.rs",
+            "start": 4456,
+            "end": 4495,
+            "symbol": "settings_element"
+          }
+        ],
+        "notes": "This is source coverage, not a recommendation to build a theme editor before fixing ordinary interactions."
+      },
+      "earlier_audit": "providers-settings.md noted theme capabilities; standalone floating composition was not a complete audited journey.",
+      "missing_coverage": "No runtime pass for floating/minimizing/resizing/restoring editor; keep it out of confirmed defect count.",
+      "ferrite_acceptance": "If theme customization is claimed, verify preview/cancel/apply lifetime against the real app; do not count an Appearance page as the same composition."
+    },
+    {
+      "id": "SH20",
+      "name": "Global confirmation and custom snooze hosts",
+      "purpose": "Present cross-route confirmations and date/duration scheduling without tying them to a transient menu.",
+      "placement": "Global AlertDialog/confirm host and custom-snooze Dialog with subordinate date picker.",
+      "triggers": "Confirm request; custom-snooze request from thread menu; explicit accept/cancel/date selection.",
+      "coexistence": "Mounted once in appHosts above the app shell, callable from different surfaces. A mounted host is normally invisible.",
+      "responsive": "Shared Dialog/AlertDialog constraints; snooze max-md with calendar popover.",
+      "visibility_persistence": "Confirm store status controls dialog; close completion cleans request. New snooze request resolves previous request null; unmount also resolves pending request null.",
+      "motion_focus_lifetime": "Confirm focus targets action as configured; cancel/close cleanup is explicit. Snooze’s pending promise lifetime must not survive its owner invisibly.",
+      "t3": [
+        {
+          "path": "apps/web/src/routes/__root.tsx",
+          "start": 189,
+          "end": 195,
+          "symbol": "global action hosts",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/routes/__root.tsx#L189-L195"
+        },
+        {
+          "path": "apps/web/src/components/ConfirmDialogHost.tsx",
+          "start": 54,
+          "end": 99,
+          "symbol": "ConfirmDialogHost",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/ConfirmDialogHost.tsx#L54-L99"
+        },
+        {
+          "path": "apps/web/src/components/CustomSnoozeDialog.tsx",
+          "start": 39,
+          "end": 88,
+          "symbol": "request/host/dialog",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/CustomSnoozeDialog.tsx#L39-L88"
+        }
+      ],
+      "ferrite": {
+        "relation": "Generic modal infrastructure exists; exact snooze/confirmation workflows not established by it.",
+        "anchors": [
+          {
+            "path": "crates/ferrite-cockpit/src/cockpit.rs",
+            "start": 10672,
+            "end": 10673,
+            "symbol": "Root dialog/notification layers"
+          }
+        ],
+        "notes": "Compare particular actions when exercised; no repository-wide absence claim."
+      },
+      "earlier_audit": "Earlier thread/navigation inventory covered snooze concepts; no complete global host lifetime trace located.",
+      "missing_coverage": "Request replacement, route change, cancel, keyboard focus, nested picker Escape.",
+      "ferrite_acceptance": "No invisible pending confirmation or stale thread action may remain after cancel or navigation."
+    },
+    {
+      "id": "SH21",
+      "name": "Guest sharing and pending guest work",
+      "purpose": "Create/view a share session and expose its state at relevant conversation locations.",
+      "placement": "Global GuestShareDialog; small ChatHeader GuestShareIndicator; guest pending messages in timeline footer; guest route bypasses ordinary shell.",
+      "triggers": "Share action opens thread-ref dialog; create/copy/revoke states; guest route entry; pending guest request.",
+      "coexistence": "One feature deliberately has multiple placements; indicator/dialog/footer are not substitute surfaces.",
+      "responsive": "Dialog uses shared responsive layout; indicator/footer follow header/timeline constraints. Guest route chooses its own Outlet branch.",
+      "visibility_persistence": "Global atom stores thread ref; host returns null when absent and keys by environment/thread. Header indicator only for server thread. Pending messages only for relevant active server state.",
+      "motion_focus_lifetime": "Dialog lifetime follows share request/thread identity; header and footer remain in their normal surfaces. No runtime sharing operation performed here.",
+      "t3": [
+        {
+          "path": "apps/web/src/routes/__root.tsx",
+          "start": 155,
+          "end": 164,
+          "symbol": "guest/auth route branch",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/routes/__root.tsx#L155-L164"
+        },
+        {
+          "path": "apps/web/src/components/chat/GuestShareControls.tsx",
+          "start": 48,
+          "end": 57,
+          "symbol": "GuestShareDialogHost",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/GuestShareControls.tsx#L48-L57"
+        },
+        {
+          "path": "apps/web/src/components/chat/GuestShareControls.tsx",
+          "start": 105,
+          "end": 146,
+          "symbol": "dialog states",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/GuestShareControls.tsx#L105-L146"
+        },
+        {
+          "path": "apps/web/src/components/chat/GuestShareControls.tsx",
+          "start": 177,
+          "end": 220,
+          "symbol": "indicator/pending messages",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/GuestShareControls.tsx#L177-L220"
+        },
+        {
+          "path": "apps/web/src/components/chat/ChatHeader.tsx",
+          "start": 396,
+          "end": 397,
+          "symbol": "header indicator",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/ChatHeader.tsx#L396-L397"
+        },
+        {
+          "path": "apps/web/src/components/ChatView.tsx",
+          "start": 3091,
+          "end": 3124,
+          "symbol": "guest footer branch",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/ChatView.tsx#L3091-L3124"
+        }
+      ],
+      "ferrite": {
+        "relation": "No verified like-for-like guest sharing workflow in inspected Ferrite shell.",
+        "anchors": [
+          {
+            "path": "crates/ferrite-cockpit/src/cockpit.rs",
+            "start": 10618,
+            "end": 10673,
+            "symbol": "enumerated root composition"
+          }
+        ],
+        "notes": "Root overlay capability alone does not establish sharing."
+      },
+      "earlier_audit": "No full guest sharing composition walkthrough located in the earlier shell audit.",
+      "missing_coverage": "Guest route, owner dialog, indicator, pending approval and revocation remain unexercised.",
+      "ferrite_acceptance": "Keep this as bounded coverage debt unless sharing is in required scope; do not inflate existing interaction defects with an untested feature wish."
+    },
+    {
+      "id": "SH22",
+      "name": "Cross-app and project-machine global dialogs",
+      "purpose": "Configure use in another app and copy/add a project to another machine from multiple entry points.",
+      "placement": "Global UseInAnotherApp wizard and AddProjectToMachine Dialog.",
+      "triggers": "Command/menu/settings public opener with environment/project request; completion/cancel.",
+      "coexistence": "Root hosts are available regardless current thread. Wizard/request content is not a right-panel tool.",
+      "responsive": "Shared dialog framing; add-project dialog max-xl. Environment/cloud availability can replace wizard content.",
+      "visibility_persistence": "UseInAnotherApp keeps request alive in atom; add-project request store has session key and closes if the project disappears.",
+      "motion_focus_lifetime": "Session key resets dialog state; source owner deletion invalidates the project request. No external app config or project copy performed.",
+      "t3": [
+        {
+          "path": "apps/web/src/components/mcp/UseInAnotherAppDialog.tsx",
+          "start": 59,
+          "end": 81,
+          "symbol": "request/host/WizardDialog",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/mcp/UseInAnotherAppDialog.tsx#L59-L81"
+        },
+        {
+          "path": "apps/web/src/components/AddProjectToMachineDialog.tsx",
+          "start": 62,
+          "end": 90,
+          "symbol": "request session/ownership",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/AddProjectToMachineDialog.tsx#L62-L90"
+        },
+        {
+          "path": "apps/web/src/components/AddProjectToMachineDialog.tsx",
+          "start": 212,
+          "end": 225,
+          "symbol": "Dialog framing",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/AddProjectToMachineDialog.tsx#L212-L225"
+        },
+        {
+          "path": "apps/web/src/routes/__root.tsx",
+          "start": 194,
+          "end": 195,
+          "symbol": "root hosts",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/routes/__root.tsx#L194-L195"
+        }
+      ],
+      "ferrite": {
+        "relation": "No exact matching wizard composition verified; Ferrite project editor/dialog mechanism is only a partial infrastructure counterpart.",
+        "anchors": [
+          {
+            "path": "crates/ferrite-cockpit/src/cockpit.rs",
+            "start": 10665,
+            "end": 10673,
+            "symbol": "project editor and global dialog layer"
+          }
+        ],
+        "notes": "Do not infer connection/project transfer parity from generic machine or project settings."
+      },
+      "earlier_audit": "providers-settings.md covers machine capability differences; this adds explicit global request ownership.",
+      "missing_coverage": "Availability gates, stale project/environment, cancellation and completion are source-only here.",
+      "ferrite_acceptance": "Any offered cross-machine action must name the destination, remain bound to the correct project, and show completion/failure; no stale modal after source deletion."
+    },
+    {
+      "id": "SH23",
+      "name": "Connection onboarding, relay installer and SSH prompt",
+      "purpose": "Guide account/device connection and answer desktop authentication prompts.",
+      "placement": "Separate root dialogs/wizard; first-run recovery is SH01, not this modal group.",
+      "triggers": "Signed-in account transition; request to install relay; desktop bridge password request queue.",
+      "coexistence": "Root appHosts siblings, independent of selected thread; only one queued SSH request is shown at a time.",
+      "responsive": "Shared dialog constraints; SSH max-md with password input initial focus; connection wizard may be unavailable without cloud config.",
+      "visibility_persistence": "Onboarding has account/opt-out state and local storage. Account change closes current request. Relay retains closing view until transition completes. SSH is request-ID/queue scoped.",
+      "motion_focus_lifetime": "Relay allows cancel/close in confirming state, not active installing state. SSH request key isolates input and hides normal close control; result returns through bridge. No credential entered by this worker.",
+      "t3": [
+        {
+          "path": "apps/web/src/components/cloud/ConnectOnboardingDialog.tsx",
+          "start": 42,
+          "end": 55,
+          "symbol": "availability/opt-out",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/cloud/ConnectOnboardingDialog.tsx#L42-L55"
+        },
+        {
+          "path": "apps/web/src/components/cloud/ConnectOnboardingDialog.tsx",
+          "start": 104,
+          "end": 136,
+          "symbol": "account request gating",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/cloud/ConnectOnboardingDialog.tsx#L104-L136"
+        },
+        {
+          "path": "apps/web/src/components/cloud/RelayClientInstallDialog.tsx",
+          "start": 35,
+          "end": 63,
+          "symbol": "install modal lifecycle",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/cloud/RelayClientInstallDialog.tsx#L35-L63"
+        },
+        {
+          "path": "apps/web/src/components/desktop/SshPasswordPromptDialog.tsx",
+          "start": 49,
+          "end": 85,
+          "symbol": "desktop request queue",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/desktop/SshPasswordPromptDialog.tsx#L49-L85"
+        },
+        {
+          "path": "apps/web/src/components/desktop/SshPasswordPromptDialog.tsx",
+          "start": 156,
+          "end": 164,
+          "symbol": "prompt focus/frame",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/desktop/SshPasswordPromptDialog.tsx#L156-L164"
+        }
+      ],
+      "ferrite": {
+        "relation": "Ferrite has a different SSH connection flow; specific T3 dialogs are not established counterparts.",
+        "anchors": [
+          {
+            "path": "crates/ferrite-core/src/machine.rs",
+            "start": 1,
+            "end": 7,
+            "symbol": "SSH machine design"
+          },
+          {
+            "path": "crates/ferrite-core/src/machine.rs",
+            "start": 354,
+            "end": 380,
+            "symbol": "SSH invocation"
+          },
+          {
+            "path": "crates/ferrite-cockpit/src/cockpit.rs",
+            "start": 10672,
+            "end": 10673,
+            "symbol": "generic dialog layer"
+          }
+        ],
+        "notes": "Existing providers-settings report describes remote sign-in in terminal rather than stored-password flow; not a new claim of missing connection support."
+      },
+      "earlier_audit": "providers-settings.md covers machine/relay capability differences; modal ownership/queue was not previously enumerated.",
+      "missing_coverage": "Install failure/cancel boundaries, account switch, repeated SSH prompts and stale request cleanup are unexercised.",
+      "ferrite_acceptance": "Connection failures should stay actionable and preserve work; no blocked invisible prompt or repeated lost-focus credential dialog."
+    },
+    {
+      "id": "SH24",
+      "name": "Toast layers and background accessibility announcement",
+      "purpose": "Deliver transient global feedback and announce other thread state without navigating away.",
+      "placement": "Global top-right toast viewport and anchored toasts; separate sr-only live region outside collapsed sidebar.",
+      "triggers": "Toast creation; background listed/nonarchived other-thread state change.",
+      "coexistence": "Toast providers are above all root branches. BackgroundThreadAnnouncer remains outside inert navigation so collapse does not suppress announcement. It is not the Background Work dashboard.",
+      "responsive": "Toast viewport constrained near top-right; anchored toasts follow their anchor. Screen-reader announcement has no visible geometry.",
+      "visibility_persistence": "Toast store owns lifetime; announcer compares eligible background thread transitions. Neither changes selected route by itself.",
+      "motion_focus_lifetime": "Toast transitions specify transform/opacity .5s and height .15s in inspected CSS. Announcer is aria-live polite; no screen-reader runtime pass.",
+      "t3": [
+        {
+          "path": "apps/web/src/routes/__root.tsx",
+          "start": 130,
+          "end": 139,
+          "symbol": "persistent toast providers",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/routes/__root.tsx#L130-L139"
+        },
+        {
+          "path": "apps/web/src/components/ui/toast.tsx",
+          "start": 556,
+          "end": 614,
+          "symbol": "toast provider/viewport/motion",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/ui/toast.tsx#L556-L614"
+        },
+        {
+          "path": "apps/web/src/components/ui/toast.tsx",
+          "start": 714,
+          "end": 744,
+          "symbol": "anchored provider",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/ui/toast.tsx#L714-L744"
+        },
+        {
+          "path": "apps/web/src/components/BackgroundThreadAnnouncer.tsx",
+          "start": 32,
+          "end": 90,
+          "symbol": "eligibility / live region",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/BackgroundThreadAnnouncer.tsx#L32-L90"
+        },
+        {
+          "path": "apps/web/src/components/AppSidebarLayout.tsx",
+          "start": 491,
+          "end": 494,
+          "symbol": "announcer sibling",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/AppSidebarLayout.tsx#L491-L494"
+        }
+      ],
+      "ferrite": {
+        "relation": "Ferrite toasts and Background Work surface exist; these do not establish a background announcement counterpart.",
+        "anchors": [
+          {
+            "path": "crates/ferrite-cockpit/src/cockpit/palette.rs",
+            "start": 1504,
+            "end": 1562,
+            "symbol": "toast_float"
+          },
+          {
+            "path": "crates/ferrite-cockpit/src/cockpit/background_work.rs",
+            "start": 253,
+            "end": 280,
+            "symbol": "background_dialog_element"
+          },
+          {
+            "path": "crates/ferrite-cockpit/src/cockpit/panel.rs",
+            "start": 672,
+            "end": 683,
+            "symbol": "Background panel surface"
+          }
+        ],
+        "notes": "A background task status should not silently route the user into Background Work; navigation and notification are different effects."
+      },
+      "earlier_audit": "subagents-background.md and motion.md cover status/notifications; whole-shell separation clarifies the user’s unwanted background-navigation concern.",
+      "missing_coverage": "Fresh event-to-navigation trace needed for the reported unexpected switch; source-only host placement does not prove its trigger.",
+      "ferrite_acceptance": "Completion/error feedback must not change the current conversation/tool unless the user activates an explicit destination; collapsed navigation must not hide essential feedback."
+    },
+    {
+      "id": "SH25",
+      "name": "History swipe feedback and hold-to-quit hint",
+      "purpose": "Show navigation gesture progress and protected quit-key instruction without changing layout.",
+      "placement": "Desktop edge swipe indicators at z100; route-independent top-center quit hint at z100, pointer-events-none.",
+      "triggers": "Electron wheel/trackpad history gesture; desktop quit bridge key-down/up/double-click mode.",
+      "coexistence": "Swipe indicator overlays current route; QuitHoldOverlay is above router as AppRoot sibling and may appear on any route.",
+      "responsive": "Swipe uses viewport edge; quit hint centers at top22%. No modal or layout reservation.",
+      "visibility_persistence": "Swipe gesture local state. Quit module external-store visibility with 1200ms hold hint linger; double-click release hides immediately. Bridge subscription cleaned when last listener unmounts.",
+      "motion_focus_lifetime": "Swipe release fades/translates200ms, icon feedback100ms; quit hint is status role and does not capture pointer/focus. Do not infer a hold animation from its name.",
+      "t3": [
+        {
+          "path": "apps/web/src/components/HistorySwipeNavigation.tsx",
+          "start": 112,
+          "end": 190,
+          "symbol": "gesture / indicator",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/HistorySwipeNavigation.tsx#L112-L190"
+        },
+        {
+          "path": "apps/web/src/components/QuitHoldOverlay.tsx",
+          "start": 5,
+          "end": 46,
+          "symbol": "bridge/lifetime",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/QuitHoldOverlay.tsx#L5-L46"
+        },
+        {
+          "path": "apps/web/src/components/QuitHoldOverlay.tsx",
+          "start": 51,
+          "end": 68,
+          "symbol": "status overlay",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/QuitHoldOverlay.tsx#L51-L68"
+        },
+        {
+          "path": "apps/web/src/AppRoot.tsx",
+          "start": 12,
+          "end": 14,
+          "symbol": "outside-router placement",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/AppRoot.tsx#L12-L14"
+        }
+      ],
+      "ferrite": {
+        "relation": "History buttons exist; gesture feedback and quit hint equivalence are not verified.",
+        "anchors": [
+          {
+            "path": "crates/ferrite-cockpit/src/cockpit/view_head.rs",
+            "start": 105,
+            "end": 128,
+            "symbol": "history arrows placement"
+          },
+          {
+            "path": "crates/ferrite-cockpit/src/cockpit.rs",
+            "start": 10647,
+            "end": 10650,
+            "symbol": "title/history/nav overlays"
+          }
+        ],
+        "notes": "Keyboard history support is not proof of trackpad gesture affordance. No recommendation to prioritize quit hint over reported interaction defects."
+      },
+      "earlier_audit": "motion.md explicitly left history-swipe counterpart unestablished; quit overlay ancestor was omitted from earlier root inventory.",
+      "missing_coverage": "Native gesture, interrupted gesture and protected quit require controlled runtime testing; no pass claimed.",
+      "ferrite_acceptance": "History gestures must not trigger while scrolling the intended pane or steal focus; any quit confirmation should be visible without a hidden modal."
+    }
+  ],
+  "render_ledger": [
+    {
+      "root": "main.tsx > AppRoot",
+      "anchors": [
+        {
+          "path": "apps/web/src/main.tsx",
+          "start": 27,
+          "end": 51,
+          "symbol": "startup/ManagedAuthShell",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/main.tsx#L27-L51"
+        },
+        {
+          "path": "apps/web/src/AppRoot.tsx",
+          "start": 8,
+          "end": 16,
+          "symbol": "AppRoot",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/AppRoot.tsx#L8-L16"
+        }
+      ],
+      "children": [
+        "ManagedAuthShell only when publishable key and cloud configuration; Electron/browser implementation chosen by runtime.",
+        "AppAtomRegistryProvider contains RouterProvider, ElectronBrowserHost, QuitHoldOverlay as siblings. Browser host lifetime is delegated to browser reconciliation, not owned by route layout."
+      ]
+    },
+    {
+      "root": "__root RootRouteBranch",
+      "anchors": [
+        {
+          "path": "apps/web/src/routes/__root.tsx",
+          "start": 130,
+          "end": 230,
+          "symbol": "RootRouteBranch",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/routes/__root.tsx#L130-L230"
+        }
+      ],
+      "children": [
+        "ToastProvider > AnchoredToastProvider wrap route branch.",
+        "Guest path: Outlet. Pair/connect/connect-agent/approve-agent paths: Outlet. Hosted prompt landing: PromptLinkLanding. Unauthenticated: Outlet. Welcome: appHosts + appShell. Normal app: FirstRunGate containing appHosts, EventRouter when primary authentication exists, and appShell.",
+        "appHosts: DesktopAppActivationCoordinator when primary authenticated; DesktopWebLinkCoordinator when authenticated or local environment disabled; RunningThreadKeepAlive only Electron; RelayClientInstallDialog; ConnectOnboardingDialog; SshPasswordPromptDialog; SnapShotCoordinator; ReopenClosedViewShortcut; ConfirmDialogHost; CustomSnoozeDialogHost; GuestShareDialogHost; ProjectCloneToastCoordinator; AddProjectToMachineDialogHost; UseInAnotherAppDialogHost; DevReplayHost only DEV + authentication.",
+        "appShell: CommandPalette > AppSidebarLayout(showSidebar=!welcome) > Outlet.",
+        "ChatGptWelcomeCoordinator plus ThemeEditorHost sit at branch-level; ThemeEditorHost remains outside welcome/app FirstRunGate choice.",
+        "Separate root route error and not-found components are main-page branches, not transient workspace panels. Coordinators/services above are not each counted as a visible UI surface."
+      ]
+    },
+    {
+      "root": "AppSidebarLayout",
+      "anchors": [
+        {
+          "path": "apps/web/src/components/AppSidebarLayout.tsx",
+          "start": 457,
+          "end": 496,
+          "symbol": "AppSidebarLayout",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/AppSidebarLayout.tsx#L457-L496"
+        }
+      ],
+      "children": [
+        "PanelAnimationSuppressionProvider > SidebarProvider.",
+        "When showSidebar: SidebarBrandWidthProbe (measurement only), left Sidebar > ThreadSidebar + SidebarRail.",
+        "Routed children always occupy sibling slot.",
+        "BackgroundThreadAnnouncer; SidebarControl(showSidebar); HistorySwipeNavigation only Electron.",
+        "Sidebar chooses noncollapsible, mobile Sheet, or desktop offcanvas branch. Collapsed desktop subtree becomes inert; mobile sheet state is separate."
+      ]
+    },
+    {
+      "root": "ThreadSidebar inner boundary",
+      "anchors": [
+        {
+          "path": "apps/web/src/components/Sidebar.tsx",
+          "start": 2967,
+          "end": 2985,
+          "symbol": "header",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/Sidebar.tsx#L2967-L2985"
+        },
+        {
+          "path": "apps/web/src/components/Sidebar.tsx",
+          "start": 3205,
+          "end": 3245,
+          "symbol": "list branches",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/Sidebar.tsx#L3205-L3245"
+        },
+        {
+          "path": "apps/web/src/components/Sidebar.tsx",
+          "start": 3438,
+          "end": 3653,
+          "symbol": "rows/footer",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/Sidebar.tsx#L3438-L3653"
+        }
+      ],
+      "children": [
+        "SidebarChromeHeader; SidebarContent > SidebarThreadHeader/project scope and SidebarGroup; SidebarChromeFooter.",
+        "Search branch versus normal sortable groups. Normal branch includes thread rows, SidebarDraftBlock, project folder headers, drag boundaries, Active placeholder, Working/Snoozed/Settled section headers, Settled placeholder.",
+        "Older settled Show more/Loading/Retry button when expanded with hidden rows; empty state when no search/folders/drafts/threads, with no-project Add project action.",
+        "Leaf row context menus/project chooser internals are delegated to navigation/workflow inventories; listing this boundary does not certify every menu."
+      ]
+    },
+    {
+      "root": "_chat > ThreadRouteView",
+      "anchors": [
+        {
+          "path": "apps/web/src/routes/_chat.tsx",
+          "start": 18,
+          "end": 44,
+          "symbol": "ChatLayout",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/routes/_chat.tsx#L18-L44"
+        },
+        {
+          "path": "apps/web/src/components/ThreadRouteView.tsx",
+          "start": 159,
+          "end": 234,
+          "symbol": "ThreadRouteView",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/ThreadRouteView.tsx#L159-L234"
+        }
+      ],
+      "children": [
+        "ThreadLinkPrompt only server target and no app modal.",
+        "Shown target: retained background target during Settings/Usage, otherwise route target. ThreadRouteView if target; blank SidebarInset for app modal without target; otherwise Outlet. Modal Outlet is a sibling when modalOpen.",
+        "ThreadRouteView alternatives: hidden draft -> home redirect; valid draft -> ChatView draft; promoted draft -> ChatView server with preserved handoff key plus route redirect; missing draft -> home redirect; hidden server -> home; off-shell blocked -> waiting/conditional redirect; ready/loading with known shell -> ChatView server; otherwise no view.",
+        "SidebarInset inert while background; redirects withheld while background. Index route has hosted-empty, draft landing/error, no-project hero branches distinct from NoActiveThreadState."
+      ]
+    },
+    {
+      "root": "ChatView outer shell",
+      "anchors": [
+        {
+          "path": "apps/web/src/components/ChatView.tsx",
+          "start": 3176,
+          "end": 3183,
+          "symbol": "no active",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/ChatView.tsx#L3176-L3183"
+        },
+        {
+          "path": "apps/web/src/components/ChatView.tsx",
+          "start": 3270,
+          "end": 3380,
+          "symbol": "outer/header/canvas",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/ChatView.tsx#L3270-L3380"
+        },
+        {
+          "path": "apps/web/src/components/ChatView.tsx",
+          "start": 3480,
+          "end": 3567,
+          "symbol": "composer",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/ChatView.tsx#L3480-L3567"
+        },
+        {
+          "path": "apps/web/src/components/ChatView.tsx",
+          "start": 3733,
+          "end": 4006,
+          "symbol": "remaining shell siblings",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/ChatView.tsx#L3733-L4006"
+        }
+      ],
+      "children": [
+        "No active thread: null if embedded, otherwise NoActiveThreadState.",
+        "DeviceSetupDialogHost if !embedded; root panelLayoutControls if rightPanelControlsAtRoot && !embedded.",
+        "Chat column inert/zero-width when workspace maximized. Header only !embedded: desktop control-hit-test region when applicable, layout controls unless root/sheet owns them, separate details header control when workspace owns titlebar, ChatHeader.",
+        "ThreadFindCanvas: ThreadFind; WorkspaceFileDropOverlay only during drag; ChatBannerLane; conversationArea/WorkspaceMutationIdContext > ThreadTimeline; ScrollToEndButton only showScrollToBottom && !Find.",
+        "Composer overlay: DraftHeroHeadline when hero; ChildThreadApprovals; ComposerSurface shell/host; ProviderSubagentBar for provider child; NativeChildWorkDialog only Antigravity path; ChatComposer when not provider child; context BranchToolbar when showComposerContextStrip; detached banner stack for draft hero when banners exist.",
+        "PreviewSessionSync only eligible active nonembedded server browser context (nonvisual). ThreadPreviewMiniPlayer only shown active nonembedded frame.",
+        "BranchRestoreConfirmHost, ThreadDetailsPanel and PullRequestThreadDialogHost only !embedded.",
+        "ChatTerminalDrawers only !embedded. ChatRightPanel only present retained panel state with thread && !embedded, owning RightPanelSurfaceContent.",
+        "RevertConfirmHost even embedded; LinkPullRequestDialogHost only !embedded; ThreadVisitWatermark nonvisual; ExpandedImageDialogHost even embedded. FileMetadataThreadProvider wraps result, nonvisual.",
+        "ThreadTimeline footer independently gates pending handoff, ThreadNow/status, guest pending messages and queued run controls. Transcript/tool/message leaf renderers are owned by conversation reconciliation."
+      ]
+    },
+    {
+      "root": "ChatHeader and panel controls",
+      "anchors": [
+        {
+          "path": "apps/web/src/components/chat/ChatHeader.tsx",
+          "start": 247,
+          "end": 397,
+          "symbol": "header children",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/ChatHeader.tsx#L247-L397"
+        },
+        {
+          "path": "apps/web/src/components/chat/PanelLayoutControls.tsx",
+          "start": 57,
+          "end": 230,
+          "symbol": "controls",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/PanelLayoutControls.tsx#L57-L230"
+        }
+      ],
+      "children": [
+        "Project breadcrumb; optional parent breadcrumb; title input or title/menu trigger; origin badge when present; GuestShareIndicator only server thread.",
+        "PanelLayoutControls conditionally renders distinct Thread details, terminal drawer and right-panel controls. Maximize control is separate. ThreadPanelHeaderControl/WorkspaceTitlebarControls avoid mobile Sheet overlap and follow current header ownership."
+      ]
+    },
+    {
+      "root": "ThreadDetailsPanel / ThreadDetailsCard",
+      "anchors": [
+        {
+          "path": "apps/web/src/components/chat/ThreadDetailsPanel.tsx",
+          "start": 151,
+          "end": 307,
+          "symbol": "section gates/menu",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/ThreadDetailsPanel.tsx#L151-L307"
+        },
+        {
+          "path": "apps/web/src/components/chat/ThreadDetailsCard.tsx",
+          "start": 130,
+          "end": 196,
+          "symbol": "inline/popover",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/ThreadDetailsCard.tsx#L130-L196"
+        }
+      ],
+      "children": [
+        "Inline aside only placement && inlineOpen. Popover stays rendered but opens only mode=popover && popoverOpen; card body belongs to current mode.",
+        "Workspace section: environment only full density and enabled; Open in only nonessential + enabled + capability; scripts only enabled and project scripts defined.",
+        "Version control: branch only cwd + git repository + enabled; git section when cwd + project + git actions enabled or changes enabled with git repository.",
+        "Servers and automations only full density, nondraft and enabled. Relationships only full density, nondraft and lineage or sideChats enabled.",
+        "Usage only enabled; context only enabled with context-window data. Empty card exposes chooser. Context-menu item chooser has all visibility toggles and reset.",
+        "Twelve configured items: environment, openIn, scripts, branch, gitActions, changes, servers, automations, lineage, sideChats default enabled; usage/context default disabled. Density and capability may suppress enabled rows."
+      ]
+    },
+    {
+      "root": "RightPanelSurfaceContent",
+      "anchors": [
+        {
+          "path": "apps/web/src/components/chat/RightPanelSurfaceContent.tsx",
+          "start": 86,
+          "end": 233,
+          "symbol": "surface switch",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/RightPanelSurfaceContent.tsx#L86-L233"
+        },
+        {
+          "path": "apps/web/src/components/RightPanelTabs.tsx",
+          "start": 1529,
+          "end": 1554,
+          "symbol": "empty/body branch",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/RightPanelTabs.tsx#L1529-L1554"
+        }
+      ],
+      "children": [
+        "No active surface -> workspace launcher. Active -> preview/browser, terminal, diff, pullRequest, linked-pull-request list, sidechat, device, files or file.",
+        "Pull request capability unknown/unavailable is its own visible branch. There is no provider-Agent case in this switch; provider child main navigation is separate.",
+        "Workspace tab chrome/menus/tool internals belong to browser and workspace reconciliation. Shared terminal engine does not merge drawer and dock placements."
+      ]
+    },
+    {
+      "root": "Settings/Usage and global dialogs boundary",
+      "anchors": [
+        {
+          "path": "apps/web/src/routes/_chat.settings.tsx",
+          "start": 45,
+          "end": 143,
+          "symbol": "Settings",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/routes/_chat.settings.tsx#L45-L143"
+        },
+        {
+          "path": "apps/web/src/components/usage/UsagePage.tsx",
+          "start": 504,
+          "end": 581,
+          "symbol": "Usage",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/usage/UsagePage.tsx#L504-L581"
+        },
+        {
+          "path": "apps/web/src/routes/_chat.settings.beta.tsx",
+          "start": 1,
+          "end": 4,
+          "symbol": "alias",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/routes/_chat.settings.beta.tsx#L1-L4"
+        },
+        {
+          "path": "apps/web/src/routes/_chat.settings.integrations.tsx",
+          "start": 1,
+          "end": 4,
+          "symbol": "alias",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/routes/_chat.settings.integrations.tsx#L1-L4"
+        },
+        {
+          "path": "apps/web/src/routes/_chat.settings.storage.tsx",
+          "start": 1,
+          "end": 4,
+          "symbol": "alias",
+          "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/routes/_chat.settings.storage.tsx#L1-L4"
+        }
+      ],
+      "children": [
+        "Settings AppRouteModal: scope unavailable/ineligible notice or scoped Outlet; General-specific restore control; section header/breadcrumb.",
+        "Labs route exists; whether its navigation item is exposed is a separate availability condition. Secrets beforeLoad redirects when feature disabled. Open source licenses and Snap Shot are child pages. Access/Connections share ConnectionsSettings with different view props. Beta/Integrations/Storage are old-link aliases, not extra independent screen designs.",
+        "Usage AppRouteModal: no environment, limits, skeleton, inaccessible, overview branches; UsageModelDialogHost when !showingLimits; price overrides dialog when open.",
+        "Root-mounted dialog hosts are normally null/closed until request. SH20–SH23 enumerate visible request-driven groups; their deep inner forms are not all runtime audited.",
+        "Canonical exhaustive route/global-host registry is surface-reconciliation-completeness. This shell report does not equate route count, host count, surface count, observed screen count or defect count."
+      ]
+    }
+  ],
+  "practical_omissions": [
+    {
+      "kind": "confirmed_composition_correction",
+      "surface": "SH05",
+      "text": "Ordinary provider-child entry currently opens Ferrite's Agent panel; the observed/reference contract is a full main conversation. Repair guidance must use the full Subject/Pane path rather than certify compact child drilldown."
+    },
+    {
+      "kind": "confirmed_composition_correction",
+      "surface": "SH07",
+      "text": "Overview is not an equivalent Thread details card. The details surface needs independent visibility, compact placement, narrow fallback and coexistence with an active tool."
+    },
+    {
+      "kind": "known_placement_difference",
+      "surface": "SH09",
+      "text": "Command-J into the shared right panel cannot demonstrate the bottom drawer alongside Browser/Files. Distinguish the product decision and coexistence contract before declaring terminal parity."
+    },
+    {
+      "kind": "existing_user_report_and_source_path",
+      "surface": "SH02",
+      "text": "Ferrite sidebar snapping remains a real issue in its boolean/constant-width path. T3’s configurable motion gate must not turn this into a false negative."
+    },
+    {
+      "kind": "existing_user_report_needs_measurement",
+      "surface": "SH08",
+      "text": "Opening a massive workspace needs first-open/saved-width/clamping evidence for each tool. Existing functionality and per-tool floors do not prove a satisfactory opening size."
+    },
+    {
+      "kind": "coverage_boundary",
+      "surface": "SH10-SH25",
+      "text": "Transient/global/auxiliary surfaces are enumerated to prevent composition omissions. Unexercised source-supported hosts are not added as confirmed Ferrite defects or automatic feature priorities."
+    }
+  ],
+  "measurement_sequence": [
+    "At a fixed viewport, record left nav, main transcript lane and right workspace rectangles. Toggle nav open/close/rapid reverse, recording intermediate frames and input focus; repeat reduced-motion behavior separately.",
+    "Open a provider child from the parent transcript. Confirm main-lane occupancy, full transcript affordances, status/footer, parent breadcrumb, parent-return scroll and child nested navigation. Do not substitute a SideChat surface.",
+    "With workspace closed, toggle Thread details. Open Browser/Files while details is present, then toggle details/Escape independently. Verify which visibility state is restored after workspace closes.",
+    "Resize to the inline-details boundary: verify 280px card, 12px gap, measured chat clearance, >=160px available height and popover fallback. Add Find/floating preview only if available; verify clearance and focus.",
+    "Measure Browser/File/PR and Files/Changes first open, manual resize, close/reopen, thread switch, maximize/restore and narrow viewport. Preserve tool identity and a usable transcript lane.",
+    "Open terminal drawer while another workspace tool remains active, then distinguish hide, close terminal, interrupt and terminate. Existing terminal output/split checks do not replace this coexistence test.",
+    "Open Settings/Usage over working conversation; close nested dialogs then route modal; check retained inert background, return destination and focus. Exercise command palette nested Escape separately.",
+    "Trigger provider error/refresh and background completion only in a controlled permitted run; capture fresh state after settling. Do not diagnose a timeout from banner text or count stale native accessibility output as a product defect."
+  ],
+  "boundaries": [
+    "Source is the exact installed SHA via official raw files; later 74573 checkout is named only as a separate comparison reference. No installed runtime fact is inferred from the later checkout.",
+    "No app launched, UI input, model task, build or test was run by this worker. No product files changed. This is a render-tree/source reconciliation, with parent observations cited by their existing report.",
+    "Major conditional direct children are enumerated at the named roots and their crucial wrapper boundaries. Deeper transcript, browser, tool and settings forms remain delegated; this is not a claim that every possible T3 menu state has been live exercised.",
+    "Default panel animation is not asserted here. The installed source applies motion only for positive configured duration, no reduced motion, and no navigation suppression. User-required Ferrite animation is an independent acceptance bar.",
+    "Ferrite counterparts are anchored to inspected paths. 'No verified counterpart' is bounded evidence, not a repository-wide absence proof; generic modal, panel or content reuse cannot establish placement equivalence.",
+    "Prior native Thread details/child observations are already recorded in thread-details-card-correction.md and subagent-placement-correction.md. Details native captures were not exported as artifact screenshots; this report does not invent them.",
+    "Counts deliberately differ: 25 grouped shell surfaces, conditional children, routes, runtime observations and historical177 findings are separate measures. No new failure tally is assigned here."
+  ]
+}
+

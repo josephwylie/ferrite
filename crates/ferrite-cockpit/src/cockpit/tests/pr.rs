@@ -164,13 +164,21 @@ fn a_push_reads_the_pr_again(cx: &mut TestAppContext) {
 }
 
 /// The branch's PR whole, as its Surface reads it.
-pub(super) fn snapshot(state: ferrite_core::protocol::WirePrState) -> ferrite_core::protocol::WirePr {
+pub(super) fn snapshot(
+    state: ferrite_core::protocol::WirePrState,
+) -> ferrite_core::protocol::WirePr {
     use ferrite_core::protocol::*;
     WirePr {
         number: 48,
         title: "Nav rows keep their height".into(),
         url: "https://github.com/o/r/pull/48".into(),
         body: "Live rows reserve their status line.".into(),
+        author: None,
+        author_avatar_url: None,
+        updated_at: None,
+        changed_files: None,
+        additions: None,
+        deletions: None,
         state,
         draft: false,
         head: "fix/nav".into(),
@@ -183,6 +191,9 @@ pub(super) fn snapshot(state: ferrite_core::protocol::WirePrState) -> ferrite_co
             url: Some("https://ci.example/run/9".into()),
         }],
         comments: vec![WirePrComment {
+            id: None,
+            author_is_bot: false,
+            place: None,
             kind: WirePrCommentKind::Comment,
             author: "ada".into(),
             anchor: "comment".into(),
@@ -205,7 +216,12 @@ fn with_pr<'a>(
     name: &str,
     state: ferrite_core::protocol::WirePrState,
     cx: &'a mut TestAppContext,
-) -> (Entity<CockpitView>, ThreadId, Fake, &'a mut gpui::VisualTestContext) {
+) -> (
+    Entity<CockpitView>,
+    ThreadId,
+    Fake,
+    &'a mut gpui::VisualTestContext,
+) {
     let (core, fake, _checkout) = bound_cockpit(name, Provider::Claude);
     bind_production_keys(cx);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
@@ -214,13 +230,17 @@ fn with_pr<'a>(
     tick(cx);
     let thread = view.read_with(cx, |view, _| view.panes[0].thread().unwrap());
     land(&view, thread, Some(pr_with_checks()), cx);
-    view.update(cx, |view, _| view.fixture_pr_snapshot(thread, snapshot(state)));
+    view.update(cx, |view, _| {
+        view.fixture_pr_snapshot(thread, snapshot(state))
+    });
     tick(cx);
     (view, thread, fake, cx)
 }
 
 fn click(selector: &'static str, cx: &mut gpui::VisualTestContext) {
-    let at = cx.debug_bounds(selector).unwrap_or_else(|| panic!("{selector}"));
+    let at = cx
+        .debug_bounds(selector)
+        .unwrap_or_else(|| panic!("{selector}"));
     cx.simulate_click(at.center(), gpui::Modifiers::none());
     tick(cx);
 }
@@ -230,8 +250,11 @@ fn click(selector: &'static str, cx: &mut gpui::VisualTestContext) {
 #[gpui::test]
 fn the_pr_row_and_the_plus_menu_open_one_pr_surface(cx: &mut TestAppContext) {
     use crate::cockpit::surfaces::SurfaceId;
-    let (view, thread, _fake, cx) =
-        with_pr("pr-surface-open", ferrite_core::protocol::WirePrState::Open, cx);
+    let (view, thread, _fake, cx) = with_pr(
+        "pr-surface-open",
+        ferrite_core::protocol::WirePrState::Open,
+        cx,
+    );
     let id = SurfaceId::PullRequest(48);
     opens_once(&view, thread, id.clone(), cx, |_, cx| {
         if cx.debug_bounds("panel-pr").is_none() {
@@ -244,7 +267,10 @@ fn the_pr_row_and_the_plus_menu_open_one_pr_surface(cx: &mut TestAppContext) {
             view.run_opener(thread, crate::cockpit::panel::Opener::PullRequest, cx)
         });
     });
-    assert!(cx.debug_bounds("panel-tab-PullRequest-48").is_some(), "its tab");
+    assert!(
+        cx.debug_bounds("panel-tab-PullRequest-48").is_some(),
+        "its tab"
+    );
     assert!(cx.debug_bounds("pr-header").is_some(), "its body");
     assert!(cx.debug_bounds("pr-title").is_some(), "on Summary");
 }
@@ -254,8 +280,11 @@ fn the_pr_row_and_the_plus_menu_open_one_pr_surface(cx: &mut TestAppContext) {
 #[gpui::test]
 fn the_pr_surface_keeps_its_view(cx: &mut TestAppContext) {
     use crate::cockpit::surfaces::{PrTab, SurfaceId};
-    let (view, thread, _fake, cx) =
-        with_pr("pr-surface-views", ferrite_core::protocol::WirePrState::Open, cx);
+    let (view, thread, _fake, cx) = with_pr(
+        "pr-surface-views",
+        ferrite_core::protocol::WirePrState::Open,
+        cx,
+    );
     view.update(cx, |view, cx| view.open_pr_surface(thread, cx));
     tick(cx);
     for tab in ["Summary", "Guide", "Timeline", "Code"] {
@@ -265,23 +294,36 @@ fn the_pr_surface_keeps_its_view(cx: &mut TestAppContext) {
     assert_eq!(segment.size.height, px(ferrite_ui::theme::SURFACE_TAB_H));
     click("pr-tab-Timeline", cx);
     assert!(cx.debug_bounds("pr-timeline").is_some(), "the conversation");
-    view.update(cx, |view, cx| view.upsert_surface(thread, SurfaceId::Overview, cx));
+    view.update(cx, |view, cx| {
+        view.upsert_surface(thread, SurfaceId::Overview, cx)
+    });
     tick(cx);
     view.update(cx, |view, cx| view.open_pr_surface(thread, cx));
     tick(cx);
-    assert!(cx.debug_bounds("pr-timeline").is_some(), "kept on the Surface");
-    let kept = view.read_with(cx, |view, _| view.panel.surfaces.get(thread).unwrap().pr_tab(48));
+    assert!(
+        cx.debug_bounds("pr-timeline").is_some(),
+        "kept on the Surface"
+    );
+    let kept = view.read_with(cx, |view, _| {
+        view.panel.surfaces.get(thread).unwrap().pr_tab(48)
+    });
     assert_eq!(kept, PrTab::Timeline);
     click("pr-tab-Guide", cx);
-    assert!(cx.debug_bounds("pr-write-guide").is_some(), "no guide yet: the way to ask");
+    assert!(
+        cx.debug_bounds("pr-write-guide").is_some(),
+        "no guide yet: the way to ask"
+    );
 }
 
 /// Choosing another view fades the body in once; choosing the one already
 /// shown, or an unrelated update, plays nothing.
 #[gpui::test]
 fn a_pr_view_fades_in_once_when_the_view_changes(cx: &mut TestAppContext) {
-    let (view, thread, _fake, cx) =
-        with_pr("pr-surface-fade", ferrite_core::protocol::WirePrState::Open, cx);
+    let (view, thread, _fake, cx) = with_pr(
+        "pr-surface-fade",
+        ferrite_core::protocol::WirePrState::Open,
+        cx,
+    );
     view.update(cx, |view, cx| view.open_pr_surface(thread, cx));
     tick(cx);
     let picked = |view: &gpui::Entity<CockpitView>, cx: &mut gpui::VisualTestContext| {
@@ -322,16 +364,29 @@ fn merge_asks_twice_and_a_merged_pr_shows_its_pill(cx: &mut TestAppContext) {
     });
     tick(cx);
     assert!(cx.debug_bounds("pr-pill").is_some(), "merged: the pill");
-    assert!(cx.debug_bounds("pr-primary").is_none(), "in the action's place");
-    assert!(cx.debug_bounds("pr-merge").is_none(), "merged: nothing to merge");
+    assert!(
+        cx.debug_bounds("pr-primary").is_none(),
+        "in the action's place"
+    );
+    assert!(
+        cx.debug_bounds("pr-merge").is_none(),
+        "merged: nothing to merge"
+    );
     let rows: Vec<String> = view.read_with(cx, |view, _| {
-        view.context_rows(MenuTarget::PrMore(crate::cockpit::panel::pr_read::PrTarget::thread(thread, 48)))
-            .into_iter()
-            .flatten()
-            .map(|(item, _)| item.label.to_string())
-            .collect()
+        view.context_rows(MenuTarget::PrMore(
+            crate::cockpit::panel::pr_read::PrTarget::thread(thread, 48),
+        ))
+        .into_iter()
+        .flatten()
+        .map(|(item, _)| item.label.to_string())
+        .collect()
     });
-    for row in ["Explain this PR", "Revert changes", "Delete branch", "Copy link"] {
+    for row in [
+        "Explain this PR",
+        "Revert changes",
+        "Delete branch",
+        "Copy link",
+    ] {
         assert!(rows.contains(&row.to_string()), "{row} in {rows:?}");
     }
     assert!(!rows.contains(&"Merge now".to_string()));
@@ -358,13 +413,18 @@ fn an_open_pr_surface_follows_a_merge(cx: &mut TestAppContext) {
     );
     tick(cx);
     assert!(cx.debug_bounds("pr-pill").is_some(), "merged: the pill");
-    assert!(cx.debug_bounds("pr-primary").is_none(), "no Merge to press again");
+    assert!(
+        cx.debug_bounds("pr-primary").is_none(),
+        "no Merge to press again"
+    );
     let rows: Vec<String> = view.read_with(cx, |view, _| {
-        view.context_rows(MenuTarget::PrMore(crate::cockpit::panel::pr_read::PrTarget::thread(thread, 48)))
-            .into_iter()
-            .flatten()
-            .map(|(item, _)| item.label.to_string())
-            .collect()
+        view.context_rows(MenuTarget::PrMore(
+            crate::cockpit::panel::pr_read::PrTarget::thread(thread, 48),
+        ))
+        .into_iter()
+        .flatten()
+        .map(|(item, _)| item.label.to_string())
+        .collect()
     });
     assert!(!rows.contains(&"Merge now".to_string()), "{rows:?}");
 }
@@ -377,7 +437,9 @@ fn an_armed_merge_does_not_outlive_its_surface(cx: &mut TestAppContext) {
     use ferrite_core::protocol::WirePrState;
     let (view, thread, fake, cx) = with_pr("pr-armed", WirePrState::Open, cx);
     let back = |view: &Entity<CockpitView>, cx: &mut gpui::VisualTestContext| {
-        view.update(cx, |view, cx| view.activate_surface(thread, &SurfaceId::PullRequest(48), cx));
+        view.update(cx, |view, cx| {
+            view.activate_surface(thread, &SurfaceId::PullRequest(48), cx)
+        });
         tick(cx);
     };
     view.update(cx, |view, cx| view.open_pr_surface(thread, cx));
@@ -385,7 +447,9 @@ fn an_armed_merge_does_not_outlive_its_surface(cx: &mut TestAppContext) {
     let before = fake.sent.borrow().len();
 
     click("pr-primary", cx);
-    view.update(cx, |view, cx| view.upsert_surface(thread, SurfaceId::Overview, cx));
+    view.update(cx, |view, cx| {
+        view.upsert_surface(thread, SurfaceId::Overview, cx)
+    });
     tick(cx);
     back(&view, cx);
     click("pr-primary", cx);
@@ -397,14 +461,17 @@ fn an_armed_merge_does_not_outlive_its_surface(cx: &mut TestAppContext) {
     tick(cx);
     back(&view, cx);
     click("pr-primary", cx);
-    assert_eq!(fake.sent.borrow().len(), before, "hiding the Panel disarmed it");
+    assert_eq!(
+        fake.sent.borrow().len(),
+        before,
+        "hiding the Panel disarmed it"
+    );
 }
 
-/// A PR tab restored from `panel.json` for #47, on a branch whose PR is now
-/// #48, goes once the branch's PR is known: no tab acts on another PR than
-/// the one it names.
+/// A restored PR tab keeps its identity when the checkout has another PR.
+/// Checkout actions never act on that other number.
 #[gpui::test]
-fn a_restored_tab_for_another_pr_goes(cx: &mut TestAppContext) {
+fn a_restored_tab_for_another_pr_keeps_its_identity(cx: &mut TestAppContext) {
     use crate::cockpit::surfaces::SurfaceId;
     use ferrite_core::protocol::WirePrState;
     let (core, fake, _checkout) = bound_cockpit("pr-restored", Provider::Claude);
@@ -412,7 +479,11 @@ fn a_restored_tab_for_another_pr_goes(cx: &mut TestAppContext) {
     let dir = scratch("pr-restored-prefs");
     std::fs::create_dir_all(&dir).unwrap();
     let mut surfaces = crate::cockpit::surfaces::Surfaces::default();
-    surfaces.entry(thread, true).upsert(SurfaceId::PullRequest(47));
+    surfaces.apply(
+        thread,
+        true,
+        crate::cockpit::surfaces::SurfaceAction::Open(SurfaceId::PullRequest(47)),
+    );
     surfaces.save(&dir).unwrap();
     let prefs = Preferences {
         dir,
@@ -424,26 +495,80 @@ fn a_restored_tab_for_another_pr_goes(cx: &mut TestAppContext) {
     cx.simulate_resize(gpui::size(px(1900.), px(900.)));
     tick(cx);
     land(&view, thread, Some(pr_with_checks()), cx);
-    view.update(cx, |view, _| view.fixture_pr_snapshot(thread, snapshot(WirePrState::Open)));
+    view.update(cx, |view, _| {
+        view.fixture_pr_snapshot(thread, snapshot(WirePrState::Open))
+    });
     tick(cx);
-    let tabs = view.read_with(cx, |view, _| view.panel.surfaces.get(thread).unwrap().tabs.clone());
-    assert!(!tabs.contains(&SurfaceId::PullRequest(47)), "{tabs:?}");
-    assert!(cx.debug_bounds("panel-tab-PullRequest-47").is_none());
+    let tabs = view.read_with(cx, |view, _| {
+        view.panel.surfaces.get(thread).unwrap().tabs.clone()
+    });
+    assert!(tabs.contains(&SurfaceId::PullRequest(47)), "{tabs:?}");
+    assert!(cx.debug_bounds("panel-tab-PullRequest-47").is_some());
     assert!(
-        !fake.sent.borrow().iter().any(|sent| sent.contains("gh pr merge")),
+        cx.debug_bounds("pr-primary").is_none(),
+        "a different PR cannot merge the checkout branch"
+    );
+    assert!(
+        !fake
+            .sent
+            .borrow()
+            .iter()
+            .any(|sent| sent.contains("gh pr merge")),
         "nothing merged"
     );
 }
 
-/// The PR Surface's Code view is the branch's whole diff, whatever the
-/// Changes Surface was left on, and choosing it leaves Changes as it was.
 #[gpui::test]
-fn a_prs_code_view_is_the_branchs_diff(cx: &mut TestAppContext) {
+fn pr_header_metadata_stays_visible_across_tabs(cx: &mut TestAppContext) {
+    use ferrite_core::protocol::WirePrState;
+    let (view, thread, _fake, cx) = with_pr("pr-header-metadata", WirePrState::Open, cx);
+    view.update(cx, |view, cx| {
+        view.open_pr_surface(thread, cx);
+        let mut pr = snapshot(WirePrState::Open);
+        pr.author = Some("ada".into());
+        pr.updated_at = Some("2026-11-15T08:00:00Z".into());
+        pr.changed_files = Some(3);
+        pr.additions = Some(12);
+        pr.deletions = Some(2);
+        view.fixture_pr_snapshot(thread, pr);
+    });
+    tick(cx);
+    for tab in [
+        "pr-tab-Summary",
+        "pr-tab-Timeline",
+        "pr-tab-Guide",
+        "pr-tab-Code",
+    ] {
+        click(tab, cx);
+        for selector in [
+            "pr-title",
+            "pr-author",
+            "pr-updated",
+            "pr-files",
+            "pr-additions",
+            "pr-deletions",
+        ] {
+            assert!(
+                cx.debug_bounds(selector).is_some(),
+                "{selector} missing on {tab}"
+            );
+        }
+    }
+}
+
+/// Published Code keeps its own content and leaves local Changes as it was.
+#[gpui::test]
+fn a_prs_code_view_reads_the_published_diff(cx: &mut TestAppContext) {
     use crate::cockpit::surfaces::SurfaceId;
     use crate::cockpit::tools::Diff;
     use ferrite_core::protocol::WirePrState;
     let (view, thread, _fake, cx) = with_pr("pr-code", WirePrState::Open, cx);
-    view.update(cx, |view, cx| view.upsert_surface(thread, SurfaceId::Changes, cx));
+    view.update(cx, |view, cx| {
+        let path = view.thread_path(thread).unwrap();
+        let files = ferrite_core::protocol::sides_of_unified("diff --git a/published.rs b/published.rs\n--- a/published.rs\n+++ b/published.rs\n@@ -1 +1 @@\n-old\n+published\n");
+        view.cockpit.fixture_forge_diff(path, 48, files);
+        view.upsert_surface(thread, SurfaceId::Changes, cx);
+    });
     tick(cx);
     view.update(cx, |view, cx| view.open_pr_surface(thread, cx));
     tick(cx);
@@ -451,13 +576,39 @@ fn a_prs_code_view_is_the_branchs_diff(cx: &mut TestAppContext) {
     let scope = |diff: Diff, cx: &mut gpui::VisualTestContext| {
         view.read_with(cx, |view, _| view.changes_scope_label(diff))
     };
-    assert_eq!(scope(Diff::PullRequest(thread), cx).as_deref(), Some("All changes"));
+    assert_eq!(
+        scope(
+            Diff::PullRequest(crate::cockpit::panel::pr_read::PrTarget::thread(thread, 48)),
+            cx
+        )
+        .as_deref(),
+        Some("All changes")
+    );
     assert_eq!(
         scope(Diff::Changes(thread), cx).as_deref(),
         Some("Uncommitted changes"),
         "the Changes Surface keeps its scope"
     );
-    assert!(cx.debug_bounds("changes-scope").is_none(), "no scope to pick in Code");
+    assert!(
+        cx.debug_bounds("changes-scope").is_none(),
+        "no scope to pick in Code"
+    );
+    until(cx, |cx| {
+        view.read_with(cx, |view, _| {
+            view.changes_read(Diff::PullRequest(crate::cockpit::panel::pr_read::PrTarget::thread(
+                thread, 48,
+            ))) == Some(1)
+        })
+    });
+    assert!(
+        cx.debug_bounds("changes-stage-0").is_none(),
+        "published files cannot stage local files"
+    );
+    assert!(
+        cx.debug_bounds("changes-open-0").is_none(),
+        "published files cannot open an unrelated local file"
+    );
+    assert!(cx.debug_bounds("changes-reviewed-0").is_some());
 }
 
 /// The PR's header and views are stops in the Panel's row of controls: the
@@ -468,7 +619,8 @@ fn the_pr_surface_is_worked_from_the_keyboard(cx: &mut TestAppContext) {
     use super::panel_focus::{activate, focused_control, press};
     use crate::cockpit::panel::{PanelControl, Semantics};
     use crate::cockpit::surfaces::PrTab;
-    let (view, thread, _fake, cx) = with_pr("pr-keys", ferrite_core::protocol::WirePrState::Open, cx);
+    let (view, thread, _fake, cx) =
+        with_pr("pr-keys", ferrite_core::protocol::WirePrState::Open, cx);
     view.update(cx, |view, cx| view.open_pr_surface(thread, cx));
     tick(cx);
 
@@ -493,18 +645,30 @@ fn the_pr_surface_is_worked_from_the_keyboard(cx: &mut TestAppContext) {
     while focused_control(&view, cx) != Some(PanelControl::PrView(PrTab::Timeline)) {
         let before = focused_control(&view, cx);
         press("right", cx);
-        assert_ne!(focused_control(&view, cx), before, "the Timeline segment is on the row");
+        assert_ne!(
+            focused_control(&view, cx),
+            before,
+            "the Timeline segment is on the row"
+        );
     }
     activate("enter", cx);
-    assert!(cx.debug_bounds("pr-timeline").is_some(), "⏎ chooses the view");
+    assert!(
+        cx.debug_bounds("pr-timeline").is_some(),
+        "⏎ chooses the view"
+    );
     assert_eq!(
         focused_control(&view, cx),
         Some(PanelControl::PrView(PrTab::Timeline)),
         "and the keyboard stays on its segment"
     );
     let drawn = view.read_with(cx, |view, _| view.panel.focus.drawn());
-    let chosen = drawn.iter().find(|(control, _)| *control == PanelControl::PrView(PrTab::Timeline));
-    assert_eq!(chosen.map(|(_, semantics)| semantics), Some(&Semantics::tab("Timeline", true)));
+    let chosen = drawn
+        .iter()
+        .find(|(control, _)| *control == PanelControl::PrView(PrTab::Timeline));
+    assert_eq!(
+        chosen.map(|(_, semantics)| semantics),
+        Some(&Semantics::tab("Timeline", true))
+    );
 
     for _ in 0..12 {
         if focused_control(&view, cx) == Some(PanelControl::PrNumber) {
@@ -512,10 +676,21 @@ fn the_pr_surface_is_worked_from_the_keyboard(cx: &mut TestAppContext) {
         }
         press("left", cx);
     }
-    assert_eq!(focused_control(&view, cx), Some(PanelControl::PrNumber), "←  reaches the number");
+    assert_eq!(
+        focused_control(&view, cx),
+        Some(PanelControl::PrNumber),
+        "←  reaches the number"
+    );
     press("shift-f10", cx);
-    assert!(view.read_with(cx, |view, _| view.context_menu.is_some()), "⇧F10 opens the number's menu");
+    assert!(
+        view.read_with(cx, |view, _| view.context_menu.is_some()),
+        "⇧F10 opens the number's menu"
+    );
     press("escape", cx);
     assert!(view.read_with(cx, |view, _| view.context_menu.is_none()));
-    assert_eq!(focused_control(&view, cx), Some(PanelControl::PrNumber), "esc gives the keyboard back");
+    assert_eq!(
+        focused_control(&view, cx),
+        Some(PanelControl::PrNumber),
+        "esc gives the keyboard back"
+    );
 }
