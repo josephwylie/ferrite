@@ -586,8 +586,7 @@ pub fn bindings(platform: Platform) -> Vec<Binding> {
         ("escape".into(), "lightbox::Close", Some(LIGHTBOX)),
         ("enter".into(), "review::SaveComment", Some("ReviewComment")),
         ("enter".into(), "cite::SaveComment", Some("CiteComment")),
-        ("cmd-enter".into(), "cite::SaveAndSendComment", Some("CiteComment")),
-        ("ctrl-enter".into(), "cite::SaveAndSendComment", Some("CiteComment")),
+        (with_primary("enter"), "cite::SaveAndSendComment", Some("CiteComment")),
         ("escape".into(), "cite::CancelComment", Some("CiteComment")),
         ("escape".into(), "cite::CancelComment", Some("CitationPopup")),
         (
