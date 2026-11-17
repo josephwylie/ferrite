@@ -7,7 +7,7 @@ impl CockpitView {
     /// The Factory head's surface tabs: Board and Workflows.
     pub(in crate::cockpit) fn factory_surface_tabs(&self, cx: &mut Context<Self>) -> Div {
         use ferrite_ui::theme::*;
-        let Some(view) = self.factory_view.as_ref() else {
+        let Some(view) = self.factory() else {
             return div();
         };
         let board = self.cockpit.factory();
@@ -64,8 +64,7 @@ impl CockpitView {
                     .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
                         if surface == Surface::Board
                             && view
-                                .factory_view
-                                .as_ref()
+                                .factory()
                                 .is_some_and(|view| view.archive.shown)
                         {
                             view.close_archive(cx);
@@ -188,8 +187,7 @@ impl CockpitView {
                     let workflow = view.shown_id();
                     view.open_new_task(cx);
                     if let Some(sheet) = view
-                        .factory_view
-                        .as_mut()
+                        .factory_mut()
                         .and_then(|shown| shown.sheet.as_mut())
                     {
                         sheet.workflow = workflow;
@@ -312,7 +310,7 @@ impl CockpitView {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         use ferrite_ui::theme::*;
-        let Some(view) = self.factory_view.as_ref() else {
+        let Some(view) = self.factory() else {
             return div().into_any_element();
         };
         // While the start or the approval settings show, no Step's row
@@ -343,7 +341,7 @@ impl CockpitView {
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(|view, _: &MouseDownEvent, _, cx| {
-                    if let Some(view) = view.factory_view.as_mut() {
+                    if let Some(view) = view.factory_mut() {
                         view.workflows.focused = None;
                     }
                     cx.notify();
@@ -686,7 +684,7 @@ impl CockpitView {
         window: &Window,
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
-        let composer = self.factory_view.as_ref()?.workflows.fields.get(field)?;
+        let composer = self.factory()?.workflows.fields.get(field)?;
         let focused = composer.read(cx).focus_handle(cx).is_focused(window);
         let key = field.key();
         let chosen = field.clone();

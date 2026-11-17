@@ -9,6 +9,7 @@
 //! tab draws the Worker's ordinary Pane, which this window already holds.
 
 use super::*;
+use super::destination::{Destination, Shows};
 use ferrite_core::factory::{self as core_factory, Status, Task, TaskId};
 use ferrite_core::protocol::{Done, TaskAction};
 use ferrite_core::workspace::registry::ProjectId;
@@ -138,9 +139,6 @@ pub(crate) struct NewTask {
 /// What the Factory view shows.
 pub(crate) struct FactoryView {
     pub(crate) project: ProjectId,
-    /// The Pane focused when the board opened: focus moving to another of
-    /// the operator's own leaves the board.
-    pub(crate) focus_at_open: Option<PaneIdentity>,
     /// The Task whose panel is open.
     pub(crate) open: Option<TaskId>,
     pub(crate) tab: TaskTab,
@@ -190,15 +188,16 @@ static REQUESTS: AtomicU64 = AtomicU64::new(1);
 impl CockpitView {
     /// Show `project`'s Factory board in the board's place.
     pub(crate) fn open_factory(&mut self, project: ProjectId, cx: &mut Context<Self>) {
-        self.prs.shown = false;
         let focus_at_open = self.cockpit.roster().focused();
-        match self.factory_view.as_mut() {
-            Some(view) if view.project == project => view.focus_at_open = focus_at_open,
+        match self.destination.as_mut() {
+            Some(Destination {
+                shows: Shows::Factory(view),
+                focus_at_open: at,
+            }) if view.project == project => *at = focus_at_open,
             _ => {
                 let workflows = super::workflows::Workflows::new(cx);
-                self.factory_view = Some(FactoryView {
+                let view = FactoryView {
                     project,
-                    focus_at_open,
                     open: None,
                     tab: TaskTab::Overview,
                     note: None,
@@ -212,7 +211,11 @@ impl CockpitView {
                     direct: Default::default(),
                     opening: None,
                     archive: Default::default(),
-                })
+                };
+                self.destination = Some(Destination {
+                    shows: Shows::Factory(view),
+                    focus_at_open,
+                });
             }
         }
         cx.notify();
@@ -230,18 +233,17 @@ impl CockpitView {
         else {
             return;
         };
-        if self.factory_view.as_ref().map(|view| view.project) != Some(project) {
+        if self.factory().map(|view| view.project) != Some(project) {
             self.open_factory(project, cx);
         }
         self.read_worker(None, cx);
         let archive_shown = self
-            .factory_view
-            .as_ref()
+            .factory()
             .is_some_and(|view| view.archive.shown);
         if archived && !archive_shown {
             self.open_archive(cx);
         }
-        if let Some(view) = self.factory_view.as_mut() {
+        if let Some(view) = self.factory_mut() {
             view.surface = super::workflows::Surface::Board;
             view.archive.shown = archived;
             view.open = Some(task.to_string());
@@ -255,7 +257,7 @@ impl CockpitView {
     }
 
     pub(crate) fn task_tab(&mut self, tab: TaskTab, cx: &mut Context<Self>) {
-        let Some(view) = self.factory_view.as_mut() else {
+        let Some(view) = self.factory_mut() else {
             return;
         };
         view.tab = tab;
@@ -273,8 +275,7 @@ impl CockpitView {
     /// toast keeps clear of as it does the right panel.
     pub(super) fn task_panel_w(&self) -> f32 {
         let shown = self
-            .factory_view
-            .as_ref()
+            .factory()
             .is_some_and(|view| view.surface == super::workflows::Surface::Board)
             && self.open_task_now().is_some();
         if shown {
@@ -286,8 +287,7 @@ impl CockpitView {
 
     /// Whether `task`'s panel is on screen.
     fn task_panel_shown(&self, task: &str) -> bool {
-        self.factory_view
-            .as_ref()
+        self.factory()
             .is_some_and(|view| view.surface == super::workflows::Surface::Board)
             && self.open_task_now().is_some_and(|open| open.id == task)
     }
@@ -295,7 +295,7 @@ impl CockpitView {
     /// The open Task, as the board says it now, while it is where the
     /// Factory looks: a Task cleared to the Archive leaves the board's panel.
     pub(super) fn open_task_now(&self) -> Option<&Task> {
-        let view = self.factory_view.as_ref()?;
+        let view = self.factory()?;
         self.cockpit
             .factory()
             .task(view.open.as_deref()?)
@@ -309,7 +309,7 @@ impl CockpitView {
 
     /// The Worker drawn in the open panel's Worker tab, which streams whole.
     pub(super) fn factory_worker_drawn(&self) -> Option<ThreadId> {
-        let view = self.factory_view.as_ref()?;
+        let view = self.factory()?;
         if let Some(coordinator) = self.coordinator_drawn() {
             return Some(coordinator);
         }
@@ -323,36 +323,14 @@ impl CockpitView {
         task.worker.filter(|_| self.pane_for_worker(task).is_some())
     }
 
-    /// Focus moved to another of the operator's own Panes (a new draft, a
-    /// landing): the board gives way to it.
-    pub(super) fn leave_factory_if_moved(&mut self) {
-        let Some(view) = self.factory_view.as_ref() else {
-            return;
-        };
-        let now = self.cockpit.roster().focused();
-        if now == view.focus_at_open {
-            return;
-        }
-        // Read through the identity: an owned Thread just reopened may
-        // have no Pane in this window yet.
-        let owned = now
-            .and_then(PaneIdentity::thread)
-            .is_some_and(|thread| !self.cockpit.operators(thread));
-        if owned {
-            return;
-        }
-        self.factory_view = None;
-    }
-
     /// The Tasks changed: the open panel's Task may be gone.
     pub(super) fn factory_changed(&mut self, cx: &mut Context<Self>) {
         let gone = self
-            .factory_view
-            .as_ref()
+            .factory()
             .and_then(|view| view.open.as_deref())
             .is_some_and(|id| self.cockpit.factory().task(id).is_none());
         if gone {
-            if let Some(view) = self.factory_view.as_mut() {
+            if let Some(view) = self.factory_mut() {
                 view.open = None;
             }
         }
@@ -366,7 +344,7 @@ impl CockpitView {
     /// What holds the keyboard while the Factory shows: the sheet's field,
     /// the Worker's Composer on its tab, else the window's own.
     pub(super) fn factory_focus(&self, window: &Window, cx: &gpui::App) -> Option<FocusHandle> {
-        let view = self.factory_view.as_ref()?;
+        let view = self.factory()?;
         if let Some(sheet) = &view.sheet {
             let field = if sheet.pr_focused {
                 &sheet.pr
@@ -399,7 +377,7 @@ impl CockpitView {
     pub(crate) fn task_command(&mut self, action: TaskAction, cx: &mut Context<Self>) {
         let note = match self.cockpit.task(action) {
             Ok(Some(Done::Deleted { kept })) => {
-                if let Some(view) = self.factory_view.as_mut() {
+                if let Some(view) = self.factory_mut() {
                     view.open = None;
                 }
                 kept.map(SharedString::from)
@@ -407,14 +385,14 @@ impl CockpitView {
             Ok(_) => None,
             Err(error) => Some(SharedString::from(error.to_string())),
         };
-        if let Some(view) = self.factory_view.as_mut() {
+        if let Some(view) = self.factory_mut() {
             view.note = note;
         }
         cx.notify();
     }
 
     pub(crate) fn open_new_task(&mut self, cx: &mut Context<Self>) {
-        let Some(view) = self.factory_view.as_mut() else {
+        let Some(view) = self.factory_mut() else {
             return;
         };
         if let Some(mut kept) = view.kept.take() {
@@ -447,8 +425,7 @@ impl CockpitView {
     /// the instructions.
     pub(crate) fn focus_new_task_pr(&mut self, pr: bool, cx: &mut Context<Self>) {
         if let Some(sheet) = self
-            .factory_view
-            .as_mut()
+            .factory_mut()
             .and_then(|view| view.sheet.as_mut())
         {
             sheet.pr_focused = pr;
@@ -459,7 +436,7 @@ impl CockpitView {
     /// Close the sheet and any menu it opened; what was typed stays for
     /// the next time it opens.
     pub(crate) fn close_new_task(&mut self, cx: &mut Context<Self>) {
-        if let Some(view) = self.factory_view.as_mut() {
+        if let Some(view) = self.factory_mut() {
             view.kept = view.sheet.take();
         }
         self.close_factory_menu();
@@ -469,7 +446,7 @@ impl CockpitView {
     /// Start: the Task, its worktree and its Worker, in the Server. Its
     /// panel opens on it; a refusal stays on the sheet.
     pub(crate) fn start_new_task(&mut self, cx: &mut Context<Self>) {
-        let Some(view) = self.factory_view.as_ref() else {
+        let Some(view) = self.factory() else {
             return;
         };
         let project = view.project;
@@ -490,7 +467,7 @@ impl CockpitView {
             };
             match self.cockpit.task(action) {
                 Ok(Some(Done::Task { task })) => {
-                    if let Some(view) = self.factory_view.as_mut() {
+                    if let Some(view) = self.factory_mut() {
                         view.sheet = None;
                         view.surface = super::workflows::Surface::Board;
                         view.open = Some(task);
@@ -504,8 +481,7 @@ impl CockpitView {
             }
         };
         if let Some(sheet) = self
-            .factory_view
-            .as_mut()
+            .factory_mut()
             .and_then(|view| view.sheet.as_mut())
         {
             sheet.error = error;
@@ -547,7 +523,7 @@ impl CockpitView {
         });
         // Its board on screen shows the Task's state in its column, so the
         // toast only passes by there.
-        let board_shown = self.factory_view.as_ref().is_some_and(|view| {
+        let board_shown = self.factory().is_some_and(|view| {
             view.project == project
                 && view.surface == super::workflows::Surface::Board
                 && !view.archive.shown
@@ -653,7 +629,7 @@ impl CockpitView {
                     self.task_tab(TaskTab::Worker, cx);
                 } else {
                     self.read_worker(Some(thread), cx);
-                    if let Some(view) = self.factory_view.as_mut() {
+                    if let Some(view) = self.factory_mut() {
                         view.tab = TaskTab::Worker;
                     }
                 }
@@ -716,8 +692,7 @@ impl CockpitView {
                     .map(|project| project.title.clone())
                     .unwrap_or_default();
                 let shown = self
-                    .factory_view
-                    .as_ref()
+                    .factory()
                     .is_some_and(|view| view.project == project);
                 let item = menu::Item::new(title).checked(shown);
                 let item = match board.needs_you(project) {
@@ -733,7 +708,7 @@ impl CockpitView {
     /// panel beside them.
     pub(super) fn factory_board(&self, window: &mut Window, cx: &mut Context<Self>) -> Div {
         use ferrite_ui::theme::*;
-        let Some(view) = self.factory_view.as_ref() else {
+        let Some(view) = self.factory() else {
             return div();
         };
         let project = view.project;
@@ -1076,11 +1051,10 @@ impl CockpitView {
             }))
             .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
                 let shut = view
-                    .factory_view
-                    .as_ref()
+                    .factory()
                     .is_some_and(|shown| shown.open.as_deref() == Some(id.as_str()));
                 if shut {
-                    if let Some(shown) = view.factory_view.as_mut() {
+                    if let Some(shown) = view.factory_mut() {
                         shown.open = None;
                     }
                     cx.notify();
@@ -1098,7 +1072,7 @@ impl CockpitView {
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
         use ferrite_ui::theme::*;
-        let view = self.factory_view.as_ref()?;
+        let view = self.factory()?;
         let task = self.open_task_now()?;
         let tab = view.tab;
         let id = task.id.clone();
@@ -1150,7 +1124,7 @@ impl CockpitView {
         let close = ferrite_ui::components::ghost_button("task-close", "Close", cx)
             .debug_selector(|| "task-close".into())
             .on_click(cx.listener(|view, _: &ClickEvent, _, cx| {
-                if let Some(view) = view.factory_view.as_mut() {
+                if let Some(view) = view.factory_mut() {
                     view.open = None;
                 }
                 cx.notify();
@@ -1417,7 +1391,7 @@ impl CockpitView {
         window: &Window,
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
-        let sheet = self.factory_view.as_ref()?.sheet.as_ref()?;
+        let sheet = self.factory()?.sheet.as_ref()?;
         let close = ferrite_ui::sheet::sheet_close("new-task-close", "Close New task", cx)
             .on_click(cx.listener(|view, _: &ClickEvent, _, cx| {
                 cx.stop_propagation();

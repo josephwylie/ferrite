@@ -122,7 +122,7 @@ fn the_answer_box_answers_the_question_and_keeps_what_was_typed(cx: &mut TestApp
     });
     tick(cx);
     view.update(cx, |view, cx| {
-        view.factory_view.as_mut().unwrap().open = None;
+        view.factory_mut().unwrap().open = None;
         cx.notify();
     });
     tick(cx);
@@ -169,7 +169,7 @@ fn a_workers_permission_is_answered_from_the_task(cx: &mut TestAppContext) {
     click(cx, "task-permission-open");
     view.read_with(cx, |view, _| {
         assert_eq!(
-            view.factory_view.as_ref().unwrap().tab,
+            view.factory().unwrap().tab,
             crate::cockpit::factory::TaskTab::Worker
         );
     });

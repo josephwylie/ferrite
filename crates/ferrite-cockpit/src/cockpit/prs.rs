@@ -27,6 +27,7 @@ use gpui::actions;
 
 use super::panel::pr_read::{PrFailure, PrTarget};
 use super::*;
+use super::destination::{Destination, Shows};
 use crate::cockpit::surfaces::PrTab;
 use ferrite_core::protocol::{WirePrFilter, WirePrList, WirePrRow, WirePrUnread};
 use ferrite_core::workspace::registry::ProjectId;
@@ -50,7 +51,6 @@ struct ListRead {
 }
 
 pub(crate) struct PrsView {
-    pub(crate) shown: bool,
     pub(super) project: Option<ProjectId>,
     pub(super) filter: WirePrFilter,
     lists: HashMap<(ProjectId, WirePrFilter), ListRead>,
@@ -59,14 +59,12 @@ pub(crate) struct PrsView {
     pub(in crate::cockpit) tab: PrTab,
     pub(super) scroll: ScrollHandle,
     issued: u64,
-    focus_at_open: Option<PaneIdentity>,
     pub(super) focus: FocusHandle,
 }
 
 impl PrsView {
     pub(super) fn new(cx: &mut Context<CockpitView>) -> Self {
         Self {
-            shown: false,
             project: None,
             filter: WirePrFilter::Open,
             lists: HashMap::new(),
@@ -75,7 +73,6 @@ impl PrsView {
             tab: PrTab::Summary,
             scroll: ScrollHandle::new(),
             issued: 0,
-            focus_at_open: None,
             focus: cx.focus_handle(),
         }
     }
@@ -101,23 +98,10 @@ fn index_of(url: &str) -> Option<String> {
 }
 
 impl CockpitView {
-    /// A destination (the Factory, the PRs) stands in the board's place.
-    pub(super) fn destination_shown(&self) -> bool {
-        self.factory_view.is_some() || self.prs.shown
-    }
-
-    /// Whatever stands in the board's place gives it back. The PRs
-    /// destination keeps what it holds for the next visit.
-    pub(super) fn leave_destination(&mut self) {
-        self.factory_view = None;
-        self.prs.shown = false;
-    }
-
     /// Show the PRs destination in the board's place: on `project` when
     /// told, else where it was left, else the shown Thread's Project, else
     /// the first one.
     pub(crate) fn open_prs(&mut self, project: Option<ProjectId>, cx: &mut Context<Self>) {
-        self.factory_view = None;
         let focused = self.focused_thread();
         let from_thread =
             focused.and_then(|thread| self.facts.get(thread).and_then(|facts| facts.project));
@@ -132,8 +116,10 @@ impl CockpitView {
             .or(self.prs.project.filter(known))
             .or(from_thread)
             .or(first);
-        self.prs.shown = true;
-        self.prs.focus_at_open = self.cockpit.roster().focused();
+        self.destination = Some(Destination {
+            shows: Shows::Prs,
+            focus_at_open: self.cockpit.roster().focused(),
+        });
         self.prs.project = chosen;
         if let Some(project) = chosen {
             self.read_prs_list(project, cx);
@@ -186,24 +172,6 @@ impl CockpitView {
                 self.open_pr_as(thread, ferrite_pane::link_target::Open::Primary, window, cx)
             }
             None => self.open_prs(None, cx),
-        }
-    }
-
-    /// Focus moved to another of the operator's own Panes: the destination
-    /// gives way to it, kept as it was for the next visit.
-    pub(super) fn leave_prs_if_moved(&mut self) {
-        if !self.prs.shown {
-            return;
-        }
-        let now = self.cockpit.roster().focused();
-        if now == self.prs.focus_at_open {
-            return;
-        }
-        let owned = now
-            .and_then(PaneIdentity::thread)
-            .is_some_and(|thread| !self.cockpit.operators(thread));
-        if !owned {
-            self.prs.shown = false;
         }
     }
 

@@ -16,6 +16,7 @@ mod context_menu;
 pub(crate) mod coordinator;
 pub(crate) mod decisions;
 mod delivery;
+mod destination;
 mod details;
 pub(crate) mod direction;
 mod drafts;
@@ -711,8 +712,8 @@ pub struct CockpitView {
     /// Measuring at every reader's slide's destination (`board_level`), so
     /// a Level never flaps mid-slide.
     nav_measure_rest: std::cell::Cell<bool>,
-    /// A Project's Factory board, shown in the board's place (ADR 0037).
-    factory_view: Option<factory::FactoryView>,
+    /// What stands in the board's place: the Factory or the PRs.
+    destination: Option<destination::Destination>,
     /// The PRs destination, kept as it was left while another view shows.
     prs: prs::PrsView,
     /// The Tasks whose needs-you toast stands, and the state it announced.
@@ -1701,7 +1702,7 @@ impl CockpitView {
             transcript_entities: Default::default(),
             decisions: decisions::DecisionState::new(cx.weak_entity()),
             nav_measure_rest: std::cell::Cell::new(false),
-            factory_view: None,
+            destination: None,
             prs: prs::PrsView::new(cx),
             task_toasts: Default::default(),
             empty_cursor: 0,
@@ -10162,8 +10163,7 @@ impl CockpitView {
             _ => Vec::new(),
         };
         // The open Task's Worker, drawn in its panel, streams whole too.
-        self.leave_factory_if_moved();
-        self.leave_prs_if_moved();
+        self.leave_destination_if_moved();
         let drawn: Vec<ThreadId> = match self.factory_worker_drawn() {
             Some(worker) => vec![worker],
             None => drawn,
@@ -10397,7 +10397,7 @@ impl CockpitView {
             self.focus.clone()
         } else if let Some(focus) = self.factory_focus(window, cx) {
             focus
-        } else if self.rename.is_none() && fullscreen.is_none() && self.prs.shown {
+        } else if self.rename.is_none() && fullscreen.is_none() && self.prs_shown() {
             self.prs.focus.clone()
         } else if self.rename.is_none() && fullscreen.is_none() && self.empty_board_shown() {
             self.empty_focus.clone()
@@ -10537,10 +10537,10 @@ impl CockpitView {
         let board = self.board_bounds(window);
         let grid = if !self.cockpit.environment_available() {
             frame().flex().child(self.no_environment(cx))
-        } else if self.factory_view.is_some() {
+        } else if self.factory().is_some() {
             // A Project's Factory board stands in the board's place.
             frame().flex().child(self.factory_board(window, cx))
-        } else if self.prs.shown {
+        } else if self.prs_shown() {
             frame().flex().child(self.prs_board(cx))
         } else if let Some(index) = fullscreen.filter(|index| !self.has_reader(*index)) {
             // The fullscreened Pane takes the whole window (with a reader,
