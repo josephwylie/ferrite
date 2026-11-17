@@ -265,7 +265,8 @@ impl Engine {
                 self.apply_input(*thread, Input::Notice(text.clone()));
                 Ok(None)
             }
-            Op::BrowserCapture { .. }
+            Op::BrowserDispatch { .. }
+            | Op::BrowserCapture { .. }
             | Op::BrowserCaptureImage { .. }
             | Op::BrowserProtect { .. }
             | Op::BrowserRelease { .. }
@@ -288,6 +289,7 @@ impl Engine {
             | Op::ListRepo { .. }
             | Op::ReviewDiff { .. }
             | Op::ReviewRead { .. }
+            | Op::ReviewPullRequestDiff { .. }
             | Op::ListCommits { .. }
             | Op::SearchRepo { .. }
             | Op::ReadFile { .. }

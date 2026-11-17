@@ -19,6 +19,7 @@ use crate::transcript::Body;
 use crate::{Decision, DecisionAnswer, SessionEvent};
 
 mod browser_annotations;
+mod browser_lifetime;
 #[cfg(unix)]
 mod browser_providers;
 mod drive;
@@ -26,6 +27,7 @@ mod environment;
 mod factory;
 mod owned;
 mod park;
+mod progress;
 mod publish;
 mod starts;
 
@@ -5217,7 +5219,7 @@ fn browser_test_window(harness: &Harness, thread: ThreadId) -> crate::link::Clie
                 name: "browser-owner".into(),
                 version: "0".into(),
             },
-            capabilities: vec![Capability::ConversationBrowser],
+            capabilities: vec![Capability::ConversationBrowser, Capability::BrowserDispatch],
         },
     )
     .unwrap();
@@ -5259,15 +5261,19 @@ fn browser_test_answer(
             document,
             revision,
             control,
+            dispatch,
         } = client
             .messages
             .recv_timeout(Duration::from_secs(5))
             .unwrap()
         {
             assert_eq!(control, expected);
+            let boot_id = dispatch.expect("dispatch capability");
+            browser_test_dispatch(client, request, &boot_id, thread, owner, document, revision);
             client
                 .send(&ClientMessage::BrowserReply {
                     request,
+                    boot_id: Some(boot_id),
                     thread,
                     owner,
                     document,
@@ -5278,6 +5284,23 @@ fn browser_test_answer(
             return;
         }
     }
+}
+
+fn browser_test_dispatch(
+    client: &mut crate::link::Client,
+    request: u64,
+    boot_id: &str,
+    thread: ThreadId,
+    owner: crate::browser::Owner,
+    document: crate::browser::Document,
+    revision: u64,
+) {
+    assert!(matches!(
+        browser_test_command(client, 10_000 + request, Op::BrowserDispatch {
+            request, boot_id: boot_id.into(), thread, owner, document, revision,
+        }),
+        ServerMessage::Reply { ok: Some(Done::BrowserDispatch { remaining_ms: 1.. }), error: None, .. }
+    ));
 }
 
 #[test]
@@ -6083,6 +6106,7 @@ fn browser_requests_allow_operator_recovery_without_discarding_annotation_protec
             break (request, revision);
         }
     };
+    browser_test_dispatch(&mut owner_window, number, &window.boot_id, thread, owner, document, revision);
     assert!(
         agent
             .submit(Operation::Action {
@@ -6121,6 +6145,7 @@ fn browser_requests_allow_operator_recovery_without_discarding_annotation_protec
     owner_window
         .send(&ClientMessage::BrowserReply {
             request: number,
+            boot_id: Some(window.boot_id.clone()),
             thread,
             owner,
             document,
@@ -6284,6 +6309,7 @@ fn browser_requests_cannot_promote_reads_started_before_operator_settlement() {
             break request;
         }
     };
+    browser_test_dispatch(&mut owner_window, request, &window.boot_id, thread, owner, document, revision);
     browser_test_command(
         &mut owner_window,
         602,
@@ -6297,6 +6323,7 @@ fn browser_requests_cannot_promote_reads_started_before_operator_settlement() {
     owner_window
         .send(&ClientMessage::BrowserReply {
             request,
+            boot_id: Some(window.boot_id.clone()),
             thread,
             owner,
             document,
@@ -6354,6 +6381,7 @@ fn browser_requests_cannot_promote_reads_started_before_operator_settlement() {
             break request;
         }
     };
+    browser_test_dispatch(&mut owner_window, request, &window.boot_id, thread, owner, document, revision);
     let ServerMessage::Reply {
         ok: Some(Done::BrowserProtection { lease }),
         error: None,
@@ -6374,6 +6402,7 @@ fn browser_requests_cannot_promote_reads_started_before_operator_settlement() {
     owner_window
         .send(&ClientMessage::BrowserReply {
             request,
+            boot_id: Some(window.boot_id.clone()),
             thread,
             owner,
             document,

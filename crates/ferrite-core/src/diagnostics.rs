@@ -1,6 +1,7 @@
-//! What Ferrite says about itself after the fact (ADR 0019): one capped,
-//! rotating log under `~/.ferrite/logs`, a crash report per panic beside
-//! it, and the text Settings › About copies for a bug report.
+//! What Ferrite says about itself after the fact (ADR 0019): a capped,
+//! rotating log per process under `~/.ferrite/logs` (the window's and the
+//! Server's), a crash report per panic beside them, and the text Settings ›
+//! About copies for a bug report, which carries both logs.
 //!
 //! A Dock launch has no terminal, so anything only printed is lost. Every
 //! line goes to stderr as before and, once `open` has named the directory,
@@ -13,10 +14,11 @@ use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
 
-/// The live log's name under `logs/`; the one before it is `ferrite.log.1`.
+/// The window's live log under `logs/`.
 const LOG: &str = "ferrite.log";
-const PREVIOUS: &str = "ferrite.log.1";
-/// Past this the live log becomes the previous one: two files, about 2 MB.
+/// The Server's, beside it: most of what a Thread does is said there.
+const SERVER_LOG: &str = "server.log";
+/// Past this a live log becomes its previous one: two files, about 2 MB.
 const CAP: u64 = 1024 * 1024;
 /// Crash reports kept; a new one past this removes the oldest.
 const CRASHES: usize = 5;
@@ -39,9 +41,13 @@ pub fn open(dir: &Path) {
     open_as(dir, LOG);
 }
 
-/// `open`, into a log of its own: the Server's is `server.log`, so the
-/// window's and the Server's lines never interleave.
-pub fn open_as(dir: &Path, name: &'static str) {
+/// `open`, for the Server: a log of its own, so its lines and the window's
+/// never interleave.
+pub fn open_server(dir: &Path) {
+    open_as(dir, SERVER_LOG);
+}
+
+fn open_as(dir: &Path, name: &'static str) {
     let logs = logs(dir);
     let log = Log::new(logs.clone(), name, CAP);
     if SINK.set(Mutex::new(log)).is_err() {
@@ -81,7 +87,7 @@ pub fn write(line: fmt::Arguments) {
 
 /// The text "Copy diagnostics" puts on the clipboard: `facts` (version,
 /// platform, the CLIs) one per line, then from `<dir>/logs` the newest
-/// crash report whole and the end of the log.
+/// crash report whole and the end of each process's log.
 pub fn report(dir: &Path, facts: &[(&str, String)]) -> String {
     let dir = logs(dir);
     let mut text = String::from("Ferrite diagnostics\n");
@@ -92,18 +98,32 @@ pub fn report(dir: &Path, facts: &[(&str, String)]) -> String {
         let contents = fs::read_to_string(&crash).unwrap_or_default();
         text.push_str(&format!("\n--- {} ---\n{contents}\n", crash.display()));
     }
-    let lines: Vec<String> = [PREVIOUS, LOG]
+    for name in [LOG, SERVER_LOG] {
+        let tail = tail(&dir, name);
+        text.push_str(&format!("\n--- {name}, last {} lines ---\n", tail.len()));
+        for line in tail {
+            text.push_str(&line);
+            text.push('\n');
+        }
+    }
+    text
+}
+
+/// The last `REPORT_LINES` lines of the log `name` in `dir`, oldest first,
+/// reaching back into its previous file when the live one is short.
+fn tail(dir: &Path, name: &str) -> Vec<String> {
+    let mut lines: Vec<String> = [previous(name), name.to_string()]
         .iter()
         .filter_map(|name| fs::read_to_string(dir.join(name)).ok())
         .flat_map(|contents| contents.lines().map(str::to_string).collect::<Vec<_>>())
         .collect();
-    let tail = &lines[lines.len().saturating_sub(REPORT_LINES)..];
-    text.push_str(&format!("\n--- log, last {} lines ---\n", tail.len()));
-    for line in tail {
-        text.push_str(line);
-        text.push('\n');
-    }
-    text
+    lines.drain(..lines.len().saturating_sub(REPORT_LINES));
+    lines
+}
+
+/// What the log `name` is renamed to when it fills.
+fn previous(name: &str) -> String {
+    format!("{name}.1")
 }
 
 /// The log file pair in one directory, rotated at `cap` bytes.
@@ -132,7 +152,7 @@ impl Log {
         let full = fs::metadata(&path).is_ok_and(|meta| meta.len() + entry.len() as u64 > self.cap);
         if full {
             self.file = None;
-            fs::rename(&path, self.dir.join(format!("{}.1", self.name)))?;
+            fs::rename(&path, self.dir.join(previous(self.name)))?;
         }
         if self.file.is_none() {
             fs::create_dir_all(&self.dir)?;
@@ -213,7 +233,7 @@ mod tests {
         }
 
         let live = fs::read_to_string(dir.join(LOG)).unwrap();
-        let previous = fs::read_to_string(dir.join(PREVIOUS)).unwrap();
+        let previous = fs::read_to_string(dir.join(previous(LOG))).unwrap();
         assert!(live.len() <= 200 && previous.len() <= 200);
         assert!(live.ends_with("line 19\n"), "{live}");
         assert!(!previous.contains("line 0\n"), "the oldest lines are gone");
@@ -258,5 +278,33 @@ mod tests {
         assert!(!report.contains("old crash"), "only the newest crash");
         let ended = report.find("session ended").unwrap();
         assert!(ended < report.find("parked").unwrap(), "{report}");
+    }
+
+    /// The copied report carries the Server's log after the window's, and
+    /// reaches into a rotated file: a bug in a Thread is usually told there.
+    #[test]
+    fn the_report_carries_the_servers_log_beside_the_windows() {
+        let dir = scratch("report-server");
+        let logs = logs(&dir);
+        Log::new(logs.clone(), LOG, CAP)
+            .append("window: opened")
+            .unwrap();
+        let mut server = Log::new(logs.clone(), SERVER_LOG, 120);
+        for n in 0..6 {
+            server.append(&format!("server: line {n}")).unwrap();
+        }
+        assert!(logs.join(previous(SERVER_LOG)).exists(), "it rotated");
+
+        let report = report(&dir, &[]);
+
+        let at = |needle: &str| {
+            report
+                .find(needle)
+                .unwrap_or_else(|| panic!("no {needle:?} in\n{report}"))
+        };
+        assert!(at("--- ferrite.log, last 1 lines ---") < at("window: opened"));
+        assert!(at("window: opened") < at("--- server.log, last 6 lines ---"));
+        assert!(at("--- server.log") < at("server: line 0"));
+        assert!(at("server: line 0") < at("server: line 5"));
     }
 }

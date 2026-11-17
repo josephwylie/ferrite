@@ -481,6 +481,18 @@ pub struct WirePr {
     pub url: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub body: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub author: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub author_avatar_url: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub updated_at: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub changed_files: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub additions: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub deletions: Option<u64>,
     pub state: WirePrState,
     #[serde(default)]
     pub draft: bool,
@@ -578,6 +590,12 @@ pub enum WireCheckStatus {
 /// A review, a plain comment, or an inline finding on the pull request.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WirePrComment {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub author_is_bot: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub place: Option<WireFindingPlace>,
     pub kind: WirePrCommentKind,
     pub author: String,
     /// `path:start-end` for a finding, the kind's word otherwise.
@@ -596,6 +614,20 @@ pub struct WirePrComment {
     pub outdated: bool,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub replies: Vec<WireReply>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WireFindingPlace {
+    pub path: String,
+    pub range: Option<(u32, u32)>,
+    pub side: Option<WireDiffSide>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WireDiffSide {
+    Old,
+    New,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -620,6 +652,10 @@ pub enum WireReviewState {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WireReply {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub author_is_bot: bool,
     pub author: String,
     pub body: String,
     pub created_at: String,
@@ -632,6 +668,12 @@ impl From<forge::PrSnapshot> for WirePr {
             title: pr.title,
             url: pr.url,
             body: pr.body,
+            author: pr.author,
+            author_avatar_url: pr.author_avatar_url,
+            updated_at: pr.updated_at,
+            changed_files: pr.changed_files,
+            additions: pr.additions,
+            deletions: pr.deletions,
             state: match pr.state {
                 forge::PrState::Open => WirePrState::Open,
                 forge::PrState::Merged => WirePrState::Merged,
@@ -666,41 +708,55 @@ impl From<forge::PrSnapshot> for WirePr {
                     url: check.url,
                 })
                 .collect(),
-            comments: pr
-                .comments
-                .into_iter()
-                .map(|comment| WirePrComment {
-                    kind: match comment.kind {
-                        forge::CommentKind::Review => WirePrCommentKind::Review,
-                        forge::CommentKind::Comment => WirePrCommentKind::Comment,
-                        forge::CommentKind::Finding => WirePrCommentKind::Finding,
-                    },
-                    author: comment.author,
-                    anchor: comment.anchor,
-                    verdict: comment.verdict.map(|state| match state {
-                        forge::ReviewState::Approved => WireReviewState::Approved,
-                        forge::ReviewState::ChangesRequested => WireReviewState::ChangesRequested,
-                        forge::ReviewState::Commented => WireReviewState::Commented,
-                    }),
-                    body: comment.body,
-                    snippet: comment.snippet,
-                    created_at: comment.created_at,
-                    resolved: comment.is_resolved,
-                    outdated: comment.is_outdated,
-                    replies: comment
-                        .replies
-                        .into_iter()
-                        .map(|reply| WireReply {
-                            author: reply.author,
-                            body: reply.body,
-                            created_at: reply.created_at,
-                        })
-                        .collect(),
-                })
-                .collect(),
+            comments: pr.comments.into_iter().map(WirePrComment::from).collect(),
             truncated: pr.comments_truncated || pr.checks_truncated,
             checks_truncated: pr.checks_truncated,
             comments_truncated: pr.comments_truncated,
+        }
+    }
+}
+
+impl From<forge::Comment> for WirePrComment {
+    fn from(comment: forge::Comment) -> Self {
+        Self {
+            id: comment.id,
+            author_is_bot: comment.author_is_bot,
+            place: comment.place.map(|place| WireFindingPlace {
+                path: place.path,
+                range: place.range,
+                side: place.side.map(|side| match side {
+                    ferrite_reviewr::model::Side::Old => WireDiffSide::Old,
+                    ferrite_reviewr::model::Side::New => WireDiffSide::New,
+                }),
+            }),
+            kind: match comment.kind {
+                forge::CommentKind::Review => WirePrCommentKind::Review,
+                forge::CommentKind::Comment => WirePrCommentKind::Comment,
+                forge::CommentKind::Finding => WirePrCommentKind::Finding,
+            },
+            author: comment.author,
+            anchor: comment.anchor,
+            verdict: comment.verdict.map(|state| match state {
+                forge::ReviewState::Approved => WireReviewState::Approved,
+                forge::ReviewState::ChangesRequested => WireReviewState::ChangesRequested,
+                forge::ReviewState::Commented => WireReviewState::Commented,
+            }),
+            body: comment.body,
+            snippet: comment.snippet,
+            created_at: comment.created_at,
+            resolved: comment.is_resolved,
+            outdated: comment.is_outdated,
+            replies: comment
+                .replies
+                .into_iter()
+                .map(|reply| WireReply {
+                    id: reply.id,
+                    author_is_bot: reply.author_is_bot,
+                    author: reply.author,
+                    body: reply.body,
+                    created_at: reply.created_at,
+                })
+                .collect(),
         }
     }
 }
@@ -858,7 +914,9 @@ impl WirePrUnread {
                 forge::Failure::Offline => Self::Offline,
                 forge::Failure::Other => Self::Failed,
             }),
-            PrView::Pending | PrView::Loading | PrView::Held | PrView::GitError(_) => Some(Self::Failed),
+            PrView::Pending | PrView::Loading | PrView::Held | PrView::GitError(_) => {
+                Some(Self::Failed)
+            }
             PrView::Pr(_)
             | PrView::NoPr
             | PrView::Detached
@@ -1022,6 +1080,49 @@ mod tests {
     /// A pull request's snapshot becomes the wire's; with none, the note
     /// says why, in the forge's noun.
     #[test]
+    fn provider_activity_keeps_identity_bot_status_and_file_location_on_the_wire() {
+        let comment: WirePrComment = forge::Comment {
+            id: Some("comment-1".into()),
+            kind: forge::CommentKind::Finding,
+            author: "reviewer[bot]".into(),
+            author_is_bot: true,
+            anchor: "src/lib.rs:4".into(),
+            verdict: None,
+            place: Some(forge::FindingPlace::from_lines(
+                "src/lib.rs",
+                Some(4),
+                Some(4),
+                Some(ferrite_reviewr::model::Side::New),
+            )),
+            body: "Check this".into(),
+            snippet: None,
+            created_at: String::new(),
+            is_resolved: false,
+            is_outdated: false,
+            replies: vec![forge::Reply {
+                id: Some("reply-1".into()),
+                author: "ada".into(),
+                author_is_bot: false,
+                body: "Fixed".into(),
+                created_at: String::new(),
+            }],
+        }
+        .into();
+        assert_eq!(comment.id.as_deref(), Some("comment-1"));
+        assert!(comment.author_is_bot);
+        assert_eq!(comment.place.as_ref().unwrap().path, "src/lib.rs");
+        assert_eq!(comment.place.as_ref().unwrap().range, Some((4, 4)));
+        assert_eq!(
+            comment.place.as_ref().unwrap().side,
+            Some(WireDiffSide::New)
+        );
+        assert_eq!(comment.replies[0].id.as_deref(), Some("reply-1"));
+        let roundtrip: WirePrComment =
+            serde_json::from_str(&serde_json::to_string(&comment).unwrap()).unwrap();
+        assert_eq!(roundtrip, comment);
+    }
+
+    #[test]
     fn a_pull_request_carries_its_snapshot_or_its_note() {
         let note = ReviewPullRequest::of(PrView::NoPr, "MR");
         assert_eq!(note.pr, Err("No MR yet. Ready to ship?".into()));
@@ -1048,8 +1149,14 @@ mod tests {
         let github = ferrite_reviewr::git::Forge::GitHub;
         for (view, kind) in [
             (PrView::TimedOut(github), WirePrUnread::TimedOut),
-            (PrView::Error(github, "API rate limit exceeded".into()), WirePrUnread::RateLimited),
-            (PrView::Error(github, "dial tcp: no such host".into()), WirePrUnread::Offline),
+            (
+                PrView::Error(github, "API rate limit exceeded".into()),
+                WirePrUnread::RateLimited,
+            ),
+            (
+                PrView::Error(github, "dial tcp: no such host".into()),
+                WirePrUnread::Offline,
+            ),
         ] {
             assert_eq!(ReviewPullRequest::of(view, "PR").unread, Some(kind));
         }

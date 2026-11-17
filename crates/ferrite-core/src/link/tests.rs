@@ -577,11 +577,11 @@ fn browser_annotation_upload_does_not_wait_for_socket_and_keeps_following_messag
                     height: 1.,
                 },
             },
-            png: protocol::WirePng {
+            png: Some(protocol::WirePng {
                 width: 1,
                 height: 1,
                 base64: "A".repeat(8 * 1024 * 1024),
-            },
+            }),
         },
     });
     let (queued, returned) = mpsc::channel();

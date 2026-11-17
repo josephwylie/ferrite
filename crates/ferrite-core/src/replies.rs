@@ -33,6 +33,16 @@ pub struct Source {
     pub block: BlockId,
 }
 
+/// A citation's location in its native text member. Offsets count normalized UTF-16 units.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Selector {
+    pub part: usize,
+    pub start: usize,
+    pub end: usize,
+    pub prefix: String,
+    pub suffix: String,
+}
+
 /// A passage the operator replied to, what they said about it (empty for a
 /// bare quote; it may span lines), and where it came from when it was cited
 /// from a transcript.
@@ -42,6 +52,8 @@ pub struct Reply {
     pub text: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source: Option<Source>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub selector: Option<Selector>,
 }
 
 impl Reply {
@@ -50,6 +62,7 @@ impl Reply {
             quote: quote.into(),
             text: text.into(),
             source: None,
+            selector: None,
         }
     }
 
@@ -316,4 +329,16 @@ mod tests {
         let prompt = compose(&replies, text);
         assert_eq!(split(&prompt), (replies, text));
     }
+    #[test]
+    fn citation_selectors_round_trip_and_old_drafts_still_load() {
+        let mut reply = Reply::new("same passage", "comment");
+        reply.selector = Some(super::Selector {
+            part: 0, start: 45, end: 57, prefix: "the second ".into(), suffix: " follows".into(),
+        });
+        let json = serde_json::to_string(&reply).unwrap();
+        assert_eq!(serde_json::from_str::<Reply>(&json).unwrap(), reply);
+        let old: Reply = serde_json::from_str(r#"{"quote":"old quote","text":""}"#).unwrap();
+        assert!(old.selector.is_none());
+    }
+
 }

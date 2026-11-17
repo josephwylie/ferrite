@@ -1728,7 +1728,7 @@ mod tests {
         );
         assert_eq!(
             crate::prompt_files::paths(&text, None),
-            [annotation.original().to_path_buf()],
+            [annotation.original().unwrap().to_path_buf()],
             "page text must never become a filesystem image reference"
         );
         assert_eq!(blocks[1]["type"], "image");

@@ -139,7 +139,7 @@ impl Queue {
     pub fn refused(&mut self, id: &str) {
         self.admitting.retain(|admitting| admitting != id);
         self.metadata.pending.remove(id);
-        let _ = self.save();
+        self.save_removal();
     }
     /// Every prompt not yet picked up, newest first: what Ferrite holds,
     /// then what the provider is taking, then what it has queued.
@@ -206,7 +206,7 @@ impl Queue {
             self.consume(&item.client_id);
             self.dropped.insert(item.id.clone());
         }
-        let _ = self.save();
+        self.save_removal();
         items
     }
     /// A prompt sent as a turn of its own under `client_id`, already
@@ -239,7 +239,7 @@ impl Queue {
             .collect::<Vec<_>>()
             .join("\n\n");
         self.metadata.pending.clear();
-        let _ = self.save();
+        self.save_removal();
         Some(format!("Claude Session ended with pending input; delivery is uncertain and was not retried:\n{texts}"))
     }
     fn raw(&self, item: &mut QueuedPrompt) {
@@ -346,6 +346,19 @@ impl Queue {
         }
         change
     }
+    /// `save`, after taking prompts out. A failure loses none of them, but
+    /// the file still lists them until a later save: reopening the Thread
+    /// then reports them as uncertain again (Claude) or starts a Session to
+    /// send what is not there (Codex). The log says why.
+    fn save_removal(&self) {
+        if let Err(error) = self.save() {
+            crate::log!(
+                "queue {}: a removal was not saved: {error}",
+                self.path.display()
+            );
+        }
+    }
+
     /// Saved beside and renamed over, behind a barrier: the queue is whole
     /// on disk before the rename can be, without waiting on the drive's
     /// cache for every prompt queued (ADR 0009).
