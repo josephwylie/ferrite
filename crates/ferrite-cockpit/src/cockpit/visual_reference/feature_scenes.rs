@@ -188,7 +188,6 @@ fn review(staged: Staged) -> (Scene, Setup) {
         let reading = view.prefs.settings.reading_size;
         let review =
             cx.new(|cx| ReviewView::new(composer.clone(), ReviewScope::Uncommitted, reading, cx));
-        view.empty_shown = false;
         view.panes[index].review.show(review.clone(), "main".into());
         window.focus(&review.focus_handle(cx), cx);
         review.update(cx, |review, cx| {
@@ -490,7 +489,6 @@ fn reader() -> (Scene, Setup) {
     let setup: Setup = Box::new(move |view, window, cx| {
         std::fs::create_dir_all(file.parent().unwrap()).unwrap();
         std::fs::write(&file, NAV_RS).unwrap();
-        view.empty_shown = false;
         view.open_preview(file.clone(), Some(14), window, cx);
     });
     (scene, setup)
@@ -1103,7 +1101,6 @@ fn output_cards(label: &str) -> (super::Scene, std::path::PathBuf) {
 fn page_pane() -> (Scene, Setup) {
     let (scene, page) = output_cards("page-pane");
     let setup: Setup = Box::new(move |view, window, _| {
-        view.empty_shown = false;
         view.panes[0]
             .preview
             .open_page(ferrite_pane::page::PageSource::File(page.clone()), window);

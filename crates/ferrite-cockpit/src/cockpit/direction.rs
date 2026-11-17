@@ -175,7 +175,7 @@ fn read(task: &Task, to: &Destination) -> String {
 impl CockpitView {
     /// The Task's drafts, made once.
     pub(crate) fn ensure_drafts(&mut self, task: &str, cx: &mut Context<Self>) {
-        let Some(view) = self.factory_view.as_ref() else {
+        let Some(view) = self.factory() else {
             return;
         };
         if view.direct.drafts.contains_key(task) {
@@ -196,17 +196,17 @@ impl CockpitView {
             skip: Vec::new(),
             then: ThenReturn::Routes,
         };
-        if let Some(view) = self.factory_view.as_mut() {
+        if let Some(view) = self.factory_mut() {
             view.direct.drafts.insert(task.to_string(), drafts);
         }
     }
 
     pub(crate) fn task_drafts(&self, task: &str) -> Option<&TaskDrafts> {
-        self.factory_view.as_ref()?.direct.drafts.get(task)
+        self.factory()?.direct.drafts.get(task)
     }
 
     fn task_drafts_mut(&mut self, task: &str) -> Option<&mut TaskDrafts> {
-        self.factory_view.as_mut()?.direct.drafts.get_mut(task)
+        self.factory_mut()?.direct.drafts.get_mut(task)
     }
 
     /// What a Task's field holds now.
@@ -219,7 +219,7 @@ impl CockpitView {
     /// The field holding the keyboard on the open Task's say, while it is
     /// on screen: its sheet, or the answer box on the Board's Overview.
     pub(super) fn direct_focus(&self, cx: &gpui::App) -> Option<FocusHandle> {
-        let view = self.factory_view.as_ref()?;
+        let view = self.factory()?;
         let field = view.direct.focused?;
         let task = match &view.direct.sheet {
             Some((task, _)) => task.as_str(),
@@ -235,7 +235,7 @@ impl CockpitView {
     }
 
     pub(crate) fn focus_direct(&mut self, field: DirectField, cx: &mut Context<Self>) {
-        if let Some(view) = self.factory_view.as_mut() {
+        if let Some(view) = self.factory_mut() {
             view.direct.focused = Some(field);
         }
         cx.notify();
@@ -247,7 +247,7 @@ impl CockpitView {
             Ok(_) => (true, None),
             Err(error) => (false, Some(SharedString::from(error.to_string()))),
         };
-        if let Some(view) = self.factory_view.as_mut() {
+        if let Some(view) = self.factory_mut() {
             view.note = note;
         }
         cx.notify();
@@ -275,7 +275,7 @@ impl CockpitView {
         };
         let text = self.direct_text(&task.id, DirectField::Answer, cx);
         if text.trim().is_empty() {
-            if let Some(view) = self.factory_view.as_mut() {
+            if let Some(view) = self.factory_mut() {
                 view.note = Some("Write the answer first.".into());
             }
             cx.notify();
@@ -289,7 +289,7 @@ impl CockpitView {
         if self.direct_command(action, cx) {
             self.clear_field(&task.id, DirectField::Answer, cx);
             // Answered, the box lets the keyboard go.
-            if let Some(view) = self.factory_view.as_mut() {
+            if let Some(view) = self.factory_mut() {
                 view.direct.focused = None;
             }
         }
@@ -308,7 +308,7 @@ impl CockpitView {
             return;
         };
         self.ensure_drafts(&task, cx);
-        if let Some(view) = self.factory_view.as_mut() {
+        if let Some(view) = self.factory_mut() {
             view.direct.sheet = Some((task, sheet));
             view.direct.tried = false;
             view.direct.focused = Some(match sheet {
@@ -321,7 +321,7 @@ impl CockpitView {
 
     /// Close the sheet; what was typed stays for the next time.
     pub(crate) fn close_direct_sheet(&mut self, cx: &mut Context<Self>) {
-        if let Some(view) = self.factory_view.as_mut() {
+        if let Some(view) = self.factory_mut() {
             view.direct.sheet = None;
             view.direct.tried = false;
             view.direct.focused = None;
@@ -331,7 +331,7 @@ impl CockpitView {
     }
 
     fn sheet_task(&self) -> Option<Task> {
-        let (task, _) = self.factory_view.as_ref()?.direct.sheet.as_ref()?;
+        let (task, _) = self.factory()?.direct.sheet.as_ref()?;
         self.cockpit.factory().task(task).cloned()
     }
 
@@ -341,7 +341,7 @@ impl CockpitView {
         let Some(task) = self.sheet_task() else {
             return;
         };
-        if let Some(view) = self.factory_view.as_mut() {
+        if let Some(view) = self.factory_mut() {
             view.direct.tried = true;
         }
         let feedback = self.direct_text(&task.id, DirectField::Feedback, cx);
@@ -371,7 +371,7 @@ impl CockpitView {
         let Some(task) = self.sheet_task() else {
             return;
         };
-        if let Some(view) = self.factory_view.as_mut() {
+        if let Some(view) = self.factory_mut() {
             view.direct.tried = true;
         }
         let note = self.direct_text(&task.id, DirectField::Note, cx);
@@ -409,8 +409,7 @@ impl CockpitView {
 
     pub(crate) fn toggle_skip(&mut self, step: StepId, cx: &mut Context<Self>) {
         let Some((task, _)) = self
-            .factory_view
-            .as_ref()
+            .factory()
             .and_then(|view| view.direct.sheet.clone())
         else {
             return;
@@ -428,8 +427,7 @@ impl CockpitView {
 
     pub(crate) fn set_then(&mut self, then: ThenReturn, cx: &mut Context<Self>) {
         let Some((task, _)) = self
-            .factory_view
-            .as_ref()
+            .factory()
             .and_then(|view| view.direct.sheet.clone())
         else {
             return;
@@ -442,8 +440,7 @@ impl CockpitView {
 
     pub(crate) fn apply_task_pick(&mut self, pick: TaskPick, cx: &mut Context<Self>) {
         let Some((task, _)) = self
-            .factory_view
-            .as_ref()
+            .factory()
             .and_then(|view| view.direct.sheet.clone())
         else {
             return;
@@ -757,7 +754,7 @@ impl CockpitView {
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
         use ferrite_ui::theme::*;
-        let view = self.factory_view.as_ref()?;
+        let view = self.factory()?;
         let (id, sheet) = view.direct.sheet.clone()?;
         let task = self.cockpit.factory().task(&id)?.clone();
         let run = task.workflow.as_ref()?;

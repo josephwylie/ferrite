@@ -29,7 +29,7 @@ pub(crate) enum CoordinatorPick {
 impl CockpitView {
     /// The shown Project's Coordinator's Thread, once started.
     pub(crate) fn coordinator_thread(&self) -> Option<ThreadId> {
-        let project = self.factory_view.as_ref()?.project;
+        let project = self.factory()?.project;
         self.cockpit.factory().coordinator(project)?.thread
     }
 
@@ -40,7 +40,7 @@ impl CockpitView {
 
     /// The Coordinator drawn on its surface, which streams whole.
     pub(super) fn coordinator_drawn(&self) -> Option<ThreadId> {
-        let view = self.factory_view.as_ref()?;
+        let view = self.factory()?;
         (view.surface == super::workflows::Surface::Coordinator)
             .then(|| self.coordinator_thread())
             .flatten()
@@ -50,7 +50,7 @@ impl CockpitView {
     /// What the Coordinator runs on: the Factory's choice, else the
     /// operator's defaults.
     pub(crate) fn coordinator_agent(&self) -> Agent {
-        let chosen = self.factory_view.as_ref().and_then(|view| {
+        let chosen = self.factory().and_then(|view| {
             self.cockpit
                 .factory()
                 .coordinator(view.project)?
@@ -74,7 +74,7 @@ impl CockpitView {
 
     /// The opening field, made once.
     pub(crate) fn ensure_coordinator_field(&mut self, cx: &mut Context<Self>) {
-        let Some(view) = self.factory_view.as_ref() else {
+        let Some(view) = self.factory() else {
             return;
         };
         if view.opening.is_some() {
@@ -83,7 +83,7 @@ impl CockpitView {
         let composer = cx.new(Composer::new);
         composer.update(cx, |composer, cx| composer.set_role(Role::Field(None), cx));
         cx.observe(&composer, |_, _, cx| cx.notify()).detach();
-        if let Some(view) = self.factory_view.as_mut() {
+        if let Some(view) = self.factory_mut() {
             view.opening = Some(composer);
         }
     }
@@ -91,7 +91,7 @@ impl CockpitView {
     /// The keyboard while the Coordinator surface shows: its Pane's
     /// Composer once it runs, else the opening field.
     pub(super) fn coordinator_focus(&self, window: &Window, cx: &gpui::App) -> Option<FocusHandle> {
-        let view = self.factory_view.as_ref()?;
+        let view = self.factory()?;
         if view.surface != super::workflows::Surface::Coordinator {
             return None;
         }
@@ -111,7 +111,7 @@ impl CockpitView {
             Ok(done) => (done, None),
             Err(error) => (None, Some(SharedString::from(error.to_string()))),
         };
-        if let Some(view) = self.factory_view.as_mut() {
+        if let Some(view) = self.factory_mut() {
             view.note = note;
         }
         cx.notify();
@@ -120,7 +120,7 @@ impl CockpitView {
 
     /// Send the opening field's words: the Coordinator starts on them.
     pub(crate) fn speak_to_coordinator(&mut self, cx: &mut Context<Self>) {
-        let Some(view) = self.factory_view.as_ref() else {
+        let Some(view) = self.factory() else {
             return;
         };
         let project = view.project;
@@ -156,7 +156,7 @@ impl CockpitView {
     }
 
     pub(crate) fn apply_coordinator_pick(&mut self, pick: CoordinatorPick, cx: &mut Context<Self>) {
-        let Some(project) = self.factory_view.as_ref().map(|view| view.project) else {
+        let Some(project) = self.factory().map(|view| view.project) else {
             return;
         };
         let mut agent = self.coordinator_agent();
@@ -243,7 +243,7 @@ impl CockpitView {
     /// empty one with its opening field), and the proposals beside it.
     pub(super) fn coordinator_surface(&self, window: &mut Window, cx: &mut Context<Self>) -> Div {
         use ferrite_ui::theme::*;
-        let Some(view) = self.factory_view.as_ref() else {
+        let Some(view) = self.factory() else {
             return div();
         };
         let project = view.project;
@@ -401,8 +401,7 @@ impl CockpitView {
         let starting = coordinator.is_some_and(|c| c.starting || c.thread.is_some());
         let error = coordinator.and_then(|c| c.error.clone());
         let field = self
-            .factory_view
-            .as_ref()
+            .factory()
             .and_then(|view| view.opening.clone());
         let focused = field
             .as_ref()

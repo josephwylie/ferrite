@@ -22,7 +22,7 @@ impl CockpitView {
                 _ => return,
             }
         };
-        if let Some(view) = self.factory_view.as_mut() {
+        if let Some(view) = self.factory_mut() {
             view.note = note;
         }
         cx.notify();
@@ -30,7 +30,7 @@ impl CockpitView {
 
     /// Dismiss the view's notice.
     pub(crate) fn dismiss_factory_note(&mut self, cx: &mut Context<Self>) {
-        if let Some(view) = self.factory_view.as_mut() {
+        if let Some(view) = self.factory_mut() {
             view.note = None;
         }
         cx.notify();

@@ -271,7 +271,7 @@ fn routes_problems_and_pickers(cx: &mut TestAppContext) {
             "unsaved"
         );
         assert_eq!(
-            view.factory_view.as_ref().unwrap().note.as_deref(),
+            view.factory().unwrap().note.as_deref(),
             Some("Fix the problems listed before saving.")
         );
     });
@@ -431,7 +431,7 @@ fn routes_problems_and_pickers(cx: &mut TestAppContext) {
         assert_eq!(workflow.versions.len(), 1);
         assert!(!workflow.unsaved());
         assert_eq!(
-            view.factory_view.as_ref().unwrap().note.as_deref(),
+            view.factory().unwrap().note.as_deref(),
             Some("Saved version 1.")
         );
     });
@@ -474,7 +474,7 @@ fn typed_text_survives_what_happens_around_it(cx: &mut TestAppContext) {
     click(cx, "inspector-instructions");
     view.read_with(cx, |view, _| {
         assert_eq!(
-            view.factory_view.as_ref().unwrap().workflows.focused,
+            view.factory().unwrap().workflows.focused,
             Some(instructions.clone())
         );
     });
@@ -507,7 +507,7 @@ fn typed_text_survives_what_happens_around_it(cx: &mut TestAppContext) {
     holds(&view, cx, "a field revealed");
 
     view.update(cx, |view, cx| {
-        view.factory_view.as_mut().unwrap().note = Some("A notice".into());
+        view.factory_mut().unwrap().note = Some("A notice".into());
         cx.notify();
     });
     tick(cx);
@@ -547,7 +547,7 @@ fn typed_text_survives_what_happens_around_it(cx: &mut TestAppContext) {
 
     click(cx, "workflow-save");
     view.update(cx, |view, cx| {
-        view.factory_view = None;
+        view.leave_destination();
         cx.notify();
     });
     tick(cx);

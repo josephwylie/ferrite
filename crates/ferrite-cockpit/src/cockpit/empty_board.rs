@@ -10,7 +10,6 @@
 //! The rows are a list with its own focus and key context (`EmptyBoard`):
 //! `empty_board::Next` / `Previous` move the selection, `Run` does what the
 //! row says (the floats package binds ↑ ↓ ⏎). A press does the same.
-//! `show_empty_board` shows it while Threads stay open.
 
 use super::*;
 
@@ -88,19 +87,9 @@ fn home_row(
 }
 
 impl CockpitView {
-    /// Show the empty board while Threads stay open — a fixture's door
-    /// (tests, visual references): the app reaches it only when no Pane is
-    /// visible. The next landing on a Pane leaves it.
-    #[cfg(any(test, feature = "visual-reference"))]
-    pub(crate) fn show_empty_board(&mut self, cx: &mut Context<Self>) {
-        self.empty_shown = true;
-        self.empty_cursor = 0;
-        cx.notify();
-    }
-
     /// Whether the empty board is what the board draws this frame.
     pub(super) fn empty_board_shown(&self) -> bool {
-        self.empty_shown || self.visible_indices().is_empty()
+        self.visible_indices().is_empty()
     }
 
     /// The hook the root render calls (frame's actions): the empty board's
@@ -215,7 +204,6 @@ impl CockpitView {
             return;
         };
         self.empty_cursor = at;
-        self.empty_shown = false;
         window.dispatch_action(row.run, cx);
         cx.notify();
     }
@@ -408,7 +396,6 @@ impl CockpitView {
             .hover_row(format!("empty-board-recent-{}", thread.get()))
             .press_row()
             .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
-                view.empty_shown = false;
                 if open {
                     view.focus_thread(thread, cx);
                 } else {
