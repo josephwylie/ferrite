@@ -3,6 +3,12 @@
 
 use super::*;
 
+pub(super) fn sidebar_width(cx: &mut gpui::VisualTestContext, preferred: f32, viewport: f32) -> f32 {
+    let header = cx.debug_bounds("nav-head").expect("the rendered brand and history");
+    let minimum = (f32::from(header.right()) + 12.0 + 1.0).ceil().max(208.0);
+    preferred.clamp(minimum, (viewport.floor() - 640.0).max(minimum))
+}
+
 fn sorted_threads(core: &Cockpit) -> Vec<ThreadId> {
     let mut threads = core.threads();
     threads.sort();
@@ -100,35 +106,45 @@ fn the_board_starts_past_the_card(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
-fn the_edge_tab_folds_and_opens_the_nav(cx: &mut TestAppContext) {
-    use ferrite_ui::theme::{HISTORY_X, NAV_EDGE_TAB_W};
-    let (core, _fake) = cockpit("nav-edge-tab", 2);
+fn the_header_toggle_folds_and_reopens_the_sidebar(cx: &mut TestAppContext) {
+    use ferrite_ui::theme::{ICON_BUTTON, NAV_HEADER_H, WIN_CHROME_H};
+    let (core, _fake) = cockpit("nav-header-toggle", 2);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     hide_panel(&view, cx);
     cx.simulate_resize(gpui::size(px(1440.), px(900.)));
     tick(cx);
-    let card = cx.debug_bounds("nav-card").expect("open, the card");
-    let tab = cx.debug_bounds("nav-edge-tab").expect("the tab");
-    assert!((tab.left() - card.right()).abs() <= px(1.), "on the card's edge: {tab:?}");
-    assert!((tab.center().y - card.center().y).abs() <= px(0.5), "at its mid-height");
-    let back = cx.debug_bounds("history-back").expect("the back arrow");
-    assert!(back.bottom() <= card.top(), "open, back sits in the titlebar: {back:?}");
-    assert!(cx.debug_bounds("nav-collapse").is_none(), "no other fold control");
+    let toggle = cx.debug_bounds("nav-toggle").expect("header toggle");
+    assert_eq!(toggle.size, gpui::size(px(ICON_BUTTON), px(ICON_BUTTON)));
+    assert_eq!(toggle.left(), px(nav::header_controls_left(false) + 1.0));
+    assert_eq!(toggle.center().y, px(NAV_HEADER_H / 2.0));
+    let brand = cx.debug_bounds("nav-brand").expect("brand");
+    assert_eq!(brand.left(), px(nav::header_controls_left(false) + ICON_BUTTON + 12.0));
+    let back = cx.debug_bounds("history-back").expect("back arrow");
+    assert!(brand.right() < back.left());
+    assert_eq!(back.center().y, toggle.center().y);
+    let card = cx.debug_bounds("nav-card").expect("sidebar");
+    let seam = cx.debug_bounds("board-header-seam").expect("board divider");
+    assert_eq!(seam.left(), card.right(), "the board divider clears the sidebar");
+    assert_eq!(seam.bottom(), px(WIN_CHROME_H), "the board retains its own header height");
+    assert!(cx.debug_bounds("nav-edge-tab").is_none());
 
-    cx.simulate_click(tab.center(), gpui::Modifiers::none());
+    cx.simulate_click(toggle.center(), gpui::Modifiers::none());
     tick(cx);
-    assert!(view.read_with(cx, |view, _| view.nav_folded()), "the tab folds it");
-    assert!(cx.debug_bounds("nav-card").is_none(), "folded, the card goes away");
-    let tab = cx.debug_bounds("nav-edge-tab").expect("the tab stays");
-    assert_eq!(tab.left(), px(0.), "at the window's edge");
-    assert_eq!(tab.size.width, px(NAV_EDGE_TAB_W));
-    let back = cx.debug_bounds("history-back").expect("the back arrow");
-    assert_eq!(back.left(), px(HISTORY_X), "beside the traffic lights");
+    assert!(view.read_with(cx, |view, _| view.nav_folded()));
+    for selector in ["nav-card", "nav-brand", "history-back", "history-forward"] {
+        assert!(cx.debug_bounds(selector).is_none(), "{selector} collapses with the sidebar");
+    }
+    let folded_toggle = cx.debug_bounds("nav-toggle").expect("toggle remains");
+    assert_eq!(folded_toggle, toggle, "the control stays in place");
+    let title = cx.debug_bounds("view-title").expect("board title");
+    assert!(title.left() > folded_toggle.right(), "the board title clears the toggle");
 
-    cx.simulate_click(tab.center(), gpui::Modifiers::none());
+    cx.simulate_click(folded_toggle.center(), gpui::Modifiers::none());
     tick(cx);
-    assert!(!view.read_with(cx, |view, _| view.nav_folded()), "and opens it");
+    assert!(!view.read_with(cx, |view, _| view.nav_folded()));
     assert!(cx.debug_bounds("nav-card").is_some());
+    assert!(cx.debug_bounds("nav-brand").is_some());
+    assert!(cx.debug_bounds("history-back").is_some());
 }
 
 #[gpui::test]
@@ -148,14 +164,20 @@ fn resizing_the_sidebar_persists_and_resets_without_losing_collapse(cx: &mut Tes
     tick(cx);
     let before = cx.debug_bounds("nav-card").unwrap();
     let title_width = cx.debug_bounds(title).unwrap().size.width;
-    assert_eq!(before.size.width, px(256.0));
+    let default_width = sidebar_width(cx, nav::WIDTH, 1440.0);
+    let resized_width = default_width + 64.0;
+    let narrow_width = sidebar_width(cx, resized_width, 900.0);
+    assert_eq!(before.size.width, px(default_width));
     let rail = cx.debug_bounds("nav-resize-rail").unwrap();
     let start = rail.center();
     let end = start + gpui::point(px(64.0), px(0.0));
     cx.simulate_mouse_down(start, MouseButton::Left, gpui::Modifiers::none());
+    cx.simulate_mouse_move(end - gpui::point(px(4.0), px(0.0)), Some(MouseButton::Left), gpui::Modifiers::none());
+    tick(cx);
+    assert_eq!(cx.debug_bounds("nav-card").unwrap().size.width, px(default_width + 60.0));
     cx.simulate_mouse_move(end, Some(MouseButton::Left), gpui::Modifiers::none());
     tick(cx);
-    assert_eq!(cx.debug_bounds("nav-card").unwrap().size.width, px(320.0));
+    assert_eq!(cx.debug_bounds("nav-card").unwrap().size.width, px(resized_width), "a small move over the repositioned occluding rail still resizes");
     assert_eq!(cx.debug_bounds(title).unwrap().size.width, title_width + px(64.0));
     assert_eq!(view.read_with(cx, |view, _| view.prefs.settings.nav_width_px), None);
     cx.simulate_event(MouseUpEvent {
@@ -165,23 +187,24 @@ fn resizing_the_sidebar_persists_and_resets_without_losing_collapse(cx: &mut Tes
         click_count: 1,
     });
     tick(cx);
-    assert_eq!(ferrite_core::settings::Settings::load(&dir).unwrap().nav_width_px, Some(320.0));
-    assert_eq!(cx.debug_bounds("nav-titlebar").unwrap().size.width, px(320.0));
-    assert_eq!(cx.debug_bounds("board").unwrap().left(), px(320.0));
+    assert_eq!(view.read_with(cx, |view, _| view.prefs.settings.nav_width_px), Some(resized_width), "release on the rail commits before its click consumes the event");
+    assert_eq!(ferrite_core::settings::Settings::load(&dir).unwrap().nav_width_px, Some(resized_width));
+    assert_eq!(cx.debug_bounds("nav-titlebar").unwrap().size.width, px(resized_width));
+    assert_eq!(cx.debug_bounds("board").unwrap().left(), px(resized_width));
 
     cx.simulate_resize(gpui::size(px(900.0), px(900.0)));
     tick(cx);
-    assert_eq!(cx.debug_bounds("nav-card").unwrap().size.width, px(260.0));
-    assert_eq!(ferrite_core::settings::Settings::load(&dir).unwrap().nav_width_px, Some(320.0));
+    assert_eq!(cx.debug_bounds("nav-card").unwrap().size.width, px(narrow_width));
+    assert_eq!(ferrite_core::settings::Settings::load(&dir).unwrap().nav_width_px, Some(resized_width));
     cx.simulate_resize(gpui::size(px(1440.0), px(900.0)));
     tick(cx);
-    assert_eq!(cx.debug_bounds("nav-card").unwrap().size.width, px(320.0));
+    assert_eq!(cx.debug_bounds("nav-card").unwrap().size.width, px(resized_width));
     view.update(cx, |view, cx| view.set_nav_collapsed(true, cx));
     tick(cx);
     assert!(cx.debug_bounds("nav-resize-rail").is_none());
     view.update(cx, |view, cx| view.set_nav_collapsed(false, cx));
     tick(cx);
-    assert_eq!(cx.debug_bounds("nav-card").unwrap().size.width, px(320.0));
+    assert_eq!(cx.debug_bounds("nav-card").unwrap().size.width, px(resized_width));
 
     let at = cx.debug_bounds("nav-resize-rail").unwrap().center();
     cx.simulate_event(MouseDownEvent {
@@ -198,7 +221,7 @@ fn resizing_the_sidebar_persists_and_resets_without_losing_collapse(cx: &mut Tes
         click_count: 2,
     });
     tick(cx);
-    assert_eq!(cx.debug_bounds("nav-card").unwrap().size.width, px(256.0));
+    assert_eq!(cx.debug_bounds("nav-card").unwrap().size.width, px(default_width));
     assert_eq!(ferrite_core::settings::Settings::load(&dir).unwrap().nav_width_px, None);
     assert!(!view.read_with(cx, |view, _| view.nav_folded()));
 }

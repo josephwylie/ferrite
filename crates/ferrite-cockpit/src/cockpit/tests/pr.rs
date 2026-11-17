@@ -179,6 +179,8 @@ pub(super) fn snapshot(
         changed_files: None,
         additions: None,
         deletions: None,
+        reviewers: None,
+        labels: None,
         state,
         draft: false,
         head: "fix/nav".into(),
@@ -193,6 +195,7 @@ pub(super) fn snapshot(
         comments: vec![WirePrComment {
             id: None,
             author_is_bot: false,
+            author_avatar_url: None,
             place: None,
             kind: WirePrCommentKind::Comment,
             author: "ada".into(),

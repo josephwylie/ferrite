@@ -164,11 +164,11 @@ impl CockpitView {
                             .map(|(repository, _)| repository.to_owned())
                     })
             });
-        let same_repository = checkout
-            .as_ref()
-            .is_some_and(|repository| {
-                ["pull", "issues"].iter().any(|kind| url.starts_with(&format!("{repository}/{kind}/")))
-            });
+        let same_repository = checkout.as_ref().is_some_and(|repository| {
+            ["pull", "issues"]
+                .iter()
+                .any(|kind| url.starts_with(&format!("{repository}/{kind}/")))
+        });
         if same_repository {
             self.upsert_surface(thread, surfaces::SurfaceId::PullRequest(number), cx);
         } else {
@@ -303,7 +303,7 @@ impl CockpitView {
         };
         self.prs.selected = Some(number);
         self.prs.detail = true;
-        self.read_pr_snapshot(PrTarget::project(project, number), true, cx);
+        self.prepare_pr_view(PrTarget::project(project, number), true, cx);
         cx.notify();
     }
 
@@ -405,15 +405,17 @@ impl CockpitView {
             crumbs.push(separator());
             crumbs.push(crumb(format!("#{number}").into(), true).into_any_element());
         }
-        vec![div()
-            .debug_selector(|| "view-breadcrumb".into())
-            .flex()
-            .flex_shrink(1.)
-            .min_w_0()
-            .items_center()
-            .gap(px(t::HEAD_CRUMB_GAP))
-            .children(crumbs)
-            .into_any_element()]
+        vec![
+            div()
+                .debug_selector(|| "view-breadcrumb".into())
+                .flex()
+                .flex_shrink(1.)
+                .min_w_0()
+                .items_center()
+                .gap(px(t::HEAD_CRUMB_GAP))
+                .children(crumbs)
+                .into_any_element(),
+        ]
     }
 
     /// The destination: its scope and filter over the list, or the open PR.
@@ -846,6 +848,14 @@ impl CockpitView {
                     .border_b(px(HAIRLINE_W))
                     .border_color(panel::pull_request::soft_line())
                     .child(back)
+                    .children(snapshot.filter(|_| self.pr_condensed(target)).map(|pr| {
+                        div()
+                            .debug_selector(|| "pr-condensed-title".into())
+                            .min_w_0()
+                            .truncate()
+                            .font_weight(W_LABEL)
+                            .child(SharedString::from(format!("#{} {}", pr.number, pr.title)))
+                    }))
                     .child(div().flex_1())
                     .children(open)
                     .children(tone.map(panel::pull_request::pr_pill)),

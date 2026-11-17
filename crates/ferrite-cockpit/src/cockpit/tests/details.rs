@@ -142,7 +142,16 @@ fn a_narrow_pane_opens_details_as_a_popover(cx: &mut TestAppContext) {
     cx.simulate_keystrokes("cmd-shift-b");
     tick(cx);
     assert!(open(&view, cx));
-    assert!(cx.debug_bounds("details-card").is_some());
+    let card = cx.debug_bounds("details-card").unwrap();
+    let canvas = view.read_with(cx, |view, _| view.panes[0].details.canvas.get().unwrap());
+    assert!(
+        (f32::from(card.top() - canvas.top()) - 8.).abs() < 1.,
+        "the popup's 8px padding sits below the measured header edge"
+    );
+    assert!(
+        (f32::from(canvas.right() - card.right()) - 12.).abs() < 1.,
+        "4px alignment and 8px padding preserve the source edge clearance"
+    );
     assert!(
         cx.debug_bounds("panel").is_none(),
         "popover leaves panel visibility alone"
@@ -416,4 +425,128 @@ fn details_preferences_can_empty_and_restore_the_card(cx: &mut TestAppContext) {
             .context_card_preferences
             .visible(ContextCardItem::Context));
     });
+}
+
+#[gpui::test]
+fn editor_choice_saves_without_launching_and_uses_only_installed_choices(cx: &mut TestAppContext) {
+    use super::super::details::editors::Editors;
+    use ferrite_core::settings::Settings;
+    let (view, thread, cx) = solo("details-editor-preference", 2400., cx);
+    view.update(cx, |view, cx| {
+        view.details_editors = Editors::with_ids(&["vscode", "file-manager"]);
+        view.open_context_menu(
+            MenuTarget::DetailsEditor(thread),
+            gpui::point(px(600.), px(150.)),
+            cx,
+        );
+    });
+    tick(cx);
+    view.read_with(cx, |view, _| {
+        let menu = view.context_menu.as_ref().unwrap();
+        assert_eq!(menu.rows.len(), 2);
+        assert_eq!(menu.rows[0].as_ref().unwrap().0.label.as_ref(), "VS Code");
+        assert!(menu
+            .rows
+            .iter()
+            .flatten()
+            .all(|(item, _)| item.shortcut.is_none()));
+    });
+    let vscode = cx.debug_bounds("context-menu-row-0").unwrap();
+    cx.simulate_click(vscode.center(), gpui::Modifiers::none());
+    tick(cx);
+    view.read_with(cx, |view, _| {
+        assert!(view.context_menu.is_none());
+        assert_eq!(
+            view.prefs.settings.preferred_editor.as_deref(),
+            Some("vscode")
+        );
+        assert_eq!(
+            Settings::load(&view.prefs.dir)
+                .unwrap()
+                .preferred_editor
+                .as_deref(),
+            Some("vscode")
+        );
+    });
+    assert!(cx.debug_bounds("details-choose-editor").is_some());
+}
+
+#[gpui::test]
+fn popup_density_preserves_content_while_the_available_height_shrinks(cx: &mut TestAppContext) {
+    use ferrite_core::settings::ContextCardItem;
+    let (core, fake, _checkout) = bound_cockpit("details-densities", Provider::Claude);
+    bind_production_keys(cx);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    hold_nav_open(&view, cx);
+    cx.simulate_resize(gpui::size(px(1440.), px(900.)));
+    let stream = fake.streams.borrow()[0].clone();
+    stream
+        .send(SessionEvent::RateLimits {
+            five_hour: Some(ferrite_core::RateLimitWindow {
+                used_fraction: 0.25,
+                resets_at: None,
+            }),
+            weekly: Some(ferrite_core::RateLimitWindow {
+                used_fraction: 0.4,
+                resets_at: None,
+            }),
+        })
+        .unwrap();
+    stream
+        .send(SessionEvent::TokenUsage {
+            total_tokens: 50_000,
+            input_tokens: 40_000,
+            cached_input_tokens: 5_000,
+            output_tokens: 5_000,
+            reasoning_output_tokens: 0,
+            context_window: Some(200_000),
+        })
+        .unwrap();
+    view.update(cx, |view, cx| {
+        view.change_settings(
+            |settings| {
+                settings
+                    .context_card_preferences
+                    .set(ContextCardItem::Usage, true);
+                settings
+                    .context_card_preferences
+                    .set(ContextCardItem::Context, true);
+            },
+            cx,
+        )
+    });
+    tick(cx);
+    cx.simulate_keystrokes("cmd-shift-b");
+    tick(cx);
+    let full = cx
+        .debug_bounds("details-density-full")
+        .expect("full initially fits");
+    assert!(cx.debug_bounds("details-item-environment-0").is_some());
+    assert!(cx.debug_bounds("details-item-openIn-0").is_some());
+
+    // Preserve the same rows and width. Set the real canvas budget below
+    // Full, then below Compact; no measurement values are injected.
+    let canvas = view.read_with(cx, |view, _| view.panes[0].details.canvas.get().unwrap());
+    let compact_window_height =
+        900. - f32::from(canvas.size.height) + f32::from(full.size.height) + 2. - 32. + 52.;
+    cx.simulate_resize(gpui::size(px(1440.), px(compact_window_height)));
+    tick(cx);
+    let compact = cx
+        .debug_bounds("details-density-compact")
+        .expect("compact fits after hiding environment");
+    assert!(cx.debug_bounds("details-item-environment-0").is_none());
+    assert!(cx.debug_bounds("details-item-openIn-0").is_some());
+
+    let canvas = view.read_with(cx, |view, _| view.panes[0].details.canvas.get().unwrap());
+    let essential_window_height =
+        compact_window_height - f32::from(canvas.size.height) + f32::from(compact.size.height) + 2.
+            - 16.
+            + 52.;
+    cx.simulate_resize(gpui::size(px(1440.), px(essential_window_height)));
+    tick(cx);
+    assert!(cx.debug_bounds("details-density-essential").is_some());
+    assert!(cx.debug_bounds("details-item-openIn-0").is_none());
+    assert!(cx.debug_bounds("details-item-usage-0").is_some());
+    assert!(cx.debug_bounds("details-item-usage-1").is_some());
+    assert!(cx.debug_bounds("details-item-context-0").is_some());
 }

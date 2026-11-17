@@ -260,10 +260,6 @@ impl CockpitView {
         }
         for pane in &mut self.panes {
             for annotation in pane.preview.take_annotation_requests() {
-                if annotation.original().is_none() {
-                    pane.preview.loading_annotation(annotation, window);
-                    continue;
-                }
                 let image = pane
                     .thread()
                     .ok_or_else(|| {
@@ -375,6 +371,13 @@ impl CockpitView {
             match pane.preview_tab.documents.get(&wanted) {
                 Some(document) => pane.preview.restore(document.clone()),
                 None if wanted == Path::new(BROWSER_PATH) => pane.preview.show_browser(),
+                // Images opened explicitly live in the transient lightbox,
+                // never in a file document. A stale saved File(image) cannot
+                // converge here: open() would refocus its lightbox each frame,
+                // even in an inactive Thread or after the operator closes it.
+                None if ferrite_pane::image_viewer::is_image(&wanted) => {
+                    self.forget_surface(thread, &SurfaceId::File(wanted));
+                }
                 None => pane.preview.open(wanted, None, &[], window, cx),
             }
         }
@@ -461,12 +464,10 @@ impl CockpitView {
                             .child(annotation.comment().to_owned()),
                     )
                 })
-                .child(ferrite_pane::annotation_editor::annotation_context(annotation))
                 .child(match image {
                     Some(image) => {
                         ferrite_pane::annotation_editor::annotation_stage(annotation, image.clone())
                     }
-                    None if annotation.original().is_none() => div().into_any_element(),
                     None => div().child("Loading capture…").into_any_element(),
                 })
                 .into_any_element(),

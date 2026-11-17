@@ -170,21 +170,22 @@ fn a_panel_sliding_out_takes_no_input(cx: &mut TestAppContext) {
 /// move through widths between its own and none, and a flip turns around.
 #[gpui::test]
 fn the_nav_slides_open_and_shut(cx: &mut TestAppContext) {
-    use crate::nav::COLUMN_WIDTH;
     let (view, cx) = window("column-nav-slide", 1600., cx);
-    assert_eq!(board_left(cx), COLUMN_WIDTH);
+    let preferred = view.read_with(cx, |view, _| view.prefs.settings.nav_width_px.unwrap_or(nav::WIDTH));
+    let resting_width = super::nav_parity::sidebar_width(cx, preferred, 1600.0);
+    assert_eq!(board_left(cx), resting_width);
 
     fold_nav(true, &view, cx);
     at(MOTION_DUR_BASE_MS / 4, cx);
     let folding = board_left(cx);
     assert!(
-        folding > 20.0 && folding < COLUMN_WIDTH - 20.0,
+        folding > 20.0 && folding < resting_width - 20.0,
         "mid-fold: {folding}"
     );
     let column = cx.debug_bounds("nav-column").expect("still drawn");
     assert_eq!(
         f32::from(column.size.width),
-        COLUMN_WIDTH,
+        resting_width,
         "its face unsquashed"
     );
     assert!(cx.debug_bounds("column-veil").is_some(), "and deaf");
@@ -197,7 +198,7 @@ fn the_nav_slides_open_and_shut(cx: &mut TestAppContext) {
         board_left(cx)
     );
     at(MOTION_DUR_BASE_MS, cx);
-    assert_eq!(board_left(cx), COLUMN_WIDTH);
+    assert_eq!(board_left(cx), resting_width);
     assert_eq!(frame(cx), 0);
 
     fold_nav(true, &view, cx);
@@ -210,8 +211,9 @@ fn the_nav_slides_open_and_shut(cx: &mut TestAppContext) {
 /// columns, with nothing asking for another.
 #[gpui::test]
 fn reduced_motion_lands_both_columns(cx: &mut TestAppContext) {
-    use crate::nav::COLUMN_WIDTH;
     let (view, cx) = window("column-reduced", 1600., cx);
+    let preferred = view.read_with(cx, |view, _| view.prefs.settings.nav_width_px.unwrap_or(nav::WIDTH));
+    let resting_width = super::nav_parity::sidebar_width(cx, preferred, 1600.0);
     cx.update(|_, cx| cx.set_reduce_motion(true));
 
     toggle_panel(&view, cx);
@@ -227,7 +229,7 @@ fn reduced_motion_lands_both_columns(cx: &mut TestAppContext) {
     fold_nav(false, &view, cx);
     frame(cx);
     assert_eq!(panel_w(cx), PANEL_W);
-    assert_eq!(board_left(cx), COLUMN_WIDTH);
+    assert_eq!(board_left(cx), resting_width);
     assert_eq!(frame(cx), 0);
 }
 

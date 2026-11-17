@@ -439,6 +439,23 @@ fn build_snapshot(
         changed_files: None,
         additions: None,
         deletions: None,
+        reviewers: pr["reviewers"].as_array().map(|reviewers| {
+            reviewers
+                .iter()
+                .filter_map(|reviewer| {
+                    Some(crate::forge::Reviewer {
+                        login: reviewer["uniqueName"]
+                            .as_str()
+                            .or_else(|| reviewer["id"].as_str())?
+                            .to_string(),
+                        name: reviewer["displayName"].as_str().map(str::to_string),
+                        avatar_url: reviewer["imageUrl"].as_str().map(str::to_string),
+                        verdict: azure_verdict(reviewer["vote"].as_i64().unwrap_or(0)),
+                    })
+                })
+                .collect()
+        }),
+        labels: None,
         // A missing status reads as closed, never reviewable.
         state: parse_state(pr["status"].as_str().unwrap_or_default()),
         is_draft: pr["isDraft"].as_bool().unwrap_or(false),
@@ -581,6 +598,7 @@ fn replies_from_thread(thread: &Value) -> Vec<Reply> {
             Reply {
                 id: comment_id(thread, comment),
                 author_is_bot: is_azure_bot(&comment["author"]),
+                author_avatar_url: comment["author"]["imageUrl"].as_str().map(str::to_string),
                 author,
                 body: comment["content"].as_str().unwrap_or("").trim().to_string(),
                 created_at: comment["publishedDate"].as_str().unwrap_or("").to_string(),
@@ -642,6 +660,7 @@ fn merge_comments(threads: &[&Value], pr: &Value) -> Vec<Comment> {
             id: comment_id(thread, root),
             kind,
             author_is_bot: is_azure_bot(&root["author"]),
+            author_avatar_url: root["author"]["imageUrl"].as_str().map(str::to_string),
             author,
             anchor,
             verdict: None,
@@ -666,10 +685,22 @@ fn merge_comments(threads: &[&Value], pr: &Value) -> Vec<Comment> {
         }
         let bot = is_azure_bot(reviewer);
         // Votes have no timestamp, so they sort after the dated rows.
-        out.push(prose_row(CommentKind::Review, author, bot, body.to_string(), String::new()));
+        let mut review =
+            prose_row(CommentKind::Review, author, bot, body.to_string(), String::new());
+        review.author_avatar_url = reviewer["imageUrl"].as_str().map(str::to_string);
+        review.verdict = azure_verdict(reviewer["vote"].as_i64().unwrap_or(0));
+        out.push(review);
     }
     finish_comments(&mut out);
     out
+}
+
+fn azure_verdict(vote: i64) -> Option<crate::forge::ReviewState> {
+    match vote {
+        5 | 10 => Some(crate::forge::ReviewState::Approved),
+        -5 | -10 => Some(crate::forge::ReviewState::ChangesRequested),
+        _ => None,
+    }
 }
 
 /// The prose one reviewer vote renders as; a zero vote renders nothing.
@@ -929,7 +960,7 @@ mod tests {
             &["org", "project", "app"],
         )
         .unwrap();
-        let node = json!({"pullRequestId": 7, "createdBy": {"displayName": "Ada", "imageUrl": "https://example.test/ada.png"}});
+        let node = json!({"pullRequestId": 7, "createdBy": {"displayName": "Ada", "imageUrl": "https://example.test/ada.png"}, "reviewers":[{"id":"ada", "uniqueName":"ada@example.test", "displayName":"Ada", "imageUrl":"https://example.test/ada.png", "vote":10}]});
         let pr = build_snapshot(
             &node,
             &target,
@@ -945,6 +976,11 @@ mod tests {
         assert_eq!(pr.author_avatar_url.as_deref(), Some("https://example.test/ada.png"));
         assert_eq!(pr.updated_at, None);
         assert_eq!((pr.changed_files, pr.additions, pr.deletions), (None, None, None));
+        let reviewer = &pr.reviewers.as_ref().unwrap()[0];
+        assert_eq!(reviewer.login, "ada@example.test");
+        assert_eq!(reviewer.verdict, Some(crate::forge::ReviewState::Approved));
+        assert_eq!(reviewer.avatar_url.as_deref(), Some("https://example.test/ada.png"));
+        assert_eq!(pr.labels, None);
     }
 
     #[test]

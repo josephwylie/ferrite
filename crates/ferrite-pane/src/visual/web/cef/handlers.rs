@@ -311,6 +311,8 @@ wrap_display_handler! {
 
     impl DisplayHandler {
         fn on_address_change(&self, browser: Option<&mut Browser>, frame: Option<&mut Frame>, url: Option<&CefString>) {
+            // The empty bootstrap page is private; keep the queued website URL.
+            if self.state.external && url.is_some_and(|url| !external_url(&url.to_string())) { return; }
             if frame.is_some_and(|frame| frame.is_main() != 0) {
                 if let Some(url) = url { self.state.navigation(self.generation, |state| {
                     state.url = url.to_string();
@@ -443,7 +445,9 @@ wrap_request_handler! {
         ) -> ::std::os::raw::c_int {
             let url = request.map(|r| CefString::from(&r.url()).to_string()).unwrap_or_default();
             if self.page.external {
-                let blocked = !external_url(&url);
+                let main_frame = _frame.as_ref().is_some_and(|frame| frame.is_main() != 0);
+                let blocked = !external_url(&url)
+                    && !self.state.allows_bootstrap_document(self.generation, main_frame, &url);
                 if blocked && _frame.is_some_and(|frame| frame.is_main() != 0) {
                     self.state.navigation(self.generation, |state| { state.loading = false; state.error = Some("This tab can navigate only to http or https websites. Check the destination address.".into()); });
                 }
@@ -643,9 +647,15 @@ wrap_load_handler! {
             });
         }
         fn on_load_start(&self, _browser: Option<&mut Browser>, frame: Option<&mut Frame>, _transition_type: TransitionType) {
-            if frame.is_some_and(|frame| frame.is_main() != 0) {
+            if let Some(frame) = frame.filter(|frame| frame.is_main() != 0) {
+                let url = CefString::from(&frame.url()).to_string();
+                if self.state.external && !external_url(&url) { return; }
+                if self.state.is_current(self.generation) {
+                    self.state.website_started.store(true, Ordering::SeqCst);
+                }
                 if self.state.is_current(self.generation) { self.state.clear_popup(); }
                 self.state.navigation(self.generation, |state| {
+                    state.url = url;
                     state.document_generation = state.document_generation.saturating_add(1);
                     state.loading = true;
                     state.error = None;
@@ -660,6 +670,9 @@ wrap_load_handler! {
         }
         fn on_load_error(&self, _browser: Option<&mut Browser>, frame: Option<&mut Frame>, error_code: Errorcode, error_text: Option<&CefString>, failed_url: Option<&CefString>) {
             if !frame.is_some_and(|frame| frame.is_main() != 0) || error_code == Errorcode::ABORTED { return; }
+            if failed_url.is_some_and(|url| external_url(&url.to_string())) && self.state.is_current(self.generation) {
+                self.state.website_started.store(true, Ordering::SeqCst);
+            }
             self.state.navigation(self.generation, |state| {
                 state.loading = false;
                 state.error = Some(format!("Could not load {}: {}. Check the address and connection, then reload.", failed_url.map(|url| url.to_string()).unwrap_or_else(|| state.url.clone()), error_text.map(|error| error.to_string()).unwrap_or_else(|| "navigation failed".into())));
@@ -767,7 +780,10 @@ mod tests {
             dialog_origin("https://site.example:8443/a/b?q=1#x"),
             "https://site.example:8443"
         );
-        assert_eq!(dialog_origin("http://localhost:5173/start"), "http://localhost:5173");
+        assert_eq!(
+            dialog_origin("http://localhost:5173/start"),
+            "http://localhost:5173"
+        );
     }
 
     #[test]

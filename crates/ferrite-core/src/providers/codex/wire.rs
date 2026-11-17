@@ -2394,7 +2394,7 @@ mod tests {
         assert_eq!(
             input_items(&text, &[], None),
             [
-                serde_json::json!({"type": "localImage", "path": annotation.original().unwrap()}),
+                serde_json::json!({"type": "localImage", "path": annotation.original()}),
                 serde_json::json!({"type": "text", "text": text}),
             ]
         );

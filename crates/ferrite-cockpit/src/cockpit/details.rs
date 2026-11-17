@@ -3,6 +3,7 @@
 //! expose the same card through its title bar control.
 
 mod content;
+pub(super) mod editors;
 
 use super::*;
 use ferrite_pane::details::{Density, Standing};
@@ -105,6 +106,7 @@ impl CockpitView {
     /// A card open in a Pane that no longer holds the focus shuts: Escape
     /// only reaches the focused Pane's card.
     pub(super) fn tend_details(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.tend_details_editors(window, cx);
         let previous_rest = self.nav_measure_rest.replace(true);
         let targets = self.pane_rects(window);
         self.nav_measure_rest.set(previous_rest);
@@ -172,7 +174,7 @@ impl CockpitView {
     pub(super) fn details_card(
         &self,
         index: usize,
-        _window: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
         let pane = self.panes.get(index)?;
@@ -210,7 +212,18 @@ impl CockpitView {
         } else {
             DETAILS_GAP
         };
-        let available = (f32::from(canvas.size.height) - top - DETAILS_GAP).max(0.);
+        let available =
+            (f32::from(canvas.size.height) - if inline { top + DETAILS_GAP } else { 52. }).max(0.);
+        // The source popover anchors to the whole chat header. The measured
+        // transcript canvas begins at that header's bottom, and shares its
+        // right edge. Panel popup padding is 8px, with a 4px align offset.
+        let popup_anchor = gpui::point(
+            canvas.right() - px(4.),
+            canvas.top() + px(pane.details.top_inset.get()),
+        );
+        let popup_height = (f32::from(window.viewport_size().height) - 104.)
+            .min(f32::from(window.viewport_size().height - popup_anchor.y) - 16.)
+            .max(0.);
         let content = self.details_content(thread);
         let width = (f32::from(canvas.size.width) - 2. * DETAILS_GAP).clamp(0., DETAILS_W);
         let measured = pane.details.measurements.clone();
@@ -224,6 +237,7 @@ impl CockpitView {
         let sections = ferrite_ui::components::on_bounds(
             div()
                 .relative()
+                .flex_shrink_0()
                 .debug_selector(move || {
                     format!(
                         "details-density-{}",
@@ -279,6 +293,7 @@ impl CockpitView {
             .border_color(rgba(0xffffff1a))
             .max_w_full()
             .max_h_full()
+            .when(!inline, |card| card.max_h(px(popup_height)))
             .min_w_0()
             .overflow_hidden()
             .on_mouse_down(
@@ -299,10 +314,11 @@ impl CockpitView {
                         .iter()
                         .find(|pane| pane.thread() == Some(thread))
                         .is_some_and(|pane| pane.details.on_opener(event.position));
-                    let choosing_items = view
-                        .context_menu
-                        .as_ref()
-                        .is_some_and(|menu| menu.target == MenuTarget::Details(thread));
+                    let choosing_items = view.context_menu.as_ref().is_some_and(|menu| {
+                        matches!(menu.target,
+                            MenuTarget::Details(owner) | MenuTarget::DetailsEditor(owner)
+                                if owner == thread)
+                    });
                     if !inline && !on_toggle && !choosing_items {
                         view.close_details(thread, window, cx);
                     }
@@ -322,19 +338,33 @@ impl CockpitView {
             )
             .into_any_element(),
         };
-        Some(
-            div()
-                .absolute()
-                .top(px(top))
-                .bottom(px(DETAILS_GAP))
-                .left(px(DETAILS_GAP))
-                .right(px(DETAILS_GAP))
-                .flex()
-                .justify_end()
-                .items_start()
-                .child(card)
+        if inline {
+            Some(
+                div()
+                    .absolute()
+                    .top(px(top))
+                    .bottom(px(DETAILS_GAP))
+                    .left(px(DETAILS_GAP))
+                    .right(px(DETAILS_GAP))
+                    .flex()
+                    .justify_end()
+                    .items_start()
+                    .child(card)
+                    .into_any_element(),
+            )
+        } else {
+            Some(
+                deferred(
+                    anchored()
+                        .anchor(gpui::Anchor::TopRight)
+                        .position(popup_anchor)
+                        .snap_to_window()
+                        .child(div().w(px(width + 16.)).p(px(8.)).child(card)),
+                )
+                .with_priority(2)
                 .into_any_element(),
-        )
+            )
+        }
     }
 
     pub(super) fn details_toggle(&self, cx: &mut Context<Self>) -> Stateful<Div> {

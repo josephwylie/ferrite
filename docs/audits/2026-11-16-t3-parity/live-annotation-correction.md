@@ -1,5 +1,7 @@
 # Browser annotation layout correction
 
+> Superseded acceptance record. These captures verify historical retained-image editing. The requested live browser workflow and its outstanding checks are recorded in [current live implementation and acceptance](live-annotation-current.md). The earlier evidence below remains preserved.
+
 The goal is to align Ferrite's existing browser annotation controls with T3's hierarchy and placement. This report covers the retained capture editor. The live capture overlay belongs to the cockpit and is verified separately.
 
 ## Reference evidence

@@ -168,7 +168,7 @@ fn contract_native_discovery_dismissal_does_not_reopen_picker(cx: &mut TestAppCo
 }
 
 #[gpui::test]
-fn a_folded_nav_leaves_only_its_edge_tab(cx: &mut TestAppContext) {
+fn a_folded_nav_leaves_its_header_toggle(cx: &mut TestAppContext) {
     let (core, _fake) = cockpit("folded-nav-doors", 3);
     bind_production_keys(cx);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
@@ -181,9 +181,10 @@ fn a_folded_nav_leaves_only_its_edge_tab(cx: &mut TestAppContext) {
     let row: &'static str = format!("nav-thread-{}", first.get()).leak();
     assert!(cx.debug_bounds(row).is_none(), "folded, no rows");
     assert!(cx.debug_bounds("nav-column").is_none(), "no column");
-    let tab = bounds(cx, "nav-edge-tab".to_string());
-    assert_eq!(tab.left(), px(0.), "at the window's edge");
-    assert!(tab.top() >= px(ferrite_ui::theme::WIN_CHROME_H), "under the head row");
+    let toggle = bounds(cx, "nav-toggle".to_string());
+    assert_eq!(toggle.left(), px(nav::header_controls_left(false) + 1.0));
+    assert_eq!(toggle.center().y, px(ferrite_ui::theme::NAV_HEADER_H / 2.0));
+    assert!(cx.debug_bounds("nav-edge-tab").is_none());
 
     cx.simulate_keystrokes("cmd-b");
     tick(cx);

@@ -105,8 +105,7 @@ impl CockpitView {
     }
 
     fn view_head_pad_l(&self) -> f32 {
-        let arrows_end = theme::HISTORY_X + 2.0 * theme::ICON_BUTTON;
-        theme::VIEW_HEAD_PAD_X.max(arrows_end + theme::VIEW_HEAD_GAP - self.nav_width())
+        theme::VIEW_HEAD_PAD_X.max(self.nav_brand_left() - self.nav_width())
     }
 
     pub(super) fn history_arrows_element(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
@@ -122,7 +121,7 @@ impl CockpitView {
                     .bg(theme::NAV_BACKGROUND)
                     .flex()
                     .items_center()
-                    .pl(px(theme::HISTORY_X))
+                    .pl(px(self.nav_brand_left()))
                     .font_family(theme::FONT_UI)
                     .text_color(rgb(theme::INK_STRONG))
                     .child(nav::list::grain(0.0))
@@ -130,16 +129,19 @@ impl CockpitView {
                     .into_any_element(),
             );
         }
-        let arrows = div()
+        None
+    }
+
+    pub(super) fn nav_header_toggle(&self, cx: &mut Context<Self>) -> AnyElement {
+        nav::header_toggle(!self.nav_folded())
             .absolute()
-            .top_0()
-            .left(px(theme::HISTORY_X))
-            .h(px(theme::WIN_CHROME_H))
-            .flex()
-            .items_center()
-            .child(self.history_arrows(cx))
-            .into_any_element();
-        Some(arrows)
+            .left(px(self.nav_controls_left() + 1.0))
+            .top(px((theme::NAV_HEADER_H - theme::ICON_BUTTON) / 2.0))
+            .on_click(cx.listener(|view, _: &ClickEvent, _, cx| {
+                cx.stop_propagation();
+                view.toggle_nav_now(cx);
+            }))
+            .into_any_element()
     }
 
     /// Back and forward (`history`), each disabled at its end. Its tooltip
@@ -147,7 +149,7 @@ impl CockpitView {
     pub(super) fn history_arrows(&self, cx: &mut Context<Self>) -> AnyElement {
         let back = history_arrow(
             "history-back",
-            icons::BACK,
+            icons::ARROW_LEFT,
             "Back",
             "cockpit::GoBack",
             self.history.can_go_back(),
@@ -158,7 +160,7 @@ impl CockpitView {
         }));
         let forward = history_arrow(
             "history-forward",
-            icons::FORWARD,
+            icons::ARROW_RIGHT,
             "Forward",
             "cockpit::GoForward",
             self.history.can_go_forward(),
@@ -579,7 +581,7 @@ fn history_arrow(
         crate::nav::icon_button(
             key,
             glyph,
-            theme::ICON_BUTTON_GLYPH,
+            14.0,
             theme::ICON_BUTTON,
             theme::R_CONTROL,
         )
@@ -594,7 +596,7 @@ fn history_arrow(
             .size(px(theme::ICON_BUTTON))
             .child(ferrite_ui::icons::icon(
                 glyph,
-                theme::ICON_BUTTON_GLYPH,
+                14.0,
                 theme::HISTORY_ARROW_DISABLED_INK,
             ))
     };

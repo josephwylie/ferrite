@@ -50,6 +50,7 @@ fn comment(kind: WirePrCommentKind, author: &str, body: &str) -> WirePrComment {
     WirePrComment {
         id: None,
         author_is_bot: false,
+        author_avatar_url: None,
         place: None,
         kind,
         author: author.into(),
@@ -79,6 +80,17 @@ fn full_pr() -> WirePr {
         changed_files: None,
         additions: None,
         deletions: None,
+        reviewers: Some(vec![ferrite_core::protocol::WirePrReviewer {
+            login: "ada".into(),
+            name: Some("Ada".into()),
+            avatar_url: None,
+            verdict: Some(WireReviewState::Approved),
+        }]),
+        labels: Some(vec![ferrite_core::protocol::WirePrLabel {
+            name: "bug".into(),
+            color: Some("d73a4a".into()),
+            description: Some("A regression".into()),
+        }]),
         state: WirePrState::Open,
         draft: false,
         head: "feature/7".into(),
@@ -99,6 +111,7 @@ fn full_pr() -> WirePr {
                 replies: vec![WireReply {
                     id: None,
                     author_is_bot: false,
+                    author_avatar_url: None,
                     author: "bob".into(),
                     body: "Fixed in the next push.".into(),
                     created_at: "2026-11-12".into(),
@@ -201,6 +214,52 @@ fn the_footer_opens_the_prs_from_an_empty_board(cx: &mut TestAppContext) {
     });
 }
 
+/// Summary's metadata and conversation are reachable without leaving the tab.
+#[gpui::test]
+fn summary_shows_metadata_and_filters_the_conversation_without_dropping_it(
+    cx: &mut TestAppContext,
+) {
+    let (world, cx) = world("prs-summary", 0, two_rows(), false, cx);
+    click(cx, "nav-pull-requests");
+    lands(cx, "prs-row-7");
+    click(cx, "prs-row-7");
+    lands(cx, "pr-body");
+    assert!(shows(cx, "pr-reviewer-0"));
+    assert!(shows(cx, "pr-label-0"));
+    assert!(!shows(cx, "pr-check-0"));
+    assert!(
+        !shows(cx, "pr-comment-0"),
+        "resolved conversation starts hidden"
+    );
+    assert!(shows(cx, "pr-comment-1"), "plain comments live on Summary");
+    click(cx, "pr-comments-filter");
+    cx.update(|window, cx| {
+        world
+            .view
+            .update(cx, |view, cx| view.press_menu_row(1, window, cx))
+    });
+    tick(cx);
+    assert!(
+        world
+            .view
+            .read_with(cx, |view, _| view.context_menu.is_some()),
+        "filter menu remains open"
+    );
+    world.view.update(cx, |view, cx| {
+        view.context_menu = None;
+        cx.notify();
+    });
+    tick(cx);
+    assert!(shows(cx, "pr-comment-0"));
+    assert!(shows(cx, "pr-snippet-0"));
+    assert!(shows(cx, "pr-reply-0-0"));
+    click(cx, "pr-section-description");
+    assert!(!shows(cx, "pr-body"));
+    click(cx, "pr-tab-Timeline");
+    click(cx, "pr-tab-Summary");
+    assert!(!shows(cx, "pr-body"), "section state survives tab changes");
+}
+
 /// A focused Thread whose branch has no PR no longer leaves the button
 /// dead: it opens the list, on the Thread's Project.
 #[gpui::test]
@@ -238,9 +297,13 @@ fn a_listed_pr_shows_whole_with_its_review_threads(cx: &mut TestAppContext) {
         "published Code is available without a checkout branch"
     );
     assert!(!shows(cx, "pr-primary"), "no actions: they are a Thread's");
+    assert!(shows(cx, "pr-checks"));
+    assert!(!shows(cx, "pr-activity-count"));
 
     click(cx, "pr-tab-Timeline");
     lands(cx, "pr-snippet-0");
+    assert!(!shows(cx, "pr-checks"));
+    assert!(shows(cx, "pr-activity-count"));
     assert!(
         shows(cx, "pr-title"),
         "PR identity remains visible on Timeline"
@@ -261,7 +324,10 @@ fn a_project_pr_reads_published_code_without_a_thread(cx: &mut TestAppContext) {
     use crate::cockpit::tools::Diff;
     let (world, cx) = world("prs-published-code", 0, two_rows(), false, cx);
     world.view.update(cx, |view, _| {
-        let files = ferrite_core::protocol::sides_of_unified("diff --git a/remote.rs b/remote.rs\n--- a/remote.rs\n+++ b/remote.rs\n@@ -1 +1 @@\n-old\n+remote\n");
+        let files = ferrite_core::protocol::sides_of_unified(concat!(
+            "diff --git a/src/remote.rs b/src/remote.rs\n--- a/src/remote.rs\n+++ b/src/remote.rs\n@@ -1 +1 @@\n-old\n+remote\n",
+            "diff --git a/tests/remote.rs b/tests/remote.rs\nnew file mode 100644\n--- /dev/null\n+++ b/tests/remote.rs\n@@ -0,0 +1 @@\n+test\n",
+        ));
         view.cockpit.fixture_forge_diff(world.path.clone(), 7, files);
         view.cockpit.fixture_forge_diff(world.path.clone(), 3, Vec::new());
     });
@@ -275,14 +341,284 @@ fn a_project_pr_reads_published_code_without_a_thread(cx: &mut TestAppContext) {
         world
             .view
             .read_with(cx, |view, _| view.changes_read(Diff::PullRequest(target)))
-            == Some(1)
+            == Some(2)
     });
+    assert!(!shows(cx, "pr-checks"));
+    assert!(!shows(cx, "pr-activity-count"));
+    assert!(
+        !shows(cx, "changes-filter"),
+        "PR Code has no local Changes search row"
+    );
+    assert!(shows(cx, "pr-code-files-2"));
+    assert!(shows(cx, "pr-code-viewed-0-2"));
+    assert!(shows(cx, "pr-code-path-0"));
+    assert!(
+        shows(cx, "pr-code-deletions-1"),
+        "zero deletions still has a counter"
+    );
     assert!(!shows(cx, "changes-stage-0"));
     assert!(!shows(cx, "changes-open-0"));
     assert!(shows(cx, "changes-reviewed-0"));
+    assert!(shows(cx, "pr-code-line-0-0-old-1"));
+    assert!(shows(cx, "pr-code-line-0-0-new-none"));
+    assert!(shows(cx, "pr-code-line-0-1-old-none"));
+    assert!(shows(cx, "pr-code-line-0-1-new-1"));
+
+    // A query left in a hidden field cannot silently hide published files.
+    let diff = Diff::PullRequest(target);
+    let field = world
+        .view
+        .read_with(cx, |view, _| view.changes_filter(diff).unwrap());
+    world.view.update(cx, |_, cx| {
+        field.update(cx, |field, cx| field.set("no-such-file".into(), cx))
+    });
+    tick(cx);
+    assert!(shows(cx, "changes-file-0") && shows(cx, "changes-file-1"));
+
+    click(cx, "changes-reviewed-0");
+    assert!(world.view.read_with(cx, |view, _| {
+        view.changes_reviewed_for_test(diff, "src/remote.rs")
+    }));
+    assert!(shows(cx, "pr-code-viewed-1-2"));
+    click(cx, "changes-hide-tests");
+    assert!(shows(cx, "pr-code-files-1"));
+    assert!(shows(cx, "pr-code-viewed-1-1"));
+    assert!(!shows(cx, "changes-file-1"));
+    click(cx, "pr-code-hidden-tests");
+    assert!(shows(cx, "pr-code-files-2") && shows(cx, "changes-file-1"));
+    click(cx, "changes-reviewed-0");
+    assert!(!world.view.read_with(cx, |view, _| {
+        view.changes_reviewed_for_test(diff, "src/remote.rs")
+    }));
+    assert!(shows(cx, "pr-code-viewed-0-2"));
     click(cx, "pr-tab-Timeline");
     assert!(shows(cx, "pr-snippet-0"));
     assert!(shows(cx, "pr-reply-0-0"));
+}
+
+#[gpui::test]
+fn summary_headings_stick_and_collapsing_keeps_the_heading_in_place(cx: &mut TestAppContext) {
+    use crate::cockpit::panel::pr_read::PrTarget;
+
+    let (world, cx) = world("prs-summary-scroll", 0, two_rows(), false, cx);
+    let mut pr = full_pr();
+    pr.body = "A paragraph in the long description.\n\n".repeat(60);
+    pr.comments = vec![comment(
+        WirePrCommentKind::Comment,
+        "ada",
+        &"A paragraph in the long conversation.\n\n".repeat(60),
+    )];
+    world.view.update(cx, |view, _| {
+        view.cockpit.fixture_forge_numbered(
+            world.path.clone(),
+            7,
+            ReviewPullRequest {
+                noun: "PR".into(),
+                pr: Ok(pr),
+                unread: None,
+            },
+        );
+    });
+    click(cx, "nav-pull-requests");
+    lands(cx, "prs-row-7");
+    click(cx, "prs-row-7");
+    lands(cx, "pr-body");
+    let target = PrTarget::project(world.project, 7);
+    let scroll = world.view.read_with(cx, |view, _| {
+        view.panel
+            .pr_reads
+            .get(target)
+            .unwrap()
+            .summary_scroll
+            .clone()
+    });
+    let viewport = debug_bounds(cx, "pr-summary".into()).unwrap();
+    let heading = debug_bounds(cx, "pr-section-description".into()).unwrap();
+    assert!(
+        heading.top() > viewport.top(),
+        "metadata precedes the section"
+    );
+    click(cx, "pr-section-description");
+    assert_eq!(
+        scroll.offset().y,
+        px(0.),
+        "an unpinned collapse leaves the scroll alone"
+    );
+    click(cx, "pr-section-description");
+
+    cx.simulate_event(gpui::ScrollWheelEvent {
+        position: viewport.center(),
+        delta: gpui::ScrollDelta::Pixels(gpui::point(px(0.), px(-250.))),
+        ..Default::default()
+    });
+    tick(cx);
+    let viewport = debug_bounds(cx, "pr-summary".into()).unwrap();
+    let pinned = debug_bounds(cx, "pr-section-description".into()).unwrap();
+    assert!(
+        (pinned.top() - viewport.top()).abs() <= px(1.),
+        "the real heading stays at the viewport edge"
+    );
+    let before = scroll.offset();
+    assert!(before.y < px(-100.));
+    click(cx, "pr-tab-Timeline");
+    click(cx, "pr-tab-Summary");
+    assert_eq!(scroll.offset(), before, "Summary restores its own position");
+
+    // The next section pushes this heading away rather than overlapping it.
+    let description = scroll.bounds_for_item(1).unwrap();
+    let near_end = description.bottom() - viewport.top() - pinned.size.height / 2.;
+    world.view.update(cx, |_, cx| {
+        scroll.set_offset(gpui::point(px(0.), -near_end));
+        cx.notify();
+    });
+    tick(cx);
+    let leaving = debug_bounds(cx, "pr-section-description".into()).unwrap();
+    let next = debug_bounds(cx, "pr-section-checks".into()).unwrap();
+    assert!(leaving.top() < viewport.top());
+    assert!(
+        (leaving.bottom() - next.top()).abs() <= px(1.),
+        "the sticky heading stops at its section boundary"
+    );
+
+    world.view.update(cx, |_, cx| {
+        scroll.set_offset(before);
+        cx.notify();
+    });
+    tick(cx);
+    click(cx, "pr-section-description");
+    assert!(!shows(cx, "pr-body"));
+    let collapsed = debug_bounds(cx, "pr-section-description".into()).unwrap();
+    assert!(
+        (collapsed.top() - viewport.top()).abs() <= px(1.),
+        "collapse preserves the pinned heading's place"
+    );
+    assert!(
+        scroll.offset().y > before.y,
+        "the removed body is compensated before layout clamps"
+    );
+}
+
+#[gpui::test]
+fn pr_header_compensates_scroll_and_retains_each_tabs_state(cx: &mut TestAppContext) {
+    use crate::cockpit::panel::pr_read::PrTarget;
+    use crate::cockpit::surfaces::PrTab;
+    use crate::cockpit::tools::Diff;
+    let (world, cx) = world("pr-header-scroll", 1, two_rows(), false, cx);
+    let thread = world
+        .view
+        .read_with(cx, |view, _| view.cockpit.threads()[0]);
+    let target = PrTarget::thread(thread, 7);
+    world.view.update(cx, |view, cx| {
+        let path = view.thread_path(thread).unwrap();
+        let base = ferrite_pane::file_links::origin_base(&path).unwrap();
+        let mut pr = full_pr();
+        pr.body = "A long description paragraph.\n\n".repeat(60);
+        pr.comments = vec![comment(
+            WirePrCommentKind::Comment,
+            "ada",
+            &"A long comment paragraph.\n\n".repeat(60),
+        )];
+        view.cockpit.fixture_forge_numbered(
+            path.clone(),
+            7,
+            ReviewPullRequest { noun: "PR".into(), pr: Ok(pr), unread: None },
+        );
+        let patch = format!("diff --git a/header.rs b/header.rs\nnew file mode 100644\n--- /dev/null\n+++ b/header.rs\n@@ -0,0 +1,100 @@\n{}", "+let value = 1;\n".repeat(100));
+        view.cockpit.fixture_forge_diff(
+            path,
+            7,
+            ferrite_core::protocol::sides_of_unified(&patch),
+        );
+        view.open_named_pr(thread, 7, format!("{base}/pull/7"), cx);
+    });
+    lands(cx, "pr-body");
+    let (summary, timeline, state) = world.view.read_with(cx, |view, _| {
+        let read = view.panel.pr_reads.get(target).unwrap();
+        (
+            read.summary_scroll.clone(),
+            read.timeline_scroll.clone(),
+            read.header.clone(),
+        )
+    });
+    let (expanded, compact) = {
+        let state = state.borrow();
+        (state.expanded_height, state.compact_height)
+    };
+    assert!(
+        expanded > compact && compact > 0.,
+        "both real header layouts are measured"
+    );
+    assert!(
+        !shows(cx, "pr-identity-compact"),
+        "the inactive form does not prepaint"
+    );
+    let original_body_top = debug_bounds(cx, "pr-body".into()).unwrap().top();
+    let set_top = |scroll: &gpui::ScrollHandle, top: f32, cx: &mut gpui::VisualTestContext| {
+        world.view.update(cx, |_, cx| {
+            scroll.set_offset(gpui::point(px(0.), px(-top)));
+            cx.notify();
+        });
+        tick(cx);
+    };
+    set_top(&summary, expanded + 32., cx);
+    assert!(
+        !world
+            .view
+            .read_with(cx, |view, _| view.pr_condensed(target)),
+        "the threshold is strict"
+    );
+    let requested_top = expanded + 96.;
+    set_top(&summary, requested_top, cx);
+    lands(cx, "pr-identity-compact");
+    assert!(shows(cx, "pr-condensed-title"));
+    assert!(
+        !shows(cx, "pr-title") && !shows(cx, "pr-copy-head"),
+        "the inactive expanded form has no drawn controls"
+    );
+    let expected_top = requested_top - (expanded - compact);
+    assert!(
+        (-f32::from(summary.offset().y) - expected_top).abs() <= 1.,
+        "scroll uses the saved absolute compensation target"
+    );
+    let moved_body_top = debug_bounds(cx, "pr-body".into()).unwrap().top();
+    assert!(
+        (moved_body_top - (original_body_top - px(requested_top))).abs() <= px(1.),
+        "the content does not jump when chrome shrinks"
+    );
+    let summary_offset = summary.offset();
+
+    click(cx, "pr-tab-Timeline");
+    assert!(!shows(cx, "pr-identity-compact"));
+    set_top(&timeline, requested_top, cx);
+    lands(cx, "pr-identity-compact");
+    click(cx, "pr-tab-Guide");
+    assert!(
+        !shows(cx, "pr-identity-compact"),
+        "Guide has no condensing scroller"
+    );
+    assert!(shows(cx, "pr-title"));
+    assert!(!state.borrow().condensed(PrTab::Guide));
+    click(cx, "pr-tab-Code");
+    lands(cx, "pr-code-files-1");
+    assert!(!shows(cx, "pr-identity-compact"));
+    let code = world.view.read_with(cx, |view, _| {
+        view.changes_scroll(Diff::PullRequest(target)).unwrap()
+    });
+    set_top(&code, requested_top, cx);
+    lands(cx, "pr-identity-compact");
+    click(cx, "pr-tab-Summary");
+    assert!(shows(cx, "pr-identity-compact"));
+    assert_eq!(
+        summary.offset(),
+        summary_offset,
+        "switching tabs restores Summary's compensated position"
+    );
+    set_top(&summary, 3., cx);
+    until(cx, |cx| !shows(cx, "pr-identity-compact"));
+    assert!(shows(cx, "pr-title"));
+    let state = state.borrow();
+    assert!(!state.condensed(PrTab::Summary));
+    assert!(state.condensed(PrTab::Timeline) && state.condensed(PrTab::Code));
 }
 
 /// A review shows its verdict whether or not it has words, and a failed
@@ -308,6 +644,8 @@ fn a_pr_shows_each_review_verdict_and_its_failed_checks_run(cx: &mut TestAppCont
     assert!(!shows(cx, "pr-verdict-0"), "a finding has no verdict");
 
     click(cx, "pr-tab-Summary");
+    assert!(!shows(cx, "pr-check-0"), "Checks starts closed");
+    click(cx, "pr-section-checks");
     lands(cx, "pr-check-0");
     assert_eq!(cx.opened_url(), None);
     click(cx, "pr-check-0");
@@ -598,6 +936,119 @@ fn a_transcript_pr_keeps_the_conversation_and_loads_the_requested_number(cx: &mu
         shows(cx, "pr-tab-Code"),
         "Code reads the requested PR independently of the checkout branch"
     );
+}
+
+#[gpui::test]
+fn a_restored_code_tab_loads_and_wraps_without_repeated_reads(cx: &mut TestAppContext) {
+    use crate::cockpit::panel::pr_read::PrTarget;
+    use crate::cockpit::surfaces::PrTab;
+    use crate::cockpit::tools::Diff;
+
+    let (world, cx) = world("pr-restored-code", 1, two_rows(), false, cx);
+    let thread = world
+        .view
+        .read_with(cx, |view, _| view.cockpit.threads()[0]);
+    let target = PrTarget::thread(thread, 7);
+    let diff = Diff::PullRequest(target);
+    let path = world.view.update(cx, |view, cx| {
+        view.pr_landed(thread, Some(pr_with_checks()), cx);
+        let path = view.thread_path(thread).unwrap();
+        let base = ferrite_pane::file_links::origin_base(&path).unwrap();
+        let wide = format!("pub fn requested() {{ let text = {:?}; }}", "source text ".repeat(24));
+        let files = ferrite_core::protocol::sides_of_unified(&format!("diff --git a/requested.rs b/requested.rs\n--- a/requested.rs\n+++ b/requested.rs\n@@ -1 +1 @@\n-old\n+{wide}\n"));
+        view.cockpit.fixture_forge_diff(path.clone(), 7, files);
+        // This is what session restoration retains, without runtime Changes state.
+        view.surfaces_mut(thread).pr_tabs.insert(7, PrTab::Code);
+        assert_eq!(view.changes_generation_for_test(diff), None);
+        view.open_named_pr(thread, 7, format!("{base}/pull/7"), cx);
+        path
+    });
+    lands(cx, "pr-code-files-1");
+    world.view.read_with(cx, |view, _| {
+        assert!(!view.destination_shown(), "the conversation is retained");
+        assert_eq!(view.pr_snapshot(thread).map(|pr| pr.number), Some(7));
+        assert_eq!(view.changes_generation_for_test(diff), Some(1));
+    });
+    let wrapped = debug_bounds(cx, "panel-hunk-0-1".into()).unwrap();
+    let viewport = debug_bounds(cx, "changes-scroll".into()).unwrap();
+    assert!(
+        wrapped.size.height > px(ferrite_ui::theme::LH_PANEL_DIFF),
+        "selected Wrap grows the source row inside a nowrap Panel"
+    );
+    assert!(wrapped.right() <= viewport.right() + px(1.));
+    assert!(!shows(cx, "panel-hunks-scroll-0"));
+    click(cx, "changes-wrap");
+    let scroller = debug_bounds(cx, "panel-hunks-scroll-0".into()).unwrap();
+    let unwrapped = debug_bounds(cx, "panel-hunk-0-1".into()).unwrap();
+    assert_eq!(unwrapped.size.height, px(ferrite_ui::theme::LH_PANEL_DIFF));
+    assert!(unwrapped.size.width > scroller.size.width);
+    cx.simulate_event(gpui::ScrollWheelEvent {
+        position: scroller.center(),
+        delta: gpui::ScrollDelta::Pixels(gpui::point(px(-5_000.), px(0.))),
+        ..Default::default()
+    });
+    tick(cx);
+    let slid = debug_bounds(cx, "panel-hunk-0-1".into()).unwrap();
+    assert!(
+        slid.left() < unwrapped.left(),
+        "unwrapped text remains horizontally reachable"
+    );
+    assert!(slid.right() <= scroller.right() + px(1.));
+    world
+        .view
+        .update(cx, |view, _| view.cockpit.fixture_hold_pr_reads(path));
+    for _ in 0..3 {
+        world.view.update(cx, |_, cx| cx.notify());
+        tick(cx);
+    }
+    world.view.update(cx, |view, _| {
+        assert_eq!(
+            view.changes_generation_for_test(diff),
+            Some(1),
+            "rendering does not reissue the diff"
+        );
+        assert!(
+            view.cockpit.take_held_reads().is_empty(),
+            "rendering does not reissue metadata"
+        );
+    });
+}
+
+#[gpui::test]
+fn retained_project_code_loads_each_requested_number(cx: &mut TestAppContext) {
+    use crate::cockpit::panel::pr_read::PrTarget;
+    use crate::cockpit::tools::Diff;
+
+    let (world, cx) = world("prs-retained-code-number", 0, two_rows(), false, cx);
+    world.view.update(cx, |view, _| {
+        view.cockpit.fixture_forge_diff(world.path.clone(), 7, Vec::new());
+        let mut next = full_pr();
+        next.number = 3;
+        next.title = "Another published PR".into();
+        view.cockpit.fixture_forge_numbered(world.path.clone(), 3, ReviewPullRequest { noun: "PR".into(), pr: Ok(next), unread: None });
+        let files = ferrite_core::protocol::sides_of_unified("diff --git a/third.rs b/third.rs\n--- a/third.rs\n+++ b/third.rs\n@@ -1 +1 @@\n-old\n+third\n");
+        view.cockpit.fixture_forge_diff(world.path.clone(), 3, files);
+    });
+    click(cx, "nav-pull-requests");
+    lands(cx, "prs-row-7");
+    click(cx, "prs-row-7");
+    lands(cx, "pr-body");
+    click(cx, "pr-tab-Code");
+    click(cx, "prs-back");
+    click(cx, "prs-row-3");
+    lands(cx, "pr-code-files-1");
+    world.view.read_with(cx, |view, _| {
+        let target = PrTarget::project(world.project, 3);
+        assert_eq!(
+            view.panel.pr_reads.snapshot(target).map(|pr| pr.number),
+            Some(3)
+        );
+        assert_eq!(view.changes_read(Diff::PullRequest(target)), Some(1));
+        assert_eq!(
+            view.changes_generation_for_test(Diff::PullRequest(target)),
+            Some(1)
+        );
+    });
 }
 
 #[gpui::test]

@@ -54,6 +54,7 @@ pub(super) enum MenuTarget {
     SurfaceTab { thread: ThreadId, at: usize },
     /// The pull request Surface's `⋯`.
     PrMore(super::panel::pr_read::PrTarget),
+    PrCommentFilter(super::panel::pr_read::PrTarget),
     /// The nav card's PR badge: the PR's own doors, not the Thread's.
     PrLink(ThreadId),
     /// A Factory picker (#221): its rows are the Factory view's `picks`.
@@ -61,6 +62,7 @@ pub(super) enum MenuTarget {
     /// A right-click on the Thread's web page.
     BrowserPage(ThreadId),
     Details(ThreadId),
+    DetailsEditor(ThreadId),
 }
 
 /// One thing a context-menu row does.
@@ -138,6 +140,7 @@ pub(super) enum MenuVerb {
     OpenFactory(ProjectId),
     /// A pull request Surface's row.
     Pr(panel::PrAction),
+    PrCommentFilter(super::panel::pr_read::CommentFilter),
     /// A PR link's rows (`MenuTarget::PrLink`): open it by a door, or copy
     /// its forge address.
     PrOpen(Open),
@@ -146,6 +149,7 @@ pub(super) enum MenuVerb {
     Factory(usize),
     DetailsItem(ferrite_core::settings::ContextCardItem),
     DetailsReset,
+    DetailsEditor(super::details::editors::EditorId),
 }
 
 /// A parent row's submenu.
@@ -434,11 +438,13 @@ impl CockpitView {
             }
             MenuTarget::BrowserPage(thread) => rows = self.browser_page_rows(thread),
             MenuTarget::Details(_) => rows = self.details_menu_rows(),
+            MenuTarget::DetailsEditor(_) => rows = self.details_editor_rows(),
             MenuTarget::Terminal(_) => rows = self.terminal_context_rows(),
             MenuTarget::TerminalMore(_) => rows = self.terminal_more_rows(),
             MenuTarget::SurfaceMenu(thread) => rows = self.surface_menu_rows(thread),
             MenuTarget::SurfaceTab { thread, at } => rows = self.surface_tab_rows(thread, at),
             MenuTarget::PrMore(target) => rows = self.pr_menu_rows(target),
+            MenuTarget::PrCommentFilter(_) => rows = self.pr_comment_filter_rows(),
             MenuTarget::PrLink(thread) => rows = self.pr_link_rows(thread),
             MenuTarget::Factory => {
                 rows = self
@@ -856,8 +862,16 @@ impl CockpitView {
             return;
         }
         let target = open.target;
-        self.context_menu = None;
-        self.run_menu_verb(target, verb, window, cx);
+        if matches!(verb, MenuVerb::PrCommentFilter(_)) {
+            self.run_menu_verb(target, verb, window, cx);
+            let rows = self.context_rows(target);
+            if let Some(open) = self.context_menu.as_mut() {
+                open.rows = rows;
+            }
+        } else {
+            self.context_menu = None;
+            self.run_menu_verb(target, verb, window, cx);
+        }
         cx.notify();
     }
 
@@ -869,6 +883,9 @@ impl CockpitView {
         cx: &mut Context<Self>,
     ) {
         match (target, verb) {
+            (MenuTarget::DetailsEditor(_), MenuVerb::DetailsEditor(editor)) => {
+                self.prefer_details_editor(editor, cx);
+            }
             (MenuTarget::Details(_), MenuVerb::DetailsItem(item)) => self.change_settings(|settings| {
                 let visible = settings.context_card_preferences.visible(item);
                 settings.context_card_preferences.set(item, !visible);
@@ -940,6 +957,10 @@ impl CockpitView {
                 self.run_surface_tab_verb(thread, at, verb, cx)
             }
             (MenuTarget::PrMore(target), MenuVerb::Pr(action)) => self.run_pr_action(target, action, cx),
+            (MenuTarget::PrCommentFilter(_), MenuVerb::PrCommentFilter(filter)) => {
+                self.panel.pr_reads.comment_filters.toggle(filter);
+                cx.notify();
+            }
             (MenuTarget::PrLink(thread), MenuVerb::PrOpen(how)) => {
                 self.open_pr_as(thread, how, window, cx)
             }
@@ -1040,10 +1061,12 @@ impl CockpitView {
                     | MenuTarget::SurfaceMenu(_)
                     | MenuTarget::SurfaceTab { .. }
                     | MenuTarget::PrMore(_)
+                    | MenuTarget::PrCommentFilter(_)
                     | MenuTarget::PrLink(_)
                     | MenuTarget::Factory
                     | MenuTarget::BrowserPage(_)
                     | MenuTarget::Details(_)
+                    | MenuTarget::DetailsEditor(_)
                     | MenuTarget::Page(_) => None,
                 };
                 self.open_draft(DraftTarget::Main, cx);
@@ -1133,6 +1156,9 @@ impl CockpitView {
             MouseButton::Left,
             cx.listener(|_, _: &MouseDownEvent, _, cx| cx.stop_propagation()),
         );
+        if matches!(open.target, MenuTarget::DetailsEditor(_)) {
+            shell = shell.min_w(px(0.)).w(px(ferrite_ui::theme::DETAILS_W - 18.));
+        }
         // Where the open submenu's parent row stands: the submenu's top.
         let mut parent_top = px(ferrite_ui::theme::FLOAT_PAD);
         let mut y = parent_top;
@@ -1161,6 +1187,15 @@ impl CockpitView {
                     let lit = open.sub.as_ref().is_some_and(|(at, _)| *at == index);
                     let cursor = open.cursor == MenuCursor::Row(index);
                     let face = menu::row(index, item, cursor, open.armed == Some(index))
+                        .when(matches!(open.target, MenuTarget::DetailsEditor(_)) && !item.disabled, |row| {
+                            if let MenuVerb::DetailsEditor(editor) = verb {
+                                row.relative().pl(px(ferrite_ui::theme::MENU_ROW_PAD_X + 24.))
+                                    .child(div().absolute()
+                                        .left(px(ferrite_ui::theme::MENU_ROW_PAD_X))
+                                        .top(px((ferrite_ui::theme::FLOAT_ROW_H - 16.) / 2.))
+                                        .child(editor.image(16.)))
+                            } else { row }
+                        })
                         .debug_selector(move || format!("context-menu-row-{index}"))
                         .when(lit, |row| row.bg(ferrite_ui::theme::paint::FLOAT_HOVER))
                         .when(parent, |row| {

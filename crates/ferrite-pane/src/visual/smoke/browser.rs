@@ -94,7 +94,7 @@ pub(super) fn run(engine: &dyn Engine) -> Result<(), String> {
                 "<!doctype html><title>Closed shadow</title><body><script>document.body.attachShadow({mode:'closed'}).innerHTML='<input value=unfinished>';console.log('ferrite-clean')</script>".to_owned()
             } else {
                 format!(
-                    r#"<!doctype html><html style="background:rgb(255,0,0)"><head><title>Ferrite browser fixture</title></head><body style="margin:0;background:rgb(255,0,0)"><button id="paint" onclick="document.documentElement.style.background='{color}';document.body.style.background='{color}';this.textContent='Painted'">Paint</button><input id="value" oninput="fetch('/dirty?value='+encodeURIComponent(this.value))"><script>window.fixtureReady=true</script></body></html>"#
+                    r#"<!doctype html><html style="background:rgb(255,0,0)"><head><title>Ferrite browser fixture</title></head><body style="margin:0;background:rgb(255,0,0)"><button id="paint" onclick="document.documentElement.style.background='{color}';document.body.style.background='{color}';this.textContent='Painted'">Paint</button><input id="value" oninput="fetch('/dirty?value='+encodeURIComponent(this.value))"><script>window.fixtureReady=true;window.fixtureKeys=[];window.trapAnnotationKeys=false;for(const type of ['keydown','keypress','keyup'])window.addEventListener(type,event=>{{if(event.isTrusted&&window.trapAnnotationKeys){{window.fixtureKeys.push(event.key);event.preventDefault();event.stopImmediatePropagation()}}}},true)</script></body></html>"#
                 )
             };
             let status = if request.starts_with("GET /error ") {
@@ -111,7 +111,14 @@ pub(super) fn run(engine: &dyn Engine) -> Result<(), String> {
         height: 600,
         scale: 1.0,
     };
-    let one = engine.open_browser(&format!("http://{address}/one"), viewport, Box::new(|| {}))?;
+    let first_url = format!("http://{address}/one");
+    let one = engine.open_browser(&first_url, viewport, Box::new(|| {}))?;
+    wait_browser(engine, one.as_ref(), |state| {
+        state.url == first_url && !state.loading && state.document_generation > 0
+    })?;
+    if one.state().can_back {
+        return Err("Private bootstrap document leaked into browser history".into());
+    }
     let two = engine.open_browser(&format!("http://{address}/two"), viewport, Box::new(|| {}))?;
     let sealed = engine.open(
         Page {

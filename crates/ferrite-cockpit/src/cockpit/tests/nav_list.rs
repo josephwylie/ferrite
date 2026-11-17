@@ -381,8 +381,8 @@ fn a_narrow_window_folds_the_nav_without_saving_it(cx: &mut TestAppContext) {
     );
     assert!(cx.debug_bounds("nav-column").is_none(), "the column is folded away");
     assert!(
-        cx.debug_bounds("nav-edge-tab").is_some(),
-        "the edge tab stays to bring it back"
+        cx.debug_bounds("nav-toggle").is_some(),
+        "the header toggle stays to bring it back"
     );
     assert_eq!(
         view.read_with(cx, |view, _| (

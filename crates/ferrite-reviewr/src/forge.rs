@@ -172,6 +172,9 @@ pub struct PrSnapshot {
     pub changed_files: Option<u64>,
     pub additions: Option<u64>,
     pub deletions: Option<u64>,
+    /// None when the provider did not supply this metadata; an empty list means none.
+    pub reviewers: Option<Vec<Reviewer>>,
+    pub labels: Option<Vec<PrLabel>>,
     pub state: PrState,
     pub is_draft: bool,
     /// The PR's head branch name, which may differ from the local one.
@@ -189,6 +192,23 @@ pub struct PrSnapshot {
     pub comments_truncated: bool,
     /// Checks had more rows than the 100-row fetch.
     pub checks_truncated: bool,
+}
+
+/// A requested reviewer, with the latest submitted verdict when available.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Reviewer {
+    pub login: String,
+    pub name: Option<String>,
+    pub avatar_url: Option<String>,
+    pub verdict: Option<ReviewState>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PrLabel {
+    pub name: String,
+    /// The provider's six-digit RGB color, without a leading hash.
+    pub color: Option<String>,
+    pub description: Option<String>,
 }
 
 /// The PR lifecycle.
@@ -245,6 +265,7 @@ pub struct Comment {
     pub kind: CommentKind,
     pub author: String,
     pub author_is_bot: bool,
+    pub author_avatar_url: Option<String>,
     /// `path`, `path:line`, or `path:start-end` for a finding, the kind word otherwise.
     pub anchor: String,
     /// How a `review` ended: approved, changes requested, or only commented.
@@ -269,6 +290,7 @@ pub struct Reply {
     pub id: Option<String>,
     pub author: String,
     pub author_is_bot: bool,
+    pub author_avatar_url: Option<String>,
     pub body: String,
     pub created_at: String,
 }
@@ -287,15 +309,17 @@ pub enum ReviewState {
     Approved,
     ChangesRequested,
     Commented,
+    Dismissed,
 }
 
 impl ReviewState {
-    /// GitHub's `PullRequestReviewState`; a pending or dismissed review has no verdict.
+    /// GitHub's `PullRequestReviewState`; a pending review has no submitted verdict.
     fn of_github(state: &str) -> Option<Self> {
         match state {
             "APPROVED" => Some(Self::Approved),
             "CHANGES_REQUESTED" => Some(Self::ChangesRequested),
             "COMMENTED" => Some(Self::Commented),
+            "DISMISSED" => Some(Self::Dismissed),
             _ => None,
         }
     }
@@ -1131,11 +1155,12 @@ fn build_detail_query(number: u64) -> String {
          headRefOid isCrossRepository author{{login avatarUrl}} updatedAt changedFiles additions deletions \
          commits(last:1){{nodes{{commit{{statusCheckRollup{{contexts(first:100){{pageInfo{{hasNextPage}} nodes{{__typename \
          ... on CheckRun{{name status conclusion detailsUrl}} ... on StatusContext{{context state targetUrl}}}}}}}}}}}}}} \
-         reviews(last:100){{pageInfo{{hasPreviousPage}} nodes{{id author{{login}} state body submittedAt}}}} \
-         comments(last:100){{pageInfo{{hasPreviousPage}} nodes{{id author{{login}} body createdAt}}}} \
+         reviewRequests(first:100){{nodes{{requestedReviewer{{...on User{{login name avatarUrl}} ...on Bot{{login avatarUrl}} ...on Team{{combinedSlug teamName:name teamAvatarUrl:avatarUrl}}}}}}}} labels(first:100){{nodes{{name color description}}}} \
+         reviews(last:100){{pageInfo{{hasPreviousPage}} nodes{{id author{{login avatarUrl}} state body submittedAt}}}} \
+         comments(last:100){{pageInfo{{hasPreviousPage}} nodes{{id author{{login avatarUrl}} body createdAt}}}} \
          reviewThreads(last:100){{pageInfo{{hasPreviousPage}} nodes{{id isResolved isOutdated path \
          startLine line originalStartLine originalLine diffSide \
-         comments(first:100){{pageInfo{{hasNextPage endCursor}} nodes{{id author{{login}} body createdAt diffHunk}}}}}}}}}}}}}}"
+         comments(first:100){{pageInfo{{hasNextPage endCursor}} nodes{{id author{{login avatarUrl}} body createdAt diffHunk}}}}}}}}}}}}}}"
     )
 }
 
@@ -1205,7 +1230,7 @@ fn append_thread_comment_page(thread: &mut Value, page: &Value) -> Result<(), Gh
 fn thread_comments_page(target: &FetchTarget<'_>, id: &str, after: &str) -> Result<Value, GhError> {
     let q = "query($id:ID!,$after:String!){node(id:$id){... on PullRequestReviewThread{\
              comments(first:100, after:$after){pageInfo{hasNextPage endCursor} \
-             nodes{id author{login} body createdAt}}}}}";
+             nodes{id author{login avatarUrl} body createdAt}}}}}";
     graphql(
         target.repo,
         target.host,
@@ -1256,6 +1281,19 @@ fn build_snapshot(node: &Value, sync: Sync) -> PrSnapshot {
         changed_files: node["changedFiles"].as_u64(),
         additions: node["additions"].as_u64(),
         deletions: node["deletions"].as_u64(),
+        reviewers: github_reviewers(node),
+        labels: node["labels"]["nodes"].as_array().map(|labels| {
+            labels
+                .iter()
+                .filter_map(|label| {
+                    Some(PrLabel {
+                        name: label["name"].as_str()?.to_string(),
+                        color: label["color"].as_str().map(str::to_string),
+                        description: label["description"].as_str().map(str::to_string),
+                    })
+                })
+                .collect()
+        }),
         state: parse_state(node["state"].as_str().unwrap_or("OPEN")),
         is_draft: node["isDraft"].as_bool().unwrap_or(false),
         head_ref: node["headRefName"].as_str().unwrap_or_default().to_string(),
@@ -1273,6 +1311,56 @@ fn build_snapshot(node: &Value, sync: Sync) -> PrSnapshot {
         comments_truncated,
         checks_truncated,
     }
+}
+
+/// Hosts remove actors from requests after review. Keep their latest verdict too,
+/// and match login casing so a completed review does not appear as a second actor.
+fn github_reviewers(node: &Value) -> Option<Vec<Reviewer>> {
+    let requests = node["reviewRequests"]["nodes"].as_array()?;
+    let actor = |user: &Value| {
+        Some(Reviewer {
+            login: user["login"].as_str().or_else(|| user["combinedSlug"].as_str())?.to_string(),
+            name: user["name"].as_str().or_else(|| user["teamName"].as_str()).map(str::to_string),
+            avatar_url: user["avatarUrl"]
+                .as_str()
+                .or_else(|| user["teamAvatarUrl"].as_str())
+                .map(str::to_string),
+            verdict: None,
+        })
+    };
+    let mut reviewers: Vec<_> =
+        requests.iter().filter_map(|request| actor(&request["requestedReviewer"])).collect();
+    let mut latest: std::collections::BTreeMap<String, &Value> = std::collections::BTreeMap::new();
+    for review in node["reviews"]["nodes"].as_array().into_iter().flatten() {
+        if !matches!(review["state"].as_str(), Some("APPROVED" | "CHANGES_REQUESTED" | "DISMISSED"))
+        {
+            continue;
+        }
+        let Some(login) = review["author"]["login"].as_str() else { continue };
+        let key = login.to_ascii_lowercase();
+        let prior = latest.get(&key);
+        if prior.is_none_or(|prior| {
+            prior["submittedAt"].as_str().and_then(parse_iso)
+                <= review["submittedAt"].as_str().and_then(parse_iso)
+        }) {
+            latest.insert(key, review);
+        }
+    }
+    for (key, review) in latest {
+        let verdict = review["state"]
+            .as_str()
+            .and_then(ReviewState::of_github)
+            .filter(|state| *state != ReviewState::Dismissed);
+        if let Some(requested) =
+            reviewers.iter_mut().find(|actor| actor.login.eq_ignore_ascii_case(&key))
+        {
+            requested.verdict = verdict;
+        } else if let Some(mut reviewer) = actor(&review["author"]).filter(|_| verdict.is_some()) {
+            reviewer.verdict = verdict;
+            reviewers.push(reviewer);
+        }
+    }
+    Some(reviewers)
 }
 
 fn parse_state(s: &str) -> PrState {
@@ -1303,7 +1391,7 @@ pub(crate) fn upsert_latest(checks: &mut Vec<Check>, check: Check) {
 
 /// Keep the full conversation in newest-first order.
 pub(crate) fn finish_comments(out: &mut Vec<Comment>) {
-    out.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+    out.sort_by_key(|comment| std::cmp::Reverse(parse_iso(&comment.created_at)));
 }
 
 /// The latest run per check name, normalised from check runs and commit statuses.
@@ -1408,6 +1496,7 @@ fn merge_comments(reviews: &Value, issues: &Value, threads: &Value) -> Vec<Comme
             kind: CommentKind::Finding,
             verdict: None,
             author_is_bot: is_bot(&login),
+            author_avatar_url: root["author"]["avatarUrl"].as_str().map(str::to_string),
             author: login,
             anchor: place.anchor(),
             place: Some(place),
@@ -1432,7 +1521,9 @@ fn prose_comment(
 ) -> Comment {
     let login = user["login"].as_str().unwrap_or("").to_string();
     let bot = is_bot(&login);
-    prose_row(kind, login, bot, body, created_at.unwrap_or("").to_string())
+    let mut comment = prose_row(kind, login, bot, body, created_at.unwrap_or("").to_string());
+    comment.author_avatar_url = user["avatarUrl"].as_str().map(str::to_string);
+    comment
 }
 
 pub(crate) fn finding_anchor(path: &str, start: Option<u64>, end: Option<u64>) -> String {
@@ -1493,6 +1584,7 @@ pub(crate) fn prose_row(
         id: None,
         kind,
         author_is_bot,
+        author_avatar_url: None,
         author,
         anchor: anchor.to_string(),
         verdict: None,
@@ -1520,6 +1612,7 @@ fn replies_from_nodes(nodes: &[Value]) -> Vec<Reply> {
             Some(Reply {
                 id: provider_id(&n["id"]),
                 author_is_bot: is_bot(&login),
+                author_avatar_url: n["author"]["avatarUrl"].as_str().map(str::to_string),
                 author: login,
                 body: body.to_string(),
                 created_at: n["createdAt"].as_str().unwrap_or("").to_string(),
@@ -1638,6 +1731,44 @@ mod tests {
     }
 
     #[test]
+    fn summary_metadata_keeps_reviewers_latest_verdicts_and_labels() {
+        let node = serde_json::json!({
+            "reviewRequests": {"nodes": [{"requestedReviewer": {"login": "Ada", "name": "Ada Lovelace", "avatarUrl": "https://example.test/ada.png"}}]},
+            "labels": {"nodes": [{"name": "bug", "color": "ff0000", "description": "A regression"}]},
+            "reviews": {"nodes": [
+                {"author": {"login": "ada"}, "state": "APPROVED", "submittedAt": "2026-11-16T10:00:00Z"},
+                {"author": {"login": "ada"}, "state": "CHANGES_REQUESTED", "submittedAt": "2026-11-16T11:00:00+02:00"},
+                {"author": {"login": "bob", "avatarUrl": "https://example.test/bob.png"}, "state": "CHANGES_REQUESTED", "submittedAt": "2026-11-16T10:00:00Z"},
+                {"author": {"login": "dismissed"}, "state": "APPROVED", "submittedAt": "2026-11-16T09:00:00Z"},
+                {"author": {"login": "dismissed"}, "state": "DISMISSED", "submittedAt": "2026-11-16T10:00:00Z"}
+            ]}
+        });
+        let pr = build_snapshot(&node, Sync::Unknown);
+        let reviewers = pr.reviewers.unwrap();
+        assert_eq!(
+            reviewers.len(),
+            2,
+            "case-insensitive requested/submitted identity; dismissed verdict supersedes approval"
+        );
+        assert_eq!(reviewers[0].login, "Ada");
+        assert_eq!(reviewers[0].name.as_deref(), Some("Ada Lovelace"));
+        assert_eq!(reviewers[0].verdict, Some(ReviewState::Approved));
+        assert_eq!(reviewers[1].avatar_url.as_deref(), Some("https://example.test/bob.png"));
+        let labels = pr.labels.unwrap();
+        assert_eq!(labels[0].name, "bug");
+        assert_eq!(labels[0].color.as_deref(), Some("ff0000"));
+        assert_eq!(labels[0].description.as_deref(), Some("A regression"));
+        assert!(pr.comments.iter().any(|comment| comment.verdict == Some(ReviewState::Dismissed)));
+        let empty = build_snapshot(
+            &serde_json::json!({"reviewRequests":{"nodes":[]},"labels":{"nodes":[]}}),
+            Sync::Unknown,
+        );
+        assert_eq!((empty.reviewers, empty.labels), (Some(Vec::new()), Some(Vec::new())));
+        let unavailable = build_snapshot(&Value::Null, Sync::Unknown);
+        assert_eq!((unavailable.reviewers, unavailable.labels), (None, None));
+    }
+
+    #[test]
     fn truncated_flips_when_any_capped_surface_has_a_next_page() {
         let base = serde_json::json!({
             "number": 1, "title": "t", "url": "u", "state": "OPEN", "isDraft": false,
@@ -1718,6 +1849,8 @@ mod tests {
             changed_files: None,
             additions: None,
             deletions: None,
+            reviewers: None,
+            labels: None,
             state: PrState::Open,
             is_draft: false,
             head_ref: String::new(),
@@ -2301,6 +2434,7 @@ mod tests {
             kind,
             author: "claude[bot]".to_string(),
             author_is_bot: true,
+            author_avatar_url: None,
             anchor: anchor.to_string(),
             verdict: None,
             place: None,

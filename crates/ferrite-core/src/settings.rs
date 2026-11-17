@@ -59,6 +59,9 @@ pub struct Settings {
     /// a saved choice is kept.
     pub panel_shown: bool,
     pub context_card_preferences: ContextCardPreferences,
+    /// The last installed editor chosen by Open in, using its stable editor ID.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub preferred_editor: Option<String>,
     /// The Threads pinned to the top of the nav's list, in the order they
     /// were pinned (the row menu's `Pin`). An id whose Thread is gone is
     /// passed over. Default: none.
@@ -363,6 +366,7 @@ impl Default for Settings {
             nav_width_px: None,
             panel_shown: false,
             context_card_preferences: ContextCardPreferences::default(),
+            preferred_editor: None,
             pinned_threads: Vec::new(),
             open_shelves: Vec::new(),
             confirm_delete: true,
@@ -608,6 +612,7 @@ mod tests {
                 ("environment".to_string(), false),
                 ("usage".to_string(), true),
             ])),
+            preferred_editor: Some("vscode".to_string()),
             pinned_threads: vec![crate::ThreadId::new(7)],
             open_shelves: vec![NavShelf::Working, NavShelf::Parked],
             confirm_delete: false,

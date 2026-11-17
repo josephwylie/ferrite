@@ -1952,6 +1952,8 @@ fn samples() -> Vec<(&'static str, Sample)> {
                         changed_files: None,
                         additions: None,
                         deletions: None,
+                        reviewers: None,
+                        labels: None,
                         state: WirePrState::Open,
                         draft: false,
                         head: "vendor/reviewr".into(),
@@ -1966,6 +1968,7 @@ fn samples() -> Vec<(&'static str, Sample)> {
                         comments: vec![WirePrComment {
                             id: None,
                             author_is_bot: false,
+                            author_avatar_url: None,
                             place: None,
                             kind: WirePrCommentKind::Finding,
                             author: "reviewer".into(),
@@ -1979,6 +1982,7 @@ fn samples() -> Vec<(&'static str, Sample)> {
                             replies: vec![WireReply {
                                 id: None,
                                 author_is_bot: false,
+                                author_avatar_url: None,
                                 author: "joseph".into(),
                                 body: "Fixed.".into(),
                                 created_at: "2026-10-15T10:00:00Z".into(),

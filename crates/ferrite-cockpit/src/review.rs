@@ -2985,6 +2985,7 @@ mod tests {
         let approval = WirePrComment {
             id: None,
             author_is_bot: false,
+            author_avatar_url: None,
             place: None,
             kind: WirePrCommentKind::Review,
             author: "cy".into(),
@@ -3017,6 +3018,8 @@ mod tests {
                         changed_files: None,
                         additions: None,
                         deletions: None,
+                        reviewers: None,
+                        labels: None,
                         state: WirePrState::Open,
                         draft: false,
                         head: "f".into(),

@@ -20,6 +20,7 @@ from pathlib import Path
 
 from native_browser_service import NativeService
 from browser_processes import sample_browser_processes
+from probe_annotation_keyboard import verify_annotation_keyboard
 
 
 def screenshot_color(path, point=None):
@@ -261,7 +262,11 @@ def main():
                 assert color == expected[path][1], "controller reconnect lost visible page state"
             process_samples["after_controller_reconnect"] = sample_browser_processes(browser_pid, executable)
             retain_process_samples()
+            verify_annotation_keyboard(endpoint, authorization, tabs["/one"]["targetId"])
             evidence = {"embedded_targets": len(tabs),
+                              "annotation_keyboard_isolation": True,
+                              "annotation_code_dark_rendering": True,
+                              "annotation_live_draw_region_erase": True,
                               "concurrent_agents": process_samples["concurrent_agents"]["peak_active_agent_workers"],
                               "controllers_per_active_service": max(controllers),
                               "browser_process_count_single_agent": single_browsers,

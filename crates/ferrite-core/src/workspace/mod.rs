@@ -1043,6 +1043,8 @@ mod tests {
             changed_files: None,
             additions: None,
             deletions: None,
+            reviewers: None,
+            labels: None,
             state: forge::PrState::Open,
             is_draft: false,
             head_ref: "h".into(),

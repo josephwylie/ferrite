@@ -1,6 +1,6 @@
 import { readFileSync, writeFileSync } from "node:fs";
 import { stripTypeScriptTypes } from "node:module";
-const files = ["AnnotationIds.ts", "AnnotationKeyboard.ts", "AnnotationStroke.ts", "AnnotationStyles.generated.ts", "bridge.ts", "guest.ts"];
+const files = ["AnnotationIds.ts", "AnnotationKeyboard.ts", "AnnotationStroke.ts", "AnnotationStyles.generated.ts", "AnnotationTheme.ts", "bridge.ts", "guest.ts"];
 const source = files.map(file => readFileSync(new URL(file, import.meta.url), "utf8")
   .replace(/^import .*?;\n/gms, "")
   .replace(/^export /gm, "")).join("\n");

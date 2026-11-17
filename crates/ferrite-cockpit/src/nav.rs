@@ -595,40 +595,20 @@ fn icon_ink(glyph: &'static str, size: f32, t: f32) -> gpui::Svg {
     ))
 }
 
-const EDGE_TAB_KEY: &str = "nav-edge-tab";
+pub fn header_controls_left(fullscreen: bool) -> f32 {
+    if cfg!(target_os = "macos") && !fullscreen { 90.0 } else { 12.0 }
+}
 
-pub fn edge_tab(open: bool) -> Stateful<Div> {
-    let t = motion::hover_t(&SharedString::from(EDGE_TAB_KEY));
-    let r = px(NAV_EDGE_TAB_R);
-    div()
-        .id(EDGE_TAB_KEY)
-        .debug_selector(|| EDGE_TAB_KEY.into())
-        .flex()
-        .items_center()
-        .justify_center()
-        .w(px(NAV_EDGE_TAB_W))
-        .h(px(NAV_EDGE_TAB_H))
-        .rounded_tr(r)
-        .rounded_br(r)
-        .bg(NAV_BACKGROUND)
-        .border_t_1()
-        .border_r_1()
-        .border_b_1()
-        .border_color(rgba(NAV_BORDER))
-        .occlude()
-        .on_hover(motion::hover_snap(EDGE_TAB_KEY.into()))
-        .child(
-            icon_ink(icons::CHEVRON_RIGHT, NAV_EDGE_TAB_GLYPH, t)
-                .when(open, |glyph| {
-                    glyph.with_transformation(gpui::Transformation::rotate(gpui::radians(
-                        std::f32::consts::PI,
-                    )))
-                }),
-        )
-        .tooltip(ferrite_ui::menu::action_tooltip(
-            "Toggle sidebar",
-            "cockpit::ToggleNav",
-        ))
+pub fn header_toggle(open: bool) -> Stateful<Div> {
+    icon_button(
+        "nav-toggle",
+        if open { icons::PANEL_LEFT_CLOSE } else { icons::PANEL_LEFT },
+        16.0,
+        ICON_BUTTON,
+        R_CONTROL,
+    )
+    .occlude()
+    .nav_action_tooltip("Toggle sidebar", "cockpit::ToggleNav")
 }
 
 /// A chord as it is drawn, its key a capital: `cmd-k` → `⌘K`.
@@ -1301,15 +1281,14 @@ mod tests {
     }
 
     #[test]
-    fn the_edge_tab_wears_the_card_and_points_the_way() {
+    fn the_header_toggle_is_a_standard_titlebar_control() {
         for open in [true, false] {
-            let mut tab = edge_tab(open);
-            let style = tab.style();
-            assert_eq!(style.background, Some(NAV_BACKGROUND.into()));
-            assert_eq!(style.border_color, Some(gpui::Hsla::from(rgba(NAV_BORDER))));
-            assert_eq!(style.border_widths.left, None, "no edge on the card's side");
-            assert_eq!(style.corner_radii.top_right, Some(px(8.).into()));
-            assert_eq!(style.corner_radii.top_left, None);
+            let mut toggle = header_toggle(open);
+            let style = toggle.style();
+            assert_eq!(style.size.width, Some(px(28.0).into()));
+            assert_eq!(style.size.height, Some(px(28.0).into()));
+            assert_eq!(style.corner_radii.top_left, Some(px(R_CONTROL).into()));
+            assert_eq!(style.border_widths.right, None);
         }
     }
 

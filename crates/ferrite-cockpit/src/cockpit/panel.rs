@@ -280,7 +280,7 @@ impl CockpitView {
             SurfaceId::Changes => self.ensure_changes(thread, cx),
             SurfaceId::Overview => self.refresh_context(thread),
             SurfaceId::PullRequest(number) => {
-                self.read_pr_snapshot(pr_read::PrTarget::thread(thread, *number), true, cx)
+                self.prepare_pr_view(pr_read::PrTarget::thread(thread, *number), true, cx)
             }
             _ => {}
         }
@@ -467,7 +467,7 @@ impl CockpitView {
                 }
                 Some(SurfaceId::Changes) => self.ensure_changes(thread, cx),
                 Some(SurfaceId::PullRequest(number)) => {
-                    self.read_pr_snapshot(pr_read::PrTarget::thread(thread, number), false, cx)
+                    self.prepare_pr_view(pr_read::PrTarget::thread(thread, number), false, cx)
                 }
                 _ => {}
             }

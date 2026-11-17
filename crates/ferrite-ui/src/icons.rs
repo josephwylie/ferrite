@@ -43,7 +43,34 @@ macro_rules! icons {
 }
 
 icons![
+    "arrow-down-up",
+    "editor-cursor",
+    "editor-trae",
+    "editor-kiro",
+    "editor-vscode",
+    "editor-vscode-insiders",
+    "editor-vscodium",
+    "editor-zed",
+    "editor-antigravity",
+    "editor-finder",
+    "editor-file-explorer",
+    "editor-idea",
+    "editor-aqua",
+    "editor-clion",
+    "editor-datagrip",
+    "editor-dataspell",
+    "editor-goland",
+    "editor-phpstorm",
+    "editor-pycharm",
+    "editor-rider",
+    "editor-rubymine",
+    "editor-rustrover",
+    "editor-webstorm",
+    "users",
+    "tag",
     "sidebar",
+    "panel-left",
+    "panel-left-close",
     "chevron-down",
     "chevron-right",
     "close",
@@ -116,6 +143,7 @@ icons![
     "shield",
     "arrow-up",
     "arrow-down",
+    "arrow-left",
     "arrow-right",
     "corner-down-left",
     "git-pull-request",
@@ -195,6 +223,8 @@ icons![
 ];
 
 pub const SIDEBAR: &str = "icons/sidebar.svg";
+pub const PANEL_LEFT: &str = "icons/panel-left.svg";
+pub const PANEL_LEFT_CLOSE: &str = "icons/panel-left-close.svg";
 pub const CHEVRON_DOWN: &str = "icons/chevron-down.svg";
 pub const CHEVRON_RIGHT: &str = "icons/chevron-right.svg";
 pub const CLOSE: &str = "icons/close.svg";
@@ -205,6 +235,31 @@ pub const WARNING: &str = "icons/warning.svg";
 pub const PENCIL: &str = "icons/pencil.svg";
 pub const CHECK: &str = "icons/check.svg";
 pub const BRANCH: &str = "icons/branch.svg";
+// Full-color editor marks use gpui::img rather than the tinted icon helper.
+pub const ARROW_DOWN_UP: &str = "icons/arrow-down-up.svg";
+pub const EDITOR_CURSOR: &str = "icons/editor-cursor.svg";
+pub const EDITOR_TRAE: &str = "icons/editor-trae.svg";
+pub const EDITOR_KIRO: &str = "icons/editor-kiro.svg";
+pub const EDITOR_VSCODE: &str = "icons/editor-vscode.svg";
+pub const EDITOR_VSCODE_INSIDERS: &str = "icons/editor-vscode-insiders.svg";
+pub const EDITOR_VSCODIUM: &str = "icons/editor-vscodium.svg";
+pub const EDITOR_ZED: &str = "icons/editor-zed.svg";
+pub const EDITOR_ANTIGRAVITY: &str = "icons/editor-antigravity.svg";
+pub const EDITOR_FINDER: &str = "icons/editor-finder.svg";
+pub const EDITOR_FILE_EXPLORER: &str = "icons/editor-file-explorer.svg";
+pub const EDITOR_IDEA: &str = "icons/editor-idea.svg";
+pub const EDITOR_AQUA: &str = "icons/editor-aqua.svg";
+pub const EDITOR_CLION: &str = "icons/editor-clion.svg";
+pub const EDITOR_DATAGRIP: &str = "icons/editor-datagrip.svg";
+pub const EDITOR_DATASPELL: &str = "icons/editor-dataspell.svg";
+pub const EDITOR_GOLAND: &str = "icons/editor-goland.svg";
+pub const EDITOR_PHPSTORM: &str = "icons/editor-phpstorm.svg";
+pub const EDITOR_PYCHARM: &str = "icons/editor-pycharm.svg";
+pub const EDITOR_RIDER: &str = "icons/editor-rider.svg";
+pub const EDITOR_RUBYMINE: &str = "icons/editor-rubymine.svg";
+pub const EDITOR_RUSTROVER: &str = "icons/editor-rustrover.svg";
+pub const EDITOR_WEBSTORM: &str = "icons/editor-webstorm.svg";
+
 pub const CODEX: &str = "icons/codex.svg";
 pub const CLAUDE: &str = "icons/claude.svg";
 const FERRITE_UPPER: &str = "icons/ferrite-upper.svg";
@@ -316,6 +371,7 @@ pub const ARROW_UP: &str = "icons/arrow-up.svg";
 /// A commit to pull.
 pub const ARROW_DOWN: &str = "icons/arrow-down.svg";
 /// A pull request's head branch into its base.
+pub const ARROW_LEFT: &str = "icons/arrow-left.svg";
 pub const ARROW_RIGHT: &str = "icons/arrow-right.svg";
 /// The palette cursor row's enter hint.
 pub const CORNER_DOWN_LEFT: &str = "icons/corner-down-left.svg";
@@ -543,6 +599,9 @@ mod tests {
     fn every_icon_key_loads_an_svg() {
         for key in [
             SIDEBAR,
+            PANEL_LEFT,
+            PANEL_LEFT_CLOSE,
+            ARROW_LEFT,
             BELL,
             BELL_FILL,
             CHEVRON_DOWN,
@@ -766,3 +825,7 @@ mod tests {
         assert_eq!(Assets.list("icons/").unwrap().len(), ICONS.len());
     }
 }
+
+/// Pull request Summary metadata.
+pub const USERS: &str = "icons/users.svg";
+pub const TAG: &str = "icons/tag.svg";

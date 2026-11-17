@@ -673,6 +673,9 @@ pub fn bindings(platform: Platform) -> Vec<Binding> {
         // every same-depth tie.
         ("enter".into(), NO_ACTION, Some(PANEL_EMPTY)),
         ("enter".into(), NO_ACTION, Some(BROWSER)),
+        // A live annotation's Send chord must reach the guest before the
+        // host can retain its evidence and submit the Composer.
+        (with_primary("enter"), NO_ACTION, Some(BROWSER)),
         ("tab".into(), NO_ACTION, Some(BROWSER)),
         ("shift-tab".into(), NO_ACTION, Some(BROWSER)),
         ("escape".into(), NO_ACTION, Some(BROWSER)),

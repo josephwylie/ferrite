@@ -228,10 +228,7 @@ impl ThreadSurfaces {
         self.revision += 1;
         let gone = self.tabs.remove(at);
         if self.active.as_ref() == Some(&gone) {
-            self.active = self
-                .tabs
-                .get(at.min(self.tabs.len().saturating_sub(1)))
-                .cloned();
+            self.active = self.tabs.get(at.min(self.tabs.len().saturating_sub(1))).cloned();
         }
         self.remember(gone);
     }
@@ -256,11 +253,7 @@ impl ThreadSurfaces {
         };
         self.revision += 1;
         let gone = self.tabs.split_off(at + 1);
-        if self
-            .active
-            .as_ref()
-            .is_some_and(|active| gone.contains(active))
-        {
+        if self.active.as_ref().is_some_and(|active| gone.contains(active)) {
             self.active = Some(id.clone());
         }
         self.remember_all(gone);
@@ -301,10 +294,7 @@ impl ThreadSurfaces {
         if let Some(at) = self.tabs.iter().position(|tab| tab == id) {
             self.tabs.remove(at);
             if self.active.as_ref() == Some(id) {
-                self.active = self
-                    .tabs
-                    .get(at.min(self.tabs.len().saturating_sub(1)))
-                    .cloned();
+                self.active = self.tabs.get(at.min(self.tabs.len().saturating_sub(1))).cloned();
             }
         }
         self.closed.retain(|closed| closed != id);
@@ -547,8 +537,7 @@ fn migrate(persisted: Persisted, resolves: impl Fn(ThreadId, &SurfaceId) -> bool
                 tabs.push(id);
             }
         }
-        let active =
-            shown_at.and_then(|at| tabs.get(at.min(tabs.len().saturating_sub(1))).cloned());
+        let active = shown_at.and_then(|at| tabs.get(at.min(tabs.len().saturating_sub(1))).cloned());
         let mut pr_tabs = stored.pr_tabs;
         pr_tabs.retain(|number, _| tabs.contains(&SurfaceId::PullRequest(*number)));
         threads.insert(
@@ -598,10 +587,7 @@ mod tests {
         let mut panel = ThreadSurfaces::new(true);
         panel.upsert(file("a.rs"));
         panel.upsert(file("b.rs"));
-        assert_eq!(
-            panel.tabs,
-            [SurfaceId::Overview, file("a.rs"), file("b.rs")]
-        );
+        assert_eq!(panel.tabs, [SurfaceId::Overview, file("a.rs"), file("b.rs")]);
         assert_eq!(panel.active, Some(file("b.rs")));
         panel.upsert(file("a.rs"));
         assert_eq!(panel.tabs.len(), 3, "deduped by path");
@@ -612,19 +598,13 @@ mod tests {
     fn reveal_is_refused_after_an_operator_action() {
         let mut panel = ThreadSurfaces::new(true);
         let seen = panel.revision();
-        assert!(
-            panel.reveal(SurfaceId::Changes, seen),
-            "nothing happened since"
-        );
+        assert!(panel.reveal(SurfaceId::Changes, seen), "nothing happened since");
         assert_eq!(panel.active, Some(SurfaceId::Changes));
         assert_eq!(panel.revision(), seen, "a reveal is not the operator's");
 
         let seen = panel.revision();
         panel.activate(&SurfaceId::Overview);
-        assert!(
-            !panel.reveal(SurfaceId::Files, seen),
-            "the operator chose Overview"
-        );
+        assert!(!panel.reveal(SurfaceId::Files, seen), "the operator chose Overview");
         assert_eq!(panel.active, Some(SurfaceId::Overview));
         assert!(!panel.tabs.contains(&SurfaceId::Files));
 
@@ -672,11 +652,7 @@ mod tests {
         panel.close(&SurfaceId::Browser);
         assert_eq!(panel.reopen_closed(), Some(SurfaceId::Changes));
         assert_eq!(panel.active, Some(SurfaceId::Changes));
-        assert_eq!(
-            panel.reopen_closed(),
-            None,
-            "a shell or a page cannot come back"
-        );
+        assert_eq!(panel.reopen_closed(), None, "a shell or a page cannot come back");
     }
 
     #[test]
@@ -688,11 +664,7 @@ mod tests {
         panel.close(&file("a"));
         assert_eq!(panel.active, Some(file("b")), "the tab now in its place");
         panel.close(&file("b"));
-        assert_eq!(
-            panel.active,
-            Some(SurfaceId::Overview),
-            "at the end, the one before"
-        );
+        assert_eq!(panel.active, Some(SurfaceId::Overview), "at the end, the one before");
         panel.close(&SurfaceId::Overview);
         assert_eq!(panel.active, None, "Open a surface");
         assert!(panel.open, "the Panel stays on");
@@ -717,30 +689,15 @@ mod tests {
         panel.activate(&file("a"));
         panel.close_right(&file("b"));
         assert_eq!(panel.tabs, [SurfaceId::Overview, file("a"), file("b")]);
-        assert_eq!(
-            panel.active,
-            Some(file("a")),
-            "the shown tab was left of it"
-        );
+        assert_eq!(panel.active, Some(file("a")), "the shown tab was left of it");
         let mut panel = tabs();
         panel.close_right(&file("a"));
-        assert_eq!(
-            panel.active,
-            Some(file("a")),
-            "the shown tab went: `a` takes it"
-        );
-        assert_eq!(
-            panel.reopen_closed(),
-            Some(file("c")),
-            "the shown one comes back first"
-        );
+        assert_eq!(panel.active, Some(file("a")), "the shown tab went: `a` takes it");
+        assert_eq!(panel.reopen_closed(), Some(file("c")), "the shown one comes back first");
 
         let mut panel = tabs();
         panel.move_to(&file("c"), 0);
-        assert_eq!(
-            panel.tabs,
-            [file("c"), SurfaceId::Overview, file("a"), file("b")]
-        );
+        assert_eq!(panel.tabs, [file("c"), SurfaceId::Overview, file("a"), file("b")]);
         assert_eq!(panel.active, Some(file("c")));
         panel.move_to(&file("c"), 99);
         assert_eq!(panel.tabs.last(), Some(&file("c")), "clamped to the end");
@@ -752,8 +709,7 @@ mod tests {
     }
 
     fn scratch(name: &str) -> PathBuf {
-        let dir =
-            std::env::temp_dir().join(format!("ferrite-surfaces-{name}-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("ferrite-surfaces-{name}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         dir
     }
@@ -778,12 +734,7 @@ mod tests {
         let panel = loaded.get(thread).expect("the Thread's Panel");
         assert_eq!(
             panel.tabs,
-            [
-                SurfaceId::Overview,
-                file("a.rs"),
-                SurfaceId::Changes,
-                SurfaceId::PullRequest(48)
-            ]
+            [SurfaceId::Overview, file("a.rs"), SurfaceId::Changes, SurfaceId::PullRequest(48)]
         );
         assert_eq!(panel.pr_tab(48), PrTab::Timeline, "a PR keeps its view");
         assert_eq!(panel.pr_tab(7), PrTab::Summary);
@@ -820,10 +771,7 @@ mod tests {
         std::fs::write(dir.join(FILE_NAME), br#"{"version": 99, "threads": []}"#).unwrap();
         let error = Surfaces::load(&dir, |_, _| true).err().expect("refused");
         assert_eq!(error.kind(), io::ErrorKind::InvalidData);
-        assert!(Surfaces::load(&scratch("missing"), |_, _| true)
-            .unwrap()
-            .threads
-            .is_empty());
+        assert!(Surfaces::load(&scratch("missing"), |_, _| true).unwrap().threads.is_empty());
     }
 
     #[test]
@@ -842,8 +790,10 @@ mod tests {
         surfaces.entry(lone, true).upsert(file("deleted"));
         surfaces.save(&dir).unwrap();
 
-        let loaded =
-            Surfaces::load(&dir, |thread, id| thread != gone && *id != file("deleted")).unwrap();
+        let loaded = Surfaces::load(&dir, |thread, id| {
+            thread != gone && *id != file("deleted")
+        })
+        .unwrap();
         assert!(loaded.get(gone).is_none(), "a deleted Thread's Panel goes");
         let panel = loaded.get(kept).unwrap();
         assert_eq!(panel.tabs, [SurfaceId::Overview, file("a"), file("c")]);

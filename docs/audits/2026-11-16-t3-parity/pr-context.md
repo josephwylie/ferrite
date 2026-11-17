@@ -1,5 +1,7 @@
 # PR and context card source comparison
 
+> PR status correction: [pr-current.md](pr-current.md) supersedes this report’s PR data, remote Code, and scope claims. The paragraphs below preserve the earlier investigation; they are not a description of the current PR implementation.
+
 Reference checkout HEAD verified as `4da2bc520c38cd6b36014d2888774168fbf4c77f`.
 Previous audit reports were treated as hypotheses. This comparison reads the components directly.
 

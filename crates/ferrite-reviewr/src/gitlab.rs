@@ -572,6 +572,34 @@ fn build_snapshot(
         changed_files: mr["changes_count"].as_str().and_then(|count| count.parse().ok()),
         additions: None,
         deletions: None,
+        reviewers: mr["reviewers"].as_array().map(|requested| {
+            let mut reviewers: Vec<_> = requested.iter().filter_map(gitlab_reviewer).collect();
+            for approved in approvals["approved_by"].as_array().into_iter().flatten() {
+                let Some(mut reviewer) = gitlab_reviewer(&approved["user"]) else { continue };
+                reviewer.verdict = Some(crate::forge::ReviewState::Approved);
+                if let Some(existing) = reviewers
+                    .iter_mut()
+                    .find(|actor| actor.login.eq_ignore_ascii_case(&reviewer.login))
+                {
+                    existing.verdict = reviewer.verdict;
+                } else {
+                    reviewers.push(reviewer);
+                }
+            }
+            reviewers
+        }),
+        labels: mr["labels"].as_array().map(|labels| {
+            labels
+                .iter()
+                .filter_map(|label| {
+                    Some(crate::forge::PrLabel {
+                        name: label.as_str()?.to_string(),
+                        color: None,
+                        description: None,
+                    })
+                })
+                .collect()
+        }),
         // A missing state reads as closed, never reviewable.
         state: parse_state(mr["state"].as_str().unwrap_or_default()),
         is_draft: mr["draft"].as_bool().unwrap_or(false),
@@ -586,6 +614,15 @@ fn build_snapshot(
         comments_truncated,
         checks_truncated,
     }
+}
+
+fn gitlab_reviewer(user: &Value) -> Option<crate::forge::Reviewer> {
+    Some(crate::forge::Reviewer {
+        login: user["username"].as_str()?.to_string(),
+        name: user["name"].as_str().map(str::to_string),
+        avatar_url: user["avatar_url"].as_str().map(str::to_string),
+        verdict: None,
+    })
 }
 
 /// `opened` maps to `open`; a locked MR reads as closed.
@@ -650,6 +687,7 @@ fn replies_from_discussion(discussion: &Value) -> Vec<Reply> {
             Reply {
                 id: crate::forge::provider_id(&note["id"]),
                 author_is_bot: is_gitlab_bot(&author),
+                author_avatar_url: note["author"]["avatar_url"].as_str().map(str::to_string),
                 author,
                 body: note["body"].as_str().unwrap_or("").trim().to_string(),
                 created_at: note["created_at"].as_str().unwrap_or("").to_string(),
@@ -686,6 +724,7 @@ fn merge_comments(discussions: &[Value], approvals: &Value) -> Vec<Comment> {
             id: crate::forge::provider_id(&root["id"]),
             kind,
             author_is_bot: is_gitlab_bot(&author),
+            author_avatar_url: root["author"]["avatar_url"].as_str().map(str::to_string),
             author,
             anchor,
             verdict: None,
@@ -705,13 +744,16 @@ fn merge_comments(discussions: &[Value], approvals: &Value) -> Vec<Comment> {
         }
         let bot = is_gitlab_bot(&author);
         // Approvals have no timestamp, so they sort after the dated rows.
-        out.push(prose_row(
+        let mut review = prose_row(
             CommentKind::Review,
             author,
             bot,
             "Approved this merge request.".to_string(),
             String::new(),
-        ));
+        );
+        review.author_avatar_url = user["user"]["avatar_url"].as_str().map(str::to_string);
+        review.verdict = Some(crate::forge::ReviewState::Approved);
+        out.push(review);
     }
     finish_comments(&mut out);
     out
@@ -830,6 +872,28 @@ mod tests {
         assert_eq!((pr.additions, pr.deletions), (None, None));
         mr["changes_count"] = json!("1000+");
         assert_eq!(read(&mr).changed_files, None);
+    }
+
+    #[test]
+    fn summary_metadata_combines_requested_and_approved_reviewers() {
+        let mr = json!({"reviewers": [{"username":"Ada", "name":"Ada", "avatar_url":"https://example.test/ada.png"}], "labels":["bug"]});
+        let approvals =
+            json!({"approved_by":[{"user":{"username":"ada"}},{"user":{"username":"bob"}}]});
+        let pr = build_snapshot(&mr, Sync::Unknown, Vec::new(), &[], &approvals, false, false);
+        let reviewers = pr.reviewers.unwrap();
+        assert_eq!(reviewers.len(), 2);
+        assert!(
+            reviewers
+                .iter()
+                .all(|reviewer| reviewer.verdict == Some(crate::forge::ReviewState::Approved))
+        );
+        assert_eq!(reviewers[0].avatar_url.as_deref(), Some("https://example.test/ada.png"));
+        assert_eq!(pr.labels.unwrap()[0].name, "bug");
+        assert!(
+            pr.comments
+                .iter()
+                .all(|comment| comment.verdict == Some(crate::forge::ReviewState::Approved))
+        );
     }
 
     #[test]

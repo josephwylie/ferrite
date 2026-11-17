@@ -213,13 +213,12 @@ impl Composer {
             .bounds()
     }
 
-    /// The open comment field's focus, while it holds the keyboard. A click
-    /// on the main line moves focus away; the field stays open but no longer
-    /// pulls it back.
+    /// Claim the first frame before prepaint, then preserve the comment's
+    /// keyboard only while it holds focus. An outside click can take it away.
     pub(super) fn comment_focus(&self, window: &Window, cx: &App) -> Option<gpui::FocusHandle> {
         let edit = self.citations.editing.as_ref()?;
         let focus = gpui::Focusable::focus_handle(edit.field.read(cx), cx);
-        focus.contains_focused(window, cx).then_some(focus)
+        (edit.focus_pending.get() || focus.contains_focused(window, cx)).then_some(focus)
     }
 
     pub fn comment_valid(&self, cx: &App) -> bool {
@@ -633,6 +632,8 @@ fn panel(entity: &Entity<Composer>, index: usize, _reply: &Reply, cx: &App) -> A
     let empty = field.read(cx).text().is_empty();
     let invalid = !composer.comment_valid(cx);
     let focused_field = field.clone();
+    let pressed_field = field.clone();
+    let focus_owner = entity.downgrade();
     let field = components::on_bounds(
         div()
             .relative()
@@ -651,10 +652,23 @@ fn panel(entity: &Entity<Composer>, index: usize, _reply: &Reply, cx: &App) -> A
             .child(field),
         move |_, window, cx| {
             if pending.replace(false) {
-                window.focus(
-                    &gpui::Focusable::focus_handle(focused_field.read(cx), cx),
-                    cx,
-                );
+                let focus = gpui::Focusable::focus_handle(focused_field.read(cx), cx);
+                // The Cockpit claims pending focus before prepaint. A host
+                // without that focus policy needs the same handoff after
+                // drawing: changing focus here would miss track_focus and
+                // Window::refresh is suppressed during prepaint.
+                window.on_next_frame(move |window, cx| {
+                    if focus_owner.upgrade().is_some_and(|owner| {
+                        owner
+                            .read(cx)
+                            .citations
+                            .editing
+                            .as_ref()
+                            .is_some_and(|edit| edit.field == focused_field)
+                    }) {
+                        window.focus(&focus, cx);
+                    }
+                });
             }
         },
     );
@@ -715,6 +729,12 @@ fn panel(entity: &Entity<Composer>, index: usize, _reply: &Reply, cx: &App) -> A
                 .debug_selector(|| "cite-comment-field".into())
                 .px(px(4.))
                 .py(px(6.))
+                .on_mouse_down(gpui::MouseButton::Left, move |_, window, cx| {
+                    window.focus(
+                        &gpui::Focusable::focus_handle(pressed_field.read(cx), cx),
+                        cx,
+                    );
+                })
                 .child(field),
         )
         .when(invalid, |panel| {

@@ -68,3 +68,45 @@ Model the Domain placed the optional preference and transient drag in their exis
 The worker added regression coverage for resize geometry, release persistence, viewport clamping, collapse restoration, double-click reset, abandoned drag cancellation, finite-width fallback, brand limits, and selected working-row opacity. No builds, tests, GUI runs, or worktrees were created by this worker. Parent verification remains outstanding.
 
 The parent's narrow test filter needs `test(nav::tests) | test(cockpit::columns::tests) | test(cockpit::tests::nav_list) | test(cockpit::tests::nav_parity) | test(cockpit::tests::nav_shelves) | test(cockpit::tests::column_motion) | test(cockpit::tests::navigation)` for `ferrite-cockpit`, plus `test(settings::tests)` for `ferrite-core`. Combine these with the other workers' changed-module filters in the parent's serial run. Follow with the one parent typecheck and the native E2E pass.
+
+
+## Isolated verification corrections
+
+The parent run in `/tmp/ferrite-parity-isolated-ui-tests.log` exposed two sidebar failures. The resize regression reached 320px and widened title text correctly, but release on the rail left the stored width unset. GPUI `elements/div.rs:3060-3103` dispatches click listeners during the mouse-up bubble phase. The rail stops that propagation, so the root's bubble listener never committed the resize. Sidebar release now commits in the root capture phase before any child consumes the event. The test still releases on the actual rail and checks both in-memory and disk state.
+
+The collapse-level fixture used a 550px window. Sidebar clamping now leaves at least 300px for the cell there, so Transcript is the correct expanded level. The fixture now uses 480px. Even at the 208px sidebar minimum, the expanded cell is at most 272px; folding restores 480px. These bounds straddle `docview.rs`'s 300px Transcript threshold without changing production zoom rules.
+
+Fix Root Causes moved resize completion to the event phase that can receive every release. The existing red tests remain the regression checks. This worker made these corrections only in `/Users/josephwylie/Desktop/Projects/ferrite-t3-parity` and ran no Cargo commands, builds, or GUI checks. Parent rerun remains pending.
+
+
+## Resize event routing correction
+
+The parent's second run in `/tmp/ferrite-parity-ui-corrections.log` proved that changing only the root event phase did not fix release persistence. The preceding capture-phase conclusion was incomplete.
+
+GPUI `Interactivity::capture_any_mouse_up` in `elements/div.rs:235` checks `hitbox.is_hovered` even during capture. The resize rail uses `occlude`. `window.rs:1187` stops hit testing at that blocking hitbox, so the root is not hovered and its capture listener is skipped. The same condition gates the root move handler. An initial jump can resize while the pointer is outside the old rail, but small moves after the rail repaints can stop reaching the root.
+
+The rail now installs window capture listeners during canvas painting, following the existing `image_viewer.rs::follow_press` pattern. These listeners check the owned resize state directly and receive move/release events regardless of the hitbox under the pointer. They consume events only while the sidebar owns a resize. The old root sidebar handlers are removed. The regression test now makes a second 4px move inside the repositioned rail before release, so it checks both continued movement and persistence. No other input owner changed.
+
+This correction was made only in the isolated worktree. Parent Cargo and native verification remain pending. No worker builds or GUI runs were performed.
+
+
+## Sidebar header correction after native build 4
+
+The native build 4 screenshot confirms that the sidebar header already uses the 52px `NAV_HEADER_H`. Its history center is at 26px and search center at 76px. The apparent 44px bottom edge came from `plane_seams`, drawn afterward across the whole window. That horizontal rule now starts at the sidebar's animated width. The board and panel still use their existing 44px header, and native traffic-light geometry is unchanged.
+
+Pinned `AppSidebarLayout.tsx:385-405` owns a persistent 28px sidebar toggle at `workspace-controls-left + 1px`, centered in the 52px topbar. macOS desktop uses a 90px controls inset outside fullscreen. The ordinary inset is 12px. `ui/sidebar.tsx:246` places the brand after the inset, 28px control, and 12px gap. Ferrite now follows these positions, including the 130px brand inset on ordinary macOS windows. The existing width measurement includes this complete header footprint without polling layout.
+
+The former middle rail collapse handle is removed. A header toggle with open and closed panel glyphs remains visible when the sidebar collapses. Brand and history collapse with the sidebar, matching their ownership in `SidebarChrome.tsx`; the board title clears the remaining control. History uses the source 14px arrow glyphs rather than the former chevrons. Ferrite branding remains unchanged.
+
+Regression assertions now exercise header-toggle collapse and reopening, fixed toggle bounds, brand/history ordering, hidden collapsed history, board-title clearance, and the divider's sidebar exclusion. Existing automatic-collapse and provider-navigation tests target the header control. The prior midrail-specific unit assertion is replaced with a titlebar-control geometry assertion.
+
+No Cargo, native UI, or screenshot runs were performed by this worker. The parent should run the changed `nav::tests`, `cockpit::tests::nav_parity`, `cockpit::tests::navigation`, `cockpit::tests::nav_list`, `cockpit::tests::provider_navigation`, and `cockpit::tests::thread_groups` tests, together with `ferrite-ui`'s `icons::tests`, before the native comparison.
+
+
+## Column animation endpoints after the header correction
+
+The parent run in `/tmp/ferrite-parity-final-ui-tests-retry.log` reached a 262px settled sidebar in the GPUI test font. Two column-motion tests still expected the unconditional 256px default. The production minimum matches the pinned `SidebarBrandWidthProbe` and `threadSidebarWidth.ts`. It includes the 130px brand inset, measured brand, 4px gap, two 28px history controls, 12px right padding, and 1px border, then rounds up and takes the larger of that value and 208px. A measured header can therefore raise the 256px preferred default.
+
+The animation tests now derive their endpoint from the rendered `nav-head` bounds, right padding, border, preferred width, and viewport limit. They retain the same assertions for intermediate motion, unsquashed column face, reversal continuity, complete closure, reduced-motion snapping, and zero animation frames at rest. The resize-persistence regression uses the same measured bounds for its default, drag, narrow-viewport, and reset expectations. No expected value was replaced with a hardcoded 262px value.
+
+Production sizing and rendering code are unchanged by this correction. No Cargo or native UI runs were performed by this worker. Parent rerun remains pending.

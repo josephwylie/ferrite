@@ -23,6 +23,7 @@ pub(crate) fn review_verdict(state: WireReviewState) -> Option<(&'static str, u3
     match state {
         WireReviewState::Approved => Some(("Approved", GREEN)),
         WireReviewState::ChangesRequested => Some(("Changes requested", RED)),
+        WireReviewState::Dismissed => Some(("Dismissed", INK_SUBTLE)),
         WireReviewState::Commented => Some(("Commented", INK_SUBTLE)),
         WireReviewState::Unknown => None,
     }

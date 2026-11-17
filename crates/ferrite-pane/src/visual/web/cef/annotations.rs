@@ -14,6 +14,96 @@ static NEXT_ID: AtomicI32 = AtomicI32::new(FIRST_ID);
 const LIMIT: usize = 1024 * 1024 + 65536;
 const GUEST: &str = include_str!("../../live_annotation/guest.js");
 const SOURCE: &str = include_str!("../../live_annotation/source.js");
+const KEYBOARD_GUARD: &str = include_str!("../../live_annotation/keyboard-guard.js");
+const WORLD: &str = "ferrite-live-annotation";
+
+fn next_id() -> i32 {
+    NEXT_ID
+        .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |id| {
+            Some(if id >= i32::MAX - 1 { FIRST_ID } else { id + 1 })
+        })
+        .unwrap()
+}
+
+#[derive(Clone, Copy)]
+enum Preparation {
+    Waiting(Instant),
+    Ready(bool),
+    Started(bool),
+}
+
+/// Install only inert keyboard capture before the first website navigation.
+/// The full editor remains lazy, and a timeout does not disable browsing.
+pub(super) struct Bootstrap {
+    _registration: Option<Registration>,
+    inbox: Arc<Mutex<Inbox>>,
+    expected: Arc<AtomicI32>,
+    preparation: Preparation,
+}
+
+impl Bootstrap {
+    pub(super) fn new(browser: &Browser) -> Self {
+        let inbox = Arc::new(Mutex::new(Inbox {
+            messages: VecDeque::new(),
+            overflow: false,
+        }));
+        let id = next_id();
+        let expected = Arc::new(AtomicI32::new(id));
+        let mut observer = AnnotationObserver::new(inbox.clone(), expected.clone());
+        let host = browser.host();
+        let registration = host
+            .as_ref()
+            .and_then(|host| host.add_dev_tools_message_observer(Some(&mut observer)));
+        let command =
+            json!({ "id": id, "method": "Page.addScriptToEvaluateOnNewDocument", "params": {
+                "source": KEYBOARD_GUARD, "worldName": WORLD,
+            }})
+            .to_string();
+        let sent = registration.is_some()
+            && host.is_some_and(|host| host.send_dev_tools_message(Some(command.as_bytes())) != 0);
+        Self {
+            _registration: registration,
+            inbox,
+            expected,
+            preparation: if sent {
+                Preparation::Waiting(Instant::now())
+            } else {
+                Preparation::Ready(false)
+            },
+        }
+    }
+
+    /// Returns true once, when the queued initial navigation may begin.
+    pub(super) fn advance(&mut self) -> bool {
+        if let Preparation::Waiting(since) = self.preparation {
+            let mut inbox = self.inbox.lock().unwrap();
+            if let Some(response) = inbox.messages.pop_front() {
+                self.preparation = Preparation::Ready(
+                    response.get("error").is_none()
+                        && response["result"]["identifier"].as_str().is_some(),
+                );
+            } else if inbox.overflow || since.elapsed() >= Duration::from_secs(5) {
+                self.preparation = Preparation::Ready(false);
+            }
+        }
+        if let Preparation::Ready(available) = self.preparation {
+            self.expected.store(0, Ordering::SeqCst);
+            self._registration.take();
+            self.preparation = Preparation::Started(available);
+            true
+        } else {
+            false
+        }
+    }
+
+    pub(super) fn started(&self) -> bool {
+        matches!(self.preparation, Preparation::Started(_))
+    }
+
+    pub(super) fn available(&self) -> bool {
+        matches!(self.preparation, Preparation::Started(true))
+    }
+}
 
 #[derive(Clone, Copy)]
 enum Step {
@@ -124,11 +214,7 @@ impl AnnotationSession {
     }
 
     fn send(&mut self, browser: &Browser, step: Step, method: &str, params: Value) {
-        let id = NEXT_ID
-            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |id| {
-                Some(if id >= i32::MAX - 1 { FIRST_ID } else { id + 1 })
-            })
-            .unwrap();
+        let id = next_id();
         self.expected.store(id, Ordering::SeqCst);
         let message = json!({ "id": id, "method": method, "params": params }).to_string();
         self.pending = Some(Pending {
@@ -191,11 +277,7 @@ impl AnnotationSession {
         if self.context.is_none() || self.cleanup != Cleanup::Idle {
             return;
         }
-        let id = NEXT_ID
-            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |id| {
-                Some(if id >= i32::MAX - 1 { FIRST_ID } else { id + 1 })
-            })
-            .unwrap();
+        let id = next_id();
         let message = json!({ "id": id, "method": "Runtime.evaluate", "params": {
             "expression": format!("globalThis.__ferriteAnnotation?.setSendEnabled({enabled})"),
             "contextId": self.context, "returnByValue": true, "timeout": 250,
@@ -381,7 +463,7 @@ impl AnnotationSession {
                             Step::World,
                             "Page.createIsolatedWorld",
                             json!({
-                                "frameId": frame, "worldName": "ferrite-live-annotation"
+                                "frameId": frame, "worldName": WORLD
                             }),
                         );
                     } else {
@@ -519,6 +601,7 @@ wrap_dev_tools_message_observer! {
     struct AnnotationObserver { inbox: Arc<Mutex<Inbox>>, expected: Arc<AtomicI32> }
     impl DevToolsMessageObserver {
         fn on_dev_tools_message(&self, _browser: Option<&mut Browser>, message: Option<&[u8]>) -> ::std::os::raw::c_int {
+            if self.expected.load(Ordering::SeqCst) == 0 { return 1; }
             let Some(bytes) = message else { return 1 };
             if bytes.len() > LIMIT { return 1; }
             if let Ok(value) = serde_json::from_slice::<Value>(bytes) {
@@ -535,7 +618,71 @@ wrap_dev_tools_message_observer! {
 
 #[cfg(test)]
 mod tests {
-    use super::Cleanup;
+    use super::*;
+
+    fn bootstrap(preparation: Preparation) -> Bootstrap {
+        Bootstrap {
+            _registration: None,
+            inbox: Arc::new(Mutex::new(Inbox {
+                messages: VecDeque::new(),
+                overflow: false,
+            })),
+            expected: Arc::new(AtomicI32::new(17)),
+            preparation,
+        }
+    }
+
+    #[test]
+    fn keyboard_bootstrap_requires_ack_then_releases_navigation_once() {
+        let mut bootstrap = bootstrap(Preparation::Waiting(Instant::now()));
+        assert!(!bootstrap.advance());
+        assert!(!bootstrap.started());
+        assert!(!bootstrap.available());
+        bootstrap
+            .inbox
+            .lock()
+            .unwrap()
+            .messages
+            .push_back(json!({"result": {"identifier": "guard"}}));
+        assert!(bootstrap.advance());
+        assert!(bootstrap.started());
+        assert!(bootstrap.available());
+        assert!(!bootstrap.advance());
+        assert_eq!(bootstrap.expected.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn keyboard_bootstrap_timeout_preserves_browsing_without_claiming_isolation() {
+        let mut bootstrap = bootstrap(Preparation::Waiting(
+            Instant::now() - Duration::from_secs(6),
+        ));
+        assert!(bootstrap.advance());
+        assert!(bootstrap.started());
+        assert!(!bootstrap.available());
+        bootstrap
+            .inbox
+            .lock()
+            .unwrap()
+            .messages
+            .push_back(json!({"result": {"identifier": "late"}}));
+        assert!(!bootstrap.advance());
+        assert!(!bootstrap.available());
+    }
+
+    #[test]
+    fn keyboard_bootstrap_error_preserves_browsing_without_claiming_isolation() {
+        let mut bootstrap = bootstrap(Preparation::Waiting(Instant::now()));
+        bootstrap
+            .inbox
+            .lock()
+            .unwrap()
+            .messages
+            .push_back(json!({"error": {"code": -1}}));
+        assert!(bootstrap.advance());
+        assert!(bootstrap.started());
+        assert!(!bootstrap.available());
+    }
+
     #[test]
     fn failed_restore_stops_after_one_retry_without_claiming_cleanup() {
         let mut cleanup = Cleanup::Idle;

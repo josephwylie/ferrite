@@ -493,6 +493,10 @@ pub struct WirePr {
     pub additions: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub deletions: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reviewers: Option<Vec<WirePrReviewer>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub labels: Option<Vec<WirePrLabel>>,
     pub state: WirePrState,
     #[serde(default)]
     pub draft: bool,
@@ -514,6 +518,21 @@ pub struct WirePr {
     pub checks_truncated: bool,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub comments_truncated: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WirePrReviewer {
+    pub login: String,
+    pub name: Option<String>,
+    pub avatar_url: Option<String>,
+    pub verdict: Option<WireReviewState>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WirePrLabel {
+    pub name: String,
+    pub color: Option<String>,
+    pub description: Option<String>,
 }
 
 impl WirePr {
@@ -595,6 +614,8 @@ pub struct WirePrComment {
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub author_is_bot: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub author_avatar_url: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub place: Option<WireFindingPlace>,
     pub kind: WirePrCommentKind,
     pub author: String,
@@ -646,6 +667,7 @@ pub enum WireReviewState {
     Approved,
     ChangesRequested,
     Commented,
+    Dismissed,
     #[serde(other)]
     Unknown,
 }
@@ -656,6 +678,8 @@ pub struct WireReply {
     pub id: Option<String>,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub author_is_bot: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub author_avatar_url: Option<String>,
     pub author: String,
     pub body: String,
     pub created_at: String,
@@ -674,6 +698,27 @@ impl From<forge::PrSnapshot> for WirePr {
             changed_files: pr.changed_files,
             additions: pr.additions,
             deletions: pr.deletions,
+            reviewers: pr.reviewers.map(|reviewers| {
+                reviewers
+                    .into_iter()
+                    .map(|reviewer| WirePrReviewer {
+                        login: reviewer.login,
+                        name: reviewer.name,
+                        avatar_url: reviewer.avatar_url,
+                        verdict: reviewer.verdict.map(WireReviewState::from),
+                    })
+                    .collect()
+            }),
+            labels: pr.labels.map(|labels| {
+                labels
+                    .into_iter()
+                    .map(|label| WirePrLabel {
+                        name: label.name,
+                        color: label.color,
+                        description: label.description,
+                    })
+                    .collect()
+            }),
             state: match pr.state {
                 forge::PrState::Open => WirePrState::Open,
                 forge::PrState::Merged => WirePrState::Merged,
@@ -716,11 +761,23 @@ impl From<forge::PrSnapshot> for WirePr {
     }
 }
 
+impl From<forge::ReviewState> for WireReviewState {
+    fn from(state: forge::ReviewState) -> Self {
+        match state {
+            forge::ReviewState::Approved => Self::Approved,
+            forge::ReviewState::ChangesRequested => Self::ChangesRequested,
+            forge::ReviewState::Commented => Self::Commented,
+            forge::ReviewState::Dismissed => Self::Dismissed,
+        }
+    }
+}
+
 impl From<forge::Comment> for WirePrComment {
     fn from(comment: forge::Comment) -> Self {
         Self {
             id: comment.id,
             author_is_bot: comment.author_is_bot,
+            author_avatar_url: comment.author_avatar_url,
             place: comment.place.map(|place| WireFindingPlace {
                 path: place.path,
                 range: place.range,
@@ -736,11 +793,7 @@ impl From<forge::Comment> for WirePrComment {
             },
             author: comment.author,
             anchor: comment.anchor,
-            verdict: comment.verdict.map(|state| match state {
-                forge::ReviewState::Approved => WireReviewState::Approved,
-                forge::ReviewState::ChangesRequested => WireReviewState::ChangesRequested,
-                forge::ReviewState::Commented => WireReviewState::Commented,
-            }),
+            verdict: comment.verdict.map(WireReviewState::from),
             body: comment.body,
             snippet: comment.snippet,
             created_at: comment.created_at,
@@ -752,6 +805,7 @@ impl From<forge::Comment> for WirePrComment {
                 .map(|reply| WireReply {
                     id: reply.id,
                     author_is_bot: reply.author_is_bot,
+                    author_avatar_url: reply.author_avatar_url,
                     author: reply.author,
                     body: reply.body,
                     created_at: reply.created_at,
@@ -1086,6 +1140,7 @@ mod tests {
             kind: forge::CommentKind::Finding,
             author: "reviewer[bot]".into(),
             author_is_bot: true,
+            author_avatar_url: Some("https://example.test/avatar.png".into()),
             anchor: "src/lib.rs:4".into(),
             verdict: None,
             place: Some(forge::FindingPlace::from_lines(
@@ -1103,6 +1158,7 @@ mod tests {
                 id: Some("reply-1".into()),
                 author: "ada".into(),
                 author_is_bot: false,
+                author_avatar_url: Some("https://example.test/avatar.png".into()),
                 body: "Fixed".into(),
                 created_at: String::new(),
             }],
@@ -1117,6 +1173,14 @@ mod tests {
             Some(WireDiffSide::New)
         );
         assert_eq!(comment.replies[0].id.as_deref(), Some("reply-1"));
+        assert_eq!(
+            comment.author_avatar_url.as_deref(),
+            Some("https://example.test/avatar.png")
+        );
+        assert_eq!(
+            comment.replies[0].author_avatar_url,
+            comment.author_avatar_url
+        );
         let roundtrip: WirePrComment =
             serde_json::from_str(&serde_json::to_string(&comment).unwrap()).unwrap();
         assert_eq!(roundtrip, comment);

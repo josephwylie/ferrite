@@ -439,6 +439,8 @@ unsafe impl<T> Send for MainThread<T> {}
 /// a released view keeps it, and the next browser picks up where it left off.
 struct ViewState {
     external: bool,
+    /// The private empty document must not publish website metadata.
+    website_started: AtomicBool,
     navigation: Mutex<BrowserState>,
     /// What a website asked of the host, taken by the host in order.
     requests: Mutex<HostRequests>,
@@ -491,7 +493,10 @@ impl ViewState {
     }
 
     fn navigation(&self, generation: u64, f: impl FnOnce(&mut BrowserState)) {
-        if self.external && self.is_current(generation) {
+        if self.external
+            && self.website_started.load(Ordering::SeqCst)
+            && self.is_current(generation)
+        {
             let mut navigation = self.navigation.lock().unwrap();
             let before = navigation.clone();
             f(&mut navigation);
@@ -499,6 +504,14 @@ impl ViewState {
                 self.dirty.store(true, Ordering::SeqCst);
             }
         }
+    }
+
+    fn allows_bootstrap_document(&self, generation: u64, main_frame: bool, url: &str) -> bool {
+        self.external
+            && self.is_current(generation)
+            && !self.website_started.load(Ordering::SeqCst)
+            && main_frame
+            && url == "about:blank"
     }
 
     fn request_window(&self, generation: u64, url: Option<&CefString>) {
@@ -683,7 +696,7 @@ impl Engine for CefEngine {
         if controller.is_none() {
             let mut created = control::Control::start()?;
             for view in self.inner.live_views() {
-                if view.doc.external {
+                if view.doc.external && view.navigation_ready() {
                     if let Some(browser) = view.browser.borrow().clone() {
                         created.register(view.target_id(), browser, view.agent_access.clone());
                     }
@@ -711,6 +724,14 @@ impl Engine for CefEngine {
         let views = engine.live_views();
         for view in &views {
             view.finish_deferred_hide();
+            let prepared = view
+                .bootstrap
+                .borrow_mut()
+                .as_mut()
+                .is_some_and(annotations::Bootstrap::advance);
+            if prepared {
+                view.start_initial_navigation();
+            }
             if let (Some(browser), Some(annotation)) = (
                 view.browser.borrow().as_ref(),
                 view.annotation.borrow_mut().as_mut(),
@@ -806,6 +827,7 @@ impl CefEngine {
         });
         let state = Arc::new(ViewState {
             external: external_url.is_some(),
+            website_started: AtomicBool::new(false),
             navigation: Mutex::new(BrowserState {
                 url: external_url.unwrap_or_default().into(),
                 loading: external_url.is_some(),
@@ -836,6 +858,7 @@ impl CefEngine {
             browser: RefCell::new(None),
             observation: RefCell::new(None),
             annotation: RefCell::new(None),
+            bootstrap: RefCell::new(None),
             failed: Cell::new(false),
             agent_access: Arc::new(AgentAccess::default()),
             protected: Cell::new(false),
@@ -871,6 +894,7 @@ impl EngineInner {
             view.state.retire_dialog();
             view.state.generation.fetch_add(1, Ordering::SeqCst);
             view.annotation.borrow_mut().take();
+            view.bootstrap.borrow_mut().take();
             view.observation.borrow_mut().take();
             if let Some(browser) = view.browser.borrow_mut().take() {
                 if let Some(host) = browser.host() {
@@ -935,6 +959,7 @@ struct ViewInner {
     browser: RefCell<Option<Browser>>,
     observation: RefCell<Option<observation::Observation>>,
     annotation: RefCell<Option<annotations::AnnotationSession>>,
+    bootstrap: RefCell<Option<annotations::Bootstrap>>,
     failed: Cell<bool>,
     agent_access: Arc<AgentAccess>,
     protected: Cell<bool>,
@@ -969,6 +994,41 @@ impl ViewInner {
         )
     }
 
+    fn navigation_ready(&self) -> bool {
+        !self.doc.external
+            || self
+                .bootstrap
+                .borrow()
+                .as_ref()
+                .is_some_and(|bootstrap| bootstrap.started())
+    }
+
+    fn start_initial_navigation(&self) {
+        let browser = self.browser.borrow();
+        let Some(browser) = browser.as_ref() else {
+            return;
+        };
+        *self.observation.borrow_mut() = observation::Observation::new(browser);
+        let url = self.state.navigation.lock().unwrap().url.clone();
+        if let Some(frame) = browser.main_frame() {
+            self.navigation_intent();
+            if self
+                .bootstrap
+                .borrow()
+                .as_ref()
+                .is_some_and(|bootstrap| bootstrap.available())
+            {
+                let script = format!("location.replace({})", serde_json::to_string(&url).unwrap());
+                frame.execute_java_script(Some(&script.as_str().into()), Some(&"about:blank".into()), 0);
+            } else {
+                frame.load_url(Some(&url.as_str().into()));
+            }
+        }
+        if let Some(control) = self._engine.control.borrow_mut().as_mut() {
+            control.register(self.target_id(), browser.clone(), self.agent_access.clone());
+        }
+    }
+
     /// Visible and without a browser: never created yet, or released.
     fn wants_browser(&self) -> bool {
         self.visible.get()
@@ -983,6 +1043,7 @@ impl ViewInner {
     fn create_browser(&self) {
         let started = Instant::now();
         let generation = self.state.generation.fetch_add(1, Ordering::SeqCst) + 1;
+        self.state.website_started.store(false, Ordering::SeqCst);
         *self.state.layers.lock().unwrap() = BrowserLayers::default();
         self.state.loaded.store(self.doc.external, Ordering::SeqCst);
         // The reloaded page has the latest theme built in.
@@ -1017,16 +1078,20 @@ impl ViewInner {
         } else {
             self.doc.url.clone()
         };
+        // The empty initial page lets the private document-start guard register
+        // before any website script. It never becomes an agent-visible target.
+        let initial_url: CefString = if self.doc.external { "about:blank" } else { &url }.into();
         let browser = browser_host_create_browser_sync(
             Some(&window_info),
             Some(&mut client),
-            Some(&url.as_str().into()),
+            Some(&initial_url),
             Some(&settings),
             None,
             context.as_mut(),
         );
         self.failed.set(browser.is_none());
         if browser.is_none() {
+            self.state.website_started.store(true, Ordering::SeqCst);
             ferrite_core::log!("visuals: cef_browser_host_create_browser_sync returned null");
             self.state.navigation(generation, |state| {
                 state.loading = false;
@@ -1034,15 +1099,7 @@ impl ViewInner {
             });
         }
         if self.doc.external {
-            if let (Some(control), Some(browser)) =
-                (self._engine.control.borrow_mut().as_mut(), browser.clone())
-            {
-                control.register(self.target_id(), browser, self.agent_access.clone());
-            }
-        }
-        if self.doc.external {
-            *self.observation.borrow_mut() =
-                browser.as_ref().and_then(observation::Observation::new);
+            *self.bootstrap.borrow_mut() = browser.as_ref().map(annotations::Bootstrap::new);
         }
         *self.browser.borrow_mut() = browser;
         // The browser loads the document as it is now.
@@ -1174,6 +1231,7 @@ impl ViewInner {
 impl Drop for ViewInner {
     fn drop(&mut self) {
         self.annotation.get_mut().take();
+        self.bootstrap.get_mut().take();
         self.observation.get_mut().take();
         if let Some(host) = self.host() {
             host.close_browser(1);
@@ -1380,7 +1438,10 @@ impl BrowserView for CefView {
         self.0.state.navigation.lock().unwrap().clone()
     }
     fn target_id(&self) -> Option<String> {
-        self.0.browser.borrow().as_ref().map(|_| self.0.target_id())
+        self.0
+            .navigation_ready()
+            .then(|| self.0.target_id())
+            .filter(|_| self.0.browser.borrow().is_some())
     }
     fn browser_viewport(&self) -> Option<BrowserViewport> {
         let geometry = self.0.state.geometry.lock().unwrap();
@@ -1414,6 +1475,11 @@ impl BrowserView for CefView {
             return Err("Conversation browser requires an http or https URL".into());
         }
         self.0.failed.set(false);
+        if !self.0.navigation_ready() {
+            self.0.navigation_intent();
+            self.0.state.navigation.lock().unwrap().url = url.into();
+            return Ok(());
+        }
         if let Some(frame) = self
             .0
             .browser
@@ -1458,6 +1524,10 @@ impl BrowserView for CefView {
     }
     fn reload(&self) -> Result<(), String> {
         self.0.failed.set(false);
+        if self.0.browser.borrow().is_some() && !self.0.navigation_ready() {
+            self.0.navigation_intent();
+            return Ok(());
+        }
         if let Some(browser) = self.0.browser.borrow().as_ref() {
             self.0.navigation_intent();
             browser.reload();
@@ -1469,6 +1539,15 @@ impl BrowserView for CefView {
         Ok(())
     }
     fn start_annotation(&self, generation: u64, send_enabled: bool) -> Result<(), String> {
+        if !self
+            .0
+            .bootstrap
+            .borrow()
+            .as_ref()
+            .is_some_and(|bootstrap| bootstrap.available())
+        {
+            return Err("Live annotation is unavailable because keyboard isolation could not be prepared. Close and reopen this tab to retry.".into());
+        }
         if !self.0.protected.get()
             || !self.0.agent_access.paused.load(Ordering::SeqCst)
             || self.state().document_generation != generation
@@ -1567,6 +1646,7 @@ impl BrowserView for CefView {
             return Ok(false);
         }
         view.annotation.borrow_mut().take();
+        view.bootstrap.borrow_mut().take();
         view.observation.borrow_mut().take();
         view.state.generation.fetch_add(1, Ordering::SeqCst);
         *view.state.layers.lock().unwrap() = BrowserLayers::default();
@@ -1592,6 +1672,7 @@ mod tests {
     fn external_state() -> ViewState {
         ViewState {
             external: true,
+            website_started: AtomicBool::new(true),
             navigation: Mutex::new(BrowserState::default()),
             requests: Mutex::default(),
             geometry: Mutex::new(Geometry {
@@ -1609,6 +1690,41 @@ mod tests {
             restyle_unpainted: AtomicBool::new(false),
             trace: false,
         }
+    }
+
+    #[test]
+    fn bootstrap_document_cannot_replace_requested_website_metadata() {
+        let state = external_state();
+        state.website_started.store(false, Ordering::SeqCst);
+        state.navigation.lock().unwrap().url = "https://site.example/queued".into();
+        state.navigation(2, |navigation| {
+            navigation.url = "about:blank".into();
+            navigation.title = "Blank document".into();
+            navigation.can_back = true;
+        });
+        let current = state.navigation.lock().unwrap().clone();
+        assert_eq!(current.url, "https://site.example/queued");
+        assert!(current.title.is_empty());
+        assert!(!current.can_back);
+        state.website_started.store(true, Ordering::SeqCst);
+        state.navigation(2, |navigation| navigation.title = "Website".into());
+        assert_eq!(state.navigation.lock().unwrap().title, "Website");
+    }
+
+    #[test]
+    fn bootstrap_document_is_private_to_the_current_initial_main_frame() {
+        let mut state = external_state();
+        state.website_started.store(false, Ordering::SeqCst);
+        assert!(state.allows_bootstrap_document(2, true, "about:blank"));
+        assert!(!state.allows_bootstrap_document(1, true, "about:blank"));
+        assert!(!state.allows_bootstrap_document(2, false, "about:blank"));
+        assert!(!state.allows_bootstrap_document(2, true, "about:blank#script"));
+        assert!(!state.allows_bootstrap_document(2, true, "data:text/html,private"));
+        state.website_started.store(true, Ordering::SeqCst);
+        assert!(!state.allows_bootstrap_document(2, true, "about:blank"));
+        state.website_started.store(false, Ordering::SeqCst);
+        state.external = false;
+        assert!(!state.allows_bootstrap_document(2, true, "about:blank"));
     }
 
     fn raised() -> DialogRequest {

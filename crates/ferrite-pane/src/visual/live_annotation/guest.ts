@@ -3,6 +3,7 @@ import { createAnnotationIdSource } from "./AnnotationIds";
 import { resolveAnnotationSubmission } from "./AnnotationKeyboard";
 import { addStrokePoint, openStrokePath, startStroke, strokeBounds } from "./AnnotationStroke";
 import { previewAnnotationStyles } from "./AnnotationStyles.generated";
+import { annotationTheme, applyAnnotationTheme } from "./AnnotationTheme";
 import { getElementContext, ipcRenderer, ELEMENT_PICKED_CHANNEL, CANCEL_PICK_CHANNEL, ANNOTATION_CAPTURED_CHANNEL, installBridge } from "./bridge";
 import type { DesktopPreviewAnnotationTheme, PickedElementStackFrame, PickedElementPayload, PreviewAnnotationRect, PreviewAnnotationPoint, PreviewAnnotationElementTarget, PreviewAnnotationRegionTarget, PreviewAnnotationStrokeTarget, PreviewAnnotationStyleChange, PreviewAnnotationScreenshot, PreviewAnnotationPayload, PreviewAnnotationSubmission } from "./types";
 import type { StrokeGeometry } from "./AnnotationStroke";
@@ -44,48 +45,13 @@ interface AnnotationSession {
 }
 
 let activeSession: AnnotationSession | null = null;
-let annotationTheme: DesktopPreviewAnnotationTheme | null = null;
 
-const applyAnnotationTheme = (
-  host: HTMLElement,
-  theme: DesktopPreviewAnnotationTheme | null,
-): void => {
-  if (!theme) return;
-  host.style.colorScheme = theme.colorScheme;
-  const variables = {
-    "--t3-radius": theme.radius,
-    "--t3-background": theme.background,
-    "--t3-foreground": theme.foreground,
-    "--t3-popover": theme.popover,
-    "--t3-popover-foreground": theme.popoverForeground,
-    "--t3-primary": theme.primary,
-    "--t3-primary-foreground": theme.primaryForeground,
-    "--t3-muted": theme.muted,
-    "--t3-muted-foreground": theme.mutedForeground,
-    "--t3-accent": theme.accent,
-    "--t3-accent-foreground": theme.accentForeground,
-    "--t3-border": theme.border,
-    "--t3-input": theme.input,
-    "--t3-ring": theme.ring,
-    "--t3-font-sans": theme.fontSans,
-    "--t3-font-mono": theme.fontMono,
+const keyboardGuard = (globalThis as unknown as {
+  __ferriteAnnotationKeyboard?: {
+    bind(host: HTMLElement, handle: (event: KeyboardEvent) => void, isCapturing: () => boolean): () => void;
   };
-  for (const [name, value] of Object.entries(variables)) {
-    host.style.setProperty(name, value);
-  }
-};
-
-// Registered before page scripts so their capture listeners never see keys typed into the
-// overlay; the closed shadow root retargets those to the host, hiding that they edit text.
-const isolateOverlayKey = (event: KeyboardEvent): void => {
-  if (!event.isTrusted || !activeSession || !(event.target instanceof Element) || !isAnnotationNode(event.target))
-    return;
-  activeSession.handleOverlayKey(event);
-  event.stopImmediatePropagation();
-};
-
-for (const type of ["keydown", "keypress", "keyup"] as const)
-  window.addEventListener(type, isolateOverlayKey, true);
+}).__ferriteAnnotationKeyboard;
+if (!keyboardGuard) throw new Error("Live annotation keyboard isolation is unavailable");
 
 const nextId = createAnnotationIdSource();
 
@@ -371,6 +337,7 @@ function startAnnotation(
 ): void {
   activeSession?.teardown(false);
   let finished = false;
+  let releaseKeyboard: (() => void) | null = null;
   const host = document.createElement("div");
   host.setAttribute(OVERLAY_ATTRIBUTE, "");
   host.setAttribute("dir", "ltr");
@@ -1205,6 +1172,8 @@ function startAnnotation(
   const teardown = (notifyMain: boolean): void => {
     if (finished) return;
     finished = true;
+    releaseKeyboard?.();
+    releaseKeyboard = null;
     rootResizeObserver.disconnect();
     restoreStyles();
     window.removeEventListener("pointermove", onPointerMove, true);
@@ -1230,7 +1199,6 @@ function startAnnotation(
     inputLayer?.remove();
     host.remove();
     activeSession = null;
-    for (const type of ["keydown", "keypress", "keyup"]) window.removeEventListener(type, isolateOverlayKey, true);
     if (notifyMain) ipcRenderer.send(ELEMENT_PICKED_CHANNEL, null);
   };
 
@@ -1320,6 +1288,17 @@ function startAnnotation(
     if (event.type !== "keydown") return;
     onKeyDown(event);
     if (event.cancelBubble) return;
+    const field = shadowRoot.activeElement;
+    if (
+      (field instanceof HTMLInputElement || field instanceof HTMLTextAreaElement) &&
+      event.key.toLowerCase() === "a" &&
+      (event.metaKey || event.ctrlKey) &&
+      !event.altKey && !event.shiftKey && !event.isComposing
+    ) {
+      field.select();
+      event.preventDefault();
+      return;
+    }
     const submission =
       shadowRoot.activeElement === comment ? resolveAnnotationSubmission(event, sendEnabled) : null;
     if (!submission) return;
@@ -1359,6 +1338,7 @@ function startAnnotation(
     },
     handleOverlayKey,
   };
+  releaseKeyboard = keyboardGuard.bind(host, handleOverlayKey, () => pendingCapture);
 }
 
 installBridge((sendEnabled) => startAnnotation(sendEnabled), (enabled) => activeSession?.setSendEnabled(enabled));

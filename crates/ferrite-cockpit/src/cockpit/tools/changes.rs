@@ -20,6 +20,8 @@
 //! read off the UI thread whenever the pane opens, the scope changes or
 //! Refresh is pressed.
 
+mod pull_request;
+
 use std::collections::{HashMap, HashSet};
 use std::hash::{DefaultHasher, Hash, Hasher};
 
@@ -31,7 +33,9 @@ use ferrite_pane::composer::{Composer, Role};
 
 use super::*;
 use crate::cockpit::context_menu::Submenu;
-use crate::cockpit::panel::hunks::{Layout, Line, Shown, Sign, hunks_element, shown};
+use crate::cockpit::panel::hunks::{
+    HighlightedLines, Layout, Line, Shown, Sign, hunks_element, shown,
+};
 use crate::cockpit::panel::pr_read::PrTarget;
 use crate::cockpit::surfaces::SurfaceId;
 
@@ -113,12 +117,15 @@ const BRANCHES_LISTED: usize = 20;
 
 struct File {
     path: String,
+    kind: ferrite_reviewr::model::ChangeKind,
     added: u32,
     removed: u32,
     hunks: Shown,
     /// `hunks` without its whitespace-only changes, worked out off the UI
     /// thread with the diff.
     hunks_without_whitespace: Shown,
+    /// PR syntax is prepared once with the read, not on every UI frame.
+    syntax: HighlightedLines,
     /// The file's change is in git's index (`git add`).
     staged: bool,
     /// What its hunks say, so a mark made on other content is not this one's.
@@ -134,13 +141,29 @@ impl File {
         };
         Self {
             path: sides.file.path.clone(),
+            kind: sides.file.kind,
             added: sides.file.additions,
             removed: sides.file.deletions,
             revision: revision_of(&hunks),
             hunks,
             hunks_without_whitespace,
+            syntax: HighlightedLines::new(),
             staged,
         }
+    }
+
+    fn with_syntax(mut self) -> Self {
+        let language =
+            ferrite_core::transcript::language_for_path(std::path::Path::new(&self.path));
+        if let Shown::Hunks(hunks) = &self.hunks {
+            for line in hunks.iter().flatten() {
+                self.syntax.entry(line.text.clone()).or_insert_with(|| {
+                    let tokens = ferrite_core::transcript::highlight_tokens(language, &line.text);
+                    ferrite_pane::pane::code(&line.text, Some(&tokens))
+                });
+            }
+        }
+        self
     }
 }
 
@@ -319,10 +342,11 @@ fn unchanged_in_block(block: Vec<Line>) -> Vec<Line> {
     let mut out = Vec::new();
     while i < rows && j < columns {
         if removed_keys[i] == added_keys[j] {
-            removed.next();
+            let old = removed.next().expect("i < rows");
             let line = added.next().expect("j < columns");
             out.push(Line {
                 sign: Sign::Context,
+                old_no: old.old_no,
                 ..line
             });
             i += 1;
@@ -418,7 +442,12 @@ impl CockpitView {
             let files = cx
                 .background_executor()
                 .spawn(async move {
-                    files.map(|files| files.iter().map(|sides| File::of(sides, false)).collect::<Vec<_>>())
+                    files.map(|files| {
+                        files
+                            .iter()
+                            .map(|sides| File::of(sides, false).with_syntax())
+                            .collect::<Vec<_>>()
+                    })
                 })
                 .await;
             view.update(cx, |view, cx| {
@@ -733,7 +762,11 @@ impl CockpitView {
                 .changes_empty(diff, &changes.scope, cx)
                 .into_any_element(),
             Load::Read(files) => {
-                let wanted = changes.filter.read(cx).text().trim().to_lowercase();
+                let wanted = if matches!(diff, Diff::PullRequest(_)) {
+                    String::new()
+                } else {
+                    changes.filter.read(cx).text().trim().to_lowercase()
+                };
                 let listed: Vec<_> = files
                     .iter()
                     .enumerate()
@@ -768,42 +801,44 @@ impl CockpitView {
                     .flex_1()
                     .min_h_0()
                     .children(changes.stage_failure.as_ref().map(Self::stage_failure_note))
-                    .child(
-                        div()
-                            .debug_selector(|| "changes-filter".into())
-                            .flex()
-                            .flex_shrink_0()
-                            .items_center()
-                            .gap(px(theme::SPACE_2))
-                            .h(px(theme::ICON_BUTTON))
-                            .mx(px(theme::SPACE_2))
-                            .px(px(theme::SPACE_2))
-                            .rounded(px(theme::R_CONTROL))
-                            .bg(paint::FIELD)
-                            .child(icons::icon(
-                                icons::SEARCH,
-                                theme::ICON_BUTTON_GLYPH,
-                                theme::INK_SUBTLE,
-                            ))
-                            .child(
-                                div()
-                                    .relative()
-                                    .flex_1()
-                                    .min_w_0()
-                                    .text_size(px(theme::FS_LABEL))
-                                    .child(changes.filter.clone())
-                                    .when(empty, |line| {
-                                        line.child(
-                                            div()
-                                                .absolute()
-                                                .top_0()
-                                                .left_0()
-                                                .text_color(rgb(theme::INK_SUBTLE))
-                                                .child("Filter files"),
-                                        )
-                                    }),
-                            ),
-                    )
+                    .when(diff.local_thread().is_some(), |body| {
+                        body.child(
+                            div()
+                                .debug_selector(|| "changes-filter".into())
+                                .flex()
+                                .flex_shrink_0()
+                                .items_center()
+                                .gap(px(theme::SPACE_2))
+                                .h(px(theme::ICON_BUTTON))
+                                .mx(px(theme::SPACE_2))
+                                .px(px(theme::SPACE_2))
+                                .rounded(px(theme::R_CONTROL))
+                                .bg(paint::FIELD)
+                                .child(icons::icon(
+                                    icons::SEARCH,
+                                    theme::ICON_BUTTON_GLYPH,
+                                    theme::INK_SUBTLE,
+                                ))
+                                .child(
+                                    div()
+                                        .relative()
+                                        .flex_1()
+                                        .min_w_0()
+                                        .text_size(px(theme::FS_LABEL))
+                                        .child(changes.filter.clone())
+                                        .when(empty, |line| {
+                                            line.child(
+                                                div()
+                                                    .absolute()
+                                                    .top_0()
+                                                    .left_0()
+                                                    .text_color(rgb(theme::INK_SUBTLE))
+                                                    .child("Filter files"),
+                                            )
+                                        }),
+                                ),
+                        )
+                    })
                     .child(list)
                     .into_any_element()
             }
@@ -834,6 +869,10 @@ impl CockpitView {
                     .child(why.clone())
             }))
             .child(body)
+    }
+
+    pub(in crate::cockpit) fn changes_scroll(&self, diff: Diff) -> Option<ScrollHandle> {
+        Some(self.tools.changes.get(&diff)?.scroll.clone())
     }
 
     /// Nothing changed in the scope: its note, and for the uncommitted scope
@@ -897,6 +936,9 @@ impl CockpitView {
     /// T3's diff toolbar: the scope and what it compares at the left, the
     /// view's tools at the right.
     fn changes_head(&self, diff: Diff, changes: &Changes, cx: &mut Context<Self>) -> Div {
+        if matches!(diff, Diff::PullRequest(_)) {
+            return self.pr_diff_head(diff, changes, cx);
+        }
         use theme::*;
         let all_folded = matches!(&changes.load, Load::Read(files)
             if !files.is_empty() && files.iter().all(|file| changes.folded.contains(&file.path)));
@@ -1253,13 +1295,26 @@ impl CockpitView {
                     )),
                 )
             });
+        let head = if matches!(diff, Diff::PullRequest(_)) {
+            self.pr_diff_file_head(diff, changes, at, file, cx)
+        } else {
+            head
+        };
         let hunks = (!folded).then(|| {
             let hunks = if changes.hide_whitespace {
                 &file.hunks_without_whitespace
             } else {
                 &file.hunks
             };
-            hunks_element(at, hunks, Layout::Whole { wrap: changes.wrap })
+            let layout = if matches!(diff, Diff::PullRequest(_)) {
+                Layout::PullRequest {
+                    wrap: changes.wrap,
+                    syntax: &file.syntax,
+                }
+            } else {
+                Layout::Whole { wrap: changes.wrap }
+            };
+            hunks_element(at, hunks, layout)
         });
         div()
             .flex()
@@ -1287,6 +1342,10 @@ impl CockpitView {
             .is_some_and(|changes| changes.reviewed.contains_key(path))
     }
 
+    pub(in crate::cockpit) fn changes_generation_for_test(&self, diff: Diff) -> Option<u64> {
+        Some(self.tools.changes.get(&diff)?.generation)
+    }
+
     pub(in crate::cockpit) fn changes_stage_failure_for_test(&self, diff: Diff) -> Option<String> {
         let failure = self.tools.changes.get(&diff)?.stage_failure.as_ref()?;
         Some(format!("{} {}", failure.path, failure.message))
@@ -1309,7 +1368,46 @@ mod tests {
         Line {
             sign,
             text: text.to_string().into(),
+            old_no: None,
+            new_no: None,
         }
+    }
+
+    #[test]
+    fn whitespace_pairs_keep_both_source_coordinates() {
+        let old = Line {
+            old_no: Some(21),
+            ..line(Sign::Removed, "  let x = 1;")
+        };
+        let new = Line {
+            new_no: Some(34),
+            ..line(Sign::Added, "let x = 1;")
+        };
+        let paired = unchanged_in_block(vec![old, new]);
+        assert_eq!(paired.len(), 1);
+        assert_eq!(paired[0].sign, Sign::Context);
+        assert_eq!((paired[0].old_no, paired[0].new_no), (Some(21), Some(34)));
+    }
+
+    #[test]
+    fn published_files_cache_syntax_while_local_files_remain_plain() {
+        let sides = ferrite_core::protocol::sides_of_unified(
+            "diff --git a/a.rs b/a.rs\n--- a/a.rs\n+++ b/a.rs\n@@ -1 +1 @@\n-old\n+pub fn changed() {}\n",
+        );
+        let local = File::of(&sides[0], false);
+        assert!(local.syntax.is_empty());
+        let published = local.with_syntax();
+        let runs = published
+            .syntax
+            .get(&SharedString::from("pub fn changed() {}"))
+            .unwrap();
+        let keyword = Some(gpui::Hsla::from(rgb(theme::SYN_KEYWORD)));
+        assert!(runs.iter().any(|(_, style)| style.color == keyword));
+        assert_eq!(
+            published.syntax.len(),
+            2,
+            "one cached entry for each distinct displayed line"
+        );
     }
 
     #[test]

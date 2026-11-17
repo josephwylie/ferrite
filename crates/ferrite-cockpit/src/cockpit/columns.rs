@@ -54,6 +54,7 @@ struct NavResize {
 pub(crate) struct Columns {
     nav_viewport_width: f32,
     nav_brand_width: f32,
+    nav_controls_left: f32,
     nav_resize: Option<NavResize>,
     nav: ColumnSlide,
     panel: ColumnSlide,
@@ -71,6 +72,7 @@ impl Columns {
         Self {
             nav_viewport_width: f32::INFINITY,
             nav_brand_width: 0.0,
+            nav_controls_left: nav::header_controls_left(false),
             nav_resize: None,
             nav: ColumnSlide::at_rest(true, now),
             panel: ColumnSlide::at_rest(false, now),
@@ -97,6 +99,14 @@ fn clamp_nav_width(preferred: f32, viewport: f32, brand: f32) -> f32 {
 }
 
 impl CockpitView {
+    pub(super) fn nav_controls_left(&self) -> f32 {
+        self.columns.nav_controls_left
+    }
+
+    pub(super) fn nav_brand_left(&self) -> f32 {
+        self.nav_controls_left() + ferrite_ui::theme::ICON_BUTTON + 12.0
+    }
+
     pub(super) fn nav_expanded_width(&self) -> f32 {
         let preferred = self.columns.nav_resize.as_ref().map_or_else(
             || self.prefs.settings.nav_width_px.unwrap_or(nav::WIDTH),
@@ -110,15 +120,14 @@ impl CockpitView {
     }
 
     pub(super) fn measure_nav_width(&mut self, window: &Window, cx: &mut Context<Self>) {
-        use ferrite_ui::theme::{
-            FONT_UI, FS_NAV_TITLE, HISTORY_X, ICON_BUTTON, INK_STRONG, SPACE_1, W_LABEL,
-        };
+        use ferrite_ui::theme::{FONT_UI, FS_NAV_TITLE, ICON_BUTTON, INK_STRONG, SPACE_1, W_LABEL};
         let previous = self.nav_expanded_width();
         let width = f32::from(window.viewport_size().width);
         if self.columns.nav_viewport_width != width {
             self.cancel_nav_resize();
         }
         self.columns.nav_viewport_width = width;
+        self.columns.nav_controls_left = nav::header_controls_left(window.is_fullscreen());
         let brand = window.text_system().shape_line(
             "Ferrite".into(),
             px(FS_NAV_TITLE),
@@ -135,8 +144,12 @@ impl CockpitView {
             }],
             None,
         );
-        self.columns.nav_brand_width =
-            HISTORY_X + f32::from(brand.width) + SPACE_1 + 2.0 * ICON_BUTTON + 12.0 + 1.0;
+        self.columns.nav_brand_width = self.nav_brand_left()
+            + f32::from(brand.width)
+            + SPACE_1
+            + 2.0 * ICON_BUTTON
+            + 12.0
+            + 1.0;
         if previous != self.nav_expanded_width() {
             self.notify_part(parts::Part::Nav, cx);
         }
@@ -184,6 +197,49 @@ impl CockpitView {
     }
 
     pub(super) fn nav_resize_rail(&self, cx: &mut Context<Self>) -> Stateful<Div> {
+        let view = cx.entity().downgrade();
+        let pointer = gpui::canvas(
+            |_, _, _| {},
+            move |_, _, window, _| {
+                let moved = view.clone();
+                window.on_mouse_event(move |event: &MouseMoveEvent, phase, _, cx| {
+                    if phase != gpui::DispatchPhase::Capture {
+                        return;
+                    }
+                    let handled = moved
+                        .update(cx, |view, cx| {
+                            let resizing = view.columns.nav_resize.is_some();
+                            if resizing {
+                                view.nav_pointer_moved(event.position, event.dragging(), cx);
+                            }
+                            resizing
+                        })
+                        .unwrap_or(false);
+                    if handled {
+                        cx.stop_propagation();
+                    }
+                });
+                window.on_mouse_event(move |event: &MouseUpEvent, phase, _, cx| {
+                    if phase != gpui::DispatchPhase::Capture || event.button != MouseButton::Left {
+                        return;
+                    }
+                    let handled = view
+                        .update(cx, |view, cx| {
+                            let resizing = view.columns.nav_resize.is_some();
+                            if resizing {
+                                view.finish_nav_resize(cx);
+                            }
+                            resizing
+                        })
+                        .unwrap_or(false);
+                    if handled {
+                        cx.stop_propagation();
+                    }
+                });
+            },
+        )
+        .absolute()
+        .inset_0();
         div()
             .id("nav-resize-rail")
             .debug_selector(|| "nav-resize-rail".into())
@@ -194,6 +250,7 @@ impl CockpitView {
             .w(px(16.0))
             .occlude()
             .cursor(gpui::CursorStyle::ResizeLeftRight)
+            .child(pointer)
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(|view, event: &MouseDownEvent, _, cx| {

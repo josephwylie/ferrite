@@ -6,6 +6,7 @@
 //! between fit and actual size — easing, asking for frames only while it
 //! moves, and never rebuilding the Panes under it.
 use super::*;
+use crate::cockpit::surfaces::SurfaceId;
 use ferrite_pane::preview::Body;
 
 /// A solid PNG `width` × `height` at `path`.
@@ -82,6 +83,124 @@ fn picture(
     viewer
         .read_with(cx, |viewer, _| viewer.picture())
         .expect("the picture is drawn")
+}
+
+#[gpui::test]
+fn a_restored_image_tab_cannot_steal_another_threads_comment_or_address(cx: &mut TestAppContext) {
+    let dir = scratch("viewer-restored-inactive-files");
+    let image = dir.join("restored.png");
+    png(&image, 120, 80);
+    let (core, _fake) = cockpit("viewer-restored-inactive", 2);
+    let threads = core.threads();
+    let (inactive, active) = (threads[0], threads[1]);
+    bind_production_keys(cx);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(1600.), px(900.)));
+    view.update(cx, |view, cx| view.focus_thread(active, cx));
+    tick(cx);
+
+    // Reproduce an old panel.json containing an image as a File surface.
+    // Images have no preview document: only an explicit open makes a lightbox.
+    view.update(cx, |view, cx| {
+        view.surfaces_mut(inactive)
+            .upsert(SurfaceId::File(image.clone()));
+        view.save_surfaces();
+        view.panel.surfaces =
+            super::super::surfaces::Surfaces::load(&view.prefs.dir, |_, _| true).unwrap();
+        let index = view.pane_for(active).unwrap();
+        view.panes[index].composer.update(cx, |composer, cx| {
+            composer.cite_with_comment(ferrite_core::replies::Reply::new("passage", ""), None, cx);
+        });
+        cx.notify();
+    });
+    tick(cx);
+    for _ in 0..3 {
+        cx.update(|window, cx| {
+            window.refresh();
+            window.simulate_next_frame(cx);
+        });
+        tick(cx);
+    }
+    cx.simulate_input("comment keeps its focus");
+    cx.simulate_keystrokes("enter");
+    tick(cx);
+    view.read_with(cx, |view, cx| {
+        let composer = view.panes[view.pane_for(active).unwrap()].composer.read(cx);
+        assert_eq!(composer.replies()[0].text, "comment keeps its focus");
+        assert_eq!(composer.text(), "");
+        assert!(
+            view.panes[view.pane_for(inactive).unwrap()]
+                .preview
+                .lightbox()
+                .is_none()
+        );
+        assert!(
+            !view
+                .panel
+                .surfaces
+                .get(inactive)
+                .unwrap()
+                .tabs
+                .contains(&SurfaceId::File(image.clone()))
+        );
+    });
+
+    view.update(cx, |view, cx| view.open_browser(active, cx));
+    tick(cx);
+    let address = cx
+        .debug_bounds("browser-address")
+        .expect("the active browser address");
+    cx.simulate_click(address.center(), gpui::Modifiers::none());
+    cx.simulate_keystrokes("cmd-a");
+    // Repeat the stale restoration while the address already owns focus.
+    view.update(cx, |view, cx| {
+        view.surfaces_mut(inactive)
+            .upsert(SurfaceId::File(image.clone()));
+        cx.notify();
+    });
+    tick(cx);
+    cx.simulate_input("https://example.test/kept");
+    tick(cx);
+    view.read_with(cx, |view, cx| {
+        assert_eq!(
+            view.browsers.threads[&active].address.read(cx).text(),
+            "https://example.test/kept"
+        );
+        assert_eq!(
+            view.panes[view.pane_for(active).unwrap()]
+                .composer
+                .read(cx)
+                .text(),
+            ""
+        );
+    });
+
+    // A deliberate image open still focuses its lightbox, and closing it
+    // remains closed through later renders.
+    view.update_in(cx, |view, window, cx| {
+        let index = view.pane_for(active).unwrap();
+        view.panes[index]
+            .preview
+            .open(image.clone(), None, &[], window, cx);
+        cx.notify();
+    });
+    tick(cx);
+    assert!(cx.debug_bounds("image-viewer").is_some());
+    cx.simulate_keystrokes("escape");
+    tick(cx);
+    cx.update(|window, cx| {
+        window.refresh();
+        window.simulate_next_frame(cx);
+    });
+    tick(cx);
+    view.read_with(cx, |view, _| {
+        assert!(
+            view.panes
+                .iter()
+                .all(|pane| pane.preview.lightbox().is_none())
+        );
+    });
+    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// A prompt's image, clicked under its band, opens in the lightbox: over

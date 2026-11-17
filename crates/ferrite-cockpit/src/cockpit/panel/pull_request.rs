@@ -22,6 +22,9 @@
 //! (`facts.pr`); its whole snapshot (body, checks, conversation) is read
 //! when the Surface opens (`Cockpit::review_pull_request`).
 
+mod header;
+mod summary;
+
 use super::pr_action::{ActionState, Stage};
 use super::pr_read::{Answer, PrFailure, PrRead, PrSource, PrTarget, stamp_age};
 use super::*;
@@ -265,27 +268,48 @@ fn repo_of(url: &str) -> Option<String> {
     }
 }
 
-/// The checks as the views' trailing slot says them: failures first.
-fn checks_line(pr: &WirePr) -> Option<(String, u32)> {
+/// T3's checks summary: every reported check contributes to the denominator.
+fn checks_line(checks: &[ferrite_core::protocol::WireCheck]) -> (String, &'static str, u32) {
     use ferrite_ui::theme::*;
-    if pr.checks.is_empty() {
-        return None;
-    }
+    let total = checks.len();
     let count = |status: &[WireCheckStatus]| {
-        pr.checks
+        checks
             .iter()
             .filter(|check| status.contains(&check.status))
             .count()
     };
     let failing = count(&[WireCheckStatus::Failure]);
     let running = count(&[WireCheckStatus::Running, WireCheckStatus::Pending]);
-    Some(if failing > 0 {
-        (format!("{failing} failing"), RED)
+    let passed = count(&[WireCheckStatus::Success]);
+    if total == 0 {
+        (
+            "No checks reported".into(),
+            icons::CIRCLE_DASHED,
+            INK_SUBTLE,
+        )
+    } else if failing > 0 {
+        (
+            format!("{failing} of {total} failing"),
+            icons::X_CIRCLE,
+            RED,
+        )
     } else if running > 0 {
-        (format!("{running} running"), INK_SUBTLE)
+        (
+            format!("{running} of {total} running"),
+            icons::CIRCLE_DASHED,
+            YELLOW,
+        )
     } else {
-        ("Checks passing".into(), INK_SUBTLE)
-    })
+        (
+            if passed == total {
+                "All checks passed".into()
+            } else {
+                format!("{passed} of {total} passing")
+            },
+            icons::CHECK_CIRCLE,
+            GREEN,
+        )
+    }
 }
 
 /// A hairline at 60% (T3's `border-border/60`).
@@ -330,6 +354,62 @@ impl CockpitView {
                 .registry()
                 .project(project)
                 .map(|project| project.root.clone()),
+        }
+    }
+
+    /// Prepare the view a PR retained across closing or restarting. Its tab
+    /// choice is persisted, while published diff state is made on demand.
+    pub(in crate::cockpit) fn prepare_pr_view(
+        &mut self,
+        target: PrTarget,
+        again: bool,
+        cx: &mut Context<Self>,
+    ) {
+        self.read_pr_snapshot(target, again, cx);
+        if self.pr_view_tab(target) == PrTab::Code {
+            // ensure_diff inserts its state before spawning a read. Repeated
+            // tend_panel frames therefore retain the same in-flight/read diff.
+            self.ensure_pr_changes(target, cx);
+        }
+    }
+
+    fn pr_view_tab(&self, target: PrTarget) -> PrTab {
+        match target.source {
+            PrSource::Thread(thread) => self
+                .panel
+                .surfaces
+                .get(thread)
+                .map_or(PrTab::Summary, |state| state.pr_tab(target.number)),
+            PrSource::Project(_) => self.prs.tab,
+        }
+    }
+
+    pub(in crate::cockpit) fn pr_condensed(&self, target: PrTarget) -> bool {
+        self.panel
+            .pr_reads
+            .get(target)
+            .is_some_and(|read| read.header.borrow().condensed(self.pr_view_tab(target)))
+    }
+
+    fn pr_view_is_shown(&self, target: PrTarget, tab: PrTab) -> bool {
+        if self.pr_view_tab(target) != tab {
+            return false;
+        }
+        match target.source {
+            PrSource::Thread(thread) => {
+                self.panel_pane()
+                    .and_then(|index| self.panes[index].thread())
+                    == Some(thread)
+                    && self.panel.surfaces.get(thread).is_some_and(|state| {
+                        state.open && state.active == Some(SurfaceId::PullRequest(target.number))
+                    })
+            }
+            PrSource::Project(project) => {
+                self.prs.shown
+                    && self.prs.detail
+                    && self.prs.project == Some(project)
+                    && self.prs.selected == Some(target.number)
+            }
         }
     }
 
@@ -517,14 +597,7 @@ impl CockpitView {
 
     /// A view of `target`'s PR chosen, in whichever surface shows it.
     fn select_pr_view(&mut self, target: PrTarget, tab: PrTab, cx: &mut Context<Self>) {
-        let was = match target.source {
-            PrSource::Thread(thread) => self
-                .panel
-                .surfaces
-                .get(thread)
-                .map_or(PrTab::Summary, |state| state.pr_tab(target.number)),
-            PrSource::Project(_) => self.prs.tab,
-        };
+        let was = self.pr_view_tab(target);
         if was != tab {
             self.panel.pr_picked = Some(cx.background_executor().now());
         }
@@ -651,13 +724,36 @@ impl CockpitView {
             (_, Some(failure)) => Some(self.pr_failed(target, failure, snapshot.is_some(), cx)),
             _ => None,
         });
+        let scroll = read.and_then(|read| match tab {
+            PrTab::Summary => Some(read.summary_scroll.clone()),
+            PrTab::Timeline => Some(read.timeline_scroll.clone()),
+            PrTab::Code => self.changes_scroll(tools::Diff::PullRequest(target)),
+            PrTab::Guide => None,
+        });
+        let body = if let (Some(read), Some(scroll)) = (read, scroll) {
+            header::ObservedBody {
+                body,
+                view: cx.entity().downgrade(),
+                target,
+                tab,
+                scroll,
+                state: read.header.clone(),
+            }
+            .into_any_element()
+        } else {
+            body
+        };
         div()
             .flex()
             .flex_col()
             .flex_1()
             .min_h_0()
             .bg(rgb(ferrite_ui::theme::TX_GROUND))
-            .children(snapshot.map(pr_identity))
+            .children(snapshot.map(|pr| {
+                let state = read.expect("snapshot belongs to this read").header.clone();
+                let condensed = state.borrow().condensed(tab);
+                header::identity(pr, state, condensed)
+            }))
             .child(self.pr_views(target, tab, cx))
             .children(notice)
             .child(ferrite_ui::motion::swap_since(
@@ -746,6 +842,7 @@ impl CockpitView {
             .snapshot(target)
             .map(|pr| pr.url.clone());
         let branch_pr = self.facts.pr(thread).is_some_and(|pr| pr.number == number);
+        let condensed = self.pr_condensed(target);
         let crumbs = div()
             .debug_selector(|| "pr-crumbs".into())
             .flex()
@@ -755,7 +852,7 @@ impl CockpitView {
             .gap(px(SPACE_1))
             .h(px(PR_ROW_H))
             .pl(px(SPACE_4))
-            .children(repo.map(|repo| {
+            .children(repo.filter(|_| !condensed).map(|repo| {
                 div()
                     .min_w_0()
                     .truncate()
@@ -784,6 +881,21 @@ impl CockpitView {
                         if let Some(url) = &url {
                             cx.open_url(url);
                         }
+                    }),
+            )
+            .children(
+                self.panel
+                    .pr_reads
+                    .snapshot(target)
+                    .filter(|_| condensed)
+                    .map(|pr| {
+                        div()
+                            .debug_selector(|| "pr-condensed-title".into())
+                            .min_w_0()
+                            .truncate()
+                            .font_weight(W_LABEL)
+                            .text_color(rgb(INK_STRONG))
+                            .child(SharedString::from(pr.title.clone()))
                     }),
             );
         let primary = if tone.settled() || !branch_pr {
@@ -994,6 +1106,10 @@ impl CockpitView {
                 .h(px(SURFACE_TAB_H))
                 .px(px(PR_SEGMENT_PAD_X))
                 .rounded(px(R_CONTROL))
+                // Toggle's desktop `sm:text-sm` overrides segmented `text-xs`.
+                .text_size(px(14.))
+                .line_height(px(20.))
+                .font_weight(W_LABEL)
                 .text_color(rgb(if pressed { INK_STRONG } else { INK_SUBTLE }))
                 .map(|segment| {
                     if pressed {
@@ -1023,24 +1139,43 @@ impl CockpitView {
                 .into_any_element()
         });
         let snapshot = self.panel.pr_reads.snapshot(target);
-        let checks = snapshot.and_then(checks_line).map(|(line, ink)| {
+        let checks = snapshot.filter(|_| shown == PrTab::Summary).map(|pr| {
+            let (line, glyph, ink) = checks_line(&pr.checks);
             div()
                 .debug_selector(|| "pr-checks".into())
-                .text_color(rgb(ink))
+                .flex()
+                .items_center()
+                .gap(px(6.))
+                .text_size(px(12.))
+                .text_color(rgb(INK_SUBTLE))
+                .child(icon(glyph, 14., ink))
                 .child(SharedString::from(line))
         });
-        let comments = snapshot.filter(|pr| !pr.comments.is_empty()).map(|pr| {
-            let count = pr.comments.len();
+        let comments = snapshot.filter(|_| shown == PrTab::Timeline).map(|pr| {
+            let count: usize = pr
+                .comments
+                .iter()
+                .map(|comment| 1 + comment.replies.len())
+                .sum();
             div()
+                .id("pr-activity-count")
+                .debug_selector(|| "pr-activity-count".into())
+                .flex()
+                .items_center()
+                .gap(px(4.))
+                .text_size(px(12.))
                 .text_color(rgb(INK_SUBTLE))
-                .child(SharedString::from(format!(
+                .tooltip(ferrite_ui::menu::tooltip(format!(
                     "{count} comment{}",
                     if count == 1 { "" } else { "s" }
                 )))
+                .child(icon(icons::MESSAGE_CIRCLE, 12., INK_SUBTLE))
+                .child(SharedString::from(count.to_string()))
         });
         div()
             .debug_selector(|| "pr-views".into())
             .border_t(px(HAIRLINE_W))
+            .border_b(px(HAIRLINE_W))
             .border_color(soft_line())
             .flex()
             .flex_shrink_0()
@@ -1071,85 +1206,10 @@ impl CockpitView {
             .font_family(FONT_UI)
             .text_size(px(FS_PROSE))
             .line_height(px(LH_PROSE))
-            .child(ferrite_pane::rich::Markdown::new(
-                id,
-                text.to_string(),
-                self.panel.pr_rich.clone(),
-            ))
-            .into_any_element()
-    }
-
-    /// Summary: the description and checks below the persistent PR identity.
-    fn pr_summary(&self, target: PrTarget, pr: &WirePr, cx: &mut Context<Self>) -> AnyElement {
-        use ferrite_ui::theme::*;
-        let checks = pr
-            .checks
-            .iter()
-            .enumerate()
-            .map(|(index, check)| {
-                let (glyph, ink) = match check.status {
-                    WireCheckStatus::Success => (icons::CHECK_CIRCLE, GREEN),
-                    WireCheckStatus::Failure => (icons::X_CIRCLE, RED),
-                    WireCheckStatus::Running | WireCheckStatus::Pending => {
-                        (icons::CIRCLE_DASHED, YELLOW)
-                    }
-                    WireCheckStatus::Skipped | WireCheckStatus::Unknown => {
-                        (icons::CIRCLE_MINUS, INK_SUBTLE)
-                    }
-                };
-                let row = div()
-                    .id(("pr-check", index))
-                    .debug_selector(move || format!("pr-check-{index}"))
-                    .flex()
-                    .items_center()
-                    .gap(px(SPACE_2))
-                    .h(px(PR_ROW_H))
-                    .child(icon(glyph, ICON_CHEVRON, ink))
-                    .child(
-                        div()
-                            .min_w_0()
-                            .truncate()
-                            .child(SharedString::from(check.name.clone())),
-                    );
-                match check.url.clone() {
-                    Some(url) => row
-                        .cursor_pointer()
-                        .hover(|row| row.underline())
-                        .child(icon(icons::EXTERNAL, PR_LINK_GLYPH, INK_SUBTLE))
-                        .on_click(cx.listener(move |_, _: &ClickEvent, _, cx| cx.open_url(&url)))
-                        .into_any_element(),
-                    None => row.into_any_element(),
-                }
-            })
-            .collect::<Vec<_>>();
-        pr_scroll("pr-summary")
-            .when(!pr.body.is_empty(), |summary| {
-                summary.child(
-                    div()
-                        .debug_selector(|| "pr-body".into())
-                        .mt(px(SPACE_3))
-                        .child(self.pr_prose(format!("pr-body-{target:?}"), &pr.body)),
-                )
-            })
-            .when(!pr.checks.is_empty(), |summary| {
-                summary
-                    .child(
-                        div()
-                            .mt(px(SPACE_3))
-                            .font_weight(W_LABEL)
-                            .text_color(rgb(INK_SUBTLE))
-                            .child("Checks"),
-                    )
-                    .children(checks)
-            })
-            .when(pr.more_checks(), |summary| {
-                summary.child(pr_more(
-                    "pr-more-checks",
-                    "More checks than are shown. See all on the forge",
-                    &pr.url,
-                    cx,
-                ))
-            })
+            .child(
+                ferrite_pane::rich::Markdown::new(id, text.to_string(), self.panel.pr_rich.clone())
+                    .pull_request(),
+            )
             .into_any_element()
     }
 
@@ -1219,148 +1279,23 @@ impl CockpitView {
     /// first (T3's default order): each entry's code context, its
     /// resolved or outdated mark, and its replies beneath.
     fn pr_timeline(&self, target: PrTarget, pr: &WirePr, cx: &mut Context<Self>) -> AnyElement {
-        use ferrite_ui::theme::*;
-        if pr.comments.is_empty() {
-            return pr_note("No comments yet".into());
-        }
-        let entries = pr.comments.iter().enumerate().map(|(index, comment)| {
-            let kind = match comment.kind {
-                WirePrCommentKind::Review => "reviewed",
-                WirePrCommentKind::Finding => "commented on",
-                WirePrCommentKind::Comment | WirePrCommentKind::Unknown => "commented",
-            };
-            let what = match comment.kind {
-                WirePrCommentKind::Finding => {
-                    format!("{} {kind} {}", comment.author, comment.anchor)
-                }
-                _ => format!("{} {kind}", comment.author),
-            };
-            let verdict = comment.verdict.and_then(crate::pr::review_verdict);
-            let mark = |text: &'static str, ink: u32| {
-                div()
-                    .debug_selector(move || format!("pr-{}-{index}", text.to_lowercase()))
-                    .flex_shrink_0()
-                    .text_color(rgb(ink))
-                    .child(text)
-            };
-            div()
-                .id(SharedString::from(format!(
-                    "pr-activity-{target:?}-{}",
-                    comment
-                        .id
-                        .as_deref()
-                        .map(str::to_string)
-                        .unwrap_or_else(|| index.to_string())
-                )))
-                .debug_selector(move || format!("pr-comment-{index}"))
-                .flex()
-                .flex_col()
-                .gap(px(SPACE_1))
-                .py(px(SPACE_2))
-                .border_b(px(HAIRLINE_W))
-                .border_color(soft_line())
-                .child(
-                    div()
-                        .flex()
-                        .gap(px(SPACE_2))
-                        .child(
-                            div()
-                                .flex_1()
-                                .min_w_0()
-                                .truncate()
-                                .font_weight(W_LABEL)
-                                .text_color(rgb(INK_STRONG))
-                                .child(SharedString::from(what)),
-                        )
-                        .when(comment.author_is_bot, |row| {
-                            row.child(
-                                div()
-                                    .debug_selector(move || format!("pr-bot-{index}"))
-                                    .text_size(px(FS_META))
-                                    .text_color(rgb(INK_SUBTLE))
-                                    .child("bot"),
-                            )
-                        })
-                        .children(verdict.map(|(text, ink)| {
-                            div()
-                                .debug_selector(move || format!("pr-verdict-{index}"))
-                                .flex_shrink_0()
-                                .text_color(rgb(ink))
-                                .child(text)
-                        }))
-                        .when(comment.resolved, |head| head.child(mark("Resolved", GREEN)))
-                        .when(comment.outdated, |head| {
-                            head.child(mark("Outdated", INK_SUBTLE))
-                        })
-                        .child(
-                            div()
-                                .flex_shrink_0()
-                                .text_color(rgb(INK_SUBTLE))
-                                .child(stamp_age(&comment.created_at)),
-                        ),
-                )
-                .children(comment.snippet.as_ref().map(|snippet| {
-                    div()
-                        .debug_selector(move || format!("pr-snippet-{index}"))
-                        .px(px(SPACE_2))
-                        .py(px(SPACE_1))
-                        .rounded(px(R_CONTROL))
-                        .bg(paint::RAISED)
-                        .font_family(FONT_CODE)
-                        .text_size(px(FS_META))
-                        .text_color(rgb(INK_SUBTLE))
-                        .overflow_x_hidden()
-                        .child(SharedString::from(snippet.clone()))
-                }))
-                .when(!comment.body.is_empty(), |entry| {
-                    entry.child(
-                        self.pr_prose(format!("pr-comment-{target:?}-{index}"), &comment.body),
-                    )
-                })
-                .children(comment.replies.iter().enumerate().map(|(reply, said)| {
-                    div()
-                        .id(SharedString::from(format!(
-                            "pr-reply-{target:?}-{}-{}",
-                            comment.id.as_deref().unwrap_or("legacy"),
-                            said.id
-                                .as_deref()
-                                .map(str::to_string)
-                                .unwrap_or_else(|| format!("{index}-{reply}"))
-                        )))
-                        .debug_selector(move || format!("pr-reply-{index}-{reply}"))
-                        .flex()
-                        .flex_col()
-                        .ml(px(SPACE_3))
-                        .pl(px(SPACE_3))
-                        .border_l(px(HAIRLINE_W))
-                        .border_color(soft_line())
-                        .child(
-                            div()
-                                .flex()
-                                .gap(px(SPACE_2))
-                                .text_color(rgb(INK_SUBTLE))
-                                .child(
-                                    div()
-                                        .flex_1()
-                                        .min_w_0()
-                                        .truncate()
-                                        .font_weight(W_LABEL)
-                                        .child(SharedString::from(format!(
-                                            "{} replied",
-                                            said.author
-                                        ))),
-                                )
-                                .child(div().flex_shrink_0().child(stamp_age(&said.created_at))),
-                        )
-                        .child(
-                            self.pr_prose(
-                                format!("pr-reply-{target:?}-{index}-{reply}"),
-                                &said.body,
-                            ),
-                        )
-                }))
-        });
+        let scroll = self
+            .panel
+            .pr_reads
+            .get(target)
+            .map(|read| read.timeline_scroll.clone())
+            .unwrap_or_default();
+        let entries = pr
+            .comments
+            .iter()
+            .enumerate()
+            .map(|(index, comment)| self.pr_comment(target, index, comment));
         pr_scroll("pr-timeline")
+            .track_scroll(&scroll)
+            .gap(px(12.))
+            .when(pr.comments.is_empty(), |timeline| {
+                timeline.child("No comments yet")
+            })
             .children(entries)
             .when(pr.more_comments(), |timeline| {
                 timeline.child(pr_more(
@@ -1369,6 +1304,172 @@ impl CockpitView {
                     &pr.url,
                     cx,
                 ))
+            })
+            .into_any_element()
+    }
+    /// The same source conversation card is used by Summary and Timeline.
+    fn pr_comment(
+        &self,
+        target: PrTarget,
+        index: usize,
+        comment: &ferrite_core::protocol::WirePrComment,
+    ) -> AnyElement {
+        use ferrite_ui::theme::*;
+        let verdict = comment.verdict.and_then(crate::pr::review_verdict);
+        let card =
+            div()
+                .flex()
+                .flex_col()
+                .rounded(px(8.))
+                .border_1()
+                .border_color(soft_line())
+                .overflow_hidden()
+                .child(
+                    div()
+                        .flex()
+                        .flex_wrap()
+                        .items_center()
+                        .gap(px(8.))
+                        .px(px(12.))
+                        .py(px(10.))
+                        .bg(rgba(0xffffff06))
+                        .text_size(px(12.))
+                        .text_color(rgb(INK_SUBTLE))
+                        .child(pr_avatar(
+                            &comment.author,
+                            comment.author_avatar_url.as_deref(),
+                        ))
+                        .child(
+                            div()
+                                .font_weight(W_LABEL)
+                                .text_color(rgb(INK_STRONG))
+                                .child(SharedString::from(comment.author.clone())),
+                        )
+                        .when(comment.author_is_bot, |row| {
+                            row.child(
+                                div()
+                                    .debug_selector(move || format!("pr-bot-{index}"))
+                                    .child("bot"),
+                            )
+                        })
+                        .child(stamp_age(&comment.created_at))
+                        .children(verdict.map(|(text, ink)| {
+                            div()
+                                .debug_selector(move || format!("pr-verdict-{index}"))
+                                .text_color(rgb(ink))
+                                .child(text)
+                        }))
+                        .when(comment.resolved, |row| {
+                            row.child(
+                                div()
+                                    .debug_selector(move || format!("pr-resolved-{index}"))
+                                    .text_color(rgb(GREEN))
+                                    .child("Resolved"),
+                            )
+                        })
+                        .when(comment.outdated, |row| {
+                            row.child(
+                                div()
+                                    .debug_selector(move || format!("pr-outdated-{index}"))
+                                    .child("Outdated"),
+                            )
+                        }),
+                )
+                .when(comment.kind == WirePrCommentKind::Finding, |card| {
+                    card.child(
+                        div()
+                            .mt(px(8.))
+                            .px(px(12.))
+                            .text_size(px(12.))
+                            .text_color(rgb(INK_SUBTLE))
+                            .child(SharedString::from(comment.anchor.clone())),
+                    )
+                })
+                .children(comment.snippet.as_ref().map(|snippet| {
+                    div()
+                        .debug_selector(move || format!("pr-snippet-{index}"))
+                        .mx(px(12.))
+                        .mt(px(8.))
+                        .px(px(8.))
+                        .py(px(4.))
+                        .rounded(px(6.))
+                        .bg(paint::RAISED)
+                        .font_family(FONT_CODE)
+                        .text_size(px(FS_META))
+                        .text_color(rgb(INK_SUBTLE))
+                        .overflow_x_hidden()
+                        .child(SharedString::from(snippet.clone()))
+                }))
+                .when(!comment.body.trim().is_empty(), |card| {
+                    card.child(div().px(px(12.)).py(px(12.)).child(
+                        self.pr_prose(format!("pr-comment-{target:?}-{index}"), &comment.body),
+                    ))
+                });
+        div()
+            .id(SharedString::from(format!(
+                "pr-activity-{target:?}-{}",
+                comment.id.clone().unwrap_or_else(|| index.to_string())
+            )))
+            .debug_selector(move || format!("pr-comment-{index}"))
+            .flex()
+            .flex_col()
+            .gap(px(8.))
+            .flex_shrink_0()
+            .child(card)
+            .when(!comment.replies.is_empty(), |entry| {
+                entry.child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap(px(8.))
+                        .ml(px(16.))
+                        .pl(px(12.))
+                        .border_l(px(2.))
+                        .border_color(soft_line())
+                        .children(comment.replies.iter().enumerate().map(|(reply, said)| {
+                            div()
+                                .id(SharedString::from(format!(
+                                    "pr-reply-{target:?}-{}-{}",
+                                    comment.id.as_deref().unwrap_or("legacy"),
+                                    said.id
+                                        .clone()
+                                        .unwrap_or_else(|| format!("{index}-{reply}"))
+                                )))
+                                .debug_selector(move || format!("pr-reply-{index}-{reply}"))
+                                .rounded(px(8.))
+                                .border_1()
+                                .border_color(soft_line())
+                                .overflow_hidden()
+                                .child(
+                                    div()
+                                        .flex()
+                                        .flex_wrap()
+                                        .items_center()
+                                        .gap(px(8.))
+                                        .px(px(12.))
+                                        .py(px(10.))
+                                        .bg(rgba(0xffffff06))
+                                        .text_size(px(12.))
+                                        .text_color(rgb(INK_SUBTLE))
+                                        .child(pr_avatar(
+                                            &said.author,
+                                            said.author_avatar_url.as_deref(),
+                                        ))
+                                        .child(
+                                            div()
+                                                .font_weight(W_LABEL)
+                                                .text_color(rgb(INK_STRONG))
+                                                .child(SharedString::from(said.author.clone())),
+                                        )
+                                        .when(said.author_is_bot, |row| row.child("bot"))
+                                        .child(stamp_age(&said.created_at)),
+                                )
+                                .child(div().px(px(12.)).py(px(12.)).child(self.pr_prose(
+                                    format!("pr-reply-{target:?}-{index}-{reply}"),
+                                    &said.body,
+                                )))
+                        })),
+                )
             })
             .into_any_element()
     }
@@ -1448,6 +1549,35 @@ fn pr_refreshing() -> AnyElement {
 /// (selector, label, whether it retries).
 type PrNotice = (String, u32, Vec<(&'static str, &'static str, bool)>);
 
+fn pr_avatar(login: &str, url: Option<&str>) -> Div {
+    use ferrite_ui::theme::*;
+    div()
+        .size(px(16.))
+        .flex_shrink_0()
+        .rounded_full()
+        .bg(paint::RAISED)
+        .flex()
+        .items_center()
+        .justify_center()
+        .overflow_hidden()
+        .text_size(px(8.))
+        .text_color(rgb(INK_SUBTLE))
+        .when(url.is_none(), |avatar| {
+            avatar.child(SharedString::from(
+                login
+                    .chars()
+                    .next()
+                    .map(|letter| letter.to_uppercase().to_string())
+                    .unwrap_or_default(),
+            ))
+        })
+        .children(url.map(|url| {
+            gpui::img(SharedString::from(url.to_string()))
+                .size(px(16.))
+                .rounded_full()
+        }))
+}
+
 /// The width of the chip that dismisses a notice, whatever it is called.
 const PR_LEAVE_CHIP_W: f32 = 112.;
 
@@ -1509,6 +1639,7 @@ fn pr_identity(pr: &WirePr) -> Div {
         .child(
             div()
                 .debug_selector(|| "pr-title".into())
+                .min_h(px(24.))
                 .truncate()
                 .text_size(px(16.))
                 .font_weight(gpui::FontWeight::SEMIBOLD)
@@ -1649,11 +1780,35 @@ mod tests {
     use super::*;
 
     #[test]
+    fn checks_summary_counts_every_reported_check() {
+        use WireCheckStatus::*;
+        for (statuses, expected) in [
+            (vec![], "No checks reported"),
+            (vec![Success, Success, Skipped], "2 of 3 passing"),
+            (vec![Failure, Success, Pending], "1 of 3 failing"),
+            (vec![Running, Pending, Success], "2 of 3 running"),
+            (vec![Success, Success], "All checks passed"),
+            (vec![Unknown], "0 of 1 passing"),
+        ] {
+            let checks: Vec<_> = statuses
+                .into_iter()
+                .map(|status| ferrite_core::protocol::WireCheck {
+                    name: "check".into(),
+                    status,
+                    url: None,
+                })
+                .collect();
+            assert_eq!(checks_line(&checks).0, expected);
+        }
+    }
+
+    #[test]
     fn the_newest_guide_wins_among_a_newest_first_read() {
         use ferrite_core::protocol::WirePrComment;
         let said = |body: &str| WirePrComment {
             id: None,
             author_is_bot: false,
+            author_avatar_url: None,
             place: None,
             kind: WirePrCommentKind::Comment,
             author: "bot".into(),
@@ -1678,6 +1833,8 @@ mod tests {
             changed_files: None,
             additions: None,
             deletions: None,
+            reviewers: None,
+            labels: None,
             state: WirePrState::Open,
             draft: false,
             head: String::new(),

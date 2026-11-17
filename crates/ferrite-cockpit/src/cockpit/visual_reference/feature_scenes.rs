@@ -380,6 +380,8 @@ fn pull_request() -> ReviewPullRequest {
             changed_files: Some(3),
             additions: Some(42),
             deletions: Some(12),
+            reviewers: None,
+            labels: None,
             state: WirePrState::Open,
             draft: false,
             head: "fix/nav-jitter".into(),
@@ -396,6 +398,7 @@ fn pull_request() -> ReviewPullRequest {
                 WirePrComment {
                     id: None,
                     author_is_bot: false,
+                    author_avatar_url: None,
                     place: None,
                     kind: WirePrCommentKind::Review,
                     author: "maria".into(),
@@ -411,6 +414,7 @@ fn pull_request() -> ReviewPullRequest {
                 WirePrComment {
                     id: None,
                     author_is_bot: false,
+                    author_avatar_url: None,
                     place: None,
                     kind: WirePrCommentKind::Finding,
                     author: "maria".into(),
@@ -424,6 +428,7 @@ fn pull_request() -> ReviewPullRequest {
                     replies: vec![WireReply {
                         id: None,
                         author_is_bot: false,
+                        author_avatar_url: None,
                         author: "joseph".into(),
                         body: "No: the next commit keeps it to open Threads.".into(),
                         created_at: "2026-10-15T09:20:00Z".into(),

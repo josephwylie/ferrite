@@ -674,6 +674,7 @@ pub struct CockpitView {
     /// The operator's commands running, and what they and the keys have
     /// still to say.
     user_commands: user_commands::UserCommands,
+    details_editors: details::editors::Editors,
     /// Whether "Quit Ferrite?" is on screen (`leaving`).
     leave_asked: bool,
     group_error: Option<SharedString>,
@@ -1688,6 +1689,7 @@ impl CockpitView {
             server_bands: Default::default(),
             unreadable_told: false,
             user_commands: Default::default(),
+            details_editors: Default::default(),
             leave_asked: false,
             group_error: None,
             needs_you: NeedsYou::new(),
@@ -3779,7 +3781,7 @@ impl CockpitView {
             | MenuTarget::PrMore(_)
             | MenuTarget::PrLink(_)
             | MenuTarget::BrowserPage(_) => None,
-            MenuTarget::Details(_) => None,
+            MenuTarget::Details(_) | MenuTarget::DetailsEditor(_) | MenuTarget::PrCommentFilter(_) => None,
             MenuTarget::Parked
             | MenuTarget::NavFilter
             | MenuTarget::NavFactory
@@ -5625,7 +5627,8 @@ impl CockpitView {
             .inset_0()
             .child(
                 line()
-                    .left_0()
+                    .debug_selector(|| "board-header-seam".into())
+                    .left(px(self.nav_width()))
                     .right_0()
                     .top(px(WIN_CHROME_H - HAIRLINE_W))
                     .h(px(HAIRLINE_W)),
@@ -10782,7 +10785,6 @@ impl CockpitView {
                 MouseButton::Left,
                 cx.listener(|view, event: &MouseUpEvent, _, cx| {
                     view.end_seam_drag(cx);
-                    view.finish_nav_resize(cx);
                     view.panel_pointer_released(event.position, cx);
                     if view.drop_preview.take().is_some()
                         | view.dragging.take().is_some()
@@ -10812,7 +10814,6 @@ impl CockpitView {
                     // Only the nav's order reads it.
                     view.notify_part(parts::Part::Nav, cx);
                 }
-                view.nav_pointer_moved(event.position, event.dragging(), cx);
                 view.panel_pointer_moved(event.position, event.dragging(), cx);
                 if view.seam_drag.is_some() {
                     if event.dragging() {
@@ -10927,7 +10928,7 @@ impl CockpitView {
             .child(self.view_head(cx))
             .children(self.history_arrows_element(cx))
             .when(!self.nav_folded(), |root| root.child(self.nav_resize_rail(cx)))
-            .child(self.nav_edge_tab(cx))
+            .child(self.nav_header_toggle(cx))
             // The panel over the strip's right end: its tabs take
             // their presses, the gaps between them still drag. Its toggle
             // over both heads, in one place.
@@ -13185,27 +13186,7 @@ impl CockpitView {
         ferrite_ui::theme::Paint::solid(ferrite_ui::theme::tx_ground(lone))
     }
 
-    fn nav_edge_tab(&self, cx: &mut Context<Self>) -> AnyElement {
-        use ferrite_ui::theme::NAV_INSET_Y;
-        let open = !self.nav_folded();
-        let left = (self.nav_expanded_width() - ferrite_ui::theme::HAIRLINE_W)
-            * self.nav_width() / self.nav_expanded_width();
-        div()
-            .absolute()
-            .top(px(nav::CARD_TOP))
-            .bottom(px(NAV_INSET_Y))
-            .left(px(left))
-            .flex()
-            .items_center()
-            .child(nav::edge_tab(open).on_mouse_down(
-                MouseButton::Left,
-                cx.listener(|view, _: &MouseDownEvent, _, cx| {
-                    cx.stop_propagation();
-                    view.toggle_nav_now(cx);
-                }),
-            ))
-            .into_any_element()
-    }
+
 }
 
 /// A slot's leaf in a board's tree. A Thread's Pane is its own id; drafts

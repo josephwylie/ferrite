@@ -6,6 +6,7 @@ use ferrite_ui::icons::{self, icon};
 #[derive(Clone, Debug)]
 enum Action {
     Reveal(std::path::PathBuf),
+    OpenEditor(super::editors::EditorId),
     Surface(super::super::surfaces::SurfaceId),
     CreatePr,
 }
@@ -69,22 +70,34 @@ fn section(item: ContextCardItem) -> u8 {
 
 impl Content {
     pub(super) fn scrolling_height(&self, density: Density) -> f32 {
-        self.rows
+        let rows: Vec<_> = self
+            .rows
+            .iter()
+            .filter(|row| row.shown_at(density))
+            .collect();
+        let pr_rows = rows
             .iter()
             .filter(|row| {
-                row.shown_at(density)
-                    && (matches!(
-                        row.item,
-                        ContextCardItem::Lineage | ContextCardItem::SideChats
-                    ) || matches!(
-                        row.action,
-                        Some(Action::Surface(
-                            super::super::surfaces::SurfaceId::PullRequest(_)
-                        ))
+                matches!(
+                    row.action,
+                    Some(Action::Surface(
+                        super::super::surfaces::SurfaceId::PullRequest(_)
                     ))
+                )
             })
-            .count() as f32
-            * 32.
+            .count();
+        let mut height = pr_rows as f32 * 32.;
+        // T3 measures the whole relationships/side-chats section, including
+        // its heading and padding. PRs exclude only their list of rows.
+        for item in [ContextCardItem::Lineage, ContextCardItem::SideChats] {
+            let count = rows.iter().filter(|row| row.item == item).count();
+            if count == 0 {
+                continue;
+            }
+            let divider = rows.iter().any(|row| section(row.item) < section(item));
+            height += count as f32 * 32. + 32. + 4. + 8. + 10. + if divider { 1. } else { 0. };
+        }
+        height
     }
 
     pub(super) fn key(&self, thread: ThreadId, width: f32, density: Density) -> String {
@@ -164,6 +177,7 @@ impl Content {
                         .flex()
                         .items_center()
                         .h(px(32.))
+                        .mb(px(4.))
                         .px(px(10.))
                         .text_size(px(11.))
                         .text_color(rgb(INK_SUBTLE))
@@ -171,6 +185,10 @@ impl Content {
                 );
             }
             for (at, row) in group_rows.iter().enumerate() {
+                if row.item == ContextCardItem::OpenIn {
+                    block = block.child(editor_control(row, thread, cx));
+                    continue;
+                }
                 let selector = format!("details-item-{}-{at}", row.item.id());
                 let action = row.action.clone();
                 let usage = matches!(row.item, ContextCardItem::Usage | ContextCardItem::Context);
@@ -241,6 +259,9 @@ impl Content {
                                 Action::Reveal(path) => {
                                     ferrite_pane::preview::open_original(path, window, cx)
                                 }
+                                Action::OpenEditor(editor) => {
+                                    view.open_details_editor(thread, *editor, window, cx)
+                                }
                                 Action::Surface(surface) => {
                                     view.upsert_surface(thread, surface.clone(), cx)
                                 }
@@ -290,16 +311,16 @@ impl CockpitView {
             folder.action = Some(Action::Reveal(path.clone()));
             rows.push(folder);
             if !self.on_machine() {
-                let label = if cfg!(target_os = "macos") {
-                    "Open in Finder"
-                } else if cfg!(target_os = "windows") {
-                    "Open in File Explorer"
-                } else {
-                    "Open in file manager"
-                };
+                let editor = self
+                    .details_editors
+                    .preferred(self.prefs.settings.preferred_editor.as_deref());
+                let label = editor.map_or_else(
+                    || "Open in editor".to_owned(),
+                    |editor| format!("Open in {}", editor.label()),
+                );
                 let mut open_in = Row::new(Item::OpenIn, label, icons::FOLDER);
                 open_in.tooltip = Some(path.to_string_lossy().into_owned());
-                open_in.action = Some(Action::Reveal(path));
+                open_in.action = editor.map(Action::OpenEditor);
                 rows.push(open_in);
             }
         }
@@ -422,6 +443,84 @@ impl CockpitView {
     }
 }
 
+/// T3's primary launch button and separate 32px preference picker share
+/// one row; the dropdown anchors to that whole row, not the chevron.
+fn editor_control(row: &Row, thread: ThreadId, cx: &mut Context<CockpitView>) -> AnyElement {
+    let bounds = std::rc::Rc::new(std::cell::Cell::new(None));
+    let anchor = bounds.clone();
+    let editor = match row.action {
+        Some(Action::OpenEditor(editor)) => Some(editor),
+        _ => None,
+    };
+    let primary = div()
+        .id("details-open-editor")
+        .debug_selector(|| "details-item-openIn-0".to_string())
+        .flex()
+        .flex_1()
+        .min_w_0()
+        .items_center()
+        .gap(px(10.))
+        .h(px(32.))
+        .px(px(10.))
+        .rounded(px(8.))
+        .text_color(rgba(0xffffffcc))
+        .when(editor.is_none(), |row| row.opacity(0.5))
+        .child(editor.map_or_else(
+            || icon(icons::EXTERNAL, 16., INK_SUBTLE).into_any_element(),
+            |editor| editor.image(16.),
+        ))
+        .child(div().min_w_0().truncate().child(row.label.clone()))
+        .when_some(editor, |row, editor| {
+            row.cursor_pointer()
+                .hover(|style| style.bg(rgba(0xffffff14)))
+                .on_click(cx.listener(move |view, _: &ClickEvent, window, cx| {
+                    cx.stop_propagation();
+                    view.open_details_editor(thread, editor, window, cx);
+                }))
+        })
+        .tooltip(ferrite_ui::menu::tooltip(row.label.clone()));
+    let picker = div()
+        .id("details-choose-editor")
+        .debug_selector(|| "details-choose-editor".to_string())
+        .flex()
+        .items_center()
+        .justify_center()
+        .flex_shrink_0()
+        .w(px(32.))
+        .h(px(32.))
+        .rounded(px(8.))
+        .cursor_pointer()
+        .hover(|style| style.bg(rgba(0xffffff14)))
+        .child(icon(icons::CHEVRON_DOWN, 12., INK_SUBTLE))
+        .tooltip(ferrite_ui::menu::tooltip("Choose editor"))
+        .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
+            cx.stop_propagation();
+            if let Some(bounds) = anchor.get() {
+                view.refresh_details_editors(cx);
+                view.open_context_menu_under(MenuTarget::DetailsEditor(thread), bounds, cx);
+            }
+        }));
+    ferrite_ui::components::on_bounds(
+        div()
+            .relative()
+            .flex()
+            .items_center()
+            .w_full()
+            .h(px(32.))
+            .child(primary)
+            .child(
+                div()
+                    .flex_shrink_0()
+                    .w(px(1.))
+                    .h(px(16.))
+                    .bg(rgba(0xffffff1a)),
+            )
+            .child(picker),
+        move |measured, _, _| bounds.set(Some(measured)),
+    )
+    .into_any_element()
+}
+
 fn tokens(value: u64) -> String {
     if value >= 1_000_000 {
         format!("{:.1}M", value as f64 / 1_000_000.)
@@ -476,5 +575,28 @@ mod tests {
             content.key(thread, 280., Density::Full),
             content.key(thread, 220., Density::Full)
         );
+    }
+
+    #[test]
+    fn growing_lists_exclude_the_same_bounds_as_the_source() {
+        use super::super::super::surfaces::SurfaceId;
+        let mut pr = Row::new(ContextCardItem::Branch, "PR #4", icons::GIT_PULL_REQUEST);
+        pr.action = Some(Action::Surface(SurfaceId::PullRequest(4)));
+        let content = Content {
+            rows: vec![
+                Row::new(ContextCardItem::Environment, "Local", icons::LAPTOP),
+                pr,
+                Row::new(ContextCardItem::Lineage, "Research", icons::BOT),
+                Row::new(ContextCardItem::Lineage, "Review", icons::BOT),
+                Row::new(ContextCardItem::SideChats, "Notes", icons::MESSAGE_CIRCLE),
+            ],
+        };
+        // PR row + two whole sections (36px heading, 18px padding, 1px border).
+        assert_eq!(
+            content.scrolling_height(Density::Full),
+            32. + (64. + 55.) + (32. + 55.)
+        );
+        assert_eq!(content.scrolling_height(Density::Compact), 32.);
+        assert_eq!(content.scrolling_height(Density::Essential), 32.);
     }
 }

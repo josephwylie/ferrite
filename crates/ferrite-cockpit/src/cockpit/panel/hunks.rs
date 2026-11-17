@@ -10,7 +10,8 @@
 //!
 //! The panel draws what changed with one line of context either side, on
 //! `BLOCK` in the panel's diff face: a sign column, the add and delete
-//! washes, no line numbers and no syntax colour.
+//! washes. Overview/local Changes retain that compact presentation; published
+//! PR Code also shows the source line coordinates and cached syntax colours.
 
 use super::*;
 use ferrite_core::docview::FileChange;
@@ -26,14 +27,22 @@ const CONTEXT: usize = 1;
 const MAX_LINES: usize = 120;
 
 /// How a file's hunks are drawn.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum Layout {
+#[derive(Clone, Copy)]
+pub(crate) enum Layout<'a> {
     /// The Overview's block: the first `MAX_LINES` lines, each cut at the edge.
     Abbreviated,
     /// The Changes Surface: every line. A long line wraps, or, unwrapped,
     /// scrolls sideways.
     Whole { wrap: bool },
+    /// Published Code, using highlights prepared with the file read.
+    PullRequest {
+        wrap: bool,
+        syntax: &'a HighlightedLines,
+    },
 }
+
+pub(crate) type HighlightedLines =
+    HashMap<SharedString, Vec<(std::ops::Range<usize>, gpui::HighlightStyle)>>;
 
 /// A file in the panel: its Thread and the path its facts carry.
 type FileKey = (ThreadId, String);
@@ -56,6 +65,8 @@ pub(crate) enum Shown {
 pub(crate) struct Line {
     pub sign: Sign,
     pub text: SharedString,
+    pub old_no: Option<u32>,
+    pub new_no: Option<u32>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -334,6 +345,8 @@ fn flatten(rows: &[Row], out: &mut Vec<Line>) {
         out.push(Line {
             sign,
             text: text(spans),
+            old_no: row.old_no(),
+            new_no: row.new_no(),
         });
     }
 }
@@ -341,11 +354,21 @@ fn flatten(rows: &[Row], out: &mut Vec<Line>) {
 /// The hunk area (`BLOCK`, the panel's diff face): each line on a 2.5ch sign
 /// column inset 1ch, changed lines on their wash in body ink, context in
 /// `INK_SUBTLE`; a hairline between hunks.
-pub(crate) fn hunks_element(index: usize, shown: &Shown, layout: Layout) -> Div {
+pub(crate) fn hunks_element(index: usize, shown: &Shown, layout: Layout<'_>) -> Div {
     use ferrite_ui::theme::*;
     let cell = FS_PANEL_DIFF * CODE_ADVANCE;
-    let wrap = layout == Layout::Whole { wrap: true };
-    let scrolls = layout == Layout::Whole { wrap: false };
+    let wrap = matches!(
+        layout,
+        Layout::Whole { wrap: true } | Layout::PullRequest { wrap: true, .. }
+    );
+    let scrolls = matches!(
+        layout,
+        Layout::Whole { wrap: false } | Layout::PullRequest { wrap: false, .. }
+    );
+    let syntax = match layout {
+        Layout::PullRequest { syntax, .. } => Some(syntax),
+        _ => None,
+    };
     // A wrapped line grows by rows; an unwrapped one is cut at the edge, or
     // keeps its width for the area to scroll.
     let row = || {
@@ -354,7 +377,11 @@ pub(crate) fn hunks_element(index: usize, shown: &Shown, layout: Layout) -> Div 
             .flex_shrink_0()
             .when(wrap, |row| row.min_h(px(LH_PANEL_DIFF)))
             .when(!wrap, |row| row.h(px(LH_PANEL_DIFF)))
-            .pl(px(PANEL_HUNK_INSET_CELLS * cell))
+            .pl(px(if syntax.is_some() {
+                0.
+            } else {
+                PANEL_HUNK_INSET_CELLS * cell
+            }))
             .when(!scrolls, |row| row.overflow_hidden())
     };
     let area = div()
@@ -367,6 +394,7 @@ pub(crate) fn hunks_element(index: usize, shown: &Shown, layout: Layout) -> Div 
         .font_family(FONT_CODE)
         .text_size(px(FS_PANEL_DIFF))
         .line_height(px(LH_PANEL_DIFF))
+        .when(wrap, |area| area.whitespace_normal())
         .when(!wrap, |area| area.whitespace_nowrap());
     let hunks = match shown {
         Shown::Hunks(hunks) => hunks,
@@ -375,7 +403,23 @@ pub(crate) fn hunks_element(index: usize, shown: &Shown, layout: Layout) -> Div 
         }
     };
     let total: usize = hunks.iter().map(Vec::len).sum();
-    let mut left = if layout == Layout::Abbreviated { MAX_LINES } else { usize::MAX };
+    let mut left = if matches!(layout, Layout::Abbreviated) {
+        MAX_LINES
+    } else {
+        usize::MAX
+    };
+    let number_width = if syntax.is_some() {
+        let largest = hunks
+            .iter()
+            .flatten()
+            .flat_map(|line| [line.old_no, line.new_no])
+            .flatten()
+            .max()
+            .unwrap_or(1);
+        (largest.to_string().len().max(3) as f32 + 1.) * cell
+    } else {
+        0.
+    };
     let mut drawn = 0;
     let mut area = area;
     for (at, hunk) in hunks.iter().enumerate() {
@@ -407,6 +451,31 @@ pub(crate) fn hunks_element(index: usize, shown: &Shown, layout: Layout) -> Div 
                 row()
                     .debug_selector(move || format!("panel-hunk-{index}-{n}"))
                     .when_some(wash, |row, wash| row.bg(rgba(wash)))
+                    .when(syntax.is_some(), |row| {
+                        row.children([("old", line.old_no), ("new", line.new_no)].map(
+                            |(side, number)| {
+                                div()
+                                    .debug_selector(move || {
+                                        format!(
+                                            "pr-code-line-{index}-{n}-{side}-{}",
+                                            number.map_or_else(
+                                                || "none".into(),
+                                                |number| number.to_string()
+                                            )
+                                        )
+                                    })
+                                    .flex_shrink_0()
+                                    .w(px(number_width))
+                                    .pr(px(cell))
+                                    .text_right()
+                                    .text_color(rgb(INK_SUBTLE))
+                                    .child(SharedString::from(
+                                        number
+                                            .map_or_else(String::new, |number| number.to_string()),
+                                    ))
+                            },
+                        ))
+                    })
                     .child(
                         div()
                             .flex_shrink_0()
@@ -418,8 +487,15 @@ pub(crate) fn hunks_element(index: usize, shown: &Shown, layout: Layout) -> Div 
                         div()
                             .when(scrolls, |text| text.flex_none())
                             .when(!scrolls, |text| text.flex_1().min_w_0().overflow_hidden())
-                            .text_color(rgb(ink))
-                            .child(line.text.clone()),
+                            .text_color(rgb(if syntax.is_some() { SYN_PLAIN } else { ink }))
+                            .child(match syntax {
+                                Some(syntax) => gpui::StyledText::new(line.text.clone())
+                                    .with_highlights(
+                                        syntax.get(&line.text).cloned().unwrap_or_default(),
+                                    )
+                                    .into_any_element(),
+                                None => line.text.clone().into_any_element(),
+                            }),
                     ),
             );
             drawn += 1;
@@ -502,6 +578,41 @@ mod tests {
                     .collect()
             })
             .collect()
+    }
+
+    #[test]
+    fn source_coordinates_survive_flattening_and_context_folds() {
+        let rows = vec![
+            Row::Fold {
+                lines: vec![Row::Context {
+                    old_no: 17,
+                    new_no: 20,
+                    spans: vec![span("context")],
+                }],
+            },
+            Row::Deletion {
+                old_no: 18,
+                spans: vec![span("old")],
+                emphasis: vec![],
+                cr: false,
+            },
+            Row::Insertion {
+                new_no: 21,
+                spans: vec![span("new")],
+                emphasis: vec![],
+                cr: false,
+            },
+        ];
+        let hunks = hunks(&rows);
+        let positions: Vec<_> = hunks
+            .iter()
+            .flatten()
+            .map(|line| (line.old_no, line.new_no))
+            .collect();
+        assert_eq!(
+            positions,
+            [(Some(17), Some(20)), (Some(18), None), (None, Some(21))]
+        );
     }
 
     /// One line of context either side of a change, the Review's folds

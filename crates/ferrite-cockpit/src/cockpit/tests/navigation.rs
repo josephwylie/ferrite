@@ -83,14 +83,10 @@ fn the_arrows_lead_the_head_and_step_on_a_click(cx: &mut TestAppContext) {
         view.set_nav_collapsed(true, cx);
     });
     tick(cx);
-    assert_eq!(
-        cx.debug_bounds("history-back").map(|bounds| bounds.left()),
-        Some(px(ferrite_ui::theme::HISTORY_X)),
-        "folded, beside the traffic lights"
-    );
+    assert!(cx.debug_bounds("history-back").is_none(), "history collapses with the sidebar");
     let title = cx.debug_bounds("view-title").expect("the title");
-    let forward = cx.debug_bounds("history-forward").unwrap();
-    assert!(forward.right() < title.left(), "the title clears them");
+    let toggle = cx.debug_bounds("nav-toggle").expect("persistent sidebar toggle");
+    assert!(toggle.right() < title.left(), "the title clears the toggle");
 
     view.update(cx, |view, cx| {
         view.empty_shown = true;
@@ -98,8 +94,8 @@ fn the_arrows_lead_the_head_and_step_on_a_click(cx: &mut TestAppContext) {
     });
     tick(cx);
     assert!(
-        cx.debug_bounds("history-back").is_some(),
-        "on the empty board"
+        cx.debug_bounds("nav-toggle").is_some(),
+        "the sidebar toggle remains on the empty board"
     );
     assert!(cx.debug_bounds("view-title").is_none());
 }

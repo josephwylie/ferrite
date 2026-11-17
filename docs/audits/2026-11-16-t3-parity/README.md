@@ -1,5 +1,17 @@
 # Scoped T3 alignment
 
+> Current status, 2026-11-17. Native annotation acceptance now passes after Keychain resolution and two native-input corrections. Whole-surface parity remains open because the PR and context differences listed in the acceptance record remain. No 1:1 or numerical 90% claim is supported.
+
+The [current acceptance record](acceptance-current.md) separates verified behavior from remaining differences. Reports are [PR](pr-current.md), [context](context.md), [sidebar](sidebar.md), [Cite](cite-complete-parity.md), and [live annotations](live-annotation-current.md). The [native completion record](evidence/live-browser/native-completion.md) links actual captures, fixture-provider payloads, and measurements against pinned T3 rules.
+
+After the final source edit, five bootstrap tests, the app typecheck, the bundle build, and the strengthened browser smoke passed. Normal native startup then loaded the requested page, kept private bootstrap history hidden, and opened live annotation controls. Earlier native passes verify CSS editing, Attach, receipt reopening, Draw, Region, Erase, direct Send, Cite, contextual PR loading, sidebar controls, and responsive context placement. Exact commands and source hashes are in the [verification manifest](evidence/live-browser/bootstrap-history-verification.json).
+
+Implementation remains in the warmed `ferrite-t3-parity` worktree. Cleanup removed disposable compiler state and completed test artifacts, leaving 4.7 GiB free at the final check. Warm dependency outputs, the source, both audits, the main checkout, and the final verification app remain. No task commit, PR, merge, or release installation has occurred.
+
+Everything below records earlier iterations. Historical claims about Keychain blocking or retained-screenshot annotation parity are superseded by the current records above.
+
+## Historical implementation and verification
+
 This change aligns Ferrite's sidebar, contextual PR panel, responsive context card, browser annotation controls, and selected-text citation comment popup with T3's implementation. The source authority is commit `4da2bc520c38cd6b36014d2888774168fbf4c77f` in `/tmp/ferrite-t3-reference`. The old `2026-11-13-t3-parity` directory remains unchanged.
 
 ## Live annotation acceptance correction

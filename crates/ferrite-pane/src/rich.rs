@@ -2,16 +2,17 @@
 //! advances the toolkit parser; unrelated pane renders do not parse again.
 use gpui::base::text::{TextView, TextViewState, TextViewStyle};
 use gpui::component::input::{Textarea, TextareaState};
-use gpui::{prelude::*, px, rems, rgb, rgba, App, Entity, Focusable, SharedString, Window};
+use gpui::{App, Entity, Focusable, SharedString, Window, prelude::*, px, rems, rgb, rgba};
 use std::{cell::RefCell, collections::HashMap, rc::Rc};
 
 use crate::link_target::{LinkTarget, Open};
 use ferrite_ui::theme;
 
 pub fn init(cx: &mut App) {
-    cx.bind_keys(CONTROL_CONTEXTS.map(|context| {
-        gpui::KeyBinding::new("enter", gpui::NoAction {}, Some(context))
-    }));
+    cx.bind_keys(
+        CONTROL_CONTEXTS
+            .map(|context| gpui::KeyBinding::new("enter", gpui::NoAction {}, Some(context))),
+    );
 }
 
 /// The key contexts of the transcript's native controls: a code block's
@@ -21,11 +22,10 @@ const CONTROL_CONTEXTS: [&str; 2] = ["TranscriptCodeActions", "LinkStop"];
 /// Code actions and links form a native keyboard island inside the
 /// transcript: Tab walks them and ⏎ presses the focused one.
 pub fn controls_focused(window: &Window) -> bool {
-    window.context_stack().iter().any(|context| {
-        CONTROL_CONTEXTS
-            .iter()
-            .any(|name| context.contains(name))
-    })
+    window
+        .context_stack()
+        .iter()
+        .any(|context| CONTROL_CONTEXTS.iter().any(|name| context.contains(name)))
 }
 
 /// Replace a native text output's source without losing the reader's
@@ -300,6 +300,8 @@ pub struct Markdown {
     quiet: bool,
     /// One line, never wrapped (`activity`).
     single_line: bool,
+    /// Source-host PR prose keeps its document heading scale, independent of transcript styling.
+    pull_request: bool,
     /// `ferrite-chip:` links draw as a prompt's inline file chips, opening
     /// in this Pane's preview among the prompt's images (`pane::prompt_chip`).
     chips: Option<(
@@ -320,6 +322,12 @@ pub struct Markdown {
 }
 
 impl Markdown {
+    /// T3 PR prose: document headings and collapsed block margins.
+    pub fn pull_request(mut self) -> Self {
+        self.pull_request = true;
+        self
+    }
+
     pub fn selection_document(
         mut self,
         document: Option<gpui::base::TextSelectionDocument>,
@@ -408,6 +416,7 @@ impl Markdown {
             ink: None,
             quiet: false,
             single_line: false,
+            pull_request: false,
             chips: None,
             skills: Default::default(),
             document: None,
@@ -423,7 +432,9 @@ impl gpui::RenderOnce for Markdown {
         // A parsed document keeps parts of the style it was first laid out
         // in (a list's items): prose that turns to narration once more work
         // follows it is laid out afresh in the quiet style.
-        let key = if self.quiet {
+        let key = if self.pull_request {
+            SharedString::from(format!("{}~pull-request", self.id))
+        } else if self.quiet {
             SharedString::from(format!("{}~quiet", self.id))
         } else {
             self.id.clone()
@@ -447,7 +458,9 @@ impl gpui::RenderOnce for Markdown {
         // A view of prose runs a cell past its column for a line's trailing
         // space (below); its blocks take that cell back. A single line
         // never wraps, so runs on its column.
-        let text_style = if self.single_line {
+        let text_style = if self.pull_request {
+            pull_request_style(window.rem_size(), base)
+        } else if self.single_line {
             style_at(window.rem_size(), base)
         } else {
             hung_style(window.rem_size(), base)
@@ -625,7 +638,10 @@ impl gpui::RenderOnce for Markdown {
                     // A call's path opens where a prose path's ⌘-click does:
                     // the Thread's preview, in Files.
                     (LinkTarget::File(file), true, Some(scope)) => {
-                        let at = file.location.as_deref().and_then(crate::file_links::location_line);
+                        let at = file
+                            .location
+                            .as_deref()
+                            .and_then(crate::file_links::location_line);
                         let target = crate::file_links::PathTarget::new(file.path.clone())
                             .at_line(at)
                             .in_scope(scope);
@@ -635,11 +651,26 @@ impl gpui::RenderOnce for Markdown {
                         let how = Open::of(event);
                         let routed = how == Open::Primary
                             && scope.is_some_and(|scope| {
-                                crate::file_links::open_pull_request(&scope, *number, url.clone(), window, cx)
+                                crate::file_links::open_pull_request(
+                                    &scope,
+                                    *number,
+                                    url.clone(),
+                                    window,
+                                    cx,
+                                )
                             });
                         if !routed {
-                            let browser = if how == Open::Primary { Open::Integrated } else { how };
-                            LinkTarget::External(url.clone()).open(browser, link_preview.as_ref(), window, cx);
+                            let browser = if how == Open::Primary {
+                                Open::Integrated
+                            } else {
+                                how
+                            };
+                            LinkTarget::External(url.clone()).open(
+                                browser,
+                                link_preview.as_ref(),
+                                window,
+                                cx,
+                            );
                         }
                     }
                     _ => {
@@ -1067,6 +1098,44 @@ fn style_hanging(rem_size: gpui::Pixels, base: gpui::Pixels, hang: f32) -> TextV
         style = style.with_heading(level, heading(level, base));
     }
     style
+}
+
+/// T3 index.css: headings 20/18/16/14px on 1.3 lines, 20px above,
+/// 8px below; adjacent paragraph margins collapse to the larger 10.4px.
+/// The renderer uses additive block padding, so the extra heading inset
+/// is 20 - 10.4. This opt-in never changes transcript heading defaults.
+fn pull_request_style(rem_size: gpui::Pixels, base: gpui::Pixels) -> TextViewStyle {
+    let scale = f32::from(base) / 14.;
+    let rem = |value| rems(value * scale / f32::from(rem_size));
+    let mut style = hung_style(rem_size, base)
+        .with_paragraph_gap(rem(10.4))
+        .with_heading_spacing(rem(9.6), Some(rem(10.4)))
+        .with_heading_font_size(|level, base| px(pr_heading_size(level, f32::from(base))));
+    for level in 1..=6 {
+        let size = pr_heading_size(level, f32::from(base));
+        style = style.with_heading(
+            level,
+            gpui::StyleRefinement::default()
+                .font_weight(gpui::FontWeight::SEMIBOLD)
+                .text_color(rgb(if level == 6 {
+                    theme::INK_SUBTLE
+                } else {
+                    theme::INK_STRONG
+                }))
+                .line_height(px(size * 1.3)),
+        );
+    }
+    style
+}
+
+fn pr_heading_size(level: u8, base: f32) -> f32 {
+    let size = match level {
+        1 => 20.,
+        2 => 18.,
+        3 => 16.,
+        _ => 14.,
+    };
+    size * base / 14.
 }
 
 /// The inline-code chip's wash (SPEC §5.4's `padding: 1px 5px`): its
@@ -1505,7 +1574,7 @@ pub mod testing {
 #[cfg(test)]
 mod file_link_tests {
     use super::*;
-    use gpui::{div, Context, Modifiers, Render, TestAppContext, VisualTestContext};
+    use gpui::{Context, Modifiers, Render, TestAppContext, VisualTestContext, div};
 
     struct LinkFixture {
         cache: TextCache,
@@ -2252,8 +2321,11 @@ let count = 2;
         });
         let edge = px(theme::tx_cell(theme::FS_PROSE));
         let selector = Box::leak(
-            format!("file-attachment-{}", std::env::temp_dir().join("f01.txt").display())
-                .into_boxed_str(),
+            format!(
+                "file-attachment-{}",
+                std::env::temp_dir().join("f01.txt").display()
+            )
+            .into_boxed_str(),
         );
         for width in (240..=560).step_by(4) {
             let width = px(width as f32);
@@ -2458,7 +2530,7 @@ let count = 2;
 #[cfg(test)]
 mod spacing_tests {
     use super::*;
-    use gpui::{div, Context, Render, TestAppContext};
+    use gpui::{Context, Render, TestAppContext, div};
     const SELECTORS: [&str; 9] = [
         "spacing-0",
         "spacing-1",
@@ -2848,7 +2920,7 @@ mod spacing_tests {
 #[cfg(test)]
 mod vendor_knob_tests {
     use super::*;
-    use gpui::{div, Context, Render, TestAppContext};
+    use gpui::{Context, Render, TestAppContext, div};
 
     type Knobs = fn(TextViewStyle) -> TextViewStyle;
 
@@ -3012,6 +3084,31 @@ mod style_tests {
             Some(theme::paint::BLOCK_RING.into()),
             "a fence's box has its ring"
         );
+    }
+
+    #[test]
+    fn pull_request_prose_uses_its_heading_scale_without_changing_transcripts() {
+        let rem = px(theme::FS_UI);
+        let style = pull_request_style(rem, px(14.));
+        for (level, size) in [(1, 20.), (2, 18.), (3, 16.), (4, 14.), (5, 14.), (6, 14.)] {
+            assert_eq!(style.heading_font_size(level), Some(px(size)));
+            assert_eq!(
+                style.heading(level).text.font_weight,
+                Some(gpui::FontWeight::SEMIBOLD)
+            );
+            assert_eq!(
+                style.heading(level).text.line_height,
+                Some(px(size * 1.3).into())
+            );
+        }
+        let near = |value: gpui::Rems, want: f32| {
+            assert!((f32::from(value.to_pixels(rem)) - want).abs() < 0.01);
+        };
+        near(style.paragraph_gap(), 10.4);
+        near(style.heading_space_above(), 9.6);
+        near(style.heading_space_below().unwrap(), 10.4);
+        assert_eq!(style_at(rem, px(14.)).heading_font_size(2), Some(px(14.)));
+        assert_eq!(hung_style(rem, px(14.)).heading_space_below(), None);
     }
 
     /// Theme rule 1: a heading is the body size, set apart by weight and

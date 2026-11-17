@@ -151,8 +151,52 @@ fn a_citation_is_commented_edited_and_removed_through_its_controls(cx: &mut Test
     assert!(cx.debug_bounds("cite-chip-0").is_none());
 }
 
-/// While a comment is being written, a click on the main line takes the
-/// keyboard: what is typed next goes to the draft, not into the quote.
+/// Both opening and pressing the visible textarea hand it the keyboard.
+#[gpui::test]
+fn citation_comment_takes_focus_on_open_and_across_the_whole_textarea(cx: &mut TestAppContext) {
+    let (view, cx) = conversation("cite-comment-pointer-focus", cx, PARAGRAPHS);
+    drag(&view, cx, (3, 0), (3, 4));
+    click(cx, "selection-reply-quote");
+    cx.simulate_input("initial");
+    click(cx, "cite-save");
+    assert_eq!(replies(&view, cx)[0].text, "initial");
+
+    open_comment(cx, 0);
+    cx.simulate_keystrokes("cmd-a backspace");
+    for (bottom, input) in [(false, "placeholder"), (true, " padding")] {
+        // A native activation or another control can have taken focus while
+        // the popup remains open. Clicking any of its textarea restores it.
+        cx.update(|window, cx| {
+            let main = &view.read(cx).panes[0].composer;
+            window.focus(&gpui::Focusable::focus_handle(main.read(cx), cx), cx);
+        });
+        tick(cx);
+        let field = cx.debug_bounds("cite-comment-field").unwrap();
+        let at = gpui::point(
+            field.left() + px(20.),
+            if bottom {
+                field.bottom() - px(4.)
+            } else {
+                field.top() + px(12.)
+            },
+        );
+        cx.simulate_click(at, gpui::Modifiers::none());
+        tick(cx);
+        cx.simulate_input(input);
+    }
+    click(cx, "cite-save");
+    assert_eq!(replies(&view, cx)[0].text, "placeholder padding");
+    assert_eq!(
+        view.read_with(cx, |view, cx| view.panes[0]
+            .composer
+            .read(cx)
+            .text()
+            .to_owned()),
+        "",
+        "comment keystrokes must never edit the main prompt"
+    );
+}
+
 #[gpui::test]
 fn a_click_on_the_main_line_leaves_the_comment_field(cx: &mut TestAppContext) {
     let (view, cx) = conversation("cite-main-line", cx, PARAGRAPHS);
@@ -752,6 +796,12 @@ fn a_wheel_right_after_go_to_source_is_not_undone(cx: &mut TestAppContext) {
     });
     tick(cx);
     click(cx, "cite-chip-0-source");
+    assert!(
+        transcript
+            .read_with(cx, |transcript, _| transcript.cited_painted())
+            .is_some(),
+        "Go to source landed before the wheel dismissed its mark"
+    );
     let viewport = transcript.read_with(cx, |transcript, _| transcript.scroll().bounds());
     cx.simulate_event(gpui::ScrollWheelEvent {
         position: viewport.center(),

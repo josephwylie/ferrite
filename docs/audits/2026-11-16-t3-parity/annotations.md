@@ -1,5 +1,7 @@
 # Browser annotation controls
 
+> Superseded acceptance record. The retained screenshot editor described below does not establish live annotation parity. See [current live implementation and acceptance](live-annotation-current.md). Historical source notes and evidence remain preserved.
+
 Reference commit is `4da2bc520c38cd6b36014d2888774168fbf4c77f` in `/tmp/ferrite-t3-reference`. These rules come from the pinned source. The parent also captured installed T3 in `evidence/t3-native.png`. That screenshot is supplementary because its binary commit was not established.
 
 ## Rules established before editing

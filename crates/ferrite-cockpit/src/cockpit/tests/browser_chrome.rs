@@ -192,6 +192,30 @@ fn tab_count(view: &Entity<CockpitView>, thread: ThreadId, cx: &mut gpui::Visual
 }
 
 #[gpui::test]
+fn browser_submit_chords_reach_the_guest_without_sending_the_composer(cx: &mut TestAppContext) {
+    use ferrite_pane::visual::web::{fake::Call, Input};
+    let (engine, view, _thread, cx) = browser_window(cx, "bnt-guest-submit");
+    type_in_composer(&view, "Wait for the annotation evidence", cx);
+    let page = cx.debug_bounds("browser-preview").unwrap();
+    cx.simulate_click(page.center(), gpui::Modifiers::none());
+    tick(cx);
+    for (chord, command) in [("cmd-enter", true), ("ctrl-enter", false)] {
+        cx.simulate_keystrokes(chord);
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        loop {
+            leap(cx, super::super::user_commands::ENDED_POLL);
+            assert_eq!(composer_text(&view, cx), "Wait for the annotation evidence", "{chord} must not submit outside the guest");
+            if engine.journal().iter().any(|call| matches!(call, Call::Input(Input::Key { key, down: true, modifiers, .. }) if key == "enter" && if command { modifiers.command } else { modifiers.control })) {
+                break;
+            }
+            assert!(std::time::Instant::now() < deadline, "{chord} did not reach the guest");
+            std::thread::yield_now();
+        }
+        cx.simulate_event(gpui::KeyUpEvent { keystroke: gpui::Keystroke::parse(chord).unwrap() });
+    }
+}
+
+#[gpui::test]
 fn a_new_tab_acts_on_no_page_and_cancel_returns_to_the_page(cx: &mut TestAppContext) {
     use ferrite_pane::visual::web::fake::Call;
     let (engine, view, thread, cx) = browser_window(cx, "bnt-cancel");

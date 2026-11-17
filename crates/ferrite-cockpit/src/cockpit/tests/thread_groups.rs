@@ -339,7 +339,7 @@ fn the_titlebar_band_says_nothing_and_no_bar_is_left(cx: &mut TestAppContext) {
     ] {
         assert!(cx.debug_bounds(gone).is_none(), "{gone} is gone");
     }
-    assert!(cx.debug_bounds("nav-collapse").is_none(), "the edge tab folds the nav");
+    assert!(cx.debug_bounds("nav-toggle").is_some(), "the header toggle folds the nav");
     let search = cx.debug_bounds("nav-search").expect("nav-search");
     assert!(
         search.top() >= px(ferrite_ui::theme::WIN_CHROME_H),
