@@ -230,6 +230,46 @@ fn a_worktree_that_cannot_be_made_rolls_the_first_send_back() {
     let _ = std::fs::remove_dir_all(dir);
 }
 
+/// A directory squatting where the worktree would go is not the worktree:
+/// the first send is refused and its reservation forgotten all the same.
+#[test]
+fn a_squatted_worktree_path_rolls_the_first_send_back() {
+    let dir = scratch("worktree-squatted");
+    let repo = repo_in(&dir);
+    let squatted = repo.join(crate::workspace::WORKTREES).join("squat");
+    std::fs::create_dir_all(squatted.join("kept")).unwrap();
+    let (spawner, _providers, gate) = off_loop();
+    let mut engine = engine(&dir.join("threads"), spawner);
+
+    let started = engine.bootstrap_command(
+        DraftId::new(1),
+        &first_send(crate::workspace::WorkspaceChoice::NamedWorktree {
+            repo: repo.clone(),
+            branch: "squat".into(),
+            base: None,
+        }),
+    );
+    assert!(matches!(started, Ok(None)), "the first send is pending: {started:?}");
+    gate.send(()).unwrap();
+    let error = settle_first_send(&mut engine).expect_err("git refuses a path in use");
+
+    assert!(
+        error.to_string().contains("squat"),
+        "the operator hears what git said: {error}"
+    );
+    assert!(engine.threads().is_empty(), "a half-made Thread stayed");
+    assert!(squatted.join("kept").exists(), "the squatting directory was touched");
+    let registry = engine.registry();
+    assert!(
+        registry
+            .projects()
+            .iter()
+            .all(|project| registry.worktrees(project.id).is_empty()),
+        "the worktree stayed registered"
+    );
+    let _ = std::fs::remove_dir_all(dir);
+}
+
 fn settle_first_send(engine: &mut Engine) -> io::Result<crate::engine::Bootstrapped> {
     let deadline = Instant::now() + Duration::from_secs(10);
     loop {
