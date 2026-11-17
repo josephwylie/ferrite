@@ -2,6 +2,9 @@
 target/
 **/*.rs.bk
 
+# Python (the scripts' bytecode caches)
+__pycache__/
+
 # macOS
 .DS_Store
 **/.DS_Store
