@@ -1318,7 +1318,7 @@ fn build(state: &str, label: &str) -> (Scene, Setup) {
             let setup: Setup = Box::new(|view, window, cx| {
                 branches(view, window, cx);
                 view.set_shelf_open(crate::nav::Shelf::Parked, true, cx);
-                view.nav_scroll.scroll_to_bottom();
+                view.nav_view.read(cx).scroll.scroll_to_bottom();
                 let parked = view
                     .nav_state()
                     .parked
@@ -1341,7 +1341,9 @@ fn build(state: &str, label: &str) -> (Scene, Setup) {
             let setup: Setup = Box::new(|view, window, cx| {
                 branches(view, window, cx);
                 view.focus_nav(window, cx);
-                view.step_nav(2, window, cx);
+                let items = view.nav_view.read(cx).items(&view.nav_inputs(cx));
+                view.nav_view
+                    .update(cx, |nav, cx| nav.step(2, &items, window, cx));
             });
             (scene, setup)
         }
@@ -1369,9 +1371,9 @@ fn build(state: &str, label: &str) -> (Scene, Setup) {
             let (scene, branches) = nav();
             let setup: Setup = Box::new(|view, window, cx| {
                 branches(view, window, cx);
-                view.nav_search
-                    .update(cx, |line, cx| line.set("re".into(), cx));
-                let field = gpui::Focusable::focus_handle(&view.nav_search, cx);
+                let search = view.nav_view.read(cx).search.clone();
+                search.update(cx, |line, cx| line.set("re".into(), cx));
+                let field = gpui::Focusable::focus_handle(&search, cx);
                 window.focus(&field, cx);
                 cx.notify();
             });
@@ -1406,7 +1408,7 @@ fn build(state: &str, label: &str) -> (Scene, Setup) {
             let setup: Setup = Box::new(|view, window, cx| {
                 branches(view, window, cx);
                 // The shown working card sits at the list's foot.
-                view.nav_scroll.scroll_to_bottom();
+                view.nav_view.read(cx).scroll.scroll_to_bottom();
                 for (name, reading) in [
                     ("Screenshot harness", fixture_pr(415, PrState::Open, false)),
                     ("Release notes 0.9", fixture_pr(388, PrState::Open, true)),

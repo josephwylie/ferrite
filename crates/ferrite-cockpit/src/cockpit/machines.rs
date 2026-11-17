@@ -4,7 +4,7 @@
 //! › Machines. A window with only this computer draws none of it.
 
 use super::*;
-use crate::machines::{Connection, MachineRow, Machines, OffScreen};
+use crate::machines::{MachineRow, Machines, OffScreen};
 use crate::notifications::{Alert, Detail, State};
 use ferrite_core::cockpit::ServerState;
 use ferrite_core::notifications::Notifications;
@@ -60,66 +60,6 @@ impl CockpitView {
                 }
             });
         }
-    }
-
-    /// A machine's heading: its press goes to the machine, or folds the
-    /// one the window is on; its triangle folds either.
-    pub(super) fn machine_heading(&self, row: &MachineRow, cx: &mut Context<Self>) -> AnyElement {
-        let (index, selected) = (row.index, row.selected);
-        let fold = nav::machine_fold(index, row.folded).on_mouse_down(
-            MouseButton::Left,
-            cx.listener(move |view, _: &MouseDownEvent, _, cx| {
-                cx.stop_propagation();
-                view.fold_machine(index, cx);
-            }),
-        );
-        nav::machine_heading(row, fold)
-            .on_mouse_down(
-                MouseButton::Left,
-                cx.listener(move |view, _: &MouseDownEvent, _, cx| {
-                    if selected {
-                        view.fold_machine(index, cx);
-                    } else {
-                        cx.emit(GoToMachine {
-                            index: Some(index),
-                            open: None,
-                        });
-                    }
-                }),
-            )
-            .into_any_element()
-    }
-
-    /// Every machine the window is not on: its heading and, unfolded, the
-    /// Threads it has open. A press on either goes to the machine.
-    pub(super) fn machines_off_screen(
-        &self,
-        rows: &[MachineRow],
-        cx: &mut Context<Self>,
-    ) -> Vec<AnyElement> {
-        let mut drawn = Vec::new();
-        for row in rows.iter().filter(|row| !row.selected) {
-            drawn.push(self.machine_heading(row, cx));
-            if row.folded {
-                continue;
-            }
-            let index = row.index;
-            let lost = row.connection != Connection::Online;
-            drawn.extend(row.threads.iter().map(|thread| {
-                nav::machine_thread_row(index, thread, lost)
-                    .on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(move |_, _: &MouseDownEvent, _, cx| {
-                            cx.emit(GoToMachine {
-                                index: Some(index),
-                                open: None,
-                            });
-                        }),
-                    )
-                    .into_any_element()
-            }));
-        }
-        drawn
     }
 
     /// Go to the machine an alert is about and open it there (a toast's
@@ -217,7 +157,7 @@ impl CockpitView {
         (requests, finished)
     }
 
-    fn fold_machine(&mut self, index: usize, cx: &mut Context<Self>) {
+    pub(super) fn fold_machine(&mut self, index: usize, cx: &mut Context<Self>) {
         if let Some(machines) = &self.machines {
             machines.update(cx, |machines, cx| {
                 machines.toggle_fold(index);

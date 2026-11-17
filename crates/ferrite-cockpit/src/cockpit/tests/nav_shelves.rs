@@ -127,7 +127,9 @@ fn a_resorted_card_slides_and_a_parked_one_leaves_a_ghost(cx: &mut TestAppContex
     let travel = |view: &Entity<CockpitView>, cx: &mut gpui::VisualTestContext| {
         view.read_with(cx, |view, cx| {
             let now = cx.background_executor().now();
-            view.nav_motion
+            view.nav_view
+                .read(cx)
+                .motion
                 .borrow()
                 .offset(super::super::nav_list::NavKey::Card(mover), now)
         })
@@ -155,14 +157,14 @@ fn a_resorted_card_slides_and_a_parked_one_leaves_a_ghost(cx: &mut TestAppContex
     view.read_with(cx, |view, cx| {
         let now = cx.background_executor().now();
         assert!(
-            view.nav_motion.borrow().ghost_count(now) > 0,
+            view.nav_view.read(cx).motion.borrow().ghost_count(now) > 0,
             "its card leaves as a ghost"
         )
     });
     leap(cx, Duration::from_millis(400));
     view.read_with(cx, |view, cx| {
         let now = cx.background_executor().now();
-        assert_eq!(view.nav_motion.borrow().ghost_count(now), 0, "and goes")
+        assert_eq!(view.nav_view.read(cx).motion.borrow().ghost_count(now), 0, "and goes")
     });
 }
 
@@ -197,7 +199,7 @@ fn the_search_row_replaces_the_list_with_its_results(cx: &mut TestAppContext) {
     tick(cx);
     cx.simulate_input("needle");
     tick(cx);
-    let typed = view.read_with(cx, |view, cx| view.nav_search.read(cx).text().to_string());
+    let typed = view.read_with(cx, |view, cx| view.nav_view.read(cx).search.read(cx).text().to_string());
     assert!(cx.debug_bounds("nav-results").is_some(), "the results; typed {typed:?}");
     let result: &'static str = format!("nav-result-{}", threads[1].get()).leak();
     let row = cx.debug_bounds(result).expect("its row");
@@ -250,9 +252,9 @@ fn the_search_highlight_follows_its_thread_through_live_updates(cx: &mut TestApp
 
     let results = |view: &CockpitView, cx: &gpui::App| {
         let state = view.nav_state();
-        view.search_matches(&state, cx).iter().map(|row| row.thread).collect::<Vec<_>>()
+        view.nav_view.read(cx).search_matches(&state, cx).iter().map(|row| row.thread).collect::<Vec<_>>()
     };
-    let (order, lit) = view.read_with(cx, |view, cx| (results(view, cx), view.nav_search_pick.get()));
+    let (order, lit) = view.read_with(cx, |view, cx| (results(view, cx), view.nav_view.read(cx).search_pick.get()));
     assert_eq!(order.len(), 3);
     assert_eq!(lit, Some(order[1]), "↓ lit the second result");
 
@@ -295,9 +297,9 @@ fn the_foot_offers_undo_for_a_park(cx: &mut TestAppContext) {
 
     cx.simulate_keystrokes("cmd-shift-e cmd-z");
     tick(cx);
-    view.read_with(cx, |view, _| {
+    view.read_with(cx, |view, cx| {
         assert!(view.facts.parked().is_empty(), "⌘Z revived it");
-        assert!(view.nav_undo.is_none());
+        assert!(view.nav_view.read(cx).undo.is_none());
     });
     assert!(cx.debug_bounds("nav-undo-notice").is_none());
 
@@ -320,8 +322,8 @@ fn the_keyboard_walks_the_list_and_follows_a_parked_thread(cx: &mut TestAppConte
     hide_panel(&view, cx);
     tick(cx);
     let cursor = |view: &Entity<CockpitView>, cx: &mut gpui::VisualTestContext| {
-        view.read_with(cx, |view, _| {
-            view.nav_cursor.clone().map(|cursor| cursor.item)
+        view.read_with(cx, |view, cx| {
+            view.nav_view.read(cx).cursor.clone().map(|cursor| cursor.item)
         })
     };
     cx.simulate_keystrokes("cmd-shift-e end");
@@ -343,10 +345,10 @@ fn the_keyboard_walks_the_list_and_follows_a_parked_thread(cx: &mut TestAppConte
     };
     cx.simulate_keystrokes("cmd-w");
     tick(cx);
-    view.read_with(cx, |view, _| {
+    view.read_with(cx, |view, cx| {
         assert!(view.facts.parked().contains(&thread), "⌘W parked it");
         assert_eq!(
-            view.nav_cursor.clone().map(|cursor| cursor.item),
+            view.nav_view.read(cx).cursor.clone().map(|cursor| cursor.item),
             Some(nav::NavItem::Thread(thread)),
             "the cursor follows it"
         );
@@ -544,7 +546,7 @@ fn a_resize_does_not_send_shelf_rows_travelling(cx: &mut TestAppContext) {
     let travel = |view: &Entity<CockpitView>, cx: &mut gpui::VisualTestContext| {
         view.read_with(cx, |view, cx| {
             let now = cx.background_executor().now();
-            view.nav_motion.borrow().offset(key, now)
+            view.nav_view.read(cx).motion.borrow().offset(key, now)
         })
     };
     assert_eq!(travel(&view, cx), None, "at rest");
@@ -578,8 +580,8 @@ fn rename_on_a_slim_row_draws_the_editor(cx: &mut TestAppContext) {
     for (at, thread) in [("Parked", threads[0]), ("Snoozed", threads[1])] {
         view.update(cx, |view, cx| view.open_context_menu(MenuTarget::Thread(thread), gpui::point(px(10.), px(10.)), cx));
         tick(cx);
-        let rename = view.read_with(cx, |view, _| {
-            view.context_rows(MenuTarget::Thread(thread))
+        let rename = view.read_with(cx, |view, cx| {
+            view.context_rows(MenuTarget::Thread(thread), cx)
                 .iter()
                 .position(|row| matches!(row, Some((_, verb)) if *verb == MenuVerb::Rename))
                 .expect("the menu offers Rename")

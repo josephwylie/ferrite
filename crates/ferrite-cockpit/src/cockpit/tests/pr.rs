@@ -94,8 +94,8 @@ fn the_menu_and_the_palette_offer_the_pr_actions(cx: &mut TestAppContext) {
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     tick(cx);
     let thread = view.read_with(cx, |view, _| view.cockpit.threads()[0]);
-    let menu = |view: &CockpitView| -> Vec<String> {
-        view.context_rows(MenuTarget::Thread(thread))
+    let menu = |view: &CockpitView, cx: &gpui::App| -> Vec<String> {
+        view.context_rows(MenuTarget::Thread(thread), cx)
             .into_iter()
             .flatten()
             .map(|(item, _)| item.label.to_string())
@@ -113,15 +113,15 @@ fn the_menu_and_the_palette_offer_the_pr_actions(cx: &mut TestAppContext) {
     };
     let refresh = "Refresh PR status".to_string();
     let open = "Open PR in browser".to_string();
-    view.read_with(cx, |view, _| {
-        assert!(menu(view).contains(&refresh));
-        assert!(!menu(view).contains(&open), "no PR to open yet");
+    view.read_with(cx, |view, cx| {
+        assert!(menu(view, cx).contains(&refresh));
+        assert!(!menu(view, cx).contains(&open), "no PR to open yet");
     });
     assert!(palette(cx).contains(&refresh));
     assert!(!palette(cx).contains(&open));
 
     land(&view, thread, Some(pr_with_checks()), cx);
-    view.read_with(cx, |view, _| assert!(menu(view).contains(&open)));
+    view.read_with(cx, |view, cx| assert!(menu(view, cx).contains(&open)));
     assert!(palette(cx).contains(&open));
 
     asked(&view, cx);
@@ -372,10 +372,10 @@ fn merge_asks_twice_and_a_merged_pr_shows_its_pill(cx: &mut TestAppContext) {
         cx.debug_bounds("pr-merge").is_none(),
         "merged: nothing to merge"
     );
-    let rows: Vec<String> = view.read_with(cx, |view, _| {
+    let rows: Vec<String> = view.read_with(cx, |view, cx| {
         view.context_rows(MenuTarget::PrMore(
             crate::cockpit::panel::pr_read::PrTarget::thread(thread, 48),
-        ))
+        ), cx)
         .into_iter()
         .flatten()
         .map(|(item, _)| item.label.to_string())
@@ -417,10 +417,10 @@ fn an_open_pr_surface_follows_a_merge(cx: &mut TestAppContext) {
         cx.debug_bounds("pr-primary").is_none(),
         "no Merge to press again"
     );
-    let rows: Vec<String> = view.read_with(cx, |view, _| {
+    let rows: Vec<String> = view.read_with(cx, |view, cx| {
         view.context_rows(MenuTarget::PrMore(
             crate::cockpit::panel::pr_read::PrTarget::thread(thread, 48),
-        ))
+        ), cx)
         .into_iter()
         .flatten()
         .map(|(item, _)| item.label.to_string())

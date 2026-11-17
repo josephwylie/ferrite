@@ -450,7 +450,7 @@ fn cmd_i_walks_the_list_requests_first(cx: &mut TestAppContext) {
         "Bash wants to run gh issue close 212"
     );
     let cursor = |cx: &mut gpui::VisualTestContext| {
-        view.read_with(cx, |view, _| view.nav_cursor.as_ref().map(|cursor| cursor.item))
+        view.read_with(cx, |view, cx| view.nav_view.read(cx).cursor.as_ref().map(|cursor| cursor.item))
     };
     assert_eq!(cursor(cx), Some(nav::NavItem::Thread(rows[0].thread)));
     cx.simulate_keystrokes("up");
@@ -465,7 +465,7 @@ fn cmd_i_walks_the_list_requests_first(cx: &mut TestAppContext) {
     assert_eq!(cursor(cx), Some(nav::NavItem::Thread(rows[1].thread)));
     cx.simulate_keystrokes("escape");
     tick(cx);
-    assert!(!view.read_with(cx, |view, _| view.nav_keys_held));
+    assert!(!view.read_with(cx, |view, cx| view.nav_view.read(cx).keys_held));
     assert_eq!(cursor(cx), None);
     assert_eq!(*fake.interrupts.borrow(), 0);
 }

@@ -45,7 +45,7 @@ fn cmd_i_holds_the_list_until_escape_gives_the_keys_back(cx: &mut TestAppContext
     // An unrelated render must leave the Popover's dismiss handler focused.
     view.update(cx, |_, cx| cx.notify());
     tick(cx);
-    view.read_with(cx, |view, _| assert!(view.nav_keys_held));
+    view.read_with(cx, |view, cx| assert!(view.nav_view.read(cx).keys_held));
     cx.simulate_keystrokes("escape");
     tick(cx);
     assert_eq!(
@@ -53,7 +53,7 @@ fn cmd_i_holds_the_list_until_escape_gives_the_keys_back(cx: &mut TestAppContext
         0,
         "Escape only gives the list's keys back"
     );
-    view.read_with(cx, |view, _| assert!(!view.nav_keys_held));
+    view.read_with(cx, |view, cx| assert!(!view.nav_view.read(cx).keys_held));
     cx.simulate_keystrokes("escape");
     assert_eq!(
         *fake.interrupts.borrow(),
@@ -656,14 +656,14 @@ fn contract_request_notice_opens_its_owning_child(cx: &mut TestAppContext) {
         view.notice_verb(Verb::OpenDecision(id.clone()), cx)
     });
     tick(cx);
-    view.read_with(cx, |view, _| {
+    view.read_with(cx, |view, cx| {
         assert_eq!(view.focused(), 1);
         assert_eq!(
             view.panes[view.focused()].selected,
             Subject::Subagent(key.clone())
         );
         assert!(view.cockpit.notifications().decision(&id).unwrap().read);
-        assert!(!view.nav_keys_held);
+        assert!(!view.nav_view.read(cx).keys_held);
     });
 }
 
@@ -780,7 +780,7 @@ fn the_keyboard_parks_the_cursors_card_and_the_cursor_follows_it(cx: &mut TestAp
         assert_eq!(view.cockpit.parked().unwrap(), vec![active[1]]);
         assert_eq!(view.needs_you_rows(cx).len(), 2);
         assert_eq!(
-            view.nav_cursor.as_ref().map(|cursor| cursor.item),
+            view.nav_view.read(cx).cursor.as_ref().map(|cursor| cursor.item),
             Some(nav::NavItem::Thread(active[1])),
             "the cursor follows its Thread into the Parked shelf"
         );

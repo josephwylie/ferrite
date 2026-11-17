@@ -5,7 +5,9 @@
 //! moves from Active to Working slides there while one that parks leaves
 //! as a ghost and enters the Parked shelf as a slim row.
 
+use super::nav_view::{MenuAt, NavEvent, NavInputs, NavView};
 use super::*;
+use crate::machines::{Connection, MachineRow};
 use crate::nav::flip::{self, Update};
 use crate::nav::{list, NavItem, Shelf, SHELVES};
 use ferrite_ui::motion::{fold_body, Reveal, FOLD};
@@ -55,26 +57,49 @@ impl Notice {
     }
 }
 
+
 impl CockpitView {
-    pub(super) fn nav_content(
-        &self,
-        state: &nav::NavState,
-        window: &Window,
-        cx: &mut Context<Self>,
-    ) -> Div {
+    pub(crate) fn shelf_open(&self, shelf: Shelf) -> bool {
+        self.prefs.settings.open_shelves.contains(&shelf)
+    }
+
+    /// Open or fold `shelf` and remember it. Its body eases open and shut
+    /// (`NavView::shelf_shown`), and the list's motion stands still for it:
+    /// the rows would travel over the headers below, which the body's own
+    /// height already moves.
+    pub(crate) fn set_shelf_open(&mut self, shelf: Shelf, open: bool, cx: &mut Context<Self>) {
+        if self.shelf_open(shelf) == open {
+            return;
+        }
+        self.nav_view.read(cx).snap.set(true);
+        self.change_settings(
+            |settings| {
+                settings.open_shelves.retain(|other| *other != shelf);
+                if open {
+                    settings.open_shelves.push(shelf);
+                }
+            },
+            cx,
+        );
+        cx.notify();
+    }
+}
+
+impl NavView {
+    pub(super) fn content(&self, inputs: &NavInputs, window: &Window, cx: &mut Context<Self>) -> Div {
         #[cfg(test)]
         drawn::built_nav();
-        self.nav_drawn.borrow_mut().clear();
-        let list = if self.nav_searching(cx) {
-            self.search_results(state, cx)
+        self.drawn.borrow_mut().clear();
+        let list = if self.searching(cx) {
+            self.search_results(&inputs.state, cx)
         } else {
-            self.nav_list(state, window, cx)
+            self.list(inputs, window, cx)
         };
         let list = self.sweep_release(list, cx);
-        nav::content().w(px(self.nav_expanded_width()))
-            .child(self.search_row(window, cx))
+        nav::content().w(px(inputs.width))
+            .child(self.search_row(inputs, window, cx))
             // Over the list, outside its keys: the field's ⏎ and Esc are its own.
-            .children(self.snooze_field())
+            .children(inputs.snooze.as_ref().map(snooze::field))
             .child(
                 div()
                     .relative()
@@ -83,22 +108,17 @@ impl CockpitView {
                     .flex_1()
                     .min_h_0()
                     .child(list)
-                    .children(nav::edge_fades(&self.nav_scroll))
-                    .child(nav::scrollbar(&self.nav_scroll, self.nav_hovered)),
+                    .children(nav::edge_fades(&self.scroll))
+                    .child(nav::scrollbar(&self.scroll, self.hovered)),
             )
-            .child(self.nav_foot(window, cx))
-    }
-
-    /// Whether `shelf` is open (`Settings::open_shelves`).
-    pub(crate) fn shelf_open(&self, shelf: Shelf) -> bool {
-        self.prefs.settings.open_shelves.contains(&shelf)
+            .child(self.foot(inputs, window, cx))
     }
 
     /// How far `shelf`'s body is open on screen, 0 to 1: it follows the
     /// setting, turning round from where it is when that flips, and is
     /// already there on first sight.
-    fn shelf_shown(&self, shelf: Shelf, now: Instant, reduced: bool) -> (f32, bool) {
-        let open = self.shelf_open(shelf);
+    fn shelf_shown(&self, inputs: &NavInputs, shelf: Shelf, now: Instant, reduced: bool) -> (f32, bool) {
+        let open = inputs.shelf_open(shelf);
         let mut folds = self.shelf_folds.borrow_mut();
         let at = match folds.iter().position(|(other, _)| *other == shelf) {
             Some(at) => at,
@@ -117,35 +137,14 @@ impl CockpitView {
         (fold.value(now, reduced), fold.running(now, reduced))
     }
 
-    /// Open or fold `shelf` and remember it. Its body eases open and shut
-    /// (`shelf_shown`), and the list's motion stands still for it: the
-    /// rows would travel over the headers below, which the body's own
-    /// height already moves.
-    pub(crate) fn set_shelf_open(&mut self, shelf: Shelf, open: bool, cx: &mut Context<Self>) {
-        if self.shelf_open(shelf) == open {
-            return;
-        }
-        self.nav_snap.set(true);
-        self.change_settings(
-            |settings| {
-                settings.open_shelves.retain(|other| *other != shelf);
-                if open {
-                    settings.open_shelves.push(shelf);
-                }
-            },
-            cx,
-        );
-        cx.notify();
-    }
-
     /// The rows a shelf draws: all of them open (Parked's first pages),
     /// folded only the shown Thread's.
     pub(crate) fn shelf_rows<'a>(
         &self,
-        state: &'a nav::NavState,
+        inputs: &'a NavInputs,
         shelf: Shelf,
     ) -> Vec<&'a nav::ThreadRow> {
-        self.rows_of(state, shelf, self.shelf_open(shelf))
+        self.rows_of(&inputs.state, shelf, inputs.shelf_open(shelf))
     }
 
     /// [`Self::shelf_rows`] for a shelf `open` or not.
@@ -160,63 +159,63 @@ impl CockpitView {
             return rows.iter().filter(|row| row.selected).collect();
         }
         match shelf {
-            Shelf::Parked => rows.iter().take(self.nav_parked_shown).collect(),
+            Shelf::Parked => rows.iter().take(self.parked_shown).collect(),
             _ => rows.iter().collect(),
         }
     }
 
     /// The list (ADR 0040), scrolling, holding its keys (`nav_keys`).
-    fn nav_list(
+    fn list(
         &self,
-        state: &nav::NavState,
+        inputs: &NavInputs,
         window: &Window,
         cx: &mut Context<Self>,
     ) -> Stateful<Div> {
+        let state = &inputs.state;
         let mut rows: Vec<AnyElement> = Vec::new();
         let mut faces: Vec<(NavKey, NavFace)> = Vec::new();
         rows.extend(
-            self.nav_notice
-                .text()
+            inputs
+                .notice
+                .as_ref()
                 .map(|error| nav::notice(error.clone()).into_any_element()),
         );
         // With machines (ADR 0026): the one the window is on heads the
         // list, which folds under it; the others follow its cards.
-        let machines = self.machine_rows(cx);
-        let on = machines
-            .as_ref()
-            .and_then(|rows| rows.iter().find(|row| row.selected));
+        let machines = inputs.machines.as_ref();
+        let on = machines.and_then(|rows| rows.iter().find(|row| row.selected));
         if let Some(on) = on {
             rows.push(self.machine_heading(on, cx));
         }
         let folded = on.is_some_and(|on| on.folded);
         for row in state.pinned.iter().filter(|_| !folded) {
-            rows.push(self.nav_card(row, None, &mut faces, cx));
+            rows.push(self.card(inputs, row, None, &mut faces, cx));
         }
-        for notice in self.inbox_rows(state, cx).into_iter().filter(|_| !folded) {
+        for notice in inputs.inbox.iter().filter(|_| !folded) {
             let local = notice
                 .away
                 .is_none()
                 .then(|| state.active.iter().find(|row| row.thread == notice.thread))
                 .flatten();
             rows.push(match local {
-                Some(row) => self.nav_card(row, Some(notice.open_verb()), &mut faces, cx),
+                Some(row) => self.card(inputs, row, Some(notice.open_verb()), &mut faces, cx),
                 None => {
                     let verb = notice.open_verb();
                     let index = rows.len();
-                    nav::notice_row(index, &notice, false, &nav::Measure::Text(cx, self.nav_expanded_width()))
-                        .on_click(cx.listener(move |view, _: &ClickEvent, window, cx| {
-                            view.notice_verb(verb.clone(), cx);
+                    nav::notice_row(index, notice, false, &nav::Measure::Text(cx, inputs.width))
+                        .on_click(cx.listener(move |_, _: &ClickEvent, window, cx| {
+                            cx.emit(NavEvent::Notice(verb.clone()));
                             window.blur(cx);
                         }))
                         .into_any_element()
                 }
             });
         }
-        if let Some(machines) = &machines {
+        if let Some(machines) = machines {
             rows.extend(self.machines_off_screen(machines, cx));
         }
         if !folded && state.pinned.is_empty() && state.active.is_empty() {
-            rows.push(self.nav_empty(state, cx));
+            rows.push(self.empty(inputs, cx));
         }
         let now = cx.background_executor().now();
         let reduced = ferrite_ui::motion::reduced_motion(cx);
@@ -231,11 +230,11 @@ impl CockpitView {
                 rows.push(list::spacer().into_any_element());
                 anchored = true;
             }
-            rows.push(self.shelf_header(shelf, all.len(), cx));
+            rows.push(self.shelf_header(inputs, shelf, all.len(), cx));
             // Its body: the rows between the shown Thread's (which a fold
             // keeps) ride one clip each, so they close without the
             // Thread's row, or the rows below, jumping.
-            let (shown, moving) = self.shelf_shown(shelf, now, reduced);
+            let (shown, moving) = self.shelf_shown(inputs, shelf, now, reduced);
             folding |= moving;
             let name = list::shelf_key(shelf);
             let mut body: Vec<AnyElement> = Vec::new();
@@ -250,8 +249,8 @@ impl CockpitView {
             };
             for row in self.rows_of(state, shelf, shown > 0.0) {
                 let face = match shelf {
-                    Shelf::Working => self.nav_card(row, None, &mut faces, cx),
-                    Shelf::Snoozed | Shelf::Parked => self.nav_slim(row, shelf, &mut faces, cx),
+                    Shelf::Working => self.card(inputs, row, None, &mut faces, cx),
+                    Shelf::Snoozed | Shelf::Parked => self.slim(inputs, row, shelf, &mut faces, cx),
                 };
                 if row.selected {
                     clip(&mut body, &mut rows);
@@ -260,11 +259,11 @@ impl CockpitView {
                     body.push(face);
                 }
             }
-            if shelf == Shelf::Parked && shown > 0.0 && all.len() > self.nav_parked_shown {
+            if shelf == Shelf::Parked && shown > 0.0 && all.len() > self.parked_shown {
                 body.push(
                     list::show_more_parked()
-                        .on_click(cx.listener(|view, _: &ClickEvent, _, cx| {
-                            view.nav_parked_shown += ferrite_ui::theme::NAV_PARKED_PAGE;
+                        .on_click(cx.listener(|nav, _: &ClickEvent, _, cx| {
+                            nav.parked_shown += ferrite_ui::theme::NAV_PARKED_PAGE;
                             cx.notify();
                         }))
                         .into_any_element(),
@@ -272,16 +271,16 @@ impl CockpitView {
             }
             clip(&mut body, &mut rows);
         }
-        let ghosts = self.nav_motion.borrow_mut().begin(Update {
+        let ghosts = self.motion.borrow_mut().begin(Update {
             rows: faces,
-            snap: self.nav_snap.replace(folding)
+            snap: self.snap.replace(folding)
                 || folding
-                || self.nav_drag_live.get()
-                || self.nav_viewport.replace(window.viewport_size()) != window.viewport_size(),
+                || cx.has_active_drag()
+                || self.viewport.replace(window.viewport_size()) != window.viewport_size(),
             now,
             reduced,
         });
-        let measure = nav::Measure::Text(cx, self.nav_expanded_width());
+        let measure = nav::Measure::Text(cx, inputs.width);
         let ghosts = ghosts.into_iter().map(|ghost| {
             let (top, opacity) = ghost.at(now);
             let face = match &ghost.face {
@@ -296,37 +295,34 @@ impl CockpitView {
                 .opacity(opacity)
                 .child(face)
         });
-        if folding || self.nav_motion.borrow().running(now) {
+        if folding || self.motion.borrow().running(now) {
             ferrite_ui::motion::request_frame(window);
         }
         let body = list::body().children(rows).children(ghosts);
-        let body = if self.machine_lost() {
+        let body = if inputs.machine_lost {
             machines::held(body, "machine-lost-list").into_any_element()
         } else {
             body.into_any_element()
         };
-        self.nav_keys(nav::list_scroll(&self.nav_scroll), cx)
-            .child(flip::flip_list(&self.nav_motion, body))
+        self.keys(nav::list_scroll(&self.scroll), cx)
+            .child(flip::flip_list(&self.motion, body))
     }
 
     /// The list with nothing above its shelves: T3's words, centred, and
     /// Ferrite's way forward under them.
-    fn nav_empty(&self, state: &nav::NavState, cx: &mut Context<Self>) -> AnyElement {
-        let filtered = self
-            .nav_filter
-            .and_then(|project| self.cockpit.registry().project(project))
-            .map(|project| project.title.clone());
+    fn empty(&self, inputs: &NavInputs, cx: &mut Context<Self>) -> AnyElement {
+        let state = &inputs.state;
         let anything = !(state.working.is_empty() && state.snoozed.is_empty())
             || !state.parked.is_empty();
-        let words = if filtered.is_none() && anything {
+        let words = if inputs.filtered.is_none() && anything {
             "Nothing needs you".to_string()
         } else {
-            list::empty_words(filtered.as_deref())
+            list::empty_words(inputs.filtered.as_deref())
         };
-        let parked = (!state.parked.is_empty() && !self.shelf_open(Shelf::Parked)).then(|| {
+        let parked = (!state.parked.is_empty() && !inputs.shelf_open(Shelf::Parked)).then(|| {
             list::parked_link()
-                .on_click(cx.listener(|view, _: &ClickEvent, _, cx| {
-                    view.set_shelf_open(Shelf::Parked, true, cx);
+                .on_click(cx.listener(|_, _: &ClickEvent, _, cx| {
+                    cx.emit(NavEvent::SetShelfOpen(Shelf::Parked, true));
                 }))
                 .into_any_element()
         });
@@ -334,23 +330,23 @@ impl CockpitView {
     }
 
     /// A shelf's header, wired: its press folds or opens the shelf.
-    fn shelf_header(&self, shelf: Shelf, count: usize, cx: &mut Context<Self>) -> AnyElement {
-        let open = self.shelf_open(shelf);
-        let cursor = self.nav_cursor.as_ref().map(|cursor| cursor.item) == Some(NavItem::Shelf(shelf));
+    fn shelf_header(&self, inputs: &NavInputs, shelf: Shelf, count: usize, cx: &mut Context<Self>) -> AnyElement {
+        let open = inputs.shelf_open(shelf);
+        let cursor = self.cursor.as_ref().map(|cursor| cursor.item) == Some(NavItem::Shelf(shelf));
         list::shelf_heading(shelf, count, open, cursor)
             .children(self.cursor_reveal(NavItem::Shelf(shelf)))
             .on_mouse_down(
                 MouseButton::Left,
-                cx.listener(move |view, _: &MouseDownEvent, _, cx| {
-                    view.set_shelf_open(shelf, !open, cx);
+                cx.listener(move |_, _: &MouseDownEvent, _, cx| {
+                    cx.emit(NavEvent::SetShelfOpen(shelf, !open));
                 }),
             )
             .when(shelf == Shelf::Parked, |header| {
                 header.on_mouse_down(
                     MouseButton::Right,
-                    cx.listener(|view, event: &MouseDownEvent, _, cx| {
+                    cx.listener(|_, event: &MouseDownEvent, _, cx| {
                         cx.stop_propagation();
-                        view.open_context_menu(MenuTarget::Parked, event.position, cx);
+                        cx.emit(NavEvent::Menu(MenuTarget::Parked, MenuAt::Point(event.position)));
                     }),
                 )
             })
@@ -360,8 +356,9 @@ impl CockpitView {
     /// A Thread's card, wired, riding the list's motion: a press opens it
     /// (`open`, a request's own door, else its Thread), ⌘/⇧ picks it, a
     /// right press opens its menu, and a drag carries it onto the board.
-    fn nav_card(
+    fn card(
         &self,
+        inputs: &NavInputs,
         row: &nav::ThreadRow,
         open: Option<Verb>,
         faces: &mut Vec<(NavKey, NavFace)>,
@@ -369,53 +366,170 @@ impl CockpitView {
     ) -> AnyElement {
         let thread = row.thread;
         faces.push((NavKey::Card(thread), NavFace::Card(row.clone())));
-        let title = self.editable_thread_title(thread, row.name.clone(), true, cx);
+        let title = self.thread_title(inputs, thread, row.name.clone(), true, cx);
         let card = nav::thread_card(
             row,
             title,
-            self.card_doors(thread, cx),
-            self.renaming_thread(thread),
-            &nav::Measure::Text(cx, self.nav_expanded_width()),
+            self.card_doors(inputs, row, cx),
+            renaming(inputs, thread),
+            &nav::Measure::Text(cx, inputs.width),
         )
         .children(self.cursor_reveal(NavItem::Thread(thread)))
         .children(self.shown_reveal(row))
-        .children(self.hover_card(row, cx));
+        .children(self.hover_card(inputs, row, cx));
         let card = self.pickable_card(card, thread, cx)
-            .on_click(cx.listener(move |view, event: &ClickEvent, window, cx| {
+            .on_click(cx.listener(move |nav, event: &ClickEvent, window, cx| {
                 cx.stop_propagation();
-                if view.pick_card(thread, event.modifiers(), cx) {
+                if nav.pick_card(thread, event.modifiers(), cx) {
                     return;
                 }
-                view.snooze_editor = None;
-                match &open {
-                    Some(verb) => view.notice_verb(verb.clone(), cx),
-                    None => {
-                        view.open_nav_row(thread, cx);
-                    }
-                }
+                cx.emit(NavEvent::DismissSnooze);
+                cx.emit(match &open {
+                    Some(verb) => NavEvent::Notice(verb.clone()),
+                    None => NavEvent::Open(thread),
+                });
                 window.blur(cx);
             }))
             .on_mouse_down(
                 MouseButton::Right,
-                cx.listener(move |view, event: &MouseDownEvent, _, cx| {
+                cx.listener(move |nav, event: &MouseDownEvent, _, cx| {
                     cx.stop_propagation();
-                    view.pick_for_menu(thread, cx);
-                    view.open_context_menu(MenuTarget::Thread(thread), event.position, cx);
+                    nav.pick_for_menu(thread, cx);
+                    cx.emit(NavEvent::Menu(MenuTarget::Thread(thread), MenuAt::Point(event.position)));
                 }),
             );
-        flip::flip_row(&self.nav_motion, NavKey::Card(thread), card).into_any_element()
+        flip::flip_row(&self.motion, NavKey::Card(thread), card).into_any_element()
+    }
+
+    /// What a Thread's card wires (`nav::CardDoors`): its hover strip —
+    /// Snooze, whose menu opens under it (hidden while a turn is queued),
+    /// and Park — for an open Thread; the pin's unpin; and the PR chip,
+    /// whose press opens the PR in the Panel's preview (⌘-press, in the
+    /// browser). Pin stays in the context menu.
+    fn card_doors(&self, inputs: &NavInputs, row: &nav::ThreadRow, cx: &mut Context<Self>) -> nav::CardDoors {
+        let thread = row.thread;
+        let held = inputs.menu == Some(MenuTarget::Snooze(thread));
+        let strip = inputs.open.get(&thread).map(|open| {
+            let mut buttons = Vec::new();
+            if !open.queued {
+                let drawn = std::rc::Rc::new(std::cell::Cell::new(None::<gpui::Bounds<Pixels>>));
+                buttons.push(
+                    nav::snooze_button(thread)
+                        .relative()
+                        .child({
+                            let drawn = drawn.clone();
+                            gpui::canvas(move |bounds, _, _| drawn.set(Some(bounds)), |_, _, _, _| {})
+                                .absolute()
+                                .size_full()
+                        })
+                        .on_mouse_down(
+                            MouseButton::Left,
+                            cx.listener(move |_, event: &MouseDownEvent, _, cx| {
+                                cx.stop_propagation();
+                                let at = match drawn.get() {
+                                    Some(button) => MenuAt::Under(button),
+                                    None => MenuAt::Point(event.position),
+                                };
+                                cx.emit(NavEvent::Menu(MenuTarget::Snooze(thread), at));
+                            }),
+                        )
+                        .on_click(|_, _, cx| cx.stop_propagation())
+                        .into_any_element(),
+                );
+            }
+            buttons.push(
+                nav::park_button(thread)
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(move |nav, _: &MouseDownEvent, _, cx| {
+                            cx.stop_propagation();
+                            nav.arm_park_sweep(thread, cx);
+                        }),
+                    )
+                    .on_click(|_, _, cx| cx.stop_propagation())
+                    .into_any_element(),
+            );
+            nav::strip(buttons, nav::strip_w(!open.queued, &nav::Measure::Text(cx, inputs.width)))
+        });
+        let pin = nav::pin_glyph(thread, true)
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(move |_, _: &MouseDownEvent, _, cx| {
+                    cx.stop_propagation();
+                    cx.emit(NavEvent::Unpin(thread));
+                }),
+            )
+            .on_click(|_, _, cx| cx.stop_propagation())
+            .into_any_element();
+        let pr = row.pr.as_ref().map(|pr| {
+            nav::pr_chip(thread, pr)
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(move |_, event: &MouseDownEvent, _, cx| {
+                        cx.stop_propagation();
+                        cx.emit(NavEvent::OpenPr(thread, Open::of_modifiers(event.modifiers)));
+                    }),
+                )
+                .on_mouse_down(
+                    MouseButton::Right,
+                    cx.listener(move |_, event: &MouseDownEvent, _, cx| {
+                        cx.stop_propagation();
+                        cx.emit(NavEvent::Menu(MenuTarget::PrLink(thread), MenuAt::Point(event.position)));
+                    }),
+                )
+                .on_click(|_, _, cx| cx.stop_propagation())
+                .into_any_element()
+        });
+        nav::CardDoors {
+            strip,
+            strip_held: held,
+            pr,
+            pin: Some(pin),
+        }
+    }
+
+    /// A Thread's title cell: the rename field while it edits, else its
+    /// title, whose second click renames it.
+    fn thread_title(
+        &self,
+        inputs: &NavInputs,
+        thread: ThreadId,
+        title: SharedString,
+        hint: bool,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        if let Some((editing, editor)) = &inputs.rename {
+            if *editing == thread {
+                return rename_field(editor.clone(), hint)
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(|_, _: &MouseDownEvent, _, cx| cx.stop_propagation()),
+                    )
+                    .into_any_element();
+            }
+        }
+        nav::rename_target_thread(thread, title)
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(move |_, event: &MouseDownEvent, _, cx| {
+                    // The first click focuses the Thread, the second
+                    // renames it.
+                    if event.click_count < 2 {
+                        return;
+                    }
+                    cx.stop_propagation();
+                    cx.emit(NavEvent::Rename(thread));
+                }),
+            )
+            .into_any_element()
     }
 
     /// A card's hover detail, while the pointer rests on it — never during
     /// a drag or with its Snooze menu open.
-    fn hover_card(&self, row: &nav::ThreadRow, cx: &gpui::App) -> Option<AnyElement> {
+    fn hover_card(&self, inputs: &NavInputs, row: &nav::ThreadRow, cx: &gpui::App) -> Option<AnyElement> {
         let thread = row.thread;
-        let snoozing = matches!(
-            self.context_menu.as_ref().map(|menu| menu.target),
-            Some(MenuTarget::Snooze(_))
-        );
+        let snoozing = matches!(inputs.menu, Some(MenuTarget::Snooze(_)));
         if snoozing
-            || self.nav_drag_live.get()
             || cx.has_active_drag()
             || ferrite_ui::motion::hover_t(&crate::nav::card_key(thread)) < 1.0
         {
@@ -437,15 +551,16 @@ impl CockpitView {
         Some(crate::nav::chrome::hover_card(
             row,
             crate::nav::chrome::HoverLines { lines },
-            self.nav_expanded_width(),
+            inputs.width,
         ))
     }
 
     /// A Snoozed or Parked shelf's slim row, wired: a press opens (a
     /// parked one revives), its action wakes or revives it, a right press
     /// opens its menu.
-    fn nav_slim(
+    fn slim(
         &self,
+        inputs: &NavInputs,
         row: &nav::ThreadRow,
         shelf: Shelf,
         faces: &mut Vec<(NavKey, NavFace)>,
@@ -455,17 +570,17 @@ impl CockpitView {
         let wall = ferrite_core::clock::system_time();
         let (time, action) = match shelf {
             Shelf::Snoozed => {
-                let until = self
-                    .cockpit
-                    .thread(thread)
-                    .and_then(|open| open.snooze())
-                    .map_or(wall, |snooze| snooze.until);
+                let until = inputs
+                    .open
+                    .get(&thread)
+                    .and_then(|open| open.snooze_until)
+                    .unwrap_or(wall);
                 let wake = list::wake_button(thread)
                     .on_mouse_down(
                         MouseButton::Left,
-                        cx.listener(move |view, _: &MouseDownEvent, _, cx| {
+                        cx.listener(move |_, _: &MouseDownEvent, _, cx| {
                             cx.stop_propagation();
-                            view.snooze_thread(thread, None, cx);
+                            cx.emit(NavEvent::Wake(thread));
                         }),
                     )
                     .on_click(|_, _, cx| cx.stop_propagation());
@@ -478,9 +593,9 @@ impl CockpitView {
                 let revive = list::revive_button(thread)
                     .on_mouse_down(
                         MouseButton::Left,
-                        cx.listener(move |view, _: &MouseDownEvent, _, cx| {
+                        cx.listener(move |_, _: &MouseDownEvent, _, cx| {
                             cx.stop_propagation();
-                            view.revive_thread(thread, cx);
+                            cx.emit(NavEvent::Revive(thread));
                         }),
                     )
                     .on_click(|_, _, cx| cx.stop_propagation());
@@ -492,28 +607,83 @@ impl CockpitView {
             }
         };
         faces.push((NavKey::Slim(thread), NavFace::Slim(row.clone(), time.clone())));
-        let title = if self.renaming_thread(thread) {
-            list::SlimTitle::Editor(self.editable_thread_title(thread, row.name.clone(), false, cx))
+        let title = if renaming(inputs, thread) {
+            list::SlimTitle::Editor(self.thread_title(inputs, thread, row.name.clone(), false, cx))
         } else {
             list::SlimTitle::Row
         };
-        let slim = list::slim_row(row, title, time, action, &nav::Measure::Text(cx, self.nav_expanded_width()))
+        let slim = list::slim_row(row, title, time, action, &nav::Measure::Text(cx, inputs.width))
             .children(self.cursor_reveal(NavItem::Thread(thread)))
             .children(self.shown_reveal(row))
-            .on_click(cx.listener(move |view, _: &ClickEvent, window, cx| {
+            .on_click(cx.listener(move |_, _: &ClickEvent, window, cx| {
                 cx.stop_propagation();
-                view.snooze_editor = None;
-                view.open_nav_row(thread, cx);
+                cx.emit(NavEvent::DismissSnooze);
+                cx.emit(NavEvent::Open(thread));
                 window.blur(cx);
             }))
             .on_mouse_down(
                 MouseButton::Right,
-                cx.listener(move |view, event: &MouseDownEvent, _, cx| {
+                cx.listener(move |nav, event: &MouseDownEvent, _, cx| {
                     cx.stop_propagation();
-                    view.pick_for_menu(thread, cx);
-                    view.open_context_menu(MenuTarget::Thread(thread), event.position, cx);
+                    nav.pick_for_menu(thread, cx);
+                    cx.emit(NavEvent::Menu(MenuTarget::Thread(thread), MenuAt::Point(event.position)));
                 }),
             );
-        flip::flip_row(&self.nav_motion, NavKey::Slim(thread), slim).into_any_element()
+        flip::flip_row(&self.motion, NavKey::Slim(thread), slim).into_any_element()
     }
+
+    /// A machine's heading: its press goes to the machine, or folds the
+    /// one the window is on; its triangle folds either.
+    fn machine_heading(&self, row: &MachineRow, cx: &mut Context<Self>) -> AnyElement {
+        let (index, selected) = (row.index, row.selected);
+        let fold = nav::machine_fold(index, row.folded).on_mouse_down(
+            MouseButton::Left,
+            cx.listener(move |_, _: &MouseDownEvent, _, cx| {
+                cx.stop_propagation();
+                cx.emit(NavEvent::FoldMachine(index));
+            }),
+        );
+        nav::machine_heading(row, fold)
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(move |_, _: &MouseDownEvent, _, cx| {
+                    cx.emit(if selected {
+                        NavEvent::FoldMachine(index)
+                    } else {
+                        NavEvent::GoToMachine(index)
+                    });
+                }),
+            )
+            .into_any_element()
+    }
+
+    /// Every machine the window is not on: its heading and, unfolded, the
+    /// Threads it has open. A press on either goes to the machine.
+    fn machines_off_screen(&self, rows: &[MachineRow], cx: &mut Context<Self>) -> Vec<AnyElement> {
+        let mut drawn = Vec::new();
+        for row in rows.iter().filter(|row| !row.selected) {
+            drawn.push(self.machine_heading(row, cx));
+            if row.folded {
+                continue;
+            }
+            let index = row.index;
+            let lost = row.connection != Connection::Online;
+            drawn.extend(row.threads.iter().map(|thread| {
+                nav::machine_thread_row(index, thread, lost)
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(move |_, _: &MouseDownEvent, _, cx| {
+                            cx.emit(NavEvent::GoToMachine(index));
+                        }),
+                    )
+                    .into_any_element()
+            }));
+        }
+        drawn
+    }
+}
+
+/// Whether the rename field is open on `thread`'s title.
+fn renaming(inputs: &NavInputs, thread: ThreadId) -> bool {
+    inputs.rename.as_ref().is_some_and(|(editing, _)| *editing == thread)
 }

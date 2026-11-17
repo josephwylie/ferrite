@@ -139,8 +139,8 @@ fn an_agent_that_cannot_fork_offers_none(cx: &mut TestAppContext) {
 fn the_menu_and_the_palette_fork_and_rewind(cx: &mut TestAppContext) {
     let (view, fake, cx) = answered("menu-fork", cx);
     let thread = view.read_with(cx, |view, _| view.panes[0].thread().unwrap());
-    let fork = view.read_with(cx, |view, _| {
-        view.context_rows(MenuTarget::Thread(thread))
+    let fork = view.read_with(cx, |view, cx| {
+        view.context_rows(MenuTarget::Thread(thread), cx)
             .into_iter()
             .flatten()
             .find(|(_, verb)| *verb == MenuVerb::Fork)
@@ -195,7 +195,7 @@ fn the_menu_and_the_palette_fork_and_rewind(cx: &mut TestAppContext) {
 #[gpui::test]
 fn the_rewind_menu_offers_the_code_only_where_the_agent_restores_files(cx: &mut TestAppContext) {
     // The rows never depend on which prompt: any block names one.
-    let labels = |view: &CockpitView, thread| {
+    let labels = |view: &CockpitView, thread, cx: &gpui::App| {
         let block = view
             .cockpit
             .thread(thread)
@@ -203,17 +203,17 @@ fn the_rewind_menu_offers_the_code_only_where_the_agent_restores_files(cx: &mut 
         let Some(block) = block else {
             return Vec::new();
         };
-        view.context_rows(MenuTarget::Prompt { thread, block })
+        view.context_rows(MenuTarget::Prompt { thread, block }, cx)
             .into_iter()
             .flatten()
             .map(|(item, _)| item.label.to_string())
             .collect::<Vec<_>>()
     };
     let (view, _fake, cx) = answered("rewind-code", cx);
-    view.read_with(cx, |view, _| {
+    view.read_with(cx, |view, cx| {
         let thread = view.cockpit.threads()[0];
         assert_eq!(
-            labels(view, thread),
+            labels(view, thread, cx),
             ["Rewind conversation", "Rewind conversation and code"]
         );
     });
@@ -230,9 +230,9 @@ fn the_rewind_menu_offers_the_code_only_where_the_agent_restores_files(cx: &mut 
         })
         .unwrap();
     tick(cx);
-    view.read_with(cx, |view, _| {
+    view.read_with(cx, |view, cx| {
         let thread = view.cockpit.threads()[0];
-        assert_eq!(labels(view, thread), ["Rewind conversation"]);
+        assert_eq!(labels(view, thread, cx), ["Rewind conversation"]);
     });
 }
 

@@ -24,13 +24,14 @@ impl CockpitView {
             }
             outcomes.push(Outcome { thread, result });
         }
-        self.nav_picked
-            .retain(|picked| !parked.contains(picked));
         self.report_failures("park", &outcomes);
         self.sync_panes(cx);
-        if !parked.is_empty() {
-            self.offer_undo(nav_chrome::UndoAct::Parked(parked), cx);
-        }
+        self.nav_view.update(cx, |nav, cx| {
+            nav.picked.retain(|picked| !parked.contains(picked));
+            if !parked.is_empty() {
+                nav.offer_undo(nav_chrome::UndoAct::Parked(parked), cx);
+            }
+        });
         cx.notify();
     }
 

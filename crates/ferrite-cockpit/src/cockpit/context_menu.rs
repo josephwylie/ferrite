@@ -291,7 +291,7 @@ impl CockpitView {
         if self.rename.is_some() {
             self.finish_rename(false, cx);
         }
-        let rows = self.context_rows(target);
+        let rows = self.context_rows(target, cx);
         self.context_menu = Some(ContextMenu {
             target,
             at,
@@ -306,13 +306,17 @@ impl CockpitView {
     }
 
     /// The rows a target offers. `None` is a gap between groups of rows.
-    pub(super) fn context_rows(&self, target: MenuTarget) -> Vec<Option<(menu::Item, MenuVerb)>> {
+    pub(super) fn context_rows(
+        &self,
+        target: MenuTarget,
+        cx: &gpui::App,
+    ) -> Vec<Option<(menu::Item, MenuVerb)>> {
         use ferrite_ui::components::bound_chord;
         let mut rows: Vec<Option<(menu::Item, MenuVerb)>> = Vec::new();
         match target {
             // The nav row: where a Thread lives in the roster — open it,
             // park it, delete it.
-            MenuTarget::Thread(thread) => self.thread_rows(thread, &mut rows),
+            MenuTarget::Thread(thread) => self.thread_rows(thread, &mut rows, cx),
             MenuTarget::Snooze(_) => rows.extend(self.snooze_rows().into_iter().map(Some)),
             // The transcript: what is on screen — copy it, name it, size
             // it, and the Pane's own park/close. Deleting a Thread is the
@@ -479,7 +483,12 @@ impl CockpitView {
     /// own verbs, its paths, its PR, its place, and its end. Every row is
     /// a one-letter key, pressed while the menu is up (`menu_mnemonic`); a
     /// parent row (`›`) has none.
-    fn thread_rows(&self, thread: ThreadId, rows: &mut Vec<Option<(menu::Item, MenuVerb)>>) {
+    fn thread_rows(
+        &self,
+        thread: ThreadId,
+        rows: &mut Vec<Option<(menu::Item, MenuVerb)>>,
+        cx: &gpui::App,
+    ) {
         let key =
             |label: &'static str, letter: &'static str| menu::Item::new(label).shortcut(letter);
         let rule = |rows: &mut Vec<Option<(menu::Item, MenuVerb)>>| {
@@ -547,7 +556,7 @@ impl CockpitView {
                 rows.push(Some((menu::Item::new("Wake thread"), MenuVerb::Wake)));
             }
 
-            let park = match self.menu_threads(thread).len() {
+            let park = match self.nav_view.read(cx).menu_threads(thread).len() {
                 1 => key("Park thread", "A"),
                 count => menu::Item::new(format!("Park ({count})")).shortcut("A"),
             };
@@ -658,8 +667,9 @@ impl CockpitView {
     pub(super) fn tend_menu_focus(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.context_menu.is_some() {
             if self.menu_return.is_none() {
-                self.menu_return = Some(if self.nav_keys_held && self.nav_focus.is_focused(window) {
-                    MenuReturn::Nav(self.nav_cursor.clone())
+                let nav = self.nav_view.read(cx);
+                self.menu_return = Some(if nav.holds_keys(window) {
+                    MenuReturn::Nav(nav.cursor.clone())
                 } else {
                     MenuReturn::Focus(window.focused(cx).unwrap_or_else(|| self.focus.clone()))
                 });
@@ -861,8 +871,10 @@ impl CockpitView {
             (MenuTarget::Thread(thread), MenuVerb::Unpin) => self.set_pinned(thread, false, cx),
             // One act (`Cockpit::park_thread`), straight into the parked
             // rows.
-            (MenuTarget::Thread(thread), MenuVerb::Park) if self.menu_threads(thread).len() > 1 => {
-                let threads = self.menu_threads(thread);
+            (MenuTarget::Thread(thread), MenuVerb::Park)
+                if self.nav_view.read(cx).menu_threads(thread).len() > 1 =>
+            {
+                let threads = self.nav_view.read(cx).menu_threads(thread);
                 self.park_listed(&threads, cx);
                 self.parked_changed(cx);
             }

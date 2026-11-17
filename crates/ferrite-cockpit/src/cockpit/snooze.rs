@@ -27,7 +27,9 @@ impl CockpitView {
         match self.cockpit.snooze_thread(thread, until) {
             Ok(()) => {
                 if until.is_some() {
-                    self.offer_undo(super::nav_chrome::UndoAct::Snoozed(thread), cx);
+                    self.nav_view.update(cx, |nav, cx| {
+                        nav.offer_undo(super::nav_chrome::UndoAct::Snoozed(thread), cx)
+                    });
                 }
                 self.nav_notice.clear();
             }
@@ -84,35 +86,34 @@ impl CockpitView {
         }
         cx.notify();
     }
+}
 
-    pub(super) fn snooze_field(&self) -> Option<Div> {
-        let editor = self.snooze_editor.as_ref()?;
-        Some(
-            div()
-                .flex()
-                .flex_col()
-                .min_w_0()
-                .gap(px(ferrite_ui::theme::SPACE_2))
-                .px(px(ferrite_ui::theme::SPACE_2))
-                .py(px(ferrite_ui::theme::SPACE_2))
-                .child(
-                    ferrite_ui::components::text_meta()
-                        .child(format!("Snooze {}", self.facts.name(editor.thread)))
-                        .truncate(),
-                )
-                .child(editor.line.clone())
-                .child(
-                    ferrite_ui::components::text_meta()
-                        .whitespace_normal()
-                        .child("Local date/time: YYYY-MM-DD HH:MM, or a duration: 30m, 3h, 2d"),
-                )
-                .child(ferrite_ui::components::text_meta().child("↵ snooze · esc cancel"))
-                .children(
-                    editor
-                        .error
-                        .as_ref()
-                        .map(|error| nav::notice(error.clone())),
-                ),
+/// The Snooze field as the nav draws it, over its list.
+pub(super) struct Field {
+    pub title: SharedString,
+    pub line: Entity<ferrite_pane::composer::Composer>,
+    pub error: Option<SharedString>,
+}
+
+pub(super) fn field(field: &Field) -> Div {
+    div()
+        .flex()
+        .flex_col()
+        .min_w_0()
+        .gap(px(ferrite_ui::theme::SPACE_2))
+        .px(px(ferrite_ui::theme::SPACE_2))
+        .py(px(ferrite_ui::theme::SPACE_2))
+        .child(
+            ferrite_ui::components::text_meta()
+                .child(format!("Snooze {}", field.title))
+                .truncate(),
         )
-    }
+        .child(field.line.clone())
+        .child(
+            ferrite_ui::components::text_meta()
+                .whitespace_normal()
+                .child("Local date/time: YYYY-MM-DD HH:MM, or a duration: 30m, 3h, 2d"),
+        )
+        .child(ferrite_ui::components::text_meta().child("↵ snooze · esc cancel"))
+        .children(field.error.as_ref().map(|error| nav::notice(error.clone())))
 }
