@@ -1040,28 +1040,23 @@ impl Cockpit {
     /// it, reviving a parked one. The Thread landed on, or None when it
     /// is gone.
     pub fn open_notice(&mut self, id: NoticeId) -> Option<ThreadId> {
-        let known = self
-            .shared
-            .notifications
-            .get(id)
-            .map(|notice| notice.thread);
+        let thread = self.shared.notifications.get(id)?.thread;
         notice(self.act(Op::Notice {
             action: NoticeAction::Open { notice: id.get() },
         }));
-        self.land_on(known?)
+        self.land_on(thread)
     }
 
     /// Open one live Decision attention record: its Subject is shown, and
     /// the operator lands on its Thread as `open_notice` does.
     pub fn open_decision_notice(&mut self, id: &DecisionNoticeId) -> Option<ThreadId> {
-        let live = self.shared.notifications.decision(id).is_some();
+        self.shared.notifications.decision(id)?;
         notice(self.act(Op::Notice {
             action: NoticeAction::OpenDecision {
                 thread: id.thread,
                 handle: (&id.handle).into(),
             },
         }));
-        live.then_some(())?;
         self.land_on(id.thread)
     }
 
