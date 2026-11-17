@@ -74,10 +74,6 @@ pub struct ThreadFacts {
     /// Server counted them while parked. (The nav row no longer names the
     /// count.)
     pub subagents: usize,
-    /// How many turns the Thread holds (its prompts): counted while open,
-    /// as its Server counted them while parked — the parked tile's `11
-    /// turns`.
-    pub turns: Option<usize>,
     /// Main's folded reading from the digest: what the nav row reads
     /// without walking Blocks.
     pub wall: WallCard,
@@ -271,7 +267,6 @@ impl Facts {
             let facts = self.threads.entry(*thread).or_default();
             facts.last_used = last_used;
             facts.name = display_name(cockpit, *thread, self.auto_title);
-            facts.turns = cockpit.parked_turns(*thread);
             facts.subagents = cockpit.subagent_count(*thread).unwrap_or_default();
             let Ok(meta) = cockpit.peek(*thread) else {
                 facts.provider = None;
@@ -391,11 +386,6 @@ impl Facts {
     }
 
     /// When a Thread was last used, from the cache.
-    /// How many turns `thread` holds, where known (`ThreadFacts::turns`).
-    pub fn turns(&self, thread: ThreadId) -> Option<usize> {
-        self.threads.get(&thread).and_then(|facts| facts.turns)
-    }
-
     pub fn last_used(&self, thread: ThreadId) -> Option<SystemTime> {
         self.threads.get(&thread).and_then(|facts| facts.last_used)
     }
@@ -425,7 +415,6 @@ impl Facts {
         if let Some(open) = open {
             let digest = open.digest();
             facts.wall = digest.wall.clone();
-            facts.turns = Some(digest.turns);
             facts.changed_files = digest.changed_files.clone();
             facts.subagents = digest.subagents;
             facts.main_busy = open.busy();
@@ -803,8 +792,6 @@ mod tests {
         assert_eq!(row.name.as_ref(), "Fix the flaky");
         assert_eq!(row.provider, Some(Provider::Claude));
         assert_eq!(row.project, None);
-        assert_eq!(facts.turns(titled), Some(1));
-        assert_eq!(facts.turns(untitled), Some(2));
         assert_eq!(facts.get(untitled).unwrap().subagents, 0);
         let _ = std::fs::remove_dir_all(&dir);
     }

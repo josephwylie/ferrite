@@ -9616,8 +9616,8 @@ impl CockpitView {
             })
             .or_else(|| {
                 let pane = self.panes.get(self.focused())?;
-                // A parked member draws no Composer: the root holds the
-                // keyboard, where ⏎ wakes it (F-8).
+                // A Thread whose facts have not landed draws no Composer:
+                // the root holds the keyboard until they do.
                 if pane
                     .thread()
                     .is_some_and(|thread| self.cockpit.thread(thread).is_none())
@@ -10249,7 +10249,11 @@ impl CockpitView {
                 },
             ));
         };
-        let open = self.cockpit.thread(thread);
+        // Over a link, the roster can list a Thread a frame before its
+        // facts land: the cell stays an empty shell until they do.
+        let Some(open) = self.cockpit.thread(thread) else {
+            return cell;
+        };
         let retained_transcript = pane.transcript().map(|transcript| {
             let document = transcript.read(cx).selection_document();
             gpui::base::TextSelectionDocumentOwner::new(document)
@@ -10264,20 +10268,6 @@ impl CockpitView {
                 )
                 .into_any_element()
         });
-        // A parked Thread's facts (F-6, F-8).
-        let parked_line = open.is_none().then(|| {
-            let age = self
-                .facts
-                .last_used(thread)
-                .map(|at| crate::facts::since_label(at, ferrite_core::clock::system_time()))
-                .filter(|age| !age.is_empty())
-                .map_or_else(|| "now".to_string(), |age| format!("{age} ago"));
-            let turns = self.facts.turns(thread).unwrap_or(0);
-            SharedString::from(format!(
-                "Parked {age} \u{b7} {turns} turn{}",
-                if turns == 1 { "" } else { "s" }
-            ))
-        });
         let facts = pane::PaneFacts {
             thread: open,
             composer_empty: pane.composer.read(cx).is_empty(),
@@ -10290,7 +10280,6 @@ impl CockpitView {
             drop_target: self.drop_target(index, cx),
             plane: self.on_plane(thread),
             decision_joined: false,
-            parked_line,
         };
         let attachments = Composer::attachments(&pane.composer, &pane.preview, cx);
         // The docked Decision merges into the Composer when that Composer
@@ -10322,9 +10311,7 @@ impl CockpitView {
                             .map(|(_, rect)| rect.w)
                     })
                     .unwrap_or_else(|| self.board_bounds(window).w),
-                clock: open
-                    .and_then(|open| open.turn().elapsed())
-                    .map(ferrite_core::progress::live_seconds),
+                clock: open.turn().elapsed().map(ferrite_core::progress::live_seconds),
             },
         );
         let wiring = pane::PaneWiring {
@@ -10339,9 +10326,7 @@ impl CockpitView {
             resume_offer: self.resume_offer(index, cx),
             // An empty Thread wears the draft's start card until its first
             // prompt.
-            start: if pane.is_main()
-                && open.is_some_and(|open| open.transcript().blocks().is_empty())
-            {
+            start: if pane.is_main() && open.transcript().blocks().is_empty() {
                 self.thread_hero(thread)
             } else {
                 None
@@ -10705,7 +10690,7 @@ impl CockpitView {
     /// Where a card hangs (`FloatPlace::card_corner`). Until its trigger
     /// or Pane has been laid out once, it waits a frame rather than guess —
     /// `CARD_GEOMETRY_FRAMES` of them at most, then hangs from the board's
-    /// corner: a Pane with nothing to give (a parked one draws no Composer,
+    /// corner: a Pane with nothing to give (one whose facts have not landed,
     /// one gone from the roster draws nothing) would have the card ask for
     /// every frame for as long as it stayed open.
     fn card_corner(

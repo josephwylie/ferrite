@@ -577,8 +577,6 @@ pub mod words {
     pub const SETTING_UP: &str = "setting up";
     /// Held by the operator.
     pub const PAUSED: &str = "paused";
-    /// Parked: no Session in memory, one keystroke from coming back.
-    pub const PARKED: &str = "parked";
     /// Ferrite cannot observe it.
     pub const UNAVAILABLE: &str = "unavailable";
     /// An answer is on its way to the provider.

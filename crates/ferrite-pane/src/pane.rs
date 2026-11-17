@@ -573,7 +573,7 @@ impl PaneView {
 /// core handle — `None` for a Thread the cockpit could not open — beside
 /// the four the window alone can answer.
 pub struct PaneFacts<'a> {
-    pub thread: Option<ThreadView<'a>>,
+    pub thread: ThreadView<'a>,
     /// Whether the Composer line is empty — what decides the idle
     /// placeholder, read where the cockpit has a `cx` to read it with.
     pub composer_empty: bool,
@@ -595,16 +595,13 @@ pub struct PaneFacts<'a> {
     /// This Pane's docked Decision merges into its live Composer (one
     /// block, rule 2.8.1): the Composer drops its top edge and corners.
     pub decision_joined: bool,
-    /// A parked Thread's two facts, as its tile reads them: `Parked 2h ago
-    /// · 11 turns`. `None` for an open Thread.
-    pub parked_line: Option<SharedString>,
 }
 
 /// The click-wired elements only the cockpit can build — gpui listeners
 /// are made with its own `Context` — and the Pane only places.
 #[derive(Default)]
 pub struct PaneWiring {
-    /// The retained L1 transcript. Its cached entity owns native text and
+    /// The retained transcript. Its cached entity owns native text and
     /// row layout; the Pane only places the allocated viewport.
     pub transcript: Option<AnyElement>,
     pub attachments: Option<AnyElement>,
@@ -678,9 +675,6 @@ pub fn wall_state(turn: Option<&Turn>, pending: bool, tests_failing: bool) -> Wa
     }
 }
 
-/// One Pane. A Thread with no open state in core is one the cockpit could
-/// not open; it still gets a cell, because a Pane that vanishes hides the
-/// problem.
 /// Everything the `render_pane` slots read for one frame, gathered once by the
 /// skeleton. **Foundation-owned:** only the integrator adds a field, so no
 /// package edits this struct. The owned wiring pieces are `Option`s that the
@@ -688,9 +682,8 @@ pub fn wall_state(turn: Option<&Turn>, pending: bool, tests_failing: bool) -> Wa
 pub(crate) struct PaneCtx<'a> {
     pub view: &'a PaneView,
     #[allow(dead_code)]
-    pub thread: Option<ThreadView<'a>>,
-    /// The selected Subject's transcript; `None` for a parked Pane.
-    pub transcript: Option<&'a Transcript>,
+    pub thread: ThreadView<'a>,
+    pub transcript: &'a Transcript,
     pub focused: bool,
     /// The Main Subject's pending Decision.
     pub decision: Option<&'a Decision>,
@@ -713,7 +706,7 @@ pub(crate) struct PaneCtx<'a> {
     #[allow(dead_code)]
     pub unread: bool,
     // ---- owned wiring
-    /// `l1_composer` / `l2_composer`.
+    /// `l1_composer`.
     pub attachments: Option<AnyElement>,
     pub menu: Option<AnyElement>,
     /// `l1_dock`: activity requests that were not docked in the body.
@@ -746,7 +739,6 @@ pub fn render_pane(
         drop_target,
         plane,
         decision_joined,
-        parked_line,
     } = facts;
     let PaneWiring {
         transcript: retained_transcript,
@@ -764,17 +756,16 @@ pub fn render_pane(
     // The Decision is the transcript's tail now (`decision_tail`): no card
     // is laid over the body or docked above the Composer at this level.
     let _ = activity_decisions;
-    let subject = thread.and_then(|thread| thread.activity().subject(&view.selected));
-    let transcript = subject.as_ref().map(|subject| subject.transcript());
-    let decision = if view.is_main() {
-        thread.and_then(|thread| thread.pending())
-    } else {
-        None
-    };
-    let workspace = thread.and_then(|thread| thread.workspace());
     let key = view.thread().map_or(0, ThreadId::get);
     let shell = record_card(pane_shell(plane), view);
-    let frame = |pane: Div| pane_frame(pane, key);
+    // A selected subagent the Activity no longer holds has no transcript
+    // to draw: the Pane stays an empty shell for the frame.
+    let Some(subject) = thread.activity().subject(&view.selected) else {
+        return pane_frame(shell, key);
+    };
+    let transcript = subject.transcript();
+    let decision = if view.is_main() { thread.pending() } else { None };
+    let workspace = thread.workspace();
 
     let mut cx = PaneCtx {
         view,
@@ -783,9 +774,9 @@ pub fn render_pane(
         focused,
         decision,
         has_activity_decisions,
-        queued: thread.map_or(&[], |thread| thread.queue()),
+        queued: thread.queue(),
         composer_empty,
-        suggestion: thread.and_then(|thread| thread.suggestion()),
+        suggestion: thread.suggestion(),
         reduce_motion,
         editing,
         drop_target,
@@ -803,79 +794,67 @@ pub fn render_pane(
     // transcript has its own head over it.
     let mut pane = shell
         .children(subagent_head.map(|head| subagent_strip(key, head)));
-    match transcript {
-        Some(_) => {
-            view.rich
-                .file_context(workspace.map(WorkspaceBinding::cwd), &view.preview);
-            // A child's tab has no Composer to carry the `Decision` key
-            // context: while that child's request pends, its body does, and
-            // with no Composer there the answer letters bind too.
-            let child_request = !view.is_main()
-                && thread.is_some_and(|thread| {
-                    thread
-                        .pending_decisions()
-                        .iter()
-                        .any(|request| request.subject.as_ref() == Some(&view.selected))
-                });
-            let details_canvas = view.details.canvas.clone();
-            pane = pane.child(components::on_bounds(
+    view.rich
+        .file_context(workspace.map(WorkspaceBinding::cwd), &view.preview);
+    // A child's tab has no Composer to carry the `Decision` key
+    // context: while that child's request pends, its body does, and
+    // with no Composer there the answer letters bind too.
+    let child_request = !view.is_main()
+        && thread
+            .pending_decisions()
+            .iter()
+            .any(|request| request.subject.as_ref() == Some(&view.selected));
+    let details_canvas = view.details.canvas.clone();
+    pane = pane.child(components::on_bounds(
+        div()
+            .debug_selector(move || format!("pane-body-{key}"))
+            .relative()
+            .flex()
+            .flex_col()
+            .flex_1()
+            .min_h_0()
+            .min_w_0()
+            // Nothing paints under the head: the body clips at its
+            // own top edge — the Pane's edge in Solo, the head rule
+            // on a board.
+            .overflow_hidden()
+            .when(child_request, |body| {
+                body.key_context("Decision SubagentDecision")
+            })
+            .child(
+                div().flex().flex_col().flex_1().min_h_0().min_w_0()
+                    .pr(px(details_lane_width))
+                    .child(retained_transcript.expect("L1 transcript entity is wired by CockpitView")),
+            )
+            .children(start.map(|project| {
+                // An empty Thread, as a draft: the hero at the
+                // body's centre.
                 div()
-                    .debug_selector(move || format!("pane-body-{key}"))
-                    .relative()
+                    .absolute()
+                    .inset_0()
                     .flex()
                     .flex_col()
-                    .flex_1()
-                    .min_h_0()
-                    .min_w_0()
-                    // Nothing paints under the head: the body clips at its
-                    // own top edge — the Pane's edge in Solo, the head rule
-                    // on a board.
-                    .overflow_hidden()
-                    .when(child_request, |body| {
-                        body.key_context("Decision SubagentDecision")
-                    })
-                    .child(
-                        div().flex().flex_col().flex_1().min_h_0().min_w_0()
-                            .pr(px(details_lane_width))
-                            .child(retained_transcript.expect("L1 transcript entity is wired by CockpitView")),
-                    )
-                    .children(start.map(|project| {
-                        // An empty Thread, as a draft: the hero at the
-                        // body's centre.
-                        div()
-                            .absolute()
-                            .inset_0()
-                            .flex()
-                            .flex_col()
-                            .items_center()
-                            .justify_center()
-                            .px(px(theme::SPACE_4))
-                            .child(start_hero(project))
-                    }))
-                    .children(details),
-                // The card is placed on the bounds the frame before measured:
-                // a change redraws this Pane, and no other part.
-                move |bounds, window, cx| {
-                    if details_canvas.replace(Some(bounds)) != Some(bounds) {
-                        components::redraw_drawn_view(window, cx);
-                    }
-                },
-            ));
-            // The order is head · body · progress · dock · composer.
-            pane = pane.children(l1_dock(&mut cx));
-            // The drop sheet covers the Pane beneath the Composer, which
-            // paints after it and so stays in view, edged in `INK_STRONG`.
-            pane = pane.children(drop_target.then(crate::prompt_drop::sheet));
-            pane = pane.children(l1_composer(&mut cx));
-        }
-        None => {
-            // A parked Thread holds its slot as its tile, at any size.
-            pane = pane
-                .child(parked_body(parked_line))
-                .children(drop_target.then(crate::prompt_drop::sheet));
-        }
-    }
-    frame(pane)
+                    .items_center()
+                    .justify_center()
+                    .px(px(theme::SPACE_4))
+                    .child(start_hero(project))
+            }))
+            .children(details),
+        // The card is placed on the bounds the frame before measured:
+        // a change redraws this Pane, and no other part.
+        move |bounds, window, cx| {
+            if details_canvas.replace(Some(bounds)) != Some(bounds) {
+                components::redraw_drawn_view(window, cx);
+            }
+        },
+    ));
+    // The order is head · body · progress · dock · composer.
+    pane = pane.children(l1_dock(&mut cx));
+    // The drop sheet covers the Pane beneath the Composer, which
+    // paints after it and so stays in view, edged in `INK_STRONG`.
+    pane = pane.children(drop_target.then(crate::prompt_drop::sheet));
+    pane = pane.children(l1_composer(&mut cx));
+    pane_frame(pane, key)
 }
 
 // ---------------------------------------------------------- render_pane slots
@@ -894,17 +873,16 @@ fn l1_dock(cx: &mut PaneCtx) -> Vec<AnyElement> {
     cx.activity_decisions.take().into_iter().collect()
 }
 
-/// WP-D · the L1 Composer: Main's alone. A subagent takes no prompts, so
+/// WP-D · the Composer: Main's alone. A subagent takes no prompts, so
 /// its transcript runs to the Pane's foot.
 fn l1_composer(cx: &mut PaneCtx) -> Option<AnyElement> {
     if !cx.view.is_main() {
         return None;
     }
-    let transcript = cx.transcript?;
     Some(
         composer_region(
             cx.view,
-            Some(transcript),
+            Some(cx.transcript),
             ComposerStack {
                 decision: cx.decision,
                 queued: cx.queued,
@@ -1638,33 +1616,6 @@ pub fn tool_has_details(tool: &ToolBlock) -> bool {
         || tool.structured_preview.is_some()
         || !tool.summary.is_empty()
         || !tool.diffs.is_empty()
-}
-
-/// A parked Thread's Pane: `parked`, its facts, and how to wake it.
-fn parked_body(parked_line: Option<SharedString>) -> Div {
-    div()
-        .flex()
-        .flex_col()
-        .flex_1()
-        .min_h_0()
-        .min_w_0()
-        .overflow_hidden()
-        .py(px(theme::HALF_ROW))
-        .px(px(2.0 * theme::CH))
-        .font_family(theme::FONT_UI)
-        .text_size(px(theme::FS_UI))
-        .line_height(px(theme::LH_UI))
-        .text_color(rgb(INK_SUBTLE))
-        .child(
-            div()
-                .font_weight(theme::W_LABEL)
-                .child(theme::words::PARKED),
-        )
-        .child(div().flex_shrink_0().h(px(theme::HALF_ROW)))
-        .child(div().truncate().child(
-            parked_line.unwrap_or_else(|| SharedString::from(theme::words::PARKED)),
-        ))
-        .child(div().truncate().child("\u{23ce} reopens it"))
 }
 
 /// The text of an approval's command well: a command's source, else the
