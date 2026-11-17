@@ -376,6 +376,13 @@ browser does, so the same CSS geometry lands on the same device pixels:
   which upstream exposes only through `VisualTestContext`: the live
   reference capture drives a headless window that is no test context's and
   clicks what it finds there.
+- **A spring reads the executor's clock** (`elements/animation.rs`). A
+  spring element stepped by `Instant::now()`, so its tests' fake clock did
+  not move it: it moved by the real time between two frames, and under
+  about 25 microseconds `f32` rounds that step to nothing, which failed
+  `test_spring_animation_preserves_velocity_when_retargeted` in CI. It
+  reads `BackgroundExecutor::now`, as a synced animation does. The app's
+  executor reads the same real clock, so nothing changes there.
 
 Cargo applies both through the root `[patch.crates-io]`. Remove a patch when
 an upstream release offers equivalent behaviour.
