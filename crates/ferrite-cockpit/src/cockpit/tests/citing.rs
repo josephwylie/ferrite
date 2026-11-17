@@ -611,7 +611,7 @@ fn a_source_that_arrives_later_is_no_longer_unavailable(cx: &mut TestAppContext)
 }
 
 /// A prompt, then an answer of `lines` paragraphs, the last one cited and
-/// the tray's chip opened: the pinned band covers the top of the view.
+/// saved. The pinned band covers the top of the view.
 fn cited_answer<'a>(
     name: &str,
     lines: usize,
@@ -646,6 +646,12 @@ fn cited_answer<'a>(
         .expect("Cite draws");
     cx.simulate_click(cite.center(), gpui::Modifiers::none());
     tick(cx);
+    cx.simulate_keystrokes("enter");
+    tick(cx);
+    assert!(
+        cx.debug_bounds("cite-panel").is_none(),
+        "save the citation before navigating"
+    );
     let block = replies(&view, cx)[0].source.expect("cited").block;
     let transcript = view.read_with(cx, |view, _| view.panes[0].transcript().unwrap());
     (transcript, block, cx)
@@ -724,8 +730,6 @@ fn go_to_source_leaves_a_visible_passage_where_it_is(cx: &mut TestAppContext) {
         top < floor,
         "the answer's top is under the band; the passage is in view"
     );
-    cx.simulate_keystrokes("enter");
-    tick(cx);
     let before = transcript.read_with(cx, |transcript, _| transcript.scroll().offset());
     click(cx, "cite-chip-0-source");
     for _ in 0..4 {
