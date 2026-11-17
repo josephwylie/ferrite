@@ -1,11 +1,8 @@
 #![cfg(unix)]
-#[allow(dead_code)]
-#[path = "support/provider_contract.rs"]
-mod support;
 use ferrite_core::activity::ActivityEvent;
 use ferrite_core::{ControlKind, SessionControl, SessionEvent};
 use serde_json::json;
-use support::*;
+use crate::support::*;
 
 #[test]
 fn context_refresh_uses_native_summary_control_and_updates_shared_usage() {

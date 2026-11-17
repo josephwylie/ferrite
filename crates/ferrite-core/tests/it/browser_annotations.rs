@@ -7,7 +7,7 @@ use ferrite_core::browser_annotations::{self, Capture, Selection, Viewport};
 fn captured_feedback_survives_prompt_roundtrip_without_a_live_page() {
     let root = std::env::temp_dir().join(format!("ferrite-annotation-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&root);
-    let png = include_bytes!("fixtures/browser-original.png");
+    let png = include_bytes!("../fixtures/browser-original.png");
     let capture = Capture {
         document: Document {
             tab: TabId(7),
@@ -77,7 +77,7 @@ fn sent_annotation_reopens_through_the_thread_store() {
             height: 1.0,
         },
     };
-    let png = include_bytes!("fixtures/browser-original.png");
+    let png = include_bytes!("../fixtures/browser-original.png");
     let annotation = browser_annotations::retain(
         store.dir(),
         capture,
@@ -194,7 +194,7 @@ fn live_screenshot_uses_crop_dimensions_and_rejects_missing_image_bytes() {
             height: 1.,
         },
     });
-    let png = include_bytes!("fixtures/browser-original.png");
+    let png = include_bytes!("../fixtures/browser-original.png");
     let annotation = browser_annotations::retain_optional(
         &root,
         capture.clone(),
@@ -249,7 +249,7 @@ fn legacy_receipt_image_fields_still_deserialize() {
     let annotation = browser_annotations::retain(
         &root,
         capture,
-        include_bytes!("fixtures/browser-original.png"),
+        include_bytes!("../fixtures/browser-original.png"),
         "Legacy".into(),
         vec![],
     )

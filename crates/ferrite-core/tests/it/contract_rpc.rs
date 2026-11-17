@@ -1,9 +1,6 @@
 #![cfg(unix)]
-#[allow(dead_code)]
-#[path = "support/provider_contract.rs"]
-mod support;
 use ferrite_core::{SessionEvent, TurnOutcome};
-use support::*;
+use crate::support::*;
 
 #[test]
 fn rejected_codex_start_settles_the_optimistic_turn_with_native_error() {

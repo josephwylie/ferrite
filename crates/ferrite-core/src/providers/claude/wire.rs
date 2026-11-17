@@ -1918,7 +1918,7 @@ mod tests {
     fn variant(event: &SessionEvent) -> Option<&'static str> {
         Some(match event {
             // Shared progress is proved through the public Session replay in
-            // tests/provider_progress.rs, including captured native messages.
+            // tests/it/provider_progress.rs, including captured native messages.
             SessionEvent::ReasoningSummaryPart { .. }
             | SessionEvent::Progress { .. }
             | SessionEvent::ToolOutputDelta { .. }
@@ -1937,7 +1937,7 @@ mod tests {
             SessionEvent::DecisionRequested { .. } => "DecisionRequested",
             SessionEvent::TurnEnded { .. } => "TurnEnded",
             // No committed capture has one yet; proved through the public
-            // Session replay in tests/provider_progress.rs.
+            // Session replay in tests/it/provider_progress.rs.
             SessionEvent::ToolSummary { .. } => return None,
             // Proved by `a_mode_denial_is_a_refusal_not_a_failure`, on a capture.
             SessionEvent::ToolDenied { .. } => return None,
@@ -1976,10 +1976,10 @@ mod tests {
             // Read from `init` by the Activity decoder; proved on a capture there.
             SessionEvent::Handshake { .. } => return None,
             SessionEvent::HookRan { .. } => "HookRan",
-            // Answered by the control reader, proved in tests/contract_native_controls.rs.
+            // Answered by the control reader, proved in tests/it/contract_native_controls.rs.
             SessionEvent::ControlRefused { .. } => return None,
             // A stateful stream read by the activity decoder (`drafts`),
-            // proved by the show-visual capture in tests/claude_session.rs.
+            // proved by the show-visual capture in tests/it/claude_session.rs.
             SessionEvent::ToolDraft { .. } => return None,
         })
     }

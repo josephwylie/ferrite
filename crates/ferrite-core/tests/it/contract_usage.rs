@@ -1,11 +1,8 @@
 #![cfg(unix)]
-#[allow(dead_code)]
-#[path = "support/provider_contract.rs"]
-mod support;
 use ferrite_core::transcript::{Input, Transcript};
 use ferrite_core::{SessionEvent, UsageScope};
 use serde_json::json;
-use support::*;
+use crate::support::*;
 
 #[test]
 fn context_only_refresh_cannot_reset_output_accounting() {

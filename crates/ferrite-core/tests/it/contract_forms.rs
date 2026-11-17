@@ -1,10 +1,7 @@
 #![cfg(unix)]
-#[allow(dead_code)]
-#[path = "support/provider_contract.rs"]
-mod support;
 use ferrite_core::{DecisionAnswer, DecisionKind};
 use serde_json::json;
-use support::*;
+use crate::support::*;
 
 #[test]
 fn question_presentation_and_answers_are_provider_neutral() {

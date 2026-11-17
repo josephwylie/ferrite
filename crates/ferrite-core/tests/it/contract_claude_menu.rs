@@ -1,11 +1,8 @@
 //! The Claude `/` menu after the handshake: MCP prompts join once their
 //! servers have settled, named the way they are typed.
 #![cfg(unix)]
-#[allow(dead_code)]
-#[path = "support/provider_contract.rs"]
-mod support;
 use ferrite_core::SessionEvent;
-use support::*;
+use crate::support::*;
 
 #[test]
 fn claude_mcp_prompts_join_the_menu_once_the_servers_settle() {

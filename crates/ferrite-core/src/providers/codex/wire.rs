@@ -1520,7 +1520,7 @@ mod tests {
     fn variant(event: &SessionEvent) -> Option<&'static str> {
         Some(match event {
             // Shared progress is proved through the public Session replay in
-            // tests/provider_progress.rs, including captured native messages.
+            // tests/it/provider_progress.rs, including captured native messages.
             SessionEvent::ReasoningSummaryPart { .. }
             | SessionEvent::Progress { .. }
             | SessionEvent::ToolOutputDelta { .. }

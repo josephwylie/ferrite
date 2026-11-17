@@ -1689,7 +1689,7 @@ fn refused_skill_discovery_fails_startup_instead_of_sending_plain_text() {
 fn native_queue_admission_and_cancellation_use_the_existing_session_pipe() {
     use ferrite_core::QueueEvent;
     let capture: Value = serde_json::from_str(include_str!(
-        "fixtures/codex-native-queue-0.153.4.json"
+        "../fixtures/codex-native-queue-0.153.4.json"
     ))
     .unwrap();
     let item = &capture["after_process_restart"][0];

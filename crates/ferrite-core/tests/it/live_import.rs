@@ -3,7 +3,7 @@
 //! talk to vendor services.
 //!
 //! Run deliberately, after changing anything about the import parsers:
-//! `cargo test -p ferrite-core --test live_import -- --ignored --nocapture`
+//! `cargo test -p ferrite-core --test it live_import:: -- --ignored --nocapture`
 //!
 //! Each probe is the whole acceptance path: make a throwaway session with
 //! the real CLI, find the session file the vendor wrote for it, import that

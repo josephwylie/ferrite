@@ -1,9 +1,6 @@
 #![cfg(unix)]
-#[allow(dead_code)]
-#[path = "support/provider_contract.rs"]
-mod support;
 use std::time::Duration;
-use support::*;
+use crate::support::*;
 
 #[test]
 fn native_file_search_preserves_ranking_paths_and_directory_identity() {

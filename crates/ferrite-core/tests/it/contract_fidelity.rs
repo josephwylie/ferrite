@@ -1,9 +1,6 @@
 #![cfg(unix)]
-#[allow(dead_code)]
-#[path = "support/provider_contract.rs"]
-mod support;
 use serde_json::json;
-use support::*;
+use crate::support::*;
 
 #[test]
 fn conversation_reset_never_reuses_a_live_decision_handle() {
@@ -226,7 +223,7 @@ fn codex_raw_reasoning_and_summary_do_not_share_a_part_identity() {
 
 #[test]
 fn captured_claude_thinking_then_text_have_distinct_stream_block_identities() {
-    let frames = include_str!("fixtures/claude-hello-2.1.243.jsonl")
+    let frames = include_str!("../fixtures/claude-hello-2.1.243.jsonl")
         .lines()
         .map(|l| serde_json::from_str(l).unwrap())
         .collect();

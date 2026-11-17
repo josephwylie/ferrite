@@ -245,7 +245,7 @@ mod tests {
 
     #[test]
     fn captured_claude_task_progress_is_visible() {
-        let raw = include_str!("fixtures/subagents/claude-overlap-2.1.261.jsonl");
+        let raw = include_str!("../fixtures/subagents/claude-overlap-2.1.261.jsonl");
         let frame = raw
             .lines()
             .filter_map(|l| serde_json::from_str::<Value>(l).ok())
@@ -259,7 +259,7 @@ mod tests {
     }
     #[test]
     fn captured_claude_api_retry_is_visible() {
-        let raw = include_str!("fixtures/claude-todo-2.1.243.jsonl");
+        let raw = include_str!("../fixtures/claude-todo-2.1.243.jsonl");
         let frame = raw
             .lines()
             .filter_map(|l| serde_json::from_str::<Value>(l).ok())
@@ -585,7 +585,7 @@ mod tests {
 
     #[test]
     fn captured_current_codex_heading_is_visible_once_even_if_completion_repeats() {
-        let mut frames: Vec<Value> = include_str!("fixtures/codex-progress-summary-0.153.4.jsonl")
+        let mut frames: Vec<Value> = include_str!("../fixtures/codex-progress-summary-0.153.4.jsonl")
             .lines()
             .map(|line| {
                 let mut frame: Value = serde_json::from_str(line).unwrap();

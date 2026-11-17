@@ -1,9 +1,6 @@
 #![cfg(unix)]
-#[allow(dead_code)]
-#[path = "support/provider_contract.rs"]
-mod support;
 use ferrite_core::{ControlKind, McpStatus, QueueEvent, SessionControl, SessionEvent};
-use support::*;
+use crate::support::*;
 
 #[test]
 fn codex_mcp_status_refresh_uses_native_thread_scope() {

@@ -3,7 +3,7 @@
 //! the plan each time it moves. Ignored by default: they cost money, need
 //! auth and talk to a vendor service.
 //!
-//! `cargo test -p ferrite-core --test live_plans -- --ignored --nocapture`
+//! `cargo test -p ferrite-core --test it live_plans:: -- --ignored --nocapture`
 //! With `FERRITE_PLAN_CAPTURE=<dir>` the provider's stdout is also kept
 //! there (`claude.jsonl`, `codex.jsonl`), which is how the committed
 //! `*-update-plan-*` fixtures were captured.

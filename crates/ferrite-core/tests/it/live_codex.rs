@@ -2,7 +2,7 @@
 //! money, need auth, and talk to a vendor service.
 //!
 //! Run deliberately, after changing anything about the wire:
-//! `cargo test -p ferrite-core --test live_codex -- --ignored --nocapture`
+//! `cargo test -p ferrite-core --test it live_codex:: -- --ignored --nocapture`
 //! Set FERRITE_CODEX_BIN to point at a specific install.
 
 use std::sync::mpsc::Receiver;

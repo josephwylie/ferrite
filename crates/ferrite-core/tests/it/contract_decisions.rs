@@ -1,10 +1,7 @@
 #![cfg(unix)]
-#[allow(dead_code)]
-#[path = "support/provider_contract.rs"]
-mod support;
 use ferrite_core::DecisionAnswer;
 use serde_json::json;
-use support::*;
+use crate::support::*;
 
 #[test]
 fn codex_computer_use_approval_exposes_session_persistence_and_returns_native_meta() {

@@ -1,9 +1,6 @@
 #![cfg(unix)]
-#[allow(dead_code)]
-#[path = "support/provider_contract.rs"]
-mod support;
 use serde_json::json;
-use support::*;
+use crate::support::*;
 
 #[test]
 fn native_patch_update_replaces_hunks_without_finishing_the_tool() {
