@@ -650,14 +650,17 @@ fn subagents(fake: &Fake, stream: usize, count: usize) {
 }
 
 /// A card's title takes its whole line. At the nav's own width, a Thread
-/// of the shown Group on a long worktree branch that runs five subagents
+/// on a long worktree branch that runs five subagents
 /// is a 78px card: its title pinned to the card's text width, its branch
 /// cut in its middle on line 3 inside the card, so a long branch can
 /// never squeeze the title. The subagent count is never on the card.
 #[gpui::test]
 fn a_card_title_takes_its_line_and_the_branch_its_own(cx: &mut TestAppContext) {
     use ferrite_ui::theme::{NAV_CARD_H, NAV_ROW_PAD_X};
-    let (view, fake, cx, _group) = board("nav-title-first", 2, cx);
+    let (core, fake) = cockpit("nav-title-first", 2);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(1440.), px(900.)));
+    tick(cx);
     subagents(&fake, 0, 5);
     subagents(&fake, 1, 5);
     tick(cx);

@@ -270,10 +270,8 @@ fn a_finish_on_the_focused_pane_is_read_at_once_and_never_toasts(cx: &mut TestAp
 /// operator on its Pane and preserves Inbox mode.
 #[gpui::test]
 fn opening_a_notice_lands_on_its_pane_and_reads_it(cx: &mut TestAppContext) {
-    let (mut core, fake) = cockpit("open-notice", 4);
-    let group = group_all(&mut core);
+    let (core, fake) = cockpit("open-notice", 4);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
-    view.update(cx, |view, cx| view.enter_group(group, cx));
     fake.streams.borrow()[2]
         .send(SessionEvent::TurnEnded {
             outcome: ferrite_core::TurnOutcome::Error("rate limited".into()),
@@ -503,11 +501,9 @@ fn away_from_the_window_a_finish_posts_a_system_notification(cx: &mut TestAppCon
 /// it leaves the notification centre.
 #[gpui::test]
 fn clicking_a_request_s_system_notification_opens_it(cx: &mut TestAppContext) {
-    let (mut core, fake) = cockpit("system-notification-request", 2);
-    let group = group_all(&mut core);
+    let (core, fake) = cockpit("system-notification-request", 2);
     cx.update(|cx| cx.set_app_identity("com.github.josephwylie.ferrite", "Ferrite"));
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
-    view.update(cx, |view, cx| view.enter_group(group, cx));
     let threads = view.read_with(cx, |view, _| view.cockpit.threads());
     let home = crate::machines::MachineKey(None);
     cx.deactivate_window();
@@ -680,10 +676,8 @@ fn settings_silence_sounds_and_system_notifications(cx: &mut TestAppContext) {
 #[gpui::test]
 fn contract_request_notice_opens_its_owning_child(cx: &mut TestAppContext) {
     use ferrite_core::activity::{ActivityEvent, AgentInfo, AgentKey, Subject};
-    let (mut core, fake) = cockpit("request-child-contract", 2);
-    let group = group_all(&mut core);
+    let (core, fake) = cockpit("request-child-contract", 2);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
-    view.update(cx, |view, cx| view.enter_group(group, cx));
     let key = AgentKey::new(Provider::Claude, "native", "child");
     let mut info = AgentInfo::new(key.clone());
     info.parent = Some(Subject::Main);

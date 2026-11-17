@@ -341,18 +341,9 @@ fn a_menu_from_a_button_stays_in_the_window(cx: &mut TestAppContext) {
 /// newest Notice needs the operator again, until it is next seen.
 #[gpui::test]
 fn mark_as_unread_brings_back_a_read_threads_notice(cx: &mut TestAppContext) {
-    let (mut core, fake) = cockpit("row-menu-unread", 3);
+    let (core, fake) = cockpit("row-menu-unread", 3);
     let threads = core.threads();
-    let group = core
-        .apply_group(GroupChange::Create {
-            first: threads[0],
-            second: threads[1],
-        })
-        .unwrap()
-        .group
-        .unwrap();
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
-    view.update(cx, |view, cx| view.enter_group(group, cx));
     fake.streams.borrow()[2]
         .send(SessionEvent::TurnEnded {
             outcome: ferrite_core::TurnOutcome::Completed,

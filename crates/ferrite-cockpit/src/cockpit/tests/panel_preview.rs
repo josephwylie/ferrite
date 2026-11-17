@@ -48,6 +48,15 @@ fn window<'a>(
         let group = group_all(&mut core);
         core.enter_group(group).unwrap();
     }
+    open(core, fake, cx)
+}
+
+/// A window on `core`'s Threads at 1600, the first one focused.
+fn open(
+    core: Cockpit,
+    fake: Fake,
+    cx: &mut TestAppContext,
+) -> (Entity<CockpitView>, Fake, &mut gpui::VisualTestContext) {
     bind_production_keys(cx);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     hold_nav_open(&view, cx);
@@ -205,7 +214,8 @@ fn escape_and_cmd_w_in_the_preview_close_it_not_the_turn_or_the_pane(cx: &mut Te
 /// coming back finds it, wide.
 #[gpui::test]
 fn each_thread_keeps_its_own_preview(cx: &mut TestAppContext) {
-    let (view, _fake, cx) = window("preview-threads", 2, cx);
+    let (core, fake) = cockpit("preview-threads", 2);
+    let (view, _fake, cx) = open(core, fake, cx);
     let file = source("preview-threads-file", 20);
     preview(&view, &file, Some(3), cx);
     let wide = panel_w(cx).unwrap();
