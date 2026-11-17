@@ -4752,19 +4752,6 @@ fn open_threads_are_the_roster_and_solo_shows_the_focused_one() {
     assert_eq!(cockpit.visible(), [PaneIdentity::Thread(threads[0])]);
     assert!(cockpit.focus(PaneIdentity::Thread(threads[2])));
     assert_eq!(cockpit.visible(), [PaneIdentity::Thread(threads[2])]);
-    assert_eq!(
-        crate::layout::grid_shape(
-            cockpit.visible().len(),
-            crate::layout::Rect {
-                x: 0.0,
-                y: 0.0,
-                w: 1134.0,
-                h: 838.0
-            }
-        )
-        .0,
-        1
-    );
     cockpit.park(threads[2]).unwrap();
     assert_eq!(
         cockpit.roster().panes().len(),

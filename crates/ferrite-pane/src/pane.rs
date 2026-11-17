@@ -706,16 +706,16 @@ pub(crate) struct PaneCtx<'a> {
     #[allow(dead_code)]
     pub unread: bool,
     // ---- owned wiring
-    /// `l1_composer`.
+    /// `composer_slot`.
     pub attachments: Option<AnyElement>,
     pub menu: Option<AnyElement>,
-    /// `l1_dock`: activity requests that were not docked in the body.
+    /// `dock_slot`: activity requests that were not docked in the body.
     pub activity_decisions: Option<AnyElement>,
     /// The docked Decision merges into this Pane's Composer (one block).
     pub decision_joined: bool,
-    /// `l1_composer`: the Solo box's controls.
+    /// `composer_slot`: the Solo box's controls.
     pub toolbar: Option<ComposerControls>,
-    /// `PaneWiring::resume_offer`, for `l1_composer`.
+    /// `PaneWiring::resume_offer`, for `composer_slot`.
     pub resume_offer: Option<AnyElement>,
 }
 
@@ -824,7 +824,7 @@ pub fn render_pane(
             .child(
                 div().flex().flex_col().flex_1().min_h_0().min_w_0()
                     .pr(px(details_lane_width))
-                    .child(retained_transcript.expect("L1 transcript entity is wired by CockpitView")),
+                    .child(retained_transcript.expect("the transcript entity is wired by CockpitView")),
             )
             .children(start.map(|project| {
                 // An empty Thread, as a draft: the hero at the
@@ -849,11 +849,11 @@ pub fn render_pane(
         },
     ));
     // The order is head · body · progress · dock · composer.
-    pane = pane.children(l1_dock(&mut cx));
+    pane = pane.children(dock_slot(&mut cx));
     // The drop sheet covers the Pane beneath the Composer, which
     // paints after it and so stays in view, edged in `INK_STRONG`.
     pane = pane.children(drop_target.then(crate::prompt_drop::sheet));
-    pane = pane.children(l1_composer(&mut cx));
+    pane = pane.children(composer_slot(&mut cx));
     pane_frame(pane, key)
 }
 
@@ -861,12 +861,12 @@ pub fn render_pane(
 // Each slot's body belongs to one package; its signature and `PaneCtx` are
 // the integrator's.
 
-/// WP-F · between the body and the Composer. Every L1 request — Main's
+/// WP-F · between the body and the Composer. Every request — Main's
 /// plain approval included — is the one Decision card in the body's
 /// requests overlay (`activity_decisions`), and a failed send is that
-/// card's own error line, so nothing docks here at L1; the slot keeps any
-/// activity requests a level hands it undocked.
-fn l1_dock(cx: &mut PaneCtx) -> Vec<AnyElement> {
+/// card's own error line, so nothing docks here; the slot keeps any
+/// activity requests it is handed undocked.
+fn dock_slot(cx: &mut PaneCtx) -> Vec<AnyElement> {
     if !cx.has_activity_decisions {
         return Vec::new();
     }
@@ -875,7 +875,7 @@ fn l1_dock(cx: &mut PaneCtx) -> Vec<AnyElement> {
 
 /// WP-D · the Composer: Main's alone. A subagent takes no prompts, so
 /// its transcript runs to the Pane's foot.
-fn l1_composer(cx: &mut PaneCtx) -> Option<AnyElement> {
+fn composer_slot(cx: &mut PaneCtx) -> Option<AnyElement> {
     if !cx.view.is_main() {
         return None;
     }
@@ -1608,7 +1608,7 @@ pub fn rendered_window(blocks: &[Block]) -> &[Block] {
 }
 
 /// Tool rows with something to disclose — output, a structured result, an
-/// input, or a diff — in exactly the window L1 draws. Disclosure cycling,
+/// input, or a diff — in exactly the window the Pane draws. Disclosure cycling,
 /// focus validation, and controls all consume this one eligibility rule so
 /// an invisible row can never remain keyboard-addressable.
 pub fn tool_has_details(tool: &ToolBlock) -> bool {

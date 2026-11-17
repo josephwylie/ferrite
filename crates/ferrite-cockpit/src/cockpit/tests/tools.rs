@@ -108,7 +108,6 @@ fn a_tab_dragged_past_six_pixels_moves_and_five_is_a_click(cx: &mut TestAppConte
     upsert(&view, thread, SurfaceId::Changes, cx);
     upsert(&view, thread, SurfaceId::Background, cx);
     let changes = cx.debug_bounds("panel-tab-Changes").unwrap().center();
-    let overview = cx.debug_bounds("panel-tab-Overview").unwrap().center();
     // 5px and back onto itself: a click, which shows it.
     cx.simulate_mouse_down(changes, gpui::MouseButton::Left, gpui::Modifiers::none());
     let near = gpui::point(changes.x + px(5.), changes.y);

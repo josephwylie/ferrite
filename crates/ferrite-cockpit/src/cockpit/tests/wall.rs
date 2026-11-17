@@ -22,8 +22,8 @@ fn the_smallest_window_still_draws_the_transcript_and_composer(cx: &mut TestAppC
     tick(cx);
     let rect = cx.update(|window, cx| view.read(cx).pane_rects(window)[0].1);
     assert!(
-        !ferrite_core::docview::Cell::new(rect.w, rect.h).holds_transcript(),
-        "the premise: the cell is under the old transcript floor: {rect:?}"
+        rect.w < 300.0 || rect.h < 360.0,
+        "the premise: the cell is under the old 300 by 360 transcript floor: {rect:?}"
     );
     assert!(cx.debug_bounds("composer-block").is_some(), "the Composer");
     assert!(cx.debug_bounds("transcript-answer").is_some(), "the transcript");

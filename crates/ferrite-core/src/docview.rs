@@ -195,32 +195,6 @@ pub fn is_test_run(tool: &ToolBlock) -> bool {
         })
 }
 
-/// A Pane's cell, in logical pixels. The renderer measures it; nothing here
-/// knows what a pixel looks like.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct Cell {
-    pub width: f32,
-    pub height: f32,
-}
-
-impl Cell {
-    pub fn new(width: f32, height: f32) -> Self {
-        Self { width, height }
-    }
-
-    /// Whether a transcript and its Composer read in this cell: from
-    /// `TRANSCRIPT_WIDTH` wide and `TRANSCRIPT_HEIGHT` tall.
-    pub fn holds_transcript(self) -> bool {
-        self.width >= TRANSCRIPT_WIDTH && self.height >= TRANSCRIPT_HEIGHT
-    }
-}
-
-pub const TRANSCRIPT_WIDTH: f32 = 300.0;
-const TRANSCRIPT_HEIGHT: f32 = 360.0;
-/// The narrowest a Pane is let fall to: the UI folds the nav to its rail
-/// rather than let the board's cell drop under it.
-pub const TILE_FLOOR_WIDTH: f32 = 200.0;
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -426,15 +400,6 @@ mod tests {
         assert_eq!(passed_count("all passed"), None);
         assert_eq!(test_count("2 FAILING checks", &["failing"]), Some(2));
         assert_eq!(test_count("it failed", &["failed", "failing"]), None);
-    }
-
-    /// From 300 wide and 360 tall, a hair under on either axis does not.
-    #[test]
-    fn a_cell_holds_a_transcript_from_300_by_360() {
-        assert!(Cell::new(300.0, 360.0).holds_transcript());
-        assert!(Cell::new(372.0, 880.0).holds_transcript());
-        assert!(!Cell::new(299.9, 900.0).holds_transcript());
-        assert!(!Cell::new(1200.0, 359.9).holds_transcript());
     }
 
     /// The comps' running cells name the tool in flight; the activity line

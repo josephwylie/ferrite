@@ -2221,8 +2221,8 @@ pub const WINDOW_MIN_W: f32 = 640.0;
 pub const WINDOW_MIN_H: f32 = 420.0;
 
 /// 8px — the gutter between two cards on a board, the tree's gap
-/// (`layout::Tree::rects`): the core's `GRID_GAP`, so the default grid's
-/// equal cells stay equal. Its centre line is the seam.
+/// (`layout::Tree::rects`): the core's `GRID_GAP`. Its centre line is the
+/// seam.
 pub const BOARD_SEAM: f32 = GRID_GAP;
 /// 2px — the line a seam draws in its gutter under the pointer and while
 /// held (`SEAM_HOVER`); at rest the gutter alone separates the cards.
@@ -3245,6 +3245,9 @@ pub const NAV_SCROLLBAR_GUTTER: f32 = NAV_COL_PAD;
 pub const NAV_SCROLLBAR_INSET: f32 = 1.0;
 const _: () = assert!(NAV_SCROLLBAR_GUTTER == 2. * NAV_SCROLLBAR_INSET + SCROLLBAR_THUMB_W_HOVER);
 pub const NAV_AUTO_FOLD_BOARD_W: f32 = 560.0;
+/// The narrowest the Pane is let fall to: the nav folds to its rail
+/// rather than let the Pane drop under it.
+pub const NAV_AUTO_FOLD_PANE_W: f32 = 200.0;
 pub const NAV_AUTO_FOLD_HYSTERESIS: f32 = 24.0;
 
 // **The Thread card** (`nav::card`, T3 Code's `SidebarThreadRow`,

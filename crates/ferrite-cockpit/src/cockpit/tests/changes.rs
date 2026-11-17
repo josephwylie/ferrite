@@ -317,7 +317,7 @@ fn a_reviewed_file_changed_afterwards_is_unreviewed_and_open_again(cx: &mut Test
     cx.simulate_click(mark.center(), gpui::Modifiers::none());
     tick(cx);
     assert!(cx.debug_bounds("panel-hunks-0").is_none(), "reviewed folds it");
-    let mut again = |text: &str, cx: &mut gpui::VisualTestContext| {
+    let again = |text: &str, cx: &mut gpui::VisualTestContext| {
         std::fs::write(repo_of("changes-stale").join("a.rs"), text).unwrap();
         let refresh = cx.debug_bounds("changes-refresh").unwrap();
         cx.simulate_click(refresh.center(), gpui::Modifiers::none());
