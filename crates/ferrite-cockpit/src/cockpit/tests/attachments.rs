@@ -360,7 +360,7 @@ fn upload_admission(name: &str, fresh: bool, cx: &mut TestAppContext) {
     let (view, fake, dir, cx) = window_on(name, cx);
     if fresh {
         view.update(cx, |view, cx| {
-            view.open_draft_with_placement(DraftTarget::Main, DraftPlacement::Loose, cx);
+            view.open_draft(DraftTarget::Main, cx);
         });
         tick(cx);
     }

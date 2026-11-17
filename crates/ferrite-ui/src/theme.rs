@@ -846,10 +846,6 @@ pub const GLYPH_GUTTER: f32 = 2.0 * CH;
 /// 108 cells — the prose measure: the most a paragraph, a code block or a
 /// table runs before it wraps, at any reading size.
 pub const MEASURE_CH: f32 = 108.0;
-/// A floor under the face's advance for laying out against text width
-/// estimates (a title's floor). With one monospace face every advance is
-/// `CODE_ADVANCE`; this stays a floor so a short label is never padded.
-pub const UI_ADVANCE_FLOOR: f32 = 0.5;
 
 /// The non-ASCII glyphs Geist Mono sets: every one is in its cmap (asserted
 /// by `theme::tests`). A rule the tests enforce, so it compiles only with
@@ -2261,26 +2257,6 @@ pub const HEAD_PAD_X: f32 = CH;
 pub const PANE_HEAD_PAD_L: f32 = 14.0;
 pub const PANE_HEAD_PAD_R: f32 = SPACE_1_5;
 pub const PANE_HEAD_GAP: f32 = SPACE_2;
-/// 14px — the provider's logo and a mark's icon in the Group head.
-pub const PANE_HEAD_ICON: f32 = 14.0;
-/// The width a dot mark lays out at in the Group head: the dot and a pixel
-/// each side, as the mockup's box.
-pub const PANE_HEAD_DOT_W: f32 = NAV_DOT + 2.0;
-/// 14px — the fill button's `maximize` glyph.
-pub const PANE_HEAD_FILL_GLYPH: f32 = 14.0;
-
-/// The compact Composer (SPEC §5.9 item 5, `pane::compact_composer`): a
-/// 38px box `COMPACT_COMPOSER_INSET` in from the card's sides and foot,
-/// padded 12 before the input and 7 after the send circle (24, its
-/// `arrow-up` 12).
-pub const COMPACT_COMPOSER_H: f32 = 38.0;
-pub const COMPACT_COMPOSER_INSET: f32 = 10.0;
-pub const COMPACT_COMPOSER_PAD_L: f32 = SPACE_3;
-/// Off the space scale: centres the 24px circle 7px from the box's edge,
-/// as the mockup draws it.
-pub const COMPACT_COMPOSER_PAD_R: f32 = 7.0;
-pub const SEND_CIRCLE_SM: f32 = SPACE_6;
-pub const SEND_GLYPH_SM: f32 = SPACE_3;
 
 /// The failure strip (SPEC §5.9 item 4): 36 high at `R_CARD` on
 /// `FAILURE_WASH`, padded 12 / 6, its `x-circle` 14, its `Retry` 26 high
@@ -2308,13 +2284,6 @@ pub const BACKGROUND_DIALOG_SECTION_GAP: f32 = 20.0;
 /// What follows the title (`label: activity`) reads at 60% of the muted ink.
 pub const BACKGROUND_LINE_DETAIL_OPACITY: f32 = 0.6;
 pub const BACKGROUND_LINE_ACTIONS_GAP: f32 = 10.0;
-/// The floor a head title keeps however narrow the head (a shorter title
-/// keeps its whole text). There is no cap — a long title takes the width
-/// the head has.
-pub const HEAD_TITLE_MIN_W: f32 = 96.0;
-/// How much readier a Group head's title is to shrink than its state word
-/// (flex shrink factors): the title ellipsizes to its floor first.
-pub const HEAD_TITLE_SHRINK: f32 = 64.0;
 /// The checks card (`open_checks`, a palette command): wide enough for a
 /// matrix job's own name — `test (windows-latest, stable)` — beside its
 /// state word, which is the whole reason the card exists.

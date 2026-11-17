@@ -436,28 +436,25 @@ fn a_request_off_the_board_posts_while_the_window_is_frontmost(cx: &mut TestAppC
     );
 }
 
-/// ADR 0017: with the window in the background, a finish on a Pane
-/// left on screen is news. It chimes, toasts and posts a system
-/// notification; clicking that brings the window forward and lands on
-/// the Thread, and everything on screen is read.
+/// ADR 0017: the Thread on screen finishing while the window is away posts
+/// a system notification, since nobody is looking at it; clicking it reads
+/// it, and read, it leaves the notification centre.
 #[gpui::test]
-fn away_from_the_window_a_finish_posts_a_system_notification(cx: &mut TestAppContext) {
-    let (mut core, fake) = cockpit("system-notification", 2);
-    let group = group_all(&mut core);
+fn away_from_the_window_the_shown_thread_s_finish_posts_a_notification(
+    cx: &mut TestAppContext,
+) {
+    let (core, fake) = cockpit("system-notification-shown", 1);
     cx.update(|cx| cx.set_app_identity("com.github.josephwylie.ferrite", "Ferrite"));
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
-    view.update(cx, |view, cx| view.enter_group(group, cx));
-    let threads = view.read_with(cx, |view, _| view.cockpit.threads());
+    let thread = view.read_with(cx, |view, _| view.cockpit.threads()[0]);
     let home = crate::machines::MachineKey(None);
     cx.deactivate_window();
-    for at in [0, 1] {
-        fake.streams.borrow()[at]
-            .send(SessionEvent::TurnEnded {
-                outcome: ferrite_core::TurnOutcome::Completed,
-                cost_usd: None,
-            })
-            .unwrap();
-    }
+    fake.streams.borrow()[0]
+        .send(SessionEvent::TurnEnded {
+            outcome: ferrite_core::TurnOutcome::Completed,
+            cost_usd: None,
+        })
+        .unwrap();
     tick(cx);
     ring(cx);
     let tags = |cx: &mut gpui::VisualTestContext| {
@@ -468,31 +465,22 @@ fn away_from_the_window_a_finish_posts_a_system_notification(cx: &mut TestAppCon
     };
     assert_eq!(
         tags(cx),
-        [system_tag(&home, threads[0]), system_tag(&home, threads[1])],
-        "both Panes are on the board, but nobody is looking"
+        [system_tag(&home, thread)],
+        "the Thread is on screen, but nobody is looking"
     );
-    view.read_with(cx, |view, _| {
-        assert_eq!(
-            view.chimed,
-            [Sound::Done],
-            "ringing together, they chime once"
-        );
-        assert_eq!(view.needs_you.toasts().len(), 2);
-    });
+    view.read_with(cx, |view, _| assert_eq!(view.chimed, [Sound::Done]));
 
     cx.simulate_system_notification_response(gpui::SystemNotificationResponse {
-        tag: system_tag(&home, threads[1]).into(),
+        tag: system_tag(&home, thread).into(),
         action_id: None,
     });
     tick(cx);
     view.read_with(cx, |view, _| {
-        assert_eq!(view.focused(), 1, "the click landed on its Thread");
-        assert!(!view.cockpit.notifications().attention(threads[1]));
-        assert!(view.needs_you.toasts().is_empty(), "both are in view now");
+        assert!(!view.cockpit.notifications().attention(thread));
     });
     assert!(
         tags(cx).is_empty(),
-        "read, they leave the notification centre"
+        "read, it leaves the notification centre"
     );
 }
 
@@ -534,52 +522,6 @@ fn clicking_a_request_s_system_notification_opens_it(cx: &mut TestAppContext) {
         tags(cx).is_empty(),
         "read, it leaves the notification centre"
     );
-}
-
-/// ADR 0017: alerts ringing together chime once, needs-you over done;
-/// and with the window focused, a request on a Pane that is on the
-/// board but not focused rings nothing — it is seen where it is asked.
-#[gpui::test]
-fn alerts_chime_once_and_a_request_in_view_rings_nothing(cx: &mut TestAppContext) {
-    let (mut core, fake) = cockpit("alerts-together", 2);
-    let group = group_all(&mut core);
-    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
-    view.update(cx, |view, cx| view.enter_group(group, cx));
-    cx.deactivate_window();
-    fake.streams.borrow()[0]
-        .send(SessionEvent::TurnEnded {
-            outcome: ferrite_core::TurnOutcome::Completed,
-            cost_usd: None,
-        })
-        .unwrap();
-    fake.streams.borrow()[1].send(decision("away")).unwrap();
-    tick(cx);
-    ring(cx);
-    view.read_with(cx, |view, _| {
-        assert_eq!(view.chimed, [Sound::NeedsYou]);
-        assert_eq!(view.needs_you.toasts().len(), 2);
-    });
-
-    cx.update(|window, _| window.activate_window());
-    view.update(cx, |view, _| view.chimed.clear());
-    tick(cx);
-    let unfocused = view.read_with(cx, |view, _| {
-        assert!(view.needs_you.toasts().is_empty(), "both are in view now");
-        view.cockpit
-            .threads()
-            .into_iter()
-            .position(|thread| Some(thread) != view.focused_thread())
-            .unwrap()
-    });
-    fake.streams.borrow()[unfocused]
-        .send(decision("here"))
-        .unwrap();
-    tick(cx);
-    ring(cx);
-    view.read_with(cx, |view, _| {
-        assert!(view.needs_you.toasts().is_empty());
-        assert!(view.chimed.is_empty());
-    });
 }
 
 /// The Notifications page: sounds on and off, a provider's sounds, a

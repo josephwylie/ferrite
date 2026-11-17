@@ -1,7 +1,6 @@
 //! The command palette (⌘K, the prototype's `#palette`): every Thread, the
-//! Projects and Groups to jump to, then every command, filtered as the
-//! operator types (FL-1…FL-5). Scoped, it is also ⌘G's Group list and the
-//! session import picker.
+//! Projects to jump to, then every command, filtered as the operator types
+//! (FL-1…FL-5). Scoped, it is also the session import picker.
 //!
 //! The view holds what it shows — the rows, the type tab, the filter's
 //! survivors and the cursor — and draws it as the Claude app's search
@@ -11,7 +10,7 @@
 //! empty line), section headings, rows (a state mark or the command's
 //! icon, the name with its matches lit, the context and the chord at the
 //! right, the cursor row `SELECTED`), and the footer — the keys' hints
-//! (`Close esc`, `Change type ← →`, `Open beside ⇥`) and the cursor row's
+//! (`Close esc`, `Change type ← →`) and the cursor row's
 //! working directory or the result count. At rest — `All`, nothing typed
 //! — it lists `Recents` (the Threads used last) and a few `Actions` that
 //! start work; a query or a tab reaches every row. The cockpit builds the rows
@@ -21,14 +20,13 @@
 //!
 //! **Status filters.** A line of one letter is a filter, not a search: `b`
 //! `w` `i` `d` keep only the rows whose state is blocked, working, idle or
-//! done (`cockpit::Attention`; a Project or Group by its roll-up), and `a`
+//! done (`cockpit::Attention`; a Project by its roll-up), and `a`
 //! keeps them all. Commands have no state and stay. The next letter turns
 //! the line into a search, so no key is ever lost to a filter: `debug`
 //! finds an idle Thread named so although `d` alone keeps the done ones.
 
 use std::ops::Range;
 
-use ferrite_core::groups::GroupId;
 use ferrite_core::roster::PaneIdentity;
 use ferrite_core::workspace::registry::ProjectId;
 use ferrite_core::ThreadId;
@@ -50,8 +48,6 @@ gpui::actions!(
     [
         // ⌘K: the palette, open or shut.
         Toggle,
-        // ⌘G: the palette scoped to Groups.
-        OpenGroups,
         // ⌘⇧P / ⌘⇧D: the palette's two keyed commands.
         ShowParked,
         ReviewBranch,
@@ -59,7 +55,6 @@ gpui::actions!(
         SelectNext,
         SelectPrevious,
         Confirm,
-        Preview,
         Dismiss,
         // ← / → on an empty line: the next or previous type tab.
         NextType,
@@ -67,12 +62,11 @@ gpui::actions!(
     ]
 );
 
-/// What the palette lists: everything (⌘K), the Groups alone (⌘G), or the
+/// What the palette lists: everything (⌘K), or the
 /// CLI sessions there are to import (`import a session`, `/import`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum PaletteScope {
     All,
-    Groups,
     Sessions,
 }
 
@@ -81,7 +75,6 @@ pub(crate) enum PaletteScope {
 pub(crate) enum Section {
     Threads,
     Projects,
-    Groups,
     Commands,
     Sessions,
 }
@@ -91,7 +84,6 @@ impl Section {
         match self {
             Section::Threads => "Threads",
             Section::Projects => "Projects",
-            Section::Groups => "Groups",
             Section::Commands => "Actions",
             Section::Sessions => "Sessions",
         }
@@ -147,9 +139,6 @@ pub(crate) enum Command {
     ReviewChanges,
     NewThread,
     NewWorktreeThread,
-    NewThreadInGroup,
-    NewGroup,
-    OpenGroup,
     ReopenLast,
     NewThreadIn(ProjectId),
     FilterAll,
@@ -161,7 +150,6 @@ pub(crate) enum Command {
     ToggleSidebar,
     TogglePanel,
     ToggleDetails,
-    FullscreenPane,
     TextLarger,
     TextSmaller,
     TextReset,
@@ -187,8 +175,6 @@ pub(crate) enum Command {
     SurfaceMenu,
     CloseSurface,
     ReopenSurface,
-    /// The palette again, to pick a Thread to open beside the focused one.
-    OpenBeside,
     ShowChecks,
     RefreshPr,
     OpenPr,
@@ -221,19 +207,14 @@ impl Command {
         Some(match self {
             Command::NewThread
             | Command::NewThreadIn(_)
-            | Command::NewThreadInGroup
-            | Command::NewGroup
             | Command::NewProject => PLUS,
             Command::NewWorktreeThread | Command::ReviewBranch => BRANCH,
-            Command::OpenGroup => BOARD,
             Command::ParkThread | Command::ShowParked => ARCHIVE,
             Command::Settings => GEAR,
             Command::PullRequests => GIT_PULL_REQUEST,
             Command::ToggleSidebar => SIDEBAR,
             Command::TogglePanel | Command::SurfaceMenu => PANEL_RIGHT,
             Command::ToggleDetails => DETAILS,
-            Command::OpenBeside => SPLIT_RIGHT,
-            Command::FullscreenPane => MAXIMIZE,
             Command::Notifications => BELL,
             Command::CopyPrompt => COPY,
             Command::ResendPrompt => RESEND,
@@ -251,10 +232,8 @@ impl Command {
 /// What a row does when it runs.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum Act {
-    /// Focus the Thread, or revive it; ⇥ opens it beside the current Pane.
+    /// Focus the Thread, or revive it.
     Thread(ThreadId),
-    /// Enter the Group.
-    Group(GroupId),
     /// Land on the Project's Thread that most needs the operator.
     Project(ProjectId),
     /// Open the Project's Factory.
@@ -276,7 +255,7 @@ pub(crate) struct Row {
     /// The muted words after the name: a Thread's `perf sweep · working`,
     /// a command's description. Part of what the query matches.
     pub context: SharedString,
-    /// A Thread's state, or a Project's or Group's roll-up: its still mark
+    /// A Thread's state, or a Project's roll-up: its still mark
     /// (`RowStatus::face`) and what the status filters read. `None` holds
     /// the 2-cell column empty and passes every filter.
     pub status: Option<RowStatus>,
@@ -656,10 +635,8 @@ impl Render for Palette {
         if !tabs.is_empty() {
             hints.push(("Change type", "\u{2190} \u{2192}"));
         }
-        match self.scope {
-            PaletteScope::All => hints.push(("Open beside", "\u{21e5}")),
-            PaletteScope::Groups => {}
-            PaletteScope::Sessions => hints.push(("Import", "\u{23ce}")),
+        if self.scope == PaletteScope::Sessions {
+            hints.push(("Import", "\u{23ce}"));
         }
         let detail = self
             .selected()
@@ -903,7 +880,7 @@ pub(crate) fn footer_row(left: impl IntoElement, right: SharedString) -> gpui::D
         )
 }
 
-/// A row's mark: a Thread's (or a Project's or Group's roll-up) state
+/// A row's mark: a Thread's (or a Project's roll-up) state
 /// mark, else the command's icon, else nothing.
 fn mark(row: &Row) -> Option<gpui::AnyElement> {
     match (row.status, &row.act) {
@@ -1059,7 +1036,6 @@ mod tests {
                 "against the default branch",
                 Command::ReviewBranch,
             ),
-            command("open a group", "", Command::OpenGroup),
         ];
         let shown = filter(&rows, "par", PaletteScope::All, Tab::All);
         assert_eq!(
@@ -1174,7 +1150,6 @@ mod tests {
             Command::NewWorktreeThread.icon(),
             Some(ferrite_ui::icons::BRANCH)
         );
-        assert_eq!(Command::OpenGroup.icon(), Some(ferrite_ui::icons::BOARD));
         assert_eq!(Command::FilterAll.icon(), None);
     }
 }

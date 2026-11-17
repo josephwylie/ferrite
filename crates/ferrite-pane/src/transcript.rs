@@ -1884,7 +1884,7 @@ impl TranscriptView {
     }
 
     /// The transcript's grid: the reading size in Solo, a half step under
-    /// it in a Group Pane (`theme::tx_size`).
+    /// it in the side chat (`theme::tx_size`).
     fn grid(&self) -> Grid {
         Grid::pane(
             self.input.presentation.reading_size,

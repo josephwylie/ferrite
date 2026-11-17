@@ -829,10 +829,9 @@ impl Document {
 // -------------------------------------------------------------- the head
 
 /// The head both reading surfaces wear — the Panel's preview card and the
-/// Review's slot on the board: the Group head's twin, `PANE_HEAD_H` over
-/// its `paint::LINE`, its insets and gap, so it lines up with the head
-/// of the Pane beside it. `label` at the left, `doors` (`head_door`s) at
-/// the right.
+/// Review's slot on the board: `PANE_HEAD_H` over its `paint::LINE`, at
+/// its insets and gap. `label` at the left, `doors` (`head_door`s) at the
+/// right.
 pub fn reading_head(label: Div, doors: impl IntoIterator<Item = gpui::AnyElement>) -> Div {
     use ferrite_ui::theme::*;
     div()
@@ -877,10 +876,10 @@ pub fn head_suffix(text: String) -> Div {
         .child(text)
 }
 
-/// One of a head's doors at the right, the Group head's fill button's
-/// twin: an `ICON_BUTTON` square at `R_CONTROL` holding `glyph`, quiet until
-/// the pointer is on it (`hover`, its blend's key). A press here acts; it
-/// must not also pick the slot up as a drag.
+/// One of a head's doors at the right: an `ICON_BUTTON` square at
+/// `R_CONTROL` holding `glyph`, quiet until the pointer is on it (`hover`,
+/// its blend's key). A press here acts; it must not also pick the slot up
+/// as a drag.
 pub fn head_door(id: &'static str, hover: String, glyph: &'static str) -> gpui::Stateful<Div> {
     use ferrite_ui::theme::{ICON_BUTTON, ICON_BUTTON_GLYPH, INK_SUBTLE, R_CONTROL};
     div()

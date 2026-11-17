@@ -329,7 +329,7 @@ pub const GIT_MERGE: &str = "icons/git-merge.svg";
 pub const REFRESH: &str = "icons/refresh.svg";
 /// Open on GitHub.
 pub const EXTERNAL: &str = "icons/external.svg";
-/// Fill the board with a Pane.
+/// Maximize the side panel.
 pub const MAXIMIZE: &str = "icons/maximize.svg";
 /// The `+` menu's `Add files or photos`: Lucide's paperclip.
 pub const PAPERCLIP: &str = "icons/paperclip.svg";

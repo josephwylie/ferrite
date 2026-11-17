@@ -3,42 +3,6 @@
 use super::*;
 use ferrite_core::replies::Reply;
 
-/// #15 AC1: a click lands the operator on a Pane — the focus ring moves,
-/// and the keyboard follows it into that Pane's Composer.
-#[gpui::test]
-fn clicking_a_pane_focuses_it_and_the_keyboard_follows(cx: &mut TestAppContext) {
-    let (mut core, _fake) = cockpit("click-focus", 2);
-    let group = group_all(&mut core);
-    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
-    view.update(cx, |view, cx| view.enter_group(group, cx));
-    // Two Panes side by side, each big enough to hold a Composer even
-    // with the 208px nav (#21) taken off the left.
-    cx.simulate_resize(gpui::size(px(1800.), px(600.)));
-    tick(cx);
-    view.read_with(cx, |view, _| assert_eq!(view.focused(), 0));
-
-    cx.simulate_click(gpui::point(px(1200.), px(300.)), gpui::Modifiers::none());
-
-    view.read_with(cx, |view, _| {
-        assert_eq!(view.focused(), 1, "the click moved the focus ring");
-    });
-
-    cx.simulate_input("hi");
-
-    let (left, right) = view.update(cx, |view, cx| {
-        (
-            view.panes[0]
-                .composer
-                .update(cx, |composer, cx| composer.take(cx)),
-            view.panes[1]
-                .composer
-                .update(cx, |composer, cx| composer.take(cx)),
-        )
-    });
-    assert_eq!(right, "hi", "typing lands in the clicked Pane");
-    assert_eq!(left, "", "and nowhere else");
-}
-
 /// #15 AC4: wheel-scrolling into history detaches from the tail — new
 /// Blocks must not yank the reader down — and scrolling back to the
 /// bottom reattaches tail-follow.

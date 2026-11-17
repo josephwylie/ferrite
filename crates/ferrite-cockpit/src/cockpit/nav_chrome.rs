@@ -1,6 +1,6 @@
 //! The nav's chrome, wired (`nav::chrome`): the search row — the inline
-//! field and its results, the Filter menu (a Project to filter by, a Group
-//! to open), Add project and New thread — and the foot — Settings, Pull
+//! field and its results, the Filter menu (a Project to filter by), Add
+//! project and New thread — and the foot — Settings, Pull
 //! requests, Usage, the undo notice behind ⌘Z, free disk and the update
 //! door.
 
@@ -19,7 +19,7 @@ pub(crate) struct NavUndo {
 
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) enum UndoAct {
-    Parked(Vec<super::nav_undo::ParkedThread>),
+    Parked(Vec<ThreadId>),
     Snoozed(ThreadId),
 }
 
@@ -297,8 +297,7 @@ impl CockpitView {
         self.nav_search.focus_handle(cx).is_focused(window)
     }
 
-    /// The Filter menu's rows: every Project (the scoped one checked), and
-    /// the Groups, which open from here.
+    /// The Filter menu's rows: every Project, the scoped one checked.
     pub(super) fn filter_rows(&self) -> Vec<Option<(menu::Item, MenuVerb)>> {
         let mut rows = vec![Some((
             menu::Item::new("All projects").checked(self.nav_filter.is_none()),
@@ -310,22 +309,6 @@ impl CockpitView {
                 MenuVerb::FilterProject(Some(project.id)),
             ))
         }));
-        let groups: Vec<_> = self
-            .cockpit
-            .groups()
-            .iter()
-            .map(|group| {
-                Some((
-                    menu::Item::new(group.display_title())
-                        .leading(ferrite_ui::icons::BOARD, ferrite_ui::theme::INK_SUBTLE),
-                    MenuVerb::OpenGroup(group.id),
-                ))
-            })
-            .collect();
-        if !groups.is_empty() {
-            rows.push(None);
-            rows.extend(groups);
-        }
         rows
     }
 

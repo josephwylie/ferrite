@@ -191,7 +191,7 @@ pub fn roll_up<'a>(rows: impl IntoIterator<Item = &'a ThreadRow>) -> Option<RowS
 }
 
 /// One Thread's row — its card (`card::thread_card`), identical whether
-/// it is a loose Thread, a Group member or a parked one; only the
+/// it is an open Thread or a parked one; only the
 /// container differs. Every field is a cache read (`CockpitView::thread_row`).
 #[derive(Clone)]
 pub struct ThreadRow {
@@ -202,8 +202,7 @@ pub struct ThreadRow {
     /// The Project's name, from the facts cache: the badge's monogram and
     /// hue read it.
     pub project: Option<SharedString>,
-    /// The board shows this Thread (Solo), or it is the shown Group's
-    /// focused member: the row carries the selection.
+    /// The board shows this Thread: the row carries the selection.
     pub selected: bool,
     /// Its state's word (C10), which the status label says.
     pub tail: NavTail,
@@ -797,7 +796,7 @@ pub fn notice_row(index: usize, row: &NoticeRow, cursor: bool, measure: &Measure
         )))
 }
 
-/// A refusal from the last change (a Group's, a Snooze's), at the top of
+/// A refusal from the last change (a Park's, a Snooze's), at the top of
 /// the list, until the next change succeeds: a `BLOCKED` dot and the refusal, dim, wrapping.
 /// Colour on the dot, never the row.
 pub fn notice(text: SharedString) -> Div {
@@ -929,24 +928,6 @@ pub fn rename_target_thread(thread: ThreadId, title: SharedString) -> Stateful<D
         .overflow_hidden()
         .whitespace_nowrap()
         .child(title)
-}
-
-/// A nav row lifted off the list while it is dragged: the same row the
-/// list draws, at the column's inner width, on the float ground with its
-/// ring and the one float shadow.
-pub fn drag_row(row: Stateful<Div>, width: f32) -> Div {
-    div()
-        .w(px(width))
-        .font_family(FONT_UI)
-        .text_size(px(FS_NAV))
-        .line_height(px(NAV_LINE))
-        .text_color(rgb(INK_STRONG))
-        .bg(paint::FLOAT)
-        .rounded(px(R_CONTROL))
-        .border_1()
-        .border_color(paint::FLOAT_EDGE)
-        .shadow(ferrite_ui::components::float_shadow())
-        .child(row)
 }
 
 #[cfg(test)]
@@ -1178,19 +1159,6 @@ mod tests {
         for quiet in [None, Some(&HeadSlot::Interrupted), Some(&HeadSlot::Parked)] {
             assert_eq!(of(quiet), NavTail::Age(age()));
         }
-        assert_eq!(
-            NavTail::Waiting(words::APPROVAL).member_word(),
-            Some((words::NEEDS_YOU.into(), ATTENTION))
-        );
-        assert_eq!(
-            NavTail::Failed.member_word(),
-            Some((words::FAILED.into(), BLOCKED))
-        );
-        assert_eq!(
-            NavTail::Working("1m".into()).member_word(),
-            Some(("1m".into(), ferrite_ui::theme::INK_SUBTLE))
-        );
-        assert_eq!(NavTail::Age(age()).member_word(), None);
     }
 
     /// The nav never says `now` (C10).

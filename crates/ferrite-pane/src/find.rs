@@ -27,7 +27,7 @@ use ferrite_ui::theme::*;
 gpui::actions!(find, [Open, Next, Previous, Close]);
 
 /// The bar's key context: its line's, where ⏎, ⇧⏎, ⌘G, ⌘⇧G and esc step
-/// and close instead of sending, opening a Group or interrupting.
+/// and close instead of sending or interrupting.
 pub(crate) const KEY_CONTEXT: &str = "Find";
 
 /// Frames a host waits for the active occurrence to paint (and report

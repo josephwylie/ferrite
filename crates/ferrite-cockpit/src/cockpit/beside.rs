@@ -1,12 +1,11 @@
 //! What opens beside a Pane on the board (F-15): a review of the Thread's
-//! changes (ADR 0021), or another Thread. A file, an image or a command's
-//! output opens in the Panel instead (`panel/preview.rs`).
+//! changes (ADR 0021). A file, an image or a command's output opens in the
+//! Panel instead (`panel/preview.rs`).
 //!
 //! A review takes the reader slot the Pane has (`ReviewSlot`, laid out by
-//! `board_tree`): it needs the board's width, and takes line comments. In
-//! Solo the board becomes `Pane | review`, in a Group (or a fullscreen
-//! Pane) the Pane's own cell splits, half and half (`READER_SHARE`), the
-//! seam between them dragging like any other (22–78%). Escape in it, its
+//! `board_tree`): it needs the board's width, and takes line comments. The
+//! board becomes `Pane | review`, half and half (`READER_SHARE`), the seam
+//! between them dragging (22–78%). Escape in it, its
 //! ×, or ⌘W while it holds focus closes it, and the tree it was spliced
 //! into closes back over it, restoring the board as it was.
 //!
@@ -34,12 +33,6 @@
 //! `review_pull_request`, `review_files`, `review_bases`,
 //! `pick_review_base`). Picking another scope, a commit, a search's file,
 //! the pull request, every file or a base comes back here to be read.
-//!
-//! Another Thread opens as a second Pane: beside the current one in Solo (a
-//! pair on the Solo board, for as long as focus stays on one of the two),
-//! or in a Group as a member right after the focused one
-//! (`GroupChange::Include`, non-exclusive, R1) — focused when it is already
-//! a member.
 
 use super::*;
 use crate::review::{
@@ -200,8 +193,6 @@ pub(super) const ANSWER_POLL: std::time::Duration = std::time::Duration::from_mi
 pub(crate) enum Beside {
     /// The focused Thread's changes, at a scope.
     Review(Scope),
-    /// Another Thread, as its own Pane.
-    Thread(ThreadId),
 }
 
 impl CockpitView {
@@ -214,7 +205,6 @@ impl CockpitView {
     ) {
         match beside {
             Beside::Review(scope) => self.open_review(scope, window, cx),
-            Beside::Thread(thread) => self.open_thread_beside(thread, cx),
         }
     }
 
@@ -489,87 +479,6 @@ impl CockpitView {
             |review, (), cx| review.pick_scope(Scope::Branch, cx),
             ReviewView::fail,
         );
-    }
-
-    /// Another Thread as its own Pane beside the focused one (F-15).
-    fn open_thread_beside(&mut self, thread: ThreadId, cx: &mut Context<Self>) {
-        let Some(owner) = self.cockpit.roster().focused() else {
-            return;
-        };
-        if owner == PaneIdentity::Thread(thread) {
-            return;
-        }
-        match self.cockpit.roster().view() {
-            View::Group(group) => {
-                let members = self
-                    .cockpit
-                    .groups()
-                    .get(group)
-                    .map(|group| group.members.clone())
-                    .unwrap_or_default();
-                if members.contains(&thread) {
-                    self.focus_thread_in_view(thread);
-                    cx.notify();
-                    return;
-                }
-                let index = owner
-                    .thread()
-                    .and_then(|focused| members.iter().position(|member| *member == focused))
-                    .map(|at| at + 1);
-                if let Err(error) = self.cockpit.apply_group(GroupChange::Include {
-                    thread,
-                    group,
-                    index,
-                }) {
-                    self.group_error = Some(error.to_string().into());
-                    cx.notify();
-                    return;
-                }
-                self.group_error = None;
-                // Re-entering lays the new member's Pane (a parked Thread's
-                // as its tile) and keeps focus where the operator was.
-                if let Err(error) = self.cockpit.enter_group(group) {
-                    self.group_error = Some(error.to_string().into());
-                }
-                self.sync_panes(cx);
-            }
-            View::Solo => {
-                // A parked Thread wakes to stand beside; focus stays home.
-                if self.cockpit.thread(thread).is_none() {
-                    if let Err(error) = self.cockpit.wake(thread) {
-                        ferrite_core::log!("thread {thread} could not be opened beside: {error:?}");
-                        return;
-                    }
-                }
-                self.cockpit.focus(owner);
-                self.solo_beside = Some((owner, thread));
-                self.sync_panes(cx);
-            }
-        }
-        cx.notify();
-    }
-
-    /// Focus a Pane already on the board without changing the view.
-    fn focus_thread_in_view(&mut self, thread: ThreadId) {
-        if let Some(index) = self.pane_for(thread) {
-            self.focus_pane(index);
-        }
-    }
-
-    /// The Solo pair `open_thread_beside` made, while it still holds: the
-    /// board is Solo, nothing is fullscreen, both Panes are open and focus
-    /// is on one of them.
-    pub(super) fn solo_pair(&self) -> Option<(PaneIdentity, PaneIdentity)> {
-        let (owner, companion) = self.solo_beside?;
-        let companion = PaneIdentity::Thread(companion);
-        let roster = self.cockpit.roster();
-        let focused = roster.focused()?;
-        (roster.view() == View::Solo
-            && roster.fullscreen().is_none()
-            && (focused == owner || focused == companion)
-            && self.index_of(owner).is_some()
-            && self.index_of(companion).is_some())
-        .then_some((owner, companion))
     }
 
     /// Close the review beside `index` (escape in it, ⌘W while it holds

@@ -154,7 +154,7 @@ impl CockpitView {
         }
         let focused = self.cockpit.roster().focused();
         for fresh in kept {
-            let id = self.spawn_draft_pane(fresh.binding, DraftPlacement::Loose, cx);
+            let id = self.spawn_draft_pane(fresh.binding, cx);
             if let Some(pane) = self
                 .panes
                 .iter()

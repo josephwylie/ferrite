@@ -19,6 +19,10 @@
 //! Thread that changes section (starts working, snoozes, parks) carries it
 //! along. A move scrolls the row into view (`cursor_reveal`), and so does
 //! the shown Thread changing (`shown_reveal`).
+//!
+//! The list's order is also the window's: ⌘{ / ⌘} step the screen to the
+//! previous or next open Thread it lists, and ⌘1…⌘9 go to one by place
+//! (`thread_order`), whoever holds the keys.
 
 use super::*;
 use crate::nav::{NavCursor, NavItem, Shelf, SHELVES};
@@ -356,9 +360,53 @@ impl CockpitView {
         })
     }
 
-    /// A Thread row's press, and ⏎ on it: an open Thread takes focus (on
-    /// the Group on screen when it holds it, else Solo); a parked one
-    /// revives.
+    /// The Threads ⌘{ / ⌘} step through and ⌘1…⌘9 count: the open ones
+    /// the sidebar draws, in its order. A parked row is not one of them: a
+    /// key that walks must not spend a Session reviving a Thread.
+    pub(super) fn thread_order(&self, cx: &App) -> Vec<ThreadId> {
+        self.nav_items(cx)
+            .into_iter()
+            .filter_map(|cursor| match cursor.item {
+                NavItem::Thread(thread) => Some(thread),
+                NavItem::Shelf(_) => None,
+            })
+            .filter(|thread| self.pane_for(*thread).is_some())
+            .collect()
+    }
+
+    /// ⌘} (`delta` 1) and ⌘{ (-1): show the next or the previous Thread in
+    /// the sidebar's order, wrapping at its ends. Off the list (a draft, the
+    /// empty board), ⌘} starts at the first and ⌘{ at the last.
+    pub(super) fn step_thread(&mut self, delta: isize, cx: &mut Context<Self>) {
+        let order = self.thread_order(cx);
+        let len = order.len() as isize;
+        if len == 0 {
+            return;
+        }
+        let at = self
+            .focused_thread()
+            .and_then(|shown| order.iter().position(|thread| *thread == shown));
+        let next = match at {
+            Some(at) => (at as isize + delta).rem_euclid(len),
+            None if delta > 0 => 0,
+            None => len - 1,
+        };
+        self.focus_thread(order[next as usize], cx);
+    }
+
+    /// ⌘1…⌘9: show the sidebar's `ordinal`th Thread (`thread_order`). A
+    /// digit past the list does nothing.
+    pub(super) fn go_to_thread(&mut self, ordinal: usize, cx: &mut Context<Self>) {
+        let thread = ordinal
+            .checked_sub(1)
+            .and_then(|at| self.thread_order(cx).get(at).copied());
+        if let Some(thread) = thread {
+            self.focus_thread(thread, cx);
+        }
+    }
+
+    /// A Thread row's press, and ⏎ on it: an open Thread takes the screen;
+    /// a parked one revives.
     pub(super) fn open_nav_row(&mut self, thread: ThreadId, cx: &mut Context<Self>) -> bool {
         if self.pane_for(thread).is_some() {
             self.focus_thread(thread, cx);

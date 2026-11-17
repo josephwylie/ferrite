@@ -28,7 +28,7 @@ fn land(
 fn run(view: &Entity<CockpitView>, command: Command, cx: &mut gpui::VisualTestContext) {
     cx.update(|window, cx| {
         view.update(cx, |view, cx| {
-            view.run_palette_act(Act::Command(command), false, window, cx)
+            view.run_palette_act(Act::Command(command), window, cx)
         })
     });
 }

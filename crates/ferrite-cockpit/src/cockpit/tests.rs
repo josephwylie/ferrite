@@ -28,7 +28,6 @@ mod find;
 mod floats_parity;
 mod forks;
 mod frame_parity;
-mod fullscreen;
 mod image_viewer;
 mod interaction_regressions;
 mod key_ownership;
@@ -76,8 +75,8 @@ mod stale_chrome;
 mod starts;
 mod startup;
 mod subagents;
-mod thread_groups;
 mod terminal;
+mod thread_keys;
 mod tools;
 mod citing;
 mod transcript_pointer;
@@ -110,6 +109,7 @@ use std::rc::Rc;
 use std::sync::mpsc::{self, Receiver, Sender};
 
 use ferrite_core::cockpit::Spawner;
+use ferrite_core::roster::View;
 
 use ferrite_core::providers::Session;
 
@@ -398,31 +398,6 @@ fn scratch(name: &str) -> std::path::PathBuf {
     let dir = std::env::temp_dir().join(format!("ferrite-view-{}-{name}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     dir
-}
-
-/// Put every open Thread into one Group. A multi-Pane view **is** a Group
-/// (#28), so any test that wants more than one Pane on screen has to say
-/// which Group they share — `View::Solo` shows exactly the focused Pane.
-fn group_all(cockpit: &mut Cockpit) -> GroupId {
-    let threads = cockpit.threads();
-    let group = cockpit
-        .apply_group(GroupChange::Create {
-            first: threads[0],
-            second: threads[1],
-        })
-        .unwrap()
-        .group
-        .unwrap();
-    for thread in &threads[2..] {
-        cockpit
-            .apply_group(GroupChange::Join {
-                thread: *thread,
-                group,
-                index: None,
-            })
-            .unwrap();
-    }
-    group
 }
 
 /// Hold this test's wall clock still, for a test that counts renders. The

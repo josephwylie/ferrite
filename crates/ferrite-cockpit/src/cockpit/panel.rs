@@ -495,9 +495,9 @@ impl CockpitView {
     }
 
     /// What the board leaves at its right: the panel's column as far in as
-    /// it is, or the frame's gutter when the panel is hidden (SPEC §4).
+    /// it is (SPEC §4).
     pub(super) fn board_right(&self) -> f32 {
-        self.panel_column_w().max(self.board_pad())
+        self.panel_column_w()
     }
 
     /// ⌥⌘B, the View menu, the palette and the title bar's toggle: show or

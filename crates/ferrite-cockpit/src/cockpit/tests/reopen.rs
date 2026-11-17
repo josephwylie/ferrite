@@ -21,7 +21,7 @@ fn emit(fake: &Fake, event: ActivityEvent) {
 fn reopen_closed(view: &Entity<CockpitView>, cx: &mut gpui::VisualTestContext) {
     cx.update(|window, cx| {
         view.update(cx, |view, cx| {
-            view.run_palette_act(Act::Command(Command::ReopenSurface), false, window, cx)
+            view.run_palette_act(Act::Command(Command::ReopenSurface), window, cx)
         })
     });
     tick(cx);

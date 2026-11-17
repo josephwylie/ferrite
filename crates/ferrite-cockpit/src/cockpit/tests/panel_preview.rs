@@ -43,11 +43,7 @@ fn window<'a>(
     panes: usize,
     cx: &'a mut TestAppContext,
 ) -> (Entity<CockpitView>, Fake, &'a mut gpui::VisualTestContext) {
-    let (mut core, fake) = cockpit(name, panes);
-    if panes > 1 {
-        let group = group_all(&mut core);
-        core.enter_group(group).unwrap();
-    }
+    let (core, fake) = cockpit(name, panes);
     open(core, fake, cx)
 }
 
@@ -238,8 +234,8 @@ fn each_thread_keeps_its_own_preview(cx: &mut TestAppContext) {
     assert!(cx.debug_bounds("panel-preview").is_some());
 }
 
-/// An image holds the keyboard in its viewer — yet focus moving to the
-/// other Pane (⌘}) takes it there: typing reaches that Pane's Composer.
+/// An image holds the keyboard in its viewer — yet ⌘} showing the next
+/// Thread takes it there: typing reaches that Thread's Composer.
 #[gpui::test]
 fn focus_moving_to_another_pane_takes_the_keyboard_from_an_image(cx: &mut TestAppContext) {
     let (view, _fake, cx) = window("preview-image-focus", 2, cx);
@@ -265,7 +261,7 @@ fn focus_moving_to_another_pane_takes_the_keyboard_from_an_image(cx: &mut TestAp
             view.panes[index].composer.read(cx).text().to_string()
         })
     };
-    assert_eq!(typed(1, cx), "x", "the other Pane's Composer has it");
+    assert_eq!(typed(1, cx), "x", "the next Thread's Composer has it");
     assert_eq!(typed(0, cx), "");
 }
 

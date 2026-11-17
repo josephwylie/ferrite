@@ -76,7 +76,7 @@ impl CockpitView {
             return None;
         }
         let mut cards = self.decision_cards_of(index, subject, false, false)?;
-        cards.solo = false;
+        cards.narrow = true;
         cards.inset = ferrite_ui::theme::tx_inset_at(0., false);
         Some(card_tail(cards))
     }

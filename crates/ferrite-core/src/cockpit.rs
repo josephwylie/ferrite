@@ -1350,6 +1350,15 @@ fn notice(server: &mut remote::Remote, action: NoticeAction) {
 /// Mirror parity (ADR 0025): after every message, each open Thread's
 /// mirror reads exactly as the Engine's own Thread does. Every Cockpit
 /// test checks it as it runs.
+#[cfg(feature = "test-support")]
+impl Cockpit {
+    /// A UI test's park that fails: the Engine reports this Thread's park
+    /// as refused.
+    pub fn refuse_park(&mut self, thread: ThreadId) {
+        self.in_process().refuse_park.insert(thread);
+    }
+}
+
 #[cfg(test)]
 impl Cockpit {
     pub(crate) fn set_session_project_root(
@@ -3261,40 +3270,17 @@ impl Cockpit {
         landed
     }
 
-    /// A running nav row's click (#21): land on that Thread's Pane, in the
-    /// view that shows it — its Group, or Solo.
+    /// A running nav row's click (#21): land on that Thread's Pane, alone
+    /// on screen.
     pub fn focus_thread(&mut self, thread: ThreadId) -> bool {
         let identity = PaneIdentity::Thread(thread);
         if self.roster.index_of(identity).is_none() {
             return false;
         }
-        self.roster.set_view(self.view_showing(thread));
+        self.roster.set_view(View::Solo);
         let landed = self.roster.focus(identity);
         self.acknowledge_seen();
         landed
-    }
-
-    /// The view that shows `thread` (R1, Groups are non-exclusive): the
-    /// Group on screen when it holds the Thread, else the Thread's home
-    /// Group, else Solo — a Thread that is only a guest of Groups lives
-    /// loose.
-    fn view_showing(&self, thread: ThreadId) -> View {
-        match self.roster.view() {
-            View::Group(group)
-                if self
-                    .shared
-                    .groups
-                    .get(group)
-                    .is_some_and(|group| group.members.contains(&thread)) =>
-            {
-                View::Group(group)
-            }
-            _ => self
-                .shared
-                .groups
-                .home(thread)
-                .map_or(View::Solo, |group| View::Group(group.id)),
-        }
     }
 
     /// Record the Subject the renderer is actually showing. Invalid or stale
@@ -3389,7 +3375,7 @@ impl Cockpit {
         self.roster.remove_thread(thread);
     }
 
-    /// Revive one parked Thread into the view that shows it (#21): a Pane,
+    /// Revive one parked Thread onto the screen, alone (#21): a Pane,
     /// focus, and the park order forgetting it — cmd-o must not revive it a
     /// second time. The shared tail of cmd-o and a parked nav row's click.
     /// An open Thread is only landed on: one a window has no Pane drawn for
@@ -3399,7 +3385,7 @@ impl Cockpit {
             self.revive(thread)?;
             self.roster.note_revived(thread);
         }
-        self.roster.set_view(self.view_showing(thread));
+        self.roster.set_view(View::Solo);
         self.roster.focus(PaneIdentity::Thread(thread));
         Ok(())
     }

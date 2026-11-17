@@ -68,20 +68,6 @@ impl NavTail {
         }
     }
 
-    /// The word a shown Group's member row says at its right (§5.1.6), and
-    /// a Group Pane's head after its title (§5.9): the state words and a
-    /// working Thread's elapsed time, nothing for an age or for background
-    /// work, with the ink the state takes.
-    pub fn member_word(&self) -> Option<(SharedString, u32)> {
-        match self {
-            NavTail::Waiting(_) => Some((words::NEEDS_YOU.into(), ATTENTION)),
-            NavTail::Failed => Some((words::FAILED.into(), BLOCKED)),
-            NavTail::Failing(_) => self.text().map(|text| (text, BLOCKED)),
-            NavTail::Working(elapsed) if !elapsed.is_empty() => Some((elapsed.clone(), INK_SUBTLE)),
-            NavTail::Done => Some((words::DONE.into(), INK_SUBTLE)),
-            _ => None,
-        }
-    }
 }
 
 /// A Thread's state, for its mark, least urgent first: the order a
@@ -164,31 +150,8 @@ fn marked(status: RowStatus, ink: u32, small: bool) -> AnyElement {
     }
 }
 
-/// A Group Pane head's mark (SPEC §5.9): the row's face with its 8px dots
-/// and 14px icons, a dot laid out at the width the mockup's box takes
-/// (`PANE_HEAD_DOT_W`), so the title starts where it is drawn.
-pub(crate) fn head_mark(status: RowStatus) -> AnyElement {
-    let face = mark_sized(
-        status,
-        status.ink(),
-        NAV_DOT,
-        ferrite_ui::theme::PANE_HEAD_ICON,
-    );
-    match status {
-        RowStatus::NeedsYou | RowStatus::Failed | RowStatus::Background => div()
-            .flex()
-            .flex_shrink_0()
-            .items_center()
-            .justify_center()
-            .w(px(ferrite_ui::theme::PANE_HEAD_DOT_W))
-            .child(face)
-            .into_any_element(),
-        _ => div().flex().flex_shrink_0().child(face).into_any_element(),
-    }
-}
-
 /// **The one status truth**: a state's mark, drawn here for every surface
-/// that shows a Thread's state (the nav row, the rail, the Pane head, the
+/// that shows a Thread's state (the nav row, the rail, the
 /// palette, a subagent's tab, the empty board's recent rows), in
 /// `RowStatus::ink` (`ink`, at the shell's step there). `dot` and `glyph`
 /// are the surface's sizes.

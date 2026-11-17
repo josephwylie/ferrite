@@ -1,5 +1,5 @@
 //! The context menu (theme WP-E, `menu`): what a right-click, a row's `⋯`
-//! or a title's ▾ offers for a Thread, a Pane, a Group, a Project, the
+//! or a title's ▾ offers for a Thread, a Pane, a Project, the
 //! Parked view, a Review line, a prompt's Rewind or a page — the rows each
 //! target offers (`context_rows`), their one-letter keys, a destructive
 //! row's arming, a parent row's submenu beside it (`Submenu`), and the
@@ -19,8 +19,7 @@ pub(super) enum MenuTarget {
     Pane(ThreadId),
     /// The Parked shelf's header at the foot of the nav.
     Parked,
-    /// The search row's Filter button: a Project to filter by, a Group to
-    /// open.
+    /// The search row's Filter button: a Project to filter by.
     NavFilter,
     /// The search row's Factory button: a Project's board to open.
     NavFactory,
@@ -74,14 +73,13 @@ pub(super) enum MenuVerb {
     Pin,
     Unpin,
     Focus,
-    Fullscreen,
     /// Unfold or fold the Parked section.
     ToggleParked,
     /// Delete every Thread the Parked section lists — exactly those rows,
     /// so what the menu erases is what the operator can see.
     DeleteAllParked,
-    /// Park the Thread in one act, on screen or not: a Group member leaves
-    /// its Group and parks (`Cockpit::park_thread`), the same as cmd-w.
+    /// Park the Thread in one act, on screen or not (`Cockpit::park_thread`),
+    /// the same as cmd-w.
     Park,
     /// The transcript menu's own verbs: what is highlighted (in the
     /// Review, the pick), or all of it.
@@ -90,7 +88,6 @@ pub(super) enum MenuVerb {
     /// The Review's own verbs: comment on the pick, read the line's file.
     Comment,
     OpenAtLine,
-    LeaveGroup,
     NewThread,
     Reveal,
     CopyPath,
@@ -124,8 +121,6 @@ pub(super) enum MenuVerb {
     Browser(super::browser::PageVerb),
     /// The Thread's id in the form the CLI takes (`thread_link`).
     CopyLink,
-    /// Move the Thread into this Group (Claude's `Move to section ›`).
-    JoinGroup(GroupId),
     /// A `+` menu row: its Surface opens in the Panel.
     OpenSurface(panel::Opener),
     /// A Panel tab's closes.
@@ -134,7 +129,6 @@ pub(super) enum MenuVerb {
     CloseSurfacesRight,
     CloseAllSurfaces,
     FilterProject(Option<ProjectId>),
-    OpenGroup(GroupId),
     OpenFactory(ProjectId),
     /// A pull request Surface's row.
     Pr(panel::PrAction),
@@ -153,8 +147,6 @@ pub(super) enum MenuVerb {
 pub(super) enum Submenu {
     /// Where the Thread's checkout opens: Finder, a Terminal.
     OpenIn,
-    /// The other Groups the Thread can move to.
-    MoveToGroup,
     Snooze,
     /// The Files menus' parent rows: `Copy ›` and `Tab size ›`.
     Files(tools::FilesSub),
@@ -315,19 +307,17 @@ impl CockpitView {
 
     /// The rows a target offers. `None` is a gap between groups of rows.
     pub(super) fn context_rows(&self, target: MenuTarget) -> Vec<Option<(menu::Item, MenuVerb)>> {
-        let mut rows: Vec<Option<(menu::Item, MenuVerb)>> = Vec::new();
         use ferrite_ui::components::bound_chord;
-        let fullscreen = bound_chord("cockpit::ToggleFullscreen").unwrap_or_default();
+        let mut rows: Vec<Option<(menu::Item, MenuVerb)>> = Vec::new();
         match target {
             // The nav row: where a Thread lives in the roster — open it,
-            // park it, move it between Groups, delete it.
+            // park it, delete it.
             MenuTarget::Thread(thread) => self.thread_rows(thread, &mut rows),
             MenuTarget::Snooze(_) => rows.extend(self.snooze_rows().into_iter().map(Some)),
             // The transcript: what is on screen — copy it, name it, size
             // it, and the Pane's own park/close. Deleting a Thread is the
             // nav's act; the transcript never offers it.
-            MenuTarget::Pane(thread) => {
-                let grouped = self.cockpit.groups().of(thread).is_some();
+            MenuTarget::Pane(_) => {
                 let selected = self.native_copy.is_some();
                 rows.push(Some((
                     menu::Item::new("Copy")
@@ -341,10 +331,6 @@ impl CockpitView {
                 )));
                 rows.push(None);
                 rows.push(Some((menu::Item::new("Rename"), MenuVerb::Rename)));
-                rows.push(Some((
-                    menu::Item::new("Toggle fullscreen").shortcut(fullscreen),
-                    MenuVerb::Fullscreen,
-                )));
                 rows.push(None);
                 if !self.on_machine() {
                     rows.push(Some((
@@ -354,17 +340,12 @@ impl CockpitView {
                 }
                 rows.push(Some((menu::Item::new("Copy path"), MenuVerb::CopyPath)));
                 rows.push(None);
-                // cmd-w parks in one act, Group member or not
-                // (`Cockpit::park_thread`); leaving without parking is its
-                // own row.
+                // cmd-w parks in one act (`Cockpit::park_thread`).
                 rows.push(Some((
                     menu::Item::new("Park thread")
                         .shortcut(bound_chord("cockpit::CloseThread").unwrap_or_default()),
                     MenuVerb::Park,
                 )));
-                if grouped {
-                    rows.push(Some((menu::Item::new("Leave group"), MenuVerb::LeaveGroup)));
-                }
             }
             // The Parked shelf's header: the shelf, and the one bulk act it
             // exists for — clearing the parked history it holds.
@@ -506,9 +487,7 @@ impl CockpitView {
                 rows.push(None);
             }
         };
-        let shown = self.pane_for(thread).is_some();
         let open = self.cockpit.thread(thread);
-        let grouped = self.cockpit.groups().of(thread).is_some();
         // A machine's path is not in this computer's Finder or Terminal.
         if !self.on_machine() {
             rows.push(Some((
@@ -517,10 +496,9 @@ impl CockpitView {
             )));
             rule(rows);
         }
-        // A Group member's place is its Group.
         if self.prefs.settings.pinned_threads.contains(&thread) {
             rows.push(Some((key("Unpin", "P"), MenuVerb::Unpin)));
-        } else if !grouped {
+        } else {
             rows.push(Some((key("Pin", "P"), MenuVerb::Pin)));
         }
         // On screen, the Thread is seen again the next frame.
@@ -546,9 +524,6 @@ impl CockpitView {
                 MenuVerb::Focus,
             )));
         }
-        if shown {
-            rows.push(Some((key("Toggle fullscreen", "T"), MenuVerb::Fullscreen)));
-        }
         rule(rows);
         rows.push(Some((
             key("New thread in this project", "N"),
@@ -560,16 +535,6 @@ impl CockpitView {
         rows.push(Some((key("Refresh PR status", "S"), MenuVerb::RefreshPr)));
         if self.facts.pr(thread).is_some_and(|pr| pr.url.is_some()) {
             rows.push(Some((key("Open PR in browser", "B"), MenuVerb::OpenPr)));
-        }
-        rule(rows);
-        if !self.groups_to_join(thread).is_empty() {
-            rows.push(Some((
-                menu::Item::new("Move to group"),
-                MenuVerb::Submenu(Submenu::MoveToGroup),
-            )));
-        }
-        if grouped {
-            rows.push(Some((key("Leave group", "L"), MenuVerb::LeaveGroup)));
         }
         rule(rows);
         // Park is Ferrite's archive: Claude's `A`.
@@ -594,17 +559,6 @@ impl CockpitView {
         )));
     }
 
-    /// The Groups `thread` can move into: every Group but its home.
-    fn groups_to_join(&self, thread: ThreadId) -> Vec<(GroupId, String)> {
-        let home = self.cockpit.groups().of(thread).map(|group| group.id);
-        self.cockpit
-            .groups()
-            .iter()
-            .filter(|group| Some(group.id) != home && !group.members.contains(&thread))
-            .map(|group| (group.id, group.title.clone()))
-            .collect()
-    }
-
     /// A submenu's rows (`Submenu`).
     fn submenu_rows(&self, target: MenuTarget, kind: Submenu) -> Vec<(menu::Item, MenuVerb)> {
         match (kind, target) {
@@ -612,14 +566,8 @@ impl CockpitView {
                 (menu::Item::new("Finder"), MenuVerb::Reveal),
                 (menu::Item::new("Terminal"), MenuVerb::OpenTerminal),
             ],
-            (Submenu::MoveToGroup, MenuTarget::Thread(thread)) => self
-                .groups_to_join(thread)
-                .into_iter()
-                .map(|(group, title)| (menu::Item::new(title), MenuVerb::JoinGroup(group)))
-                .collect(),
             (Submenu::Snooze, MenuTarget::Thread(_) | MenuTarget::Pane(_)) => self.snooze_rows(),
             (Submenu::Snooze, _) => Vec::new(),
-            (Submenu::MoveToGroup, _) => Vec::new(),
             (Submenu::Files(sub), MenuTarget::File(thread) | MenuTarget::FilesMore(thread)) => {
                 self.files_sub_rows(thread, sub)
             }
@@ -885,7 +833,7 @@ impl CockpitView {
                 if let Some(until) = preset.until(ferrite_core::clock::system_time()) {
                     self.snooze_thread(thread, Some(until), cx);
                 } else {
-                    self.group_error =
+                    self.nav_notice =
                         Some("That snooze time has passed. Choose another time.".into());
                 }
             }
@@ -900,7 +848,7 @@ impl CockpitView {
                 self.start_rename(RenameTarget::Thread(thread), cx)
             }
             (MenuTarget::Pane(thread), MenuVerb::Rename) => {
-                self.start_rename(RenameTarget::PaneTitle(thread), cx)
+                self.start_rename(RenameTarget::ViewTitle(thread), cx)
             }
             (MenuTarget::Thread(thread) | MenuTarget::Pane(thread), MenuVerb::Focus) => {
                 if self.pane_for(thread).is_some() {
@@ -909,14 +857,10 @@ impl CockpitView {
                     self.revive_thread(thread, cx);
                 }
             }
-            (MenuTarget::Thread(thread) | MenuTarget::Pane(thread), MenuVerb::Fullscreen) => {
-                self.focus_thread(thread, cx);
-                self.cockpit.toggle_fullscreen();
-            }
             (MenuTarget::Thread(thread), MenuVerb::Pin) => self.set_pinned(thread, true, cx),
             (MenuTarget::Thread(thread), MenuVerb::Unpin) => self.set_pinned(thread, false, cx),
-            // One act: a Group member leaves its Group and parks
-            // (`Cockpit::park_thread`), straight into the parked rows.
+            // One act (`Cockpit::park_thread`), straight into the parked
+            // rows.
             (MenuTarget::Thread(thread), MenuVerb::Park) if self.menu_threads(thread).len() > 1 => {
                 let threads = self.menu_threads(thread);
                 self.park_listed(&threads, cx);
@@ -1000,13 +944,6 @@ impl CockpitView {
             (MenuTarget::Pane(thread), MenuVerb::CopyTranscript) => {
                 self.copy_transcript(thread, cx);
             }
-            (MenuTarget::Thread(thread) | MenuTarget::Pane(thread), MenuVerb::LeaveGroup) => {
-                match self.cockpit.apply_group(GroupChange::Leave { thread }) {
-                    Ok(_) => self.group_error = None,
-                    Err(error) => self.group_error = Some(error.to_string().into()),
-                }
-                self.sync_panes(cx);
-            }
             (MenuTarget::Parked, MenuVerb::ToggleParked) => {
                 let open = self.shelf_open(nav::Shelf::Parked);
                 self.set_shelf_open(nav::Shelf::Parked, !open, cx);
@@ -1014,7 +951,6 @@ impl CockpitView {
             (MenuTarget::NavFilter, MenuVerb::FilterProject(project)) => {
                 self.choose_nav_filter(project, cx)
             }
-            (MenuTarget::NavFilter, MenuVerb::OpenGroup(group)) => self.enter_group(group, cx),
             (MenuTarget::NavFactory, MenuVerb::OpenFactory(project)) => {
                 self.open_factory(project, cx)
             }
@@ -1064,18 +1000,6 @@ impl CockpitView {
             (MenuTarget::Thread(thread), MenuVerb::CopyLink) => {
                 cx.write_to_clipboard(ClipboardItem::new_string(thread_link(thread)));
             }
-            (MenuTarget::Thread(thread), MenuVerb::JoinGroup(group)) => {
-                let change = GroupChange::Join {
-                    thread,
-                    group,
-                    index: None,
-                };
-                match self.cockpit.apply_group(change) {
-                    Ok(_) => self.group_error = None,
-                    Err(error) => self.group_error = Some(error.to_string().into()),
-                }
-                self.sync_panes(cx);
-            }
             (_, MenuVerb::OpenTerminal) => {
                 if let Some(path) = self.target_path(target) {
                     if let Err(error) = terminal_at(&path).spawn() {
@@ -1097,9 +1021,9 @@ impl CockpitView {
             }
             (MenuTarget::Thread(thread) | MenuTarget::Pane(thread), MenuVerb::Delete) => {
                 if let Err(error) = self.delete_thread(thread) {
-                    self.group_error = Some(format!("delete refused: {error}").into());
+                    self.nav_notice = Some(format!("delete refused: {error}").into());
                 } else {
-                    self.group_error = None;
+                    self.nav_notice = None;
                 }
                 if self
                     .popover

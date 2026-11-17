@@ -57,47 +57,6 @@ fn a_thread_can_be_opened_in_its_own_worktree(cx: &mut TestAppContext) {
     });
 }
 
-/// `a` is option 2 at wall range too (`2 always`): a request that
-/// offered no standing answer is allowed for this thread out loud — the
-/// answer goes, and Ferrite keeps the thread rule it names.
-#[gpui::test]
-fn always_at_the_wall_keeps_a_thread_rule_when_nothing_was_offered(cx: &mut TestAppContext) {
-    let (mut core, fake) = cockpit("wall-always", 24);
-    // Twenty-four Threads tile the board as one Group's wall.
-    let group = group_all(&mut core);
-    core.enter_group(group).unwrap();
-    cx.update(|cx| {
-        cx.bind_keys([KeyBinding::new("a", Always, Some("Wall"))]);
-    });
-    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
-    // Wall range, as above: the "Wall" key context only exists there.
-    cx.simulate_resize(gpui::size(px(1440.), px(900.)));
-    // `decision()` offers no standing answer.
-    fake.streams.borrow()[3].send(decision("perm_04")).unwrap();
-    tick(cx);
-    let flagged = view.read_with(cx, |view, _| view.panes[3].thread().unwrap());
-
-    cx.simulate_keystrokes("a");
-    tick(cx);
-
-    assert!(
-        matches!(
-            fake.answered.borrow().as_slice(),
-            [(id, DecisionAnswer::Allow { .. })] if id == "perm_04"
-        ),
-        "{:?}",
-        fake.answered.borrow()
-    );
-    view.read_with(cx, |view, _| {
-        assert_eq!(
-            view.decisions.rules().len(),
-            1,
-            "the thread rule option 2 names is kept"
-        );
-        assert_eq!(view.decisions.rules()[0].thread, flagged);
-    });
-}
-
 /// cmd-n drafts onto the checkout the operator is already in — the
 /// plain case, beside cmd-shift-n's worktree — and the zero-keystroke
 /// path holds: typing and sending with the band untouched binds to the

@@ -53,23 +53,25 @@ An agent backend a Session runs on. v1: Claude and Codex.
 _Avoid_: model (a provider selects models; it is not one).
 
 **Pane**
-The visible cell in the cockpit grid showing one Thread at some zoom level.
-A view, never an identity.
-_Avoid_: window, tile, terminal.
+The board's one plane, showing one Thread at some zoom level. A view, never
+an identity.
+_Avoid_: window, tile, terminal, fullscreen Pane (Solo already fills the
+board).
 
 **Cockpit**
-The visible Panes: **Solo** shows exactly one Thread; **Group** shows the exact
-ordered membership of one durable Group (two or more Threads).
-_Avoid_: dashboard, workspace (see Workspace binding).
+The window's main area. It shows one Thread at a time (**Solo**), or the
+empty board when none is open.
+_Avoid_: dashboard, workspace (see Workspace binding), split, Group view.
 
 **Solo**
-The default Cockpit view: exactly the focused Thread's Pane.
+The Cockpit's one view: exactly the focused Thread's Pane. ⌘{ / ⌘} step it
+to the previous or next open Thread in the nav's order, and ⌘1…⌘9 go to
+one by place; a parked Thread is skipped, never revived.
 
 **Panel**
 The right column, beside the board: the focused Thread's **Surfaces** as
-tabs (ADR 0039). It follows the focused Thread in every view (Solo, a
-Group's focused Pane, a fullscreen Pane, with a Review open beside it),
-shown while the operator has it on; there is none without a Thread (a
+tabs (ADR 0039). It follows the focused Thread, with a Review open beside
+it too, shown while the operator has it on; there is none without a Thread (a
 draft, the empty board), but for a draft's preview.
 _Avoid_: sidebar (that is the nav), Beside slot (that opens inside the
 board), dock (its columns are Surfaces now).
@@ -98,26 +100,24 @@ context and changes are the Panel's.
 _Avoid_: status bar, status line (both are gone).
 
 **Group**
-A durable, operator-ordered set of two or more Threads, which may span
-Projects. Each Thread retains its own Workspace binding. Opening the Group's
-header shows exactly its members in the Cockpit.
+A durable, operator-ordered set of two or more Threads, from before the
+window showed one Thread at a time. Still stored, so no member is lost, but
+the window never opens, makes or changes one: the nav lists each member as
+an ordinary Thread.
+_Avoid_: folder (the nav has none).
 
 **Roster**
 The Cockpit's state, headless: the open Panes in order, the one holding the
-keyboard, the view (Solo or one Group), the fullscreen, and this launch's
-park order. Changed only by the operator's acts on the Cockpit (close,
-reopen, enter a Group, drop); the window mirrors it and paints.
+keyboard, the view, and this launch's park order. Changed only by the
+operator's acts on the Cockpit (close, reopen, focus); the window mirrors it
+and paints.
 _Avoid_: layout (that is what the Roster's grid computes), tab list.
 
 **Layout**
-A Group's arrangement of its Panes: a binary split tree (each split a row
-or a column with a share for its first side), persisted with the Group.
-Seams between Panes resize it; dropping a Pane on another swaps them (the
-centre) or splits that slot (an edge). A Pane's open Review takes a slot of
-its own in the same tree (in Solo too), the reader slot, placed for the
-session only — the persisted Layout names Threads alone. Files and images
-open in the Panel's preview instead.
-_Avoid_: grid (that is what an even Layout happens to be), mosaic.
+The board's split while a Review is open beside the shown Pane: the Pane
+and the Review's reader slot, the seam between them resizing it, kept for
+the session only. Files and images open in the Panel's preview instead.
+_Avoid_: grid, mosaic, board of Panes (one Thread shows at a time).
 
 **Title**
 What a Thread is called: the operator's own name for it, else a short
@@ -152,7 +152,8 @@ Thread's header remains the durable truth about that Thread.
 **Semantic zoom**
 A Pane's rendering chosen by its size: **Transcript** (near: the transcript
 and its Composer) or **Wall** (far: the state word, the last few lines, quick
-answers). No user mode-switch; size decides.
+answers), which a Pane reaches only in a window too small for its
+Transcript. No user mode-switch; size decides.
 
 **Composer**
 The prompt box at the bottom of a Transcript Pane: text that wraps and
@@ -205,12 +206,14 @@ Feedback attached to a selected page element or a marked region of a page,
 using comments, drawings, or both.
 
 **Review**
-A diff of a Thread's changes beside its Pane — uncommitted, the branch
+A diff of a Thread's changes beside its Pane, the one thing that stands
+beside one — uncommitted, the branch
 against its base, the last turn, or one of the branch's commits — whose
 lines take comments; it also searches the checkout and shows the branch's
 pull request. herdr-reviewr's, vendored. The comments wait on the Composer
 and go to the Thread with its next prompt.
-_Avoid_: compare (the read-only view it replaced), code review (a PR's).
+_Avoid_: compare (the read-only view it replaced), code review (a PR's),
+beside Thread (no Thread opens beside another).
 
 **Notice**
 Ferrite's own record that a Thread's Main finished for good: its turn ended
@@ -345,7 +348,8 @@ would be a new concept, not a revival of this one.
 - Name kept: Ferrite (iOS audio app collision accepted — distant category).
 - v1 providers: Claude + Codex, minimal.
 - v1 cockpit: Solo by default; an opened Group shows its exact membership with
-  semantic zoom.
+  semantic zoom. Amended 2026-11-17: one Thread at a time; the window no
+  longer opens Groups, and their members are ordinary nav Threads.
 - v1 git: workspace binding only (worktree or main); no checkpoints yet.
 - Issue-tracker/board integration: later, not v1. Amended 2026-11-10 (ADR 0037):
   a Project has a Factory; the operator's tracker stays the tracker.

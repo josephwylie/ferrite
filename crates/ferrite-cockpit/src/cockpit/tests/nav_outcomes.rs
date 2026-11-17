@@ -1,5 +1,5 @@
 //! Nav acts on several Threads say how each one went: a failed Park or
-//! reopen is named in the list, and Undo puts a Thread back in its Group.
+//! reopen is named in the list, and Undo takes back what parked.
 
 use super::*;
 
@@ -10,47 +10,45 @@ fn sorted_threads(core: &Cockpit) -> Vec<ThreadId> {
 }
 
 fn notice(view: &Entity<CockpitView>, cx: &mut gpui::VisualTestContext) -> Option<String> {
-    view.read_with(cx, |view, _| view.group_error.as_ref().map(|error| error.to_string()))
+    view.read_with(cx, |view, _| view.nav_notice.as_ref().map(|error| error.to_string()))
 }
 
-/// A Park of two where one cannot park (its Group's file cannot be
-/// written): the other parks, the failed one is named and stays picked, and
-/// ⌘Z takes back only the one.
-#[cfg(unix)]
+/// A Park of two where the Engine refuses one: the failed one is named in
+/// the list and stays picked, the other parks, and ⌘Z takes back the one
+/// that parked.
 #[gpui::test]
-fn a_bulk_park_names_the_thread_that_failed(cx: &mut TestAppContext) {
-    use std::os::unix::fs::PermissionsExt;
+fn a_bulk_park_of_loose_threads_names_the_thread_that_failed(cx: &mut TestAppContext) {
     bind_production_keys(cx);
-    let (mut core, _fake) = cockpit("nav-park-fails", 3);
+    let (mut core, _fake) = cockpit("nav-park-refused", 3);
     let threads = sorted_threads(&core);
-    core.apply_group(GroupChange::Create { first: threads[0], second: threads[1] }).unwrap();
+    core.refuse_park(threads[0]);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     hide_panel(&view, cx);
     tick(cx);
-    let store = std::env::temp_dir().join(format!("ferrite-view-{}-nav-park-fails", std::process::id()));
-    let writable = std::fs::metadata(&store).unwrap().permissions();
-    std::fs::set_permissions(&store, std::fs::Permissions::from_mode(0o555)).unwrap();
     let both = [threads[0], threads[2]];
     view.update(cx, |view, cx| {
         view.nav_picked = both.to_vec();
         view.park_listed(&both, cx);
     });
-    std::fs::set_permissions(&store, writable).unwrap();
     tick(cx);
 
     let said = notice(&view, cx).expect("the failure is reported");
-    assert!(said.starts_with("Couldn't park "), "{said}");
+    let name = view.read_with(cx, |view, _| view.facts.name(threads[0]).to_string());
+    assert!(said.starts_with(&format!("Couldn't park {name}: ")), "{said}");
     assert_eq!(said.matches(';').count(), 0, "one failure, one entry: {said}");
     assert!(cx.debug_bounds("nav-notice").is_some(), "drawn in the list");
     view.read_with(cx, |view, _| {
         assert_eq!(view.nav_picked, vec![threads[0]], "the failed one stays picked");
-        assert_eq!(view.facts.parked(), vec![threads[2]]);
+        assert!(view.facts.parked().contains(&threads[2]));
     });
 
     cx.simulate_keystrokes("cmd-shift-e cmd-z");
     tick(cx);
     view.read_with(cx, |view, _| {
-        assert!(view.facts.parked().is_empty(), "Undo revived the one that parked");
+        assert!(
+            !view.facts.parked().contains(&threads[2]),
+            "Undo revived the one that parked"
+        );
     });
 }
 
@@ -85,46 +83,6 @@ fn a_failed_reopen_is_reported(cx: &mut TestAppContext) {
     view.read_with(cx, |view, _| {
         assert!(view.facts.parked().contains(&threads[0]), "still parked");
     });
-}
-
-/// Undo of a Park puts the Thread back in the Group it left, at its place;
-/// a Group the Park dissolved is made again with its title and order.
-#[gpui::test]
-fn undo_restores_the_groups_a_park_left(cx: &mut TestAppContext) {
-    bind_production_keys(cx);
-    let (mut core, _fake) = cockpit("nav-undo-groups", 3);
-    let threads = sorted_threads(&core);
-    let group = group_all(&mut core);
-    core.apply_group(GroupChange::Rename { group, title: "Trio".into() }).unwrap();
-    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
-    hide_panel(&view, cx);
-    tick(cx);
-    let members = |view: &Entity<CockpitView>, cx: &mut gpui::VisualTestContext| {
-        view.read_with(cx, |view, _| {
-            view.cockpit
-                .groups()
-                .iter()
-                .map(|group| (group.title.clone(), group.members.clone()))
-                .collect::<Vec<_>>()
-        })
-    };
-    let before = members(&view, cx);
-    assert_eq!(before, vec![("Trio".to_string(), threads.clone())]);
-
-    view.update(cx, |view, cx| view.park_listed(&[threads[0]], cx));
-    tick(cx);
-    assert_eq!(members(&view, cx), vec![("Trio".to_string(), vec![threads[1], threads[2]])]);
-    cx.simulate_keystrokes("cmd-shift-e cmd-z");
-    tick(cx);
-    assert_eq!(members(&view, cx), before, "back at its place in the Group");
-
-    view.update(cx, |view, cx| view.park_listed(&[threads[0], threads[1]], cx));
-    tick(cx);
-    assert!(members(&view, cx).is_empty(), "the Group dissolved with the second Park");
-    cx.simulate_keystrokes("cmd-shift-e cmd-z");
-    tick(cx);
-    assert_eq!(members(&view, cx), before, "made again, whole, with its title");
-    assert!(notice(&view, cx).is_none());
 }
 
 /// ⌘O reopens a parked Thread the nav's Project scope hides: the scope

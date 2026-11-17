@@ -3,21 +3,14 @@
 //! shows is folded in core, and every key it answers to belongs to the
 //! cockpit above it.
 //!
-//! A Pane is a card on the frame (theme WP-C, SPEC §5.3): `paint::CARD` at
-//! `R_CARD`; its content starts at the card's own edges, and its 1px ring
-//! is an overlay just outside them (`card_ring`) that only changes colour —
-//! `CARD_RING` at rest, `FOCUS_RING` when focused on a board, `WAIT_RING`
-//! while it waits (a focused waiting Pane shows only the yellow; its focus
-//! reads in the head ground and title). On a board it wears one head
-//! row — the dot (a working Thread's working mark), the title, the
-//! provider mark — and no state word; top to bottom then the subagent
-//! strip, the transcript body (its Decision is the transcript's tail), the
-//! Composer. Two altitudes (R12): the transcript, or the wall tile — the
+//! A Pane is the window's plane (theme WP-C, SPEC §5.3): square, flush
+//! with the chrome's hairlines, with no head (the nav's row names the
+//! Thread); top to bottom the subagent strip, the transcript body (its
+//! Decision is the transcript's tail), the Composer. Two altitudes (R12): the transcript, or the wall tile — the
 //! state word in colour, the last lines dim, the quick answers.
 
 mod agents;
 mod background_work;
-mod compact_composer;
 mod composer;
 mod menus;
 mod output;
@@ -35,16 +28,13 @@ pub use background_work::{
 #[cfg(any(test, feature = "test-support"))]
 pub use composer::model_label;
 pub use composer::{
-    attach_button, composer_footer, composer_row_limit, env_strip, env_word, flat_facts_text,
+    attach_button, composer_footer, composer_row_limit, env_strip, env_word,
     mode_chip, model_effort_chip, offers_import, ModelChip, permission_mode_label, queued_close, queued_count,
     primary_actions, queued_edit, queued_send_now, queued_sends_now, queued_takes_back, send_button,
     stop_button,
     toolbar_chip, ComposerControls, PrimaryActions,
 };
-use composer::{
-    composer_region, composer_stack, env_face, ghost_row, placeholder, queue_card, ComposerStack,
-    Ghost,
-};
+use composer::{composer_region, env_face, ComposerStack};
 pub use menus::{menu_item, menu_popover, menu_row, picker_row, picker_section, MenuRow};
 use output::{call_body, diff_rows, hunk_rows, render_diff, running_tests, DiffRow};
 pub use output::{diff_number_cells, test_elbow, DiffKind, DiffPaint, TestElbow};
@@ -58,7 +48,7 @@ pub use working::{background_clock, background_link, working_tail, WorkingFacts,
 pub(crate) use wrap_up::{render_wrap_up, Face as WrapUpFace};
 #[cfg(test)]
 use {
-    composer::{composer_fixed_height, composer_queue_height, queued_preview},
+    composer::{composer_fixed_height, composer_queue_height, placeholder, queued_preview},
     output::{changed_words, result_highlights},
     usage::{category_ink, reset_label},
     working::starting_line,
@@ -97,10 +87,6 @@ use ferrite_ui::pointer::{Pointer, PointerPressed};
 use ferrite_ui::theme;
 use ferrite_ui::theme::*;
 
-// The Cockpit's ⌘D, which a Group head's needs-you door dispatches. It is
-// declared here, below the Cockpit, but keeps the `cockpit` namespace:
-// operators' keymaps bind it as `cockpit::NextDecision` (ADR 0024).
-gpui::actions!(cockpit, [NextDecision]);
 
 /// One Pane's view state: what the window owns per Pane. Everything it
 /// shows lives in core; this is the keyboard, the scrollback position, and
@@ -592,9 +578,6 @@ pub struct PaneFacts<'a> {
     /// Whether the Composer line is empty — what decides the idle
     /// placeholder, read where the cockpit has a `cx` to read it with.
     pub composer_empty: bool,
-    /// How many files wait in the Composer's draft: an unfocused board
-    /// cell counts them on its flat line instead of drawing their shelf.
-    pub composer_files: usize,
     pub focused: bool,
     /// This Thread finished and the operator has not seen it since (an
     /// unread Notice): its head's mark is the done check until they do.
@@ -610,15 +593,10 @@ pub struct PaneFacts<'a> {
     /// Native files are dragged over this Pane: the drop sheet covers it
     /// and the Composer, drawn above the sheet, wears the strong edge.
     pub drop_target: bool,
-    /// More than one Pane is on the board, so which one holds the keyboard
-    /// needs showing: only then does focus draw the `FOCUS_RING` edge.
-    pub show_focus: bool,
-    /// The Pane is the window's plane (Solo, fullscreen), on the
+    /// The Pane is the window's plane, on the
     /// transcript's black ground; drawn inside another surface (the
     /// Factory's), it takes that surface's `CARD` ground instead.
     pub plane: bool,
-    /// This Thread's provider: the Group head's mark at its right.
-    pub provider_mark: Option<Provider>,
     /// This Pane's docked Decision merges into its live Composer (one
     /// block, rule 2.8.1): the Composer drops its top edge and corners.
     pub decision_joined: bool,
@@ -645,31 +623,16 @@ pub struct PaneWiring {
     /// The open `/` or `@` popover for this Pane's Composer, rows wired to
     /// their picks in the cockpit and hung above the input line here (#23).
     pub menu: Option<AnyElement>,
-    /// The head's title cell, wired: the name with a double-click that
-    /// opens the rename editor, or the editor itself while renaming. None
-    /// draws the plain name (L2, L3, drafts).
-    pub title: Option<AnyElement>,
     /// A subagent's head (`subagent_head`) while the Pane shows one; None
     /// on Main, which has none.
     pub subagent_head: Option<AnyElement>,
     pub activity_decisions: Option<AnyElement>,
-    /// A question too big for this Pane's body: it answers in fullscreen
-    /// (the expand key), and the body keeps its transcript meanwhile.
-    pub expand_question: bool,
-    pub question_measurement: Option<AnyElement>,
-    /// Wires the whole L1 head as the Pane's drag handle (the cockpit
-    /// supplies it while the board has somewhere to move the Pane to).
-    pub head_drag: Option<HeadDrag>,
     /// The wall tile's quick answers while its Thread waits (L3 only): the
     /// approval's verbs or the question's options, each a boxed word wired
     /// to its answer in the cockpit.
     pub quick_answers: Option<AnyElement>,
-    /// The Solo Composer's controls, wired in the cockpit (SPEC §5.5); on
-    /// a board, the focused Pane's send circle alone.
+    /// The Composer's controls, wired in the cockpit (SPEC §5.5).
     pub toolbar: Option<ComposerControls>,
-    /// The Group head's fill button (`fill_button`), wired to fill the
-    /// board with this Pane; None in Solo.
-    pub fill: Option<AnyElement>,
     /// An empty Thread's hero (`Hero`): it stands centred over its body
     /// until the first prompt.
     pub start: Option<Hero>,
@@ -680,10 +643,6 @@ pub struct PaneWiring {
     /// saved (`resume_offer`), the first row of the Composer's stack.
     pub resume_offer: Option<AnyElement>,
 }
-
-/// Turns the Pane head's band into its drag handle: the cockpit gives it an
-/// id and the drag payload, since only the cockpit knows the board.
-pub type HeadDrag = Box<dyn FnOnce(Div) -> AnyElement>;
 
 /// The wall's state matrix (glance.md §4), selected from O(1) reads plus the
 /// folded tests flag. Pure so the matrix is assertable without a window.
@@ -851,7 +810,6 @@ pub(crate) struct PaneCtx<'a> {
     pub has_activity_decisions: bool,
     pub queued: &'a [ferrite_core::engine::QueueItem],
     pub composer_empty: bool,
-    pub composer_files: usize,
     pub suggestion: Option<&'a str>,
     // ---- pre-plumbed for the work packages: wired, not read yet
     /// The operator asked the system for reduced motion.
@@ -865,9 +823,6 @@ pub(crate) struct PaneCtx<'a> {
     /// Finished while the operator looked elsewhere (an unread Notice).
     #[allow(dead_code)]
     pub unread: bool,
-    /// More than one Pane is on the board: the Composer is the grid's one
-    /// fixed line (C4), not Solo's full block.
-    pub grid: bool,
     // ---- owned wiring
     /// `l1_composer` / `l2_composer`.
     pub attachments: Option<AnyElement>,
@@ -896,16 +851,13 @@ pub fn render_pane(
     let PaneFacts {
         thread,
         composer_empty,
-        composer_files,
         focused,
         unread,
         wall,
         reduce_motion,
         editing,
         drop_target,
-        show_focus,
         plane,
-        provider_mark,
         decision_joined,
         cell_width,
         text_system,
@@ -917,21 +869,16 @@ pub fn render_pane(
         transcript: retained_transcript,
         attachments,
         menu,
-        title,
         subagent_head,
         activity_decisions,
-        expand_question,
-        question_measurement,
-        head_drag,
         quick_answers,
         toolbar,
-        fill,
         start,
         details,
         details_lane_width,
         resume_offer,
     } = wiring;
-    let has_activity_decisions = activity_decisions.is_some() || expand_question;
+    let has_activity_decisions = activity_decisions.is_some();
     // The Decision is the transcript's tail now (`decision_tail`): no card
     // is laid over the body or docked above the Composer at this level.
     let _ = activity_decisions;
@@ -943,30 +890,18 @@ pub fn render_pane(
         None
     };
     let workspace = thread.and_then(|thread| thread.workspace());
-    let status = subject
-        .as_ref()
-        .map(|subject| transcript_status(subject.status(), subject.fresh()));
     let turn = thread.and_then(|thread| thread.subject_turn(&view.selected));
     let state = wall_state(
         turn.as_ref(),
         decision.is_some_and(Decision::blocks_execution),
         wall.tests_failing,
     );
-    // Attention and focus are two channels on one edge (F-2): the edge is
-    // an overlay over the Pane's own content (`pane_frame`), recoloured
-    // only, so nothing reflows when a Decision arrives. A waiting Pane
-    // draws `WAIT_RING` on every side — focused or not; a focused one
-    // says so in its head ground and title instead of a second ring.
     let pending = thread.map(|thread| thread.pending_decisions());
     let attention_pending =
         pending.is_some_and(|pending| !pending.is_empty()) || state == WallState::Decision;
-    // Focus is drawn only where it tells the operator something: a lone
-    // Pane is plainly the one holding the keyboard.
-    let framed = focused && show_focus;
-    let edge = PaneEdge::of(framed, attention_pending, !show_focus);
     let key = view.thread().map_or(0, ThreadId::get);
-    let shell = record_card(pane_shell(edge, plane), view);
-    let frame = |pane: Div| pane_frame(pane, edge, key);
+    let shell = record_card(pane_shell(plane), view);
+    let frame = |pane: Div| pane_frame(pane, key);
     // What a pending request asks, as the lexicon names it: the tile's
     // state word and the question door at the Pane's foot read it.
     let kind = attention_pending.then(|| {
@@ -976,46 +911,11 @@ pub fn render_pane(
             .or_else(|| decision.map(request_kind))
             .unwrap_or(theme::words::APPROVAL)
     });
-    // Solo (fullscreen included) has no head at any tier: the nav's row
-    // names the Thread (C2, ADR 0014). A Group's head is the Pane's drag handle
-    // whenever the cockpit wires one. It names the Thread and nothing
-    // else (theme rule 7): the dot, the title, the provider's mark.
-    let head = |title: Option<AnyElement>| {
-        show_focus.then(|| {
-            let slot = state_word(state, kind, wall, turn.as_ref(), unread);
-            let mark = head_mark(
-                view.is_main(),
-                dot_state(state, slot.as_ref()),
-                unread,
-                thread.is_some_and(|thread| thread.background_work()),
-                status,
-            );
-            let word = crate::mark::NavTail::of(mark, slot.as_ref(), SharedString::default())
-                .member_word();
-            let head = group_head(GroupHead {
-                key,
-                name: view.name.clone(),
-                mark: Some(mark),
-                word,
-                focused: framed,
-                title,
-                provider: provider_mark,
-                action: fill,
-                width: Some(cell_width),
-            });
-            match head_drag {
-                Some(drag) => drag(head),
-                None => head.into_any_element(),
-            }
-        })
-    };
-
-    // Far enough away, a Pane is its tile: the head, the state word, the
-    // last lines, and the quick answers while it waits.
+    // Far enough away, a Pane is its tile: the state word, the last lines,
+    // and the quick answers while it waits.
     if level == Level::Wall {
         return frame(
             shell
-                .children(head(title))
                 .child(wall_cell(WallTile {
                     key,
                     card: wall,
@@ -1043,13 +943,11 @@ pub fn render_pane(
         has_activity_decisions,
         queued: thread.map_or(&[], |thread| thread.queue()),
         composer_empty,
-        composer_files,
         suggestion: thread.and_then(|thread| thread.suggestion()),
         reduce_motion,
         editing,
         drop_target,
         unread,
-        grid: show_focus,
         attachments,
         menu,
         activity_decisions: None,
@@ -1058,12 +956,10 @@ pub fn render_pane(
         resume_offer,
     };
 
-    // Solo (fullscreen included) has no head: the nav's row names the
-    // Thread (C2, ADR 0014), and the body starts at the Pane's own top edge. A
-    // Group's Pane wears the one head. A subagent's transcript has its own
-    // head over it either way.
+    // A Pane has no head: the nav's row names the Thread (C2, ADR 0014),
+    // and the body starts at the Pane's own top edge. A subagent's
+    // transcript has its own head over it.
     let mut pane = shell
-        .children(head(title))
         .children(subagent_head.map(|head| subagent_strip(key, head)));
     match transcript {
         Some(_) => {
@@ -1114,7 +1010,6 @@ pub fn render_pane(
                             .px(px(theme::SPACE_4))
                             .child(start_hero(project))
                     }))
-                    .children(question_measurement)
                     .children(details),
                 // The card is placed on the bounds the frame before measured:
                 // a change redraws this Pane, and no other part.
@@ -1126,9 +1021,6 @@ pub fn render_pane(
             ));
             // The order is head · body · progress · dock · composer.
             pane = pane.children(l1_dock(&mut cx));
-            // A question too big for this body answers in fullscreen: the
-            // Pane's foot says so, where its state reads (theme rule 7).
-            pane = pane.children(expand_question.then(|| question_door(key)));
             // The drop sheet covers the Pane beneath the Composer, which
             // paints after it and so stays in view, edged in `INK_STRONG`.
             pane = pane.children(drop_target.then(crate::prompt_drop::sheet));
@@ -1172,11 +1064,9 @@ fn l1_composer(cx: &mut PaneCtx) -> Option<AnyElement> {
             cx.view,
             Some(transcript),
             ComposerStack {
-                grid: cx.grid,
                 decision: cx.decision,
                 queued: cx.queued,
                 empty: cx.composer_empty,
-                files: cx.composer_files,
                 attachments: cx.attachments.take(),
                 menu: cx.menu.take(),
                 draft: false,
@@ -1205,17 +1095,11 @@ fn record_card(shell: Div, view: &PaneView) -> Div {
     })
 }
 
-/// The Pane on the plane (theme rule 2, SPEC §5.3): `paint::CARD`, its
-/// content flush to its own edges — the ring is an overlay (`pane_frame`),
-/// never a border in layout. A Group's Pane is a cell at `R_CARD`; a Solo
-/// Pane (`PaneEdge::Flush`) is the plane itself, square. `overflow:
-/// hidden` clips the children to the box.
-fn pane_shell(edge: PaneEdge, plane: bool) -> Div {
-    let radius = if edge == PaneEdge::Flush {
-        0.0
-    } else {
-        theme::R_CARD
-    };
+/// The Pane on the plane (theme rule 2, SPEC §5.3): square, its content
+/// flush to its own edges, on the transcript's ground when it is the
+/// window's plane (`plane`), else its host's `CARD`. `overflow: hidden`
+/// clips the children to the box.
+fn pane_shell(plane: bool) -> Div {
     div()
         .relative()
         .flex()
@@ -1223,62 +1107,13 @@ fn pane_shell(edge: PaneEdge, plane: bool) -> Div {
         .size_full()
         .min_h_0()
         .min_w_0()
-        .rounded(px(radius))
-        .bg(rgb(theme::tx_ground(edge == PaneEdge::Flush && plane)))
+        .bg(rgb(theme::tx_ground(plane)))
         .font_family(theme::FONT_UI)
         .overflow_hidden()
 }
 
-/// What a Pane card's 1px ring says (F-2, SPEC §5.9): a waiting Pane
-/// (`WAIT_RING`, focused or not) beats focus (`FOCUS_RING`), and a Pane
-/// with neither rests on `CARD_RING`. A Solo Pane has no ring: it is the
-/// plane itself, flush with the chrome's hairlines (theme rule 2), and its
-/// Decision carries the signal.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum PaneEdge {
-    Attention,
-    Focused,
-    Rest,
-    Flush,
-}
-
-impl PaneEdge {
-    pub(crate) fn of(focused: bool, attention: bool, solo: bool) -> Self {
-        if solo {
-            PaneEdge::Flush
-        } else if attention {
-            PaneEdge::Attention
-        } else if focused {
-            PaneEdge::Focused
-        } else {
-            PaneEdge::Rest
-        }
-    }
-
-    pub(crate) fn ink(self) -> gpui::Hsla {
-        match self {
-            PaneEdge::Attention => rgba(WAIT_RING).into(),
-            PaneEdge::Focused => rgba(FOCUS_RING).into(),
-            PaneEdge::Rest => theme::paint::CARD_RING.into(),
-            PaneEdge::Flush => rgba(theme::TRANSPARENT).into(),
-        }
-    }
-}
-
-/// The Pane root (F-1): the card, then its 1px ring (`card_ring`) — it
-/// takes no layout and no pointer, so the content starts at the card's own
-/// edges and a state change moves nothing. Every Pane root is `PANE_GROUP`.
-fn pane_frame(pane: Div, edge: PaneEdge, key: u64) -> Stateful<Div> {
-    let overlay = match edge {
-        PaneEdge::Focused => {
-            Some(card_ring(edge.ink()).debug_selector(move || format!("pane-focus-edge-{key}")))
-        }
-        PaneEdge::Attention => {
-            Some(card_ring(edge.ink()).debug_selector(move || format!("pane-waiting-edge-{key}")))
-        }
-        PaneEdge::Rest => Some(card_ring(edge.ink())),
-        PaneEdge::Flush => None,
-    };
+/// The Pane root (F-1): every Pane root is `PANE_GROUP`.
+fn pane_frame(pane: Div, key: u64) -> Stateful<Div> {
     div()
         .id(gpui::ElementId::Name(SharedString::from(format!(
             "pane-edge-{key}"
@@ -1291,12 +1126,10 @@ fn pane_frame(pane: Div, edge: PaneEdge, key: u64) -> Stateful<Div> {
         .min_h_0()
         .min_w_0()
         .child(pane)
-        .children(overlay)
 }
 
 /// A card's 1px ring in `ink`, just outside its box
-/// (`components::outer_ring`), in the gutter between a Group's cells. The
-/// cockpit rings a reader's card with it.
+/// (`components::outer_ring`). The cockpit rings a reader's card with it.
 pub fn card_ring(ink: impl Into<gpui::Hsla>) -> Div {
     div()
         .absolute()
@@ -1310,13 +1143,9 @@ pub fn card_ring(ink: impl Into<gpui::Hsla>) -> Div {
 /// clicks are wired — the Pane only lays it out.
 pub struct DraftState<'a> {
     pub attachments: Option<AnyElement>,
-    /// The draft-only close control in the Pane header.
-    pub discard: AnyElement,
     /// The open `/` or `@` menu, hung above the Composer like every menu.
     pub menu: Option<AnyElement>,
     pub composer_empty: bool,
-    /// How many files wait in the draft (`PaneFacts::composer_files`).
-    pub composer_files: usize,
     pub focused: bool,
     /// A failed bootstrap's words, shown where the band is.
     pub error: Option<&'a SharedString>,
@@ -1324,68 +1153,40 @@ pub struct DraftState<'a> {
     pub reduce_motion: bool,
     /// Native files hover the draft (`PaneFacts::drop_target`).
     pub drop_target: bool,
-    /// More than one Pane is on the board (`PaneFacts::show_focus`).
-    pub show_focus: bool,
-    /// The Solo box's controls (`PaneWiring::toolbar`).
+    /// The box's controls (`PaneWiring::toolbar`).
     pub toolbar: Option<ComposerControls>,
     /// The hero (`Hero`), its project word wired in the cockpit to the
-    /// Project picker. None on a board, where the cell has no room.
+    /// Project picker. None on the wall, where the tile has no room.
     pub start: Option<Hero>,
 }
 
-/// What a draft is called until its first send names the Thread — in its
-/// Group head.
+/// What a draft is called until its first send names the Thread.
 pub const DRAFT_TITLE: &str = "New thread";
 
 /// A draft Pane (#29): an empty transcript area and the Composer wearing
-/// the pre-prompt band. In Solo it has no head. On a board it wears the
-/// Group head (the glyph column reserved, no dot: nothing runs yet) with the
-/// × in its slot, then the grid's one Composer line; below L1 the body is
-/// the head and that line alone.
+/// the pre-prompt band. It has no head: cmd-w discards it.
 pub fn render_draft(view: &PaneView, state: DraftState<'_>, level: Level) -> impl IntoElement {
     let DraftState {
         attachments,
-        discard,
         menu,
         composer_empty,
-        composer_files,
         focused,
         error,
         reduce_motion,
         drop_target,
-        show_focus,
         toolbar,
         start,
     } = state;
-    // A draft wears the live Pane's edge: transparent at rest or, beside
-    // other Panes, the focus ink. It has no state to announce.
-    let framed = focused && show_focus;
-    let edge = PaneEdge::of(framed, false, !show_focus);
     let key = view.identity.draft().map_or(0, DraftId::get);
-    let mut shell = record_card(pane_shell(edge, true), view);
-    if show_focus {
-        shell = shell.child(group_head(GroupHead {
-            key,
-            name: view.name.clone(),
-            mark: None,
-            word: None,
-            focused: framed,
-            title: None,
-            provider: None,
-            action: Some(discard),
-            width: None,
-        }));
-    }
+    let shell = record_card(pane_shell(true), view);
     let _ = reduce_motion;
     let composer = composer_region(
         view,
         None,
         ComposerStack {
-            grid: show_focus,
             decision: None,
             queued: &[],
             empty: composer_empty,
-            files: composer_files,
             attachments,
             menu,
             draft: true,
@@ -1421,7 +1222,6 @@ pub fn render_draft(view: &PaneView, state: DraftState<'_>, level: Level) -> imp
             // The Composer holds itself to the reading column
             // (`TX_COLUMN_MAX_W`, `in_column`).
             .when(level != Level::Wall, |pane| pane.child(composer)),
-        edge,
         u64::MAX - key,
     )
 }
@@ -1508,32 +1308,6 @@ pub fn hero_project(label: SharedString, switcher: bool) -> Stateful<Div> {
                 })
         })
         .child(label)
-}
-
-/// A Draft is disposable state, so its Pane advertises the same close action
-/// as cmd-w: an `ICON_BUTTON` × in `INK_SUBTLE` — the Group head's slot on a
-/// board (Solo has no head: cmd-w alone). Its tooltip names the key
-/// only where one is bound. Live Threads deliberately keep keyboard and
-/// context-menu closure instead of adding this control to every Pane.
-pub fn draft_close_button(draft: DraftId) -> gpui::component::button::Button {
-    components::button(("discard-draft", draft.get() as usize))
-        .debug_selector(|| "discard-draft".into())
-        .flex_shrink_0()
-        .w(px(theme::ICON_BUTTON))
-        .h(px(theme::ICON_BUTTON))
-        .p_0()
-        .accessibility_label("Discard draft")
-        .child(icon(icons::CLOSE, theme::ICON_BUTTON_GLYPH, INK_STRONG))
-}
-
-/// The × with its tooltip: `Discard draft`, and the key after it only where
-/// one is bound (`menu::tooltip_with_key`).
-pub fn draft_discard(draft: DraftId, button: AnyElement, keys: Option<String>) -> Stateful<Div> {
-    div()
-        .id(("discard-draft-tip", draft.get() as usize))
-        .flex_shrink_0()
-        .tooltip(ferrite_ui::menu::tooltip_with_key("Discard draft", keys))
-        .child(button)
 }
 
 /// A draft's Project or Workspace chip on the strip over the box
@@ -1855,29 +1629,6 @@ pub fn quick_answer(id: SharedString, key: SharedString, label: SharedString) ->
         )
 }
 
-/// The Pane head's mark: the main Thread's is its nav row's
-/// (`mark::RowStatus`) — the done check while its finish is `unread`, the
-/// green ring while `background` work runs behind its idle Main. A
-/// subagent tab's is that agent's own transcript state.
-fn head_mark(
-    main: bool,
-    state: WallState,
-    unread: bool,
-    background: bool,
-    subject: Option<Status>,
-) -> crate::mark::RowStatus {
-    if main {
-        return crate::mark::RowStatus::of(state, unread, background);
-    }
-    let state = match subject {
-        Some(Status::Streaming) => WallState::Working,
-        Some(Status::Blocked) => WallState::Decision,
-        Some(Status::Closed) => WallState::Blocked,
-        _ => WallState::Idle,
-    };
-    crate::mark::RowStatus::of(state, false, false)
-}
-
 /// What a pending request asks of the operator, as the lexicon names it:
 /// a Question, a plan to approve (Claude's `ExitPlanMode`), or an approval.
 fn request_kind(decision: &Decision) -> &'static str {
@@ -1891,7 +1642,7 @@ fn request_kind(decision: &Decision) -> &'static str {
 }
 
 /// One lexicon word for where a Thread stands (rule 2.11.2), shared by the
-/// Group head's state slot and the wall tile's state word. Each variant
+/// nav row and the wall tile's state word. Each variant
 /// is one state; `text` is what it reads, `ink` the one ink it wears
 /// where colour is allowed.
 #[derive(Clone, Debug, PartialEq)]
@@ -1935,7 +1686,7 @@ impl HeadSlot {
     }
 }
 
-/// The state vocabulary, shared by the Group head and the wall:
+/// The state vocabulary, shared by the nav and the wall:
 /// `needs you` > `failing` > `failed` > `working` > `done` >
 /// `interrupted` > `parked`; idle is nothing. A finish is `done` only while
 /// `unread` (not yet seen), as the nav row's mark is
@@ -1980,7 +1731,7 @@ fn state_word(
 /// error reads `failed` until seen, so its dot is `BLOCKED` like a closed
 /// Session's until then;
 /// a `failing` word is always a `BLOCKED` dot. Every surface that draws a
-/// Thread's dot — the nav, the rail, the Group head — reads
+/// Thread's dot — the nav, the rail, the wall — reads
 /// it through here.
 pub fn dot_state(state: WallState, word: Option<&HeadSlot>) -> WallState {
     match word {
@@ -2037,310 +1788,12 @@ pub fn resume_offer(key: u64, line: SharedString, action: gpui::component::butto
         .into_any_element()
 }
 
-/// The Pane's foot while its question is too big for the body: `◆ needs
-/// you · question` and the key that answers it in full, as a door — a press
-/// runs the ⌘D jump. It sits where the Pane's state reads (theme rule 7).
-fn question_door(key: u64) -> AnyElement {
-    let expand = components::bound_chord("cockpit::ToggleFullscreen");
-    let face = div()
-        .debug_selector(|| "question-expand".into())
-        .flex()
-        .flex_shrink(1.)
-        .min_w_0()
-        .items_center()
-        .gap(px(theme::CH))
-        .whitespace_nowrap()
-        .overflow_hidden()
-        .font_family(theme::FONT_UI)
-        .text_size(px(theme::FS_UI))
-        .line_height(px(theme::LH_UI))
-        .text_color(rgb(INK_SUBTLE))
-        .child(
-            div()
-                .flex()
-                .flex_shrink_0()
-                .items_center()
-                .w(px(theme::GLYPH_GUTTER - theme::CH))
-                .child(components::glyph("\u{25c6}", ATTENTION)),
-        )
-        .child(
-            div()
-                .flex_shrink_0()
-                .text_color(rgb(ATTENTION))
-                .child(theme::words::NEEDS_YOU),
-        )
-        .child(
-            div()
-                .flex_shrink_0()
-                .text_color(rgb(TEXT_FAINT))
-                .child("\u{b7}"),
-        )
-        .child(div().flex_shrink_0().child(theme::words::QUESTION))
-        .children(expand.map(|keys| {
-            div()
-                .flex()
-                .flex_shrink_0()
-                .items_center()
-                .gap(px(theme::CH))
-                .child(div().text_color(rgb(TEXT_FAINT)).child("\u{b7}"))
-                .child(components::key_combo(&keys, INK_SUBTLE))
-                .child("answers in full")
-        }));
-    div()
-        .flex()
-        .flex_shrink_0()
-        .w_full()
-        .min_w_0()
-        .h(px(theme::PANE_HEAD_H))
-        .items_center()
-        .px(px(theme::GLYPH_GUTTER))
-        .child(needs_you_door(
-            SharedString::from(format!("pane-needs-you-{key}")),
-            SharedString::from(format!("pane-question-{key}")),
-            face,
-        ))
-        .into_any_element()
-}
-
 // ------------------------------------------------------------- tile text
 
 // ------------------------------------------------------------- the head
 
-/// The one Group head (SPEC §5.9), for a transcript Pane and a wall tile
-/// alike: one `PANE_HEAD_H` row (38px) closed by a `LINE`, padded
-/// `PANE_HEAD_PAD_L` / `PANE_HEAD_PAD_R`, its items `PANE_HEAD_GAP` apart.
-/// In order: the state mark (`mark::head_mark`), the title in `FS_LABEL`
-/// at `W_LABEL` — `INK_STRONG` on the focused Pane, `INK_SUBTLE` elsewhere —
-/// kept to its `title_floor`, the state word in `FS_META` and its ink, a
-/// spacer, the provider's 13px logo and the trailing control: the fill
-/// button, or a draft's ×. No band on the focused head: the ring says focus.
-///
-/// Narrow, it gives way in order, never slicing a glyph: the title
-/// ellipsizes to its floor, then the word ellipsizes, and where even the
-/// floor does not fit beside the mark, the logo and the control (`width`),
-/// the floor gives way too. The mark, the logo and the control keep their
-/// size, and the control stands outside the part that gives way, so the
-/// board can always be filled from the head.
-pub(crate) struct GroupHead {
-    pub key: u64,
-    pub name: SharedString,
-    /// The Thread's mark; a draft has none.
-    pub mark: Option<crate::mark::RowStatus>,
-    /// The state word and its ink (`mark::NavTail::member_word`).
-    pub word: Option<(SharedString, u32)>,
-    /// The Pane holds the keyboard on a board: a strong title.
-    pub focused: bool,
-    /// The wired title (drag handle, double-click rename); `None` draws the
-    /// name.
-    pub title: Option<AnyElement>,
-    pub provider: Option<Provider>,
-    /// The trailing control: the fill button, or a draft's ×.
-    pub action: Option<AnyElement>,
-    /// The head's width this frame, when the board knows it.
-    pub width: Option<f32>,
-}
-
-pub(crate) fn group_head(head: GroupHead) -> Div {
-    let GroupHead {
-        key,
-        name,
-        mark,
-        word,
-        focused,
-        title,
-        provider,
-        action,
-        width,
-    } = head;
-    let title_ink = if focused { INK_STRONG } else { INK_SUBTLE };
-    let fit = HeadFit::of(
-        width,
-        mark.is_some(),
-        word.as_ref().map(|(text, _)| text.as_ref()),
-        provider.is_some(),
-        action.is_some(),
-        title_floor(&name),
-    );
-    let word = word.filter(|_| fit.word);
-    let provider = provider.filter(|_| fit.provider);
-    let floor = fit.floor;
-    div()
-        .debug_selector(move || format!("pane-head-{key}"))
-        .flex()
-        .flex_shrink_0()
-        .items_center()
-        .gap(px(theme::PANE_HEAD_GAP))
-        // The hairline lies under the row's 38, as the mockup's border does.
-        .h(px(theme::PANE_HEAD_H + 1.))
-        .pl(px(theme::PANE_HEAD_PAD_L))
-        .pr(px(theme::PANE_HEAD_PAD_R))
-        .border_b_1()
-        .border_color(theme::paint::LINE)
-        .min_w_0()
-        .overflow_hidden()
-        .whitespace_nowrap()
-        .font_family(theme::FONT_UI)
-        .text_size(px(theme::FS_LABEL))
-        .line_height(px(theme::LH_UI))
-        .child(
-            // What gives way: everything but the control.
-            div()
-                .flex()
-                .flex_1()
-                .min_w_0()
-                .items_center()
-                .gap(px(theme::PANE_HEAD_GAP))
-                .overflow_hidden()
-                .children(mark.map(|mark| {
-                    div()
-                        .debug_selector(move || format!("pane-head-dot-{key}"))
-                        .flex()
-                        .flex_shrink_0()
-                        .items_center()
-                        .h(px(theme::LH_UI))
-                        .child(crate::mark::head_mark(mark))
-                }))
-                .child(
-                    div()
-                        .debug_selector(move || format!("pane-head-title-{key}"))
-                        .flex()
-                        // Far the readier to shrink: the title gives way
-                        // to its floor before the word gives any.
-                        .flex_shrink(theme::HEAD_TITLE_SHRINK)
-                        .min_w(px(floor))
-                        .overflow_hidden()
-                        .font_weight(theme::W_LABEL)
-                        .text_color(rgb(title_ink))
-                        .child(match title {
-                            Some(title) => title,
-                            None => div().min_w_0().truncate().child(name).into_any_element(),
-                        }),
-                )
-                .children(word.map(|(text, ink)| {
-                    div()
-                        .debug_selector(move || format!("pane-head-word-{key}"))
-                        .flex_shrink(1.)
-                        .min_w_0()
-                        .truncate()
-                        .text_size(px(theme::FS_META))
-                        .text_color(rgb(ink))
-                        .child(text)
-                }))
-                .child(div().flex_1())
-                .children(provider.map(|provider| {
-                    let (glyph, ink) = ferrite_ui::provider::mark(provider);
-                    div()
-                        .debug_selector(move || format!("pane-head-provider-{key}"))
-                        .flex()
-                        .flex_shrink_0()
-                        .child(icon(glyph, theme::PANE_HEAD_ICON, ink))
-                })),
-        )
-        .children(action)
-}
-
-/// What a Group head shows at its width: past what the title's floor and
-/// the word need beside the fixed parts, the logo goes first, then the
-/// word, then the floor itself gives way to what is left.
-#[derive(Clone, Copy, Debug, PartialEq)]
-struct HeadFit {
-    word: bool,
-    provider: bool,
-    floor: f32,
-}
-
-impl HeadFit {
-    fn of(
-        width: Option<f32>,
-        mark: bool,
-        word: Option<&str>,
-        provider: bool,
-        action: bool,
-        floor: f32,
-    ) -> Self {
-        let Some(width) = width else {
-            return Self {
-                word: word.is_some(),
-                provider,
-                floor,
-            };
-        };
-        // The word at its shortest likely run, and the gap before it.
-        let word_w = word.map_or(0.0, |word| {
-            word.chars().count() as f32 * theme::FS_META * theme::UI_ADVANCE_FLOOR
-                + theme::PANE_HEAD_GAP
-        });
-        // The title's room beside the pads, the mark, the logo, the
-        // control and the gaps (the spacer stands between two of them).
-        let part = |shown: bool, w: f32| if shown { w + theme::PANE_HEAD_GAP } else { 0.0 };
-        let room = |provider: bool| {
-            width
-                - theme::PANE_HEAD_PAD_L
-                - theme::PANE_HEAD_PAD_R
-                - part(mark, theme::PANE_HEAD_DOT_W)
-                - part(provider, theme::PANE_HEAD_ICON)
-                - part(action, theme::ICON_BUTTON)
-        };
-        if room(provider) >= floor + word_w {
-            return Self {
-                word: word.is_some(),
-                provider,
-                floor,
-            };
-        }
-        if room(false) >= floor + word_w {
-            return Self {
-                word: word.is_some(),
-                provider: false,
-                floor,
-            };
-        }
-        Self {
-            word: false,
-            provider: false,
-            floor: floor.min(room(false).max(0.0)),
-        }
-    }
-}
-
-/// The head's fill button (SPEC §5.9): a 28px `maximize` door, `RAISED`
-/// under the pointer, whose press the cockpit wires to fill the board with
-/// this Pane (`ToggleFullscreen`), its tooltip `Fill the board ⌘⇧⏎` read
-/// from the keymap.
-pub fn fill_button(key: u64) -> Stateful<Div> {
-    let blend = SharedString::from(format!("pane-fill-{key}"));
-    let t = ferrite_ui::motion::hover_t(&blend);
-    div()
-        .id(gpui::ElementId::Name(blend.clone()))
-        .debug_selector(move || format!("pane-fill-{key}"))
-        .flex()
-        .flex_shrink_0()
-        .items_center()
-        .justify_center()
-        .size(px(theme::ICON_BUTTON))
-        .rounded(px(theme::R_CONTROL))
-        .cursor_pointer()
-        .when(t > 0.0, |door| {
-            door.bg(ferrite_ui::motion::mix(
-                rgba(TRANSPARENT).into(),
-                theme::paint::RAISED.into(),
-                t,
-            ))
-        })
-        .on_hover(ferrite_ui::motion::hover_listener(blend))
-        .tooltip(ferrite_ui::menu::action_tooltip(
-            "Fill the board",
-            "cockpit::ToggleFullscreen",
-        ))
-        .child(icon(
-            icons::MAXIMIZE,
-            theme::PANE_HEAD_FILL_GLYPH,
-            INK_STRONG,
-        ))
-}
-
 /// The failure strip (SPEC §5.9 item 4), the transcript's tail row under
-/// a failed turn's failure line, Solo's and a Group Pane's alike:
+/// a failed turn's failure line:
 /// `FAILURE_STRIP_H` at `R_CARD` on `FAILURE_WASH`, an `x-circle` in
 /// `BLOCKED`, why it failed (`API Error: 529 overloaded`) in `INK_STRONG`, cut to
 /// one line, and at the right the wired `Retry` (`retry_button`), which a
@@ -2401,31 +1854,8 @@ pub fn retry_button(key: u64, cx: &gpui::App) -> gpui::component::button::Button
     )
 }
 
-/// `needs you` as a door: a press runs the ⌘D jump (`NextDecision`) from
-/// wherever the keyboard is — the press does not land on a Pane first — and
-/// the tooltip names that key: `Next needs you ⌘D`. The Group head's
-/// slot draws it.
-pub(crate) fn needs_you_door(id: SharedString, selector: SharedString, face: Div) -> AnyElement {
-    let door = div()
-        .id(gpui::ElementId::Name(id))
-        .debug_selector(move || selector.to_string())
-        .flex()
-        .flex_shrink(1.)
-        .min_w_0()
-        .overflow_hidden()
-        .cursor_pointer()
-        .child(face)
-        .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
-        .on_click(|_, window, cx| window.dispatch_action(Box::new(NextDecision), cx));
-    door.tooltip(ferrite_ui::menu::action_tooltip(
-        "Next needs you",
-        "cockpit::NextDecision",
-    ))
-    .into_any_element()
-}
-
 /// The row a subagent's head (`subagent_head`) stands in, over its
-/// transcript: under the head on a board, at the card's top edge in Solo —
+/// transcript, at the card's top edge —
 /// one `SUBAGENT_HEAD_H` row padded `SUBAGENT_HEAD_PAD_X`, closed by a
 /// `LINE`.
 fn subagent_strip(key: u64, head: AnyElement) -> Div {
@@ -2441,17 +1871,6 @@ fn subagent_strip(key: u64, head: AnyElement) -> Div {
         .border_color(theme::paint::LINE)
         .text_color(rgb(INK_SUBTLE))
         .child(head)
-}
-
-/// The floor a head title keeps however narrow its head: `HEAD_TITLE_MIN_W`,
-/// or about its whole text when that is shorter. The title is proportional
-/// UI text, so its width is estimated from below (`UI_ADVANCE_FLOOR` a
-/// character): a short title is never padded past its text, and only a head
-/// squeezed to its floor can clip one's last letter.
-fn title_floor(name: &str) -> f32 {
-    (name.chars().count() as f32 * theme::FS_UI * theme::UI_ADVANCE_FLOOR)
-        .floor()
-        .min(theme::HEAD_TITLE_MIN_W)
 }
 
 /// A run's mark in the shared check vocabulary (`components::CheckMark`),
@@ -2650,14 +2069,6 @@ pub fn check_row(index: usize, run: &Check) -> Stateful<Div> {
             row.hover_raised(format!("check-row-{index}"))
                 .press_raised()
         })
-}
-
-/// The head's title: the name, truncating, with no hover face and the
-/// default cursor — it is a name, not a button. Render-only; the cockpit
-/// gives it its id, its double-click rename and its `Rename · double-click`
-/// tooltip.
-pub fn head_title(name: SharedString) -> Div {
-    div().min_w_0().truncate().child(name)
 }
 
 /// The rendered tail of a transcript at one level — the window `body`
@@ -2932,7 +2343,7 @@ impl Grid {
         Self::sized(theme::answer_text_size(reading))
     }
 
-    /// The grid of a Solo (`solo`) or a Group Pane's transcript
+    /// The grid of a Solo (`solo`) or a side chat's transcript
     /// (`theme::tx_size`).
     pub fn pane(reading: ferrite_core::settings::ReadingSize, solo: bool) -> Self {
         Self::sized(theme::tx_size(reading, solo))
@@ -5122,8 +4533,8 @@ mod tests {
         );
     }
 
-    /// `Starting` holds the working line's own row, Solo's and a Group
-    /// Pane's, so the line never moves when the turn's words replace it.
+    /// `Starting` holds the working line's own row, Solo's and a side
+    /// chat's, so the line never moves when the turn's words replace it.
     #[gpui::test]
     fn the_starting_line_stands_on_the_working_line_grid(cx: &mut TestAppContext) {
         let (_, cx) = cx.add_window_view(|_, cx| {
@@ -6169,27 +5580,6 @@ mod tests {
         rows.iter().map(|row| row.text.as_ref()).collect()
     }
 
-    /// A narrow Group head gives way in order: the logo, then the word,
-    /// then the title's floor — never the control.
-    #[test]
-    fn a_narrow_head_drops_the_logo_then_the_word() {
-        let fit = |width| HeadFit::of(Some(width), true, Some("needs you"), true, true, 96.0);
-        assert_eq!(
-            fit(400.0),
-            HeadFit {
-                word: true,
-                provider: true,
-                floor: 96.0
-            }
-        );
-        let narrower = fit(240.0);
-        assert!(narrower.word && !narrower.provider, "{narrower:?}");
-        let narrowest = fit(150.0);
-        assert!(!narrowest.word && !narrowest.provider, "{narrowest:?}");
-        assert!(narrowest.floor < 96.0 && narrowest.floor > 0.0);
-        assert_eq!(fit(20.0).floor, 0.0);
-    }
-
     /// F-6: prose wraps once — at its own line break, else where the face
     /// breaks it — its continuation hanging under the first word, and the
     /// tile keeps its last `WALL_LINES` rows.
@@ -6832,28 +6222,6 @@ mod tests {
         assert_eq!(compact_count(1_200_000), "1.2M");
     }
 
-    /// F-2: one attention edge. A waiting Pane draws `WAIT_RING` on a
-    /// board whether it holds focus or not — no inner ring, no full-ink
-    /// answer target, no red blocked edge; a calm focused Pane draws the
-    /// focus ring; at rest the card's own ring. Solo draws none: it is the
-    /// plane itself.
-    #[test]
-    fn pane_edge_ranks_state_over_focus() {
-        assert_eq!(PaneEdge::of(true, true, false), PaneEdge::Attention);
-        assert_eq!(PaneEdge::of(false, true, false), PaneEdge::Attention);
-        assert_eq!(PaneEdge::of(true, false, false), PaneEdge::Focused);
-        assert_eq!(PaneEdge::of(false, false, false), PaneEdge::Rest);
-        assert_eq!(PaneEdge::Rest.ink(), theme::paint::CARD_RING.into());
-        assert_eq!(PaneEdge::Focused.ink(), rgba(FOCUS_RING).into());
-        assert_eq!(PaneEdge::Attention.ink(), rgba(WAIT_RING).into());
-        for focused in [false, true] {
-            for attention in [false, true] {
-                let edge = PaneEdge::of(focused, attention, true);
-                assert_eq!(edge, PaneEdge::Flush, "solo {focused} {attention}");
-            }
-        }
-    }
-
     /// A run's state word is coloured only when it failed; the mark beside
     /// it carries the rest, in the one check vocabulary: green only while a
     /// run is going, a pass dim, never the ochre that means an agent waits.
@@ -6897,7 +6265,7 @@ mod tests {
         }
     }
 
-    /// Every word the wall and the Group head's slot can say is the
+    /// Every word the wall and the nav row can say is the
     /// lexicon's (`theme::words`), lowercase — `failing 2`, never `2
     /// failing`; `failed`, never a raw reason; idle says nothing.
     #[test]
@@ -7141,46 +6509,36 @@ mod tests {
 
     // ---- WP-D tests (append above the end line)
     /// The height budget counts exactly what the Composer draws around its
-    /// editor rows, at every level, focused or not: Solo's box — the
-    /// input's 14 + 8, the 42px toolbar, the 14px inset — and a board's
-    /// compact box — 9 above and below its one 20px row, 10 to the foot.
+    /// editor rows, at every level, focused or not: the input's 14 + 8, the
+    /// 42px toolbar, the 14px inset.
     #[test]
     fn the_fixed_height_follows_the_composer_tokens() {
-        // Solo: the row's 7 + 5 of air above and below one line (a 44 box),
-        // then the 41px footer down to the card's foot.
-        assert_eq!(composer_fixed_height(false), 2. * (7. + 5.) + 41.);
-        assert_eq!(composer_fixed_height(true), 9. + 9. + 10.);
-        assert_eq!(
-            theme::COMPACT_COMPOSER_H,
-            composer_fixed_height(true) - theme::COMPACT_COMPOSER_INSET + theme::COMPOSER_ROW_H
+        // The row's 7 + 5 of air above and below one line (a 44 box), then
+        // the 41px footer down to the card's foot.
+        assert_eq!(composer_fixed_height(), 2. * (7. + 5.) + 41.);
+        // A tall Pane shows every editor row; a short one keeps its
+        // majority.
+        assert_eq!(composer_row_limit(900., 0), crate::composer::MAX_ROWS);
+        let limit = composer_row_limit(300., 0) as f32;
+        assert!(
+            composer_fixed_height() + limit * theme::COMPOSER_ROW_H
+                <= 300. * theme::COMPOSER_MAX_PANE_FRACTION
         );
-        for grid in [false, true] {
-            // A tall Pane shows every editor row; a short one keeps its
-            // majority.
-            assert_eq!(composer_row_limit(900., grid, 0), crate::composer::MAX_ROWS);
-            let limit = composer_row_limit(300., grid, 0) as f32;
-            assert!(
-                composer_fixed_height(grid) + limit * theme::COMPOSER_ROW_H
-                    <= 300. * theme::COMPOSER_MAX_PANE_FRACTION
-            );
-        }
-        // Solo's queue is a 44px row per message and its 8 gap; the
-        // compact box counts none (its Pane says `2 queued` unfocused).
-        assert_eq!(composer_queue_height(900., false, 0), 0.);
+        // The queue is a 44px row per message and its 8 gap.
+        assert_eq!(composer_queue_height(900., 0), 0.);
         // A row per message, up to the rows it shows; more scroll.
         assert_eq!(
-            composer_queue_height(900., false, 1),
+            composer_queue_height(900., 1),
             theme::QUEUE_CARD_H + theme::QUEUE_CARD_GAP
         );
         assert_eq!(
-            composer_queue_height(900., false, 2),
+            composer_queue_height(900., 2),
             2. * theme::QUEUE_CARD_H + theme::QUEUE_CARD_GAP
         );
         assert_eq!(
-            composer_queue_height(900., false, 9),
+            composer_queue_height(900., 9),
             theme::QUEUE_ROWS_SHOWN as f32 * theme::QUEUE_CARD_H + theme::QUEUE_CARD_GAP
         );
-        assert_eq!(composer_queue_height(900., true, 3), 0.);
     }
 
     /// The ctx meter fills green, then yellow, then red.

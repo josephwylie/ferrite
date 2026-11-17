@@ -1,8 +1,8 @@
 //! The stale-chrome matrix: the Cockpit draws its nav and each Pane as a
 //! cached part, rebuilt only when something it shows changes — so for every
 //! way chrome changes, a test that what is on screen (what the part last
-//! drew, `cockpit::drawn`) follows. A four-Pane Group or one Thread Solo,
-//! the motion kit live, an active window, the keyboard in the first Pane.
+//! drew, `cockpit::drawn`) follows. One Thread on screen, the motion kit
+//! live, an active window, the keyboard in the first Pane.
 
 use super::*;
 use crate::cockpit::drawn;
@@ -25,28 +25,18 @@ struct Board<'a> {
     cx: &'a mut gpui::VisualTestContext,
 }
 
-/// Four Threads in one Group on the board, `working` of them mid-turn.
-fn board<'a>(name: &str, working: &[usize], cx: &'a mut TestAppContext) -> Board<'a> {
-    ferrite_ui::motion::testing::drive();
-    let (mut core, fake) = cockpit(name, 4);
-    let group = group_all(&mut core);
-    open(core, fake, Some(group), working, cx)
-}
-
 /// One Thread, Solo, mid-turn when `working`.
 fn solo<'a>(name: &str, working: bool, cx: &'a mut TestAppContext) -> Board<'a> {
     ferrite_ui::motion::testing::drive();
     let (core, fake) = cockpit(name, 1);
     let working: &[usize] = if working { &[0] } else { &[] };
-    open(core, fake, None, working, cx)
+    open(core, fake, working, cx)
 }
 
-/// A window on `core`, `group` entered if any, the keyboard in the first
-/// Pane, `working` mid-turn, first paint settled.
+/// A window on `core`, the keyboard in the first Pane, `working` mid-turn, first paint settled.
 fn open<'a>(
     mut core: Cockpit,
     fake: Fake,
-    group: Option<GroupId>,
     working: &[usize],
     cx: &'a mut TestAppContext,
 ) -> Board<'a> {
@@ -58,9 +48,6 @@ fn open<'a>(
     cx.simulate_resize(gpui::size(px(1600.), px(1000.)));
     cx.update(|window, _| window.activate_window());
     view.update(cx, |view, cx| {
-        if let Some(group) = group {
-            view.enter_group(group, cx);
-        }
         view.focus_pane(0);
         cx.notify();
     });
@@ -106,10 +93,6 @@ impl Board<'_> {
     }
 }
 
-fn centre(rect: &layout::Rect) -> gpui::Point<Pixels> {
-    gpui::point(px(rect.x + rect.w / 2.), px(rect.y + rect.h / 2.))
-}
-
 /// Seen: a Thread on the board finishes while the window is away; its
 /// Pane's head and its nav row say done at once, and both redraw it read
 /// the moment the window comes back.
@@ -150,41 +133,6 @@ fn a_finish_while_the_window_is_away_is_drawn_done_until_it_returns(cx: &mut Tes
     );
 }
 
-/// Focus: a click moves the keyboard to another Pane; both Panes redraw
-/// their focus, and the new one's line takes the keyboard.
-#[gpui::test]
-fn a_click_moves_focus_and_both_panes_redraw_it(cx: &mut TestAppContext) {
-    let mut b = board("stale-focus", &[], cx);
-    assert!(b.pane(0).focused && !b.pane(2).focused);
-    let rect = b.rect(2);
-    b.cx.simulate_click(centre(&rect), gpui::Modifiers::none());
-    frames(b.cx, 200);
-    assert!(b.pane(2).focused, "the clicked Pane draws its focus");
-    assert!(!b.pane(0).focused, "the one it left draws none");
-    assert!(b.pane(2).editing, "its line holds the keyboard");
-}
-
-/// Drop target: native files dragged over a Pane edge its Composer, and
-/// leaving takes the edge away.
-#[gpui::test]
-fn dragged_files_edge_the_pane_under_them(cx: &mut TestAppContext) {
-    let mut b = board("stale-drop", &[], cx);
-    let rect = b.rect(1);
-    b.cx.simulate_event(gpui::FileDropEvent::Entered {
-        position: centre(&rect),
-        paths: gpui::ExternalPaths(vec![here().join("notes.txt")].into()),
-    });
-    tick(b.cx);
-    assert!(
-        b.pane(1).drop_target,
-        "the Pane under the files draws the edge"
-    );
-    assert!(!b.pane(0).drop_target);
-    b.cx.simulate_event(gpui::FileDropEvent::Exited);
-    tick(b.cx);
-    assert!(!b.pane(1).drop_target, "left: no edge");
-}
-
 /// cmd-B slides the column to the rail: the Panes take the board's width
 /// on screen every frame, and rest on the wider one.
 #[gpui::test]
@@ -210,45 +158,6 @@ fn the_panes_ride_the_nav_fold(cx: &mut TestAppContext) {
     assert!(landed > last, "wider beside the rail: {last} -> {landed}");
     frames(b.cx, 400);
     assert_eq!(b.pane(0).cell_width, landed, "and stays there");
-}
-
-/// The rename editor: opening it on a Pane's head draws it there; the name
-/// committed reaches the nav row, and the editor leaves the head.
-#[gpui::test]
-fn a_rename_opens_in_the_head_and_lands_in_the_nav(cx: &mut TestAppContext) {
-    let b = board("stale-rename", &[], cx);
-    let thread = b.threads[1];
-    let view = b.view.clone();
-    view.update(b.cx, |view, cx| {
-        view.start_rename(RenameTarget::PaneTitle(thread), cx)
-    });
-    frames(b.cx, 100);
-    assert!(b.pane(1).renaming, "the head draws the editor");
-    view.update(b.cx, |view, cx| {
-        let (_, editor) = view.rename.clone().expect("the editor is open");
-        editor.update(cx, |editor, cx| editor.set("Renamed thread".into(), cx));
-        view.finish_rename(true, cx);
-    });
-    frames(b.cx, 100);
-    assert!(!b.pane(1).renaming, "the editor has left the head");
-    assert!(
-        drawn::row(thread).ends_with("Renamed thread"),
-        "the nav draws the new name: {}",
-        drawn::row(thread)
-    );
-}
-
-/// Reduced motion, turned on with a Thread mid-turn, reaches every Pane.
-#[gpui::test]
-fn reduced_motion_reaches_every_pane(cx: &mut TestAppContext) {
-    let b = board("stale-reduced", &[0, 2], cx);
-    assert!(!b.pane(2).reduce_motion);
-    b.cx.update(|_, cx| cx.set_reduce_motion(true));
-    frames(b.cx, 100);
-    for thread in 0..4 {
-        assert!(b.pane(thread).reduce_motion, "Pane {thread} draws it");
-    }
-    assert!(b.cx.debug_bounds("progress-mark-still").is_some());
 }
 
 /// Window activation: leaving the window takes the keyboard from every
@@ -315,42 +224,6 @@ fn the_slash_menu_opens_and_closes_over_its_pane(cx: &mut TestAppContext) {
         b.cx.debug_bounds("composer-menu-rows").is_none(),
         "and gone on escape"
     );
-}
-
-/// Preferences: the reading size reaches every Pane's transcript, the
-/// focused one's and the others'.
-#[gpui::test]
-fn the_reading_size_reaches_every_pane(cx: &mut TestAppContext) {
-    let b = board("stale-prefs", &[], cx);
-    for thread in 0..4 {
-        b.send(
-            thread,
-            SessionEvent::TextDelta {
-                text: format!("Pane {thread} answers."),
-            },
-        );
-    }
-    tick(b.cx);
-    frames(b.cx, 100);
-    let view = b.view.clone();
-    let prefixes: Vec<String> = view.read_with(b.cx, |view, _| {
-        view.panes
-            .iter()
-            .map(|pane| format!("markdown-{}-", pane.text_namespace()))
-            .collect()
-    });
-    view.update(b.cx, |view, cx| {
-        view.prefs.settings.reading_size = ferrite_core::settings::ReadingSize::nearest(18);
-        cx.notify();
-    });
-    frames(b.cx, 100);
-    for prefix in &prefixes {
-        assert_eq!(
-            b.cx.update(|_, cx| ferrite_pane::rich::testing::font_size(prefix, cx)),
-            Some(px(18. - ferrite_ui::theme::TX_GROUP_STEP)),
-            "{prefix} reads at the new size (a Group Pane's half step under it)"
-        );
-    }
 }
 
 /// A working clock turns over on its Pane while the board sits still.

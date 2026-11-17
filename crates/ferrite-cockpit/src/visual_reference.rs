@@ -26,8 +26,6 @@ use ferrite_core::{
     activity::TranscriptCoverage,
     activity::{ActivityEvent, AgentInfo, AgentKey, AgentStatus, ExecutionEvent, Subject},
     cockpit::{Cockpit, SpawnRequest, Spawner},
-    groups::{GroupChange, GroupId},
-    layout::{Axis, Node, Tree},
     providers::Session,
     settings::ReadingSize,
     store::{Provider, Store},
@@ -197,16 +195,6 @@ impl Feed {
     }
     fn ok(&self, id: &str, output: &str) -> &Self {
         self.done(id, output, false, ToolResult::Opaque)
-    }
-    /// A shell call as Codex sends it: the command alone.
-    fn bash(&self, id: &str, command: &str, stdout: &str, exit: i64, ms: u64) -> &Self {
-        self.shell(
-            id,
-            serde_json::json!({ "command": command }),
-            stdout,
-            exit,
-            ms,
-        )
     }
     /// A Bash call as Claude Code sends it: the command and the words it
     /// wrote for what the command is for (the row's line).
@@ -388,34 +376,6 @@ impl Scene {
         let feed = Feed(self.feeds.borrow().last().expect("spawned").clone());
         (thread, feed)
     }
-
-    fn group(&mut self, members: &[ThreadId], title: &str) -> GroupId {
-        let group = self
-            .core
-            .apply_group(GroupChange::Create {
-                first: members[0],
-                second: members[1],
-            })
-            .expect("group fixture Threads")
-            .group
-            .expect("a new Group");
-        for thread in &members[2..] {
-            self.core
-                .apply_group(GroupChange::Join {
-                    thread: *thread,
-                    group,
-                    index: None,
-                })
-                .expect("join fixture Group");
-        }
-        self.core
-            .apply_group(GroupChange::Rename {
-                group,
-                title: title.into(),
-            })
-            .expect("name fixture Group");
-        group
-    }
 }
 
 /// Sizes by label: the two transcript widths the references began with,
@@ -440,10 +400,6 @@ const STATES: &[(&str, &[&str])] = &[
     ("conversation", &["app", "wide"]),
     ("diff", &["app"]),
     ("nav", &["app"]),
-    ("group4", &["app"]),
-    ("group9", &["app"]),
-    ("group12", &["app"]),
-    ("group12-dragged", &["app"]),
     ("subagents", &["app"]),
     ("subagent", &["app"]),
     ("composer", &["app"]),
@@ -515,7 +471,6 @@ const STATES: &[(&str, &[&str])] = &[
     // (run from the bundle) the pages are Chromium's; without, the fallback.
     ("visuals", &["app", "wide", "narrow"]),
     ("visuals-top", &["app"]),
-    ("visuals-group", &["app"]),
     // (end visuals)
 
     // ---- WP-G states (append above the end line)
@@ -535,7 +490,6 @@ const STATES: &[(&str, &[&str])] = &[
     // compared against docs/design/ui-refresh/mockups/<view>.png.
     ("refresh-solo", &["refresh"]),
     ("refresh-solo-changes", &["refresh"]),
-    ("refresh-group", &["refresh"]),
     ("refresh-pr-failing", &["refresh"]),
     ("refresh-pr-merged", &["refresh"]),
     ("refresh-pr-none", &["refresh"]),
@@ -847,7 +801,6 @@ fn build(state: &str, label: &str) -> (Scene, Setup) {
             (scene, setup)
         }
         "nav" => nav(),
-        "group4" => group4(),
         "visuals" => (visuals(label), none),
         "visuals-top" => {
             let scene = visuals("top");
@@ -860,10 +813,6 @@ fn build(state: &str, label: &str) -> (Scene, Setup) {
             });
             (scene, setup)
         }
-        "visuals-group" => visuals_group(),
-        "group9" => group9(),
-        "group12" => group12(false),
-        "group12-dragged" => group12(true),
         "subagents" => subagents(),
         "composer" => composer(),
         "menu" => menu(),
@@ -1909,8 +1858,8 @@ fn conversation(label: &str) -> Scene {
     scene
 }
 
-/// A spread of Threads across three Projects, one a three-member Group,
-/// covering every status the nav draws.
+/// A spread of Threads across three Projects, covering every status the
+/// nav draws.
 fn nav() -> (Scene, Setup) {
     let mut scene = Scene::new("nav");
     let ferrite = scene.project("ferrite");
@@ -1990,7 +1939,6 @@ fn nav() -> (Scene, Setup) {
         .text("Added the `app` size and a state filter.")
         .end(0.2210);
     subagent_crew(&harness_feed, "harness", 5);
-    scene.group(&[geist, density, harness], "UI overhaul");
 
     let (flaky, flaky_feed) = scene.open(Provider::Claude, &ferrite, "Fix flaky pump test");
     let _ = scene.core.send(flaky, "Fix the flaky pump test.".into());
@@ -2160,105 +2108,6 @@ fn subagent_crew(feed: &Feed, prefix: &str, count: usize) {
     }
 }
 
-/// `nodes` side by side (or stacked), each an equal share.
-fn chain(mut nodes: Vec<Node>, axis: Axis) -> Node {
-    if nodes.len() == 1 {
-        return nodes.pop().unwrap();
-    }
-    let share = 1.0 / nodes.len() as f32;
-    let head = nodes.remove(0);
-    Node::Split {
-        axis,
-        ratio: share,
-        first: Box::new(head),
-        second: Box::new(chain(nodes, axis)),
-    }
-}
-
-fn leaves(threads: &[ThreadId]) -> Vec<Node> {
-    threads.iter().map(|thread| Node::Leaf(*thread)).collect()
-}
-
-/// Members in a mix of states: streaming, asking, done, failed.
-fn members(scene: &mut Scene, checkout: &Path, titles: &[&str]) -> Vec<ThreadId> {
-    let mut threads = Vec::new();
-    for (at, title) in titles.iter().enumerate() {
-        let provider = if at % 3 == 1 {
-            Provider::Codex
-        } else {
-            Provider::Claude
-        };
-        let (thread, feed) = scene.open(provider, checkout, title);
-        let _ = scene.core.send(thread, format!("{title}."));
-        feed.boot(provider, 20_000 + 9_000 * at as u64);
-        match at % 5 {
-            0 => {
-                feed.text("Wiring the joiner into the canvas path so the atlas stays per-cell; ")
-                    .bash(
-                        "check",
-                        "cargo check --workspace",
-                        "Finished dev profile",
-                        0,
-                        9_100,
-                    )
-                    .text("the fold keeps the tail following the newest line while")
-                    .tool(
-                        "test",
-                        "Bash",
-                        serde_json::json!({"command": "cargo test --workspace"}),
-                    );
-            }
-            1 => {
-                feed.text("Closing the superseded issue needs your ruling.\n\n")
-                    .approval("close", "gh issue close 212");
-            }
-            2 => {
-                feed.text("Landed the retune behind the theme tokens; the suite is green.")
-                    .end(0.31);
-            }
-            3 => {
-                feed.bash(
-                    "fail",
-                    "cargo test --workspace",
-                    "test result: FAILED. 357 passed; 2 failed",
-                    101,
-                    61_000,
-                )
-                .text("Two cases regressed after the retune; rerunning the pair with the fold instrumented");
-            }
-            _ => {
-                feed.text("Reading the board recipes side by side before touching anything")
-                    .tool(
-                        "read",
-                        "Read",
-                        serde_json::json!({"file_path": "crates/ferrite/src/pane.rs"}),
-                    );
-            }
-        }
-        threads.push(thread);
-    }
-    threads
-}
-
-/// Four members on the default grid: 2×2 at L1 at the app size.
-fn group4() -> (Scene, Setup) {
-    let mut scene = Scene::new("group4");
-    let ferrite = scene.project("ferrite");
-    let threads = members(
-        &mut scene,
-        &ferrite,
-        &[
-            "Perf: layout cache",
-            "Close stale issues",
-            "Theme retune",
-            "Fold regression",
-        ],
-    );
-    let group = scene.group(&threads, "Perf sweep");
-    scene.core.enter_group(group).expect("enter fixture Group");
-    (scene, Box::new(|_, _, _| {}))
-}
-
 /// An agent's visual: the tool call's input, as `show_visual` takes it.
 fn visual_input(title: &str, caption: &str, html: &str) -> serde_json::Value {
     serde_json::json!({ "title": title, "caption": caption, "html": html })
@@ -2341,62 +2190,6 @@ fn visuals(label: &str) -> Scene {
         ),
     });
     scene
-}
-
-/// Four Panes on a board, two with visuals: a visual at a Group Pane's
-/// width.
-fn visuals_group() -> (Scene, Setup) {
-    let mut scene = Scene::new("visuals-group");
-    let ferrite = scene.project("ferrite");
-    let threads = members(
-        &mut scene,
-        &ferrite,
-        &[
-            "Token spend",
-            "Notice options",
-            "Theme retune",
-            "Fold regression",
-        ],
-    );
-    for (index, (title, page)) in [
-        ("Token usage", STATS_PAGE),
-        ("Notice options", MOCKUPS_PAGE),
-    ]
-    .into_iter()
-    .enumerate()
-    {
-        let feed = Feed(scene.feeds.borrow()[index].clone());
-        feed.text("Here it is.")
-            .tool(&format!("v-{index}"), VISUAL, visual_input(title, "", page))
-            .ok(&format!("v-{index}"), "Shown to the operator inline.")
-            .end(0.01);
-    }
-    let group = scene.group(&threads, "Visuals");
-    scene.core.enter_group(group).expect("enter fixture Group");
-    (scene, Box::new(|_, _, _| {}))
-}
-
-/// Nine members on the default grid (3×3), one of them asking a Question.
-fn group9() -> (Scene, Setup) {
-    let mut scene = Scene::new("group9");
-    let ferrite = scene.project("ferrite");
-    let titles = [
-        "Perf: layout cache",
-        "Close stale issues",
-        "Theme retune",
-        "Fold regression",
-        "Board recipes",
-        "Pump backpressure",
-        "Triage 212",
-        "Diff stats badge",
-        "Wall census",
-    ];
-    let threads = members(&mut scene, &ferrite, &titles);
-    // "Board recipes" (spawned fifth) stops to ask.
-    Feed(scene.feeds.borrow()[4].clone()).ev(questions("board-question", "ask"));
-    let group = scene.group(&threads, "Grid of nine");
-    scene.core.enter_group(group).expect("enter fixture Group");
-    (scene, Box::new(|_, _, _| {}))
 }
 
 /// A turn that ends in a provider error after some work.
@@ -2557,49 +2350,6 @@ fn tool_group_overflow() -> Scene {
     }
     scene.core.pump();
     scene
-}
-
-/// Twelve members on the default grid (4×3, one Level for the board); or,
-/// `dragged`, the operator's own row of five over a row of seven, which the
-/// board keeps as it was left — at the one Level its smallest cell allows.
-fn group12(dragged: bool) -> (Scene, Setup) {
-    let mut scene = Scene::new(if dragged {
-        "group12-dragged"
-    } else {
-        "group12"
-    });
-    let ferrite = scene.project("ferrite");
-    let titles = [
-        "Perf: layout cache",
-        "Close stale issues",
-        "Theme retune",
-        "Fold regression",
-        "Board recipes",
-        "Pump backpressure",
-        "Triage 212",
-        "Diff stats badge",
-        "Wall census",
-        "Atlas eviction",
-        "Seam drag",
-        "Resume handshake",
-    ];
-    let threads = members(&mut scene, &ferrite, &titles);
-    let group = scene.group(&threads, "Wall of twelve");
-    if dragged {
-        let top = chain(leaves(&threads[..5]), Axis::Row);
-        let bottom = chain(leaves(&threads[5..]), Axis::Row);
-        scene
-            .core
-            .set_group_layout(
-                group,
-                Tree {
-                    root: Some(chain(vec![top, bottom], Axis::Column)),
-                },
-            )
-            .expect("lay out fixture Group");
-    }
-    scene.core.enter_group(group).expect("enter fixture Group");
-    (scene, Box::new(|_, _, _| {}))
 }
 
 /// A Main that delegated to three subagents, each in a different state.

@@ -53,16 +53,17 @@ pub(crate) const FREE_DISK: u64 = 7_500_000_000;
 // ------------------------------------------------------------------ world
 
 /// Which view the world is built for. The roster never changes; what
-/// differs is the Codex request the Group view is waiting on: the Solo
-/// mockups count `3 need you` and roll WORK up as `1 failed`, the Group
-/// mockup counts `4`, with Find all calls asking. So in Solo that Thread
-/// is still searching, and in the Group it has asked.
+/// differs is the Codex request the palette shot is waiting on: the Solo
+/// mockups count `3 need you`, the palette's world counts `4`, with Find
+/// all calls asking. So in Solo that Thread is still searching, and in
+/// the palette's world it has asked.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Look {
     /// Ferrite idle memory usage in Solo (solo.png, solo-changes.png).
     Solo,
-    /// The WORK Group, Supplier Price Review focused (group.png).
-    Group,
+    /// Supplier Price Review on screen, Find all calls asking
+    /// (command-search.png).
+    Asking,
 }
 
 /// The crash fix's pull request, as the forge reads it (pr-states.png and
@@ -315,7 +316,7 @@ pub(crate) fn build(root: &Path, look: Look, pr: Pr, clock: Clock) -> World {
 
     // The Groups, in creation order: the bar's `2 Work`, `3 InvoiceMate
     // business`. WORK sits under agenticos, its first member's Project.
-    let work = group(&mut core, supplier, calls, &[epicurean, bb], "WORK");
+    group(&mut core, supplier, calls, &[epicurean, bb], "WORK");
     group(&mut core, business, redesign, &[], "InvoiceMate Business");
 
     // The idle Threads were read when they finished: only Complete BB
@@ -339,14 +340,8 @@ pub(crate) fn build(root: &Path, look: Look, pr: Pr, clock: Clock) -> World {
         Look::Solo => {
             core.focus_thread(memory);
         }
-        Look::Group => {
-            // The operator has stepped away: the window is in the
-            // background, so the supplier list's finish, on screen in
-            // WORK, stays unseen and its head says `done` (ADR 0015's
-            // seen rule reads only what a focused window shows).
-            core.set_window_active(false);
+        Look::Asking => {
             core.focus_thread(supplier);
-            core.enter_group(work).expect("enter WORK");
         }
     }
     core.pump();
@@ -794,8 +789,8 @@ fn supplier_review(s: &mut Script, who: ThreadId) {
     s.ev(CAPTURE, who, phase("Comparing"));
 }
 
-/// Find all calls to this API (group.png, Pane 2): a Codex search, then,
-/// in the Group's look, its request to write the list out.
+/// Find all calls to this API: a Codex search, then, in the Asking look,
+/// its request to write the list out.
 fn find_calls(s: &mut Script, who: ThreadId, look: Look) {
     let start = hms(12, 24, 0);
     s.prompt(
@@ -841,7 +836,7 @@ fn find_calls(s: &mut Script, who: ThreadId, look: Look) {
             },
         ),
     );
-    if look == Look::Group {
+    if look == Look::Asking {
         let command = "rg -n \"client.request\\(\" src --json > calls.json";
         s.ev(
             start + 5,
@@ -1488,7 +1483,7 @@ mod tests {
             midnight: midnight(),
             fixture: None,
         };
-        let world = build(&root, Look::Group, Pr::Open, clock);
+        let world = build(&root, Look::Asking, Pr::Open, clock);
         let core = &world.core;
         assert_eq!(core.threads().len(), 14, "fourteen Threads are open");
         assert_eq!(core.parked().unwrap().len(), 3, "three are parked");
@@ -1496,7 +1491,7 @@ mod tests {
         let titles: Vec<String> = core.groups().iter().map(|g| g.display_title()).collect();
         assert_eq!(titles, ["WORK", "InvoiceMate Business"]);
         let asking = core.needs_you();
-        assert_eq!(asking.len(), 4, "four need you on the Group");
+        assert_eq!(asking.len(), 4, "four need you");
         for thread in [
             world.cast.recipes,
             world.cast.customers,

@@ -13,7 +13,6 @@ use gpui::component::{
     Disableable,
 };
 use gpui::KeyDownEvent;
-use gpui_base::ElementExt as _;
 use std::{cell::RefCell, collections::HashMap, rc::Rc};
 
 /// A Pane's Decision state, shared with the cards it draws: each question
@@ -90,90 +89,7 @@ struct RequestForm {
     inputs: Vec<Entity<InputState>>,
     form_inputs: HashMap<String, Entity<InputState>>,
     values: serde_json::Map<String, serde_json::Value>,
-    fit: QuestionFit,
     scroll: ScrollHandle,
-}
-
-#[derive(Default)]
-struct QuestionFit {
-    available: Option<gpui::Size<gpui::Pixels>>,
-    island: Option<gpui::Bounds<gpui::Pixels>>,
-    viewport: Option<gpui::Bounds<gpui::Pixels>>,
-    content: Option<gpui::Bounds<gpui::Pixels>>,
-    first_control: Option<gpui::Bounds<gpui::Pixels>>,
-    required: Option<gpui::Pixels>,
-}
-
-impl QuestionFit {
-    fn needs_expansion(&self) -> bool {
-        self.available
-            .zip(self.required)
-            .is_some_and(|(available, required)| available.height < required)
-    }
-
-    fn measure(&mut self, part: QuestionMeasure, bounds: gpui::Bounds<gpui::Pixels>) {
-        match part {
-            QuestionMeasure::Available => {
-                if self
-                    .available
-                    .is_some_and(|previous| (previous.width - bounds.size.width).abs() > px(0.5))
-                {
-                    self.island = None;
-                    self.viewport = None;
-                    self.content = None;
-                    self.first_control = None;
-                    self.required = None;
-                }
-                self.available = Some(bounds.size);
-            }
-            QuestionMeasure::Island => self.island = Some(bounds),
-            QuestionMeasure::Viewport => self.viewport = Some(bounds),
-            QuestionMeasure::Content => self.content = Some(bounds),
-            QuestionMeasure::FirstControl => self.first_control = Some(bounds),
-        }
-        if let (Some(island), Some(viewport), Some(content), Some(first)) =
-            (self.island, self.viewport, self.content, self.first_control)
-        {
-            // Both content and its first control move by the same scroll
-            // offset. Their difference is a size, not a scrolling position.
-            let first_section = first.bottom() - content.top();
-            self.required = Some(island.size.height - viewport.size.height + first_section);
-        }
-    }
-}
-
-#[derive(Clone, Copy)]
-enum QuestionMeasure {
-    Available,
-    Island,
-    Viewport,
-    Content,
-    FirstControl,
-}
-
-fn measure_question(
-    forms: RequestForms,
-    handle: DecisionHandle,
-    part: QuestionMeasure,
-    owner: gpui::WeakEntity<CockpitView>,
-) -> impl Fn(gpui::Bounds<gpui::Pixels>, &mut Window, &mut gpui::App) + 'static {
-    move |bounds, window, cx| {
-        let changed = {
-            let mut forms = forms.0.borrow_mut();
-            let Some(form) = forms.get_mut(&handle) else {
-                return;
-            };
-            let before = form.fit.needs_expansion();
-            form.fit.measure(part, bounds);
-            before != form.fit.needs_expansion()
-        };
-        if changed {
-            let owner = owner.clone();
-            window.defer(cx, move |_, cx| {
-                let _ = owner.update(cx, |_, cx| cx.notify());
-            });
-        }
-    }
 }
 
 /// Pending handles can share a destination. Visit each destination once,
@@ -225,9 +141,9 @@ fn native_keys<E: gpui::InteractiveElement>(element: E) -> E {
 /// Every request card's frame. In the transcript the card is the row
 /// itself, on the transcript's own column; in the requests overlay it lies
 /// on the plane, inset on the transcript's axes, so the rows it docks over
-/// do not show through. For a question this frame is the island
-/// `QuestionFit` measures.
-fn request_frame(card: impl IntoElement, overlay: bool, solo: bool, inset: f32) -> Div {
+/// do not show through. `narrow` is the compact inspector's column
+/// (`Cards::narrow`).
+fn request_frame(card: impl IntoElement, overlay: bool, narrow: bool, inset: f32) -> Div {
     native_keys(
         div()
             .w_full()
@@ -249,10 +165,9 @@ fn request_frame(card: impl IntoElement, overlay: bool, solo: bool, inset: f32) 
             })
             .when(!overlay, |frame| frame.ml(px(-theme::CARD_OUTSET)))
             // Every card waits on the operator: Claude's pill says so over
-            // it, on the column, the one place its state takes a hue. In a
-            // Group Pane its head and ring say it already (rule 7), and the
-            // room is the card's.
-            .when(solo && !overlay, |frame| {
+            // it, on the column, the one place its state takes a hue. In the
+            // compact inspector the room is the card's.
+            .when(!narrow && !overlay, |frame| {
                 frame.child(decision::needs_input().ml(px(theme::CARD_OUTSET)))
             })
             .child(card),
@@ -714,13 +629,6 @@ impl CockpitView {
         )
     }
 
-    /// The head's title: the Thread's, whichever Subject is selected — the
-    /// subagent's own head says which transcript this is.
-    pub(super) fn activity_title(&self, index: usize, cx: &mut Context<Self>) -> AnyElement {
-        let thread = self.panes[index].thread().expect("Thread Pane");
-        self.pane_title(index, thread, cx)
-    }
-
     pub(super) fn respond_exact(
         &mut self,
         thread: ThreadId,
@@ -753,74 +661,10 @@ impl CockpitView {
         cx.notify();
     }
 
-    /// Whether this Pane's question is too big for its body: it answers in
-    /// fullscreen (the expand key, `ToggleFullscreen`), and the body keeps
-    /// its transcript meanwhile. The head's slot says `needs you ·
-    /// question`; there is no head chip.
-    pub(super) fn question_needs_expansion(&self, index: usize, compact: bool) -> bool {
-        let pane = &self.panes[index];
-        if self.cockpit.roster().fullscreen() == Some(pane.identity) {
-            return false;
-        }
-        let Some(thread) = pane.thread() else {
-            return false;
-        };
-        let Some(open) = self.cockpit.thread(thread) else {
-            return false;
-        };
-        open.pending_decisions().iter().any(|request| {
-            (request.subject.as_ref() == Some(&pane.selected)
-                || (request.subject.is_none() && pane.is_main()))
-                && pane::questions_of(&request.decision).is_some()
-                && (compact
-                    || pane
-                        .request_forms
-                        .0
-                        .borrow()
-                        .get(&request.handle)
-                        .is_some_and(|form| form.fit.needs_expansion()))
-        })
-    }
-
-    pub(super) fn activity_question_measurement(
-        &self,
-        index: usize,
-        cx: &mut Context<Self>,
-    ) -> Option<AnyElement> {
-        let pane = &self.panes[index];
-        let thread = pane.thread()?;
-        let handles: Vec<_> = self
-            .cockpit
-            .thread(thread)?
-            .pending_decisions()
-            .iter()
-            .filter(|request| {
-                (request.subject.as_ref() == Some(&pane.selected)
-                    || (request.subject.is_none() && pane.is_main()))
-                    && pane::questions_of(&request.decision).is_some()
-            })
-            .map(|request| request.handle.clone())
-            .collect();
-        if handles.is_empty() {
-            return None;
-        }
-        let mut measure = div().absolute().inset_0();
-        for handle in handles {
-            measure = measure.on_prepaint(measure_question(
-                pane.request_forms.clone(),
-                handle,
-                QuestionMeasure::Available,
-                cx.entity().downgrade(),
-            ));
-        }
-        Some(measure.into_any_element())
-    }
-
     /// The Decision cards this Pane's selected Subject shows, as a snapshot
     /// of the cockpit: the requests, their owner's provider and context,
     /// and the Pane's forms. `overlay` cards lie on the plane over the
-    /// transcript's foot (a question too big for the body answers in
-    /// fullscreen there); the transcript's own cards scroll with its rows.
+    /// transcript's foot; the transcript's own cards scroll with its rows.
     pub(super) fn decision_cards(&self, index: usize, overlay: bool, short: bool) -> Option<Cards> {
         let subject = self.panes.get(index)?.selected.clone();
         self.decision_cards_of(index, &subject, overlay, short)
@@ -840,21 +684,10 @@ impl CockpitView {
         let thread = pane.thread()?;
         let open = self.cockpit.thread(thread)?;
         let activity = open.activity();
-        let fullscreen = self.cockpit.roster().fullscreen() == Some(pane.identity);
         let requests: Vec<(PendingDecision, bool)> = activity
             .pending_decisions()
             .iter()
             .filter(|request| shown_for(subject, request))
-            .filter(|request| {
-                !overlay
-                    || fullscreen
-                    || !pane
-                        .request_forms
-                        .0
-                        .borrow()
-                        .get(&request.handle)
-                        .is_some_and(|form| form.fit.needs_expansion())
-            })
             .map(|request| {
                 // An async question asks while its agent works on.
                 let working = !request.decision.blocks_execution()
@@ -926,8 +759,8 @@ impl CockpitView {
             request_error: pane.request_error.clone(),
             short,
             overlay,
-            solo: !self.grid_board(),
-            inset: theme::tx_inset_at(0., !self.grid_board()),
+            narrow: false,
+            inset: theme::tx_inset_at(0., true),
             requests,
         })
     }
@@ -949,7 +782,7 @@ impl CockpitView {
         let short = rect.is_some_and(|rect| rect.h < theme::DECISION_SHORT_PANE_H);
         let mut cards = self.decision_cards(index, true, short)?;
         if let Some(rect) = rect {
-            cards.inset = theme::tx_inset_at(rect.w, cards.solo);
+            cards.inset = theme::tx_inset_at(rect.w, true);
         }
         cards.render(window, cx)
     }
@@ -1297,9 +1130,9 @@ pub(super) struct Cards {
     /// Drawn in the requests overlay, on the plane, rather than in the
     /// transcript.
     pub(super) overlay: bool,
-    /// The Pane is Solo's: the transcript column's inset, and the hint line
-    /// under the box.
-    pub(super) solo: bool,
+    /// Drawn in the compact inspector's narrow column: the approval's
+    /// actions stack, and no pill names the wait.
+    pub(super) narrow: bool,
     /// The overlay's inset on the transcript's axes: the column's at the
     /// Pane's width (`theme::tx_inset_at`).
     pub(super) inset: f32,
@@ -1332,7 +1165,7 @@ impl Cards {
             (diff.added, diff.removed).hash(&mut hasher);
         }
         self.request_error.hash(&mut hasher);
-        self.solo.hash(&mut hasher);
+        self.narrow.hash(&mut hasher);
         let cursors = self.forms.1.borrow();
         let forms = self.forms.0.borrow();
         for (request, working) in &self.requests {
@@ -1524,8 +1357,8 @@ impl Cards {
     /// the prose, the command band (or the edit's diff), the amend note
     /// while it is open, then `Deny` and the split `Allow once` whose menu
     /// holds `Always allow <pattern>` (its note says what that covers) and
-    /// `Allow and switch to …` — inline in Solo, stacked in a Group Pane's
-    /// narrow column. The keys are on the buttons (⌘⏎ on `Allow once`, ⇧⌘⏎
+    /// `Allow and switch to …` — inline, or stacked in the compact
+    /// inspector's narrow column (`narrow`). The keys are on the buttons (⌘⏎ on `Allow once`, ⇧⌘⏎
     /// on the menu's `Always allow`, esc); 1–3, ↑↓ and ⏎ still act.
     fn approval_card(&self, request: PendingDecision, cx: &gpui::App) -> AnyElement {
         let thread = self.thread;
@@ -1590,7 +1423,7 @@ impl Cards {
                 view.answer_approval_request(thread, &pick, choice, note, Some(window), cx);
             })
         };
-        let stacked = !self.solo;
+        let stacked = self.narrow;
         let deny = decision::deny_button(
             SharedString::from(format!("request-deny-{}-{serial}", thread.get())),
             stacked,
@@ -1714,7 +1547,7 @@ impl Cards {
         request_frame(
             decision::approval_card(serial, children),
             self.overlay,
-            self.solo,
+            self.narrow,
             self.inset,
         )
         .into_any_element()
@@ -1827,7 +1660,6 @@ impl Cards {
                     inputs: Vec::new(),
                     form_inputs,
                     values: form_defaults(&fields),
-                    fit: Default::default(),
                     scroll: ScrollHandle::new(),
                 },
             );
@@ -2044,7 +1876,7 @@ impl Cards {
         request_frame(
             decision::card(handle.serial, children),
             self.overlay,
-            self.solo,
+            self.narrow,
             self.inset,
         )
         .into_any_element()
@@ -2122,7 +1954,7 @@ impl Cards {
         request_frame(
             decision::card(handle.serial, children),
             self.overlay,
-            self.solo,
+            self.narrow,
             self.inset,
         )
         .into_any_element()
@@ -2161,7 +1993,6 @@ impl Cards {
                     inputs,
                     form_inputs: Default::default(),
                     values: Default::default(),
-                    fit: Default::default(),
                     scroll: ScrollHandle::new(),
                 },
             );
@@ -2179,19 +2010,10 @@ impl Cards {
                 .min(questions[qi].options.len().saturating_sub(1))
         });
         let single = questions.len() == 1;
-        // Only the overlay measures its question against the body (a card
-        // too big answers in fullscreen); in the transcript it scrolls with
-        // the rows and never asks.
-        let measure = |part: QuestionMeasure| {
-            measure_question(forms.clone(), handle.clone(), part, self.owner.clone())
-        };
         let overlay = self.overlay;
         let mut content = div()
             .id(("question-content", handle.serial as usize))
             .debug_selector(|| "question-scroll-content".into())
-            .when(overlay, |content| {
-                content.on_prepaint(measure(QuestionMeasure::Content))
-            })
             .w_full()
             .min_w_0()
             .flex_shrink_1()
@@ -2258,9 +2080,6 @@ impl Cards {
                         },
                     )
                     .debug_selector(move || format!("question-choice-{qi}-{oi}"))
-                    .when(overlay && qi == 0 && oi == 0, |row| {
-                        row.on_prepaint(measure(QuestionMeasure::FirstControl))
-                    })
                     .on_click(self.act(move |view, _, cx| {
                         if let Some(form) = pick_forms.0.borrow_mut().get_mut(&pick_handle) {
                             pick_option(&mut form.answers[qi].picks, oi, multi);
@@ -2317,9 +2136,6 @@ impl Cards {
                                 .min_w_0()
                                 .h(px(theme::QUESTION_OTHER_H))
                                 .debug_selector(move || selector.clone())
-                                .when(overlay && qi == 0 && question.options.is_empty(), |input| {
-                                    input.on_prepaint(measure(QuestionMeasure::FirstControl))
-                                })
                                 .cursor_text()
                                 .child(
                                     gpui::Styled::h(
@@ -2374,9 +2190,6 @@ impl Cards {
                     .min_h_0()
                     .overflow_hidden()
                     .debug_selector(|| "question-viewport".into())
-                    .when(overlay, |viewport| {
-                        viewport.on_prepaint(measure(QuestionMeasure::Viewport))
-                    })
                     .child(content),
             )
             .into_any_element(),
@@ -2430,13 +2243,7 @@ impl Cards {
             ]))
             .into_any_element(),
         );
-        // The frame is the island QuestionFit measures: it carries the dock
-        // gap as well as the card, so `required` counts every pixel the
-        // overlay must hold.
-        request_frame(decision::card(handle.serial, children), overlay, self.solo, self.inset)
-            .when(overlay, |frame| {
-                frame.on_prepaint(measure(QuestionMeasure::Island))
-            })
+        request_frame(decision::card(handle.serial, children), overlay, self.narrow, self.inset)
             .into_any_element()
     }
 }

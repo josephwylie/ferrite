@@ -255,18 +255,6 @@ fn a_menu_shortcut_is_a_bound_chord(cx: &mut TestAppContext) {
             }
         }
     });
-    let fullscreen = view.read_with(cx, |view, _| {
-        let thread = view.panes[0].thread().unwrap();
-        view.context_rows(MenuTarget::Pane(thread))
-            .into_iter()
-            .flatten()
-            .find(|(_, verb)| *verb == MenuVerb::Fullscreen)
-            .and_then(|(item, _)| item.shortcut)
-    });
-    assert_eq!(
-        fullscreen.as_deref(),
-        Some(ferrite_ui::keymap::PLATFORM.chord("shift-⏎").as_str())
-    );
 }
 
 /// A right-click on a Pane summons the menu for its Thread; escape
