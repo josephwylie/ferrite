@@ -266,14 +266,19 @@ fn interrogate_a_clock_corrected_back_silences_a_schedule() {
     let first = due(&harness).expect("a due time");
     eprintln!("due after turning on: {first} (now {t0})");
     // The clock jumps a week ahead for a moment ...
+    // Each time is held until the Server has stepped the schedule at it:
+    // a time it never sees would make a run late, and so skipped.
     clock.store(t0 + 7 * 24 * HOUR, Ordering::SeqCst);
-    std::thread::sleep(Duration::from_millis(300));
-    eprintln!("due during the jump: {:?}", due(&harness));
+    wait_for("the step during the jump", || {
+        due(&harness) == Some(first + 7 * 24 * HOUR)
+    });
     // ... and is corrected; three hours pass, each run seen on time (a
     // run seen late is missed, and this schedule skips a missed run).
     for hours in 0..3 {
         clock.store(first + hours * HOUR + 1_000, Ordering::SeqCst);
-        std::thread::sleep(Duration::from_millis(300));
+        wait_for("the step on the hour", || {
+            due(&harness) == Some(first + (hours + 1) * HOUR)
+        });
     }
     wait_for("a run after the correction", || {
         ok_call(
