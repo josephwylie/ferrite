@@ -1,10 +1,10 @@
 //! What every window shares, as a window holds it (ADR 0025): read-only
-//! copies of the Server's Groups, registry, Notices and providers, and the
-//! open Threads, each replaced whole by its latest message.
+//! copies of the Server's registry, Notices and providers, and the open
+//! Threads, each replaced whole by its latest message. An older Server's
+//! Groups are not read.
 
 use std::path::{Path, PathBuf};
 
-use crate::groups::Groups;
 use crate::notifications::Notifications;
 use crate::protocol::{ProviderState, ServerMessage, Snapshot};
 use crate::store::Provider;
@@ -13,10 +13,8 @@ use crate::workspace::registry::Registry;
 use crate::{ModelInfo, ThreadId};
 
 pub(crate) struct Shared {
-    /// The Store these are of, and whether it is on this computer.
+    /// The Store these are of.
     dir: PathBuf,
-    local: bool,
-    pub(crate) groups: Groups,
     pub(crate) registry: Registry,
     pub(crate) notifications: Notifications,
     providers: Vec<ProviderState>,
@@ -33,11 +31,9 @@ pub(crate) struct Shared {
 impl Shared {
     /// Nothing yet: the shared state of the Store in `dir` before the
     /// Engine's first messages.
-    pub(crate) fn new(dir: &Path, local: bool) -> Self {
+    pub(crate) fn new(dir: &Path) -> Self {
         Self {
             dir: dir.to_path_buf(),
-            local,
-            groups: Groups::empty(dir, local),
             registry: Registry::empty(dir),
             notifications: Notifications::default(),
             providers: Vec::new(),
@@ -52,11 +48,8 @@ impl Shared {
     pub(crate) fn attached(&mut self, snapshot: &Snapshot) {
         *self = Self {
             open: snapshot.roster.open.clone(),
-            ..Self::new(&self.dir, self.local)
+            ..Self::new(&self.dir)
         };
-        if let Some(groups) = &snapshot.groups {
-            self.set_groups(groups);
-        }
         if let Some(registry) = &snapshot.registry {
             self.set_registry(registry);
         }
@@ -76,7 +69,6 @@ impl Shared {
             ServerMessage::Roster { roster, .. } => {
                 self.open = roster.open.clone();
             }
-            ServerMessage::Groups { groups, .. } => self.set_groups(groups),
             ServerMessage::Registry { registry, .. } => self.set_registry(registry),
             ServerMessage::Notices { notices, .. } => {
                 self.notifications = Notifications::from_wire(notices);
@@ -101,15 +93,6 @@ impl Shared {
                 self.providers = providers.clone();
             }
             _ => {}
-        }
-    }
-
-    /// A copy the Server sent that this build cannot read keeps the one
-    /// before: a window older than its Server says so in its log.
-    fn set_groups(&mut self, groups: &serde_json::Value) {
-        match Groups::from_wire(groups.clone(), &self.dir, self.local) {
-            Ok(groups) => self.groups = groups,
-            Err(error) => crate::log!("the server's groups could not be read: {error}"),
         }
     }
 

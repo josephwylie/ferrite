@@ -24,19 +24,7 @@ use crate::ThreadId;
 const SCHEMA_VERSION: u32 = 1;
 const FILE_NAME: &str = "groups.json";
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(transparent)]
-pub struct GroupId(u64);
-
-impl GroupId {
-    pub fn new(value: u64) -> Self {
-        Self(value)
-    }
-
-    pub fn get(self) -> u64 {
-        self.0
-    }
-}
+pub use crate::protocol::GroupId;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Group {
@@ -62,7 +50,7 @@ impl Group {
 
     pub fn display_title(&self) -> String {
         if self.title.trim().is_empty() {
-            format!("group-{:02}", self.id.0)
+            format!("group-{:02}", self.id.get())
         } else {
             self.title.clone()
         }
@@ -366,7 +354,7 @@ impl Groups {
                 layout,
             });
         }
-        let next_id = groups.iter().map(|group| group.id.0).max().unwrap_or(0) + 1;
+        let next_id = groups.iter().map(|group| group.id.get()).max().unwrap_or(0) + 1;
         let this = Self {
             dir: dir.to_path_buf(),
             local: true,
@@ -547,7 +535,7 @@ impl Groups {
                 }
                 let mut dissolved = self.detach_home(first).into_iter().collect::<Vec<_>>();
                 dissolved.extend(self.detach_home(second));
-                let id = GroupId(self.next_id);
+                let id = GroupId::new(self.next_id);
                 self.next_id += 1;
                 self.groups.push(Group {
                     id,
@@ -779,7 +767,7 @@ impl Groups {
             })
             .collect();
         Ok(Self {
-            next_id: groups.iter().map(|group| group.id.0).max().unwrap_or(0) + 1,
+            next_id: groups.iter().map(|group| group.id.get()).max().unwrap_or(0) + 1,
             groups,
             ..Self::empty(dir, local)
         })

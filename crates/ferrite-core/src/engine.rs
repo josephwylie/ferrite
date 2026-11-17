@@ -1,6 +1,6 @@
 //! The Engine (ADR 0025): everything that keeps running without a window.
 //! The Store and its claim, every Session and its writer, the prompt
-//! queue, pending Decisions, Notices, Groups, the registry, and every
+//! queue, pending Decisions, Notices, the registry, and every
 //! policy — Handover, the memory watchdog, ending idle Sessions, the titler,
 //! suggestions, deferred finish. The Server owns one; a window reads it
 //! through its client, `cockpit::Cockpit`, and changes it only by its acts.
@@ -22,9 +22,6 @@ use crate::activity::{
     DecisionHandle, PendingDecision, Subject,
 };
 use crate::digest::Digest;
-use crate::groups::{
-    Applied, ApplyError, Dissolved, Drag, DropTarget, GroupChange, GroupId, Groups, Plan,
-};
 use crate::notifications::{DecisionNoticeId, Frame, NoticeId, Notifications};
 pub use crate::prompt_history::HistoryDirection;
 use crate::prompt_history::PromptHistory;
@@ -405,29 +402,6 @@ impl std::fmt::Display for DeleteError {
 
 impl std::error::Error for DeleteError {}
 
-#[derive(Debug)]
-pub enum ReviveGroupError {
-    MissingGroup,
-    Member { thread: ThreadId, error: LoadError },
-    Rollback { thread: ThreadId, error: io::Error },
-}
-
-impl std::fmt::Display for ReviveGroupError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::MissingGroup => write!(f, "group no longer exists"),
-            Self::Member { thread, error } => {
-                write!(f, "could not revive thread {thread}: {error}")
-            }
-            Self::Rollback { thread, error } => {
-                write!(f, "could not roll back revived thread {thread}: {error}")
-            }
-        }
-    }
-}
-
-impl std::error::Error for ReviveGroupError {}
-
 enum ReplacementKind {
     Fresh,
     Handover,
@@ -787,7 +761,6 @@ fn next_generation() -> u64 {
 /// What every window shares, as the Engine last told its clients.
 #[derive(Default)]
 struct PublishedShared {
-    groups: Option<serde_json::Value>,
     registry: Option<serde_json::Value>,
     notices: Option<Vec<protocol::WireNotice>>,
     providers: Option<Vec<protocol::ProviderState>>,
@@ -1184,7 +1157,6 @@ pub struct Engine {
     /// worktrees, living beside the Thread logs. The selector reads it; the
     /// bootstrap places worktrees through it.
     registry: Registry,
-    groups: Groups,
     /// The open Threads, in the order they opened: the shared half of the
     /// Roster, which each window follows (`open_threads`).
     open: Vec<ThreadId>,
@@ -1271,7 +1243,6 @@ impl Engine {
 
     pub fn try_new(store: Store, mut spawner: Box<dyn Spawner>) -> io::Result<Self> {
         let registry = Registry::open(store.dir())?;
-        let groups = Groups::load(store.dir())?;
         let model_discovery = spawner.discover_models();
         let model_cache = crate::providers::models::ModelCache::load(store.dir());
         let limit_cache = crate::providers::limits::LimitCache::load(store.dir());
@@ -1279,7 +1250,6 @@ impl Engine {
             threads: Threads::default(),
             store,
             registry,
-            groups,
             open: Vec::new(),
             boot: crate::clock::instant(),
             boot_id: boot_id(),
@@ -1331,31 +1301,6 @@ impl Engine {
         &self.registry
     }
 
-    pub fn groups(&self) -> &Groups {
-        &self.groups
-    }
-
-    /// A Group change (#28). What it does to each window's view is the
-    /// window's (`Cockpit::apply_group`).
-    pub fn apply_group(&mut self, change: GroupChange) -> Result<Applied, ApplyError> {
-        let applied = self.groups.apply(change)?;
-        self.tell_dissolved(&applied.dissolved);
-        Ok(applied)
-    }
-
-    /// Each Group a change dissolved, and its survivor, for every window.
-    fn tell_dissolved(&mut self, dissolved: &[Dissolved]) {
-        self.outbox
-            .extend(dissolved.iter().map(|dissolved| ServerMessage::Dissolved {
-                group: dissolved.group,
-                survivor: dissolved.survivor,
-            }));
-    }
-
-    pub fn plan_group_drop(&self, drag: Drag, target: DropTarget) -> Plan {
-        self.groups.preview_drop(drag, target)
-    }
-
     /// Register a project root (idempotent, canonicalized) — the selector's
     /// type-a-path row and the launch seed both land here.
     pub fn register_project(&mut self, root: &Path) -> io::Result<ProjectId> {
@@ -1385,31 +1330,6 @@ impl Engine {
 
     pub fn remove_project_directory(&mut self, project: ProjectId, index: usize) -> io::Result<()> {
         self.registry.remove_directory(project, index)
-    }
-
-    /// A Group's Pane layout, reconciled to its members; None for a Group
-    /// that no longer exists.
-    pub fn group_layout(
-        &self,
-        group: GroupId,
-        bounds: crate::layout::Rect,
-    ) -> Option<crate::layout::Tree> {
-        self.groups.layout(group, bounds)
-    }
-
-    /// Put a Group back on the default grid, forgetting the arrangement the
-    /// operator dragged, swapped or split.
-    pub fn reset_group_layout(&mut self, group: GroupId) -> Result<(), ApplyError> {
-        self.groups.reset_layout(group)
-    }
-
-    /// Persist a Group's Pane layout — a seam dragged, a Pane dropped.
-    pub fn set_group_layout(
-        &mut self,
-        group: GroupId,
-        tree: crate::layout::Tree,
-    ) -> Result<(), ApplyError> {
-        self.groups.set_layout(group, tree)
     }
 
     /// Forget a registered Project. Refused while any Thread, open or
@@ -1833,13 +1753,6 @@ impl Engine {
     }
 
     fn rollback_bootstrap(&mut self, id: ThreadId) -> io::Result<()> {
-        // Roll back membership before its durable Thread; if persistence
-        // refuses, preserve the Thread so the Group never points to nothing.
-        if self.groups.of(id).is_some() {
-            self.groups
-                .apply(GroupChange::Leave { thread: id })
-                .map_err(io::Error::other)?;
-        }
         self.threads.remove(&id);
         self.open.retain(|open| *open != id);
         self.store.delete(id)
@@ -2217,20 +2130,10 @@ impl Engine {
             return self.park(thread).map_err(DeleteError::Io);
         }
         let meta = self.store.peek(thread).map_err(DeleteError::Load)?;
-        let groups_before = self.groups.clone();
-        let grouped = self.groups.of(thread).is_some();
         let live = self
             .threads
             .get(&thread)
             .is_some_and(|state| state.session.is_some());
-        let dissolved = if grouped {
-            self.groups
-                .apply(GroupChange::Leave { thread })
-                .map_err(|error| DeleteError::Io(io::Error::other(error)))?
-                .dissolved
-        } else {
-            Vec::new()
-        };
 
         let deleted = (|| {
             if let (None, Some(WorkspaceBinding::Worktree { repo, path })) =
@@ -2266,20 +2169,7 @@ impl Engine {
             crate::log!("thread {thread}: session ended: deleted");
         }
 
-        if let Err(error) = deleted {
-            if grouped {
-                self.groups
-                    .restore_snapshot(groups_before)
-                    .map_err(|restore| {
-                        DeleteError::Io(io::Error::other(format!(
-                            "{error}; restoring group membership also failed: {restore}"
-                        )))
-                    })?;
-            }
-            return Err(error);
-        }
-        self.tell_dissolved(&dissolved);
-        Ok(())
+        deleted
     }
 
     /// Close a Pane: the Session ends, the log is flushed, and the Thread
@@ -2500,39 +2390,6 @@ impl Engine {
             self.start_or_say(thread, "the queued prompts could not be sent");
         }
         Ok(first_args)
-    }
-
-    /// Open every member of one persisted Group or leave the live set unchanged.
-    pub fn revive_group(&mut self, group: GroupId) -> Result<Vec<ThreadId>, ReviveGroupError> {
-        let members = self
-            .groups
-            .get(group)
-            .ok_or(ReviveGroupError::MissingGroup)?
-            .members
-            .clone();
-        let mut revived = Vec::new();
-        for thread in &members {
-            if self.threads.contains_key(thread) {
-                continue;
-            }
-            if let Err(error) = self.revive(*thread) {
-                let mut rollback_failure = None;
-                for opened in revived.into_iter().rev() {
-                    if let Err(error) = self.park(opened) {
-                        rollback_failure.get_or_insert((opened, error));
-                    }
-                }
-                if let Some((thread, error)) = rollback_failure {
-                    return Err(ReviveGroupError::Rollback { thread, error });
-                }
-                return Err(ReviveGroupError::Member {
-                    thread: *thread,
-                    error,
-                });
-            }
-            revived.push(*thread);
-        }
-        Ok(members)
     }
 
     /// Adopt a CLI session file as a Thread of this cockpit (#11) — the
@@ -4637,7 +4494,7 @@ impl Engine {
                 parked: self.parked().unwrap_or_default(),
             },
             decisions: self.pending_decisions(),
-            groups: self.published_shared.groups.clone(),
+            groups: None,
             registry: self.published_shared.registry.clone(),
             notices: self.published_shared.notices.clone(),
             providers: self.published_shared.providers.clone(),
@@ -4938,13 +4795,6 @@ impl Engine {
             });
         }
         let shared = &mut self.published_shared;
-        if let Some(groups) = changed(&mut shared.groups, self.groups.to_wire()) {
-            self.revision += 1;
-            self.outbox.push(ServerMessage::Groups {
-                revision: self.revision,
-                groups,
-            });
-        }
         if let Some(registry) = changed(&mut shared.registry, self.registry.to_wire()) {
             self.revision += 1;
             self.outbox.push(ServerMessage::Registry {

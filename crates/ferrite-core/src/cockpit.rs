@@ -225,7 +225,7 @@ impl Cockpit {
             .unwrap_or_default();
         Self {
             link,
-            shared: shared::Shared::new(dir, logs.is_some()),
+            shared: shared::Shared::new(dir),
             parked: parked::Parked::default(),
             logs,
             roster: Roster::default(),

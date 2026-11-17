@@ -5,8 +5,8 @@
 
 use super::*;
 use crate::protocol::{
-    Done, ErrorCode, NoticeAction, Op, ProjectAction, WireAnswer, WireDirection, WireDissolved,
-    WireError, WireHandle,
+    Done, ErrorCode, NoticeAction, Op, ProjectAction, WireAnswer, WireDirection, WireError,
+    WireHandle,
 };
 
 /// What a command came to: a result to reply `ok` with, or why not.
@@ -187,39 +187,11 @@ impl Engine {
                 .map_err(failed),
             Op::Park { thread } => self.park(*thread).map(|()| None).map_err(failed),
             Op::Revive { thread } => self.revive(*thread).map(|()| None).map_err(failed),
-            Op::ReviveGroup { group } => self
-                .revive_group(*group)
-                .map(|threads| Some(Done::Threads { threads }))
-                .map_err(failed),
             Op::Delete { thread } => self.delete(*thread).map(|()| None).map_err(failed),
             Op::Import { path } => self
                 .import(path)
                 .map(|thread| Some(Done::Thread { thread }))
                 .map_err(failed),
-            Op::Group { change } => {
-                let change = change.try_into().map_err(|_| unknown())?;
-                self.apply_group(change)
-                    .map(|applied| {
-                        Some(Done::Grouped {
-                            group: applied.group,
-                            dissolved: applied
-                                .dissolved
-                                .iter()
-                                .map(|dissolved| WireDissolved {
-                                    group: dissolved.group,
-                                    survivor: dissolved.survivor,
-                                })
-                                .collect(),
-                        })
-                    })
-                    .map_err(failed)
-            }
-            Op::Layout { group, tree } => match tree {
-                Some(tree) => self.set_group_layout(*group, tree.clone()),
-                None => self.reset_group_layout(*group),
-            }
-            .map(|()| None)
-            .map_err(failed),
             Op::Project { action } => self.project(action),
             Op::Notice { action } => {
                 self.notice(action);
@@ -308,6 +280,10 @@ impl Engine {
             | Op::Workflow { .. }
             | Op::GitHub { .. }
             | Op::Coordinator { .. }
+            // Groups are gone; an older window may still ask.
+            | Op::Group { .. }
+            | Op::Layout { .. }
+            | Op::ReviveGroup { .. }
             | Op::Unknown => Err(unknown()),
         }
     }

@@ -1127,16 +1127,32 @@ fn a_resume_never_crosses_a_reopened_thread() {
     back.until(|window| window.said(thread) == other.said(thread));
 }
 
+/// An unknown command, and an older window's Group commands, which this
+/// Server no longer carries out.
 #[test]
 fn a_command_this_server_does_not_know_is_answered_unsupported() {
     let harness = start("unknown");
     let mut window = attach(&harness.address);
-    let reply = window.command(5, Op::Unknown);
-    assert!(
-        matches!(&reply, ServerMessage::Reply { error: Some(error), .. }
-            if error.code == ErrorCode::Unsupported),
-        "{reply:?}"
-    );
+    let group = crate::protocol::GroupId::new(1);
+    let ops = [
+        Op::Unknown,
+        Op::Group {
+            change: crate::protocol::WireGroupChange::Create {
+                first: ThreadId::new(1),
+                second: ThreadId::new(2),
+            },
+        },
+        Op::Layout { group, tree: None },
+        Op::ReviveGroup { group },
+    ];
+    for (id, op) in (5..).zip(ops) {
+        let reply = window.command(id, op);
+        assert!(
+            matches!(&reply, ServerMessage::Reply { error: Some(error), .. }
+                if error.code == ErrorCode::Unsupported),
+            "{reply:?}"
+        );
+    }
 }
 
 #[test]
