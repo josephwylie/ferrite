@@ -365,11 +365,7 @@ pub fn ensure_worktree(repo: &Path, path: &Path, branch: &str) -> Result<(), Git
     if path.join(".git").exists() {
         return Ok(());
     }
-    // Revivals place their worktrees on spawning threads at once (ADR
-    // 0018). One at a time: a prune can remove another add's admin
-    // directory in the instant before git marks it "initializing".
-    static PLACING: std::sync::Mutex<()> = std::sync::Mutex::new(());
-    let _placing = PLACING.lock().unwrap_or_else(|e| e.into_inner());
+    let _placing = placing();
     // A worktree deleted by hand leaves a stale registration that keeps its
     // branch "checked out" (probed: re-adding the branch fails until a
     // prune). Pruning first makes recreation just work.
@@ -388,6 +384,14 @@ pub fn ensure_worktree(repo: &Path, path: &Path, branch: &str) -> Result<(), Git
     Ok(())
 }
 
+/// Starts place their worktrees on spawning threads at once (ADR 0018).
+/// One at a time: a prune can remove another add's admin directory in the
+/// instant before git marks it "initializing".
+fn placing() -> std::sync::MutexGuard<'static, ()> {
+    static PLACING: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    PLACING.lock().unwrap_or_else(|e| e.into_inner())
+}
+
 /// Add a worktree at `path` on a new branch `branch`, made from `base` (the
 /// repo's HEAD when none). Git refuses a branch that already exists: a new
 /// worktree never takes over another's work.
@@ -397,6 +401,7 @@ pub fn add_worktree(
     branch: &str,
     base: Option<&str>,
 ) -> Result<(), GitError> {
+    let _placing = placing();
     git(repo, &["worktree", "prune"])?;
     exclude_inside(repo, path)?;
     let mut args = vec!["worktree", "add", "-b", branch, path_str(path)?];

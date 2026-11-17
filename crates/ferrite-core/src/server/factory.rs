@@ -411,6 +411,7 @@ impl Server {
                 workspace,
                 agent.effort,
                 launch,
+                crate::engine::MakeCheckout::BeforeReply,
             )
             .map_err(|error| error.to_string())?;
         if let Some(title) = title {
