@@ -240,3 +240,37 @@ fn settle_first_send(engine: &mut Engine) -> io::Result<crate::engine::Bootstrap
         }
     }
 }
+
+/// A Thread opened outright answers git's refusal itself, as `thread.start`
+/// and a Factory Worker need, even from a spawner that starts off the loop.
+#[test]
+fn an_opened_thread_whose_worktree_is_refused_is_refused_in_the_reply() {
+    let dir = scratch("worktree-refused-open");
+    let repo = repo_in(&dir);
+    crate::workspace::git_for_tests(&repo, &["branch", "taken"]);
+    let (spawner, _providers, _gate) = off_loop();
+    let mut engine = engine(&dir.join("threads"), spawner);
+
+    let error = engine
+        .open(
+            Provider::Claude,
+            crate::workspace::WorkspaceChoice::NamedWorktree {
+                repo: repo.clone(),
+                branch: "taken".into(),
+                base: None,
+            },
+        )
+        .expect_err("git refuses a taken branch");
+
+    assert!(error.to_string().contains("taken"), "the reply says what git said: {error}");
+    assert!(engine.threads().is_empty(), "a half-made Thread stayed");
+    let registry = engine.registry();
+    assert!(
+        registry
+            .projects()
+            .iter()
+            .all(|project| registry.worktrees(project.id).is_empty()),
+        "the refused worktree stayed registered"
+    );
+    let _ = std::fs::remove_dir_all(dir);
+}

@@ -203,8 +203,8 @@ pub trait Spawner {
     }
 }
 
-/// Work a Session's start waits on and its caller should not: a launch's
-/// stagger, and the git calls that make a revived Thread's worktree real.
+/// Work a Session's start waits on and its caller should not: the git
+/// calls that make a Thread's checkout ready, new or revived.
 pub type Preparation = Box<dyn FnOnce() -> io::Result<()> + Send>;
 
 /// Resident memory per Session, injected. The cockpit never shells out for
@@ -674,6 +674,9 @@ struct Thread {
     resume_at: Option<crate::store::ResumePoint>,
     /// A rewind or fork asked of its agent and not yet answered.
     rewinding: Option<rewind::Rewinding>,
+    /// The worktree this Thread registered for its first start to make,
+    /// until that start settles (`Engine::forget_unmade`).
+    reserved_worktree: Option<PathBuf>,
 }
 
 impl Thread {
@@ -743,6 +746,7 @@ impl Thread {
             state_changed: true,
             resume_at: None,
             rewinding: None,
+            reserved_worktree: None,
         };
         if let Some(notice) = state.native_queue.take_unreadable() {
             state.apply(Input::Notice(notice));
@@ -1497,6 +1501,7 @@ impl Engine {
             workspace,
             None,
             launch,
+            MakeCheckout::BeforeReply,
         )
     }
 
@@ -1520,12 +1525,15 @@ impl Engine {
     /// `effort` is the Thread's own reasoning level from its first breath
     /// (a draft's chip); None is the operator's default for the provider.
     /// A Factory Step's Worker and a Coordinator open this way (ADR 0037).
+    /// `make` says whether the branch switch or worktree the choice asks
+    /// for is made before this answers or by the first start (ADR 0018).
     pub(crate) fn open_choice(
         &mut self,
         choice: ProviderChoice,
         workspace: WorkspaceChoice,
         effort: Option<String>,
         launch: Launch,
+        make: MakeCheckout,
     ) -> io::Result<ThreadId> {
         let ProviderChoice { provider, model } = choice;
         let first_args = launch_args::LaunchArgs::of(provider, &launch);
@@ -1549,37 +1557,66 @@ impl Engine {
             Some(project) => project,
             None => self.registry.register(root)?,
         };
-        match &workspace {
-            WorkspaceChoice::Branch { checkout, branch } => {
-                workspace::checkout_existing_branch(checkout, branch).map_err(io::Error::other)?;
-            }
+        let (binding, reserved, first) = match workspace {
+            WorkspaceChoice::Main { checkout } => (WorkspaceBinding::Main { checkout }, None, None),
+            WorkspaceChoice::Branch { checkout, branch } => (
+                WorkspaceBinding::Main {
+                    checkout: checkout.clone(),
+                },
+                None,
+                Some(FirstCheckout::Switch {
+                    checkout,
+                    branch,
+                    new: false,
+                }),
+            ),
             WorkspaceChoice::NewBranch { checkout } => {
                 let branch = self.registry.reserve_branch(project)?;
-                workspace::checkout_new_branch(checkout, &branch).map_err(io::Error::other)?;
-            }
-            _ => {}
-        }
-        let (binding, fresh_branch) = match workspace {
-            WorkspaceChoice::Main { checkout } => (WorkspaceBinding::Main { checkout }, None),
-            WorkspaceChoice::Branch { checkout, .. } | WorkspaceChoice::NewBranch { checkout } => {
-                (WorkspaceBinding::Main { checkout }, None)
+                (
+                    WorkspaceBinding::Main {
+                        checkout: checkout.clone(),
+                    },
+                    None,
+                    Some(FirstCheckout::Switch {
+                        checkout,
+                        branch,
+                        new: true,
+                    }),
+                )
             }
             WorkspaceChoice::NewWorktree { repo } => {
                 let entry = self.registry.reserve_worktree(project)?;
+                let path = entry.path;
                 (
                     WorkspaceBinding::Worktree {
                         repo,
-                        path: entry.path,
+                        path: path.clone(),
                     },
-                    Some(entry.branch),
+                    Some(path),
+                    None,
                 )
             }
             WorkspaceChoice::NamedWorktree { repo, branch, base } => {
-                let (_, path) = self.create_worktree(&repo, &branch, base.as_deref())?;
-                (WorkspaceBinding::Worktree { repo, path }, Some(branch))
+                let owner = self.registry.register(&repo)?;
+                let path = self.registry.place(owner, &branch);
+                let reserved = self.registry.branch_for(&path).is_none().then(|| path.clone());
+                self.registry.register_worktree(owner, &branch, &path)?;
+                (
+                    WorkspaceBinding::Worktree {
+                        repo: repo.clone(),
+                        path: path.clone(),
+                    },
+                    reserved,
+                    Some(FirstCheckout::Add {
+                        repo,
+                        path,
+                        branch,
+                        base,
+                    }),
+                )
             }
             WorkspaceChoice::ExistingWorktree { repo, path } => {
-                (WorkspaceBinding::Worktree { repo, path }, None)
+                (WorkspaceBinding::Worktree { repo, path }, None, None)
             }
         };
         let created = self.store.create_owned(
@@ -1592,22 +1629,14 @@ impl Engine {
         let (id, mut writer) = match created {
             Ok(created) => created,
             Err(error) => {
-                if fresh_branch.is_some() {
-                    self.registry.remove_worktree(binding.cwd())?;
-                }
+                self.forget_unmade(reserved);
                 return Err(error);
             }
         };
         if let Err(error) = self.store.mark_open(id) {
             let _ = self.store.delete(id);
+            self.forget_unmade(reserved);
             return Err(error);
-        }
-        if let Err(e) = ensure_workspace(&self.registry, &binding, id) {
-            if fresh_branch.is_some() {
-                let _ = self.registry.remove_worktree(binding.cwd());
-            }
-            let _ = self.store.delete(id);
-            return Err(io::Error::other(e));
         }
         // The chosen effort goes into the header beside the model, so a
         // revive spawns on it too.
@@ -1617,6 +1646,7 @@ impl Engine {
                     .set_tuning(id, model.clone(), effort.clone(), Some(&mut writer))
             {
                 let _ = self.store.delete(id);
+                self.forget_unmade(reserved);
                 return Err(io::Error::other(e.to_string()));
             }
         }
@@ -1624,10 +1654,18 @@ impl Engine {
             let path = launch_args::path(self.store.dir(), id);
             if let Err(e) = launch_args::save(&path, agent_args.as_ref()) {
                 let _ = self.store.delete(id);
+                self.forget_unmade(reserved);
                 return Err(e);
             }
         }
-        let session = match self.spawner.start(SpawnRequest {
+        let place = placement(&self.registry, self.store.dir(), Some(&binding), id);
+        let prepare: Preparation = Box::new(move || {
+            if let Some(first) = first {
+                first.run().map_err(io::Error::other)?;
+            }
+            place()
+        });
+        let request = SpawnRequest {
             thread: id,
             provider,
             model: model.as_deref(),
@@ -1644,12 +1682,19 @@ impl Engine {
             ),
             launch: launch_args::for_provider(first_args.as_ref(), provider),
             owner: owner.as_ref(),
-        }) {
+        };
+        let started = match make {
+            MakeCheckout::BeforeReply => prepare().and_then(|()| self.spawner.start(request)),
+            MakeCheckout::InFirstStart => self.spawner.start_after(prepare, request),
+        };
+        let session = match started {
             Ok(session) => session,
-            // The bootstrap's failure contract: no Thread. The worktree, if
-            // one was just created, stays — real, registered, adoptable.
+            // The bootstrap's failure contract: no Thread. A worktree made
+            // already stays (real, registered, adoptable); one never made
+            // is forgotten.
             Err(e) => {
                 let _ = self.store.delete(id);
+                self.forget_unmade(reserved);
                 return Err(e);
             }
         };
@@ -1673,9 +1718,22 @@ impl Engine {
             state.agent_args = agent_args;
             state.project = Some(project);
             state.owner = owner;
+            state.reserved_worktree = reserved;
         }
         self.note_open(id);
         Ok(id)
+    }
+
+    /// A worktree a new Thread registered whose tree never came to stand is
+    /// forgotten once its first start fails: no later start remakes it on a
+    /// branch git refused or the operator never chose.
+    fn forget_unmade(&mut self, reserved: Option<PathBuf>) {
+        let Some(path) = reserved.filter(|path| !path.exists()) else {
+            return;
+        };
+        if let Err(error) = self.registry.remove_worktree(&path) {
+            crate::log!("could not forget the unmade worktree {}: {error}", path.display());
+        }
     }
 
     /// Start the first send. The returned id is provisional while startup
@@ -1713,7 +1771,13 @@ impl Engine {
         prompt: &str,
         effort: Option<String>,
     ) -> io::Result<ThreadId> {
-        let id = self.open_choice(choice, workspace, effort, Launch::default())?;
+        let id = self.open_choice(
+            choice,
+            workspace,
+            effort,
+            Launch::default(),
+            MakeCheckout::InFirstStart,
+        )?;
         let pending = PendingBootstrap {
             prompt: prompt.to_string(),
             draft: None,
@@ -3067,6 +3131,10 @@ impl Engine {
                 let result = state.session.as_mut().expect("exists").poll();
                 if matches!(result, Ok(false)) {
                     continue;
+                }
+                let reserved = state.reserved_worktree.take();
+                if result.is_err() {
+                    self.forget_unmade(reserved);
                 }
                 if let Some(pending) = self.bootstraps.remove(&id) {
                     let delivered = result.and_then(|_| self.finish_bootstrap(id, &pending));
@@ -5681,25 +5749,6 @@ fn carry_digest(from: Provider, exchanges: &[(String, String)]) -> String {
     )
 }
 
-/// The workspace a binding names, made real; the main checkout is the
-/// operator's and is touched by nothing. A missing worktree is created —
-/// or recreated after a hand-deletion — on its registered branch (#29),
-/// falling back to the Thread-named branch for worktrees
-/// from before the registry. A tree already standing passes the adoption
-/// conflict check instead: git itself must call it a worktree of this
-/// repo, or a Session would spawn into a directory that only looks like
-/// one.
-fn ensure_workspace(
-    registry: &Registry,
-    binding: &WorkspaceBinding,
-    thread: ThreadId,
-) -> Result<(), workspace::GitError> {
-    let WorkspaceBinding::Worktree { repo, path } = binding else {
-        return Ok(());
-    };
-    place_worktree(repo, path, &worktree_branch(registry, path, thread))
-}
-
 /// The branch a Thread's worktree at `path` is (re)made on.
 fn worktree_branch(registry: &Registry, path: &Path, thread: ThreadId) -> String {
     registry
@@ -5708,13 +5757,13 @@ fn worktree_branch(registry: &Registry, path: &Path, thread: ThreadId) -> String
         .unwrap_or_else(|| branch_name(thread))
 }
 
-/// What every start of an existing Thread's Session waits on (ADR 0018):
-/// its worktree checked if standing, or remade if missing and Ferrite's own
-/// (registered, or pre-registry under the store). A revive's start and any
-/// later one alike, so a worktree a revival could not place is tried again
-/// on the next send rather than spawned into while missing. The branch is
-/// looked up here; the git calls run wherever the spawner runs the
-/// preparation.
+/// What every start of a Thread's Session waits on (ADR 0018): its
+/// worktree checked if standing, or made if missing and Ferrite's own
+/// (registered, or pre-registry under the store). A new Thread's first
+/// start, a revive's and any later one alike, so a worktree a revival
+/// could not place is tried again on the next send rather than spawned
+/// into while missing. The branch is looked up here; the git calls run
+/// wherever the spawner runs the preparation.
 fn placement(
     registry: &Registry,
     store_dir: &Path,
@@ -5743,8 +5792,8 @@ fn placement(
     })
 }
 
-/// `ensure_workspace`'s git half, which needs no registry: it can run off
-/// the UI thread (`placement`).
+/// A Thread's worktree made real, or the tree standing there checked: the
+/// git half of `placement`, which needs no registry.
 fn place_worktree(repo: &Path, path: &Path, branch: &str) -> Result<(), workspace::GitError> {
     // Anything already standing at the path must BE the worktree — a
     // directory that merely exists there (squatting where one was, or was
@@ -5753,6 +5802,55 @@ fn place_worktree(repo: &Path, path: &Path, branch: &str) -> Result<(), workspac
         return registry::adoption_check(repo, path);
     }
     workspace::ensure_worktree(repo, path, branch)
+}
+
+/// When a new Thread's checkout is made. Before `open_choice` answers, for
+/// a caller whose reply says whether it could be (`thread.start`, a Factory
+/// Worker), on the loop. Or by the first start, off the loop, for a first
+/// send, whose rollback reports a refusal (`take_bootstrap_results`).
+pub(crate) enum MakeCheckout {
+    BeforeReply,
+    InFirstStart,
+}
+
+/// The git a new Thread's choice asks of its checkout before the first
+/// Session, ahead of its `placement`: the branch switched to, or the
+/// worktree added on a branch git must not already have.
+enum FirstCheckout {
+    Switch {
+        checkout: PathBuf,
+        branch: String,
+        new: bool,
+    },
+    Add {
+        repo: PathBuf,
+        path: PathBuf,
+        branch: String,
+        base: Option<String>,
+    },
+}
+
+impl FirstCheckout {
+    fn run(self) -> Result<(), workspace::GitError> {
+        match self {
+            Self::Switch {
+                checkout,
+                branch,
+                new: false,
+            } => workspace::checkout_existing_branch(&checkout, &branch),
+            Self::Switch {
+                checkout,
+                branch,
+                new: true,
+            } => workspace::checkout_new_branch(&checkout, &branch),
+            Self::Add {
+                repo,
+                path,
+                branch,
+                base,
+            } => workspace::add_worktree(&repo, &path, &branch, base.as_deref()),
+        }
+    }
 }
 
 /// The branch a Thread's worktree lives on. Named for the Thread so the
