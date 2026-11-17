@@ -228,7 +228,7 @@ mod tests {
     #[test]
     fn stage_paths_are_literal_and_cannot_escape_the_checkout() {
         let root = repo("paths");
-        for name in ["[literal].txt", "-option", "other.txt", "line\nbreak.txt"] {
+        for name in ["[literal].txt", "-option", "other.txt"] {
             std::fs::write(root.join(name), "new").unwrap();
         }
         for path in ["../outside", "/outside", ":(glob)*", ".git/config"] {
@@ -245,22 +245,31 @@ mod tests {
             staged: true,
         })
         .unwrap();
+        assert_eq!(staged(root), HashSet::from(["[literal].txt".into()]));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_path_with_a_newline_stages_literally() {
+        let root = repo("newline");
+        std::fs::write(root.join("line\nbreak.txt"), "new").unwrap();
         execute(Request::SetStaged {
             root: root.clone(),
             path: "line\nbreak.txt".into(),
             staged: true,
         })
         .unwrap();
-        let read = execute(Request::Read {
+        assert_eq!(staged(root), HashSet::from(["line\nbreak.txt".into()]));
+    }
+
+    fn staged(root: PathBuf) -> HashSet<String> {
+        execute(Request::Read {
             root,
             scope: Scope::Uncommitted,
         })
         .unwrap()
         .snapshot()
-        .unwrap();
-        assert_eq!(
-            read.staged,
-            HashSet::from(["[literal].txt".into(), "line\nbreak.txt".into()])
-        );
+        .unwrap()
+        .staged
     }
 }
