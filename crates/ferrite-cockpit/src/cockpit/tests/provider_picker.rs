@@ -122,7 +122,7 @@ fn draft_command_discovery_discards_old_workspace_replies_and_shows_failures(
     );
     assert_eq!(
         fake.command_requests.borrow()[1].1,
-        std::fs::canonicalize(&elsewhere).unwrap()
+        ferrite_core::workspace::follow::canonical(&elsewhere)
     );
     tx.send(Err(std::io::Error::other("provider unavailable")))
         .unwrap();

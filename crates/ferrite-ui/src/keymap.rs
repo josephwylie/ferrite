@@ -35,6 +35,17 @@ pub enum Platform {
     Windows,
 }
 
+impl Platform {
+    /// The primary modifier's key-table word: `cmd-w` on macOS, `ctrl-w`
+    /// on Windows.
+    pub fn primary(self) -> &'static str {
+        match self {
+            Platform::Mac => "cmd",
+            Platform::Windows => "ctrl",
+        }
+    }
+}
+
 /// The convention this build follows.
 #[cfg(target_os = "macos")]
 pub const PLATFORM: Platform = Platform::Mac;
@@ -85,10 +96,7 @@ pub type Binding = (String, &'static str, Option<&'static str>);
 /// context). Action names are the registered `namespace::Action` strings,
 /// so the table stays buildable without touching gpui.
 pub fn bindings(platform: Platform) -> Vec<Binding> {
-    let primary = match platform {
-        Platform::Mac => "cmd",
-        Platform::Windows => "ctrl",
-    };
+    let primary = platform.primary();
     // The word modifier: alt on macOS (alt-backspace, alt-left), ctrl on
     // Windows (ctrl-backspace, ctrl-left) — each platform's own text-field
     // grammar. On Windows ctrl-left is a word step and home is the line

@@ -239,8 +239,10 @@ mod tests {
             LinkTarget::resolve("#details", None),
             LinkTarget::Fragment("#details".into())
         );
-        let file = LinkTarget::resolve("src/main.rs:42", Some(Path::new("/repo")));
-        assert_eq!(file.address().as_deref(), Ok("/repo/src/main.rs:42"));
+        let repo = Path::new("/repo");
+        let file = LinkTarget::resolve("src/main.rs:42", Some(repo));
+        let main = repo.join("src").join("main.rs");
+        assert_eq!(file.address(), Ok(format!("{}:42", main.display())));
         assert!(LinkTarget::resolve("src/main.rs", None).address().is_err());
     }
 

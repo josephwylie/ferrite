@@ -1372,7 +1372,7 @@ fn a_draft_on_a_machine_starts_a_thread_in_a_directory_typed_there(cx: &mut Test
         );
         let project = view.cockpit.registry().projects().last().unwrap().clone();
         assert_eq!(project.title, "repo");
-        assert_eq!(project.root, std::fs::canonicalize(&repo).unwrap());
+        assert_eq!(project.root, ferrite_core::workspace::follow::canonical(&repo));
         project.id
     });
 
@@ -1446,7 +1446,7 @@ fn a_draft_on_a_machine_starts_a_thread_in_a_directory_typed_there(cx: &mut Test
     });
     assert_eq!(
         *started.lock().unwrap(),
-        [std::fs::canonicalize(&repo).unwrap()]
+        [ferrite_core::workspace::follow::canonical(&repo)]
     );
 }
 

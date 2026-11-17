@@ -453,12 +453,12 @@ fn cmd_click_opens_what_the_shell_printed(cx: &mut TestAppContext) {
     tick(cx);
     let thread = view.read_with(cx, |view, _| view.panes[0].thread().unwrap());
     opened(&view, cx);
-    run(
-        &view,
-        thread,
-        b"printf '\\033[2J\\033[Hhttp://localhost:5173/app\\nhttps://example.com/docs\\nsrc/main.rs:3\\n'\r",
-        cx,
-    );
+    // The platform shell: the login shell on Unix, PowerShell on Windows.
+    #[cfg(unix)]
+    let print = b"printf '\\033[2J\\033[Hhttp://localhost:5173/app\\nhttps://example.com/docs\\nsrc/main.rs:3\\n'\r";
+    #[cfg(windows)]
+    let print = b"Clear-Host; 'http://localhost:5173/app', 'https://example.com/docs', 'src/main.rs:3'\r";
+    run(&view, thread, print, cx);
     let shell = view.read_with(cx, |view, _| view.terminal_view(thread)).unwrap();
     assert!(typed_reaches(&shell, "docs\nsrc/main.rs:3", cx), "the shell printed the three");
     let at = cell(cx, 0, 12);
