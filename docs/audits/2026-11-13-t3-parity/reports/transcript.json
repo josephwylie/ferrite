@@ -1,0 +1,163 @@
+[
+  {
+    "id": "transcript-001",
+    "title": "Find cannot discover text hidden by turn or tool disclosures",
+    "priority": "P2",
+    "category": "partial-capability",
+    "evidence_level": "source-proven",
+    "impact": "A reader can receive zero matches for text that exists in the loaded conversation. The new default turn folding makes this common for intermediate explanations and command output.",
+    "ferrite_evidence": [
+      "crates/ferrite-pane/src/transcript/find.rs:3-9",
+      "crates/ferrite-pane/src/transcript/find.rs:99-111",
+      "crates/ferrite-pane/src/transcript.rs:1201-1247",
+      "crates/ferrite-pane/src/transcript/rows.rs:549-559"
+    ],
+    "t3_evidence": [
+      "apps/web/src/components/chat/MessagesTimeline.tsx:639-662",
+      "apps/web/src/components/chat/MessagesTimeline.tsx:714-729",
+      "apps/web/src/components/chat/TimelineUserMessageRow.tsx:298-299"
+    ],
+    "recommendation": "Build a search index from semantic messages and tool details. Keep visible-content selection separate. Map each hit to the disclosure chain and stable content identity.",
+    "acceptance": "A token present only in a collapsed intermediate answer or collapsed command result is counted before expansion. Next match opens the required disclosures and reveals the exact occurrence. Closing Find preserves the reader's place."
+  },
+  {
+    "id": "transcript-002",
+    "title": "Long transcript retention has no equivalent of earlier-turn paging",
+    "priority": "P2",
+    "category": "missing-capability",
+    "evidence_level": "inferred",
+    "impact": "Readers of long sessions cannot reliably return to the earliest prompts or search them from the transcript. Stored events may still exist; this is a navigation and retrieval limitation, not a claim of data loss.",
+    "ferrite_evidence": [
+      "crates/ferrite-core/src/activity.rs:324-337",
+      "crates/ferrite-core/src/activity.rs:756-815",
+      "crates/ferrite-core/src/transcript.rs:2952-2958",
+      "crates/ferrite-core/src/cockpit/mirror.rs:313-324",
+      "crates/ferrite-pane/src/transcript.rs:140-191",
+      "crates/ferrite-pane/src/transcript.rs:273-311"
+    ],
+    "t3_evidence": [
+      "apps/web/src/components/chat/MessagesTimeline.tsx:1505-1534"
+    ],
+    "recommendation": "Add a stored-history cursor and older-page loading to the main transcript. Preserve bounded memory with a sliding window. Show partial coverage rather than silently presenting the retained start as the conversation start.",
+    "acceptance": "A fixture larger than both retention budgets can reach its original prompt through an earlier-history control. Prepending a page does not move the current visible sentence. A failed page load shows a retry action. Confirm the installed build before promoting this inferred gap to a reproduced defect."
+  },
+  {
+    "id": "transcript-003",
+    "title": "Successful turns erase the visible plan history",
+    "priority": "P2",
+    "category": "partial-capability",
+    "evidence_level": "source-proven",
+    "impact": "Readers cannot check which planned steps were completed or left pending after a successful answer. Expanding Worked does not recover the checklist.",
+    "ferrite_evidence": [
+      "crates/ferrite-pane/src/pane/working.rs:627-655",
+      "crates/ferrite-core/src/transcript.rs:331-335",
+      "crates/ferrite-pane/src/transcript/rows.rs:413-427",
+      "crates/ferrite-pane/src/pane/working.rs:816-843"
+    ],
+    "t3_evidence": [
+      "apps/web/src/components/chat/MessagesTimeline.logic.ts:1966",
+      "apps/web/src/components/chat/MessagesTimeline.logic.ts:1992",
+      "apps/web/src/components/chat/V2ItemInspector.tsx:404-412"
+    ],
+    "recommendation": "Snapshot the last checklist state per turn and render it as historical work. Retain the useful blocked presentation for interrupted turns, with no live spinner after settlement.",
+    "acceptance": "After a successful turn ends, expand Worked and inspect the original ordered steps and their final statuses. A pending step remains visibly pending. The same historical plan survives reopening the thread."
+  },
+  {
+    "id": "transcript-004",
+    "title": "Opening one tool removes the entire work-group height cap",
+    "priority": "P2",
+    "category": "interaction",
+    "evidence_level": "source-proven",
+    "impact": "Inspecting one result in a large group can expand all its compact rows into the main transcript and displace surrounding content far beyond the intended bounded work list.",
+    "ferrite_evidence": [
+      "crates/ferrite-pane/src/transcript.rs:1821-1848",
+      "crates/ferrite-pane/src/pane.rs:4485-4488",
+      "crates/ferrite-pane/src/pane.rs:4507-4514"
+    ],
+    "t3_evidence": [
+      "apps/web/src/components/chat/TimelineWorkGroupRows.tsx:231-241",
+      "apps/web/src/components/chat/TimelineWorkGroupRows.tsx:274-281"
+    ],
+    "recommendation": "Retain the base cap of min(288 px, half the viewport) and add measured detail height. Keep the group's scroll anchor when children open and close.",
+    "acceptance": "With 100 compact calls, opening a two-line result grows the group only by that result's added height. The other compact calls remain internally scrollable. Closing the child restores the previous group position."
+  },
+  {
+    "id": "transcript-005",
+    "title": "Pin as chapter is a transient label without chapter navigation",
+    "priority": "P3",
+    "category": "partial-capability",
+    "evidence_level": "source-proven",
+    "impact": "The menu promises a way to mark a useful answer, but there is no chapter list to retrieve it and a new transcript view starts with no pins.",
+    "ferrite_evidence": [
+      "crates/ferrite-pane/src/transcript/message_menu.rs:19-20",
+      "crates/ferrite-pane/src/transcript/message_menu.rs:173-177",
+      "crates/ferrite-pane/src/transcript.rs:483-484",
+      "crates/ferrite-pane/src/transcript.rs:611",
+      "crates/ferrite-pane/src/transcript.rs:1497-1503"
+    ],
+    "t3_evidence": [],
+    "recommendation": "Either complete persistent chapter navigation using stable message identities or remove this incomplete menu action until its purpose is supported. This is Ferrite's own incomplete feature, not a requirement inferred from T3.",
+    "acceptance": "Pin an answer, restart, open the same thread and use a chapter list to jump to it. If the feature is intentionally temporary, the action name and feedback explicitly say so."
+  },
+  {
+    "id": "transcript-006",
+    "title": "Citations and copied text do not retain a navigable source message",
+    "priority": "P2",
+    "category": "partial-capability",
+    "evidence_level": "source-proven",
+    "impact": "A cited passage reaches the model, but the reader cannot jump back to the original answer or copy a stable link to a specific prompt. Repeated text makes manual relocation ambiguous.",
+    "ferrite_evidence": [
+      "crates/ferrite-pane/src/quote.rs:50-85",
+      "crates/ferrite-pane/src/transcript/reply.rs:206-220",
+      "crates/ferrite-pane/src/transcript.rs:1565-1593",
+      "crates/ferrite-pane/src/transcript.rs:303-305"
+    ],
+    "t3_evidence": [
+      "apps/web/src/components/chat/TimelineAssistantRows.tsx:220-243",
+      "apps/web/src/components/chat/MessagesTimeline.tsx:664-706",
+      "apps/web/src/components/chat/TimelineUserMessageRow.tsx:834-840"
+    ],
+    "recommendation": "Add optional structured provenance to Reply without breaking plain-text provider prompts. Add a prompt/message deep link and a source-opening action on sent citation chips.",
+    "acceptance": "A citation made from a folded historical response opens the exact original passage after reopening the thread. A copied prompt link lands on that prompt. Duplicate passages resolve by message identity, not substring alone."
+  },
+  {
+    "id": "transcript-007",
+    "title": "Markdown math is displayed as code instead of typeset formulas",
+    "priority": "P2",
+    "category": "missing-capability",
+    "evidence_level": "source-proven",
+    "impact": "Technical explanations containing fractions, matrices or aligned equations remain raw TeX-like text and are harder to read.",
+    "ferrite_evidence": [
+      "vendor/gpui-base/src/text/format/markdown.rs:233-237",
+      "vendor/gpui-base/src/text/format/markdown.rs:413-417",
+      "crates/ferrite-pane/src/rich.rs:647-655"
+    ],
+    "t3_evidence": [
+      "apps/web/src/components/ChatMarkdown.tsx:1414-1421",
+      "apps/web/src/components/chat/MarkdownMath.tsx:9-12",
+      "apps/web/src/components/chat/MarkdownMath.tsx:33-74"
+    ],
+    "recommendation": "Add an optional math rendering path with literal fallback and source-preserving copy. This is a capability choice beyond ADR 0038's narrower work-group contract, not evidence that the recent styling migration failed.",
+    "acceptance": "Inline fractions and display matrices render correctly in both themes. Partial invalid streaming remains readable. Copy returns the source equation and wide formulas remain keyboard-scrollable."
+  },
+  {
+    "id": "transcript-008",
+    "title": "Transcript Markdown has no inline audio or video playback",
+    "priority": "P2",
+    "category": "missing-capability",
+    "evidence_level": "source-proven",
+    "impact": "Generated or referenced audio and video require leaving the transcript. Image-style media references cannot become the inline players T3 provides.",
+    "ferrite_evidence": [
+      "vendor/gpui-base/src/text/format/markdown.rs:225-231",
+      "crates/ferrite-pane/src/rich.rs:535-575",
+      "crates/ferrite-pane/src/rich.rs:647-655",
+      "crates/ferrite-pane/src/pane.rs:3800-3832"
+    ],
+    "t3_evidence": [
+      "apps/web/src/components/ChatMarkdown.tsx:1490-1518",
+      "apps/web/src/components/chat/ChatMarkdownMedia.tsx:298-321"
+    ],
+    "recommendation": "Classify media references before image rendering and provide accessible native playback or an intentional media attachment fallback. Treat this as optional parity investment according to the product's media workflows.",
+    "acceptance": "An MP3 and an MP4 referenced in an assistant answer each expose playback controls or a labeled open action. Failed media does not appear as an unexplained broken image. Playback stops appropriately when its transcript is released."
+  }
+]

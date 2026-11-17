@@ -1,0 +1,1906 @@
+{
+  "scope": "Existing user journeys and required completion behavior; feature existence is not a pass.",
+  "snapshot": "All completed correction reports through navigation, including the read-only Working rename clarification, are reconciled. Four parent-adopted quality-correction records map into existing journeys. Forms valid input, blank paging and Working rename commit remain inconclusive within their stated cases; no complete workflow is certified.",
+  "source_commit": "62947f91d5cd6ee494aaae9ed09d794a853e5bab",
+  "verdict": "Incomplete runtime coverage; no whole-journey production-quality pass is claimed.",
+  "status_meanings": {
+    "not-exercised": "Related source risks exist, but this complete journey has not been exercised in runtime evidence read for this matrix.",
+    "partial-runtime-failure": "At least one executed branch fails; remaining branches are unverified.",
+    "positive-runtime-branch-only": "A bounded success exists; the complete journey is not certified.",
+    "runtime-inconclusive": "Runtime was attempted but the intended input/rendering boundary was not established; this is neither a certified product failure nor a complete pass."
+  },
+  "cases": [
+    {
+      "id": "NAV-01",
+      "area": "Navigation",
+      "journey": "Open the PR the user clicked",
+      "issue_ids": [
+        "pr-navigation-01",
+        "pr-navigation-02",
+        "pr-navigation-04",
+        "pr-navigation-05",
+        "pr-navigation-06",
+        "link-affordances-07"
+      ],
+      "priority": "P1",
+      "trigger": "Keep thread A focused, hide the right panel, and click the PR badge on thread B; repeat through footer, Overview and context menu.",
+      "intended_visible_outcome": "B\u2019s PR is visible in the intended native destination; the selected thread, PR identity and copied URL agree.",
+      "failure_recovery": "Missing URL, unavailable browser ownership or PR read failure produces a visible explanation on the user\u2019s current surface.",
+      "cross_surface_checks": "Repeat with another project filter, open Browser and a second PR target; preserve A\u2019s unsent draft.",
+      "current_status": "partial-runtime-failure",
+      "runtime_evidence": [
+        "reports/pr-entry-runtime-correction.md",
+        "evidence/pr-entry-correction/18-cross-before.png",
+        "evidence/pr-entry-correction/19-cross-after.png",
+        "evidence/pr-entry-correction/cross-thread-verdict.json",
+        "evidence/pr-entry-correction/02-focused-thread-pr-click.png",
+        "evidence/pr-entry-correction/07-native-summary.png",
+        "evidence/pr-entry-correction/08-native-timeline.png"
+      ],
+      "next_runtime_check": "Test cross-thread navigation from absent/empty board and remaining entry points; require the clicked target visibly appear while preserving the prior draft.",
+      "current_owner": "pr_entry_runtime_correction",
+      "evidence_basis": "Bounded observed branches with stated limits; no complete journey certified",
+      "runtime_observations": [
+        "Production gh discovery supplies A/#101 and B/#202. With A selected and panel hidden, an actual click on B\u2019s badge leaves A selected and no visible panel; an OCR/element assertion fails in repeated runs.",
+        "A\u2019s own badge opens Browser; Overview\u2019s PR row opens native #101 with populated Summary and Timeline. The split destinations are directly observed."
+      ],
+      "remaining_unverified_branches": [
+        "B absent from board/empty board, footer and external/modifier routes, CEF GitHub load, no-PR/missing-URL/error targeting and preservation of an unrelated draft were not exercised."
+      ],
+      "correction_findings": [
+        "PR report NAV-01",
+        "PR report NAV-02"
+      ]
+    },
+    {
+      "id": "NAV-02",
+      "area": "Navigation",
+      "journey": "Refresh a PR and recover from failed reads",
+      "issue_ids": [
+        "pr-operations-001",
+        "pr-operations-002",
+        "pr-operations-003",
+        "pr-operations-015",
+        "pr-operations-016",
+        "quality-correction-004"
+      ],
+      "priority": "P1",
+      "trigger": "Open PR details, change the fixture\u2019s checks/comments, refresh, then inject an error and delayed old response.",
+      "intended_visible_outcome": "The visible current PR refreshes checks and comments together; a late response cannot replace a newer target.",
+      "failure_recovery": "Keep last useful content, show a scoped error, make Retry actually retry, and cancel or bound abandoned reads.",
+      "cross_surface_checks": "Switch PR/thread and close/reopen while a read is outstanding.",
+      "current_status": "partial-runtime-failure",
+      "runtime_evidence": [
+        "reports/pr-entry-runtime-correction.md",
+        "evidence/pr-entry-correction/13-refreshed-stale-timeline.png",
+        "evidence/pr-entry-correction/14-refreshed-stale-summary.png",
+        "evidence/pr-entry-correction/15-overview-fresh-checks.png",
+        "evidence/pr-entry-correction/refresh-verdict.json",
+        "evidence/pr-entry-correction/17-reopened-summary-settled.png",
+        "evidence/pr-entry-correction/24-lifecycle-refresh-settled.png",
+        "evidence/pr-entry-correction/25-lifecycle-new-comment.png",
+        "evidence/pr-entry-correction/04-overview-native-pr.png"
+      ],
+      "next_runtime_check": "Verify checks/body/comments always invalidate current detail and preserve visibly stale content during failures; then exercise concurrency/auth and action-driven refresh.",
+      "current_owner": "pr_entry_runtime_correction",
+      "evidence_basis": "Bounded observed branches with stated limits; no complete journey certified",
+      "runtime_observations": [
+        "Actual thread-menu Refresh and palette Refresh trigger one lightweight PR read but no detailed read when only checks/body/comments change. Native review remains stale while Overview reflects new CI.",
+        "Re-entering Overview\u2019s PR row reloads details. A synthetic OPEN\u2192MERGED change does trigger detailed refresh and new body/check/comment rendering. No forge write occurs."
+      ],
+      "remaining_unverified_branches": [
+        "Auth expiry, transient failed reload retaining prior content, out-of-order reads/cancellation/deadline and agent-action refresh remain untested.",
+        "Initial synthetic-repository read error was clipped in the panel, but the fixture caused the error; native network/auth recovery is not established."
+      ],
+      "correction_findings": [
+        "PR report NAV-03",
+        "quality-correction-004"
+      ]
+    },
+    {
+      "id": "NAV-03",
+      "area": "Navigation",
+      "journey": "Read the complete PR review",
+      "issue_ids": [
+        "pr-operations-004",
+        "pr-operations-005",
+        "pr-operations-006",
+        "pr-operations-007",
+        "pr-operations-008",
+        "pr-operations-009",
+        "pr-operations-017",
+        "pr-operations-018",
+        "pr-operations-019"
+      ],
+      "priority": "P1",
+      "trigger": "Open Summary, Guide, Timeline and Code for a PR containing replies, approvals, resolved threads, rich text and failed checks.",
+      "intended_visible_outcome": "The review is readable, ordered and complete or explicitly truncated; the newest intended guide and the actual check failure are reachable.",
+      "failure_recovery": "Empty, partial, stale and truncated records have an honest explanation and retrieval route.",
+      "cross_surface_checks": "Compare visible identity and checkout synchronization across tabs and after refresh.",
+      "current_status": "positive-runtime-branch-only",
+      "runtime_evidence": [
+        "reports/pr-entry-runtime-correction.md",
+        "evidence/pr-entry-correction/07-native-summary.png",
+        "evidence/pr-entry-correction/08-native-timeline.png"
+      ],
+      "next_runtime_check": "Populate complex/long review data and exercise Guide/Code/check routes; initial Summary/Timeline rendering is only a positive entry branch.",
+      "current_owner": "primary-agent-follow-up",
+      "evidence_basis": "Bounded observed branches with stated limits; no complete journey certified",
+      "runtime_observations": [
+        "Overview enters a native PR view populated through production reviewr plus installed gh/local Unix-socket forge fixture. Summary shows description/checks and Timeline shows the controlled comment."
+      ],
+      "remaining_unverified_branches": [
+        "Guide generation, Code/review interaction, full replies/verdicts, long data caps, check-detail navigation, description formatting and sync context remain unverified."
+      ],
+      "correction_findings": [
+        "PR report NAV-02 native detail control"
+      ]
+    },
+    {
+      "id": "NAV-04",
+      "area": "Navigation",
+      "journey": "Run an existing PR action against the correct branch",
+      "issue_ids": [
+        "pr-operations-012",
+        "pr-operations-014",
+        "pr-operations-020",
+        "pr-operations-021"
+      ],
+      "priority": "P1",
+      "trigger": "With real branch changes absent from current transcript edits, invoke existing Create, Fix, Guide or Merge controls in a disposable fixture.",
+      "intended_visible_outcome": "Availability reflects repository state; the prompt names the actual forge/repository/PR; pending and completion are visible.",
+      "failure_recovery": "Failure leaves recoverable context and a working retry; unavailable merge methods are explained.",
+      "cross_surface_checks": "Queue an action while changing focused thread and ensure its target does not change.",
+      "current_status": "not-exercised",
+      "runtime_evidence": [],
+      "next_runtime_check": "Capture generated prompts in the fake provider only; never perform a real create/merge/push.",
+      "current_owner": "primary-agent-follow-up",
+      "evidence_basis": "Source review only; full journey unexercised"
+    },
+    {
+      "id": "NAV-05",
+      "area": "Navigation",
+      "journey": "Search, select and open the intended thread",
+      "issue_ids": [
+        "projects-navigation-005",
+        "projects-navigation-006",
+        "projects-navigation-007",
+        "projects-navigation-009"
+      ],
+      "priority": "P2",
+      "trigger": "Open sidebar search with many results, navigate below the fold, allow result reordering, then press Enter.",
+      "intended_visible_outcome": "The highlighted result remains visible and stable; Enter opens that exact thread and its selection remains discoverable.",
+      "failure_recovery": "No matches, disappearing matches and filtered-out destinations explain what happened without losing the query.",
+      "cross_surface_checks": "Switch project filter while searching; preserve draft and return to same result after closing search.",
+      "current_status": "partial-runtime-failure",
+      "runtime_evidence": [
+        "reports/navigation-runtime-correction.md",
+        "evidence/navigation-correction/13-search-44-results.png",
+        "evidence/navigation-correction/14-search-offscreen-zero.png",
+        "evidence/navigation-correction/15-enter-offscreen-zero-opens-02.png",
+        "evidence/navigation-correction/11-search-down-12.png",
+        "evidence/navigation-correction/12-search-enter-12.png"
+      ],
+      "next_runtime_check": "Keep highlighted search result in view when query/cursor changes; then exercise keyboard moves beyond viewport, live reordering/disappearance and project-filter context.",
+      "current_owner": "primary-agent-follow-up",
+      "evidence_basis": "Actual broad-query stale-offset failure plus visible-target keyboard success; full search journey remains open",
+      "runtime_observations": [
+        "A broad 44-thread search retains prior sidebar scroll offset while resetting cursor to result 0: visible rows begin at 09, selected result 02 is above viewport, and Enter opens 02.",
+        "In a separate 14-result control, twelve Down keys highlight a visible result 14 and Enter opens that exact thread."
+      ],
+      "remaining_unverified_branches": [
+        "Arrow selection moving beyond viewport, live result reorder/disappearance, title-only search scope, project-filter target visibility and retained drafts remain untested."
+      ],
+      "correction_findings": [
+        "NAV05-search-scroll-cursor"
+      ]
+    },
+    {
+      "id": "NAV-06",
+      "area": "Navigation",
+      "journey": "Rename, park, undo and reopen a thread",
+      "issue_ids": [
+        "projects-navigation-001",
+        "projects-navigation-002",
+        "projects-navigation-003",
+        "projects-navigation-004",
+        "projects-navigation-011",
+        "projects-navigation-014"
+      ],
+      "priority": "P1",
+      "trigger": "Rename working, snoozed and parked rows; park one grouped thread and a multi-selection; undo and reopen.",
+      "intended_visible_outcome": "A visible editor owns typing; undo restores identity and grouping; reopen shows history and the expected active thread.",
+      "failure_recovery": "Failed park/reopen remains visible per item, retains selection and permits retry.",
+      "cross_surface_checks": "Check groups, project filters, search and existing drafts after each action.",
+      "current_status": "partial-runtime-failure",
+      "runtime_evidence": [
+        "reports/navigation-runtime-correction.md",
+        "evidence/navigation-correction/17-working-rename-editor.png",
+        "evidence/navigation-correction/19-working-rename-saved.png",
+        "evidence/navigation-correction/22-settled-row-rename.png",
+        "evidence/navigation-correction/26-snoozed-row-menu.png",
+        "evidence/navigation-correction/27-snoozed-rename-attempt.png"
+      ],
+      "next_runtime_check": "Exercise a visible Parked row and establish actual rename input/save/cancel on Working/settled rows; then park/undo/reopen failure and group restoration.",
+      "current_owner": "primary-agent-follow-up",
+      "evidence_basis": "Snoozed Rename failure confirmed; Working/settled rename hints observed but actual input/commit and persistence unproven",
+      "runtime_observations": [
+        "Snoozed slim row offers Rename, but selecting it draws no rename hint/editor and stored title stays unchanged.",
+        "Working and settled row actions display a rename hint. For Working, the specific rename-thread-2 selector was absent; type/Enter acknowledged input but the full editor text/commit was not established. An immediate title read had no settle interval or later persistence check. This is inconclusive, not a saved-rename failure. Settled typing/save was not completed."
+      ],
+      "remaining_unverified_branches": [
+        "Parked row Rename was not clicked because the target was outside the drawn slice.",
+        "Working input/commit and settled rename save remain unresolved. Normal rename Cancel, failed reopen, grouped Undo Park, bulk failure and Cmd+W remain unverified."
+      ],
+      "correction_findings": [
+        "NAV06-rename-snoozed",
+        "NAV06-rename-working inconclusive",
+        "NAV06-rename-settled entry only"
+      ]
+    },
+    {
+      "id": "NAV-07",
+      "area": "Navigation",
+      "journey": "Keep project and checkout context across new work",
+      "issue_ids": [
+        "projects-navigation-008",
+        "projects-navigation-012",
+        "projects-navigation-013"
+      ],
+      "priority": "P2",
+      "trigger": "Scope to a project, create a thread from the current branch/worktree, edit the project, and return.",
+      "intended_visible_outcome": "Visible project, checkout and new-thread defaults follow the chosen context without hidden re-selection.",
+      "failure_recovery": "Invalid or unavailable paths have a clear recovery route.",
+      "cross_surface_checks": "Restart and search from scoped state; open an external thread link.",
+      "current_status": "not-exercised",
+      "runtime_evidence": [],
+      "next_runtime_check": "Use two scratch repositories and a worktree, checking actual cwd in provider launch records.",
+      "current_owner": "primary-agent-follow-up",
+      "evidence_basis": "Source review only; full journey unexercised",
+      "remaining_unverified_branches": [
+        "The navigation fixture did not exercise draft preservation, project-filter switching or New thread checkout retargeting."
+      ]
+    },
+    {
+      "id": "SHELL-01",
+      "area": "Shell",
+      "journey": "Open and close sidebars with coherent motion",
+      "issue_ids": [
+        "motion-001",
+        "motion-003",
+        "motion-004",
+        "motion-005",
+        "motion-009",
+        "motion-011"
+      ],
+      "priority": "P1",
+      "trigger": "Toggle left sidebar, right panel, tab bodies, menus, shelves, Find and notices through their ordinary controls.",
+      "intended_visible_outcome": "Each structural change preserves context with the required interruptible opening/closing behavior; content does not snap unexpectedly.",
+      "failure_recovery": "Reverse a transition mid-flight; reduced motion yields a deliberate stable final state.",
+      "cross_surface_checks": "Keep reading a long response while switching tools and toggling panels.",
+      "current_status": "not-exercised",
+      "runtime_evidence": [],
+      "next_runtime_check": "Native intermediate-frame timing remains required; visual-quality source review confirms snap policy but settled endpoint captures do not establish motion.",
+      "current_owner": "parent native inspection",
+      "evidence_basis": "Source review only; full journey unexercised"
+    },
+    {
+      "id": "SHELL-02",
+      "area": "Shell",
+      "journey": "Restore sensible panel width after using a wide tool",
+      "issue_ids": [
+        "panel-tools-018",
+        "input-focus-008"
+      ],
+      "priority": "P1",
+      "trigger": "Open Overview, open Files/Changes, return to Overview, close/reopen, resize, maximize/restore, and restart.",
+      "intended_visible_outcome": "The previous operator-selected size and reading space are respected; a tool\u2019s minimum does not silently become the global saved width.",
+      "failure_recovery": "Narrow windows remain usable and dragging continues across child content.",
+      "cross_surface_checks": "Check left navigation visibility, conversation width and reading position at every step.",
+      "current_status": "partial-runtime-failure",
+      "runtime_evidence": [
+        "evidence/panel-correction/overview-width-contract.json",
+        "evidence/panel-correction/03-overview-reopened.png",
+        "evidence/panel-correction/05-overview-after-files.png",
+        "evidence/panel-correction/07-reopened-after-files.png",
+        "reports/panel-runtime-correction.md",
+        "evidence/panel-correction/independent-width-contract.json",
+        "evidence/panel-correction/21-after-headless-restart.png",
+        "evidence/panel-correction/25-independent-overview-reopened.png",
+        "reports/visual-quality-correction.md"
+      ],
+      "next_runtime_check": "Two fresh threads and app restart confirm sticky width at 1440 \u00d7 900; continue actual divider drag, narrow-window, and operator-chosen-width restore checks in native runtime.",
+      "current_owner": "panel_runtime_correction",
+      "evidence_basis": "Executed bounded branch plus source review",
+      "runtime_observations": [
+        "Overview 320 \u2192 Files 864 \u2192 Overview 864 at 1440 px, without operator resize; wide state persists through close/reopen and app restart.",
+        "An independent fresh thread reproduces the same growth via Changes; nav hides and conversation contracts.",
+        "Visual review independently confirms sparse Overview and Browser inheriting the broad allocation."
+      ],
+      "remaining_unverified_branches": [
+        "Native narrow-window behavior, actual divider dragging, restored operator-selected width and intermediate motion remain untested."
+      ],
+      "correction_findings": [
+        "panel-tools-018 bounded sticky-width branch",
+        "VQ-C04"
+      ]
+    },
+    {
+      "id": "SHELL-03",
+      "area": "Shell",
+      "journey": "Keep keys in the control the user clicked",
+      "issue_ids": [
+        "input-focus-001",
+        "input-focus-003",
+        "input-focus-005",
+        "input-focus-009",
+        "input-focus-010"
+      ],
+      "priority": "P1",
+      "trigger": "Leave a sentinel draft, click file editor/filter, launcher, browser form or another panel control, and type/navigation-submit keys.",
+      "intended_visible_outcome": "Typing and actions belong to the intended visible control; the conversation sends only on explicit composer submission.",
+      "failure_recovery": "Redraw, provider updates, failed actions and closed menus restore focus to a valid control.",
+      "cross_surface_checks": "Cross Files, Browser, terminal, side chat, PR tabs, palette and composer.",
+      "current_status": "partial-runtime-failure",
+      "runtime_evidence": [
+        "reports/runtime-interactions.md",
+        "evidence/headless/04-editor-next-keys.png",
+        "evidence/headless/06-filter-next-keys.png",
+        "evidence/headless/10-panel-after-enter.png",
+        "reports/forms-runtime-correction.md",
+        "evidence/forms-correction/04-after-form-submit.png",
+        "evidence/forms-correction/08-coordinate-click.png"
+      ],
+      "next_runtime_check": "Retain reproduced Files and empty-launcher checks; add native browser form Tab/Enter/Escape/paste/IME and accessibility traversal.",
+      "current_owner": "primary-agent-follow-up",
+      "evidence_basis": "Executed bounded branch plus source review",
+      "runtime_observations": [
+        "Form parent-wrapper click/type attempts reached Main, but exact nested Input hits were not established; this is an inconclusive addition, not another certified routing defect."
+      ],
+      "remaining_unverified_branches": [
+        "Native Browser input, valid form field traversal, accessibility focus and unrelated surface routes remain open.",
+        "Resolve form nested-input bounds and headless paint ambiguity before claiming another production focus failure."
+      ]
+    },
+    {
+      "id": "SHELL-04",
+      "area": "Shell",
+      "journey": "Close or dismiss the surface the user is operating",
+      "issue_ids": [
+        "input-focus-004",
+        "link-affordances-06"
+      ],
+      "priority": "P1",
+      "trigger": "With a PR/terminal/side-chat/file panel or context menu focused, press Cmd+W or Escape.",
+      "intended_visible_outcome": "Close removes the intended tool; Escape dismisses the top interaction; the parent thread and draft survive.",
+      "failure_recovery": "Reopen restores the same resource and focus.",
+      "cross_surface_checks": "Repeat with nested menus, Find, image preview, browser content and streaming main thread.",
+      "current_status": "partial-runtime-failure",
+      "runtime_evidence": [
+        "evidence/headless/30-web-menu-after-escape.png"
+      ],
+      "next_runtime_check": "Test menu Escape (already failing) plus Cmd+W on disposable panel sessions and Reopen closed surface.",
+      "current_owner": "primary-agent-follow-up",
+      "evidence_basis": "Executed bounded branch plus source review"
+    },
+    {
+      "id": "LIVE-01",
+      "area": "Live output",
+      "journey": "Read live main and tool output as it arrives",
+      "issue_ids": [
+        "motion-008",
+        "transcript-004",
+        "scroll-quality-001",
+        "scroll-quality-003"
+      ],
+      "priority": "P1",
+      "trigger": "Start a controlled long response with intermittent tool output; view it before completion, navigate away and return.",
+      "intended_visible_outcome": "New text and tool output visibly arrive on the correct thread without waiting for final completion; follow behavior is understandable.",
+      "failure_recovery": "Pause, error, stop and provider disconnect retain what arrived and show the true state.",
+      "cross_surface_checks": "Read earlier content, open Files/browser, switch threads and return during streaming.",
+      "current_status": "positive-runtime-branch-only",
+      "runtime_evidence": [
+        "reports/agent-live-correction.md",
+        "evidence/agent-live-correction/02-main-first-live-clear.png",
+        "evidence/agent-live-correction/03-main-second-live.png",
+        "evidence/agent-live-correction/10-agent-open-live-three.png",
+        "reports/scroll-runtime-correction.md",
+        "evidence/scroll-correction/12-after-append.png",
+        "evidence/scroll-correction/provider-emitted.jsonl"
+      ],
+      "next_runtime_check": "Continue valid long/lifecycle provider replay and live navigation checks; do not turn the observed incremental visibility into a pass for scrolling or every provider.",
+      "current_owner": "agent_live_runtime_correction",
+      "evidence_basis": "Executed bounded branches and/or inspected rendered state plus source review; no complete journey certified",
+      "runtime_observations": [
+        "Main MAIN_LIVE_ONE and MAIN_LIVE_TWO appeared before completion through the controlled Claude protocol-to-renderer path.",
+        "Open Alpha received second and third forwarded child assistant messages without reopen or refresh.",
+        "A separate controlled Read fixture rendered APPEND_01 through APPEND_08 and END_SENTINEL in order."
+      ],
+      "remaining_unverified_branches": [
+        "Long output, intermittent tool output, provider disconnect, stop, cross-thread return and manual-scroll interactions remain untested by this run.",
+        "Child token deltas are outside the tested Claude adapter contract. Synthetic final Main snapshot duplicated a sentence; invalid fixture lifecycle is excluded from product defects.",
+        "Append was released after the confounded blank paging state, so no known manually selected reading position was established for preservation testing."
+      ],
+      "correction_findings": [
+        "agent-live working Main/child updates"
+      ]
+    },
+    {
+      "id": "AGENT-01",
+      "area": "Agents",
+      "journey": "Open a child and follow nested live work",
+      "issue_ids": [
+        "subagents-background-02",
+        "subagents-background-04",
+        "quality-correction-001"
+      ],
+      "priority": "P1",
+      "trigger": "From a rendered spawn row open a running child, inspect its incrementally arriving output, then open its child and return to parent/root.",
+      "intended_visible_outcome": "The named child\u2019s real output, identity and status appear; nested relationships and parent/root navigation remain available.",
+      "failure_recovery": "Empty, waiting, failed and unavailable children are distinct states with a useful action.",
+      "cross_surface_checks": "Keep main composer/draft and selected child stable while unrelated children update.",
+      "current_status": "partial-runtime-failure",
+      "runtime_evidence": [
+        "reports/agent-live-correction.md",
+        "evidence/agent-live-correction/06-agent-open-live-two-nested.png",
+        "evidence/agent-live-correction/07-nested-row-click.png",
+        "evidence/agent-live-correction/08-nested-live-output-click.png",
+        "evidence/agent-live-correction/13-completed-agent.png",
+        "evidence/agent-live-correction/14-agent-maximized-output.png"
+      ],
+      "next_runtime_check": "Reproduce completed and failed nested routes, then verify ordinary prose across actual resize/maximize/restore; preserve event-boundary evidence.",
+      "current_owner": "agent_live_runtime_correction",
+      "evidence_basis": "Executed bounded branches and/or inspected rendered state plus source review; no complete journey certified",
+      "runtime_observations": [
+        "Main row opens the correct Alpha child; its open transcript receives supported forwarded messages and completion.",
+        "Inside Alpha, the Grandchild row and its View live output text are both inert despite emitted child output.",
+        "At ordinary 420px width, child prose loses sentence endings; maximizing to 960 px reveals the complete text."
+      ],
+      "remaining_unverified_branches": [
+        "Immediate-parent/root navigation, completed nested opening, multiple unrelated children, failures and native resizing remain untested.",
+        "Child prose clipping is a distinct correction finding; the layout root cause has not been isolated."
+      ],
+      "correction_findings": [
+        "agent-live-05",
+        "agent-live-07",
+        "quality-correction-001"
+      ]
+    },
+    {
+      "id": "AGENT-02",
+      "area": "Agents",
+      "journey": "Handle a child decision and stop the intended work",
+      "issue_ids": [
+        "subagents-background-04",
+        "subagents-background-05",
+        "subagents-background-06",
+        "subagents-background-07"
+      ],
+      "priority": "P1",
+      "trigger": "Receive a child decision, inspect it, answer it, then stop a mixed child/command task.",
+      "intended_visible_outcome": "The request and control name their target; the reply/stop reaches only that target; opening Main stays in Main.",
+      "failure_recovery": "Rejected or ineffective Stop clears pending state, explains failure and permits retry.",
+      "cross_surface_checks": "Verify transcript summary, Background panel, agent tab and parent status agree.",
+      "current_status": "not-exercised",
+      "runtime_evidence": [],
+      "next_runtime_check": "Decision and Stop were not part of the completed live-agent fixture. Use a controlled decision/stop-capable protocol fixture and capture outgoing target IDs and UI states.",
+      "current_owner": "agent_live_runtime_correction",
+      "evidence_basis": "Source review only; full journey unexercised"
+    },
+    {
+      "id": "AGENT-03",
+      "area": "Agents",
+      "journey": "Close, reopen and restore agent history",
+      "issue_ids": [
+        "subagents-background-01",
+        "subagents-background-03",
+        "subagents-background-09"
+      ],
+      "priority": "P1",
+      "trigger": "Open an agent with output, close its tab, reopen it, then restart with that tab selected and inspect an evicted child.",
+      "intended_visible_outcome": "Reopening restores content, not an empty tab; restart preserves target or clearly recovers it; stored history loads when needed.",
+      "failure_recovery": "History loading, failure and retry are visible and do not resume the provider unexpectedly.",
+      "cross_surface_checks": "Repeat SideChat separately because it has different backing resources; compare Files which already has a hydration path.",
+      "current_status": "partial-runtime-failure",
+      "runtime_evidence": [
+        "reports/agent-live-correction.md",
+        "evidence/agent-live-correction/11-reopen-palette.png",
+        "evidence/agent-live-correction/12-reopened-agent-blank.png",
+        "evidence/agent-live-correction/13-completed-agent.png",
+        "reports/draft-lifecycle-runtime-correction.md",
+        "evidence/draft-lifecycle-correction/13-sidechat-open.png",
+        "evidence/draft-lifecycle-correction/15-sidechat-draft-confirmed.png",
+        "evidence/draft-lifecycle-correction/19-sidechat-reopened-settled.png"
+      ],
+      "next_runtime_check": "Single-tab Agent and SideChat reopen failures are confirmed separately. Continue Close all, restart, eviction and completed SideChat history; Cmd+W targeting is still open.",
+      "current_owner": "agent_live_runtime_correction",
+      "evidence_basis": "Executed bounded branches and/or inspected rendered state plus source review; no complete journey certified",
+      "runtime_observations": [
+        "Closing Alpha and choosing Reopen closed surface through the palette restores its selected tab with a blank body.",
+        "agent-drill is absent while panel-tab-Agent exists; clicking the original Main row reconstructs the child content.",
+        "Separately, selecting real transcript text and clicking selection-side-chat opens a working SideChat with a child thread and typeable composer.",
+        "Closing that SideChat removes its child; palette Reopen closed surface restores only the selected tab. Body, header and composer remain absent after settled recapture and explicit activation."
+      ],
+      "remaining_unverified_branches": [
+        "Close all, restart, eviction hydration, failed history load/retry and provider launch behavior across those branches remain untested.",
+        "SideChat prompt submission, completed reply restoration, real-provider fork continuity and Cmd+W were not exercised."
+      ],
+      "correction_findings": [
+        "agent-live-06",
+        "draft-lifecycle-runtime-03"
+      ]
+    },
+    {
+      "id": "AGENT-04",
+      "area": "Agents",
+      "journey": "Find all running work consistently",
+      "issue_ids": [
+        "subagents-background-08"
+      ],
+      "priority": "P1",
+      "trigger": "Run a child and a shell task concurrently; open transcript summary, Background and agent inspection.",
+      "intended_visible_outcome": "All views agree on which work exists, its owner and whether the main turn is awaiting it.",
+      "failure_recovery": "Completion/failure removes or settles the correct row without stale Stopping labels.",
+      "cross_surface_checks": "Switch threads with reused task IDs and return.",
+      "current_status": "partial-runtime-failure",
+      "runtime_evidence": [
+        "reports/agent-live-correction.md",
+        "evidence/agent-live-correction/06-agent-open-live-two-nested.png",
+        "evidence/agent-live-correction/09-main-live-output-click.png"
+      ],
+      "next_runtime_check": "Keep the proven wrong-output-route branch and continue mixed shell/child inventory and lifecycle comparison; this is not evidence that child updates never arrive.",
+      "current_owner": "agent_live_runtime_correction",
+      "evidence_basis": "Executed bounded branches and/or inspected rendered state plus source review; no complete journey certified",
+      "runtime_observations": [
+        "After Alpha output is visible in its child transcript, Main row View live output opens Background and says No output yet for the same child."
+      ],
+      "remaining_unverified_branches": [
+        "Concurrent shell/child inventory, reused IDs, nested Background inclusion, stop state, failure/completion settlement and thread switching remain untested."
+      ],
+      "correction_findings": [
+        "agent-live-04"
+      ]
+    },
+    {
+      "id": "COMPOSE-01",
+      "area": "Composer",
+      "journey": "Send without losing a refused draft",
+      "issue_ids": [
+        "composer-01"
+      ],
+      "priority": "P1",
+      "trigger": "Compose text, quote and attachment, then submit during a definite admission refusal.",
+      "intended_visible_outcome": "The full prompt remains editable or clearly recoverable until admitted; accepted content appears once.",
+      "failure_recovery": "Retry preserves context without overwriting newer typing or duplicating an uncertain send.",
+      "cross_surface_checks": "Switch threads or receive provider startup updates while sending.",
+      "current_status": "not-exercised",
+      "runtime_evidence": [],
+      "next_runtime_check": "Use deterministic provider-start/admission failure; capture composer before/after and fake-provider receipts.",
+      "current_owner": "draft_lifecycle_runtime_correction",
+      "evidence_basis": "Source review only; full journey unexercised"
+    },
+    {
+      "id": "COMPOSE-02",
+      "area": "Composer",
+      "journey": "Retain a never-sent draft across navigation and restart",
+      "issue_ids": [
+        "composer-02"
+      ],
+      "priority": "P1",
+      "trigger": "Create a new unsent pane, type a sentinel and context, wait for autosave, navigate away and restart the owned window.",
+      "intended_visible_outcome": "The same unsent draft and context return, just as an existing thread draft does.",
+      "failure_recovery": "Provider unavailable or no checkout still preserves authored text.",
+      "cross_surface_checks": "Compare new unsent pane, existing thread, Park/reopen and sidebar filter transitions.",
+      "current_status": "partial-runtime-failure",
+      "runtime_evidence": [
+        "reports/draft-lifecycle-runtime-correction.md",
+        "evidence/draft-lifecycle-correction/03-unsent-draft-before.png",
+        "evidence/draft-lifecycle-correction/04-after-window-restart.png",
+        "evidence/draft-lifecycle-correction/06-new-draft-after-restart.png",
+        "evidence/draft-lifecycle-correction/drafts-before-restart.json"
+      ],
+      "next_runtime_check": "Exercise normal Quit and recovery of launch context, multiple new drafts and first-send promotion; the proved boundary is window process termination after autosave.",
+      "current_owner": "draft_lifecycle_runtime_correction",
+      "evidence_basis": "Executed bounded branches plus source review; complete journey remains open",
+      "runtime_observations": [
+        "A new Cmd+N pane visibly contained its plain-text sentinel after autosave time, but drafts.json held only the existing-thread control.",
+        "After only the owned window process was terminated and restarted, the existing-thread control restored and a new pane was blank."
+      ],
+      "remaining_unverified_branches": [
+        "Normal Quit, multiple new drafts, attachments, model/checkout recovery, first-send promotion and draft navigation permutations remain untested."
+      ]
+    },
+    {
+      "id": "COMPOSE-03",
+      "area": "Composer",
+      "journey": "Edit a queued prompt without merging unrelated work",
+      "issue_ids": [
+        "composer-04"
+      ],
+      "priority": "P1",
+      "trigger": "During a controlled busy turn queue a prompt, type a different unsent draft, and click queued Edit.",
+      "intended_visible_outcome": "The queued item remains independently editable; its text and attachments do not merge silently with the unrelated draft.",
+      "failure_recovery": "Cancel/edit failure keeps both original items recoverable and preserves order.",
+      "cross_surface_checks": "Repeat with native queue acknowledgements arriving during edits and with a second queued item.",
+      "current_status": "partial-runtime-failure",
+      "runtime_evidence": [
+        "reports/draft-lifecycle-runtime-correction.md",
+        "evidence/draft-lifecycle-correction/08-queue-before-edit-valid.png",
+        "evidence/draft-lifecycle-correction/09-queue-after-edit.png",
+        "evidence/draft-lifecycle-correction/queue-before-edit.json",
+        "evidence/draft-lifecycle-correction/queue-after-edit.json",
+        "evidence/draft-lifecycle-correction/drafts-after-queue-edit.json"
+      ],
+      "next_runtime_check": "Verify distinct identities through multi-item Edit, cancellation races and resubmission; preserve unrelated composer text and provider acknowledgements.",
+      "current_owner": "draft_lifecycle_runtime_correction",
+      "evidence_basis": "Executed bounded branches plus source review; complete journey remains open",
+      "runtime_observations": [
+        "One native queued prompt and a separate unsent draft existed before the actual queued-edit-0 click.",
+        "The click sent cancel_async_message for that exact UUID, queue count fell from 1 to 0, and persisted composer text became QUEUED_SENTINEL followed by UNRELATED_DRAFT. Both texts survive, but separate message identities are merged."
+      ],
+      "remaining_unverified_branches": [
+        "Multiple queued items/order, resubmission, provider-consumption race and a committed Save/Cancel editing flow remain untested; no Save/Cancel flow was presented.",
+        "The earlier fixture lacked queue capability and was correctly refused with text retained; that setup failure is excluded from defects."
+      ]
+    },
+    {
+      "id": "COMPOSE-04",
+      "area": "Composer",
+      "journey": "Understand Stop and queued continuation",
+      "issue_ids": [
+        "composer-06"
+      ],
+      "priority": "P2",
+      "trigger": "Queue a second prompt, then press the visible Stop control while the first turn runs.",
+      "intended_visible_outcome": "The result clearly states whether only the current turn or all pending work stopped; the observed behavior matches the UI language.",
+      "failure_recovery": "Stop failure and queued cancellation have a visible retry path.",
+      "cross_surface_checks": "Compare main turn, child work and queued-native versus locally queued prompts.",
+      "current_status": "not-exercised",
+      "runtime_evidence": [],
+      "next_runtime_check": "Test existing Stop semantics with a deterministic queue. This is a product-contract assessment, not an automatic failure of a deliberately chosen policy.",
+      "current_owner": "primary-agent-follow-up",
+      "evidence_basis": "Source review only; full journey unexercised"
+    },
+    {
+      "id": "QUOTE-01",
+      "area": "Quotes",
+      "journey": "Select, cite, add general text and send",
+      "issue_ids": [
+        "quote-attachments-003",
+        "quote-attachments-012"
+      ],
+      "priority": "P1",
+      "trigger": "Select a passage by double-click, drag and keyboard; invoke Cite, type ordinary text, remove/undo and send.",
+      "intended_visible_outcome": "The intended exact selection becomes one usable quote and ordinary text can be added immediately; send carries both.",
+      "failure_recovery": "Selection changes, streaming and long/complex passages do not silently lose the action or text.",
+      "cross_surface_checks": "Repeat in code, multiline prose, tables, folded content and narrow layouts.",
+      "current_status": "positive-runtime-branch-only",
+      "runtime_evidence": [
+        "evidence/headless/21-clean-cite-and-annotation.png",
+        "evidence/headless/23-quote-sent.png",
+        "evidence/headless/provider-host.jsonl",
+        "reports/attachment-runtime-correction.md",
+        "evidence/attachment-correction/13-whole-response-cited.png",
+        "evidence/attachment-correction/16-long-cite-with-commentary.png",
+        "evidence/attachment-correction/17-long-cite-sent.png",
+        "evidence/attachment-correction/provider-host.jsonl"
+      ],
+      "next_runtime_check": "Use native multiline, code and streaming selection paths; retain distinct short Cite and 990-character whole-context successes.",
+      "current_owner": "attachments_runtime_correction",
+      "evidence_basis": "Executed bounded branch plus source review",
+      "runtime_observations": [
+        "Prior short double-click selection Cite plus general commentary/send remains a working branch.",
+        "A separate whole-response Attach message as context route sends 991 source characters (990 trimmed), including prose/Rust and separate general commentary, intact in the provider frame."
+      ],
+      "remaining_unverified_branches": [
+        "Long drag/multiline/code/keyboard/streaming selection-Cite remains untested; whole-response context attachment is a different entry path."
+      ]
+    },
+    {
+      "id": "QUOTE-02",
+      "area": "Quotes",
+      "journey": "Inspect and comment on individual quoted passages",
+      "issue_ids": [
+        "quote-attachments-001",
+        "quote-attachments-002",
+        "transcript-006"
+      ],
+      "priority": "P1",
+      "trigger": "Cite two longer passages, inspect each in full, add a distinct per-quote comment and navigate to its source.",
+      "intended_visible_outcome": "Quoted prose is readable and inspectable; each comment remains paired with its passage/source through send and reopen.",
+      "failure_recovery": "Cancel/edit does not discard the quote or the general composer text.",
+      "cross_surface_checks": "Compare draft shelf, sent transcript, retry and reopened draft.",
+      "current_status": "partial-runtime-failure",
+      "runtime_evidence": [
+        "evidence/headless/21-clean-cite-and-annotation.png",
+        "evidence/headless/22-clean-tile-no-editor.png",
+        "reports/attachment-runtime-correction.md",
+        "evidence/attachment-correction/13-whole-response-cited.png",
+        "evidence/attachment-correction/14-tile-click.png",
+        "evidence/attachment-correction/15-tile-key-no-editor.png",
+        "evidence/attachment-correction/17-long-cite-sent.png"
+      ],
+      "next_runtime_check": "Verify readable full-source inspection, per-quote comments and source navigation for long/multiple quotes without changing general commentary behavior.",
+      "current_owner": "attachments_runtime_correction",
+      "evidence_basis": "Executed bounded branch plus source review",
+      "runtime_observations": [
+        "The 990-trimmed-character response becomes one 88\u00d788 tile with only a few opening words and ellipsis.",
+        "Clicking the tile reveals no full text or per-quote comment editor; q is unhandled. After send, the Quote row also clips after two lines. Complete provider payload is retained, so this is inspection/editability failure, not payload loss."
+      ],
+      "remaining_unverified_branches": [
+        "Other quote counts, keyboard traversal, source navigation, selected-code contexts and source-deleted states remain unverified."
+      ]
+    },
+    {
+      "id": "QUOTE-03",
+      "area": "Quotes",
+      "journey": "Keep quote formatting and editability through attachments and restore",
+      "issue_ids": [
+        "quote-attachments-004",
+        "quote-attachments-005",
+        "quote-attachments-006",
+        "composer-09"
+      ],
+      "priority": "P2",
+      "trigger": "Compose a literal blockquote, Cite a passage, attach a file, send/retry/reopen; also attach a long whole message.",
+      "intended_visible_outcome": "Literal text stays literal, quotes keep their presentation and identity, and file previews remain visible.",
+      "failure_recovery": "Oversized or unsupported context gives an actionable explanation rather than a silent no-op.",
+      "cross_surface_checks": "Compare draft encoding, sent transcript rendering, history recall and queued editing.",
+      "current_status": "positive-runtime-branch-only",
+      "runtime_evidence": [
+        "reports/attachment-runtime-correction.md",
+        "evidence/attachment-correction/19-draft-before-restart.png",
+        "evidence/attachment-correction/20-after-server-restart.png",
+        "evidence/attachment-correction/21-restored-draft-sent.png",
+        "evidence/attachment-correction/provider-host.jsonl"
+      ],
+      "next_runtime_check": "Test the actual 10,000/10,001 boundary, literal leading general-editor blockquotes, queue recall and files; do not clear the mapped source findings from this success.",
+      "current_owner": "attachments_runtime_correction",
+      "evidence_basis": "Bounded observed branches with stated limits; no complete journey certified",
+      "runtime_observations": [
+        "The 990-trimmed-character whole-context passage and ordinary commentary survive a full isolated server/window restart and then send intact.",
+        "A literal blockquote inside deliberately attached source stays in the same one tile after restore; its outgoing Markdown uses nested > >."
+      ],
+      "remaining_unverified_branches": [
+        "10,000/10,001 whole-context character boundaries in quote-attachments-004 are not tested by this 990-character fixture.",
+        "Literal leading Markdown typed in the general editor (quote-attachments-005) is distinct from blockquote text nested inside intentional context and remains untested.",
+        "Retry, queue recall, multiple quote identities, file-attached quote rendering and downstream provider interpretation remain unverified."
+      ],
+      "correction_findings": [
+        "QUOTE-03 bounded context restore"
+      ]
+    },
+    {
+      "id": "QUOTE-04",
+      "area": "Quotes",
+      "journey": "Keep cited reference text inert",
+      "issue_ids": [
+        "quote-attachments-007"
+      ],
+      "priority": "P1",
+      "trigger": "Cite text containing @file and skill syntax, add ordinary instruction and send.",
+      "intended_visible_outcome": "The outgoing provider prompt treats the passage as quoted reference; no unintended file or skill input is activated.",
+      "failure_recovery": "Retry/restoration preserves that distinction.",
+      "cross_surface_checks": "Compare deliberate @file attachment with the same syntax only inside a quote.",
+      "current_status": "not-exercised",
+      "runtime_evidence": [],
+      "next_runtime_check": "Capture both adapters\u2019 actual outgoing typed input using fixture files and fake providers.",
+      "current_owner": "primary-agent-follow-up",
+      "evidence_basis": "Source review only; full journey unexercised"
+    },
+    {
+      "id": "ATTACH-01",
+      "area": "Attachments",
+      "journey": "Attach, inspect, remove and send supported files/images",
+      "issue_ids": [
+        "composer-07",
+        "quote-attachments-008",
+        "quote-attachments-009",
+        "quote-attachments-011"
+      ],
+      "priority": "P1",
+      "trigger": "Attach PNG plus supported SVG/AVIF/TIFF, open previews, navigate by keyboard, remove one, and add many at narrow width.",
+      "intended_visible_outcome": "Previews and readiness states are truthful, inspectable and bounded; unsupported input has a useful fallback.",
+      "failure_recovery": "A repaired/newly created file can retry decoding without restarting; loading/failure preserves user context.",
+      "cross_surface_checks": "Repeat before send, after send, during typing, with panel open and after redraw.",
+      "current_status": "not-exercised",
+      "runtime_evidence": [
+        "reports/attachment-runtime-correction.md",
+        "evidence/attachment-correction/22-attachment-add-menu.png",
+        "evidence/attachment-correction/23-file-picker.png"
+      ],
+      "next_runtime_check": "Use a native owned picker/drop fixture for actual files and supported image formats, then preview/remove/send/history; no headless intake pass.",
+      "current_owner": "attachments_runtime_correction",
+      "evidence_basis": "Entry observed only; actual attachment intake unexercised",
+      "runtime_observations": [
+        "Add files or photos is visible, but the native chooser was outside documented headless controls and no file or image was attached."
+      ]
+    },
+    {
+      "id": "ATTACH-02",
+      "area": "Attachments",
+      "journey": "Preserve attachment meaning across remote send and history",
+      "issue_ids": [
+        "composer-03",
+        "quote-attachments-010"
+      ],
+      "priority": "P1",
+      "trigger": "Attach a local file to a remote-backed thread, send, then change/delete the original and inspect retry/history.",
+      "intended_visible_outcome": "The target receives the intended content or a clear transfer limitation; history states whether it refers to mutable path or retained content.",
+      "failure_recovery": "Missing or changed paths have explicit recovery rather than a misleading identical preview.",
+      "cross_surface_checks": "Compare local/remote machines, pasted screenshots and ordinary paths.",
+      "current_status": "not-exercised",
+      "runtime_evidence": [],
+      "next_runtime_check": "Needs isolated remote fixture; inspect actual provider bytes and paths. Mutable-path history is a declared product choice, not automatically a runtime bug.",
+      "current_owner": "primary-agent-follow-up",
+      "evidence_basis": "Source review only; full journey unexercised"
+    },
+    {
+      "id": "COMPOSE-05",
+      "area": "Composer",
+      "journey": "Reopen a structured review draft",
+      "issue_ids": [
+        "composer-11"
+      ],
+      "priority": "P2",
+      "trigger": "Create a review-comment draft with target metadata, leave and reopen it, then edit/send.",
+      "intended_visible_outcome": "The target, line selection and structured controls remain visible and editable.",
+      "failure_recovery": "Failed send retains the same review context.",
+      "cross_surface_checks": "Compare normal draft, queue edit, restart and source-file changes.",
+      "current_status": "not-exercised",
+      "runtime_evidence": [],
+      "next_runtime_check": "Use a disposable review fixture and capture UI plus outgoing review prompt before/after reopen.",
+      "current_owner": "primary-agent-follow-up",
+      "evidence_basis": "Source review only; full journey unexercised"
+    },
+    {
+      "id": "READ-01",
+      "area": "Transcript",
+      "journey": "Find text in loaded but folded history",
+      "issue_ids": [
+        "transcript-001",
+        "scroll-quality-006"
+      ],
+      "priority": "P1",
+      "trigger": "Search for a sentinel inside a folded turn/tool output, including during live follow.",
+      "intended_visible_outcome": "Find counts the actual loaded text, opens/reveals the match and keeps it visible.",
+      "failure_recovery": "No matches is accurate; Escape restores focus without interrupting work.",
+      "cross_surface_checks": "Repeat with a tall visible row, existing jump animation and a right-panel toggle.",
+      "current_status": "partial-runtime-failure",
+      "runtime_evidence": [
+        "reports/scroll-runtime-correction.md",
+        "evidence/scroll-correction/05-folded-find.png",
+        "evidence/scroll-correction/07-expanded-find-last.png",
+        "evidence/scroll-correction/18-find-sentinel.png"
+      ],
+      "next_runtime_check": "Verify Find across multiple hidden-content kinds and reveal active matches in tall rows without losing manual position.",
+      "current_owner": "scroll_runtime_correction",
+      "evidence_basis": "Bounded observed branches with stated limits; no complete journey certified",
+      "runtime_observations": [
+        "Find for a known phrase in the loaded but folded Read output reported no matches. Opening the call made its last-passage query return 1/1, while its tail was still folded behind +167 lines.",
+        "Find for END_SENTINEL in the latest completed answer showed a visible highlighted match."
+      ],
+      "remaining_unverified_branches": [
+        "Other output types, hidden intermediate turns, long-row active-match visibility, changing generations and Find interacting with an existing ease/live follow remain untested."
+      ],
+      "correction_findings": [
+        "SCROLL-RUNTIME-02",
+        "SCROLL-RUNTIME-03"
+      ]
+    },
+    {
+      "id": "READ-02",
+      "area": "Transcript",
+      "journey": "Manual navigation wins over live follow and automatic jumps",
+      "issue_ids": [
+        "scroll-quality-001",
+        "scroll-quality-002",
+        "scroll-quality-007",
+        "scroll-quality-008",
+        "motion-008",
+        "motion-009"
+      ],
+      "priority": "P1",
+      "trigger": "While output streams or a jump is in progress, use scrollbar track/thumb, wheel, then change panel width or disclosure state.",
+      "intended_visible_outcome": "The chosen reading position remains stable until an explicit return-to-latest action.",
+      "failure_recovery": "Missing/replaced targets cancel cleanly instead of landing on another row.",
+      "cross_surface_checks": "Use long answers, unmeasured rows, history replacement, small windows and live tool completion.",
+      "current_status": "not-exercised",
+      "runtime_evidence": [],
+      "next_runtime_check": "Native drag/wheel/resize recording required; public headless driver lacks those events. Existing12send-scroll tests do not cover these transitions.",
+      "current_owner": "scroll_runtime_correction",
+      "evidence_basis": "Source review only; full journey unexercised"
+    },
+    {
+      "id": "READ-03",
+      "area": "Transcript",
+      "journey": "Return to latest and page without hiding text",
+      "issue_ids": [
+        "scroll-quality-003",
+        "scroll-quality-005",
+        "scroll-quality-009"
+      ],
+      "priority": "P2",
+      "trigger": "Leave newest content below the viewport, compare latest button and End, then page through a pinned prompt.",
+      "intended_visible_outcome": "Latest cue appears whenever real content is hidden; End and button land consistently without synthetic blank space; page overlap covers every line.",
+      "failure_recovery": "Late layout/runway updates cannot move away from the requested destination.",
+      "cross_surface_checks": "Repeat after send, while streaming and with pinned prompt height changing.",
+      "current_status": "runtime-inconclusive",
+      "runtime_evidence": [
+        "reports/scroll-runtime-correction.md",
+        "evidence/scroll-correction/08-end.png",
+        "evidence/scroll-correction/09-pageup.png",
+        "evidence/scroll-correction/10-pagedown.png",
+        "evidence/scroll-correction/11-end-return.png"
+      ],
+      "next_runtime_check": "Resolve repaint confound with independent geometry/state and native capture before promoting paging; do not assign the observed blank image to an original scroll mechanism.",
+      "current_owner": "scroll_runtime_correction",
+      "evidence_basis": "Bounded observed branches with stated limits; no complete journey certified",
+      "runtime_observations": [
+        "After PageUp/PageDown, saved headless screenshots showed a blank transcript; End restored content in later captures.",
+        "Parent inspection also found unrelated sidebar/title/composer chrome missing in the blank captures, so repaint failure confounds a product paging defect."
+      ],
+      "remaining_unverified_branches": [
+        "Independent semantic scroll offsets/visible row evidence or native reproduction is required before classifying blank paging as a product defect.",
+        "Pinned-area paging coverage, End runway behavior, Latest button accounting, wheel/resize/thumb drag and native macOS routing remain unverified."
+      ],
+      "correction_findings": [
+        "SCROLL-RUNTIME-01 pending repaint investigation"
+      ]
+    },
+    {
+      "id": "READ-04",
+      "area": "Transcript",
+      "journey": "Expand one result without destabilizing surrounding content",
+      "issue_ids": [
+        "transcript-004",
+        "scroll-quality-004",
+        "motion-005"
+      ],
+      "priority": "P2",
+      "trigger": "At the tail and mid-history, expand a completed tool or one row in a large work group.",
+      "intended_visible_outcome": "The clicked heading stays recognizable and the requested result opens within a bounded layout.",
+      "failure_recovery": "Collapse restores position and focus without a large jump.",
+      "cross_surface_checks": "Repeat with simultaneous stream append, panel width change and Find result.",
+      "current_status": "not-exercised",
+      "runtime_evidence": [],
+      "next_runtime_check": "Use a long grouped-tool fixture and click rendered disclosure; compare heading coordinates and total group extent before/after.",
+      "current_owner": "primary-agent-follow-up",
+      "evidence_basis": "Source review only; full journey unexercised"
+    },
+    {
+      "id": "READ-05",
+      "area": "Transcript",
+      "journey": "Review the plan and return to a marked answer",
+      "issue_ids": [
+        "transcript-003",
+        "transcript-005"
+      ],
+      "priority": "P2",
+      "trigger": "After a successful turn, expand its work and inspect its plan; pin an answer, navigate away and return/restart.",
+      "intended_visible_outcome": "Completed plan evidence remains recoverable and the marked answer has a discoverable return path matching the action\u2019s label.",
+      "failure_recovery": "Unavailable older material is stated rather than silently missing.",
+      "cross_surface_checks": "Compare completed/failed/paused turn and reconstructed transcript view.",
+      "current_status": "not-exercised",
+      "runtime_evidence": [],
+      "next_runtime_check": "Emit real plan/update events and completed result; inspect through rendered entry paths and restart.",
+      "current_owner": "primary-agent-follow-up",
+      "evidence_basis": "Source review only; full journey unexercised"
+    },
+    {
+      "id": "FILES-01",
+      "area": "Files",
+      "journey": "Edit and save the file the user opened",
+      "issue_ids": [
+        "input-focus-010",
+        "input-focus-009"
+      ],
+      "priority": "P1",
+      "trigger": "Open sample.rs from tree or source link, click text, type multiple keys, Find, and save.",
+      "intended_visible_outcome": "File editor receives input, Find searches the file, save changes disk, and the main draft is untouched.",
+      "failure_recovery": "Read-only/error states remain visible and editable text remains recoverable.",
+      "cross_surface_checks": "Type across background redraws, switch tabs and return.",
+      "current_status": "partial-runtime-failure",
+      "runtime_evidence": [
+        "evidence/headless/04-editor-next-keys.png",
+        "evidence/headless/06-filter-next-keys.png",
+        "evidence/headless/07-file-find.png",
+        "reports/files-runtime-correction.md",
+        "evidence/files-correction/07-readme-original.png",
+        "evidence/files-correction/08-readme-revisited-after-external-change.png",
+        "evidence/files-correction/09-readme-reopened-after-close.png"
+      ],
+      "next_runtime_check": "Fix/establish public editor input, then dirty-buffer save/reload/conflict handling. Keep the clean-preview stale-on-revisit branch distinct from destructive overwrite.",
+      "current_owner": "files_runtime_correction",
+      "evidence_basis": "Executed bounded branch plus source review",
+      "runtime_observations": [
+        "Earlier actual editor/filter typing goes to Main. Separately, a clean README preview retains old text after an external disk replacement and selecting the already-open path; closing its inner tab and reopening reads the new sentinel."
+      ],
+      "remaining_unverified_branches": [
+        "Dirty editor/save, conflict safety, concurrent saves, requested source line and native input remain untested."
+      ]
+    },
+    {
+      "id": "FILES-02",
+      "area": "Files",
+      "journey": "Keep edits through save errors and external changes",
+      "issue_ids": [
+        "panel-tools-001",
+        "panel-tools-002"
+      ],
+      "priority": "P1",
+      "trigger": "Edit a file, inject a write refusal, close/reopen; separately change disk externally while the editor is open.",
+      "intended_visible_outcome": "Unsaved text survives; stale buffers cannot silently overwrite newer disk contents.",
+      "failure_recovery": "The user sees the affected file, retry/reconcile options and confirmed outcome.",
+      "cross_surface_checks": "Repeat with two threads on one checkout, autosave overlap and late write completion.",
+      "current_status": "not-exercised",
+      "runtime_evidence": [],
+      "next_runtime_check": "Requires a working real editor-input path or separately documented injection to establish preconditions; do not treat direct Editor.type_text as end-to-end proof.",
+      "current_owner": "files_runtime_correction",
+      "evidence_basis": "No valid dirty-buffer precondition established; source risk only",
+      "remaining_unverified_branches": [
+        "No dirty buffer was established through public controls; save, write refusal, dirty close and external-write conflict are untested. A clean preview staleness branch is recorded under FILES-01."
+      ]
+    },
+    {
+      "id": "FILES-03",
+      "area": "Files",
+      "journey": "Discover files and keep the tree current",
+      "issue_ids": [
+        "panel-tools-003",
+        "panel-tools-004"
+      ],
+      "priority": "P1",
+      "trigger": "Open directory tree, then create/rename/delete files and change Git status externally; inspect a directory beyond its cap.",
+      "intended_visible_outcome": "Visible tree and status refresh; omissions and truncation are explicit.",
+      "failure_recovery": "Deleted targets explain their disappearance and provide refresh/retry.",
+      "cross_surface_checks": "Switch project/checkouts, filter the tree and reopen cached directories.",
+      "current_status": "partial-runtime-failure",
+      "runtime_evidence": [
+        "reports/files-runtime-correction.md",
+        "evidence/files-correction/10-tree-expanded-before-mutation.png",
+        "evidence/files-correction/11-tree-after-external-mutation.png",
+        "evidence/files-correction/12-tree-after-collapse-expand.png"
+      ],
+      "next_runtime_check": "Exercise Git status separately and inspect boundary-sized trees; verify external additions/removals become visible without deleting working state.",
+      "current_owner": "files_runtime_correction",
+      "evidence_basis": "Bounded observed branches with stated limits; no complete journey certified",
+      "runtime_observations": [
+        "After external addition/removal, expanded tree keeps the deleted child and omits the new one; collapse/re-expand does not refresh it."
+      ],
+      "remaining_unverified_branches": [
+        "Git status color updates, file discovery limits, deep trees, ignored paths and alternate refresh routes remain untested."
+      ],
+      "correction_findings": [
+        "Files tree stale children"
+      ]
+    },
+    {
+      "id": "FILES-04",
+      "area": "Files",
+      "journey": "Keep all open files reachable and restore the working set",
+      "issue_ids": [
+        "panel-tools-005",
+        "panel-tools-006"
+      ],
+      "priority": "P1",
+      "trigger": "Open enough files to overflow tabs, select/close an offscreen tab, restart and return.",
+      "intended_visible_outcome": "Every open file remains reachable and the chosen file/working-set preferences restore.",
+      "failure_recovery": "Missing file on restore produces a scoped recovery state without losing other tabs.",
+      "cross_surface_checks": "Open wide tools, narrow the panel, hide explorer and switch threads.",
+      "current_status": "partial-runtime-failure",
+      "runtime_evidence": [
+        "reports/files-runtime-correction.md",
+        "evidence/files-correction/26-kept-tabs-overflow.png",
+        "evidence/files-correction/28-files-restored-after-switch.png",
+        "evidence/files-correction/29-files-after-switch-settle.png"
+      ],
+      "next_runtime_check": "Verify tab-strip access and close at ordinary/narrow widths; separately establish restored content with independent state/native evidence.",
+      "current_owner": "files_runtime_correction",
+      "evidence_basis": "Bounded observed branches with stated limits; no complete journey certified",
+      "runtime_observations": [
+        "Eighteen kept long-named inner tabs produce only four visible labels. files-tab-17 lies at logical x = 3250, beyond the 1440 px window; the strip offers no overflow navigation.",
+        "The tree still activates paths, so content is not unreachable by every route. Switching outer surfaces produced a blank headless body, which is inconclusive for tab restoration."
+      ],
+      "remaining_unverified_branches": [
+        "Native tab overflow navigation, hidden-tab close, resize, restart working-set persistence and selected-tab restore remain unverified.",
+        "Blank body after outer switch may be a headless paint failure and is not promoted as a restoration defect."
+      ],
+      "correction_findings": [
+        "Files inner strip overflow"
+      ]
+    },
+    {
+      "id": "FILES-05",
+      "area": "Files",
+      "journey": "Open the correct representation and source location",
+      "issue_ids": [
+        "panel-tools-007",
+        "panel-tools-008",
+        "link-affordances-04"
+      ],
+      "priority": "P2",
+      "trigger": "Open Markdown/prose/image files and source links with line suffixes from tree and transcript.",
+      "intended_visible_outcome": "The file opens in a useful view at its requested location, with an editing or preview route appropriate to the entry action.",
+      "failure_recovery": "Unsupported content has an explicit alternative and preserves path context.",
+      "cross_surface_checks": "Compare tree, transcript chip, PR Code and Changes entry points.",
+      "current_status": "partial-runtime-failure",
+      "runtime_evidence": [
+        "evidence/headless/29-file-chip-context-menu.png"
+      ],
+      "next_runtime_check": "Click actual fixture targets and capture destination/path/line; right-click file-chip fallback already reproduced as wrong whole-message menu.",
+      "current_owner": "primary-agent-follow-up",
+      "evidence_basis": "Executed bounded branch plus source review"
+    },
+    {
+      "id": "DIFF-01",
+      "area": "Changes",
+      "journey": "Inspect all of a change without clipped or misleading presentation",
+      "issue_ids": [
+        "panel-tools-009",
+        "panel-tools-010",
+        "panel-tools-011"
+      ],
+      "priority": "P1",
+      "trigger": "Open a file with >120 changed lines, long expressions and whitespace-only edits; change wrapping/whitespace controls.",
+      "intended_visible_outcome": "All intended hunks are reachable or truncation is explicit; long unwrapped lines scroll; whitespace toggle matches its label.",
+      "failure_recovery": "Large or unsupported diff explains limits without allowing a false complete-review impression.",
+      "cross_surface_checks": "Resize the panel, use keyboard navigation and mark reviewed only after inspecting content.",
+      "current_status": "positive-runtime-branch-only",
+      "runtime_evidence": [
+        "reports/files-runtime-correction.md",
+        "evidence/files-correction/14-changes-long.png",
+        "evidence/files-correction/17-changes-pagedown.png"
+      ],
+      "next_runtime_check": "Use native scrolling to inspect the actual 120-row boundary and separate Review route, then wrapping/whitespace controls; do not promote source cap solely from the first hunk screenshot.",
+      "current_owner": "files_runtime_correction",
+      "evidence_basis": "Bounded observed branches with stated limits; no complete journey certified",
+      "runtime_observations": [
+        "Changes displays a full +160/\u2212160 diffstat and initial hunk region for the controlled file. Source still caps panel hunk rows at 120."
+      ],
+      "remaining_unverified_branches": [
+        "No working headless scroll input reached the omission line or final sentinel; runtime truncation reachability and full Review route remain unverified.",
+        "Wrap/no-wrap, long lines, Hide whitespace and complete diff inspection remain untested."
+      ],
+      "correction_findings": [
+        "Files long diff initial region only"
+      ]
+    },
+    {
+      "id": "DIFF-02",
+      "area": "Changes",
+      "journey": "Keep review state fresh and handle Git actions visibly",
+      "issue_ids": [
+        "panel-tools-012",
+        "panel-tools-014"
+      ],
+      "priority": "P1",
+      "trigger": "Open Changes, mark reviewed, modify disk or comparison scope, then stage/unstage with success and failure fixtures.",
+      "intended_visible_outcome": "Diff contents and reviewed marks track the actual revision; stage/unstage visibly affects only the intended target.",
+      "failure_recovery": "Git lock/permission failure leaves a visible error and retry, with no false success.",
+      "cross_surface_checks": "Agent edits while another file is reviewed; switch thread on the same checkout.",
+      "current_status": "not-exercised",
+      "runtime_evidence": [],
+      "next_runtime_check": "Scratch Git repo and temporary index.lock; real rendered actions plus git status and frame capture.",
+      "current_owner": "files_runtime_correction",
+      "evidence_basis": "Source review only; full journey unexercised"
+    },
+    {
+      "id": "TERM-01",
+      "area": "Terminal",
+      "journey": "Open, type, interrupt and close a working terminal",
+      "issue_ids": [
+        "panel-tools-015",
+        "input-focus-004"
+      ],
+      "priority": "P1",
+      "trigger": "Open Terminal through each offered entry, type a harmless command, interrupt it, switch tabs, close and reopen; repeat with invalid shell.",
+      "intended_visible_outcome": "A usable terminal owns typing and shows output; closing it leaves the parent conversation intact.",
+      "failure_recovery": "Startup and process errors appear beside a recoverable control.",
+      "cross_surface_checks": "Keep unsent main draft and running agent unchanged; test Return/Tab/clipboard separately.",
+      "current_status": "not-exercised",
+      "runtime_evidence": [],
+      "next_runtime_check": "Use a disposable shell and recorded output sentinels; invalid shell tests actual failure view.",
+      "current_owner": "primary-agent-follow-up",
+      "evidence_basis": "Source review only; full journey unexercised"
+    },
+    {
+      "id": "BROWSER-UI-01",
+      "area": "Browser",
+      "journey": "Navigate and edit the address predictably",
+      "issue_ids": [
+        "BROWSER-04",
+        "BROWSER-05",
+        "BROWSER-06",
+        "BROWSER-07"
+      ],
+      "priority": "P1",
+      "trigger": "Open two pages on one host, enter localhost without scheme, begin editing a URL during redirect, then open a new tab and use Back/Reload.",
+      "intended_visible_outcome": "Tab identity is distinguishable; address editing is stable; toolbar actions target the visible page.",
+      "failure_recovery": "Invalid input and failed navigation have a clear error/retry preserving the typed destination.",
+      "cross_surface_checks": "Switch thread/tab, hide/show panel and change panel size during navigation.",
+      "current_status": "not-exercised",
+      "runtime_evidence": [],
+      "next_runtime_check": "Native CEF fixture with same-host titles, redirect delay and controlled navigation; no headless website claim.",
+      "current_owner": "parent native inspection",
+      "evidence_basis": "Source review only; full journey unexercised"
+    },
+    {
+      "id": "BROWSER-UI-02",
+      "area": "Browser",
+      "journey": "Use a normal website without host input stealing",
+      "issue_ids": [
+        "BROWSER-01",
+        "BROWSER-02",
+        "BROWSER-03",
+        "input-focus-001",
+        "input-focus-006"
+      ],
+      "priority": "P1",
+      "trigger": "Use page forms, Tab/Enter/Escape, clipboard/IME, new-window links and JavaScript confirm/prompt.",
+      "intended_visible_outcome": "The website receives normal input and visible dialogs/new destinations; the main draft is never sent or altered.",
+      "failure_recovery": "Blocked unsupported behavior explains itself and offers a usable route out.",
+      "cross_surface_checks": "Keep sentinel draft, switch active tabs, right-click links/images/fields and return focus.",
+      "current_status": "not-exercised",
+      "runtime_evidence": [],
+      "next_runtime_check": "Actual CEF local fixture and native input are required; prior browser Observe success was not a completed interaction test.",
+      "current_owner": "parent native inspection",
+      "evidence_basis": "Source review only; full journey unexercised"
+    },
+    {
+      "id": "BROWSER-UI-03",
+      "area": "Browser",
+      "journey": "Keep browser chrome coherent across loading, empty and error states",
+      "issue_ids": [
+        "BROWSER-08",
+        "BROWSER-12",
+        "BROWSER-15",
+        "quality-correction-002",
+        "quality-correction-003"
+      ],
+      "priority": "P1",
+      "trigger": "Open empty Browser, load a page slowly, navigate successfully, then fail navigation.",
+      "intended_visible_outcome": "Toolbar/address/page proportions remain stable and legible; status and recovery are attached to the relevant action.",
+      "failure_recovery": "Retry can be found and used without reading a large block of implementation-oriented text.",
+      "cross_surface_checks": "Compare shell tab row, nested page tabs, panel heading, browser toolbar and usable page viewport.",
+      "current_status": "partial-runtime-failure",
+      "runtime_evidence": [
+        "reports/visual-quality-correction.md",
+        "evidence/panel-correction/13-browser-after-files.png",
+        "evidence/panel-correction/15-browser-after-changes.png",
+        "evidence/native-correction.md"
+      ],
+      "next_runtime_check": "Capture native address hover/focus and controlled slow-load/error sequences at a common width; check page identity and add/close ownership. Preserve the existing loaded/loading/empty observations and their installed-version limits.",
+      "current_owner": "parent native inspection + visual_quality_correction",
+      "evidence_basis": "Executed bounded branches and/or inspected rendered state plus source review; no complete journey certified",
+      "runtime_observations": [
+        "Saved rendered chrome has a shared Browser tab, repeated blue Browser title inside an inset card, an inner page-tab row and then the toolbar. Parent independently observed the same stack with a loaded native example.com page.",
+        "The empty address area has no prompt or clear enclosing location-control affordance in saved headless captures.",
+        "Host-unavailable text appends edit/reload advice that cannot resolve lack of an embedded browser host. This is an error-presentation failure, not a native loading failure.",
+        "Parent later observed installed CEF Loading state with Annotate removed, Address shifted left and an additional Loading row. Closing the owned page exposed an empty address area. Native images are retained in the conversation only; installed commit is unknown."
+      ],
+      "remaining_unverified_branches": [
+        "Native address hover/focus, controlled slow-load timing, invalid URL/network-error recovery and narrow-width legibility remain unverified.",
+        "Native loaded/loading/empty corroboration is recorded in evidence/native-correction.md without a saved native image path.",
+        "Loading geometry now has a bounded native observation. This does not upgrade schemeless-address, input ownership or error-recovery claims."
+      ],
+      "correction_findings": [
+        "VQ-C01",
+        "VQ-C02",
+        "VQ-C03",
+        "quality-correction-002",
+        "quality-correction-003"
+      ]
+    },
+    {
+      "id": "BROWSER-UI-04",
+      "area": "Browser",
+      "journey": "Return to the same page after hiding and restarting",
+      "issue_ids": [
+        "BROWSER-11",
+        "BROWSER-13"
+      ],
+      "priority": "P2",
+      "trigger": "Navigate multiple pages, scroll and edit a harmless field, hide/reclaim the page, return, then restart.",
+      "intended_visible_outcome": "The visible recovery contract for history, scroll and page state is clear; persistent profile problems have a usable recovery route.",
+      "failure_recovery": "Expired auth/cache or unavailable target is distinguishable from an empty page.",
+      "cross_surface_checks": "Switch threads and leave Browser hidden while agents run.",
+      "current_status": "not-exercised",
+      "runtime_evidence": [],
+      "next_runtime_check": "Native CEF fixture plus controlled reclamation/restart; do not infer page restoration from URL metadata.",
+      "current_owner": "primary-agent-follow-up",
+      "evidence_basis": "Source review only; full journey unexercised"
+    },
+    {
+      "id": "LINK-01",
+      "area": "Links",
+      "journey": "Open, copy and dismiss the target actually clicked",
+      "issue_ids": [
+        "link-affordances-01",
+        "link-affordances-02",
+        "link-affordances-03",
+        "link-affordances-04",
+        "link-affordances-05",
+        "link-affordances-06",
+        "link-affordances-07"
+      ],
+      "priority": "P1",
+      "trigger": "Activate ordinary URLs, issue references, file chips, fragments and PR badges through click, right-click, modifiers and keyboard.",
+      "intended_visible_outcome": "All routes preserve the resolved target and offer appropriate destinations; menus dismiss and restore focus.",
+      "failure_recovery": "Unsupported destination gives visible feedback instead of leaking internal schemes or doing nothing.",
+      "cross_surface_checks": "Compare transcript, Files, sidebar, PR details and browser chrome; preserve unsent text.",
+      "current_status": "partial-runtime-failure",
+      "runtime_evidence": [
+        "evidence/headless/28-web-menu-actual.png",
+        "evidence/headless/29-file-chip-context-menu.png",
+        "evidence/headless/30-web-menu-after-escape.png"
+      ],
+      "next_runtime_check": "Web menu composition, file-chip fallback and Escape failed in bounded checks. Remaining destinations/copy values/modifiers require actual activation checks.",
+      "current_owner": "primary-agent-follow-up",
+      "evidence_basis": "Executed bounded branch plus source review"
+    },
+    {
+      "id": "PERM-01",
+      "area": "Permissions",
+      "journey": "Answer the right request with ordinary typing and truthful settings",
+      "issue_ids": [
+        "PS-01",
+        "input-focus-007",
+        "coverage-quality-03"
+      ],
+      "priority": "P1",
+      "trigger": "Receive a permission card or required form, type valid text beginning y/n/a, choose options, submit and continue the turn.",
+      "intended_visible_outcome": "Typing edits fields, explicit controls decide, and displayed sandbox/policy matches the running session.",
+      "failure_recovery": "Invalid/failed answers retain values, explain errors and permit correction.",
+      "cross_surface_checks": "Repeat async question during streaming and a child decision while main is focused.",
+      "current_status": "runtime-inconclusive",
+      "runtime_evidence": [
+        "reports/forms-runtime-correction.md",
+        "evidence/forms-correction/02-form.png",
+        "evidence/forms-correction/03-required-validation.png",
+        "evidence/forms-correction/04-after-form-submit.png",
+        "evidence/forms-correction/08-coordinate-click.png",
+        "evidence/forms-correction/06-after-deny.png",
+        "evidence/forms-correction/provider-frames.jsonl"
+      ],
+      "next_runtime_check": "Establish the nested Input painted bounds and actual hit through native input or an accurate public harness seam, then submit valid values for the exact request ID. Preserve the working validation/cancel/deny evidence.",
+      "current_owner": "forms_runtime_correction",
+      "evidence_basis": "Inconclusive valid-input attempt; required validation, Cancel and explicit Deny are bounded successes",
+      "runtime_observations": [
+        "A valid required two-string schema arrived through the production Claude adapter; empty Submit displayed required validation.",
+        "Public form selectors identify nonzero parent sections, not nested Input bounds. Click/type attempts entered the Main composer, but an actual nested Input hit was not established. Saved headless images cannot distinguish absent painting from clipping or incomplete repaint.",
+        "Cancel sent matching action=cancel. A separate interaction_required approval displayed its command and waiting state; explicit Deny sent the matching denial and the fixture completed."
+      ],
+      "remaining_unverified_branches": [
+        "Valid answer payload/association, actual Input visibility and hit geometry, field focus recovery, field-to-field Tab/Enter, asynchronous questions, child decisions, Allow and native UI remain unverified.",
+        "This is inconclusive for a product form defect; missing labels/inputs and wrong-target typing must not be promoted without resolving the hit/paint ambiguity.",
+        "input-focus-007 approval shortcuts and PS-01 Codex sandbox truthfulness were not tested."
+      ],
+      "correction_findings": [
+        "PERM-01-question-required-form",
+        "PERM-01-approval",
+        "focus-and-composer-ownership"
+      ]
+    },
+    {
+      "id": "SETTINGS-01",
+      "area": "Settings",
+      "journey": "Choose provider defaults that match the next session",
+      "issue_ids": [
+        "PS-04",
+        "PS-05",
+        "PS-07"
+      ],
+      "priority": "P2",
+      "trigger": "Set provider/model/permissions, start a fresh thread, inspect effective launch; simulate unavailable CLI/auth/session.",
+      "intended_visible_outcome": "Next session uses the displayed defaults and setup failures identify the actual recovery step.",
+      "failure_recovery": "Unavailable native session retains context and offers a same-thread recovery route where supported.",
+      "cross_surface_checks": "Compare existing session changes with new-thread defaults and restart.",
+      "current_status": "not-exercised",
+      "runtime_evidence": [],
+      "next_runtime_check": "Fake provider launch arguments and supported-model responses, then real settings UI; no real login or remote completion.",
+      "current_owner": "primary-agent-follow-up",
+      "evidence_basis": "Source review only; full journey unexercised"
+    },
+    {
+      "id": "SETTINGS-02",
+      "area": "Settings",
+      "journey": "Apply remote settings to the machine being controlled",
+      "issue_ids": [
+        "PS-02",
+        "PS-03"
+      ],
+      "priority": "P1",
+      "trigger": "Connect isolated remote machine, change defaults and inspect provider update/version UI.",
+      "intended_visible_outcome": "Displayed machine identity, saved settings, CLI target and next session agree.",
+      "failure_recovery": "Connection/write failure stays scoped to that remote machine and preserves prior values.",
+      "cross_surface_checks": "Switch between local and remote while dialog open; restart remote session.",
+      "current_status": "not-exercised",
+      "runtime_evidence": [],
+      "next_runtime_check": "Requires isolated remote fixture; source-only risk today. No operator remote settings should be changed.",
+      "current_owner": "primary-agent-follow-up",
+      "evidence_basis": "Source review only; full journey unexercised"
+    },
+    {
+      "id": "RESTORE-01",
+      "area": "Persistence",
+      "journey": "Resume a coherent workspace after restart",
+      "issue_ids": [
+        "coverage-quality-05",
+        "panel-tools-006",
+        "subagents-background-09",
+        "quote-attachments-005",
+        "composer-02"
+      ],
+      "priority": "P1",
+      "trigger": "Set window geometry, selected thread/tool/file/agent, quote-rich draft and reading position, then restart.",
+      "intended_visible_outcome": "The workspace resumes the chosen state or names recoverable exceptions; it does not silently land on Background or discard context.",
+      "failure_recovery": "Missing resource/path/provider affects only that resource with a clear recovery path.",
+      "cross_surface_checks": "Compare application restart, renderer-only restart, thread Park/reopen and panel close/reopen.",
+      "current_status": "partial-runtime-failure",
+      "runtime_evidence": [
+        "reports/panel-runtime-correction.md",
+        "reports/draft-lifecycle-runtime-correction.md",
+        "evidence/draft-lifecycle-correction/03-unsent-draft-before.png",
+        "evidence/draft-lifecycle-correction/06-new-draft-after-restart.png",
+        "reports/attachment-runtime-correction.md",
+        "evidence/attachment-correction/19-draft-before-restart.png",
+        "evidence/attachment-correction/20-after-server-restart.png"
+      ],
+      "next_runtime_check": "Build a combined owned workspace fixture and test normal Quit/restart plus interrupted restart; preserve individual context and targeted recovery.",
+      "current_owner": "primary-agent-follow-up",
+      "evidence_basis": "Two bounded restart defects; no whole-workspace recovery pass",
+      "runtime_observations": [
+        "Panel width persists incorrectly through app restart; separately, a never-sent draft disappears across window-process restart while an existing-thread draft restores.",
+        "Separately, one existing-thread whole-context quote plus ordinary commentary survives a full isolated server/window restart. This does not repair the never-sent pane failure."
+      ],
+      "remaining_unverified_branches": [
+        "Normal Quit, coherent mixed-surface restoration, file working set, selected agents, attachments, model/checkout context and error recovery are not certified."
+      ]
+    },
+    {
+      "id": "ACCESS-01",
+      "area": "Accessibility",
+      "journey": "Operate existing controls and honor reduced motion",
+      "issue_ids": [
+        "motion-006",
+        "motion-007",
+        "input-focus-003"
+      ],
+      "priority": "P2",
+      "trigger": "Traverse visible controls by keyboard/assistive technology, then change system reduced-motion preference while app remains running.",
+      "intended_visible_outcome": "Controls expose meaningful names/roles/state and system motion preference updates as intended.",
+      "failure_recovery": "Disabled/unavailable actions are perceivable with focus recovery.",
+      "cross_surface_checks": "Menus, tab strips, citation actions, browser controls, PR segments and overlays.",
+      "current_status": "not-exercised",
+      "runtime_evidence": [],
+      "next_runtime_check": "Native platform check; static source plus headless default key dispatch do not establish assistive-technology or OS preference behavior.",
+      "current_owner": "primary-agent-follow-up",
+      "evidence_basis": "Source review only; full journey unexercised"
+    },
+    {
+      "id": "OPS-01",
+      "area": "Operational flows",
+      "journey": "Start a requested provider through the documented CLI",
+      "issue_ids": [
+        "coverage-quality-09"
+      ],
+      "priority": "P2",
+      "trigger": "Use advertised multiword provider-argument syntax, then corrected repeated-flag syntax.",
+      "intended_visible_outcome": "Help and parser agree, the requested model receives its exact arguments, and the worker is discoverable/closable.",
+      "failure_recovery": "Rejected syntax fails clearly before starting a worker.",
+      "cross_surface_checks": "Check worker cleanup and parent thread identity.",
+      "current_status": "partial-runtime-failure",
+      "runtime_evidence": [
+        "evidence/runtime-observations.md"
+      ],
+      "next_runtime_check": "Original --args multiword form failed; repeated --args= values succeeded. This is a narrow runtime failure, not a product-wide verification substitute.",
+      "current_owner": "primary-agent-follow-up",
+      "evidence_basis": "Executed bounded branch plus source review"
+    },
+    {
+      "id": "OPS-02",
+      "area": "Operational flows",
+      "journey": "Operate an existing schedule through its lifecycle",
+      "issue_ids": [
+        "coverage-quality-06"
+      ],
+      "priority": "P2",
+      "trigger": "Create an available recurring schedule, inspect next-run time, edit, pause, resume and observe one deterministic execution.",
+      "intended_visible_outcome": "The chosen recurrence and next execution are visible; execution appears once on the correct target with outcome.",
+      "failure_recovery": "Invalid recurrence, missed run and provider failure are recoverable and explained.",
+      "cross_surface_checks": "Compare timezone, project target, restart and an already-running prior execution.",
+      "current_status": "not-exercised",
+      "runtime_evidence": [],
+      "next_runtime_check": "No runtime schedule check has run. One-time/sub-hour schedules are separate capability scope and do not determine whether existing recurrence works.",
+      "current_owner": "primary-agent-follow-up",
+      "evidence_basis": "Source review only; full journey unexercised"
+    }
+  ],
+  "optional_capability_candidates_excluded_from_quality_pass": [
+    {
+      "id": "BROWSER-09",
+      "title": "Viewport size is inseparable from panel size"
+    },
+    {
+      "id": "BROWSER-10",
+      "title": "Find, DevTools, hard reload, and page appearance controls are absent"
+    },
+    {
+      "id": "BROWSER-12",
+      "title": "An empty browser provides neither useful guidance nor recent/local destinations"
+    },
+    {
+      "id": "BROWSER-14",
+      "title": "Browser capture is annotation-oriented and lacks direct recording/export affordances"
+    },
+    {
+      "id": "BROWSER-16",
+      "title": "No browser-chrome escape to the system browser"
+    },
+    {
+      "id": "composer-05",
+      "title": "The composer cannot choose queue versus steer per message"
+    },
+    {
+      "id": "composer-08",
+      "title": "Large pastes stay inline with no composer length guard"
+    },
+    {
+      "id": "composer-10",
+      "title": "The mention menu has no PR, thread or model-reference search"
+    },
+    {
+      "id": "input-focus-005",
+      "title": "No workspace-area focus cycle or per-surface focus restoration connects the composer and panel"
+    },
+    {
+      "id": "panel-tools-013",
+      "title": "Changes lacks full diff navigation and comparison controls present in T3"
+    },
+    {
+      "id": "panel-tools-016",
+      "title": "Terminal surfaces cannot split into simultaneous shells"
+    },
+    {
+      "id": "panel-tools-017",
+      "title": "Terminal output has no URL or file-path opening flow"
+    },
+    {
+      "id": "pr-navigation-03",
+      "title": "There is no standalone PR inbox or project-scoped PR browsing destination"
+    },
+    {
+      "id": "pr-operations-010",
+      "title": "No native comment, reply, review verdict or resolution workflow"
+    },
+    {
+      "id": "pr-operations-011",
+      "title": "PR metadata cannot be edited or managed in the native panel"
+    },
+    {
+      "id": "pr-operations-013",
+      "title": "Lifecycle actions lack inverse operations and branch maintenance"
+    },
+    {
+      "id": "projects-navigation-010",
+      "title": "Pinned rows cannot be reordered directly"
+    },
+    {
+      "id": "PS-06",
+      "title": "Provider choices do not include T3's additional drivers or named provider instances"
+    },
+    {
+      "id": "PS-08",
+      "title": "Provider defaults have no project override or fallback-model settings"
+    },
+    {
+      "id": "transcript-002",
+      "title": "Long transcript retention has no equivalent of earlier-turn paging"
+    },
+    {
+      "id": "transcript-007",
+      "title": "Markdown math is displayed as code instead of typeset formulas"
+    },
+    {
+      "id": "transcript-008",
+      "title": "Transcript Markdown has no inline audio or video playback"
+    },
+    {
+      "id": "composer-12",
+      "title": "There is no prompt stash independent of the active draft"
+    },
+    {
+      "id": "composer-14",
+      "title": "There is no integrated voice-input workflow"
+    },
+    {
+      "id": "composer-15",
+      "title": "A first prompt cannot fan out to multiple chosen models"
+    },
+    {
+      "id": "coverage-quality-07",
+      "title": "No first-class guest thread participation was found"
+    },
+    {
+      "id": "coverage-quality-08",
+      "title": "T3 device panels have no Ferrite panel counterpart"
+    }
+  ],
+  "infrastructure_evidence_not_product_journey_pass": [
+    {
+      "id": "coverage-quality-01",
+      "title": "UI interaction tests do not gate ordinary PR CI"
+    },
+    {
+      "id": "coverage-quality-02",
+      "title": "Some UI tests bypass real keyboard and opener dispatch"
+    },
+    {
+      "id": "coverage-quality-04",
+      "title": "Default UI checks do not establish native Chromium behavior"
+    }
+  ],
+  "required_user_completion_gap_exception": {
+    "link-affordances-01": "Explicit system-browser choice remains in the required link journey because the user explicitly requested it, despite the original inventory disposition being capability-candidate."
+  },
+  "summary": {
+    "journeys": 52,
+    "mapped_existing_records": 145,
+    "mapped_repair_quality_records": 136,
+    "whole_journeys_certified": 0,
+    "optional_candidates_excluded": 27,
+    "current_status_counts": {
+      "partial-runtime-failure": 22,
+      "positive-runtime-branch-only": 5,
+      "not-exercised": 23,
+      "runtime-inconclusive": 2
+    },
+    "mapped_original_repair_quality_records": 132,
+    "mapped_new_repair_quality_records": 4
+  },
+  "reconciled_reports": [
+    "reports/panel-runtime-correction.md",
+    "reports/agent-live-correction.md",
+    "reports/visual-quality-correction.md",
+    "reports/draft-lifecycle-runtime-correction.md",
+    "reports/forms-runtime-correction.md",
+    "reports/scroll-runtime-correction.md",
+    "reports/attachment-runtime-correction.md",
+    "reports/pr-entry-runtime-correction.md",
+    "reports/files-runtime-correction.md",
+    "reports/quality-correction.json",
+    "reports/navigation-runtime-correction.md"
+  ],
+  "original_id_evidence_recommendations": [
+    {
+      "id": "panel-tools-018",
+      "upgrade": "runtime reproduced: width remains enlarged after wide-tool visit, tab close, reopen and restart",
+      "exclude": "narrow-window and manual divider behavior; input-focus-008 not upgraded"
+    },
+    {
+      "id": "subagents-background-02",
+      "upgrade": "runtime reproduced: nested row and View live output controls inert",
+      "exclude": "all alternate ancestry routes and parent/root navigation"
+    },
+    {
+      "id": "subagents-background-03",
+      "upgrade": "runtime reproduced separately for Agent and SideChat single-tab close/reopen",
+      "exclude": "Close all, completed SideChat reply, real-provider continuity, Cmd+W, restart and evicted history"
+    },
+    {
+      "id": "subagents-background-08",
+      "upgrade": "bounded runtime refinement: child row live-output link opens Background with false No output yet",
+      "exclude": "complete background inventory, mixed command/agent and stopping behavior"
+    },
+    {
+      "id": "BROWSER-15",
+      "upgrade": "visual/runtime evidence: unavailable-host error appends irrelevant generic recovery advice",
+      "exclude": "native invalid-address and network-error states"
+    },
+    {
+      "id": "BROWSER-08",
+      "upgrade": "none; loading geometry remains source-backed",
+      "exclude": "settled chrome screenshots do not establish loading movement"
+    },
+    {
+      "id": "motion-001",
+      "upgrade": "none; user report and source snap policy remain, no timed intermediate frames",
+      "exclude": "endpoint screenshots cannot prove transition timing"
+    },
+    {
+      "id": "composer-02",
+      "upgrade": "runtime reproduced: one fresh unsent plain-text draft missing after window process termination/restart despite autosave delay",
+      "exclude": "normal Quit, multiple drafts, attachment/model/checkout recovery and promotion"
+    },
+    {
+      "id": "composer-04",
+      "upgrade": "runtime reproduced: actual Edit cancels one queued UUID and merges unrelated draft",
+      "exclude": "two-item order, resubmission, race and Save/Cancel workflow"
+    },
+    {
+      "id": "coverage-quality-03",
+      "upgrade": "no runtime defect promotion: valid-answer coverage remains unresolved, while empty validation, Cancel and Deny work",
+      "exclude": "parent wrapper bounds are not nested Input bounds; missing-field/wrong-focus defect is not established; input-focus-007 and PS-01 remain untested"
+    },
+    {
+      "id": "transcript-001",
+      "upgrade": "runtime reproduced: folded loaded Read output returns no matches; disclosure permits a match",
+      "exclude": "all folded kinds and active-result anchoring"
+    },
+    {
+      "id": "quote-attachments-001",
+      "upgrade": "runtime evidence reinforced: whole-context tile click offers no per-quote comment editor",
+      "exclude": "general composer commentary works; no blanket Cite failure"
+    },
+    {
+      "id": "quote-attachments-002",
+      "upgrade": "runtime reproduced: 88\u00d788 quote tile and sent row cannot disclose complete 990-character source",
+      "exclude": "provider receives complete content; no payload loss"
+    },
+    {
+      "id": "quote-attachments-004",
+      "upgrade": "none; successful fixture is 990 trimmed characters, below 10,000 limit",
+      "exclude": "boundary refusal remains untested"
+    },
+    {
+      "id": "quote-attachments-005",
+      "upgrade": "none; tested nested source quote is inside deliberate context",
+      "exclude": "literal leading Markdown in general composer remains untested"
+    },
+    {
+      "id": "pr-navigation-01",
+      "upgrade": "runtime reproduced twice: B badge click leaves A selected with no visible panel",
+      "exclude": "B absent/empty board, footer/modifier routes"
+    },
+    {
+      "id": "pr-navigation-02",
+      "upgrade": "runtime confirms split entry: badge opens Browser; Overview opens populated native review",
+      "exclude": "native CEF page load and all entry variants"
+    },
+    {
+      "id": "pr-operations-001",
+      "upgrade": "runtime reproduced: same-identity/lifecycle refresh leaves details stale despite fresh Overview CI",
+      "exclude": "agent-action branch untested; lifecycle change and explicit re-entry do refresh"
+    },
+    {
+      "id": "panel-tools-003",
+      "upgrade": "runtime reproduced: cached directory children stay stale through collapse/re-expand",
+      "exclude": "Git status refresh and discovery caps"
+    },
+    {
+      "id": "panel-tools-005",
+      "upgrade": "runtime reproduced: 18 kept inner tabs clip with offscreen tab 17 and no strip overflow control",
+      "exclude": "tree path activation remains usable; restore unproven"
+    },
+    {
+      "id": "panel-tools-002",
+      "upgrade": "supporting clean-cache staleness only: open Markdown preview ignores external write until close/reopen",
+      "exclude": "dirty conflict and destructive overwrite not exercised"
+    },
+    {
+      "id": "panel-tools-009",
+      "upgrade": "no full runtime promotion: full diffstat/initial hunk seen; 120-row cap is source-backed",
+      "exclude": "scroll to omission line and separate Review route untested"
+    },
+    {
+      "id": "projects-navigation-006",
+      "upgrade": "bounded runtime support: query starts with cursor 0 above retained scroll offset and Enter opens unseen 02; visible-target keyboard control works",
+      "exclude": "arrow movement beyond viewport and live result reordering are untested"
+    },
+    {
+      "id": "projects-navigation-001",
+      "upgrade": "runtime support for Snoozed only: offered Rename closes menu without drawing editor",
+      "exclude": "Parked Rename untested; Working/settled completed save not established"
+    }
+  ],
+  "reconciliation_notes": [
+    "Panel: two fresh threads reproduce compact Overview becoming permanently wide through Files/Changes; reopen and app restart retain it. Native divider/narrow-window/motion remain open. [Report](panel-runtime-correction.md).",
+    "Agents: direct child opening and Main/child incremental visibility work in the controlled protocol; nested opening, the separate live-output route, blank reopen and ordinary-width prose clipping fail. Synthetic final Main duplication is excluded because its fixture lifecycle was invalid. [Report](agent-live-correction.md).",
+    "Visuals: inspected rendered chrome shows redundant browser hierarchy, weak empty address affordance and irrelevant host-error recovery advice. Parent corroborates hierarchy in loaded native Browser without a saved capture path; native loading/focus/error/motion states remain open. [Report](visual-quality-correction.md).",
+    "Drafts: a never-sent text draft disappears after window-process restart; queued Edit merges distinct queued/current drafts; SideChat independently reproduces blank reopen. Normal Quit, multi-item races and completed SideChat recovery remain open. [Report](draft-lifecycle-runtime-correction.md).",
+    "Forms: required validation, Cancel and explicit Deny succeed. Valid input remains inconclusive: selectors identify parent wrappers, exact Input hit is unproven, and headless paint/clipping is ambiguous. No new missing-field or wrong-focus defect is certified. [Updated report](forms-runtime-correction.md).",
+    "Scroll: folded loaded tool output returns no matches until disclosure; latest-answer Find and ordered appends work. Blank paging captures also lose unrelated chrome, so their cause remains inconclusive pending independent evidence. [Report](scroll-runtime-correction.md).",
+    "Quotes: 990-character whole-context source plus commentary sends/restores intact; preview/full-source inspection and per-quote editing fail. 10,000-character boundary and ordinary leading general-editor blockquotes are not covered. Actual file/image intake remains unexercised. [Report](attachment-runtime-correction.md).",
+    "PRs: actual B badge leaves A selected; focused badge opens Browser while Overview opens populated native detail. Refresh leaves same-PR details stale; re-entry and lifecycle-change controls recover. Writes and native GitHub page load remain untested. [Report](pr-entry-runtime-correction.md).",
+    "Files: clean preview and directory children stay stale after external changes; inner tab strip clips offscreen tabs. Dirty save/conflict is untested, long-diff end reachability is untested, and blank outer-switch restore is inconclusive. [Report](files-runtime-correction.md).",
+    "Navigation: broad search can Enter-open a selected result above the viewport; a visible keyboard target works. Snoozed Rename has no editor. Working/settled show hints, but Working exact Input/commit and settled save were not established; the immediate Working title read proves no persistence defect. Parked Rename and project/draft continuity remain open. [Updated report](navigation-runtime-correction.md)."
+  ],
+  "new_correction_record_mappings": [
+    {
+      "id": "quality-correction-001",
+      "journey": "AGENT-01",
+      "summary": "Agent transcript prose clips at ordinary panel width"
+    },
+    {
+      "id": "quality-correction-002",
+      "journey": "BROWSER-UI-03",
+      "summary": "Browser retains a duplicate heading, nested tabs and legacy card beneath shared panel tabs"
+    },
+    {
+      "id": "quality-correction-003",
+      "journey": "BROWSER-UI-03",
+      "summary": "Empty browser address entry lacks a clear editable-region affordance"
+    },
+    {
+      "id": "quality-correction-004",
+      "journey": "NAV-02",
+      "summary": "Native PR read errors run beyond the panel and hide their cause and recovery text"
+    }
+  ],
+  "evidence_recommendation_scope": "Original-ID recommendations attach bounded runtime observations. Broad combined original records may retain source evidence levels; no blanket reclassification is required or implied.",
+  "remaining_priority_order": [
+    {
+      "rank": 1,
+      "journeys": [
+        "BROWSER-UI-01",
+        "BROWSER-UI-02",
+        "BROWSER-UI-03",
+        "SHELL-01",
+        "SHELL-02"
+      ],
+      "next": "Native Browser keyboard/mouse ownership, popups/dialogs, loading/error/focus states, actual panel resize and timed sidebar open/close/reversal. Headless evidence cannot substitute for these."
+    },
+    {
+      "rank": 2,
+      "journeys": [
+        "READ-02",
+        "READ-03",
+        "READ-04"
+      ],
+      "next": "Resolve headless repaint confound with semantic viewport state or native capture, then establish a known visible reading anchor before live append, disclosure, width change, scrollbar input, End and Latest."
+    },
+    {
+      "rank": 3,
+      "journeys": [
+        "FILES-01",
+        "FILES-02",
+        "DIFF-01",
+        "DIFF-02"
+      ],
+      "next": "Establish actual editor input, then dirty save failure/conflict and retained edits. Use native scroll to inspect complete diff and full Review; clean preview/tree staleness is already reproduced."
+    },
+    {
+      "rank": 4,
+      "journeys": [
+        "ATTACH-01",
+        "ATTACH-02",
+        "QUOTE-01",
+        "QUOTE-03"
+      ],
+      "next": "Native file/image picker or drop and supported formats, inspect/remove/send/history; multiline Cite, 10,000/10,001 context boundary and ordinary leading Markdown in the general editor."
+    },
+    {
+      "rank": 5,
+      "journeys": [
+        "PERM-01",
+        "AGENT-02",
+        "AGENT-03",
+        "AGENT-04"
+      ],
+      "next": "Establish exact form Input hit and valid payload; child decisions/Stop target IDs, mixed-task inventory, completed SideChat history, eviction, restart and real provider event compatibility."
+    },
+    {
+      "rank": 6,
+      "journeys": [
+        "COMPOSE-01",
+        "COMPOSE-02",
+        "COMPOSE-03",
+        "NAV-02",
+        "NAV-03",
+        "NAV-04",
+        "RESTORE-01"
+      ],
+      "next": "Normal Quit and multi-draft promotion/context restore; queued Edit order/races; PR read error/concurrency/complex review and controlled action lifecycle; coherent mixed-surface restoration."
+    },
+    {
+      "rank": 7,
+      "journeys": [
+        "NAV-05",
+        "NAV-06",
+        "NAV-07"
+      ],
+      "next": "Search after live reorder/disappearance, actual offscreen keyboard selection, visible Parked rename, completed Working/settled rename, failed reopen, grouped Undo Park, bulk failures and draft/project/checkout continuity."
+    }
+  ]
+}

@@ -1,0 +1,262 @@
+{
+  "overrides": {
+    "panel-tools-001": {
+      "priority": "P1",
+      "review_note": "Conditional loss of an edited buffer remains urgent. P0 was too strong without a reproduced widespread trigger."
+    },
+    "panel-tools-002": {
+      "priority": "P1",
+      "review_note": "A stale buffer can overwrite an agent's newer disk contents. This is a Ferrite integrity defect. The independent reviewer did not find T3 stale-write protection either, so it is not presented as a verified T3 parity advantage. A clean Markdown preview stayed stale on same-tab revisit after external replacement; close/reopen loaded new disk text. Dirty-buffer overwrite and save-conflict loss were not exercised.",
+      "runtime_evidence": [
+        "reports/files-runtime-correction.md",
+        "evidence/files-correction/08-readme-revisited-after-external-change.png",
+        "evidence/files-correction/09-readme-reopened-after-close.png"
+      ]
+    },
+    "subagents-background-01": {
+      "priority": "P2",
+      "review_note": "The defect requires an unretained child. The default retains 128 children. The source condition is established, but its frequency and the installed restart path were not reproduced."
+    },
+    "subagents-background-03": {
+      "title": "Reopen closed tab restores empty Agent and SideChat tabs",
+      "review_note": "Both paths restore a tab identifier after releasing its backing view. File previews are excluded because their renderer hydrates them on reopen. Both Agent and SideChat close/reopen failures were exercised through real controls. Reopen returns the tab identity with no backing body. File previews remain excluded.",
+      "runtime_evidence": [
+        "reports/agent-live-correction.md",
+        "evidence/agent-live-correction/12-reopened-agent-blank.png",
+        "reports/draft-lifecycle-runtime-correction.md",
+        "evidence/draft-lifecycle-correction/18-sidechat-reopened.png",
+        "evidence/draft-lifecycle-correction/19-sidechat-reopened-settled.png"
+      ],
+      "evidence_level": "runtime-reproduced"
+    },
+    "motion-001": {
+      "title": "Sidebar and right-panel geometry snap across structural changes",
+      "review_note": "Both shell width findings share the explicit snap policy. The detailed report retains separate contracts for collapse, reopen, maximize, and width floors. Panel sizing constraints remain a separate finding."
+    },
+    "input-focus-001": {
+      "title": "Host action bindings take browser and empty-panel input before their local handlers",
+      "review_note": "The same action-before-key-listener boundary also causes input-focus-002. Browser Enter can send the conversation draft and browser Escape can close the surface. The empty-panel branch was reproduced through real GPUI dispatch: Enter sent PANEL_ENTER_SENTINEL and left the launcher open. The browser branch was not exercised in Chromium. This combined record retains source-proven confidence to avoid presenting both branches as runtime-reproduced.",
+      "runtime_evidence": [
+        "reports/runtime-interactions.md",
+        "evidence/headless/09-panel-before-enter.png",
+        "evidence/headless/10-panel-after-enter.png",
+        "evidence/headless/provider-host.jsonl"
+      ]
+    },
+    "quote-attachments-001": {
+      "disposition": "repair-or-quality",
+      "review_note": "The user explicitly requires adding their own text to a citation. This is a required workflow gap, not an optional feature candidate. Clean pointer Cite and ordinary composer annotation worked, sending exactly > amber followed by My clean annotation. Clicking the quote tile exposed no editor; typing there was unhandled. This is a per-quote authoring gap, not proof that ordinary text cannot accompany a quote.",
+      "evidence_level": "runtime-reproduced",
+      "runtime_evidence": [
+        "reports/runtime-interactions.md",
+        "evidence/headless/21-clean-cite-and-annotation.png",
+        "evidence/headless/22-clean-tile-no-editor.png",
+        "evidence/headless/provider-host.jsonl"
+      ]
+    },
+    "coverage-quality-07": {
+      "ferrite_evidence": [
+        "crates/ferrite-core/src/api/schema.rs:118-137",
+        "crates/ferrite-core/src/api/schema.rs:244-257",
+        "crates/ferrite-cockpit/src/palette.rs:139-190",
+        "crates/ferrite-ui/src/frame/settings.rs:15-43"
+      ],
+      "review_note": "The absence claim remains an inference from bounded repository searches, not proof that every possible external collaboration route is impossible."
+    },
+    "input-focus-009": {
+      "evidence_level": "runtime-reproduced",
+      "runtime_evidence": [
+        "reports/runtime-interactions.md",
+        "evidence/headless/07-file-find.png"
+      ],
+      "review_note": "Cmd+F after clicking the file editor opened transcript Find and highlighted a transcript match in the pinned headless build."
+    },
+    "input-focus-010": {
+      "evidence_level": "runtime-reproduced",
+      "runtime_evidence": [
+        "reports/runtime-interactions.md",
+        "evidence/headless/02-editor-before.png",
+        "evidence/headless/04-editor-next-keys.png",
+        "evidence/headless/06-filter-next-keys.png"
+      ],
+      "review_note": "Real clicks followed by separate printable keys sent xyz and sam to the main composer; the editor and filter remained unchanged. Failure was visible on the first post-click key."
+    },
+    "quote-attachments-012": {
+      "runtime_evidence": [
+        "reports/runtime-interactions.md",
+        "evidence/headless/20-cite-clean-selection.png",
+        "evidence/headless/21-clean-cite-and-annotation.png",
+        "evidence/headless/23-quote-sent.png",
+        "evidence/headless/provider-host.jsonl"
+      ],
+      "review_note": "The isolated pinned-source build did not reproduce the blanket pointer Cite failure. A clean selection, Cite, ordinary text entry and send succeeded. The installed intermittent symptom remains unresolved, and this verification-gap record stays unverified."
+    },
+    "link-affordances-01": {
+      "evidence_level": "runtime-reproduced",
+      "runtime_evidence": [
+        "reports/runtime-interactions.md",
+        "evidence/headless/28-web-menu-actual.png"
+      ],
+      "review_note": "The actual transcript menu showed Open link and Copy link, with no explicit system-browser action. The installed copy-only symptom was not reproduced on this fixture. No browser navigation outcome was tested."
+    },
+    "link-affordances-04": {
+      "evidence_level": "runtime-reproduced",
+      "runtime_evidence": [
+        "reports/runtime-interactions.md",
+        "evidence/headless/29-file-chip-context-menu.png"
+      ],
+      "review_note": "Right-clicking the rendered sample.rs chip opened whole-message Copy, Attach, Pin and Fork actions, with no file-target actions."
+    },
+    "link-affordances-06": {
+      "runtime_evidence": [
+        "reports/runtime-interactions.md",
+        "evidence/headless/30-web-menu-after-escape.png"
+      ],
+      "review_note": "Escape left the open link menu visible after real key dispatch. This proves the dismissal failure in the tested state; the broader keyboard-activation claim remains source-proven."
+    },
+    "subagents-background-02": {
+      "review_note": "Controlled Main > Alpha > Grandchild rendered nested controls; both nested row and View live output did nothing. This verifies the normal drill failure, not every parent/ancestry/provider path.",
+      "runtime_evidence": [
+        "reports/agent-live-correction.md",
+        "evidence/agent-live-correction/07-nested-row-click.png",
+        "evidence/agent-live-correction/08-nested-live-output-click.png"
+      ]
+    },
+    "subagents-background-08": {
+      "review_note": "Clicking an agent name opened its updated child transcript, but that same row\u2019s View live output opened Background with No output yet. This is a reproduced branch of the inconsistent work/output model; other inventory branches retain source-only status.",
+      "runtime_evidence": [
+        "reports/agent-live-correction.md",
+        "evidence/agent-live-correction/06-agent-open-live-two-nested.png",
+        "evidence/agent-live-correction/09-main-live-output-click.png"
+      ]
+    },
+    "panel-tools-018": {
+      "review_note": "The sticky-width branch is runtime-reproduced: Overview 320px becomes 864px after Files/Changes, auto-hides navigation and remains wide through close/reopen and restart at a 1440px window. Narrow-window/manual-drag branches remain unverified.",
+      "runtime_evidence": [
+        "reports/panel-runtime-correction.md",
+        "evidence/panel-correction/overview-width-contract.json",
+        "evidence/panel-correction/03-overview-reopened.png",
+        "evidence/panel-correction/05-overview-after-files.png"
+      ],
+      "ferrite_evidence": [
+        "crates/ferrite-cockpit/src/cockpit/panel.rs:149-177",
+        "crates/ferrite-cockpit/src/cockpit/panel.rs:368-391",
+        "crates/ferrite-ui/src/theme.rs:989"
+      ]
+    },
+    "pr-navigation-01": {
+      "review_note": "Actual production gh discovery in two scratch repositories plus rendered badge clicks reproduced A selected / B clicked / no visible destination. The focused-thread badge was a positive control. CEF page load was not tested.",
+      "runtime_evidence": [
+        "reports/pr-entry-runtime-correction.md",
+        "evidence/pr-entry-correction/cross-thread-verdict.json",
+        "evidence/pr-entry-correction/18-cross-before.png",
+        "evidence/pr-entry-correction/19-cross-after.png"
+      ],
+      "evidence_level": "runtime-reproduced"
+    },
+    "pr-navigation-02": {
+      "review_note": "Focused sidebar badge opened Browser; the Overview PR row opened the real native Summary and Timeline through production reviewr reads. Other PR entry points remain source-only.",
+      "runtime_evidence": [
+        "reports/pr-entry-runtime-correction.md",
+        "evidence/pr-entry-correction/02-focused-thread-pr-click.png",
+        "evidence/pr-entry-correction/07-native-summary.png",
+        "evidence/pr-entry-correction/08-native-timeline.png"
+      ]
+    },
+    "pr-operations-001": {
+      "review_note": "Both menu and palette Refresh PR status left same-number/same-lifecycle detail checks/body/comments stale while lightweight state updated. Re-entry and OPEN\u2192MERGED refresh worked. Agent-action invalidation is not runtime-tested.",
+      "runtime_evidence": [
+        "reports/pr-entry-runtime-correction.md",
+        "evidence/pr-entry-correction/refresh-verdict.json",
+        "evidence/pr-entry-correction/14-refreshed-stale-summary.png",
+        "evidence/pr-entry-correction/15-overview-fresh-checks.png"
+      ]
+    },
+    "composer-02": {
+      "review_note": "A never-sent Cmd+N draft vanished after owned window SIGTERM/restart after autosave; an existing-thread draft persisted and restored as the control. Normal Quit, launch context and attachments were not tested.",
+      "runtime_evidence": [
+        "reports/draft-lifecycle-runtime-correction.md",
+        "evidence/draft-lifecycle-correction/03-unsent-draft-before.png",
+        "evidence/draft-lifecycle-correction/06-new-draft-after-restart.png",
+        "evidence/draft-lifecycle-correction/drafts-before-restart.json"
+      ],
+      "evidence_level": "runtime-reproduced"
+    },
+    "composer-04": {
+      "review_note": "Real queued-edit click canceled the queued UUID and combined QUEUED_SENTINEL with UNRELATED_DRAFT. Both texts survived; their independent identities did not. Multi-item and race branches remain untested.",
+      "runtime_evidence": [
+        "reports/draft-lifecycle-runtime-correction.md",
+        "evidence/draft-lifecycle-correction/08-queue-before-edit-valid.png",
+        "evidence/draft-lifecycle-correction/09-queue-after-edit.png",
+        "evidence/draft-lifecycle-correction/drafts-after-queue-edit.json"
+      ],
+      "evidence_level": "runtime-reproduced"
+    },
+    "quote-attachments-002": {
+      "review_note": "A roughly 991-character response attached as context was truncated in the 88px tile and could not be inspected by clicking it. Full prose/code still reached the provider. This does not test the >10,000-character attachment limit.",
+      "runtime_evidence": [
+        "reports/attachment-runtime-correction.md",
+        "evidence/attachment-correction/13-whole-response-cited.png",
+        "evidence/attachment-correction/14-tile-click.png",
+        "evidence/attachment-correction/provider-host.jsonl"
+      ],
+      "evidence_level": "runtime-reproduced"
+    },
+    "transcript-001": {
+      "review_note": "Find reported no matches for text inside a folded Read call; after disclosure it returned 1/1 for a unique final-passage phrase. Closed-turn search remains source-only. The separate screenshot-only paging blankness is inconclusive because headless repaint omitted unrelated shell regions.",
+      "runtime_evidence": [
+        "reports/scroll-runtime-correction.md",
+        "evidence/scroll-correction/05-folded-find.png",
+        "evidence/scroll-correction/07-expanded-find-last.png"
+      ]
+    },
+    "panel-tools-003": {
+      "review_note": "External add/delete left cached children unchanged even after collapse/re-expand. Git status coloring is not runtime-tested.",
+      "runtime_evidence": [
+        "reports/files-runtime-correction.md",
+        "evidence/files-correction/10-tree-expanded-before-mutation.png",
+        "evidence/files-correction/12-tree-after-collapse-expand.png"
+      ]
+    },
+    "panel-tools-005": {
+      "review_note": "Eighteen kept inner tabs placed files-tab-17 at x=3250 in a 1440px window without strip navigation. The file tree still activates paths; the failure concerns strip access and hidden close controls.",
+      "runtime_evidence": [
+        "reports/files-runtime-correction.md",
+        "evidence/files-correction/26-kept-tabs-overflow.png"
+      ],
+      "evidence_level": "runtime-reproduced"
+    },
+    "projects-navigation-001": {
+      "review_note": "Rendered Snoozed-row Rename closed the menu but displayed no editor or rename hint; the stored title remained unchanged. Parked remains source-only. Working-row commit was inconclusive and is not counted as a save failure.",
+      "runtime_evidence": [
+        "reports/navigation-runtime-correction.md",
+        "evidence/navigation-correction/26-snoozed-row-menu.png",
+        "evidence/navigation-correction/27-snoozed-rename-attempt.png"
+      ]
+    },
+    "projects-navigation-006": {
+      "review_note": "Opening a broad search after sidebar scrolling retained the old scroll offset with cursor reset to result 0. Visible rows began at 09, but Enter opened the invisible selected result 02. A separate visible-result Down/Enter path worked. Live reordering remains untested.",
+      "runtime_evidence": [
+        "reports/navigation-runtime-correction.md",
+        "evidence/navigation-correction/14-search-offscreen-zero.png",
+        "evidence/navigation-correction/15-enter-offscreen-zero-opens-02.png"
+      ]
+    },
+    "BROWSER-08": {
+      "review_note": "Parent native observations corroborated the loading branch: Annotate disappeared, Address shifted left and a Loading row appeared above the page. The installed commit is unknown and captures are conversation-only. The source finding remains source-proven; no timing, focus, controlled slow-load or network-error sequence was certified.",
+      "runtime_evidence": [
+        "evidence/native-correction.md"
+      ]
+    },
+    "pr-navigation-03": {
+      "disposition": "repair-or-quality",
+      "review_note": "Surface-composition reconciliation corrects prior optional-scope framing: the user explicitly requires an accessible PRs view. A standalone PR browsing destination is required audit repair scope, usable from an empty board or a thread without a current-branch PR. Native forge mutation features remain separate choices. Evidence remains source-proven; no new runtime pass is inferred."
+    }
+  },
+  "merge": {
+    "input-focus-002": "input-focus-001",
+    "motion-010": "BROWSER-08",
+    "motion-002": "motion-001",
+    "reconciliation-001": "subagents-background-03"
+  }
+}

@@ -1,0 +1,194 @@
+[
+  {
+    "id": "subagents-background-01",
+    "title": "Opening an evicted agent through its transcript row never requests saved history",
+    "priority": "P1",
+    "category": "defect",
+    "evidence_level": "source-proven",
+    "impact": "A real agent can open as an empty transcript despite its history existing in Ferrite storage.",
+    "ferrite_evidence": [
+      "crates/ferrite-cockpit/src/cockpit/agent_pane.rs:80-110",
+      "crates/ferrite-cockpit/src/cockpit/agent_pane.rs:154-163",
+      "crates/ferrite-cockpit/src/cockpit/side_chat.rs:492-502",
+      "crates/ferrite-cockpit/src/cockpit/subagents.rs:397-400",
+      "crates/ferrite-cockpit/src/cockpit/subagents.rs:1055-1069",
+      "crates/ferrite-core/src/engine/history.rs:110-172",
+      "crates/ferrite-core/src/activity.rs:330-336"
+    ],
+    "t3_evidence": [
+      "https://github.com/pingdotgg/t3code/blob/74573fc29b901bafbf8f1dbb2eb29606da1fa448/apps/web/src/components/chat/useThreadLifecycle.tsx#L466-L495"
+    ],
+    "recommendation": "Make the Panel agent opener request and observe saved history, render loading/error/coverage states, and support retry through the same loader as full-Pane navigation.",
+    "acceptance": "With a small child-retention limit, finish and evict agent A, then click A in Main. Its stored prompt and response load without resuming its provider. A failing read shows a visible retry that succeeds after the storage failure clears."
+  },
+  {
+    "id": "subagents-background-02",
+    "title": "Nested agents and immediate-parent navigation are missing from the normal drill path",
+    "priority": "P1",
+    "category": "partial-capability",
+    "evidence_level": "source-proven",
+    "impact": "The core knows grandchildren, but inspecting a child loses the routes needed to inspect its children or identify the immediate parent.",
+    "ferrite_evidence": [
+      "crates/ferrite-cockpit/src/cockpit/side_chat.rs:477-482",
+      "crates/ferrite-cockpit/src/cockpit/side_chat.rs:527",
+      "crates/ferrite-cockpit/src/cockpit/side_chat.rs:564",
+      "crates/ferrite-cockpit/src/cockpit/agent_pane.rs:125-143",
+      "crates/ferrite-cockpit/src/cockpit/agent_pane.rs:203-225",
+      "crates/ferrite-cockpit/src/cockpit/subagents.rs:463-490",
+      "crates/ferrite-cockpit/src/cockpit/transcript_glue.rs:49-96",
+      "crates/ferrite-core/src/activity.rs:69-76"
+    ],
+    "t3_evidence": [
+      "https://github.com/pingdotgg/t3code/blob/74573fc29b901bafbf8f1dbb2eb29606da1fa448/apps/web/src/components/chat/ThreadRelationshipsControl.tsx#L514-L583",
+      "https://github.com/pingdotgg/t3code/blob/74573fc29b901bafbf8f1dbb2eb29606da1fa448/apps/web/src/components/chat/ThreadRelationshipsControl.tsx#L784-L859",
+      "https://github.com/pingdotgg/t3code/blob/74573fc29b901bafbf8f1dbb2eb29606da1fa448/apps/web/src/components/chat/ProviderSubagentBar.tsx#L70-L75"
+    ],
+    "recommendation": "Pass child mappings into agent transcripts, route OpenAgent from a Drill to another Drill, and expose immediate-parent and root navigation using AgentInfo.parent. Add a relationship list independent of retained spawn rows.",
+    "acceptance": "Create Main > A > B with both providers. Open A from Main, then B from A. B identifies A as parent, opens A, and offers Main separately. Completed children remain reachable after spawn rows are outside the rendered window."
+  },
+  {
+    "id": "subagents-background-03",
+    "title": "Reopen closed tab restores an empty Agent tab",
+    "priority": "P1",
+    "category": "defect",
+    "evidence_level": "source-proven",
+    "impact": "The advertised reopen action returns a blank subagent view.",
+    "ferrite_evidence": [
+      "crates/ferrite-cockpit/src/cockpit/panel.rs:290-293",
+      "crates/ferrite-cockpit/src/cockpit/panel.rs:313-319",
+      "crates/ferrite-cockpit/src/cockpit/agent_pane.rs:113-121",
+      "crates/ferrite-cockpit/src/cockpit/surfaces.rs:48-52",
+      "crates/ferrite-cockpit/src/cockpit/surfaces.rs:232-235",
+      "crates/ferrite-cockpit/src/cockpit/palette.rs:1294-1297",
+      "crates/ferrite-cockpit/src/cockpit/agent_pane.rs:203-206"
+    ],
+    "t3_evidence": [],
+    "recommendation": "Reconstruct the agent resource through open_agent_drill when reopening its SurfaceId, or exclude it from reopen until a resource-aware restore exists.",
+    "acceptance": "Open an agent with visible text, close its tab, then invoke Reopen closed tab. The same agent and transcript return. Repeat through Close all and confirm each restored tab has content."
+  },
+  {
+    "id": "subagents-background-04",
+    "title": "Agent Panel views omit coverage, decision guidance and full status",
+    "priority": "P2",
+    "category": "partial-capability",
+    "evidence_level": "source-proven",
+    "impact": "A partial, waiting, failed, or unavailable child can look like an ordinary read-only transcript with no explanation of what the operator should do.",
+    "ferrite_evidence": [
+      "crates/ferrite-cockpit/src/cockpit/agent_pane.rs:145-175",
+      "crates/ferrite-cockpit/src/cockpit/agent_pane.rs:203-225",
+      "crates/ferrite-cockpit/src/cockpit/side_chat.rs:477-482",
+      "crates/ferrite-cockpit/src/cockpit/side_chat.rs:558-565",
+      "crates/ferrite-cockpit/src/cockpit/panel/strip.rs:249-260",
+      "crates/ferrite-cockpit/src/cockpit/subagents.rs:350-367",
+      "crates/ferrite-cockpit/src/cockpit/subagents.rs:459-604"
+    ],
+    "t3_evidence": [
+      "https://github.com/pingdotgg/t3code/blob/74573fc29b901bafbf8f1dbb2eb29606da1fa448/apps/web/src/components/chat/ProviderSubagentBar.tsx#L14-L75",
+      "https://github.com/pingdotgg/t3code/blob/74573fc29b901bafbf8f1dbb2eb29606da1fa448/apps/web/src/components/chat/SubagentTooltipContent.tsx#L33-L61",
+      "https://github.com/pingdotgg/t3code/blob/74573fc29b901bafbf8f1dbb2eb29606da1fa448/apps/web/src/components/ChatView.tsx#L1746-L1748"
+    ],
+    "recommendation": "Give the primary agent drill an identity/status header, coverage explanation, and an explicit route to its pending request. Preserve read-only prompting semantics. State whether Stop targets this child.",
+    "acceptance": "Open agents in Pending, Waiting, Failed, NotLoaded, Partial, and ToolActivity states. Each view states its true status/coverage. Waiting exposes a route to the exact request; opening and answering it preserves the parent draft."
+  },
+  {
+    "id": "subagents-background-05",
+    "title": "Generic thread opening can replace Main with the first pending child",
+    "priority": "P2",
+    "category": "interaction",
+    "evidence_level": "source-proven",
+    "impact": "A user selecting a thread can unexpectedly land in a background agent and lose the visible Main composer, while a direct agent-row click instead opens a side tab.",
+    "ferrite_evidence": [
+      "crates/ferrite-cockpit/src/cockpit.rs:12274-12285",
+      "crates/ferrite-cockpit/src/cockpit.rs:12298-12327",
+      "crates/ferrite-cockpit/src/cockpit/subagents.rs:415-438",
+      "crates/ferrite-cockpit/src/cockpit/agent_pane.rs:1-10",
+      "crates/ferrite-cockpit/src/cockpit/subagents.rs:463-490"
+    ],
+    "t3_evidence": [
+      "https://github.com/pingdotgg/t3code/blob/74573fc29b901bafbf8f1dbb2eb29606da1fa448/apps/web/src/components/chat/ProviderSubagentBar.tsx#L63-L75",
+      "https://github.com/pingdotgg/t3code/blob/74573fc29b901bafbf8f1dbb2eb29606da1fa448/apps/web/src/components/chat/useThreadLifecycle.tsx#L466-L495"
+    ],
+    "recommendation": "Separate Open thread from Open request, and visibly name child destinations on request actions. Use one explicit inspection/follow policy; do not silently retarget generic thread opening to whichever decision happens to be first.",
+    "acceptance": "With Main and two children awaiting different approvals, activate the generic thread card, then each exact request. The generic action opens Main; request actions name and open the selected owner. Back returns to the prior place and Main draft remains unchanged."
+  },
+  {
+    "id": "subagents-background-06",
+    "title": "Background Stop never clears its pending marker or offers retry after failure",
+    "priority": "P2",
+    "category": "defect",
+    "evidence_level": "source-proven",
+    "impact": "A rejected or ineffective stop can leave Stopping... permanently disabled. Reused task IDs can inherit this state across threads or session generations.",
+    "ferrite_evidence": [
+      "crates/ferrite-cockpit/src/cockpit/background_work.rs:123-128",
+      "crates/ferrite-cockpit/src/cockpit/background_work.rs:183-199",
+      "crates/ferrite-cockpit/src/cockpit/background_work.rs:206-224",
+      "crates/ferrite-cockpit/src/cockpit.rs:598",
+      "crates/ferrite-cockpit/src/cockpit.rs:11561-11578",
+      "crates/ferrite-cockpit/src/cockpit.rs:11739-11747"
+    ],
+    "t3_evidence": [
+      "https://github.com/pingdotgg/t3code/blob/74573fc29b901bafbf8f1dbb2eb29606da1fa448/apps/web/src/components/chat/useThreadLifecycle.tsx#L416-L463"
+    ],
+    "recommendation": "Key stop requests by thread, session generation and task; clear on failure/completion, expose failures beside Stop, and allow retry if the provider does not settle.",
+    "acceptance": "Reject a Stop request. Its error appears beside the background line and Stop becomes enabled again. Reuse the same native task ID in another thread and a later session and confirm no inherited pending marker."
+  },
+  {
+    "id": "subagents-background-07",
+    "title": "Background-work Stop excludes every subagent it counts",
+    "priority": "P2",
+    "category": "partial-capability",
+    "evidence_level": "source-proven",
+    "impact": "A mixed commands-and-agents line offers Stop but stops only commands; an agents-only line has no Stop even where child interruption is supported.",
+    "ferrite_evidence": [
+      "crates/ferrite-cockpit/src/cockpit/background_work.rs:82-93",
+      "crates/ferrite-cockpit/src/cockpit/background_work.rs:123-128",
+      "crates/ferrite-cockpit/src/cockpit/background_work.rs:206-222",
+      "crates/ferrite-cockpit/src/cockpit.rs:5707-5727"
+    ],
+    "t3_evidence": [
+      "https://github.com/pingdotgg/t3code/blob/74573fc29b901bafbf8f1dbb2eb29606da1fa448/apps/web/src/components/chat/ThreadActivityBanners.tsx#L170-L179",
+      "https://github.com/pingdotgg/t3code/blob/74573fc29b901bafbf8f1dbb2eb29606da1fa448/apps/web/src/components/chat/useThreadLifecycle.tsx#L434-L443"
+    ],
+    "recommendation": "Make Stop scope explicit and use the existing child-stop operation for stoppable child work. If one action cannot stop everything, give per-item controls and name the remaining work.",
+    "acceptance": "Run one command and one stoppable child after Main settles. Stop either stops both, or clearly says Stop commands and leaves a named child Stop control. An agents-only state offers child Stop where supported."
+  },
+  {
+    "id": "subagents-background-08",
+    "title": "Background task views disagree about which work exists",
+    "priority": "P2",
+    "category": "partial-capability",
+    "evidence_level": "source-proven",
+    "impact": "The transcript can say Waiting on a subagent while the Background tab is empty; users must learn three different background-work views.",
+    "ferrite_evidence": [
+      "crates/ferrite-cockpit/src/cockpit/background_work.rs:28-97",
+      "crates/ferrite-cockpit/src/cockpit/panel/background.rs:29-39",
+      "crates/ferrite-cockpit/src/cockpit/panel/background.rs:84-94",
+      "crates/ferrite-cockpit/src/cockpit/palette.rs:1273-1276",
+      "crates/ferrite-cockpit/src/cockpit/background_work.rs:345-379"
+    ],
+    "t3_evidence": [
+      "https://github.com/pingdotgg/t3code/blob/74573fc29b901bafbf8f1dbb2eb29606da1fa448/apps/web/src/components/chat/ThreadActivityBanners.tsx#L180-L208",
+      "https://github.com/pingdotgg/t3code/blob/74573fc29b901bafbf8f1dbb2eb29606da1fa448/apps/web/src/components/chat/BackgroundWorkDetails.tsx#L39-L63"
+    ],
+    "recommendation": "Use one attributed work inventory for the transcript summary, detail dialog and Background tab. Include agents and shell tasks, retain owner identity, and distinguish awaited work from work merely running. Make palette naming identify the destination.",
+    "acceptance": "With an agents-only workload, the transcript count, Details and Background tab show the same agent. With a command known only from a progress snapshot, every view includes it. A dev server running after Main completes reads Running unless the provider says it is awaited."
+  },
+  {
+    "id": "subagents-background-09",
+    "title": "Agent inspection tabs disappear on restart despite the Panel persistence contract",
+    "priority": "P2",
+    "category": "partial-capability",
+    "evidence_level": "source-proven",
+    "impact": "A user returning to a long review loses the agent inspection tabs and can land on a surviving Background tab instead.",
+    "ferrite_evidence": [
+      "crates/ferrite-cockpit/src/cockpit/panel.rs:124-140",
+      "crates/ferrite-cockpit/src/cockpit/surfaces.rs:370-388",
+      "docs/adr/0039-the-panel-is-one-tabbed-surface-host.md:17-31"
+    ],
+    "t3_evidence": [
+      "https://github.com/pingdotgg/t3code/blob/74573fc29b901bafbf8f1dbb2eb29606da1fa448/apps/web/src/components/chat/useThreadLifecycle.tsx#L466-L495"
+    ],
+    "recommendation": "Persist stable agent identities and reconstruct saved drills lazily, or make this exception an explicit product decision with a clear recoverable list of recent agents. Preserve deliberate active-tab choice when an ephemeral tab cannot restore.",
+    "acceptance": "Open Overview, Background and Agent A with A active, restart, and verify A restores with saved history or an explicit recovery state. The application does not silently show Background as if the user chose it."
+  }
+]

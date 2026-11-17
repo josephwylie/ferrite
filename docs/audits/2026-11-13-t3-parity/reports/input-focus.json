@@ -1,0 +1,239 @@
+[
+  {
+    "id": "input-focus-001",
+    "title": "Host actions take browser Enter, Tab, Escape and clipboard shortcuts before Chromium receives them",
+    "priority": "P1",
+    "category": "defect",
+    "evidence_level": "source-proven",
+    "impact": "Browser forms and keyboard navigation cannot rely on normal page input. Enter can send or queue the main conversation draft while the user is editing a web page. Paste targets that draft and takes focus away from the page.",
+    "ferrite_evidence": [
+      "vendor/gpui-pre/src/window.rs:6152-6168",
+      "vendor/gpui-pre/src/window.rs:6539-6557",
+      "crates/ferrite-pane/src/visual/element.rs:265-287",
+      "crates/ferrite-cockpit/src/cockpit/panel/preview.rs:383",
+      "crates/ferrite-cockpit/src/cockpit/panel/preview.rs:498-520",
+      "crates/ferrite-ui/src/keymap.rs:47",
+      "crates/ferrite-ui/src/keymap.rs:90-93",
+      "crates/ferrite-ui/src/keymap.rs:179-192",
+      "crates/ferrite-ui/src/keymap.rs:304-315",
+      "crates/ferrite-cockpit/src/cockpit/palette.rs:1378-1402",
+      "crates/ferrite-ui/src/keymap.rs:537",
+      "crates/ferrite-cockpit/src/cockpit.rs:5486-5596",
+      "crates/ferrite-cockpit/src/cockpit.rs:9292-9335"
+    ],
+    "t3_evidence": [
+      "https://github.com/pingdotgg/t3code/blob/74573fc29b901bafbf8f1dbb2eb29606da1fa448/apps/desktop/src/preview/Manager.ts#L514-L534",
+      "https://github.com/pingdotgg/t3code/blob/74573fc29b901bafbf8f1dbb2eb29606da1fa448/apps/desktop/src/preview/Manager.ts#L1509-L1583"
+    ],
+    "recommendation": "Give browser content an explicit input context and route its editing actions to the browser before the cockpit acts. Keep page keys and host navigation shortcuts separate. Guard Submit with the actual sending control or explicit submit intent, so unrelated focused content cannot send its draft.",
+    "acceptance": "With a fake provider and a local form, leave a sentinel unsent in the main composer. Click the page input and exercise Enter, Tab, Shift-Tab, Escape, copy and paste. The form receives intended keys, the draft remains unchanged, no provider send occurs, and only explicit host commands navigate away."
+  },
+  {
+    "id": "input-focus-002",
+    "title": "Enter in the empty panel invokes the conversation submit action instead of the highlighted opener",
+    "priority": "P1",
+    "category": "defect",
+    "evidence_level": "source-proven",
+    "impact": "The empty panel advertises a keyboard launcher that cannot receive its Enter key under the production binding table. An unsent main draft is exposed to the same unintended-submit path as browser content.",
+    "ferrite_evidence": [
+      "crates/ferrite-cockpit/src/cockpit/panel/strip.rs:670-691",
+      "crates/ferrite-cockpit/src/cockpit/panel/strip.rs:716-742",
+      "crates/ferrite-cockpit/src/cockpit.rs:10239-10248",
+      "crates/ferrite-ui/src/keymap.rs:185-189",
+      "vendor/gpui-pre/src/window.rs:6152-6168",
+      "crates/ferrite-cockpit/src/cockpit/tests/tools.rs:190-220"
+    ],
+    "t3_evidence": [
+      "https://github.com/pingdotgg/t3code/blob/74573fc29b901bafbf8f1dbb2eb29606da1fa448/apps/web/src/components/RightPanelTabs.tsx#L438-L460",
+      "https://github.com/pingdotgg/t3code/blob/74573fc29b901bafbf8f1dbb2eb29606da1fa448/apps/web/src/components/RightPanelTabs.tsx#L475-L481"
+    ],
+    "recommendation": "Add a panel-launcher context with its own Enter action, or intercept before action dispatch. Verify through production key registration and the focused rendered launcher, rather than invoking its helper.",
+    "acceptance": "An integration test uses bind_production_keys, clicks the blank launcher, sends ArrowDown and Enter as real key events, and asserts exactly the chosen surface opens with zero main-composer sends."
+  },
+  {
+    "id": "input-focus-003",
+    "title": "Right-panel tabs, close buttons and PR controls have no keyboard focus or accessible control roles",
+    "priority": "P1",
+    "category": "interaction",
+    "evidence_level": "source-proven",
+    "impact": "Keyboard-only users cannot operate much of the right panel. Assistive technology cannot discover the raw controls as named buttons or tabs. A visible hover and an on_click handler do not make a GPUI Div focusable.",
+    "ferrite_evidence": [
+      "crates/ferrite-cockpit/src/cockpit/panel/strip.rs:487-575",
+      "crates/ferrite-cockpit/src/cockpit/panel/strip.rs:578-619",
+      "crates/ferrite-cockpit/src/cockpit/panel/strip.rs:314-324",
+      "crates/ferrite-pane/src/preview.rs:689-707",
+      "crates/ferrite-cockpit/src/cockpit/panel/pull_request.rs:517-533",
+      "crates/ferrite-cockpit/src/cockpit/panel/pull_request.rs:578-603",
+      "crates/ferrite-cockpit/src/cockpit/panel/pull_request.rs:609-633",
+      "crates/ferrite-ui/src/components.rs:29-39",
+      "crates/ferrite-ui/src/components.rs:144-158",
+      "crates/ferrite-ui/src/theme.rs:1019",
+      "vendor/gpui-pre/src/elements/div.rs:1876-1882",
+      "vendor/gpui-pre/src/elements/div.rs:2222-2241",
+      "vendor/gpui-pre/src/elements/div.rs:2992-3057"
+    ],
+    "t3_evidence": [
+      "https://github.com/pingdotgg/t3code/blob/74573fc29b901bafbf8f1dbb2eb29606da1fa448/apps/web/src/components/RightPanelTabs.tsx#L912-L915",
+      "https://github.com/pingdotgg/t3code/blob/74573fc29b901bafbf8f1dbb2eb29606da1fa448/apps/web/src/components/RightPanelTabs.tsx#L977-L990",
+      "https://github.com/pingdotgg/t3code/blob/74573fc29b901bafbf8f1dbb2eb29606da1fa448/apps/web/src/components/RightPanelTabs.tsx#L1408-L1418",
+      "https://github.com/pingdotgg/t3code/blob/74573fc29b901bafbf8f1dbb2eb29606da1fa448/apps/web/src/components/preview/RightPanelResizeHandle.tsx#L14-L25"
+    ],
+    "recommendation": "Use named, focusable native controls for panel actions, with a single tab-order policy. Expose tab state and PR segment selection to accessibility. Preserve focus through redraws rather than just adding handles to controls the focus pump will reclaim. Increase close hit area while retaining the visual icon size.",
+    "acceptance": "Operate tab switching, close, add, maximize, PR views and PR link without a pointer. Inspect the accessibility tree for names, roles and selected states. Repeated background updates preserve the focused control and Enter/Space executes only that control."
+  },
+  {
+    "id": "input-focus-004",
+    "title": "Cmd+W on a PR or terminal can close the parent conversation instead of the active panel surface",
+    "priority": "P1",
+    "category": "interaction",
+    "evidence_level": "source-proven",
+    "impact": "A familiar close command can remove the working conversation from view when the user intends to close a panel tab. The thread is parked, not deleted, but the navigation change is unrelated to the clicked surface.",
+    "ferrite_evidence": [
+      "crates/ferrite-ui/src/keymap.rs:364-367",
+      "crates/ferrite-cockpit/src/cockpit.rs:9148-9175",
+      "crates/ferrite-cockpit/src/cockpit/panel.rs:282-293",
+      "crates/ferrite-terminal/src/view.rs:324-344",
+      "crates/ferrite-ui/src/keymap.rs:604-617"
+    ],
+    "t3_evidence": [
+      "https://github.com/pingdotgg/t3code/blob/74573fc29b901bafbf8f1dbb2eb29606da1fa448/packages/shared/src/keybindings.ts#L69-L75",
+      "https://github.com/pingdotgg/t3code/blob/74573fc29b901bafbf8f1dbb2eb29606da1fa448/apps/web/src/components/chat/useRightPanelActions.ts#L315-L324"
+    ],
+    "recommendation": "Route close through a focused-area owner and active surface. Preserve the explicit command for closing a conversation, with a clearly named separate action or context.",
+    "acceptance": "For each panel surface, focus its content, press close once and assert only its tab closes. The parent thread stays selected and unparked. Test the browser/file/review exceptions to preserve their existing behavior."
+  },
+  {
+    "id": "input-focus-005",
+    "title": "No workspace-area focus cycle or per-surface focus restoration connects the composer and panel",
+    "priority": "P2",
+    "category": "missing-capability",
+    "evidence_level": "source-proven",
+    "impact": "Users who enter the terminal or panel cannot rely on one keyboard command to move among major areas. Opening or switching a panel tab does not establish a consistent focus handoff. Focus behavior depends on the specific body component.",
+    "ferrite_evidence": [
+      "crates/ferrite-ui/src/keymap.rs:263-310",
+      "crates/ferrite-cockpit/src/cockpit.rs:5796-5914",
+      "crates/ferrite-cockpit/src/cockpit.rs:10109-10274",
+      "crates/ferrite-cockpit/src/cockpit/panel.rs:282-284",
+      "crates/ferrite-cockpit/src/cockpit/panel.rs:550-620"
+    ],
+    "t3_evidence": [
+      "https://github.com/pingdotgg/t3code/blob/74573fc29b901bafbf8f1dbb2eb29606da1fa448/packages/shared/src/keybindings.ts#L59-L63",
+      "https://github.com/pingdotgg/t3code/blob/74573fc29b901bafbf8f1dbb2eb29606da1fa448/apps/web/src/components/AppSidebarLayout.tsx#L175-L195",
+      "https://github.com/pingdotgg/t3code/blob/74573fc29b901bafbf8f1dbb2eb29606da1fa448/apps/web/src/lib/workspaceFocus.ts#L99-L174",
+      "https://github.com/pingdotgg/t3code/blob/74573fc29b901bafbf8f1dbb2eb29606da1fa448/apps/web/src/lib/workspaceFocus.ts#L175-L257",
+      "https://github.com/pingdotgg/t3code/blob/74573fc29b901bafbf8f1dbb2eb29606da1fa448/apps/web/src/components/preview/PreviewPanelShell.tsx#L112-L148"
+    ],
+    "recommendation": "Introduce explicit focus ownership for major visible areas and a remembered focus target per panel surface. Route keyboard focus deliberately on open, switch and close. Keep the composer's useful local tool walk, but provide a separate area-navigation command.",
+    "acceptance": "F6 and Shift-F6, or documented equivalents, visit visible nav, conversation, composer and panel areas. They leave a terminal and browser without typing into them. Reopening a tab restores its last valid control. A closed or hidden tab never retains focus."
+  },
+  {
+    "id": "input-focus-006",
+    "title": "Embedded browser input has no composition or native text-input bridge",
+    "priority": "P2",
+    "category": "partial-capability",
+    "evidence_level": "source-proven",
+    "impact": "Users of input methods, composed text and native text services lack an implemented path equivalent to Ferrite's composer. Sending raw key_char values is not a composition protocol. Exact failures for each operating-system input method need runtime checks.",
+    "ferrite_evidence": [
+      "crates/ferrite-pane/src/visual/element.rs:265-289",
+      "crates/ferrite-pane/src/visual/web/mod.rs:121-162",
+      "crates/ferrite-pane/src/visual/web/cef/input.rs:60-110",
+      "crates/ferrite-pane/src/composer.rs:984-1021",
+      "crates/ferrite-pane/src/composer.rs:1852-1854"
+    ],
+    "t3_evidence": [
+      "https://github.com/pingdotgg/t3code/blob/74573fc29b901bafbf8f1dbb2eb29606da1fa448/apps/desktop/src/preview/Manager.ts#L1540-L1548"
+    ],
+    "recommendation": "Implement native text-input and composition for the offscreen browser, including caret bounds and commit/cancel handling. Do not treat synthetic per-key CHAR events as sufficient. Audit the custom terminal input path separately because it also reads raw key events.",
+    "acceptance": "Compose and commit a Japanese phrase and Chinese candidate sequence in a local browser textarea on each supported OS. Cancel a composition with Escape, move the candidate cursor, and confirm no host command runs and the candidate window follows the caret."
+  },
+  {
+    "id": "input-focus-007",
+    "title": "Typing y, n or a as the first character of an empty approval composer performs a permission action",
+    "priority": "P1",
+    "category": "interaction",
+    "evidence_level": "source-proven",
+    "impact": "A user who starts a normal follow-up with \"also\", \"no\" or \"yes\" can answer a pending approval before sending a message. The a shortcut means Always. This is an intentional current interaction contract, but it conflicts with the live text-field affordance.",
+    "ferrite_evidence": [
+      "crates/ferrite-pane/src/pane/composer.rs:504-517",
+      "crates/ferrite-ui/src/keymap.rs:193-207",
+      "crates/ferrite-cockpit/src/cockpit.rs:5984-5993",
+      "crates/ferrite-cockpit/src/cockpit.rs:6012-6040",
+      "crates/ferrite-cockpit/src/cockpit/tests/composer_menus.rs:957-1027"
+    ],
+    "t3_evidence": [
+      "https://github.com/pingdotgg/t3code/blob/74573fc29b901bafbf8f1dbb2eb29606da1fa448/apps/web/src/components/chat/ComposerPendingApprovalActions.tsx#L26-L30",
+      "https://github.com/pingdotgg/t3code/blob/74573fc29b901bafbf8f1dbb2eb29606da1fa448/apps/web/src/components/chat/ComposerPendingApprovalActions.tsx#L51-L86"
+    ],
+    "recommendation": "Keep bare approval letters in an explicitly focused approval region or non-editing mode. Use modified chords or ordinary focused buttons while the composer is editable. Preserve question and nonempty-draft behavior.",
+    "acceptance": "With an approval pending and the composer empty, type \"also check this\", \"no, change direction\" and \"yes, after tests\" as ordinary key events. All text remains unsent and no approval response occurs. Explicit approval shortcuts and buttons still work."
+  },
+  {
+    "id": "input-focus-008",
+    "title": "Panel resizing relies on root hover events that occluding children can block",
+    "priority": "P2",
+    "category": "interaction",
+    "evidence_level": "inferred",
+    "impact": "A resize drag may stall over the panel edge or another occluding control and may miss its release. This is a source-backed risk, not a measured or runtime-reproduced failure.",
+    "ferrite_evidence": [
+      "crates/ferrite-cockpit/src/cockpit/panel.rs:480-484",
+      "crates/ferrite-cockpit/src/cockpit/panel.rs:500-542",
+      "crates/ferrite-cockpit/src/cockpit/panel.rs:586-604",
+      "crates/ferrite-cockpit/src/cockpit.rs:10506-10514",
+      "crates/ferrite-cockpit/src/cockpit.rs:10534-10549",
+      "crates/ferrite-cockpit/src/cockpit/panel/strip.rs:550-559",
+      "vendor/gpui-pre/src/elements/div.rs:215-228",
+      "vendor/gpui-pre/src/elements/div.rs:304-317",
+      "vendor/gpui-pre/src/window.rs:1187-1208"
+    ],
+    "t3_evidence": [
+      "https://github.com/pingdotgg/t3code/blob/74573fc29b901bafbf8f1dbb2eb29606da1fa448/apps/web/src/hooks/useResizeDrag.ts#L47-L71",
+      "https://github.com/pingdotgg/t3code/blob/74573fc29b901bafbf8f1dbb2eb29606da1fa448/apps/web/src/hooks/useResizeDrag.ts#L82-L125"
+    ],
+    "recommendation": "Use an explicit captured drag session or capture-phase window listeners with an active-drag guard. End it on release, cancellation, window blur and owner disappearance. Confirm the actual failure before selecting the smallest repair.",
+    "acceptance": "Resize continuously across the edge, tabs, browser and terminal. Release outside the original edge and outside the window. Width follows continuously and never changes after release. Include slow movement smaller than the edge width."
+  },
+  {
+    "id": "input-focus-009",
+    "title": "Find in a Files editor searches the conversation instead of the file",
+    "priority": "P2",
+    "category": "defect",
+    "evidence_level": "source-proven",
+    "impact": "Users searching the code or prose currently visible in Files get a transcript search. The shortcut changes the wrong reading context and does not offer file-local matching.",
+    "ferrite_evidence": [
+      "crates/ferrite-ui/src/keymap.rs:263-265",
+      "crates/ferrite-cockpit/src/cockpit.rs:6144-6164",
+      "crates/ferrite-cockpit/src/cockpit/tools/files.rs:271-293",
+      "crates/ferrite-cockpit/src/cockpit/tools/editor.rs:426-504",
+      "crates/ferrite-cockpit/src/cockpit/tools/files.rs:663-687"
+    ],
+    "t3_evidence": [
+      "https://github.com/pingdotgg/t3code/blob/74573fc29b901bafbf8f1dbb2eb29606da1fa448/apps/web/src/components/files/FilePreviewPanel.browser.test.tsx#L189-L225"
+    ],
+    "recommendation": "Route Find through the focused surface and implement a file-local search owner for code and prose. Keep transcript search scoped to conversation focus.",
+    "acceptance": "Use a file containing a sentinel absent from the transcript. Focus the file and invoke Find. The sentinel matches and scrolls into view in the file; the transcript search remains closed. Repeat for Markdown and after returning from another panel tab."
+  },
+  {
+    "id": "input-focus-010",
+    "title": "Files editor and filter lose keyboard focus when their edits redraw the cockpit",
+    "priority": "P1",
+    "category": "defect",
+    "evidence_level": "source-proven",
+    "impact": "Code editing and file filtering can redirect subsequent typing into the main conversation. This is a concrete missing exemption in the current focus reconciliation, beyond the broader area-navigation gap in input-focus-005.",
+    "ferrite_evidence": [
+      "crates/ferrite-cockpit/src/cockpit/tools/editor.rs:301-312",
+      "crates/ferrite-cockpit/src/cockpit/tools/editor.rs:201-216",
+      "crates/ferrite-cockpit/src/cockpit/tools/files.rs:125-135",
+      "crates/ferrite-cockpit/src/cockpit/tools/files.rs:228-239",
+      "crates/ferrite-cockpit/src/cockpit/tools/files.rs:446-464",
+      "crates/ferrite-cockpit/src/cockpit.rs:10159-10162",
+      "crates/ferrite-cockpit/src/cockpit.rs:10220-10274",
+      "crates/ferrite-cockpit/src/cockpit/tests/files.rs:74-89"
+    ],
+    "t3_evidence": [
+      "https://github.com/pingdotgg/t3code/blob/74573fc29b901bafbf8f1dbb2eb29606da1fa448/apps/web/src/components/files/FilePreviewPanel.browser.test.tsx#L189-L225",
+      "https://github.com/pingdotgg/t3code/blob/74573fc29b901bafbf8f1dbb2eb29606da1fa448/apps/web/src/lib/workspaceFocus.ts#L120-L138"
+    ],
+    "recommendation": "Preserve the active Files editor and filter as real focus owners. Prefer a general active-surface ownership check over another loosely related global exception. Replace the editing proof with a rendered click-and-type integration check in addition to the autosave test.",
+    "acceptance": "In a scratch checkout, click a source line and type several separate key events across cockpit updates. Assert every character lands in the file, none enters the composer, and focus remains in the editor. Repeat in the file filter and while a transcript streams. No live user file is needed for this test."
+  }
+]

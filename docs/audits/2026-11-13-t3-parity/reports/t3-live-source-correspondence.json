@@ -1,0 +1,879 @@
+{
+  "goal": "Match actual installed T3 journeys to exact installed source and concrete production-quality Ferrite acceptance requirements.",
+  "recorded_at": "2026-11-13T15:24:25.001984+00:00",
+  "throughput_checkpoint": "n/a, read-only investigation",
+  "installed_revision": "1264c206aee0dce805d6279809118bc091f29d2f",
+  "comparison_revision": "74573fc29b901bafbf8f1dbb2eb29606da1fa448",
+  "provenance_report": "t3-installed-source-match.md",
+  "observation_evidence": {
+    "path": "../evidence/t3-live/observations.md",
+    "sha256": "ee2739e94e1d8d6b0fa3c924debebf8b6228f2c96d969af347bf33c80eb9630b",
+    "bytes": 25492,
+    "captured_by": "parent in native installed T3",
+    "worker_reverified_runtime": false
+  },
+  "source_policy": "All source_refs resolve to installed SHA. Newer checkout paths were used only to discover module names. No claim of binary reproducibility.",
+  "journeys": [
+    {
+      "id": "live-command-output",
+      "observed": "Sol parent command exposed PARENT_TICK_2 through 25 before completion. A fresh actual Sol child ran SOL_CHILD_STREAM with 90 one-second ticks. Its native child route showed ticks 2 through 26 in accessibility output and ticks 17 through 31 with Working 38s in the screenshot before completion. Sonnet child exposed ticks 30 through 44 while Working 2m 49s, before its requested 50 ticks finished. Both children later finished.",
+      "evidence_level": "Parent native observation; exact installed source inspected by this worker.",
+      "source_refs": [
+        "codex_output",
+        "claude_capability",
+        "claude_child_lookup",
+        "claude_tail_dispatch",
+        "claude_tail_file",
+        "output_manager",
+        "output_hub",
+        "output_panel",
+        "output_inspector"
+      ],
+      "ferrite_reports": [
+        "agent-live-correction.md",
+        "subagents-background.md"
+      ],
+      "ferrite_finding_ids": [
+        "agent-live-04",
+        "agent-live-05",
+        "agent-live-06",
+        "agent-live-07"
+      ],
+      "acceptance": [
+        "Main and child progress must appear before tool settlement through the actual provider adapter.",
+        "Agent row and View live output must reach the same current child output.",
+        "Nested child navigation, reopen, ordinary-width wrapping, maximize and return must preserve output and identity."
+      ],
+      "limits": [
+        "Observed Claude local_bash tailing does not establish universal SDK tool-output streaming, background-command streaming, or every provider.",
+        "Ferrite child forwarded-message live checks do not establish child command stdout parity.",
+        "The first Sol child capture occurred after completion. The later separate 90-tick child recheck establishes live child stdout, without upgrading every provider or command path."
+      ]
+    },
+    {
+      "id": "child-route-and-approvals",
+      "observed": "Both real providers exposed child routes, read-only footer, and Open parent. Sonnet child command approval appeared in the parent separately from the parent file-edit approval.",
+      "evidence_level": "Parent native observation and installed ownership assignment.",
+      "source_refs": [
+        "child_footer",
+        "child_composer",
+        "child_footer_state",
+        "claude_approval_callback",
+        "claude_approval_owner",
+        "claude_approval_wait"
+      ],
+      "ferrite_reports": [
+        "subagents-background.md",
+        "agent-live-correction.md"
+      ],
+      "ferrite_finding_ids": [
+        "subagents-background-02",
+        "subagents-background-04",
+        "subagents-background-05"
+      ],
+      "acceptance": [
+        "Every child inspector must identify provider, model, state, and parent and give an explicit return action.",
+        "Child approval guidance must lead to the exact live request and name its owner without losing the parent draft or current reading position.",
+        "Approving one request must not resolve a separate child command, edit, or later test request."
+      ],
+      "limits": [
+        "Read-only child prompting is shared T3 policy and is not by itself a Ferrite defect.",
+        "No native Ferrite child-approval session was run by this worker."
+      ]
+    },
+    {
+      "id": "citation-comment-image",
+      "observed": "Selection, citation, multiline save/reopen/cancel, ordinary draft text, image attachment/preview, combined send, model receipt, and source-anchor navigation all passed in native T3.",
+      "evidence_level": "Parent native observation includes actual Sol reply identifying quote, comments, and image gradient.",
+      "source_refs": [
+        "citation_schema",
+        "citation_insert",
+        "citation_editor",
+        "citation_sent",
+        "citation_provider",
+        "send_context",
+        "send_dispatch",
+        "sent_image",
+        "citation_navigation"
+      ],
+      "ferrite_reports": [
+        "quote-attachments.md",
+        "attachment-runtime-correction.md",
+        "composer.md"
+      ],
+      "ferrite_finding_ids": [
+        "quote-attachments-001",
+        "quote-attachments-002",
+        "transcript-006"
+      ],
+      "acceptance": [
+        "UI-selected quote retains source identity and a separately editable multiline comment.",
+        "Save and reopen retain both lines; cancel preserves the saved comment; ordinary text and image coexist.",
+        "Preview and Escape preserve the draft, then actual provider receipt confirms all parts once.",
+        "Sent citation returns to its precise source and the user can resume the latest reading position."
+      ],
+      "limits": [
+        "Native T3 transient source highlight was not established.",
+        "Ferrite ordinary commentary plus quote send passed its controlled replay; per-quote commenting and full inspection remain distinct.",
+        "Ferrite attachment file intake was not exercised in the attachment runtime correction."
+      ]
+    },
+    {
+      "id": "queue-edit-steer",
+      "observed": "Command-click Steer enqueued original text; Edit loaded it; Save replaced it with edited text; Send now removed queue item and rendered Steer; Sol acknowledged edited marker.",
+      "evidence_level": "Parent native observation and installed queue implementation.",
+      "source_refs": [
+        "queue_intent",
+        "queue_modifier",
+        "queue_edit",
+        "queue_edit_begin",
+        "queue_edit_save",
+        "queue_promote"
+      ],
+      "ferrite_reports": [
+        "composer.md"
+      ],
+      "ferrite_finding_ids": [
+        "composer-04",
+        "composer-05"
+      ],
+      "acceptance": [
+        "Expose user intent to queue after the active turn or steer it immediately.",
+        "With queue A/B and unrelated draft C, edit A then cancel preserves A/B order and C. Save A2 replaces only A and restores C.",
+        "Send now delivers the edited payload once and reports its destination semantics. Handle a queued run starting during an open edit."
+      ],
+      "limits": [
+        "The native run tested one queued item and save, not multi-item order, edit cancel, or race recovery.",
+        "A separate fresh Sol Stop recheck succeeded, and Sonnet Stop and Resume succeeded. Sol Resume and held-queue behavior were not exercised.",
+        "Composer-06 remains a separate source-backed stop/hold policy difference."
+      ]
+    },
+    {
+      "id": "supervised-edit-and-changes",
+      "observed": "Sonnet exact command approval proceeded, separate calculator.py edit approval changed Changes +0 -0 to +1 -1, then narrow unittest command required a new approval.",
+      "evidence_level": "Parent native observation; approval, file result, and totals renderer inspected.",
+      "source_refs": [
+        "claude_approval_wait",
+        "claude_file_result",
+        "claude_file_item",
+        "changes_ui",
+        "changes_totals"
+      ],
+      "ferrite_reports": [
+        "providers-settings.md",
+        "panel-tools.md"
+      ],
+      "ferrite_finding_ids": [],
+      "acceptance": [
+        "Supervised commands and edits expose exact action and independent decisions before execution.",
+        "After an approved one-line replacement, change summary refreshes to +1 -1 and leads to the actual file diff.",
+        "A subsequent test command receives its own decision unless an explicit standing permission applies."
+      ],
+      "limits": [
+        "The causal Git invalidation path was not fully traced. The observed refresh is stronger than an assumption based on a rendered badge.",
+        "Observation of the test approval alone does not prove tests passed.",
+        "Recovered invalid child name is a tool-input validation error, not missing delegation."
+      ]
+    },
+    {
+      "id": "parent-child-status",
+      "observed": "While child worked, parent sidebar said Waiting and child parent Lineage row said Done. Child later completed normally.",
+      "evidence_level": "Observed native inconsistency with distinct source derivations; runtime payload cause unresolved.",
+      "source_refs": [
+        "sidebar_state",
+        "sidebar_label",
+        "parent_lineage",
+        "lineage_state",
+        "lineage_label",
+        "child_footer_state",
+        "child_footer_label"
+      ],
+      "ferrite_reports": [
+        "subagents-background.md",
+        "agent-live-correction.md"
+      ],
+      "ferrite_finding_ids": [
+        "subagents-background-04",
+        "subagents-background-08"
+      ],
+      "acceptance": [
+        "Represent parent turn completion and outstanding child work separately and label their scope.",
+        "Sidebar, lineage, child footer, and decision owner must agree on the same scoped state or explain the difference.",
+        "Awaiting a child or approval must provide a reachable destination and must never imply that known live output is absent."
+      ],
+      "limits": [
+        "No captured runtime payload establishes which sidebar Waiting branch applied.",
+        "The labels do not establish stale transport, lost child, stopped child, or missing output.",
+        "Ferrite status defects require Ferrite evidence and cannot be inferred from this T3 inconsistency."
+      ]
+    },
+    {
+      "id": "sidechat-context-and-bringback",
+      "observed": "Native Side chat showed Context from Calculator UI Audit, inherited GPT-6.1-Sol Low, and replied SIDE_CHAT_RECEIVED with both correct source markers. Bring back left parent composer empty and started no turn. On the next parent message, which did not supply the sentinel, the actual parent response repeated SIDE_CHAT_RECEIVED and the two-marker sentence. Closing then Command-Shift-T reopened the original side prompt, response, and parent context.",
+      "evidence_level": "Final parent native observation ledger verifies creation, actual deferred next-message receipt, and closed/reopened side contents. Exact installed source inspected.",
+      "source_refs": [
+        "sidechat_create",
+        "sidechat_header",
+        "sidechat_bringback",
+        "sidechat_bringback_toast",
+        "sidechat_merge_run",
+        "sidechat_transfer_guard",
+        "sidechat_pending_transfer",
+        "sidechat_delta_context",
+        "sidechat_transfer_consumed"
+      ],
+      "ferrite_reports": [
+        "draft-lifecycle-runtime-correction.md",
+        "panel-tools.md"
+      ],
+      "ferrite_finding_ids": [],
+      "acceptance": [
+        "Create a clearly identified side conversation with the parent model and context, then verify actual provider receipt.",
+        "Bring back must visibly acknowledge success or failure and identify deferred delivery to the next parent message.",
+        "Preserve unrelated parent draft and the side transcript, then deliver unique side-only content on the next actual parent send.",
+        "Close and reopen must restore side content and draft together."
+      ],
+      "limits": [
+        "The transient Brought back toast was not captured. Actual next-message model receipt establishes delivery independently of that toast.",
+        "The observed reopen preserved sent prompt, response, and parent context. It does not establish unsent side-draft recovery, application-restart recovery, or every closure route.",
+        "The installed path intentionally changes neither parent composer text nor side-pane visibility and starts no turn. No hidden chip or asynchronous composer insertion is inferred.",
+        "Existing Ferrite controlled replay verifies side-chat draft reopening failure, not real-provider fork context."
+      ]
+    },
+    {
+      "id": "thread-find-and-turn-navigation",
+      "observed": "Native AMBER_COMPASS Find reported 1/3, Enter advanced to 2/3, Escape closed Find. PARENT_TICK_25 reported 0/0 while the Worked for 1m35s group was folded. Next turn revealed the citation/comment/image turn and Scroll to end while PR #246 remained open.",
+      "evidence_level": "Parent native observation; exact installed server search scope and client navigation inspected.",
+      "source_refs": [
+        "find_source_scope",
+        "find_remote",
+        "find_count",
+        "find_enter",
+        "find_reveal",
+        "next_turn",
+        "next_turn_position"
+      ],
+      "ferrite_reports": [
+        "transcript.md",
+        "scroll-runtime-correction.md"
+      ],
+      "ferrite_finding_ids": [
+        "transcript-001"
+      ],
+      "acceptance": [
+        "Search message prose independently of viewport mounting, navigate exact occurrences with stable counts, and retain panel state.",
+        "Document the searched content classes. If Ferrite promises command-output search, discover it while folded and reveal the exact hit.",
+        "Next turn reaches the next intended prompt and Scroll to end restores current reading without changing the active PR panel."
+      ],
+      "limits": [
+        "Installed T3 server Find excludes command_execution rows before matching. The folded group is an observed condition, not a proven causal explanation.",
+        "T3 command-output search parity is not demonstrated by this run. Ferrite folded-output failure remains its own observed limitation.",
+        "This bounded turn-navigation success does not establish every streaming resize or scroll anchoring case."
+      ]
+    },
+    {
+      "id": "sonnet-stop-resume",
+      "observed": "After approval of bounded 120-second command, native Stop changed state to Stopped with Run interrupted / Stopped by user. Parent process inspection found no matching command. Resume thread submitted Continue where you left off, and Sonnet respected the instruction not to rerun it.",
+      "evidence_level": "Parent native observation and process-table check; installed button and resume dispatch inspected.",
+      "source_refs": [
+        "stop_button",
+        "resume_turn"
+      ],
+      "ferrite_reports": [
+        "composer.md"
+      ],
+      "ferrite_finding_ids": [
+        "composer-06"
+      ],
+      "acceptance": [
+        "Stop visibly acknowledges interruption and stops the owned bounded command before natural completion.",
+        "Resume identifies the interrupted context and preserves the instruction not to repeat completed or forbidden work.",
+        "Verify held-queue policy independently with actual queued inputs."
+      ],
+      "limits": [
+        "Sol Stop was separately verified, but Sol Resume was not executed.",
+        "Neither stop run demonstrated queued A/B hold behavior. They do not close the source-backed Ferrite stop/queue policy difference."
+      ]
+    },
+    {
+      "id": "sol-stop",
+      "observed": "A fresh real Sol run showed Running python3 and the exact SOL_STOP_PROBE command before Stop generation. Stop produced Stopped, Run interrupted / Stopped by user, and Resume thread. Parent independent process inspection found no matching Python command afterward.",
+      "evidence_level": "Final parent native observation ledger and parent process inspection. This worker performed no runtime work.",
+      "source_refs": [
+        "stop_button"
+      ],
+      "ferrite_reports": [
+        "composer.md"
+      ],
+      "ferrite_finding_ids": [
+        "composer-06"
+      ],
+      "acceptance": [
+        "Stop visibly acknowledges interruption and stops the owned bounded command before natural completion.",
+        "Distinguish interruption success from Resume execution and from queue hold policy."
+      ],
+      "limits": [
+        "The initial Sol attempt finished naturally before a guarded Stop click and remains inconclusive as that attempt. The separate fresh recheck establishes Stop success.",
+        "Resume thread was exposed but Sol Resume was not executed.",
+        "No held-queue behavior was exercised."
+      ]
+    }
+  ],
+  "sources": {
+    "claude_capability": {
+      "path": "apps/server/src/orchestration-v2/Adapters/ClaudeAdapterV2.ts",
+      "revision": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "line": 435,
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/server/src/orchestration-v2/Adapters/ClaudeAdapterV2.ts#L435",
+      "raw_url": "https://raw.githubusercontent.com/pingdotgg/t3code/1264c206aee0dce805d6279809118bc091f29d2f/apps/server/src/orchestration-v2/Adapters/ClaudeAdapterV2.ts",
+      "sha256": "8dfc184486f025c2ddf981de0c482b4b2342e5d06f6166b68b7b87b00e997694",
+      "anchor_text": "    streamsToolOutput: false,"
+    },
+    "claude_child_lookup": {
+      "path": "apps/server/src/orchestration-v2/Adapters/ClaudeAdapterV2.ts",
+      "revision": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "line": 7466,
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/server/src/orchestration-v2/Adapters/ClaudeAdapterV2.ts#L7466",
+      "raw_url": "https://raw.githubusercontent.com/pingdotgg/t3code/1264c206aee0dce805d6279809118bc091f29d2f/apps/server/src/orchestration-v2/Adapters/ClaudeAdapterV2.ts",
+      "sha256": "8dfc184486f025c2ddf981de0c482b4b2342e5d06f6166b68b7b87b00e997694",
+      "anchor_text": "        const findToolCall = (context: ActiveClaudeTurnContext, nativeItemId: string) =>"
+    },
+    "claude_tail_dispatch": {
+      "path": "apps/server/src/orchestration-v2/Adapters/ClaudeAdapterV2.ts",
+      "revision": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "line": 9771,
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/server/src/orchestration-v2/Adapters/ClaudeAdapterV2.ts#L9771",
+      "raw_url": "https://raw.githubusercontent.com/pingdotgg/t3code/1264c206aee0dce805d6279809118bc091f29d2f/apps/server/src/orchestration-v2/Adapters/ClaudeAdapterV2.ts",
+      "sha256": "8dfc184486f025c2ddf981de0c482b4b2342e5d06f6166b68b7b87b00e997694",
+      "anchor_text": "          if (message.type === \"system\" && message.subtype === \"task_started\") {"
+    },
+    "claude_approval_owner": {
+      "path": "apps/server/src/orchestration-v2/Adapters/ClaudeAdapterV2.ts",
+      "revision": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "line": 7894,
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/server/src/orchestration-v2/Adapters/ClaudeAdapterV2.ts#L7894",
+      "raw_url": "https://raw.githubusercontent.com/pingdotgg/t3code/1264c206aee0dce805d6279809118bc091f29d2f/apps/server/src/orchestration-v2/Adapters/ClaudeAdapterV2.ts",
+      "sha256": "8dfc184486f025c2ddf981de0c482b4b2342e5d06f6166b68b7b87b00e997694",
+      "anchor_text": "          const node: OrchestrationV2ExecutionNode = {"
+    },
+    "claude_approval_callback": {
+      "path": "apps/server/src/orchestration-v2/Adapters/ClaudeAdapterV2.ts",
+      "revision": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "line": 10632,
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/server/src/orchestration-v2/Adapters/ClaudeAdapterV2.ts#L10632",
+      "raw_url": "https://raw.githubusercontent.com/pingdotgg/t3code/1264c206aee0dce805d6279809118bc091f29d2f/apps/server/src/orchestration-v2/Adapters/ClaudeAdapterV2.ts",
+      "sha256": "8dfc184486f025c2ddf981de0c482b4b2342e5d06f6166b68b7b87b00e997694",
+      "anchor_text": "        const canUseToolEffect = Effect.fn(\"ClaudeAdapterV2.canUseTool\")(function* ("
+    },
+    "claude_approval_wait": {
+      "path": "apps/server/src/orchestration-v2/Adapters/ClaudeAdapterV2.ts",
+      "revision": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "line": 10828,
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/server/src/orchestration-v2/Adapters/ClaudeAdapterV2.ts#L10828",
+      "raw_url": "https://raw.githubusercontent.com/pingdotgg/t3code/1264c206aee0dce805d6279809118bc091f29d2f/apps/server/src/orchestration-v2/Adapters/ClaudeAdapterV2.ts",
+      "sha256": "8dfc184486f025c2ddf981de0c482b4b2342e5d06f6166b68b7b87b00e997694",
+      "anchor_text": "          const artifacts = yield* buildApprovalRequestArtifacts({"
+    },
+    "claude_file_result": {
+      "path": "apps/server/src/orchestration-v2/Adapters/ClaudeAdapterV2.ts",
+      "revision": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "line": 3412,
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/server/src/orchestration-v2/Adapters/ClaudeAdapterV2.ts#L3412",
+      "raw_url": "https://raw.githubusercontent.com/pingdotgg/t3code/1264c206aee0dce805d6279809118bc091f29d2f/apps/server/src/orchestration-v2/Adapters/ClaudeAdapterV2.ts",
+      "sha256": "8dfc184486f025c2ddf981de0c482b4b2342e5d06f6166b68b7b87b00e997694",
+      "anchor_text": "function claudeFileChangeText(output: ClaudeNativeToolOutput): string {"
+    },
+    "claude_file_item": {
+      "path": "apps/server/src/orchestration-v2/Adapters/ClaudeAdapterV2.ts",
+      "revision": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "line": 6307,
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/server/src/orchestration-v2/Adapters/ClaudeAdapterV2.ts#L6307",
+      "raw_url": "https://raw.githubusercontent.com/pingdotgg/t3code/1264c206aee0dce805d6279809118bc091f29d2f/apps/server/src/orchestration-v2/Adapters/ClaudeAdapterV2.ts",
+      "sha256": "8dfc184486f025c2ddf981de0c482b4b2342e5d06f6166b68b7b87b00e997694",
+      "anchor_text": "          const outputText ="
+    },
+    "claude_tail_file": {
+      "path": "apps/server/src/orchestration-v2/Adapters/ClaudeTaskOutputTail.ts",
+      "revision": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "line": 7,
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/server/src/orchestration-v2/Adapters/ClaudeTaskOutputTail.ts#L7",
+      "raw_url": "https://raw.githubusercontent.com/pingdotgg/t3code/1264c206aee0dce805d6279809118bc091f29d2f/apps/server/src/orchestration-v2/Adapters/ClaudeTaskOutputTail.ts",
+      "sha256": "489473257dedd191e56a815ab3e8b60bc869ace68f0d0bab9205b3e7033265b3",
+      "anchor_text": "/** The SDK withholds stdout until tool results; tail task_started files for live output."
+    },
+    "output_manager": {
+      "path": "apps/server/src/orchestration-v2/ProviderSessionManager.ts",
+      "revision": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "line": 2397,
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/server/src/orchestration-v2/ProviderSessionManager.ts#L2397",
+      "raw_url": "https://raw.githubusercontent.com/pingdotgg/t3code/1264c206aee0dce805d6279809118bc091f29d2f/apps/server/src/orchestration-v2/ProviderSessionManager.ts",
+      "sha256": "b5d5cd743b100556269dd863f48cb84aba1142a7d92da799c55b861479907e29",
+      "anchor_text": "            if (nativeEvent.type === \"command_output.delta\") {"
+    },
+    "output_hub": {
+      "path": "apps/server/src/orchestration-v2/CommandOutputHub.ts",
+      "revision": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "line": 145,
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/server/src/orchestration-v2/CommandOutputHub.ts#L145",
+      "raw_url": "https://raw.githubusercontent.com/pingdotgg/t3code/1264c206aee0dce805d6279809118bc091f29d2f/apps/server/src/orchestration-v2/CommandOutputHub.ts",
+      "sha256": "988654878243e32e8543b10c4325dbe479a5eb1ebbb5a393c67d389cdb27636f",
+      "anchor_text": "  const append: CommandOutputHubShape[\"append\"] = ({ chunk, ...target }) =>"
+    },
+    "output_panel": {
+      "path": "apps/web/src/components/chat/CommandOutputPanel.tsx",
+      "revision": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "line": 14,
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/CommandOutputPanel.tsx#L14",
+      "raw_url": "https://raw.githubusercontent.com/pingdotgg/t3code/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/CommandOutputPanel.tsx",
+      "sha256": "192ef881d4eb8ddd2b62a40ea9c91de9b799ff8822e183fce3c7c06142e07ae3",
+      "anchor_text": "export function useCommandOutputStreaming(environmentId: EnvironmentId): boolean {"
+    },
+    "output_inspector": {
+      "path": "apps/web/src/components/chat/V2ItemInspector.tsx",
+      "revision": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "line": 268,
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/V2ItemInspector.tsx#L268",
+      "raw_url": "https://raw.githubusercontent.com/pingdotgg/t3code/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/V2ItemInspector.tsx",
+      "sha256": "cdcdea563b749496a838a07c79b7e89cdfb7c522d6ccb761e4a49a15357b09d3",
+      "anchor_text": "              <CommandOutputPanel"
+    },
+    "codex_output": {
+      "path": "apps/server/src/orchestration-v2/Adapters/CodexAdapterV2.ts",
+      "revision": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "line": 4553,
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/server/src/orchestration-v2/Adapters/CodexAdapterV2.ts#L4553",
+      "raw_url": "https://raw.githubusercontent.com/pingdotgg/t3code/1264c206aee0dce805d6279809118bc091f29d2f/apps/server/src/orchestration-v2/Adapters/CodexAdapterV2.ts",
+      "sha256": "f4bef0b31818e4b5558a3e9b84015e282f4d03ff9b2a1f345c8948739a214c09",
+      "anchor_text": "        yield* client.handleServerNotification(\"item/commandExecution/outputDelta\", (payload) =>"
+    },
+    "child_footer": {
+      "path": "apps/web/src/components/chat/ProviderSubagentBar.tsx",
+      "revision": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "line": 14,
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/ProviderSubagentBar.tsx#L14",
+      "raw_url": "https://raw.githubusercontent.com/pingdotgg/t3code/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/ProviderSubagentBar.tsx",
+      "sha256": "0d1627c66dbd4a66e34686844cb03bc03cf9be57f4b73197936cbb835f452e43",
+      "anchor_text": "export function ProviderSubagentBar(props: {"
+    },
+    "child_composer": {
+      "path": "apps/web/src/components/ChatView.tsx",
+      "revision": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "line": 1713,
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/ChatView.tsx#L1713",
+      "raw_url": "https://raw.githubusercontent.com/pingdotgg/t3code/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/ChatView.tsx",
+      "sha256": "c04f7ebfbed10af5afc938609ab3eada4d767a60a6ab483d875973fff50b49c4",
+      "anchor_text": "  const showProviderSubagentBar = isProviderSubagent;"
+    },
+    "child_footer_state": {
+      "path": "packages/client-runtime/src/state/threadExecution.ts",
+      "revision": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "line": 176,
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/packages/client-runtime/src/state/threadExecution.ts#L176",
+      "raw_url": "https://raw.githubusercontent.com/pingdotgg/t3code/1264c206aee0dce805d6279809118bc091f29d2f/packages/client-runtime/src/state/threadExecution.ts",
+      "sha256": "0321df484a6b8ddfa0dab3d0ed69f911e2a95e5c19071cd8ad128550a185b698",
+      "anchor_text": "export function deriveProviderSubagentStatus("
+    },
+    "child_footer_label": {
+      "path": "packages/client-runtime/src/state/threadExecution.ts",
+      "revision": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "line": 257,
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/packages/client-runtime/src/state/threadExecution.ts#L257",
+      "raw_url": "https://raw.githubusercontent.com/pingdotgg/t3code/1264c206aee0dce805d6279809118bc091f29d2f/packages/client-runtime/src/state/threadExecution.ts",
+      "sha256": "0321df484a6b8ddfa0dab3d0ed69f911e2a95e5c19071cd8ad128550a185b698",
+      "anchor_text": "const SUBAGENT_STATUS_LABELS: Record<OrchestrationV2ExecutionNode[\"status\"], string> = {"
+    },
+    "parent_lineage": {
+      "path": "apps/web/src/components/chat/ThreadRelationshipsControl.tsx",
+      "revision": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "line": 700,
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/ThreadRelationshipsControl.tsx#L700",
+      "raw_url": "https://raw.githubusercontent.com/pingdotgg/t3code/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/ThreadRelationshipsControl.tsx",
+      "sha256": "da2f7a4977d89f99092451afbacaaf260e12c3e3e0ce57b88508fdbeb4b83a2d",
+      "anchor_text": "    const rowStatus ="
+    },
+    "lineage_state": {
+      "path": "packages/client-runtime/src/state/threadRelationships.ts",
+      "revision": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "line": 161,
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/packages/client-runtime/src/state/threadRelationships.ts#L161",
+      "raw_url": "https://raw.githubusercontent.com/pingdotgg/t3code/1264c206aee0dce805d6279809118bc091f29d2f/packages/client-runtime/src/state/threadRelationships.ts",
+      "sha256": "72c42ffb7968301e6008fb46c0c664bc097a2c55e4f4e304ae285e37af580874",
+      "anchor_text": "export function threadRelationshipRowStatus("
+    },
+    "lineage_label": {
+      "path": "apps/web/src/components/chat/ThreadRelationshipIcon.tsx",
+      "revision": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "line": 7,
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/ThreadRelationshipIcon.tsx#L7",
+      "raw_url": "https://raw.githubusercontent.com/pingdotgg/t3code/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/ThreadRelationshipIcon.tsx",
+      "sha256": "33adbcdc315644637d0aeb939c215dbbef74204b78de30145f7e83ae0a0a38a1",
+      "anchor_text": "export function threadRelationshipStatusLabel(status: string | null): string {"
+    },
+    "sidebar_state": {
+      "path": "apps/web/src/components/Sidebar.logic.ts",
+      "revision": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "line": 954,
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/Sidebar.logic.ts#L954",
+      "raw_url": "https://raw.githubusercontent.com/pingdotgg/t3code/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/Sidebar.logic.ts",
+      "sha256": "d9c88a16bb7c7b4cd43c5811067a27df3f293d8938a42730f33793167b085493",
+      "anchor_text": "export function resolveSidebarThreadStatus(thread: SidebarThreadStatusInput): SidebarThreadStatus {"
+    },
+    "sidebar_label": {
+      "path": "apps/web/src/components/sidebar/SidebarThreadRow.tsx",
+      "revision": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "line": 750,
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/sidebar/SidebarThreadRow.tsx#L750",
+      "raw_url": "https://raw.githubusercontent.com/pingdotgg/t3code/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/sidebar/SidebarThreadRow.tsx",
+      "sha256": "5c9ac0509457488a23949754f0a7617189525dc20246a1691aa5a49dedc8c14f",
+      "anchor_text": "      : status === \"waiting\""
+    },
+    "queue_intent": {
+      "path": "packages/client-runtime/src/state/composerDispatch.ts",
+      "revision": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "line": 1,
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/packages/client-runtime/src/state/composerDispatch.ts#L1",
+      "raw_url": "https://raw.githubusercontent.com/pingdotgg/t3code/1264c206aee0dce805d6279809118bc091f29d2f/packages/client-runtime/src/state/composerDispatch.ts",
+      "sha256": "e1b1f13fc057ba9e686207d0be63dbcd8abd83daa9012484ed76f124172d0169",
+      "anchor_text": "export type ComposerDispatchMode = \"auto\" | \"queue\" | \"steer\" | \"restart\";"
+    },
+    "queue_modifier": {
+      "path": "apps/web/src/components/chat/ComposerPrimaryActions.tsx",
+      "revision": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "line": 150,
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/ComposerPrimaryActions.tsx#L150",
+      "raw_url": "https://raw.githubusercontent.com/pingdotgg/t3code/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/ComposerPrimaryActions.tsx",
+      "sha256": "ed785744facd53946ee76cf88e6c6ac40984e4392e09ca28b2555b465ca74b43",
+      "anchor_text": "    !isEditingQueuedMessage &&"
+    },
+    "queue_edit": {
+      "path": "apps/web/src/components/chat/useQueuedRunEdit.ts",
+      "revision": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "line": 181,
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/useQueuedRunEdit.ts#L181",
+      "raw_url": "https://raw.githubusercontent.com/pingdotgg/t3code/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/useQueuedRunEdit.ts",
+      "sha256": "c2e0713ab5cc6a2fda0e75465cd363c4bc41140607280b3f541e3f047203bceb",
+      "anchor_text": "/** Edits preserve the thread draft; attachment removals stay local until save. */"
+    },
+    "queue_edit_begin": {
+      "path": "apps/web/src/components/chat/useQueuedRunEdit.ts",
+      "revision": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "line": 231,
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/useQueuedRunEdit.ts#L231",
+      "raw_url": "https://raw.githubusercontent.com/pingdotgg/t3code/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/useQueuedRunEdit.ts",
+      "sha256": "c2e0713ab5cc6a2fda0e75465cd363c4bc41140607280b3f541e3f047203bceb",
+      "anchor_text": "  const beginEdit = useStableCallback((request: EditQueuedRunRequest) => {"
+    },
+    "queue_edit_save": {
+      "path": "apps/web/src/components/chat/useQueuedRunEdit.ts",
+      "revision": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "line": 308,
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/useQueuedRunEdit.ts#L308",
+      "raw_url": "https://raw.githubusercontent.com/pingdotgg/t3code/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/useQueuedRunEdit.ts",
+      "sha256": "c2e0713ab5cc6a2fda0e75465cd363c4bc41140607280b3f541e3f047203bceb",
+      "anchor_text": "  const saveEdit = async ("
+    },
+    "queue_promote": {
+      "path": "apps/web/src/components/chat/QueuedRunsControl.tsx",
+      "revision": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "line": 172,
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/QueuedRunsControl.tsx#L172",
+      "raw_url": "https://raw.githubusercontent.com/pingdotgg/t3code/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/QueuedRunsControl.tsx",
+      "sha256": "7094c8b3d85d696be4450a52621b9c51c21f900fb5c7dbff4857bd241fbc4c05",
+      "anchor_text": "  const sendQueuedMessage = async (queuedRunId: RunId) => {"
+    },
+    "citation_insert": {
+      "path": "apps/web/src/components/chat/ChatComposer.tsx",
+      "revision": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "line": 2939,
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/ChatComposer.tsx#L2939",
+      "raw_url": "https://raw.githubusercontent.com/pingdotgg/t3code/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/ChatComposer.tsx",
+      "sha256": "418417528c25acbdacbb87c08fd78e1c8eb48012e3892b6cc07935e4bad5654d",
+      "anchor_text": "      citeAssistantText: (citation, sourceAnchor) =>"
+    },
+    "citation_editor": {
+      "path": "apps/web/src/components/chat/AssistantCitationCommentEditor.tsx",
+      "revision": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "line": 27,
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/AssistantCitationCommentEditor.tsx#L27",
+      "raw_url": "https://raw.githubusercontent.com/pingdotgg/t3code/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/AssistantCitationCommentEditor.tsx",
+      "sha256": "0556de517252881734a506f9ee4214fc3ea7770768e85366a0891c97379bcaf3",
+      "anchor_text": "  const [comment, setComment] = useState(citation.comment ?? \"\");"
+    },
+    "citation_sent": {
+      "path": "apps/web/src/components/chat/AssistantCitationChip.tsx",
+      "revision": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "line": 53,
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/AssistantCitationChip.tsx#L53",
+      "raw_url": "https://raw.githubusercontent.com/pingdotgg/t3code/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/AssistantCitationChip.tsx",
+      "sha256": "720cae72af8c1df1f9376928fd1a188851c972de87db5c1d13f9ed3acf41f18a",
+      "anchor_text": " * A quoted response inside a message. Clicking it goes to the source; its comment follows as"
+    },
+    "citation_provider": {
+      "path": "packages/shared/src/assistantCitations.ts",
+      "revision": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "line": 148,
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/packages/shared/src/assistantCitations.ts#L148",
+      "raw_url": "https://raw.githubusercontent.com/pingdotgg/t3code/1264c206aee0dce805d6279809118bc091f29d2f/packages/shared/src/assistantCitations.ts",
+      "sha256": "b48d44ed54cb431931d280ba6fc50e0d13f2bb06037a69e236ff2f0f1709693b",
+      "anchor_text": "export function expandAssistantCitationsForProvider(prompt: string): string {"
+    },
+    "citation_schema": {
+      "path": "packages/contracts/src/assistantCitations.ts",
+      "revision": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "line": 11,
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/packages/contracts/src/assistantCitations.ts#L11",
+      "raw_url": "https://raw.githubusercontent.com/pingdotgg/t3code/1264c206aee0dce805d6279809118bc091f29d2f/packages/contracts/src/assistantCitations.ts",
+      "sha256": "eb8f28d6dd7d1c809cbdd358a161e193e29bab26f944366eab29765ec1ba27fb",
+      "anchor_text": "export const AssistantCitation = Schema.Struct({"
+    },
+    "citation_navigation": {
+      "path": "apps/web/src/lib/assistantCitationNavigation.ts",
+      "revision": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "line": 79,
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/lib/assistantCitationNavigation.ts#L79",
+      "raw_url": "https://raw.githubusercontent.com/pingdotgg/t3code/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/lib/assistantCitationNavigation.ts",
+      "sha256": "e9df0e4add98460ffd9d1a3ce2a3f131cc8a01a358ce666cbf6cc43e5bd17ad8",
+      "anchor_text": "export function assistantCitationNavigation("
+    },
+    "send_context": {
+      "path": "apps/web/src/components/chat/useComposerSend.ts",
+      "revision": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "line": 750,
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/useComposerSend.ts#L750",
+      "raw_url": "https://raw.githubusercontent.com/pingdotgg/t3code/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/useComposerSend.ts",
+      "sha256": "deccfeebf8cb0983aa3bad210b8b450ee9aaf7ac99abb64c105cefa0cec3f23c",
+      "anchor_text": "      attachments: composerAttachmentsSnapshot,"
+    },
+    "send_dispatch": {
+      "path": "apps/web/src/components/chat/useComposerSend.ts",
+      "revision": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "line": 1262,
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/useComposerSend.ts#L1262",
+      "raw_url": "https://raw.githubusercontent.com/pingdotgg/t3code/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/useComposerSend.ts",
+      "sha256": "deccfeebf8cb0983aa3bad210b8b450ee9aaf7ac99abb64c105cefa0cec3f23c",
+      "anchor_text": "            attachments: turnAttachmentsResult.value,"
+    },
+    "sent_image": {
+      "path": "apps/web/src/components/chat/TimelineUserMessageRow.tsx",
+      "revision": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "line": 721,
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/TimelineUserMessageRow.tsx#L721",
+      "raw_url": "https://raw.githubusercontent.com/pingdotgg/t3code/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/TimelineUserMessageRow.tsx",
+      "sha256": "a37ddef44400d151289c3698a82b8f7653f3c95db08d6812bf44039986580e24",
+      "anchor_text": "            {image.previewUrl ? ("
+    },
+    "changes_ui": {
+      "path": "apps/web/src/components/GitActionsControl.tsx",
+      "revision": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "line": 1705,
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/GitActionsControl.tsx#L1705",
+      "raw_url": "https://raw.githubusercontent.com/pingdotgg/t3code/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/GitActionsControl.tsx",
+      "sha256": "5077583fe3a893d38120481f2e8581e30db5f8b7283cc0d23ead44a8600bd896",
+      "anchor_text": "      {showChanges && isRepo && !quietEmptyDraft ? ("
+    },
+    "changes_totals": {
+      "path": "apps/web/src/components/GitActionsControl.logic.ts",
+      "revision": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "line": 454,
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/GitActionsControl.logic.ts#L454",
+      "raw_url": "https://raw.githubusercontent.com/pingdotgg/t3code/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/GitActionsControl.logic.ts",
+      "sha256": "f58dc32ae05363fafb2e11da60b65633b2e4abba08c62b5e8eec8699b43a4d5b",
+      "anchor_text": "export function resolveChangesTotals("
+    },
+    "sidechat_create": {
+      "path": "apps/web/src/components/chat/useSideChat.ts",
+      "revision": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "line": 51,
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/useSideChat.ts#L51",
+      "raw_url": "https://raw.githubusercontent.com/pingdotgg/t3code/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/useSideChat.ts",
+      "sha256": "501cc9ca0fd857397992708d4b582b0b4665bea8fb48e8c1fa1a3fe79e76bd58",
+      "anchor_text": "  const start = async (threadRef: ScopedThreadRef, prompt: string | undefined) => {"
+    },
+    "sidechat_header": {
+      "path": "apps/web/src/components/chat/MessagesTimeline.tsx",
+      "revision": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "line": 1182,
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/MessagesTimeline.tsx#L1182",
+      "raw_url": "https://raw.githubusercontent.com/pingdotgg/t3code/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/MessagesTimeline.tsx",
+      "sha256": "42a6fc40d552f3f35fe03c5992c8ea9228aa3b77a92d797c8fe879dcbdc44d63",
+      "anchor_text": "      <div className=\"messages-timeline-row-frame\">"
+    },
+    "sidechat_bringback": {
+      "path": "apps/web/src/components/chat/SideChatPane.tsx",
+      "revision": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "line": 59,
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/SideChatPane.tsx#L59",
+      "raw_url": "https://raw.githubusercontent.com/pingdotgg/t3code/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/SideChatPane.tsx",
+      "sha256": "d487c01b2179fb0869d81018f8e92e71c7e4f92ec206036c8f21371343e92a42",
+      "anchor_text": "  const mergeRun = projection ? resolveLatestMergeBackRun(projection) : null;"
+    },
+    "sidechat_bringback_toast": {
+      "path": "apps/web/src/components/chat/SideChatPane.tsx",
+      "revision": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "line": 77,
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/SideChatPane.tsx#L77",
+      "raw_url": "https://raw.githubusercontent.com/pingdotgg/t3code/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/SideChatPane.tsx",
+      "sha256": "d487c01b2179fb0869d81018f8e92e71c7e4f92ec206036c8f21371343e92a42",
+      "anchor_text": "    if (result._tag === \"Success\") {"
+    },
+    "sidechat_merge_run": {
+      "path": "packages/client-runtime/src/state/threadWorkflows.ts",
+      "revision": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "line": 48,
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/packages/client-runtime/src/state/threadWorkflows.ts#L48",
+      "raw_url": "https://raw.githubusercontent.com/pingdotgg/t3code/1264c206aee0dce805d6279809118bc091f29d2f/packages/client-runtime/src/state/threadWorkflows.ts",
+      "sha256": "e7bcb629ae5bd9626c58cc3b5478912aef957c8371dc314f94b95c62d223c3b3",
+      "anchor_text": "/**"
+    },
+    "sidechat_pending_transfer": {
+      "path": "apps/server/src/orchestration-v2/Orchestrator.ts",
+      "revision": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "line": 5275,
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/server/src/orchestration-v2/Orchestrator.ts#L5275",
+      "raw_url": "https://raw.githubusercontent.com/pingdotgg/t3code/1264c206aee0dce805d6279809118bc091f29d2f/apps/server/src/orchestration-v2/Orchestrator.ts",
+      "sha256": "a75efaddeeea9a41146090b2b17e4270d51958dbf141a7c3e0c9f15aafc61778",
+      "anchor_text": "    const transfer: OrchestrationV2ContextTransfer = {"
+    },
+    "sidechat_transfer_guard": {
+      "path": "apps/server/src/orchestration-v2/Orchestrator.ts",
+      "revision": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "line": 5193,
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/server/src/orchestration-v2/Orchestrator.ts#L5193",
+      "raw_url": "https://raw.githubusercontent.com/pingdotgg/t3code/1264c206aee0dce805d6279809118bc091f29d2f/apps/server/src/orchestration-v2/Orchestrator.ts",
+      "sha256": "a75efaddeeea9a41146090b2b17e4270d51958dbf141a7c3e0c9f15aafc61778",
+      "anchor_text": "    if ("
+    },
+    "sidechat_delta_context": {
+      "path": "apps/server/src/orchestration-v2/Orchestrator.ts",
+      "revision": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "line": 7898,
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/server/src/orchestration-v2/Orchestrator.ts#L7898",
+      "raw_url": "https://raw.githubusercontent.com/pingdotgg/t3code/1264c206aee0dce805d6279809118bc091f29d2f/apps/server/src/orchestration-v2/Orchestrator.ts",
+      "sha256": "a75efaddeeea9a41146090b2b17e4270d51958dbf141a7c3e0c9f15aafc61778",
+      "anchor_text": "    const mergeBackHandoff ="
+    },
+    "sidechat_transfer_consumed": {
+      "path": "apps/server/src/orchestration-v2/Orchestrator.ts",
+      "revision": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "line": 8307,
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/server/src/orchestration-v2/Orchestrator.ts#L8307",
+      "raw_url": "https://raw.githubusercontent.com/pingdotgg/t3code/1264c206aee0dce805d6279809118bc091f29d2f/apps/server/src/orchestration-v2/Orchestrator.ts",
+      "sha256": "a75efaddeeea9a41146090b2b17e4270d51958dbf141a7c3e0c9f15aafc61778",
+      "anchor_text": "    if (pendingMergeBackTransfer !== undefined && mergeBackResolution !== null) {"
+    },
+    "find_source_scope": {
+      "path": "apps/server/src/orchestration-v2/ThreadFind.ts",
+      "revision": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "line": 311,
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/server/src/orchestration-v2/ThreadFind.ts#L311",
+      "raw_url": "https://raw.githubusercontent.com/pingdotgg/t3code/1264c206aee0dce805d6279809118bc091f29d2f/apps/server/src/orchestration-v2/ThreadFind.ts",
+      "sha256": "f6f1494528c519e5a4b94fe7a16725d73ca678a5aba1aa5afd3e84a60e81b157",
+      "anchor_text": "      const candidates = index"
+    },
+    "find_remote": {
+      "path": "apps/web/src/components/chat/useThreadFind.ts",
+      "revision": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "line": 268,
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/useThreadFind.ts#L268",
+      "raw_url": "https://raw.githubusercontent.com/pingdotgg/t3code/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/useThreadFind.ts",
+      "sha256": "7f75ac8dbcc7b6c36a351e78d3d5ba135ce369a98cd73920e6482a8ce0865e26",
+      "anchor_text": "function useServerResults("
+    },
+    "find_count": {
+      "path": "apps/web/src/components/chat/threadFind.ts",
+      "revision": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "line": 17,
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/threadFind.ts#L17",
+      "raw_url": "https://raw.githubusercontent.com/pingdotgg/t3code/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/threadFind.ts",
+      "sha256": "3b067720d9198b6c2fb79e6c356548382e181528455a2f8d3a86b0b99a88ac58",
+      "anchor_text": "export function stepThreadFindIndex(index: number, total: number, delta: number): number {"
+    },
+    "find_enter": {
+      "path": "apps/web/src/components/chat/ThreadFindBar.tsx",
+      "revision": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "line": 54,
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/ThreadFindBar.tsx#L54",
+      "raw_url": "https://raw.githubusercontent.com/pingdotgg/t3code/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/ThreadFindBar.tsx",
+      "sha256": "feab8f379745c5893f1cb89c9fd272fc04e81437461424df19e8c169ed17f705",
+      "anchor_text": "    if (event.key === \"Enter\") {"
+    },
+    "find_reveal": {
+      "path": "apps/web/src/components/chat/useThreadFindNavigation.ts",
+      "revision": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "line": 174,
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/useThreadFindNavigation.ts#L174",
+      "raw_url": "https://raw.githubusercontent.com/pingdotgg/t3code/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/useThreadFindNavigation.ts",
+      "sha256": "eb49161e74f0985b12a05f939a9fb386e9e4d79b9cb1c39c30b37d7098380ccd",
+      "anchor_text": "export function useThreadFindNavigation({"
+    },
+    "next_turn": {
+      "path": "apps/web/src/components/chat/TimelineMinimap.tsx",
+      "revision": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "line": 266,
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/TimelineMinimap.tsx#L266",
+      "raw_url": "https://raw.githubusercontent.com/pingdotgg/t3code/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/TimelineMinimap.tsx",
+      "sha256": "4725be2370d2a94dccb2a7dc3445b9f22850db766b76e919f360b44bc1b07a3b",
+      "anchor_text": "function TimelineMinimapNavigationButton({"
+    },
+    "next_turn_position": {
+      "path": "apps/web/src/components/chat/MessagesTimeline.tsx",
+      "revision": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "line": 901,
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/MessagesTimeline.tsx#L901",
+      "raw_url": "https://raw.githubusercontent.com/pingdotgg/t3code/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/MessagesTimeline.tsx",
+      "sha256": "42a6fc40d552f3f35fe03c5992c8ea9228aa3b77a92d797c8fe879dcbdc44d63",
+      "anchor_text": "  const refreshMinimap = useStableCallback(() => {"
+    },
+    "stop_button": {
+      "path": "apps/web/src/components/chat/ComposerPrimaryActions.tsx",
+      "revision": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "line": 161,
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/ComposerPrimaryActions.tsx#L161",
+      "raw_url": "https://raw.githubusercontent.com/pingdotgg/t3code/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/ComposerPrimaryActions.tsx",
+      "sha256": "ed785744facd53946ee76cf88e6c6ac40984e4392e09ca28b2555b465ca74b43",
+      "anchor_text": "  const renderStopGenerationButton = (insidePendingAction: boolean) => ("
+    },
+    "resume_turn": {
+      "path": "apps/web/src/components/chat/useComposerResume.ts",
+      "revision": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "line": 122,
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/useComposerResume.ts#L122",
+      "raw_url": "https://raw.githubusercontent.com/pingdotgg/t3code/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/useComposerResume.ts",
+      "sha256": "e92b3abeb4ee8218815f2b3f5267a518a1825d0840946ac4924c39514e8c015a",
+      "anchor_text": "      const turnResult = await startThreadTurn({"
+    }
+  },
+  "verification": {
+    "app_code_edited": false,
+    "tests": "Not run. Documentation-only source correspondence.",
+    "builds": "Not run.",
+    "native_ui": "No worker UI access. Parent owns observations.",
+    "real_model_sessions": "No worker model sessions.",
+    "written_paths": [
+      "reports/t3-live-source-correspondence.md",
+      "reports/t3-live-source-correspondence.json"
+    ],
+    "source_integrity": "All source anchors fetched from exact installed commit; full fetched-file SHA-256 and anchor text recorded."
+  },
+  "principles": [
+    {
+      "name": "Prove It Works",
+      "choice": "Anchor runtime claims in parent native observations; treat source correspondence and controlled Ferrite replay as separate evidence."
+    }
+  ],
+  "unverified": [
+    "Native Ferrite reproduction of these combined real-provider journeys.",
+    "Exact runtime payload responsible for T3 parent status disagreement.",
+    "Sol Resume execution and queued-input hold/resume policy.",
+    "Transient Side-chat Brought back success toast.",
+    "Unsent side-chat draft and application-restart recovery."
+  ],
+  "additional_parent_message_evidence": [
+    "Earlier direct parent updates are now recorded in the final native observation ledger."
+  ],
+  "final_native_cleanup_reported_by_parent": {
+    "source": "../evidence/t3-live/observations.md#final-child-output-recheck-and-cleanup",
+    "worker_reverified": false,
+    "summary": "Owned children finished, audit surfaces closed, tested preferences restored, disposable roots archived, T3 quit, and owned fixture server stopped. Parent reported no matching runtime processes. Isolated fixture and archived evidence retained for reproduction."
+  }
+}

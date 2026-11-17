@@ -1,0 +1,300 @@
+[
+  {
+    "id": "composer-01",
+    "title": "An idle send can clear the only draft before admission fails",
+    "priority": "P1",
+    "category": "defect",
+    "evidence_level": "source-proven",
+    "impact": "An unsent prompt and its staged context can disappear when the user sends to an unavailable workspace or a session that cannot start. This is a conditional loss after accepting Submit, not evidence of general transcript loss.",
+    "ferrite_evidence": [
+      "crates/ferrite-cockpit/src/cockpit.rs:5552-5554,5585-5596",
+      "crates/ferrite-pane/src/composer.rs:516-527",
+      "crates/ferrite-core/src/engine.rs:2537-2578",
+      "crates/ferrite-core/src/engine.rs:989-993",
+      "crates/ferrite-core/src/cockpit.rs:1747-1758,2853-2859"
+    ],
+    "t3_evidence": [
+      "apps/web/src/components/chat/useComposerSend.ts:1404-1453"
+    ],
+    "recommendation": "Make send admission return an explicit outcome or recover the full snapshot on every definite refusal. Preserve uncertain-send status separately to avoid accidental duplicate sends.",
+    "acceptance": "Send a unique multiline prompt with a file and quote after forcing each early refusal. The prompt and context remain editable, the refusal is visible, no user message is falsely shown as delivered, and a later retry sends exactly once. Type a second draft during failure and verify both remain recoverable."
+  },
+  {
+    "id": "composer-02",
+    "title": "A new unsent pane has no durable draft record",
+    "priority": "P1",
+    "category": "defect",
+    "evidence_level": "source-proven",
+    "impact": "A first prompt composed before a thread exists is lost when the app closes. Existing-thread drafts persist, making the difference hard to anticipate. This is loss of unsent editor state before the user accepts Submit, not loss of an accepted prompt or transcript.",
+    "ferrite_evidence": [
+      "crates/ferrite-cockpit/src/cockpit.rs:2204-2228",
+      "crates/ferrite-core/src/roster.rs:19-48",
+      "crates/ferrite-core/src/drafts.rs:12-17,34-58",
+      "crates/ferrite-core/src/draft.rs:27-35",
+      "crates/ferrite-cockpit/src/cockpit/drafts.rs:28-64"
+    ],
+    "t3_evidence": [
+      "apps/web/src/composerDraftStore.ts:2263-2371",
+      "apps/web/src/composerDraftStore.ts:2580-2641,4420-4437"
+    ],
+    "recommendation": "Persist DraftId-owned records separately from thread drafts, including the launch binding, and migrate ownership atomically on first send.",
+    "acceptance": "Create two unsent new drafts with different models, branches and attachments. Quit normally and reopen. Both return unchanged; sending one promotes only that draft and does not duplicate it on a second restart."
+  },
+  {
+    "id": "composer-03",
+    "title": "Ordinary local attachments are not transferred to a remote machine",
+    "priority": "P1",
+    "category": "defect",
+    "evidence_level": "source-proven",
+    "impact": "A local file or pasted screenshot can look attached in a remote thread while the agent receives only a client-local path that does not exist on its machine.",
+    "ferrite_evidence": [
+      "crates/ferrite-cockpit/src/cockpit.rs:8525-8541",
+      "crates/ferrite-pane/src/composer.rs:572-618",
+      "crates/ferrite-pane/src/prompt_drop.rs:36-45",
+      "crates/ferrite-core/src/prompt_files.rs:15-24",
+      "crates/ferrite-core/src/cockpit.rs:1747-1758",
+      "crates/ferrite-core/src/providers/codex/wire.rs:1276-1293",
+      "crates/ferrite-core/src/providers/claude/wire.rs:28-55"
+    ],
+    "t3_evidence": [
+      "apps/web/src/lib/attachmentUploadQueue.ts:135-161,270-301",
+      "apps/web/src/components/chat/useComposerSend.ts:1110-1114"
+    ],
+    "recommendation": "Represent ordinary attachment ownership and transfer state explicitly. Stage bytes on the destination before admitting a send, retain progress/errors, and never reinterpret client absolute paths as remote files.",
+    "acceptance": "Attach a client-only PNG and text file to a remote thread using all three intake methods. The agent can read their exact contents; upload failure retains the draft and offers retry/removal. A coincidentally identical remote path must not substitute different bytes."
+  },
+  {
+    "id": "composer-04",
+    "title": "Queued Edit removes the message and merges it into unrelated draft text",
+    "priority": "P2",
+    "category": "partial-capability",
+    "evidence_level": "source-proven",
+    "impact": "Editing a queued message changes queue membership immediately and combines it with a separate draft. There is no save-in-place or cancel that restores both original pieces of work.",
+    "ferrite_evidence": [
+      "crates/ferrite-cockpit/src/cockpit.rs:8098-8123",
+      "crates/ferrite-core/src/cockpit.rs:2388-2390",
+      "crates/ferrite-core/src/engine.rs:3883-3886,3925-3965",
+      "crates/ferrite-cockpit/src/cockpit.rs:2337-2358",
+      "crates/ferrite-pane/src/pane/composer.rs:925-928"
+    ],
+    "t3_evidence": [
+      "apps/web/src/components/chat/useQueuedRunEdit.ts:162-184,194-219,322-380"
+    ],
+    "recommendation": "Either rename this operation Take back and disclose its merge behavior, or add transactional queued editing with independent draft storage and a provider/server edit operation.",
+    "acceptance": "With queued A/B and draft C, edit A and cancel: A/B order and C remain unchanged. Repeat and save A2: only A changes, C is restored, and no extra turn is started. Cover A starting while its edit is open."
+  },
+  {
+    "id": "composer-05",
+    "title": "The composer cannot choose queue versus steer per message",
+    "priority": "P2",
+    "category": "missing-capability",
+    "evidence_level": "source-proven",
+    "impact": "Users cannot deliberately defer a follow-up until the current turn finishes. A message intended as later work can alter the running turn.",
+    "ferrite_evidence": [
+      "crates/ferrite-cockpit/src/cockpit.rs:5585-5596,8243-8264",
+      "crates/ferrite-core/src/engine.rs:3706-3748",
+      "crates/ferrite-core/src/providers/codex.rs:604-621",
+      "crates/ferrite-core/src/providers/claude.rs:683-699"
+    ],
+    "t3_evidence": [
+      "apps/web/src/components/chat/ComposerPrimaryActions.tsx:250-265,393-398",
+      "packages/client-runtime/src/state/composerDispatch.ts:1-51",
+      "docs/user/composer.md:63-91"
+    ],
+    "recommendation": "Add an explicit dispatch intent through UI, protocol and provider adapters. Keep a local/default behavior preference with a one-shot alternate action.",
+    "acceptance": "In both providers, Queue leaves the running turn unmodified and starts only after it ends; Steer reaches the running turn. Pointer tooltip, modifier-click, keyboard and accessibility label describe the same action. Unsupported steer never appears available."
+  },
+  {
+    "id": "composer-06",
+    "title": "Stop deliberately allows queued work to continue",
+    "priority": "P2",
+    "category": "intentional-difference",
+    "evidence_level": "source-proven",
+    "impact": "A user expecting Stop to stop automation can see queued work start immediately. This is intentional current code behavior, not an accidental missing interrupt.",
+    "ferrite_evidence": [
+      "crates/ferrite-cockpit/src/cockpit.rs:8269-8284",
+      "crates/ferrite-core/src/engine.rs:2660-2701"
+    ],
+    "t3_evidence": [
+      "apps/web/src/components/chat/useComposerResume.ts:52-55,88-166",
+      "docs/user/composer.md:246-271"
+    ],
+    "recommendation": "Make stopping semantics an explicit product decision. Prefer a hold state that survives restart, with Resume and separately named Send now behavior.",
+    "acceptance": "With pending A/B, Stop visibly acknowledges interruption and neither A nor B runs until Resume. If retaining current semantics, the label and confirmation-free explanatory text must clearly state that queued work will continue."
+  },
+  {
+    "id": "composer-07",
+    "title": "Attachment readiness and native-image fallbacks are invisible",
+    "priority": "P2",
+    "category": "partial-capability",
+    "evidence_level": "source-proven",
+    "impact": "A chip can imply that a model received an image even when it got only a path. Missing or oversized files have no composer warning. HEIC/HEIF is not a native image format in the provider attachment classifier.",
+    "ferrite_evidence": [
+      "crates/ferrite-pane/src/composer.rs:139-158,572-582",
+      "crates/ferrite-core/src/prompt_files.rs:96-105",
+      "crates/ferrite-core/src/providers/claude/wire.rs:23-55",
+      "crates/ferrite-core/src/providers/codex/wire.rs:1276-1293"
+    ],
+    "t3_evidence": [
+      "apps/web/src/components/chat/useComposerAttachmentIntake.ts:247-284",
+      "apps/web/src/lib/attachmentUploadQueue.ts:135-161",
+      "docs/user/composer.md:38-56"
+    ],
+    "recommendation": "Add provider-aware validation and explicit attachment state, including a visible file-reference fallback. Prepare images off the UI thread, and retain original bytes where needed.",
+    "acceptance": "Each boundary case produces either a ready native image or a visible explanation before Send. Deleted/unreadable files block or require removal. HEIC is converted or clearly labeled as a file. The agent sees the expected image bytes for accepted inputs."
+  },
+  {
+    "id": "composer-08",
+    "title": "Large pastes stay inline with no composer length guard",
+    "priority": "P2",
+    "category": "missing-capability",
+    "evidence_level": "source-proven",
+    "impact": "Large logs or documents fill the prompt directly and can hit provider or transport limits without an early actionable message. No performance regression is claimed without measurement.",
+    "ferrite_evidence": [
+      "crates/ferrite-pane/src/composer.rs:594-619",
+      "crates/ferrite-cockpit/src/cockpit.rs:5552-5596",
+      "crates/ferrite-pane/src/line.rs:13-32"
+    ],
+    "t3_evidence": [
+      "apps/web/src/components/chat/useComposerAttachmentIntake.ts:371-445",
+      "apps/web/src/components/chat/ComposerPromptLengthValidation.tsx:1-13",
+      "docs/user/composer.md:6-13"
+    ],
+    "recommendation": "Add a provider-aware send limit and optional large-paste-to-file path, retaining an editable override. Do not copy T3 numeric limits blindly.",
+    "acceptance": "A large paste becomes a named readable text attachment with feedback; the override preserves inline text. Oversize sends do not clear content and explain how to proceed. Test Unicode byte/character boundaries and selection replacement."
+  },
+  {
+    "id": "composer-09",
+    "title": "Context is mostly a shelf or serialized trailer rather than inline records",
+    "priority": "P2",
+    "category": "partial-capability",
+    "evidence_level": "source-proven",
+    "impact": "Users cannot place an image, quote, review note or browser annotation at a precise point in instructions, move it as one inline object, or copy the object with its context to another draft.",
+    "ferrite_evidence": [
+      "crates/ferrite-pane/src/composer.rs:139-166,536-554,1142-1155",
+      "crates/ferrite-core/src/prompt_files.rs:15-24",
+      "crates/ferrite-reviewr/src/ferrite.rs:538-547",
+      "crates/ferrite-pane/src/attachments.rs:89-127,149-189"
+    ],
+    "t3_evidence": [
+      "apps/web/src/composerDraftStore.ts:2600-2621",
+      "packages/contracts/src/composerContext.ts:1-180",
+      "docs/user/composer.md:323-379"
+    ],
+    "recommendation": "Introduce structured context records while keeping a plain-text fallback for providers. Preserve positions and clipboard metadata without requiring every attachment to become a new visual component.",
+    "acceptance": "Write instructions around two image chips and a quote; cut/paste them into a second draft and restart. Each preview, source and relative position survives, and the outgoing prompt identifies the intended object correctly."
+  },
+  {
+    "id": "composer-10",
+    "title": "The mention menu has no PR, thread or model-reference search",
+    "priority": "P2",
+    "category": "missing-capability",
+    "evidence_level": "source-proven",
+    "impact": "Users must manually find and describe another thread, PR or model. Structured references that an agent can inspect on demand are missing from the composer.",
+    "ferrite_evidence": [
+      "crates/ferrite-cockpit/src/cockpit.rs:6288-6307,6492-6595",
+      "crates/ferrite-pane/src/composer.rs:1142-1155",
+      "crates/ferrite-pane/src/prompt_drop.rs:11-45"
+    ],
+    "t3_evidence": [
+      "apps/web/src/components/chat/useComposerMenuItems.ts:60-79,120-180,323-348",
+      "apps/web/src/components/chat/composerModelMentions.ts:1-43",
+      "packages/client-runtime/src/composerThreadItems.ts:1-115",
+      "docs/user/composer.md:332-360"
+    ],
+    "recommendation": "Add reference-specific item types and payloads. Reuse PR/thread identity from their owning modules rather than scraping displayed text. Keep linked-machine transport separate from local thread references.",
+    "acceptance": "Pick a PR by number and text, a thread by title, and a model by alias. Each chip previews the right source; model mention leaves active model unchanged; the agent receives a resolvable reference. A sidebar thread drop has the same result as a menu pick."
+  },
+  {
+    "id": "composer-11",
+    "title": "Review comment drafts lose their structured controls after reopen",
+    "priority": "P2",
+    "category": "defect",
+    "evidence_level": "source-proven",
+    "impact": "Review comments survive as prose but no longer have their original review attachment controls after the pane is recreated. This is loss of editability and source structure, not loss of the comment words.",
+    "ferrite_evidence": [
+      "crates/ferrite-cockpit/src/cockpit/drafts.rs:28-56",
+      "crates/ferrite-pane/src/composer.rs:494-513,536-549",
+      "crates/ferrite-reviewr/src/ferrite.rs:538-547",
+      "crates/ferrite-pane/src/composer.rs:354-369,427-432"
+    ],
+    "t3_evidence": [
+      "apps/web/src/composerDraftStore.ts:2600-2621"
+    ],
+    "recommendation": "Persist comments separately from outbound prompt text and hydrate them with the other draft context records.",
+    "acceptance": "Add two anchored review comments, restart, and remove just one through its original control. The remaining comment retains its file/line anchor and sends once; neither appears as duplicated raw export text."
+  },
+  {
+    "id": "composer-12",
+    "title": "There is no prompt stash independent of the active draft",
+    "priority": "P3",
+    "category": "missing-capability",
+    "evidence_level": "source-proven",
+    "impact": "Users cannot temporarily set aside several prompts and their context while composing something else. Per-thread autosave and sent-prompt history do not provide this workflow.",
+    "ferrite_evidence": [
+      "crates/ferrite-core/src/drafts.rs:12-17,44-58",
+      "crates/ferrite-cockpit/src/cockpit.rs:6617-6650",
+      "crates/ferrite-pane/src/composer.rs:41-80"
+    ],
+    "t3_evidence": [
+      "apps/web/src/components/chat/useComposerStash.ts:461-522,549-596,698-720",
+      "apps/web/src/components/chat/ComposerStashMenu.tsx:1-150"
+    ],
+    "recommendation": "Treat stash as an optional product addition after draft durability. Reuse structured draft snapshots and explicit deletion/retention rules.",
+    "acceptance": "Stash two prompts including images and quotes, restart, compose a third, then restore either stash. No item sends implicitly and attachment expiry/failure is visible."
+  },
+  {
+    "id": "composer-13",
+    "title": "The native composer lacks rich Markdown and code-block editing",
+    "priority": "P3",
+    "category": "intentional-difference",
+    "evidence_level": "source-proven",
+    "impact": "Formatting is plain source text with token highlighting. Users do not get T3 list continuation, task nesting, code indentation, syntax highlighting or language selection while composing.",
+    "ferrite_evidence": [
+      "crates/ferrite-pane/src/line.rs:1-32",
+      "crates/ferrite-pane/src/composer.rs:787-790,1273-1310"
+    ],
+    "t3_evidence": [
+      "apps/web/src/components/ComposerPromptEditorTiptap.tsx:810-870,1271-1318",
+      "docs/user/composer.md:15-36"
+    ],
+    "recommendation": "Keep plain text as a supported choice. If richer editing is desired, first define exact Markdown round-trip and shortcut behavior, especially Enter inside code.",
+    "acceptance": "Lists nest/continue predictably, code blocks indent and choose language, and toggling rich/plain preserves the exact submitted Markdown. Test IME, Unicode, multiline selection and undo across formatting boundaries."
+  },
+  {
+    "id": "composer-14",
+    "title": "There is no integrated voice-input workflow",
+    "priority": "P3",
+    "category": "missing-capability",
+    "evidence_level": "source-proven",
+    "impact": "T3 users can dictate into a draft with recording, transcription and cancellation feedback. Ferrite has no corresponding composer control or state. OS-level dictation may still work and was not tested.",
+    "ferrite_evidence": [
+      "crates/ferrite-pane/src/composer.rs:41-80,594-619",
+      "crates/ferrite-cockpit/src/cockpit.rs:8291-8301,8525-8541"
+    ],
+    "t3_evidence": [
+      "apps/web/src/components/chat/ComposerSpeechButton.tsx:16-39,91-119,122-145",
+      "docs/user/composer.md:199-203"
+    ],
+    "recommendation": "Treat this as a product capability choice. If added, reuse explicit draft ownership and cancellation rules; disclose the transcription destination.",
+    "acceptance": "Start voice input, dictate, finish, and verify text lands at the saved selection without sending. Cancel and microphone failure preserve the original draft. Changing threads does not insert text into the wrong draft."
+  },
+  {
+    "id": "composer-15",
+    "title": "A first prompt cannot fan out to multiple chosen models",
+    "priority": "P3",
+    "category": "missing-capability",
+    "evidence_level": "source-proven",
+    "impact": "A user comparing models must manually create and submit several threads. T3 has a single draft action that launches selected models in isolated worktrees.",
+    "ferrite_evidence": [
+      "crates/ferrite-core/src/draft.rs:27-35",
+      "crates/ferrite-cockpit/src/cockpit.rs:7854-7877,7895-7904"
+    ],
+    "t3_evidence": [
+      "apps/web/src/components/chat/composerSend.logic.ts:39-59",
+      "apps/web/src/components/chat/useComposerSend.ts:1110-1130"
+    ],
+    "recommendation": "Keep this optional and separate from ordinary send. If adopted, model a fan-out submission explicitly instead of overloading one thread binding.",
+    "acceptance": "Send one draft to two models. Two isolated, clearly labeled threads receive identical prompt/context. Failure of one leaves its submission recoverable without resending the successful one."
+  }
+]

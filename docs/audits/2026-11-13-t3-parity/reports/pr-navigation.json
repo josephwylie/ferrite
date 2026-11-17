@@ -1,0 +1,134 @@
+[
+  {
+    "id": "pr-navigation-01",
+    "title": "Clicking another thread's PR routes to a panel that is not shown",
+    "priority": "P1",
+    "category": "defect",
+    "evidence_level": "source-proven",
+    "impact": "A plain click on the underlined PR badge of a nonfocused thread does not reveal its destination. The browser request targets that thread, while the visible panel remains attached to the focused thread. If browser ownership is unavailable, attachment fails and its error is also stored under the hidden target. This directly explains a class of apparent dead sidebar links.",
+    "ferrite_evidence": [
+      "crates/ferrite-cockpit/src/cockpit.rs:12806-12819",
+      "crates/ferrite-cockpit/src/cockpit.rs:1826-1831",
+      "crates/ferrite-cockpit/src/cockpit/browser.rs:218-240",
+      "crates/ferrite-cockpit/src/cockpit/browser.rs:637-647",
+      "crates/ferrite-cockpit/src/cockpit/panel.rs:204-211",
+      "crates/ferrite-cockpit/src/cockpit/nav_list.rs:327-337",
+      "crates/ferrite-core/src/server/browser.rs:116-130",
+      "crates/ferrite-core/src/server/browser.rs:146-165"
+    ],
+    "t3_evidence": [
+      "https://github.com/pingdotgg/t3code/blob/74573fc29b901bafbf8f1dbb2eb29606da1fa448/apps/web/src/components/sidebar/SidebarThreadRow.tsx#L962-L969"
+    ],
+    "recommendation": "Route an explicit PR click through a destination-aware navigation operation that makes the clicked thread or selected PR visible. Keep agent-initiated browser reveals separate from explicit user navigation.",
+    "acceptance": "With A focused and B visible in the sidebar, click B's PR number. B's exact PR becomes visible on that click. Repeat with B without a board pane, with the panel hidden, and from the empty board. A modifier click opens the external URL without switching the thread."
+  },
+  {
+    "id": "pr-navigation-02",
+    "title": "The main PR affordances bypass the native PR view",
+    "priority": "P2",
+    "category": "interaction",
+    "evidence_level": "source-proven",
+    "impact": "The sidebar PR badge and footer PR button open a generic Browser tab, while the Overview PR row and panel menu open the native Summary/Guide/Timeline/Code view. Users can repeatedly choose the obvious PR controls without discovering the built-in review interface.",
+    "ferrite_evidence": [
+      "crates/ferrite-cockpit/src/cockpit/nav_chrome.rs:314-339",
+      "crates/ferrite-cockpit/src/cockpit.rs:1826-1831",
+      "crates/ferrite-cockpit/src/cockpit.rs:12806-12819",
+      "crates/ferrite-cockpit/src/cockpit/panel/changes.rs:379-397",
+      "crates/ferrite-cockpit/src/cockpit/panel/strip.rs:159-171",
+      "crates/ferrite-cockpit/src/cockpit/panel/pull_request.rs:452-469"
+    ],
+    "t3_evidence": [
+      "https://github.com/pingdotgg/t3code/blob/74573fc29b901bafbf8f1dbb2eb29606da1fa448/apps/web/src/components/sidebar/SidebarThreadRow.tsx#L962-L969",
+      "https://github.com/pingdotgg/t3code/blob/74573fc29b901bafbf8f1dbb2eb29606da1fa448/apps/web/src/lib/openPullRequestLink.ts#L74-L137"
+    ],
+    "recommendation": "Make the badge and current-PR action open the native PR view by default. Preserve separately named browser and external-browser actions. Do not relabel the existing Open PR in browser command as broken merely because it does what its name says.",
+    "acceptance": "For the focused thread, the badge and current-PR action show the same native PR tab as Overview and the + menu. Repeated opens leave one native tab. Explicit browser actions still open the browser."
+  },
+  {
+    "id": "pr-navigation-03",
+    "title": "There is no standalone PR inbox or project-scoped PR browsing destination",
+    "priority": "P2",
+    "category": "missing-capability",
+    "evidence_level": "source-proven",
+    "impact": "Ferrite cannot use the sidebar footer to browse PRs independently of a focused branch. With no known PR on the focused thread, that control does nothing even when the project has other PRs. Reviewers cannot inspect authored, reviewing, or other project PRs through an app-wide list.",
+    "ferrite_evidence": [
+      "crates/ferrite-cockpit/src/cockpit/nav_chrome.rs:324-339",
+      "crates/ferrite-cockpit/src/cockpit/panel/strip.rs:136-144",
+      "crates/ferrite-cockpit/src/cockpit/surfaces.rs:25-45",
+      "crates/ferrite-cockpit/src/cockpit/starts.rs:790-825",
+      "crates/ferrite-cockpit/src/cockpit/starts.rs:1055-1074"
+    ],
+    "t3_evidence": [
+      "https://github.com/pingdotgg/t3code/blob/74573fc29b901bafbf8f1dbb2eb29606da1fa448/apps/web/src/components/sidebar/SidebarChrome.tsx#L234-L239",
+      "https://github.com/pingdotgg/t3code/blob/74573fc29b901bafbf8f1dbb2eb29606da1fa448/apps/web/src/routes/_chat.pull-requests.tsx#L30-L78",
+      "https://github.com/pingdotgg/t3code/blob/74573fc29b901bafbf8f1dbb2eb29606da1fa448/apps/web/src/components/pullRequest/usePullRequestListView.ts#L89-L123",
+      "https://github.com/pingdotgg/t3code/blob/74573fc29b901bafbf8f1dbb2eb29606da1fa448/apps/web/src/components/pullRequest/PullRequestsPage.tsx#L1123-L1132"
+    ],
+    "recommendation": "Add a distinct PR inbox destination with project scope and explicit selection, usable without a focused thread. Keep the current branch shortcut separate. Scope and filter controls should represent actual supported backend queries.",
+    "acceptance": "From an empty board and a thread without a PR, open Pull requests, select a project, inspect a PR from a different branch, change list scope, and return to the previously selected PR without changing checkout."
+  },
+  {
+    "id": "pr-navigation-04",
+    "title": "The native PR target is the current branch, so links and multiple PRs cannot become independent native tabs",
+    "priority": "P2",
+    "category": "partial-capability",
+    "evidence_level": "source-proven",
+    "impact": "A native tab stores only a number under a thread, and its data loader resolves the current checkout rather than an explicit repository and PR. Ferrite cannot natively open an arbitrary linked PR beside the current PR, retain an older PR after the branch points to a newer one, or navigate a PR comment anchor into the native view.",
+    "ferrite_evidence": [
+      "crates/ferrite-cockpit/src/cockpit/surfaces.rs:44-45",
+      "crates/ferrite-cockpit/src/cockpit/panel/pull_request.rs:274-305",
+      "crates/ferrite-cockpit/src/cockpit/panel/pull_request.rs:319-352",
+      "crates/ferrite-cockpit/src/cockpit.rs:3508-3521",
+      "crates/ferrite-pane/src/preview.rs:322-331",
+      "crates/ferrite-cockpit/src/cockpit/browser.rs:342-355"
+    ],
+    "t3_evidence": [
+      "https://github.com/pingdotgg/t3code/blob/74573fc29b901bafbf8f1dbb2eb29606da1fa448/apps/web/src/rightPanelStore.ts#L66-L80",
+      "https://github.com/pingdotgg/t3code/blob/74573fc29b901bafbf8f1dbb2eb29606da1fa448/apps/web/src/rightPanelStore.ts#L267-L298",
+      "https://github.com/pingdotgg/t3code/blob/74573fc29b901bafbf8f1dbb2eb29606da1fa448/apps/web/src/lib/openPullRequestLink.ts#L83-L134",
+      "https://github.com/pingdotgg/t3code/blob/74573fc29b901bafbf8f1dbb2eb29606da1fa448/apps/web/src/components/ChatMarkdown.tsx#L1257-L1261",
+      "https://github.com/pingdotgg/t3code/blob/74573fc29b901bafbf8f1dbb2eb29606da1fa448/apps/web/src/components/sidebar/SidebarThreadRow.tsx#L1074-L1091"
+    ],
+    "recommendation": "Introduce an explicit selected PR identity containing repository, host, number, and environment or project scope. Read by that target. Retain branch PR discovery as an entry point, then allow independent selected PR tabs and anchor reveals.",
+    "acceptance": "Open PR 48 and PR 49 from links in the same thread, then switch its branch. Each tab still names and loads its own PR. Equal numbers from different repositories remain distinct. A linked comment or diff anchor reveals the intended content."
+  },
+  {
+    "id": "pr-navigation-05",
+    "title": "A known PR without a URL still presents clickable controls that silently do nothing",
+    "priority": "P2",
+    "category": "defect",
+    "evidence_level": "source-proven",
+    "impact": "The accepted PR data shape permits a number and state without a URL. The sidebar still underlines the number and the footer appears enabled, but open_pr returns without feedback. The native PR entry could still work because it needs a number and checkout rather than the missing URL.",
+    "ferrite_evidence": [
+      "crates/ferrite-core/src/workspace/mod.rs:539-546",
+      "crates/ferrite-core/src/workspace/mod.rs:768-783",
+      "crates/ferrite-cockpit/src/nav/card.rs:787-809",
+      "crates/ferrite-cockpit/src/cockpit/nav_chrome.rs:324-339",
+      "crates/ferrite-cockpit/src/cockpit.rs:1827-1831",
+      "crates/ferrite-cockpit/src/cockpit/panel/pull_request.rs:274-276",
+      "crates/ferrite-cockpit/src/cockpit/context_menu.rs:460-462"
+    ],
+    "t3_evidence": [],
+    "recommendation": "Use the native PR destination when number and checkout are available. For URL-only actions, apply the same URL availability gate already used by the context menu and palette, with a clear unavailable reason.",
+    "acceptance": "Render a PR reading with number 415 and url None. Its primary PR control opens native detail or clearly states why unavailable; it never appears as an enabled dead link. Normal production gh usually supplies a URL, so also verify the real failing data before attributing the user's incident to this case."
+  },
+  {
+    "id": "pr-navigation-06",
+    "title": "The reported sidebar click failure lacks end-to-end verification at the actual entry points",
+    "priority": "P2",
+    "category": "verification-gap",
+    "evidence_level": "unverified",
+    "impact": "Existing PR tests establish the internal panel path but do not establish that the reported sidebar click works in the installed app. The source explains nonfocused and missing-URL failures, but the user may also hit a separate native browser or pointer problem when clicking a focused thread.",
+    "ferrite_evidence": [
+      "crates/ferrite-cockpit/src/cockpit/tests/pr.rs:92-134",
+      "crates/ferrite-cockpit/src/cockpit/tests/pr.rs:226-247",
+      "crates/ferrite-cockpit/src/cockpit/tests/nav_shelves.rs:225-239",
+      "crates/ferrite-cockpit/src/cockpit/tests/nav_shelves.rs:384-418"
+    ],
+    "t3_evidence": [
+      "https://github.com/pingdotgg/t3code/blob/74573fc29b901bafbf8f1dbb2eb29606da1fa448/apps/web/src/components/sidebar/SidebarThreadRow.tsx#L962-L969"
+    ],
+    "recommendation": "Add an event-level regression test for the real sidebar badge, footer, and + menu. Have the runtime owner exercise the installed app with known URLs on focused and nonfocused threads. Assert destination visibility and selection, not just tab allocation or handler invocation.",
+    "acceptance": "Record installed build identity, clicked thread, PR URL availability, focused thread, panel active tab before and after, and visible destination. Cover plain and modifier clicks and panel-hidden state. Verify a test fails if the badge handler stops activating its intended destination."
+  }
+]

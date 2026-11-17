@@ -1,0 +1,253 @@
+[
+  {
+    "id": "quote-attachments-001",
+    "title": "Cite has no reachable per-quote comment editor",
+    "priority": "P1",
+    "category": "missing-capability",
+    "evidence_level": "source-proven",
+    "impact": "The user cannot attach their own words to an individual citation. Multiple citations cannot each receive an independently editable instruction. The ordinary composer remains a separate place to type general text; this finding does not establish that all typing after Cite is broken.",
+    "ferrite_evidence": [
+      "crates/ferrite-pane/src/transcript/reply.rs:206-220",
+      "crates/ferrite-pane/src/transcript/message_menu.rs:168-171",
+      "crates/ferrite-pane/src/attachments.rs:551-618",
+      "crates/ferrite-pane/src/composer.rs:409-419,645-654",
+      "crates/ferrite-cockpit/src/cockpit/tools/terminal.rs:130-133",
+      "crates/ferrite-cockpit/src/cockpit/tests/transcript_pointer.rs:954-975",
+      "crates/ferrite-cockpit/src/cockpit/visual_reference/feature_scenes.rs:560-561"
+    ],
+    "t3_evidence": [
+      "https://github.com/pingdotgg/t3code/blob/74573fc29b901bafbf8f1dbb2eb29606da1fa448/apps/web/src/components/chat/AssistantCitationChip.tsx#L275",
+      "https://github.com/pingdotgg/t3code/blob/74573fc29b901bafbf8f1dbb2eb29606da1fa448/apps/web/src/components/chat/AssistantCitationCommentEditor.tsx#L81",
+      "https://github.com/pingdotgg/t3code/blob/74573fc29b901bafbf8f1dbb2eb29606da1fa448/apps/web/src/components/ComposerPromptEditorTiptap.tsx#L455",
+      "https://github.com/pingdotgg/t3code/blob/74573fc29b901bafbf8f1dbb2eb29606da1fa448/apps/web/src/components/chat/ChatComposer.tsx#L2989"
+    ],
+    "recommendation": "Add a native comment editor to the citation interaction, with Save, Cancel, multiline input, a focus return target and a later Edit comment action. Keep quote source and user comment separate. Correct composer.md's positive claim that reply cards already provide a usable commenting workflow.",
+    "acceptance": "Using only UI actions, cite two different passages, add different multiline comments, edit one, cancel another edit, add general prompt text, reopen the draft and send. Each comment remains editable and paired with its quote. IME Enter does not save or send prematurely. A quote with no comment also sends."
+  },
+  {
+    "id": "quote-attachments-002",
+    "title": "Quote previews hide their full contents with no disclosure",
+    "priority": "P2",
+    "category": "interaction",
+    "evidence_level": "source-proven",
+    "impact": "The user cannot inspect the whole passage they are about to cite, and a sent prompt cannot reveal the complete quote or a preloaded long comment. Similar openings become indistinguishable.",
+    "ferrite_evidence": [
+      "crates/ferrite-pane/src/attachments.rs:505-543,551-618",
+      "crates/ferrite-ui/src/theme.rs:756-757,1974-1978,2100-2102,2604-2610",
+      "crates/ferrite-pane/src/pane.rs:3528-3533,3549-3559"
+    ],
+    "t3_evidence": [
+      "https://github.com/pingdotgg/t3code/blob/74573fc29b901bafbf8f1dbb2eb29606da1fa448/apps/web/src/components/chat/AssistantCitationChip.tsx#L87",
+      "https://github.com/pingdotgg/t3code/blob/74573fc29b901bafbf8f1dbb2eb29606da1fa448/apps/web/src/components/chat/AssistantCitationChip.tsx#L106",
+      "https://github.com/pingdotgg/t3code/blob/74573fc29b901bafbf8f1dbb2eb29606da1fa448/apps/web/src/components/chat/AssistantCitationChip.tsx#L255"
+    ],
+    "recommendation": "Use a text-sized citation row or chip with full inspection and comment editing. Preserve compactness through disclosure rather than irreversible clipping. Restore provenance under transcript-006; this finding separately covers local readability even when a source is unavailable.",
+    "acceptance": "A 5,000-character citation, two citations with identical opening words, a code excerpt and a multiline comment can each be inspected in full before and after send. The UI clearly distinguishes source text from comment text at narrow pane widths. Screenshot review confirms readable wrapping and controls."
+  },
+  {
+    "id": "quote-attachments-003",
+    "title": "The Cite toolbar is pointer-only and does not observe keyboard selection",
+    "priority": "P2",
+    "category": "interaction",
+    "evidence_level": "source-proven",
+    "impact": "A keyboard user cannot reach or activate the displayed Cite action. A selection changed without mouse release does not create a fresh offer.",
+    "ferrite_evidence": [
+      "crates/ferrite-pane/src/transcript.rs:3193-3195",
+      "crates/ferrite-pane/src/transcript/reply.rs:59-96,206-224,352-396"
+    ],
+    "t3_evidence": [
+      "https://github.com/pingdotgg/t3code/blob/74573fc29b901bafbf8f1dbb2eb29606da1fa448/apps/web/src/components/chat/AssistantSelectionToolbar.tsx#L140",
+      "https://github.com/pingdotgg/t3code/blob/74573fc29b901bafbf8f1dbb2eb29606da1fa448/apps/web/src/components/chat/AssistantSelectionToolbar.tsx#L148",
+      "https://github.com/pingdotgg/t3code/blob/74573fc29b901bafbf8f1dbb2eb29606da1fa448/apps/web/src/components/chat/AssistantSelectionToolbar.tsx#L191"
+    ],
+    "recommendation": "Give Cite a focusable native control and explicit keyboard activation while retaining a captured selection until activation settles. Observe selection changes independently of mouse-up. Keep Escape dismissal and the oversize explanation.",
+    "acceptance": "Select a passage, Tab to Cite, activate with Enter and with Space, and confirm exactly one citation and no message send. Keyboard-only selection exposes the same action. Escape restores a predictable focus target without interrupting the agent."
+  },
+  {
+    "id": "quote-attachments-004",
+    "title": "Attach message as context silently does nothing for long messages",
+    "priority": "P2",
+    "category": "defect",
+    "evidence_level": "source-proven",
+    "impact": "The visible attach action can produce no attachment, error or explanation for a long assistant answer. This is a concrete no-op that can resemble the reported citation regression.",
+    "ferrite_evidence": [
+      "crates/ferrite-pane/src/transcript/message_menu.rs:103-123,168-171",
+      "crates/ferrite-pane/src/quote.rs:13-26",
+      "crates/ferrite-pane/src/transcript/reply.rs:225-227"
+    ],
+    "t3_evidence": [
+      "https://github.com/pingdotgg/t3code/blob/74573fc29b901bafbf8f1dbb2eb29606da1fa448/apps/web/src/components/chat/TimelineAssistantRows.tsx#L220",
+      "https://github.com/pingdotgg/t3code/blob/74573fc29b901bafbf8f1dbb2eb29606da1fa448/apps/web/src/components/chat/AssistantSelectionToolbar.tsx#L179"
+    ],
+    "recommendation": "Use a whole-message source reference, or show a disabled reason and offer a shorter selected passage. A successful-looking action must not disappear silently.",
+    "acceptance": "Exercise 1, 2, 10,000 and 10,001 trimmed characters through the actual menu. Each action either creates context or displays an explicit reason. Unicode bounds match the explanation."
+  },
+  {
+    "id": "quote-attachments-005",
+    "title": "Ordinary blockquote text is reclassified as an uneditable citation on restore",
+    "priority": "P2",
+    "category": "defect",
+    "evidence_level": "source-proven",
+    "impact": "An ordinary prompt can change into attachment cards when reopened or recalled. Its text leaves the main editor, and its editing affordances disappear. This is a structure and editability defect; the words usually remain serialized.",
+    "ferrite_evidence": [
+      "crates/ferrite-pane/src/quote.rs:67-118",
+      "crates/ferrite-pane/src/composer.rs:494-512,536-554",
+      "crates/ferrite-cockpit/src/cockpit/drafts.rs:28-56",
+      "crates/ferrite-cockpit/src/cockpit.rs:6641-6649"
+    ],
+    "t3_evidence": [
+      "https://github.com/pingdotgg/t3code/blob/74573fc29b901bafbf8f1dbb2eb29606da1fa448/packages/shared/src/assistantCitations.ts#L21",
+      "https://github.com/pingdotgg/t3code/blob/74573fc29b901bafbf8f1dbb2eb29606da1fa448/packages/shared/src/assistantCitations.ts#L43",
+      "https://github.com/pingdotgg/t3code/blob/74573fc29b901bafbf8f1dbb2eb29606da1fa448/packages/shared/src/assistantCitations.ts#L118"
+    ],
+    "recommendation": "Persist typed citation records or an unambiguous versioned encoding. Keep literal Markdown literal. Preserve multiline comments and support legacy prompt decoding without treating every new leading blockquote as structured context.",
+    "acceptance": "Round-trip literal leading blockquotes, nested quotes, the literal ↩ marker, blank lines, Unicode and deliberate citations through draft restart, history and resend. Compare both text and editable record types. General text remains in the general editor."
+  },
+  {
+    "id": "quote-attachments-006",
+    "title": "A quote-only prompt renders differently when a file is attached",
+    "priority": "P2",
+    "category": "defect",
+    "evidence_level": "source-proven",
+    "impact": "Adding an unrelated file can turn the citation into raw > text in the sent prompt. Draft restoration reconstructs the quote differently from transcript rendering. Imported comments can also absorb the attachment trailer and hide the file preview.",
+    "ferrite_evidence": [
+      "crates/ferrite-pane/src/quote.rs:74-85,91-118",
+      "crates/ferrite-core/src/prompt_files.rs:15-24",
+      "crates/ferrite-core/src/browser_annotations.rs:475-478",
+      "crates/ferrite-pane/src/composer.rs:506-511",
+      "crates/ferrite-pane/src/pane.rs:3226-3241,3543-3557"
+    ],
+    "t3_evidence": [
+      "https://github.com/pingdotgg/t3code/blob/74573fc29b901bafbf8f1dbb2eb29606da1fa448/apps/web/src/components/chat/useComposerSend.ts#L1292",
+      "https://github.com/pingdotgg/t3code/blob/74573fc29b901bafbf8f1dbb2eb29606da1fa448/apps/web/src/components/chat/TimelineUserMessageRow.tsx#L483"
+    ],
+    "recommendation": "Decode a prompt once into text, quotes, files and annotations, then render that result. Do not repeatedly split and recompose transport syntax inside render helpers.",
+    "acceptance": "Test the cross-product of zero or nonempty main text, one or several quotes, zero or multiline comments, file/image attachments and browser annotations. Sent, reopened and recalled forms retain the same quote rows, file previews and comment boundaries. No transport token appears as comment prose."
+  },
+  {
+    "id": "quote-attachments-007",
+    "title": "Quoted file and skill syntax can become active provider input",
+    "priority": "P1",
+    "category": "defect",
+    "evidence_level": "source-proven",
+    "impact": "Citing reference text can attach a local file or activate a Codex skill even though the user only meant to discuss the quoted text. A quote can therefore change the provider input beyond its visible citation card.",
+    "ferrite_evidence": [
+      "crates/ferrite-pane/src/quote.rs:34-47,74-85",
+      "crates/ferrite-core/src/prompt_files.rs:49-93",
+      "crates/ferrite-core/src/providers/claude/wire.rs:25-62",
+      "crates/ferrite-core/src/providers/codex/wire.rs:1242-1293",
+      "crates/ferrite-core/src/browser_annotations.rs:453-461"
+    ],
+    "t3_evidence": [
+      "https://github.com/pingdotgg/t3code/blob/74573fc29b901bafbf8f1dbb2eb29606da1fa448/packages/shared/src/assistantCitations.ts#L148",
+      "https://github.com/pingdotgg/t3code/blob/74573fc29b901bafbf8f1dbb2eb29606da1fa448/apps/web/src/components/chat/useComposerSend.ts#L1110",
+      "https://github.com/pingdotgg/t3code/blob/74573fc29b901bafbf8f1dbb2eb29606da1fa448/apps/web/src/components/chat/useComposerSend.ts#L1292"
+    ],
+    "recommendation": "Carry typed context to provider adapters and expand quotation text only as text. At minimum isolate quoted material from attachment and skill scanning. Use the annotation encoder's explicit separation as an existing design precedent, not a blanket text replacement that corrupts quoted content.",
+    "acceptance": "Against a fake provider and harmless fixture files, cite exact file/skill syntax and inspect the wire payload. It contains the unchanged reference text but no unsolicited file bytes, localImage, localAudio, mention or skill item. Explicitly attaching the same fixture still produces the intended typed item."
+  },
+  {
+    "id": "quote-attachments-008",
+    "title": "Valid image attachments can show a permanent false Failed tile",
+    "priority": "P2",
+    "category": "defect",
+    "evidence_level": "source-proven",
+    "impact": "An image supported by the rendering library can appear broken before it is decoded. A repaired or newly created file can remain Failed until the app process restarts.",
+    "ferrite_evidence": [
+      "crates/ferrite-pane/src/image_viewer.rs:65-72",
+      "vendor/gpui-pre/src/elements/img.rs:210-217",
+      "crates/ferrite-pane/src/attachments.rs:451-498",
+      "crates/ferrite-pane/src/pane.rs:3861-3896,3919-3955"
+    ],
+    "t3_evidence": [
+      "https://github.com/pingdotgg/t3code/blob/74573fc29b901bafbf8f1dbb2eb29606da1fa448/apps/web/src/components/chat/ComposerAttachmentStrip.tsx#L220",
+      "https://github.com/pingdotgg/t3code/blob/74573fc29b901bafbf8f1dbb2eb29606da1fa448/apps/web/src/components/chat/useComposerAttachmentIntake.ts#L273"
+    ],
+    "recommendation": "Let the supported decoder determine displayability. Use a neutral dimension fallback while metadata is unknown. Key cached facts by a file version or explicit attachment identity and expose a retry after changes. This is separate from composer-07's provider readiness problem.",
+    "acceptance": "Valid SVG, AVIF, TIFF, PNG and a JPEG with large metadata each show a preview or an accurate format-specific explanation. A missing/corrupt file repaired at the same path recovers without restarting. Replacing an image updates dimensions and caption."
+  },
+  {
+    "id": "quote-attachments-009",
+    "title": "Draft file previews and sent image previews lack keyboard activation",
+    "priority": "P2",
+    "category": "interaction",
+    "evidence_level": "source-proven",
+    "impact": "A keyboard user can remove a draft file but cannot activate its preview. Image preview is keyboard-capable in the draft, then loses that capability after the message sends.",
+    "ferrite_evidence": [
+      "crates/ferrite-pane/src/attachments.rs:191-257,409-424,713-727",
+      "crates/ferrite-pane/src/pane.rs:3800-3838"
+    ],
+    "t3_evidence": [
+      "https://github.com/pingdotgg/t3code/blob/74573fc29b901bafbf8f1dbb2eb29606da1fa448/apps/web/src/components/chat/ComposerAttachmentStrip.tsx#L470",
+      "https://github.com/pingdotgg/t3code/blob/74573fc29b901bafbf8f1dbb2eb29606da1fa448/apps/web/src/components/chat/TimelineUserMessageRow.tsx#L733"
+    ],
+    "recommendation": "Share a semantic preview control between draft and transcript renderers, with a stable accessible name and focus restoration when preview closes. Keep removal a separate control.",
+    "acceptance": "Open and close text and image previews entirely by keyboard before and after send. Every activation opens once without sending a message. Tab exposes preview and remove as distinct labeled actions. An accessibility inspection sees buttons rather than anonymous clickable text."
+  },
+  {
+    "id": "quote-attachments-010",
+    "title": "Attachment history stores mutable paths rather than retained content",
+    "priority": "P2",
+    "category": "intentional-difference",
+    "evidence_level": "source-proven",
+    "impact": "Retry and history can refer to changed or deleted file content. A pasted screenshot depends on a temporary file even after its prompt has been saved. The visual record is not a reliable record of the bytes originally sent. ADR 0004 explicitly chooses path storage, so this is a documented product tradeoff with incomplete user feedback, not an accidental omission of a promised byte store.",
+    "ferrite_evidence": [
+      "crates/ferrite-pane/src/composer.rs:572-582,2104-2124",
+      "crates/ferrite-core/src/prompt_files.rs:15-24",
+      "crates/ferrite-cockpit/src/cockpit/drafts.rs:28-56",
+      "crates/ferrite-pane/src/pane.rs:3800-3836",
+      "crates/ferrite-pane/src/preview.rs:271-290",
+      "crates/ferrite-cockpit/src/cockpit/transcript_glue.rs:169-190",
+      "crates/ferrite-core/src/providers/claude/wire.rs:28-62",
+      "crates/ferrite-core/src/providers/codex/wire.rs:1276-1293",
+      "docs/adr/0004-prompt-attachments.md:23-36"
+    ],
+    "t3_evidence": [
+      "https://github.com/pingdotgg/t3code/blob/74573fc29b901bafbf8f1dbb2eb29606da1fa448/apps/web/src/components/chat/useComposerAttachmentIntake.ts#L204",
+      "https://github.com/pingdotgg/t3code/blob/74573fc29b901bafbf8f1dbb2eb29606da1fa448/apps/web/src/lib/attachmentUploadQueue.ts#L135",
+      "https://github.com/pingdotgg/t3code/blob/74573fc29b901bafbf8f1dbb2eb29606da1fa448/apps/web/src/composerDraftStore.ts#L2291",
+      "https://github.com/pingdotgg/t3code/blob/74573fc29b901bafbf8f1dbb2eb29606da1fa448/apps/web/src/components/chat/ComposerAttachmentStrip.tsx#L462"
+    ],
+    "recommendation": "Distinguish live file references from retained attachments. Copy clipboard media and explicit attachment snapshots into an owned durable store and keep content identity with history. Detect stale references and expose reattach/retry instead of silently changing content. Keep workspace @mentions live if that is the intended contract.",
+    "acceptance": "Send version A of a fixture, replace the original with B, reopen and inspect history, then retry. The UI and provider payload agree on A versus B and never silently substitute. A pasted screenshot survives restart and routine temp cleanup, or displays an actionable missing-asset state before send."
+  },
+  {
+    "id": "quote-attachments-011",
+    "title": "The attachment shelf has no bounded overflow policy",
+    "priority": "P2",
+    "category": "interaction",
+    "evidence_level": "inferred",
+    "impact": "At narrow pane widths, many attachments can consume the available conversation height. Source shows unbounded growth; the installed app must establish the exact clipping or displacement symptom.",
+    "ferrite_evidence": [
+      "crates/ferrite-pane/src/attachments.rs:275-295,579-585",
+      "crates/ferrite-pane/src/composer.rs:572-582,647-649",
+      "crates/ferrite-pane/src/pane/composer.rs:501-510,564-577"
+    ],
+    "t3_evidence": [
+      "https://github.com/pingdotgg/t3code/blob/74573fc29b901bafbf8f1dbb2eb29606da1fa448/apps/web/src/components/chat/ComposerAttachmentStrip.tsx#L179",
+      "https://github.com/pingdotgg/t3code/blob/74573fc29b901bafbf8f1dbb2eb29606da1fa448/apps/web/src/components/chat/ComposerAttachmentStrip.tsx#L583",
+      "https://github.com/pingdotgg/t3code/blob/74573fc29b901bafbf8f1dbb2eb29606da1fa448/apps/web/src/components/composerFooterLayout.ts#L1"
+    ],
+    "recommendation": "Measure the installed layout with many attachments, then provide a bounded attachment region or compact summary with explicit expansion. Preserve navigation, removal and the active editor. Do not copy T3's expanded wrapping blindly; its resting summary and screenshot horizontal scrolling are the relevant comparison.",
+    "acceptance": "At 360 pixel pane width and 600 pixel window height, add 12 images, six citations and long-named files. The editor, Send and all attachments remain reachable by pointer and keyboard. Resize and remove items without losing focus or the visible edit position. Capture before/after screenshots."
+  },
+  {
+    "id": "quote-attachments-012",
+    "title": "The reported pointer Cite regression still needs installed-app reproduction",
+    "priority": "P1",
+    "category": "verification-gap",
+    "evidence_level": "unverified",
+    "impact": "The user reports that citing no longer works. Existing event handlers and fixture tests do not establish that the installed app accepts the real selection and reaches the composer.",
+    "ferrite_evidence": [
+      "crates/ferrite-pane/src/transcript/reply.rs:65-95,163-171,204-224",
+      "crates/ferrite-cockpit/src/cockpit.rs:2127-2134",
+      "crates/ferrite-cockpit/src/cockpit/tests/transcript_pointer.rs:512-615"
+    ],
+    "t3_evidence": [
+      "https://github.com/pingdotgg/t3code/blob/74573fc29b901bafbf8f1dbb2eb29606da1fa448/apps/web/src/components/chat/AssistantSelectionToolbar.tsx#L185",
+      "https://github.com/pingdotgg/t3code/blob/74573fc29b901bafbf8f1dbb2eb29606da1fa448/apps/web/src/components/chat/ChatComposer.tsx#L2544"
+    ],
+    "recommendation": "Parent should capture the installed build identity, selection, toolbar, click result and focus destination. Keep the report open until that reproduction distinguishes no offer, dead activation, wrong destination and inability to type. Do not mark the regression fixed because a handler exists.",
+    "acceptance": "On the installed build, test plain prose, code, tables, links, double/triple click, cross-block selection, scrolling, a narrow pane, right-panel focus and two open threads. Verify the citation reaches the intended draft and typing works. Record pointer coordinates and before/after evidence for every failure. Do not send to a live provider without an appropriate disposable thread."
+  }
+]

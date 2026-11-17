@@ -1,0 +1,2630 @@
+{
+  "goal": "Reconcile actual conversation composition and conditional surfaces so users need not discover missing placement or workflow contracts themselves.",
+  "scope": "Installed T3 conversation subtree and its sibling mount boundaries, compared with Ferrite source and existing audit evidence. No native execution by this worker.",
+  "recorded_at": "2026-11-13T16:24:27.844779+00:00",
+  "installed_revision": "1264c206aee0dce805d6279809118bc091f29d2f",
+  "comparison_checkout_revision": "74573fc29b901bafbf8f1dbb2eb29606da1fa448",
+  "ferrite_revision": "62947f91d5cd6ee494aaae9ed09d794a853e5bab",
+  "revision_rule": "All T3 source links here are installed-SHA links. Newer checkout used for filename discovery only; prior reports may contain explicitly qualified newer citations.",
+  "throughput_checkpoint": "n/a, read-only investigation",
+  "evidence": {
+    "observations": "../evidence/t3-live/observations.md",
+    "sha256": "ee2739e94e1d8d6b0fa3c924debebf8b6228f2c96d969af347bf33c80eb9630b",
+    "placement_corrections_read": [
+      "subagent-placement-correction.md",
+      "thread-details-card-correction.md"
+    ]
+  },
+  "surfaces": [
+    {
+      "id": "C01",
+      "name": "Main conversation route",
+      "parent": "ThreadRouteView",
+      "purpose": "Read and operate the selected root conversation.",
+      "placement": "Main SidebarInset content, containing ChatView, not either sidebar.",
+      "triggers": "Select root thread or route directly.",
+      "coexistence": "Header, timeline, composer, independent details card and workspace siblings.",
+      "responsive": "Workspace maximization gives chat w-0 and inert; embedded mode has different chrome.",
+      "ownership": "Scoped environment and thread; draft routes resolve separately.",
+      "focus": "Header menus, composer, Find, workspace have separate focus areas.",
+      "motion": "Panel or draft movement has explicit gates; route change is not proof of transition.",
+      "lifetime": "Thread mount and remembered ready timeline are keyed; displayed and requested data can differ while loading.",
+      "source_refs": [
+        "route",
+        "root",
+        "timeline_live"
+      ],
+      "ferrite_source_refs": [
+        "pane",
+        "transcript"
+      ],
+      "ferrite_counterpart": "Ordinary Pane and TranscriptView.",
+      "wrong_substitute": "A right-panel Agent inspector or Overview tab is not the main conversation.",
+      "prior_reports": [
+        "subagent-placement-correction.md",
+        "transcript.md"
+      ],
+      "prior_coverage": "Main transcript covered; composition previously scattered.",
+      "actual_audit_omission": "No additional root-feature defect asserted.",
+      "native_evidence": "Native roots exercised."
+    },
+    {
+      "id": "C02",
+      "name": "Provider child full conversation",
+      "parent": "ThreadRouteView -> ChatView",
+      "purpose": "Inspect a provider-owned child with its own complete transcript.",
+      "placement": "Normal main conversation route, reached from agent/lineage actions.",
+      "triggers": "onOpenRelatedThread navigates to /$environmentId/$threadId; lineage does likewise unless side chat.",
+      "coexistence": "Parent breadcrumb, transcript, footer and optional workspace; parent draft stays with parent.",
+      "responsive": "Normal reading lane; a narrow optional inspector is a separate product choice.",
+      "ownership": "Selected child projection; provider owns execution and may forbid independent prompting.",
+      "focus": "Open parent returns through scoped navigation; child footer is not an input.",
+      "motion": "No main-child entrance animation is proven by the route source.",
+      "lifetime": "Child route loads its own detail, including omitted idle children.",
+      "source_refs": [
+        "open_child",
+        "lineage_route",
+        "route",
+        "child_gate",
+        "childbar"
+      ],
+      "ferrite_source_refs": [
+        "agent_panel",
+        "full_subject",
+        "compact"
+      ],
+      "ferrite_counterpart": "Full-Pane Subject selection exists, but ordinary row action opens a compact Agent panel.",
+      "wrong_substitute": "Widening/maximizing Agent panel alone does not meet the primary main-conversation placement contract.",
+      "prior_reports": [
+        "subagent-placement-correction.md",
+        "agent-live-correction.md",
+        "subagents-background.md"
+      ],
+      "prior_coverage": "Live route was recorded but original Unit 12 assumed compact Panel as primary.",
+      "actual_audit_omission": "Confirmed recommendation/placement omission, corrected by dedicated addendum.",
+      "native_evidence": "Sol and Sonnet child routes and live stdout verified; full nested lifecycle is not universally certified."
+    },
+    {
+      "id": "C03",
+      "name": "Conversation header and parent breadcrumb",
+      "parent": "ChatView header",
+      "purpose": "Identify project, parent and selected thread; expose thread actions and Find entry.",
+      "placement": "Header above canvas, suppressed for embedded side chats.",
+      "triggers": "Existing thread/draft and parent link; title activation or context menu.",
+      "coexistence": "Separate from panel toggles and details-card toggle in same title region.",
+      "responsive": "Parent title collapses to fit measured breadcrumb width.",
+      "ownership": "Selected thread/project; parent may belong to another environment.",
+      "focus": "Semantic title button/menu and rename input; breadcrumb can open parent.",
+      "motion": "Hover/title transitions are CSS details, not panel motion.",
+      "lifetime": "Mounted with route header; embedded ChatView omits this header.",
+      "source_refs": [
+        "header",
+        "root"
+      ],
+      "ferrite_source_refs": [
+        "pane",
+        "full_subject"
+      ],
+      "ferrite_counterpart": "Pane title/Subject navigation and menus.",
+      "wrong_substitute": "Generic panel title cannot identify full conversation ancestry.",
+      "prior_reports": [
+        "projects-navigation.md",
+        "subagent-placement-correction.md"
+      ],
+      "prior_coverage": "Thread navigation covered; parent/title placement was not a unified contract.",
+      "actual_audit_omission": "Require breadcrumb and menu destination checks in child and root modes.",
+      "native_evidence": "Parent breadcrumb and Open parent verified; every title/rename variant not certified."
+    },
+    {
+      "id": "C04",
+      "name": "Virtualized transcript and earlier-history control",
+      "parent": "ThreadTimeline -> MessagesTimeline",
+      "purpose": "Render live answers and retrieve prior turns without losing reading position.",
+      "placement": "Scrollable main lane; earlier-history/error control is its list header.",
+      "triggers": "Projection deltas, route switch, Load earlier, or citation/Find history demand.",
+      "coexistence": "Composer overlay reserves content inset; header and footer can coexist with long history.",
+      "responsive": "Min-width and lane inset come from ChatCanvas measurements; long content must wrap.",
+      "ownership": "Per-thread live turn items; remembered ready transcript excludes ephemeral previews.",
+      "focus": "Focusable earlier-history button; history error/retry are visible rather than silent blank content.",
+      "motion": "Maintain-visible-content positioning and scroll adjustments are separate from appearance animation.",
+      "lifetime": "Ready timeline cache is keyed; earlier pages and work-history loads are independent.",
+      "source_refs": [
+        "timeline_live",
+        "timeline_list",
+        "history",
+        "canvas_layout"
+      ],
+      "ferrite_source_refs": [
+        "transcript",
+        "scroll"
+      ],
+      "ferrite_counterpart": "TranscriptView list with retained rendering window and scroll anchors.",
+      "wrong_substitute": "A current rendered window is not proof that earlier persisted history can be loaded.",
+      "prior_reports": [
+        "transcript.md",
+        "scroll-quality.md",
+        "scroll-runtime-correction.md"
+      ],
+      "prior_coverage": "Source and controlled scroll coverage exist; historical paging runtime remains bounded.",
+      "actual_audit_omission": "No newly reproduced defect; retain paging/loading/error contract separately.",
+      "native_evidence": "Rich output and selected navigation verified; all historical paging states not executed."
+    },
+    {
+      "id": "C05",
+      "name": "Find in thread overlay",
+      "parent": "ThreadFindCanvas -> ThreadFind",
+      "purpose": "Search conversation messages with counts and exact occurrence navigation.",
+      "placement": "Absolute top-right canvas overlay, not a workspace tab or browser Find.",
+      "triggers": "Thread Find command or header action, when server capability permits.",
+      "coexistence": "Reserves details-card top inset; parent PR/tool panel can remain open.",
+      "responsive": "Width is capped by details-card width and available chat width.",
+      "ownership": "Provider owns query/count state below ChatView; server filters message/plan/input candidates.",
+      "focus": "Open/refire focuses and selects input; Enter/Shift-Enter navigate; close callback focuses composer.",
+      "motion": "150ms opacity entrance with reduced-motion opt-out.",
+      "lifetime": "One scoped Find store; content changes refresh results; history reveal may materialize unloaded rows.",
+      "source_refs": [
+        "canvas",
+        "find_owner",
+        "find_bar",
+        "find_scope",
+        "find_reveal"
+      ],
+      "ferrite_source_refs": [
+        "find",
+        "transcript"
+      ],
+      "ferrite_counterpart": "Transcript Find bar searches rendered logical-text projection.",
+      "wrong_substitute": "Browser Find, file Find, or a generic panel search is not conversation Find.",
+      "prior_reports": [
+        "transcript.md",
+        "scroll-runtime-correction.md",
+        "t3-live-source-correspondence.md"
+      ],
+      "prior_coverage": "Prose Find and Ferrite folded exclusion covered; prior broad T3 tool-search assumption corrected.",
+      "actual_audit_omission": "Must preserve exact search scope; installed T3 excludes command_execution regardless of fold.",
+      "native_evidence": "AMBER counts/Enter verified; command-only token returned 0/0; not data loss."
+    },
+    {
+      "id": "C06",
+      "name": "Timeline minimap and previous/next-turn navigation",
+      "parent": "MessagesTimeline -> TimelineMinimap",
+      "purpose": "Show turn positions and move directly among prompts.",
+      "placement": "Beside timeline list, not the left thread sidebar.",
+      "triggers": "Hover/focus navigation buttons or strip activation.",
+      "coexistence": "Find and panel state are independent; selected turn reveals in same conversation.",
+      "responsive": "Gutter tracks actual list viewport and content width.",
+      "ownership": "Derived from current rows, visible range and prompt row indices.",
+      "focus": "Buttons have Previous turn/Next turn labels; no-op/disabled state depends on current range/end.",
+      "motion": "Requested turn scroll uses reduced-motion gate; strip/button hover opacity is separate.",
+      "lifetime": "Current index refreshes from layout and scroll metrics; not a saved chapter system.",
+      "source_refs": [
+        "minimap",
+        "turn_nav"
+      ],
+      "ferrite_source_refs": [
+        "minimap",
+        "transcript",
+        "scroll"
+      ],
+      "ferrite_counterpart": "Ferrite has a minimap rail, prompt/failure/Decision/pass ticks, viewport band, and click/rail jumps. Equivalent previous/next-turn buttons and full keyboard/focus behavior were not established.",
+      "wrong_substitute": "Pin as chapter or ordinary scroll is not equivalent to turn overview/navigation.",
+      "prior_reports": [
+        "motion.md",
+        "transcript.md",
+        "t3-live-source-correspondence.md"
+      ],
+      "prior_coverage": "Motion report already covers minimap snap navigation; native T3 verified one Next turn. Previous reconciliation lacked explicit comparison of the existing rail and adjacent-turn controls.",
+      "actual_audit_omission": "Detailed destination/focus acceptance gap, not an absent minimap or new Ferrite runtime failure.",
+      "native_evidence": "Next turn reached quote/comment/image turn with PR retained; full minimap interaction untested."
+    },
+    {
+      "id": "C07",
+      "name": "Work groups, live row and historical folds",
+      "parent": "MessagesTimeline row dispatch",
+      "purpose": "Present commands/reasoning and elapsed activity without consuming the entire transcript.",
+      "placement": "Inline work-log rows and bounded expandable history inside timeline.",
+      "triggers": "Running work, disclosure, turn/attempt folds, work-history demand.",
+      "coexistence": "Final prose, pending approval row, working footer and group detail have distinct positions.",
+      "responsive": "Expanded virtual list caps at min(18rem,50dvh) plus opened detail height.",
+      "ownership": "Disclosure and expanded-entry state belong to group; historic turn data can load lazily.",
+      "focus": "Header/row aria-expanded and keyboard disclosure; nested scrolling must remain reachable.",
+      "motion": "Chevron transitions, activity shimmer and append-follow exist; grouping uses selected nonanimated panels.",
+      "lifetime": "Expansion retains entry IDs within group view; loading skeleton and history errors are independent.",
+      "source_refs": [
+        "row_dispatch",
+        "workgroup",
+        "workentry"
+      ],
+      "ferrite_source_refs": [
+        "work",
+        "tool"
+      ],
+      "ferrite_counterpart": "Work rows, grouped calls, turn folds and thinking tail.",
+      "wrong_substitute": "A tool name or final summary alone does not show current output or full historical details.",
+      "prior_reports": [
+        "transcript.md",
+        "scroll-quality.md",
+        "agent-live-correction.md"
+      ],
+      "prior_coverage": "Core source and controlled disclosure covered.",
+      "actual_audit_omission": "Explicit row dispatcher now prevents treating every history form as one generic tool block.",
+      "native_evidence": "Several command disclosures and live output verified; all fold/history states untested."
+    },
+    {
+      "id": "C08",
+      "name": "Tool item inspector and live output",
+      "parent": "Expanded work entry -> V2ItemInspector",
+      "purpose": "Inspect actual arguments, stdout, diff, images and structured tool results.",
+      "placement": "Inline WorkLogDetails, not a global tool inspector window.",
+      "triggers": "Expand individual tool entry or fetch retained output.",
+      "coexistence": "Inside bounded group; open diff can hand off to full workspace while transcript stays.",
+      "responsive": "Pre/code content has its own overflow; environment capability gates output subscription.",
+      "ownership": "Thread/item identity keys output; command deltas and final persisted result are distinct sources.",
+      "focus": "Expanded row uses keyboard disclosure; image/diff buttons have separate actions.",
+      "motion": "Chevron/row interactions do not imply streaming transition; stdout subscription is data flow.",
+      "lifetime": "Inspector mounts on expanded entry; live panel follows until user scrolls away and settles to final output.",
+      "source_refs": [
+        "workentry",
+        "inspector",
+        "command_output"
+      ],
+      "ferrite_source_refs": [
+        "tool",
+        "rich"
+      ],
+      "ferrite_counterpart": "Expanded tool call rows and native preview/diff destinations.",
+      "wrong_substitute": "Background panel with No output yet is wrong when the child transcript contains known output.",
+      "prior_reports": [
+        "agent-live-correction.md",
+        "t3-live-source-correspondence.md",
+        "panel-tools.md"
+      ],
+      "prior_coverage": "Actual live streams covered; some tool-result branches remained source-only.",
+      "actual_audit_omission": "Keep item inspection distinct from agent full conversation and background roster.",
+      "native_evidence": "Sol parent/child and Sonnet child stdout verified before completion."
+    },
+    {
+      "id": "C09",
+      "name": "Inline agent group, agent links and hover information",
+      "parent": "V2EventTimelineRow -> V2SubagentGroup / V2LifecycleRow",
+      "purpose": "Show related launched agents, aggregate progress and links into each child.",
+      "placement": "Inline work-log group inside parent transcript.",
+      "triggers": "Subagent item; group only when row has more than one agent.",
+      "coexistence": "Lineage card is an additional navigation view, not replacement for these rows.",
+      "responsive": "Group has bounded avatars/count and truncated text with hover details.",
+      "ownership": "Runtime projected subagent identity and status, not independent user thread rows.",
+      "focus": "Collapsible group and child link are distinct targets; hover card does not become editable chat.",
+      "motion": "Opacity/chevron CSS; group panel explicitly animate=false.",
+      "lifetime": "Open child loads own route; group expansion belongs to row state.",
+      "source_refs": [
+        "agent_group",
+        "agent_link"
+      ],
+      "ferrite_source_refs": [
+        "work",
+        "agent_panel"
+      ],
+      "ferrite_counterpart": "Grouped agent rows and progress exist; opener currently routes to compact Panel.",
+      "wrong_substitute": "Left-sidebar tree or background card does not satisfy inline launch context plus correct main route.",
+      "prior_reports": [
+        "subagents-background.md",
+        "subagent-placement-correction.md",
+        "agent-live-correction.md"
+      ],
+      "prior_coverage": "Group mechanics covered; initial repair direction missed destination size/placement.",
+      "actual_audit_omission": "Link group must be reconciled with corrected main-child action, not merely retain clickable pills.",
+      "native_evidence": "Real children and prior-agent movement verified; all hover states not native certified."
+    },
+    {
+      "id": "C10",
+      "name": "Independent Thread details card",
+      "parent": "ChatView -> ThreadDetailsPanel -> ThreadDetailsCard",
+      "purpose": "Keep compact execution and thread context available beside conversation.",
+      "placement": "Absolute upper-right aside, or dedicated anchored popover when space is insufficient.",
+      "triggers": "Independent toggle/shortcut; per-thread presentation state.",
+      "coexistence": "Separate from full workspace; card layout avoids Find and preview/composer footprints.",
+      "responsive": "280px source card with density full/compact/essential; placement fallback is measured, not a freely dragged window.",
+      "ownership": "Scoped environment/thread and independent inline/popover visibility.",
+      "focus": "Popover requests details focus; Find interactions do not force it closed; Escape returns to toggle in native recheck.",
+      "motion": "Top-inset transition and popup lifecycle; no arbitrary drag/resize/minimize contract established.",
+      "lifetime": "Popup stays in tree across mode changes to close cleanly; details state is not workspace active-tab state.",
+      "source_refs": [
+        "details_mount",
+        "details",
+        "details_layout",
+        "canvas_layout"
+      ],
+      "ferrite_source_refs": [
+        "overview",
+        "panel"
+      ],
+      "ferrite_counterpart": "Overview has related information inside the tool workspace.",
+      "wrong_substitute": "Overview tab, narrower forced panel width, or copied card styling alone cannot coexist equivalently with a loaded tool.",
+      "prior_reports": [
+        "thread-details-card-correction.md",
+        "panel-tools.md"
+      ],
+      "prior_coverage": "Previously named toggle/lineage but independent presentation omitted.",
+      "actual_audit_omission": "Confirmed quality-correction-005, already added by parent; do not double-count.",
+      "native_evidence": "Dedicated recheck verified toggle, shortcut, focus, Escape and one fallback. Subsequent parent-owned native evidence verified Thread details beside loaded README with an intact draft; all-tool and narrow-screen variants remain open. See ../evidence/surface-reconciliation/observations.md."
+    },
+    {
+      "id": "C11",
+      "name": "Lineage and Side chats sections inside details",
+      "parent": "ThreadDetailsPanel -> ThreadRelationshipsPanel",
+      "purpose": "Show parent/child/fork/transfer relations and related side conversations.",
+      "placement": "Conditional sections inside full-density details card; not entire details host.",
+      "triggers": "Existing related/active/previous/remote rows or side chats; visibility customization.",
+      "coexistence": "Workspace/Git/usage/context sections share card; inline agent group remains in transcript.",
+      "responsive": "Only full density mounts these sections; pagination limits visible lineage rows.",
+      "ownership": "Graph distinguishes subagent, fork, transfer, sideChat and linked-environment relations.",
+      "focus": "Ordinary children navigate full route; side-chat predicate opens side tab; tooltip carries details.",
+      "motion": "Group disclosure state; no new native transition guarantee asserted.",
+      "lifetime": "Active/previous grouping is status-derived and detail may load after navigation.",
+      "source_refs": [
+        "details_sections",
+        "lineage",
+        "lineage_route"
+      ],
+      "ferrite_source_refs": [
+        "full_subject",
+        "overview"
+      ],
+      "ferrite_counterpart": "Subject ancestry data exists; main drill and compact rendering lose some navigation.",
+      "wrong_substitute": "A flat named-agent list cannot replace immediate-parent/root ancestry or distinguish side-chat destination.",
+      "prior_reports": [
+        "subagents-background.md",
+        "subagent-placement-correction.md",
+        "thread-details-card-correction.md"
+      ],
+      "prior_coverage": "Original source coverage exists; card density/coexistence integration was omitted.",
+      "actual_audit_omission": "Correct placement and status scope jointly; do not claim provider children are ordinary left-sidebar rows.",
+      "native_evidence": "Native parent/child label disagreement observed; not child loss."
+    },
+    {
+      "id": "C12",
+      "name": "Antigravity-native Subagent work dialog",
+      "parent": "ProviderSubagentBar actions",
+      "purpose": "Read provider-native child records that are not independently messageable.",
+      "placement": "Modal dialog launched from provider-child footer only for selected antigravity driver.",
+      "triggers": "Subagent work button; query starts only while open.",
+      "coexistence": "Overlays child conversation; never substitutes for Sol/Sonnet normal route.",
+      "responsive": "max-w-2xl popup; footer label can be screen-reader-only at narrow composer width.",
+      "ownership": "nativeChildWork query keyed by environment/thread; refresh, loading/error/empty/truncation states.",
+      "focus": "Shared dialog primitive controls focus/Close; read-only child steps, no messaging input.",
+      "motion": "Shared dialog 200ms source styles; no native timing measurement.",
+      "lifetime": "Local open state; content/query unmounts when closed.",
+      "source_refs": [
+        "child_gate",
+        "native_dialog",
+        "dialog",
+        "dialog_style"
+      ],
+      "ferrite_source_refs": [
+        "full_subject",
+        "compact"
+      ],
+      "ferrite_counterpart": "Provider-scoped history/coverage messaging exists; no exact Antigravity dialog counterpart established.",
+      "wrong_substitute": "Compact Agent panel is not justification to replace normal child routes with a read-only modal for all providers.",
+      "prior_reports": [
+        "subagents-background.md"
+      ],
+      "prior_coverage": "Already covered and provider-qualified in source; not a newly discovered missing feature.",
+      "actual_audit_omission": "Audit still needs branch-specific execution if this optional provider is adopted.",
+      "native_evidence": "Antigravity dialog was not executed in native audit."
+    },
+    {
+      "id": "C13",
+      "name": "Draft hero and ordinary composer host",
+      "parent": "ChatView composer overlay -> ChatComposer",
+      "purpose": "Compose new conversation or next message while retaining transcript reading space.",
+      "placement": "Centered headline/composer for empty draft; bottom overlay for active thread.",
+      "triggers": "Draft hero predicate, project selection, transition toward first send.",
+      "coexistence": "Banners detach below hero but join active composer; branch/environment strip below host.",
+      "responsive": "Short-height media rule pins hero toward bottom; mobile composer can collapse to prompt summary.",
+      "ownership": "Draft/session binding separate from existing thread and queued-edit target.",
+      "focus": "Typed editor owns IME; focus restoration and mobile expansion are distinct from panel focus.",
+      "motion": "Draft hero/view-transition names and composer background transitions exist; no native interpolation measured here.",
+      "lifetime": "Composer may stay mounted across threads; provider-child branch unmounts it entirely.",
+      "source_refs": [
+        "hero",
+        "composer_mount",
+        "composer",
+        "composer_mobile",
+        "context_strip"
+      ],
+      "ferrite_source_refs": [
+        "composer",
+        "pane"
+      ],
+      "ferrite_counterpart": "Native composer region and draft binding.",
+      "wrong_substitute": "An always-visible generic input or child footer cannot stand in for all draft/running/question states.",
+      "prior_reports": [
+        "composer.md",
+        "draft-lifecycle-runtime-correction.md"
+      ],
+      "prior_coverage": "Draft persistence and input mechanics covered; centered/overlay/mobile assembly not systematically retained.",
+      "actual_audit_omission": "Presentation/lifetime coverage gap, not newly reproduced loss.",
+      "native_evidence": "Existing-draft and combined content flows observed; mobile/first-send animation unexecuted."
+    },
+    {
+      "id": "C14",
+      "name": "Composer model, effort, permissions and primary actions",
+      "parent": "ChatComposer controls/footer",
+      "purpose": "Show provider settings and the actual send/steer/queue/stop/resume action.",
+      "placement": "Footer or resting controls host within composer, plus optional context strip.",
+      "triggers": "Measured room, focus/resting state, active turn, pending question, nonempty draft.",
+      "coexistence": "Does not replace question drawer or inline approval details; control relocation must preserve identity.",
+      "responsive": "Controls can hide blocks/use icons; mobile pending answers move primary actions inside editor area.",
+      "ownership": "Selected model and effective runtime policy; Stop key belongs to thread, not reused composer instance.",
+      "focus": "Model picker and permission menus have explicit open state; pointer-focus preservation varies by viewport.",
+      "motion": "Source hover/background transitions; stop pending state is functional feedback.",
+      "lifetime": "Footer action keyed by environment/thread; resumed route cannot reuse old stop state.",
+      "source_refs": [
+        "composer_controls",
+        "composer_footer",
+        "composer_mobile"
+      ],
+      "ferrite_source_refs": [
+        "composer",
+        "decision"
+      ],
+      "ferrite_counterpart": "Model/effort/permission chips, native primary actions.",
+      "wrong_substitute": "Showing one Stop icon does not certify queue timing, question submission or effective sandbox truth.",
+      "prior_reports": [
+        "composer.md",
+        "providers-settings.md",
+        "t3-live-source-correspondence.md"
+      ],
+      "prior_coverage": "Source and bounded actual provider setting/Stop checks covered.",
+      "actual_audit_omission": "Require relocation/focus and action-state matrix rather than a single screenshot.",
+      "native_evidence": "Sol Stop, Sonnet Stop/Resume verified; Sol Resume and held queue not executed."
+    },
+    {
+      "id": "C15",
+      "name": "Command, entity and prompt-stash overlays",
+      "parent": "ChatComposer -> ComposerCommandMenuLayer",
+      "purpose": "Select commands/context or restore independent stashed drafts.",
+      "placement": "Anchored menu above composer body.",
+      "triggers": "Typed trigger or stash badge; stash only when command menu is closed.",
+      "coexistence": "Menu and stash are mutually selected; ordinary draft remains separate from chosen context.",
+      "responsive": "Anchor and popup width govern narrow layout; no desktop screenshot establishes mobile behavior.",
+      "ownership": "Draft context records and selected provider catalogs; stash queue has independent entries.",
+      "focus": "Editor active suggestion ID and highlighted item coordinate keyboard navigation.",
+      "motion": "Menu layer/popover motion comes from primitives; native motion unmeasured.",
+      "lifetime": "Menus are ephemeral; stashes are draft records, not sent queue runs.",
+      "source_refs": [
+        "composer_menu",
+        "composer_editor",
+        "popover"
+      ],
+      "ferrite_source_refs": [
+        "composer",
+        "quote"
+      ],
+      "ferrite_counterpart": "Native command/file/skill menus; independent prompt stash not established.",
+      "wrong_substitute": "Queued message editing or prompt history is not a stash menu with independent draft/context entries.",
+      "prior_reports": [
+        "composer.md"
+      ],
+      "prior_coverage": "Feature differences covered; overlay collision/focus not fully exercised.",
+      "actual_audit_omission": "Retain mutual-exclusion and outside/Escape behavior as explicit acceptance.",
+      "native_evidence": "Native command/entity/stash authoring variants not certified by the combined send run."
+    },
+    {
+      "id": "C16",
+      "name": "Assistant selection Cite toolbar",
+      "parent": "MessagesTimeline -> AssistantSelectionToolbar",
+      "purpose": "Capture a selected passage with source identity.",
+      "placement": "Portal near selection, clamped inside browser window.",
+      "triggers": "Valid assistant selection and citation callback; keyboard focus shortcut.",
+      "coexistence": "Can sit above transcript while composer stays mounted; source selection is not whole-response Reply.",
+      "responsive": "Window clamp prevents toolbar overflow; max selected length can disable citing.",
+      "ownership": "Selected thread/message/range and source anchor.",
+      "focus": "Pointer down preserves selection; keyboard can focus toolbar; callback inserts into owning composer.",
+      "motion": "No toolbar entrance interpolation was established from inspected code.",
+      "lifetime": "Selection observer/portal disappears with selection or source lifecycle.",
+      "source_refs": [
+        "timeline_list",
+        "selection"
+      ],
+      "ferrite_source_refs": [
+        "reply",
+        "quote"
+      ],
+      "ferrite_counterpart": "Native floating Cite selection action creates Reply text.",
+      "wrong_substitute": "General response context menu or quoted text alone does not preserve selected-source identity.",
+      "prior_reports": [
+        "quote-attachments.md",
+        "transcript.md",
+        "t3-installed-source-match.md"
+      ],
+      "prior_coverage": "Selection behavior covered; whole-response Reply is newer-only and remains qualified.",
+      "actual_audit_omission": "No new absence; keep precise insertion owner and selection/focus contract.",
+      "native_evidence": "Native selection and Cite worked with markers."
+    },
+    {
+      "id": "C17",
+      "name": "Citation chip comment editor and sent source card",
+      "parent": "ComposerPromptEditor -> AssistantCitationChip",
+      "purpose": "Author, reopen and cancel per-quote comments; return from sent quote to source.",
+      "placement": "Anchored comment popover in draft; source link plus comment in sent user row.",
+      "triggers": "Cite insertion or comment edit action; sent card activation navigates.",
+      "coexistence": "Ordinary prompt and images coexist; comment draft differs from saved comment.",
+      "responsive": "Popover and multiline editor bound to source; full comment whitespace preserved in sent card.",
+      "ownership": "Citation schema stores environment/thread/message/text/context/comment; source navigation is explicit.",
+      "focus": "Textarea supports multiline, Save/Cancel and submit-and-send; focus return tied to chip/source.",
+      "motion": "Shared popup transitions; no native animation timing claim.",
+      "lifetime": "Uncommitted comment draft clears on close; source observation detects disappearance; sent citation remains.",
+      "source_refs": [
+        "citation",
+        "citation_comment",
+        "citation_navigation"
+      ],
+      "ferrite_source_refs": [
+        "quote",
+        "attachment"
+      ],
+      "ferrite_counterpart": "Reply stores quote/text but UI has no per-quote authoring path and no navigable source identity.",
+      "wrong_substitute": "Ordinary composer commentary is not an editable comment associated with a citation.",
+      "prior_reports": [
+        "quote-attachments.md",
+        "attachment-runtime-correction.md",
+        "t3-live-source-correspondence.md"
+      ],
+      "prior_coverage": "Known comment/provenance gaps source-backed; actual combined T3 delivery verified.",
+      "actual_audit_omission": "Keep comment, quote disclosure and source navigation as separate contracts.",
+      "native_evidence": "Save/reopen/cancel, combined send and source return verified; transient highlight not established."
+    },
+    {
+      "id": "C18",
+      "name": "Structured context chips and details popovers",
+      "parent": "ComposerContextReferenceChip registry",
+      "purpose": "Inspect terminal, review, preview annotation, thread, machine, image or file context without leaving draft.",
+      "placement": "Inline chips in editor; some open top-side details popover, others preview media or navigate.",
+      "triggers": "Record kind decides renderer and action; unresolved record gets explicit fallback.",
+      "coexistence": "Review diff or annotation crop detail can coexist with composer and workspace.",
+      "responsive": "Chip truncation is paired with detail presentation; popover width bounded by shared primitive.",
+      "ownership": "Draft context records keep typed identities; unavailable record is not silently substituted.",
+      "focus": "Accessible Show details trigger; separate remove/action buttons and source-aware context callbacks.",
+      "motion": "Shared popup transition and chip hover underline; source-only timing.",
+      "lifetime": "Popover ephemeral; records persist with draft and bind outgoing attachment IDs.",
+      "source_refs": [
+        "context_registry",
+        "context_popover",
+        "composer_editor"
+      ],
+      "ferrite_source_refs": [
+        "attachment",
+        "quote"
+      ],
+      "ferrite_counterpart": "Attachment shelf, review count, browser annotations and path tokens.",
+      "wrong_substitute": "An 88px tile, count-only chip or raw filename is not complete inspectable structured context.",
+      "prior_reports": [
+        "quote-attachments.md",
+        "composer.md",
+        "browser.md"
+      ],
+      "prior_coverage": "Capabilities covered in slices; per-kind opener/destination assembly was not reconciled.",
+      "actual_audit_omission": "Important inspection/ownership audit gap; no blanket Ferrite absence asserted for every kind.",
+      "native_evidence": "Preview annotation detail and actual provider receipt observed; all other record kinds not certified."
+    },
+    {
+      "id": "C19",
+      "name": "Draft attachment strip and file preview dialog",
+      "parent": "ChatComposer -> ComposerAttachmentMediaRow/FileList",
+      "purpose": "Show attachment readiness, thumbnail, retry/removal and full file preview.",
+      "placement": "Media row/file list above editor; non-image preview is a modal dialog.",
+      "triggers": "Attach/paste/drop; media preview or filename activation.",
+      "coexistence": "Does not consume workspace active tab just to inspect unsent file.",
+      "responsive": "Media absent when mobile collapsed; separate resting thumbnails; dialog width/height bounded.",
+      "ownership": "Attachment draft target, upload/preparation state, nonpersisted warnings.",
+      "focus": "Named Preview/Remove/Retry controls; file dialog Close retains draft.",
+      "motion": "Snapshot frame opacity/scale with reduced-motion classes; ordinary image row is not proven animated.",
+      "lifetime": "Preview file ID is local; removing/closing affects preview/draft separately.",
+      "source_refs": [
+        "attachment_media",
+        "attachment_files",
+        "file_dialog"
+      ],
+      "ferrite_source_refs": [
+        "attachment",
+        "preview"
+      ],
+      "ferrite_counterpart": "Native attachment tiles and file/image preview destinations exist.",
+      "wrong_substitute": "Path pasted into text or sent-file workspace tab is not unsent attachment readiness and inspection.",
+      "prior_reports": [
+        "composer.md",
+        "quote-attachments.md",
+        "attachment-runtime-correction.md"
+      ],
+      "prior_coverage": "Readiness and clipping source issues known; file chooser runtime limited.",
+      "actual_audit_omission": "Need classify preview route per draft type rather than call all previews equivalent.",
+      "native_evidence": "Native T3 PNG attach/remove affordance/preview verified; Ferrite file intake not exercised by prior controlled correction."
+    },
+    {
+      "id": "C20",
+      "name": "Expanded image/video dialog",
+      "parent": "ChatView -> ExpandedImageDialogHost",
+      "purpose": "Inspect media from draft, history or tool output at usable size.",
+      "placement": "Media modal above other composer/popover overlays.",
+      "triggers": "onImageExpand or attachment/media chip preview.",
+      "coexistence": "Underlying draft and workspace retain state; nested context menu owns Escape before dialog.",
+      "responsive": "92vw/92vh media frame and zoom/pan; not mobile bottom-sheet variant.",
+      "ownership": "Atom carries owning threadKey and preview; owned blob URL revoked when replaced.",
+      "focus": "Initial Close focus; explicit saved opener restoration after unmount; arrows navigate/pan with context-menu guard.",
+      "motion": "Shared media dialog opacity/scale 200ms source styles; no measured runtime smoothness.",
+      "lifetime": "Leaving route clears preview through thread-overlay registry; close clears atom.",
+      "source_refs": [
+        "overlay_hosts",
+        "image_dialog",
+        "image_lifetime",
+        "dialog",
+        "dialog_style"
+      ],
+      "ferrite_source_refs": [
+        "preview",
+        "attachment"
+      ],
+      "ferrite_counterpart": "Native Preview host handles images; complete equivalent media modal/focus contract not established.",
+      "wrong_substitute": "Opening a generic reader or workspace image tab is not proof of equivalent modal nesting and focus return.",
+      "prior_reports": [
+        "quote-attachments.md",
+        "input-focus.md",
+        "t3-live-source-correspondence.md"
+      ],
+      "prior_coverage": "PNG dialog visible and Escape worked; full image-dialog lifetime was not explicitly mapped.",
+      "actual_audit_omission": "Source-level focus and route-scoping gap in previous reconciliation.",
+      "native_evidence": "T3 filename/100% preview and draft preservation verified; multi-image/video cases untested."
+    },
+    {
+      "id": "C21",
+      "name": "Queued messages and transactional edit target",
+      "parent": "Timeline footer -> QueuedRunsControl",
+      "purpose": "Inspect pending future inputs and edit/promote/remove each by stable identity.",
+      "placement": "Timeline end after current state and pending guest rows; editing uses composer.",
+      "triggers": "Queued run or uncommitted optimistic queued message.",
+      "coexistence": "Working state and queue both visible; unrelated main draft preserved by separate edit target.",
+      "responsive": "Visible queue count limited with Show more; row actions wrap independently.",
+      "ownership": "Run/message identity and separate queued-edit draft target.",
+      "focus": "Edit/Cancel/Save/Send now have explicit callbacks; saving makes composer host inert/aria-busy.",
+      "motion": "No queue transition claim; source command success determines lifecycle.",
+      "lifetime": "Optimistic rows disappear after committed; save clears only successful edit target.",
+      "source_refs": [
+        "queue_mount",
+        "footer",
+        "queue",
+        "queue_edit",
+        "composer_mount"
+      ],
+      "ferrite_source_refs": [
+        "queue",
+        "composer"
+      ],
+      "ferrite_counterpart": "Queue cards/actions exist, but Edit cancels/takes back and merges draft.",
+      "wrong_substitute": "Prompt history, native steer queue or stash cannot substitute for transactional queued editing and timing intent.",
+      "prior_reports": [
+        "composer.md",
+        "draft-lifecycle-runtime-correction.md",
+        "t3-live-source-correspondence.md"
+      ],
+      "prior_coverage": "Known composer-04/05; controlled runtime plus real T3 one-item save.",
+      "actual_audit_omission": "Do not treat queue-card presence as cancellation/race/draft-isolation coverage.",
+      "native_evidence": "Native T3 queue/edit/promote receipt passed; multi-item order/cancel/race not certified."
+    },
+    {
+      "id": "C22",
+      "name": "Ordinary pending approval inside timeline",
+      "parent": "Work entry / unmatched approval footer",
+      "purpose": "Show exact proposed action and decision choices where it belongs in work history.",
+      "placement": "Inline WorkLogRow; unmatched approvals appended at transcript list end.",
+      "triggers": "Pending approval projection not held by typing guard.",
+      "coexistence": "Composer remains for decline/redirect feedback; approval details and More options are separate.",
+      "responsive": "Command text scrolls up to bounded height; actions wrap.",
+      "ownership": "Request ID and live response capability; vanished provider cannot be approved.",
+      "focus": "Command is selectable; buttons and More options route the exact request; typing feedback has approval-specific meaning.",
+      "motion": "Button pending feedback is distinct from generic loading; no native timing measurement.",
+      "lifetime": "Pending row changes to settled history through provider events; response state prevents duplicate decisions.",
+      "source_refs": [
+        "approval_row",
+        "timeline_list",
+        "composer_question",
+        "approval_actions"
+      ],
+      "ferrite_source_refs": [
+        "decisions",
+        "decision"
+      ],
+      "ferrite_counterpart": "Decision cards rendered in transcript tail; exact approval answer path shared.",
+      "wrong_substitute": "A generic waiting badge or main-composer send must not approve an unrelated child.",
+      "prior_reports": [
+        "providers-settings.md",
+        "forms-runtime-correction.md",
+        "t3-live-source-correspondence.md"
+      ],
+      "prior_coverage": "Bounded approvals covered; assembly with held typing/feedback and exact action not fully exercised.",
+      "actual_audit_omission": "Action ownership and coexistence need explicit matrix, not new blanket missing approval claim.",
+      "native_evidence": "Real Sonnet separate command/edit/test approvals observed; final model claim of no approvals rejected."
+    },
+    {
+      "id": "C23",
+      "name": "Related-child approval stack above composer",
+      "parent": "ChatView -> ChildThreadApprovals",
+      "purpose": "Answer exact child-thread approvals without losing owning root context.",
+      "placement": "Separate scrollable stack immediately above composer shell.",
+      "triggers": "childThreadApprovalsAtom returns related approvals.",
+      "coexistence": "Distinct from active thread pending approval row and child read-only footer.",
+      "responsive": "max-h-80 scroll stack; per-card command max-h-40.",
+      "ownership": "Environment/thread/request triple keys cards; command submits entry.thread.threadId.",
+      "focus": "Per-card button disabled on missing operation scope or nonlive capability; card-level error is visible.",
+      "motion": "No stack entrance animation established.",
+      "lifetime": "Cards follow pending atom; local responding/error state keyed by exact request triple.",
+      "source_refs": [
+        "composer_mount",
+        "child_approvals"
+      ],
+      "ferrite_source_refs": [
+        "decisions",
+        "full_subject",
+        "compact"
+      ],
+      "ferrite_counterpart": "Core pending decisions retain Subject; compact drill omits Decision strip.",
+      "wrong_substitute": "Generic Open thread selecting first pending child is not an exact named-child request route.",
+      "prior_reports": [
+        "subagents-background.md",
+        "forms-runtime-correction.md"
+      ],
+      "prior_coverage": "Child decision gaps known; separate T3 stack was not prominent in prior inventory.",
+      "actual_audit_omission": "Assembly/ownership omission; not proof that native Sonnet observed this exact component rather than parent-owned request row.",
+      "native_evidence": "Sonnet child command appeared in parent; source component reachability not uniquely established by that screenshot."
+    },
+    {
+      "id": "C24",
+      "name": "Pending question drawer and answer mode",
+      "parent": "ChatComposer -> ComposerPendingUserInputPanel",
+      "purpose": "Present questions, choice options and custom answer with request-scoped submission.",
+      "placement": "Attached drawer above editor; editor becomes custom-answer field, primary actions become question actions.",
+      "triggers": "Pending user-input request; multiquestion progress controls current question.",
+      "coexistence": "Open question suppresses unrelated attention banners, retaining machine problems; attachments capability-gated.",
+      "responsive": "Collapsible drawer and mobile inline action relocation; option text wraps.",
+      "ownership": "Answers/questionIndex belong to runtime request, not ordinary draft text.",
+      "focus": "Digit shortcuts ignore editor contexts; single-choice can auto-advance; IME guard and required answer state matter.",
+      "motion": "Collapsible and option-state CSS exist; no native multiquestion timing guarantee.",
+      "lifetime": "Auto-advance timer cancels on request change/disable/unmount; ordinary draft must survive request lifecycle.",
+      "source_refs": [
+        "composer_question",
+        "questions",
+        "composer_editor",
+        "composer_footer"
+      ],
+      "ferrite_source_refs": [
+        "decision",
+        "decisions"
+      ],
+      "ferrite_counterpart": "Native request forms/choices exist; controlled field clicks routed to composer in bounded replay.",
+      "wrong_substitute": "An ordinary composer or approval card is not a form with field validation and custom-answer ownership.",
+      "prior_reports": [
+        "forms-runtime-correction.md",
+        "providers-settings.md",
+        "input-focus.md"
+      ],
+      "prior_coverage": "Known form/focus uncertainty remains; one T3 single choice passed.",
+      "actual_audit_omission": "Need question/composer arbitration and editor-focused number shortcut as explicit boundaries.",
+      "native_evidence": "Native Cobalt single-choice receipt verified; typing 2 in focused field inserted text rather than choosing option."
+    },
+    {
+      "id": "C25",
+      "name": "Timeline present-state, pending handoff and guest proposal rows",
+      "parent": "ChatView timelineFooter -> ThreadNow",
+      "purpose": "Show current attention/work/sync/goal, lifecycle and proposed next input at the end of conversation.",
+      "placement": "Timeline footer, before queued own messages.",
+      "triggers": "attentionNow/workNow/goalNow/sync, handoff, status line, guest or queued count.",
+      "coexistence": "Independent of top error lane and composer sending banners; Scroll to end summary can show child input/queue count.",
+      "responsive": "NoticeText truncates with details popover while actions remain reachable; touch targets expand.",
+      "ownership": "Selected thread; related-child open action names destination; guest send/dismiss are explicit.",
+      "focus": "Attention uses alert semantics, sync status; details popover exposes cut text, actions remain focusable.",
+      "motion": "ThreadNow source has 150ms fade and reduced-motion opt-out.",
+      "lifetime": "Footer mounted only while one present/queued condition exists; guest additions follow only if reader was already following.",
+      "source_refs": [
+        "footer",
+        "now",
+        "background_now",
+        "guest"
+      ],
+      "ferrite_source_refs": [
+        "background",
+        "decisions"
+      ],
+      "ferrite_counterpart": "Background-work footer line exists; Background panel uses separate inventory.",
+      "wrong_substitute": "Persistent Background tab, top error toast or composer shelf is not same current-state position and reader-follow contract.",
+      "prior_reports": [
+        "subagents-background.md",
+        "motion.md",
+        "coverage-quality.md"
+      ],
+      "prior_coverage": "Background and guest capability source coverage exist; combined footer ordering/coexistence was not audited as one composition.",
+      "actual_audit_omission": "Require current-state/queue visibility and named request destinations; optional guest runtime remains unexecuted.",
+      "native_evidence": "Normal working/waiting/Stopped observed; guest/handoff/goal branches not native certified."
+    },
+    {
+      "id": "C26",
+      "name": "Composer sending notices and top error lane",
+      "parent": "ChatView ChatBannerLane + ChatComposer ComposerBannerStack",
+      "purpose": "Separate provider/thread faults from sending-context notices and machine attention.",
+      "placement": "Provider/thread glass alerts at top of canvas; attached composer notice cards or detached below hero.",
+      "triggers": "Provider setup/error, thread failure; fallback, usage, clone, extension, fresh session, branch or environment item.",
+      "coexistence": "Question drawer can replace attention notices while machine warning/error remains; top lane independent.",
+      "responsive": "Overflow NoticeText opens details; card action rows wrap; hero short-height rule places banners in flow.",
+      "ownership": "Provider banner uses selected instance; thread error dismissal has own key/session state; composer items have stable IDs/order.",
+      "focus": "Refresh provider, setup, expand error and dismiss have separate controls; no focus theft by generic notification inferred.",
+      "motion": "Composer stack fades 150ms with reduced-motion; top alert source does not prove equivalent motion.",
+      "lifetime": "Ready/dismissed provider suppresses banner; pending refresh state settles independently of thread activity.",
+      "source_refs": [
+        "top_banner",
+        "provider_banner",
+        "error_banner",
+        "banner_assembly",
+        "banner_stack",
+        "composer_question"
+      ],
+      "ferrite_source_refs": [
+        "background",
+        "pane"
+      ],
+      "ferrite_counterpart": "Session errors/notices and composer error fields exist; exact two-lane equivalence not established.",
+      "wrong_substitute": "One generic red message/toast cannot replace provider-refresh, thread fault and draft-specific actions.",
+      "prior_reports": [
+        "providers-settings.md",
+        "input-focus.md",
+        "t3-files-terminal-live-source-match.md"
+      ],
+      "prior_coverage": "Provider banner real refresh observed; whole channel hierarchy previously fragmented across reports.",
+      "actual_audit_omission": "Important composition gap; source conditions must be exercised without overwriting draft or hiding recovery.",
+      "native_evidence": "Codex probe timeout banner and visible recovery observed; root cause not diagnosed."
+    },
+    {
+      "id": "C27",
+      "name": "Plan, rendered HTML and MCP app artifact viewers",
+      "parent": "MessagesTimeline typed row dispatch",
+      "purpose": "Read structured assistant artifacts and interact with their dedicated viewers.",
+      "placement": "Plan card, HTML frame or MCP app iframe inline; HTML media dialog or MCP fullscreen on demand.",
+      "triggers": "proposed-plan/html-render/mcp-app row kinds.",
+      "coexistence": "Fullscreen preserves inline height or pins parent state; unrelated tool panel remains distinct.",
+      "responsive": "Plan content can collapse; HTML dialog caps viewport; MCP iframe changes display mode while preserving row height.",
+      "ownership": "Plan save is workspace write with explicit form; HTML blob/fullscreen lifetime belongs viewer; MCP host scoped to app.",
+      "focus": "Plan action menu/save form, HTML expand/Close/zoom, MCP iframe interaction have separate focus contexts.",
+      "motion": "HTML hover controls and shared modal styles exist; no MCP/native animation claim.",
+      "lifetime": "HTML expansion releases fullscreen pin on unmount; closed MCP app shows recoverable closed state.",
+      "source_refs": [
+        "row_dispatch",
+        "artifact_dispatch",
+        "plan",
+        "html",
+        "html_dialog",
+        "mcp_app"
+      ],
+      "ferrite_source_refs": [
+        "rich",
+        "preview",
+        "transcript"
+      ],
+      "ferrite_counterpart": "Markdown/code/Mermaid exist; direct full artifact viewer equivalence not established.",
+      "wrong_substitute": "Code fence, rendered file preview or embedded browser tab is not an interactive MCP app or artifact viewer.",
+      "prior_reports": [
+        "transcript.md",
+        "panel-tools.md"
+      ],
+      "prior_coverage": "Markdown/media known; installed in-chat HTML/MCP modal composition not systematically reconciled.",
+      "actual_audit_omission": "Actual audit coverage omission, source-only; product adoption decision needed before counting as Ferrite defects.",
+      "native_evidence": "No native plan-save, HTML expand or MCP app execution was performed."
+    },
+    {
+      "id": "C28",
+      "name": "Secret and machine-link request cards",
+      "parent": "V2EventTimelineRow special branches",
+      "purpose": "Resolve secret or machine-link requests in their dedicated UI.",
+      "placement": "Secret inline form; link inline request launches multistep modal wizard.",
+      "triggers": "secret_request or link_request item; display can become answered or pending elsewhere.",
+      "coexistence": "Separate from normal approval/question drawer and generic provider setup settings.",
+      "responsive": "Forms wrap within message lane; link wizard uses shared modal presentation.",
+      "ownership": "Request IDs and active owner; secrets use dedicated source/input rather than prompt transcript text.",
+      "focus": "Own form validation/submit/cancel; link wizard machine/access steps and failure state.",
+      "motion": "Shared modal styles for link flow; secret form motion not established.",
+      "lifetime": "Answered/pending-elsewhere renders compact row; in-flight buttons disabled.",
+      "source_refs": [
+        "agent_group",
+        "secret",
+        "link_request",
+        "dialog"
+      ],
+      "ferrite_source_refs": [
+        "decision",
+        "decisions"
+      ],
+      "ferrite_counterpart": "General approval/elicitation machinery exists; no exact secret/link workflow counterpart established.",
+      "wrong_substitute": "Settings secret provider entry or MCP reconnect control is not in-conversation request resolution.",
+      "prior_reports": [
+        "coverage-quality.md",
+        "providers-settings.md",
+        "forms-runtime-correction.md"
+      ],
+      "prior_coverage": "Settings capabilities named; these installed conversation branches were not explicitly mapped.",
+      "actual_audit_omission": "Actual surface inventory omission; source-only and optional, not a new runtime failure.",
+      "native_evidence": "Neither branch was executed; no credentials or remote access changed."
+    },
+    {
+      "id": "C29",
+      "name": "Embedded Side chat conversation and Bring back",
+      "parent": "RightPanelSurfaceContent -> SideChatPane -> ChatView embedded",
+      "purpose": "Explore a fork beside parent, then defer its context into next parent input.",
+      "placement": "Tabbed workspace side pane with own title/Bring back/Delete/Close and embedded ChatView.",
+      "triggers": "Add Side chat or context action; finished side reply enables merge candidate.",
+      "coexistence": "Parent main conversation and side composer coexist; embedded view suppresses main header/details/workspace/drawer siblings.",
+      "responsive": "Width is outer workspace contract; body reuses conversation lane/mobile rules.",
+      "ownership": "Side thread differs from provider child; readSettings copies model/mode; merge records pending context transfer.",
+      "focus": "ComposerHandleContext reset isolates input owner; Bring back is a deferred operation, not auto-submit.",
+      "motion": "No side-body interpolation proven; outer panel lifecycle belongs workspace map.",
+      "lifetime": "Installed close requests delete onlyIfUnused, so a side chat with a run/message survives; explicit Delete is separate. Ferrite surface release removes the side tab and retires its backing thread. Native T3 reopened sent contents; restart/unsent-draft behavior remains unverified.",
+      "source_refs": [
+        "sidechat",
+        "sidechat_create",
+        "sidechat_merge",
+        "sidechat_close",
+        "root",
+        "details_mount",
+        "workspace_siblings"
+      ],
+      "ferrite_source_refs": [
+        "sidechat",
+        "side_merge",
+        "compact",
+        "side_close",
+        "side_release",
+        "side_delete"
+      ],
+      "ferrite_counterpart": "Side chat and Bring back exist; Ferrite inserts serialized quote into parent draft instead of installed pending transfer design.",
+      "wrong_substitute": "A provider-child Agent panel or read-only compact transcript cannot replace independently editable Side chat.",
+      "prior_reports": [
+        "draft-lifecycle-runtime-correction.md",
+        "subagent-placement-correction.md",
+        "t3-live-source-correspondence.md"
+      ],
+      "prior_coverage": "Real deferred receipt now verified; Ferrite controlled reopen failure known.",
+      "actual_audit_omission": "Keep main-child and side-pane authoring separate. Ferrite close/delete conflation is source-supported; the existing controlled blank reopen is runtime evidence, not a new native reproduction.",
+      "native_evidence": "Actual inherited Sol context, next-parent receipt without sentinel supplied, and closed/reopened sent contents verified."
+    },
+    {
+      "id": "C30",
+      "name": "Thread-scoped confirmation and setup hosts",
+      "parent": "ChatView sibling overlay hosts",
+      "purpose": "Confirm rewind/branch effects or start PR/device setup at the originating thread.",
+      "placement": "Modal/alert-dialog hosts, not part of transcript rows or workspace tab body.",
+      "triggers": "Revert/Edit from here, restore branch, PR-thread action, device setup, Link PR.",
+      "coexistence": "Underlying chat can become inert while reverting; embedded mode suppresses most global setup hosts.",
+      "responsive": "Shared dialog mobile sheet/max-height defaults; each host owns its content limits.",
+      "ownership": "Overlay atoms carry threadKey; leaving route closes stale entries; handlers bind operation destination.",
+      "focus": "Dialog actions/cancel and shared primitive focus; no write is implied by merely opening dialog.",
+      "motion": "Retained popup children support exit; source default 200ms opacity/scale, no runtime smoothness certified.",
+      "lifetime": "Revert and image hosts remain independent; branch/PR/device/link hosts have embedded suppression.",
+      "source_refs": [
+        "overlay_hosts",
+        "confirm_hosts",
+        "dialog",
+        "dialog_style"
+      ],
+      "ferrite_source_refs": [
+        "preview",
+        "panel",
+        "decisions"
+      ],
+      "ferrite_counterpart": "Rewind/fork and operation confirmation paths exist; exact per-host equivalence not established here.",
+      "wrong_substitute": "One generic confirmation popup or panel tab does not prove correct thread ownership across route changes.",
+      "prior_reports": [
+        "composer.md",
+        "pr-operations.md",
+        "coverage-quality.md"
+      ],
+      "prior_coverage": "Individual capabilities inspected; common overlay thread-lifetime contract was not captured.",
+      "actual_audit_omission": "Assembly/lifetime coverage omission; workspace and shell specialists own detailed tool dialogs.",
+      "native_evidence": "PR actions inspected without remote writes; these destructive/remote confirmations were not executed."
+    },
+    {
+      "id": "C31",
+      "name": "Canvas preview, bottom terminal drawer and workspace siblings",
+      "parent": "ChatView nonembedded siblings",
+      "purpose": "Keep preview/tool work independently hosted beside the conversation.",
+      "placement": "ThreadPreviewMiniPlayer inside canvas; ChatTerminalDrawers below column; ChatRightPanel beside column.",
+      "triggers": "Preview state, terminal toggle, workspace surfaces and maximize.",
+      "coexistence": "Details card is independent; maximized workspace explicitly makes chat inert; embedded side chat does not recursively mount workspace.",
+      "responsive": "Inline/sheet/float/terminal-drawer are separate presentation contracts, delegated to workspace report.",
+      "ownership": "Active threadKey and workspace store; preview session sync gated by capabilities and nonembedded route.",
+      "focus": "Separate focus scopes; hidden/maximized chat inert prevents accidental input.",
+      "motion": "Panel duration passed explicitly; no claim that default 0ms yields animation.",
+      "lifetime": "Presence retention and outer surface close/reopen owned by workspace reconciliation.",
+      "source_refs": [
+        "root",
+        "details_mount",
+        "workspace_siblings"
+      ],
+      "ferrite_source_refs": [
+        "panel",
+        "preview"
+      ],
+      "ferrite_counterpart": "Ferrite Panel and terminal/browser/file surfaces exist.",
+      "wrong_substitute": "Thread details card, floating browser preview, terminal drawer and workspace tab are not interchangeable names.",
+      "prior_reports": [
+        "thread-details-card-correction.md",
+        "t3-surface-contracts.md",
+        "panel-tools.md"
+      ],
+      "prior_coverage": "Source reports existed but header/card/tool spatial distinction caused actual omissions.",
+      "actual_audit_omission": "Conversation map records sibling boundary; full outer tool contract is delegated, not omitted.",
+      "native_evidence": "Native browser/tool/terminal runs and one details coexistence recheck recorded by parent."
+    },
+    {
+      "id": "C32",
+      "name": "Voice recording and transcription state",
+      "parent": "Composer footer -> speech controls / VoiceInputSetup",
+      "purpose": "Record, review and cancel spoken input without accidental send.",
+      "placement": "Recording pill/button and live transcription inside composer; setup overlay when required.",
+      "triggers": "Speech capability/settings and user record/setup actions.",
+      "coexistence": "Question/approval modes and frozen editor have special submission ownership.",
+      "responsive": "Resting/mobile composer may hide ordinary footer, but active voice keeps relevant controls visible.",
+      "ownership": "Transcription environment and request generation separate from normal keyboard draft.",
+      "focus": "Cancel/finish shortcuts, setup focus and frozen-editor state must retain original input.",
+      "motion": "No measured recording animation or meter timing; source controls only.",
+      "lifetime": "Recording/preparing/transcribing/setup state governs editor freeze and cleanup.",
+      "source_refs": [
+        "composer_voice",
+        "composer_footer"
+      ],
+      "ferrite_source_refs": [
+        "composer"
+      ],
+      "ferrite_counterpart": "No integrated voice UI established; OS dictation is a different path.",
+      "wrong_substitute": "Audio attachment or operating-system dictation is not recording/transcription/cancel state in composer.",
+      "prior_reports": [
+        "composer.md",
+        "coverage-quality.md"
+      ],
+      "prior_coverage": "Known optional voice gap; native audit observed Off and did not enable.",
+      "actual_audit_omission": "No new finding; explicit unexecuted conditional surface retained.",
+      "native_evidence": "Not executed; no microphone/model/integration started."
+    }
+  ],
+  "sources": {
+    "root": {
+      "path": "apps/web/src/components/ChatView.tsx",
+      "revision": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "line": 3270,
+      "anchor_text": "  const content = (",
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/ChatView.tsx#L3270",
+      "sha256": "c04f7ebfbed10af5afc938609ab3eada4d767a60a6ab483d875973fff50b49c4"
+    },
+    "canvas": {
+      "path": "apps/web/src/components/ChatView.tsx",
+      "revision": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "line": 3336,
+      "anchor_text": "        <div className=\"relative flex min-h-0 min-w-0 flex-1\">",
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/ChatView.tsx#L3336",
+      "sha256": "c04f7ebfbed10af5afc938609ab3eada4d767a60a6ab483d875973fff50b49c4"
+    },
+    "timeline_mount": {
+      "path": "apps/web/src/components/ChatView.tsx",
+      "revision": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "line": 3380,
+      "anchor_text": "                <ThreadTimeline",
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/ChatView.tsx#L3380",
+      "sha256": "c04f7ebfbed10af5afc938609ab3eada4d767a60a6ab483d875973fff50b49c4"
+    },
+    "composer_mount": {
+      "path": "apps/web/src/components/ChatView.tsx",
+      "revision": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "line": 3489,
+      "anchor_text": "            <div",
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/ChatView.tsx#L3489",
+      "sha256": "c04f7ebfbed10af5afc938609ab3eada4d767a60a6ab483d875973fff50b49c4"
+    },
+    "child_gate": {
+      "path": "apps/web/src/components/ChatView.tsx",
+      "revision": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "line": 3543,
+      "anchor_text": "                            {showProviderSubagentBar ? (",
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/ChatView.tsx#L3543",
+      "sha256": "c04f7ebfbed10af5afc938609ab3eada4d767a60a6ab483d875973fff50b49c4"
+    },
+    "details_mount": {
+      "path": "apps/web/src/components/ChatView.tsx",
+      "revision": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "line": 3832,
+      "anchor_text": "                <ThreadDetailsPanel",
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/ChatView.tsx#L3832",
+      "sha256": "c04f7ebfbed10af5afc938609ab3eada4d767a60a6ab483d875973fff50b49c4"
+    },
+    "workspace_siblings": {
+      "path": "apps/web/src/components/ChatView.tsx",
+      "revision": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "line": 3915,
+      "anchor_text": "        {embedded ? null : (",
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/ChatView.tsx#L3915",
+      "sha256": "c04f7ebfbed10af5afc938609ab3eada4d767a60a6ab483d875973fff50b49c4"
+    },
+    "overlay_hosts": {
+      "path": "apps/web/src/components/ChatView.tsx",
+      "revision": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "line": 3995,
+      "anchor_text": "      <RevertConfirmHost",
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/ChatView.tsx#L3995",
+      "sha256": "c04f7ebfbed10af5afc938609ab3eada4d767a60a6ab483d875973fff50b49c4"
+    },
+    "footer": {
+      "path": "apps/web/src/components/ChatView.tsx",
+      "revision": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "line": 3091,
+      "anchor_text": "  const timelineFooter =",
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/ChatView.tsx#L3091",
+      "sha256": "c04f7ebfbed10af5afc938609ab3eada4d767a60a6ab483d875973fff50b49c4"
+    },
+    "queue_mount": {
+      "path": "apps/web/src/components/ChatView.tsx",
+      "revision": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "line": 3001,
+      "anchor_text": "  const queuedRunsControl =",
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/ChatView.tsx#L3001",
+      "sha256": "c04f7ebfbed10af5afc938609ab3eada4d767a60a6ab483d875973fff50b49c4"
+    },
+    "banner_assembly": {
+      "path": "apps/web/src/components/ChatView.tsx",
+      "revision": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "line": 2552,
+      "anchor_text": "  const composerBannerItems = (() => {",
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/ChatView.tsx#L2552",
+      "sha256": "c04f7ebfbed10af5afc938609ab3eada4d767a60a6ab483d875973fff50b49c4"
+    },
+    "hero": {
+      "path": "apps/web/src/components/ChatView.tsx",
+      "revision": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "line": 3508,
+      "anchor_text": "                  {isDraftHeroState ? (",
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/ChatView.tsx#L3508",
+      "sha256": "c04f7ebfbed10af5afc938609ab3eada4d767a60a6ab483d875973fff50b49c4"
+    },
+    "context_strip": {
+      "path": "apps/web/src/components/ChatView.tsx",
+      "revision": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "line": 3733,
+      "anchor_text": "                            {showComposerContextStrip && (",
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/ChatView.tsx#L3733",
+      "sha256": "c04f7ebfbed10af5afc938609ab3eada4d767a60a6ab483d875973fff50b49c4"
+    },
+    "route": {
+      "path": "apps/web/src/components/ThreadRouteView.tsx",
+      "revision": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "line": 218,
+      "anchor_text": "      <ChatView",
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/ThreadRouteView.tsx#L218",
+      "sha256": "c16f517bd19e2d073dc00e0ff67cb5de04c963ea1a3aa630faee3ff217e5d6cc"
+    },
+    "open_child": {
+      "path": "apps/web/src/components/chat/useThreadLifecycle.tsx",
+      "revision": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "line": 463,
+      "anchor_text": "  const onOpenRelatedThread = async (",
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/useThreadLifecycle.tsx#L463",
+      "sha256": "fce930f0ee5ba9dbfffbcb60b097db7a05902d32d84a6771c51159f8e1bf72ec"
+    },
+    "header": {
+      "path": "apps/web/src/components/chat/ChatHeader.tsx",
+      "revision": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "line": 247,
+      "anchor_text": "  return (",
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/ChatHeader.tsx#L247",
+      "sha256": "9698863142f869f8b27165b308caac4ea552a3e85247b0c3210f6a180051bd80"
+    },
+    "childbar": {
+      "path": "apps/web/src/components/chat/ProviderSubagentBar.tsx",
+      "revision": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "line": 14,
+      "anchor_text": "export function ProviderSubagentBar(props: {",
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/ProviderSubagentBar.tsx#L14",
+      "sha256": "0d1627c66dbd4a66e34686844cb03bc03cf9be57f4b73197936cbb835f452e43"
+    },
+    "timeline_live": {
+      "path": "apps/web/src/components/chat/ThreadTimeline.tsx",
+      "revision": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "line": 14,
+      "anchor_text": "/**",
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/ThreadTimeline.tsx#L14",
+      "sha256": "9e3fa8eac22efa18d0b240fbf3ff634713fa6d4e3f9ade39387a2ef235c6bab1"
+    },
+    "row_dispatch": {
+      "path": "apps/web/src/components/chat/MessagesTimeline.tsx",
+      "revision": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "line": 1573,
+      "anchor_text": "      {isWorkLogRow ? (",
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/MessagesTimeline.tsx#L1573",
+      "sha256": "42a6fc40d552f3f35fe03c5992c8ea9228aa3b77a92d797c8fe879dcbdc44d63"
+    },
+    "timeline_list": {
+      "path": "apps/web/src/components/chat/MessagesTimeline.tsx",
+      "revision": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "line": 1392,
+      "anchor_text": "  return (",
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/MessagesTimeline.tsx#L1392",
+      "sha256": "42a6fc40d552f3f35fe03c5992c8ea9228aa3b77a92d797c8fe879dcbdc44d63"
+    },
+    "history": {
+      "path": "apps/web/src/components/chat/MessagesTimeline.tsx",
+      "revision": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "line": 1481,
+      "anchor_text": "    return null;",
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/MessagesTimeline.tsx#L1481",
+      "sha256": "42a6fc40d552f3f35fe03c5992c8ea9228aa3b77a92d797c8fe879dcbdc44d63"
+    },
+    "minimap": {
+      "path": "apps/web/src/components/chat/MessagesTimeline.tsx",
+      "revision": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "line": 1455,
+      "anchor_text": "            <TimelineMinimap",
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/MessagesTimeline.tsx#L1455",
+      "sha256": "42a6fc40d552f3f35fe03c5992c8ea9228aa3b77a92d797c8fe879dcbdc44d63"
+    },
+    "turn_nav": {
+      "path": "apps/web/src/components/chat/TimelineMinimap.tsx",
+      "revision": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "line": 266,
+      "anchor_text": "function TimelineMinimapNavigationButton({",
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/TimelineMinimap.tsx#L266",
+      "sha256": "4725be2370d2a94dccb2a7dc3445b9f22850db766b76e919f360b44bc1b07a3b"
+    },
+    "find_owner": {
+      "path": "apps/web/src/components/chat/ThreadFindProvider.tsx",
+      "revision": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "line": 10,
+      "anchor_text": "export function ThreadFindCanvas({",
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/ThreadFindProvider.tsx#L10",
+      "sha256": "1e12c955622d51e51255e0d2e1604bd7b0cb01a821da5ffc83ecb54c62c84df8"
+    },
+    "find_bar": {
+      "path": "apps/web/src/components/chat/ThreadFindBar.tsx",
+      "revision": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "line": 26,
+      "anchor_text": "export function ThreadFindBar(props: ThreadFindBarProps) {",
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/ThreadFindBar.tsx#L26",
+      "sha256": "feab8f379745c5893f1cb89c9fd272fc04e81437461424df19e8c169ed17f705"
+    },
+    "find_scope": {
+      "path": "apps/server/src/orchestration-v2/ThreadFind.ts",
+      "revision": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "line": 311,
+      "anchor_text": "      const candidates = index",
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/server/src/orchestration-v2/ThreadFind.ts#L311",
+      "sha256": "f6f1494528c519e5a4b94fe7a16725d73ca678a5aba1aa5afd3e84a60e81b157"
+    },
+    "find_reveal": {
+      "path": "apps/web/src/components/chat/useThreadFindNavigation.ts",
+      "revision": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "line": 174,
+      "anchor_text": "export function useThreadFindNavigation({",
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/useThreadFindNavigation.ts#L174",
+      "sha256": "eb49161e74f0985b12a05f939a9fb386e9e4d79b9cb1c39c30b37d7098380ccd"
+    },
+    "canvas_layout": {
+      "path": "apps/web/src/components/chat/ChatCanvas.tsx",
+      "revision": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "line": 18,
+      "anchor_text": "}: Omit<ComponentProps<\"div\">, \"className\" | \"style\" | \"ref\"> & {",
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/ChatCanvas.tsx#L18",
+      "sha256": "d5d34e57d73f2597b1248b33399c19cc0dc2577f5e9c74760b4717394c8d77f9"
+    },
+    "workgroup": {
+      "path": "apps/web/src/components/chat/TimelineWorkGroupRows.tsx",
+      "revision": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "line": 248,
+      "anchor_text": "    <WorkGroupViewCtx value={groupView}>",
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/TimelineWorkGroupRows.tsx#L248",
+      "sha256": "96098d9a8e0567aab54fab26f0ddd3fb3819802f89bfac1fac6c2550a3b082be"
+    },
+    "workentry": {
+      "path": "apps/web/src/components/chat/TimelineWorkEntryRow.tsx",
+      "revision": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "line": 223,
+      "anchor_text": "  const [expanded, setExpanded] = useState(",
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/TimelineWorkEntryRow.tsx#L223",
+      "sha256": "9fdf0667a1c0efd2c5bfb06814324c611f4907a3098ff186a266862fb9a7928f"
+    },
+    "inspector": {
+      "path": "apps/web/src/components/chat/V2ItemInspector.tsx",
+      "revision": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "line": 231,
+      "anchor_text": "  const environmentStreamsOutput = useCommandOutputStreaming(props.environmentId);",
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/V2ItemInspector.tsx#L231",
+      "sha256": "cdcdea563b749496a838a07c79b7e89cdfb7c522d6ccb761e4a49a15357b09d3"
+    },
+    "command_output": {
+      "path": "apps/web/src/components/chat/CommandOutputPanel.tsx",
+      "revision": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "line": 26,
+      "anchor_text": "export function CommandOutputPanel(props: {",
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/CommandOutputPanel.tsx#L26",
+      "sha256": "192ef881d4eb8ddd2b62a40ea9c91de9b799ff8822e183fce3c7c06142e07ae3"
+    },
+    "agent_group": {
+      "path": "apps/web/src/components/chat/TimelineV2EventRow.tsx",
+      "revision": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "line": 19,
+      "anchor_text": "export function V2EventTimelineRow({ row }: { row: Extract<TimelineRow, { kind: \"event\" }> }) {",
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/TimelineV2EventRow.tsx#L19",
+      "sha256": "d3a90e0a6b411481efef3e3aa1f7f5eefa9fae1d444f0c7e888e168f4796cc94"
+    },
+    "agent_link": {
+      "path": "apps/web/src/components/chat/V2LifecycleRow.tsx",
+      "revision": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "line": 421,
+      "anchor_text": "    (thread) => thread?.projection.subagents.find((agent) => agent.id === props.subagentId) ?? null,",
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/V2LifecycleRow.tsx#L421",
+      "sha256": "5939cb524feaaf5e51d7dc2b1952b0048b9fda83f42100fc4cf47bb559179791"
+    },
+    "lineage": {
+      "path": "apps/web/src/components/chat/ThreadRelationshipsControl.tsx",
+      "revision": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "line": 586,
+      "anchor_text": "  const lineageVisible =",
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/ThreadRelationshipsControl.tsx#L586",
+      "sha256": "da2f7a4977d89f99092451afbacaaf260e12c3e3e0ce57b88508fdbeb4b83a2d"
+    },
+    "lineage_route": {
+      "path": "apps/web/src/components/chat/ThreadRelationshipsControl.tsx",
+      "revision": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "line": 604,
+      "anchor_text": "  // Idle children can be omitted from the shell; opening one loads its own detail.",
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/ThreadRelationshipsControl.tsx#L604",
+      "sha256": "da2f7a4977d89f99092451afbacaaf260e12c3e3e0ce57b88508fdbeb4b83a2d"
+    },
+    "details": {
+      "path": "apps/web/src/components/chat/ThreadDetailsCard.tsx",
+      "revision": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "line": 131,
+      "anchor_text": "  return (",
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/ThreadDetailsCard.tsx#L131",
+      "sha256": "995d549288518bd5078c869e5a2f13269204ad71a48f6e5a3e0c33f160fd07ed"
+    },
+    "details_sections": {
+      "path": "apps/web/src/components/chat/ThreadDetailsPanel.tsx",
+      "revision": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "line": 151,
+      "anchor_text": "      {(density) => {",
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/ThreadDetailsPanel.tsx#L151",
+      "sha256": "d88e73deea36a9c5d66d888a524047a1c26276ad2113558c4644a4b0bcc7d3df"
+    },
+    "details_layout": {
+      "path": "apps/web/src/components/chat/threadDetailsCardLayout.ts",
+      "revision": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "line": 17,
+      "anchor_text": "export function resolveThreadDetailsCardLayout({",
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/threadDetailsCardLayout.ts#L17",
+      "sha256": "2348b258a6b04531da615ac90ff85d4489b4f1d49c8443d036ee808e62e0599d"
+    },
+    "native_dialog": {
+      "path": "apps/web/src/components/chat/NativeChildWorkDialog.tsx",
+      "revision": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "line": 30,
+      "anchor_text": "export function NativeChildWorkDialog(props: {",
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/NativeChildWorkDialog.tsx#L30",
+      "sha256": "98e31dc3fdb64a96a794774f62958454a03467d22fc947ffaa41a07558483de0"
+    },
+    "composer": {
+      "path": "apps/web/src/components/chat/ChatComposer.tsx",
+      "revision": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "line": 3212,
+      "anchor_text": "  return (",
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/ChatComposer.tsx#L3212",
+      "sha256": "418417528c25acbdacbb87c08fd78e1c8eb48012e3892b6cc07935e4bad5654d"
+    },
+    "composer_controls": {
+      "path": "apps/web/src/components/chat/ChatComposer.tsx",
+      "revision": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "line": 2404,
+      "anchor_text": "  const composerControls = (",
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/ChatComposer.tsx#L2404",
+      "sha256": "418417528c25acbdacbb87c08fd78e1c8eb48012e3892b6cc07935e4bad5654d"
+    },
+    "composer_menu": {
+      "path": "apps/web/src/components/chat/ChatComposer.tsx",
+      "revision": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "line": 3393,
+      "anchor_text": "              {isStashMenuOpen && !composerMenuOpen && (",
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/ChatComposer.tsx#L3393",
+      "sha256": "418417528c25acbdacbb87c08fd78e1c8eb48012e3892b6cc07935e4bad5654d"
+    },
+    "composer_question": {
+      "path": "apps/web/src/components/chat/ChatComposer.tsx",
+      "revision": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "line": 3265,
+      "anchor_text": "      <ComposerBanner.Dock>",
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/ChatComposer.tsx#L3265",
+      "sha256": "418417528c25acbdacbb87c08fd78e1c8eb48012e3892b6cc07935e4bad5654d"
+    },
+    "composer_footer": {
+      "path": "apps/web/src/components/chat/ChatComposer.tsx",
+      "revision": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "line": 3591,
+      "anchor_text": "                  <ComposerFooterPrimaryActions",
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/ChatComposer.tsx#L3591",
+      "sha256": "418417528c25acbdacbb87c08fd78e1c8eb48012e3892b6cc07935e4bad5654d"
+    },
+    "composer_mobile": {
+      "path": "apps/web/src/components/chat/ChatComposer.tsx",
+      "revision": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "line": 3318,
+      "anchor_text": "            {showCollapsedMobilePromptRow ? (",
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/ChatComposer.tsx#L3318",
+      "sha256": "418417528c25acbdacbb87c08fd78e1c8eb48012e3892b6cc07935e4bad5654d"
+    },
+    "composer_editor": {
+      "path": "apps/web/src/components/chat/ChatComposer.tsx",
+      "revision": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "line": 3461,
+      "anchor_text": "                <ComposerContextActionsContext value={composerContextActions}>",
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/ChatComposer.tsx#L3461",
+      "sha256": "418417528c25acbdacbb87c08fd78e1c8eb48012e3892b6cc07935e4bad5654d"
+    },
+    "composer_voice": {
+      "path": "apps/web/src/components/chat/ChatComposer.tsx",
+      "revision": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "line": 3553,
+      "anchor_text": "            {speechInput.preview ? (",
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/ChatComposer.tsx#L3553",
+      "sha256": "418417528c25acbdacbb87c08fd78e1c8eb48012e3892b6cc07935e4bad5654d"
+    },
+    "selection": {
+      "path": "apps/web/src/components/chat/AssistantSelectionToolbar.tsx",
+      "revision": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "line": 148,
+      "anchor_text": "    const focusActions = (event: KeyboardEvent) => {",
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/AssistantSelectionToolbar.tsx#L148",
+      "sha256": "2773a01e91b96a775b0ab0d25d47dfdd8abbc64f4d25d239dc87fa665c1845e2"
+    },
+    "citation": {
+      "path": "apps/web/src/components/chat/AssistantCitationChip.tsx",
+      "revision": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "line": 108,
+      "anchor_text": "/** The citation chip in the composer, with its comment editor. */",
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/AssistantCitationChip.tsx#L108",
+      "sha256": "720cae72af8c1df1f9376928fd1a188851c972de87db5c1d13f9ed3acf41f18a"
+    },
+    "citation_comment": {
+      "path": "apps/web/src/components/chat/AssistantCitationCommentEditor.tsx",
+      "revision": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "line": 27,
+      "anchor_text": "  const [comment, setComment] = useState(citation.comment ?? \"\");",
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/AssistantCitationCommentEditor.tsx#L27",
+      "sha256": "0556de517252881734a506f9ee4214fc3ea7770768e85366a0891c97379bcaf3"
+    },
+    "citation_navigation": {
+      "path": "apps/web/src/lib/assistantCitationNavigation.ts",
+      "revision": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "line": 79,
+      "anchor_text": "export function assistantCitationNavigation(",
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/lib/assistantCitationNavigation.ts#L79",
+      "sha256": "e9df0e4add98460ffd9d1a3ce2a3f131cc8a01a358ce666cbf6cc43e5bd17ad8"
+    },
+    "context_registry": {
+      "path": "apps/web/src/components/composerContextPresentation.tsx",
+      "revision": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "line": 364,
+      "anchor_text": "const composerContextPresentationRegistry = createContextPresentationRegistry<",
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/composerContextPresentation.tsx#L364",
+      "sha256": "6e0cb04daf85f51f74bfbed8c78dae394457c3c8991a5f4f836d76b18bc85b5b"
+    },
+    "context_popover": {
+      "path": "apps/web/src/components/contextChipParts.tsx",
+      "revision": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "line": 64,
+      "anchor_text": "export function ContextChipPopover(props: {",
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/contextChipParts.tsx#L64",
+      "sha256": "942dcebf4fb55ce9ca7c5f00d09d959476e9f3fcaf9ec517e432395c746e6bb2"
+    },
+    "attachment_media": {
+      "path": "apps/web/src/components/chat/ComposerAttachmentStrip.tsx",
+      "revision": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "line": 136,
+      "anchor_text": "export function ComposerAttachmentMediaRow({",
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/ComposerAttachmentStrip.tsx#L136",
+      "sha256": "8a704bfd364d11c0275ad8a25124490d81b675f2a0c907e9d004947a3eefb256"
+    },
+    "attachment_files": {
+      "path": "apps/web/src/components/chat/ComposerAttachmentStrip.tsx",
+      "revision": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "line": 430,
+      "anchor_text": "export function ComposerAttachmentFileList({",
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/ComposerAttachmentStrip.tsx#L430",
+      "sha256": "8a704bfd364d11c0275ad8a25124490d81b675f2a0c907e9d004947a3eefb256"
+    },
+    "file_dialog": {
+      "path": "apps/web/src/components/chat/ComposerAttachmentStrip.tsx",
+      "revision": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "line": 534,
+      "anchor_text": "export function ComposerFilePreviewDialog({",
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/ComposerAttachmentStrip.tsx#L534",
+      "sha256": "8a704bfd364d11c0275ad8a25124490d81b675f2a0c907e9d004947a3eefb256"
+    },
+    "image_dialog": {
+      "path": "apps/web/src/components/chat/ExpandedImageDialog.tsx",
+      "revision": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "line": 80,
+      "anchor_text": "export const ExpandedImageDialog = memo(function ExpandedImageDialog({",
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/ExpandedImageDialog.tsx#L80",
+      "sha256": "012d1608b2badcf2495cc261c9f40d7ab85d531f2507466392a4c66bcad6571e"
+    },
+    "image_lifetime": {
+      "path": "apps/web/src/components/chat/ExpandedImageDialog.tsx",
+      "revision": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "line": 292,
+      "anchor_text": "// Keep preview state outside ChatView to isolate dialog renders.",
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/ExpandedImageDialog.tsx#L292",
+      "sha256": "012d1608b2badcf2495cc261c9f40d7ab85d531f2507466392a4c66bcad6571e"
+    },
+    "queue": {
+      "path": "apps/web/src/components/chat/QueuedRunsControl.tsx",
+      "revision": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "line": 172,
+      "anchor_text": "  const sendQueuedMessage = async (queuedRunId: RunId) => {",
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/QueuedRunsControl.tsx#L172",
+      "sha256": "7094c8b3d85d696be4450a52621b9c51c21f900fb5c7dbff4857bd241fbc4c05"
+    },
+    "queue_edit": {
+      "path": "apps/web/src/components/chat/useQueuedRunEdit.ts",
+      "revision": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "line": 181,
+      "anchor_text": "/** Edits preserve the thread draft; attachment removals stay local until save. */",
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/useQueuedRunEdit.ts#L181",
+      "sha256": "c2e0713ab5cc6a2fda0e75465cd363c4bc41140607280b3f541e3f047203bceb"
+    },
+    "approval_row": {
+      "path": "apps/web/src/components/chat/TimelinePendingApprovalRow.tsx",
+      "revision": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "line": 34,
+      "anchor_text": "export const TimelinePendingApprovalRow = memo(function TimelinePendingApprovalRow({",
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/TimelinePendingApprovalRow.tsx#L34",
+      "sha256": "b9760e4dac0bd051c8671ba2b431744098b4c6ef6164894ea675b47a9a004c43"
+    },
+    "approval_actions": {
+      "path": "apps/web/src/components/chat/ComposerPendingApprovalActions.tsx",
+      "revision": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "line": 1,
+      "anchor_text": "import {",
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/ComposerPendingApprovalActions.tsx#L1",
+      "sha256": "960834238cf551d08b141288757431a3add890a708d87f1164930f3a349a138d"
+    },
+    "child_approvals": {
+      "path": "apps/web/src/components/chat/ChildThreadApprovals.tsx",
+      "revision": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "line": 15,
+      "anchor_text": "function ChildApproval({ entry }: { entry: ChildThreadApproval }) {",
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/ChildThreadApprovals.tsx#L15",
+      "sha256": "ad1af6ed5e38ab8c0ed090c438489bf2cc0224b541beed728db9382993044d11"
+    },
+    "questions": {
+      "path": "apps/web/src/components/chat/ComposerPendingUserInputPanel.tsx",
+      "revision": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "line": 130,
+      "anchor_text": "  const handleOptionSelection = (questionId: string, optionValue: string) => {",
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/ComposerPendingUserInputPanel.tsx#L130",
+      "sha256": "c1593d28ea4bfc536dd49f9eb7138210d7c2631c1a66be74e2653c13b6dcd609"
+    },
+    "now": {
+      "path": "apps/web/src/components/chat/ThreadNow.tsx",
+      "revision": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "line": 83,
+      "anchor_text": "export function ThreadNow({",
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/ThreadNow.tsx#L83",
+      "sha256": "80210d9cb2223b6216427dce42e5c50cd49d2634998aaa9e8b7f26d468437ef9"
+    },
+    "background_now": {
+      "path": "apps/web/src/components/chat/ThreadActivityBanners.tsx",
+      "revision": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "line": 171,
+      "anchor_text": "export function backgroundWorkNowItem(input: {",
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/ThreadActivityBanners.tsx#L171",
+      "sha256": "7d6813b0052c873440b7d894de1034fb09cfa9b06c096765775648be28cdcada"
+    },
+    "banner_stack": {
+      "path": "apps/web/src/components/chat/ComposerBannerStack.tsx",
+      "revision": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "line": 28,
+      "anchor_text": "const GROUPS = [\"environment\", \"attention\"] as const;",
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/ComposerBannerStack.tsx#L28",
+      "sha256": "f56387e43f89fcbb3c04837e2c1401b849b60059b5c3918d102f5b18ad7f5611"
+    },
+    "top_banner": {
+      "path": "apps/web/src/components/chat/ChatBannerLane.tsx",
+      "revision": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "line": 43,
+      "anchor_text": "  return (",
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/ChatBannerLane.tsx#L43",
+      "sha256": "1c09b12f5fa029b31b58a3fc80e0a784ea89c3bb8b8fec8838e570dfe13eea96"
+    },
+    "provider_banner": {
+      "path": "apps/web/src/components/chat/ProviderStatusBanner.tsx",
+      "revision": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "line": 107,
+      "anchor_text": "  const canRefresh = useAtomValue(serverEnvironment.refreshProviders.permissionAtom(environmentId));",
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/ProviderStatusBanner.tsx#L107",
+      "sha256": "c9d9872740dfb92a77d98851e232740b6f4e6c67a7dd5fef5a9c691cd7f5d880"
+    },
+    "error_banner": {
+      "path": "apps/web/src/components/chat/ThreadErrorBanner.tsx",
+      "revision": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "line": 72,
+      "anchor_text": "export const ThreadErrorBanner = memo(function ThreadErrorBanner({",
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/ThreadErrorBanner.tsx#L72",
+      "sha256": "651e32b448b2d86e70554fbf59c1aed45116cc9bd9ab3f97628d17fec139d3dc"
+    },
+    "guest": {
+      "path": "apps/web/src/components/chat/GuestShareControls.tsx",
+      "revision": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "line": 220,
+      "anchor_text": "export function GuestPendingMessages({",
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/GuestShareControls.tsx#L220",
+      "sha256": "b4d8346f4bbeb135648eafb388eaa2e10f9ed3786ae7bc14330f50ec36b76136"
+    },
+    "artifact_dispatch": {
+      "path": "apps/web/src/components/chat/TimelineAssistantRows.tsx",
+      "revision": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "line": 229,
+      "anchor_text": "export function ProposedPlanTimelineRow({",
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/TimelineAssistantRows.tsx#L229",
+      "sha256": "5b00daeafabfee1ae64965b71dd553b41d253afbb64ac5fb3579ed40e07e0793"
+    },
+    "plan": {
+      "path": "apps/web/src/components/chat/ProposedPlanCard.tsx",
+      "revision": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "line": 161,
+      "anchor_text": "    <div className=\"rounded-2xl border border-border/80 bg-card/70 p-4 sm:p-5\">",
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/ProposedPlanCard.tsx#L161",
+      "sha256": "cd2d43c04e5583813e3333f7bb441f4852e0a93e3d9ea3adf909e2658f3fad70"
+    },
+    "html": {
+      "path": "apps/web/src/components/chat/HtmlRenderFrame.tsx",
+      "revision": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "line": 57,
+      "anchor_text": "  const [expandedSrc, setExpandedSrc] = useState<string | null>(null);",
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/HtmlRenderFrame.tsx#L57",
+      "sha256": "49cb82618408f9ff711bc16682ca5389dd1abb0a2544d68db2d7bba787aad1f5"
+    },
+    "html_dialog": {
+      "path": "apps/web/src/components/chat/HtmlRenderDialog.tsx",
+      "revision": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "line": 39,
+      "anchor_text": "    <Dialog open onOpenChange={(open) => !open && props.onClose()}>",
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/HtmlRenderDialog.tsx#L39",
+      "sha256": "ee8402e145cd34f766d80b6fc66e11ed83ea71dad6a782da5aeefbd7a6560d43"
+    },
+    "mcp_app": {
+      "path": "apps/web/src/components/chat/McpAppFrame.tsx",
+      "revision": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "line": 437,
+      "anchor_text": "    // Preserve inline row height during fullscreen to prevent timeline jumps.",
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/McpAppFrame.tsx#L437",
+      "sha256": "f7935be7bd4ff77070a2780014fa71d66db82e07ac7b631b5c02834c68ea54c0"
+    },
+    "secret": {
+      "path": "apps/web/src/components/chat/SecretRequestCard.tsx",
+      "revision": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "line": 36,
+      "anchor_text": "export function SecretRequestCard(props: {",
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/SecretRequestCard.tsx#L36",
+      "sha256": "6aeb51f464452001a39373312757054f3bc7e82e1e197f257c7e466fd96d3d1c"
+    },
+    "link_request": {
+      "path": "apps/web/src/components/chat/LinkRequestCard.tsx",
+      "revision": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "line": 57,
+      "anchor_text": "export function LinkRequestCard(props: {",
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/LinkRequestCard.tsx#L57",
+      "sha256": "6176036dc1d4007e6f53b789f5cf086958367c21eef59ae24cfbcd3dfc4ebbf0"
+    },
+    "sidechat": {
+      "path": "apps/web/src/components/chat/SideChatPane.tsx",
+      "revision": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "line": 129,
+      "anchor_text": "  return (",
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/SideChatPane.tsx#L129",
+      "sha256": "d487c01b2179fb0869d81018f8e92e71c7e4f92ec206036c8f21371343e92a42"
+    },
+    "sidechat_create": {
+      "path": "apps/web/src/components/chat/useSideChat.ts",
+      "revision": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "line": 51,
+      "anchor_text": "  const start = async (threadRef: ScopedThreadRef, prompt: string | undefined) => {",
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/useSideChat.ts#L51",
+      "sha256": "501cc9ca0fd857397992708d4b582b0b4665bea8fb48e8c1fa1a3fe79e76bd58"
+    },
+    "sidechat_merge": {
+      "path": "apps/web/src/components/chat/SideChatPane.tsx",
+      "revision": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "line": 59,
+      "anchor_text": "  const mergeRun = projection ? resolveLatestMergeBackRun(projection) : null;",
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/SideChatPane.tsx#L59",
+      "sha256": "d487c01b2179fb0869d81018f8e92e71c7e4f92ec206036c8f21371343e92a42"
+    },
+    "confirm_hosts": {
+      "path": "apps/web/src/components/chat/ChatOverlayHosts.tsx",
+      "revision": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "line": 32,
+      "anchor_text": " * Open state for overlays the chat view hosts. It lives in atoms rather than",
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/ChatOverlayHosts.tsx#L32",
+      "sha256": "2a88cef3be7b013b305fc326bc399753030188d81a9066b6b97a82f66d1cd718"
+    },
+    "dialog": {
+      "path": "apps/web/src/components/ui/dialog.tsx",
+      "revision": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "line": 18,
+      "anchor_text": "function RetainedWhileClosed({ open, children }: { open: boolean; children: ReactNode }) {",
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/ui/dialog.tsx#L18",
+      "sha256": "9a17b81ec6358725aa5cec01fb2f17b6af7644c84a61597626297db94ad2df47"
+    },
+    "dialog_style": {
+      "path": "apps/web/src/components/ui/dialog-styles.ts",
+      "revision": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "line": 1,
+      "anchor_text": "const DIALOG_BACKDROP_BASE_CLASS =",
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/ui/dialog-styles.ts#L1",
+      "sha256": "e0e987bd3bcf354286d0323db8a448d1953fce676c2503ee3d6c02dfd0a82fbb"
+    },
+    "popover": {
+      "path": "apps/web/src/components/ui/popover.tsx",
+      "revision": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "line": 66,
+      "anchor_text": "    <PopoverPrimitive.Portal keepMounted={keepMounted}>",
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/ui/popover.tsx#L66",
+      "sha256": "941184037ac560adce25d104bf188a6130d0fb50b56650c9a5b570aa65513874"
+    },
+    "sidechat_close": {
+      "path": "apps/web/src/hooks/useRightPanelSurfaceClose.ts",
+      "revision": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "line": 73,
+      "anchor_text": "    if (",
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/hooks/useRightPanelSurfaceClose.ts#L73",
+      "sha256": "575b298ad5393b6f8615dd14bd485f6e5140abac6f2fb3eea82c0a7016a4b7dc"
+    }
+  },
+  "ferrite_sources": {
+    "pane": {
+      "path": "crates/ferrite-pane/src/pane.rs",
+      "revision": "62947f91d5cd6ee494aaae9ed09d794a853e5bab",
+      "line": 881,
+      "anchor_text": "pub fn render_pane(",
+      "url": "https://github.com/josephwylie/ferrite/blob/62947f91d5cd6ee494aaae9ed09d794a853e5bab/crates/ferrite-pane/src/pane.rs#L881",
+      "sha256": "2acb056ed45a55613c97001dc36a440f00b640c54d645943004bba38b7010493"
+    },
+    "transcript": {
+      "path": "crates/ferrite-pane/src/transcript.rs",
+      "revision": "62947f91d5cd6ee494aaae9ed09d794a853e5bab",
+      "line": 2912,
+      "anchor_text": "impl Render for TranscriptView {",
+      "url": "https://github.com/josephwylie/ferrite/blob/62947f91d5cd6ee494aaae9ed09d794a853e5bab/crates/ferrite-pane/src/transcript.rs#L2912",
+      "sha256": "a564c307501c8a99d87d607cc91e40a013da27560e958025b24ad9c192abb418"
+    },
+    "agent_panel": {
+      "path": "crates/ferrite-cockpit/src/cockpit/agent_pane.rs",
+      "revision": "62947f91d5cd6ee494aaae9ed09d794a853e5bab",
+      "line": 67,
+      "anchor_text": "    /// A press on an agent call's row in Pane `index`: that agent opens in",
+      "url": "https://github.com/josephwylie/ferrite/blob/62947f91d5cd6ee494aaae9ed09d794a853e5bab/crates/ferrite-cockpit/src/cockpit/agent_pane.rs#L67",
+      "sha256": "2068795ce16dc068abc0bd55b9230b2de98c475333d6f31d659541e9bf617f4d"
+    },
+    "full_subject": {
+      "path": "crates/ferrite-cockpit/src/cockpit/subagents.rs",
+      "revision": "62947f91d5cd6ee494aaae9ed09d794a853e5bab",
+      "line": 376,
+      "anchor_text": "    pub(super) fn select_subject(",
+      "url": "https://github.com/josephwylie/ferrite/blob/62947f91d5cd6ee494aaae9ed09d794a853e5bab/crates/ferrite-cockpit/src/cockpit/subagents.rs#L376",
+      "sha256": "fec4d1bac7516b1ab6d0fc34cfe73b18e08d3a1e133e2bc067a4a14dc0950ac4"
+    },
+    "compact": {
+      "path": "crates/ferrite-cockpit/src/cockpit/side_chat.rs",
+      "revision": "62947f91d5cd6ee494aaae9ed09d794a853e5bab",
+      "line": 477,
+      "anchor_text": "    /// Tell `pane`'s transcript what `subject` of `thread` holds after its",
+      "url": "https://github.com/josephwylie/ferrite/blob/62947f91d5cd6ee494aaae9ed09d794a853e5bab/crates/ferrite-cockpit/src/cockpit/side_chat.rs#L477",
+      "sha256": "15c9371a17f092aa0d8d34b6a5ee8c1372d7187c8df9ca558100000ed2cfc0eb"
+    },
+    "sidechat": {
+      "path": "crates/ferrite-cockpit/src/cockpit/side_chat.rs",
+      "revision": "62947f91d5cd6ee494aaae9ed09d794a853e5bab",
+      "line": 607,
+      "anchor_text": "    pub(super) fn side_chat_body(&self, owner: ThreadId, id: u64, cx: &mut Context<Self>) -> AnyElement {",
+      "url": "https://github.com/josephwylie/ferrite/blob/62947f91d5cd6ee494aaae9ed09d794a853e5bab/crates/ferrite-cockpit/src/cockpit/side_chat.rs#L607",
+      "sha256": "15c9371a17f092aa0d8d34b6a5ee8c1372d7187c8df9ca558100000ed2cfc0eb"
+    },
+    "side_merge": {
+      "path": "crates/ferrite-cockpit/src/cockpit/side_chat.rs",
+      "revision": "62947f91d5cd6ee494aaae9ed09d794a853e5bab",
+      "line": 776,
+      "anchor_text": "    /// Bring back: side chat `id`'s latest run goes into the main Thread's",
+      "url": "https://github.com/josephwylie/ferrite/blob/62947f91d5cd6ee494aaae9ed09d794a853e5bab/crates/ferrite-cockpit/src/cockpit/side_chat.rs#L776",
+      "sha256": "15c9371a17f092aa0d8d34b6a5ee8c1372d7187c8df9ca558100000ed2cfc0eb"
+    },
+    "overview": {
+      "path": "crates/ferrite-cockpit/src/cockpit/panel/sections.rs",
+      "revision": "62947f91d5cd6ee494aaae9ed09d794a853e5bab",
+      "line": 25,
+      "anchor_text": "    pub(super) fn panel_sections(",
+      "url": "https://github.com/josephwylie/ferrite/blob/62947f91d5cd6ee494aaae9ed09d794a853e5bab/crates/ferrite-cockpit/src/cockpit/panel/sections.rs#L25",
+      "sha256": "9494320c8e0d1c394ec1a14c516e6abe4cb2df1887cc5611695eeaeff9d70c1d"
+    },
+    "panel": {
+      "path": "crates/ferrite-cockpit/src/cockpit/panel.rs",
+      "revision": "62947f91d5cd6ee494aaae9ed09d794a853e5bab",
+      "line": 624,
+      "anchor_text": "    /// The body under the head: one `match` on the shown Surface (T3's",
+      "url": "https://github.com/josephwylie/ferrite/blob/62947f91d5cd6ee494aaae9ed09d794a853e5bab/crates/ferrite-cockpit/src/cockpit/panel.rs#L624",
+      "sha256": "f95a3a9e7a7bae8b0f56fb108d2b7d283fd654b9d282dc1c0c8014546deca653"
+    },
+    "find": {
+      "path": "crates/ferrite-pane/src/transcript/find.rs",
+      "revision": "62947f91d5cd6ee494aaae9ed09d794a853e5bab",
+      "line": 40,
+      "anchor_text": "    pub fn open_find(&mut self, window: &mut Window, cx: &mut Context<Self>) {",
+      "url": "https://github.com/josephwylie/ferrite/blob/62947f91d5cd6ee494aaae9ed09d794a853e5bab/crates/ferrite-pane/src/transcript/find.rs#L40",
+      "sha256": "da6ded66aa40ed370326df6a8f6d42b6c5b4f7b5bf8423011d48e6c913542e23"
+    },
+    "scroll": {
+      "path": "crates/ferrite-pane/src/transcript/scroll.rs",
+      "revision": "62947f91d5cd6ee494aaae9ed09d794a853e5bab",
+      "line": 110,
+      "anchor_text": "    /// Resume native tail following and reveal the newest row.",
+      "url": "https://github.com/josephwylie/ferrite/blob/62947f91d5cd6ee494aaae9ed09d794a853e5bab/crates/ferrite-pane/src/transcript/scroll.rs#L110",
+      "sha256": "c1507f5fb984dfc57c872743ba18bcaa651a72ed0ffba173ac1b22f50321815c"
+    },
+    "work": {
+      "path": "crates/ferrite-pane/src/transcript.rs",
+      "revision": "62947f91d5cd6ee494aaae9ed09d794a853e5bab",
+      "line": 1654,
+      "anchor_text": "    fn render_work(",
+      "url": "https://github.com/josephwylie/ferrite/blob/62947f91d5cd6ee494aaae9ed09d794a853e5bab/crates/ferrite-pane/src/transcript.rs#L1654",
+      "sha256": "a564c307501c8a99d87d607cc91e40a013da27560e958025b24ad9c192abb418"
+    },
+    "tool": {
+      "path": "crates/ferrite-pane/src/transcript.rs",
+      "revision": "62947f91d5cd6ee494aaae9ed09d794a853e5bab",
+      "line": 1712,
+      "anchor_text": "    fn render_call(",
+      "url": "https://github.com/josephwylie/ferrite/blob/62947f91d5cd6ee494aaae9ed09d794a853e5bab/crates/ferrite-pane/src/transcript.rs#L1712",
+      "sha256": "a564c307501c8a99d87d607cc91e40a013da27560e958025b24ad9c192abb418"
+    },
+    "reply": {
+      "path": "crates/ferrite-pane/src/transcript/reply.rs",
+      "revision": "62947f91d5cd6ee494aaae9ed09d794a853e5bab",
+      "line": 158,
+      "anchor_text": "    pub(super) fn reply_float(",
+      "url": "https://github.com/josephwylie/ferrite/blob/62947f91d5cd6ee494aaae9ed09d794a853e5bab/crates/ferrite-pane/src/transcript/reply.rs#L158",
+      "sha256": "57bb1c171d0a6824ed58fa0095a017b2b411c2de7288c63c6051516c11f037ce"
+    },
+    "quote": {
+      "path": "crates/ferrite-pane/src/quote.rs",
+      "revision": "62947f91d5cd6ee494aaae9ed09d794a853e5bab",
+      "line": 50,
+      "anchor_text": "/// A passage the operator replied to, and what they said about it (empty",
+      "url": "https://github.com/josephwylie/ferrite/blob/62947f91d5cd6ee494aaae9ed09d794a853e5bab/crates/ferrite-pane/src/quote.rs#L50",
+      "sha256": "aa4b40c3dd5f8363b5fcfb57e2793079e7cdaf19c5b8f9fc92be4afa0438e531"
+    },
+    "attachment": {
+      "path": "crates/ferrite-pane/src/attachments.rs",
+      "revision": "62947f91d5cd6ee494aaae9ed09d794a853e5bab",
+      "line": 551,
+      "anchor_text": "fn reply_card(index: usize, reply: Reply, on_remove: Option<RemoveReply>) -> gpui::AnyElement {",
+      "url": "https://github.com/josephwylie/ferrite/blob/62947f91d5cd6ee494aaae9ed09d794a853e5bab/crates/ferrite-pane/src/attachments.rs#L551",
+      "sha256": "667be209fe7a20b5e2b1d3cd80e0e7683d70bed51d017f815b58fc5ba59019a0"
+    },
+    "composer": {
+      "path": "crates/ferrite-pane/src/pane/composer.rs",
+      "revision": "62947f91d5cd6ee494aaae9ed09d794a853e5bab",
+      "line": 456,
+      "anchor_text": "pub(super) fn composer_region(",
+      "url": "https://github.com/josephwylie/ferrite/blob/62947f91d5cd6ee494aaae9ed09d794a853e5bab/crates/ferrite-pane/src/pane/composer.rs#L456",
+      "sha256": "2d2d22cba3bbd95ac6252d177d80b3f7bc746aee9356b632e24dca0d0ac15327"
+    },
+    "queue": {
+      "path": "crates/ferrite-pane/src/pane/composer.rs",
+      "revision": "62947f91d5cd6ee494aaae9ed09d794a853e5bab",
+      "line": 791,
+      "anchor_text": "pub(super) fn queue_card(",
+      "url": "https://github.com/josephwylie/ferrite/blob/62947f91d5cd6ee494aaae9ed09d794a853e5bab/crates/ferrite-pane/src/pane/composer.rs#L791",
+      "sha256": "2d2d22cba3bbd95ac6252d177d80b3f7bc746aee9356b632e24dca0d0ac15327"
+    },
+    "decisions": {
+      "path": "crates/ferrite-cockpit/src/cockpit/decisions.rs",
+      "revision": "62947f91d5cd6ee494aaae9ed09d794a853e5bab",
+      "line": 45,
+      "anchor_text": "    pub(crate) fn decision_tail(",
+      "url": "https://github.com/josephwylie/ferrite/blob/62947f91d5cd6ee494aaae9ed09d794a853e5bab/crates/ferrite-cockpit/src/cockpit/decisions.rs#L45",
+      "sha256": "2a6a1d4147b612bc6555a1db8af2019c0696adc76519d4c9cfaca5d39ef0b872"
+    },
+    "decision": {
+      "path": "crates/ferrite-pane/src/decision.rs",
+      "revision": "62947f91d5cd6ee494aaae9ed09d794a853e5bab",
+      "line": 678,
+      "anchor_text": "pub fn card(serial: u64, children: impl IntoIterator<Item = AnyElement>) -> AnyElement {",
+      "url": "https://github.com/josephwylie/ferrite/blob/62947f91d5cd6ee494aaae9ed09d794a853e5bab/crates/ferrite-pane/src/decision.rs#L678",
+      "sha256": "5a0a8c98cb777c008863dc11904b886118b394aa35676367bb1c0799a4e81a48"
+    },
+    "background": {
+      "path": "crates/ferrite-pane/src/pane/background_work.rs",
+      "revision": "62947f91d5cd6ee494aaae9ed09d794a853e5bab",
+      "line": 112,
+      "anchor_text": "pub fn background_work_line(",
+      "url": "https://github.com/josephwylie/ferrite/blob/62947f91d5cd6ee494aaae9ed09d794a853e5bab/crates/ferrite-pane/src/pane/background_work.rs#L112",
+      "sha256": "d9b5ec32a768a88c02104fef55902e9341d5ff4a06f5afb8a1ff5adcd1b2aefa"
+    },
+    "preview": {
+      "path": "crates/ferrite-pane/src/preview.rs",
+      "revision": "62947f91d5cd6ee494aaae9ed09d794a853e5bab",
+      "line": 174,
+      "anchor_text": "pub struct Preview {",
+      "url": "https://github.com/josephwylie/ferrite/blob/62947f91d5cd6ee494aaae9ed09d794a853e5bab/crates/ferrite-pane/src/preview.rs#L174",
+      "sha256": "0930e6186085005389ea273706bc07bfc309793b50c20bdbd2f68d4893de1967"
+    },
+    "rich": {
+      "path": "crates/ferrite-pane/src/rich.rs",
+      "revision": "62947f91d5cd6ee494aaae9ed09d794a853e5bab",
+      "line": 535,
+      "anchor_text": "        let view = TextView::new(&state)",
+      "url": "https://github.com/josephwylie/ferrite/blob/62947f91d5cd6ee494aaae9ed09d794a853e5bab/crates/ferrite-pane/src/rich.rs#L535",
+      "sha256": "7b80583d8b0f74908dc209afb4c568785bf78fa333f3b2d732b2c7e539a43827"
+    },
+    "minimap": {
+      "path": "crates/ferrite-pane/src/transcript.rs",
+      "revision": "62947f91d5cd6ee494aaae9ed09d794a853e5bab",
+      "line": 2757,
+      "anchor_text": "    /// The minimap (the WP-A minimap tokens): a tick per prompt, failure,",
+      "url": "https://github.com/josephwylie/ferrite/blob/62947f91d5cd6ee494aaae9ed09d794a853e5bab/crates/ferrite-pane/src/transcript.rs#L2757",
+      "sha256": "a564c307501c8a99d87d607cc91e40a013da27560e958025b24ad9c192abb418"
+    },
+    "side_close": {
+      "path": "crates/ferrite-cockpit/src/cockpit/side_chat.rs",
+      "revision": "62947f91d5cd6ee494aaae9ed09d794a853e5bab",
+      "line": 308,
+      "anchor_text": "    pub(super) fn close_side_tab(&mut self, owner: ThreadId, id: u64, cx: &mut Context<Self>) {",
+      "url": "https://github.com/josephwylie/ferrite/blob/62947f91d5cd6ee494aaae9ed09d794a853e5bab/crates/ferrite-cockpit/src/cockpit/side_chat.rs#L308",
+      "sha256": "15c9371a17f092aa0d8d34b6a5ee8c1372d7187c8df9ca558100000ed2cfc0eb"
+    },
+    "side_release": {
+      "path": "crates/ferrite-cockpit/src/cockpit/panel.rs",
+      "revision": "62947f91d5cd6ee494aaae9ed09d794a853e5bab",
+      "line": 313,
+      "anchor_text": "    /// What a closed tab held goes with it.",
+      "url": "https://github.com/josephwylie/ferrite/blob/62947f91d5cd6ee494aaae9ed09d794a853e5bab/crates/ferrite-cockpit/src/cockpit/panel.rs#L313",
+      "sha256": "f95a3a9e7a7bae8b0f56fb108d2b7d283fd654b9d282dc1c0c8014546deca653"
+    },
+    "side_delete": {
+      "path": "crates/ferrite-cockpit/src/cockpit/side_chat.rs",
+      "revision": "62947f91d5cd6ee494aaae9ed09d794a853e5bab",
+      "line": 802,
+      "anchor_text": "    fn trash_side_chat(&mut self, owner: ThreadId, id: u64, cx: &mut Context<Self>) {",
+      "url": "https://github.com/josephwylie/ferrite/blob/62947f91d5cd6ee494aaae9ed09d794a853e5bab/crates/ferrite-cockpit/src/cockpit/side_chat.rs#L802",
+      "sha256": "15c9371a17f092aa0d8d34b6a5ee8c1372d7187c8df9ca558100000ed2cfc0eb"
+    }
+  },
+  "render_component_sites": [
+    {
+      "file": "apps/web/src/components/ChatView.tsx",
+      "line": 3276,
+      "component": "DeviceSetupDialogHost",
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/ChatView.tsx#L3276"
+    },
+    {
+      "file": "apps/web/src/components/ChatView.tsx",
+      "line": 3317,
+      "component": "ChatHeader",
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/ChatView.tsx#L3317"
+    },
+    {
+      "file": "apps/web/src/components/ChatView.tsx",
+      "line": 3337,
+      "component": "ThreadFindCanvas",
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/ChatView.tsx#L3337"
+    },
+    {
+      "file": "apps/web/src/components/ChatView.tsx",
+      "line": 3355,
+      "component": "ThreadFind",
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/ChatView.tsx#L3355"
+    },
+    {
+      "file": "apps/web/src/components/ChatView.tsx",
+      "line": 3356,
+      "component": "WorkspaceFileDropOverlay",
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/ChatView.tsx#L3356"
+    },
+    {
+      "file": "apps/web/src/components/ChatView.tsx",
+      "line": 3357,
+      "component": "ChatBannerLane",
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/ChatView.tsx#L3357"
+    },
+    {
+      "file": "apps/web/src/components/ChatView.tsx",
+      "line": 3379,
+      "component": "WorkspaceMutationIdContext",
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/ChatView.tsx#L3379"
+    },
+    {
+      "file": "apps/web/src/components/ChatView.tsx",
+      "line": 3380,
+      "component": "ThreadTimeline",
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/ChatView.tsx#L3380"
+    },
+    {
+      "file": "apps/web/src/components/ChatView.tsx",
+      "line": 3481,
+      "component": "ScrollToEndButton",
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/ChatView.tsx#L3481"
+    },
+    {
+      "file": "apps/web/src/components/ChatView.tsx",
+      "line": 3518,
+      "component": "DraftHeroHeadline",
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/ChatView.tsx#L3518"
+    },
+    {
+      "file": "apps/web/src/components/ChatView.tsx",
+      "line": 3535,
+      "component": "ChildThreadApprovals",
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/ChatView.tsx#L3535"
+    },
+    {
+      "file": "apps/web/src/components/ChatView.tsx",
+      "line": 3537,
+      "component": "ComposerSurface.Shell",
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/ChatView.tsx#L3537"
+    },
+    {
+      "file": "apps/web/src/components/ChatView.tsx",
+      "line": 3538,
+      "component": "ComposerSurface.Host",
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/ChatView.tsx#L3538"
+    },
+    {
+      "file": "apps/web/src/components/ChatView.tsx",
+      "line": 3544,
+      "component": "ProviderSubagentBar",
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/ChatView.tsx#L3544"
+    },
+    {
+      "file": "apps/web/src/components/ChatView.tsx",
+      "line": 3559,
+      "component": "NativeChildWorkDialog",
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/ChatView.tsx#L3559"
+    },
+    {
+      "file": "apps/web/src/components/ChatView.tsx",
+      "line": 3568,
+      "component": "ChatComposer",
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/ChatView.tsx#L3568"
+    },
+    {
+      "file": "apps/web/src/components/ChatView.tsx",
+      "line": 3735,
+      "component": "BranchToolbar",
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/ChatView.tsx#L3735"
+    },
+    {
+      "file": "apps/web/src/components/ChatView.tsx",
+      "line": 3778,
+      "component": "ComposerContextPermissions",
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/ChatView.tsx#L3778"
+    },
+    {
+      "file": "apps/web/src/components/ChatView.tsx",
+      "line": 3799,
+      "component": "ComposerBannerStack",
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/ChatView.tsx#L3799"
+    },
+    {
+      "file": "apps/web/src/components/ChatView.tsx",
+      "line": 3813,
+      "component": "PreviewSessionSync",
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/ChatView.tsx#L3813"
+    },
+    {
+      "file": "apps/web/src/components/ChatView.tsx",
+      "line": 3816,
+      "component": "ThreadPreviewMiniPlayer",
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/ChatView.tsx#L3816"
+    },
+    {
+      "file": "apps/web/src/components/ChatView.tsx",
+      "line": 3825,
+      "component": "BranchRestoreConfirmHost",
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/ChatView.tsx#L3825"
+    },
+    {
+      "file": "apps/web/src/components/ChatView.tsx",
+      "line": 3832,
+      "component": "ThreadDetailsPanel",
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/ChatView.tsx#L3832"
+    },
+    {
+      "file": "apps/web/src/components/ChatView.tsx",
+      "line": 3903,
+      "component": "PullRequestThreadDialogHost",
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/ChatView.tsx#L3903"
+    },
+    {
+      "file": "apps/web/src/components/ChatView.tsx",
+      "line": 3916,
+      "component": "ChatTerminalDrawers",
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/ChatView.tsx#L3916"
+    },
+    {
+      "file": "apps/web/src/components/ChatView.tsx",
+      "line": 3932,
+      "component": "ChatRightPanel",
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/ChatView.tsx#L3932"
+    },
+    {
+      "file": "apps/web/src/components/ChatView.tsx",
+      "line": 3945,
+      "component": "RightPanelMaximizeControl",
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/ChatView.tsx#L3945"
+    },
+    {
+      "file": "apps/web/src/components/ChatView.tsx",
+      "line": 3995,
+      "component": "RevertConfirmHost",
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/ChatView.tsx#L3995"
+    },
+    {
+      "file": "apps/web/src/components/ChatView.tsx",
+      "line": 4000,
+      "component": "LinkPullRequestDialogHost",
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/ChatView.tsx#L4000"
+    },
+    {
+      "file": "apps/web/src/components/ChatView.tsx",
+      "line": 4001,
+      "component": "ThreadVisitWatermark",
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/ChatView.tsx#L4001"
+    },
+    {
+      "file": "apps/web/src/components/ChatView.tsx",
+      "line": 4002,
+      "component": "ExpandedImageDialogHost",
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/ChatView.tsx#L4002"
+    },
+    {
+      "file": "apps/web/src/components/ChatView.tsx",
+      "line": 4006,
+      "component": "FileMetadataThreadProvider",
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/ChatView.tsx#L4006"
+    },
+    {
+      "file": "apps/web/src/components/chat/MessagesTimeline.tsx",
+      "line": 1395,
+      "component": "MarkdownFindContext",
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/MessagesTimeline.tsx#L1395"
+    },
+    {
+      "file": "apps/web/src/components/chat/MessagesTimeline.tsx",
+      "line": 1396,
+      "component": "TimelineRowActivityCtx",
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/MessagesTimeline.tsx#L1396"
+    },
+    {
+      "file": "apps/web/src/components/chat/MessagesTimeline.tsx",
+      "line": 1397,
+      "component": "TooltipScrollDismissArea",
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/MessagesTimeline.tsx#L1397"
+    },
+    {
+      "file": "apps/web/src/components/chat/MessagesTimeline.tsx",
+      "line": 1403,
+      "component": "AssistantSelectionToolbar",
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/MessagesTimeline.tsx#L1403"
+    },
+    {
+      "file": "apps/web/src/components/chat/MessagesTimeline.tsx",
+      "line": 1409,
+      "component": "LegendList",
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/MessagesTimeline.tsx#L1409"
+    },
+    {
+      "file": "apps/web/src/components/chat/MessagesTimeline.tsx",
+      "line": 1409,
+      "component": "MessagesTimelineRow",
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/MessagesTimeline.tsx#L1409"
+    },
+    {
+      "file": "apps/web/src/components/chat/MessagesTimeline.tsx",
+      "line": 1455,
+      "component": "TimelineMinimap",
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/MessagesTimeline.tsx#L1455"
+    },
+    {
+      "file": "apps/web/src/components/chat/MessagesTimeline.tsx",
+      "line": 1574,
+      "component": "WorkLogBlock",
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/MessagesTimeline.tsx#L1574"
+    },
+    {
+      "file": "apps/web/src/components/chat/MessagesTimeline.tsx",
+      "line": 1585,
+      "component": "WorkGroupSection",
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/MessagesTimeline.tsx#L1585"
+    },
+    {
+      "file": "apps/web/src/components/chat/MessagesTimeline.tsx",
+      "line": 1592,
+      "component": "LiveWorkEntryTimelineRow",
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/MessagesTimeline.tsx#L1592"
+    },
+    {
+      "file": "apps/web/src/components/chat/MessagesTimeline.tsx",
+      "line": 1593,
+      "component": "WorkGroupToggleTimelineRow",
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/MessagesTimeline.tsx#L1593"
+    },
+    {
+      "file": "apps/web/src/components/chat/MessagesTimeline.tsx",
+      "line": 1594,
+      "component": "ThinkingTimelineRow",
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/MessagesTimeline.tsx#L1594"
+    },
+    {
+      "file": "apps/web/src/components/chat/MessagesTimeline.tsx",
+      "line": 1597,
+      "component": "TurnFoldTimelineRow",
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/MessagesTimeline.tsx#L1597"
+    },
+    {
+      "file": "apps/web/src/components/chat/MessagesTimeline.tsx",
+      "line": 1598,
+      "component": "AttemptFoldTimelineRow",
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/MessagesTimeline.tsx#L1598"
+    },
+    {
+      "file": "apps/web/src/components/chat/MessagesTimeline.tsx",
+      "line": 1599,
+      "component": "ContextCompactionTimelineRow",
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/MessagesTimeline.tsx#L1599"
+    },
+    {
+      "file": "apps/web/src/components/chat/MessagesTimeline.tsx",
+      "line": 1600,
+      "component": "UserMessageRow",
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/MessagesTimeline.tsx#L1600"
+    },
+    {
+      "file": "apps/web/src/components/chat/MessagesTimeline.tsx",
+      "line": 1602,
+      "component": "AssistantTimelineRow",
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/MessagesTimeline.tsx#L1602"
+    },
+    {
+      "file": "apps/web/src/components/chat/MessagesTimeline.tsx",
+      "line": 1604,
+      "component": "AssistantMetaTimelineRow",
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/MessagesTimeline.tsx#L1604"
+    },
+    {
+      "file": "apps/web/src/components/chat/MessagesTimeline.tsx",
+      "line": 1605,
+      "component": "ProposedPlanTimelineRow",
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/MessagesTimeline.tsx#L1605"
+    },
+    {
+      "file": "apps/web/src/components/chat/MessagesTimeline.tsx",
+      "line": 1606,
+      "component": "HtmlRenderTimelineRow",
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/MessagesTimeline.tsx#L1606"
+    },
+    {
+      "file": "apps/web/src/components/chat/MessagesTimeline.tsx",
+      "line": 1607,
+      "component": "ViewedImagesTimelineRow",
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/MessagesTimeline.tsx#L1607"
+    },
+    {
+      "file": "apps/web/src/components/chat/MessagesTimeline.tsx",
+      "line": 1608,
+      "component": "McpAppTimelineRow",
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/MessagesTimeline.tsx#L1608"
+    },
+    {
+      "file": "apps/web/src/components/chat/MessagesTimeline.tsx",
+      "line": 1609,
+      "component": "WorkingTimelineRow",
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/MessagesTimeline.tsx#L1609"
+    },
+    {
+      "file": "apps/web/src/components/chat/MessagesTimeline.tsx",
+      "line": 1610,
+      "component": "WorktreeSetupTimelineRow",
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/MessagesTimeline.tsx#L1610"
+    },
+    {
+      "file": "apps/web/src/components/chat/MessagesTimeline.tsx",
+      "line": 1611,
+      "component": "V2EventTimelineRow",
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/MessagesTimeline.tsx#L1611"
+    },
+    {
+      "file": "apps/web/src/components/chat/MessagesTimeline.tsx",
+      "line": 1619,
+      "component": "TimelineRow",
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/MessagesTimeline.tsx#L1619"
+    },
+    {
+      "file": "apps/web/src/components/chat/MessagesTimeline.tsx",
+      "line": 1626,
+      "component": "WorktreeSetupCard",
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/MessagesTimeline.tsx#L1626"
+    },
+    {
+      "file": "apps/web/src/components/chat/MessagesTimeline.tsx",
+      "line": 1641,
+      "component": "TimelineRow",
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/MessagesTimeline.tsx#L1641"
+    },
+    {
+      "file": "apps/web/src/components/chat/MessagesTimeline.tsx",
+      "line": 1650,
+      "component": "CircleAlertIcon",
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/MessagesTimeline.tsx#L1650"
+    },
+    {
+      "file": "apps/web/src/components/chat/MessagesTimeline.tsx",
+      "line": 1652,
+      "component": "Minimize2Icon",
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/MessagesTimeline.tsx#L1652"
+    },
+    {
+      "file": "apps/web/src/components/chat/MessagesTimeline.tsx",
+      "line": 1657,
+      "component": "ArrowRightIcon",
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/MessagesTimeline.tsx#L1657"
+    },
+    {
+      "file": "apps/web/src/components/chat/MessagesTimeline.tsx",
+      "line": 1683,
+      "component": "ActivityShimmerOverlay",
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/MessagesTimeline.tsx#L1683"
+    },
+    {
+      "file": "apps/web/src/components/chat/MessagesTimeline.tsx",
+      "line": 1734,
+      "component": "Skeleton",
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/MessagesTimeline.tsx#L1734"
+    },
+    {
+      "file": "apps/web/src/components/chat/MessagesTimeline.tsx",
+      "line": 1735,
+      "component": "Skeleton",
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/MessagesTimeline.tsx#L1735"
+    },
+    {
+      "file": "apps/web/src/components/chat/MessagesTimeline.tsx",
+      "line": 1745,
+      "component": "TimelineRow",
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/MessagesTimeline.tsx#L1745"
+    },
+    {
+      "file": "apps/web/src/components/chat/MessagesTimeline.tsx",
+      "line": 1767,
+      "component": "ChevronDownIcon",
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/MessagesTimeline.tsx#L1767"
+    },
+    {
+      "file": "apps/web/src/components/chat/MessagesTimeline.tsx",
+      "line": 1769,
+      "component": "ChevronRightIcon",
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/MessagesTimeline.tsx#L1769"
+    },
+    {
+      "file": "apps/web/src/components/chat/MessagesTimeline.tsx",
+      "line": 1772,
+      "component": "TimelineRowTimestamp",
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/MessagesTimeline.tsx#L1772"
+    },
+    {
+      "file": "apps/web/src/components/chat/MessagesTimeline.tsx",
+      "line": 1778,
+      "component": "WorkHistorySkeleton",
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/MessagesTimeline.tsx#L1778"
+    },
+    {
+      "file": "apps/web/src/components/chat/MessagesTimeline.tsx",
+      "line": 1783,
+      "component": "TimelineRow",
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/MessagesTimeline.tsx#L1783"
+    },
+    {
+      "file": "apps/web/src/components/chat/MessagesTimeline.tsx",
+      "line": 1801,
+      "component": "ChevronDownIcon",
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/MessagesTimeline.tsx#L1801"
+    },
+    {
+      "file": "apps/web/src/components/chat/MessagesTimeline.tsx",
+      "line": 1803,
+      "component": "ChevronRightIcon",
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/MessagesTimeline.tsx#L1803"
+    },
+    {
+      "file": "apps/web/src/components/chat/MessagesTimeline.tsx",
+      "line": 1811,
+      "component": "WorkHistorySkeleton",
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/MessagesTimeline.tsx#L1811"
+    },
+    {
+      "file": "apps/web/src/components/chat/ChatComposer.tsx",
+      "line": 3265,
+      "component": "ComposerBanner.Dock",
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/ChatComposer.tsx#L3265"
+    },
+    {
+      "file": "apps/web/src/components/chat/ChatComposer.tsx",
+      "line": 3266,
+      "component": "ComposerBanner.Column",
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/ChatComposer.tsx#L3266"
+    },
+    {
+      "file": "apps/web/src/components/chat/ChatComposer.tsx",
+      "line": 3267,
+      "component": "ComposerBannerStack",
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/ChatComposer.tsx#L3267"
+    },
+    {
+      "file": "apps/web/src/components/chat/ChatComposer.tsx",
+      "line": 3269,
+      "component": "ComposerBanner.Attachment",
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/ChatComposer.tsx#L3269"
+    },
+    {
+      "file": "apps/web/src/components/chat/ChatComposer.tsx",
+      "line": 3270,
+      "component": "ComposerBanner.Root",
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/ChatComposer.tsx#L3270"
+    },
+    {
+      "file": "apps/web/src/components/chat/ChatComposer.tsx",
+      "line": 3272,
+      "component": "ComposerPendingUserInputPanel",
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/ChatComposer.tsx#L3272"
+    },
+    {
+      "file": "apps/web/src/components/chat/ChatComposer.tsx",
+      "line": 3293,
+      "component": "ComposerStashBadge",
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/ChatComposer.tsx#L3293"
+    },
+    {
+      "file": "apps/web/src/components/chat/ChatComposer.tsx",
+      "line": 3301,
+      "component": "ComposerSurface.Main",
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/ChatComposer.tsx#L3301"
+    },
+    {
+      "file": "apps/web/src/components/chat/ChatComposer.tsx",
+      "line": 3332,
+      "component": "CollapsedComposerPromptPreview",
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/ChatComposer.tsx#L3332"
+    },
+    {
+      "file": "apps/web/src/components/chat/ChatComposer.tsx",
+      "line": 3361,
+      "component": "PlayIcon",
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/ChatComposer.tsx#L3361"
+    },
+    {
+      "file": "apps/web/src/components/chat/ChatComposer.tsx",
+      "line": 3394,
+      "component": "ComposerCommandMenuLayer",
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/ChatComposer.tsx#L3394"
+    },
+    {
+      "file": "apps/web/src/components/chat/ChatComposer.tsx",
+      "line": 3395,
+      "component": "ComposerStashMenu",
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/ChatComposer.tsx#L3395"
+    },
+    {
+      "file": "apps/web/src/components/chat/ChatComposer.tsx",
+      "line": 3424,
+      "component": "ComposerCommandMenuLayer",
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/ChatComposer.tsx#L3424"
+    },
+    {
+      "file": "apps/web/src/components/chat/ChatComposer.tsx",
+      "line": 3425,
+      "component": "ComposerCommandMenu",
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/ChatComposer.tsx#L3425"
+    },
+    {
+      "file": "apps/web/src/components/chat/ChatComposer.tsx",
+      "line": 3443,
+      "component": "ComposerQueuedAttachmentRow",
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/ChatComposer.tsx#L3443"
+    },
+    {
+      "file": "apps/web/src/components/chat/ChatComposer.tsx",
+      "line": 3455,
+      "component": "ComposerFilePreviewDialog",
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/ChatComposer.tsx#L3455"
+    },
+    {
+      "file": "apps/web/src/components/chat/ChatComposer.tsx",
+      "line": 3461,
+      "component": "ComposerContextActionsContext",
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/ChatComposer.tsx#L3461"
+    },
+    {
+      "file": "apps/web/src/components/chat/ChatComposer.tsx",
+      "line": 3462,
+      "component": "ComposerPromptEditor",
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/ChatComposer.tsx#L3462"
+    },
+    {
+      "file": "apps/web/src/components/chat/ChatComposer.tsx",
+      "line": 3512,
+      "component": "Kbd",
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/ChatComposer.tsx#L3512"
+    },
+    {
+      "file": "apps/web/src/components/chat/ChatComposer.tsx",
+      "line": 3529,
+      "component": "ComposerPrimaryActions",
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/ChatComposer.tsx#L3529"
+    },
+    {
+      "file": "apps/web/src/components/chat/ChatComposer.tsx",
+      "line": 3549,
+      "component": "ComposerPromptLengthValidation",
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/ChatComposer.tsx#L3549"
+    },
+    {
+      "file": "apps/web/src/components/chat/ChatComposer.tsx",
+      "line": 3591,
+      "component": "ComposerFooterPrimaryActions",
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/ChatComposer.tsx#L3591"
+    },
+    {
+      "file": "apps/web/src/components/chat/ChatComposer.tsx",
+      "line": 3636,
+      "component": "ComposerSpeechRecordingPill",
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/ChatComposer.tsx#L3636"
+    },
+    {
+      "file": "apps/web/src/components/chat/ChatComposer.tsx",
+      "line": 3648,
+      "component": "ComposerSpeechButton",
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/ChatComposer.tsx#L3648"
+    },
+    {
+      "file": "apps/web/src/components/chat/ChatComposer.tsx",
+      "line": 3658,
+      "component": "VoiceInputSetup",
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/ChatComposer.tsx#L3658"
+    }
+  ],
+  "component_tree_boundary": "Dispatch inventory includes every capitalized JSX component site after the three inspected return regions, including later local helper functions. It is lexical evidence, not a parser-proven recursive tree or a count of distinct product surfaces. The 32 semantic records group those sites by user purpose. Nonvisual contexts/providers and styling/icon wrappers are intentionally not individual surfaces.",
+  "verification": {
+    "written_paths": [
+      "reports/surface-reconciliation-conversation.md",
+      "reports/surface-reconciliation-conversation.json"
+    ],
+    "tests": "Not run. Documentation-only reconciliation.",
+    "typecheck": "Not run. No product or typed-source changes.",
+    "builds": "Not run.",
+    "native_ui": "Not accessed. Parent owns native evidence.",
+    "model_sessions": "None.",
+    "runtime_process_management": "None.",
+    "new_product_defects": "No new runtime defects asserted; confirmed earlier omissions and source-only coverage gaps are labelled per record."
+  },
+  "related_surface_reconciliation_reports": [
+    "surface-reconciliation-completeness.md"
+  ]
+}

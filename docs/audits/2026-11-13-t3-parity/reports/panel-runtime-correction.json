@@ -1,0 +1,245 @@
+{
+  "existing_issue": "panel-tools-018",
+  "correction": "Sticky width is runtime reproduced; narrow-window claims remain unverified",
+  "classification": "runtime-reproduced",
+  "source_commit": "62947f91d5cd6ee494aaae9ed09d794a853e5bab",
+  "window_logical": [
+    1440,
+    900
+  ],
+  "contract": "Returning to Overview without an operator resize recovers its observed prior compact width",
+  "observed": {
+    "baseline_overview_width": 320,
+    "after_files_overview_width": 864,
+    "after_changes_overview_width": 864,
+    "baseline_window_fraction": 0.2222222222222222,
+    "actual_window_fraction": 0.6,
+    "maximized_width": 960,
+    "restored_width": 864,
+    "persisted_width": 864.00006,
+    "restart_verified": true
+  },
+  "motion": {
+    "existing_issue": "motion-001",
+    "classification": "source-proven; not runtime-verified here",
+    "reason": "The driver settles screenshots for 360 ms minimum; no per-frame capture or window resize"
+  },
+  "limits": [
+    "No native CEF browser content",
+    "No public divider drag",
+    "Fixed 1440x900 runtime",
+    "No narrow-window verification",
+    "No manual-width persistence verification"
+  ],
+  "cases": [
+    {
+      "case": "02-overview-first-open",
+      "nav_width": 280.0,
+      "panel_width": 320.0,
+      "panel_window_fraction": 0.2222222222222222,
+      "board_width": 840.0,
+      "composer_width": 768.0
+    },
+    {
+      "case": "01-default-closed",
+      "nav_width": 280.0,
+      "panel_width": 0,
+      "panel_window_fraction": 0.0,
+      "board_width": 1160.0,
+      "composer_width": 768.0
+    },
+    {
+      "case": "03-overview-reopened",
+      "nav_width": 280.0,
+      "panel_width": 320.0,
+      "panel_window_fraction": 0.2222222222222222,
+      "board_width": 840.0,
+      "composer_width": 768.0
+    },
+    {
+      "case": "04-files-open",
+      "nav_width": 0,
+      "panel_width": 864.0,
+      "panel_window_fraction": 0.6,
+      "board_width": 576.0,
+      "composer_width": 552.0
+    },
+    {
+      "case": "05-overview-after-files",
+      "nav_width": 0,
+      "panel_width": 864.0,
+      "panel_window_fraction": 0.6,
+      "board_width": 576.0,
+      "composer_width": 552.0
+    },
+    {
+      "case": "06-closed-after-files",
+      "nav_width": 280.0,
+      "panel_width": 0,
+      "panel_window_fraction": 0.0,
+      "board_width": 1160.0,
+      "composer_width": 768.0
+    },
+    {
+      "case": "07-reopened-after-files",
+      "nav_width": 0,
+      "panel_width": 864.0,
+      "panel_window_fraction": 0.6,
+      "board_width": 576.0,
+      "composer_width": 552.0
+    },
+    {
+      "case": "08-overview-files-tab-closed",
+      "nav_width": 0,
+      "panel_width": 864.0,
+      "panel_window_fraction": 0.6,
+      "board_width": 576.0,
+      "composer_width": 552.0
+    },
+    {
+      "case": "09-overview-maximized",
+      "nav_width": 0,
+      "panel_width": 960.0,
+      "panel_window_fraction": 0.6666666666666666,
+      "board_width": 480.0,
+      "composer_width": 456.0
+    },
+    {
+      "case": "10-overview-restored",
+      "nav_width": 0,
+      "panel_width": 864.0,
+      "panel_window_fraction": 0.6,
+      "board_width": 576.0,
+      "composer_width": 552.0
+    },
+    {
+      "case": "11-nav-toggle-large-panel",
+      "nav_width": 280.0,
+      "panel_width": 680.0,
+      "panel_window_fraction": 0.4722222222222222,
+      "board_width": 480.0,
+      "composer_width": 456.0
+    },
+    {
+      "case": "12-empty-after-files",
+      "nav_width": 0,
+      "panel_width": 864.0,
+      "panel_window_fraction": 0.6,
+      "board_width": 576.0,
+      "composer_width": 552.0
+    },
+    {
+      "case": "13-browser-after-files",
+      "nav_width": 0,
+      "panel_width": 864.0,
+      "panel_window_fraction": 0.6,
+      "board_width": 576.0,
+      "composer_width": 552.0
+    },
+    {
+      "case": "14-changes-open",
+      "nav_width": 0,
+      "panel_width": 864.0,
+      "panel_window_fraction": 0.6,
+      "board_width": 576.0,
+      "composer_width": 552.0
+    },
+    {
+      "case": "15-browser-after-changes",
+      "nav_width": 0,
+      "panel_width": 864.0,
+      "panel_window_fraction": 0.6,
+      "board_width": 576.0,
+      "composer_width": 552.0
+    },
+    {
+      "case": "16-panel-closed-before-nav",
+      "nav_width": 280.0,
+      "panel_width": 0,
+      "panel_window_fraction": 0.0,
+      "board_width": 1160.0,
+      "composer_width": 768.0
+    },
+    {
+      "case": "17-nav-closed",
+      "nav_width": 0,
+      "panel_width": 0,
+      "panel_window_fraction": 0.0,
+      "board_width": 1440.0,
+      "composer_width": 768.0
+    },
+    {
+      "case": "18-nav-reopened",
+      "nav_width": 280.0,
+      "panel_width": 0,
+      "panel_window_fraction": 0.0,
+      "board_width": 1160.0,
+      "composer_width": 768.0
+    },
+    {
+      "case": "19-nav-reopened-again",
+      "nav_width": 280.0,
+      "panel_width": 0,
+      "panel_window_fraction": 0.0,
+      "board_width": 1160.0,
+      "composer_width": 768.0
+    },
+    {
+      "case": "20-before-headless-restart",
+      "nav_width": 0,
+      "panel_width": 864.0,
+      "panel_window_fraction": 0.6,
+      "board_width": 576.0,
+      "composer_width": 552.0
+    },
+    {
+      "case": "21-after-headless-restart",
+      "nav_width": 0,
+      "panel_width": 864.0,
+      "panel_window_fraction": 0.6,
+      "board_width": 576.0,
+      "composer_width": 552.0
+    },
+    {
+      "case": "22-independent-overview-before-changes",
+      "nav_width": 280.0,
+      "panel_width": 320.0,
+      "panel_window_fraction": 0.2222222222222222,
+      "board_width": 840.0,
+      "composer_width": 768.0
+    },
+    {
+      "case": "23-independent-changes-open",
+      "nav_width": 0,
+      "panel_width": 864.0,
+      "panel_window_fraction": 0.6,
+      "board_width": 576.0,
+      "composer_width": 552.0
+    },
+    {
+      "case": "24-independent-overview-after-changes",
+      "nav_width": 0,
+      "panel_width": 864.0,
+      "panel_window_fraction": 0.6,
+      "board_width": 576.0,
+      "composer_width": 552.0
+    },
+    {
+      "case": "25-independent-overview-reopened",
+      "nav_width": 0,
+      "panel_width": 864.0,
+      "panel_window_fraction": 0.6,
+      "board_width": 576.0,
+      "composer_width": 552.0
+    }
+  ],
+  "failed_assertion": {
+    "contract": "Overview restores its previous width after a Changes visit without an operator resize",
+    "expected_width": 320.0,
+    "actual_width": 864.0,
+    "passed": false,
+    "basis": "Real production GPUI window, public key/click/find/shot commands"
+  },
+  "cleanup": true,
+  "new_issue_count": 0
+}
