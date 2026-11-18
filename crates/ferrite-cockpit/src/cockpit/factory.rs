@@ -1,7 +1,7 @@
-//! A Project's Factory in the window (ADR 0037, #220): its sidebar entry,
-//! its board of Tasks in the board's place, a Task's panel beside the
-//! columns, the New task sheet, and the alerts a Task raises. Its
-//! Workflows surface is `workflows.rs` (#221).
+//! A Project's Factory in the window (ADR 0037, #220): its nav entry, its
+//! board of Tasks in the board's place, a Task's panel beside the columns,
+//! and the alerts a Task raises. Its Workflows surface is `workflows.rs`
+//! (#221), and its New task sheet `new_task_view.rs`.
 //!
 //! The Factory runs in the Server (`ferrite_core::factory`): the window
 //! draws the board the Server publishes and sends commands through
@@ -13,7 +13,7 @@ use super::destination::{Destination, Shows};
 use ferrite_core::factory::{self as core_factory, Status, Task, TaskId};
 use ferrite_core::protocol::{Done, TaskAction};
 use ferrite_core::workspace::registry::ProjectId;
-use ferrite_pane::composer::{Composer, Role};
+use ferrite_pane::composer::Composer;
 
 /// The Task panel's width beside the columns.
 const TASK_PANEL_W: f32 = 480.;
@@ -122,20 +122,6 @@ impl TaskTab {
     }
 }
 
-/// The New task sheet: the instructions field, and the request that makes
-/// a second press of Start the same Task.
-pub(crate) struct NewTask {
-    pub(crate) instructions: Entity<Composer>,
-    request: String,
-    error: Option<SharedString>,
-    /// The process it runs: a Workflow's latest version, else one-off.
-    pub(crate) workflow: Option<core_factory::WorkflowId>,
-    /// Its optional pull request, `owner/repository#number` or a URL
-    /// (#223), and whether that field has the keyboard.
-    pub(crate) pr: Entity<Composer>,
-    pub(crate) pr_focused: bool,
-}
-
 /// What the Factory view shows.
 pub(crate) struct FactoryView {
     pub(crate) project: ProjectId,
@@ -144,9 +130,8 @@ pub(crate) struct FactoryView {
     pub(crate) tab: TaskTab,
     /// What the last command said back (a refusal, a worktree kept).
     pub(crate) note: Option<SharedString>,
-    pub(crate) sheet: Option<NewTask>,
     /// The New task sheet as it was closed, for when it opens again.
-    kept: Option<NewTask>,
+    pub(super) kept: Option<super::new_task_view::KeptNewTask>,
     /// The columns' sideways scroll, and the open Task, its column and how
     /// many columns fit when it last brought that column into view.
     columns: gpui::ScrollHandle,
@@ -183,8 +168,6 @@ fn status_ink(status: Status) -> u32 {
     }
 }
 
-static REQUESTS: AtomicU64 = AtomicU64::new(1);
-
 impl CockpitView {
     /// Show `project`'s Factory board in the board's place.
     pub(crate) fn open_factory(&mut self, project: ProjectId, cx: &mut Context<Self>) {
@@ -201,7 +184,6 @@ impl CockpitView {
                     open: None,
                     tab: TaskTab::Overview,
                     note: None,
-                    sheet: None,
                     kept: None,
                     columns: gpui::ScrollHandle::new(),
                     revealed: Default::default(),
@@ -341,18 +323,11 @@ impl CockpitView {
         cx.notify();
     }
 
-    /// What holds the keyboard while the Factory shows: the sheet's field,
-    /// the Worker's Composer on its tab, else the window's own.
+    /// What holds the keyboard while the Factory shows: the Worker's
+    /// Composer on its tab, else the window's own. The New task sheet's
+    /// field is the sheet host's (`Sheet::focus`).
     pub(super) fn factory_focus(&self, window: &Window, cx: &gpui::App) -> Option<FocusHandle> {
         let view = self.factory()?;
-        if let Some(sheet) = &view.sheet {
-            let field = if sheet.pr_focused {
-                &sheet.pr
-            } else {
-                &sheet.instructions
-            };
-            return Some(field.read(cx).focus_handle(cx));
-        }
         if let Some(focus) = self.direct_focus(cx) {
             return Some(focus);
         }
@@ -387,104 +362,6 @@ impl CockpitView {
         };
         if let Some(view) = self.factory_mut() {
             view.note = note;
-        }
-        cx.notify();
-    }
-
-    pub(crate) fn open_new_task(&mut self, cx: &mut Context<Self>) {
-        let Some(view) = self.factory_mut() else {
-            return;
-        };
-        if let Some(mut kept) = view.kept.take() {
-            kept.error = None;
-            kept.pr_focused = false;
-            view.sheet = Some(kept);
-            cx.notify();
-            return;
-        }
-        let instructions = cx.new(Composer::new);
-        instructions.update(cx, |field, cx| field.set_role(Role::Field(None), cx));
-        let pr = cx.new(Composer::new);
-        pr.update(cx, |field, cx| field.set_role(Role::Field(None), cx));
-        view.sheet = Some(NewTask {
-            pr,
-            pr_focused: false,
-            instructions,
-            request: format!(
-                "window-{}-{}",
-                std::process::id(),
-                REQUESTS.fetch_add(1, Ordering::Relaxed)
-            ),
-            error: None,
-            workflow: None,
-        });
-        cx.notify();
-    }
-
-    /// The New task sheet's keyboard goes to its PR field, or back to
-    /// the instructions.
-    pub(crate) fn focus_new_task_pr(&mut self, pr: bool, cx: &mut Context<Self>) {
-        if let Some(sheet) = self
-            .factory_mut()
-            .and_then(|view| view.sheet.as_mut())
-        {
-            sheet.pr_focused = pr;
-        }
-        cx.notify();
-    }
-
-    /// Close the sheet and any menu it opened; what was typed stays for
-    /// the next time it opens.
-    pub(crate) fn close_new_task(&mut self, cx: &mut Context<Self>) {
-        if let Some(view) = self.factory_mut() {
-            view.kept = view.sheet.take();
-        }
-        self.close_factory_menu();
-        cx.notify();
-    }
-
-    /// Start: the Task, its worktree and its Worker, in the Server. Its
-    /// panel opens on it; a refusal stays on the sheet.
-    pub(crate) fn start_new_task(&mut self, cx: &mut Context<Self>) {
-        let Some(view) = self.factory() else {
-            return;
-        };
-        let project = view.project;
-        let Some(sheet) = view.sheet.as_ref() else {
-            return;
-        };
-        let instructions = sheet.instructions.read(cx).text().trim().to_string();
-        let pr = Some(sheet.pr.read(cx).text().trim().to_string()).filter(|pr| !pr.is_empty());
-        let error = if instructions.is_empty() {
-            Some(SharedString::from("Say what the task is."))
-        } else {
-            let action = TaskAction::Start {
-                project,
-                instructions,
-                request: Some(sheet.request.clone()),
-                workflow: sheet.workflow.clone(),
-                pr,
-            };
-            match self.cockpit.task(action) {
-                Ok(Some(Done::Task { task })) => {
-                    if let Some(view) = self.factory_mut() {
-                        view.sheet = None;
-                        view.surface = super::workflows::Surface::Board;
-                        view.open = Some(task);
-                        view.tab = TaskTab::Overview;
-                        view.note = None;
-                    }
-                    None
-                }
-                Ok(_) => Some(SharedString::from("The Server did not start the task.")),
-                Err(error) => Some(SharedString::from(error.to_string())),
-            }
-        };
-        if let Some(sheet) = self
-            .factory_mut()
-            .and_then(|view| view.sheet.as_mut())
-        {
-            sheet.error = error;
         }
         cx.notify();
     }
@@ -1383,146 +1260,6 @@ impl CockpitView {
             return None;
         }
         self.pane_for(task.worker?)
-    }
-
-    /// The New task sheet, over the window.
-    pub(super) fn new_task_sheet(
-        &self,
-        window: &Window,
-        cx: &mut Context<Self>,
-    ) -> Option<AnyElement> {
-        let sheet = self.factory()?.sheet.as_ref()?;
-        let close = ferrite_ui::sheet::sheet_close("new-task-close", "Close New task", cx)
-            .on_click(cx.listener(|view, _: &ClickEvent, _, cx| {
-                cx.stop_propagation();
-                view.close_new_task(cx);
-            }));
-        let focused = sheet
-            .instructions
-            .read(cx)
-            .focus_handle(cx)
-            .is_focused(window);
-        let pr_focused = sheet.pr.read(cx).focus_handle(cx).is_focused(window);
-        let process = match sheet
-            .workflow
-            .as_deref()
-            .and_then(|id| self.cockpit.factory().workflow(id))
-            .and_then(|workflow| workflow.latest())
-        {
-            Some(latest) => format!(
-                "{} \u{b7} version {}",
-                latest.definition.name, latest.version
-            ),
-            None => "One-off: a single agent".into(),
-        };
-        let process_trigger = super::workflows::Trigger::default();
-        let mut body = crate::project_editor::body()
-            .child(
-                div()
-                    .id("new-task-instructions")
-                    .on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(|view, _: &MouseDownEvent, _, cx| {
-                            view.focus_new_task_pr(false, cx)
-                        }),
-                    )
-                    .child(crate::project_editor::text_area(
-                        "Instructions".into(),
-                        sheet.instructions.clone(),
-                        focused,
-                        "new-task-instructions-focused",
-                    )),
-            )
-            .child(
-                div()
-                    .id("new-task-pr")
-                    .debug_selector(|| "new-task-pr".into())
-                    .on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(|view, _: &MouseDownEvent, _, cx| {
-                            view.focus_new_task_pr(true, cx)
-                        }),
-                    )
-                    .child(crate::project_editor::text_field(
-                        "Pull request (optional): owner/repository#number or its URL".into(),
-                        sheet.pr.clone(),
-                        pr_focused,
-                        "new-task-pr-focused",
-                    )),
-            )
-            .child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .gap(px(ferrite_ui::theme::SPACE_1))
-                    .child(ferrite_ui::components::section_label("Process"))
-                    .child(
-                        div()
-                            .id("new-task-process")
-                            .debug_selector(|| "new-task-process".into())
-                            .flex()
-                            .items_center()
-                            .gap(px(ferrite_ui::theme::SPACE_1))
-                            .h(px(ferrite_ui::theme::CONTROL_H))
-                            .px(px(ferrite_ui::theme::SPACE_2))
-                            .rounded(px(ferrite_ui::theme::R_CONTROL))
-                            .border_1()
-                            .border_color(ferrite_ui::theme::paint::FIELD_RING)
-                            .cursor_pointer()
-                            .child(div().flex_1().child(SharedString::from(process)))
-                            .child(ferrite_ui::icons::icon(
-                                ferrite_ui::icons::CHEVRON_DOWN,
-                                ferrite_ui::theme::ROW_ICON,
-                                ferrite_ui::theme::INK_SUBTLE,
-                            ))
-                            .relative()
-                            .child(process_trigger.probe())
-                            .on_mouse_down(
-                                MouseButton::Left,
-                                cx.listener(move |view, event: &MouseDownEvent, _, cx| {
-                                    cx.stop_propagation();
-                                    let picks = view.process_picks();
-                                    view.open_picks(picks, &process_trigger, event.position, cx);
-                                }),
-                            ),
-                    ),
-            );
-        if let Some(error) = sheet.error.clone() {
-            body = body.child(crate::project_editor::error_line(error));
-        }
-        let start = crate::project_editor::primary_button("new-task-start", "Start", false, cx)
-            .debug_selector(|| "new-task-start".into())
-            .on_click(cx.listener(|view, _: &ClickEvent, _, cx| {
-                cx.stop_propagation();
-                view.start_new_task(cx);
-            }));
-        let card = crate::project_editor::card(f32::from(window.viewport_size().height))
-            .id("new-task-card")
-            .debug_selector(|| "new-task-card".into())
-            .on_mouse_down(
-                MouseButton::Left,
-                cx.listener(|_, _: &MouseDownEvent, _, cx| cx.stop_propagation()),
-            )
-            .child(crate::project_editor::head("New task".into(), close))
-            .child(body)
-            .child(crate::project_editor::footer(
-                div().child(
-                    ferrite_ui::components::text_ui()
-                        .text_color(gpui::rgb(ferrite_ui::theme::INK_SUBTLE))
-                        .child("Runs in its own worktree and branch."),
-                ),
-                div().flex().items_center().child(start),
-            ));
-        let veil = crate::project_editor::veil()
-            .on_mouse_down(
-                MouseButton::Left,
-                cx.listener(|view, _: &MouseDownEvent, _, cx| {
-                    cx.stop_propagation();
-                    view.close_new_task(cx);
-                }),
-            )
-            .child(card);
-        Some(deferred(veil).with_priority(3).into_any_element())
     }
 }
 

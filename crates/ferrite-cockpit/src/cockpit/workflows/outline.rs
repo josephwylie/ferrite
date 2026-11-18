@@ -186,12 +186,7 @@ impl CockpitView {
                     cx.stop_propagation();
                     let workflow = view.shown_id();
                     view.open_new_task(cx);
-                    if let Some(sheet) = view
-                        .factory_mut()
-                        .and_then(|shown| shown.sheet.as_mut())
-                    {
-                        sheet.workflow = workflow;
-                    }
+                    view.set_new_task_workflow(workflow, cx);
                 })),
             )
             .child(
