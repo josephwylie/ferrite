@@ -144,7 +144,7 @@ fn case(name: &str) -> String {
         driver.draw();
         frames.push(started.elapsed().as_secs_f64() * 1_000.);
     }
-    let mut timed = |driver: &mut Driver, act: &dyn Fn(&mut CockpitView, &mut gpui::Context<CockpitView>)| {
+    let timed = |driver: &mut Driver, act: &dyn Fn(&mut CockpitView, &mut gpui::Context<CockpitView>)| {
         driver.update(|view, _, cx| act(view, cx));
         let started = Instant::now();
         driver.draw();
