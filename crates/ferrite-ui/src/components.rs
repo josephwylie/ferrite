@@ -2744,6 +2744,48 @@ mod tests {
         assert_eq!(keyed.get(), 2);
     }
 
+    /// An icon button given its caller's focus handle is focused by it: a
+    /// view that moves the keyboard between its own stops presses the
+    /// button from Enter.
+    #[gpui::test]
+    fn an_icon_button_is_focused_by_its_callers_handle(cx: &mut gpui::TestAppContext) {
+        use std::{cell::Cell, rc::Rc};
+
+        use gpui::{FocusHandle, KeyDownEvent, KeyUpEvent, Keystroke};
+
+        struct Bar(FocusHandle, Rc<Cell<usize>>);
+        impl gpui::Render for Bar {
+            fn render(&mut self, _: &mut Window, cx: &mut gpui::Context<Self>) -> impl IntoElement {
+                let presses = self.1.clone();
+                div().child(
+                    icon_button("icon-under-test", icons::CLOSE, IconSize::Standard, "Close", cx)
+                        .track_focus(&self.0)
+                        .on_click(move |_, _, _| presses.set(presses.get() + 1)),
+                )
+            }
+        }
+
+        cx.update(theme::init_components);
+        let presses = Rc::new(Cell::new(0));
+        let (view, cx) = cx.add_window_view({
+            let presses = presses.clone();
+            move |_, cx| Bar(cx.focus_handle(), presses)
+        });
+        cx.update(|window, cx| {
+            let handle = view.read(cx).0.clone();
+            window.focus(&handle, cx);
+            window.draw(cx).clear(cx);
+        });
+        let enter = Keystroke::parse("enter").unwrap();
+        cx.simulate_event(KeyDownEvent {
+            keystroke: enter.clone(),
+            is_held: false,
+            prefer_character_input: false,
+        });
+        cx.simulate_event(KeyUpEvent { keystroke: enter });
+        assert_eq!(presses.get(), 1, "Enter on the caller's handle presses it");
+    }
+
     /// An icon button on something that drags (a slot's head, a tab) is
     /// pressed, never dragged: a press that starts on it and moves off picks
     /// nothing up, where the same press beside it picks the parent up.
