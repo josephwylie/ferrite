@@ -107,12 +107,13 @@ impl NavView {
     /// Put the cursor on `next`: its row takes the hover face and the old
     /// one gives it back, and the row scrolls into view.
     fn move_cursor(&mut self, next: Option<NavCursor>, window: &mut Window, cx: &mut Context<Self>) {
+        let painter = Some(cx.entity_id());
         if let Some(old) = self.cursor.take() {
-            crate::nav::card_hover(old.key, true)(&false, window, cx);
+            crate::nav::card_hover(old.key, true, painter)(&false, window, cx);
         }
         self.cursor_bounds.set(None);
         if let Some(next) = &next {
-            crate::nav::card_hover(next.key.clone(), true)(&true, window, cx);
+            crate::nav::card_hover(next.key.clone(), true, painter)(&true, window, cx);
             self.reveal.set(true);
         }
         self.cursor = next;
@@ -284,10 +285,10 @@ impl NavView {
         let scroll = self.scroll.clone();
         (self.cursor.as_ref().map(|cursor| cursor.item) == Some(item)).then(move || {
             gpui::canvas(
-                move |row: Bounds<Pixels>, window, _| {
+                move |row: Bounds<Pixels>, window, cx| {
                     drawn.set(Some(row));
                     if reveal.replace(false) {
-                        scroll_into_view(&scroll, row, window);
+                        scroll_into_view(&scroll, row, window, cx);
                     }
                 },
                 |_, _, _, _| {},
@@ -303,9 +304,9 @@ impl NavView {
         let reveal = self.reveal.clone();
         let scroll = self.scroll.clone();
         gpui::canvas(
-            move |row: Bounds<Pixels>, window, _| {
+            move |row: Bounds<Pixels>, window, cx| {
                 if reveal.replace(false) {
-                    scroll_into_view(&scroll, row, window);
+                    scroll_into_view(&scroll, row, window, cx);
                 }
             },
             |_, _, _, _| {},
@@ -323,9 +324,9 @@ impl NavView {
         let scroll = self.scroll.clone();
         (row.selected && shown.get() != Some(thread)).then(move || {
             gpui::canvas(
-                move |row: Bounds<Pixels>, window, _| {
+                move |row: Bounds<Pixels>, window, cx| {
                     if shown.replace(Some(thread)) != Some(thread) {
-                        scroll_into_view(&scroll, row, window);
+                        scroll_into_view(&scroll, row, window, cx);
                     }
                 },
                 |_, _, _, _| {},
@@ -441,8 +442,15 @@ impl CockpitView {
 }
 
 /// Scroll the list so `row` shows whole, by as little as it takes (none
-/// when it already does).
-fn scroll_into_view(scroll: &ScrollHandle, row: Bounds<Pixels>, window: &mut Window) {
+/// when it already does). Called while the list is drawn, too late for this
+/// draw (a refresh mid-draw is dropped), so the view drawing the list draws
+/// again once this one is done.
+fn scroll_into_view(
+    scroll: &ScrollHandle,
+    row: Bounds<Pixels>,
+    window: &mut Window,
+    cx: &mut gpui::App,
+) {
     let view = scroll.bounds();
     let mut offset = scroll.offset();
     if row.top() < view.top() {
@@ -453,5 +461,6 @@ fn scroll_into_view(scroll: &ScrollHandle, row: Bounds<Pixels>, window: &mut Win
         return;
     }
     scroll.set_offset(offset);
-    window.refresh();
+    let view = window.current_view();
+    window.defer(cx, move |_, cx| cx.notify(view));
 }

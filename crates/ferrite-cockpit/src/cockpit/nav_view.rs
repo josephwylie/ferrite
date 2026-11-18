@@ -70,6 +70,9 @@ pub(crate) struct NavView {
     pub(super) drawn: RefCell<Vec<ThreadId>>,
     /// The pointer is over the nav's column: its scrollbar shows.
     pub(super) hovered: bool,
+    /// The rows the nav last drew: a stream that leaves them as they are
+    /// draws no nav (`rows_moved`).
+    built: Option<nav::NavState>,
 }
 
 /// What the nav draws from, as the Cockpit has it this frame.
@@ -185,6 +188,7 @@ impl NavView {
             park_sweep: None,
             drawn: Default::default(),
             hovered: false,
+            built: None,
         }
     }
 
@@ -198,6 +202,11 @@ impl NavView {
     /// The list holds the keyboard it was handed.
     pub(crate) fn holds_keys(&self, window: &Window) -> bool {
         self.keys_held && self.focus.is_focused(window)
+    }
+
+    /// Whether `state`'s rows differ from the ones the nav last drew.
+    pub(super) fn rows_moved(&self, state: &nav::NavState) -> bool {
+        self.built.as_ref() != Some(state)
     }
 
     /// The pointer came into the nav's column or left it.
@@ -215,6 +224,7 @@ impl Render for NavView {
         let Some(mut inputs) = self.inputs(cx) else {
             return div().into_any_element();
         };
+        self.built = Some(inputs.state.clone());
         for row in [
             &mut inputs.state.pinned,
             &mut inputs.state.active,

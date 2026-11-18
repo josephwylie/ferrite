@@ -2636,7 +2636,8 @@ impl CockpitView {
         // new inputs first, as the Cockpit's own notify has them do
         // (`observe_self`), so they draw in this same frame.
         self.sync_visible_transcripts(cx);
-        let rows = !frame.is_empty() || !swept_busy.is_empty();
+        let rows = !swept_busy.is_empty()
+            || (!frame.is_empty() && self.nav_view.read(cx).rows_moved(&self.nav_state()));
         for thread in frame.iter().map(|update| update.thread).chain(swept_busy) {
             self.notify_thread_pane(thread, cx);
         }
