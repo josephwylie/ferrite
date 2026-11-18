@@ -1156,16 +1156,13 @@ impl CockpitView {
                         ),
                 );
             }
-            // Beside its menu, `SUBMENU_GAP` off its right edge, its first
-            // row level with its parent (the shell's pad above both).
-            ferrite_ui::components::on_bounds(
-                div()
-                    .absolute()
-                    .left(gpui::relative(1.))
-                    .top(parent_top - px(ferrite_ui::theme::FLOAT_PAD))
-                    .pl(px(ferrite_ui::theme::SUBMENU_GAP))
-                    .child(side),
-                self.record_trigger(SUBMENU.into()),
+            // Its first row level with its parent (the shell's pad above both).
+            crate::float::beside(
+                ferrite_ui::theme::SUBMENU_GAP,
+                f32::from(parent_top) - ferrite_ui::theme::FLOAT_PAD,
+                ferrite_ui::theme::GRID_PAD,
+                ferrite_ui::components::on_bounds(side, self.record_trigger(SUBMENU.into()))
+                    .into_any_element(),
             )
         });
         let shell = div()
