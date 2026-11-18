@@ -39,7 +39,9 @@ fn hit_inset(view: &Entity<CockpitView>, cx: &mut gpui::VisualTestContext) -> f3
 
 /// The sentence Find stands on stays at its inset through every frame of a
 /// panel closing and opening and of the window narrowing, widening and
-/// narrowing again, the reflow changing the rows' height each time.
+/// narrowing again, the reflow changing the rows' height each time. Widening
+/// from the least window rewraps the rows so much shorter that the held
+/// offset lies past their new end.
 #[gpui::test]
 fn a_held_sentence_stays_put_through_reflow(cx: &mut TestAppContext) {
     bind_production_keys(cx);
@@ -69,7 +71,7 @@ fn a_held_sentence_stays_put_through_reflow(cx: &mut TestAppContext) {
     settle(cx);
     cx.simulate_keystrokes("cmd-alt-b");
     settle(cx);
-    for width in [760., 1300., 900., 1000.] {
+    for width in [760., 640., 1300., 900., 1000.] {
         cx.simulate_resize(gpui::size(px(width + CAPTION_ALLOWANCE), px(700.)));
         settle(cx);
     }
