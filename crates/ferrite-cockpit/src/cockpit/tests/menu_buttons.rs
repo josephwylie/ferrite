@@ -212,7 +212,10 @@ fn a_nav_cards_snooze_button_owns_its_menu(cx: &mut TestAppContext) {
     let door = Door {
         button: format!("nav-card-snooze-{}", thread.get()),
         target: MenuTarget::Snooze(thread),
-        rows: labels(&["1 hour", "3 hours", "Tomorrow at 9 am", "Next Monday at 9 am", "Custom…"]),
+        // The rows follow the clock: "Today at 6 pm" is offered only before then.
+        rows: view.read_with(cx, |view, _| {
+            view.snooze_rows().into_iter().map(|(item, _)| item.label.to_string()).collect()
+        }),
         edge: Edge::Left,
     };
     let card = format!("nav-thread-{}", thread.get());
