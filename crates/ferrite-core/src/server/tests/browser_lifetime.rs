@@ -24,7 +24,7 @@ impl Case {
             .submit(browser_test_action(Action::Open {
                 url: "https://example.com/form".into(),
             }))
-            .recv_timeout(Duration::from_secs(5))
+            .recv_timeout(PATIENCE)
             .unwrap()
             .unwrap();
         Self {
@@ -63,7 +63,7 @@ impl Case {
             } = self
                 .owner_window
                 .messages
-                .recv_timeout(Duration::from_secs(5))
+                .recv_timeout(PATIENCE)
                 .unwrap()
             {
                 let boot_id = dispatch.expect("dispatch capability");
@@ -117,7 +117,7 @@ impl Case {
             .browser
             .for_thread(self.thread)
             .submit(Operation::State)
-            .recv_timeout(Duration::from_secs(5))
+            .recv_timeout(PATIENCE)
             .unwrap()
             .unwrap()
     }
@@ -138,7 +138,7 @@ fn queued_expiration_refuses_dispatch_and_ignores_late_success() {
         ServerMessage::Reply { error: Some(_), .. }
     ));
     let error = answer
-        .recv_timeout(Duration::from_secs(5))
+        .recv_timeout(PATIENCE)
         .unwrap()
         .unwrap_err();
     assert!(error.contains("before dispatch authorization"), "{error}");
@@ -185,7 +185,7 @@ fn persistence_backlog_does_not_extend_a_submitted_requests_lifetime() {
     assert!(matches!(answer.try_recv(), Err(mpsc::TryRecvError::Empty)));
     gate.send(()).unwrap();
     let error = answer
-        .recv_timeout(Duration::from_secs(5))
+        .recv_timeout(PATIENCE)
         .unwrap()
         .unwrap_err();
     assert!(error.contains("before dispatch authorization"), "{error}");
@@ -227,7 +227,7 @@ fn authorized_expiration_retains_uncertainty_after_late_success_and_refuses_repl
         },
     );
     let error = answer
-        .recv_timeout(Duration::from_secs(5))
+        .recv_timeout(PATIENCE)
         .unwrap()
         .unwrap_err();
     assert!(error.contains("uncertain"), "{error}");
@@ -245,7 +245,7 @@ fn authorized_expiration_retains_uncertainty_after_late_success_and_refuses_repl
             reference: "@save".into(),
         },
     });
-    assert!(retry.recv_timeout(Duration::from_secs(5)).unwrap().is_err());
+    assert!(retry.recv_timeout(PATIENCE).unwrap().is_err());
     let observed = browser_test_observe(&mut case.owner_window, &agent, case.document, 0);
     assert!(!observed.state.tabs[0].protected);
     case.finish();
@@ -281,7 +281,7 @@ fn dispatch_rechecks_exact_identity_and_operator_intervention() {
         },
     );
     assert!(answer
-        .recv_timeout(Duration::from_secs(5))
+        .recv_timeout(PATIENCE)
         .unwrap()
         .is_err());
     assert!(
@@ -313,7 +313,7 @@ fn queued_completion_cannot_bypass_dispatch_authorization() {
         },
     );
     let error = answer
-        .recv_timeout(Duration::from_secs(5))
+        .recv_timeout(PATIENCE)
         .unwrap()
         .unwrap_err();
     assert!(error.contains("before dispatch authorization"), "{error}");
@@ -355,7 +355,7 @@ fn another_server_boot_cannot_claim_or_complete_a_reused_request_number() {
             value: serde_json::json!({"saved": true}),
         },
     );
-    assert!(answer.recv_timeout(Duration::from_secs(5)).unwrap().is_ok());
+    assert!(answer.recv_timeout(PATIENCE).unwrap().is_ok());
     assert!(!case.state().state.tabs[0].protected);
     case.finish();
 }
@@ -379,7 +379,7 @@ fn operator_reload_cancels_a_queued_write_without_uncertainty() {
         ServerMessage::Reply { error: Some(_), .. }
     ));
     let error = answer
-        .recv_timeout(Duration::from_secs(5))
+        .recv_timeout(PATIENCE)
         .unwrap()
         .unwrap_err();
     assert!(error.contains("before dispatch authorization"), "{error}");
@@ -416,7 +416,7 @@ fn legacy_browser_owner_is_refused_control_with_an_upgrade_message() {
         .submit(browser_test_action(Action::Open {
             url: "https://example.com/".into(),
         }))
-        .recv_timeout(Duration::from_secs(5))
+        .recv_timeout(PATIENCE)
         .unwrap()
         .unwrap();
     let error = agent
@@ -426,7 +426,7 @@ fn legacy_browser_owner_is_refused_control_with_an_upgrade_message() {
             observation: None,
             control: Control::Observe,
         })
-        .recv_timeout(Duration::from_secs(5))
+        .recv_timeout(PATIENCE)
         .unwrap()
         .unwrap_err();
     assert!(
@@ -436,7 +436,7 @@ fn legacy_browser_owner_is_refused_control_with_an_upgrade_message() {
     assert!(
         !agent
             .submit(Operation::State)
-            .recv_timeout(Duration::from_secs(5))
+            .recv_timeout(PATIENCE)
             .unwrap()
             .unwrap()
             .state

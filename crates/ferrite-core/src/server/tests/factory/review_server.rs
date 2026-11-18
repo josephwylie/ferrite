@@ -56,7 +56,7 @@ fn one_off(
     let task = started["task"]["id"].as_str().unwrap().to_string();
     let agent = harness
         .sessions
-        .recv_timeout(Duration::from_secs(5))
+        .recv_timeout(PATIENCE)
         .expect("a Worker started");
     let worker = worker_of(caller, &task);
     (task, worker, agent)
@@ -72,7 +72,7 @@ fn coordinator_of(harness: &Harness, project: &str) -> (ThreadId, Sender<Session
     let thread = ThreadId::new(said["coordinator"]["thread"].as_u64().unwrap());
     let agent = harness
         .sessions
-        .recv_timeout(Duration::from_secs(5))
+        .recv_timeout(PATIENCE)
         .expect("the Coordinator started");
     (thread, agent)
 }
@@ -450,7 +450,7 @@ fn interrogate_a_failed_save_cuts_off_an_attached_window() {
     // The Worker rests without a report: the step decides a nudge, and
     // cannot write it.
     turn_ends(&agent);
-    let deadline = Instant::now() + Duration::from_secs(5);
+    let deadline = Instant::now() + PATIENCE;
     loop {
         let listed = caller.answer("l", "task.list", serde_json::json!({}));
         if listed["result"]["trouble"].is_string() {
@@ -512,7 +512,7 @@ fn tool_call(
         .call(tool, &arguments, move |answer| {
             told.send((answer.text, answer.is_error)).unwrap()
         });
-    said.recv_timeout(Duration::from_secs(10)).unwrap()
+    said.recv_timeout(PATIENCE).unwrap()
 }
 
 /// A Worker reports through its own tool: the Task completes, and the

@@ -19,7 +19,7 @@ fn project_id(project: &str) -> crate::workspace::registry::ProjectId {
 
 /// Until `thread` was told `text`.
 fn told(caller: &mut Caller, thread: ThreadId, text: &str) -> String {
-    let deadline = Instant::now() + Duration::from_secs(5);
+    let deadline = Instant::now() + PATIENCE;
     loop {
         let read = read(caller, thread);
         if read.contains(text) {
@@ -43,7 +43,7 @@ fn coordinator(harness: &Harness, project: &str) -> (ThreadId, Sender<SessionEve
         .unwrap_or_else(|| panic!("{said}"));
     let agent = harness
         .sessions
-        .recv_timeout(Duration::from_secs(5))
+        .recv_timeout(PATIENCE)
         .expect("the Coordinator started");
     (ThreadId::new(thread), agent)
 }
@@ -136,7 +136,7 @@ fn the_coordinator_starts_on_the_first_word_in_the_main_checkout_on_its_settings
     assert_eq!(done, Done::Changed { changed: true });
     let agent = harness
         .sessions
-        .recv_timeout(Duration::from_secs(5))
+        .recv_timeout(PATIENCE)
         .expect("the Coordinator started");
     let listed = ok(
         &harness,
@@ -206,7 +206,7 @@ fn the_coordinator_starts_on_the_first_word_in_the_main_checkout_on_its_settings
         "coordinator.say",
         serde_json::json!({ "project": project, "text": "Now?" }),
     );
-    let deadline = Instant::now() + Duration::from_secs(5);
+    let deadline = Instant::now() + PATIENCE;
     while !harness.launches.lock().unwrap().iter().any(|launch| {
         launch.0 == Provider::Claude && launch.1.as_deref() == Some("claude-coordinator")
     }) {
@@ -261,7 +261,7 @@ fn each_proposal_waits_for_the_operator_and_runs_once_accepted() {
         .to_string();
     let _worker_agent = harness
         .sessions
-        .recv_timeout(Duration::from_secs(5))
+        .recv_timeout(PATIENCE)
         .unwrap();
     let worker = worker_of(&mut caller, &running);
     ok(
@@ -374,7 +374,7 @@ fn each_proposal_waits_for_the_operator_and_runs_once_accepted() {
     };
     harness
         .sessions
-        .recv_timeout(Duration::from_secs(5))
+        .recv_timeout(PATIENCE)
         .expect("its Worker started");
     let made = task_until(&mut caller, &task, |task| task["worker"].is_u64());
     assert!(made.get("workflow").is_none(), "one-off: {made}");
@@ -456,7 +456,7 @@ fn a_task_routed_to_the_coordinator_is_told_to_it() {
         .to_string();
     let _worker_agent = harness
         .sessions
-        .recv_timeout(Duration::from_secs(5))
+        .recv_timeout(PATIENCE)
         .unwrap();
     let worker = worker_of(&mut caller, &task);
     ok_in(
@@ -472,7 +472,7 @@ fn a_task_routed_to_the_coordinator_is_told_to_it() {
     );
     harness
         .sessions
-        .recv_timeout(Duration::from_secs(5))
+        .recv_timeout(PATIENCE)
         .expect("the Coordinator started for it");
     let listed = ok(
         &harness,
@@ -617,7 +617,7 @@ fn a_proposal_and_the_coordinator_survive_a_restart() {
     );
     let _revived = harness
         .sessions
-        .recv_timeout(Duration::from_secs(5))
+        .recv_timeout(PATIENCE)
         .expect("its Session revived for the word");
     let mut caller = call(&harness);
     told(&mut caller, thread, "Still there?");

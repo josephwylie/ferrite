@@ -21,7 +21,7 @@ fn machine(harness: &Harness, sent: &Arc<Mutex<Vec<u8>>>) -> crate::cockpit::Coc
 }
 
 fn answer<T>(cockpit: &mut crate::cockpit::Cockpit, receiver: Receiver<io::Result<T>>) -> T {
-    let deadline = Instant::now() + Duration::from_secs(10);
+    let deadline = Instant::now() + PATIENCE;
     loop {
         cockpit.pump();
         match receiver.try_recv() {
@@ -105,7 +105,7 @@ fn remote_attachment_bytes_and_previews_cross_the_bridge_without_polling_the_win
     let upload = cockpit.upload_attachment(source.clone()).unwrap();
     let retained = upload
         .result
-        .recv_timeout(Duration::from_secs(10))
+        .recv_timeout(PATIENCE)
         .unwrap()
         .unwrap();
     assert_ne!(retained.path, source);
@@ -117,7 +117,7 @@ fn remote_attachment_bytes_and_previews_cross_the_bridge_without_polling_the_win
     let preview = cockpit.read_attachment(&retained.path).unwrap();
     assert_eq!(
         preview
-            .recv_timeout(Duration::from_secs(10))
+            .recv_timeout(PATIENCE)
             .unwrap()
             .unwrap(),
         bytes

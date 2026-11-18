@@ -14,7 +14,7 @@ fn ok(harness: &Harness, method: &str, params: serde_json::Value) -> serde_json:
 
 /// Until `thread` was told `text`.
 fn told(caller: &mut Caller, thread: ThreadId, text: &str) -> String {
-    let deadline = Instant::now() + Duration::from_secs(5);
+    let deadline = Instant::now() + PATIENCE;
     loop {
         let read = read(caller, thread);
         if read.contains(text) {
@@ -146,7 +146,7 @@ fn a_merge_step_reports_each_result_and_a_merged_task_tidies_its_worktree() {
 
     let _building = harness
         .sessions
-        .recv_timeout(Duration::from_secs(5))
+        .recv_timeout(PATIENCE)
         .unwrap();
     let builder = worker_of(&mut caller, &task);
     told(&mut caller, builder, "acme/widgets#12");
@@ -167,7 +167,7 @@ fn a_merge_step_reports_each_result_and_a_merged_task_tidies_its_worktree() {
 
     let merging = harness
         .sessions
-        .recv_timeout(Duration::from_secs(5))
+        .recv_timeout(PATIENCE)
         .unwrap();
     let merger = next_worker(&mut caller, &task, builder);
     let read = told(&mut caller, merger, "Merge the PR");
@@ -187,7 +187,7 @@ fn a_merge_step_reports_each_result_and_a_merged_task_tidies_its_worktree() {
     turn_ends(&merging);
     let _resolving = harness
         .sessions
-        .recv_timeout(Duration::from_secs(5))
+        .recv_timeout(PATIENCE)
         .unwrap();
     let resolver = next_worker(&mut caller, &task, merger);
     told(&mut caller, resolver, "Resolve the conflicts");
@@ -279,7 +279,7 @@ fn a_merged_task_with_a_dirty_checkout_keeps_its_worktree_and_says_why() {
     let task = started["task"]["id"].as_str().unwrap().to_string();
     let _merging = harness
         .sessions
-        .recv_timeout(Duration::from_secs(5))
+        .recv_timeout(PATIENCE)
         .unwrap();
     let merger = worker_of(&mut caller, &task);
     let at = task_until(&mut caller, &task, |task| task["worktree"].is_string());

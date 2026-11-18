@@ -21,7 +21,7 @@ fn a_thread_started_for_a_task_names_its_owner() {
     let thread = ThreadId::new(info["thread"].as_u64().unwrap());
     harness
         .sessions
-        .recv_timeout(Duration::from_secs(5))
+        .recv_timeout(PATIENCE)
         .unwrap();
 
     let (_, said, _) = cli(
@@ -71,7 +71,7 @@ fn owned_threads_stay_owned_and_unlisted_across_a_restart_and_a_revive() {
             .unwrap_or_else(|| panic!("{answer}"));
         let provider = harness
             .sessions
-            .recv_timeout(Duration::from_secs(5))
+            .recv_timeout(PATIENCE)
             .unwrap();
         (ThreadId::new(thread), provider)
     };

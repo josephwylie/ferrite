@@ -155,9 +155,9 @@ impl World {
         listed["tasks"].as_array().cloned().unwrap_or_default()
     }
 
-    /// The Tasks once `done` holds of them, for at most five seconds.
+    /// The Tasks once `done` holds of them, for at most [`PATIENCE`].
     fn tasks_until(&self, done: impl Fn(&[serde_json::Value]) -> bool) -> Vec<serde_json::Value> {
-        let deadline = Instant::now() + Duration::from_secs(5);
+        let deadline = Instant::now() + PATIENCE;
         loop {
             let tasks = self.tasks();
             if done(&tasks) {
@@ -219,7 +219,7 @@ fn a_schedule_starts_a_task_at_its_time_only_once_turned_on() {
     world
         .harness
         .sessions
-        .recv_timeout(Duration::from_secs(5))
+        .recv_timeout(PATIENCE)
         .expect("its Worker started");
 
     world.ok(
@@ -302,7 +302,7 @@ fn github_issues_start_one_task_each_and_a_failed_read_is_reported() {
         "workflow.automation",
         serde_json::json!({ "workflow": workflow, "turn": "on" }),
     );
-    let deadline = Instant::now() + Duration::from_secs(5);
+    let deadline = Instant::now() + PATIENCE;
     while world.automation(&workflow)["backlog"].is_null() {
         assert!(Instant::now() < deadline, "no backlog");
         std::thread::sleep(Duration::from_millis(10));
@@ -351,7 +351,7 @@ fn github_issues_start_one_task_each_and_a_failed_read_is_reported() {
         std::thread::sleep(Duration::from_millis(10));
     }
     world.at(midnight() + 3 * POLL);
-    let deadline = Instant::now() + Duration::from_secs(5);
+    let deadline = Instant::now() + PATIENCE;
     while world.automation(&workflow)["error"].is_null() {
         assert!(Instant::now() < deadline, "the failure was not said");
         std::thread::sleep(Duration::from_millis(10));
@@ -609,7 +609,7 @@ fn starts_that_arrived_during_a_restart_are_handled_once() {
         "workflow.automation",
         serde_json::json!({ "workflow": github, "turn": "on" }),
     );
-    let deadline = Instant::now() + Duration::from_secs(5);
+    let deadline = Instant::now() + PATIENCE;
     while world.automation(&github)["backlog"].is_null() {
         assert!(Instant::now() < deadline, "no backlog");
         std::thread::sleep(Duration::from_millis(10));

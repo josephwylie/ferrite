@@ -73,7 +73,7 @@ fn run(harness: &Harness, repo: &Path, workflow: &str, instructions: &str) -> St
 
 /// Until `thread` was told `text`.
 fn told(caller: &mut Caller, thread: ThreadId, text: &str) -> String {
-    let deadline = Instant::now() + Duration::from_secs(5);
+    let deadline = Instant::now() + PATIENCE;
     loop {
         let read = read(caller, thread);
         if read.contains(text) {
@@ -122,7 +122,7 @@ fn a_question_waits_across_a_restart_and_the_answer_resumes_the_asker() {
     let task = run(&harness, &repo, &workflow, "Add a --fast flag");
     let _agent = harness
         .sessions
-        .recv_timeout(Duration::from_secs(5))
+        .recv_timeout(PATIENCE)
         .unwrap();
     let builder = worker_of(&mut caller, &task);
     let asked = ok_in(
@@ -313,7 +313,7 @@ fn an_agent_decides_approval_with_its_instructions_and_a_rejection_reworks() {
     let task = run(&harness, &repo, &workflow, "Add a --fast flag");
     let building = harness
         .sessions
-        .recv_timeout(Duration::from_secs(5))
+        .recv_timeout(PATIENCE)
         .unwrap();
     let builder = worker_of(&mut caller, &task);
     report(&harness, builder, "finished", "Added --fast");
@@ -324,7 +324,7 @@ fn an_agent_decides_approval_with_its_instructions_and_a_rejection_reworks() {
     caller.answer("w", "agent.wait", serde_json::json!({ "thread": builder }));
     let reviewing = harness
         .sessions
-        .recv_timeout(Duration::from_secs(5))
+        .recv_timeout(PATIENCE)
         .unwrap();
     let reviewer = next_worker(&mut caller, &task, builder);
     let read = told(
@@ -458,7 +458,7 @@ fn a_workers_provider_decision_needs_the_operator_in_the_task_not_the_inbox() {
     let task = run(&harness, &repo, &workflow, "Add a --fast flag");
     let agent = harness
         .sessions
-        .recv_timeout(Duration::from_secs(5))
+        .recv_timeout(PATIENCE)
         .unwrap();
     let builder = worker_of(&mut caller, &task);
     agent.send(decision()).unwrap();

@@ -25,13 +25,13 @@ fn attach_driven(address: &Path) -> Client {
 
 /// The next action `window` is handed, past whatever else it hears.
 fn handed(window: &Client) -> (u64, Action) {
-    let deadline = Instant::now() + Duration::from_secs(5);
+    let deadline = Instant::now() + PATIENCE;
     loop {
         let left = deadline.saturating_duration_since(Instant::now());
         let message = window
             .messages
             .recv_timeout(left)
-            .expect("an action within five seconds");
+            .expect("an action in time");
         if let ServerMessage::Drive { request, action } = message {
             return (request, action);
         }

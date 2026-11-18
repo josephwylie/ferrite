@@ -44,13 +44,13 @@ fn restart(harness: Harness) -> Harness {
     serve_in(harness.dir.clone(), None)
 }
 
-/// Ask until `done` holds of the Task's JSON, for at most five seconds.
+/// Ask until `done` holds of the Task's JSON, for at most [`PATIENCE`].
 fn task_until(
     caller: &mut Caller,
     task: &str,
     done: impl Fn(&serde_json::Value) -> bool,
 ) -> serde_json::Value {
-    let deadline = Instant::now() + Duration::from_secs(5);
+    let deadline = Instant::now() + PATIENCE;
     loop {
         let got = caller.answer("g", "task.get", serde_json::json!({ "task": task }));
         let task = got["result"]["task"].clone();
@@ -110,7 +110,7 @@ fn a_task_from_the_cli_runs_one_worker_in_its_own_worktree_with_no_window() {
     assert_eq!(said[0]["result"]["task"]["title"], "Fix the flaky test");
     let _agent = harness
         .sessions
-        .recv_timeout(Duration::from_secs(5))
+        .recv_timeout(PATIENCE)
         .expect("a Worker started");
     let worker = worker_of(&mut caller, &task);
 
@@ -177,12 +177,12 @@ fn a_worker_that_never_reports_is_prompted_once_then_needs_the_operator() {
         .to_string();
     let agent = harness
         .sessions
-        .recv_timeout(Duration::from_secs(5))
+        .recv_timeout(PATIENCE)
         .unwrap();
     let worker = worker_of(&mut caller, &task);
 
     turn_ends(&agent);
-    let deadline = Instant::now() + Duration::from_secs(5);
+    let deadline = Instant::now() + PATIENCE;
     while !read(&mut caller, worker).contains("without reporting") {
         assert!(Instant::now() < deadline, "never asked to report");
         std::thread::sleep(Duration::from_millis(10));
@@ -239,7 +239,7 @@ fn a_task_alert_follows_its_board_and_says_its_event() {
         .to_string();
     let _agent = harness
         .sessions
-        .recv_timeout(Duration::from_secs(5))
+        .recv_timeout(PATIENCE)
         .unwrap();
     let worker = worker_of(&mut caller, &task);
     ok_in(
@@ -250,7 +250,7 @@ fn a_task_alert_follows_its_board_and_says_its_event() {
     );
 
     let mut shown = None;
-    let deadline = Instant::now() + Duration::from_secs(5);
+    let deadline = Instant::now() + PATIENCE;
     let alert = loop {
         let left = deadline.saturating_duration_since(Instant::now());
         assert!(!left.is_zero(), "no alert");
@@ -298,7 +298,7 @@ fn a_worker_with_background_work_or_a_subagent_running_is_not_prompted() {
         .to_string();
     let agent = harness
         .sessions
-        .recv_timeout(Duration::from_secs(5))
+        .recv_timeout(PATIENCE)
         .unwrap();
     let worker = worker_of(&mut caller, &task);
     let background = |status| SessionEvent::Progress {
@@ -335,7 +335,7 @@ fn a_worker_with_background_work_or_a_subagent_running_is_not_prompted() {
     held(&mut caller, "prompted while the Subagent runs");
 
     agent.send(subagent(AgentStatus::Idle)).unwrap();
-    let deadline = Instant::now() + Duration::from_secs(5);
+    let deadline = Instant::now() + PATIENCE;
     while !read(&mut caller, worker).contains("without reporting") {
         assert!(Instant::now() < deadline, "never asked to report");
         std::thread::sleep(Duration::from_millis(10));
@@ -390,7 +390,7 @@ fn a_task_is_stopped_resumed_and_deleted_leaving_dirty_work_alone() {
     );
     let agent = harness
         .sessions
-        .recv_timeout(Duration::from_secs(5))
+        .recv_timeout(PATIENCE)
         .unwrap();
     let worker = worker_of(&mut caller, &task);
 
@@ -431,7 +431,7 @@ fn a_task_is_stopped_resumed_and_deleted_leaving_dirty_work_alone() {
 
     let resumed = caller.answer("4", "task.resume", serde_json::json!({ "task": task }));
     assert_eq!(resumed["result"]["task"]["status"], "working", "{resumed}");
-    let deadline = Instant::now() + Duration::from_secs(5);
+    let deadline = Instant::now() + PATIENCE;
     while !read(&mut caller, worker).contains("resumed this task") {
         assert!(Instant::now() < deadline, "never told to carry on");
         std::thread::sleep(Duration::from_millis(10));
@@ -619,7 +619,7 @@ fn a_workflow_task_runs_each_step_with_its_own_agent_and_context() {
     let task = started(&said);
     let _first = harness
         .sessions
-        .recv_timeout(Duration::from_secs(5))
+        .recv_timeout(PATIENCE)
         .expect("Scout's Worker");
     let scouting = worker_of(&mut caller, &task);
     let told = read(&mut caller, scouting);
@@ -645,7 +645,7 @@ fn a_workflow_task_runs_each_step_with_its_own_agent_and_context() {
     assert_eq!((status, refused.len()), (0, 0), "{refused:?}");
     let _second = harness
         .sessions
-        .recv_timeout(Duration::from_secs(5))
+        .recv_timeout(PATIENCE)
         .expect("Writer's Worker");
     let moved = task_until(&mut caller, &task, |task| {
         task["worker"].is_u64() && task["worker"] != serde_json::json!(scouting)
