@@ -453,7 +453,6 @@ impl Controller {
     #[cfg(unix)]
     fn connect(&self) -> std::io::Result<std::os::unix::net::UnixStream> {
         let stream = std::os::unix::net::UnixStream::connect(self.directory.join("ferrite.sock"))?;
-        stream.set_read_timeout(Some(Duration::from_secs(10)))?;
         stream.set_write_timeout(Some(Duration::from_secs(5)))?;
         Ok(stream)
     }
@@ -467,7 +466,6 @@ impl Controller {
             &std::net::SocketAddr::from(([127, 0, 0, 1], port)),
             Duration::from_secs(1),
         )?;
-        stream.set_read_timeout(Some(Duration::from_secs(10)))?;
         stream.set_write_timeout(Some(Duration::from_secs(5)))?;
         Ok(stream)
     }
@@ -503,6 +501,12 @@ impl Controller {
             self.broken = true;
             failure(error)
         })?;
+        // The daemon answers once the action is done, and typing a long text
+        // outlasts any fixed wait: the answer has what the operation has left.
+        let left = self.deadline.saturating_duration_since(Instant::now());
+        connection
+            .set_read_timeout(Some(left.max(Duration::from_millis(1))))
+            .map_err(failure)?;
         let bytes = serde_json::to_vec(&value).map_err(failure)?;
         let result = (|| -> Result<Value, String> {
             connection.write_all(&bytes).map_err(|e| e.to_string())?;
