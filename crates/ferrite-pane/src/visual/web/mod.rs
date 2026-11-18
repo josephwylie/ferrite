@@ -23,6 +23,8 @@
 // nothing.
 #[cfg(feature = "cef")]
 pub mod cef;
+#[cfg(any(feature = "cef", test))]
+mod controller;
 #[cfg_attr(not(test), allow(dead_code))]
 pub mod fake;
 #[cfg(all(feature = "cef", not(any(target_os = "macos", windows))))]
