@@ -344,7 +344,9 @@ impl CockpitView {
     /// What a closed tab held goes with it.
     fn release_surface(&mut self, thread: ThreadId, id: &SurfaceId, cx: &mut Context<Self>) {
         match id {
-            SurfaceId::Terminal(number) => self.end_terminal(thread, *number, cx),
+            SurfaceId::Terminal(number) => {
+                self.terminals.update(cx, |terminals, cx| terminals.end(thread, *number, cx))
+            }
             SurfaceId::SideChat(tab) => self.close_side_tab(thread, *tab, cx),
             SurfaceId::Agent(key) => self.close_agent_drill(thread, key, cx),
             SurfaceId::File(path) => self.close_preview_of(thread, path),
@@ -795,9 +797,7 @@ impl CockpitView {
             Some(SurfaceId::File(_) | SurfaceId::Browser) => padded(self.panel_preview(owner, cx)),
             Some(SurfaceId::Files) => self.files_pane(thread, cx).into_any_element(),
             Some(SurfaceId::Changes) => filled(self.changes_pane(tools::Diff::Changes(thread), cx).into_any_element()),
-            Some(SurfaceId::Terminal(number)) => {
-                filled(self.terminal_pane(thread, number, cx).into_any_element())
-            }
+            Some(SurfaceId::Terminal(_)) => filled(self.terminals.clone().into_any_element()),
             Some(SurfaceId::SideChat(_)) => filled(self.side_chat.clone().into_any_element()),
             Some(SurfaceId::Agent(key)) => filled(self.agent_drill_body(thread, &key, cx)),
             Some(SurfaceId::PullRequest(number)) => filled(self.pr_surface(thread, number, cx)),

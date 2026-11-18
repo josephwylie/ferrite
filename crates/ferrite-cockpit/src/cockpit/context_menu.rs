@@ -430,8 +430,8 @@ impl CockpitView {
             }
             MenuTarget::BrowserPage(thread) => rows = self.browser_page_rows(thread),
             MenuTarget::Details(_) => rows = self.details_menu_rows(),
-            MenuTarget::Terminal(_) => rows = self.terminal_context_rows(),
-            MenuTarget::TerminalMore(_) => rows = self.terminal_more_rows(),
+            MenuTarget::Terminal(_) => rows = self.terminals.read(cx).context_rows(),
+            MenuTarget::TerminalMore(_) => rows = self.terminals.read(cx).more_rows(),
             MenuTarget::SurfaceMenu(thread) => rows = self.surface_menu_rows(thread),
             MenuTarget::SurfaceTab { thread, at } => rows = self.surface_tab_rows(thread, at),
             MenuTarget::PrMore(target) => rows = self.pr_menu_rows(target),
@@ -600,7 +600,7 @@ impl CockpitView {
                 self.changes_branch_rows(diff)
             }
             (Submenu::Changes(_), _) => Vec::new(),
-            (Submenu::Terminal(sub), _) => self.terminal_sub_rows(sub),
+            (Submenu::Terminal(sub), _) => self.terminals.read(cx).sub_rows(sub),
         }
     }
 

@@ -14,13 +14,24 @@
 //!   `Attach as context` pill over itself.
 //! - **Attach as context** is the Reply card in the Composer's tray, the
 //!   same one the message menu's `Attach message as context` makes.
+//!
+//! Every Thread's shells live in one view of their own (ADR 0041), which
+//! the Panel draws as the body of whichever shell it shows. What it draws
+//! of the window it reads through `terminal_inputs`; what it asks of the
+//! window (a menu, Attach, an address opened, a shell started again, a
+//! tab gone) it says as a `TerminalsEvent`. Starting a shell needs the
+//! Thread's folder and the machine, so the window starts it and hands it
+//! to the view.
 
+use std::collections::HashMap;
 use std::path::Path;
+
+use gpui::WeakEntity;
 
 use ferrite_core::{machine::Bridge, replies::Reply};
 use ferrite_pane::link_target::LinkTarget;
 use ferrite_terminal::{Cursor, Settings, Terminal, TerminalEvent, TerminalView};
-use crate::cockpit::menu_button::{Door, Edge};
+use crate::cockpit::menu_button::{Door, Doors, Edge, MenuHost};
 use ferrite_ui::icons;
 use ferrite_ui::theme;
 
@@ -53,7 +64,9 @@ const SCROLLBACKS: [usize; 3] = [1_000, theme::TERMINAL_SCROLLBACK, 100_000];
 
 /// A shell's standing: running, or the reason it never started.
 enum Shell {
-    Running(Entity<TerminalView>),
+    /// `remote`: it runs on the window's machine, so a failed end is the
+    /// connection's and leaves its tab to say so.
+    Running { view: Entity<TerminalView>, remote: bool },
     Failed(String),
 }
 
@@ -66,21 +79,22 @@ struct Tab {
 impl Tab {
     fn view(&self) -> Option<&Entity<TerminalView>> {
         match &self.shell {
-            Shell::Running(view) => Some(view),
+            Shell::Running { view, .. } => Some(view),
             Shell::Failed(_) => None,
         }
     }
 }
 
+/// One Thread's shells.
 #[derive(Default)]
-pub(crate) struct Terminals {
+struct Shells {
     tabs: Vec<Tab>,
     /// Shells started, which numbers the next.
     made: u64,
 }
 
 /// What the `⋯` menu sets, for every terminal of the window.
-pub(crate) struct Prefs {
+struct Prefs {
     settings: Settings,
     scrollback: usize,
 }
@@ -121,6 +135,57 @@ fn spawn_shell(
     }
 }
 
+/// Every Thread's shells, and what the `⋯` menu set. One view, not one
+/// per Thread: the menu's choices are the window's.
+pub(crate) struct TerminalsView {
+    cockpit: WeakEntity<CockpitView>,
+    threads: HashMap<ThreadId, Shells>,
+    prefs: Prefs,
+    /// The shown shell is to take the keyboard once it is drawn.
+    focus_wanted: bool,
+    /// Whether the shell's right-click found a selection.
+    selected: bool,
+}
+
+/// What the Terminal draws from, as the Cockpit has it this frame.
+pub(crate) struct TerminalInputs {
+    /// The Thread whose Panel shows a shell, and the shell it shows.
+    thread: ThreadId,
+    number: u64,
+    /// Whether that Thread is the focused one: only then does the shell
+    /// take the keyboard it was opened for.
+    focused: bool,
+    doors: Doors,
+}
+
+/// What the Terminal asks of the window.
+pub(crate) enum TerminalsEvent {
+    /// `Attach as context`: the text, a Reply in the Thread's Composer.
+    Attach { thread: ThreadId, text: String },
+    /// A right-click in a shell: its menu, at the press.
+    Menu { thread: ThreadId, at: gpui::Point<Pixels> },
+    /// A press on the `⋯` button.
+    Door(Door),
+    /// A ⌘-press on an address the shell printed.
+    Open { thread: ThreadId, address: String },
+    /// Try again, on a shell that could not start.
+    Retry { thread: ThreadId, number: u64 },
+    /// A shell ended on its own: its tab goes.
+    Ended { thread: ThreadId, number: u64 },
+}
+
+impl EventEmitter<TerminalsEvent> for TerminalsView {}
+
+impl MenuHost for TerminalsView {
+    fn press_door(&mut self, door: Door, _: &mut Window, cx: &mut Context<Self>) {
+        cx.emit(TerminalsEvent::Door(door));
+    }
+
+    fn tip<E: InteractiveElement>(element: E, text: SharedString) -> E {
+        <CockpitView as MenuHost>::tip(element, text)
+    }
+}
+
 impl CockpitView {
     /// One more shell in the Thread's folder, its Surface opened and
     /// shown (⌘J's first, the `+` menu's Terminal).
@@ -128,72 +193,22 @@ impl CockpitView {
         let Some(directory) = self.thread_path(thread) else {
             return;
         };
-        let shell = self.start_shell(thread, &directory, cx);
-        let terminals = self.tools.terminals.entry(thread).or_default();
-        terminals.made += 1;
-        let number = terminals.made;
-        terminals.tabs.push(Tab { number, shell });
-        self.tools.terminal_focus_wanted = true;
+        let machine = self.cockpit.machine().map(AsRef::as_ref);
+        let number = self
+            .terminals
+            .update(cx, |terminals, cx| terminals.open(thread, &directory, machine, cx));
         self.upsert_surface(thread, SurfaceId::Terminal(number), cx);
     }
 
-    /// A shell in `directory`, or the reason there is none: its Surface
-    /// says why instead of the door looking dead.
-    fn start_shell(&mut self, thread: ThreadId, directory: &Path, cx: &mut Context<Self>) -> Shell {
-        let prefs = &self.tools.terminal_prefs;
-        let (settings, scrollback) = (prefs.settings, prefs.scrollback);
-        // The column's width in cells, reckoned from the face's usual advance.
-        let columns = ((theme::TERMINAL_W - 2. * theme::TERMINAL_PAD_X)
-            / (theme::FS_TERMINAL * theme::CODE_ADVANCE)) as u16;
-        let lines = (theme::TERMINAL_FIRST_ROWS) as u16;
-        match spawn_shell(self.cockpit.machine().map(AsRef::as_ref), directory, scrollback, (columns, lines)) {
-            Ok(shell) => {
-                let view = cx.new(|cx| TerminalView::new(shell, settings, cx));
-                cx.subscribe(&view, move |cockpit, view, event: &TerminalEvent, cx| {
-                    cockpit.terminal_event(thread, view, event, cx)
-                })
-                .detach();
-                Shell::Running(view)
-            }
-            Err(error) => Shell::Failed(error.to_string()),
-        }
-    }
-
-    /// Start shell `number` again, where it failed to start.
-    fn retry_terminal(&mut self, thread: ThreadId, number: u64, cx: &mut Context<Self>) {
-        let failed = self
-            .tools
-            .terminals
-            .get(&thread)
-            .and_then(|terminals| terminals.tabs.iter().find(|tab| tab.number == number))
-            .is_some_and(|tab| matches!(tab.shell, Shell::Failed(_)));
-        let Some(directory) = self.thread_path(thread).filter(|_| failed) else {
-            return;
-        };
-        let shell = self.start_shell(thread, &directory, cx);
-        let Some(tab) = self
-            .tools
-            .terminals
-            .get_mut(&thread)
-            .and_then(|terminals| terminals.tabs.iter_mut().find(|tab| tab.number == number))
-        else {
-            return;
-        };
-        tab.shell = shell;
-        self.tools.terminal_focus_wanted = true;
-        cx.notify();
-    }
-
-    fn terminal_event(
+    pub(in crate::cockpit) fn on_terminals_event(
         &mut self,
-        thread: ThreadId,
-        view: Entity<TerminalView>,
-        event: &TerminalEvent,
+        _: Entity<TerminalsView>,
+        event: &TerminalsEvent,
         cx: &mut Context<Self>,
     ) {
         match event {
-            TerminalEvent::Attach(text) => {
-                if let Some(index) = self.pane_for(thread) {
+            TerminalsEvent::Attach { thread, text } => {
+                if let Some(index) = self.pane_for(*thread) {
                     self.focus_pane(index);
                     let reply = Reply::new(text.trim(), "");
                     self.panes[index]
@@ -202,29 +217,24 @@ impl CockpitView {
                     cx.notify();
                 }
             }
-            TerminalEvent::ContextMenu(at) => {
-                // The rows read what is selected as the menu opens.
-                self.tools.terminal_selected = view.read(cx).selection().is_some();
-                self.open_context_menu(MenuTarget::Terminal(thread), *at, cx)
+            TerminalsEvent::Menu { thread, at } => {
+                self.open_context_menu(MenuTarget::Terminal(*thread), *at, cx)
             }
-            TerminalEvent::Failed(status) if self.cockpit.machine().is_some() => {
-                if let Some(tab) = self.tools.terminals.get_mut(&thread).and_then(|terminals| {
-                    terminals.tabs.iter_mut().find(|tab| tab.view() == Some(&view))
-                }) {
-                    tab.shell = Shell::Failed(format!(
-                        "The remote terminal ended ({status}). Check the connection in Settings, then try again."
-                    ));
-                    cx.notify();
-                }
+            TerminalsEvent::Door(door) => self.toggle_door(*door, cx),
+            TerminalsEvent::Open { thread, address } => self.open_terminal_address(*thread, address, cx),
+            TerminalsEvent::Retry { thread, number } => {
+                let Some(directory) = self.thread_path(*thread) else {
+                    return;
+                };
+                let machine = self.cockpit.machine().map(AsRef::as_ref);
+                self.terminals.update(cx, |terminals, cx| {
+                    terminals.retry(*thread, *number, &directory, machine, cx)
+                });
             }
-            TerminalEvent::Exited | TerminalEvent::Failed(_) => {
-                if let Some(number) = self.terminal_number(thread, &view) {
-                    self.end_terminal(thread, number, cx);
-                    self.forget_surface(thread, &SurfaceId::Terminal(number));
-                }
+            TerminalsEvent::Ended { thread, number } => {
+                self.forget_surface(*thread, &SurfaceId::Terminal(*number));
+                cx.notify();
             }
-            TerminalEvent::Open(address) => self.open_terminal_address(thread, address, cx),
-            TerminalEvent::Title(_) => {}
         }
     }
 
@@ -249,38 +259,10 @@ impl CockpitView {
         }
     }
 
-    fn terminal_number(&self, thread: ThreadId, view: &Entity<TerminalView>) -> Option<u64> {
-        self.tools
-            .terminals
-            .get(&thread)?
-            .tabs
-            .iter()
-            .find(|tab| tab.view() == Some(view))
-            .map(|tab| tab.number)
-    }
-
-    /// Shell `number` of `thread` ends: its tab closed, or it exited.
-    pub(in crate::cockpit) fn end_terminal(&mut self, thread: ThreadId, number: u64, cx: &mut Context<Self>) {
-        let Some(terminals) = self.tools.terminals.get_mut(&thread) else {
-            return;
-        };
-        terminals.tabs.retain(|tab| tab.number != number);
-        if terminals.tabs.is_empty() {
-            self.tools.terminals.remove(&thread);
-        }
-        cx.notify();
-    }
-
-    fn terminal_of(&self, thread: ThreadId, number: u64) -> Option<Entity<TerminalView>> {
-        let terminals = self.tools.terminals.get(&thread)?;
-        let tab = terminals.tabs.iter().find(|tab| tab.number == number)?;
-        tab.view().cloned()
-    }
-
-    /// The shell `thread`'s Panel shows, if it shows one.
-    fn active_terminal(&self, thread: ThreadId) -> Option<Entity<TerminalView>> {
+    /// The number of the shell `thread`'s Panel shows, if it shows one.
+    fn shown_terminal(&self, thread: ThreadId) -> Option<u64> {
         match self.active_surface(thread)? {
-            SurfaceId::Terminal(number) => self.terminal_of(thread, number),
+            SurfaceId::Terminal(number) => Some(number),
             _ => None,
         }
     }
@@ -289,24 +271,210 @@ impl CockpitView {
     /// (`render`'s) leaves it alone, else it would hand the keyboard back to
     /// the Composer every frame.
     pub(in crate::cockpit) fn terminal_holds_focus(&self, window: &Window, cx: &gpui::App) -> bool {
-        self.focused_thread()
-            .and_then(|thread| self.active_terminal(thread))
+        self.focused_thread().is_some_and(|thread| {
+            self.shown_terminal(thread)
+                .is_some_and(|number| self.terminals.read(cx).holds_focus(thread, number, window, cx))
+        })
+    }
+
+    /// A Terminal menu row, on the shell `thread`'s Panel shows.
+    pub(in crate::cockpit) fn run_terminal_verb(&mut self, thread: ThreadId, verb: Verb, cx: &mut Context<Self>) {
+        if let Some(number) = self.shown_terminal(thread) {
+            self.terminals
+                .update(cx, |terminals, cx| terminals.run_verb(thread, number, verb, cx));
+        }
+    }
+
+    /// Everything the Terminal draws from: the shell the Panel shows.
+    fn terminal_inputs(&self) -> Option<TerminalInputs> {
+        let thread = self.panes[self.panel_drawn_pane()?].thread()?;
+        Some(TerminalInputs {
+            thread,
+            number: self.shown_terminal(thread)?,
+            focused: self.focused_thread() == Some(thread),
+            doors: self.doors(),
+        })
+    }
+}
+
+#[cfg(feature = "visual-reference")]
+impl CockpitView {
+    /// A reference scene runs `command` in the shown shell and gives it a
+    /// moment to answer.
+    pub(in crate::cockpit) fn fixture_terminal_command(
+        &mut self,
+        thread: ThreadId,
+        command: &'static [u8],
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(view) = self
+            .shown_terminal(thread)
+            .and_then(|number| self.terminals.read(cx).shell(thread, number))
+        {
+            view.update(cx, |view, _| view.write(command));
+            std::thread::sleep(std::time::Duration::from_millis(1500));
+        }
+    }
+}
+
+impl TerminalsView {
+    pub(in crate::cockpit) fn new(cockpit: WeakEntity<CockpitView>) -> Self {
+        Self {
+            cockpit,
+            threads: HashMap::new(),
+            prefs: Prefs::default(),
+            focus_wanted: false,
+            selected: false,
+        }
+    }
+
+    fn tab(&self, thread: ThreadId, number: u64) -> Option<&Tab> {
+        self.threads.get(&thread)?.tabs.iter().find(|tab| tab.number == number)
+    }
+
+    fn tab_mut(&mut self, thread: ThreadId, number: u64) -> Option<&mut Tab> {
+        self.threads.get_mut(&thread)?.tabs.iter_mut().find(|tab| tab.number == number)
+    }
+
+    /// Shell `number` of `thread`, while it runs.
+    pub(in crate::cockpit) fn shell(&self, thread: ThreadId, number: u64) -> Option<Entity<TerminalView>> {
+        self.tab(thread, number)?.view().cloned()
+    }
+
+    fn holds_focus(&self, thread: ThreadId, number: u64, window: &Window, cx: &gpui::App) -> bool {
+        self.shell(thread, number)
             .is_some_and(|view| view.focus_handle(cx).is_focused(window))
     }
 
-    /// Every frame: the shown shell takes the keyboard it was opened for,
-    /// once it has been drawn. A handle not yet in the window's tree cannot
-    /// be focused; the wish waits a frame for it.
-    pub(in crate::cockpit) fn tend_terminal(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if !self.tools.terminal_focus_wanted {
+    /// One more shell for `thread`, in `directory`: its number.
+    fn open(&mut self, thread: ThreadId, directory: &Path, machine: Option<&Bridge>, cx: &mut Context<Self>) -> u64 {
+        let shell = self.start_shell(thread, directory, machine, cx);
+        let shells = self.threads.entry(thread).or_default();
+        shells.made += 1;
+        let number = shells.made;
+        shells.tabs.push(Tab { number, shell });
+        self.focus_wanted = true;
+        cx.notify();
+        number
+    }
+
+    /// A shell in `directory`, or the reason there is none: its Surface
+    /// says why instead of the door looking dead.
+    fn start_shell(
+        &mut self,
+        thread: ThreadId,
+        directory: &Path,
+        machine: Option<&Bridge>,
+        cx: &mut Context<Self>,
+    ) -> Shell {
+        let (settings, scrollback) = (self.prefs.settings, self.prefs.scrollback);
+        // The column's width in cells, reckoned from the face's usual advance.
+        let columns = ((theme::TERMINAL_W - 2. * theme::TERMINAL_PAD_X)
+            / (theme::FS_TERMINAL * theme::CODE_ADVANCE)) as u16;
+        let lines = (theme::TERMINAL_FIRST_ROWS) as u16;
+        match spawn_shell(machine, directory, scrollback, (columns, lines)) {
+            Ok(shell) => {
+                let view = cx.new(|cx| TerminalView::new(shell, settings, cx));
+                cx.subscribe(&view, move |terminals, view, event: &TerminalEvent, cx| {
+                    terminals.on_shell_event(thread, view, event, cx)
+                })
+                .detach();
+                Shell::Running { view, remote: machine.is_some() }
+            }
+            Err(error) => Shell::Failed(error.to_string()),
+        }
+    }
+
+    /// Start shell `number` again, where it failed to start.
+    fn retry(
+        &mut self,
+        thread: ThreadId,
+        number: u64,
+        directory: &Path,
+        machine: Option<&Bridge>,
+        cx: &mut Context<Self>,
+    ) {
+        if !self
+            .tab(thread, number)
+            .is_some_and(|tab| matches!(tab.shell, Shell::Failed(_)))
+        {
             return;
         }
-        let Some(view) = self.focused_thread().and_then(|thread| self.active_terminal(thread)) else {
-            self.tools.terminal_focus_wanted = false;
+        let shell = self.start_shell(thread, directory, machine, cx);
+        if let Some(tab) = self.tab_mut(thread, number) {
+            tab.shell = shell;
+            self.focus_wanted = true;
+            cx.notify();
+        }
+    }
+
+    fn on_shell_event(
+        &mut self,
+        thread: ThreadId,
+        view: Entity<TerminalView>,
+        event: &TerminalEvent,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(tab) = self
+            .threads
+            .get_mut(&thread)
+            .and_then(|shells| shells.tabs.iter_mut().find(|tab| tab.view() == Some(&view)))
+        else {
+            return;
+        };
+        let number = tab.number;
+        match event {
+            TerminalEvent::Attach(text) => cx.emit(TerminalsEvent::Attach { thread, text: text.clone() }),
+            TerminalEvent::ContextMenu(at) => {
+                // The rows read what is selected as the menu opens.
+                self.selected = view.read(cx).selection().is_some();
+                cx.emit(TerminalsEvent::Menu { thread, at: *at })
+            }
+            TerminalEvent::Failed(status) if matches!(tab.shell, Shell::Running { remote: true, .. }) => {
+                tab.shell = Shell::Failed(format!(
+                    "The remote terminal ended ({status}). Check the connection in Settings, then try again."
+                ));
+                cx.notify();
+            }
+            TerminalEvent::Exited | TerminalEvent::Failed(_) => {
+                self.end(thread, number, cx);
+                cx.emit(TerminalsEvent::Ended { thread, number });
+            }
+            TerminalEvent::Open(address) => cx.emit(TerminalsEvent::Open { thread, address: address.clone() }),
+            TerminalEvent::Title(_) => {}
+        }
+    }
+
+    /// Shell `number` of `thread` ends: its tab closed, or it exited.
+    pub(in crate::cockpit) fn end(&mut self, thread: ThreadId, number: u64, cx: &mut Context<Self>) {
+        let Some(shells) = self.threads.get_mut(&thread) else {
+            return;
+        };
+        shells.tabs.retain(|tab| tab.number != number);
+        if shells.tabs.is_empty() {
+            self.threads.remove(&thread);
+        }
+        cx.notify();
+    }
+
+    /// The shown shell is to take the keyboard (⌘J back to it).
+    pub(in crate::cockpit) fn want_focus(&mut self) {
+        self.focus_wanted = true;
+    }
+
+    /// The shown shell takes the keyboard it was opened for, once it has
+    /// been drawn. A handle not yet in the window's tree cannot be focused;
+    /// the wish waits a frame for it.
+    fn tend_focus(&mut self, inputs: &TerminalInputs, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.focus_wanted {
+            return;
+        }
+        let Some(view) = self.shell(inputs.thread, inputs.number).filter(|_| inputs.focused) else {
+            self.focus_wanted = false;
             return;
         };
         if view.read(cx).is_drawn() {
-            self.tools.terminal_focus_wanted = false;
+            self.focus_wanted = false;
             let focus = view.focus_handle(cx);
             window.focus(&focus, cx);
         } else {
@@ -314,8 +482,8 @@ impl CockpitView {
         }
     }
 
-    pub(in crate::cockpit) fn run_terminal_verb(&mut self, thread: ThreadId, verb: Verb, cx: &mut Context<Self>) {
-        let Some(view) = self.active_terminal(thread) else {
+    fn run_verb(&mut self, thread: ThreadId, number: u64, verb: Verb, cx: &mut Context<Self>) {
+        let Some(view) = self.shell(thread, number) else {
             return;
         };
         match verb {
@@ -326,22 +494,21 @@ impl CockpitView {
             Verb::Paste => view.update(cx, |view, cx| view.paste(cx)),
             Verb::SelectAll => view.update(cx, |view, cx| view.select_all(cx)),
             Verb::Clear => view.update(cx, |view, cx| view.clear(cx)),
-            Verb::ToggleBlink => self.tools.terminal_prefs.settings.blink ^= true,
-            Verb::ToggleCopyOnSelect => self.tools.terminal_prefs.settings.copy_on_select ^= true,
-            Verb::Cursor(cursor) => self.tools.terminal_prefs.settings.cursor = cursor,
-            Verb::Scrollback(lines) => self.tools.terminal_prefs.scrollback = lines,
+            Verb::ToggleBlink => self.prefs.settings.blink ^= true,
+            Verb::ToggleCopyOnSelect => self.prefs.settings.copy_on_select ^= true,
+            Verb::Cursor(cursor) => self.prefs.settings.cursor = cursor,
+            Verb::Scrollback(lines) => self.prefs.scrollback = lines,
         }
-        let prefs = &self.tools.terminal_prefs;
-        let (settings, scrollback) = (prefs.settings, prefs.scrollback);
-        for view in self.tools.terminals.get(&thread).into_iter().flat_map(|t| &t.tabs).filter_map(Tab::view) {
+        let (settings, scrollback) = (self.prefs.settings, self.prefs.scrollback);
+        for view in self.threads.get(&thread).into_iter().flat_map(|t| &t.tabs).filter_map(Tab::view) {
             view.update(cx, |view, cx| view.configure(settings, scrollback, cx));
         }
         cx.notify();
     }
 
     /// The right-click menu's rows.
-    pub(in crate::cockpit) fn terminal_context_rows(&self) -> Vec<Option<(menu::Item, MenuVerb)>> {
-        let selected = self.tools.terminal_selected;
+    pub(in crate::cockpit) fn context_rows(&self) -> Vec<Option<(menu::Item, MenuVerb)>> {
+        let selected = self.selected;
         let row = |label: &'static str, action: &str, verb: Verb, enabled: bool| {
             let chord = ferrite_ui::components::bound_chord_in(
                 action,
@@ -367,8 +534,8 @@ impl CockpitView {
     }
 
     /// The Terminal `⋯` menu's rows.
-    pub(in crate::cockpit) fn terminal_more_rows(&self) -> Vec<Option<(menu::Item, MenuVerb)>> {
-        let prefs = &self.tools.terminal_prefs;
+    pub(in crate::cockpit) fn more_rows(&self) -> Vec<Option<(menu::Item, MenuVerb)>> {
+        let prefs = &self.prefs;
         let cursor = match prefs.settings.cursor {
             Cursor::Block => "Block",
             Cursor::Bar => "Bar",
@@ -393,8 +560,8 @@ impl CockpitView {
         ]
     }
 
-    pub(in crate::cockpit) fn terminal_sub_rows(&self, sub: Sub) -> Vec<(menu::Item, MenuVerb)> {
-        let prefs = &self.tools.terminal_prefs;
+    pub(in crate::cockpit) fn sub_rows(&self, sub: Sub) -> Vec<(menu::Item, MenuVerb)> {
+        let prefs = &self.prefs;
         match sub {
             Sub::CursorStyle => [
                 ("Block", Cursor::Block),
@@ -421,22 +588,14 @@ impl CockpitView {
 
     // ------------------------------------------------------------ drawing
 
-    /// Shell `number`'s Surface: its row (`⋯`), then the grid.
-    pub(in crate::cockpit) fn terminal_pane(&self, thread: ThreadId, number: u64, cx: &mut Context<Self>) -> Div {
-        let failure = self
-            .tools
-            .terminals
-            .get(&thread)
-            .and_then(|terminals| terminals.tabs.iter().find(|tab| tab.number == number))
-            .and_then(|tab| match &tab.shell {
-                Shell::Failed(why) => Some(why.clone()),
-                Shell::Running(_) => None,
-            });
-        let body = match failure {
-            Some(why) => Some(Self::terminal_failure(why, thread, number, cx)),
-            None => self.terminal_of(thread, number).map(IntoElement::into_any_element),
-        };
-        let more = self.doors().button(
+    /// The shown shell's Surface: its row (`⋯`), then the grid.
+    fn body(&self, inputs: &TerminalInputs, cx: &mut Context<Self>) -> Div {
+        let (thread, number) = (inputs.thread, inputs.number);
+        let body = self.tab(thread, number).map(|tab| match &tab.shell {
+            Shell::Failed(why) => Self::failure(why.clone(), thread, number, cx),
+            Shell::Running { view, .. } => view.clone().into_any_element(),
+        });
+        let more = inputs.doors.button(
             ferrite_ui::components::icon_button(
                 "terminal-more",
                 icons::ELLIPSIS,
@@ -458,7 +617,7 @@ impl CockpitView {
     }
 
     /// Why the shell never started, and a way to try again.
-    fn terminal_failure(why: String, thread: ThreadId, number: u64, cx: &mut Context<Self>) -> AnyElement {
+    fn failure(why: String, thread: ThreadId, number: u64, cx: &mut Context<Self>) -> AnyElement {
         use theme::*;
         div()
             .debug_selector(|| "terminal-failed".into())
@@ -479,45 +638,34 @@ impl CockpitView {
                     .h(px(ROW))
                     .px(px(CH))
                     .child(ferrite_ui::components::form_label("Try again", INK_SUBTLE))
-                    .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
-                        view.retry_terminal(thread, number, cx)
+                    .on_click(cx.listener(move |_, _: &ClickEvent, _, cx| {
+                        cx.emit(TerminalsEvent::Retry { thread, number })
                     })),
             )
             .into_any_element()
     }
-}
 
-#[cfg(feature = "visual-reference")]
-impl CockpitView {
-    /// A reference scene runs `command` in the shown shell and gives it a
-    /// moment to answer.
-    pub(in crate::cockpit) fn fixture_terminal_command(
-        &mut self,
-        thread: ThreadId,
-        command: &'static [u8],
-        cx: &mut Context<Self>,
-    ) {
-        if let Some(view) = self.active_terminal(thread) {
-            view.update(cx, |view, _| view.write(command));
-            std::thread::sleep(std::time::Duration::from_millis(1500));
-        }
-    }
-}
-
-#[cfg(test)]
-impl CockpitView {
-    /// The numbers of the Thread's shells.
-    pub(in crate::cockpit) fn terminal_numbers(&self, thread: ThreadId) -> Vec<u64> {
-        self.tools
-            .terminals
+    /// The numbers of the Thread's shells — what the tests read.
+    #[cfg(test)]
+    pub(in crate::cockpit) fn numbers(&self, thread: ThreadId) -> Vec<u64> {
+        self.threads
             .get(&thread)
-            .map(|terminals| terminals.tabs.iter().map(|tab| tab.number).collect())
+            .map(|shells| shells.tabs.iter().map(|tab| tab.number).collect())
             .unwrap_or_default()
     }
+}
 
-    /// The shown shell's view.
-    pub(in crate::cockpit) fn terminal_view(&self, thread: ThreadId) -> Option<Entity<TerminalView>> {
-        self.active_terminal(thread)
+impl Render for TerminalsView {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let Some(inputs) = self
+            .cockpit
+            .upgrade()
+            .and_then(|cockpit| cockpit.read(cx).terminal_inputs())
+        else {
+            return div().into_any_element();
+        };
+        self.tend_focus(&inputs, window, cx);
+        self.body(&inputs, cx).into_any_element()
     }
 }
 
