@@ -44,7 +44,7 @@ mod palette;
 pub(crate) mod panel;
 mod parts;
 mod popups;
-mod prs;
+mod prs_view;
 mod sends;
 mod server;
 mod new_task_view;
@@ -620,7 +620,7 @@ pub struct CockpitView {
     /// What stands in the board's place: the Factory or the PRs.
     destination: Option<destination::Destination>,
     /// The PRs destination, kept as it was left while another view shows.
-    prs: prs::PrsView,
+    prs: Entity<prs_view::PrsView>,
     /// The Tasks whose needs-you toast stands, and the state it announced.
     task_toasts: std::collections::HashMap<String, ferrite_core::factory::Status>,
     /// The empty board's selected row, and the list's own focus.
@@ -1364,6 +1364,8 @@ impl CockpitView {
         let cockpit_weak = cx.weak_entity();
         let sheets = cx.new(|_| sheets::Sheets::default());
         cx.subscribe(&sheets, Self::on_sheets_event).detach();
+        let prs = cx.new(|cx| prs_view::PrsView::new(cockpit_weak.clone(), cx));
+        cx.subscribe(&prs, Self::on_prs_event).detach();
         let mut view = Self {
             cockpit,
             browsers: Default::default(),
@@ -1463,7 +1465,7 @@ impl CockpitView {
             decisions: decisions::DecisionState::new(cx.weak_entity()),
             nav_measure_rest: std::cell::Cell::new(false),
             destination: None,
-            prs: prs::PrsView::new(cx),
+            prs,
             task_toasts: Default::default(),
             empty_cursor: 0,
             empty_focus: cx.focus_handle(),
@@ -8419,7 +8421,7 @@ impl CockpitView {
         } else if let Some(focus) = self.factory_focus(window, cx) {
             focus
         } else if self.rename.is_none() && self.prs_shown() {
-            self.prs.focus.clone()
+            self.prs.read(cx).focus.clone()
         } else if self.rename.is_none() && self.empty_board_shown() {
             self.empty_focus.clone()
         } else {
@@ -8536,7 +8538,7 @@ impl CockpitView {
             // A Project's Factory board stands in the board's place.
             frame().flex().child(self.factory_board(window, cx))
         } else if self.prs_shown() {
-            frame().flex().child(self.prs_board(cx))
+            frame().flex().child(self.prs.clone())
         } else if let Some((board, tree)) = self
             .board()
             .and_then(|board| self.board_tree(board).map(|tree| (board, tree)))
@@ -8816,7 +8818,6 @@ impl CockpitView {
             }))
             .on_action(cx.listener(Self::open_settings))
             .map(|root| self.register_board_actions(root, cx))
-            .map(|root| self.register_prs_actions(root, cx))
             .child(
                 div()
                     .relative()

@@ -32,7 +32,12 @@ impl CockpitView {
         if self.factory().is_some() {
             parts.extend(self.factory_head());
         } else if self.prs_shown() {
-            parts.extend(self.prs_head());
+            let prs = self.prs.read(cx);
+            let project = prs
+                .project
+                .and_then(|project| self.cockpit.registry().project(project))
+                .map(|project| SharedString::from(project.title.clone()));
+            parts.extend(prs.head(project));
         } else if !self.empty_board_shown() {
             parts.extend(self.solo_head(cx).into_iter().flatten());
         }

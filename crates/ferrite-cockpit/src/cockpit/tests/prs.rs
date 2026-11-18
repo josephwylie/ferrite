@@ -196,8 +196,8 @@ fn the_footer_opens_the_prs_from_an_empty_board(cx: &mut TestAppContext) {
     assert!(shows(cx, "prs-board"));
     lands(cx, "prs-row-7");
     assert!(shows(cx, "prs-row-3"), "its rows");
-    world.view.read_with(cx, |view, _| {
-        assert_eq!(view.prs.project, Some(world.project))
+    world.view.read_with(cx, |view, cx| {
+        assert_eq!(view.prs.read(cx).project, Some(world.project))
     });
 }
 
@@ -210,8 +210,8 @@ fn the_footer_opens_the_prs_from_a_thread_without_one(cx: &mut TestAppContext) {
     click(cx, "nav-pull-requests");
     assert!(shows(cx, "prs-board"), "opened without a PR on the branch");
     lands(cx, "prs-row-3");
-    world.view.read_with(cx, |view, _| {
-        assert_ne!(view.prs.project, Some(world.project))
+    world.view.read_with(cx, |view, cx| {
+        assert_ne!(view.prs.read(cx).project, Some(world.project))
     });
 }
 
@@ -328,21 +328,29 @@ fn back_from_a_pr_returns_to_the_list_as_it_was_left(cx: &mut TestAppContext) {
     click(cx, "prs-filter-All");
     lands(cx, "prs-rows");
     world.view.update(cx, |view, cx| {
-        view.prs.scroll.set_offset(gpui::point(px(0.), px(-300.)));
+        view.prs
+            .read(cx)
+            .scroll
+            .set_offset(gpui::point(px(0.), px(-300.)));
         cx.notify();
     });
     tick(cx);
-    let at = world.view.read_with(cx, |view, _| view.prs.scroll.offset());
+    let at = world
+        .view
+        .read_with(cx, |view, cx| view.prs.read(cx).scroll.offset());
     assert!(at.y < px(0.), "scrolled");
-    world.view.update(cx, |view, cx| view.open_pr_detail(7, cx));
+    world.view.update(cx, |view, cx| {
+        view.prs.update(cx, |prs, cx| prs.open_detail(7, cx))
+    });
     tick(cx);
     assert!(shows(cx, "prs-detail") && !shows(cx, "prs-rows"));
     click(cx, "prs-back");
     assert!(shows(cx, "prs-rows"), "the list again");
-    world.view.read_with(cx, |view, _| {
-        assert_eq!(view.prs.filter, WirePrFilter::All, "its filter");
-        assert_eq!(view.prs.selected, Some(7), "its marked row");
-        assert_eq!(view.prs.scroll.offset(), at, "its scroll");
+    world.view.read_with(cx, |view, cx| {
+        let prs = view.prs.read(cx);
+        assert_eq!(prs.filter, WirePrFilter::All, "its filter");
+        assert_eq!(prs.selected, Some(7), "its marked row");
+        assert_eq!(prs.scroll.offset(), at, "its scroll");
     });
 }
 
@@ -514,8 +522,9 @@ fn the_prs_view_is_walked_by_keys(cx: &mut TestAppContext) {
     let (world, cx) = world("prs-keys", 0, two_rows(), false, cx);
     click(cx, "nav-pull-requests");
     lands(cx, "prs-row-3");
-    let marked =
-        |cx: &mut gpui::VisualTestContext| world.view.read_with(cx, |view, _| view.prs.selected);
+    let marked = |cx: &mut gpui::VisualTestContext| {
+        world.view.read_with(cx, |view, cx| view.prs.read(cx).selected)
+    };
     cx.simulate_keystrokes("down");
     assert_eq!(marked(cx), Some(7), "the first row");
     cx.simulate_keystrokes("down");
@@ -640,4 +649,78 @@ fn a_foreign_pr_with_the_same_number_keeps_its_repository(cx: &mut TestAppContex
             Some(super::super::surfaces::SurfaceId::PullRequest(number))
         );
     });
+}
+
+/// Another Project chosen in the scope bar reads its own list, and the row
+/// marked on the last one is let go: ⏎ opens nothing until a row is marked.
+#[gpui::test]
+fn choosing_another_project_reads_its_list_and_lets_the_mark_go(cx: &mut TestAppContext) {
+    let (world, cx) = world("prs-scope", 1, two_rows(), false, cx);
+    click(cx, "nav-pull-requests");
+    lands(cx, "prs-row-3");
+    cx.simulate_keystrokes("down");
+    click(cx, &format!("prs-project-{}", world.project.get()));
+    lands(cx, "prs-row-7");
+    cx.simulate_keystrokes("enter");
+    tick(cx);
+    assert!(!shows(cx, "prs-detail"), "no row marked on the new list");
+    cx.simulate_keystrokes("down");
+    cx.simulate_keystrokes("enter");
+    tick(cx);
+    assert!(shows(cx, "prs-detail"), "a row marked again opens");
+}
+
+/// A state filter reads that state's list, and an empty one says so.
+#[gpui::test]
+fn a_filter_reads_its_own_list(cx: &mut TestAppContext) {
+    let (world, cx) = world("prs-filter-empty", 0, two_rows(), false, cx);
+    world.view.update(cx, |view, _| {
+        view.cockpit
+            .fixture_pr_list(world.path.clone(), WirePrFilter::Closed, list_of(Vec::new(), false))
+    });
+    click(cx, "nav-pull-requests");
+    lands(cx, "prs-row-7");
+    click(cx, "prs-filter-Closed");
+    lands(cx, "prs-empty");
+    assert!(!shows(cx, "prs-row-7"));
+    click(cx, "prs-filter-Open");
+    lands(cx, "prs-row-7");
+}
+
+/// With no Project, the view says so and offers to add one.
+#[gpui::test]
+fn with_no_project_the_view_offers_to_add_one(cx: &mut TestAppContext) {
+    let (core, _fake) = cockpit("prs-no-project", 0);
+    bind_production_keys(cx);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    hold_nav_open(&view, cx);
+    cx.simulate_resize(gpui::size(px(1900.), px(900.)));
+    tick(cx);
+    view.update(cx, |view, _| {
+        let projects: Vec<ProjectId> =
+            view.cockpit.registry().projects().iter().map(|project| project.id).collect();
+        for project in projects {
+            view.cockpit.remove_project(project).unwrap();
+        }
+    });
+    click(cx, "nav-pull-requests");
+    assert!(shows(cx, "prs-no-project"));
+    click(cx, "prs-add-project");
+    lands(cx, "project-editor-card");
+}
+
+/// A PR opened again shows the view it was left on, under the view's head.
+#[gpui::test]
+fn a_pr_opened_again_keeps_the_view_it_was_left_on(cx: &mut TestAppContext) {
+    let (_world, cx) = world("prs-tab-kept", 0, two_rows(), false, cx);
+    click(cx, "nav-pull-requests");
+    lands(cx, "prs-row-7");
+    assert!(shows(cx, "view-head-prs"), "the head names the destination");
+    click(cx, "prs-row-7");
+    lands(cx, "pr-body");
+    click(cx, "pr-tab-Timeline");
+    lands(cx, "pr-snippet-0");
+    click(cx, "prs-back");
+    click(cx, "prs-row-7");
+    lands(cx, "pr-snippet-0");
 }
