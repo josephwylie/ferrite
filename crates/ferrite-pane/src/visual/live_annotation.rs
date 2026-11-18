@@ -66,6 +66,7 @@ pub fn crop(png: &[u8], viewport: &Viewport, bounds: &Rect) -> Result<(Vec<u8>, 
     ))
 }
 
+#[cfg(feature = "cef")]
 pub(crate) fn parse_event(mut event: serde_json::Value) -> Result<Event, String> {
     match event["kind"].as_str() {
         Some("attach") => {
