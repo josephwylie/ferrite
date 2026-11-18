@@ -277,7 +277,7 @@ fn retained_transcript_relative_file_links_use_the_thread_workspace_and_copy_tex
     cx.simulate_resize(gpui::size(px(1200.), px(600.)));
 
     // Short enough to sit on one line of the 720px reading column.
-    let suffix = " after reading the notes on this change.";
+    let suffix = " after reading the notes on this change and the review that came after.";
     fake.streams.borrow()[0]
         .send(SessionEvent::TextDelta {
             text: format!("Before [guide](docs/guide.md:12){suffix}"),
@@ -1392,7 +1392,7 @@ fn the_panel_slides_shut_when_focus_moves_to_a_draft(cx: &mut TestAppContext) {
     display_frames(cx);
     let mid = panel_width(cx).expect("still sliding");
     assert!(
-        mid > 0. && mid < ferrite_ui::theme::PANEL_W,
+        mid > 0. && mid < crate::cockpit::panel::least_w(),
         "narrowing: {mid}"
     );
     settle(cx);
@@ -1405,7 +1405,8 @@ fn the_panel_slides_shut_when_focus_moves_to_a_draft(cx: &mut TestAppContext) {
 /// operator's).
 #[gpui::test]
 fn a_preview_snaps_the_panel_wide(cx: &mut TestAppContext) {
-    use ferrite_ui::theme::{PANEL_PAD_L, PANEL_PAD_R, PANEL_W};
+    use crate::cockpit::panel::least_w;
+    use ferrite_ui::theme::{PANEL_PAD_L, PANEL_PAD_R};
     ferrite_ui::motion::testing::drive();
     let (view, cx) = panel_window("motion-panel-preview", cx);
     let dir = scratch("motion-panel-preview-file");
@@ -1419,7 +1420,7 @@ fn a_preview_snaps_the_panel_wide(cx: &mut TestAppContext) {
     });
     cx.run_until_parked();
     let wide = view.read_with(cx, |view, _| view.board_right());
-    assert!(wide > PANEL_W + 100., "a 1600 window previews wide: {wide}");
+    assert!(wide > least_w() + 100., "a 1600 window previews wide: {wide}");
     assert_eq!(panel_width(cx), Some(wide), "wide at once");
     assert!((solo_card_right(&view, cx) - (1600. - wide)).abs() <= 1.);
     let card = cx
@@ -1434,7 +1435,7 @@ fn a_preview_snaps_the_panel_wide(cx: &mut TestAppContext) {
     cx.run_until_parked();
     assert_eq!(
         panel_width(cx),
-        Some(ferrite_ui::theme::PANEL_W),
+        Some(least_w()),
         "the compact width back: the preview's floor was never saved"
     );
     assert!(

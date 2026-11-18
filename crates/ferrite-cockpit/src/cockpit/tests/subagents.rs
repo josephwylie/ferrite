@@ -835,8 +835,9 @@ fn an_opened_agent_is_a_panel_tab(cx: &mut TestAppContext) {
     tick(cx);
 
     let pane = cx.debug_bounds("panel").expect("the pane docks");
+    let floor = ferrite_ui::theme::SIDE_CHAT_W + ferrite_ui::theme::CAPTION_ALLOWANCE;
     assert!(
-        (pane.size.width - px(ferrite_ui::theme::SIDE_CHAT_W)).abs() < px(1.),
+        (pane.size.width - px(floor)).abs() < px(1.),
         "its token width: {pane:?}"
     );
     assert!((pane.right() - px(1600.)).abs() < px(1.), "at the right");

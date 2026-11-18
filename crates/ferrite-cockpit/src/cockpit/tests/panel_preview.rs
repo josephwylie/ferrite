@@ -7,7 +7,8 @@
 //! through its first send.
 
 use super::*;
-use ferrite_ui::theme::{LH_UI, PANEL_W};
+use crate::cockpit::panel::least_w;
+use ferrite_ui::theme::LH_UI;
 
 /// A source file of `lines` numbered lines, in its own scratch directory.
 fn source(name: &str, lines: usize) -> std::path::PathBuf {
@@ -74,7 +75,7 @@ fn a_file_at_a_line_opens_wide_and_closes_back_to_the_sections(cx: &mut TestAppC
     let thread = view.read_with(cx, |view, _| view.panes[0].thread().unwrap());
     view.update(cx, |view, cx| view.open_panel(thread, cx));
     tick(cx);
-    assert_eq!(panel_w(cx), Some(PANEL_W));
+    assert_eq!(panel_w(cx), Some(least_w()));
     let file = source("preview-line-file", 200);
 
     preview(&view, &file, Some(150), cx);
@@ -85,7 +86,7 @@ fn a_file_at_a_line_opens_wide_and_closes_back_to_the_sections(cx: &mut TestAppC
     );
     assert!(cx.debug_bounds("panel-preview").is_some(), "and shown");
     let wide = panel_w(cx).expect("shown");
-    assert!(wide > PANEL_W + 100., "wide: {wide}");
+    assert!(wide > least_w() + 100., "wide: {wide}");
     let scrolled = view.read_with(cx, |view, _| {
         view.panes[0]
             .preview_tab
@@ -115,7 +116,7 @@ fn a_file_at_a_line_opens_wide_and_closes_back_to_the_sections(cx: &mut TestAppC
     );
     assert_eq!(
         panel_w(cx),
-        Some(ferrite_ui::theme::PANEL_W),
+        Some(least_w()),
         "the preview's floor was never the operator's width"
     );
 }
@@ -131,7 +132,7 @@ fn another_tab_keeps_the_preview_for_later(cx: &mut TestAppContext) {
     let overview = cx.debug_bounds("panel-tab-Overview").unwrap();
     cx.simulate_click(overview.center(), gpui::Modifiers::none());
     tick(cx);
-    assert_eq!(panel_w(cx), Some(ferrite_ui::theme::PANEL_W));
+    assert_eq!(panel_w(cx), Some(least_w()));
     assert!(cx.debug_bounds("panel-preview").is_none());
     // At this width the strip overflows: its chevron brings the tab in.
     let right = cx.debug_bounds("panel-tabs-right").expect("more to the right");
@@ -227,7 +228,7 @@ fn each_thread_keeps_its_own_preview(cx: &mut TestAppContext) {
         tick(cx);
     };
     focus(1, cx);
-    assert_eq!(panel_w(cx), Some(PANEL_W), "the other Thread's Panel");
+    assert_eq!(panel_w(cx), Some(least_w()), "the other Thread's Panel");
     assert!(cx.debug_bounds("panel-tab-Preview").is_none());
     assert!(
         view.read_with(cx, |view, _| view.panes[0].preview.is_open()),

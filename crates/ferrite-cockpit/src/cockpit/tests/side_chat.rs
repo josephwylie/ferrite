@@ -74,7 +74,7 @@ fn a_side_chat_opens_as_a_panel_tab_with_an_empty_word(cx: &mut TestAppContext) 
     let pane = cx.debug_bounds("side-chat").expect("the pane draws");
     assert!(panel.contains(&pane.center()));
     assert!(
-        panel.size.width >= px(ferrite_ui::theme::SIDE_CHAT_W) - px(1.),
+        panel.size.width >= px(ferrite_ui::theme::SIDE_CHAT_W + ferrite_ui::theme::CAPTION_ALLOWANCE) - px(1.),
         "its floor: {panel:?}"
     );
     assert!((panel.right() - px(1600.)).abs() < px(1.), "at the window's right: {panel:?}");

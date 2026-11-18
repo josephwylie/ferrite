@@ -43,13 +43,14 @@ fn card_right(view: &Entity<CockpitView>, cx: &mut gpui::VisualTestContext) -> f
 /// minimum, and the board gives up its column.
 #[gpui::test]
 fn the_panel_never_hides_for_width(cx: &mut TestAppContext) {
-    use ferrite_ui::theme::{PANEL_W, WINDOW_MIN_H, WINDOW_MIN_W};
+    use crate::cockpit::panel::least_w;
+    use ferrite_ui::theme::{WINDOW_MIN_H, WINDOW_MIN_W};
     let (view, cx) = solo("panel-any-width", 1, 1600., cx);
     for width in [1600., 1150., 900., WINDOW_MIN_W] {
         cx.simulate_resize(gpui::size(px(width), px(900.)));
         tick(cx);
         assert!(cx.debug_bounds("panel").is_some(), "shown at {width}");
-        assert_eq!(card_right(&view, cx), width - PANEL_W, "at {width}");
+        assert_eq!(card_right(&view, cx), width - least_w(), "at {width}");
     }
     cx.simulate_resize(gpui::size(px(WINDOW_MIN_W), px(WINDOW_MIN_H)));
     tick(cx);
@@ -152,13 +153,13 @@ fn toggle_sits_in_one_place(
     cx: &mut gpui::VisualTestContext,
     which: &str,
 ) {
-    use ferrite_ui::theme::PANEL_W;
+    use crate::cockpit::panel::least_w;
     let panel = cx.debug_bounds("panel").expect("shown");
     let tools = cx.debug_bounds("title-tools").expect("the tools");
     assert!(cx.debug_bounds("panel-toggle").is_some(), "{which}: the rail's door");
     assert!(tools.left() > panel.left(), "{which}: over the panel's own corner");
     let head = cx.debug_bounds("view-head").expect("the view head");
-    assert_eq!(head.right(), px(1600. - PANEL_W), "{which}: head stops");
+    assert_eq!(head.right(), px(1600. - least_w()), "{which}: head stops");
     view.update(cx, |view, cx| view.toggle_panel_now(cx));
     tick(cx);
     assert!(cx.debug_bounds("panel").is_none());
@@ -230,7 +231,7 @@ fn the_overview_is_one_scroll_of_sections(cx: &mut TestAppContext) {
 /// frame.
 #[gpui::test]
 fn the_pull_request_is_a_row_in_changes(cx: &mut TestAppContext) {
-    use ferrite_ui::theme::PANEL_W;
+    use crate::cockpit::panel::least_w;
     let (view, cx) = solo("panel-pr-row", 1, 1600., cx);
     let thread = view.read_with(cx, |view, _| view.cockpit.threads()[0]);
     view.update(cx, |view, cx| {
@@ -248,7 +249,7 @@ fn the_pull_request_is_a_row_in_changes(cx: &mut TestAppContext) {
     view.update(cx, |view, cx| view.toggle_panel_now(cx));
     cx.run_until_parked();
     let panel = cx.debug_bounds("panel").expect("open at once");
-    assert_eq!(panel.size.width, px(PANEL_W));
+    assert_eq!(panel.size.width, px(least_w()));
 }
 
 /// The Context section reads the shown Thread's context, live: another

@@ -1,8 +1,9 @@
 //! The Panel's width: the one the operator drags to is theirs, and a
 //! tool's own least (Files, Changes, a file) only widens what is drawn.
 use super::*;
+use crate::cockpit::panel::least_w;
 use crate::cockpit::surfaces::SurfaceId;
-use ferrite_ui::theme::{DOCK_THREAD_MIN_W, FILES_EDITOR_MIN_W, PANEL_W};
+use ferrite_ui::theme::{CAPTION_ALLOWANCE, DOCK_THREAD_MIN_W, FILES_EDITOR_MIN_W};
 use std::time::Duration;
 
 fn window<'a>(
@@ -74,27 +75,30 @@ fn a_drag_on_a_wide_tool_saves_the_width_dragged_to(cx: &mut TestAppContext) {
     show(&view, thread, SurfaceId::Files, cx);
     let files = drawn(cx);
     assert!(files > 500., "Files draws wide: {files}");
-    drag_to(380., 1400., cx);
-    assert_eq!(chosen(&view, thread, cx), 380., "what the pointer chose");
+    let to = 380. + CAPTION_ALLOWANCE;
+    drag_to(to, 1400., cx);
+    assert_eq!(chosen(&view, thread, cx), to, "what the pointer chose");
     assert_eq!(
         drawn(cx),
         files,
         "Files still draws no narrower than its least"
     );
     show(&view, thread, SurfaceId::Overview, cx);
-    assert_eq!(drawn(cx), 380., "Overview is the width chosen");
+    assert_eq!(drawn(cx), to, "Overview is the width chosen");
 }
 
 /// At each window width, each tool opened and left again: the width chosen
 /// is the one saved, the Panel comes back to it, and the chat keeps its
-/// least.
+/// least. Each width is wider by the head's allowance, which the Panel
+/// takes from the window.
 #[gpui::test]
 fn every_tool_leaves_the_chosen_width_alone_at_any_window_width(cx: &mut TestAppContext) {
     for (window_w, chosen_w) in [(800., 360.), (1000., 380.), (1400., 440.)] {
+        let (window_w, chosen_w) = (window_w + CAPTION_ALLOWANCE, chosen_w + CAPTION_ALLOWANCE);
         let (view, thread, cx) = window(&format!("panel-width-{window_w}"), window_w, cx);
         drag_to(chosen_w, window_w, cx);
         let saved = chosen(&view, thread, cx);
-        assert!(saved >= PANEL_W);
+        assert!(saved >= least_w());
         let rest = drawn(cx);
         for id in [SurfaceId::Files, SurfaceId::Changes, SurfaceId::Browser] {
             show(&view, thread, id.clone(), cx);
