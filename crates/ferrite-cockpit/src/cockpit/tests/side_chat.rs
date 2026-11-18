@@ -479,6 +479,106 @@ fn a_tool_row_in_a_side_chat_unfolds_in_its_tab(cx: &mut TestAppContext) {
     assert_eq!(view.read_with(cx, |view, cx| expanded(view, cx)), Some(true));
 }
 
+/// Whether `thread`'s transcript holds `text` anywhere.
+fn holds(view: &CockpitView, thread: ThreadId, text: &str) -> bool {
+    view.cockpit.thread(thread).is_some_and(|open| {
+        ferrite_core::transcript::plain_text(open.transcript().blocks()).contains(text)
+    })
+}
+
+/// A tab closed before its fork lands takes that fork with it: the window
+/// stays on the Thread, one Pane, and the fork is retired.
+#[gpui::test]
+fn a_fork_that_lands_after_its_tab_closed_is_retired(cx: &mut TestAppContext) {
+    let (view, fake, cx) = answered("side-chat-closed-early", cx);
+    let owner = owner(&view, cx);
+    view.update(cx, |view, cx| view.open_side_chat(owner, None, cx));
+    let id = side_tabs(&view, owner, cx)[0];
+    assert!(view.read_with(cx, |view, cx| shown_fork(view, owner, cx)).is_none(), "not landed yet");
+    let tab = crate::cockpit::surfaces::SurfaceId::SideChat(id);
+    view.update(cx, |view, cx| view.close_surface(owner, &tab, cx));
+    tick(cx);
+    tick(cx);
+    assert_eq!(fake.forks.borrow().len(), 1, "the fork was asked");
+    view.read_with(cx, |view, _| {
+        assert_eq!(view.panes.len(), 1, "the fork is no Pane");
+        assert_eq!(view.focused_thread(), Some(owner), "the window stays");
+        assert_eq!(view.cockpit.threads(), [owner], "the fork is retired");
+    });
+}
+
+/// Two Threads' side chats wait on forks; the first tab closes before
+/// either lands. Each fork goes to the tab of the Thread it was made from:
+/// the closed tab's is retired, the other tab takes its own.
+#[gpui::test]
+fn each_fork_lands_in_the_tab_of_the_thread_it_forks(cx: &mut TestAppContext) {
+    let (core, fake) = cockpit("side-chat-two-owners", 2);
+    *fake.native_controls.borrow_mut() = true;
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(1600.), px(700.)));
+    let threads = view.read_with(cx, |view, _| view.cockpit.threads());
+    let (first, second) = (threads[0], threads[1]);
+    // A Thread's agent is heard once the window has landed on it.
+    for (stream, thread, text) in [(1, second, "beta\n\n"), (0, first, "alpha\n\n")] {
+        view.update(cx, |view, cx| view.focus_thread(thread, cx));
+        let send = |event| fake.streams.borrow()[stream].send(event).unwrap();
+        send(SessionEvent::TextDelta { text: text.into() });
+        send(SessionEvent::TurnEnded {
+            outcome: ferrite_core::TurnOutcome::Completed,
+            cost_usd: None,
+        });
+        tick(cx);
+    }
+    view.read_with(cx, |view, _| {
+        assert!(holds(view, first, "alpha") && holds(view, second, "beta"));
+    });
+    view.update(cx, |view, cx| {
+        view.open_side_chat(first, None, cx);
+        view.open_side_chat(second, None, cx);
+    });
+    let tab = crate::cockpit::surfaces::SurfaceId::SideChat(side_tabs(&view, first, cx)[0]);
+    view.update(cx, |view, cx| view.close_surface(first, &tab, cx));
+    tick(cx);
+    tick(cx);
+    assert_eq!(fake.forks.borrow().len(), 2, "both forks were asked");
+    view.read_with(cx, |view, cx| {
+        assert_eq!(view.panes.len(), 2, "no fork is a Pane");
+        assert_eq!(view.focused_thread(), Some(first), "the window stays");
+        let fork = shown_fork(view, second, cx).expect("the second tab took a fork");
+        assert!(holds(view, fork, "beta"), "the second Thread's own fork");
+        assert_eq!(view.cockpit.threads().len(), 3, "the first fork is retired");
+    });
+}
+
+/// A script asks the windows to land on another Thread (`thread.focus`)
+/// while a side chat waits on its fork: the window lands there, and the
+/// fork still goes to its tab.
+#[gpui::test]
+fn a_focus_asked_while_a_fork_is_on_its_way_lands_the_window(cx: &mut TestAppContext) {
+    let (view, fake, cx) = answered("side-chat-focus-meanwhile", cx);
+    let owner = owner(&view, cx);
+    let other = view.update(cx, |view, _| {
+        view.cockpit
+            .open(Provider::Claude, WorkspaceChoice::Main { checkout: here() })
+            .unwrap()
+    });
+    tick(cx);
+    view.update(cx, |view, cx| {
+        view.cockpit
+            .fixture_task_alert(ferrite_core::protocol::ServerMessage::Focus { thread: other });
+        view.open_side_chat(owner, None, cx);
+    });
+    tick(cx);
+    tick(cx);
+    assert_eq!(fake.forks.borrow().len(), 1, "the fork was asked");
+    view.read_with(cx, |view, cx| {
+        assert_eq!(view.focused_thread(), Some(other), "the window lands where it was asked");
+        assert!(view.pane_for(other).is_some(), "the other Thread keeps its Pane");
+        let fork = shown_fork(view, owner, cx).expect("the tab took its fork");
+        assert!(holds(view, fork, "alpha"), "the owner's own fork");
+    });
+}
+
 /// A Thread whose agent cannot fork still gets its tab: no fork is
 /// asked, and the tab says why in the empty word's place.
 #[gpui::test]
