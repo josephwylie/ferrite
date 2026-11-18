@@ -237,6 +237,30 @@ fn cmd_j_back_to_an_open_shell_gives_it_the_keyboard(cx: &mut TestAppContext) {
     assert!(shell_focused(cx), "the shell took the keyboard");
 }
 
+/// A shell added from the `+` menu while another holds the keyboard has it
+/// before the next key: what is typed after the menu's `t` goes to the new
+/// shell, none of it to the Composer.
+#[gpui::test]
+fn a_shell_added_from_the_plus_menu_takes_the_next_key(cx: &mut TestAppContext) {
+    let (view, thread, cx) = window("terminal-plus-focus", cx);
+    cx.simulate_keystrokes("cmd-j");
+    tick(cx);
+    tick(cx);
+    let plus = cx.debug_bounds("panel-plus").expect("the +");
+    cx.simulate_click(plus.center(), gpui::Modifiers::none());
+    tick(cx);
+    cx.simulate_keystrokes("t");
+    assert_eq!(panel_tabs(&view, thread, cx).1, Some(SurfaceId::Terminal(2)), "t adds a shell");
+    cx.simulate_keystrokes("x");
+    let typed = view.read_with(cx, |view, cx| view.panes[0].composer.read(cx).text().to_string());
+    assert_eq!(typed, "", "the Composer did not take the letter");
+    let shell = shown_shell(&view, thread, cx).unwrap();
+    assert!(
+        cx.update(|window, cx| shell.focus_handle(cx).is_focused(window)),
+        "the new shell has the keyboard"
+    );
+}
+
 #[gpui::test]
 fn a_selection_offers_attach_and_attaches_as_a_reply_tile(cx: &mut TestAppContext) {
     let (view, thread, cx) = window("terminal-attach", cx);

@@ -462,24 +462,24 @@ impl TerminalsView {
         self.focus_wanted = true;
     }
 
-    /// The shown shell takes the keyboard it was opened for, once it has
-    /// been drawn. A handle not yet in the window's tree cannot be focused;
-    /// the wish waits a frame for it.
+    /// The shown shell takes the keyboard it was opened for, after the
+    /// frame that draws it. Not sooner: a handle not yet in the window's
+    /// tree cannot be focused. And not inside the frame: it is built on
+    /// where the keyboard was when the root drew, so the next key would
+    /// still be typed into the old owner.
     fn tend_focus(&mut self, inputs: &TerminalInputs, window: &mut Window, cx: &mut Context<Self>) {
-        if !self.focus_wanted {
+        if !std::mem::take(&mut self.focus_wanted) {
             return;
         }
         let Some(view) = self.shell(inputs.thread, inputs.number).filter(|_| inputs.focused) else {
-            self.focus_wanted = false;
             return;
         };
-        if view.read(cx).is_drawn() {
-            self.focus_wanted = false;
-            let focus = view.focus_handle(cx);
-            window.focus(&focus, cx);
-        } else {
-            cx.notify();
-        }
+        window.defer(cx, move |window, cx| {
+            if view.read(cx).is_drawn() {
+                let focus = view.focus_handle(cx);
+                window.focus(&focus, cx);
+            }
+        });
     }
 
     fn run_verb(&mut self, thread: ThreadId, number: u64, verb: Verb, cx: &mut Context<Self>) {
