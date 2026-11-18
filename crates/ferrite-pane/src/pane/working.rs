@@ -27,6 +27,12 @@ pub struct WorkingTail {
     state: Rc<Working>,
 }
 
+impl PartialEq for WorkingTail {
+    fn eq(&self, other: &Self) -> bool {
+        self.key == other.key
+    }
+}
+
 impl WorkingTail {
     /// The header's key while a turn runs; `None` with no turn running (a
     /// Session starting, a plan left by a turn cut short).
@@ -48,13 +54,14 @@ impl WorkingTail {
     /// The live row at the tail, for the running turn's trailing `work`
     /// (`rows::live_start`); `disclosure` opens that work's rows above it.
     pub(crate) fn live(&self, work: &[Block], disclosure: Option<LineDisclosure>) -> AnyElement {
-        let row = match &*self.state {
-            Working::Turn { live, .. } => live_row(live, work, disclosure),
-            Working::Starting { still, solo } => starting_line(*still, *solo),
-            Working::Plan { plan, solo } => div()
-                .pt(px(theme::TASK_CARD_GAP))
-                .child(task_list(plan, Grid::pane(Default::default(), *solo))),
-        };
+        let row =
+            match &*self.state {
+                Working::Turn { live, .. } => live_row(live, work, disclosure),
+                Working::Starting { still, solo } => starting_line(*still, *solo),
+                Working::Plan { plan, solo } => div().pt(px(theme::TASK_CARD_GAP)).child(
+                    task_list(plan, Grid::pane(Default::default(), *solo), plain_step),
+                ),
+            };
         div()
             .debug_selector(|| "transcript-progress".into())
             .w_full()
@@ -455,9 +462,11 @@ fn live_row(live: &Live, work: &[Block], disclosure: Option<LineDisclosure>) -> 
         .flex_shrink_0()
         .when(planned, |tail| tail.pt(px(theme::TASK_CARD_GAP)).gap(px(theme::TASK_CARD_GAP)))
         .children(planned.then(|| {
-            div()
-                .w_full()
-                .child(task_list(&live.plan, Grid::pane(Default::default(), true)))
+            div().w_full().child(task_list(
+                &live.plan,
+                Grid::pane(Default::default(), true),
+                plain_step,
+            ))
         }))
         .children(thought.map(|thought| {
             row_words()
@@ -663,7 +672,11 @@ fn plan_of(transcript: &Transcript) -> Vec<(String, TaskState)> {
 /// hairline ring, one row a step — done `check-circle` and its words
 /// dimmed, the step in hand the working mark and its words
 /// strong, a step to do a dashed ring and its words in the body's ink.
-fn task_list(plan: &[(String, TaskState)], grid: Grid) -> Div {
+fn task_list(
+    plan: &[(String, TaskState)],
+    grid: Grid,
+    label: impl Fn(usize, &str) -> AnyElement,
+) -> Div {
     div()
         .debug_selector(|| "task-list".into())
         .flex()
@@ -679,7 +692,7 @@ fn task_list(plan: &[(String, TaskState)], grid: Grid) -> Div {
         .font_family(theme::FONT_UI)
         .text_size(px(grid.activity().size))
         .line_height(px(grid.line))
-        .children(plan.iter().map(|(words, state)| {
+        .children(plan.iter().enumerate().map(|(at, (words, state))| {
             let (mark, ink) = match state {
                 TaskState::Done => (
                     icon(icons::CHECK_CIRCLE, theme::TASK_ICON, INK_SUBTLE).into_any_element(),
@@ -717,9 +730,36 @@ fn task_list(plan: &[(String, TaskState)], grid: Grid) -> Div {
                         .min_w_0()
                         .truncate()
                         .text_color(rgb(ink))
-                        .child(SharedString::from(words.clone())),
+                        .child(label(at, words)),
                 )
         }))
+}
+
+fn plain_step(_: usize, words: &str) -> AnyElement {
+    SharedString::from(words.to_owned()).into_any_element()
+}
+
+/// The plan a completed turn kept (`Body::Plan`), drawn as the task list
+/// was: done steps checked, a step still in hand or left to do marked as
+/// such, each step's words from `label` (the transcript's selectable text).
+pub(crate) fn plan_card(
+    steps: &[ferrite_core::progress::PlanStep],
+    grid: Grid,
+    label: impl Fn(usize, &str) -> AnyElement,
+) -> Div {
+    use ferrite_core::progress::StepStatus;
+    let plan: Vec<(String, TaskState)> = steps
+        .iter()
+        .map(|step| {
+            let state = match step.status {
+                StepStatus::Completed => TaskState::Done,
+                StepStatus::InProgress => TaskState::Blocked,
+                StepStatus::Pending => TaskState::ToDo,
+            };
+            (step.text.clone(), state)
+        })
+        .collect();
+    task_list(&plan, grid, label)
 }
 
 #[cfg(test)]

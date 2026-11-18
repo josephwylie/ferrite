@@ -26,24 +26,179 @@ fn the_bridge_never_asks_and_keeps_its_connection_alive() {
     let has = |pair: &str| args.windows(2).any(|w| w[0] == "-o" && w[1] == pair);
     assert!(has("BatchMode=yes"));
     assert!(has("ServerAliveInterval=15"));
+    assert!(has("RemoteCommand=none"));
     assert!(args.contains(&"-C".to_string()), "compressed");
     assert!(args.contains(&"-T".to_string()), "no terminal");
     if cfg!(unix) {
         assert!(has("ControlMaster=auto"));
         assert!(has("ControlPath=/tmp/m/c"), "Ferrite's own master");
     }
-    assert_eq!(
-        args[args.len() - 4..],
-        ["--", "me@box", "ferrited", "bridge"],
-        "the target can never be read as an option"
-    );
+    assert_eq!(args[args.len() - 3..args.len() - 1], ["--", "me@box"]);
+    assert!(args.last().unwrap().contains("/runtime/versions/"));
+    assert!(args.last().unwrap().contains("exec ferrited bridge"));
     let api = bridge_args("me@box", Path::new("/tmp/m/c"), API);
     assert_eq!(
-        api[..args.len() - 2],
-        args[..args.len() - 2],
+        api[..args.len() - 1],
+        args[..args.len() - 1],
         "the same ssh"
     );
-    assert_eq!(api[api.len() - 2..], ["ferrited", "api-bridge"]);
+    assert!(api.last().unwrap().contains("exec ferrited api-bridge"));
+}
+
+#[test]
+fn remote_terminal_uses_the_same_destination_and_authentication_as_the_bridge() {
+    let machine = Machine::new("ssh://me@box:2222");
+    let settings = Path::new("/tmp/ferrite-terminal");
+    let bridge = Bridge::ssh(&machine, settings);
+    let args = bridge.terminal_args(Path::new("/work/project")).unwrap();
+    let bridge_args = bridge_args(
+        &machine.target,
+        &dir(settings, &machine.target).join("c"),
+        WINDOW,
+    );
+    assert_eq!(args[0], "-tt");
+    assert_eq!(
+        args[1..args.len() - 1],
+        bridge_args[1..bridge_args.len() - 1]
+    );
+    for directory in ["relative", "", "/work/\0project"] {
+        assert_eq!(
+            bridge
+                .terminal_args(Path::new(directory))
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::InvalidInput
+        );
+    }
+    let local = Bridge::new(
+        "fixture",
+        settings.join("unused"),
+        Box::new(|| unreachable!()),
+    );
+    assert_eq!(
+        local.terminal_args(Path::new("/work")).unwrap_err().kind(),
+        io::ErrorKind::Unsupported
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn remote_terminal_enters_the_quoted_directory_before_starting_the_login_shell() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let root = std::env::temp_dir().join(format!("ferrite-terminal-{}", std::process::id()));
+    let directory = root.join("agent's project; $(touch escaped)");
+    std::fs::create_dir_all(&directory).unwrap();
+    let shell = root.join("shell");
+    std::fs::write(&shell, "#!/bin/sh\nprintf '%s\\n' \"$PWD\" \"$1\"\n").unwrap();
+    std::fs::set_permissions(&shell, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let bridge = Bridge::ssh(&Machine::new("box"), &root);
+    let args = bridge.terminal_args(&directory).unwrap();
+    let output = Command::new("sh")
+        .args(["-c", args.last().unwrap()])
+        .env("SHELL", &shell)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        String::from_utf8(output.stdout).unwrap(),
+        format!("{}\n-l\n", directory.display())
+    );
+    assert!(!directory.join("escaped").exists());
+    let missing = bridge.terminal_args(&root.join("missing")).unwrap();
+    let failed = Command::new("sh")
+        .args(["-c", missing.last().unwrap()])
+        .env("SHELL", &shell)
+        .output()
+        .unwrap();
+    assert!(!failed.status.success());
+    assert!(
+        failed.stdout.is_empty(),
+        "started a shell outside the requested directory"
+    );
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn ssh_fields_preserve_aliases_and_include_explicit_endpoints_in_identity() {
+    let machine = Machine::from_ssh_fields(" cloud ", "", "").unwrap();
+    assert_eq!(machine.target, "cloud");
+    let machine = Machine::from_ssh_fields("me@cloud", "me", "2222").unwrap();
+    assert_eq!(machine.target, "ssh://me@cloud:2222");
+    assert_eq!(
+        machine.ssh_fields(),
+        ("cloud".into(), "me".into(), "2222".into())
+    );
+    assert_eq!(
+        Machine::from_ssh_fields("[::1]:2222", "me", "")
+            .unwrap()
+            .target,
+        "ssh://me@[::1]:2222"
+    );
+    assert_eq!(
+        Machine::from_ssh_fields("::1", "", "").unwrap().target,
+        "::1"
+    );
+    assert_eq!(
+        Machine::from_ssh_fields("me@box", "other", "")
+            .unwrap()
+            .target,
+        "other@box"
+    );
+    assert_eq!(
+        Machine::from_ssh_fields("box:22", "", "23").unwrap().target,
+        "ssh://box:23"
+    );
+    assert_ne!(
+        dir(Path::new("/tmp"), "cloud"),
+        dir(Path::new("/tmp"), "ssh://cloud:2222")
+    );
+}
+
+#[test]
+fn ssh_fields_reject_options_shell_programs_and_invalid_ports() {
+    for host in [
+        "-cloud",
+        "box;id",
+        "box$(id)",
+        "box`id`",
+        "box'",
+        "box/path",
+        "me@@box",
+        "[bad]:22",
+        "box\n",
+        "ssh://box/path",
+    ] {
+        assert!(check_target(host).is_err(), "accepted {host}");
+    }
+    for port in ["0", "65536", "-1", "+22", "22x", "22 23"] {
+        assert!(
+            Machine::from_ssh_fields("box", "", port).is_err(),
+            "accepted {port}"
+        );
+    }
+    assert!(Machine::from_ssh_fields("box", "-oProxyCommand=x", "").is_err());
+}
+
+#[test]
+fn dropping_a_bridge_releases_its_address_for_reconnect() {
+    let directory = std::env::temp_dir().join(format!("fm-drop-{}", std::process::id()));
+    let socket = directory.join("bridge.sock");
+    for _ in 0..2 {
+        let bridge = Bridge::new(
+            "box",
+            socket.clone(),
+            Box::new(|| Err(io::Error::other("unused"))),
+        );
+        bridge.listen().unwrap();
+        drop(bridge);
+    }
+    assert!(!socket.exists());
+    let _ = std::fs::remove_dir(directory);
 }
 
 #[test]

@@ -1,13 +1,12 @@
 //! The Engine (ADR 0025): everything that keeps running without a window.
 //! The Store and its claim, every Session and its writer, the prompt
-//! queue, pending Decisions, Notices, Groups, the registry, and every
+//! queue, pending Decisions, Notices, the registry, and every
 //! policy — Handover, the memory watchdog, ending idle Sessions, the titler,
 //! suggestions, deferred finish. The Server owns one; a window reads it
 //! through its client, `cockpit::Cockpit`, and changes it only by its acts.
 //!
 //! What it shares of the Roster is which Threads are open, in the order
-//! they opened (`open_threads`). Focus, the View, fullscreen and Drafts are
-//! each window's own.
+//! they opened (`open_threads`). Focus and Drafts are each window's own.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
 use std::io;
@@ -22,15 +21,12 @@ use crate::activity::{
     DecisionHandle, PendingDecision, Subject,
 };
 use crate::digest::Digest;
-use crate::groups::{
-    Applied, ApplyError, Dissolved, Drag, DropTarget, GroupChange, GroupId, Groups, Plan,
-};
 use crate::notifications::{DecisionNoticeId, Frame, NoticeId, Notifications};
 pub use crate::prompt_history::HistoryDirection;
 use crate::prompt_history::PromptHistory;
 use crate::protocol::{self, Outgoing, ServerMessage, SharedRoster};
-use crate::providers::{Session, SettingAck};
-use crate::roster::{DraftId, DraftScope};
+use crate::providers::{ResumeFailure, Session, SettingAck};
+use crate::roster::DraftId;
 use crate::session::SessionLifecycle;
 use crate::store::{LoadError, Provider, Store, ThreadWriter};
 use crate::suggest::Suggestion;
@@ -207,8 +203,8 @@ pub trait Spawner {
     }
 }
 
-/// Work a Session's start waits on and its caller should not: a launch's
-/// stagger, and the git calls that make a revived Thread's worktree real.
+/// Work a Session's start waits on and its caller should not: the git
+/// calls that make a Thread's checkout ready, new or revived.
 pub type Preparation = Box<dyn FnOnce() -> io::Result<()> + Send>;
 
 /// Resident memory per Session, injected. The cockpit never shells out for
@@ -303,10 +299,27 @@ impl PaneUpdate {
     }
 }
 
+/// What became of a prompt the operator sent, as far as the Engine can
+/// tell at once. The caller keeps the whole draft until it knows.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[must_use = "a refused or unconfirmed send leaves the draft with the caller"]
+pub enum Admission {
+    /// On the wire: the Session has it.
+    Delivered,
+    /// Waiting for the Session to start. If it never does, the prompt comes
+    /// back through `take_retrieved_prompt`.
+    Held,
+    /// Not sent, and nothing will send it: the words say why.
+    Refused(String),
+    /// The Server did not say whether it took the prompt (it never answered
+    /// or went away mid-act): sending again may duplicate it.
+    Unconfirmed(String),
+}
+
 /// A provider and the model to serve it with — what the #25 picker picks,
 /// whole. `None` is the provider's own default, which is also what every
 /// Thread starts on.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct ProviderChoice {
     pub provider: Provider,
     pub model: Option<String>,
@@ -388,29 +401,6 @@ impl std::fmt::Display for DeleteError {
 
 impl std::error::Error for DeleteError {}
 
-#[derive(Debug)]
-pub enum ReviveGroupError {
-    MissingGroup,
-    Member { thread: ThreadId, error: LoadError },
-    Rollback { thread: ThreadId, error: io::Error },
-}
-
-impl std::fmt::Display for ReviveGroupError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::MissingGroup => write!(f, "group no longer exists"),
-            Self::Member { thread, error } => {
-                write!(f, "could not revive thread {thread}: {error}")
-            }
-            Self::Rollback { thread, error } => {
-                write!(f, "could not roll back revived thread {thread}: {error}")
-            }
-        }
-    }
-}
-
-impl std::error::Error for ReviveGroupError {}
-
 enum ReplacementKind {
     Fresh,
     Handover,
@@ -490,8 +480,6 @@ pub(crate) const HELD_AT_REST: Duration = Duration::from_secs(5 * 60);
 
 struct PendingBootstrap {
     prompt: String,
-    group: Option<GroupId>,
-    new_group_with: Option<ThreadId>,
     draft: Option<DraftId>,
 }
 
@@ -574,6 +562,10 @@ struct Thread {
     activity: Journaled,
     generation: u64,
     store_error: Option<String>,
+    /// Its provider answered a resume that it holds no conversation under
+    /// `resume`. No start tries again until `start_fresh_conversation`
+    /// replaces the conversation.
+    resume_lost: bool,
     history: HashMap<AgentKey, history::Pending>,
     history_errors: HashMap<AgentKey, String>,
     /// The live Session, or None while the Thread is not in use (ADR 0032).
@@ -682,6 +674,9 @@ struct Thread {
     resume_at: Option<crate::store::ResumePoint>,
     /// A rewind or fork asked of its agent and not yet answered.
     rewinding: Option<rewind::Rewinding>,
+    /// The worktree this Thread registered for its first start to make,
+    /// until that start settles (`Engine::forget_unmade`).
+    reserved_worktree: Option<PathBuf>,
 }
 
 impl Thread {
@@ -714,6 +709,7 @@ impl Thread {
             activity,
             generation,
             store_error: None,
+            resume_lost: false,
             history: HashMap::new(),
             history_errors: HashMap::new(),
             session,
@@ -750,6 +746,7 @@ impl Thread {
             state_changed: true,
             resume_at: None,
             rewinding: None,
+            reserved_worktree: None,
         };
         if let Some(notice) = state.native_queue.take_unreadable() {
             state.apply(Input::Notice(notice));
@@ -767,7 +764,6 @@ fn next_generation() -> u64 {
 /// What every window shares, as the Engine last told its clients.
 #[derive(Default)]
 struct PublishedShared {
-    groups: Option<serde_json::Value>,
     registry: Option<serde_json::Value>,
     notices: Option<Vec<protocol::WireNotice>>,
     providers: Option<Vec<protocol::ProviderState>>,
@@ -799,8 +795,26 @@ struct Published {
 }
 
 /// How long a Thread read back from its log is held before it may be let
-/// go again, so a Thread read often reads its log at most once a minute.
+/// go again, so a Thread read often reads its log at most once a minute. A
+/// revive counts as a read back: the window that revived a Thread watches
+/// it next, and finds it still held.
 const HOLD_AT_LEAST: Duration = Duration::from_secs(60);
+
+/// What a read back applies to a Thread's Activity: its log's `inputs`,
+/// then what the last Session announced still stands (ADR 0032).
+fn read_back_inputs(
+    inputs: Vec<ActivityInput>,
+    servers: Vec<crate::McpServer>,
+    at: Instant,
+) -> impl Iterator<Item = ActivityInput> {
+    let main = move |input| ActivityInput::Main { input, at };
+    let announced = (!servers.is_empty())
+        .then(|| main(Input::Event(SessionEvent::McpServers { servers })));
+    std::iter::once(ActivityInput::Disconnect)
+        .chain(inputs)
+        .chain(std::iter::once(main(Input::Revived)))
+        .chain(announced)
+}
 
 /// How often a streaming Thread's digest may refold: four times a second.
 /// The fold walks every Block the Thread holds (and its Subagents', for the
@@ -818,6 +832,7 @@ impl Thread {
             thread: id,
             generation: self.generation,
             provider: self.provider,
+            project: self.project,
             model: self.model.clone(),
             effort: self.effort.clone(),
             title: self.title.clone(),
@@ -850,6 +865,7 @@ impl Thread {
             commands: announced.commands().iter().map(Into::into).collect(),
             models: announced.models().to_vec(),
             permission_mode: announced.permission_mode().map(str::to_string),
+            sandbox: announced.sandbox().map(str::to_string),
             permission_modes: announced
                 .permission_modes()
                 .iter()
@@ -860,6 +876,7 @@ impl Thread {
                 .collect(),
             controls: announced.controls().iter().map(Into::into).collect(),
             store_error: self.store_error.clone(),
+            resume_lost: self.resume_lost,
             for_draft: false,
             recovered: self
                 .native_queue
@@ -1028,15 +1045,11 @@ impl Thread {
     /// Its Activity as its log says it, with no Session running: what the
     /// last one announced still stands (ADR 0032).
     fn read_back(&mut self, inputs: Vec<ActivityInput>) {
-        self.activity.apply(ActivityInput::Disconnect);
-        for input in inputs {
+        let servers = self.announced.mcp_servers().to_vec();
+        for input in read_back_inputs(inputs, servers, crate::clock::instant()) {
             self.activity.apply(input);
         }
-        self.apply(Input::Revived);
-        let servers = self.announced.mcp_servers().to_vec();
-        if !servers.is_empty() {
-            self.apply(Input::Event(SessionEvent::McpServers { servers }));
-        }
+        self.read_back_at = Some(crate::clock::instant());
     }
 
     /// `session` serves it from now on. A fresh Session knows nothing:
@@ -1147,7 +1160,6 @@ pub struct Engine {
     /// worktrees, living beside the Thread logs. The selector reads it; the
     /// bootstrap places worktrees through it.
     registry: Registry,
-    groups: Groups,
     /// The open Threads, in the order they opened: the shared half of the
     /// Roster, which each window follows (`open_threads`).
     open: Vec<ThreadId>,
@@ -1207,8 +1219,8 @@ pub struct Engine {
     /// and this Engine's feed into it.
     turn_agents: Vec<ferrite_reviewr::ferrite::Agent>,
     turns: ferrite_reviewr::ferrite::TurnSource,
-    #[cfg(test)]
-    refuse_park: std::collections::HashSet<ThreadId>,
+    #[cfg(any(test, feature = "test-support"))]
+    pub(crate) refuse_park: std::collections::HashSet<ThreadId>,
     /// How many Thread states `publish` has built (`states_built`).
     #[cfg(test)]
     states_built: usize,
@@ -1234,7 +1246,6 @@ impl Engine {
 
     pub fn try_new(store: Store, mut spawner: Box<dyn Spawner>) -> io::Result<Self> {
         let registry = Registry::open(store.dir())?;
-        let groups = Groups::load(store.dir())?;
         let model_discovery = spawner.discover_models();
         let model_cache = crate::providers::models::ModelCache::load(store.dir());
         let limit_cache = crate::providers::limits::LimitCache::load(store.dir());
@@ -1242,7 +1253,6 @@ impl Engine {
             threads: Threads::default(),
             store,
             registry,
-            groups,
             open: Vec::new(),
             boot: crate::clock::instant(),
             boot_id: boot_id(),
@@ -1274,7 +1284,7 @@ impl Engine {
             attention_count: Default::default(),
             turn_agents: Vec::new(),
             turns: Default::default(),
-            #[cfg(test)]
+            #[cfg(any(test, feature = "test-support"))]
             refuse_park: std::collections::HashSet::new(),
             #[cfg(test)]
             states_built: 0,
@@ -1294,37 +1304,7 @@ impl Engine {
         &self.registry
     }
 
-    pub fn groups(&self) -> &Groups {
-        &self.groups
-    }
-
-    /// A Group change (#28). What it does to each window's view is the
-    /// window's (`Cockpit::apply_group`).
-    pub fn apply_group(&mut self, change: GroupChange) -> Result<Applied, ApplyError> {
-        let applied = self.groups.apply(change)?;
-        self.tell_dissolved(&applied.dissolved);
-        Ok(applied)
-    }
-
-    /// Each Group a change dissolved, and its survivor, for every window.
-    fn tell_dissolved(&mut self, dissolved: &[Dissolved]) {
-        self.outbox
-            .extend(dissolved.iter().map(|dissolved| ServerMessage::Dissolved {
-                group: dissolved.group,
-                survivor: dissolved.survivor,
-            }));
-    }
-
-    pub fn plan_group_drop(&self, drag: Drag, target: DropTarget) -> Plan {
-        self.groups.preview_drop(drag, target)
-    }
-
-    /// Register a project root (idempotent, canonicalized) — the selector's
-    /// type-a-path row and the launch seed both land here.
-    pub fn register_project(&mut self, root: &Path) -> io::Result<ProjectId> {
-        self.registry.register(root)
-    }
-
+    /// Register a Project over these roots (idempotent, canonicalized).
     pub fn register_project_directories(&mut self, roots: &[PathBuf]) -> io::Result<ProjectId> {
         self.registry.register_directories(roots)
     }
@@ -1348,31 +1328,6 @@ impl Engine {
 
     pub fn remove_project_directory(&mut self, project: ProjectId, index: usize) -> io::Result<()> {
         self.registry.remove_directory(project, index)
-    }
-
-    /// A Group's Pane layout, reconciled to its members; None for a Group
-    /// that no longer exists.
-    pub fn group_layout(
-        &self,
-        group: GroupId,
-        bounds: crate::layout::Rect,
-    ) -> Option<crate::layout::Tree> {
-        self.groups.layout(group, bounds)
-    }
-
-    /// Put a Group back on the default grid, forgetting the arrangement the
-    /// operator dragged, swapped or split.
-    pub fn reset_group_layout(&mut self, group: GroupId) -> Result<(), ApplyError> {
-        self.groups.reset_layout(group)
-    }
-
-    /// Persist a Group's Pane layout — a seam dragged, a Pane dropped.
-    pub fn set_group_layout(
-        &mut self,
-        group: GroupId,
-        tree: crate::layout::Tree,
-    ) -> Result<(), ApplyError> {
-        self.groups.set_layout(group, tree)
     }
 
     /// Forget a registered Project. Refused while any Thread, open or
@@ -1546,6 +1501,7 @@ impl Engine {
             workspace,
             None,
             launch,
+            MakeCheckout::BeforeReply,
         )
     }
 
@@ -1569,12 +1525,15 @@ impl Engine {
     /// `effort` is the Thread's own reasoning level from its first breath
     /// (a draft's chip); None is the operator's default for the provider.
     /// A Factory Step's Worker and a Coordinator open this way (ADR 0037).
+    /// `make` says whether the branch switch or worktree the choice asks
+    /// for is made before this answers or by the first start (ADR 0018).
     pub(crate) fn open_choice(
         &mut self,
         choice: ProviderChoice,
         workspace: WorkspaceChoice,
         effort: Option<String>,
         launch: Launch,
+        make: MakeCheckout,
     ) -> io::Result<ThreadId> {
         let ProviderChoice { provider, model } = choice;
         let first_args = launch_args::LaunchArgs::of(provider, &launch);
@@ -1598,37 +1557,66 @@ impl Engine {
             Some(project) => project,
             None => self.registry.register(root)?,
         };
-        match &workspace {
-            WorkspaceChoice::Branch { checkout, branch } => {
-                workspace::checkout_existing_branch(checkout, branch).map_err(io::Error::other)?;
-            }
+        let (binding, reserved, first) = match workspace {
+            WorkspaceChoice::Main { checkout } => (WorkspaceBinding::Main { checkout }, None, None),
+            WorkspaceChoice::Branch { checkout, branch } => (
+                WorkspaceBinding::Main {
+                    checkout: checkout.clone(),
+                },
+                None,
+                Some(FirstCheckout::Switch {
+                    checkout,
+                    branch,
+                    new: false,
+                }),
+            ),
             WorkspaceChoice::NewBranch { checkout } => {
                 let branch = self.registry.reserve_branch(project)?;
-                workspace::checkout_new_branch(checkout, &branch).map_err(io::Error::other)?;
-            }
-            _ => {}
-        }
-        let (binding, fresh_branch) = match workspace {
-            WorkspaceChoice::Main { checkout } => (WorkspaceBinding::Main { checkout }, None),
-            WorkspaceChoice::Branch { checkout, .. } | WorkspaceChoice::NewBranch { checkout } => {
-                (WorkspaceBinding::Main { checkout }, None)
+                (
+                    WorkspaceBinding::Main {
+                        checkout: checkout.clone(),
+                    },
+                    None,
+                    Some(FirstCheckout::Switch {
+                        checkout,
+                        branch,
+                        new: true,
+                    }),
+                )
             }
             WorkspaceChoice::NewWorktree { repo } => {
                 let entry = self.registry.reserve_worktree(project)?;
+                let path = entry.path;
                 (
                     WorkspaceBinding::Worktree {
                         repo,
-                        path: entry.path,
+                        path: path.clone(),
                     },
-                    Some(entry.branch),
+                    Some(path),
+                    None,
                 )
             }
             WorkspaceChoice::NamedWorktree { repo, branch, base } => {
-                let (_, path) = self.create_worktree(&repo, &branch, base.as_deref())?;
-                (WorkspaceBinding::Worktree { repo, path }, Some(branch))
+                let owner = self.registry.register(&repo)?;
+                let path = self.registry.place(owner, &branch);
+                let reserved = self.registry.branch_for(&path).is_none().then(|| path.clone());
+                self.registry.register_worktree(owner, &branch, &path)?;
+                (
+                    WorkspaceBinding::Worktree {
+                        repo: repo.clone(),
+                        path: path.clone(),
+                    },
+                    reserved,
+                    Some(FirstCheckout::Add {
+                        repo,
+                        path,
+                        branch,
+                        base,
+                    }),
+                )
             }
             WorkspaceChoice::ExistingWorktree { repo, path } => {
-                (WorkspaceBinding::Worktree { repo, path }, None)
+                (WorkspaceBinding::Worktree { repo, path }, None, None)
             }
         };
         let created = self.store.create_owned(
@@ -1641,22 +1629,14 @@ impl Engine {
         let (id, mut writer) = match created {
             Ok(created) => created,
             Err(error) => {
-                if fresh_branch.is_some() {
-                    self.registry.remove_worktree(binding.cwd())?;
-                }
+                self.forget_unmade(reserved);
                 return Err(error);
             }
         };
         if let Err(error) = self.store.mark_open(id) {
             let _ = self.store.delete(id);
+            self.forget_unmade(reserved);
             return Err(error);
-        }
-        if let Err(e) = ensure_workspace(&self.registry, &binding, id) {
-            if fresh_branch.is_some() {
-                let _ = self.registry.remove_worktree(binding.cwd());
-            }
-            let _ = self.store.delete(id);
-            return Err(io::Error::other(e));
         }
         // The chosen effort goes into the header beside the model, so a
         // revive spawns on it too.
@@ -1666,6 +1646,7 @@ impl Engine {
                     .set_tuning(id, model.clone(), effort.clone(), Some(&mut writer))
             {
                 let _ = self.store.delete(id);
+                self.forget_unmade(reserved);
                 return Err(io::Error::other(e.to_string()));
             }
         }
@@ -1673,10 +1654,18 @@ impl Engine {
             let path = launch_args::path(self.store.dir(), id);
             if let Err(e) = launch_args::save(&path, agent_args.as_ref()) {
                 let _ = self.store.delete(id);
+                self.forget_unmade(reserved);
                 return Err(e);
             }
         }
-        let session = match self.spawner.start(SpawnRequest {
+        let place = placement(&self.registry, self.store.dir(), Some(&binding), id);
+        let prepare: Preparation = Box::new(move || {
+            if let Some(first) = first {
+                first.run().map_err(io::Error::other)?;
+            }
+            place()
+        });
+        let request = SpawnRequest {
             thread: id,
             provider,
             model: model.as_deref(),
@@ -1693,12 +1682,19 @@ impl Engine {
             ),
             launch: launch_args::for_provider(first_args.as_ref(), provider),
             owner: owner.as_ref(),
-        }) {
+        };
+        let started = match make {
+            MakeCheckout::BeforeReply => prepare().and_then(|()| self.spawner.start(request)),
+            MakeCheckout::InFirstStart => self.spawner.start_after(prepare, request),
+        };
+        let session = match started {
             Ok(session) => session,
-            // The bootstrap's failure contract: no Thread. The worktree, if
-            // one was just created, stays — real, registered, adoptable.
+            // The bootstrap's failure contract: no Thread. A worktree made
+            // already stays (real, registered, adoptable); one never made
+            // is forgotten.
             Err(e) => {
                 let _ = self.store.delete(id);
+                self.forget_unmade(reserved);
                 return Err(e);
             }
         };
@@ -1722,9 +1718,22 @@ impl Engine {
             state.agent_args = agent_args;
             state.project = Some(project);
             state.owner = owner;
+            state.reserved_worktree = reserved;
         }
         self.note_open(id);
         Ok(id)
+    }
+
+    /// A worktree a new Thread registered whose tree never came to stand is
+    /// forgotten once its first start fails: no later start remakes it on a
+    /// branch git refused or the operator never chose.
+    fn forget_unmade(&mut self, reserved: Option<PathBuf>) {
+        let Some(path) = reserved.filter(|path| !path.join(".git").exists()) else {
+            return;
+        };
+        if let Err(error) = self.registry.remove_worktree(&path) {
+            crate::log!("could not forget the unmade worktree {}: {error}", path.display());
+        }
     }
 
     /// Start the first send. The returned id is provisional while startup
@@ -1752,29 +1761,7 @@ impl Engine {
         prompt: &str,
         effort: Option<String>,
     ) -> io::Result<ThreadId> {
-        self.begin_bootstrap(choice, workspace, prompt, effort, None, None)
-    }
-
-    pub fn bootstrap_in_group(
-        &mut self,
-        choice: ProviderChoice,
-        workspace: WorkspaceChoice,
-        prompt: &str,
-        group: GroupId,
-    ) -> io::Result<ThreadId> {
-        self.bootstrap_in_group_with(choice, workspace, prompt, group, None)
-    }
-
-    fn bootstrap_in_group_with(
-        &mut self,
-        choice: ProviderChoice,
-        workspace: WorkspaceChoice,
-        prompt: &str,
-        group: GroupId,
-        effort: Option<String>,
-    ) -> io::Result<ThreadId> {
-        self.groups.validate_join(group).map_err(io::Error::other)?;
-        self.begin_bootstrap(choice, workspace, prompt, effort, Some(group), None)
+        self.begin_bootstrap(choice, workspace, prompt, effort)
     }
 
     fn begin_bootstrap(
@@ -1783,14 +1770,16 @@ impl Engine {
         workspace: WorkspaceChoice,
         prompt: &str,
         effort: Option<String>,
-        group: Option<GroupId>,
-        new_group_with: Option<ThreadId>,
     ) -> io::Result<ThreadId> {
-        let id = self.open_choice(choice, workspace, effort, Launch::default())?;
+        let id = self.open_choice(
+            choice,
+            workspace,
+            effort,
+            Launch::default(),
+            MakeCheckout::InFirstStart,
+        )?;
         let pending = PendingBootstrap {
             prompt: prompt.to_string(),
-            group,
-            new_group_with,
             draft: None,
         };
         if self.threads[&id]
@@ -1807,27 +1796,8 @@ impl Engine {
         Ok(id)
     }
 
-    /// Membership is durable before delivery; readiness precedes both.
+    /// Readiness precedes delivery.
     fn finish_bootstrap(&mut self, id: ThreadId, pending: &PendingBootstrap) -> io::Result<()> {
-        if let Some(group) = pending.group {
-            self.groups
-                .apply(GroupChange::Join {
-                    thread: id,
-                    group,
-                    index: None,
-                })
-                .map_err(io::Error::other)?;
-        }
-        if let Some(first) = pending.new_group_with {
-            if self.groups.of(first).is_some() {
-                return Err(io::Error::other(
-                    "the original Thread joined a Group before the draft was sent",
-                ));
-            }
-            self.groups
-                .apply(GroupChange::Create { first, second: id })
-                .map_err(io::Error::other)?;
-        }
         let state = self.threads.get_mut(&id).expect("pending Thread exists");
         if let Some(binding) = &state.workspace {
             state.apply(Input::Notice(format!(
@@ -1841,13 +1811,6 @@ impl Engine {
     }
 
     fn rollback_bootstrap(&mut self, id: ThreadId) -> io::Result<()> {
-        // Roll back membership before its durable Thread; if persistence
-        // refuses, preserve the Thread so the Group never points to nothing.
-        if self.groups.of(id).is_some() {
-            self.groups
-                .apply(GroupChange::Leave { thread: id })
-                .map_err(io::Error::other)?;
-        }
         self.threads.remove(&id);
         self.open.retain(|open| *open != id);
         self.store.delete(id)
@@ -1882,7 +1845,7 @@ impl Engine {
             .map(|state| std::mem::take(&mut state.awaiting.prompts))
             .unwrap_or_default();
         for held in awaiting {
-            self.send(thread, held.text);
+            let _ = self.send(thread, held.text);
         }
         Ok(())
     }
@@ -1964,6 +1927,21 @@ impl Engine {
         effort: Option<String>,
     ) -> Result<(), ProvisionError> {
         self.replace_session(thread, provider, model, effort, ReplacementKind::Fresh)
+    }
+
+    /// Continue a Thread whose provider lost its conversation on a fresh
+    /// one in place: the transcript stays, and the earlier turns go with
+    /// the next prompt as context, once, as a provider switch's do. Only a
+    /// start the provider refused as missing offers it, and with none
+    /// lost this does nothing: a conversation in
+    /// use elsewhere is not lost, and a fresh one beside it would fork.
+    pub fn start_fresh_conversation(&mut self, thread: ThreadId) -> Result<(), ProvisionError> {
+        let state = self.threads.get(&thread).ok_or(ProvisionError::Locked)?;
+        if !state.resume_lost {
+            return Ok(());
+        }
+        let (provider, model, effort) = (state.provider, state.model.clone(), state.effort.clone());
+        self.replace_session(thread, provider, model, effort, ReplacementKind::Handover)
     }
 
     fn hand_over(
@@ -2137,12 +2115,14 @@ impl Engine {
             ReplacementKind::Fresh => {
                 state.activity.replace();
                 state.resume = None;
+                state.resume_lost = false;
                 state.carry = None;
             }
             ReplacementKind::Handover => {
                 let handover = handover.expect("committed with header");
                 state.carry = Some(carry_digest(handover.from, &handover.exchanges));
                 state.resume = None;
+                state.resume_lost = false;
                 state.apply(Input::Notice(crate::store::handover_notice(
                     provider,
                     model.as_deref(),
@@ -2208,20 +2188,10 @@ impl Engine {
             return self.park(thread).map_err(DeleteError::Io);
         }
         let meta = self.store.peek(thread).map_err(DeleteError::Load)?;
-        let groups_before = self.groups.clone();
-        let grouped = self.groups.of(thread).is_some();
         let live = self
             .threads
             .get(&thread)
             .is_some_and(|state| state.session.is_some());
-        let dissolved = if grouped {
-            self.groups
-                .apply(GroupChange::Leave { thread })
-                .map_err(|error| DeleteError::Io(io::Error::other(error)))?
-                .dissolved
-        } else {
-            Vec::new()
-        };
 
         let deleted = (|| {
             if let (None, Some(WorkspaceBinding::Worktree { repo, path })) =
@@ -2257,20 +2227,7 @@ impl Engine {
             crate::log!("thread {thread}: session ended: deleted");
         }
 
-        if let Err(error) = deleted {
-            if grouped {
-                self.groups
-                    .restore_snapshot(groups_before)
-                    .map_err(|restore| {
-                        DeleteError::Io(io::Error::other(format!(
-                            "{error}; restoring group membership also failed: {restore}"
-                        )))
-                    })?;
-            }
-            return Err(error);
-        }
-        self.tell_dissolved(&dissolved);
-        Ok(())
+        deleted
     }
 
     /// Close a Pane: the Session ends, the log is flushed, and the Thread
@@ -2296,9 +2253,6 @@ impl Engine {
             return Ok(());
         }
         let Some(state) = self.threads.get_mut(&thread) else {
-            // A parked Group member's tile (`enter_group`) has a Pane and no
-            // Session: parking it again only takes the Pane away.
-            self.open.retain(|open| *open != thread);
             return Ok(());
         };
         // The parked row's subagent count, from the Activity that knows it.
@@ -2326,7 +2280,7 @@ impl Engine {
         self.open.retain(|open| *open != thread);
         state.session = None;
         state.replacement = None;
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-support"))]
         if self.refuse_park.contains(&thread) {
             return Err(io::Error::other("stub refused to park"));
         }
@@ -2338,6 +2292,17 @@ impl Engine {
     /// starts when the Thread is used, told where to resume.
     pub fn revive(&mut self, thread: ThreadId) -> Result<(), LoadError> {
         self.reopen(thread, None).map(drop)
+    }
+
+    /// Revive a parked Thread with no window attached to watch it, as a
+    /// Server's start does: it is let go to its digest as soon as that is
+    /// published, so a start holds one Thread's history at a time.
+    pub fn revive_unwatched(&mut self, thread: ThreadId) -> Result<(), LoadError> {
+        self.revive(thread)?;
+        if let Some(state) = self.threads.get_mut(&thread) {
+            state.read_back_at = None;
+        }
+        Ok(())
     }
 
     /// Reopen a parked Thread as `launch` says (`thread.revive`, ADR 0031):
@@ -2485,39 +2450,6 @@ impl Engine {
         Ok(first_args)
     }
 
-    /// Open every member of one persisted Group or leave the live set unchanged.
-    pub fn revive_group(&mut self, group: GroupId) -> Result<Vec<ThreadId>, ReviveGroupError> {
-        let members = self
-            .groups
-            .get(group)
-            .ok_or(ReviveGroupError::MissingGroup)?
-            .members
-            .clone();
-        let mut revived = Vec::new();
-        for thread in &members {
-            if self.threads.contains_key(thread) {
-                continue;
-            }
-            if let Err(error) = self.revive(*thread) {
-                let mut rollback_failure = None;
-                for opened in revived.into_iter().rev() {
-                    if let Err(error) = self.park(opened) {
-                        rollback_failure.get_or_insert((opened, error));
-                    }
-                }
-                if let Some((thread, error)) = rollback_failure {
-                    return Err(ReviveGroupError::Rollback { thread, error });
-                }
-                return Err(ReviveGroupError::Member {
-                    thread: *thread,
-                    error,
-                });
-            }
-            revived.push(*thread);
-        }
-        Ok(members)
-    }
-
     /// Adopt a CLI session file as a Thread of this cockpit (#11) — the
     /// import module's work, against this cockpit's own store. The Thread
     /// is durable and parked when this returns; `revive` opens it like any
@@ -2534,7 +2466,7 @@ impl Engine {
     /// a revive uses, which re-arms the preface. One that closed starts
     /// afresh on Main; one that ended unseen (ADR 0032) keeps what its
     /// window shows.
-    pub fn send(&mut self, thread: ThreadId, text: String) {
+    pub fn send(&mut self, thread: ThreadId, text: String) -> Admission {
         if self
             .threads
             .get(&thread)
@@ -2545,7 +2477,11 @@ impl Engine {
             }
         }
         if self.bootstraps.contains_key(&thread) {
-            return;
+            let refusal = "the Thread is still starting; nothing was sent".to_string();
+            if let Some(state) = self.threads.get_mut(&thread) {
+                state.apply(Input::Notice(refusal.clone()));
+            }
+            return Admission::Refused(refusal);
         }
         if self
             .threads
@@ -2555,39 +2491,52 @@ impl Engine {
             self.visible_subjects.remove(&thread);
         }
         let Some(state) = self.threads.get_mut(&thread) else {
-            return;
+            return Admission::Refused("no such Thread".into());
         };
         state.prompt_history.reset();
         // Guarded before anything spawns: a refused send must not leave a
         // fresh provider process behind. `deliver` guards again for the
         // sends that never pass through here.
         if let Some(refusal) = vanished_root_refusal(state) {
-            state.apply(Input::Notice(refusal));
-            return;
+            state.apply(Input::Notice(refusal.clone()));
+            return Admission::Refused(refusal);
         }
-        if !self.start_or_say(thread, "send failed") {
-            return;
+        if let Err(refusal) = self.start_session_or_say(thread, "send failed") {
+            return Admission::Refused(refusal);
         }
         let state = self.threads.get_mut(&thread).expect("checked");
         if state.ready_session().is_none() || !state.awaiting.prompts.is_empty() {
             state.hold(text);
-            return;
+            return Admission::Held;
         }
-        if let Err(error) = deliver(state, text.clone(), self.suggestions_enabled) {
-            state.undelivered(text, error);
+        match deliver(state, text, self.suggestions_enabled) {
+            Ok(_) => Admission::Delivered,
+            Err(error) => {
+                let refusal = format!("send failed: {error}");
+                state.apply(Input::Notice(refusal.clone()));
+                Admission::Refused(refusal)
+            }
         }
     }
 
     /// `start_session` for something the operator asked of the Thread: a
     /// start that fails says so on it, `what` naming what failed.
     fn start_or_say(&mut self, thread: ThreadId, what: &str) -> bool {
+        self.start_session_or_say(thread, what).is_ok()
+    }
+
+    /// `start_or_say`, handing back the words it said on a failed start.
+    fn start_session_or_say(&mut self, thread: ThreadId, what: &str) -> Result<(), String> {
         let Err(error) = self.start_session(thread, None) else {
-            return true;
+            return Ok(());
         };
-        if let Some(state) = self.threads.get_mut(&thread) {
-            state.apply(Input::Notice(format!("{what}: {error}")));
+        let words = format!("{what}: {error}");
+        // A Thread whose resume is lost already has its offer on screen:
+        // the refusal of a send says nothing the offer has not.
+        if let Some(state) = self.threads.get_mut(&thread).filter(|state| !state.resume_lost) {
+            state.apply(Input::Notice(words.clone()));
         }
-        false
+        Err(words)
     }
 
     /// Start an open Thread's Session where its conversation left off, the
@@ -2612,6 +2561,11 @@ impl Engine {
         }
         if let Some(refusal) = vanished_root_refusal(state) {
             return Err(io::Error::new(io::ErrorKind::NotFound, refusal));
+        }
+        if state.resume_lost {
+            return Err(io::Error::other(
+                "the provider cannot resume this conversation: start a fresh one to go on",
+            ));
         }
         // After a close, or with no Session yet, this start begins a new
         // generation. After one ended unseen, nothing a window holds is
@@ -2699,23 +2653,6 @@ impl Engine {
                     state.apply(Input::Notice(format!("interrupt failed: {e}")));
                 }
             }
-        }
-    }
-
-    /// Compatibility entry point. The app uses generation-scoped handles via
-    /// `respond_decision`; this accepts only a still-pending identical request.
-    pub fn respond(&mut self, thread: ThreadId, decision: &Decision, answer: DecisionAnswer) {
-        let handle = self.threads.get(&thread).and_then(|state| {
-            state
-                .activity
-                .view()
-                .decisions()
-                .iter()
-                .find(|pending| pending.decision == *decision)
-                .map(|pending| pending.handle.clone())
-        });
-        if let Some(handle) = handle {
-            let _ = self.respond_decision(thread, &handle, answer);
         }
     }
 
@@ -3195,16 +3132,16 @@ impl Engine {
                 if matches!(result, Ok(false)) {
                     continue;
                 }
+                let reserved = state.reserved_worktree.take();
+                if result.is_err() {
+                    self.forget_unmade(reserved);
+                }
                 if let Some(pending) = self.bootstraps.remove(&id) {
                     let delivered = result.and_then(|_| self.finish_bootstrap(id, &pending));
                     let result = match delivered {
-                        // A draft's own slot and deferred leave are its
-                        // window's: `Cockpit::pump` completes them.
-                        Ok(()) => Ok(Bootstrapped {
-                            thread: id,
-                            refused_leave: None,
-                            applied_leave: false,
-                        }),
+                        // A draft's own slot is its window's:
+                        // `Cockpit::pump` completes it.
+                        Ok(()) => Ok(Bootstrapped { thread: id }),
                         Err(error) => match self.rollback_bootstrap(id) {
                             Ok(()) => Err(error),
                             Err(rollback) => Err(io::Error::other(format!(
@@ -3237,7 +3174,26 @@ impl Engine {
                         state.end_session();
                         state.replace_generation();
                         crate::log!("thread {id}: session could not start: {error}");
-                        state.apply(Input::Notice(format!("could not start: {error}")));
+                        let returned = !state.awaiting.prompts.is_empty();
+                        let notice = match ResumeFailure::of(&error) {
+                            Some(ResumeFailure::SessionGone) => {
+                                state.resume_lost = true;
+                                let back = if returned { " Your prompt is back in the Composer." } else { "" };
+                                format!("could not start: {error}.{back}")
+                            }
+                            Some(ResumeFailure::InUse) => {
+                                let back = if returned {
+                                    "; your prompt is back in the Composer, to send once it is free"
+                                } else {
+                                    ""
+                                };
+                                format!(
+                                    "could not start: {error}. The conversation is in use elsewhere{back}"
+                                )
+                            }
+                            None => format!("could not start: {error}"),
+                        };
+                        state.apply(Input::Notice(notice));
                         state.give_up_awaiting();
                     }
                 }
@@ -4168,10 +4124,12 @@ impl Engine {
         self.limit_cache.get(provider)
     }
 
-    /// The use, in percent, at which a rising window warns the operator.
-    /// Empty turns the warnings off.
-    pub fn set_allowance_thresholds(&mut self, thresholds: Vec<u8>) {
-        self.allowance_thresholds = thresholds;
+    /// What the settings say of the Engine: whether completed turns
+    /// predict a follow-up, and the use, in percent, at which a rising
+    /// window warns the operator (none turns the warnings off).
+    pub fn apply_settings(&mut self, settings: &crate::settings::Settings) {
+        self.set_suggestions_enabled(settings.placeholder_suggestions);
+        self.allowance_thresholds = settings.allowance_warnings.clone();
     }
 
     /// Request workspace commands without creating a Thread or Session.
@@ -4600,7 +4558,7 @@ impl Engine {
                 parked: self.parked().unwrap_or_default(),
             },
             decisions: self.pending_decisions(),
-            groups: self.published_shared.groups.clone(),
+            groups: None,
             registry: self.published_shared.registry.clone(),
             notices: self.published_shared.notices.clone(),
             providers: self.published_shared.providers.clone(),
@@ -4776,6 +4734,12 @@ impl Engine {
         self.states_built
     }
 
+    /// How many bytes of Thread logs this Engine has read.
+    #[cfg(test)]
+    pub(crate) fn log_bytes_read(&self) -> u64 {
+        self.store.bytes_read()
+    }
+
     /// The open Threads, in the order they opened.
     pub fn open_threads(&self) -> &[ThreadId] {
         &self.open
@@ -4895,13 +4859,6 @@ impl Engine {
             });
         }
         let shared = &mut self.published_shared;
-        if let Some(groups) = changed(&mut shared.groups, self.groups.to_wire()) {
-            self.revision += 1;
-            self.outbox.push(ServerMessage::Groups {
-                revision: self.revision,
-                groups,
-            });
-        }
         if let Some(registry) = changed(&mut shared.registry, self.registry.to_wire()) {
             self.revision += 1;
             self.outbox.push(ServerMessage::Registry {
@@ -5025,6 +4982,43 @@ impl Engine {
         });
         state.activity.settle();
         state.held = true;
+    }
+
+    /// A let-go Thread's log, to read back off the pump thread for
+    /// `agent.read`. `None` when the Thread is held, or not open: its
+    /// Activity is read where it is.
+    pub(crate) fn read_back_later(&mut self, thread: ThreadId) -> Option<io::Result<ReadBack>> {
+        let state = self.threads.get_mut_if(&thread, |state| !state.held)?;
+        let read = state.writer.checkpoint().and_then(|through| {
+            let log = self.store.log_at(thread, &state.writer, through)?;
+            Ok(ReadBack {
+                thread,
+                log,
+                through,
+                activity: Journaled::new(state.activity.boot, state.activity.limits),
+                servers: state.announced.mcp_servers().to_vec(),
+                at: crate::clock::instant(),
+            })
+        });
+        Some(read)
+    }
+
+    /// Hold what a read off the pump read back (`read_back_later`), as
+    /// `hold` would have read it, so the next read reads none of the log.
+    /// Dropped when the Thread was held meanwhile or its log has grown.
+    pub(crate) fn adopt(&mut self, read: ReadThread) {
+        let Some(state) = self.threads.get_mut_if(&read.thread, |state| !state.held) else {
+            return;
+        };
+        if state.writer.checkpoint().ok() != Some(read.through) {
+            return;
+        }
+        state.activity.activity = read.activity.activity;
+        state.activity.apply(ActivityInput::Connect {
+            generation: state.generation,
+        });
+        state.activity.settle();
+        state.held = true;
         state.read_back_at = Some(crate::clock::instant());
     }
 
@@ -5120,31 +5114,18 @@ impl Engine {
         }
     }
 
-    /// A Draft's first send, in the scope its window gave it: the Thread
-    /// it became, or `None` while startup is pending — the result then
-    /// arrives through `take_bootstrap_results`, tagged with `draft`.
+    /// A Draft's first send: the Thread it became, or `None` while startup
+    /// is pending — the result then arrives through
+    /// `take_bootstrap_results`, tagged with `draft`.
     pub fn bootstrap_draft(
         &mut self,
         draft: DraftId,
-        scope: DraftScope,
         choice: ProviderChoice,
         workspace: WorkspaceChoice,
         prompt: &str,
         effort: Option<String>,
     ) -> io::Result<Option<ThreadId>> {
-        let thread = match scope.group {
-            Some(group) => {
-                self.bootstrap_in_group_with(choice, workspace, prompt, group, effort)?
-            }
-            None => self.begin_bootstrap(
-                choice,
-                workspace,
-                prompt,
-                effort,
-                None,
-                scope.new_group_with,
-            )?,
-        };
+        let thread = self.begin_bootstrap(choice, workspace, prompt, effort)?;
         match self.bootstraps.get_mut(&thread) {
             Some(pending) => {
                 pending.draft = Some(draft);
@@ -5266,6 +5247,46 @@ impl History {
             seq: self.seq,
             live: self.live,
         })
+    }
+}
+
+/// A let-go Thread's log, read back on another thread as `Engine::hold`
+/// would read it (`Engine::read_back_later`).
+pub struct ReadBack {
+    thread: ThreadId,
+    log: crate::store::LogAt,
+    through: u64,
+    activity: Journaled,
+    servers: Vec<crate::McpServer>,
+    at: Instant,
+}
+
+impl ReadBack {
+    pub fn read(mut self) -> Result<ReadThread, LoadError> {
+        let inputs = self.log.load()?.activity_inputs();
+        for input in read_back_inputs(inputs, self.servers, self.at) {
+            self.activity.apply(input);
+        }
+        self.activity.settle();
+        Ok(ReadThread {
+            thread: self.thread,
+            through: self.through,
+            activity: self.activity,
+        })
+    }
+}
+
+/// A Thread's Activity read back off the pump, for the Engine to hold
+/// (`Engine::adopt`).
+pub struct ReadThread {
+    thread: ThreadId,
+    through: u64,
+    activity: Journaled,
+}
+
+impl ReadThread {
+    pub fn view(&self) -> ActivityView<'_> {
+        self.activity.view()
     }
 }
 
@@ -5495,18 +5516,17 @@ impl<'a> ThreadView<'a> {
     pub fn permission_mode(&self) -> Option<&'a str> {
         self.state.announced.permission_mode()
     }
+
+    /// The sandbox its agent runs in, as its provider announced it.
+    pub fn sandbox(&self) -> Option<&'a str> {
+        self.state.announced.sandbox()
+    }
 }
 
-/// A draft's first send, done: the Thread it became, and whether the
-/// leave the draft was holding open (see `close`) applied.
+/// A draft's first send, done: the Thread it became.
 #[derive(Debug)]
 pub struct Bootstrapped {
     pub thread: ThreadId,
-    /// The deferred leave the Groups module refused, if it did — the Thread
-    /// is live and in its Group regardless.
-    pub refused_leave: Option<ApplyError>,
-    /// A deferred Group leave applied with this first send.
-    pub applied_leave: bool,
 }
 
 fn megabytes(bytes: u64) -> String {
@@ -5729,25 +5749,6 @@ fn carry_digest(from: Provider, exchanges: &[(String, String)]) -> String {
     )
 }
 
-/// The workspace a binding names, made real; the main checkout is the
-/// operator's and is touched by nothing. A missing worktree is created —
-/// or recreated after a hand-deletion — on its registered branch (#29),
-/// falling back to the Thread-named branch for worktrees
-/// from before the registry. A tree already standing passes the adoption
-/// conflict check instead: git itself must call it a worktree of this
-/// repo, or a Session would spawn into a directory that only looks like
-/// one.
-fn ensure_workspace(
-    registry: &Registry,
-    binding: &WorkspaceBinding,
-    thread: ThreadId,
-) -> Result<(), workspace::GitError> {
-    let WorkspaceBinding::Worktree { repo, path } = binding else {
-        return Ok(());
-    };
-    place_worktree(repo, path, &worktree_branch(registry, path, thread))
-}
-
 /// The branch a Thread's worktree at `path` is (re)made on.
 fn worktree_branch(registry: &Registry, path: &Path, thread: ThreadId) -> String {
     registry
@@ -5756,13 +5757,13 @@ fn worktree_branch(registry: &Registry, path: &Path, thread: ThreadId) -> String
         .unwrap_or_else(|| branch_name(thread))
 }
 
-/// What every start of an existing Thread's Session waits on (ADR 0018):
-/// its worktree checked if standing, or remade if missing and Ferrite's own
-/// (registered, or pre-registry under the store). A revive's start and any
-/// later one alike, so a worktree a revival could not place is tried again
-/// on the next send rather than spawned into while missing. The branch is
-/// looked up here; the git calls run wherever the spawner runs the
-/// preparation.
+/// What every start of a Thread's Session waits on (ADR 0018): its
+/// worktree checked if standing, or made if missing and Ferrite's own
+/// (registered, or pre-registry under the store). A new Thread's first
+/// start, a revive's and any later one alike, so a worktree a revival
+/// could not place is tried again on the next send rather than spawned
+/// into while missing. The branch is looked up here; the git calls run
+/// wherever the spawner runs the preparation.
 fn placement(
     registry: &Registry,
     store_dir: &Path,
@@ -5791,8 +5792,8 @@ fn placement(
     })
 }
 
-/// `ensure_workspace`'s git half, which needs no registry: it can run off
-/// the UI thread (`placement`).
+/// A Thread's worktree made real, or the tree standing there checked: the
+/// git half of `placement`, which needs no registry.
 fn place_worktree(repo: &Path, path: &Path, branch: &str) -> Result<(), workspace::GitError> {
     // Anything already standing at the path must BE the worktree — a
     // directory that merely exists there (squatting where one was, or was
@@ -5801,6 +5802,55 @@ fn place_worktree(repo: &Path, path: &Path, branch: &str) -> Result<(), workspac
         return registry::adoption_check(repo, path);
     }
     workspace::ensure_worktree(repo, path, branch)
+}
+
+/// When a new Thread's checkout is made. Before `open_choice` answers, for
+/// a caller whose reply says whether it could be (`thread.start`, a Factory
+/// Worker), on the loop. Or by the first start, off the loop, for a first
+/// send, whose rollback reports a refusal (`take_bootstrap_results`).
+pub(crate) enum MakeCheckout {
+    BeforeReply,
+    InFirstStart,
+}
+
+/// The git a new Thread's choice asks of its checkout before the first
+/// Session, ahead of its `placement`: the branch switched to, or the
+/// worktree added on a branch git must not already have.
+enum FirstCheckout {
+    Switch {
+        checkout: PathBuf,
+        branch: String,
+        new: bool,
+    },
+    Add {
+        repo: PathBuf,
+        path: PathBuf,
+        branch: String,
+        base: Option<String>,
+    },
+}
+
+impl FirstCheckout {
+    fn run(self) -> Result<(), workspace::GitError> {
+        match self {
+            Self::Switch {
+                checkout,
+                branch,
+                new: false,
+            } => workspace::checkout_existing_branch(&checkout, &branch),
+            Self::Switch {
+                checkout,
+                branch,
+                new: true,
+            } => workspace::checkout_new_branch(&checkout, &branch),
+            Self::Add {
+                repo,
+                path,
+                branch,
+                base,
+            } => workspace::add_worktree(&repo, &path, &branch, base.as_deref()),
+        }
+    }
 }
 
 /// The branch a Thread's worktree lives on. Named for the Thread so the
@@ -5843,6 +5893,7 @@ pub(crate) fn event_changes_content(event: &SessionEvent) -> bool {
         | SessionEvent::AccountPlan { .. }
         | SessionEvent::Handshake { .. }
         | SessionEvent::HookRan { .. }
+        | SessionEvent::ControlRefused { .. }
         | SessionEvent::ScheduledWork { .. } => false,
         _ => true,
     }

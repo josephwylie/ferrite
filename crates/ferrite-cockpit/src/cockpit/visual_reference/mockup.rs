@@ -1,7 +1,7 @@
 //! The UI refresh's world (`docs/design/ui-refresh/mockups/`): the one
 //! roster behind the `refresh-*` scenes of the visual reference and behind
-//! `--demo parity`. Seven Projects under a disposable HOME, the Threads,
-//! Groups and states the mockups draw, and a timeline written in the
+//! `--demo parity`. Seven Projects under a disposable HOME, the Threads
+//! and states the mockups draw, and a timeline written in the
 //! mockups' own wall-clock times, so every stamp, age and duration a
 //! capture shows falls out of the fixture clock rather than being painted.
 //!
@@ -34,9 +34,9 @@ use ferrite_reviewr::forge::{
 };
 
 use super::world::{
-    apply, approval, bash_approval, claude_menu, filler, git, git_command, group, hms, init,
-    last_used, limits, mode, phase, play, question, quiet, started, text, tokens, write_lines,
-    Clock, Run, Script, Secs, Sessions, DAY, HOUR, MINUTE,
+    Clock, DAY, HOUR, MINUTE, Run, Script, Secs, Sessions, apply, approval, bash_approval,
+    claude_menu, filler, git, git_command, hms, init, last_used, limits, mode, phase, play,
+    question, quiet, started, text, tokens, write_lines,
 };
 
 // ------------------------------------------------------------------ clock
@@ -53,16 +53,17 @@ pub(crate) const FREE_DISK: u64 = 7_500_000_000;
 // ------------------------------------------------------------------ world
 
 /// Which view the world is built for. The roster never changes; what
-/// differs is the Codex request the Group view is waiting on: the Solo
-/// mockups count `3 need you` and roll WORK up as `1 failed`, the Group
-/// mockup counts `4`, with Find all calls asking. So in Solo that Thread
-/// is still searching, and in the Group it has asked.
+/// differs is the Codex request the palette shot is waiting on: the Solo
+/// mockups count `3 need you`, the palette's world counts `4`, with Find
+/// all calls asking. So in Solo that Thread is still searching, and in
+/// the palette's world it has asked.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Look {
     /// Ferrite idle memory usage in Solo (solo.png, solo-changes.png).
     Solo,
-    /// The WORK Group, Supplier Price Review focused (group.png).
-    Group,
+    /// Supplier Price Review on screen, Find all calls asking
+    /// (command-search.png).
+    Asking,
 }
 
 /// The crash fix's pull request, as the forge reads it (pr-states.png and
@@ -133,7 +134,7 @@ fn status(branch: &str, ahead: u32, behind: u32, dirty: u32) -> BranchStatus {
 /// request reading `pr`. Nothing global is touched: the caller points HOME
 /// at `World::home` and owns the clock.
 pub(crate) fn build(root: &Path, look: Look, pr: Pr, clock: Clock) -> World {
-    let root = std::fs::canonicalize(root).expect("a canonical disposable root");
+    let root = ferrite_core::workspace::follow::canonical(root);
     let home = root.join("home");
     let launch = home.join("Desktop").join("Projects");
     let project = |name: &str| launch.join(name);
@@ -313,11 +314,6 @@ pub(crate) fn build(root: &Path, look: Look, pr: Pr, clock: Clock) -> World {
     core.queue(memory, QUEUED.into());
     core.pump();
 
-    // The Groups, in creation order: the bar's `2 Work`, `3 InvoiceMate
-    // business`. WORK sits under agenticos, its first member's Project.
-    let work = group(&mut core, supplier, calls, &[epicurean, bb], "WORK");
-    group(&mut core, business, redesign, &[], "InvoiceMate Business");
-
     // The idle Threads were read when they finished: only Complete BB
     // supplier list is done and unseen, and the notices hold only what
     // still matters — the done, the failure and the requests.
@@ -339,14 +335,8 @@ pub(crate) fn build(root: &Path, look: Look, pr: Pr, clock: Clock) -> World {
         Look::Solo => {
             core.focus_thread(memory);
         }
-        Look::Group => {
-            // The operator has stepped away: the window is in the
-            // background, so the supplier list's finish, on screen in
-            // WORK, stays unseen and its head says `done` (ADR 0015's
-            // seen rule reads only what a focused window shows).
-            core.set_window_active(false);
+        Look::Asking => {
             core.focus_thread(supplier);
-            core.enter_group(work).expect("enter WORK");
         }
     }
     core.pump();
@@ -794,8 +784,8 @@ fn supplier_review(s: &mut Script, who: ThreadId) {
     s.ev(CAPTURE, who, phase("Comparing"));
 }
 
-/// Find all calls to this API (group.png, Pane 2): a Codex search, then,
-/// in the Group's look, its request to write the list out.
+/// Find all calls to this API: a Codex search, then, in the Asking look,
+/// its request to write the list out.
 fn find_calls(s: &mut Script, who: ThreadId, look: Look) {
     let start = hms(12, 24, 0);
     s.prompt(
@@ -841,7 +831,7 @@ fn find_calls(s: &mut Script, who: ThreadId, look: Look) {
             },
         ),
     );
-    if look == Look::Group {
+    if look == Look::Asking {
         let command = "rg -n \"client.request\\(\" src --json > calls.json";
         s.ev(
             start + 5,
@@ -1129,10 +1119,12 @@ impl Pr {
     fn view(self, clock: Clock) -> PrView {
         let ago = |secs: Secs| rfc3339(clock.instant(CAPTURE - secs));
         let finding = |anchor: &str, body: &str, age: Secs, resolved: bool| Comment {
+            id: None,
             kind: CommentKind::Finding,
             author: "claude".into(),
             author_is_bot: true,
             anchor: format!("{SCHEDULED_WORK}:{anchor}"),
+            verdict: None,
             place: Some(FindingPlace::from_anchor(
                 &format!("{SCHEDULED_WORK}:{anchor}"),
                 None,
@@ -1151,6 +1143,7 @@ impl Pr {
         let check = |name: &str, status| Check {
             name: name.into(),
             status,
+            url: None,
         };
         let checks = |macos, windows, review| {
             vec![
@@ -1171,10 +1164,12 @@ impl Pr {
                 vec![
                     retries(6 * MINUTE, false),
                     Comment {
+                        id: None,
                         kind: CommentKind::Comment,
                         author: "josephwylie".into(),
                         author_is_bot: false,
                         anchor: "comment".into(),
+                        verdict: None,
                         place: None,
                         body: "Tried it locally. Closing the window mid-run no longer takes the \
                                server down."
@@ -1226,6 +1221,12 @@ impl Pr {
             title: title.into(),
             url: format!("https://github.com/josephwylie/ferrite/pull/{number}"),
             body: body.into(),
+            author: Some("josephwylie".into()),
+            author_avatar_url: None,
+            updated_at: Some(ago(4 * MINUTE)),
+            changed_files: Some(3),
+            additions: Some(42),
+            deletions: Some(12),
             state,
             is_draft: false,
             head_ref: head.into(),
@@ -1477,15 +1478,13 @@ mod tests {
             midnight: midnight(),
             fixture: None,
         };
-        let world = build(&root, Look::Group, Pr::Open, clock);
+        let world = build(&root, Look::Asking, Pr::Open, clock);
         let core = &world.core;
         assert_eq!(core.threads().len(), 14, "fourteen Threads are open");
         assert_eq!(core.parked().unwrap().len(), 3, "three are parked");
         assert_eq!(core.registry().projects().len(), 7);
-        let titles: Vec<String> = core.groups().iter().map(|g| g.display_title()).collect();
-        assert_eq!(titles, ["WORK", "InvoiceMate Business"]);
         let asking = core.needs_you();
-        assert_eq!(asking.len(), 4, "four need you on the Group");
+        assert_eq!(asking.len(), 4, "four need you");
         for thread in [
             world.cast.recipes,
             world.cast.customers,
@@ -1493,12 +1492,6 @@ mod tests {
         ] {
             assert!(asking.contains(&thread));
         }
-        let focused = core.roster().focused_thread().expect("a focused Thread");
-        assert_eq!(
-            core.groups().of(focused).map(|group| group.display_title()),
-            Some("WORK".to_string()),
-            "Supplier Price Review, on WORK"
-        );
         let memory = core.thread(world.cast.memory).unwrap();
         assert_eq!(memory.model(), Some("opus"));
         assert_eq!(

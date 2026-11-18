@@ -19,47 +19,49 @@
 //! empty board has none. There are no other size rules: hidden, the board
 //! takes its width; shown, the board gives it up, however narrow.
 //!
-//! Its width is one per Thread, dragged from the column's left edge and
-//! never under the shown kind's floor (`floor_w`), which showing it widens
-//! the Panel to; maximized, it takes all the content area but
-//! `DOCK_THREAD_MIN_W` of the board. It snaps between widths, and open and
-//! shut, as T3's and Claude's do: no ride, no fade, so nothing lays the
-//! board out again frame by frame (`motion-measured.md`).
+//! Its width is one per Thread: the operator's, dragged from the column's
+//! left edge, saved as dragged. It draws at least the shown kind's floor
+//! (`floor_w`), which is the tool's and never saved, so a visit to Files
+//! leaves an Overview as compact as it was; maximized, it takes all the
+//! content area but `DOCK_THREAD_MIN_W` of the board. It slides open and
+//! shut (`columns.rs`); a drag, a maximize and a floor change snap.
 //!
 //! The title bar keeps one tool, the Panel's toggle (`view_head`), at the
 //! window's right edge; the head row ends short of it.
 
 pub(in crate::cockpit) mod background;
 mod changes;
+mod persistence;
 pub(crate) mod hunks;
 pub(crate) mod preview;
-mod pull_request;
+pub(in crate::cockpit) mod pr_action;
+pub(in crate::cockpit) mod pr_read;
+pub(in crate::cockpit) mod pull_request;
 mod sections;
 mod strip;
+pub(in crate::cockpit) mod controls;
 
-use super::surfaces::{SurfaceId, Surfaces, ThreadSurfaces};
+use super::surfaces::{Close, CloseSelection, Restart, SurfaceAction, SurfaceId, Surfaces, ThreadSurfaces};
 use ferrite_ui::icons::{self, icon};
 use super::*;
 
+pub(crate) use controls::{PanelControl, PanelFocus, Semantics};
 pub(crate) use pull_request::PrAction;
 pub(crate) use strip::Opener;
 #[cfg(test)]
-pub(crate) use strip::tab_scroll_step;
+pub(crate) use super::tab_scroll::tab_scroll_step;
 pub(crate) use strip::soft_key_cap;
 
 /// The panel's own state on the cockpit.
 pub(crate) struct Panel {
-    /// Every Thread's tabs (`surfaces`), and whether they changed since
-    /// they were last written.
     pub(crate) surfaces: Surfaces,
-    dirty: bool,
+    persistence: persistence::Persistence,
+    pub(crate) working_sets: super::tools::WorkingSets,
     /// Each Thread's sections' scroll, so a Thread's Overview comes back
     /// where it was left.
     scrolls: std::collections::HashMap<ThreadId, ScrollHandle>,
-    /// The head row's tabs' own horizontal scroll, and its ease to where a
-    /// chevron sent it, until the frame that lands it lets it go.
-    pub(crate) tabs_scroll: ScrollHandle,
-    tabs_tween: std::cell::Cell<Option<ferrite_ui::motion::Tween>>,
+    /// The head row's tabs' own horizontal scroll.
+    pub(crate) tabs_scroll: super::tab_scroll::TabScroll,
     /// The Changes section's unfolded files and their hunks.
     hunks: hunks::Hunks,
     /// The window's width as of the last frame, what the floors and the
@@ -68,6 +70,15 @@ pub(crate) struct Panel {
     /// The first frame has been tended: a preview open by then is simply
     /// there (`tend_previews`).
     tended: bool,
+    /// The tab the last frame showed and when the operator moved to the
+    /// one now shown: its body fades in from that instant
+    /// (`ferrite_ui::motion::swap_since`), the outgoing one having gone
+    /// at once.
+    shown: Option<(ThreadId, Option<SurfaceId>)>,
+    picked: Option<std::time::Instant>,
+    /// When the operator last chose another view of a pull request
+    /// (Summary, Guide, Timeline, Code): its body fades in from then.
+    pub(in crate::cockpit) pr_picked: Option<std::time::Instant>,
     /// The Thread whose Panel's left edge is being dragged.
     resizing: Option<ThreadId>,
     /// The tab pressed, until the button goes up.
@@ -78,9 +89,15 @@ pub(crate) struct Panel {
     /// finished closed), by call.
     pub(crate) background_turned: std::collections::HashSet<String>,
     /// Each Thread's pull request, read whole for its Surface.
-    pr_reads: std::collections::HashMap<ThreadId, pull_request::PrRead>,
-    /// The Thread whose PR's Merge waits for its second press.
-    pr_armed: Option<ThreadId>,
+    pub(in crate::cockpit) pr_reads: pr_read::PrReads,
+    /// What a PR's prose (its body, guide and comments) renders through.
+    pub(crate) pr_rich: ferrite_pane::rich::TextCache,
+    /// What each PR's action in flight has become.
+    pub(in crate::cockpit) pr_actions: pr_action::PrActions,
+    /// The PR whose Merge waits for its second press.
+    pr_armed: Option<pr_read::PrTarget>,
+    /// The keyboard stops of the head and a pull request's header.
+    pub(crate) focus: PanelFocus,
 }
 
 impl Panel {
@@ -89,25 +106,50 @@ impl Panel {
     /// written over at the next change: they are conveniences, never worth
     /// refusing to start for.
     pub(crate) fn load(dir: &std::path::Path) -> Self {
-        let surfaces = Surfaces::load(dir, survives_restart).unwrap_or_else(|error| {
-            eprintln!("ferrite: the panel's tabs were not read: {error}");
-            Surfaces::default()
-        });
+        let surfaces = Surfaces::load(dir, |_, id| id.lifecycle().restart == Restart::Restore)
+            .unwrap_or_else(|error| {
+                ferrite_core::log!("the panel's tabs were not read: {error}");
+                Surfaces::default()
+            });
+        Self::with_storage(surfaces, super::tools::WorkingSets::load(dir), Default::default())
+    }
+
+    fn successor(&mut self) -> Self {
+        let mut surfaces = std::mem::take(&mut self.surfaces);
+        surfaces.restart_resources();
+        Self::with_storage(
+            surfaces,
+            std::mem::take(&mut self.working_sets),
+            std::mem::replace(&mut self.persistence, persistence::Persistence::retired()),
+        )
+    }
+
+    fn with_storage(
+        surfaces: Surfaces,
+        working_sets: super::tools::WorkingSets,
+        persistence: persistence::Persistence,
+    ) -> Self {
         Self {
             surfaces,
-            dirty: false,
+            persistence,
+            working_sets,
             scrolls: Default::default(),
-            tabs_scroll: ScrollHandle::new(),
-            tabs_tween: Default::default(),
+            tabs_scroll: Default::default(),
             hunks: Default::default(),
             window_w: 0.,
             tended: false,
+            shown: None,
+            picked: None,
+            pr_picked: None,
             resizing: None,
             tab_press: None,
             empty_highlight: 0,
             background_turned: Default::default(),
             pr_reads: Default::default(),
+            pr_rich: Default::default(),
+            pr_actions: Default::default(),
             pr_armed: None,
+            focus: Default::default(),
         }
     }
 }
@@ -119,26 +161,6 @@ struct TabPress {
     id: SurfaceId,
     x: f32,
     dragging: bool,
-}
-
-/// Which stored Surfaces still resolve after a restart (the file's
-/// `migrate`): the singletons, the branch's pull request (read again as it
-/// shows), and a File whose file is still there. A
-/// shell, a live page, a side chat's fork and an agent's drill-in end with
-/// the window. A deleted Thread's Panel goes when the tabs are next
-/// written (`save_surfaces`).
-fn survives_restart(_: ThreadId, id: &SurfaceId) -> bool {
-    match id {
-        SurfaceId::Overview
-        | SurfaceId::Changes
-        | SurfaceId::Files
-        | SurfaceId::Background
-        | SurfaceId::PullRequest(_) => true,
-        SurfaceId::File(path) => path.exists(),
-        SurfaceId::Browser | SurfaceId::Terminal(_) | SurfaceId::SideChat(_) | SurfaceId::Agent(_) => {
-            false
-        }
-    }
 }
 
 /// The least width the Panel shows `active` at, in a window `window` wide
@@ -190,7 +212,6 @@ impl CockpitView {
     }
 
     /// The Thread whose panel shows this frame, if it shows for one.
-    #[cfg(test)]
     pub(super) fn panel_thread(&self) -> Option<ThreadId> {
         self.panes[self.panel_pane()?].thread()
     }
@@ -203,7 +224,7 @@ impl CockpitView {
 
     fn panel_candidate_index(&self) -> Option<usize> {
         // A Panel is its Thread's: the Factory in the board's place has none.
-        if self.empty_board_shown() || self.factory_view.is_some() {
+        if self.empty_board_shown() || self.destination_shown() {
             return None;
         }
         let index = self.focused();
@@ -239,12 +260,8 @@ impl CockpitView {
             .flatten()
     }
 
-    /// `thread`'s tabs, made as a fresh Panel would start, to be changed:
-    /// they will be written.
-    pub(super) fn surfaces_mut(&mut self, thread: ThreadId) -> &mut ThreadSurfaces {
-        self.panel.dirty = true;
-        let open = self.prefs.settings.panel_shown;
-        self.panel.surfaces.entry(thread, open)
+    pub(super) fn apply_surface(&mut self, thread: ThreadId, action: SurfaceAction) -> bool {
+        self.panel.surfaces.apply(thread, self.prefs.settings.panel_shown, action)
     }
 
     /// The one door (ADR 0039): show `id` in `thread`'s Panel, its tab
@@ -252,17 +269,21 @@ impl CockpitView {
     /// opened. What the Surface needs (the Files tree, the Changes read) is
     /// made as it opens.
     pub(crate) fn upsert_surface(&mut self, thread: ThreadId, id: SurfaceId, cx: &mut Context<Self>) {
-        self.empty_shown = false;
         match &id {
             SurfaceId::Files => {
+                if self.active_surface(thread) != Some(SurfaceId::Files) {
+                    self.refresh_file_tree(thread, cx);
+                }
                 self.ensure_files(thread, cx);
             }
             SurfaceId::Changes => self.ensure_changes(thread, cx),
             SurfaceId::Overview => self.refresh_context(thread),
-            SurfaceId::PullRequest(_) => self.read_pr_snapshot(thread, true, cx),
+            SurfaceId::PullRequest(number) => {
+                self.read_pr_snapshot(pr_read::PrTarget::thread(thread, *number), true, cx)
+            }
             _ => {}
         }
-        self.surfaces_mut(thread).upsert(id);
+        self.apply_surface(thread, SurfaceAction::Open(id));
         cx.notify();
     }
 
@@ -275,12 +296,15 @@ impl CockpitView {
     /// An agent's open (a page it opened): `id` shows, unless the operator
     /// has acted in the Panel since `seen`. Says whether it showed.
     pub(super) fn reveal_surface(&mut self, thread: ThreadId, id: SurfaceId, seen: u64) -> bool {
-        self.surfaces_mut(thread).reveal(id, seen)
+        self.apply_surface(thread, SurfaceAction::Reveal { id, seen })
     }
 
     /// A tab pressed: its Surface shows.
     pub(super) fn activate_surface(&mut self, thread: ThreadId, id: &SurfaceId, cx: &mut Context<Self>) {
-        self.surfaces_mut(thread).activate(id);
+        if *id == SurfaceId::Files {
+            self.refresh_file_tree(thread, cx);
+        }
+        self.apply_surface(thread, SurfaceAction::Activate(id.clone()));
         cx.notify();
     }
 
@@ -288,7 +312,7 @@ impl CockpitView {
     /// what it held with it (a shell ends, a side chat's fork retires, a
     /// preview closes).
     pub(super) fn close_surface(&mut self, thread: ThreadId, id: &SurfaceId, cx: &mut Context<Self>) {
-        self.surfaces_mut(thread).close(id);
+        self.apply_surface(thread, SurfaceAction::Close(CloseSelection::One(id.clone())));
         self.release_surface(thread, id, cx);
         cx.notify();
     }
@@ -298,14 +322,16 @@ impl CockpitView {
     pub(super) fn close_surfaces(
         &mut self,
         thread: ThreadId,
-        close: impl FnOnce(&mut ThreadSurfaces),
+        close: CloseSelection,
         cx: &mut Context<Self>,
     ) {
-        let before = self.surfaces_mut(thread).tabs.clone();
-        close(self.surfaces_mut(thread));
-        let after = self.surfaces_mut(thread).tabs.clone();
-        for gone in before.iter().filter(|id| !after.contains(id)) {
-            self.release_surface(thread, gone, cx);
+        let before = self.panel.surfaces.get(thread)
+            .map_or_else(|| vec![SurfaceId::Overview], |state| state.tabs.clone());
+        self.apply_surface(thread, SurfaceAction::Close(close));
+        let after = &self.panel.surfaces.get(thread).unwrap().tabs;
+        let gone: Vec<_> = before.into_iter().filter(|id| !after.contains(id)).collect();
+        for id in gone {
+            self.release_surface(thread, &id, cx);
         }
         cx.notify();
     }
@@ -330,78 +356,128 @@ impl CockpitView {
     /// refused away): its tab goes, not to come back.
     pub(super) fn forget_surface(&mut self, thread: ThreadId, id: &SurfaceId) {
         if self.panel.surfaces.get(thread).is_some_and(|state| state.tabs.contains(id)) {
-            self.surfaces_mut(thread).forget(id);
+            self.apply_surface(thread, SurfaceAction::Forget(id.clone()));
         }
     }
 
     /// Maximize, or back: `thread`'s Panel takes all the content area but
     /// the board's least.
     pub(super) fn toggle_panel_maximized(&mut self, thread: ThreadId, cx: &mut Context<Self>) {
-        let state = self.surfaces_mut(thread);
-        state.set_maximized(!state.maximized);
+        self.apply_surface(thread, SurfaceAction::ToggleMaximized);
         cx.notify();
     }
 
-    /// Write the tabs if they changed (once a frame, or as the window
-    /// quits), a deleted Thread's going with it.
-    pub(super) fn save_surfaces(&mut self) {
-        if !std::mem::take(&mut self.panel.dirty) {
-            return;
-        }
+    pub(super) fn known_threads(&self) -> std::collections::HashSet<ThreadId> {
         let mut known: std::collections::HashSet<ThreadId> =
             self.cockpit.threads().into_iter().collect();
         if let Ok(parked) = self.cockpit.parked() {
             known.extend(parked);
         }
-        if !known.is_empty() {
-            self.panel.surfaces.retain(|thread| known.contains(&thread));
+        known
+    }
+
+    fn prepare_panel_persistence(&mut self) {
+        if self.panel.persistence.surfaces_pending(&self.panel.surfaces) {
+            let known = self.known_threads();
+            if !known.is_empty() {
+                self.panel.surfaces.retain(|thread| known.contains(&thread));
+                self.panel.focus.retain_threads(|thread| known.contains(&thread));
+                self.panel.pr_actions.retain_threads(&known);
+            }
         }
-        if let Err(error) = self.panel.surfaces.save(&self.prefs.dir) {
-            eprintln!("ferrite: the panel's tabs were not saved: {error}");
+        self.sync_working_sets();
+    }
+
+    pub(crate) fn successor_panel(&mut self) -> Panel {
+        self.sync_working_sets();
+        self.panel.successor()
+    }
+
+    pub(super) fn pump_panel_persistence(&mut self, cx: &mut Context<Self>) {
+        self.prepare_panel_persistence();
+        self.panel.persistence.pump(
+            &self.prefs.dir,
+            &self.panel.surfaces,
+            &self.panel.working_sets,
+            cx.background_executor().now(),
+        );
+    }
+
+    pub(super) fn flush_panel_persistence(&mut self) {
+        self.prepare_panel_persistence();
+        if let Err(error) = self.panel.persistence.flush(
+            &self.prefs.dir,
+            &self.panel.surfaces,
+            &self.panel.working_sets,
+        ) {
+            ferrite_core::log!("the Panel was not saved on quit: {error}");
         }
     }
 
+    /// Note a move from one tab to another of the same Thread's open
+    /// Panel. A document's preview fades itself, so a pick of or from
+    /// one starts none here, nor does the Panel opening or another
+    /// Thread's coming up. Keys held for a body that is leaving, with none
+    /// of the new tab's own to take them, go back to the conversation.
+    fn tend_tab_pick(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let shown = self
+            .panel_pane()
+            .and_then(|index| self.panes[index].thread())
+            .map(|thread| (thread, self.active_surface(thread)));
+        if shown == self.panel.shown {
+            return;
+        }
+        let previewed = |id: &Option<SurfaceId>| {
+            matches!(id, Some(SurfaceId::File(_) | SurfaceId::Browser))
+        };
+        self.panel.picked = match (&self.panel.shown, &shown) {
+            (Some((was, before)), Some((now, after)))
+                if was == now && !previewed(before) && !previewed(after) =>
+            {
+                Some(cx.background_executor().now())
+            }
+            _ => None,
+        };
+        let keyed = matches!(&shown, Some((_, tab)) if reads_panel_keys(tab.as_ref()));
+        if !keyed && self.panel_keys_held(window, cx) {
+            self.leave_panel(window, cx);
+        }
+        self.panel.shown = shown;
+    }
+
     /// Once per frame, before anything measures the board: tend the
-    /// previews (`tend_previews`), disarm a Merge no longer in view, widen
-    /// the shown Panel to its Surface's floor, give its Surface what it
-    /// needs to draw, and write the tabs if they changed.
+    /// previews (`tend_previews`), disarm a Merge no longer in view, give
+    /// the shown Surface what it needs to draw.
     pub(super) fn tend_panel(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.tend_previews(window, cx);
+        self.tend_prose_find(window);
         self.disarm_unseen_merge();
         self.panel.window_w = f32::from(window.viewport_size().width);
+        self.tend_tab_pick(window, cx);
         if let Some(thread) = self
             .panel_pane()
             .and_then(|index| self.panes[index].thread())
         {
             self.panel.scrolls.entry(thread).or_default();
-            let window_w = self.panel.window_w;
             let active = self.active_surface(thread);
-            let floor = floor_w(active.as_ref(), window_w, self.nav_width());
-            // A Panel never changed reads its floor without being made.
-            if self.panel.surfaces.get(thread).is_some_and(|state| state.width < floor) {
-                self.surfaces_mut(thread).width = floor;
-            }
             match active {
                 Some(SurfaceId::Files) => {
                     self.ensure_files(thread, cx);
                 }
                 Some(SurfaceId::Changes) => self.ensure_changes(thread, cx),
-                Some(SurfaceId::PullRequest(_)) => self.read_pr_snapshot(thread, false, cx),
+                Some(SurfaceId::PullRequest(number)) => {
+                    self.read_pr_snapshot(pr_read::PrTarget::thread(thread, number), false, cx)
+                }
                 _ => {}
             }
         }
-        self.save_surfaces();
     }
 
-    /// How much of the window's right edge the panel's column covers this
-    /// frame: its Thread's width, a draft's preview's reading width, none
-    /// hidden.
-    pub(super) fn panel_column_w(&self) -> f32 {
-        let Some(index) = self.panel_pane() else {
-            return 0.;
-        };
+    /// How wide the panel of Pane `index` rests: its Thread's width, a
+    /// draft's preview's reading width.
+    pub(super) fn panel_rest_w(&self, index: usize) -> f32 {
         let window = self.panel.window_w;
-        let nav = self.nav_width();
+        let nav = self.nav_rest_w();
         match self.panes[index].thread() {
             Some(thread) => match self.panel.surfaces.get(thread) {
                 Some(state) => panel_w(state, window, nav),
@@ -411,13 +487,17 @@ impl CockpitView {
         }
     }
 
-    /// What the board leaves at its right: the panel's column, or the
-    /// frame's gutter when the panel is hidden (SPEC §4).
+    /// How wide the panel ends up: its rest width while it shows or opens,
+    /// none while it is hidden or sliding shut.
+    pub(super) fn panel_target_w(&self) -> f32 {
+        self.panel_pane()
+            .map_or(0., |index| self.panel_rest_w(index))
+    }
+
+    /// What the board leaves at its right: the panel's column as far in as
+    /// it is (SPEC §4).
     pub(super) fn board_right(&self) -> f32 {
-        match self.panel_pane() {
-            Some(_) => self.panel_column_w(),
-            None => self.board_pad(),
-        }
+        self.panel_column_w()
     }
 
     /// ⌥⌘B, the View menu, the palette and the title bar's toggle: show or
@@ -437,7 +517,7 @@ impl CockpitView {
         let shown = match owner.thread() {
             Some(thread) => {
                 let shown = !self.panel_open(thread);
-                self.surfaces_mut(thread).set_open(shown);
+                self.apply_surface(thread, SurfaceAction::SetOpen(shown));
                 if shown {
                     self.refresh_context(thread);
                 }
@@ -463,7 +543,7 @@ impl CockpitView {
     }
 
     /// Ask `thread`'s Session to report its context afresh, when it can.
-    fn refresh_context(&mut self, thread: ThreadId) {
+    pub(super) fn refresh_context(&mut self, thread: ThreadId) {
         let Some(open) = self.cockpit.thread(thread) else {
             return;
         };
@@ -479,7 +559,8 @@ impl CockpitView {
 
     /// A press on the column's left edge: the drag that follows sets the
     /// Thread's width.
-    fn begin_panel_resize(&mut self, thread: ThreadId) {
+    fn begin_panel_resize(&mut self, thread: ThreadId, cx: &gpui::App) {
+        self.land_panel(cx);
         self.panel.resizing = Some(thread);
     }
 
@@ -495,8 +576,9 @@ impl CockpitView {
     }
 
     /// The pointer moved (the root's every move): with the edge held the
-    /// Panel's width follows it, between its Surface's floor and all it
-    /// can take; with a tab held, past the drag distance, the tab drags.
+    /// Panel's width follows it, between the sections' width and all it
+    /// can take (a tool's floor widens what is drawn, not what is chosen);
+    /// with a tab held, past the drag distance, the tab drags.
     pub(super) fn panel_pointer_moved(&mut self, position: Point<Pixels>, dragging: bool, cx: &mut Context<Self>) {
         if !dragging {
             self.panel.resizing = None;
@@ -512,14 +594,9 @@ impl CockpitView {
             return;
         };
         let window = self.panel.window_w;
-        let nav = self.nav_width();
-        let floor = floor_w(self.active_surface(thread).as_ref(), window, nav);
-        let width = (window - f32::from(position.x)).clamp(floor, most_w(window, nav).max(floor));
-        let state = self.surfaces_mut(thread);
-        if state.maximized {
-            state.set_maximized(false);
-        }
-        state.width = width;
+        let nav = self.nav_rest_w();
+        let width = (window - f32::from(position.x)).clamp(ferrite_ui::theme::PANEL_W, most_w(window, nav));
+        self.apply_surface(thread, SurfaceAction::Resize(width));
         cx.notify();
     }
 
@@ -529,7 +606,7 @@ impl CockpitView {
             return;
         };
         if press.dragging && press.thread == thread {
-            self.surfaces_mut(thread).move_to(&press.id, at);
+            self.apply_surface(thread, SurfaceAction::Move { id: press.id, index: at });
             cx.notify();
         }
     }
@@ -553,8 +630,10 @@ impl CockpitView {
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
         use ferrite_ui::theme::*;
-        let index = self.panel_pane()?;
+        self.begin_panel_controls();
+        let index = self.panel_drawn_pane()?;
         let owner = self.panes[index].identity;
+        let sliding_out = self.panel_pane().is_none();
         let column = div()
             .size_full()
             .flex()
@@ -567,9 +646,10 @@ impl CockpitView {
         let column = match owner.thread() {
             Some(thread) => {
                 let active = self.active_surface(thread);
-                column
-                    .child(self.surface_head(thread, cx))
-                    .child(self.surface_body(owner, thread, active, window, cx))
+                let head = self.surface_head(thread, cx);
+                let body = self.surface_body(owner, thread, active, window, cx);
+                self.end_panel_controls(thread, window);
+                column.child(head).child(body)
             }
             // A draft's preview, alone: no Thread, no tabs.
             None => column.child(div().h(px(WIN_CHROME_H)).flex_shrink_0()).child(
@@ -598,7 +678,7 @@ impl CockpitView {
                     MouseButton::Left,
                     cx.listener(move |view, _: &MouseDownEvent, _, cx| {
                         cx.stop_propagation();
-                        view.begin_panel_resize(thread);
+                        view.begin_panel_resize(thread, cx);
                         cx.notify();
                     }),
                 )
@@ -615,8 +695,21 @@ impl CockpitView {
                 .w(px(self.panel_column_w()))
                 .overflow_hidden()
                 .bg(paint::PANEL)
-                .child(column)
+                .child(
+                    div()
+                        .absolute()
+                        .top_0()
+                        .right_0()
+                        .bottom_0()
+                        .w(px(self.panel_rest_w(index)))
+                        .child(column),
+                )
                 .children(edge)
+                .when(sliding_out, |panel| {
+                    panel
+                        .track_focus(&self.panel_closing_focus)
+                        .child(super::columns::veil())
+                })
                 .into_any_element(),
         )
     }
@@ -654,8 +747,20 @@ impl CockpitView {
                 .child(body)
                 .into_any_element()
         };
-        match active {
-            None => filled(self.surface_empty(thread, cx)),
+        let keyed = |body: AnyElement| {
+            div()
+                .flex()
+                .flex_col()
+                .flex_1()
+                .min_h_0()
+                .min_w_0()
+                .track_focus(&self.panel_keys)
+                .child(body)
+                .into_any_element()
+        };
+        let takes_keys = reads_panel_keys(active.as_ref());
+        let body = match active {
+            None => self.surface_empty(thread, cx),
             Some(SurfaceId::Overview) => {
                 let scroll = self.panel.scrolls.get(&thread).cloned().unwrap_or_default();
                 div()
@@ -683,16 +788,28 @@ impl CockpitView {
                     .into_any_element()
             }
             Some(SurfaceId::File(_) | SurfaceId::Browser) => padded(self.panel_preview(owner, cx)),
-            Some(SurfaceId::Files) => filled(self.files_pane(thread, cx).into_any_element()),
+            Some(SurfaceId::Files) => self.files_pane(thread, cx).into_any_element(),
             Some(SurfaceId::Changes) => filled(self.changes_pane(tools::Diff::Changes(thread), cx).into_any_element()),
             Some(SurfaceId::Terminal(number)) => {
                 filled(self.terminal_pane(thread, number, cx).into_any_element())
             }
             Some(SurfaceId::SideChat(tab)) => filled(self.side_chat_body(thread, tab, cx)),
-            Some(SurfaceId::Agent(key)) => filled(self.agent_drill_body(thread, &key)),
+            Some(SurfaceId::Agent(key)) => filled(self.agent_drill_body(thread, &key, cx)),
             Some(SurfaceId::PullRequest(number)) => filled(self.pr_surface(thread, number, cx)),
-        }
+        };
+        let body = if takes_keys { keyed(body) } else { body };
+        ferrite_ui::motion::swap_since(
+            self.panel.picked,
+            div().flex().flex_col().flex_1().min_h_0().min_w_0().child(body),
+        )
+        .into_any_element()
     }
+}
+
+/// Whether `tab`'s body takes the Panel's keys (`panel_keys`): the empty
+/// Panel and Files read them, every other tab's body has its own.
+fn reads_panel_keys(tab: Option<&SurfaceId>) -> bool {
+    matches!(tab, None | Some(SurfaceId::Files))
 }
 
 /// How far in from the window's right edge the title tools' right edge sits

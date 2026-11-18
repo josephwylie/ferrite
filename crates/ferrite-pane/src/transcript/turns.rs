@@ -55,7 +55,7 @@ fn foldable(block: &Block) -> bool {
 fn foldable_after_answer(block: &Block) -> bool {
     match &block.body {
         Body::Tool(tool) => matches!(tool.state, ToolState::Ok | ToolState::Stopped),
-        Body::Thinking(_) => true,
+        Body::Thinking(_) | Body::Plan(_) => true,
         Body::TurnEnd(end) => end.outcome == TurnOutcome::Interrupted,
         _ => false,
     }

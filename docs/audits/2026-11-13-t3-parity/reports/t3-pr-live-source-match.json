@@ -1,0 +1,1339 @@
+{
+  "title": "Live T3 PR source correspondence",
+  "installed_commit": "1264c206aee0dce805d6279809118bc091f29d2f",
+  "installed_version": "0.1.10-nightly.20261111.4544",
+  "comparison_commit": "74573fc29b901bafbf8f1dbb2eb29606da1fa448",
+  "observation_path": "docs/audits/2026-11-13-t3-parity/evidence/t3-live/observations.md",
+  "observation_sha256": "ee2739e94e1d8d6b0fa3c924debebf8b6228f2c96d969af347bf33c80eb9630b",
+  "source_files": [
+    {
+      "path": "apps/web/src/components/sidebar/SidebarThreadRow.tsx",
+      "url": "https://raw.githubusercontent.com/pingdotgg/t3code/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/sidebar/SidebarThreadRow.tsx",
+      "commit": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "sha256": "5c9ac0509457488a23949754f0a7617189525dc20246a1691aa5a49dedc8c14f",
+      "bytes": 73462,
+      "line_count": 1815,
+      "identical_to_newer_checkout": false
+    },
+    {
+      "path": "apps/web/src/components/sidebar/SidebarChrome.tsx",
+      "url": "https://raw.githubusercontent.com/pingdotgg/t3code/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/sidebar/SidebarChrome.tsx",
+      "commit": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "sha256": "4b6eb2a38e812da2300adb622d2fd18f84363049e37164fadc3da1b139af1f5b",
+      "bytes": 9609,
+      "line_count": 302,
+      "identical_to_newer_checkout": true
+    },
+    {
+      "path": "apps/web/src/lib/openPullRequestLink.ts",
+      "url": "https://raw.githubusercontent.com/pingdotgg/t3code/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/lib/openPullRequestLink.ts",
+      "commit": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "sha256": "59f95ce515901c0f1eaaaff6429ea8bf68121a9eec290422b0bc53d3c4ee8493",
+      "bytes": 10878,
+      "line_count": 270,
+      "identical_to_newer_checkout": true
+    },
+    {
+      "path": "apps/web/src/hooks/usePullRequestLinking.ts",
+      "url": "https://raw.githubusercontent.com/pingdotgg/t3code/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/hooks/usePullRequestLinking.ts",
+      "commit": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "sha256": "fd089f2457c689ee9ea0fc8efc79959baa599d17dd48d76c052aaa4a35659b75",
+      "bytes": 3456,
+      "line_count": 78,
+      "identical_to_newer_checkout": true
+    },
+    {
+      "path": "apps/web/src/components/pullRequest/PullRequestsPage.tsx",
+      "url": "https://raw.githubusercontent.com/pingdotgg/t3code/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/pullRequest/PullRequestsPage.tsx",
+      "commit": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "sha256": "d3e700eec271f007c8e44ded854d989772aaad9005237cd789eda1f47eff5ffc",
+      "bytes": 66080,
+      "line_count": 1641,
+      "identical_to_newer_checkout": true
+    },
+    {
+      "path": "apps/web/src/components/pullRequest/PullRequestsColumn.tsx",
+      "url": "https://raw.githubusercontent.com/pingdotgg/t3code/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/pullRequest/PullRequestsColumn.tsx",
+      "commit": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "sha256": "bc048b14c3b9579aee9cae45fff7b262c49c27112b360e66da11cdec891c38b9",
+      "bytes": 10205,
+      "line_count": 287,
+      "identical_to_newer_checkout": true
+    },
+    {
+      "path": "apps/web/src/components/pullRequest/PullRequestListFilters.tsx",
+      "url": "https://raw.githubusercontent.com/pingdotgg/t3code/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/pullRequest/PullRequestListFilters.tsx",
+      "commit": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "sha256": "b298edf55c4f3109fd8d44a329b9eee1e0cbce2c055ee0206257c1267960ddc5",
+      "bytes": 21314,
+      "line_count": 660,
+      "identical_to_newer_checkout": true
+    },
+    {
+      "path": "apps/web/src/components/pullRequest/usePullRequestListView.ts",
+      "url": "https://raw.githubusercontent.com/pingdotgg/t3code/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/pullRequest/usePullRequestListView.ts",
+      "commit": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "sha256": "630503c8e4675cc7662fcfdcb93faf8173fa7fd5c4d9ace542676c4a0fb56220",
+      "bytes": 12131,
+      "line_count": 332,
+      "identical_to_newer_checkout": true
+    },
+    {
+      "path": "apps/web/src/components/pullRequest/pullRequestListOptions.ts",
+      "url": "https://raw.githubusercontent.com/pingdotgg/t3code/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/pullRequest/pullRequestListOptions.ts",
+      "commit": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "sha256": "f300e409088d1237c3cfbc771f53b7beef0f046ace4c7be21b81b590ffa84b51",
+      "bytes": 1772,
+      "line_count": 40,
+      "identical_to_newer_checkout": true
+    },
+    {
+      "path": "apps/web/src/components/pullRequest/PullRequestDetailPanel.tsx",
+      "url": "https://raw.githubusercontent.com/pingdotgg/t3code/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/pullRequest/PullRequestDetailPanel.tsx",
+      "commit": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "sha256": "5b1e0049bc2e0c1da81305e73ce96782a906ac628afcb552d869cb45bfd0a3d3",
+      "bytes": 80191,
+      "line_count": 2011,
+      "identical_to_newer_checkout": false
+    },
+    {
+      "path": "apps/web/src/components/pullRequest/usePullRequestDetail.ts",
+      "url": "https://raw.githubusercontent.com/pingdotgg/t3code/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/pullRequest/usePullRequestDetail.ts",
+      "commit": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "sha256": "393efe16ee04c30df836a9159ddb63abbd6a5dc69520db3b5384c2381ddbf905",
+      "bytes": 7541,
+      "line_count": 200,
+      "identical_to_newer_checkout": true
+    },
+    {
+      "path": "apps/web/src/components/pullRequest/PullRequestTimelineTab.tsx",
+      "url": "https://raw.githubusercontent.com/pingdotgg/t3code/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/pullRequest/PullRequestTimelineTab.tsx",
+      "commit": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "sha256": "7c0159453c1d0051948a3640bfa25d7a45e406a624756829665ffb6ce4719a30",
+      "bytes": 31440,
+      "line_count": 918,
+      "identical_to_newer_checkout": true
+    },
+    {
+      "path": "apps/web/src/components/pullRequest/PullRequestCodeTab.tsx",
+      "url": "https://raw.githubusercontent.com/pingdotgg/t3code/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/pullRequest/PullRequestCodeTab.tsx",
+      "commit": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "sha256": "dcf7dc7ef1fac588ae22d6db40463eb49073f14f29c135770e58769645f1ddc2",
+      "bytes": 65330,
+      "line_count": 1702,
+      "identical_to_newer_checkout": false
+    },
+    {
+      "path": "apps/web/src/components/pullRequest/PullRequestThreadLinks.tsx",
+      "url": "https://raw.githubusercontent.com/pingdotgg/t3code/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/pullRequest/PullRequestThreadLinks.tsx",
+      "commit": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "sha256": "0014cb47f72745f0f3f85b4183dd5a1020f1c3204de43c63e2c7a0bc73797824",
+      "bytes": 10070,
+      "line_count": 269,
+      "identical_to_newer_checkout": true
+    },
+    {
+      "path": "apps/web/src/components/pullRequest/PullRequestActionsMenu.tsx",
+      "url": "https://raw.githubusercontent.com/pingdotgg/t3code/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/pullRequest/PullRequestActionsMenu.tsx",
+      "commit": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "sha256": "91aa5700120fb41f23721749fe554149aed5401989ab393222f53acbaf2fa4c4",
+      "bytes": 17837,
+      "line_count": 480,
+      "identical_to_newer_checkout": true
+    },
+    {
+      "path": "apps/web/src/components/pullRequest/pullRequestLinkContextMenu.ts",
+      "url": "https://raw.githubusercontent.com/pingdotgg/t3code/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/pullRequest/pullRequestLinkContextMenu.ts",
+      "commit": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "sha256": "9a7e01732bcb786ce30406399e022df9eddf47e3a16a0c537ef6902b4bbd4e70",
+      "bytes": 1634,
+      "line_count": 52,
+      "identical_to_newer_checkout": true
+    },
+    {
+      "path": "apps/web/src/components/ThreadStatusIndicators.tsx",
+      "url": "https://raw.githubusercontent.com/pingdotgg/t3code/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/ThreadStatusIndicators.tsx",
+      "commit": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "sha256": "8307472f626bff99bf6d5c4f46e13bd1e3bb3ace6a4682d03ee38d63dad57ad3",
+      "bytes": 29506,
+      "line_count": 888,
+      "identical_to_newer_checkout": false
+    },
+    {
+      "path": "apps/web/src/components/RightPanelTabs.tsx",
+      "url": "https://raw.githubusercontent.com/pingdotgg/t3code/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/RightPanelTabs.tsx",
+      "commit": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "sha256": "de3aeb1ec4c7c10e5aefba9a7ca4a0514b10a3e41d11231359545ac683d2f0a3",
+      "bytes": 57353,
+      "line_count": 1582,
+      "identical_to_newer_checkout": false
+    },
+    {
+      "path": "apps/web/src/rightPanelStore.ts",
+      "url": "https://raw.githubusercontent.com/pingdotgg/t3code/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/rightPanelStore.ts",
+      "commit": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "sha256": "9c165e539cd80cce2d7abe540fe7b3672ffdb8c9ed8d2b8f5ae5eff27a19f650",
+      "bytes": 52008,
+      "line_count": 1293,
+      "identical_to_newer_checkout": true
+    },
+    {
+      "path": "apps/web/src/components/chat/ChatRightPanel.tsx",
+      "url": "https://raw.githubusercontent.com/pingdotgg/t3code/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/ChatRightPanel.tsx",
+      "commit": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "sha256": "f149a30f1ab8aa193cfbfd995971198410f6adb0c250d97d4fbaefad900a2513",
+      "bytes": 1541,
+      "line_count": 51,
+      "identical_to_newer_checkout": true
+    },
+    {
+      "path": "apps/web/src/components/preview/PreviewPanelShell.tsx",
+      "url": "https://raw.githubusercontent.com/pingdotgg/t3code/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/preview/PreviewPanelShell.tsx",
+      "commit": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "sha256": "d54df2ef4ea19d539a4853b6ed616659ac316df69ddff9f20b7d687dbf34409c",
+      "bytes": 8162,
+      "line_count": 211,
+      "identical_to_newer_checkout": false
+    },
+    {
+      "path": "apps/web/src/hooks/usePreviewPanelInlineSize.ts",
+      "url": "https://raw.githubusercontent.com/pingdotgg/t3code/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/hooks/usePreviewPanelInlineSize.ts",
+      "commit": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "sha256": "a1d9192d2df745d1d3c0f3fa80c22b77b5f0fe714916ec2b9035b2392a0e32a6",
+      "bytes": 3006,
+      "line_count": 74,
+      "identical_to_newer_checkout": true
+    },
+    {
+      "path": "apps/web/src/hooks/useResizableWidth.ts",
+      "url": "https://raw.githubusercontent.com/pingdotgg/t3code/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/hooks/useResizableWidth.ts",
+      "commit": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "sha256": "c0edea409280f93b81646a3effb1544baf96c498d735273c14b9df7185602d59",
+      "bytes": 4743,
+      "line_count": 118,
+      "identical_to_newer_checkout": true
+    },
+    {
+      "path": "apps/web/src/panelAnimations.ts",
+      "url": "https://raw.githubusercontent.com/pingdotgg/t3code/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/panelAnimations.ts",
+      "commit": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "sha256": "7e77b90f51d77aa57873f83d357f9cc816fd9d659bfdd6f8e8bcbc23afaf678a",
+      "bytes": 2972,
+      "line_count": 69,
+      "identical_to_newer_checkout": true
+    },
+    {
+      "path": "apps/web/src/components/ui/sidebar.tsx",
+      "url": "https://raw.githubusercontent.com/pingdotgg/t3code/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/ui/sidebar.tsx",
+      "commit": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "sha256": "feb1747a6108605e472480c37961c5a74d952f7d13f9d8e8f2e91cc5f74f4e8e",
+      "bytes": 29939,
+      "line_count": 881,
+      "identical_to_newer_checkout": false
+    },
+    {
+      "path": "packages/contracts/src/settings.ts",
+      "url": "https://raw.githubusercontent.com/pingdotgg/t3code/1264c206aee0dce805d6279809118bc091f29d2f/packages/contracts/src/settings.ts",
+      "commit": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "sha256": "9a81095f0527fc9204257ad64429b698ba1882b626c9b2a113aef73d38425f78",
+      "bytes": 90891,
+      "line_count": 2069,
+      "identical_to_newer_checkout": false
+    },
+    {
+      "path": "apps/web/src/components/ChatView.tsx",
+      "url": "https://raw.githubusercontent.com/pingdotgg/t3code/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/ChatView.tsx",
+      "commit": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "sha256": "c04f7ebfbed10af5afc938609ab3eada4d767a60a6ab483d875973fff50b49c4",
+      "bytes": 176154,
+      "line_count": 4019,
+      "identical_to_newer_checkout": false
+    },
+    {
+      "path": "apps/web/src/routes/_chat.pull-requests.tsx",
+      "url": "https://raw.githubusercontent.com/pingdotgg/t3code/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/routes/_chat.pull-requests.tsx",
+      "commit": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "sha256": "098d34968dfc637077071d9e6f6ef3bbbd6de5f3a745057b1c83f90457452d5b",
+      "bytes": 3594,
+      "line_count": 78,
+      "identical_to_newer_checkout": false
+    },
+    {
+      "path": "apps/web/src/pullRequestWorkspaceStore.ts",
+      "url": "https://raw.githubusercontent.com/pingdotgg/t3code/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/pullRequestWorkspaceStore.ts",
+      "error": "HTTP Error 404: Not Found"
+    },
+    {
+      "path": "apps/web/src/state/pullRequests.ts",
+      "url": "https://raw.githubusercontent.com/pingdotgg/t3code/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/state/pullRequests.ts",
+      "commit": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "sha256": "19c90644eda8c1f742b65c36a1513c1a60a1c650127514183d542df1fcd9477e",
+      "bytes": 26907,
+      "line_count": 709,
+      "identical_to_newer_checkout": true
+    },
+    {
+      "path": "apps/web/src/components/pullRequest/pullRequestListPreferences.ts",
+      "url": "https://raw.githubusercontent.com/pingdotgg/t3code/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/pullRequest/pullRequestListPreferences.ts",
+      "commit": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "sha256": "38653d89c06a7fa22bf1014c4f9c994f45d253131b53d1ee0b9c20f20f63c52a",
+      "bytes": 4135,
+      "line_count": 120,
+      "identical_to_newer_checkout": false
+    },
+    {
+      "path": "packages/client-runtime/src/pullRequestQuery.ts",
+      "url": "https://raw.githubusercontent.com/pingdotgg/t3code/1264c206aee0dce805d6279809118bc091f29d2f/packages/client-runtime/src/pullRequestQuery.ts",
+      "commit": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "sha256": "81e435d71ddde33b9b3419016ce48abd3376948048740021856eefe96ed785e0",
+      "bytes": 5314,
+      "line_count": 155,
+      "identical_to_newer_checkout": true
+    },
+    {
+      "path": "apps/web/src/components/pullRequest/PullRequestRow.tsx",
+      "url": "https://raw.githubusercontent.com/pingdotgg/t3code/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/pullRequest/PullRequestRow.tsx",
+      "commit": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "sha256": "ba21c665d2f2d60a94d39397c1dfb21780643bbf806c907018cb68503c659cf9",
+      "bytes": 9527,
+      "line_count": 266,
+      "identical_to_newer_checkout": true
+    },
+    {
+      "path": "apps/web/src/components/pullRequest/PullRequestDetailCrumbs.tsx",
+      "url": "https://raw.githubusercontent.com/pingdotgg/t3code/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/pullRequest/PullRequestDetailCrumbs.tsx",
+      "commit": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "sha256": "97b285588d96efd2325889465c2b783627c7ccb6e433cf844edbc402b3bf087e",
+      "bytes": 6253,
+      "line_count": 193,
+      "identical_to_newer_checkout": true
+    },
+    {
+      "path": "apps/web/src/shortcuts/chatRouteCommands.ts",
+      "url": "https://raw.githubusercontent.com/pingdotgg/t3code/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/shortcuts/chatRouteCommands.ts",
+      "commit": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "sha256": "90fc9ea7d56c02e6cffdf5f7fa3afa769dcf5eaae966320c514f9b03f66eb5a6",
+      "bytes": 8175,
+      "line_count": 199,
+      "identical_to_newer_checkout": true
+    },
+    {
+      "path": "apps/web/src/routes/_chat.tsx",
+      "url": "https://raw.githubusercontent.com/pingdotgg/t3code/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/routes/_chat.tsx",
+      "commit": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "sha256": "c916bcc3b4785e074dab58bb239cac5091d105e0428499fff70402e7dc36621e",
+      "bytes": 3110,
+      "line_count": 74,
+      "identical_to_newer_checkout": false
+    },
+    {
+      "path": "apps/web/src/components/pullRequest/pullRequestPreviewTarget.ts",
+      "url": "https://raw.githubusercontent.com/pingdotgg/t3code/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/pullRequest/pullRequestPreviewTarget.ts",
+      "error": "HTTP Error 404: Not Found"
+    },
+    {
+      "path": "apps/web/src/components/Sidebar.tsx",
+      "url": "https://raw.githubusercontent.com/pingdotgg/t3code/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/Sidebar.tsx",
+      "commit": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "sha256": "06d9c0bbb562097537fec42309d3872de8d93aa2089a15ec5d6a4f01954c012c",
+      "bytes": 149232,
+      "line_count": 3656,
+      "identical_to_newer_checkout": false
+    },
+    {
+      "path": "apps/web/src/components/AppSidebarLayout.tsx",
+      "url": "https://raw.githubusercontent.com/pingdotgg/t3code/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/AppSidebarLayout.tsx",
+      "commit": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "sha256": "47ee2af4d65cc01c55455c3ce70e2ef02ab513b99ec249ea38b068c09f4347c6",
+      "bytes": 18614,
+      "line_count": 498,
+      "identical_to_newer_checkout": true
+    },
+    {
+      "path": "apps/web/src/components/sidebar/mainAppLocation.ts",
+      "url": "https://raw.githubusercontent.com/pingdotgg/t3code/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/sidebar/mainAppLocation.ts",
+      "commit": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "sha256": "1ef9ef8bd89f3a04aa80127ff29d1ae84bdb413d70f657608289d02572e3b10d",
+      "bytes": 1870,
+      "line_count": 45,
+      "identical_to_newer_checkout": false
+    },
+    {
+      "path": "packages/client-runtime/src/changeRequestLinks.ts",
+      "url": "https://raw.githubusercontent.com/pingdotgg/t3code/1264c206aee0dce805d6279809118bc091f29d2f/packages/client-runtime/src/changeRequestLinks.ts",
+      "commit": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "sha256": "2a15c628a0b6ee7611ed058040b6be8c2c23d190a126267529881ca08d5f9393",
+      "bytes": 6000,
+      "line_count": 170,
+      "identical_to_newer_checkout": true
+    },
+    {
+      "path": "apps/web/src/components/settings/AppearanceSettingsPanel.tsx",
+      "url": "https://raw.githubusercontent.com/pingdotgg/t3code/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/settings/AppearanceSettingsPanel.tsx",
+      "commit": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "sha256": "c706d3a36ef513affbba750d0bd53a4ee844137a68a0e09442e41ce342cb994f",
+      "bytes": 19449,
+      "line_count": 486,
+      "identical_to_newer_checkout": true
+    },
+    {
+      "path": "apps/web/src/components/settings/PanelAnimationsPreview.tsx",
+      "url": "https://raw.githubusercontent.com/pingdotgg/t3code/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/settings/PanelAnimationsPreview.tsx",
+      "commit": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "sha256": "ae4699be0da4ac58809a5fc188496c8bd7ffebaa140934c8122f879d549d7720",
+      "bytes": 2050,
+      "line_count": 52,
+      "identical_to_newer_checkout": true
+    },
+    {
+      "path": "apps/web/src/components/settings/SettingsPanels.tsx",
+      "url": "https://raw.githubusercontent.com/pingdotgg/t3code/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/settings/SettingsPanels.tsx",
+      "commit": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "sha256": "b1a229ca9c2b67f35fc382016cbcc878b43134ace62fcd971c9ee67c48b6b89d",
+      "bytes": 88067,
+      "line_count": 2210,
+      "identical_to_newer_checkout": false
+    },
+    {
+      "path": "apps/web/src/components/settings/IntegrationsSettings.tsx",
+      "url": "https://raw.githubusercontent.com/pingdotgg/t3code/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/settings/IntegrationsSettings.tsx",
+      "commit": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "sha256": "5b789023f5cc4c1f915e3ebfab7192a5fa942af2c7fe33e7522f793dbf62e99a",
+      "bytes": 60074,
+      "line_count": 1626,
+      "identical_to_newer_checkout": false
+    },
+    {
+      "path": "apps/web/src/components/threadSidebarWidth.ts",
+      "url": "https://raw.githubusercontent.com/pingdotgg/t3code/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/threadSidebarWidth.ts",
+      "commit": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "sha256": "ca24313ec56263fdf80c3bb54939341d2d49aa3e49df804bf31e5670a8609445",
+      "bytes": 1127,
+      "line_count": 34,
+      "identical_to_newer_checkout": true
+    },
+    {
+      "path": "apps/web/src/hooks/useLocalStorage.ts",
+      "url": "https://raw.githubusercontent.com/pingdotgg/t3code/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/hooks/useLocalStorage.ts",
+      "commit": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "sha256": "52a91852089ba6f46f1bccc6c7e090bec1dbb775af8ed7ea0dc94bb3014f6420",
+      "bytes": 6283,
+      "line_count": 211,
+      "identical_to_newer_checkout": true
+    }
+  ],
+  "runtime_evidence_owner": "parent",
+  "worker_actions": "Read source and existing audit artifacts only. No app, model, fixture process, test, build, or delegate launched.",
+  "anchors": {
+    "entry": {
+      "path": "apps/web/src/components/sidebar/SidebarChrome.tsx",
+      "symbol": "SidebarUtilityMenu.handlePullRequestsClick",
+      "line": 234,
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/sidebar/SidebarChrome.tsx#L234",
+      "anchor_line_sha256": "b87954ccef4992eb2e4d1fa27e1094d647fa86e6d54c7e489656b7974522b2ce",
+      "state_or_branch": "Navigate to /pull-requests with readPullRequestListPreferences()."
+    },
+    "route": {
+      "path": "apps/web/src/routes/_chat.pull-requests.tsx",
+      "symbol": "Route.validateSearch",
+      "line": 31,
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/routes/_chat.pull-requests.tsx#L31",
+      "anchor_line_sha256": "c256ac6be7888e3c57d044f16f19196d2fd7961bef95eb3543245f8f0ea70d6e",
+      "state_or_branch": "Validate state, involvement, search, facets, list scope, and selected PR target independently."
+    },
+    "filter": {
+      "path": "apps/web/src/components/pullRequest/PullRequestsPage.tsx",
+      "symbol": "PullRequestsPage.updateListScope",
+      "line": 258,
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/pullRequest/PullRequestsPage.tsx#L258",
+      "anchor_line_sha256": "66c2dd6a8236973476a03037bf6ebb4915ccd038b6df996753bdd2b1a10e1912",
+      "state_or_branch": "Save the selected list preferences and update route search."
+    },
+    "preferences": {
+      "path": "apps/web/src/components/pullRequest/pullRequestListPreferences.ts",
+      "symbol": "writePullRequestListPreferences",
+      "line": 110,
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/pullRequest/pullRequestListPreferences.ts#L110",
+      "anchor_line_sha256": "409f8c7ce42d3215a8698137d8a548a4696df0f998dbec27f703153fd94dd126",
+      "state_or_branch": "Persist list preferences in t3.pullRequests.preferences. The reader restores valid values."
+    },
+    "escape": {
+      "path": "apps/web/src/components/AppSidebarLayout.tsx",
+      "symbol": "registerPullRequestsEscapeCommand",
+      "line": 204,
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/AppSidebarLayout.tsx#L204",
+      "anchor_line_sha256": "fb7bf30971159955842b7333c3f32ea8959cbc49200825c5d5efc234fcdd14e4",
+      "state_or_branch": "An unconsumed, nonrepeating Escape on /pull-requests blurs focus and navigates history back, with / fallback at the initial history entry."
+    },
+    "search": {
+      "path": "apps/web/src/components/pullRequest/usePullRequestListView.ts",
+      "symbol": "usePullRequestQueryFilters",
+      "line": 194,
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/pullRequest/usePullRequestListView.ts#L194",
+      "anchor_line_sha256": "25f3e28ab8ae36ee48c5ebf9b91a3fe690d85b2b0325487bd15a59c28b730de9",
+      "state_or_branch": "Typed and submitted queries are parsed separately. The typed query sends after a 250ms debounce; submit explicitly sets it."
+    },
+    "repo_qualifier": {
+      "path": "packages/client-runtime/src/pullRequestQuery.ts",
+      "symbol": "parsePullRequestQuery qualifier switch",
+      "line": 96,
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/packages/client-runtime/src/pullRequestQuery.ts#L96",
+      "anchor_line_sha256": "79f2878de8c627dd855c542dc6f8c34fbe3749757b83eaabd8233a53f9335ae7",
+      "state_or_branch": "repo, org, user, sort, is, archived, and state qualifiers are skipped. They do not set repository scope."
+    },
+    "select": {
+      "path": "apps/web/src/components/pullRequest/PullRequestsPage.tsx",
+      "symbol": "PullRequestsPage.selectEntry",
+      "line": 1123,
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/pullRequest/PullRequestsPage.tsx#L1123",
+      "anchor_line_sha256": "feb6ed95f8c3546f1e234e0a8c65f5d23aa3aa1fa8016242cc0a99af49412b90",
+      "state_or_branch": "Open the explicit row target in the workspace panel and update repository, number, selected project, environment, and host in the route."
+    },
+    "reference": {
+      "path": "apps/web/src/components/pullRequest/usePullRequestDetail.ts",
+      "symbol": "pullRequestPanelReference / pullRequestRefKey",
+      "line": 27,
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/pullRequest/usePullRequestDetail.ts#L27",
+      "anchor_line_sha256": "7a9cefb729f76dc4c449b82b5b0ea47772eba9ad383faab97c163febd9c0eba1",
+      "state_or_branch": "The target includes projectId, repository, number, and optional host. Query scope also includes environmentId."
+    },
+    "detail": {
+      "path": "apps/web/src/components/pullRequest/usePullRequestDetail.ts",
+      "symbol": "usePullRequestDetail",
+      "line": 49,
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/pullRequest/usePullRequestDetail.ts#L49",
+      "anchor_line_sha256": "11e20a02767fc4ab4c9c3d2d1c1b9eaeb8052eff386d1b098f2e729f80d31aa4",
+      "state_or_branch": "Read detail and activity separately, optionally checks. Resolve snapshots and shared summary for this target. Merge activity comments, reviews, and commits into displayed detail."
+    },
+    "timeline": {
+      "path": "apps/web/src/components/pullRequest/PullRequestTimelineTab.tsx",
+      "symbol": "PullRequestTimelineTab.events",
+      "line": 758,
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/pullRequest/PullRequestTimelineTab.tsx#L758",
+      "anchor_line_sha256": "45a08cc58c3056b7d857185b9ce58fa1f8492d7703a2d31bc1f7ed07592c8fd9",
+      "state_or_branch": "Build timeline events from the current PR detail, then order and group conversations."
+    },
+    "visible_tabs": {
+      "path": "apps/web/src/components/pullRequest/PullRequestDetailPanel.tsx",
+      "symbol": "PullRequestDetailPanel mounted Summary",
+      "line": 1872,
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/pullRequest/PullRequestDetailPanel.tsx#L1872",
+      "anchor_line_sha256": "0ec33d387874d6d107d7b657c0843ca321f61bfad5ba0f9711b18b21086c12a4",
+      "state_or_branch": "Visited tabs remain mounted. A nonselected tab receives the invisible class, while selected content remains visible."
+    },
+    "diff_scope": {
+      "path": "apps/web/src/components/pullRequest/PullRequestCodeTab.tsx",
+      "symbol": "PullRequestCodeTab.withheldContent",
+      "line": 713,
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/pullRequest/PullRequestCodeTab.tsx#L713",
+      "anchor_line_sha256": "584546a4e9a6c15efd81c155692dc45402f33cc666ba13a3deaba15331d369af",
+      "state_or_branch": "A truncated slice or raw parsed slice triggers withheld-content state. nextCursor controls whether pagination still has more slices."
+    },
+    "diff_warning": {
+      "path": "apps/web/src/components/pullRequest/PullRequestCodeTab.tsx",
+      "symbol": "PullRequestCodeTab truncation warning",
+      "line": 1250,
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/pullRequest/PullRequestCodeTab.tsx#L1250",
+      "anchor_line_sha256": "1bdf47966f75fdaab2e388b5bc0dd22990f03c55cbffc9c3e01477e7b27d1fb6",
+      "state_or_branch": "The warning explains that the host withheld a binary or oversized inline change. It does not by itself establish a fixed 100-file cap."
+    },
+    "diff_layout": {
+      "path": "apps/web/src/components/pullRequest/PullRequestCodeTab.tsx",
+      "symbol": "PullRequestCodeTab diff layout setting",
+      "line": 1308,
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/pullRequest/PullRequestCodeTab.tsx#L1308",
+      "anchor_line_sha256": "18788cb8fe04d90d2aba6a15507c9177aee24d222881467239c5c062da92b945",
+      "state_or_branch": "The layout control saves the selected split or stacked layout as a client preference."
+    },
+    "diff_tree": {
+      "path": "apps/web/src/components/pullRequest/PullRequestCodeTab.tsx",
+      "symbol": "PullRequestCodeTab file tree toggle",
+      "line": 1435,
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/pullRequest/PullRequestCodeTab.tsx#L1435",
+      "anchor_line_sha256": "72169e8bcc0514aa25be77abad0d1bc9115f1cbaa61ff49e1edb47cdb48fa040",
+      "state_or_branch": "The toggle changes persisted fileTreeOpen state and controls tree rendering."
+    },
+    "link_picker": {
+      "path": "apps/web/src/components/pullRequest/PullRequestThreadLinks.tsx",
+      "symbol": "ThreadPicker / EnabledPullRequestThreadLinks.changeLink",
+      "line": 92,
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/pullRequest/PullRequestThreadLinks.tsx#L92",
+      "anchor_line_sha256": "d83ae74667e7fd88ff7ce7f1f248540df28bf187d6c0c84220cec73220042b24",
+      "state_or_branch": "The chosen thread ID is scoped to the PR environment. The command links the clicked URL and closes the picker after success."
+    },
+    "link_command": {
+      "path": "apps/web/src/hooks/usePullRequestLinking.ts",
+      "symbol": "usePullRequestLinking.changeLink",
+      "line": 52,
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/hooks/usePullRequestLinking.ts#L52",
+      "anchor_line_sha256": "5b3e9360ff883f68328756ee4f60e5d077853c0fe34a644bd32dd4fff0eb9f21",
+      "state_or_branch": "Parse the PR URL, reject mismatched environments, and issue a T3 thread.pull-request.link or unlink mutation. This is local association, not a GitHub PR write."
+    },
+    "badge": {
+      "path": "apps/web/src/components/sidebar/SidebarThreadRow.tsx",
+      "symbol": "SidebarThreadRow.handlePrClick",
+      "line": 955,
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/sidebar/SidebarThreadRow.tsx#L955",
+      "anchor_line_sha256": "3d938410232298e9ecd50761ccce823556b3dcc1234c2631d7806c7f35c67e7e",
+      "state_or_branch": "Resolve the clicked badge URL, pass the row threadRef into openPrLink, and activate that thread after an in-panel open when it is not the current route."
+    },
+    "badge_list": {
+      "path": "apps/web/src/components/sidebar/SidebarThreadRow.tsx",
+      "symbol": "SidebarThreadRow.handlePrListClick",
+      "line": 1070,
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/sidebar/SidebarThreadRow.tsx#L1070",
+      "anchor_line_sha256": "701db8d4064336fa768316ff4cfabc4f55a2fcdb48c3cc25548359153494cf55",
+      "state_or_branch": "A multi-PR badge opens that thread linked-PR list and activates its thread. This branch was not exercised."
+    },
+    "badge_wiring": {
+      "path": "apps/web/src/components/ThreadStatusIndicators.tsx",
+      "symbol": "PullRequestBadge",
+      "line": 241,
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/ThreadStatusIndicators.tsx#L241",
+      "anchor_line_sha256": "6c0d630a3aa6706520de4b07b4f69403683d1eb775e1f9b0c468549ad499f76b",
+      "state_or_branch": "Single PR uses an anchor with href. Its click calls onOpenPullRequest and pointer-down stops row propagation. Multiple PRs use a list button."
+    },
+    "activate": {
+      "path": "apps/web/src/components/Sidebar.tsx",
+      "symbol": "Sidebar.navigateToThread",
+      "line": 1447,
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/Sidebar.tsx#L1447",
+      "anchor_line_sha256": "5533ff46967f40815cd221fef7d000b6ae6c1e8e099dc235b1a365c98411abcb",
+      "state_or_branch": "Clear multi-selection, set the selection anchor, and navigate to the explicit environment/thread route."
+    },
+    "activate_wiring": {
+      "path": "apps/web/src/components/Sidebar.tsx",
+      "symbol": "SidebarThreadRow onThreadActivate",
+      "line": 3417,
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/Sidebar.tsx#L3417",
+      "anchor_line_sha256": "5b04bb992d8a86cf7d450c4556e6808157fd7810c9efa866cdeef950c2b7c3ed",
+      "state_or_branch": "Wire the row activation callback to actual route navigation."
+    },
+    "link_open": {
+      "path": "apps/web/src/lib/openPullRequestLink.ts",
+      "symbol": "useOpenChangeRequestLink",
+      "line": 50,
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/lib/openPullRequestLink.ts#L50",
+      "anchor_line_sha256": "d992df70ff6ae0184087f3f0fe0367f1a426d0d11d009078b876139d88a60aca",
+      "state_or_branch": "Honor the separate in-app PR preference and modified-click behavior. Resolve the exact PR target and open it under the provided panel thread."
+    },
+    "target": {
+      "path": "packages/client-runtime/src/changeRequestLinks.ts",
+      "symbol": "resolveChangeRequestLinkTarget",
+      "line": 53,
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/packages/client-runtime/src/changeRequestLinks.ts#L53",
+      "anchor_line_sha256": "a0ff52f2eb682f2074a91861b65df64c5597db1881a4421fad239bf6359a39f7",
+      "state_or_branch": "Resolve URL repository, number, and host separately from the host project. Environment-scoped matching or allowed same-host project lending makes the explicit PR readable."
+    },
+    "open_result": {
+      "path": "apps/web/src/lib/openPullRequestLink.ts",
+      "symbol": "useOpenPrLink",
+      "line": 243,
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/lib/openPullRequestLink.ts#L243",
+      "anchor_line_sha256": "88b6a04ff9fa30a2b7b1142f7fa7766eb22731532ce9672afafaf132a7a7df50",
+      "state_or_branch": "Stop row propagation and return true only for the in-app change-request path. Modified anchor clicks keep native link behavior; fallback uses ordinary link opening."
+    },
+    "identity": {
+      "path": "apps/web/src/rightPanelStore.ts",
+      "symbol": "pullRequestSurfaceId",
+      "line": 267,
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/rightPanelStore.ts#L267",
+      "anchor_line_sha256": "be6a023e1ca0276251fdaabe343e8d04f81251362d505779379137d13d6940cf",
+      "state_or_branch": "PR tab identity contains optional environment, project, host, repository, and number."
+    },
+    "upsert": {
+      "path": "apps/web/src/rightPanelStore.ts",
+      "symbol": "upsertSurface",
+      "line": 309,
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/rightPanelStore.ts#L309",
+      "anchor_line_sha256": "1a2dd2b87a77702a5971d52cca2384bdf34ccf9a2e8aaef442da0049bc90fea7",
+      "state_or_branch": "Set isOpen and activeSurfaceId while keeping an existing target tab instead of duplicating it."
+    },
+    "open_surface": {
+      "path": "apps/web/src/rightPanelStore.ts",
+      "symbol": "openPullRequest",
+      "line": 763,
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/rightPanelStore.ts#L763",
+      "anchor_line_sha256": "0e05de520cfd53db8341fc4fee86782dae02052a20242d2870253afd22d2ca94",
+      "state_or_branch": "Apply an explicit user action to the scoped thread, upsert the PR target, and replace the pending reveal URL."
+    },
+    "close_tab": {
+      "path": "apps/web/src/rightPanelStore.ts",
+      "symbol": "closeSurface",
+      "line": 972,
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/rightPanelStore.ts#L972",
+      "anchor_line_sha256": "a1c2f7856089e39c3a72b5019eb4385a6006d3361786de3726c42d1699897bf8",
+      "state_or_branch": "Remove the exact tab. No remaining surfaces means isOpen=false and activeSurfaceId=null. Otherwise select a neighboring tab if needed."
+    },
+    "hide_panel": {
+      "path": "apps/web/src/rightPanelStore.ts",
+      "symbol": "close / toggleVisibility",
+      "line": 1102,
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/rightPanelStore.ts#L1102",
+      "anchor_line_sha256": "4ded348d5bed99a67db8f12f92489161fb01e488fa5dffe2c51f072decb1e5dd",
+      "state_or_branch": "Hide changes isOpen without removing the tab collection or its active target."
+    },
+    "inert": {
+      "path": "apps/web/src/components/preview/PreviewPanelShell.tsx",
+      "symbol": "PreviewPanelShell collapse layout effect",
+      "line": 136,
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/preview/PreviewPanelShell.tsx#L136",
+      "anchor_line_sha256": "e4be07c0f868dd499ae1e50dc2ccb314cfb1e04a300004af33ff4b32ed9bfe4f",
+      "state_or_branch": "Return focus out of closing content before applying inert to the hidden panel."
+    },
+    "right_width": {
+      "path": "apps/web/src/hooks/usePreviewPanelInlineSize.ts",
+      "symbol": "usePreviewPanelInlineSize",
+      "line": 14,
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/hooks/usePreviewPanelInlineSize.ts#L14",
+      "anchor_line_sha256": "f3b69afe965c709b8ac75940e3099947888dec8142d0e12b4da1e4ff11cc9e53",
+      "state_or_branch": "Default inline width is 540 CSS px. Minimum is 360. Maximum is the smaller of 70% viewport and container width minus 360, bounded at the minimum."
+    },
+    "width_scope": {
+      "path": "apps/web/src/components/ChatView.tsx",
+      "symbol": "ChatRightPanel widthStorageKey",
+      "line": 3935,
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/ChatView.tsx#L3935",
+      "anchor_line_sha256": "a44a4c5cfe891f984d58b1cb099485c1555469147d6f19bec54ca017668488ee",
+      "state_or_branch": "Use a per-thread width key for the chat panel."
+    },
+    "width_persist": {
+      "path": "apps/web/src/hooks/useResizableWidth.ts",
+      "symbol": "useResizableWidth.commitWidth / drag.finish",
+      "line": 63,
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/hooks/useResizableWidth.ts#L63",
+      "anchor_line_sha256": "638bc2b46e1207a4004a9d8ff0439c2b1a7b6539bf52b779477ce69b8254fb77",
+      "state_or_branch": "Persist only a committed resize or explicit setWidth. A render-time bound clamp does not persist a new width by itself."
+    },
+    "left_width": {
+      "path": "apps/web/src/components/threadSidebarWidth.ts",
+      "symbol": "resolveInitialThreadSidebarWidth",
+      "line": 25,
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/threadSidebarWidth.ts#L25",
+      "anchor_line_sha256": "72b039cdd85b39c6d4b60a78c99f378afc5bc21a250a93250255ef1b829e19a7",
+      "state_or_branch": "Left sidebar defaults to 256 CSS px, uses a 208px or brand-derived minimum, and reserves 640px for main content. Stored width is clamped to viewport bounds."
+    },
+    "motion_default": {
+      "path": "packages/contracts/src/settings.ts",
+      "symbol": "PanelAnimationDurationMs defaults and bounds",
+      "line": 155,
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/packages/contracts/src/settings.ts#L155",
+      "anchor_line_sha256": "87486e448cc00374dd6a0bbb8268214d7f64f4164733453e67000dd6e22298e7",
+      "state_or_branch": "Valid configured duration is 0 through 400ms. The decoding default is 0ms."
+    },
+    "motion_slider": {
+      "path": "apps/web/src/components/settings/AppearanceSettingsPanel.tsx",
+      "symbol": "AppearanceSettingsPanel duration slider",
+      "line": 374,
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/settings/AppearanceSettingsPanel.tsx#L374",
+      "anchor_line_sha256": "bd1c9d946c398438aad62c244590ac666e8e6560347a84539849a745095867f8",
+      "state_or_branch": "A range input writes a valid integer duration and uses 25ms steps. Its numeric output shows the saved setting."
+    },
+    "motion_gate": {
+      "path": "apps/web/src/panelAnimations.ts",
+      "symbol": "usePanelAnimationSettings",
+      "line": 31,
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/panelAnimations.ts#L31",
+      "anchor_line_sha256": "78f55e818e4cbb17135a0d2f4905e7471a90c530ff7cce3267fd2e6b19d749b8",
+      "state_or_branch": "Motion activates only with positive duration, no reduced-motion preference, and no suppression context."
+    },
+    "motion_scope": {
+      "path": "apps/web/src/panelAnimations.ts",
+      "symbol": "usePanelNavigationSuppression",
+      "line": 11,
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/panelAnimations.ts#L11",
+      "anchor_line_sha256": "8509bd5dda1cffb8c0916d05b30e967d2b2f245b8609c8d4a61ef21474acad69",
+      "state_or_branch": "Suppress panel animation on route changes until two animation frames have painted the new route."
+    },
+    "motion_layout": {
+      "path": "apps/web/src/components/AppSidebarLayout.tsx",
+      "symbol": "AppSidebarLayout.sidebarProviderStyle",
+      "line": 451,
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/AppSidebarLayout.tsx#L451",
+      "anchor_line_sha256": "2dcedaabf1800b7bee4dfe0202c77dcfe47a00e6398ea8d9a37eed9faafbe870",
+      "state_or_branch": "Provide sidebar width, animation duration, and the route-aware data-panel-animations gate to the shell."
+    },
+    "motion_sidebar": {
+      "path": "apps/web/src/components/ui/sidebar.tsx",
+      "symbol": "Sidebar offcanvas transition",
+      "line": 369,
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/ui/sidebar.tsx#L369",
+      "anchor_line_sha256": "935a64d5feb13409eb4c706b513b507a8e97826ae550887afa4508e86a1fe98d",
+      "state_or_branch": "The desktop sidebar gap transitions width to zero. Its fixed body separately transitions left, right, and width offscreen, while collapsed content becomes inert."
+    },
+    "motion_presence": {
+      "path": "apps/web/src/panelAnimations.ts",
+      "symbol": "usePanelPresence",
+      "line": 41,
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/panelAnimations.ts#L41",
+      "anchor_line_sha256": "e12d7318aba3f463baa9693b5a2461951d5622bfd7f92cd76f4f460bf5c86438",
+      "state_or_branch": "Keep the closing value mounted only for the same thread scope until the configured exit duration ends; reopening clears the pending timeout."
+    },
+    "motion_right": {
+      "path": "apps/web/src/components/preview/PreviewPanelShell.tsx",
+      "symbol": "PreviewPanelShell.widthTransition",
+      "line": 82,
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/preview/PreviewPanelShell.tsx#L82",
+      "anchor_line_sha256": "5ab281f91c321995d6ff4900f4b30ae341a595edcc4f41ff0ecb34cbac50612b",
+      "state_or_branch": "Animate only a visibility transition. Same-open width or maximization changes disable this width transition in the same commit. Closing width becomes zero."
+    },
+    "menu": {
+      "path": "apps/web/src/components/pullRequest/PullRequestActionsMenu.tsx",
+      "symbol": "PullRequestActionsMenu",
+      "line": 243,
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/pullRequest/PullRequestActionsMenu.tsx#L243",
+      "anchor_line_sha256": "ae3a5babcbb54a19c09d059d9b8c66bd81ad03f9acf7bc3a1a18d3de8daa7f3a",
+      "state_or_branch": "The visible menu separates refresh, question, explain, fixes, and other actions. Their presence is not evidence of successful execution."
+    },
+    "external": {
+      "path": "apps/web/src/components/pullRequest/PullRequestActionsMenu.tsx",
+      "symbol": "PullRequestActionsMenu open-on-host",
+      "line": 398,
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/pullRequest/PullRequestActionsMenu.tsx#L398",
+      "anchor_line_sha256": "0ccc31ae5a2954ff04ed859fb3be4ee3ff254b56a24e6a57b5e0f1a936677b37",
+      "state_or_branch": "Open-on-host calls the system shell with the displayed detail URL. Copy link and number are separate actions."
+    },
+    "context_items": {
+      "path": "apps/web/src/components/pullRequest/pullRequestLinkContextMenu.ts",
+      "symbol": "showPullRequestLinkContextMenu",
+      "line": 26,
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/pullRequest/pullRequestLinkContextMenu.ts#L26",
+      "anchor_line_sha256": "a751ab88b8a89de3517bd65d0f460ed3284415ab1ccf8f6e85493e967d626899",
+      "state_or_branch": "The custom PR context menu offers Copy link and Open on the provider host, then uses shell.openExternal for the external choice."
+    },
+    "context_row": {
+      "path": "apps/web/src/components/pullRequest/PullRequestRow.tsx",
+      "symbol": "PullRequestRow number context menu",
+      "line": 149,
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/pullRequest/PullRequestRow.tsx#L149",
+      "anchor_line_sha256": "950a7a5e51262fe1c2cd9e8c0abed7c05cfbf5d080d417e8d140902fe75f5f97",
+      "state_or_branch": "The PR workspace row number prevents the default context menu and passes its own URL to the PR menu."
+    },
+    "context_crumb": {
+      "path": "apps/web/src/components/pullRequest/PullRequestDetailCrumbs.tsx",
+      "symbol": "openNumberContextMenu",
+      "line": 19,
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/pullRequest/PullRequestDetailCrumbs.tsx#L19",
+      "anchor_line_sha256": "3d4d0fd6ba80461e72fb62a1c4f2f0402ecef6035f3b00a1eb1982d91dbdb65e",
+      "state_or_branch": "The detail breadcrumb number passes the displayed detail URL to the same PR menu."
+    },
+    "refresh": {
+      "path": "apps/web/src/components/pullRequest/PullRequestDetailPanel.tsx",
+      "symbol": "refetchFromHost / refreshDetail",
+      "line": 665,
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/pullRequest/PullRequestDetailPanel.tsx#L665",
+      "anchor_line_sha256": "893451a01c856fc3d1018f1582352fc229eba2daeebea8cf85a0330207af922c",
+      "state_or_branch": "Invalidate the host cache, refresh detail, activity, and stack, and advance the Code refresh token. Separate checks capability/query behavior still applies."
+    },
+    "code_refresh": {
+      "path": "apps/web/src/components/pullRequest/PullRequestCodeTab.tsx",
+      "symbol": "PullRequestCodeTab appliedRefreshToken",
+      "line": 540,
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/pullRequest/PullRequestCodeTab.tsx#L540",
+      "anchor_line_sha256": "85a33d5108cf6d1698d9a14d956e4514bb2f4bb3f2c55bd426a4b55ead09d6f9",
+      "state_or_branch": "A changed explicit refresh token clears slice pagination and reloads the first page and viewed files."
+    },
+    "pr_preference": {
+      "path": "apps/web/src/components/settings/IntegrationsSettings.tsx",
+      "symbol": "PullRequestLinksOpenInAppSetting",
+      "line": 782,
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/settings/IntegrationsSettings.tsx#L782",
+      "anchor_line_sha256": "5bcb522d04b9993f1a47327eb6394fa4fb965d390f3b65e70ceeca6bb099b5bd",
+      "state_or_branch": "The PR in-app preference is independent of browserLinkTarget, which controls ordinary web links."
+    },
+    "proactive_preference": {
+      "path": "apps/web/src/components/settings/SettingsPanels.tsx",
+      "symbol": "DiffsSettingsPanel proactive preference",
+      "line": 1517,
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/settings/SettingsPanels.tsx#L1517",
+      "anchor_line_sha256": "9090958a86bf31bb59946d86b5cc151810f1cc81d652523ba375e2bd7142c793",
+      "state_or_branch": "The proactive setting controls automatic reveals. It is separate from explicit PR navigation."
+    },
+    "workspace_scope": {
+      "path": "apps/web/src/components/pullRequest/PullRequestsPage.tsx",
+      "symbol": "PullRequestsPage.rightPanelRef / rightPanelAvailable",
+      "line": 180,
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/pullRequest/PullRequestsPage.tsx#L180",
+      "anchor_line_sha256": "ce936ae4e035e66903ee5b9996cce268772f098c3df95b67dad571a5f535768e",
+      "state_or_branch": "Use the synthetic PULL_REQUESTS_PANEL_REF when capable environments exist; rightPanelAvailable at line 1047 requires a selected PR surface."
+    },
+    "workspace_width": {
+      "path": "apps/web/src/components/pullRequest/PullRequestsPage.tsx",
+      "symbol": "PullRequestsPage standalone PR width props",
+      "line": 1508,
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/pullRequest/PullRequestsPage.tsx#L1508",
+      "anchor_line_sha256": "a140a1f3454077fac39690d9cad76064146a83f00c4a4a04bda19bc9f98fd2b5",
+      "state_or_branch": "The standalone workspace uses t3code:pull-request-panel-width and a half-window default (640px server fallback), independently of chat thread widths."
+    },
+    "width_forward": {
+      "path": "apps/web/src/components/RightPanelTabs.tsx",
+      "symbol": "RightPanelTabs PreviewPanelShell props",
+      "line": 1335,
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/RightPanelTabs.tsx#L1335",
+      "anchor_line_sha256": "dd0131f1191d1081c94b127438f8202d385db8f494e9fe8438468e1b1072ccb7",
+      "state_or_branch": "Forward a supplied width storage key, default width, and inline size to the shared panel shell."
+    },
+    "diff_tree_storage_key": {
+      "path": "apps/web/src/components/pullRequest/PullRequestCodeTab.tsx",
+      "symbol": "PULL_REQUEST_FILE_TREE_STORAGE_KEY",
+      "line": 151,
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/pullRequest/PullRequestCodeTab.tsx#L151",
+      "anchor_line_sha256": "7184c78f9b3ce2931bae2b7f727ebfc9aea795ac2f9a298495161eef259e7a41",
+      "state_or_branch": "One unscoped localStorage key, t3code.pullRequestFileTreeOpen, shared by PR Code views."
+    },
+    "diff_tree_storage_binding": {
+      "path": "apps/web/src/components/pullRequest/PullRequestCodeTab.tsx",
+      "symbol": "PullRequestCodeTab.fileTreeOpen",
+      "line": 398,
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/pullRequest/PullRequestCodeTab.tsx#L398",
+      "anchor_line_sha256": "5db09f8e3a42e3d4db0bf9863b089831fbe9459f7bb03ec50cf32e053847df89",
+      "state_or_branch": "useLocalStorage reads and writes the shared Boolean key; default false. Closing the view does not clear it."
+    },
+    "storage_write": {
+      "path": "apps/web/src/hooks/useLocalStorage.ts",
+      "symbol": "useLocalStorage.setValue",
+      "line": 206,
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/hooks/useLocalStorage.ts#L206",
+      "anchor_line_sha256": "1ece718f4b8f943a85a3e3695a94b37a80263df63240f46bc7186ab21e440c0c",
+      "state_or_branch": "Setter invokes writeLocalStorageValue; it writes browser localStorage and dispatches a shared change event, without unmount cleanup."
+    }
+  },
+  "observation_sections": [
+    "PR view entry",
+    "PR details and sidebar handoff",
+    "Panel motion and settings inspection",
+    "Browser, links and keyboard scope"
+  ],
+  "source_anchors_validated": 59,
+  "cases": [
+    {
+      "id": "T3PR-LIVE-01",
+      "title": "Global PR entry, saved filters, and Escape return",
+      "runtime_status": "parent-native-verified",
+      "evidence_section": "PR view entry",
+      "observed": "The parent opened Pull requests and saw actual authored rows with repository, state, checks, conflicts, age, and diff counts. Selecting Merged changed the results and route to state=merged. Escape returned to the prior thread. Reopening restored Merged. The thread sidebar remained available. Final cleanup cleared the PR query and restored state Open with involvement All.",
+      "source_anchor_ids": [
+        "entry",
+        "route",
+        "filter",
+        "preferences",
+        "escape",
+        "select",
+        "workspace_scope"
+      ],
+      "source_state_transition": "The global utility action loads saved list preferences into /pull-requests. Filter changes update both storage and route search. The Escape observer returns through history only after other handlers decline the key. Selecting a PR creates the workspace detail target independently of the current thread panel.",
+      "ferrite_existing_findings": [
+        "pr-navigation-03"
+      ],
+      "ferrite_acceptance": [
+        "A PR entry must produce a visible, usable destination from the current context. A dedicated workspace, if implemented, retains its list scope independently of the selected detail.",
+        "Set Merged, leave the page, and return. The filter and displayed results agree. Escape closes a submenu before it leaves the workspace, and returning restores the previous thread and draft."
+      ],
+      "limits": [
+        "The right-panel control was disabled at the initial observed workspace state. This is not a claim that PR detail cannot open there. The source uses its own workspace panel ref and the parent subsequently opened detail.",
+        "Only the recorded state filter was executed. Other filter controls were exposed, not exhaustively exercised. The Escape fallback at a fresh history entry was not tested."
+      ]
+    },
+    {
+      "id": "T3PR-LIVE-02",
+      "title": "Plain search works; repo qualifiers are deliberately ignored",
+      "runtime_status": "parent-native-partial",
+      "evidence_section": "PR details and sidebar handoff",
+      "observed": "Plain ferrite produced Ferrite repository results. The repo:josephwylie/ferrite attempt left mixed results. The recorded native sequence did not establish exact submission timing.",
+      "source_anchor_ids": [
+        "search",
+        "repo_qualifier",
+        "route"
+      ],
+      "source_state_transition": "Typed text and submitted text are separate state, with a 250ms debounce and explicit submit. The parser intentionally discards repo:, org:, user:, sort:, is:, archived:, and state: qualifiers because UI scope owns them. It does not convert repo: into a repository filter.",
+      "ferrite_existing_findings": [
+        "pr-navigation-03"
+      ],
+      "ferrite_acceptance": [
+        "Document the supported search syntax next to the control. Either implement repository qualification or make its unsupported status visible rather than imply GitHub search semantics.",
+        "Apply repository/project scope through its visible control, then search plain text. Wait for the settled result and confirm every row belongs to the chosen scope."
+      ],
+      "limits": [
+        "Ignoring repo: is source-proven and consistent with mixed results. It is not proof of the exact runtime request, nor a newly certified T3 defect.",
+        "No unexecuted author, label, draft, review, or checks filter is promoted into a live pass."
+      ]
+    },
+    {
+      "id": "T3PR-LIVE-03",
+      "title": "Summary and Timeline load an explicit PR target",
+      "runtime_status": "parent-native-verified",
+      "evidence_section": "PR details and sidebar handoff",
+      "observed": "Opening merged Ferrite PR #246 showed its title, repository, branch pair, merged state, and a 194-file summary. Summary, Timeline, and Code were visible. Timeline showed real commits and review events.",
+      "source_anchor_ids": [
+        "select",
+        "reference",
+        "detail",
+        "timeline"
+      ],
+      "source_state_transition": "Row selection carries repository, number, selected project, environment, and host into panel and URL state. usePullRequestDetail reads detail and activity under that target. Timeline derives its events from the merged current detail rather than the selected thread checkout.",
+      "ferrite_existing_findings": [
+        "pr-navigation-02",
+        "pr-navigation-04"
+      ],
+      "ferrite_acceptance": [
+        "Open a known PR through both the sidebar and Overview. The visible native header, repository, number, status, description, and Timeline identify the clicked PR.",
+        "A stored native PR target must remain explicit. Reading whichever PR happens to belong to the current branch cannot satisfy a click on another repository or PR number."
+      ],
+      "limits": [
+        "This establishes one merged PR and its visible events. It does not establish complete comment pagination, review replies, resolution controls, checks details, or mutation support.",
+        "Ferrite native Summary and Timeline already worked through Overview in the earlier runtime correction. The repair target is the complete entry and target contract, not merely adding another PR component."
+      ]
+    },
+    {
+      "id": "T3PR-LIVE-04",
+      "title": "Code displays a real diff and discloses withheld content",
+      "runtime_status": "parent-native-verified",
+      "evidence_section": "PR details and sidebar handoff",
+      "observed": "Code showed 100 files and Some of this diff was not shown. Expanding Cargo.toml revealed a +3 -2 diff. Split layout and the file tree changed visibly. The parent later restored Stacked and the global file-tree preference to hidden, confirmed by the Show file tree control. Hidden Summary text remained in the accessibility observation while the screenshot showed the correct Code pane.",
+      "source_anchor_ids": [
+        "diff_scope",
+        "diff_warning",
+        "diff_layout",
+        "diff_tree",
+        "visible_tabs",
+        "diff_tree_storage_key",
+        "diff_tree_storage_binding",
+        "storage_write"
+      ],
+      "source_state_transition": "Code tracks paginated diff slices and flags truncated or raw slices. The warning discloses withheld host content. Layout updates client preferences and the tree toggle changes its own persisted state. Previously visited detail tabs remain mounted and receive invisible styling when unselected.",
+      "ferrite_existing_findings": [
+        "pr-operations-007"
+      ],
+      "ferrite_acceptance": [
+        "Render the selected file patch and confirm line counts and content against the actual fixture. Split and Stacked must change the patch layout, and the tree must navigate the intended file.",
+        "Disclose partial data and the reason. A total from Summary must not be presented as fully reviewed when the visible diff is incomplete.",
+        "Verify the visible pane with a fresh capture. Test keyboard focus and assistive access separately if hidden tab content remains exposed."
+      ],
+      "limits": [
+        "The 194-file summary versus 100-file Code view does not prove a fixed 100-file cap or that every remaining file is inaccessible. Cursor state, host truncation, raw slices, and further pagination were not captured.",
+        "The accessibility observation is not a certified screen-reader defect. CSS invisibility explains retained DOM, but actual assistive-tool behavior and hidden focusability were not exercised."
+      ]
+    },
+    {
+      "id": "T3PR-LIVE-05",
+      "title": "Link to thread adds a local association",
+      "runtime_status": "parent-native-verified",
+      "evidence_section": "PR details and sidebar handoff",
+      "observed": "Link to thread selected the disposable Calculator UI Audit. That thread gained a merged #246 badge. No checkout or GitHub write was performed. In the later native cleanup, the parent selected Unlink from this thread and confirmed the sidebar PR badge disappeared, then closed the PR tab.",
+      "source_anchor_ids": [
+        "link_picker",
+        "link_command",
+        "target"
+      ],
+      "source_state_transition": "The picker selects a thread in the same environment. usePullRequestLinking parses the URL and sends T3 thread.pull-request.link. The PR repository identity remains in the link. Later target resolution can use an appropriate project to read that host without treating the thread checkout as the PR identity.",
+      "ferrite_existing_findings": [
+        "pr-navigation-04"
+      ],
+      "ferrite_acceptance": [
+        "Associate the selected PR with the chosen audit thread and show its correct number and lifecycle. Verify the association after switching threads.",
+        "Keep thread ownership, checkout location, and remote PR identity separate. Linking must not silently checkout, publish, or mutate the remote PR."
+      ],
+      "limits": [
+        "Linking and later unlinking were exercised. Multiple linked PRs, cross-environment rejection, persistence across application restart, and linking failure were not tested.",
+        "Local T3 association is an application write. The no-remote-write statement concerns the forge and repository actions, not the absence of all local state changes."
+      ]
+    },
+    {
+      "id": "T3PR-LIVE-06",
+      "title": "Clicking another thread PR activates that thread and native detail",
+      "runtime_status": "parent-native-verified",
+      "evidence_section": "PR details and sidebar handoff",
+      "observed": "The parent activated the other disposable Sonnet thread, then clicked #246 on Calculator UI Audit. T3 selected Calculator UI Audit and opened its Workspace panel with the correct merged #246 native content.",
+      "source_anchor_ids": [
+        "badge",
+        "badge_wiring",
+        "open_result",
+        "link_open",
+        "target",
+        "identity",
+        "upsert",
+        "open_surface",
+        "activate_wiring",
+        "activate",
+        "badge_list"
+      ],
+      "source_state_transition": "The badge click passes the badge owner threadRef to the PR opener. The opener resolves and upserts the exact PR under that thread. Its successful native result returns true. handlePrClick then calls onThreadActivate for a non-route owner. Sidebar wires that callback to navigation using the same environment/thread pair.",
+      "ferrite_existing_findings": [
+        "pr-navigation-01",
+        "pr-navigation-02"
+      ],
+      "ferrite_acceptance": [
+        "Start on A with its panel hidden. Click the rendered PR badge owned by B. On that click, B becomes selected and the intended native PR destination becomes visible.",
+        "Assert selected thread, project, PR number, active tab, and actual loaded body. A hidden B panel state change while A remains selected fails.",
+        "Repeat with A panel open, B already selected, and rapid A/B navigation. Keep explicit clicks separate from automatic agent reveals so the repair does not steal focus from background work."
+      ],
+      "limits": [
+        "The parent verified one plain cross-thread badge click and correct native destination. Modifier clicks, missing URL, multiple-PR list badges, empty board, and unavailable targets remain untested.",
+        "Ferrite already reproduced the inverse path in pr-entry-runtime-correction.md. This T3 success supplies a real baseline; it does not rerun or close the Ferrite failure."
+      ]
+    },
+    {
+      "id": "T3PR-LIVE-07",
+      "title": "Closing the sole PR tab and reopening the badge",
+      "runtime_status": "parent-native-verified",
+      "evidence_section": "Panel motion and settings inspection",
+      "observed": "The parent closed the sole PR panel tab. The panel hid. Clicking the sidebar badge reopened the correct #246 native surface.",
+      "source_anchor_ids": [
+        "close_tab",
+        "identity",
+        "upsert",
+        "open_surface",
+        "badge"
+      ],
+      "source_state_transition": "closeSurface removes the requested tab and closes a panel with no remaining surfaces. Reopening through the badge upserts the explicit PR target, opens the panel, and selects that tab.",
+      "ferrite_existing_findings": [
+        "pr-navigation-02"
+      ],
+      "ferrite_acceptance": [
+        "Closing the last PR tab must close only that panel resource. The thread and unrelated draft remain available. Clicking its badge restores a usable native view of the same PR.",
+        "Reopening an already open PR activates its tab rather than duplicating it. Test this separately from last-tab closure."
+      ],
+      "limits": [
+        "The record confirms close and correct reopen, not PR scroll restoration, exact selected subtab restoration, data freshness, or application restart.",
+        "Duplicate prevention is source-supported and an acceptance requirement; it was not independently exercised in this sequence."
+      ]
+    },
+    {
+      "id": "T3PR-LIVE-08",
+      "title": "Panel visibility keeps the active resource and releases hidden focus",
+      "runtime_status": "parent-native-verified-browser-context",
+      "evidence_section": "Browser, links and keyboard scope",
+      "observed": "Command-Option-B hid and reopened the browser panel with its active tab retained. The unsent chat draft survived. Command-B hid and restored the left sidebar with composer focus.",
+      "source_anchor_ids": [
+        "hide_panel",
+        "inert",
+        "motion_presence"
+      ],
+      "source_state_transition": "Visibility changes isOpen without deleting tabs or activeSurfaceId. The panel collapse effect returns focus before setting inert. Retained exit content is restricted to the same thread scope.",
+      "ferrite_existing_findings": [
+        "panel-tools-018"
+      ],
+      "ferrite_acceptance": [
+        "Hide and restore a panel containing an active PR or browser and an unrelated composer draft. Restore the same resource and preserve the draft.",
+        "Once hidden, panel controls and the browser must not consume later keyboard input or pointer hits. Verify actual focus rather than only checking the open Boolean."
+      ],
+      "limits": [
+        "The retained-resource live observation used Browser. The equivalent PR visibility-toggle branch is source-supported but not separately observed here.",
+        "This does not establish process reclamation or memory behavior. Hiding a panel is not closing a browser session."
+      ]
+    },
+    {
+      "id": "T3PR-LIVE-09",
+      "title": "PR menus offer explicit destinations; right-click scope is specific",
+      "runtime_status": "native-sidebar-context-verified-list-detail-context-actions-source-only",
+      "evidence_section": "PR details and sidebar handoff",
+      "observed": "More pull request actions showed link, refresh, question, explain, fixes, open-on-host, copy, and revert. The parent exercised Link to thread and later Unlink from this thread. A later right-click on the sidebar PR badge opened the thread context menu, including New thread, Pin, Settle, Snooze, Rename, and Copy Thread actions; no PR-specific external-open action was present in that observed menu. No forge mutation or checkout was performed.",
+      "source_anchor_ids": [
+        "menu",
+        "external",
+        "context_items",
+        "context_row",
+        "context_crumb",
+        "badge_wiring"
+      ],
+      "source_state_transition": "The actions menu sends Open on host to shell.openExternal with detail.url. The workspace row number and detail breadcrumb have a custom right-click menu containing Copy link and Open on the provider host. The inspected sidebar badge has its click and anchor behavior but no dedicated PR context-menu handler in that component.",
+      "ferrite_existing_findings": [
+        "pr-navigation-02"
+      ],
+      "ferrite_acceptance": [
+        "Native PR entry and external open must be distinct, reliable actions. External open uses the URL of the PR being displayed, not a stale branch fact.",
+        "Right-click the workspace row number and detail number. Verify the offered external action opens the exact target. Audit the sidebar badge separately; do not infer identical menus across locations.",
+        "Keep Copy link, external open, and local thread association distinct. A link that underlines must perform its advertised navigation."
+      ],
+      "limits": [
+        "Sidebar PR right-click was observed and produced the thread menu. The PR-specific list/detail context menus and external opening were not executed; those remain source-supported acceptance checks.",
+        "The observed sidebar context menu must not be generalized to list/detail numbers or webpage links. Different locations have different handlers."
+      ]
+    },
+    {
+      "id": "T3PR-LIVE-10",
+      "title": "Refresh source reaches detail and activity; freshness is still untested live",
+      "runtime_status": "source-supported-not-runtime-executed",
+      "evidence_section": "PR details and sidebar handoff",
+      "observed": "Refresh was present in the PR actions menu. The current T3 ledger does not record a click against a changed response or observed freshness after refresh.",
+      "source_anchor_ids": [
+        "menu",
+        "refresh",
+        "code_refresh",
+        "detail"
+      ],
+      "source_state_transition": "The menu invokes refreshFromHost. Its refetch invalidates host cache, refreshes detail, activity, and stack, and increments a token that resets Code slices and refreshes viewed files. Checks use their own capability-gated query and refresh path.",
+      "ferrite_existing_findings": [
+        "pr-operations-001"
+      ],
+      "ferrite_acceptance": [
+        "With one PR open, change checks, body, and comments in a controlled read fixture while keeping its number and lifecycle unchanged. Trigger the actual visible refresh action.",
+        "The native detail must update all displayed data consistently. Verify real reads and resulting text. A spinner or refreshed sidebar badge cannot pass.",
+        "Keep old useful content visibly stale during a pending read and expose a recoverable error if refresh fails."
+      ],
+      "limits": [
+        "This report does not claim T3 refresh freshness was live verified. It records the exact source path and the missing live condition.",
+        "Ferrite stale refresh is already runtime-reproduced in both CI directions. Reopening or lifecycle changes worked there, so those recovery paths do not satisfy the failing same-identity refresh contract."
+      ]
+    },
+    {
+      "id": "T3PR-LIVE-11",
+      "title": "Default panel width is scoped and resize persistence is separate",
+      "runtime_status": "source-supported-no-T3-width-measurement",
+      "evidence_section": "Panel motion and settings inspection",
+      "observed": "The parent observed opening, closing, and reopening panels. No controlled T3 logical-pixel width sequence or manual-divider experiment is recorded in this slice.",
+      "source_anchor_ids": [
+        "right_width",
+        "width_scope",
+        "width_persist",
+        "left_width",
+        "motion_right",
+        "workspace_width",
+        "width_forward"
+      ],
+      "source_state_transition": "The chat right panel uses a per-thread width key and a 540px inline default. The standalone PR workspace instead uses t3code:pull-request-panel-width and a half-window default (640px server fallback). Both reach the shared 360px minimum, 70%-of-viewport cap, and container-minus-360px sibling cap, with the maximum kept at least the minimum. A drag commits saved width at its end. The left sidebar has a separate 256px default and its own bounds. These are CSS-pixel source values, not measurements of the parent screenshots.",
+      "ferrite_existing_findings": [
+        "panel-tools-018"
+      ],
+      "ferrite_acceptance": [
+        "Record the starting compact panel width. Visit Files or Changes and return to the same compact content without touching the divider. Recover the original compact width.",
+        "Repeat after closing the tool tab, hiding/reopening, emptying tabs, and restarting. A deliberate operator resize persists independently from a temporary tool minimum.",
+        "At narrow widths preserve a usable conversation or use a deliberate alternate layout. Do not silently turn an automatic expansion into the saved operator preference."
+      ],
+      "limits": [
+        "Do not convert the screenshot sidebar width into CSS pixels without a verified scale. This report makes no native T3 geometry measurement.",
+        "The 540px chat default and half-window standalone PR default are not universal design requirements for Ferrite. The relevant requirement is predictable sizing and separation of automatic limits from saved user intent.",
+        "Ferrite earlier reproduced 320px Overview becoming a persistent 864px panel after Files or Changes. That remains separate runtime evidence, not a measurement from T3."
+      ]
+    },
+    {
+      "id": "T3PR-LIVE-12",
+      "title": "Zero default and an actual animated sidebar close at 400ms",
+      "runtime_status": "parent-native-verified-close-only",
+      "evidence_section": "Panel motion and settings inspection",
+      "observed": "Appearance Advanced initially showed Panel animations at 0ms. The parent temporarily selected 400ms and captured a partially translated closing left sidebar before fully closed frames. Decrement stepped through 25ms intervals to zero. A later settings search showed zero. Opening and right-panel closing captures were already at their endpoints.",
+      "source_anchor_ids": [
+        "motion_default",
+        "motion_slider",
+        "motion_gate",
+        "motion_scope",
+        "motion_layout",
+        "motion_sidebar",
+        "motion_presence",
+        "motion_right"
+      ],
+      "source_state_transition": "The installed contract allows 0 to 400ms and defaults to zero. The slider writes 25ms steps. Positive duration activates motion only without reduced-motion or route suppression. Desktop sidebar gap width and fixed-body position transition together. The right panel separately retains same-thread exit content and animates visibility changes while suppressing unrelated width transitions.",
+      "ferrite_existing_findings": [
+        "motion-001",
+        "motion-002"
+      ],
+      "ferrite_acceptance": [
+        "At a chosen nonzero duration, record intermediate frames for both sidebar opening and closing. Closing content remains visible during the exit and becomes inert before hidden controls can receive input.",
+        "Test right-panel opening and closing separately. Rapid reversal must not leave blank content, invisible hit targets, or stale content from another thread.",
+        "Record the reduced-motion setting and verify the resulting behavior with an authorized controlled preference change. Restore the original app duration and confirm its displayed value."
+      ],
+      "limits": [
+        "Only the left-sidebar closing transition at 400ms is directly established. Opening interpolation, right-panel interpolation, timing accuracy, frame rate, and subjective smoothness remain unverified.",
+        "Reduced-motion suppression is source-proven here, not a live preference-toggle test. The settings preview is a separate widget and cannot substitute for actual sidebar motion.",
+        "The installed zero default does not negate the user report that Ferrite snaps. T3 proves a configurable animated close path; Ferrite acceptance should follow the desired product behavior rather than copy zero motion by default."
+      ]
+    }
+  ],
+  "case_count": 12,
+  "preference_boundaries": {
+    "source_anchor_ids": [
+      "pr_preference",
+      "proactive_preference",
+      "link_open"
+    ],
+    "observed_parent_message": "Ordinary browser links were set to external and proactive PR/Changes panels were off. Diff Split was restored to Stacked. The detailed ledger independently records Stacked restoration.",
+    "interpretation": "Ordinary browser link destination, in-app PR routing, and automatic panel reveals are separate settings. A proactive-off setting must not disable an explicit badge click. The native cross-thread result proves the exercised PR route succeeded, not every preference combination."
+  },
+  "ferrite_evidence_reports": [
+    "docs/audits/2026-11-13-t3-parity/reports/pr-entry-runtime-correction.md",
+    "docs/audits/2026-11-13-t3-parity/reports/panel-runtime-correction.md",
+    "docs/audits/2026-11-13-t3-parity/reports/pr-navigation.md",
+    "docs/audits/2026-11-13-t3-parity/reports/pr-operations.md",
+    "docs/audits/2026-11-13-t3-parity/reports/motion.md"
+  ],
+  "provenance_report": "docs/audits/2026-11-13-t3-parity/reports/t3-installed-source-match.md",
+  "scope_limits": [
+    "No live UI action by this worker. Parent observations are attributed rather than rerun.",
+    "No app code, live ledger, checklist, installed app, source checkout, credentials, or fixture was changed.",
+    "No model worker, app, server, test, typecheck, build, or delegate was started. Only finite read-only source collection commands ran and exited.",
+    "No new consolidated Ferrite finding IDs or severity promotions. T3 evidence does not close Ferrite failures.",
+    "Two guessed source paths returned 404. Those path guesses are retained as collection metadata, not interpreted as missing capabilities.",
+    "Inline native screenshots are conversation evidence. They were not exported by this worker and no PNG path is fabricated."
+  ],
+  "principle_application": {
+    "name": "Prove It Works",
+    "source": "/Users/josephwylie/.codex/pstack/skills/principle-prove-it-works/SKILL.md",
+    "choice": "Only the parent-observed completion is marked verified. Menu visibility, source presence, endpoint screenshots, and static data cannot establish execution, interpolation, or freshness."
+  },
+  "collected_at_local_date": "2026-11-14",
+  "validation": {
+    "kind": "artifact-and-source-integrity",
+    "tests_or_builds_run": false,
+    "successful_source_files": 45,
+    "source_collection_404s": 2,
+    "exact_commit_line_anchors_checked": 59,
+    "all_case_anchor_ids_resolve": true,
+    "all_anchors_used": true,
+    "case_count": 12,
+    "follow_up_source_line_anchors_checked": 3,
+    "observation_fingerprint_current_at_initial_write": true,
+    "follow_up_evidence_origin": "Final parent native cleanup recorded in the live observation ledger.",
+    "observation_fingerprint_current_at_final_reconciliation": true,
+    "cleanup_restoration_status": "verified_parent_native_restore"
+  },
+  "markdown_sha256": "dfb16d6ea6711eaff5d5d6d7157d5b284a0fd805c844c56f70d8972f3cf8e60f",
+  "provider_boundaries": {
+    "source_anchor_ids": [
+      "link_open",
+      "target",
+      "detail"
+    ],
+    "interpretation": "These PR paths use shared UI plus environment and forge capabilities. Moving from the other Sonnet thread into Calculator demonstrates target ownership across those thread contexts; it does not establish a model-specific PR capability or certify every provider/host combination. Detail checks have their own capability gate."
+  },
+  "addenda": [
+    {
+      "id": "T3PR-CLEANUP-01",
+      "evidence_owner": "parent native observations recorded in the live ledger",
+      "observed": [
+        "Sidebar PR right-click opened the thread context menu with no PR-specific open action.",
+        "PR #246 was unlinked from the disposable Sol thread; the sidebar badge disappeared and the PR tab was closed.",
+        "Global PR file-tree visibility was restored to hidden, with Show file tree visible.",
+        "Global diff layout was restored to Stacked. The PR query was empty, state Open, and involvement All.",
+        "The ledger records both disposable roots archived using normal UI; this worker did not independently inspect archive state."
+      ],
+      "source_anchor_ids": [
+        "diff_tree_storage_key",
+        "diff_tree_storage_binding",
+        "storage_write",
+        "diff_tree",
+        "link_command",
+        "context_items",
+        "context_row",
+        "context_crumb"
+      ],
+      "cleanup_required": {
+        "setting": "PR Code file-tree visibility",
+        "key": "t3code.pullRequestFileTreeOpen",
+        "scope": "global within app renderer localStorage; not per PR or thread",
+        "initial_state": "hidden",
+        "test_state": "visible",
+        "required_restore": "Open any PR Code view and use Hide file tree until the control reads Show file tree. Closing its tab or archiving the thread does not restore this preference.",
+        "status": "verified_parent_native_restore",
+        "restored_state": "hidden",
+        "verification": "The parent observed Show file tree after restoring the hidden state; recorded in the final cleanup ledger."
+      },
+      "limits": [
+        "No UI or storage mutation by this worker.",
+        "This records actual sidebar menu contents; it does not assert every PR affordance has this menu.",
+        "Cleanup is verified only for the recorded controls and association. The single observed cross-thread click does not certify all PR states, modifiers, targets, or remote actions."
+      ],
+      "evidence_section": "Final child-output recheck and cleanup"
+    }
+  ],
+  "initial_observation_sha256": "84110d13782dce479d9c9207bc38b9b2c1f186d6d759056c0327c202f6a312c0"
+}

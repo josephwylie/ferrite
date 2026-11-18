@@ -11,7 +11,7 @@ use std::sync::{Arc, Mutex};
 
 use crate::engine::{Preparation, RssSampler, SpawnRequest, Spawner};
 use crate::providers::{
-    ClaudeConfig, ClaudeSession, CodexConfig, CodexSession, Session, SettingAck,
+    ClaudeConfig, ClaudeSession, CodexConfig, CodexSession, ResumeRefused, Session, SettingAck,
 };
 use crate::session::SessionLifecycle;
 use crate::settings::Settings;
@@ -242,16 +242,18 @@ enum SessionConfig {
 impl SessionConfig {
     fn spawn(self, defaults: Arc<Mutex<SessionDefaults>>) -> io::Result<Box<dyn Session + Send>> {
         let (provider, inner): (Provider, Box<dyn Session + Send>) = match self {
-            SessionConfig::Claude(config) => (
-                Provider::Claude,
-                Box::new(
-                    ClaudeSession::spawn(config).map_err(|e| io::Error::other(e.to_string()))?,
-                ),
-            ),
-            SessionConfig::Codex(config) => (
-                Provider::Codex,
-                Box::new(CodexSession::spawn(config).map_err(|e| io::Error::other(e.to_string()))?),
-            ),
+            SessionConfig::Claude(config) => {
+                let resuming = config.resume.is_some();
+                let session = ClaudeSession::spawn(config)
+                    .map_err(|e| ResumeRefused::error(resuming, e.to_string()))?;
+                (Provider::Claude, Box::new(session))
+            }
+            SessionConfig::Codex(config) => {
+                let resuming = config.resume.is_some();
+                let session = CodexSession::spawn(config)
+                    .map_err(|e| ResumeRefused::error(resuming, e.to_string()))?;
+                (Provider::Codex, Box::new(session))
+            }
         };
         Ok(Box::new(SessionWithDefaults {
             inner,
@@ -281,6 +283,10 @@ impl Session for SessionWithDefaults {
 
     fn permission_modes(&self) -> Vec<crate::PermissionModeChoice> {
         self.inner.permission_modes()
+    }
+
+    fn sandbox(&self) -> Option<String> {
+        self.inner.sandbox()
     }
 
     fn set_model(&mut self, model: Option<&str>) -> io::Result<SettingAck> {
@@ -862,7 +868,7 @@ mod tests {
                 )
                 .unwrap();
             cockpit.pump();
-            cockpit.send(thread, "first turn".into());
+            let _ = cockpit.send(thread, "first turn".into());
             cockpit.pump();
             cockpit.set_model(thread, Some("selected".into())).unwrap();
             assert_eq!(
@@ -888,7 +894,7 @@ mod tests {
                 cockpit.peek(thread).unwrap().model.as_deref(),
                 Some("selected")
             );
-            cockpit.send(thread, "after rejected model change".into());
+            let _ = cockpit.send(thread, "after rejected model change".into());
             cockpit.pump();
             assert_eq!(
                 cockpit.thread(thread).unwrap().transcript().session_id(),

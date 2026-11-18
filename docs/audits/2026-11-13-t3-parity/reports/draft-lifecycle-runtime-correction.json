@@ -1,0 +1,205 @@
+{
+  "source_commit": "62947f91d5cd6ee494aaae9ed09d794a853e5bab",
+  "binary_sha256": "8f47873505f48c90a267ef5b02913a345b72e390d17b78cd3a72c552497a2b98",
+  "store": "/tmp/ferrite-audit-runtime-8ckr_nxp/threads",
+  "environment": "production Cockpit headless fixed1440x900, fakeClaude9999, noCEF",
+  "cases": [
+    {
+      "id": "draft-lifecycle-runtime-01",
+      "existing_finding": "composer-02",
+      "title": "New unsent draft is not restored after window restart",
+      "status": "runtime-reproduced",
+      "severity": "high",
+      "precondition": "Existing thread draft control persisted and restored; fresh Cmd+N draft visibly held UNSENT_DRAFT_SENTINEL before restart",
+      "actual": "drafts.json saved only existing-thread text; window-only restart restored control, and Cmd+N was blank",
+      "expected": "New drafts remain recoverable before first send",
+      "command_log_lines": [
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12,
+        13,
+        14,
+        15,
+        16
+      ],
+      "captures": [
+        "02-existing-draft-before.png",
+        "03-unsent-draft-before.png",
+        "04-after-window-restart.png",
+        "05-existing-draft-restored.png",
+        "06-new-draft-after-restart.png"
+      ],
+      "state_files": [
+        "drafts-before-restart.json"
+      ],
+      "assertion_case": "new-draft",
+      "tested": [
+        "plain text",
+        "one existing thread control",
+        "one new unsent draft",
+        "autosave delay",
+        "window-only process restart with server/provider kept alive"
+      ],
+      "not_tested": [
+        "normal Quit action",
+        "multiple new drafts",
+        "attachments/model/checkout recovery",
+        "first-send promotion"
+      ],
+      "capture_directory": "../evidence/draft-lifecycle-correction/",
+      "evidence_check_command": "python3 docs/audits/2026-11-13-t3-parity/evidence/draft-lifecycle-correction/assert-contract.py new-draft",
+      "evidence_check_exit_code": 1,
+      "evidence_check_kind": "assertion against retained runtime captures, not a fresh replay"
+    },
+    {
+      "id": "draft-lifecycle-runtime-02",
+      "existing_finding": "composer-04",
+      "title": "Queued Edit cancels one item and combines its text with another draft",
+      "status": "runtime-reproduced",
+      "severity": "high",
+      "precondition": "Fresh thread 2 busy, queue count 1, separate composer UNRELATED_DRAFT, rendered queued-edit-0 present",
+      "actual": "Click triggered provider cancellation for exact UUID, queue count became 0, composer saved QUEUED_SENTINEL\\n\\nUNRELATED_DRAFT",
+      "expected": "Edit preserves queue identity and unrelated draft until explicit save/cancel",
+      "queued_uuid": "00013cb0-0004-4000-8006-983931946a80",
+      "command_log_lines": [
+        28,
+        29,
+        30,
+        31,
+        32,
+        33,
+        34,
+        35,
+        36,
+        37,
+        38,
+        39,
+        40
+      ],
+      "captures": [
+        "08-queue-before-edit-valid.png",
+        "09-queue-after-edit.png"
+      ],
+      "state_files": [
+        "queue-before-edit.json",
+        "queue-after-edit.json",
+        "drafts-before-queue-edit.json",
+        "drafts-after-queue-edit.json",
+        "provider-host.jsonl"
+      ],
+      "assertion_case": "queue-edit",
+      "tested": [
+        "single native queued prompt",
+        "controlled busy turn",
+        "actual UI pencil click",
+        "provider acknowledgement",
+        "both text identities",
+        "queue count before and after"
+      ],
+      "not_tested": [
+        "multiple queued prompts and order",
+        "resubmission",
+        "provider starts prompt while editor open",
+        "save/cancel flow since none was presented"
+      ],
+      "excluded_setup": "Thread 1 lacked msg_lifecycle_v1; queue was refused and text retained. Capture 07 and lines17\u201327 are not a product defect.",
+      "capture_directory": "../evidence/draft-lifecycle-correction/",
+      "evidence_check_command": "python3 docs/audits/2026-11-13-t3-parity/evidence/draft-lifecycle-correction/assert-contract.py queue-edit",
+      "evidence_check_exit_code": 1,
+      "evidence_check_kind": "assertion against retained runtime captures, not a fresh replay"
+    },
+    {
+      "id": "draft-lifecycle-runtime-03",
+      "existing_finding": null,
+      "title": "Reopen closed SideChat returns tab with no content or input",
+      "status": "runtime-reproduced",
+      "severity": "high",
+      "precondition": "Actual selection-side-chat click opened tab with header/conversation/composer; typed side draft visible; child thread4 existed",
+      "actual": "Close retired child4; palette Reopen closed surface restored tab identity only; body/head/composer absent after settled recapture and explicit activation",
+      "expected": "Reopened SideChat restores working content and draft or does not offer a dead reopen action",
+      "command_log_lines": [
+        41,
+        42,
+        43,
+        44,
+        45,
+        46,
+        47,
+        48,
+        49,
+        50,
+        51,
+        52,
+        53,
+        54,
+        55,
+        56,
+        57,
+        58,
+        59,
+        60,
+        61,
+        62,
+        63,
+        64,
+        65,
+        66,
+        67,
+        68,
+        69,
+        70,
+        71,
+        72,
+        73,
+        74,
+        75
+      ],
+      "captures": [
+        "13-sidechat-open.png",
+        "14-sidechat-draft-before-close.png",
+        "15-sidechat-draft-confirmed.png",
+        "16-sidechat-closed.png",
+        "17-sidechat-reopen-palette.png",
+        "18-sidechat-reopened.png",
+        "19-sidechat-reopened-settled.png"
+      ],
+      "state_files": [
+        "commands.jsonl"
+      ],
+      "assertion_case": "sidechat-reopen",
+      "tested": [
+        "selection opener",
+        "forked child object creation",
+        "side composer input",
+        "tab close",
+        "actual Cmd+K palette reopen",
+        "tab reactivation",
+        "settled blank body",
+        "child removal"
+      ],
+      "not_tested": [
+        "side-chat turn submission",
+        "real-provider fork continuity",
+        "completed side-chat reply restore",
+        "Cmd+W targeting",
+        "reopening other surface types"
+      ],
+      "capture_directory": "../evidence/draft-lifecycle-correction/",
+      "evidence_check_command": "python3 docs/audits/2026-11-13-t3-parity/evidence/draft-lifecycle-correction/assert-contract.py sidechat-reopen",
+      "evidence_check_exit_code": 1,
+      "evidence_check_kind": "assertion against retained runtime captures, not a fresh replay"
+    }
+  ],
+  "cleanup": "../evidence/draft-lifecycle-correction/cleanup.json",
+  "cleanup_complete": true,
+  "application_source_edits": false,
+  "builds_or_rust_tests": false,
+  "real_model_prompts": false,
+  "report": "draft-lifecycle-runtime-correction.md"
+}

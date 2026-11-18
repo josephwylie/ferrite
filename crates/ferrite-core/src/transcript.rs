@@ -19,7 +19,10 @@ pub use tools::display_tool_name;
 use tools::{result_summary, tool_summary};
 
 /// A Block's identity, stable for as long as the Block lives.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, serde::Serialize, serde::Deserialize,
+)]
+#[serde(transparent)]
 pub struct BlockId(u64);
 
 /// One rendered unit of the transcript.
@@ -99,6 +102,11 @@ pub enum Body {
     /// The provider compacting the context, and once it has, what it
     /// reported (T3's compaction divider).
     Compaction(Compaction),
+    /// The plan a completed turn ended on, its steps as they stood: the
+    /// checklist the live task card takes away when the turn settles, kept
+    /// inside the turn's fold so the reader can check what was done and
+    /// what was left.
+    Plan(Vec<crate::progress::PlanStep>),
 }
 
 /// A context compaction: running until the provider moves on, then what
@@ -176,6 +184,23 @@ pub fn format_tokens(count: u64) -> String {
         _ => fixed,
     };
     format!("{fixed}{unit}")
+}
+
+/// A kept plan as copy and search read it: a line a step, its status first.
+pub fn plan_text(steps: &[crate::progress::PlanStep]) -> String {
+    use crate::progress::StepStatus;
+    steps
+        .iter()
+        .map(|step| {
+            let mark = match step.status {
+                StepStatus::Completed => "done",
+                StepStatus::InProgress => "in progress",
+                StepStatus::Pending => "pending",
+            };
+            format!("{mark}: {}", step.text)
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 /// The row a finished turn leaves behind.
@@ -1046,6 +1071,9 @@ pub struct Transcript {
     /// How each user hook the CLI ran ended, by id (`None` while it runs):
     /// the name and the outcome (HD18).
     hooks: std::collections::BTreeMap<String, (String, Option<String>)>,
+    /// Background tasks the provider refused to stop, by task id: how many
+    /// times, and the last reason. Live only.
+    stop_refusals: std::collections::BTreeMap<String, (u32, String)>,
     /// When the running turn began — the operator's prompt went out — for
     /// the working line's clock. None between turns.
     turn_started: Option<std::time::Instant>,
@@ -1088,6 +1116,9 @@ pub struct Transcript {
     /// The latest `Input::ClockObservation`'s stamp: what a new block's
     /// `at` reads.
     clock: Option<String>,
+    /// The oldest Blocks were dropped, by the Block limit or the owner's
+    /// content budget: what shows is not where the conversation began.
+    earlier_dropped: bool,
 }
 
 /// A test runner's progress, read off its output one complete line at a
@@ -1381,6 +1412,7 @@ impl Transcript {
             cli_version: None,
             cli_tools: Vec::new(),
             hooks: Default::default(),
+            stop_refusals: Default::default(),
             turn_started: None,
             turn_output_tokens: 0,
             last_report: 0,
@@ -1400,7 +1432,21 @@ impl Transcript {
             reasoning_parts: Default::default(),
             orphan_results: Vec::new(),
             clock: None,
+            earlier_dropped: false,
         }
+    }
+
+    /// Whether the oldest Blocks were dropped to keep the rest: the Thread
+    /// began before the first Block here. A rewind's cut does not count, it
+    /// removes the end.
+    pub fn earlier_dropped(&self) -> bool {
+        self.earlier_dropped
+    }
+
+    /// Record a drop the owner made beyond this Transcript's sight: it
+    /// rebuilt the Blocks from the records it kept.
+    pub(crate) fn mark_earlier_dropped(&mut self) {
+        self.earlier_dropped = true;
     }
 
     /// The latest clock observation's stamp, which new blocks are stamped
@@ -1613,6 +1659,15 @@ impl Transcript {
             .map(|(name, outcome)| (name.as_str(), outcome.as_deref()))
     }
 
+    /// How many times the provider has refused to stop background task
+    /// `id`, and why the last time. A caller that sent a stop compares the
+    /// count with the one it saw before, to learn its own was refused.
+    pub fn stop_refusal(&self, id: &str) -> Option<(u32, &str)> {
+        self.stop_refusals
+            .get(id)
+            .map(|(count, why)| (*count, why.as_str()))
+    }
+
     /// The tools the CLI had loaded, when the live Session announced them
     /// (HD14): what the model could call, never inferred from what it did.
     pub fn cli_tools(&self) -> &[String] {
@@ -1796,6 +1851,7 @@ impl Transcript {
         // trims.
         let trimmed = self.evict();
         if !trimmed.is_empty() {
+            self.earlier_dropped = true;
             self.forget_evicted();
             update.evicted.extend(trimmed);
         }
@@ -1813,6 +1869,7 @@ impl Transcript {
             return Update::default();
         }
         let evicted = self.blocks.drain(..end).map(|block| block.id).collect();
+        self.earlier_dropped = true;
         if self.section.block().is_some_and(|open| open <= through) {
             self.section.clear();
         }
@@ -2272,6 +2329,13 @@ impl Transcript {
                 self.hooks.insert(id, (name, outcome));
                 Update::default()
             }
+            Input::Event(SessionEvent::ControlRefused { control, message }) => {
+                if let crate::SessionControl::StopTask { id } = control {
+                    let refusals = self.stop_refusals.entry(id).or_default();
+                    *refusals = (refusals.0 + 1, message);
+                }
+                Update::default()
+            }
             Input::Event(SessionEvent::Handshake { version, tools }) => {
                 self.cli_version = Some(version);
                 self.cli_tools = tools;
@@ -2317,6 +2381,7 @@ impl Transcript {
             Input::Revived => {
                 self.mcp_servers.clear();
                 self.mcp_authorizations.clear();
+                self.stop_refusals.clear();
                 self.progress.disconnected();
                 self.mcp_servers.clear();
                 self.turn_started = None;
@@ -2689,7 +2754,11 @@ impl Transcript {
                     // The cost is kept (`last_cost`) but never rendered —
                     // no dollar value appears anywhere (#22 operator
                     // amendment); a completed turn ends without a row.
-                    TurnOutcome::Completed => {}
+                    TurnOutcome::Completed => {
+                        if self.progress.plan_touched && !self.progress.plan.is_empty() {
+                            dirty.push(self.push(Body::Plan(self.progress.plan.clone())));
+                        }
+                    }
                     TurnOutcome::Interrupted => dirty.push(self.push(Body::TurnEnd(TurnEnd {
                         outcome: TurnOutcome::Interrupted,
                         elapsed_ms: None,
@@ -3326,6 +3395,7 @@ pub fn plain_text(blocks: &[Block]) -> String {
             Body::Notice(text) | Body::Meta(text) => text.clone(),
             Body::TurnEnd(end) => end.text(),
             Body::Compaction(compaction) => compaction.text(),
+            Body::Plan(steps) => plan_text(steps),
             // The page is a picture; its words are its title and caption.
             Body::Visual(visual) => format!("● Visual ({})", visual.text().replace('\n', " · ")),
             Body::WrapUp(wrap) => wrap.text(),
@@ -4028,6 +4098,7 @@ mod tests {
             Body::Notice(text) | Body::Meta(text) => text.clone(),
             Body::TurnEnd(end) => end.text(),
             Body::Compaction(compaction) => compaction.text(),
+            Body::Plan(steps) => plan_text(steps),
             Body::Visual(visual) => visual.text(),
             Body::WrapUp(wrap) => wrap.text(),
         }
@@ -5447,6 +5518,35 @@ mod tests {
         assert_eq!(update.evicted, vec![oldest]);
         assert_eq!(transcript.blocks().len(), 2);
         assert_eq!(body_text(&transcript.blocks()[0]), "two");
+    }
+
+    /// The long-history boundary (transcript-002): a Thread past
+    /// `DEFAULT_CAPACITY` blocks drops its oldest, and the Transcript says
+    /// so, for the pane to show where the kept history starts.
+    #[test]
+    fn a_history_past_the_cap_records_that_its_start_was_dropped() {
+        let mut transcript = Transcript::default();
+        assert!(!transcript.earlier_dropped());
+        let mut evicted = 0;
+        for n in 0..DEFAULT_CAPACITY {
+            evicted += transcript
+                .apply(Input::Prompt(format!("question {n}")))
+                .evicted
+                .len();
+        }
+        assert_eq!(evicted, 0);
+        assert!(!transcript.earlier_dropped(), "everything still fits");
+
+        for n in DEFAULT_CAPACITY..DEFAULT_CAPACITY + 100 {
+            evicted += transcript
+                .apply(Input::Prompt(format!("question {n}")))
+                .evicted
+                .len();
+        }
+        assert_eq!(transcript.blocks().len(), DEFAULT_CAPACITY);
+        assert_eq!(evicted, 100);
+        assert_eq!(body_text(&transcript.blocks()[0]), "question 100");
+        assert!(transcript.earlier_dropped());
     }
 
     /// The memory claim behind a cockpit left running all day: a Thread that

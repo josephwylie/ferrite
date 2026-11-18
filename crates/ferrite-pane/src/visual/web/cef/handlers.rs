@@ -15,7 +15,7 @@ use std::sync::{Arc, Mutex};
 use cef::*;
 
 use super::{document, input, Global, PageDoc, ViewState, MAX_HEIGHT, SCHEME};
-use crate::visual::web::Frame as WebFrame;
+use crate::visual::web::{DialogKind, DialogRequest, Frame as WebFrame, PageContext};
 
 /// The native cursor `on_cursor_change` is handed (unused: the view reports
 /// the cursor's kind, and the host draws its own).
@@ -85,7 +85,12 @@ wrap_app! {
             // isolated packaged smoke opts into Chromium's mock implementation.
             command_line.remove_switch(Some(&"use-mock-keychain".into()));
             if cfg!(target_os = "macos")
-                && std::env::args().any(|argument| argument == "--visual-smoke")
+                && std::env::args().any(|argument| {
+                    argument == "--visual-smoke"
+                        || (cfg!(feature = "browser-smoke")
+                            && argument == "--browser-window-smoke"
+                            && std::env::var_os("FERRITE_BROWSER_PROFILE").is_some())
+                })
                 && std::env::var("FERRITE_BROWSER_SMOKE_MOCK_KEYCHAIN").as_deref() == Ok("1")
             {
                 command_line.append_switch(Some(&"use-mock-keychain".into()));
@@ -159,10 +164,10 @@ pub(super) fn client(
         ViewRender::new(state.clone(), generation),
         ViewDisplay::new(state.clone(), generation),
         ViewLoad::new(state.clone(), generation),
-        ViewLifeSpan::new(global),
+        ViewLifeSpan::new(global, state.clone(), generation),
         ViewRequests::new(page, state.clone(), generation),
-        NoContextMenu::new(),
-        NoDialogs::new(state, generation),
+        PageContextMenu::new(state.clone(), generation),
+        PageDialogs::new(state, generation),
     )
 }
 
@@ -378,19 +383,23 @@ wrap_display_handler! {
 wrap_life_span_handler! {
     struct ViewLifeSpan {
         global: Arc<Global>,
+        state: Arc<ViewState>,
+        generation: u64,
     }
 
     impl LifeSpanHandler {
-        /// No popups, ever (`window.open`, `target=_blank`).
+        /// Never a native popup window. A website's own window request
+        /// (`window.open`, `target=_blank`) becomes a page the host opens in
+        /// a tab; a sealed visual gets nothing.
         fn on_before_popup(
             &self,
             _browser: Option<&mut Browser>,
             _frame: Option<&mut Frame>,
             _popup_id: ::std::os::raw::c_int,
-            _target_url: Option<&CefString>,
+            target_url: Option<&CefString>,
             _target_frame_name: Option<&CefString>,
             _target_disposition: WindowOpenDisposition,
-            _user_gesture: ::std::os::raw::c_int,
+            user_gesture: ::std::os::raw::c_int,
             _popup_features: Option<&PopupFeatures>,
             _window_info: Option<&mut WindowInfo>,
             _client: Option<&mut Option<Client>>,
@@ -398,6 +407,9 @@ wrap_life_span_handler! {
             _extra_info: Option<&mut Option<DictionaryValue>>,
             _no_javascript_access: Option<&mut ::std::os::raw::c_int>,
         ) -> ::std::os::raw::c_int {
+            if user_gesture != 0 {
+                self.state.request_window(self.generation, target_url);
+            }
             1
         }
 
@@ -439,14 +451,18 @@ wrap_request_handler! {
             } else { (without_fragment(&url) != self.page.url) as i32 }
         }
 
+        /// A link that asks for another tab (middle-click, modified click).
         fn on_open_urlfrom_tab(
             &self,
             _browser: Option<&mut Browser>,
             _frame: Option<&mut Frame>,
-            _target_url: Option<&CefString>,
+            target_url: Option<&CefString>,
             _target_disposition: WindowOpenDisposition,
-            _user_gesture: ::std::os::raw::c_int,
+            user_gesture: ::std::os::raw::c_int,
         ) -> ::std::os::raw::c_int {
+            if user_gesture != 0 {
+                self.state.request_window(self.generation, target_url);
+            }
             1
         }
 
@@ -587,18 +603,30 @@ wrap_resource_handler! {
 // Native UI the page must not summon off-screen.
 
 wrap_context_menu_handler! {
-    struct NoContextMenu;
+    struct PageContextMenu { state: Arc<ViewState>, generation: u64 }
 
     impl ContextMenuHandler {
+        /// Chromium's own menu never shows off-screen. A website page reports
+        /// what was clicked so the host can offer its own actions.
         fn on_before_context_menu(
             &self,
             _browser: Option<&mut Browser>,
             _frame: Option<&mut Frame>,
-            _params: Option<&mut ContextMenuParams>,
+            params: Option<&mut ContextMenuParams>,
             model: Option<&mut MenuModel>,
         ) {
             if let Some(model) = model {
                 model.clear();
+            }
+            if let Some(params) = params {
+                let text = |value: CefStringUserfree| {
+                    Some(CefString::from(&value).to_string()).filter(|text| !text.is_empty())
+                };
+                let context = PageContext {
+                    link: text(params.unfiltered_link_url()).filter(|link| external_url(link)),
+                    selection: text(params.selection_text()),
+                };
+                self.state.page_context(self.generation, context);
             }
         }
     }
@@ -641,24 +669,41 @@ wrap_load_handler! {
 }
 
 wrap_jsdialog_handler! {
-    struct NoDialogs { state: Arc<ViewState>, generation: u64 }
+    struct PageDialogs { state: Arc<ViewState>, generation: u64 }
 
     impl JsdialogHandler {
-        /// `alert`/`confirm`/`prompt`: suppressed (as if dismissed).
+        /// `alert`/`confirm`/`prompt`. A website's dialog is held for the host
+        /// to show and answer; a sealed visual's is suppressed (as if dismissed).
         fn on_jsdialog(
             &self,
             _browser: Option<&mut Browser>,
-            _origin_url: Option<&CefString>,
-            _dialog_type: JsdialogType,
-            _message_text: Option<&CefString>,
-            _default_prompt_text: Option<&CefString>,
-            _callback: Option<&mut JsdialogCallback>,
+            origin_url: Option<&CefString>,
+            dialog_type: JsdialogType,
+            message_text: Option<&CefString>,
+            default_prompt_text: Option<&CefString>,
+            callback: Option<&mut JsdialogCallback>,
             suppress_message: Option<&mut ::std::os::raw::c_int>,
         ) -> ::std::os::raw::c_int {
-            if let Some(suppress_message) = suppress_message {
-                *suppress_message = 1;
-            }
-            0
+            let (true, Some(callback)) = (self.state.external, callback) else {
+                if let Some(suppress_message) = suppress_message {
+                    *suppress_message = 1;
+                }
+                return 0;
+            };
+            let text = |value: Option<&CefString>| value.map(ToString::to_string).unwrap_or_default();
+            let request = DialogRequest {
+                origin: dialog_origin(&text(origin_url)),
+                kind: if dialog_type == JsdialogType::PROMPT {
+                    DialogKind::Prompt { default: text(default_prompt_text) }
+                } else if dialog_type == JsdialogType::CONFIRM {
+                    DialogKind::Confirm
+                } else {
+                    DialogKind::Alert
+                },
+                message: text(message_text),
+            };
+            self.state.hold_dialog(self.generation, request, callback.clone());
+            1
         }
 
         fn on_before_unload_dialog(
@@ -676,7 +721,22 @@ wrap_jsdialog_handler! {
             }
             1
         }
+
+        /// The page navigated or closed under its dialog.
+        fn on_reset_dialog_state(&self, _browser: Option<&mut Browser>) {
+            self.state.drop_dialog(self.generation);
+        }
     }
+}
+
+/// `https://site.example` for the page that raised a dialog: the site, never
+/// its path or query.
+fn dialog_origin(url: &str) -> String {
+    url::Url::parse(url)
+        .map(|url| url.origin().ascii_serialization())
+        .ok()
+        .filter(|origin| origin != "null")
+        .unwrap_or_else(|| url.to_owned())
 }
 
 /// The bundled font a request names: `ferrite-view://page/font/…`.
@@ -695,4 +755,24 @@ fn without_fragment(url: &str) -> &str {
 /// application protocols. CEF's default network loader handles only web URLs.
 pub(super) fn external_url(url: &str) -> bool {
     ferrite_core::browser::validate_url(url).is_ok()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::dialog_origin;
+
+    #[test]
+    fn a_dialog_names_the_site_never_its_path() {
+        assert_eq!(
+            dialog_origin("https://site.example:8443/a/b?q=1#x"),
+            "https://site.example:8443"
+        );
+        assert_eq!(dialog_origin("http://localhost:5173/start"), "http://localhost:5173");
+    }
+
+    #[test]
+    fn an_opaque_origin_falls_back_to_the_url() {
+        assert_eq!(dialog_origin("data:text/html,hi"), "data:text/html,hi");
+        assert_eq!(dialog_origin("not a url"), "not a url");
+    }
 }

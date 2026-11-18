@@ -1,0 +1,902 @@
+{
+  "goal": "Match parent-observed installed T3 browser journeys to exact source and existing Ferrite findings with observable acceptance.",
+  "scope": "Bounded source correspondence. No UI, models, fixture edits, tests, builds, or full repeat audit.",
+  "recorded_at": "2026-11-13T15:04:14.325476+00:00",
+  "installed": {
+    "version": "0.1.10-nightly.20261111.4544",
+    "commit": "1264c206aee0dce805d6279809118bc091f29d2f",
+    "provenance_report": "t3-installed-source-match.md"
+  },
+  "comparison": {
+    "path": "/tmp/ferrite-t3-audit-source-20261113",
+    "commit": "74573fc29b901bafbf8f1dbb2eb29606da1fa448",
+    "use": "Byte comparison only. Installed citations take precedence."
+  },
+  "evidence": {
+    "observations": "../evidence/t3-live/observations.md",
+    "observations_sha256": "ff336b32e123050cd23a0d4c346cc2eef0651f43c3cdd061a904b6c1892cab96",
+    "observations_size_bytes": 13190,
+    "worker_reverified_ui": false,
+    "screenshot_export": "../evidence/t3-live/browser-content-export.png",
+    "screenshot_export_sha256": "8a5c5301607cc57d60f27ed022a2b6a07d81e5d86921a84eff6ab4676e4f96c3",
+    "other_native_screenshots": "Conversation evidence, not exported files.",
+    "supplemental_parent_observations": {
+      "source": "Parent follow-up task for this worker. Parent will append the native ledger.",
+      "received_at": "2026-11-13T15:04:14.325688+00:00",
+      "scripted_popup": "On confirmed Amber page, Scripted popup opened a new Cobalt second.html tab. Command-W closed it.",
+      "prompt_console": "Prompt recheck on verified Amber URL left Confirm: false unchanged. Correctly targeted DevTools Console showed Uncaught Error: prompt() is not supported., repeated 2 times.",
+      "cleanup": "DevTools windows closed with Command-W."
+    }
+  },
+  "sources": [
+    {
+      "owner": "pingdotgg",
+      "repo": "t3code",
+      "revision": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "path": "apps/web/src/components/ChatMarkdown.tsx",
+      "blob_url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/ChatMarkdown.tsx",
+      "raw_url": "https://raw.githubusercontent.com/pingdotgg/t3code/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/ChatMarkdown.tsx",
+      "sha256": "0703ca6b84799ba3bfc5d6c948ba06cc5d0707c03009150980c648f5828dac26",
+      "line_count": 1865,
+      "identical_to_comparison_checkout": false
+    },
+    {
+      "owner": "pingdotgg",
+      "repo": "t3code",
+      "revision": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "path": "apps/web/src/components/chat/externalLinkContextMenu.ts",
+      "blob_url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/externalLinkContextMenu.ts",
+      "raw_url": "https://raw.githubusercontent.com/pingdotgg/t3code/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/externalLinkContextMenu.ts",
+      "sha256": "2c5145dab6db2208694890265cda100919fdb83a71066524163cbedd6761359a",
+      "line_count": 124,
+      "identical_to_comparison_checkout": true
+    },
+    {
+      "owner": "pingdotgg",
+      "repo": "t3code",
+      "revision": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "path": "apps/desktop/src/window/DesktopWindow.ts",
+      "blob_url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/desktop/src/window/DesktopWindow.ts",
+      "raw_url": "https://raw.githubusercontent.com/pingdotgg/t3code/1264c206aee0dce805d6279809118bc091f29d2f/apps/desktop/src/window/DesktopWindow.ts",
+      "sha256": "105e436339f0be888e88206517116cdba92c6d528534016096308ece0616d20e",
+      "line_count": 1131,
+      "identical_to_comparison_checkout": false
+    },
+    {
+      "owner": "pingdotgg",
+      "repo": "t3code",
+      "revision": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "path": "apps/web/src/components/preview/PreviewChromeRow.tsx",
+      "blob_url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/preview/PreviewChromeRow.tsx",
+      "raw_url": "https://raw.githubusercontent.com/pingdotgg/t3code/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/preview/PreviewChromeRow.tsx",
+      "sha256": "b21c76b5038ec0b63b0248d826024d083e10dc3d4c3aa4c2a954f83be8c29f06",
+      "line_count": 298,
+      "identical_to_comparison_checkout": false
+    },
+    {
+      "owner": "pingdotgg",
+      "repo": "t3code",
+      "revision": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "path": "apps/desktop/src/preview/Manager.ts",
+      "blob_url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/desktop/src/preview/Manager.ts",
+      "raw_url": "https://raw.githubusercontent.com/pingdotgg/t3code/1264c206aee0dce805d6279809118bc091f29d2f/apps/desktop/src/preview/Manager.ts",
+      "sha256": "59c6e4976f4493ba3aca460757c6e10729c09c67509c9bc5e9b35dee2f4afe02",
+      "line_count": 3960,
+      "identical_to_comparison_checkout": false
+    },
+    {
+      "owner": "pingdotgg",
+      "repo": "t3code",
+      "revision": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "path": "apps/web/src/components/preview/PreviewView.tsx",
+      "blob_url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/preview/PreviewView.tsx",
+      "raw_url": "https://raw.githubusercontent.com/pingdotgg/t3code/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/preview/PreviewView.tsx",
+      "sha256": "08c06eca1c239f1ff56d718eadc34b1dfb245d28abb053caecfd2f7fc24d8756",
+      "line_count": 1139,
+      "identical_to_comparison_checkout": false
+    },
+    {
+      "owner": "pingdotgg",
+      "repo": "t3code",
+      "revision": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "path": "apps/web/src/components/preview/PreviewFindBar.tsx",
+      "blob_url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/preview/PreviewFindBar.tsx",
+      "raw_url": "https://raw.githubusercontent.com/pingdotgg/t3code/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/preview/PreviewFindBar.tsx",
+      "sha256": "7213ab00de725b0717035a2303be7e8ee4cb5331b606fef7b8d604e5c5c813ee",
+      "line_count": 139,
+      "identical_to_comparison_checkout": true
+    },
+    {
+      "owner": "pingdotgg",
+      "repo": "t3code",
+      "revision": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "path": "apps/web/src/hooks/useRightPanelSurfaceClose.ts",
+      "blob_url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/hooks/useRightPanelSurfaceClose.ts",
+      "raw_url": "https://raw.githubusercontent.com/pingdotgg/t3code/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/hooks/useRightPanelSurfaceClose.ts",
+      "sha256": "575b298ad5393b6f8615dd14bd485f6e5140abac6f2fb3eea82c0a7016a4b7dc",
+      "line_count": 170,
+      "identical_to_comparison_checkout": true
+    },
+    {
+      "owner": "pingdotgg",
+      "repo": "t3code",
+      "revision": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "path": "apps/web/src/components/preview/closePreviewSession.ts",
+      "blob_url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/preview/closePreviewSession.ts",
+      "raw_url": "https://raw.githubusercontent.com/pingdotgg/t3code/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/preview/closePreviewSession.ts",
+      "sha256": "d670b0b5c1759eb5a77582c6994500842c04bb4ee82e0834b845d6ef7c7bcf81",
+      "line_count": 40,
+      "identical_to_comparison_checkout": true
+    },
+    {
+      "owner": "pingdotgg",
+      "repo": "t3code",
+      "revision": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "path": "apps/web/src/reopenClosedView.ts",
+      "blob_url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/reopenClosedView.ts",
+      "raw_url": "https://raw.githubusercontent.com/pingdotgg/t3code/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/reopenClosedView.ts",
+      "sha256": "0086b93706ea358b98374556ec79d3c4eabcb4809ffde548e56ac0576d1f0709",
+      "line_count": 164,
+      "identical_to_comparison_checkout": true
+    },
+    {
+      "owner": "pingdotgg",
+      "repo": "t3code",
+      "revision": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "path": "apps/web/src/components/ReopenClosedViewShortcut.tsx",
+      "blob_url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/ReopenClosedViewShortcut.tsx",
+      "raw_url": "https://raw.githubusercontent.com/pingdotgg/t3code/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/ReopenClosedViewShortcut.tsx",
+      "sha256": "22fcd0214ebb6bdac7e9d0f1cdfcedb1db327fcd106837d09ce8528e9036efa2",
+      "line_count": 228,
+      "identical_to_comparison_checkout": false
+    },
+    {
+      "owner": "pingdotgg",
+      "repo": "t3code",
+      "revision": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "path": "apps/web/src/rightPanelStore.ts",
+      "blob_url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/rightPanelStore.ts",
+      "raw_url": "https://raw.githubusercontent.com/pingdotgg/t3code/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/rightPanelStore.ts",
+      "sha256": "9c165e539cd80cce2d7abe540fe7b3672ffdb8c9ed8d2b8f5ae5eff27a19f650",
+      "line_count": 1293,
+      "identical_to_comparison_checkout": true
+    },
+    {
+      "owner": "pingdotgg",
+      "repo": "t3code",
+      "revision": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "path": "apps/web/src/components/preview/PreviewPanelShell.tsx",
+      "blob_url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/preview/PreviewPanelShell.tsx",
+      "raw_url": "https://raw.githubusercontent.com/pingdotgg/t3code/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/preview/PreviewPanelShell.tsx",
+      "sha256": "d54df2ef4ea19d539a4853b6ed616659ac316df69ddff9f20b7d687dbf34409c",
+      "line_count": 211,
+      "identical_to_comparison_checkout": false
+    },
+    {
+      "owner": "pingdotgg",
+      "repo": "t3code",
+      "revision": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "path": "apps/web/src/components/preview/PreviewUnreachable.tsx",
+      "blob_url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/preview/PreviewUnreachable.tsx",
+      "raw_url": "https://raw.githubusercontent.com/pingdotgg/t3code/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/preview/PreviewUnreachable.tsx",
+      "sha256": "acba86c938528ae1388ff28b990ffa0169690bb87942ad100392f409513eeb2d",
+      "line_count": 135,
+      "identical_to_comparison_checkout": true
+    },
+    {
+      "owner": "pingdotgg",
+      "repo": "t3code",
+      "revision": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "path": "apps/web/src/index.css",
+      "blob_url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/index.css",
+      "raw_url": "https://raw.githubusercontent.com/pingdotgg/t3code/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/index.css",
+      "sha256": "d723ccee7571f98bc1bc931a880d7d856b5c5f660703845e4f5b66d7f56310ef",
+      "line_count": 2594,
+      "identical_to_comparison_checkout": false
+    },
+    {
+      "owner": "pingdotgg",
+      "repo": "t3code",
+      "revision": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "path": "apps/desktop/src/preview/PickPreload.ts",
+      "blob_url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/desktop/src/preview/PickPreload.ts",
+      "raw_url": "https://raw.githubusercontent.com/pingdotgg/t3code/1264c206aee0dce805d6279809118bc091f29d2f/apps/desktop/src/preview/PickPreload.ts",
+      "sha256": "a3164ad7e395bd06ce9397643574df7ffdf0e27a239bc1e5fbb1c8e28621659a",
+      "line_count": 1832,
+      "identical_to_comparison_checkout": false
+    },
+    {
+      "owner": "pingdotgg",
+      "repo": "t3code",
+      "revision": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "path": "apps/web/src/components/chat/useComposerSend.ts",
+      "blob_url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/useComposerSend.ts",
+      "raw_url": "https://raw.githubusercontent.com/pingdotgg/t3code/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/useComposerSend.ts",
+      "sha256": "deccfeebf8cb0983aa3bad210b8b450ee9aaf7ac99abb64c105cefa0cec3f23c",
+      "line_count": 1431,
+      "identical_to_comparison_checkout": false
+    },
+    {
+      "owner": "pingdotgg",
+      "repo": "t3code",
+      "revision": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "path": "packages/shared/src/composerContextReferences.ts",
+      "blob_url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/packages/shared/src/composerContextReferences.ts",
+      "raw_url": "https://raw.githubusercontent.com/pingdotgg/t3code/1264c206aee0dce805d6279809118bc091f29d2f/packages/shared/src/composerContextReferences.ts",
+      "sha256": "6f892cb25ea101c5248b8df53ad7d084a3a6554fd397c9a2c9a9c33796197849",
+      "line_count": 452,
+      "identical_to_comparison_checkout": false
+    },
+    {
+      "owner": "pingdotgg",
+      "repo": "t3code",
+      "revision": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "path": "packages/shared/src/previewViewport.ts",
+      "blob_url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/packages/shared/src/previewViewport.ts",
+      "raw_url": "https://raw.githubusercontent.com/pingdotgg/t3code/1264c206aee0dce805d6279809118bc091f29d2f/packages/shared/src/previewViewport.ts",
+      "sha256": "49faf672fe93df20f6bbd124fc9ea7012699284d9d2f2df3db12a6fe839711a0",
+      "line_count": 174,
+      "identical_to_comparison_checkout": true
+    },
+    {
+      "owner": "pingdotgg",
+      "repo": "t3code",
+      "revision": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "path": "apps/web/src/browser/BrowserDeviceToolbar.tsx",
+      "blob_url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/browser/BrowserDeviceToolbar.tsx",
+      "raw_url": "https://raw.githubusercontent.com/pingdotgg/t3code/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/browser/BrowserDeviceToolbar.tsx",
+      "sha256": "f636690745bc8cd354cacc21b9ccfe9b057bcb8898bcab62ea33b01f209978ba",
+      "line_count": 341,
+      "identical_to_comparison_checkout": true
+    },
+    {
+      "owner": "pingdotgg",
+      "repo": "t3code",
+      "revision": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "path": "apps/desktop/package.json",
+      "blob_url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/desktop/package.json",
+      "raw_url": "https://raw.githubusercontent.com/pingdotgg/t3code/1264c206aee0dce805d6279809118bc091f29d2f/apps/desktop/package.json",
+      "sha256": "77449a7ae6e1cb8511cf7a20796e95a060e28b7e22c5520c38b3611790caaf82",
+      "line_count": 45,
+      "identical_to_comparison_checkout": false
+    },
+    {
+      "owner": "electron",
+      "repo": "electron",
+      "revision": "v44.10.1",
+      "path": "lib/renderer/window-setup.ts",
+      "blob_url": "https://github.com/electron/electron/blob/v44.10.1/lib/renderer/window-setup.ts",
+      "raw_url": "https://raw.githubusercontent.com/electron/electron/v44.10.1/lib/renderer/window-setup.ts",
+      "sha256": "d0cb7e3b0f20f8676acb00286d88c64f9bb0fe1430e16ae33fda3e0c8ecd23de",
+      "line_count": 64
+    },
+    {
+      "owner": "pingdotgg",
+      "repo": "t3code",
+      "revision": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "path": "apps/web/src/components/preview/PreviewMoreMenu.tsx",
+      "blob_url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/preview/PreviewMoreMenu.tsx",
+      "raw_url": "https://raw.githubusercontent.com/pingdotgg/t3code/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/preview/PreviewMoreMenu.tsx",
+      "sha256": "19271002358b95717a6a4072a13d0517cd844ee3ee940f50aa0dd513d46a9151",
+      "line_count": 187,
+      "identical_to_comparison_checkout": true
+    }
+  ],
+  "anchors": [
+    {
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/ChatMarkdown.tsx#L1266",
+      "source_key": "pingdotgg/t3code/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/ChatMarkdown.tsx",
+      "line": 1266,
+      "line_exists_and_nonempty": true
+    },
+    {
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/externalLinkContextMenu.ts#L26",
+      "source_key": "pingdotgg/t3code/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/externalLinkContextMenu.ts",
+      "line": 26,
+      "line_exists_and_nonempty": true
+    },
+    {
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/desktop/src/window/DesktopWindow.ts#L567",
+      "source_key": "pingdotgg/t3code/1264c206aee0dce805d6279809118bc091f29d2f/apps/desktop/src/window/DesktopWindow.ts",
+      "line": 567,
+      "line_exists_and_nonempty": true
+    },
+    {
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/desktop/src/window/DesktopWindow.ts#L656",
+      "source_key": "pingdotgg/t3code/1264c206aee0dce805d6279809118bc091f29d2f/apps/desktop/src/window/DesktopWindow.ts",
+      "line": 656,
+      "line_exists_and_nonempty": true
+    },
+    {
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/preview/PreviewChromeRow.tsx#L199",
+      "source_key": "pingdotgg/t3code/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/preview/PreviewChromeRow.tsx",
+      "line": 199,
+      "line_exists_and_nonempty": true
+    },
+    {
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/desktop/src/preview/Manager.ts#L511",
+      "source_key": "pingdotgg/t3code/1264c206aee0dce805d6279809118bc091f29d2f/apps/desktop/src/preview/Manager.ts",
+      "line": 511,
+      "line_exists_and_nonempty": true
+    },
+    {
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/desktop/src/preview/Manager.ts#L1504",
+      "source_key": "pingdotgg/t3code/1264c206aee0dce805d6279809118bc091f29d2f/apps/desktop/src/preview/Manager.ts",
+      "line": 1504,
+      "line_exists_and_nonempty": true
+    },
+    {
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/desktop/src/preview/Manager.ts#L1535",
+      "source_key": "pingdotgg/t3code/1264c206aee0dce805d6279809118bc091f29d2f/apps/desktop/src/preview/Manager.ts",
+      "line": 1535,
+      "line_exists_and_nonempty": true
+    },
+    {
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/desktop/src/preview/Manager.ts#L1555",
+      "source_key": "pingdotgg/t3code/1264c206aee0dce805d6279809118bc091f29d2f/apps/desktop/src/preview/Manager.ts",
+      "line": 1555,
+      "line_exists_and_nonempty": true
+    },
+    {
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/desktop/src/preview/Manager.ts#L1580",
+      "source_key": "pingdotgg/t3code/1264c206aee0dce805d6279809118bc091f29d2f/apps/desktop/src/preview/Manager.ts",
+      "line": 1580,
+      "line_exists_and_nonempty": true
+    },
+    {
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/preview/PreviewView.tsx#L357",
+      "source_key": "pingdotgg/t3code/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/preview/PreviewView.tsx",
+      "line": 357,
+      "line_exists_and_nonempty": true
+    },
+    {
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/preview/PreviewFindBar.tsx#L27",
+      "source_key": "pingdotgg/t3code/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/preview/PreviewFindBar.tsx",
+      "line": 27,
+      "line_exists_and_nonempty": true
+    },
+    {
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/preview/PreviewFindBar.tsx#L63",
+      "source_key": "pingdotgg/t3code/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/preview/PreviewFindBar.tsx",
+      "line": 63,
+      "line_exists_and_nonempty": true
+    },
+    {
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/desktop/src/preview/Manager.ts#L1476",
+      "source_key": "pingdotgg/t3code/1264c206aee0dce805d6279809118bc091f29d2f/apps/desktop/src/preview/Manager.ts",
+      "line": 1476,
+      "line_exists_and_nonempty": true
+    },
+    {
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/desktop/src/preview/Manager.ts#L2148",
+      "source_key": "pingdotgg/t3code/1264c206aee0dce805d6279809118bc091f29d2f/apps/desktop/src/preview/Manager.ts",
+      "line": 2148,
+      "line_exists_and_nonempty": true
+    },
+    {
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/desktop/src/preview/Manager.ts#L488",
+      "source_key": "pingdotgg/t3code/1264c206aee0dce805d6279809118bc091f29d2f/apps/desktop/src/preview/Manager.ts",
+      "line": 488,
+      "line_exists_and_nonempty": true
+    },
+    {
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/desktop/src/preview/Manager.ts#L1632",
+      "source_key": "pingdotgg/t3code/1264c206aee0dce805d6279809118bc091f29d2f/apps/desktop/src/preview/Manager.ts",
+      "line": 1632,
+      "line_exists_and_nonempty": true
+    },
+    {
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/hooks/useRightPanelSurfaceClose.ts#L108",
+      "source_key": "pingdotgg/t3code/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/hooks/useRightPanelSurfaceClose.ts",
+      "line": 108,
+      "line_exists_and_nonempty": true
+    },
+    {
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/preview/closePreviewSession.ts#L22",
+      "source_key": "pingdotgg/t3code/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/preview/closePreviewSession.ts",
+      "line": 22,
+      "line_exists_and_nonempty": true
+    },
+    {
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/reopenClosedView.ts#L104",
+      "source_key": "pingdotgg/t3code/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/reopenClosedView.ts",
+      "line": 104,
+      "line_exists_and_nonempty": true
+    },
+    {
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/ReopenClosedViewShortcut.tsx#L207",
+      "source_key": "pingdotgg/t3code/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/ReopenClosedViewShortcut.tsx",
+      "line": 207,
+      "line_exists_and_nonempty": true
+    },
+    {
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/rightPanelStore.ts#L1102",
+      "source_key": "pingdotgg/t3code/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/rightPanelStore.ts",
+      "line": 1102,
+      "line_exists_and_nonempty": true
+    },
+    {
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/rightPanelStore.ts#L1116",
+      "source_key": "pingdotgg/t3code/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/rightPanelStore.ts",
+      "line": 1116,
+      "line_exists_and_nonempty": true
+    },
+    {
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/preview/PreviewPanelShell.tsx#L132",
+      "source_key": "pingdotgg/t3code/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/preview/PreviewPanelShell.tsx",
+      "line": 132,
+      "line_exists_and_nonempty": true
+    },
+    {
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/preview/PreviewPanelShell.tsx#L206",
+      "source_key": "pingdotgg/t3code/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/preview/PreviewPanelShell.tsx",
+      "line": 206,
+      "line_exists_and_nonempty": true
+    },
+    {
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/preview/PreviewView.tsx#L1123",
+      "source_key": "pingdotgg/t3code/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/preview/PreviewView.tsx",
+      "line": 1123,
+      "line_exists_and_nonempty": true
+    },
+    {
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/preview/PreviewUnreachable.tsx#L54",
+      "source_key": "pingdotgg/t3code/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/preview/PreviewUnreachable.tsx",
+      "line": 54,
+      "line_exists_and_nonempty": true
+    },
+    {
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/preview/PreviewView.tsx#L962",
+      "source_key": "pingdotgg/t3code/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/preview/PreviewView.tsx",
+      "line": 962,
+      "line_exists_and_nonempty": true
+    },
+    {
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/preview/PreviewView.tsx#L968",
+      "source_key": "pingdotgg/t3code/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/preview/PreviewView.tsx",
+      "line": 968,
+      "line_exists_and_nonempty": true
+    },
+    {
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/preview/PreviewView.tsx#L973",
+      "source_key": "pingdotgg/t3code/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/preview/PreviewView.tsx",
+      "line": 973,
+      "line_exists_and_nonempty": true
+    },
+    {
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/preview/PreviewChromeRow.tsx#L292",
+      "source_key": "pingdotgg/t3code/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/preview/PreviewChromeRow.tsx",
+      "line": 292,
+      "line_exists_and_nonempty": true
+    },
+    {
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/index.css#L2390",
+      "source_key": "pingdotgg/t3code/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/index.css",
+      "line": 2390,
+      "line_exists_and_nonempty": true
+    },
+    {
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/index.css#L2408",
+      "source_key": "pingdotgg/t3code/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/index.css",
+      "line": 2408,
+      "line_exists_and_nonempty": true
+    },
+    {
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/index.css#L2413",
+      "source_key": "pingdotgg/t3code/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/index.css",
+      "line": 2413,
+      "line_exists_and_nonempty": true
+    },
+    {
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/desktop/src/preview/Manager.ts#L2587",
+      "source_key": "pingdotgg/t3code/1264c206aee0dce805d6279809118bc091f29d2f/apps/desktop/src/preview/Manager.ts",
+      "line": 2587,
+      "line_exists_and_nonempty": true
+    },
+    {
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/preview/PreviewView.tsx#L640",
+      "source_key": "pingdotgg/t3code/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/preview/PreviewView.tsx",
+      "line": 640,
+      "line_exists_and_nonempty": true
+    },
+    {
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/preview/PreviewView.tsx#L735",
+      "source_key": "pingdotgg/t3code/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/preview/PreviewView.tsx",
+      "line": 735,
+      "line_exists_and_nonempty": true
+    },
+    {
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/desktop/src/preview/PickPreload.ts#L441",
+      "source_key": "pingdotgg/t3code/1264c206aee0dce805d6279809118bc091f29d2f/apps/desktop/src/preview/PickPreload.ts",
+      "line": 441,
+      "line_exists_and_nonempty": true
+    },
+    {
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/desktop/src/preview/PickPreload.ts#L1244",
+      "source_key": "pingdotgg/t3code/1264c206aee0dce805d6279809118bc091f29d2f/apps/desktop/src/preview/PickPreload.ts",
+      "line": 1244,
+      "line_exists_and_nonempty": true
+    },
+    {
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/desktop/src/preview/PickPreload.ts#L1708",
+      "source_key": "pingdotgg/t3code/1264c206aee0dce805d6279809118bc091f29d2f/apps/desktop/src/preview/PickPreload.ts",
+      "line": 1708,
+      "line_exists_and_nonempty": true
+    },
+    {
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/desktop/src/preview/Manager.ts#L2316",
+      "source_key": "pingdotgg/t3code/1264c206aee0dce805d6279809118bc091f29d2f/apps/desktop/src/preview/Manager.ts",
+      "line": 2316,
+      "line_exists_and_nonempty": true
+    },
+    {
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/preview/PreviewView.tsx#L828",
+      "source_key": "pingdotgg/t3code/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/preview/PreviewView.tsx",
+      "line": 828,
+      "line_exists_and_nonempty": true
+    },
+    {
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/useComposerSend.ts#L743",
+      "source_key": "pingdotgg/t3code/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/useComposerSend.ts",
+      "line": 743,
+      "line_exists_and_nonempty": true
+    },
+    {
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/packages/shared/src/composerContextReferences.ts#L278",
+      "source_key": "pingdotgg/t3code/1264c206aee0dce805d6279809118bc091f29d2f/packages/shared/src/composerContextReferences.ts",
+      "line": 278,
+      "line_exists_and_nonempty": true
+    },
+    {
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/packages/shared/src/composerContextReferences.ts#L310",
+      "source_key": "pingdotgg/t3code/1264c206aee0dce805d6279809118bc091f29d2f/packages/shared/src/composerContextReferences.ts",
+      "line": 310,
+      "line_exists_and_nonempty": true
+    },
+    {
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/packages/shared/src/previewViewport.ts#L36",
+      "source_key": "pingdotgg/t3code/1264c206aee0dce805d6279809118bc091f29d2f/packages/shared/src/previewViewport.ts",
+      "line": 36,
+      "line_exists_and_nonempty": true
+    },
+    {
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/browser/BrowserDeviceToolbar.tsx#L145",
+      "source_key": "pingdotgg/t3code/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/browser/BrowserDeviceToolbar.tsx",
+      "line": 145,
+      "line_exists_and_nonempty": true
+    },
+    {
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/browser/BrowserDeviceToolbar.tsx#L153",
+      "source_key": "pingdotgg/t3code/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/browser/BrowserDeviceToolbar.tsx",
+      "line": 153,
+      "line_exists_and_nonempty": true
+    },
+    {
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/desktop/package.json#L25",
+      "source_key": "pingdotgg/t3code/1264c206aee0dce805d6279809118bc091f29d2f/apps/desktop/package.json",
+      "line": 25,
+      "line_exists_and_nonempty": true
+    },
+    {
+      "url": "https://github.com/electron/electron/blob/v44.10.1/lib/renderer/window-setup.ts#L17",
+      "source_key": "electron/electron/v44.10.1/lib/renderer/window-setup.ts",
+      "line": 17,
+      "line_exists_and_nonempty": true
+    },
+    {
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/preview/PreviewMoreMenu.tsx#L90",
+      "source_key": "pingdotgg/t3code/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/preview/PreviewMoreMenu.tsx",
+      "line": 90,
+      "line_exists_and_nonempty": true
+    }
+  ],
+  "journeys": [
+    {
+      "id": "browser-live-01",
+      "title": "Chat links and webpage links have different menus",
+      "runtime_evidence_author": "Parent native app observations. Worker did not repeat UI.",
+      "observed": "Right-clicking a chat Markdown link exposed integrated-browser, system-browser, and copy actions. The integrated action opened the local fixture in the right panel. A webpage link exposed Copy Link plus editing and system-service entries. The toolbar independently exposed Open in system browser.",
+      "source": "[ChatMarkdown's handler](https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/ChatMarkdown.tsx#L1266) invokes a [custom link menu](https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/externalLinkContextMenu.ts#L26) with explicit destinations. [DesktopWindow's generic menu](https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/desktop/src/window/DesktopWindow.ts#L567) adds link copying and editing roles without either Open action. It [installs that menu on guests](https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/desktop/src/window/DesktopWindow.ts#L656). The [toolbar external action](https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/preview/PreviewChromeRow.tsx#L199) is separate. This explains the two observed menus.",
+      "ferrite_mapping": "`link-affordances-01`, `BROWSER-03`, and `BROWSER-16`.",
+      "acceptance": "Both transcript and webpage link menus expose Open in integrated browser, Open in system browser, and Copy Link. Each action uses the clicked link's resolved URL. Page editing actions operate on the clicked guest. T3's copy-only webpage menu describes the reference and does not excuse Ferrite's reported missing Open actions. The active-page external action launches the committed URL even when the address field contains an unfinished draft.",
+      "limit": "The live record proves integrated opening. System launching and menu copying were visible but not activated in this sequence. Ferrite `link-affordances-01` already has separate runtime evidence in the consolidated inventory.",
+      "ferrite_finding_ids": [
+        "link-affordances-01",
+        "BROWSER-03",
+        "BROWSER-16"
+      ],
+      "source_anchors": [
+        "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/ChatMarkdown.tsx#L1266",
+        "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/externalLinkContextMenu.ts#L26",
+        "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/desktop/src/window/DesktopWindow.ts#L567",
+        "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/desktop/src/window/DesktopWindow.ts#L656",
+        "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/preview/PreviewChromeRow.tsx#L199"
+      ]
+    },
+    {
+      "id": "browser-live-02",
+      "title": "Website form input stays within the browser",
+      "runtime_evidence_author": "Parent native app observations. Worker did not repeat UI.",
+      "observed": "An unsent chat sentinel survived typing into Name, Tab into Notes, multiline paste, Enter in Notes, and Save locally. The page reported Saved: AMBER_INPUT_TAB. No chat message was sent.",
+      "source": "Manager [classifies guest editing shortcuts](https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/desktop/src/preview/Manager.ts#L511), checks [actual guest focus](https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/desktop/src/preview/Manager.ts#L1504), and controls host menu shortcuts. Its [app forwarding branch](https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/desktop/src/preview/Manager.ts#L1535) excludes composing input and requires guest focus. [Page-first commands](https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/desktop/src/preview/Manager.ts#L1555) have a separate [unhandled-key fallback](https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/desktop/src/preview/Manager.ts#L1580). This policy corresponds to the observed separation of page input and composer submission.",
+      "ferrite_mapping": "`input-focus-001` and `input-focus-006`.",
+      "acceptance": "Leave an unsent chat sentinel, then exercise text, Tab, Shift-Tab, multiline paste, Enter, Escape, copy, and paste in a local browser form. The page receives its editing actions and no provider send occurs. Exercise explicit app shortcuts separately. Verify IME with actual composed text before closing the composition finding.",
+      "limit": "The native sequence did not test every listed acceptance key, IME composition, or focused iframes. It does not close Ferrite findings.",
+      "ferrite_finding_ids": [
+        "input-focus-001",
+        "input-focus-006"
+      ],
+      "source_anchors": [
+        "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/desktop/src/preview/Manager.ts#L511",
+        "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/desktop/src/preview/Manager.ts#L1504",
+        "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/desktop/src/preview/Manager.ts#L1535",
+        "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/desktop/src/preview/Manager.ts#L1555",
+        "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/desktop/src/preview/Manager.ts#L1580"
+      ]
+    },
+    {
+      "id": "browser-live-03",
+      "title": "Find cycles real matches in the active page",
+      "runtime_evidence_author": "Parent native app observations. Worker did not repeat UI.",
+      "observed": "Find reported 1/60 for Browser passage. Enter advanced to 2/60, and Escape dismissed the bar. Search stayed inside the browser.",
+      "source": "[PreviewView gates Find](https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/preview/PreviewView.tsx#L357) on a live local desktop tab. PreviewFindBar [filters results by tab ID](https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/preview/PreviewFindBar.tsx#L27), retains partial Chromium counts, and [handles Enter and Escape locally](https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/preview/PreviewFindBar.tsx#L63). Manager [forwards every result update](https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/desktop/src/preview/Manager.ts#L1476) and [maps the query to Chromium](https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/desktop/src/preview/Manager.ts#L2148). Closing returns focus to the page.",
+      "ferrite_mapping": "`BROWSER-10`.",
+      "acceptance": "Search a fixture with 60 repeated phrases and show the active ordinal and total. Enter and Shift-Enter cycle that page. Escape clears the search and returns browser focus. Switching tabs must not search the prior page or transcript. Cover empty queries and zero results.",
+      "limit": "Previous match, zero results, and tab switching were not observed.",
+      "ferrite_finding_ids": [
+        "BROWSER-10"
+      ],
+      "source_anchors": [
+        "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/preview/PreviewView.tsx#L357",
+        "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/preview/PreviewFindBar.tsx#L27",
+        "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/preview/PreviewFindBar.tsx#L63",
+        "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/desktop/src/preview/Manager.ts#L1476",
+        "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/desktop/src/preview/Manager.ts#L2148"
+      ]
+    },
+    {
+      "id": "browser-live-04",
+      "title": "Navigation, close, and reopen preserve conversation ownership",
+      "runtime_evidence_author": "Parent native app observations. Worker did not repeat UI.",
+      "observed": "Same-tab navigation updated page, URL, and history controls. Back restored the form values. A target-blank link opened a second tab. Command-W closed the active browser tab while retaining the parent thread and chat draft. Command-Shift-T restored its title and URL. In a later check on the confirmed Amber page, Scripted popup created a new Cobalt tab with the correct second.html URL. Command-W closed that extra tab.",
+      "source": "Manager [classifies new-window destinations](https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/desktop/src/preview/Manager.ts#L488) and [emits new-tab requests](https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/desktop/src/preview/Manager.ts#L1632). [Surface close releases the exact resource](https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/hooks/useRightPanelSurfaceClose.ts#L108). [Successful preview close remembers a snapshot](https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/preview/closePreviewSession.ts#L22). [Reopen creates a session](https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/reopenClosedView.ts#L104) using its URL, viewport, and profile. [Guest shortcut forwarding](https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/ReopenClosedViewShortcut.tsx#L207) makes reopening available from browser focus.",
+      "ferrite_mapping": "`BROWSER-01`, `BROWSER-04`, `BROWSER-11`, and the cross-surface close contract in `input-focus-004`.",
+      "acceptance": "Same-tab navigation changes only that page and Back restores fixture state. Target-blank and a user-activated scripted popup open the correct destination with a useful title. Closing the focused tab preserves the conversation and draft. Reopen restores a usable destination and identifies which browsing state survives. Measure Ferrite reclamation separately before closing `BROWSER-11`.",
+      "limit": "Target-blank and the user-activated scripted popup were exercised. Middle-click, OAuth opener behavior, downloads, and POSTs remain unverified. The scripted popup success does not establish authentication callback compatibility. T3 reopen explicitly creates a new session. Restoring title and URL does not establish retained DOM, scroll, or complete history. Back restored form state before closure. `input-focus-004` concerns Ferrite PR and terminal close ownership, so this browser sequence is a regression requirement, not a reproduction of that finding.",
+      "ferrite_finding_ids": [
+        "BROWSER-01",
+        "BROWSER-04",
+        "BROWSER-11",
+        "input-focus-004"
+      ],
+      "source_anchors": [
+        "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/desktop/src/preview/Manager.ts#L488",
+        "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/desktop/src/preview/Manager.ts#L1632",
+        "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/hooks/useRightPanelSurfaceClose.ts#L108",
+        "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/preview/closePreviewSession.ts#L22",
+        "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/reopenClosedView.ts#L104",
+        "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/ReopenClosedViewShortcut.tsx#L207"
+      ]
+    },
+    {
+      "id": "browser-live-05",
+      "title": "Hiding the panel differs from closing its browser tab",
+      "runtime_evidence_author": "Parent native app observations. Worker did not repeat UI.",
+      "observed": "Command-Option-B hid and reopened the panel with its active browser tab and unsent draft retained. Command-B hid and restored the left sidebar while the composer had focus.",
+      "source": "[Panel close](https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/rightPanelStore.ts#L1102) and [visibility toggle](https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/rightPanelStore.ts#L1116) change `isOpen` without deleting surfaces or the active ID. PreviewPanelShell [releases focus and sets inert](https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/preview/PreviewPanelShell.tsx#L132) while [retaining children](https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/preview/PreviewPanelShell.tsx#L206). This differs from explicit preview-session close.",
+      "ferrite_mapping": "`panel-tools-018`, `input-focus-005`, and `BROWSER-11` have related acceptance boundaries.",
+      "acceptance": "Toggle a panel containing a browser and unsent draft, then restore the same active resource and draft. Hidden browser input cannot consume later typing. Keep operator width separate from temporary tool minimums. Overview to Files or Changes to Overview must recover the prior compact width when the operator did not resize it.",
+      "limit": "This live record establishes resource and draft retention. It does not measure animation, widths, reclamation, or restart. The separate Ferrite panel correction establishes sticky-width runtime evidence. T3's successful visibility toggle does not resolve that defect.",
+      "ferrite_finding_ids": [
+        "panel-tools-018",
+        "input-focus-005",
+        "BROWSER-11"
+      ],
+      "source_anchors": [
+        "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/rightPanelStore.ts#L1102",
+        "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/rightPanelStore.ts#L1116",
+        "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/preview/PreviewPanelShell.tsx#L132",
+        "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/preview/PreviewPanelShell.tsx#L206"
+      ]
+    },
+    {
+      "id": "browser-live-06",
+      "title": "Failed navigation has local recovery and page-tool gating",
+      "runtime_evidence_author": "Parent native app observations. Worker did not repeat UI.",
+      "observed": "An unavailable local port produced a themed Connection refused page with ERR_CONNECTION_REFUSED, Details, and Reload. Back recovered the fixture. Annotation, capture, and floating controls were disabled on the failed page.",
+      "source": "[PreviewView's LoadFailed overlay](https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/preview/PreviewView.tsx#L1123) passes error information and a reload handler into [PreviewUnreachable](https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/preview/PreviewUnreachable.tsx#L54). That component separates friendly text, details, and Reload. PreviewView gates [capture](https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/preview/PreviewView.tsx#L962), [floating preview](https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/preview/PreviewView.tsx#L968), and [annotation](https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/preview/PreviewView.tsx#L973) on `isUnreachable`.",
+      "ferrite_mapping": "`BROWSER-15`.",
+      "acceptance": "Refused connections show one concise explanation with expandable diagnostics and Reload. Back returns to the working page. Disable capture and annotation when no meaningful page rendered. Test offline, TLS failure, HTTP error, and engine/profile failure separately.",
+      "limit": "Only refused connection was exercised. Details and Reload were present. Back was the verified recovery. This does not prove every error class or Reload recovery.",
+      "ferrite_finding_ids": [
+        "BROWSER-15"
+      ],
+      "source_anchors": [
+        "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/preview/PreviewView.tsx#L1123",
+        "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/preview/PreviewUnreachable.tsx#L54",
+        "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/preview/PreviewView.tsx#L962",
+        "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/preview/PreviewView.tsx#L968",
+        "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/preview/PreviewView.tsx#L973"
+      ]
+    },
+    {
+      "id": "browser-live-07",
+      "title": "The advancing loading bar reports activity rather than network percentage",
+      "runtime_evidence_author": "Parent native app observations. Worker did not repeat UI.",
+      "observed": "Three consecutive native captures during refresh of a delayed route retained the existing page beneath a narrow blue bar whose length advanced.",
+      "source": "[PreviewChromeRow positions the bar absolutely](https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/preview/PreviewChromeRow.tsx#L292) at its bottom edge. Installed CSS [defines its keyframes](https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/index.css#L2390) and [animates scaleX from 0.04 to 0.9 over a fixed 5.3 seconds](https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/index.css#L2408). This is indeterminate activity, not measured download completion. The [reduced-motion branch](https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/index.css#L2413) removes the animation.",
+      "ferrite_mapping": "`BROWSER-08`.",
+      "acceptance": "Record page origin, actual viewport size, and address bounds before and during a slow navigation. Keep geometry stable and retain meaningful content. Show loading without inserting a row or removing controls. Respect reduced motion and do not label synthetic activity as a completion percentage.",
+      "limit": "The captures establish advancing activity and retained content. They do not measure latency, frame rate, smoothness, or exact pixel stability. The wrapped Slow load anchor click was an automation limitation. Direct entry of its observed URL established navigation.",
+      "ferrite_finding_ids": [
+        "BROWSER-08"
+      ],
+      "source_anchors": [
+        "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/preview/PreviewChromeRow.tsx#L292",
+        "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/index.css#L2390",
+        "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/index.css#L2408",
+        "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/index.css#L2413"
+      ]
+    },
+    {
+      "id": "browser-live-08",
+      "title": "Screenshot export creates a page artifact with recovery actions",
+      "runtime_evidence_author": "Parent native app observations. Worker did not repeat UI.",
+      "observed": "Capture screenshot saved an artifact and exposed Copy path, Reveal in Finder, and Copy image. Copy path followed by paste exposed its exact path. The parent copied and inspected [browser-content-export.png](../evidence/t3-live/browser-content-export.png). It contains page content without app chrome.",
+      "source": "[Manager captures the guest](https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/desktop/src/preview/Manager.ts#L2587), converts the image to PNG, writes an artifact, and returns its path and metadata. [PreviewView requests the screenshot](https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/preview/PreviewView.tsx#L640) and builds the [toast with image, path, and reveal actions](https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/preview/PreviewView.tsx#L735). This differs from the annotation pipeline.",
+      "ferrite_mapping": "`BROWSER-14`.",
+      "acceptance": "A direct screenshot action creates an openable PNG of the browser viewport without app chrome and reports the destination. Copy path pastes the saved path. Reveal selects the artifact. Copy image pastes actual image data. Visible failures preserve the working page.",
+      "limit": "Copy path and the exported file were verified. Reveal and Copy image were only visible controls. Recording was not exercised and needs separate verification of start, stop, and playable output.",
+      "ferrite_finding_ids": [
+        "BROWSER-14"
+      ],
+      "source_anchors": [
+        "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/desktop/src/preview/Manager.ts#L2587",
+        "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/preview/PreviewView.tsx#L640",
+        "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/preview/PreviewView.tsx#L735"
+      ]
+    },
+    {
+      "id": "browser-live-09",
+      "title": "Element annotation reaches the real model with a note and screenshot",
+      "runtime_evidence_author": "Parent native app observations. Worker did not repeat UI.",
+      "observed": "Annotation exposed Select, Region, Draw, and Erase. Selecting the heading identified an h1 and opened an editor. Enter attached the note to the existing draft without sending. The expanded chip showed page title, note, and element count. After Send, real Sonnet described the h1 selector, page URL, dimensions, font, and screenshot selection overlay. The composer cleared.",
+      "source": "PickPreload [captures element and page context](https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/desktop/src/preview/PickPreload.ts#L441), [defines the four tools](https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/desktop/src/preview/PickPreload.ts#L1244), and [snapshots the note and selected geometry](https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/desktop/src/preview/PickPreload.ts#L1708). Manager [attaches a cropped screenshot](https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/desktop/src/preview/Manager.ts#L2316). [PreviewView inserts annotation context and an optional image](https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/preview/PreviewView.tsx#L828), then calls the immediate-send callback only for a send submission. [useComposerSend snapshots annotation context](https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/useComposerSend.ts#L743) alongside image attachments. Shared formatting serializes [element metadata](https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/packages/shared/src/composerContextReferences.ts#L278) and [page, URL, and comment context](https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/packages/shared/src/composerContextReferences.ts#L310) for provider expansion.",
+      "ferrite_mapping": "`BROWSER-14` concerns separate direct export. Ferrite already has element and region capture, a drawing editor, and retained evidence. This successful T3 annotation baseline adds no missing-annotation finding.",
+      "acceptance": "Select an h1, add a note, attach it to an unrelated draft, inspect the context, and send once. An actual provider receives element identity, URL, dimensions, relevant style context, note, and screenshot. The composer clears only after successful submission. Cancel preserves the prior draft. Screenshot failure is visible and cannot imply an image reached the model.",
+      "limit": "Only element selection and one attachment/send were exercised. Region, Draw, Erase, style edits, voice, cancellation, and screenshot failure remain source-supported or acceptance-only.",
+      "ferrite_finding_ids": [
+        "BROWSER-14"
+      ],
+      "source_anchors": [
+        "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/desktop/src/preview/PickPreload.ts#L441",
+        "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/desktop/src/preview/PickPreload.ts#L1244",
+        "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/desktop/src/preview/PickPreload.ts#L1708",
+        "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/desktop/src/preview/Manager.ts#L2316",
+        "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/preview/PreviewView.tsx#L828",
+        "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/useComposerSend.ts#L743",
+        "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/packages/shared/src/composerContextReferences.ts#L278",
+        "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/packages/shared/src/composerContextReferences.ts#L310"
+      ]
+    },
+    {
+      "id": "browser-live-10",
+      "title": "Viewport presets rotate independently of the panel",
+      "runtime_evidence_author": "Parent native app observations. Worker did not repeat UI.",
+      "observed": "The toolbar exposed preset, width, height, ratio lock, rotation, and resize handles. iPhone 12 Pro set 390 by 844. Rotate changed the controls to 844 by 390. Closing the toolbar restored normal view.",
+      "source": "The [shared preset table](https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/packages/shared/src/previewViewport.ts#L36) defines those dimensions. BrowserDeviceToolbar [resolves the preset](https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/browser/BrowserDeviceToolbar.tsx#L145). Its [rotation handler](https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/browser/BrowserDeviceToolbar.tsx#L153) swaps dimensions and inverts a locked aspect ratio.",
+      "ferrite_mapping": "`BROWSER-09`.",
+      "acceptance": "Choose 390 by 844 independently of panel width. Rotate to 844 by 390 and verify the actual page viewport and a media-query fixture match the displayed controls. Keep chat readable, restore fill mode on close, and cover custom dimensions, bounds, ratio lock, and resize handles.",
+      "limit": "The live record verifies displayed dimensions and view restoration. It does not independently measure window.innerWidth, device identity, touch emulation, user agent, custom dimensions, or drag handles.",
+      "ferrite_finding_ids": [
+        "BROWSER-09"
+      ],
+      "source_anchors": [
+        "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/packages/shared/src/previewViewport.ts#L36",
+        "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/browser/BrowserDeviceToolbar.tsx#L145",
+        "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/browser/BrowserDeviceToolbar.tsx#L153"
+      ]
+    },
+    {
+      "id": "browser-live-11",
+      "title": "Alert and confirm work while Prompt throws an observed unsupported error",
+      "runtime_evidence_author": "Parent native app observations. Worker did not repeat UI.",
+      "observed": "Alert opened a native Amber alert sheet and Enter dismissed it. Confirm opened Cancel and OK. Escape dismissed it, and the page displayed Confirm: false. Rechecking Prompt on the verified Amber URL left that status unchanged. The parent opened DevTools for the confirmed Amber page and selected Console. Its native console displayed Uncaught Error: prompt() is not supported. The error was repeated 2 times. The DevTools windows were closed with Command-W.",
+      "source": "Installed T3 [pins Electron 44.10.1](https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/desktop/package.json#L25). That exact [Electron implementation](https://github.com/electron/electron/blob/v44.10.1/lib/renderer/window-setup.ts#L17) replaces window.prompt with a function that throws an unsupported error before webview-specific setup. No prompt replacement or custom JavaScript-dialog bridge appeared in the bounded installed Manager, DesktopWindow, or PickPreload files inspected here. The [recorded fixture location](../evidence/t3-live/fixture.json) resolves to an inspected `index.html`. Its Prompt handler evaluates `prompt()` before assigning the status text. The observed unsupported exception prevents that assignment and explains the unchanged status. The native Console result now confirms the unsupported-prompt failure that the exact Electron source explained.",
+      "ferrite_mapping": "`BROWSER-02`.",
+      "acceptance": "Ferrite alert shows the message. Confirm OK returns true, while Cancel or Escape returns false. Verify both branches. Prompt returns entered text and null on cancel, or the app states its deliberate compatibility limitation and offers a system-browser route. Do not copy T3's unsupported-prompt failure as desired parity.",
+      "limit": "The runtime exception is now observed on the confirmed Amber page. It establishes the unsupported-prompt failure, not a successful prompt return value. An earlier DevTools attempt targeted Cobalt during an unsettled tab action. The later separate-call URL verification and Amber Console check establish the correct target and do not support a targeting-defect finding. Native alert and confirm were actually observed, so do not group all T3 JavaScript dialogs as unsupported. Ferrite's dialog finding remains source-proven in this slice.",
+      "ferrite_finding_ids": [
+        "BROWSER-02"
+      ],
+      "source_anchors": [
+        "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/desktop/package.json#L25",
+        "https://github.com/electron/electron/blob/v44.10.1/lib/renderer/window-setup.ts#L17"
+      ]
+    }
+  ],
+  "prompt_followup": {
+    "classification": "Runtime-observed unsupported-prompt failure matched to exact Electron source.",
+    "electron_revision": "v44.10.1",
+    "observed_console_exception": true,
+    "inspected_override_search": [
+      {
+        "source_key": "pingdotgg/t3code/1264c206aee0dce805d6279809118bc091f29d2f/apps/desktop/src/preview/Manager.ts",
+        "searched_patterns": [
+          "window\\.prompt",
+          "javascript.dialog",
+          "js-dialog",
+          "onJSDialog"
+        ],
+        "matches": [],
+        "scope": "Bounded inspected files only, not absence across the whole product."
+      },
+      {
+        "source_key": "pingdotgg/t3code/1264c206aee0dce805d6279809118bc091f29d2f/apps/desktop/src/window/DesktopWindow.ts",
+        "searched_patterns": [
+          "window\\.prompt",
+          "javascript.dialog",
+          "js-dialog",
+          "onJSDialog"
+        ],
+        "matches": [],
+        "scope": "Bounded inspected files only, not absence across the whole product."
+      },
+      {
+        "source_key": "pingdotgg/t3code/1264c206aee0dce805d6279809118bc091f29d2f/apps/desktop/src/preview/PickPreload.ts",
+        "searched_patterns": [
+          "window\\.prompt",
+          "javascript.dialog",
+          "js-dialog",
+          "onJSDialog"
+        ],
+        "matches": [],
+        "scope": "Bounded inspected files only, not absence across the whole product."
+      }
+    ],
+    "runtime_evidence_required": null,
+    "compatibility_requirement": "Do not copy the T3 prompt limitation into Ferrite. Alert and confirm had actual native observations.",
+    "fixture": {
+      "metadata": "../evidence/t3-live/fixture.json",
+      "path": "/var/folders/5y/hnh41b2j29z8kqxy7ftzfdn80000gn/T/ferrite-t3-live-20261113-sp_in4gp/index.html",
+      "sha256": "64eac19446db421428399ef6ad7a2be88c40e5cd71f405db0a451d28d6fb0e8e",
+      "prompt_onclick": "document.querySelector('#result').textContent='Prompt: '+prompt('Amber prompt','fixture')",
+      "handler_inspected": true,
+      "event_invocation_observed": true,
+      "effect": "The observed prompt exception prevents the textContent assignment, explaining the unchanged status."
+    },
+    "console_error": "Uncaught Error: prompt() is not supported.",
+    "console_error_repeat_count": 2,
+    "confirmed_guest": "Amber fixture URL verified in a separate observation before DevTools Console inspection.",
+    "runtime_evidence_received": "Parent native Console on confirmed Amber page displayed the unsupported prompt error repeated 2 times after Prompt recheck left Confirm: false unchanged.",
+    "targeting_boundary": "Initial DevTools attempt targeted Cobalt while tab selection was unsettled. Later separate-call verification confirmed Amber. No targeting defect is recorded.",
+    "devtools_cleanup": "DevTools windows closed through Command-W."
+  },
+  "additional_boundaries": [
+    "Floating-preview coexistence and explicit close were observed. Activation was confounded and is not certified.",
+    "DevTools opening and Console inspection on the confirmed Amber page are verified. Menu visibility alone does not verify hard reload, appearance, zoom, separate-window, cookie, or cache actions. Destructive cookie/cache actions were not used.",
+    "The wrapped Slow load anchor click was an automation limit rather than an established T3 defect.",
+    "Reopening a closed tab creates a session from URL, viewport, and profile. This does not establish preserved DOM or history.",
+    "The blue bar is a fixed-duration CSS activity animation, not network completion.",
+    "File chooser, downloads, permissions, TLS, renderer recovery, authentication popups, beforeunload, and IME remain outside this bounded sequence.",
+    "No new Ferrite finding IDs or Ferrite runtime promotions are created."
+  ],
+  "verification": {
+    "source_fetch": "Exact public raw source fetched. SHA-256 and comparison identity recorded. Cited line existence checked against fetched text.",
+    "report_checks": "Eleven unique journeys, exact source revision, nonempty source anchors, relative link existence, inspected Prompt handler, JSON round trip.",
+    "tests": "Not run. Documentation-only correspondence.",
+    "typecheck": "Not run. No app code changed.",
+    "builds": "Not run.",
+    "ui": "Parent alone owns UI and models. Worker did not access UI.",
+    "writes": [
+      "reports/t3-browser-live-source-match.md",
+      "reports/t3-browser-live-source-match.json"
+    ]
+  },
+  "principles": [
+    {
+      "name": "Prove It Works",
+      "choice": "Upgrade Prompt only after correctly targeted native Console evidence. Separate menu visibility, completed actions, and source correspondence."
+    }
+  ]
+}

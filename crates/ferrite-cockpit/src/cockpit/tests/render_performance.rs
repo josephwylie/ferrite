@@ -231,61 +231,6 @@ fn expand_reasoning_rows(view: &gpui::Entity<CockpitView>, cx: &mut gpui::Visual
 }
 
 #[gpui::test]
-fn typing_in_a_focused_composer_does_not_render_sibling_native_transcripts(
-    cx: &mut TestAppContext,
-) {
-    let (mut core, fake) = cockpit("render-composer-isolation", 3);
-    let group = group_all(&mut core);
-    long_transcripts(&fake);
-    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
-    cx.simulate_resize(gpui::size(px(1800.), px(800.)));
-    view.update(cx, |view, cx| view.enter_group(group, cx));
-    tick(cx);
-    tick(cx);
-
-    // The first Pane owns the keyboard before the observed edit. The two
-    // warmed siblings have long, actual native Markdown documents.
-    view.update(cx, |view, cx| {
-        view.focus_pane(0);
-        cx.notify();
-    });
-    cx.run_until_parked();
-    cx.update(|window, cx| {
-        let view = view.read(cx);
-        assert!(
-            view.panes[0]
-                .composer
-                .read(cx)
-                .focus_handle(cx)
-                .is_focused(window),
-            "the focused Pane's Composer owns the keyboard before typing"
-        );
-    });
-    let siblings = view.read_with(cx, |view, _| {
-        view.panes[1..]
-            .iter()
-            .map(|pane| format!("markdown-{}-", pane.text_namespace()))
-            .collect::<Vec<_>>()
-    });
-
-    // GPUI changes hover/focus-visible styling once on mouse-to-keyboard
-    // transition. Measure ordinary typing after that global state has settled.
-    cx.simulate_keystrokes("left");
-    cx.run_until_parked();
-    reset_native_text_renders(cx);
-    cx.simulate_input("x");
-    cx.run_until_parked();
-
-    assert!(
-        siblings
-            .iter()
-            .all(|prefix| native_text_renders(prefix, cx) == 0),
-        "typing in one Composer must not reconstruct a sibling transcript's native text"
-    );
-    assert_eq!(composer_text(&view, cx), "x");
-}
-
-#[gpui::test]
 fn streaming_without_drawing_releases_temporary_transcript_elements(cx: &mut TestAppContext) {
     let (core, fake) = cockpit("stream-without-drawing", 1);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
@@ -312,60 +257,6 @@ fn streaming_without_drawing_releases_temporary_transcript_elements(cx: &mut Tes
         cache.retained_handles(),
         before,
         "stream updates must release all temporary native text handles"
-    );
-}
-
-#[gpui::test]
-fn streaming_one_pane_does_not_render_sibling_native_transcripts(cx: &mut TestAppContext) {
-    let (mut core, fake) = cockpit("render-stream-isolation", 3);
-    let group = group_all(&mut core);
-    long_transcripts(&fake);
-    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
-    cx.simulate_resize(gpui::size(px(1800.), px(800.)));
-    view.update(cx, |view, cx| {
-        view.enter_group(group, cx);
-        view.focus_pane(0);
-    });
-    tick(cx);
-    tick(cx);
-    tick(cx);
-    // Flush the initial native parser's notification before measuring a new
-    // stream event against the warmed scene.
-    view.update(cx, |_, cx| cx.notify());
-    cx.run_until_parked();
-    let focused_prefix = view.read_with(cx, |view, _| {
-        format!("markdown-{}-", view.panes[0].text_namespace())
-    });
-    let siblings = view.read_with(cx, |view, _| {
-        view.panes[1..]
-            .iter()
-            .map(|pane| format!("markdown-{}-", pane.text_namespace()))
-            .collect::<Vec<_>>()
-    });
-
-    reset_native_text_renders(cx);
-    let streamed_line = "the focused Pane streamed one more ordinary line";
-    fake.streams.borrow()[0]
-        .send(SessionEvent::TextDelta {
-            text: format!("{streamed_line}\n\n"),
-        })
-        .unwrap();
-    tick(cx);
-
-    assert!(
-        native_text_renders(&focused_prefix, cx) > 0,
-        "streaming must update the focused Pane's mounted native text wrapper"
-    );
-    assert!(
-        siblings
-            .iter()
-            .all(|prefix| native_text_renders(prefix, cx) == 0),
-        "streaming one Pane must not reconstruct sibling transcript native text"
-    );
-    assert!(
-        cx.update(|_, cx| ferrite_pane::rich::testing::full_text(&focused_prefix, cx))
-            .is_some_and(|text| text.contains(streamed_line)),
-        "the focused native parser must contain the streamed text"
     );
 }
 
@@ -858,13 +749,11 @@ fn replacing_an_offscreen_selected_thinking_row_clears_only_that_selection(
     );
 }
 
-/// Reading preference changes layout, not the native source/selection identity,
-/// and it is one size for every transcript: Solo, a Group, fullscreen.
+/// Reading preference changes layout, not the native source/selection identity.
 #[gpui::test]
 fn reading_size_reflows_without_replacing_text_or_selection(cx: &mut TestAppContext) {
     use ferrite_core::settings::ReadingSize;
-    let (mut core, fake) = cockpit("solo-reading-size", 2);
-    let group = group_all(&mut core);
+    let (core, fake) = cockpit("solo-reading-size", 2);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     cx.simulate_resize(gpui::size(px(1100.), px(700.)));
     for stream in fake.streams.borrow().iter() {
@@ -909,35 +798,6 @@ fn reading_size_reflows_without_replacing_text_or_selection(cx: &mut TestAppCont
             Some(selected.clone())
         );
     });
-    view.update(cx, |view, cx| view.enter_group(group, cx));
-    tick(cx);
-    cx.update(|_, cx| {
-        // A Group Pane reads half a step under it (SPEC §3.5).
-        assert_eq!(
-            ferrite_pane::rich::testing::font_size(&prefix, cx),
-            Some(px(18. - ferrite_ui::theme::TX_GROUP_STEP))
-        );
-        assert_eq!(
-            ferrite_pane::rich::testing::first_entity(&prefix, cx),
-            Some(identity)
-        );
-    });
-    view.update(cx, |view, cx| {
-        view.focus_pane(index);
-        view.cockpit.toggle_fullscreen();
-        cx.notify();
-    });
-    tick(cx);
-    cx.update(|_, cx| {
-        assert_eq!(
-            ferrite_pane::rich::testing::font_size(&prefix, cx),
-            Some(px(theme::tx_size(ReadingSize::nearest(18), true)))
-        );
-        assert_eq!(
-            ferrite_pane::rich::testing::first_entity(&prefix, cx),
-            Some(identity)
-        );
-    });
 }
 
 #[gpui::test]
@@ -953,7 +813,7 @@ fn keyboard_reaches_code_actions_after_disclosures_and_returns_to_the_draft(
     }
     let (mut core, fake) = cockpit("code-actions-keyboard", 1);
     let thread = core.threads()[0];
-    core.send(thread, "prior prompt".into());
+    let _ = core.send(thread, "prior prompt".into());
     bind_production_keys(cx);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new_thinking(core, cx));
     cx.simulate_resize(gpui::size(px(1000.), px(900.)));
@@ -983,7 +843,7 @@ fn keyboard_reaches_code_actions_after_disclosures_and_returns_to_the_draft(
     cx.simulate_keystrokes("tab");
     view.read_with(cx, |view, _| assert!(view.panes[0].has_tool_target()));
     cx.simulate_keystrokes("tab");
-    assert!(cx.update(|window, _| ferrite_pane::rich::code_actions_focused(window)));
+    assert!(cx.update(|window, _| ferrite_pane::rich::controls_focused(window)));
     enter(cx);
     assert_eq!(clipboard(cx).as_deref(), Some("    first();"));
     // HTML has Preview before Copy in the same native tab order.
@@ -1044,7 +904,7 @@ fn code_copy_traversal_does_not_accept_an_empty_composers_followup(cx: &mut Test
     });
 
     cx.simulate_keystrokes("shift-tab");
-    assert!(cx.update(|window, _| ferrite_pane::rich::code_actions_focused(window)));
+    assert!(cx.update(|window, _| ferrite_pane::rich::controls_focused(window)));
     cx.simulate_keystrokes("tab");
     cx.update(|window, cx| {
         let view = view.read(cx);
@@ -1124,43 +984,6 @@ fn answer_gutter_and_padding_survive_wrapping_resize(cx: &mut TestAppContext) {
         heights[1] > heights[0],
         "narrower Markdown must wrap naturally"
     );
-}
-
-/// Reproducible CPU layout probe; uses synthetic sessions and no local logs.
-/// Run with `cargo test -p ferrite streaming_layout_probe -- --ignored --nocapture`.
-#[gpui::test]
-#[ignore = "local performance probe"]
-fn streaming_layout_probe(cx: &mut TestAppContext) {
-    let (mut core, fake) = cockpit("streaming-layout-probe", 4);
-    let group = group_all(&mut core);
-    long_transcripts(&fake);
-    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
-    cx.simulate_resize(gpui::size(px(1440.), px(900.)));
-    view.update(cx, |view, cx| view.enter_group(group, cx));
-    for _ in 0..4 {
-        tick(cx);
-    }
-    let started = std::time::Instant::now();
-    for _ in 0..60 {
-        for stream in fake.streams.borrow().iter() {
-            stream
-                .send(SessionEvent::TextDelta {
-                    text: "more words ".into(),
-                })
-                .unwrap();
-        }
-        tick(cx);
-    }
-    eprintln!(
-        "STREAM_LAYOUT iterations=60 panes=4 elapsed_ms={:.3}",
-        started.elapsed().as_secs_f64() * 1000.
-    );
-    let prefix = view.read_with(cx, |view, _| {
-        format!("markdown-{}-", view.panes[0].text_namespace())
-    });
-    assert!(cx
-        .update(|_, cx| ferrite_pane::rich::testing::full_text(&prefix, cx))
-        .is_some_and(|text| text.contains("more words ".repeat(60).trim_end())));
 }
 
 /// Delivers the display frame the last draw asked for, and says how many
@@ -1265,7 +1088,7 @@ fn a_working_thread_asks_for_frames_and_stops_when_it_ends(cx: &mut TestAppConte
     ferrite_ui::motion::testing::drive();
     let (mut core, fake) = cockpit("motion-working", 1);
     let thread = core.threads()[0];
-    core.send(thread, "Inspect progress".into());
+    let _ = core.send(thread, "Inspect progress".into());
     let (_view, cx) = add_unfocused_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     cx.simulate_resize(gpui::size(px(1000.), px(700.)));
     fake.streams.borrow()[0]
@@ -1310,7 +1133,7 @@ fn a_loop_frame_leaves_the_cached_transcript_untouched(cx: &mut TestAppContext) 
     ferrite_ui::motion::testing::drive();
     let (mut core, fake) = cockpit("motion-tick-isolation", 1);
     let thread = core.threads()[0];
-    core.send(thread, "Inspect progress".into());
+    let _ = core.send(thread, "Inspect progress".into());
     long_transcripts(&fake);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     cx.simulate_resize(gpui::size(px(1400.), px(900.)));
@@ -1347,7 +1170,7 @@ fn a_live_appended_row_fades_in_and_then_rests(cx: &mut TestAppContext) {
     ferrite_ui::motion::testing::drive();
     let (mut core, fake) = cockpit("motion-arrival", 1);
     let thread = core.threads()[0];
-    core.send(thread, "Inspect progress".into());
+    let _ = core.send(thread, "Inspect progress".into());
     long_transcripts(&fake);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     cx.simulate_resize(gpui::size(px(1400.), px(900.)));
@@ -1397,7 +1220,7 @@ fn an_answer_arriving_whole_at_its_turn_end_plays_its_whole_fade(cx: &mut TestAp
     ferrite_ui::motion::testing::drive();
     let (mut core, fake) = cockpit("motion-whole-answer", 1);
     let thread = core.threads()[0];
-    core.send(thread, "Say hello".into());
+    let _ = core.send(thread, "Say hello".into());
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     cx.simulate_resize(gpui::size(px(1400.), px(900.)));
     tick(cx);
@@ -1448,7 +1271,7 @@ fn working_and_unread_panes_cost_at_most_one_pulse_tick_rate(cx: &mut TestAppCon
     let (mut core, fake) = cockpit("motion-breath-budget", 4);
     let threads = core.threads().to_vec();
     for thread in &threads {
-        core.send(*thread, "Inspect progress".into());
+        let _ = core.send(*thread, "Inspect progress".into());
     }
     let (_view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     cx.simulate_resize(gpui::size(px(1440.), px(900.)));
@@ -1523,45 +1346,6 @@ fn working_and_unread_panes_cost_at_most_one_pulse_tick_rate(cx: &mut TestAppCon
     );
 }
 
-fn board_left(cx: &mut gpui::VisualTestContext) -> f32 {
-    f32::from(cx.debug_bounds("board").expect("the board").left())
-}
-
-#[gpui::test]
-fn the_nav_collapse_snaps_without_frames(cx: &mut TestAppContext) {
-    ferrite_ui::motion::testing::drive();
-    let (core, _fake) = cockpit("motion-nav", 2);
-    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
-    cx.simulate_resize(gpui::size(px(1440.), px(900.)));
-    tick(cx);
-    settle(cx);
-    assert!((board_left(cx) - nav::COLUMN_WIDTH).abs() <= 0.5, "open");
-    for (collapsed, left) in [(true, 0.0), (false, nav::COLUMN_WIDTH)] {
-        view.update(cx, |view, cx| view.set_nav_collapsed(collapsed, cx));
-        cx.run_until_parked();
-        assert!(
-            (board_left(cx) - left).abs() <= 0.5,
-            "collapsed {collapsed}: at its edge at once"
-        );
-        assert_eq!(display_frames(cx), 0, "and asks for nothing");
-    }
-}
-
-#[gpui::test]
-fn reduced_motion_snaps_the_nav_collapse(cx: &mut TestAppContext) {
-    ferrite_ui::motion::testing::drive();
-    let (core, _fake) = cockpit("motion-nav-reduced", 1);
-    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
-    cx.simulate_resize(gpui::size(px(1440.), px(900.)));
-    cx.update(|_, cx| cx.set_reduce_motion(true));
-    tick(cx);
-    settle(cx);
-    view.update(cx, |view, cx| view.set_nav_collapsed(true, cx));
-    cx.run_until_parked();
-    assert!(board_left(cx).abs() <= 0.5);
-    assert_eq!(display_frames(cx), 0);
-}
-
 /// A Solo window of one Thread at 1600 wide whose settings are its own
 /// (the panel's toggle saves them), settled on its first paint.
 fn panel_window<'a>(
@@ -1590,51 +1374,29 @@ fn solo_card_right(view: &gpui::Entity<CockpitView>, cx: &mut gpui::VisualTestCo
     card.x + card.w
 }
 
-/// ⌥⌘B snaps the panel's column open and shut, as Claude's does
-/// (`motion-measured.md`): the board gives up or takes back the width on
-/// the next frame, the toggle never moves, and no frame is asked for.
+/// Focus moving to a draft, which has no panel, takes the toggle away at
+/// once and slides the panel shut.
 #[gpui::test]
-fn the_panel_snaps_in_and_out_without_frames(cx: &mut TestAppContext) {
-    use ferrite_ui::theme::PANEL_W;
-    ferrite_ui::motion::testing::drive();
-    let (view, cx) = panel_window("motion-panel", cx);
-    assert_eq!(panel_width(cx), Some(PANEL_W), "first paint");
-    assert!(cx.debug_bounds("panel-toggle").is_some(), "the rail's door");
-
-    view.update(cx, |view, cx| view.toggle_panel_now(cx));
-    cx.run_until_parked();
-    assert_eq!(panel_width(cx), None, "gone at once");
-    assert_eq!(
-        solo_card_right(&view, cx),
-        1600.,
-        "flush to the window's edge"
-    );
-    assert!(cx.debug_bounds("panel-toggle").is_some(), "still there");
-    assert_eq!(display_frames(cx), 0, "no ride asks for frames");
-
-    view.update(cx, |view, cx| view.toggle_panel_now(cx));
-    cx.run_until_parked();
-    assert_eq!(panel_width(cx), Some(PANEL_W), "back at once");
-    assert_eq!(solo_card_right(&view, cx), 1600. - PANEL_W);
-    assert!(cx.debug_bounds("panel-toggle").is_some(), "still there");
-    assert_eq!(display_frames(cx), 0);
-}
-
-/// Focus moving to a draft, which has no panel, takes the panel and the
-/// toggle away at once.
-#[gpui::test]
-fn the_panel_goes_at_once_when_focus_moves_to_a_draft(cx: &mut TestAppContext) {
+fn the_panel_slides_shut_when_focus_moves_to_a_draft(cx: &mut TestAppContext) {
     ferrite_ui::motion::testing::drive();
     let (view, cx) = panel_window("motion-panel-draft", cx);
     view.update(cx, |view, cx| {
         view.open_draft_with_provider(DraftTarget::Main, Provider::Claude, cx)
     });
     cx.run_until_parked();
-    assert_eq!(panel_width(cx), None);
     assert!(
         cx.debug_bounds("panel-toggle").is_none(),
         "no Thread: no toggle"
     );
+    cx.executor().advance_clock(Duration::from_millis(60));
+    display_frames(cx);
+    let mid = panel_width(cx).expect("still sliding");
+    assert!(
+        mid > 0. && mid < ferrite_ui::theme::PANEL_W,
+        "narrowing: {mid}"
+    );
+    settle(cx);
+    assert_eq!(panel_width(cx), None, "then gone");
 }
 
 /// A preview opening in a shown Panel snaps it to its wide width, its card
@@ -1670,7 +1432,11 @@ fn a_preview_snaps_the_panel_wide(cx: &mut TestAppContext) {
 
     view.update(cx, |view, cx| view.close_preview(0, cx));
     cx.run_until_parked();
-    assert_eq!(panel_width(cx), Some(wide), "the width kept");
+    assert_eq!(
+        panel_width(cx),
+        Some(ferrite_ui::theme::PANEL_W),
+        "the compact width back: the preview's floor was never saved"
+    );
     assert!(
         cx.debug_bounds("panel-sections").is_some(),
         "the sections, at once"
@@ -1681,8 +1447,8 @@ fn a_preview_snaps_the_panel_wide(cx: &mut TestAppContext) {
     );
 }
 
-/// A preview opened while the Panel is hidden opens the Thread's Panel, at
-/// its wide width at once, while the setting never changes; closing it
+/// A preview opened while the Panel is hidden opens the Thread's Panel,
+/// sliding in to its wide width, while the setting never changes; closing it
 /// lets the preview go and leaves the Panel on its Overview.
 #[gpui::test]
 fn a_preview_opens_a_hidden_panel(cx: &mut TestAppContext) {
@@ -1690,6 +1456,7 @@ fn a_preview_opens_a_hidden_panel(cx: &mut TestAppContext) {
     let (view, cx) = panel_window("motion-panel-preview-hidden", cx);
     view.update(cx, |view, cx| view.toggle_panel_now(cx));
     cx.run_until_parked();
+    settle(cx);
     assert_eq!(panel_width(cx), None, "the premise: hidden");
     let dir = scratch("motion-panel-preview-hidden-file");
     std::fs::create_dir_all(&dir).unwrap();
@@ -1701,6 +1468,7 @@ fn a_preview_opens_a_hidden_panel(cx: &mut TestAppContext) {
         })
     });
     cx.run_until_parked();
+    settle(cx);
     let wide = panel_width(cx).expect("shown");
     assert_eq!(wide, view.read_with(cx, |view, _| view.board_right()));
     assert!(
@@ -1715,111 +1483,6 @@ fn a_preview_opens_a_hidden_panel(cx: &mut TestAppContext) {
         view.read_with(cx, |view, _| !view.panes[0].preview.is_open()),
         "and the preview closed"
     );
-}
-
-/// Step a slide a 120Hz display frame at a time until the window asks
-/// for none: the frames it took, and the wall time they cost.
-fn slide_frames(cx: &mut gpui::VisualTestContext) -> (usize, Duration) {
-    let started = std::time::Instant::now();
-    let mut frames = 0;
-    for _ in 0..64 {
-        cx.executor().advance_clock(Duration::from_millis(8));
-        if display_frames(cx) == 0 {
-            break;
-        }
-        frames += 1;
-    }
-    (frames, started.elapsed())
-}
-
-/// A Review sliding open beside one Pane of a Group, and shut again: each
-/// frame of the slide redraws the frame around the parts, which lays the
-/// board out again and draws the review (at its final width), and builds
-/// the one Pane whose cell moves — its transcript re-wrapping at the new
-/// width, as under a cmd-B fold — and nothing else: its neighbour and the
-/// nav replay from their caches. Landed, the window asks for no frame.
-#[gpui::test]
-fn a_review_slide_builds_only_the_pane_beside_it(cx: &mut TestAppContext) {
-    ferrite_ui::motion::testing::drive();
-    let _clock = hold_wall_clock();
-    let (mut core, fake) = cockpit("reader-slide-budget", 2);
-    let group = group_all(&mut core);
-    core.enter_group(group).unwrap();
-    let threads = core.threads().to_vec();
-    long_transcripts(&fake);
-    for stream in fake.streams.borrow().iter() {
-        stream
-            .send(SessionEvent::TurnEnded {
-                outcome: ferrite_core::TurnOutcome::Completed,
-                cost_usd: None,
-            })
-            .unwrap();
-    }
-    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
-    cx.simulate_resize(gpui::size(px(1440.), px(900.)));
-    view.update(cx, |view, cx| {
-        view.focus_pane(0);
-        cx.notify();
-    });
-    tick(cx);
-    tick(cx);
-    settle(cx);
-    // The off-board finishes' toasts come and go first.
-    outlast_toasts(cx);
-    let prefix = view.read_with(cx, |view, _| {
-        format!("markdown-{}-", view.panes[0].text_namespace())
-    });
-
-    let measure = |what: &str, cx: &mut gpui::VisualTestContext| {
-        let (nav, panes) = (crate::cockpit::drawn::nav_renders(), pane_builds(&threads));
-        reset_native_text_renders(cx);
-        let (frames, took) = slide_frames(cx);
-        let nav = crate::cockpit::drawn::nav_renders() - nav;
-        let built: Vec<usize> = pane_builds(&threads)
-            .iter()
-            .zip(&panes)
-            .map(|(after, before)| after - before)
-            .collect();
-        let rewrapped = native_text_renders(&prefix, cx);
-        eprintln!(
-            "REVIEW_SLIDE {what} frames={frames} pane_builds={} neighbour_builds={} \
-             nav_builds={nav} transcript_text_renders={rewrapped} ms_per_frame={:.2}",
-            built[0],
-            built[1],
-            took.as_secs_f64() * 1_000.0 / frames.max(1) as f64,
-        );
-        let most = (ferrite_ui::theme::MOTION_SLOT_OPEN_MS / 8 + 2) as usize;
-        assert!(frames > 2 && frames <= most, "{what}: {frames} frames");
-        assert!(
-            built[0] <= frames + 2,
-            "{what}: the Pane beside the review built {} times in {frames} frames",
-            built[0]
-        );
-        assert_eq!(built[1], 0, "{what}: the neighbour was built again");
-        assert_eq!(nav, 0, "{what}: the nav was built again");
-        assert_eq!(display_frames(cx), 0, "{what}: landed, no frame");
-    };
-
-    view.update(cx, |view, cx| {
-        let composer = view.panes[0].composer.clone();
-        let reading = view.prefs.settings.reading_size;
-        let review = cx.new(|cx| {
-            crate::review::ReviewView::new(
-                composer,
-                ferrite_reviewr::model::Scope::Uncommitted,
-                reading,
-                cx,
-            )
-        });
-        view.panes[0].review.show(review, "main".into());
-        cx.notify();
-    });
-    // The open itself is the Cockpit's own change: every part builds once.
-    cx.run_until_parked();
-    measure("open", cx);
-    view.update(cx, |view, cx| view.close_review(0, cx));
-    cx.run_until_parked();
-    measure("close", cx);
 }
 
 /// A nav row's hover lands at once (`motion::HOVER_SNAP`, as Claude's
@@ -1877,79 +1540,6 @@ fn outlast_toasts(cx: &mut gpui::VisualTestContext) {
     leap(cx, crate::notifications::DONE_TOAST);
     settle(cx);
 }
-
-/// A board at work: four Panes, two of them working, an active window. The
-/// loops on screen — the working lines' stars, the working marks in the
-/// heads and the nav, the caret, and the focused working Pane's shimmer —
-/// are drawn by the loops overlay when one of them steps, never more than
-/// once a pulse tick, and the Cockpit is rebuilt only for its clocks.
-#[gpui::test]
-fn a_working_board_renders_the_cockpit_only_when_a_loop_steps(cx: &mut TestAppContext) {
-    ferrite_ui::motion::testing::drive();
-    let (mut core, fake) = cockpit("working-board-budget", 4);
-    let group = group_all(&mut core);
-    let threads = core.threads().to_vec();
-    for thread in &threads[..2] {
-        core.send(*thread, "Inspect progress".into());
-    }
-    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
-    cx.simulate_resize(gpui::size(px(1440.), px(900.)));
-    cx.update(|window, _| window.activate_window());
-    view.update(cx, |view, cx| {
-        view.enter_group(group, cx);
-        view.focus_pane(0);
-        cx.notify();
-    });
-    for stream in 0..2 {
-        fake.streams.borrow()[stream]
-            .send(SessionEvent::ReasoningSummaryDelta {
-                text: "**Checking marks**".into(),
-                summary_index: 0,
-            })
-            .unwrap();
-    }
-    tick(cx);
-    cockpit_renders_over(cx, 1_000);
-    assert!(
-        cx.debug_bounds("progress-mark-live").is_some(),
-        "the premise: a working mark is on screen"
-    );
-    let ticks = ferrite_ui::motion::testing::pulse_ticks();
-    let shimmering = cockpit_renders_over(cx, 5_000);
-    let ticked = ferrite_ui::motion::testing::pulse_ticks() - ticks;
-
-    // The keyboard on an idle Pane: no shimmer, only the steps.
-    view.update(cx, |view, cx| {
-        view.focus_pane(2);
-        cx.notify();
-    });
-    cockpit_renders_over(cx, 1_000);
-    let stepping = cockpit_renders_over(cx, 5_000);
-    eprintln!(
-        "WORKING_BOARD cockpit_renders_5s focused_working={shimmering} (pulse ticks {ticked}) \
-         focused_idle={stepping}"
-    );
-    // The loops step on the clock's grid at most: the Cockpit draws at
-    // its rate, never faster (A-2 takes the loops off the Cockpit; the
-    // shimmer, like the orbs, rides the overlay's display frames).
-    let tick_rate = (5_000 / ferrite_ui::theme::MOTION_PULSE_TICK_MS) as usize;
-    assert!(
-        ticked <= tick_rate + 1,
-        "{ticked} pulse ticks in 5s: more than one a tick"
-    );
-    for (keyboard, rendered) in [("a working", shimmering), ("an idle", stepping)] {
-        assert!(
-            rendered <= WORKING_BOARD_BUDGET,
-            "a working board with the keyboard on {keyboard} Pane rebuilt the Cockpit \
-             {rendered} times in 5s; budget is {WORKING_BOARD_BUDGET}"
-        );
-    }
-}
-
-/// What a working board may rebuild the Cockpit in 5s: its loops are drawn
-/// by the overlay, so only the working clocks' seconds (two Threads) and
-/// the sweep redraw it.
-const WORKING_BOARD_BUDGET: usize = 30;
 
 /// The pointer sweeping down the nav, a row every 250ms: each crossing
 /// blends a row's wash in and the last one's out, redrawing the Cockpit
@@ -2116,7 +1706,7 @@ fn reduced_motion_still_advances_a_working_clock(cx: &mut TestAppContext) {
     ferrite_ui::motion::testing::drive();
     let (mut core, fake) = cockpit("reduced-working-clock", 1);
     let thread = core.threads()[0];
-    core.send(thread, "Inspect progress".into());
+    let _ = core.send(thread, "Inspect progress".into());
     let (_view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     cx.update(|_, cx| cx.set_reduce_motion(true));
     cx.simulate_resize(gpui::size(px(1000.), px(700.)));
@@ -2160,7 +1750,7 @@ fn a_hovered_link_keeps_its_underline_while_its_transcript_streams(cx: &mut Test
     std::fs::create_dir_all(file.parent().unwrap()).unwrap();
     std::fs::write(&file, "guide\n").unwrap();
     let thread = core.threads()[0];
-    core.send(thread, "Read the guide".into());
+    let _ = core.send(thread, "Read the guide".into());
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     hold_nav_open(&view, cx);
     cx.simulate_resize(gpui::size(px(1200.), px(700.)));
@@ -2219,11 +1809,10 @@ fn pane_builds(threads: &[ThreadId]) -> Vec<usize> {
         .collect()
 }
 
-/// A four-Pane Group in an active window, the keyboard in the first Pane,
-/// `working` mid-turn, first paint settled.
-fn group_board<'a>(
+/// One Thread, Solo, in an active window, the keyboard in its Pane, first
+/// paint settled.
+fn solo_board<'a>(
     name: &str,
-    working: &[usize],
     cx: &'a mut TestAppContext,
 ) -> (
     Entity<CockpitView>,
@@ -2232,125 +1821,26 @@ fn group_board<'a>(
     &'a mut gpui::VisualTestContext,
 ) {
     ferrite_ui::motion::testing::drive();
-    let (mut core, fake) = cockpit(name, 4);
-    let group = group_all(&mut core);
+    let (core, fake) = cockpit(name, 1);
     let threads = core.threads().to_vec();
-    for index in working {
-        core.send(threads[*index], "Keep going".into());
-    }
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     cx.simulate_resize(gpui::size(px(1600.), px(1000.)));
     cx.update(|window, _| window.activate_window());
     view.update(cx, |view, cx| {
-        view.enter_group(group, cx);
         view.focus_pane(0);
         cx.notify();
     });
-    for index in working {
-        fake.streams.borrow()[*index]
-            .send(SessionEvent::ReasoningSummaryDelta {
-                text: "**Working**".into(),
-                summary_index: 0,
-            })
-            .unwrap();
-    }
     tick(cx);
     cockpit_renders_over(cx, 1_000);
     (view, fake, threads, cx)
-}
-
-/// Typing twenty characters into one Pane of a four-Pane Group rebuilds
-/// that Pane, never its siblings.
-#[gpui::test]
-fn typing_rebuilds_its_pane_and_not_its_siblings(cx: &mut TestAppContext) {
-    let (_view, _fake, threads, cx) = group_board("typing-parts", &[], cx);
-    // The first key moves the window from pointer to keyboard, which every
-    // view redraws for (gpui's focus-visible styling): measure typing after.
-    cx.simulate_keystrokes("left");
-    cx.run_until_parked();
-    let renders = || crate::cockpit::RENDERS.with(std::cell::Cell::get);
-    let (cockpit, panes) = (renders(), pane_builds(&threads));
-    for character in "the quick brown foxes".chars().take(20) {
-        cx.simulate_input(&character.to_string());
-        cx.run_until_parked();
-    }
-    let built: Vec<usize> = pane_builds(&threads)
-        .iter()
-        .zip(&panes)
-        .map(|(after, before)| after - before)
-        .collect();
-    eprintln!(
-        "TYPING_20 cockpit_renders={} pane_builds={built:?}",
-        renders() - cockpit
-    );
-    assert!(built[0] >= 20, "the typed-into Pane redraws its line");
-    assert_eq!(&built[1..], [0, 0, 0], "typing rebuilt a sibling Pane");
-}
-
-/// Streaming into one Pane rebuilds that Pane, never its siblings.
-#[gpui::test]
-fn streaming_rebuilds_its_pane_and_not_its_siblings(cx: &mut TestAppContext) {
-    let (_view, fake, threads, cx) = group_board("streaming-parts", &[1], cx);
-    let renders = || crate::cockpit::RENDERS.with(std::cell::Cell::get);
-    let (cockpit, panes) = (renders(), pane_builds(&threads));
-    for line in 0..20 {
-        fake.streams.borrow()[1]
-            .send(SessionEvent::TextDelta {
-                text: format!("streamed line {line}\n\n"),
-            })
-            .unwrap();
-        tick(cx);
-    }
-    let built: Vec<usize> = pane_builds(&threads)
-        .iter()
-        .zip(&panes)
-        .map(|(after, before)| after - before)
-        .collect();
-    eprintln!(
-        "STREAMING_20 cockpit_renders={} pane_builds={built:?}",
-        renders() - cockpit
-    );
-    assert!(built[1] > 0, "the streaming Pane redraws");
-    assert_eq!(
-        [built[0], built[2], built[3]],
-        [0, 0, 0],
-        "streaming rebuilt a sibling Pane"
-    );
-}
-
-/// The working clocks turning over rebuild the working Pane alone; the
-/// idle Panes beside it sit still.
-#[gpui::test]
-fn a_clock_rollover_rebuilds_only_the_working_pane(cx: &mut TestAppContext) {
-    let (_view, _fake, threads, cx) = group_board("clock-parts", &[1], cx);
-    // The first sweep's git labels land on every Pane's head: past it.
-    cockpit_renders_over(cx, 2_500);
-    let renders = || crate::cockpit::RENDERS.with(std::cell::Cell::get);
-    let (cockpit, panes) = (renders(), pane_builds(&threads));
-    std::thread::sleep(Duration::from_millis(1_100));
-    cockpit_renders_over(cx, 3_000);
-    let built: Vec<usize> = pane_builds(&threads)
-        .iter()
-        .zip(&panes)
-        .map(|(after, before)| after - before)
-        .collect();
-    eprintln!(
-        "CLOCK_3S cockpit_renders={} pane_builds={built:?}",
-        renders() - cockpit
-    );
-    assert!(built[1] > 0, "the working Pane redrew its clock");
-    assert_eq!(
-        [built[0], built[2], built[3]],
-        [0, 0, 0],
-        "a clock rebuilt an idle Pane"
-    );
 }
 
 /// With the palette open its line blinks, under the float, without the
 /// Cockpit or any Pane being rebuilt for it.
 #[gpui::test]
 fn an_open_palette_does_not_rebuild_the_cockpit(cx: &mut TestAppContext) {
-    let (view, _fake, threads, cx) = group_board("palette-parts", &[], cx);
+    let _clock = hold_wall_clock();
+    let (view, _fake, threads, cx) = solo_board("palette-parts", cx);
     view.update_in(cx, |view, window, cx| {
         view.open_palette(crate::palette::PaletteScope::All, "", window, cx)
     });
@@ -2369,44 +1859,7 @@ fn an_open_palette_does_not_rebuild_the_cockpit(cx: &mut TestAppContext) {
         rendered <= 10,
         "an open palette rebuilt the Cockpit {rendered} times in 5s"
     );
-    assert_eq!(built, [0, 0, 0, 0]);
-}
-
-/// The arrows in an open model picker move its cursor by rebuilding the
-/// Pane whose Composer chip it hangs from (SPEC §5.5) — once an arrow at
-/// most — and no other Pane. The chip is Solo's: the board's first Pane
-/// fills it.
-#[gpui::test]
-fn a_pickers_arrows_rebuild_only_its_own_pane(cx: &mut TestAppContext) {
-    let (view, _fake, threads, cx) = group_board("picker-parts", &[], cx);
-    bind_production_keys(cx);
-    view.update(cx, |view, cx| {
-        view.cockpit.toggle_fullscreen();
-        cx.notify();
-    });
-    cockpit_renders_over(cx, 300);
-    // The window moves from pointer to keyboard first (see the typing
-    // test above).
-    cx.simulate_keystrokes("left");
-    cx.run_until_parked();
-    view.update(cx, |view, cx| view.open_provider_picker(threads[0], cx));
-    cockpit_renders_over(cx, 1_000);
-    let panes = pane_builds(&threads);
-    for key in ["down", "down", "up", "down"] {
-        cx.simulate_keystrokes(key);
-        cx.run_until_parked();
-    }
-    let built: Vec<usize> = pane_builds(&threads)
-        .iter()
-        .zip(&panes)
-        .map(|(after, before)| after - before)
-        .collect();
-    eprintln!("PICKER_ARROWS_4 pane_builds={built:?}");
-    assert!(
-        (1..=4).contains(&built[0]),
-        "its Pane redraws the cursor: {built:?}"
-    );
-    assert_eq!(built[1..], [0, 0, 0], "an arrow rebuilt another Pane");
+    assert_eq!(built, [0]);
 }
 
 // ----------------------------------------------- what an entrance redraws
@@ -2431,12 +1884,12 @@ fn frames_over(cx: &mut gpui::VisualTestContext, ms: u64) -> usize {
     frames
 }
 
-/// A menu the Cockpit draws snaps open (`motion::MENU_IN` is 0ms): after
-/// the frame that opens it, nothing more is drawn for it and no Pane is
-/// rebuilt.
+/// A menu the Cockpit draws settles from its opener (`motion::MENU_IN`):
+/// frames run while it lands, none after, and no Pane is rebuilt.
 #[gpui::test]
-fn a_menu_snaps_open_and_rebuilds_no_pane(cx: &mut TestAppContext) {
-    let (view, _fake, threads, cx) = group_board("menu-entrance", &[], cx);
+fn a_menu_eases_open_and_rebuilds_no_pane(cx: &mut TestAppContext) {
+    ferrite_ui::motion::testing::drive();
+    let (view, _fake, threads, cx) = solo_board("menu-entrance", cx);
     view.update(cx, |view, cx| {
         view.open_context_menu(
             MenuTarget::Pane(threads[0]),
@@ -2445,22 +1898,20 @@ fn a_menu_snaps_open_and_rebuilds_no_pane(cx: &mut TestAppContext) {
         )
     });
     cx.run_until_parked();
-    // The frame that opens it is the Cockpit's change; a snap asks for no
-    // frame after it.
-    frames_over(cx, 16);
     let panes = pane_builds(&threads);
     let frames = frames_over(cx, 160);
     let built = built_since(&threads, &panes);
     eprintln!("MENU_OPEN frames={frames} pane_builds={built:?}");
-    assert_eq!(frames, 0, "the menu snaps open: no entrance frames");
-    assert_eq!(built, [0, 0, 0, 0], "opening it rebuilt a Pane");
+    assert!(frames > 0, "the menu settles in: entrance frames run");
+    assert_eq!(built, [0], "opening it rebuilt a Pane");
+    assert_eq!(frames_over(cx, 160), 0, "frames stop once it has landed");
 }
 
 /// The pointer on a row of a menu the Cockpit draws blends the row's wash
 /// in the frame around the parts: no Pane is rebuilt for it.
 #[gpui::test]
 fn a_hover_on_a_menu_row_rebuilds_no_pane(cx: &mut TestAppContext) {
-    let (view, _fake, threads, cx) = group_board("menu-row-hover", &[], cx);
+    let (view, _fake, threads, cx) = solo_board("menu-row-hover", cx);
     view.update(cx, |view, cx| {
         view.open_context_menu(
             MenuTarget::Pane(threads[0]),
@@ -2471,8 +1922,9 @@ fn a_hover_on_a_menu_row_rebuilds_no_pane(cx: &mut TestAppContext) {
     cockpit_renders_over(cx, 300);
     let panes = pane_builds(&threads);
     // A row with a shortcut: its key glyph sits on the row.
+    let primary = if cfg!(windows) { "control-key" } else { "command-key" };
     let row = cx
-        .debug_bounds("command-key")
+        .debug_bounds(primary)
         .expect("the Pane menu's shortcuts draw the glyph");
     cx.simulate_mouse_move(row.center(), None, gpui::Modifiers::none());
     cockpit_renders_over(cx, 300);
@@ -2490,7 +1942,7 @@ fn a_hover_on_a_menu_row_rebuilds_no_pane(cx: &mut TestAppContext) {
     cockpit_renders_over(cx, 300);
     let built = built_since(&threads, &panes);
     eprintln!("MENU_ROW_HOVER pane_builds={built:?}");
-    assert_eq!(built, [0, 0, 0, 0], "a menu row's hover rebuilt a Pane");
+    assert_eq!(built, [0], "a menu row's hover rebuilt a Pane");
 }
 
 /// The kit's toast stack measures a toast as it slides in: that redraws
@@ -2498,7 +1950,7 @@ fn a_hover_on_a_menu_row_rebuilds_no_pane(cx: &mut TestAppContext) {
 /// `refresh_windows` rebuilt every Pane on every frame a toast moved).
 #[gpui::test]
 fn a_kit_toast_coming_in_rebuilds_no_pane(cx: &mut TestAppContext) {
-    let (_view, _fake, threads, cx) = group_board("kit-toast", &[], cx);
+    let (_view, _fake, threads, cx) = solo_board("kit-toast", cx);
     cockpit_renders_over(cx, 2_500);
     let panes = pane_builds(&threads);
     cx.update(|window, cx| {
@@ -2518,7 +1970,7 @@ fn a_kit_toast_coming_in_rebuilds_no_pane(cx: &mut TestAppContext) {
     }
     let built = built_since(&threads, &panes);
     eprintln!("KIT_TOAST_IN pane_builds={built:?}");
-    assert_eq!(built, [0, 0, 0, 0], "a toast sliding in rebuilt a Pane");
+    assert_eq!(built, [0], "a toast sliding in rebuilt a Pane");
 }
 
 /// The kit's toast card moves as Ferrite's own toasts do (the vendored
@@ -2528,7 +1980,7 @@ fn a_kit_toast_coming_in_rebuilds_no_pane(cx: &mut TestAppContext) {
 #[gpui::test]
 fn a_kit_toast_slides_its_own_height_on_the_toast_tokens(cx: &mut TestAppContext) {
     ferrite_ui::motion::testing::drive();
-    let (_view, _fake, _threads, cx) = group_board("kit-toast-motion", &[], cx);
+    let (_view, _fake, _threads, cx) = solo_board("kit-toast-motion", cx);
     cx.update(|window, cx| {
         use gpui::component::WindowExt;
         window.push_notification(
@@ -2617,18 +2069,11 @@ fn needs_you_toast_comes_and_goes(
     cx: &mut TestAppContext,
 ) -> (usize, usize) {
     ferrite_ui::motion::testing::drive();
-    // A board of two, and a third Thread off it, working.
+    // The first Thread shown, and a third off the board, working.
     let (mut core, fake) = cockpit(name, 3);
     let threads = core.threads().to_vec();
-    core.apply_group(GroupChange::Create {
-        first: threads[0],
-        second: threads[1],
-    })
-    .unwrap();
-    let group = core.groups().of(threads[0]).unwrap().id;
-    core.send(threads[2], "task".into());
+    let _ = core.send(threads[2], "task".into());
     core.pump();
-    core.enter_group(group).unwrap();
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     cx.simulate_resize(gpui::size(px(1440.), px(900.)));
     view.update(cx, |view, cx| view.set_nav_collapsed(true, cx));
@@ -2757,12 +2202,12 @@ fn plays_beside_nav_rebuilds(
 
 /// A part's rebuild landing mid-entrance — the nav rebuilt alone on every
 /// frame — starves no `motion::Played` entrance the Cockpit draws: the
-/// palette, a sheet (a menu snaps, so it has none). The part's ancestors
+/// palette, a sheet, a menu. The part's ancestors
 /// are dirtied with it, so the Cockpit around it draws again and each
 /// entrance asks there for its next frame.
 #[gpui::test]
 fn nav_rebuilds_starve_no_entrance(cx: &mut TestAppContext) {
-    let (view, _fake, _threads, cx) = group_board("nav-rebuild-entrances", &[], cx);
+    let (view, _fake, _threads, cx) = solo_board("nav-rebuild-entrances", cx);
     view.update_in(cx, |view, window, cx| {
         view.open_palette(crate::palette::PaletteScope::All, "", window, cx)
     });
@@ -2780,7 +2225,7 @@ fn nav_rebuilds_starve_no_entrance(cx: &mut TestAppContext) {
 /// moves on every frame until it lands, then asks for none.
 #[gpui::test]
 fn nav_rebuilds_starve_no_review_slide(cx: &mut TestAppContext) {
-    let (view, _fake, _threads, cx) = group_board("nav-rebuild-review", &[], cx);
+    let (view, _fake, _threads, cx) = solo_board("nav-rebuild-review", cx);
     view.update(cx, |view, cx| {
         let composer = view.panes[0].composer.clone();
         let reading = view.prefs.settings.reading_size;
@@ -2803,7 +2248,7 @@ fn nav_rebuilds_starve_no_review_slide(cx: &mut TestAppContext) {
 /// while it does, no Pane rebuilt for them, none once it has landed.
 #[gpui::test]
 fn the_palette_comes_in_and_rebuilds_no_pane(cx: &mut TestAppContext) {
-    let (view, _fake, threads, cx) = group_board("palette-entrance", &[], cx);
+    let (view, _fake, threads, cx) = solo_board("palette-entrance", cx);
     view.update_in(cx, |view, window, cx| {
         view.open_palette(crate::palette::PaletteScope::All, "", window, cx)
     });
@@ -2816,31 +2261,32 @@ fn the_palette_comes_in_and_rebuilds_no_pane(cx: &mut TestAppContext) {
     let built = built_since(&threads, &panes);
     eprintln!("PALETTE_ENTRANCE frames={frames} pane_builds={built:?}");
     assert!(frames > 0, "the palette comes in");
-    assert_eq!(built, [0, 0, 0, 0], "its entrance rebuilt a Pane");
+    assert_eq!(built, [0], "its entrance rebuilt a Pane");
     assert_eq!(display_frames(cx), 0, "landed: no more frames");
 }
 
 /// The model picker opens in its place — no frame drawn blank while it
-/// measures itself — stands still there, and asks for nothing after.
+/// measures itself — settles from its opener, then stands still there and
+/// asks for nothing after.
 #[gpui::test]
 fn the_model_picker_opens_in_place_and_then_rests(cx: &mut TestAppContext) {
-    let (view, _fake, threads, cx) = group_board("choice-menu-entrance", &[], cx);
-    view.update(cx, |view, cx| {
-        view.cockpit.toggle_fullscreen();
-        cx.notify();
-    });
-    cockpit_renders_over(cx, 300);
+    let (view, _fake, threads, cx) = solo_board("choice-menu-entrance", cx);
     view.update(cx, |view, cx| view.open_provider_picker(threads[0], cx));
     cx.run_until_parked();
-    let mut stood = Vec::new();
-    for _ in 0..160 / 16 {
-        cx.executor().advance_clock(Duration::from_millis(16));
-        cx.run_until_parked();
-        display_frames(cx);
-        stood.extend(cx.debug_bounds("model-picker").map(|menu| menu.bottom()));
-    }
+    let watch = |cx: &mut gpui::VisualTestContext, ms: u64| {
+        let mut stood = Vec::new();
+        for _ in 0..ms / 16 {
+            cx.executor().advance_clock(Duration::from_millis(16));
+            cx.run_until_parked();
+            display_frames(cx);
+            stood.extend(cx.debug_bounds("model-picker").map(|menu| menu.bottom()));
+        }
+        stood
+    };
+    let entering = watch(cx, 160);
+    assert!(!entering.is_empty(), "the premise: it was drawn");
+    let stood = watch(cx, 160);
     assert_eq!(display_frames(cx), 0, "placed: no more frames");
-    assert!(!stood.is_empty(), "the premise: it was drawn");
     assert!(
         stood.windows(2).all(|pair| pair[0] == pair[1]),
         "it stood still once placed: {stood:?}"

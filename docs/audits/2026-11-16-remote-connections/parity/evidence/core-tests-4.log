@@ -1,0 +1,108 @@
+   Compiling ferrite-reviewr v0.46.0 (/Users/josephwylie/Desktop/Projects/ferrite-remote-connections/crates/ferrite-reviewr)
+   Compiling ferrite-core v0.4.0 (/Users/josephwylie/Desktop/Projects/ferrite-remote-connections/crates/ferrite-core)
+warning: variable does not need to be mutable
+   --> crates/ferrite-core/src/server/tests/drive.rs:121:13
+    |
+121 |     let mut driven = attach_driven(&harness.address);
+    |         ----^^^^^^
+    |         |
+    |         help: remove this `mut`
+    |
+    = note: `#[warn(unused_mut)]` (part of `#[warn(unused)]`) on by default
+
+warning: `ferrite-core` (lib test) generated 1 warning (run `cargo fix --lib -p ferrite-core --tests` to apply 1 suggestion)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 48.40s
+────────────
+ Nextest run ID d5069322-767d-479d-bfa8-a08c0626fac2 with nextest profile: default
+    Starting 68 tests across 1 binary (1314 tests skipped)
+        PASS [   0.037s] ( 1/68) ferrite-core api::tests::a_prompts_wait_until_working_answers_once_the_prompt_is_taken
+        PASS [   0.038s] ( 2/68) ferrite-core api::tests::a_thread_starts_where_the_cli_runs_unless_told
+        PASS [   0.038s] ( 3/68) ferrite-core api::tests::a_line_that_is_not_a_request_is_answered_with_why
+        PASS [   0.038s] ( 4/68) ferrite-core api::tests::a_ready_wait_answers_once_the_agent_is_up_and_at_rest
+        PASS [   0.041s] ( 5/68) ferrite-core api::tests::a_prompts_wait_times_out_while_its_agent_still_works
+        PASS [   0.042s] ( 6/68) ferrite-core api::tests::a_report_names_the_worker_it_runs_in
+        PASS [   0.044s] ( 7/68) ferrite-core api::tests::a_plain_wait_answers_at_once_when_the_agent_is_settled
+        PASS [   0.048s] ( 8/68) ferrite-core api::tests::a_prompts_wait_settles_blocked_when_its_agent_asks_a_decision
+        PASS [   0.057s] ( 9/68) ferrite-core api::tests::a_prompts_wait_settles_only_after_its_agent_was_seen_working
+        PASS [   0.079s] (10/68) ferrite-core api::tests::a_prompt_whose_agent_shows_no_work_stalls_after_five_seconds
+        PASS [   0.052s] (11/68) ferrite-core api::tests::answers_refusals_and_events_keep_their_shape
+        PASS [   0.077s] (12/68) ferrite-core api::tests::after_a_double_dash_every_word_is_an_argument
+        PASS [   0.075s] (13/68) ferrite-core api::tests::a_worktree_is_removed_by_its_directory
+        PASS [   0.097s] (14/68) ferrite-core api::tests::a_wrong_command_line_says_what_is_wrong
+        PASS [   0.090s] (15/68) ferrite-core api::tests::current_names_the_calling_thread_and_frees_its_position
+        PASS [   0.112s] (16/68) ferrite-core api::tests::an_owner_is_given_as_json
+        PASS [   0.112s] (17/68) ferrite-core api::tests::a_timeout_shorter_than_the_stall_comes_first
+        PASS [   0.112s] (18/68) ferrite-core api::tests::automatic_starts_parse_from_the_cli
+        PASS [   0.116s] (19/68) ferrite-core api::tests::a_wait_until_one_attention_passes_every_other
+        PASS [   0.080s] (20/68) ferrite-core api::tests::every_later_parameter_has_a_frozen_request_that_round_trips
+        PASS [   0.040s] (21/68) ferrite-core api::tests::every_operation_is_a_group_and_a_verb_whose_positionals_are_its_parameters
+        PASS [   0.036s] (22/68) ferrite-core api::tests::every_operations_schema_admits_a_request_this_server_reads
+        PASS [   0.033s] (23/68) ferrite-core api::tests::help_lists_every_command_with_its_arguments
+        PASS [   0.023s] (24/68) ferrite-core api::tests::positionals_come_in_their_declared_order_and_flags_by_their_type
+        PASS [   0.110s] (25/68) ferrite-core api::tests::every_frozen_request_still_decodes
+        PASS [   0.069s] (26/68) ferrite-core api::tests::every_operation_has_a_frozen_request_that_round_trips
+        PASS [   0.036s] (27/68) ferrite-core api::tests::machine_is_a_global_flag_before_the_arguments
+        PASS [   0.040s] (28/68) ferrite-core api::tests::machine_names_a_saved_enabled_machine
+        PASS [   0.064s] (29/68) ferrite-core api::tests::on_a_machine_a_cwd_is_given_whole
+        PASS [   0.046s] (30/68) ferrite-core api::tests::proposals_parse_from_the_cli
+        PASS [   0.048s] (31/68) ferrite-core api::tests::questions_approval_and_direction_parse_from_the_cli
+        PASS [   0.050s] (32/68) ferrite-core api::tests::the_bundled_skill_names_the_safety_rules
+        PASS [   0.062s] (33/68) ferrite-core api::tests::pull_requests_and_merging_parse_from_the_cli
+        PASS [   0.084s] (34/68) ferrite-core api::tests::the_cli_leaves_the_apps_own_arguments_alone
+        PASS [   0.084s] (35/68) ferrite-core api::tests::the_operations_are_the_ones_declared_and_never_renamed
+        PASS [   0.089s] (36/68) ferrite-core api::tests::the_version_is_the_name_then_semver
+        PASS [   0.107s] (37/68) ferrite-core api::tests::the_launch_options_read_as_their_parameters
+        PASS [   0.076s] (38/68) ferrite-core api::tests::window_actions_read_as_the_window_takes_them
+        PASS [   0.105s] (39/68) ferrite-core api::tests::the_stall_clock_waits_for_the_session_to_be_up
+        PASS [   0.069s] (40/68) ferrite-core attachment_transfer::tests::cancellation_expiry_and_disconnect_remove_scratch_files
+        PASS [   0.088s] (41/68) ferrite-core attachment_transfer::tests::a_corrupted_retained_preview_is_rejected
+        PASS [   0.033s] (42/68) ferrite-core attachment_transfer::tests::invalid_names_lengths_offsets_and_hashes_never_publish_content
+        PASS [   0.098s] (43/68) ferrite-core api::tests::workflow_authoring_parses_from_the_cli
+        PASS [   0.054s] (44/68) ferrite-core machine::remote::tests::legacy_machines_remain_readable_and_link_targets_are_validated
+        PASS [   0.064s] (45/68) ferrite-core attachment_transfer::tests::preview_refuses_unmanaged_paths_and_content_over_the_limit
+        PASS [   0.048s] (46/68) ferrite-core machine::remote::tests::links_require_tls_except_explicit_loopback_and_keep_secrets_out_of_origins
+        PASS [   0.118s] (47/68) ferrite-core attachment_transfer::tests::concurrent_same_name_uploads_keep_distinct_content_and_verify_existing_content
+        PASS [   0.218s] (48/68) ferrite-core attachment_transfer::tests::chunk_boundaries_retain_exact_content_and_read_it_in_bounded_pieces
+        PASS [   0.195s] (49/68) ferrite-core protocol::tests::every_gen1_message_has_a_frozen_fixture_that_round_trips_byte_for_byte
+        PASS [   0.202s] (50/68) ferrite-core protocol::tests::every_frozen_fixture_still_decodes
+        PASS [   0.161s] (51/68) ferrite-core server::remote::access::tests::expired_codes_and_excessive_auth_requests_are_rejected
+        PASS [   0.271s] (52/68) ferrite-core server::remote::access::tests::pairing_is_one_use_persistent_and_revocable_without_storing_secrets
+        PASS [   0.195s] (53/68) ferrite-core server::remote::tests::network::tls::untrusted_certificate_and_wrong_hostname_are_rejected
+        PASS [   0.083s] (54/68) ferrite-core server::remote::tests::profile_publication_does_not_replace_an_existing_environment
+        PASS [   0.204s] (55/68) ferrite-core server::remote::tests::network::revocation_closes_live_links_and_blocks_reconnect
+        PASS [   0.238s] (56/68) ferrite-core server::remote::tests::network::tls::trusted_certificate_pairs_and_attaches_to_the_real_server
+        PASS [   0.043s] (57/68) ferrite-core server::tests::drive::a_driven_window_that_goes_mid_action_leaves_its_caller_refused
+        PASS [   0.046s] (58/68) ferrite-core server::tests::drive::attachment_paths_reach_the_driven_window_without_server_filesystem_lookup
+        PASS [   0.034s] (59/68) ferrite-core server::tests::drive::with_no_driven_window_a_window_action_is_refused_at_once
+        PASS [   0.579s] (60/68) ferrite-core server::remote::tests::network::authenticated_link_attaches_to_the_real_server_and_rejects_identity_change
+        PASS [   0.817s] (61/68) ferrite-core server::tests::drive::a_window_action_reaches_only_the_driven_window_and_answers_with_its_reply
+        PASS [   1.418s] (62/68) ferrite-core changes::tests::stage_paths_are_literal_and_cannot_escape_the_checkout
+        PASS [   1.968s] (63/68) ferrite-core attachment_transfer::tests::a_file_exactly_at_the_limit_is_accepted_in_chunks
+        PASS [   2.030s] (64/68) ferrite-core changes::tests::comparison_bases_are_per_call_and_do_not_change_repository_configuration
+        PASS [   2.094s] (65/68) ferrite-core server::tests::remote_operations::remote_attachment_bytes_and_previews_cross_the_bridge_without_polling_the_window
+        PASS [   2.298s] (66/68) ferrite-core server::tests::remote_operations::remote_changes_reads_and_stages_only_the_servers_index
+        FAIL [   4.338s] (67/68) ferrite-core server::remote::tests::network::remote_terminal_drains_final_output_before_reporting_exit
+  stdout ───
+
+    running 1 test
+    test server::remote::tests::network::remote_terminal_drains_final_output_before_reporting_exit ... FAILED
+
+    failures:
+
+    failures:
+        server::remote::tests::network::remote_terminal_drains_final_output_before_reporting_exit
+
+    test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1381 filtered out; finished in 4.30s
+
+  stderr ───
+
+    thread 'server::remote::tests::network::remote_terminal_drains_final_output_before_reporting_exit' (53808521) panicked at crates/ferrite-core/src/server/remote/tests.rs:433:34:
+    terminal closed before reporting its exit: Close(None)
+    note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+  Cancelling due to test failure: 1 test still running
+        PASS [   4.402s] (68/68) ferrite-core server::remote::tests::network::remote_terminal_runs_in_remote_directory_resizes_and_cleans_up
+────────────
+     Summary [   4.896s] 68 tests run: 67 passed, 1 failed, 1314 skipped
+        FAIL [   4.338s] (67/68) ferrite-core server::remote::tests::network::remote_terminal_drains_final_output_before_reporting_exit
+error: test run failed

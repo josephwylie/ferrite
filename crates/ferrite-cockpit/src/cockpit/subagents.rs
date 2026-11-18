@@ -13,7 +13,6 @@ use gpui::component::{
     Disableable,
 };
 use gpui::KeyDownEvent;
-use gpui_base::ElementExt as _;
 use std::{cell::RefCell, collections::HashMap, rc::Rc};
 
 /// A Pane's Decision state, shared with the cards it draws: each question
@@ -90,90 +89,7 @@ struct RequestForm {
     inputs: Vec<Entity<InputState>>,
     form_inputs: HashMap<String, Entity<InputState>>,
     values: serde_json::Map<String, serde_json::Value>,
-    fit: QuestionFit,
     scroll: ScrollHandle,
-}
-
-#[derive(Default)]
-struct QuestionFit {
-    available: Option<gpui::Size<gpui::Pixels>>,
-    island: Option<gpui::Bounds<gpui::Pixels>>,
-    viewport: Option<gpui::Bounds<gpui::Pixels>>,
-    content: Option<gpui::Bounds<gpui::Pixels>>,
-    first_control: Option<gpui::Bounds<gpui::Pixels>>,
-    required: Option<gpui::Pixels>,
-}
-
-impl QuestionFit {
-    fn needs_expansion(&self) -> bool {
-        self.available
-            .zip(self.required)
-            .is_some_and(|(available, required)| available.height < required)
-    }
-
-    fn measure(&mut self, part: QuestionMeasure, bounds: gpui::Bounds<gpui::Pixels>) {
-        match part {
-            QuestionMeasure::Available => {
-                if self
-                    .available
-                    .is_some_and(|previous| (previous.width - bounds.size.width).abs() > px(0.5))
-                {
-                    self.island = None;
-                    self.viewport = None;
-                    self.content = None;
-                    self.first_control = None;
-                    self.required = None;
-                }
-                self.available = Some(bounds.size);
-            }
-            QuestionMeasure::Island => self.island = Some(bounds),
-            QuestionMeasure::Viewport => self.viewport = Some(bounds),
-            QuestionMeasure::Content => self.content = Some(bounds),
-            QuestionMeasure::FirstControl => self.first_control = Some(bounds),
-        }
-        if let (Some(island), Some(viewport), Some(content), Some(first)) =
-            (self.island, self.viewport, self.content, self.first_control)
-        {
-            // Both content and its first control move by the same scroll
-            // offset. Their difference is a size, not a scrolling position.
-            let first_section = first.bottom() - content.top();
-            self.required = Some(island.size.height - viewport.size.height + first_section);
-        }
-    }
-}
-
-#[derive(Clone, Copy)]
-enum QuestionMeasure {
-    Available,
-    Island,
-    Viewport,
-    Content,
-    FirstControl,
-}
-
-fn measure_question(
-    forms: RequestForms,
-    handle: DecisionHandle,
-    part: QuestionMeasure,
-    owner: gpui::WeakEntity<CockpitView>,
-) -> impl Fn(gpui::Bounds<gpui::Pixels>, &mut Window, &mut gpui::App) + 'static {
-    move |bounds, window, cx| {
-        let changed = {
-            let mut forms = forms.0.borrow_mut();
-            let Some(form) = forms.get_mut(&handle) else {
-                return;
-            };
-            let before = form.fit.needs_expansion();
-            form.fit.measure(part, bounds);
-            before != form.fit.needs_expansion()
-        };
-        if changed {
-            let owner = owner.clone();
-            window.defer(cx, move |_, cx| {
-                let _ = owner.update(cx, |_, cx| cx.notify());
-            });
-        }
-    }
 }
 
 /// Pending handles can share a destination. Visit each destination once,
@@ -225,9 +141,9 @@ fn native_keys<E: gpui::InteractiveElement>(element: E) -> E {
 /// Every request card's frame. In the transcript the card is the row
 /// itself, on the transcript's own column; in the requests overlay it lies
 /// on the plane, inset on the transcript's axes, so the rows it docks over
-/// do not show through. For a question this frame is the island
-/// `QuestionFit` measures.
-fn request_frame(card: impl IntoElement, overlay: bool, solo: bool, inset: f32) -> Div {
+/// do not show through. `narrow` is the compact inspector's column
+/// (`Cards::narrow`).
+fn request_frame(card: impl IntoElement, overlay: bool, narrow: bool, inset: f32) -> Div {
     native_keys(
         div()
             .w_full()
@@ -249,10 +165,9 @@ fn request_frame(card: impl IntoElement, overlay: bool, solo: bool, inset: f32) 
             })
             .when(!overlay, |frame| frame.ml(px(-theme::CARD_OUTSET)))
             // Every card waits on the operator: Claude's pill says so over
-            // it, on the column, the one place its state takes a hue. In a
-            // Group Pane its head and ring say it already (rule 7), and the
-            // room is the card's.
-            .when(solo && !overlay, |frame| {
+            // it, on the column, the one place its state takes a hue. In the
+            // compact inspector the room is the card's.
+            .when(!narrow && !overlay, |frame| {
                 frame.child(decision::needs_input().ml(px(theme::CARD_OUTSET)))
             })
             .child(card),
@@ -262,8 +177,14 @@ fn request_frame(card: impl IntoElement, overlay: bool, solo: bool, inset: f32) 
 /// Whether `pane` shows `request`: its selected Subject's, and on Main
 /// also a request whose owner the provider did not name.
 pub(super) fn shown_on(pane: &PaneView, request: &PendingDecision) -> bool {
-    request.subject.as_ref() == Some(&pane.selected)
-        || (request.subject.is_none() && pane.is_main())
+    shown_for(&pane.selected, request)
+}
+
+/// Whether `request` asks in `subject`'s transcript: its own, or Main's for
+/// one that names no agent.
+pub(super) fn shown_for(subject: &Subject, request: &PendingDecision) -> bool {
+    request.subject.as_ref() == Some(subject)
+        || (request.subject.is_none() && *subject == Subject::Main)
 }
 
 /// The question digit keys pick in: the first with options and no pick
@@ -370,9 +291,9 @@ fn coverage_words(
 
 impl CockpitView {
     /// Show `subject`'s transcript in `thread`'s Pane: Main, or a subagent
-    /// opened from its row (`open_agent_from`) and left by its head's back
-    /// button or escape. Every Subject switch the operator makes comes
-    /// through here.
+    /// opened from its row (`open_agent_from`) and left by its head's
+    /// crumbs, back button or escape. Every Subject switch the operator
+    /// makes comes through here.
     pub(super) fn select_subject(
         &mut self,
         thread: ThreadId,
@@ -380,27 +301,11 @@ impl CockpitView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Some(index) = self.pane_for(thread) else {
+        let Some(index) = self.take_subject(thread, subject, cx) else {
             return;
         };
-        let Some(open) = self.cockpit.thread(thread) else {
-            return;
-        };
-        let subject = open.activity().canonical_subject(&subject);
-        let Some(generation) = open
-            .activity()
-            .subject(&subject)
-            .map(|subject| subject.revision())
-        else {
-            return;
-        };
-        self.panes[index].select_subject(subject, generation, cx);
-        self.retry_subject_history(index, cx);
-        self.cockpit
-            .set_visible_subject(thread, self.panes[index].selected.clone());
         self.cockpit.focus_thread(thread);
         self.focus_pane(index);
-        self.popover = None;
         // Keep native text selections in their retained Subject entities.
         // A subagent's transcript must not edit or focus Main's hidden
         // Composer.
@@ -409,7 +314,23 @@ impl CockpitView {
         } else {
             window.focus(&self.panes[index].transcript_focus, cx);
         }
-        cx.notify();
+    }
+
+    /// A press on an agent call's row in Pane `index`, or ↵ on it: the
+    /// Pane takes that agent's transcript at full reading width. The
+    /// Subject's own viewport (scroll, open tools) and Main's draft stay
+    /// where they were; the focus pump hands the transcript the keyboard.
+    pub(super) fn open_agent_from(&mut self, index: usize, call: String, cx: &mut Context<Self>) {
+        let Some(thread) = self.panes.get(index).and_then(|pane| pane.thread()) else {
+            return;
+        };
+        let Some(subject) = self.agent_of_call(thread, &call) else {
+            return;
+        };
+        if self.take_subject(thread, subject, cx).is_some() {
+            self.cockpit.focus_thread(thread);
+            self.focus_pane(index);
+        }
     }
 
     /// A NeedsYou request already focused its Thread in core. Select its owning
@@ -420,49 +341,159 @@ impl CockpitView {
         subject: Subject,
         cx: &mut Context<Self>,
     ) {
-        let Some(index) = self.pane_for(thread) else {
-            return;
-        };
-        let Some(open) = self.cockpit.thread(thread) else {
-            return;
-        };
+        self.take_subject(thread, subject, cx);
+    }
+
+    /// The Pane that now shows `subject`, its saved history asked for
+    /// without resuming the provider.
+    fn take_subject(
+        &mut self,
+        thread: ThreadId,
+        subject: Subject,
+        cx: &mut Context<Self>,
+    ) -> Option<usize> {
+        let index = self.pane_for(thread)?;
+        let open = self.cockpit.thread(thread)?;
         let subject = open.activity().canonical_subject(&subject);
-        let Some(subject_view) = open.activity().subject(&subject) else {
-            return;
-        };
-        self.panes[index].select_subject(subject, subject_view.revision(), cx);
+        let generation = open.activity().subject(&subject)?.revision();
+        self.panes[index].select_subject(subject, generation, cx);
         self.retry_subject_history(index, cx);
         self.cockpit
             .set_visible_subject(thread, self.panes[index].selected.clone());
         self.popover = None;
         cx.notify();
+        Some(index)
+    }
+
+    /// `subject`'s ancestors by each agent's recorded parent, the
+    /// immediate parent last (Main, which every chain ends in, first).
+    pub(super) fn agent_lineage(&self, thread: ThreadId, subject: &Subject) -> Vec<Subject> {
+        let Some(open) = self.cockpit.thread(thread) else {
+            return vec![Subject::Main];
+        };
+        let activity = open.activity();
+        let mut lineage = vec![Subject::Main];
+        let mut at = subject.clone();
+        let mut reversed = Vec::new();
+        while let Some(parent) = activity
+            .children()
+            .into_iter()
+            .find(|agent| agent.subject() == at)
+            .and_then(|agent| agent.info().parent.clone())
+            .map(|parent| activity.canonical_subject(&parent))
+            .filter(|parent| *parent != Subject::Main && *parent != at)
+        {
+            if reversed.contains(&parent) {
+                break;
+            }
+            reversed.push(parent.clone());
+            at = parent;
+        }
+        lineage.extend(reversed.into_iter().rev());
+        lineage
+    }
+
+    /// What a Subject's transcript covers, or why its saved history could
+    /// not load with `Retry`: the one line the full head and the compact
+    /// Panel view both say it with.
+    pub(super) fn subject_history_line(
+        &self,
+        thread: ThreadId,
+        subject: &Subject,
+        error: Option<&str>,
+        cx: &mut Context<Self>,
+    ) -> Option<AnyElement> {
+        let view = self.cockpit.thread(thread)?.activity().subject(subject)?;
+        if let Some(error) = error {
+            // `Couldn't load transcript · <error>  Retry`: the words in
+            // `BLOCKED`, the error machine text.
+            let subject = subject.clone();
+            return Some(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(theme::SPACE_2))
+                    .min_w_0()
+                    .child(
+                        div()
+                            .flex_shrink_0()
+                            .text_color(rgb(theme::BLOCKED))
+                            .child("Couldn\u{2019}t load transcript"),
+                    )
+                    .child(
+                        div()
+                            .min_w_0()
+                            .truncate()
+                            .font_family(theme::FONT_CODE)
+                            .child(SharedString::from(error.to_owned())),
+                    )
+                    .child(
+                        components::ghost_button(
+                            ("retry-child-history", thread.get()),
+                            "Retry",
+                            cx,
+                        )
+                        .tab_stop(true)
+                        .on_click(cx.listener(move |view, _, _, cx| {
+                            view.reload_subject_history(thread, &subject, cx)
+                        })),
+                    )
+                    .into_any_element(),
+            );
+        }
+        let (lead, tail) = coverage_words(view.retained(), view.coverage())?;
+        Some(
+            div()
+                .flex()
+                .flex_wrap()
+                .justify_end()
+                .h(px(theme::LH_UI))
+                .overflow_hidden()
+                .min_w_0()
+                .child(div().flex_shrink_0().child(lead))
+                .children(tail.map(|tail| div().flex_shrink_0().child(tail)))
+                .into_any_element(),
+        )
     }
 
     /// A subagent's head, over its transcript while the Pane shows one
-    /// (Claude's drill-in): the back button and `Main`, either of which
-    /// goes back; `›`; the agent's mark, its name and its state word; and at
-    /// the far end what its transcript covers (`coverage_words`), or why it
-    /// could not load with `Retry`. Main has no head: its agents are its
-    /// transcript's `Ran agent` rows.
+    /// (Claude's drill-in): the back button, to its immediate parent, and
+    /// the crumbs of its ancestry from `Main`, each of which goes there;
+    /// the agent's mark, its name and its state word; at the far end what
+    /// its transcript covers (`subject_history_line`), `Stop` while it
+    /// runs, and `Side panel`, which holds it open beside Main instead.
+    /// Main has no head: its agents are its transcript's `Ran agent` rows.
     pub(super) fn subagent_head(&self, index: usize, cx: &mut Context<Self>) -> Option<AnyElement> {
         let pane = &self.panes[index];
         if pane.is_main() {
             return None;
         }
         let thread = pane.thread()?;
+        let selected = pane.selected.clone();
         let activity = self.cockpit.thread(thread)?.activity();
-        let subject = activity.subject(&pane.selected)?;
+        activity.subject(&selected)?;
         let agent = activity
             .children()
             .into_iter()
-            .find(|agent| agent.subject() == pane.selected)?;
+            .find(|agent| agent.subject() == selected)?;
         let waiting = activity
             .pending_decisions()
             .iter()
-            .any(|request| request.subject.as_ref() == Some(&pane.selected));
-        let back = move |view: &mut Self, window: &mut Window, cx: &mut Context<Self>| {
-            view.select_subject(thread, Subject::Main, window, cx)
+            .any(|request| request.subject.as_ref() == Some(&selected));
+        let lineage = self.agent_lineage(thread, &selected);
+        let crumb_name = |subject: &Subject| -> SharedString {
+            match subject {
+                Subject::Main => "Main".into(),
+                Subject::Subagent(_) => activity
+                    .children()
+                    .into_iter()
+                    .find(|agent| agent.subject() == *subject)
+                    .map_or_else(|| "Subagent".to_owned(), |agent| agent_name(agent.info()))
+                    .into(),
+            }
         };
+        let parent = lineage.last().cloned().unwrap_or(Subject::Main);
+        let back_to = crumb_name(&parent);
         let back_button = components::button(("subagent-back", thread.get()))
             .debug_selector(move || format!("subagent-back-{}", thread.get()))
             .tab_stop(true)
@@ -471,26 +502,24 @@ impl CockpitView {
             .h(px(theme::ICON_BUTTON))
             .p_0()
             .rounded(px(theme::R_CONTROL))
-            .accessibility_label("Back to Main")
-            .tooltip_builder(ferrite_ui::menu::tooltip("Back to Main"))
+            .accessibility_label(format!("Back to {back_to}"))
+            .tooltip_builder(ferrite_ui::menu::tooltip(format!("Back to {back_to}")))
             .child(ferrite_ui::icons::icon(
                 ferrite_ui::icons::BACK,
                 theme::ICON_BUTTON_GLYPH,
                 theme::INK_SUBTLE,
             ))
-            .on_click(cx.listener(move |view, _: &ClickEvent, window, cx| back(view, window, cx)));
-        let main_crumb = components::button(("subagent-main", thread.get()))
-            .debug_selector(move || format!("subagent-main-{}", thread.get()))
-            .flex_shrink_0()
-            .h(px(theme::SUBAGENT_CRUMB_H))
-            .px(px(theme::SPACE_1_5))
-            .rounded(px(theme::R_CONTROL))
-            .text_color(rgb(theme::INK_SUBTLE))
-            .child("Main")
-            .on_click(cx.listener(move |view, _: &ClickEvent, window, cx| back(view, window, cx)));
+            .on_click(cx.listener(move |view, _: &ClickEvent, window, cx| {
+                view.select_subject(thread, parent.clone(), window, cx)
+            }));
         let name = agent_name(agent.info());
         let word = state_word(agent.status(), agent.fresh());
-        let crumb = div()
+        let running = agent.fresh()
+            && matches!(
+                agent.status(),
+                AgentStatus::Pending | AgentStatus::Working | AgentStatus::Waiting
+            );
+        let current = div()
             .debug_selector(move || format!("subagent-name-{}", thread.get()))
             .flex()
             .items_center()
@@ -519,60 +548,7 @@ impl CockpitView {
                     .text_color(rgb(theme::INK_SUBTLE))
                     .child(word),
             );
-        let error = pane.history_error.clone();
-        let end = match (
-            &error,
-            coverage_words(subject.retained(), subject.coverage()),
-        ) {
-            // `Couldn't load transcript · <error>  Retry`: the words in
-            // `BLOCKED`, the error machine text.
-            (Some(error), _) => Some(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap(px(theme::SPACE_2))
-                    .min_w_0()
-                    .child(
-                        div()
-                            .flex_shrink_0()
-                            .text_color(rgb(theme::BLOCKED))
-                            .child("Couldn\u{2019}t load transcript"),
-                    )
-                    .child(
-                        div()
-                            .min_w_0()
-                            .truncate()
-                            .font_family(theme::FONT_CODE)
-                            .child(SharedString::from(error.clone())),
-                    )
-                    .child(
-                        components::ghost_button(
-                            ("retry-child-history", thread.get()),
-                            "Retry",
-                            cx,
-                        )
-                        .tab_stop(true)
-                        .on_click(cx.listener(move |view, _, _, cx| {
-                            view.reload_subject_history(thread, cx)
-                        })),
-                    )
-                    .into_any_element(),
-            ),
-            (None, Some((lead, tail))) => Some(
-                div()
-                    .flex()
-                    .flex_wrap()
-                    .justify_end()
-                    .h(px(theme::LH_UI))
-                    .overflow_hidden()
-                    .min_w_0()
-                    .child(div().flex_shrink_0().child(lead))
-                    .children(tail.map(|tail| div().flex_shrink_0().child(tail)))
-                    .into_any_element(),
-            ),
-            (None, None) => None,
-        };
-        let head = div()
+        let mut head = div()
             .debug_selector(move || format!("subagent-head-{}", thread.get()))
             .font_family(theme::FONT_UI)
             .font_weight(theme::W_BODY)
@@ -583,32 +559,74 @@ impl CockpitView {
             .items_center()
             .min_w_0()
             .gap(px(theme::SPACE_0_5))
-            .child(back_button)
-            .child(main_crumb)
-            .child(ferrite_ui::icons::icon(
-                ferrite_ui::icons::CHEVRON_RIGHT,
-                theme::SUBAGENT_CRUMB_ICON,
-                theme::TEXT_FAINT,
-            ))
-            .child(div().flex_1().min_w_0().pl(px(theme::SPACE_1)).child(crumb))
-            .children(end.map(|end| {
-                div()
-                    .debug_selector(move || format!("subagent-coverage-{}", thread.get()))
-                    .flex()
+            .child(back_button);
+        for (depth, ancestor) in lineage.into_iter().enumerate() {
+            let label = crumb_name(&ancestor);
+            let selector = if depth == 0 {
+                format!("subagent-main-{}", thread.get())
+            } else {
+                format!("subagent-ancestor-{depth}-{}", thread.get())
+            };
+            head = head
+                .child(
+                    components::button(SharedString::from(format!(
+                        "subagent-crumb-{depth}-{}",
+                        thread.get()
+                    )))
+                    .debug_selector(move || selector.clone())
                     .flex_shrink(1.)
                     .min_w_0()
-                    .ml(px(theme::SPACE_2))
+                    .h(px(theme::SUBAGENT_CRUMB_H))
+                    .px(px(theme::SPACE_1_5))
+                    .rounded(px(theme::R_CONTROL))
                     .text_color(rgb(theme::INK_SUBTLE))
-                    .child(end)
-            }));
-        Some(native_keys(head).into_any_element())
-    }
-
-    /// The head's title: the Thread's, whichever Subject is selected — the
-    /// subagent's own head says which transcript this is.
-    pub(super) fn activity_title(&self, index: usize, cx: &mut Context<Self>) -> AnyElement {
-        let thread = self.panes[index].thread().expect("Thread Pane");
-        self.pane_title(index, thread, cx)
+                    .child(div().truncate().child(label))
+                    .on_click(cx.listener(move |view, _: &ClickEvent, window, cx| {
+                        view.select_subject(thread, ancestor.clone(), window, cx)
+                    })),
+                )
+                .child(ferrite_ui::icons::icon(
+                    ferrite_ui::icons::CHEVRON_RIGHT,
+                    theme::SUBAGENT_CRUMB_ICON,
+                    theme::TEXT_FAINT,
+                ));
+        }
+        let history = self.subject_history_line(thread, &selected, pane.history_error.as_deref(), cx);
+        let stop_key = agent.key().clone();
+        let panel_subject = selected.clone();
+        Some(
+            native_keys(
+                head.child(div().flex_1().min_w_0().pl(px(theme::SPACE_1)).child(current))
+                    .children(history.map(|history| {
+                        div()
+                            .debug_selector(move || format!("subagent-coverage-{}", thread.get()))
+                            .flex()
+                            .flex_shrink(1.)
+                            .min_w_0()
+                            .ml(px(theme::SPACE_2))
+                            .text_color(rgb(theme::INK_SUBTLE))
+                            .child(history)
+                    }))
+                    .children(running.then(|| {
+                        components::ghost_button(("subagent-stop", thread.get()), "Stop", cx)
+                            .debug_selector(move || format!("subagent-stop-{}", thread.get()))
+                            .tab_stop(true)
+                            .on_click(cx.listener(move |view, _, _, cx| {
+                                view.stop_subagent(thread, &stop_key);
+                                cx.notify();
+                            }))
+                    }))
+                    .child(
+                        components::ghost_button(("subagent-panel", thread.get()), "Side panel", cx)
+                            .debug_selector(move || format!("subagent-panel-{}", thread.get()))
+                            .tab_stop(true)
+                            .on_click(cx.listener(move |view, _, _, cx| {
+                                view.open_agent_drill(thread, panel_subject.clone(), cx)
+                            })),
+                    ),
+            )
+            .into_any_element(),
+        )
     }
 
     pub(super) fn respond_exact(
@@ -643,94 +661,33 @@ impl CockpitView {
         cx.notify();
     }
 
-    /// Whether this Pane's question is too big for its body: it answers in
-    /// fullscreen (the expand key, `ToggleFullscreen`), and the body keeps
-    /// its transcript meanwhile. The head's slot says `needs you ·
-    /// question`; there is no head chip.
-    pub(super) fn question_needs_expansion(&self, index: usize, compact: bool) -> bool {
-        let pane = &self.panes[index];
-        if self.cockpit.roster().fullscreen() == Some(pane.identity) {
-            return false;
-        }
-        let Some(thread) = pane.thread() else {
-            return false;
-        };
-        let Some(open) = self.cockpit.thread(thread) else {
-            return false;
-        };
-        open.pending_decisions().iter().any(|request| {
-            (request.subject.as_ref() == Some(&pane.selected)
-                || (request.subject.is_none() && pane.is_main()))
-                && pane::questions_of(&request.decision).is_some()
-                && (compact
-                    || pane
-                        .request_forms
-                        .0
-                        .borrow()
-                        .get(&request.handle)
-                        .is_some_and(|form| form.fit.needs_expansion()))
-        })
-    }
-
-    pub(super) fn activity_question_measurement(
-        &self,
-        index: usize,
-        cx: &mut Context<Self>,
-    ) -> Option<AnyElement> {
-        let pane = &self.panes[index];
-        let thread = pane.thread()?;
-        let handles: Vec<_> = self
-            .cockpit
-            .thread(thread)?
-            .pending_decisions()
-            .iter()
-            .filter(|request| {
-                (request.subject.as_ref() == Some(&pane.selected)
-                    || (request.subject.is_none() && pane.is_main()))
-                    && pane::questions_of(&request.decision).is_some()
-            })
-            .map(|request| request.handle.clone())
-            .collect();
-        if handles.is_empty() {
-            return None;
-        }
-        let mut measure = div().absolute().inset_0();
-        for handle in handles {
-            measure = measure.on_prepaint(measure_question(
-                pane.request_forms.clone(),
-                handle,
-                QuestionMeasure::Available,
-                cx.entity().downgrade(),
-            ));
-        }
-        Some(measure.into_any_element())
-    }
-
     /// The Decision cards this Pane's selected Subject shows, as a snapshot
     /// of the cockpit: the requests, their owner's provider and context,
     /// and the Pane's forms. `overlay` cards lie on the plane over the
-    /// transcript's foot (a question too big for the body answers in
-    /// fullscreen there); the transcript's own cards scroll with its rows.
+    /// transcript's foot; the transcript's own cards scroll with its rows.
     pub(super) fn decision_cards(&self, index: usize, overlay: bool, short: bool) -> Option<Cards> {
+        let subject = self.panes.get(index)?.selected.clone();
+        self.decision_cards_of(index, &subject, overlay, short)
+    }
+
+    /// The cards of `subject`'s requests, answered through Pane `index`'s
+    /// forms: the Pane that holds the Thread, so a compact view of an agent
+    /// and the Pane showing it fill in one form.
+    pub(super) fn decision_cards_of(
+        &self,
+        index: usize,
+        subject: &Subject,
+        overlay: bool,
+        short: bool,
+    ) -> Option<Cards> {
         let pane = self.panes.get(index)?;
         let thread = pane.thread()?;
         let open = self.cockpit.thread(thread)?;
         let activity = open.activity();
-        let fullscreen = self.cockpit.roster().fullscreen() == Some(pane.identity);
         let requests: Vec<(PendingDecision, bool)> = activity
             .pending_decisions()
             .iter()
-            .filter(|request| shown_on(pane, request))
-            .filter(|request| {
-                !overlay
-                    || fullscreen
-                    || !pane
-                        .request_forms
-                        .0
-                        .borrow()
-                        .get(&request.handle)
-                        .is_some_and(|form| form.fit.needs_expansion())
-            })
+            .filter(|request| shown_for(subject, request))
             .map(|request| {
                 // An async question asks while its agent works on.
                 let working = !request.decision.blocks_execution()
@@ -802,8 +759,8 @@ impl CockpitView {
             request_error: pane.request_error.clone(),
             short,
             overlay,
-            solo: !self.grid_board(),
-            inset: theme::tx_inset_at(0., !self.grid_board()),
+            narrow: false,
+            inset: theme::tx_inset_at(0., true),
             requests,
         })
     }
@@ -825,7 +782,7 @@ impl CockpitView {
         let short = rect.is_some_and(|rect| rect.h < theme::DECISION_SHORT_PANE_H);
         let mut cards = self.decision_cards(index, true, short)?;
         if let Some(rect) = rect {
-            cards.inset = theme::tx_inset_at(rect.w, cards.solo);
+            cards.inset = theme::tx_inset_at(rect.w, true);
         }
         cards.render(window, cx)
     }
@@ -1039,16 +996,15 @@ impl CockpitView {
         }
     }
 
-    fn reload_subject_history(&mut self, thread: ThreadId, cx: &mut Context<Self>) {
-        let Some(index) = self.pane_for(thread) else {
-            return;
-        };
-        let subject = self.panes[index].selected.clone();
-        self.panes[index].history_error = self
+    /// `Retry`: ask again for `subject`'s saved history, wherever it is
+    /// held open, the Pane or the Panel.
+    fn reload_subject_history(&mut self, thread: ThreadId, subject: &Subject, cx: &mut Context<Self>) {
+        let error = self
             .cockpit
-            .retry_subject_history(thread, &subject)
+            .retry_subject_history(thread, subject)
             .err()
             .map(|error| error.to_string());
+        self.hold_history_error(thread, subject, error);
         cx.notify();
     }
 
@@ -1057,17 +1013,22 @@ impl CockpitView {
             return;
         };
         let subject = self.panes[index].selected.clone();
-        self.panes[index].history_error = self
-            .cockpit
-            .ensure_subject_history(thread, &subject)
+        self.panes[index].history_error = self.load_subject_history(thread, &subject);
+        cx.notify();
+    }
+
+    /// Ask core for `subject`'s saved history (it never resumes the
+    /// provider); the reason it could not be had.
+    pub(super) fn load_subject_history(&mut self, thread: ThreadId, subject: &Subject) -> Option<String> {
+        self.cockpit
+            .ensure_subject_history(thread, subject)
             .err()
             .map(|error| error.to_string())
             .or_else(|| {
                 self.cockpit
-                    .subject_history_error(thread, &subject)
+                    .subject_history_error(thread, subject)
                     .map(str::to_string)
-            });
-        cx.notify();
+            })
     }
 
     pub(super) fn prune_request_forms(&mut self, index: usize) {
@@ -1109,9 +1070,8 @@ impl CockpitView {
         self.answer_request(thread, request, answer, cx);
     }
 
-    /// The letter keys (`y` `n` `a`) and the L2 keycaps: an approval takes
-    /// its option (`y` 1, `a` 2, `n` 3) through the one answer path; a
-    /// question, form or link takes only a deny.
+    /// An approval takes its option (allow 1, always 2, deny 3) through the
+    /// one answer path; a question, form or link takes only a deny.
     pub(super) fn answer_request(
         &mut self,
         thread: ThreadId,
@@ -1170,9 +1130,9 @@ pub(super) struct Cards {
     /// Drawn in the requests overlay, on the plane, rather than in the
     /// transcript.
     pub(super) overlay: bool,
-    /// The Pane is Solo's: the transcript column's inset, and the hint line
-    /// under the box.
-    pub(super) solo: bool,
+    /// Drawn in the compact inspector's narrow column: the approval's
+    /// actions stack, and no pill names the wait.
+    pub(super) narrow: bool,
     /// The overlay's inset on the transcript's axes: the column's at the
     /// Pane's width (`theme::tx_inset_at`).
     pub(super) inset: f32,
@@ -1205,7 +1165,7 @@ impl Cards {
             (diff.added, diff.removed).hash(&mut hasher);
         }
         self.request_error.hash(&mut hasher);
-        self.solo.hash(&mut hasher);
+        self.narrow.hash(&mut hasher);
         let cursors = self.forms.1.borrow();
         let forms = self.forms.0.borrow();
         for (request, working) in &self.requests {
@@ -1397,8 +1357,8 @@ impl Cards {
     /// the prose, the command band (or the edit's diff), the amend note
     /// while it is open, then `Deny` and the split `Allow once` whose menu
     /// holds `Always allow <pattern>` (its note says what that covers) and
-    /// `Allow and switch to …` — inline in Solo, stacked in a Group Pane's
-    /// narrow column. The keys are on the buttons (⌘⏎ on `Allow once`, ⇧⌘⏎
+    /// `Allow and switch to …` — inline, or stacked in the compact
+    /// inspector's narrow column (`narrow`). The keys are on the buttons (⌘⏎ on `Allow once`, ⇧⌘⏎
     /// on the menu's `Always allow`, esc); 1–3, ↑↓ and ⏎ still act.
     fn approval_card(&self, request: PendingDecision, cx: &gpui::App) -> AnyElement {
         let thread = self.thread;
@@ -1463,7 +1423,7 @@ impl Cards {
                 view.answer_approval_request(thread, &pick, choice, note, Some(window), cx);
             })
         };
-        let stacked = !self.solo;
+        let stacked = self.narrow;
         let deny = decision::deny_button(
             SharedString::from(format!("request-deny-{}-{serial}", thread.get())),
             stacked,
@@ -1587,7 +1547,7 @@ impl Cards {
         request_frame(
             decision::approval_card(serial, children),
             self.overlay,
-            self.solo,
+            self.narrow,
             self.inset,
         )
         .into_any_element()
@@ -1650,9 +1610,6 @@ impl Cards {
                 });
             }};
         }
-        letter!(Allow, "y");
-        letter!(Deny, "n");
-        letter!(Always, "a");
         letter!(PickOption1, "1");
         letter!(PickOption2, "2");
         letter!(PickOption3, "3");
@@ -1703,7 +1660,6 @@ impl Cards {
                     inputs: Vec::new(),
                     form_inputs,
                     values: form_defaults(&fields),
-                    fit: Default::default(),
                     scroll: ScrollHandle::new(),
                 },
             );
@@ -1738,7 +1694,12 @@ impl Cards {
                 | ferrite_core::FormFieldKind::Number { .. }
                 | ferrite_core::FormFieldKind::Integer { .. } => {
                     if let Some(input) = forms.0.borrow()[&handle].form_inputs.get(&field.id) {
-                        section = section.child(Input::new(input).disabled(request.submitting));
+                        let id = field.id.clone();
+                        section = section.child(
+                            div()
+                                .debug_selector(move || format!("form-input-{id}"))
+                                .child(Input::new(input).disabled(request.submitting)),
+                        );
                     }
                 }
                 ferrite_core::FormFieldKind::Boolean { .. } => {
@@ -1863,17 +1824,20 @@ impl Cards {
         let cancel_handle = handle.clone();
         let mut children = vec![head.into_any_element()];
         children.extend(title.map(|title| decision::section(title).into_any_element()));
+        let scroll = forms.0.borrow()[&handle].scroll.clone();
         children.push(
-            decision::section(
-                div()
-                    .min_h_0()
-                    .max_h(px(theme::DECISION_BODY_MAX_H))
-                    .flex()
-                    .flex_col()
-                    .overflow_y_scrollbar()
-                    .child(body),
-            )
-            .into_any_element(),
+            div()
+                .id(("form-body", handle.serial as usize))
+                .w_full()
+                .min_w_0()
+                .flex_shrink_1()
+                .max_h(px(theme::DECISION_BODY_MAX_H))
+                .overflow_y_scroll()
+                .track_scroll(&scroll)
+                .vertical_scrollbar(&scroll)
+                .pr(px(theme::DECISION_SCROLL_GUTTER))
+                .child(body)
+                .into_any_element(),
         );
         children.extend(error.map(|error| {
             decision::section(
@@ -1912,7 +1876,7 @@ impl Cards {
         request_frame(
             decision::card(handle.serial, children),
             self.overlay,
-            self.solo,
+            self.narrow,
             self.inset,
         )
         .into_any_element()
@@ -1990,7 +1954,7 @@ impl Cards {
         request_frame(
             decision::card(handle.serial, children),
             self.overlay,
-            self.solo,
+            self.narrow,
             self.inset,
         )
         .into_any_element()
@@ -2029,7 +1993,6 @@ impl Cards {
                     inputs,
                     form_inputs: Default::default(),
                     values: Default::default(),
-                    fit: Default::default(),
                     scroll: ScrollHandle::new(),
                 },
             );
@@ -2047,19 +2010,10 @@ impl Cards {
                 .min(questions[qi].options.len().saturating_sub(1))
         });
         let single = questions.len() == 1;
-        // Only the overlay measures its question against the body (a card
-        // too big answers in fullscreen); in the transcript it scrolls with
-        // the rows and never asks.
-        let measure = |part: QuestionMeasure| {
-            measure_question(forms.clone(), handle.clone(), part, self.owner.clone())
-        };
         let overlay = self.overlay;
         let mut content = div()
             .id(("question-content", handle.serial as usize))
             .debug_selector(|| "question-scroll-content".into())
-            .when(overlay, |content| {
-                content.on_prepaint(measure(QuestionMeasure::Content))
-            })
             .w_full()
             .min_w_0()
             .flex_shrink_1()
@@ -2126,9 +2080,6 @@ impl Cards {
                         },
                     )
                     .debug_selector(move || format!("question-choice-{qi}-{oi}"))
-                    .when(overlay && qi == 0 && oi == 0, |row| {
-                        row.on_prepaint(measure(QuestionMeasure::FirstControl))
-                    })
                     .on_click(self.act(move |view, _, cx| {
                         if let Some(form) = pick_forms.0.borrow_mut().get_mut(&pick_handle) {
                             pick_option(&mut form.answers[qi].picks, oi, multi);
@@ -2185,9 +2136,6 @@ impl Cards {
                                 .min_w_0()
                                 .h(px(theme::QUESTION_OTHER_H))
                                 .debug_selector(move || selector.clone())
-                                .when(overlay && qi == 0 && question.options.is_empty(), |input| {
-                                    input.on_prepaint(measure(QuestionMeasure::FirstControl))
-                                })
                                 .cursor_text()
                                 .child(
                                     gpui::Styled::h(
@@ -2242,9 +2190,6 @@ impl Cards {
                     .min_h_0()
                     .overflow_hidden()
                     .debug_selector(|| "question-viewport".into())
-                    .when(overlay, |viewport| {
-                        viewport.on_prepaint(measure(QuestionMeasure::Viewport))
-                    })
                     .child(content),
             )
             .into_any_element(),
@@ -2298,13 +2243,7 @@ impl Cards {
             ]))
             .into_any_element(),
         );
-        // The frame is the island QuestionFit measures: it carries the dock
-        // gap as well as the card, so `required` counts every pixel the
-        // overlay must hold.
-        request_frame(decision::card(handle.serial, children), overlay, self.solo, self.inset)
-            .when(overlay, |frame| {
-                frame.on_prepaint(measure(QuestionMeasure::Island))
-            })
+        request_frame(decision::card(handle.serial, children), overlay, self.narrow, self.inset)
             .into_any_element()
     }
 }

@@ -93,14 +93,16 @@ pub(crate) fn script_command(executable: &str, workflow: &str) -> String {
 impl CockpitView {
     /// Settings' stepper on how many Factory Tasks work at once.
     pub(crate) fn step_factory_limit(&mut self, delta: i32, cx: &mut Context<Self>) {
-        let now = self.prefs.settings.factory_tasks_at_once;
+        let Some(now) = self.factory_limit() else {
+            return;
+        };
         let next = if delta == 0 {
             core_factory::DEFAULT_LIMIT
         } else {
             core_factory::clamp_limit(now.saturating_add_signed(delta as isize))
         };
         if next != now {
-            self.change_settings(|settings| settings.factory_tasks_at_once = next, cx);
+            self.change_defaults(|defaults| defaults.factory_tasks_at_once = next, cx);
             cx.notify();
         }
     }
@@ -116,14 +118,13 @@ fn ferrite_executable() -> String {
 impl CockpitView {
     /// The start's settings are what the inspector shows.
     pub(crate) fn start_shown(&self) -> bool {
-        self.factory_view
-            .as_ref()
+        self.factory()
             .is_some_and(|view| view.workflows.start_open)
     }
 
     /// Show the shown Workflow's start in the inspector.
     pub(crate) fn open_start(&mut self, cx: &mut Context<Self>) {
-        if let Some(view) = self.factory_view.as_mut() {
+        if let Some(view) = self.factory_mut() {
             view.workflows.start_open = true;
             view.workflows.focused = None;
         }
@@ -245,15 +246,14 @@ impl CockpitView {
         }
         let unasked = |listing: Option<&Listing>| matches!(listing, None | Some(Listing::Unasked));
         let want_repositories = self
-            .factory_view
-            .as_ref()
+            .factory()
             .is_some_and(|view| unasked(Some(&view.workflows.github.repositories)));
         if want_repositories {
             let listing = match self.cockpit.github_names(GitHubAsk::Repositories) {
                 Ok(pending) => Listing::Pending(pending),
                 Err(error) => Listing::Failed(error.to_string()),
             };
-            if let Some(view) = self.factory_view.as_mut() {
+            if let Some(view) = self.factory_mut() {
                 view.workflows.github.repositories = listing;
             }
         }
@@ -261,8 +261,7 @@ impl CockpitView {
             return;
         };
         let want_labels = self
-            .factory_view
-            .as_ref()
+            .factory()
             .is_some_and(|view| unasked(view.workflows.github.labels.get(&repository)));
         if want_labels {
             let listing = match self.cockpit.github_names(GitHubAsk::Labels {
@@ -271,7 +270,7 @@ impl CockpitView {
                 Ok(pending) => Listing::Pending(pending),
                 Err(error) => Listing::Failed(error.to_string()),
             };
-            if let Some(view) = self.factory_view.as_mut() {
+            if let Some(view) = self.factory_mut() {
                 view.workflows.github.labels.insert(repository, listing);
             }
         }
@@ -282,7 +281,7 @@ impl CockpitView {
         // The draft a window is told of may name a repository whose labels
         // were never asked for.
         self.ask_github_lists();
-        let Some(view) = self.factory_view.as_mut() else {
+        let Some(view) = self.factory_mut() else {
             return;
         };
         let lists = &mut view.workflows.github;
@@ -379,7 +378,7 @@ impl CockpitView {
     }
 
     fn repository_picks(&self, start: &Start) -> Vec<(ferrite_ui::menu::Item, Pick)> {
-        let Some(view) = self.factory_view.as_ref() else {
+        let Some(view) = self.factory() else {
             return Vec::new();
         };
         view.workflows
@@ -399,8 +398,7 @@ impl CockpitView {
 
     fn label_picks(&self, start: &Start) -> Vec<(ferrite_ui::menu::Item, Pick)> {
         let Some(listing) = start.github.repository.as_ref().and_then(|repository| {
-            self.factory_view
-                .as_ref()?
+            self.factory()?
                 .workflows
                 .github
                 .labels
@@ -790,7 +788,7 @@ impl CockpitView {
         cx: &mut Context<Self>,
     ) -> Div {
         use ferrite_ui::theme::*;
-        let Some(view) = self.factory_view.as_ref() else {
+        let Some(view) = self.factory() else {
             return div();
         };
         let lists = &view.workflows.github;

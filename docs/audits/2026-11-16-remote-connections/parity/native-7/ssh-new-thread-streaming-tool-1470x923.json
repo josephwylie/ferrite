@@ -1,0 +1,24 @@
+{
+  "path": "/Users/josephwylie/Desktop/Projects/ferrite-remote-connections/docs/audits/2026-11-16-remote-connections/parity/native-7/ssh-new-thread-streaming-tool-1470x923.png",
+  "sha256": "32ff48b81d3defa245be65c3c186267c73fe5475034e88caf72b878ce3ebd209",
+  "logical_viewport": [
+    1470,
+    923
+  ],
+  "device_pixel_ratio": 2.0,
+  "pixel_dimensions": [
+    2940,
+    1846
+  ],
+  "image_format": "PNG",
+  "crop_px": [
+    0,
+    0,
+    2940,
+    1846
+  ],
+  "surface": "Ferrite native headless Driver",
+  "provider": "simulated Codex app-server, no model API calls",
+  "source_commit": "545742f1e82335a1ae24016f4eb6250e68af5223",
+  "binary_sha256": "8362b7bca5fc616cd93722d8704ca61821323798227e7904af1514025ee97da4"
+}

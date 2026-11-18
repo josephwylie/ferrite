@@ -6,13 +6,15 @@
 //! one door (`upsert_surface`); pressed again they bring the same tab
 //! forward.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 mod changes;
 mod editor;
 mod files;
+mod save;
 mod terminal;
 mod tree;
+mod working_set;
 
 use super::surfaces::SurfaceId;
 use super::*;
@@ -28,6 +30,9 @@ pub(crate) struct Tools {
     terminal_focus_wanted: bool,
     /// Whether the shell's right-click found a selection.
     terminal_selected: bool,
+    /// Threads whose agent worked since the last sweep, so their checkout
+    /// may have changed (`follow_workspace`).
+    worked: HashSet<ThreadId>,
 }
 
 gpui::actions!(cockpit, [ToggleTerminal, ToggleChanges, ToggleFiles, ToggleFileTree, GoToFile]);
@@ -35,10 +40,35 @@ gpui::actions!(cockpit, [ToggleTerminal, ToggleChanges, ToggleFiles, ToggleFileT
 #[cfg(test)]
 pub(crate) use editor::AUTO_SAVE_AFTER;
 pub(crate) use changes::{Diff, Sub as ChangesSub, Verb as ChangesVerb};
+pub(crate) use editor::Editor;
+#[cfg(test)]
+pub(crate) use save::SaveState;
 pub(crate) use files::{Sub as FilesSub, Verb as FilesVerb};
+#[cfg(test)]
+pub(crate) use tree::Status as FileStatus;
 pub(crate) use terminal::{Sub as TerminalSub, Verb as TerminalVerb};
+pub(crate) use working_set::WorkingSets;
 
 impl CockpitView {
+    /// Note that the agent of each of these Threads worked this frame.
+    pub(super) fn note_work(&mut self, frame: &[ferrite_core::cockpit::PaneUpdate]) {
+        self.tools.worked.extend(frame.iter().map(|update| update.thread));
+    }
+
+    /// What the agents of the Threads that worked since the last call may
+    /// have changed shows: the open Changes read again, and each Files
+    /// buffer that holds no edits of its own takes its file's new text.
+    pub(super) fn follow_workspace(&mut self, cx: &mut Context<Self>) {
+        for thread in std::mem::take(&mut self.tools.worked) {
+            if self.tools.changes.contains_key(&Diff::Changes(thread)) {
+                self.reread_changes(Diff::Changes(thread), cx);
+            }
+            for editor in self.files_editors(thread) {
+                editor.update(cx, |editor, cx| editor.follow_disk(cx));
+            }
+        }
+    }
+
     /// ⌘J: the focused Thread's last shell brought forward, or its first
     /// started.
     pub(super) fn toggle_terminal(&mut self, _: &ToggleTerminal, _: &mut Window, cx: &mut Context<Self>) {

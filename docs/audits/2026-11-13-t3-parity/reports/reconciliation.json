@@ -1,0 +1,19 @@
+[
+  {
+    "id": "reconciliation-001",
+    "title": "Reopen closed tab restores an empty SideChat tab",
+    "priority": "P2",
+    "category": "defect",
+    "evidence_level": "source-proven",
+    "impact": "Reopening a closed SideChat restores its outer tab but not its released conversation record, leaving an empty body instead of the previous work.",
+    "ferrite_evidence": [
+      "crates/ferrite-cockpit/src/cockpit/surfaces.rs:48-53",
+      "crates/ferrite-cockpit/src/cockpit/panel.rs:290-293,314-319,384-390",
+      "crates/ferrite-cockpit/src/cockpit/side_chat.rs:308-324,607-615",
+      "crates/ferrite-cockpit/src/cockpit/palette.rs:1294-1298"
+    ],
+    "t3_evidence": [],
+    "recommendation": "Define close and reopen policy with the resource lifecycle. Restore the same durable conversation, or exclude intentionally destroyed SideChats from reopen with clear lifecycle copy. Do not silently create a new fork. File previews are a distinct case because panel/preview.rs:298-319 hydrates them.",
+    "acceptance": "Create a side conversation containing a unique marker through the UI, close its tab, and invoke Reopen closed tab. The same identity and marker return with working controls, or a deliberately unsupported action is unavailable and explained. Repeat during fork startup and failed restoration; no duplicate provider work or blank body is allowed."
+  }
+]

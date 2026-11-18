@@ -7,7 +7,7 @@
 use std::rc::Rc;
 
 use gpui::component::input::InputState;
-use gpui::{App, Entity, SharedString, Window};
+use gpui::{App, Entity, FocusHandle, SharedString, Window};
 
 /// The Settings pages, in sidebar order. `About` is pinned to the
 /// sidebar's foot, apart from the settings.
@@ -19,16 +19,18 @@ pub enum PageKey {
     Behaviour,
     Notifications,
     Server,
+    Connections,
     About,
 }
 
 impl PageKey {
-    pub const ALL: [PageKey; 6] = [
+    pub const ALL: [PageKey; 7] = [
         PageKey::NewThreads,
         PageKey::Permissions,
         PageKey::Behaviour,
         PageKey::Notifications,
         PageKey::Server,
+        PageKey::Connections,
         PageKey::About,
     ];
 
@@ -39,6 +41,7 @@ impl PageKey {
             PageKey::Behaviour => "Behaviour",
             PageKey::Notifications => "Notifications",
             PageKey::Server => "Server",
+            PageKey::Connections => "Connections",
             PageKey::About => "About",
         }
     }
@@ -51,6 +54,7 @@ impl PageKey {
             PageKey::Behaviour => "settings-page-behaviour",
             PageKey::Notifications => "settings-page-notifications",
             PageKey::Server => "settings-page-server",
+            PageKey::Connections => "settings-page-connections",
             PageKey::About => "settings-page-about",
         }
     }
@@ -68,10 +72,97 @@ impl PageKey {
 
 /// What a row's token does when pressed.
 pub type Act = Rc<dyn Fn(&mut App)>;
+pub type WindowAct = Rc<dyn Fn(&mut Window, &mut App)>;
+
+#[derive(Clone)]
+pub struct ConnectionAction {
+    pub id: SharedString,
+    pub label: SharedString,
+    pub enabled: bool,
+    pub act: WindowAct,
+}
+
+#[derive(Clone)]
+pub struct ConnectionRow {
+    pub name: SharedString,
+    pub target: SharedString,
+    pub status: SharedString,
+    pub connected: bool,
+    pub enabled: bool,
+    pub detail: Option<SharedString>,
+    pub actions: Vec<ConnectionAction>,
+    pub removal: Option<(WindowAct, WindowAct)>,
+}
+
+#[derive(Clone)]
+pub struct ConnectionFields {
+    pub remote_host: Entity<InputState>,
+    pub pairing_code: Entity<InputState>,
+    pub host: Entity<InputState>,
+    pub username: Entity<InputState>,
+    pub port: Entity<InputState>,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ConnectionMode {
+    #[default]
+    Remote,
+    Ssh,
+}
+
+#[derive(Clone)]
+pub struct ConnectionSuggestion {
+    pub value: SharedString,
+    pub label: SharedString,
+    pub address: SharedString,
+}
+
+#[derive(Clone)]
+pub struct ConnectionSuggestions {
+    pub rows: Vec<ConnectionSuggestion>,
+    pub highlighted: Option<usize>,
+    pub message: Option<SharedString>,
+    pub scroll: gpui::ScrollHandle,
+}
+
+#[derive(Clone)]
+pub struct ConnectionVerification {
+    pub target: SharedString,
+    pub prompt: SharedString,
+    pub response: Option<Entity<InputState>>,
+    pub focus: Option<FocusHandle>,
+    pub expires: SharedString,
+    pub submit: WindowAct,
+}
+
+#[derive(Clone)]
+pub enum ConnectionForm {
+    Closed {
+        open: WindowAct,
+        error: Option<SharedString>,
+    },
+    Editing {
+        fields: ConnectionFields,
+        mode: ConnectionMode,
+        focus: FocusHandle,
+        suggestions: Option<ConnectionSuggestions>,
+        choose_mode: Rc<dyn Fn(ConnectionMode, &mut Window, &mut App)>,
+        open_suggestions: WindowAct,
+        choose_host: Rc<dyn Fn(SharedString, &mut Window, &mut App)>,
+        progress: Option<SharedString>,
+        error: Option<SharedString>,
+        warning: Option<SharedString>,
+        verification: Option<ConnectionVerification>,
+        submit: WindowAct,
+        cancel: WindowAct,
+    },
+}
 
 /// A row's control, as the frame draws it.
 #[derive(Clone)]
 pub enum Control {
+    ConnectionForm(ConnectionForm),
+    ConnectionRow(ConnectionRow),
     /// Two options, a token each, the chosen one inverse.
     Tokens {
         id: &'static str,
@@ -119,7 +210,9 @@ pub enum Control {
         act: Rc<dyn Fn(&mut Window, &mut App)>,
     },
     /// A read-only value.
-    Fact { value: SharedString },
+    Fact {
+        value: SharedString,
+    },
     /// The one button that does something about the row, or its value as a
     /// fact reads when there is nothing to do. Its act has the window it was
     /// pressed in, as `Entry`'s does, never reaching for it by a handle.
@@ -533,7 +626,9 @@ mod tests {
         assert_eq!(PageKey::Notifications.step(1), PageKey::Server);
         assert_eq!(PageKey::About.step(1), PageKey::About);
         assert_eq!(PageKey::NewThreads.step(-1), PageKey::NewThreads);
-        assert_eq!(PageKey::About.step(-5), PageKey::NewThreads);
+        assert_eq!(PageKey::Server.step(1), PageKey::Connections);
+        assert_eq!(PageKey::Connections.step(1), PageKey::About);
+        assert_eq!(PageKey::About.step(-6), PageKey::NewThreads);
         assert_eq!(PageKey::default(), PageKey::NewThreads);
     }
 

@@ -27,7 +27,7 @@ use ferrite_ui::theme::*;
 gpui::actions!(find, [Open, Next, Previous, Close]);
 
 /// The bar's key context: its line's, where ⏎, ⇧⏎, ⌘G, ⌘⇧G and esc step
-/// and close instead of sending, opening a Group or interrupting.
+/// and close instead of sending or interrupting.
 pub(crate) const KEY_CONTEXT: &str = "Find";
 
 /// Frames a host waits for the active occurrence to paint (and report
@@ -273,7 +273,7 @@ impl Find {
     /// `search` icon in `INK_SUBTLE`, the query in `INK_STRONG`, the count
     /// muted at the right — hung `FLOAT_OFFSET` under the top right of its host, the
     /// text it searches (`relative`). A host narrower than the bar narrows
-    /// the query, never the count. It opens like every float (`menu_in`).
+    /// the query, never the count. It opens like every float (`float_in`).
     pub fn bar(&self) -> Div {
         let bar = ferrite_ui::menu::float()
             .debug_selector(|| "find-bar".into())

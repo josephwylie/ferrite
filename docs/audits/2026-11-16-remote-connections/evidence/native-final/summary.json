@@ -1,0 +1,325 @@
+{
+  "passed": true,
+  "transport": "actual nonroot OpenSSH localhost",
+  "provider": "simulated Codex app-server, explicit fixture launcher checked before prompting",
+  "filesystem": "Client and SSH server share this Mac's filesystem; recorded SSH requests prove routing. Separate collision unit tests prove no local fallback.",
+  "bootstrap": "Preinstalled task-owned ferrited; cold installer/archive/checksum checks are separate unit fixtures, not a published-asset download.",
+  "sizes": {
+    "1440x900": {
+      "passed": true,
+      "owned_processes_stopped": true,
+      "binary_sha256": "c428a4e5597e1d339471c45ab7c67aba1bb413715fd7bfd0e2c807db55396bf6",
+      "server_sha256": "edb4c09f92c2d19d460780b5eb2a71f136cb7211015ed74fb290caed49c43272",
+      "full_flow_binary_sha256": "858f3afc9e73ed7b9c9abc05ead32bea4caebfcb5da4cd1f7ff8536d913dfe28",
+      "full_flow_source_commit": "7cef3de1594d65f1d85891692942e952029a134f",
+      "files_recapture": {
+        "passed": true,
+        "size": "1440x900",
+        "binary_sha256": "c428a4e5597e1d339471c45ab7c67aba1bb413715fd7bfd0e2c807db55396bf6",
+        "source_commit": "92087e9e28d1bae3bb69ff92ab56d48aeb968362"
+      },
+      "recovery": null,
+      "checks": [
+        {
+          "time": 1794827405.5550349,
+          "kind": "check",
+          "name": "remote-project-ownership",
+          "passed": true
+        },
+        {
+          "time": 1794827406.6335082,
+          "kind": "check",
+          "name": "remote-codex-provider-ownership",
+          "passed": true,
+          "provider": "simulated Codex app-server"
+        },
+        {
+          "time": 1794827410.9473531,
+          "kind": "check",
+          "name": "remote-files-read-edit-save",
+          "passed": true,
+          "evidence": "actual SSH file_operation snapshot/read/write requests and saved text",
+          "limitation": "localhost SSH fixture shares the host filesystem; SSH request logs prove routing"
+        },
+        {
+          "time": 1794827413.2580638,
+          "kind": "check",
+          "name": "remote-terminal-command",
+          "passed": true,
+          "ssh_connection": "127.0.0.1 61619 127.0.0.1 61604",
+          "cwd": "/private/tmp/ferrite-remote-b3lvgix_/remote-project",
+          "marker": "FERRITE_SSH_TERMINAL_61604"
+        },
+        {
+          "time": 1794827420.268529,
+          "kind": "check",
+          "name": "remote-server-survives-window-disconnect",
+          "passed": true
+        },
+        {
+          "time": 1794827920.367112,
+          "kind": "check",
+          "name": "remote-files-final-layout-read-write",
+          "passed": true,
+          "binary_sha256": "c428a4e5597e1d339471c45ab7c67aba1bb413715fd7bfd0e2c807db55396bf6"
+        },
+        {
+          "time": 1794827981.179709,
+          "kind": "check",
+          "name": "remote-files-final-layout-read-write",
+          "passed": true,
+          "binary_sha256": "c428a4e5597e1d339471c45ab7c67aba1bb413715fd7bfd0e2c807db55396bf6"
+        }
+      ],
+      "file_requests": {
+        "snapshot": 7,
+        "read": 7,
+        "write": 3
+      },
+      "simulated_turns": 1,
+      "screenshots": [
+        "1440x900/01-connections-empty-1440x900.png",
+        "1440x900/02-add-form-1440x900.png",
+        "1440x900/03-invalid-input-retained-1440x900.png",
+        "1440x900/03b-host-key-confirmation-1440x900.png",
+        "1440x900/04-connecting-1440x900.png",
+        "1440x900/05-connection-failure-1440x900.png",
+        "1440x900/06-native-auth-prompt-1440x900.png",
+        "1440x900/07-connected-row-1440x900.png",
+        "1440x900/08-disabled-row-1440x900.png",
+        "1440x900/08b-reconnected-1440x900.png",
+        "1440x900/09-remote-selected-1440x900.png",
+        "1440x900/09b-remote-thread-1440x900.png",
+        "1440x900/09c-remote-files-tree-1440x900.png",
+        "1440x900/09d-remote-file-read-1440x900.png",
+        "1440x900/09e-remote-file-saved-1440x900.png",
+        "1440x900/09f-remote-terminal-output-1440x900.png",
+        "1440x900/10-remote-connections-1440x900.png",
+        "1440x900/11-remove-confirmation-1440x900.png",
+        "1440x900/12-removed-1440x900.png"
+      ]
+    },
+    "1000x700": {
+      "passed": true,
+      "owned_processes_stopped": true,
+      "binary_sha256": "8cd22b04f06fed6b576559e7bf2f411e1498cbaaae8ef46fa00f8ce1a4aac63d",
+      "server_sha256": "edb4c09f92c2d19d460780b5eb2a71f136cb7211015ed74fb290caed49c43272",
+      "full_flow_binary_sha256": "858f3afc9e73ed7b9c9abc05ead32bea4caebfcb5da4cd1f7ff8536d913dfe28",
+      "full_flow_source_commit": "7cef3de1594d65f1d85891692942e952029a134f",
+      "files_recapture": {
+        "passed": true,
+        "size": "1000x700",
+        "binary_sha256": "c428a4e5597e1d339471c45ab7c67aba1bb413715fd7bfd0e2c807db55396bf6",
+        "source_commit": "92087e9e28d1bae3bb69ff92ab56d48aeb968362"
+      },
+      "recovery": {
+        "passed": true,
+        "binary_sha256": "8cd22b04f06fed6b576559e7bf2f411e1498cbaaae8ef46fa00f8ce1a4aac63d",
+        "source_commit": "5e5aa24ce1b5bde1b3c6ca8140a94cb9df4fc9f1",
+        "setup_warning": "synthetic stderr diagnostic through actual setup SSH",
+        "files": "real remote binary/read failure/retry/conflict/reload/overwrite",
+        "terminal": "actual SSH shell exit 23 then Retry and SSH_CONNECTION marker"
+      },
+      "checks": [
+        {
+          "time": 1794827446.2853749,
+          "kind": "check",
+          "name": "remote-project-ownership",
+          "passed": true
+        },
+        {
+          "time": 1794827447.380251,
+          "kind": "check",
+          "name": "remote-codex-provider-ownership",
+          "passed": true,
+          "provider": "simulated Codex app-server"
+        },
+        {
+          "time": 1794827451.693423,
+          "kind": "check",
+          "name": "remote-files-read-edit-save",
+          "passed": true,
+          "evidence": "actual SSH file_operation snapshot/read/write requests and saved text",
+          "limitation": "localhost SSH fixture shares the host filesystem; SSH request logs prove routing"
+        },
+        {
+          "time": 1794827453.646028,
+          "kind": "check",
+          "name": "remote-terminal-command",
+          "passed": true,
+          "ssh_connection": "127.0.0.1 61690 127.0.0.1 61646",
+          "cwd": "/private/tmp/ferrite-remote-21dqievx/remote-project",
+          "marker": "FERRITE_SSH_TERMINAL_61646"
+        },
+        {
+          "time": 1794827460.168724,
+          "kind": "check",
+          "name": "remote-server-survives-window-disconnect",
+          "passed": true
+        },
+        {
+          "time": 1794827941.064147,
+          "kind": "check",
+          "name": "remote-files-final-layout-read-write",
+          "passed": true,
+          "binary_sha256": "c428a4e5597e1d339471c45ab7c67aba1bb413715fd7bfd0e2c807db55396bf6"
+        },
+        {
+          "time": 1794827995.1177359,
+          "kind": "check",
+          "name": "remote-files-final-layout-read-write",
+          "passed": true,
+          "binary_sha256": "c428a4e5597e1d339471c45ab7c67aba1bb413715fd7bfd0e2c807db55396bf6"
+        },
+        {
+          "time": 1794828415.014168,
+          "kind": "check",
+          "name": "remote-recovery-surfaces",
+          "passed": true,
+          "binary_sha256": "c428a4e5597e1d339471c45ab7c67aba1bb413715fd7bfd0e2c807db55396bf6",
+          "source_commit": "92087e9e28d1bae3bb69ff92ab56d48aeb968362",
+          "setup_warning": "synthetic stderr diagnostic through actual setup SSH",
+          "files": "real remote binary/read failure/retry/conflict/reload/overwrite",
+          "terminal": "actual SSH shell exit 23 then Retry and SSH_CONNECTION marker"
+        },
+        {
+          "time": 1794828678.648632,
+          "kind": "check",
+          "name": "remote-recovery-surfaces",
+          "passed": true,
+          "binary_sha256": "8cd22b04f06fed6b576559e7bf2f411e1498cbaaae8ef46fa00f8ce1a4aac63d",
+          "source_commit": "5e5aa24ce1b5bde1b3c6ca8140a94cb9df4fc9f1",
+          "setup_warning": "synthetic stderr diagnostic through actual setup SSH",
+          "files": "real remote binary/read failure/retry/conflict/reload/overwrite",
+          "terminal": "actual SSH shell exit 23 then Retry and SSH_CONNECTION marker"
+        }
+      ],
+      "file_requests": {
+        "snapshot": 208,
+        "read": 21,
+        "write": 11
+      },
+      "simulated_turns": 1,
+      "screenshots": [
+        "1000x700/01-connections-empty-1000x700.png",
+        "1000x700/02-add-form-1000x700.png",
+        "1000x700/03-invalid-input-retained-1000x700.png",
+        "1000x700/03b-host-key-confirmation-1000x700.png",
+        "1000x700/04-connecting-1000x700.png",
+        "1000x700/05-connection-failure-1000x700.png",
+        "1000x700/06-native-auth-prompt-1000x700.png",
+        "1000x700/07-connected-row-1000x700.png",
+        "1000x700/08-disabled-row-1000x700.png",
+        "1000x700/08b-reconnected-1000x700.png",
+        "1000x700/09-remote-selected-1000x700.png",
+        "1000x700/09b-remote-thread-1000x700.png",
+        "1000x700/09c-remote-files-tree-1000x700.png",
+        "1000x700/09d-remote-file-read-1000x700.png",
+        "1000x700/09e-remote-file-saved-1000x700.png",
+        "1000x700/09f-remote-terminal-output-1000x700.png",
+        "1000x700/10-remote-connections-1000x700.png",
+        "1000x700/11-remove-confirmation-1000x700.png",
+        "1000x700/12-removed-1000x700.png",
+        "1000x700/13-setup-warning-1000x700.png",
+        "1000x700/14-remote-binary-guidance-1000x700.png",
+        "1000x700/15-remote-image-guidance-1000x700.png",
+        "1000x700/16-remote-file-read-failure-1000x700.png",
+        "1000x700/17-remote-file-retry-recovered-1000x700.png",
+        "1000x700/18-remote-save-conflict-1000x700.png",
+        "1000x700/19-remote-conflict-reloaded-1000x700.png",
+        "1000x700/20-remote-conflict-overwritten-1000x700.png",
+        "1000x700/21-remote-terminal-failed-1000x700.png",
+        "1000x700/22-remote-terminal-retry-recovered-1000x700.png"
+      ]
+    },
+    "800x600": {
+      "passed": true,
+      "owned_processes_stopped": true,
+      "binary_sha256": "c428a4e5597e1d339471c45ab7c67aba1bb413715fd7bfd0e2c807db55396bf6",
+      "server_sha256": "edb4c09f92c2d19d460780b5eb2a71f136cb7211015ed74fb290caed49c43272",
+      "full_flow_binary_sha256": "858f3afc9e73ed7b9c9abc05ead32bea4caebfcb5da4cd1f7ff8536d913dfe28",
+      "full_flow_source_commit": "05dc35efab9e1473e5f1bee34a09b5b45ff3ff8d",
+      "files_recapture": {
+        "passed": true,
+        "size": "800x600",
+        "binary_sha256": "c428a4e5597e1d339471c45ab7c67aba1bb413715fd7bfd0e2c807db55396bf6",
+        "source_commit": "92087e9e28d1bae3bb69ff92ab56d48aeb968362"
+      },
+      "recovery": null,
+      "checks": [
+        {
+          "time": 1794827588.203081,
+          "kind": "check",
+          "name": "remote-project-ownership",
+          "passed": true
+        },
+        {
+          "time": 1794827589.190541,
+          "kind": "check",
+          "name": "remote-codex-provider-ownership",
+          "passed": true,
+          "provider": "simulated Codex app-server"
+        },
+        {
+          "time": 1794827593.432248,
+          "kind": "check",
+          "name": "remote-files-read-edit-save",
+          "passed": true,
+          "evidence": "actual SSH file_operation snapshot/read/write requests and saved text",
+          "limitation": "localhost SSH fixture shares the host filesystem; SSH request logs prove routing"
+        },
+        {
+          "time": 1794827595.509718,
+          "kind": "check",
+          "name": "remote-terminal-command",
+          "passed": true,
+          "ssh_connection": "127.0.0.1 61803 127.0.0.1 61707",
+          "cwd": "/private/tmp/ferrite-remote-3pxf1xzh/remote-project",
+          "marker": "FERRITE_SSH_TERMINAL_61707"
+        },
+        {
+          "time": 1794827601.560351,
+          "kind": "check",
+          "name": "remote-server-survives-window-disconnect",
+          "passed": true
+        },
+        {
+          "time": 1794828146.126293,
+          "kind": "check",
+          "name": "remote-files-final-layout-read-write",
+          "passed": true,
+          "binary_sha256": "c428a4e5597e1d339471c45ab7c67aba1bb413715fd7bfd0e2c807db55396bf6"
+        }
+      ],
+      "file_requests": {
+        "snapshot": 7,
+        "read": 7,
+        "write": 2
+      },
+      "simulated_turns": 1,
+      "screenshots": [
+        "800x600/01-connections-empty-800x600.png",
+        "800x600/02-add-form-800x600.png",
+        "800x600/03-invalid-input-retained-800x600.png",
+        "800x600/03b-host-key-confirmation-800x600.png",
+        "800x600/04-connecting-800x600.png",
+        "800x600/05-connection-failure-800x600.png",
+        "800x600/06-native-auth-prompt-800x600.png",
+        "800x600/06b-masked-auth-response-800x600.png",
+        "800x600/07-connected-row-800x600.png",
+        "800x600/08-disabled-row-800x600.png",
+        "800x600/08b-reconnected-800x600.png",
+        "800x600/09-remote-selected-800x600.png",
+        "800x600/09b-remote-thread-800x600.png",
+        "800x600/09c-empty-editor-800x600.png",
+        "800x600/09c-remote-files-tree-800x600.png",
+        "800x600/09d-remote-file-read-800x600.png",
+        "800x600/09e-remote-file-saved-800x600.png",
+        "800x600/09f-remote-terminal-output-800x600.png",
+        "800x600/10-remote-connections-800x600.png",
+        "800x600/11-remove-confirmation-800x600.png",
+        "800x600/12-removed-800x600.png"
+      ]
+    }
+  }
+}

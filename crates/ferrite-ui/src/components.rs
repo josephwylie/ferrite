@@ -404,7 +404,7 @@ pub fn fade(fill: Hsla, rising: bool, height: f32, stops: &[(f32, f32)]) -> Div 
 }
 
 /// `shadow` with its ink scaled by `k` (0..1): a floating surface's shadow
-/// while it fades in or out (`motion::menu_in`).
+/// while it fades in or out (`motion::float_in`).
 pub fn shadow_faded(shadow: Vec<BoxShadow>, k: f32) -> Vec<BoxShadow> {
     shadow
         .into_iter()
@@ -1619,7 +1619,7 @@ pub fn home_relative(path: &std::path::Path) -> String {
     }
 }
 
-/// A fold's chevron, every surface's (the nav's sections and Groups, the
+/// A fold's chevron, every surface's (the nav's sections, the
 /// panel's file blocks, the usage card's folds): `chevron-right` while
 /// folded, a quarter turn down while open. The turn eases over
 /// `motion::CHEVRON` (Claude's 60ms) when the fold flips under it, keyed
@@ -1706,6 +1706,23 @@ pub fn on_bounds<E: ParentElement>(
     element.child(Measured {
         record: Some(Box::new(record)),
     })
+}
+
+/// From a prepaint or paint callback: draw the view being drawn once more,
+/// and no other part of the window. What a measurement asks for when it comes
+/// out different from the one its frame was built on.
+///
+/// While an animation is asking for frames, the redraw joins its next one. A
+/// window at rest gets the view marked dirty once the draw ends (a view
+/// cannot be marked during one) and no frame request, so a column that has
+/// landed leaves nothing waiting on a frame.
+pub fn redraw_drawn_view(window: &Window, cx: &mut App) {
+    if window.frame_requested() {
+        window.request_animation_frame();
+    } else {
+        let view = window.current_view();
+        cx.defer(move |cx| cx.notify(view));
+    }
 }
 
 type Record = Box<dyn FnOnce(gpui::Bounds<gpui::Pixels>, &mut Window, &mut App)>;

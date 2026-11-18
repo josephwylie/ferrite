@@ -171,6 +171,73 @@ fn machine_window(
     })
 }
 
+#[gpui::test]
+fn escape_closes_settings_on_an_empty_remote_workspace(cx: &mut TestAppContext) {
+    bind_production_keys(cx);
+    let machines = cx.new(|_| machines("empty-remote-escape", Some("me@box")));
+    let core = machines.update(cx, |machines, _| machines.cockpit()).unwrap();
+    let (root, cx) = machine_window(cx, core, machines);
+    tick(cx);
+    let view = shown(&root, cx);
+    view.read_with(cx, |view, _| assert!(view.panes.is_empty()));
+    cx.simulate_keystrokes("cmd-,");
+    cx.run_until_parked();
+    view.read_with(cx, |view, cx| assert!(view.settings_open(cx)));
+    cx.simulate_keystrokes("escape");
+    cx.run_until_parked();
+    view.read_with(cx, |view, cx| assert!(!view.settings_open(cx)));
+    cx.simulate_keystrokes("escape");
+    cx.run_until_parked();
+    view.update_in(cx, |view, window, cx| {
+        view.unqueue_from_backspace(&ferrite_pane::composer::Backspace, window, cx);
+    });
+    view.read_with(cx, |view, _| assert!(view.panes.is_empty()));
+}
+
+#[gpui::test]
+fn remote_files_and_terminal_open_through_their_keyboard_shortcuts(cx: &mut TestAppContext) {
+    use ferrite_core::cockpit::{Attach, Endpoint, ServerState};
+    use crate::cockpit::surfaces::SurfaceId;
+    let dir = settings_dir("tool-keys");
+    let _ = std::fs::remove_dir_all(&dir);
+    let dial = ferrite_core::server::fixture_machine(
+        dir.join("box"), Box::new(OnBox(Default::default())),
+    ).unwrap();
+    let mut core = Cockpit::attach(Attach {
+        browser: false,
+        driven: false,
+        store: dir.join("window/threads"),
+        server: Endpoint::Machine(std::sync::Arc::new(Bridge::new(
+            "box", dir.join("bridge/bridge.sock"), dial,
+        ))),
+        client: ferrite_core::protocol::Peer { name: "test".into(), version: "0".into() },
+        renderer: None,
+        discovery: Box::new(Fake::default()),
+    }).unwrap();
+    ferrite_core::doorbell::until("remote server never attached", || {
+        core.pump();
+        matches!(core.server(), Some(ServerState::Attached { .. }))
+    });
+    let thread = core.open(Provider::Codex, WorkspaceChoice::Main { checkout: here() }).unwrap();
+    bind_production_keys(cx);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(1400.), px(900.)));
+    tick(cx);
+    view.read_with(cx, |view, _| {
+        assert!(view.on_machine());
+        assert!(view.opener_unavailable(thread, crate::cockpit::panel::Opener::Files).is_none());
+        assert!(view.opener_unavailable(thread, crate::cockpit::panel::Opener::Terminal).is_none());
+        assert!(view.opener_unavailable(thread, crate::cockpit::panel::Opener::Changes).is_none());
+    });
+    cx.simulate_keystrokes("cmd-shift-f");
+    tick(cx);
+    view.read_with(cx, |view, _| assert_eq!(view.active_surface(thread), Some(SurfaceId::Files)));
+    cx.simulate_keystrokes("cmd-j");
+    tick(cx);
+    view.read_with(cx, |view, _| assert!(matches!(view.active_surface(thread), Some(SurfaceId::Terminal(_)))));
+    assert!(cx.debug_bounds("terminal-failed").is_some(), "a fake SSH bridge cannot start a local shell");
+}
+
 /// The Cockpit the window shows now.
 fn shown(
     root: &Entity<gpui::component::Root>,
@@ -303,6 +370,78 @@ fn a_machine_off_screen_heads_its_rows_with_its_connection(cx: &mut TestAppConte
     assert!(debug_bounds(cx, "nav-machine-1".into()).is_some(), "box");
     until(cx, |cx| connection(&view, 1, cx) == Connection::Attention);
     assert_eq!(connection(&view, 0, cx), Connection::Online);
+    view.update(cx, |view, cx| {
+        let machines = view.machines.as_ref().unwrap();
+        assert!(matches!(
+            machines.read(cx).server_state(1, view.cockpit.server()),
+            Some(ferrite_core::cockpit::ServerState::Detached {
+                attention: Some(Failure::SignIn),
+                ..
+            })
+        ));
+        machines.update(cx, |machines, _| machines.retry(1));
+        assert_eq!(
+            machines.read(cx).rows(view.cockpit.server())[1].connection,
+            Connection::Connecting,
+            "Retry also releases an off-screen authentication stop"
+        );
+    });
+}
+
+#[gpui::test]
+fn removing_the_selected_connection_confirms_then_returns_to_this_computer(
+    cx: &mut TestAppContext,
+) {
+    let machines = cx.new(|_| machines("remove-selected", Some("me@box")));
+    let core = machines
+        .update(cx, |machines, _| machines.cockpit())
+        .unwrap();
+    let (root, cx) = machine_window(cx, core, machines);
+    let remote = shown(&root, cx);
+    let remove = remote.update_in(cx, |view, window, cx| {
+        view.prefs.settings.machines = vec![Machine {
+            name: "box".into(),
+            target: "me@box".into(),
+            enabled: true,
+        }];
+        view.connection_settings(window, cx)
+            .into_iter()
+            .flat_map(|group| group.rows)
+            .find_map(|row| match row.control {
+                settings::Control::ConnectionRow(row) => row
+                    .actions
+                    .into_iter()
+                    .find(|action| action.id.as_ref() == "connection-remove-1")
+                    .map(|action| action.act),
+                _ => None,
+            })
+            .unwrap()
+    });
+    cx.update(|window, cx| remove(window, cx));
+    let confirm = remote.update_in(cx, |view, window, cx| {
+        assert_eq!(
+            view.prefs.settings.machines.len(),
+            1,
+            "the first press only asks"
+        );
+        view.connection_settings(window, cx)
+            .into_iter()
+            .flat_map(|group| group.rows)
+            .find_map(|row| match row.control {
+                settings::Control::ConnectionRow(row) => row.removal.map(|(confirm, _)| confirm),
+                _ => None,
+            })
+            .unwrap()
+    });
+    cx.update(|window, cx| confirm(window, cx));
+    tick(cx);
+    let local = shown(&root, cx);
+    assert_ne!(local.entity_id(), remote.entity_id());
+    local.read_with(cx, |view, cx| {
+        assert!(view.cockpit.machine().is_none());
+        assert!(view.prefs.settings.machines.is_empty());
+        assert!(!view.machines.as_ref().unwrap().read(cx).listed());
+    });
 }
 
 #[gpui::test]
@@ -346,7 +485,7 @@ fn going_to_a_machine_that_needs_a_sign_in_says_so_and_holds_still(cx: &mut Test
     let first = shown(cx);
     first.update(cx, |_, cx| {
         cx.emit(GoToMachine {
-            index: 1,
+            index: Some(1),
             open: None,
         })
     });
@@ -390,7 +529,7 @@ fn going_to_a_machine_that_needs_a_sign_in_says_so_and_holds_still(cx: &mut Test
     // And back: the window follows the Cockpit it built last.
     on_box.update(cx, |_, cx| {
         cx.emit(GoToMachine {
-            index: 0,
+            index: Some(0),
             open: None,
         })
     });
@@ -421,6 +560,46 @@ fn going_to_a_machine_that_needs_a_sign_in_says_so_and_holds_still(cx: &mut Test
             "box's sign-in band stays with box"
         );
     });
+}
+
+#[gpui::test]
+fn switching_machines_transfers_unsaved_panel_state_and_retires_the_previous_writer(cx: &mut TestAppContext) {
+    use crate::cockpit::surfaces::{SurfaceAction, SurfaceId, Surfaces};
+    let (core, _fake, checkout) = bound_cockpit("machines-panel-transfer", Provider::Claude);
+    let machines = cx.new(|_| machines("panel-transfer", None));
+    let (root, cx) = machine_window(cx, core, machines);
+    let first = shown(&root, cx);
+    let dir = scratch("machines-panel-transfer-prefs");
+    std::fs::write(&dir, "the settings directory is temporarily unavailable").unwrap();
+    let thread = first.update(cx, |view, cx| {
+        view.prefs.dir = dir.clone();
+        let thread = view.panes[0].thread().unwrap();
+        view.open_in_files(thread, checkout.join("src/lib.rs"), None, true, cx);
+        view.pump(cx);
+        view.flush_panel_persistence();
+        view.apply_surface(thread, SurfaceAction::Open(SurfaceId::Browser));
+        view.apply_surface(thread, SurfaceAction::Open(SurfaceId::Changes));
+        cx.emit(GoToMachine { index: Some(1), open: None });
+        thread
+    });
+    cx.run_until_parked();
+    let successor = shown(&root, cx);
+    assert_ne!(successor.entity_id(), first.entity_id());
+    successor.read_with(cx, |view, _| {
+        let state = view.panel.surfaces.get(thread).unwrap();
+        assert_eq!(state.active, Some(SurfaceId::Changes));
+        assert!(!state.tabs.contains(&SurfaceId::Browser), "live resources end with their owner");
+    });
+    std::fs::remove_file(&dir).unwrap();
+    successor.update(cx, |view, _| view.flush_panel_persistence());
+    first.update(cx, |view, cx| {
+        view.apply_surface(thread, SurfaceAction::Open(SurfaceId::Overview));
+        view.pump(cx);
+        view.flush_panel_persistence();
+    });
+    assert_eq!(Surfaces::load(&dir, |_, _| true).unwrap().get(thread).unwrap().active, Some(SurfaceId::Changes));
+    let files: serde_json::Value = serde_json::from_slice(&std::fs::read(dir.join("files.json")).unwrap()).unwrap();
+    assert_eq!(files["threads"][thread.get().to_string()]["files"][0]["path"], checkout.join("src/lib.rs").to_str().unwrap());
 }
 
 /// A machine with no `ferrited` says so, and while it is away its board,
@@ -547,27 +726,6 @@ fn a_machines_parked_threads_show_in_the_nav_and_revive_on_click(cx: &mut TestAp
         assert_eq!(view.facts.name(named).as_ref(), "Release notes");
         assert!(view.panes.is_empty(), "nothing open on the machine");
     });
-    view.read_with(cx, |view, _| {
-        use ferrite_core::groups::{Drag, DropTarget, GroupChange, Plan};
-        assert_eq!(
-            view.cockpit.plan_group_drop(
-                Drag::Thread {
-                    thread: other,
-                    group: None,
-                },
-                DropTarget::ThreadRow {
-                    thread: named,
-                    group: None,
-                    index: 0,
-                },
-            ),
-            Plan::Change(GroupChange::Create {
-                first: named,
-                second: other,
-            }),
-            "a drop is the machine's Server's to check"
-        );
-    });
     assert!(
         !dir.join("window").join("threads").exists(),
         "the window keeps no Store for the machine"
@@ -603,6 +761,7 @@ fn box_thread(thread: ThreadId, title: &str) -> ferrite_core::protocol::ThreadSt
         thread,
         generation: 1,
         provider: Provider::Claude,
+        project: None,
         model: None,
         effort: None,
         title: Some(title.into()),
@@ -612,6 +771,7 @@ fn box_thread(thread: ThreadId, title: &str) -> ferrite_core::protocol::ThreadSt
         session_project_root: None,
         first_prompt_sent: true,
         has_prompt_history: true,
+        resume_lost: false,
         starting: false,
         working: false,
         tuning: false,
@@ -622,6 +782,7 @@ fn box_thread(thread: ThreadId, title: &str) -> ferrite_core::protocol::ThreadSt
         commands: vec![],
         models: vec![],
         permission_mode: None,
+        sandbox: None,
         permission_modes: vec![],
         controls: vec![],
         store_error: None,
@@ -1143,7 +1304,7 @@ fn a_draft_on_a_machine_starts_a_thread_in_a_directory_typed_there(cx: &mut Test
 
     let field = view.update(cx, |view, cx| {
         view.open_project_creator(cx);
-        let field = view.project_editor.as_ref().unwrap().remote.as_ref();
+        let field = view.project_editor_view.read(cx).editor.as_ref().unwrap().remote.as_ref();
         field.expect("a path field on a machine").field.clone()
     });
     assert!(
@@ -1156,7 +1317,9 @@ fn a_draft_on_a_machine_starts_a_thread_in_a_directory_typed_there(cx: &mut Test
         field.set(format!("{}/re", folder.display()), cx)
     });
     until(cx, |cx| {
-        view.read_with(cx, |view, cx| view.remote_completions(cx) == ["repo"])
+        view.read_with(cx, |view, cx| {
+            view.project_editor_view.read(cx).remote_completions(cx) == ["repo"]
+        })
     });
     tick(cx);
     assert!(debug_bounds(cx, "project-path-completion:repo".into()).is_some());
@@ -1177,20 +1340,20 @@ fn a_draft_on_a_machine_starts_a_thread_in_a_directory_typed_there(cx: &mut Test
     cx.simulate_keystrokes("enter");
     view.update(cx, |view, cx| {
         assert_eq!(
-            view.project_editor.as_ref().unwrap().staged,
+            view.project_editor_view.read(cx).editor.as_ref().unwrap().staged,
             std::slice::from_ref(&repo)
         );
         assert_eq!(field.read(cx).text(), "", "the field empties");
     });
     cx.simulate_keystrokes("enter");
-    let project = view.update(cx, |view, _| {
+    let project = view.update(cx, |view, cx| {
         assert!(
-            view.project_editor.is_none(),
+            !view.project_editor_open(cx),
             "the next ↵ confirms the card, adding nothing more"
         );
         let project = view.cockpit.registry().projects().last().unwrap().clone();
         assert_eq!(project.title, "repo");
-        assert_eq!(project.root, std::fs::canonicalize(&repo).unwrap());
+        assert_eq!(project.root, ferrite_core::workspace::follow::canonical(&repo));
         project.id
     });
 
@@ -1264,7 +1427,7 @@ fn a_draft_on_a_machine_starts_a_thread_in_a_directory_typed_there(cx: &mut Test
     });
     assert_eq!(
         *started.lock().unwrap(),
-        [std::fs::canonicalize(&repo).unwrap()]
+        [ferrite_core::workspace::follow::canonical(&repo)]
     );
 }
 
@@ -1379,19 +1542,17 @@ fn a_review_of_a_machines_thread_reads_its_checkout_there(cx: &mut TestAppContex
     );
 }
 
-/// The public Server/window path must show its exact native page, including
-/// provider-initiated opens and navigation that finishes before the next paint.
-#[gpui::test]
-fn conversation_browser_shares_the_live_preview_and_new_tab_opens_separately(cx: &mut TestAppContext) {
+/// A Cockpit attached to a Server whose browser window has one tab open on
+/// a local page, and the Thread and tab document it belongs to.
+pub(super) fn browser_core(name: &str) -> (Cockpit, ThreadId, ferrite_core::browser::Document) {
     use ferrite_core::browser::Action;
     use ferrite_core::cockpit::{Attach, Endpoint, ServerState};
-    use ferrite_pane::visual::{engine::Visuals, web::fake::{Call, FakeEngine}};
-    let dir = scratch("browser-preview");
+    let dir = scratch(name);
     let dial = ferrite_core::server::fixture_machine(dir.join("box"), Box::new(OnBox(Default::default()))).unwrap();
     let bridge = std::sync::Arc::new(Bridge::new("box", dir.join("bridge.sock"), dial));
     let mut core = Cockpit::attach(Attach {
         store: dir.join("window"), server: Endpoint::Machine(bridge),
-        client: ferrite_core::protocol::Peer { name: "browser-preview".into(), version: "0".into() },
+        client: ferrite_core::protocol::Peer { name: name.into(), version: "0".into() },
         renderer: None, browser: true, driven: false, discovery: Box::new(Fake::default()),
     }).unwrap();
     ferrite_core::doorbell::until("browser window did not attach", || {
@@ -1401,6 +1562,16 @@ fn conversation_browser_shares_the_live_preview_and_new_tab_opens_separately(cx:
     core.browser_attach(thread).unwrap();
     let opened = core.browser(thread, Action::Open { url: "http://localhost:5173/start".into() }).unwrap();
     let document = opened.tabs[0].document();
+    (core, thread, document)
+}
+
+/// The public Server/window path must show its exact native page, including
+/// provider-initiated opens and navigation that finishes before the next paint.
+#[gpui::test]
+fn conversation_browser_shares_the_live_preview_and_new_tab_opens_separately(cx: &mut TestAppContext) {
+    use ferrite_core::browser::Action;
+    use ferrite_pane::visual::{engine::Visuals, web::fake::{Call, FakeEngine}};
+    let (core, thread, document) = browser_core("browser-preview");
     bind_production_keys(cx);
     let engine = std::rc::Rc::new(FakeEngine::new());
     cx.update(|cx| Visuals::install(engine.clone(), cx));
@@ -1547,10 +1718,15 @@ fn remote_inbox_uses_digests_and_follows_another_clients_park(cx: &mut TestAppCo
 }
 
 #[gpui::test]
-fn browser_annotation_host_intercepts_selection_and_releases_cancelled_capture(cx: &mut TestAppContext) {
+fn browser_live_annotation_keeps_focus_and_protection_until_guest_cleanup(cx: &mut TestAppContext) {
     use ferrite_core::browser::Action;
     use ferrite_core::cockpit::{Attach, Endpoint, ServerState};
-    use ferrite_pane::visual::{engine::Visuals, web::{fake::{Call, FakeEngine}, Input}};
+    use ferrite_pane::visual::{
+        engine::Visuals,
+        live_annotation::{Event, Submission},
+        web::{fake::{Call, FakeEngine}, Input},
+    };
+    use ferrite_core::browser_annotations::{LiveFeedback, LiveScreenshot, Rect, RegionTarget, Selection, Viewport};
     // Short: the machine's socket under it must fit macOS's 104-byte SUN_LEN.
     let dir = scratch("annotation-host");
     let dial = ferrite_core::server::fixture_machine(dir.join("box"), Box::new(OnBox(Default::default()))).unwrap();
@@ -1571,51 +1747,660 @@ fn browser_annotation_host_intercepts_selection_and_releases_cancelled_capture(c
     cx.update(|cx| Visuals::install(engine.clone(), cx));
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     cx.simulate_resize(gpui::size(px(1600.), px(900.)));
-    until(cx, |cx| engine.live_views() == 1 && cx.debug_bounds("browser-preview").is_some());
-    let activation = || engine.journal().into_iter().filter(|call| {
-        matches!(call, Call::Input(input) if !matches!(input, Input::Leave))
-    }).collect::<Vec<_>>();
-    let before = activation();
-    let wait = |cx: &mut gpui::VisualTestContext, label: &str, done: fn(&mut gpui::VisualTestContext) -> bool| {
-        ferrite_core::doorbell::until(label, || { leap(cx, super::super::user_commands::ENDED_POLL); done(cx) });
+    // Native callbacks and remote retention use several threads. Bound the
+    // whole condition: repeated socket replies must not reset its deadline.
+    let wait = |cx: &mut gpui::VisualTestContext, label: &str, done: &mut dyn FnMut(&mut gpui::VisualTestContext) -> bool| {
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        loop {
+            leap(cx, super::super::user_commands::ENDED_POLL);
+            if done(cx) { break; }
+            assert!(std::time::Instant::now() < deadline, "{label}; native journal: {:?}", engine.journal().into_iter().rev().take(24).collect::<Vec<_>>());
+            std::thread::yield_now();
+        }
     };
-    let annotate = cx.debug_bounds("browser-annotate").expect("live browser offers annotation capture");
-    cx.simulate_click(annotate.center(), gpui::Modifiers::none());
-    wait(cx, "region selection opens", |cx| cx.debug_bounds("browser-annotation-overlay").is_some());
-    let protected = view.update(cx, |view, _| view.cockpit.browser_attach(thread).unwrap());
-    assert!(protected.tabs[0].protected, "selection protects the exact live page");
-    let cancel = cx.debug_bounds("browser-annotation-cancel").unwrap();
-    cx.simulate_click(cancel.center(), gpui::Modifiers::none());
-    wait(cx, "Cancel closes selection", |cx| cx.debug_bounds("browser-annotation-overlay").is_none());
-    let released = view.update(cx, |view, _| view.cockpit.browser_attach(thread).unwrap());
-    assert!(!released.tabs[0].protected, "cancel releases capture protection");
-    let annotate = cx.debug_bounds("browser-annotate").unwrap();
-    cx.simulate_click(annotate.center(), gpui::Modifiers::none());
-    wait(cx, "element controls open", |cx| cx.debug_bounds("browser-annotation-element").is_some());
-    let element = cx.debug_bounds("browser-annotation-element").unwrap();
-    cx.simulate_click(element.center(), gpui::Modifiers::none());
+    wait(cx, "browser becomes visible", &mut |cx| engine.live_views() == 1 && cx.debug_bounds("browser-preview").is_some());
+    wait(cx, "page finishes loading", &mut |cx| view.update(cx, |view, _| {
+        !view.cockpit.browser_attach(thread).unwrap().tabs[0].loading
+    }));
+    let finished = || engine.journal().iter().filter(|call| matches!(call, Call::AnnotationFinished(_))).count();
+    let protected = |cx: &mut gpui::VisualTestContext| view.update(cx, |view, _| {
+        view.cockpit.browser_attach(thread).unwrap().tabs[0].protected
+    });
+    let begin = |cx: &mut gpui::VisualTestContext| {
+        let annotate = cx.debug_bounds("browser-annotate").expect("live page offers annotation");
+        cx.simulate_click(annotate.center(), gpui::Modifiers::none());
+        tick(cx);
+    };
+
+    begin(cx);
+    assert!(protected(cx), "the live editor protects the exact page");
+    assert!(cx.debug_bounds("browser-annotation-overlay").is_none(), "the editor lives in the guest page");
+    assert!(cx.update(|window, cx| view.read(cx).browser_annotation_focus(thread, cx).is_some_and(|focus| focus.is_focused(window))), "starting annotation focuses the rendered WebView");
     cx.simulate_keystrokes("escape");
-    wait(cx, "Escape closes selection", |cx| cx.debug_bounds("browser-annotation-overlay").is_none());
-    let annotate = cx.debug_bounds("browser-annotate").unwrap();
-    cx.simulate_click(annotate.center(), gpui::Modifiers::none());
-    wait(cx, "region retry opens", |cx| cx.debug_bounds("browser-annotation-overlay").is_some());
-    let overlay = cx.debug_bounds("browser-annotation-overlay").unwrap();
-    let from = overlay.origin + gpui::point(px(20.), px(20.));
-    let to = from + gpui::point(px(80.), px(60.));
-    cx.simulate_mouse_down(from, MouseButton::Left, gpui::Modifiers::none());
-    cx.simulate_mouse_move(to, MouseButton::Left, gpui::Modifiers::none());
-    cx.simulate_mouse_up(to, MouseButton::Left, gpui::Modifiers::none());
-    wait(cx, "unavailable capture releases overlay", |cx| cx.debug_bounds("browser-annotation-overlay").is_none());
-    let released = view.update(cx, |view, _| view.cockpit.browser_attach(thread).unwrap());
-    assert!(!released.tabs[0].protected, "unavailable capture releases protection");
-    let annotate = cx.debug_bounds("browser-annotate").unwrap();
-    cx.simulate_click(annotate.center(), gpui::Modifiers::none());
-    wait(cx, "selection opens before new tab", |cx| cx.debug_bounds("browser-annotation-overlay").is_some());
+    wait(cx, "Escape reaches the guest", &mut |_| engine.journal().iter().any(|call| matches!(call, Call::Input(Input::Key { key, down: true, .. }) if key == "escape")));
+    // simulate_keystrokes sends only key-down; a real release ends the
+    // independent operator gesture after the annotation lease is released.
+    cx.simulate_event(gpui::KeyUpEvent { keystroke: gpui::Keystroke::parse("escape").unwrap() });
+    engine.annotation_event(Event::Cancelled);
+    wait(cx, "Cancel requests guest cleanup", &mut |_| finished() == 1);
+    assert!(protected(cx), "cancel waits for CSS restoration");
+    engine.annotation_event(Event::Closed);
+    wait(cx, "cancelled session releases protection", &mut |cx| !protected(cx));
+
+    begin(cx);
+    let viewport = engine.browser_viewport().unwrap();
+    let bounds = Rect { x: 12., y: 20., width: 80., height: 60. };
+    engine.annotation_event(Event::Attach {
+        feedback: LiveFeedback {
+            id: "live-region".into(),
+            page_url: "http://localhost:5173/start".into(),
+            page_title: Some("Fixture".into()),
+            comment: "Keep this region even without a screenshot".into(),
+            elements: vec![],
+            regions: vec![RegionTarget { id: "region-1".into(), rect: bounds.clone() }],
+            strokes: vec![],
+            style_changes: vec![],
+            screenshot: LiveScreenshot::Unavailable { reason: "Not captured yet".into() },
+            bounds,
+            created_at: "2026-11-16T00:00:00.000Z".into(),
+        },
+        viewport: Viewport {
+            width_css: f64::from(viewport.width),
+            height_css: f64::from(viewport.height),
+            device_scale: f64::from(viewport.scale),
+        },
+        submission: Submission::Attach,
+    });
+    wait(cx, "Attach capture requests guest cleanup", &mut |_| finished() == 2);
+    assert!(protected(cx), "Attach keeps its lease while the guest restores styles");
+    assert!(cx.debug_bounds("browser-annotation-attachment").is_none(), "no receipt is exposed before cleanup");
+    engine.annotation_event(Event::Closed);
+    wait(cx, "cleaned capture reaches the composer", &mut |cx| cx.debug_bounds("browser-annotation-attachment").is_some());
+    assert!(!protected(cx), "durable retention releases the lease");
+    let annotations = view.read_with(cx, |view, cx| view.panes[0].composer.read(cx).browser_annotations().to_vec());
+    assert_eq!(annotations.len(), 1);
+    assert!(annotations[0].original().is_none(), "an unavailable capture creates no fake image");
+    assert_eq!(annotations[0].comment(), "Keep this region even without a screenshot");
+    assert!(matches!(&annotations[0].capture().selection, Selection::Live { feedback } if feedback.regions[0].id == "region-1" && matches!(feedback.screenshot, LiveScreenshot::Unavailable { .. })));
+
+    begin(cx);
     let new_tab = cx.debug_bounds("browser-new-tab").unwrap();
     cx.simulate_click(new_tab.center(), gpui::Modifiers::none());
+    wait(cx, "New Tab requests guest cleanup", &mut |_| finished() == 3);
+    assert!(protected(cx), "hiding the page still waits for restoration");
+    engine.annotation_event(Event::Closed);
+    wait(cx, "hidden session releases protection", &mut |cx| !protected(cx));
+    let started = engine.journal().iter().filter(|call| matches!(call, Call::AnnotationStarted(..))).count();
+    begin(cx);
+    assert_eq!(engine.journal().iter().filter(|call| matches!(call, Call::AnnotationStarted(..))).count(), started, "new address mode has no visible page to annotate");
+}
+
+/// A window on a machine whose own `settings.json` is `there`, with its
+/// Settings open and the machine's defaults read. Returns the machine's
+/// settings directory too.
+fn settings_on_a_machine<'a>(
+    cx: &'a mut TestAppContext,
+    name: &str,
+    there: &ferrite_core::settings::Settings,
+) -> (
+    Entity<CockpitView>,
+    &'a mut gpui::VisualTestContext,
+    std::path::PathBuf,
+) {
+    use ferrite_core::cockpit::{Attach, Endpoint, ServerState};
+    let dir = scratch(name);
+    let remote = dir.join("r");
+    std::fs::create_dir_all(&remote).unwrap();
+    there.save(&remote).unwrap();
+    let dial = ferrite_core::server::fixture_machine(
+        remote.join("threads"),
+        Box::new(OnBox(Default::default())),
+    )
+    .unwrap();
+    let bridge = std::sync::Arc::new(Bridge::new(
+        "box",
+        dir.join("bridge").join("bridge.sock"),
+        dial,
+    ));
+    let mut core = Cockpit::attach(Attach {
+        browser: false,
+        driven: false,
+        store: dir.join("window").join("threads"),
+        server: Endpoint::Machine(bridge),
+        client: ferrite_core::protocol::Peer {
+            name: "window".into(),
+            version: "0".into(),
+        },
+        renderer: None,
+        discovery: Box::new(Fake::default()),
+    })
+    .unwrap();
+    ferrite_core::doorbell::until("client did not attach", || {
+        core.pump();
+        matches!(core.server(), Some(ServerState::Attached { .. }))
+    });
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(1000.), px(700.)));
+    bind_production_keys(cx);
+    cx.simulate_keystrokes("cmd-,");
+    cx.run_until_parked();
+    until(cx, |cx| {
+        view.read_with(cx, |view, _| view.shown_defaults().is_some())
+    });
     tick(cx);
-    let released = view.update(cx, |view, _| view.cockpit.browser_attach(thread).unwrap());
-    assert!(!released.tabs[0].protected, "starting another tab must release hidden selection protection");
-    assert!(cx.debug_bounds("browser-annotate").is_none(), "new address mode has no visible page to annotate");
-    assert_eq!(activation(), before, "annotation selection never forwards page activation input");
+    (view, cx, remote)
+}
+
+/// Settings on a machine show and edit that machine's own defaults: the
+/// Server writes its file and the sheet shows what it reread, while this
+/// computer's preferences stay as they were.
+#[gpui::test]
+fn settings_on_a_machine_edit_its_defaults_not_this_computers(cx: &mut TestAppContext) {
+    use ferrite_core::settings::Settings;
+    let there = Settings {
+        factory_tasks_at_once: 5,
+        placeholder_suggestions: false,
+        codex_approval_policy: "never".into(),
+        ..Default::default()
+    };
+    let (view, cx, remote) = settings_on_a_machine(cx, "rd", &there);
+    let here = view.read_with(cx, |view, _| view.prefs.settings.clone());
+    assert_ne!(here.factory_tasks_at_once, there.factory_tasks_at_once);
+    let shown = |cx: &mut gpui::VisualTestContext| {
+        view.read_with(cx, |view, _| view.shown_defaults().unwrap())
+    };
+    assert_eq!(shown(cx), there.server_defaults(), "the machine's, not ours");
+
+    let search = cx.debug_bounds("settings-search").unwrap();
+    cx.simulate_click(search.center(), gpui::Modifiers::none());
+    cx.simulate_input("at once");
+    tick(cx);
+    let at = cx.debug_bounds("settings-factory-limit-1").unwrap().center();
+    cx.simulate_click(at, gpui::Modifiers::none());
+    until(cx, |cx| {
+        view.read_with(cx, |view, _| {
+            view.shown_defaults()
+                .is_some_and(|shown| shown.factory_tasks_at_once == 6)
+        })
+    });
+    let search = cx.debug_bounds("settings-search").unwrap();
+    cx.simulate_click(search.center(), gpui::Modifiers::none());
+    cx.simulate_keystrokes(&ferrite_ui::keymap::PLATFORM.chord("a"));
+    cx.simulate_input("follow-up");
+    tick(cx);
+    let at = cx
+        .debug_bounds("settings-placeholder-suggestions")
+        .unwrap()
+        .center();
+    cx.simulate_click(at, gpui::Modifiers::none());
+    until(cx, |cx| {
+        view.read_with(cx, |view, _| {
+            view.shown_defaults()
+                .is_some_and(|shown| shown.placeholder_suggestions)
+        })
+    });
+
+    until(cx, |_| {
+        Settings::load(&remote).is_ok_and(|written| written.placeholder_suggestions)
+    });
+    let written = Settings::load(&remote).unwrap();
+    assert_eq!(written.factory_tasks_at_once, 6, "written to its file");
+    assert!(written.placeholder_suggestions);
+    assert_eq!(
+        written.codex_approval_policy, "never",
+        "what the edit did not name stays"
+    );
+    assert_eq!(
+        view.read_with(cx, |view, _| view.prefs.settings.clone()),
+        here,
+        "this computer's preferences did not move"
+    );
+    assert!(
+        Settings::load(&view.read_with(cx, |view, _| view.prefs.dir.clone()))
+            .map_or(true, |saved| saved.factory_tasks_at_once == here.factory_tasks_at_once)
+    );
+}
+
+/// Two quick edits both land: the second is built on the first, not on what
+/// the machine last said.
+#[gpui::test]
+fn two_quick_edits_to_a_machines_defaults_both_land(cx: &mut TestAppContext) {
+    use ferrite_core::settings::Settings;
+    let there = Settings {
+        factory_tasks_at_once: 5,
+        ..Default::default()
+    };
+    let (view, cx, remote) = settings_on_a_machine(cx, "rd-quick", &there);
+    let search = cx.debug_bounds("settings-search").unwrap();
+    cx.simulate_click(search.center(), gpui::Modifiers::none());
+    cx.simulate_input("at once");
+    tick(cx);
+    let more = cx.debug_bounds("settings-factory-limit-1").unwrap().center();
+    cx.simulate_click(more, gpui::Modifiers::none());
+    cx.simulate_click(more, gpui::Modifiers::none());
+    until(cx, |_| {
+        Settings::load(&remote).is_ok_and(|written| written.factory_tasks_at_once == 7)
+    });
+    until(cx, |cx| {
+        view.read_with(cx, |view, _| view.factory_limit()) == Some(7)
+    });
+}
+
+/// A machine that cannot write its file says so in both groups that show
+/// its defaults, beside the values it kept.
+#[cfg(unix)]
+#[gpui::test]
+fn a_machine_that_cannot_save_its_defaults_says_so(cx: &mut TestAppContext) {
+    use ferrite_core::settings::Settings;
+    use std::os::unix::fs::PermissionsExt;
+    let there = Settings {
+        factory_tasks_at_once: 5,
+        ..Default::default()
+    };
+    let (view, cx, remote) = settings_on_a_machine(cx, "rd-readonly", &there);
+    std::fs::set_permissions(&remote, std::fs::Permissions::from_mode(0o555)).unwrap();
+    let search = cx.debug_bounds("settings-search").unwrap();
+    cx.simulate_click(search.center(), gpui::Modifiers::none());
+    cx.simulate_input("at once");
+    tick(cx);
+    let more = cx.debug_bounds("settings-factory-limit-1").unwrap().center();
+    cx.simulate_click(more, gpui::Modifiers::none());
+    let says = |group: &super::settings::Group| {
+        group
+            .rows
+            .iter()
+            .any(|row| row.words.iter().any(|word| word.contains("Not saved on box")))
+    };
+    let unsaved = |cx: &mut gpui::VisualTestContext| {
+        view.update(cx, |view, cx| {
+            (
+                says(&view.machine_group(cx)),
+                view.permission_groups(cx).iter().any(says),
+            )
+        })
+    };
+    until(cx, |cx| unsaved(cx).0);
+    assert!(unsaved(cx).1, "the Permissions page says it too");
+    until(cx, |cx| {
+        view.read_with(cx, |view, _| view.factory_limit()) == Some(5)
+    });
+    std::fs::set_permissions(&remote, std::fs::Permissions::from_mode(0o755)).unwrap();
+}
+
+#[cfg(unix)]
+fn says_in_machine_group(
+    view: &Entity<CockpitView>,
+    cx: &mut gpui::VisualTestContext,
+    words: &str,
+) -> bool {
+    view.update(cx, |view, cx| {
+        view.machine_group(cx)
+            .rows
+            .iter()
+            .any(|row| row.words.iter().any(|word| word.contains(words)))
+    })
+}
+
+/// A read that failed and then lands shows the values, not a refused edit.
+#[cfg(unix)]
+#[gpui::test]
+fn a_failed_read_that_later_lands_is_not_an_unsaved_edit(cx: &mut TestAppContext) {
+    use ferrite_core::settings::Settings;
+    use std::os::unix::fs::PermissionsExt;
+    let (view, cx, remote) = settings_on_a_machine(cx, "rd-reread", &Settings::default());
+    let file = remote.join(Settings::FILE);
+    std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o000)).unwrap();
+    view.update(cx, |view, _| {
+        view.environment.defaults = None;
+        view.ask_server_defaults();
+    });
+    until(cx, |cx| says_in_machine_group(&view, cx, "Could not read them"));
+    std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o644)).unwrap();
+    view.update(cx, |view, _| view.ask_server_defaults());
+    until(cx, |cx| {
+        view.read_with(cx, |view, _| view.shown_defaults().is_some())
+    });
+    tick(cx);
+    assert!(!says_in_machine_group(&view, cx, "Not saved"));
+}
+
+/// An edit that saves after one was refused takes the refusal away.
+#[cfg(unix)]
+#[gpui::test]
+fn a_saved_edit_clears_an_earlier_refusal(cx: &mut TestAppContext) {
+    use ferrite_core::settings::Settings;
+    use std::os::unix::fs::PermissionsExt;
+    let there = Settings {
+        factory_tasks_at_once: 5,
+        ..Default::default()
+    };
+    let (view, cx, remote) = settings_on_a_machine(cx, "rd-resave", &there);
+    std::fs::set_permissions(&remote, std::fs::Permissions::from_mode(0o555)).unwrap();
+    let search = cx.debug_bounds("settings-search").unwrap();
+    cx.simulate_click(search.center(), gpui::Modifiers::none());
+    cx.simulate_input("at once");
+    tick(cx);
+    let more = cx.debug_bounds("settings-factory-limit-1").unwrap().center();
+    cx.simulate_click(more, gpui::Modifiers::none());
+    until(cx, |cx| says_in_machine_group(&view, cx, "Not saved on box"));
+    until(cx, |cx| {
+        view.read_with(cx, |view, _| view.factory_limit()) == Some(5)
+    });
+    std::fs::set_permissions(&remote, std::fs::Permissions::from_mode(0o755)).unwrap();
+    cx.simulate_click(more, gpui::Modifiers::none());
+    until(cx, |_| {
+        Settings::load(&remote).is_ok_and(|written| written.factory_tasks_at_once == 6)
+    });
+    until(cx, |cx| !says_in_machine_group(&view, cx, "Not saved"));
+}
+
+fn machine_with_edited_remote_file<'a>(
+    name: &str,
+    selected: bool,
+    unsaved: bool,
+    cx: &'a mut TestAppContext,
+) -> (
+    Entity<gpui::component::Root>,
+    Entity<CockpitView>,
+    Entity<crate::cockpit::tools::Editor>,
+    &'a mut gpui::VisualTestContext,
+) {
+    use ferrite_core::file_operations::{fingerprint, Reply, Request};
+    let (core, _fake, checkout) = bound_cockpit(name, Provider::Codex);
+    let machines = cx.new(|_| {
+        if unsaved {
+            let dir = settings_dir(name);
+            Machines::new(
+                Reach {
+                    settings_dir: dir.clone(),
+                    store: dir.join("threads"),
+                    executable: dir.join("no-such-ferrite"),
+                    client: ferrite_core::protocol::Peer {
+                        name: "test".into(),
+                        version: "0".into(),
+                    },
+                    renderer: None,
+                    driven: false,
+                    defaults: Default::default(),
+                    bridge: needs_sign_in,
+                },
+                &[],
+                Some("me@box"),
+            )
+        } else {
+            machines(name, selected.then_some("me@box"))
+        }
+    });
+    let (root, cx) = machine_window(cx, core, machines);
+    cx.simulate_resize(gpui::size(px(1900.), px(900.)));
+    tick(cx);
+    let view = shown(&root, cx);
+    let thread = view.read_with(cx, |view, _| view.panes[0].thread().unwrap());
+    view.update(cx, |view, cx| {
+        view.prefs.settings.machines = if unsaved {
+            Vec::new()
+        } else {
+            vec![Machine {
+                name: "box".into(),
+                target: "me@box".into(),
+                enabled: true,
+            }]
+        };
+        view.prefs.settings.save(&view.prefs.dir).unwrap();
+        view.remote_files_for_test(
+            thread,
+            |request| {
+                Ok(match request {
+                    Request::Read { .. } => Reply::Text {
+                        text: "remote original".into(),
+                        fingerprint: fingerprint(b"remote original"),
+                    },
+                    Request::Write { text, .. } => Reply::Written {
+                        fingerprint: fingerprint(text.as_bytes()),
+                    },
+                    _ => Reply::Unknown,
+                })
+            },
+            cx,
+        );
+        view.open_in_files(thread, checkout.join("edited.rs"), None, true, cx);
+    });
+    tick(cx);
+    let editor = view.read_with(cx, |view, _| view.files_editor_of(thread).unwrap());
+    editor.update(cx, |editor, cx| editor.type_text("edited ", cx));
+    (root, view, editor, cx)
+}
+
+#[gpui::test]
+fn remote_files_block_machine_switch_until_the_save_has_finished(cx: &mut TestAppContext) {
+    let (root, view, editor, cx) =
+        machine_with_edited_remote_file("remote-files-leave", false, false, cx);
+    view.update(cx, |_, cx| {
+        cx.emit(GoToMachine {
+            index: Some(1),
+            open: None,
+        })
+    });
+    tick(cx);
+    assert_eq!(
+        shown(&root, cx),
+        view,
+        "the dirty editor stays in its window"
+    );
+    assert!(editor.read_with(cx, |editor, _| editor.is_dirty()));
+    editor.update(cx, |editor, cx| editor.save(cx));
+    assert!(matches!(
+        editor.read_with(cx, |editor, _| editor.save_state().clone()),
+        crate::cockpit::tools::SaveState::Saving(_)
+    ));
+    assert!(
+        view.read_with(cx, |view, cx| view.files_leave_error(cx))
+            .is_some(),
+        "an in-flight save still blocks leaving"
+    );
+    tick(cx);
+    assert!(!editor.read_with(cx, |editor, _| editor.is_dirty()));
+    view.update(cx, |_, cx| {
+        cx.emit(GoToMachine {
+            index: Some(1),
+            open: None,
+        })
+    });
+    tick(cx);
+    assert_ne!(
+        shown(&root, cx),
+        view,
+        "a confirmed save permits the switch"
+    );
+}
+
+#[gpui::test]
+fn remote_files_block_disconnect_and_remove_before_settings_or_selection_change(
+    cx: &mut TestAppContext,
+) {
+    for (name, remove, unsaved) in [
+        ("disconnect", false, false),
+        ("remove", true, false),
+        ("forget-unsaved", true, true),
+    ] {
+        let (root, view, editor, cx) =
+            machine_with_edited_remote_file(&format!("remote-files-{name}"), true, unsaved, cx);
+        let action = view.update_in(cx, |view, window, cx| {
+            view.connection_settings(window, cx)
+                .into_iter()
+                .flat_map(|group| group.rows)
+                .find_map(|row| match row.control {
+                    settings::Control::ConnectionRow(row) => row
+                        .actions
+                        .into_iter()
+                        .find(|action| {
+                            action.id.as_ref()
+                                == if remove {
+                                    "connection-remove-1"
+                                } else {
+                                    "connection-toggle-1"
+                                }
+                        })
+                        .map(|action| action.act),
+                    _ => None,
+                })
+                .unwrap()
+        });
+        cx.update(|window, cx| action(window, cx));
+        let action = if remove {
+            view.update_in(cx, |view, window, cx| {
+                view.connection_settings(window, cx)
+                    .into_iter()
+                    .flat_map(|group| group.rows)
+                    .find_map(|row| match row.control {
+                        settings::Control::ConnectionRow(row) => {
+                            row.removal.map(|(confirm, _)| confirm)
+                        }
+                        _ => None,
+                    })
+                    .unwrap()
+            })
+        } else {
+            action
+        };
+        cx.update(|window, cx| action(window, cx));
+        tick(cx);
+        assert_eq!(shown(&root, cx), view, "{name} preserves the dirty editor");
+        view.read_with(cx, |view, cx| {
+            assert!(editor.read(cx).is_dirty(), "{name} preserves the unsaved buffer");
+            assert_eq!(
+                view.prefs.settings.machines,
+                ferrite_core::settings::Settings::load(&view.prefs.dir)
+                    .unwrap()
+                    .machines
+            );
+            assert_eq!(
+                view.machines
+                    .as_ref()
+                    .unwrap()
+                    .read(cx)
+                    .selected_key()
+                    .unwrap()
+                    .0
+                    .as_deref(),
+                Some("me@box")
+            );
+            if !unsaved {
+                assert!(view.prefs.settings.machines[0].enabled);
+            } else {
+                assert!(view.machines.as_ref().unwrap().read(cx).unsaved().is_some());
+            }
+        });
+        editor.update(cx, |editor, cx| editor.save(cx));
+        tick(cx);
+        cx.update(|window, cx| action(window, cx));
+        tick(cx);
+        assert_ne!(shown(&root, cx), view, "{name} can leave after saving");
+        let next = shown(&root, cx);
+        next.read_with(cx, |view, _| {
+            if remove {
+                assert!(view.prefs.settings.machines.is_empty());
+            } else {
+                assert!(!view.prefs.settings.machines[0].enabled);
+            }
+        });
+    }
+}
+
+#[gpui::test]
+fn local_environment_switch_persists_and_empty_client_blocks_new_threads(cx: &mut TestAppContext) {
+    bind_production_keys(cx);
+    let machines = cx.new(|_| {
+        let mut machines = machines("local-environment-toggle", None);
+        machines.set_local_enabled(false);
+        machines.settings_changed(&[]);
+        machines
+    });
+    let core = machines
+        .update(cx, |machines, _| machines.go_to(None))
+        .unwrap()
+        .unwrap();
+    let (root, cx) = machine_window(cx, core, machines);
+    let dir = settings_dir("local-environment-toggle-prefs");
+    shown(&root, cx).update(cx, |view, _| {
+        view.prefs.dir = dir.clone();
+        view.prefs.settings.local_environment_enabled = false;
+        view.prefs.settings.save(&dir).unwrap();
+    });
+    tick(cx);
+    assert!(cx.debug_bounds("no-environment").is_some());
+    cx.simulate_keystrokes("cmd-n");
+    cx.simulate_keystrokes("cmd-shift-n");
+    tick(cx);
+    shown(&root, cx).read_with(cx, |view, _| {
+        assert!(view.panes.is_empty());
+        assert!(
+            view.on_machine(),
+            "empty client cannot use local file fallbacks"
+        );
+        assert!(view.shown_defaults().is_none());
+    });
+    for enabled in [true, false] {
+        let toggle = shown(&root, cx).update_in(cx, |view, window, cx| {
+            view.connection_settings(window, cx)
+                .into_iter()
+                .flat_map(|group| group.rows)
+                .find_map(|row| match row.control {
+                    settings::Control::ConnectionRow(row) => row
+                        .actions
+                        .into_iter()
+                        .find(|action| action.id.as_ref() == "connection-toggle-local")
+                        .map(|action| action.act),
+                    _ => None,
+                })
+                .unwrap()
+        });
+        cx.update(|window, cx| toggle(window, cx));
+        tick(cx);
+        assert_eq!(
+            ferrite_core::settings::Settings::load(&dir)
+                .unwrap()
+                .local_environment_enabled,
+            enabled
+        );
+        shown(&root, cx).read_with(cx, |view, _| {
+            assert_eq!(view.cockpit.environment_available(), enabled);
+            assert_eq!(view.prefs.settings.local_environment_enabled, enabled);
+        });
+    }
+    assert!(cx.debug_bounds("no-environment-connections").is_some());
+}
+
+#[gpui::test]
+fn local_environment_switch_preserves_unreadable_settings(cx: &mut TestAppContext) {
+    let (core, _fake) = cockpit("local-toggle-unreadable", 1);
+    let prefs = Preferences {
+        unreadable: Some("expected value at line 1 column 1".into()),
+        ..Preferences::ephemeral()
+    };
+    let path = prefs.dir.join(ferrite_core::settings::Settings::FILE);
+    std::fs::create_dir_all(&prefs.dir).unwrap();
+    std::fs::write(&path, b"not json").unwrap();
+    let (view, cx) = add_cockpit_window(cx, |_, cx| {
+        CockpitView::new_with_settings(core, Provider::Codex, prefs, cx)
+    });
+    let toggle = view.update_in(cx, |view, window, cx| {
+        view.connection_settings(window, cx)
+            .into_iter()
+            .flat_map(|group| group.rows)
+            .find_map(|row| match row.control {
+                settings::Control::ConnectionRow(row) => row
+                    .actions
+                    .into_iter()
+                    .find(|action| action.id.as_ref() == "connection-toggle-local")
+                    .map(|action| action.act),
+                _ => None,
+            })
+            .unwrap()
+    });
+    cx.update(|window, cx| toggle(window, cx));
+    view.read_with(cx, |view, _| {
+        assert!(view.prefs.settings.local_environment_enabled);
+    });
+    assert_eq!(std::fs::read(&path).unwrap(), b"not json");
 }

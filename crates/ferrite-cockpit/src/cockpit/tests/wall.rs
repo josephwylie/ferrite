@@ -1,105 +1,32 @@
-//! The wall: grid membership, levels and wall cards.
+//! The Pane at any size, and the wall cards the nav reads.
 #[allow(unused_imports)]
 use super::*;
 
-/// AC4: the wall flags a Thread, and one key answers it from across the
-/// room — the operator never focuses the Pane it belongs to.
+/// A Pane has one drawing at any size: in the smallest window, the nav
+/// and the panel beside it squeeze it under what was once a transcript's
+/// floor, and it still reads the transcript and types in the Composer.
 #[gpui::test]
-fn a_wall_flagged_decision_is_answered_without_focusing_its_pane(cx: &mut TestAppContext) {
-    let (mut core, fake) = cockpit("wall-answer", 24);
-    let group = group_all(&mut core);
-    cx.update(|cx| {
-        cx.bind_keys([KeyBinding::new("y", Allow, Some("Wall"))]);
-    });
+fn the_smallest_window_still_draws_the_transcript_and_composer(cx: &mut TestAppContext) {
+    let (core, fake) = cockpit("small-window", 1);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
-    view.update(cx, |view, cx| view.enter_group(group, cx));
-    // A 24-member Group lays out on the default grid, which picks the
-    // highest Level every cell can hold: at 1200×900 a 4×6 grid still
-    // keeps ~217×133px instruments. 1060×770 beside the open column
-    // (the flush board, theme WP-C) leaves no grid whose cells clear the
-    // 200×120px instruments floor, which is the range this test is
-    // about — held open, since folding the nav away (rule 2.7.7) would
-    // lift its cells over the floor.
-    hold_nav_open(&view, cx);
-    cx.simulate_resize(gpui::size(px(1060.), px(770.)));
-    view.update(cx, |view, _| {
-        assert_eq!(view.panes.len(), 24);
-    });
-    cx.update(|window, cx| {
-        assert_eq!(view.read(cx).level_now(window), Level::Wall);
-    });
-    fake.streams.borrow()[7].send(decision("perm_08")).unwrap();
+    super::hold_nav_open(&view, cx);
+    cx.simulate_resize(gpui::size(
+        px(ferrite_ui::theme::WINDOW_MIN_W),
+        px(ferrite_ui::theme::WINDOW_MIN_H),
+    ));
+    fake.streams.borrow()[0]
+        .send(SessionEvent::TextDelta {
+            text: "A small window still reads.\n\n".into(),
+        })
+        .unwrap();
     tick(cx);
-    let flagged = view.read_with(cx, |view, _| view.panes[7].thread().unwrap());
-    view.read_with(cx, |view, _| {
-        assert_eq!(view.focused(), 0, "focus stays where the operator left it");
-        assert!(view
-            .cockpit
-            .thread(flagged)
-            .and_then(|open| open.pending())
-            .is_some());
-    });
-
-    cx.simulate_keystrokes("y");
-
-    view.read_with(cx, |view, _| {
-        assert!(
-            view.cockpit
-                .thread(flagged)
-                .and_then(|open| open.pending())
-                .is_none(),
-            "the flagged Thread is the one that got answered"
-        );
-        assert_eq!(view.focused(), 0, "and answering did not move the operator");
-    });
-}
-
-/// A Group's default grid is the aspect rule (`layout::grid_shape`), and
-/// it is the *only* grid: with the global wall gone (#28) there is no
-/// board-specific shape to follow and no six-column ceiling — a Group is
-/// as wide as its own membership and the window make it. The app
-/// window's board (1440×900 less the nav and chrome) is 1134×838;
-/// `grid_shape` returns (columns, rows).
-#[test]
-fn the_grid_follows_the_groups_own_membership() {
-    let board = layout::Rect {
-        x: 0.0,
-        y: 0.0,
-        w: 1134.0,
-        h: 838.0,
-    };
-    let shape = |count| layout::grid_shape(count, board);
-    assert_eq!(shape(1), (1, 1));
-    assert_eq!(shape(2), (2, 1));
-    assert_eq!(shape(6), (3, 2));
-    // Four is a plain 2×2 now — the prototype's tall-left 2×3 is gone.
-    assert_eq!(shape(4), (2, 2));
-    assert_eq!(shape(9), (3, 3));
-    assert_eq!(shape(12), (4, 3));
-    // Past the old wall's 24, and past its six columns: nothing clamps.
-    assert_eq!(shape(24), (5, 5));
-    assert_eq!(shape(48), (7, 7));
-    assert_eq!(shape(100), (10, 10));
-}
-
-/// AC1: no mode switch — the same cockpit renders at a different altitude
-/// when the window changes size.
-#[gpui::test]
-fn resizing_the_window_changes_every_panes_level(cx: &mut TestAppContext) {
-    let (core, _fake) = cockpit("resize", 4);
-    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
-    cx.run_until_parked();
-
-    let wide = cx.update(|window, cx| view.read(cx).level_now(window));
-    // Narrow enough that the board under the folded nav is narrower
-    // than a transcript (300px).
-    cx.simulate_resize(gpui::size(gpui::px(300.), gpui::px(280.)));
-    let narrow = cx.update(|window, cx| view.read(cx).level_now(window));
-
+    let rect = cx.update(|window, cx| view.read(cx).pane_rects(window)[0].1);
     assert!(
-        narrow < wide,
-        "a smaller window must fall to a lower level: {narrow:?} vs {wide:?}"
+        rect.w < 300.0 || rect.h < 360.0,
+        "the premise: the cell is under the old 300 by 360 transcript floor: {rect:?}"
     );
+    assert!(cx.debug_bounds("composer-block").is_some(), "the Composer");
+    assert!(cx.debug_bounds("transcript-answer").is_some(), "the transcript");
 }
 
 /// What a Thread's wall card says right now: its alert context and the

@@ -1,0 +1,11 @@
+{
+  "reference_source": "4da2bc520c38cd6b36014d2888774168fbf4c77f",
+  "installed_reference_version": "0.1.10-nightly.20261111.4544",
+  "capture_method": "Native T3 application via cua_repl",
+  "pixel_size": [
+    2940,
+    1846
+  ],
+  "source_version_difference": "Installed app is older than source. Visible composition agrees; installed mode-switch error retention differs from source browser test. Source behavior is authoritative for that case.",
+  "baseline_locked": true
+}

@@ -1,0 +1,914 @@
+{
+  "schema_version": 1,
+  "title": "Installed T3 Files, Terminal and provider refresh: observed behavior matched to source",
+  "date": "2026-11-14",
+  "installed_version": "0.1.10-nightly.20261111.4544",
+  "installed_source_sha": "1264c206aee0dce805d6279809118bc091f29d2f",
+  "source_origin": "https://github.com/pingdotgg/t3code",
+  "provenance_report": "t3-installed-source-match.md",
+  "observations_path": "../evidence/t3-live/observations.md",
+  "observations_lines": [
+    106,
+    123
+  ],
+  "scope": "Read-only source comparison. The parent performed runtime checks. This worker performed no UI actions, model tasks, builds, tests, app launches or persistent process creation.",
+  "evidence_rules": [
+    "The parent observation log is the runtime evidence. Source supports the implementation path, not an additional runtime pass.",
+    "All source anchors use the installed SHA. Newer-source changes are labeled.",
+    "Ferrite acceptance criteria are proposed checks, not claims that Ferrite currently fails them.",
+    "A fresh observation is required after mutation; an action acknowledgement or stale AX snapshot does not establish behavior.",
+    "Visible control, source branch, completed runtime journey and independent side-effect evidence remain distinct."
+  ],
+  "cases": [
+    {
+      "id": "FILES-01",
+      "title": "Open a real project file in a retained panel tab",
+      "observations": [
+        109,
+        110
+      ],
+      "runtime_status": "verified_by_parent",
+      "observed": "Files listed the disposable project. README.md opened as source. The rendered long-guide.md link opened that actual file in another tab.",
+      "transition": "Files surface → selected file path → file:<relativePath> surface → active file tab, panel open.",
+      "source_claims": [
+        {
+          "claim": "FileBrowserPanel selection takes the last selected non-folder entry and calls onOpenFile with its panel path.",
+          "anchor": {
+            "path": "apps/web/src/components/files/FileBrowserPanel.tsx",
+            "symbol": "useFileTree onSelectionChange",
+            "start_line": 274,
+            "end_line": 284,
+            "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/files/FileBrowserPanel.tsx#L274-L284"
+          }
+        },
+        {
+          "claim": "RightPanelSurfaceContent passes the workspace root, selected path, line, request id and opening callback into FilePreviewPanel.",
+          "anchor": {
+            "path": "apps/web/src/components/chat/RightPanelSurfaceContent.tsx",
+            "symbol": "case files/file",
+            "start_line": 203,
+            "end_line": 234,
+            "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/RightPanelSurfaceContent.tsx#L203-L234"
+          }
+        },
+        {
+          "claim": "openFile removes the standalone Files surface, reuses a matching file tab or appends one, increments its reveal request and activates it.",
+          "anchor": {
+            "path": "apps/web/src/rightPanelStore.ts",
+            "symbol": "openFile",
+            "start_line": 812,
+            "end_line": 845,
+            "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/rightPanelStore.ts#L812-L845"
+          }
+        },
+        {
+          "claim": "Rendered Markdown file links call the same openFile path with optional line metadata; asynchronous basename lookup rejects superseded results.",
+          "anchor": {
+            "path": "apps/web/src/components/ChatMarkdown.tsx",
+            "symbol": "openFileInPanel",
+            "start_line": 800,
+            "end_line": 818,
+            "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/ChatMarkdown.tsx#L800-L818"
+          }
+        }
+      ],
+      "limits": [
+        "This verifies the inspected fixture and navigation path, not every filename, inaccessible host path, rename or deletion case."
+      ],
+      "ferrite_acceptance": [
+        "Open Files, click README.md, then activate long-guide.md from its rendered link. Confirm the actual file contents and active tab name agree.",
+        "Reopen the same path and confirm it activates its existing tab; another path opens its own tab. The conversation and draft remain present.",
+        "A pointer click and keyboard activation must reach the same file; an underlined link that only changes appearance fails the journey."
+      ],
+      "observation_refs": [
+        {
+          "path": "../evidence/t3-live/observations.md",
+          "line": 109
+        },
+        {
+          "path": "../evidence/t3-live/observations.md",
+          "line": 110
+        }
+      ]
+    },
+    {
+      "id": "FILES-02",
+      "title": "Switch Markdown between source and rendered content",
+      "observations": [
+        109,
+        110
+      ],
+      "runtime_status": "verified_by_parent",
+      "observed": "Show rendered markdown displayed real headings, code, quotations and links after README.md source had been visible.",
+      "transition": "Markdown source → persisted rendered preference true → RenderedMarkdownSurface → ChatMarkdown; pending line navigation keeps the file in source until handled.",
+      "source_claims": [
+        {
+          "claim": "The Markdown preference defaults to false. Rendering additionally requires a handled reveal request, so a newly requested line can override the rendered preference.",
+          "anchor": {
+            "path": "apps/web/src/components/files/FilePreviewPanel.tsx",
+            "symbol": "renderMarkdownPreferred / revealHandled / renderMarkdown",
+            "start_line": 1098,
+            "end_line": 1133,
+            "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/files/FilePreviewPanel.tsx#L1098-L1133"
+          }
+        },
+        {
+          "claim": "The toolbar flips the appropriate rendered preference and records whether the current path/reveal request has been handled.",
+          "anchor": {
+            "path": "apps/web/src/components/files/FilePreviewPanel.tsx",
+            "symbol": "FileSurfaceAction rendered toggle",
+            "start_line": 1357,
+            "end_line": 1378,
+            "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/files/FilePreviewPanel.tsx#L1357-L1378"
+          }
+        },
+        {
+          "claim": "The render branch mounts RenderedMarkdownSurface or the source/editor branch using the same file contents.",
+          "anchor": {
+            "path": "apps/web/src/components/files/FilePreviewPanel.tsx",
+            "symbol": "file content branches",
+            "start_line": 1566,
+            "end_line": 1615,
+            "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/files/FilePreviewPanel.tsx#L1566-L1615"
+          }
+        },
+        {
+          "claim": "FileMarkdownPreview passes frontmatter-masked text to ChatMarkdown, with the file directory as image base and a max-w-4xl, px-6, py-5 content layout.",
+          "anchor": {
+            "path": "apps/web/src/components/files/FileMarkdownPreview.tsx",
+            "symbol": "FileMarkdownPreview",
+            "start_line": 7,
+            "end_line": 36,
+            "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/files/FileMarkdownPreview.tsx#L7-L36"
+          }
+        }
+      ],
+      "limits": [
+        "The live capture proves visible content and the toggle, not exact typography dimensions or rendering of every Markdown extension.",
+        "A search-result line opening source while rendered preference is on is supported behavior, not a failed preference restore."
+      ],
+      "ferrite_acceptance": [
+        "Toggle both ways without duplicating tabs or losing the file identity. Render headings, quoted paragraphs, code and links as distinct content.",
+        "Activate a relative file link from rendered Markdown and verify the destination path and contents.",
+        "Opening a search result must prioritize the requested source line over an incompatible rendered view."
+      ],
+      "observation_refs": [
+        {
+          "path": "../evidence/t3-live/observations.md",
+          "line": 109
+        },
+        {
+          "path": "../evidence/t3-live/observations.md",
+          "line": 110
+        }
+      ]
+    },
+    {
+      "id": "FILES-03",
+      "title": "Route Find according to the surface that owns focus",
+      "observations": [
+        110,
+        121
+      ],
+      "runtime_status": "source_editor_verified_rendered_content_unverified",
+      "observed": "With the source editor focused, Command-F opened content Find with case, whole-word and regex controls; COBALT_LANTERN navigated and displayed 18 of 80. In an earlier rendered mode, Command-F focused the explorer search. With the chat composer focused and a PR panel open, Command-F later opened Find in thread.",
+      "transition": "Focused source editor → dependency-owned editor Find; focused composer → chat.find if enabled. Rendered Markdown is a separate ChatMarkdown surface and has no content-Find handler in its wrapper.",
+      "source_claims": [
+        {
+          "claim": "T3 imports its editable file editor from @pierre/diffs/edit; the search UI internals are owned by that dependency.",
+          "anchor": {
+            "path": "apps/web/src/components/files/FilePreviewPanel.tsx",
+            "symbol": "Editor import and createFileEditor",
+            "start_line": 33,
+            "end_line": 40,
+            "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/files/FilePreviewPanel.tsx#L33-L40"
+          }
+        },
+        {
+          "claim": "createFileEditor constructs the dependency's Editor rather than a separate T3 editor implementation.",
+          "anchor": {
+            "path": "apps/web/src/components/files/FilePreviewPanel.tsx",
+            "symbol": "createFileEditor",
+            "start_line": 598,
+            "end_line": 603,
+            "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/files/FilePreviewPanel.tsx#L598-L603"
+          }
+        },
+        {
+          "claim": "EditableFileSurface mounts EditProvider, Virtualizer and File with editing enabled and editor callbacks.",
+          "anchor": {
+            "path": "apps/web/src/components/files/FilePreviewPanel.tsx",
+            "symbol": "EditableFileSurface",
+            "start_line": 874,
+            "end_line": 902,
+            "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/files/FilePreviewPanel.tsx#L874-L902"
+          }
+        },
+        {
+          "claim": "Default Command-F bindings select preview.find when previewFocus is true and chat.find otherwise outside terminal focus.",
+          "anchor": {
+            "path": "packages/shared/src/keybindings.ts",
+            "symbol": "DEFAULT_KEYBINDINGS",
+            "start_line": 79,
+            "end_line": 116,
+            "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/packages/shared/src/keybindings.ts#L79-L116"
+          }
+        },
+        {
+          "claim": "Browser preview focus is a connected webview or an ancestor with data-preview-panel-mode. File-rendering mode alone is not this condition.",
+          "anchor": {
+            "path": "apps/web/src/lib/previewFocus.ts",
+            "symbol": "isPreviewFocused",
+            "start_line": 1,
+            "end_line": 6,
+            "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/lib/previewFocus.ts#L1-L6"
+          }
+        },
+        {
+          "claim": "ChatView computes focus context and opens thread Find only for a server thread with threadFind enabled.",
+          "anchor": {
+            "path": "apps/web/src/components/ChatView.tsx",
+            "symbol": "getShortcutContext and chat.find",
+            "start_line": 2667,
+            "end_line": 2719,
+            "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/ChatView.tsx#L2667-L2719"
+          }
+        },
+        {
+          "claim": "useChatShortcuts leaves an already-prevented non-terminal event alone and only consumes a successfully handled command.",
+          "anchor": {
+            "path": "apps/web/src/components/chat/useChatShortcuts.ts",
+            "symbol": "handleShortcut",
+            "start_line": 67,
+            "end_line": 93,
+            "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/useChatShortcuts.ts#L67-L93"
+          }
+        },
+        {
+          "claim": "The installed explorer supplies its own search input/useFileTreeSearch. Its root has no newer preview-action Find subscription or explicit Command-F capture handler.",
+          "anchor": {
+            "path": "apps/web/src/components/files/FileBrowserPanel.tsx",
+            "symbol": "FileSearchField and FileBrowserPanel root",
+            "start_line": 474,
+            "end_line": 499,
+            "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/files/FileBrowserPanel.tsx#L474-L499"
+          }
+        },
+        {
+          "claim": "Rendered file content uses ChatMarkdown; this wrapper does not install a rendered-content Find handler.",
+          "anchor": {
+            "path": "apps/web/src/components/files/FileMarkdownPreview.tsx",
+            "symbol": "FileMarkdownPreview",
+            "start_line": 7,
+            "end_line": 36,
+            "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/files/FileMarkdownPreview.tsx#L7-L36"
+          }
+        },
+        {
+          "claim": "The installed dependency and patch selection both target @pierre/diffs 1.7.0-beta.3.",
+          "anchor": {
+            "path": "pnpm-workspace.yaml",
+            "symbol": "catalog and patched dependency",
+            "start_line": 240,
+            "end_line": 240,
+            "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/pnpm-workspace.yaml#L240-L240"
+          }
+        }
+      ],
+      "limits": [
+        "Source-editor Find is runtime verified, but the dependency's exact keyboard/search algorithm was not independently traced here. T3 pins @pierre/diffs 1.7.0-beta.3.",
+        "The explorer landing in the rendered-mode attempt is recorded behavior. The exact active element/event path was not captured, so its cause is unresolved.",
+        "The immediately subsequent commit eceeab4d5c5bb02b58906978ff9e50bbd595ec19 is titled fix(web): Cmd+F in the Files panel focuses its search (#34346). Its new handlers must not be cited as the implementation installed in this audit.",
+        "Neither this source nor the live attempt certifies Find within rendered Markdown contents. It must not be counted as a T3 runtime pass."
+      ],
+      "ferrite_acceptance": [
+        "With editor focus, Command-F searches the file and Enter moves the visible content match; include a match outside the initial viewport.",
+        "With composer focus and a right panel open, Command-F searches the conversation and leaves the panel intact.",
+        "Define and visibly expose the intended rendered-Markdown Find scope. Test source, rendered text, explorer, browser and composer separately, retaining an unsent draft in all cases.",
+        "Capture the focused surface before each shortcut and a fresh state afterward. Do not attribute a stale accessibility snapshot to failed routing."
+      ],
+      "observation_refs": [
+        {
+          "path": "../evidence/t3-live/observations.md",
+          "line": 110
+        },
+        {
+          "path": "../evidence/t3-live/observations.md",
+          "line": 121
+        }
+      ]
+    },
+    {
+      "id": "FILES-04",
+      "title": "Project search opens the matching file and requested line",
+      "observations": [
+        111
+      ],
+      "runtime_status": "verified_by_parent",
+      "observed": "Command-Shift-F opened project content search. COBALT_LANTERN returned 82 matches in 3 files. Clicking README line 8 opened README.md source.",
+      "transition": "Command-Shift-F → content search overlay → query scoped by environment and cwd → result path+line → file tab with new reveal id → source line reveal.",
+      "source_claims": [
+        {
+          "claim": "The default project search shortcut is mod+shift+f outside terminal focus.",
+          "anchor": {
+            "path": "packages/shared/src/keybindings.ts",
+            "symbol": "DEFAULT_KEYBINDINGS",
+            "start_line": 86,
+            "end_line": 88,
+            "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/packages/shared/src/keybindings.ts#L86-L88"
+          }
+        },
+        {
+          "claim": "The command scope dispatches ToggleMode; CommandPalette's content mode renders ProjectContentSearchDialog.",
+          "anchor": {
+            "path": "apps/web/src/shortcuts/commandPaletteCommands.ts",
+            "symbol": "toggleOverlay / projectSearch.toggle",
+            "start_line": 23,
+            "end_line": 29,
+            "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/shortcuts/commandPaletteCommands.ts#L23-L29"
+          }
+        },
+        {
+          "claim": "The active content mode renders the search dialog rather than the filename picker.",
+          "anchor": {
+            "path": "apps/web/src/components/CommandPalette.tsx",
+            "symbol": "content mode",
+            "start_line": 387,
+            "end_line": 390,
+            "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/CommandPalette.tsx#L387-L390"
+          }
+        },
+        {
+          "claim": "The hook preserves query whitespace, debounces it and sends cwd, query, limit and matching options; it exposes pending, error, truncation and regex-fallback state.",
+          "anchor": {
+            "path": "apps/web/src/state/queries.ts",
+            "symbol": "useProjectContentSearch",
+            "start_line": 359,
+            "end_line": 404,
+            "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/state/queries.ts#L359-L404"
+          }
+        },
+        {
+          "claim": "openMatch checks readable/current results, closes the search overlay and opens the result path at lineNumber.",
+          "anchor": {
+            "path": "apps/web/src/components/search/ProjectContentSearchDialog.tsx",
+            "symbol": "openMatch",
+            "start_line": 119,
+            "end_line": 157,
+            "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/search/ProjectContentSearchDialog.tsx#L119-L157"
+          }
+        },
+        {
+          "claim": "The server dispatches content search to workspaceEntries.searchContents.",
+          "anchor": {
+            "path": "apps/server/src/ws.ts",
+            "symbol": "projectsSearchContents",
+            "start_line": 2870,
+            "end_line": 2881,
+            "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/server/src/ws.ts#L2870-L2881"
+          }
+        },
+        {
+          "claim": "File line reveal clamps the requested line, keys requests by path/id, computes centered scrolling and cancels its short stabilization guard on wheel, touch, pointer or keyboard input.",
+          "anchor": {
+            "path": "apps/web/src/components/files/FilePreviewPanel.tsx",
+            "symbol": "useFileLineReveal",
+            "start_line": 435,
+            "end_line": 565,
+            "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/files/FilePreviewPanel.tsx#L435-L565"
+          }
+        }
+      ],
+      "limits": [
+        "The reported counts are fixture-specific. Search-result highlight geometry was not independently measured.",
+        "The stabilization guard and cancellation behavior are source-supported; the live check did not exercise every manual-scroll interruption or late-layout case."
+      ],
+      "ferrite_acceptance": [
+        "Use a fixture with a known match count across several files. The count, file grouping and opened file must agree with disk.",
+        "Activate a result outside the initial viewport. The requested line must become visible in the intended file even if rendered Markdown had been preferred.",
+        "Once the user scrolls or interacts, reveal stabilization must stop fighting their input.",
+        "Exercise no results, invalid regex and denied/unavailable workspace states without leaving stale clickable results."
+      ],
+      "observation_refs": [
+        {
+          "path": "../evidence/t3-live/observations.md",
+          "line": 111
+        }
+      ]
+    },
+    {
+      "id": "FILES-05",
+      "title": "Edits persist and undo restores disk contents",
+      "observations": [
+        112
+      ],
+      "runtime_status": "persistence_verified_command_s_causality_unverified",
+      "observed": "Appending EDITOR_SAVE_SENTINEL and pressing Command-S produced exactly the expected disk diff. Undo and Command-S restored an empty diff.",
+      "transition": "Editor change → optimistic file-query contents → per-file ordered save coordinator → 500 ms debounce → projectsWriteFile RPC → filesystem overwrite → confirmed cache state.",
+      "source_claims": [
+        {
+          "claim": "handleEditChange updates edited contents and the project file cache, then changes the held save session.",
+          "anchor": {
+            "path": "apps/web/src/components/files/FilePreviewPanel.tsx",
+            "symbol": "handleEditChange",
+            "start_line": 700,
+            "end_line": 732,
+            "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/files/FilePreviewPanel.tsx#L700-L732"
+          }
+        },
+        {
+          "claim": "The per-file session uses a 500 ms debounce and calls projectEnvironment.writeFile with environment, cwd, path and contents; releasing the final lease flushes.",
+          "anchor": {
+            "path": "apps/web/src/components/files/fileSaveSessions.ts",
+            "symbol": "fileSaveSessions",
+            "start_line": 119,
+            "end_line": 159,
+            "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/files/fileSaveSessions.ts#L119-L159"
+          }
+        },
+        {
+          "claim": "FileSaveCoordinator serializes persistence, tracks revisions and schedules the newest draft after an in-flight write. It clears pending only after confirmation.",
+          "anchor": {
+            "path": "apps/web/src/components/files/fileSaveCoordinator.ts",
+            "symbol": "change / persistLatest",
+            "start_line": 26,
+            "end_line": 99,
+            "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/files/fileSaveCoordinator.ts#L26-L99"
+          }
+        },
+        {
+          "claim": "The server write endpoint delegates to WorkspaceFileSystem.",
+          "anchor": {
+            "path": "apps/server/src/ws.ts",
+            "symbol": "projectsWriteFile",
+            "start_line": 2916,
+            "end_line": 2926,
+            "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/server/src/ws.ts#L2916-L2926"
+          }
+        },
+        {
+          "claim": "WorkspaceFileSystem checks workspace membership, resolves the write target, writes the contents and avoids rescanning existing-file autosaves.",
+          "anchor": {
+            "path": "apps/server/src/workspace/WorkspaceFileSystem.ts",
+            "symbol": "writeFile",
+            "start_line": 543,
+            "end_line": 592,
+            "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/server/src/workspace/WorkspaceFileSystem.ts#L543-L592"
+          }
+        },
+        {
+          "claim": "The app default mod+s binding names composer.stash; the observed write must not be treated as proof of an editor-specific Save shortcut.",
+          "anchor": {
+            "path": "packages/shared/src/keybindings.ts",
+            "symbol": "DEFAULT_KEYBINDINGS",
+            "start_line": 88,
+            "end_line": 94,
+            "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/packages/shared/src/keybindings.ts#L88-L94"
+          }
+        }
+      ],
+      "limits": [
+        "The live diff establishes persistence and undo restoration. Autosave can explain both writes; Command-S causality is not established.",
+        "No source claim is made that a save-specific Command-S handler exists inside the editor dependency.",
+        "The fixture restored cleanly. Save failure, permission loss, rapid edit/close and concurrent edits remain additional acceptance cases."
+      ],
+      "ferrite_acceptance": [
+        "Append a unique sentinel, observe persistence on disk, undo, and verify the disk content returns exactly to its original state.",
+        "Verify edit focus separately: Command-S must not unexpectedly send or stash the chat draft.",
+        "Close a file immediately after editing and reopen it; the last accepted contents must survive.",
+        "A failed write must retain the unsaved content and expose a recoverable pending/error state rather than presenting an unearned saved state."
+      ],
+      "observation_refs": [
+        {
+          "path": "../evidence/t3-live/observations.md",
+          "line": 112
+        }
+      ]
+    },
+    {
+      "id": "TERMINAL-01",
+      "title": "A panel terminal executes in the intended workspace and displays actual output",
+      "observations": [
+        113
+      ],
+      "runtime_status": "verified_by_parent",
+      "observed": "A real Python command printed TERMINAL_UI_SENTINEL and the fixture's canonical cwd in the panel terminal.",
+      "transition": "Add Terminal → allocate terminal id → place panel tab → server open with workspace/worktree cwd → attached session output → Ghostty surface.",
+      "source_claims": [
+        {
+          "claim": "addTerminalSurface places the new terminal in the right-panel store and focuses the launched id.",
+          "anchor": {
+            "path": "apps/web/src/components/chat/useChatTerminalActions.ts",
+            "symbol": "addTerminalSurface",
+            "start_line": 330,
+            "end_line": 338,
+            "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/useChatTerminalActions.ts#L330-L338"
+          }
+        },
+        {
+          "claim": "launchTerminal computes the project/worktree location, places the destination before opening, and sends thread, terminal id, cwd and runtime environment.",
+          "anchor": {
+            "path": "apps/web/src/components/terminal/useThreadTerminalActions.ts",
+            "symbol": "defaultLaunchLocation / launchTerminal",
+            "start_line": 73,
+            "end_line": 110,
+            "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/terminal/useThreadTerminalActions.ts#L73-L110"
+          }
+        },
+        {
+          "claim": "ThreadTerminalDrawer attaches a session; writes include the same environment/thread/terminal identity.",
+          "anchor": {
+            "path": "apps/web/src/components/ThreadTerminalDrawer.tsx",
+            "symbol": "terminal session and writeTerminal",
+            "start_line": 624,
+            "end_line": 636,
+            "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/ThreadTerminalDrawer.tsx#L624-L636"
+          }
+        },
+        {
+          "claim": "Output reset and append frames call resetAndWrite or write on the actual terminal surface.",
+          "anchor": {
+            "path": "apps/web/src/components/ThreadTerminalDrawer.tsx",
+            "symbol": "writeTerminalOutputUpdate",
+            "start_line": 163,
+            "end_line": 171,
+            "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/ThreadTerminalDrawer.tsx#L163-L171"
+          }
+        },
+        {
+          "claim": "The terminalOpen and terminalWrite RPC handlers call TerminalManager, whose write path requires a running session and writes input to its PTY process.",
+          "anchor": {
+            "path": "apps/server/src/terminal/Manager.ts",
+            "symbol": "write",
+            "start_line": 3333,
+            "end_line": 3354,
+            "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/server/src/terminal/Manager.ts#L3333-L3354"
+          }
+        }
+      ],
+      "limits": [
+        "The shell's missing local powerlevel10k theme messages are observed environment output, not evidence of a T3 terminal defect.",
+        "This check did not certify reconnect, very large output, shell restart or every keyboard chord."
+      ],
+      "ferrite_acceptance": [
+        "Print a unique sentinel and canonical cwd from a real bounded command. Confirm both in the terminal viewport and against the intended project.",
+        "Keep a chat draft while entering terminal input; keystrokes must reach only the active terminal.",
+        "Output must update in the active pane without opening an unrelated background-work route."
+      ],
+      "observation_refs": [
+        {
+          "path": "../evidence/t3-live/observations.md",
+          "line": 113
+        }
+      ]
+    },
+    {
+      "id": "TERMINAL-02",
+      "title": "Ctrl-C interrupts foreground work and returns a usable prompt",
+      "observations": [
+        114
+      ],
+      "runtime_status": "verified_by_parent",
+      "observed": "Ctrl-C interrupted a 120-second command within the same 3.2-second tool call, producing KeyboardInterrupt and a fresh prompt.",
+      "transition": "Focused terminal key → Ghostty encodeKey → onData → terminal write RPC → running PTY input → foreground interruption → output/prompt.",
+      "source_claims": [
+        {
+          "claim": "GhosttyTerminalSurface checks local input ownership and clipboard shortcuts, then encodes the key and forwards nonempty data to onData.",
+          "anchor": {
+            "path": "apps/web/src/terminal/ghostty/surface.ts",
+            "symbol": "onKeyDown",
+            "start_line": 1110,
+            "end_line": 1220,
+            "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/terminal/ghostty/surface.ts#L1110-L1220"
+          }
+        },
+        {
+          "claim": "The terminal surface's onData calls handleData, which permission-checks and calls writeTerminal; failures render a terminal system message.",
+          "anchor": {
+            "path": "apps/web/src/components/ThreadTerminalDrawer.tsx",
+            "symbol": "handleData",
+            "start_line": 1093,
+            "end_line": 1103,
+            "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/ThreadTerminalDrawer.tsx#L1093-L1103"
+          }
+        },
+        {
+          "claim": "TerminalManager writes the received data to the running PTY and NodePtyProcess forwards it to node-pty.",
+          "anchor": {
+            "path": "apps/server/src/terminal/NodePtyAdapter.ts",
+            "symbol": "write",
+            "start_line": 193,
+            "end_line": 195,
+            "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/server/src/terminal/NodePtyAdapter.ts#L193-L195"
+          }
+        }
+      ],
+      "limits": [
+        "The live timing establishes interruption rather than natural completion. This is distinct from the close-pane termination path.",
+        "The source trace does not assert a captured literal Ctrl-C byte or that close escalation was exercised.",
+        "Copy behavior is platform/selection dependent. The test used Ctrl-C as interrupt in the observed macOS session."
+      ],
+      "ferrite_acceptance": [
+        "Run a bounded command long enough that natural completion cannot explain the result, interrupt it, and show a new usable shell prompt.",
+        "Typing a subsequent harmless command must work in the same pane.",
+        "Retain the other panes and chat draft; interruption must affect the intended terminal process."
+      ],
+      "observation_refs": [
+        {
+          "path": "../evidence/t3-live/observations.md",
+          "line": 114
+        }
+      ]
+    },
+    {
+      "id": "TERMINAL-03",
+      "title": "Split creates a separate terminal with clear pane ownership",
+      "observations": [
+        115
+      ],
+      "runtime_status": "verified_by_parent",
+      "observed": "Split Terminal Horizontally created a second terminal input/pane.",
+      "transition": "Split active right-panel terminal → allocate/open new terminal id → add to same terminal surface with horizontal direction → focus new id.",
+      "source_claims": [
+        {
+          "claim": "splitPanelTerminal validates the active terminal surface and group limit, launches a terminal placed by store.splitTerminal, and focuses the new id.",
+          "anchor": {
+            "path": "apps/web/src/components/chat/useChatTerminalActions.ts",
+            "symbol": "splitPanelTerminal",
+            "start_line": 341,
+            "end_line": 358,
+            "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/useChatTerminalActions.ts#L341-L358"
+          }
+        },
+        {
+          "claim": "TerminalSplitPanes maps horizontal to equal grid columns and vertical to equal grid rows, with an independently keyed terminal for each id.",
+          "anchor": {
+            "path": "apps/web/src/components/ThreadTerminalDrawer.tsx",
+            "symbol": "TerminalSplitPanes",
+            "start_line": 1300,
+            "end_line": 1347,
+            "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/ThreadTerminalDrawer.tsx#L1300-L1347"
+          }
+        },
+        {
+          "claim": "Keyboard split/new/close commands route to the right-panel terminal when it owns focus and otherwise to the drawer.",
+          "anchor": {
+            "path": "apps/web/src/components/chat/useChatTerminalActions.ts",
+            "symbol": "terminal shortcuts",
+            "start_line": 409,
+            "end_line": 442,
+            "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/useChatTerminalActions.ts#L409-L442"
+          }
+        }
+      ],
+      "limits": [
+        "The source resolves the horizontal/vertical naming precisely. Live verification covered horizontal creation, not vertical splitting or the maximum-pane limit."
+      ],
+      "ferrite_acceptance": [
+        "Split horizontally and confirm two side-by-side usable inputs. Print a different sentinel in each and verify output isolation.",
+        "Focus either pane, then use split/close shortcuts. Only the owning terminal group should change.",
+        "Tab order, pointer focus and the active-pane indication must agree."
+      ],
+      "observation_refs": [
+        {
+          "path": "../evidence/t3-live/observations.md",
+          "line": 115
+        }
+      ]
+    },
+    {
+      "id": "TERMINAL-04",
+      "title": "Closing a pane stops its session and removes it without orphaning work",
+      "observations": [
+        115
+      ],
+      "runtime_status": "visible_close_and_bounded_process_cleanup_verified",
+      "observed": "Closing each audit-owned terminal showed the stop-process/history-clear confirmation. Confirmation removed both panes and returned to the file surface. Process inspection found no remaining bounded audit Python command.",
+      "transition": "Close request → confirmation → terminal close command with deleteHistory → server stop/unregister/persist/flush/remove → closed event → history deletion → remaining surface/focus.",
+      "source_claims": [
+        {
+          "claim": "requestClosePanelTerminal waits for confirmTerminalClose and rechecks permission. closePanelTerminal closes the session, removes both UI representations and focuses the surviving panel terminal.",
+          "anchor": {
+            "path": "apps/web/src/components/chat/useChatTerminalActions.ts",
+            "symbol": "closePanelTerminal / requestClosePanelTerminal",
+            "start_line": 373,
+            "end_line": 403,
+            "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/useChatTerminalActions.ts#L373-L403"
+          }
+        },
+        {
+          "claim": "The local confirmation explicitly describes process stopping and history clearing; failed dialog access resolves false.",
+          "anchor": {
+            "path": "apps/web/src/lib/terminalCloseConfirm.ts",
+            "symbol": "confirmTerminalClose",
+            "start_line": 9,
+            "end_line": 34,
+            "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/lib/terminalCloseConfirm.ts#L9-L34"
+          }
+        },
+        {
+          "claim": "closeTerminalSession requests deleteHistory:true, with an exit-line fallback after a non-interrupted close failure when permission remains.",
+          "anchor": {
+            "path": "apps/web/src/components/terminal/useThreadTerminalActions.ts",
+            "symbol": "closeTerminalSession",
+            "start_line": 117,
+            "end_line": 135,
+            "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/terminal/useThreadTerminalActions.ts#L117-L135"
+          }
+        },
+        {
+          "claim": "TerminalManager closeSession stops the process, unregisters and removes the session, publishes closed and conditionally deletes history.",
+          "anchor": {
+            "path": "apps/server/src/terminal/Manager.ts",
+            "symbol": "closeSession",
+            "start_line": 2589,
+            "end_line": 2627,
+            "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/server/src/terminal/Manager.ts#L2589-L2627"
+          }
+        },
+        {
+          "claim": "Process termination subscribes to exit before SIGTERM and escalates to SIGKILL only after the configured grace period.",
+          "anchor": {
+            "path": "apps/server/src/terminal/Manager.ts",
+            "symbol": "runKillEscalation",
+            "start_line": 1846,
+            "end_line": 1907,
+            "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/server/src/terminal/Manager.ts#L1846-L1907"
+          }
+        }
+      ],
+      "limits": [
+        "The confirmation text and visible cleanup were exercised. Persisted history deletion and forced SIGKILL escalation were not independently verified.",
+        "The independent process inspection covers the bounded audit command, not every possible descendant process tree."
+      ],
+      "ferrite_acceptance": [
+        "Create two disposable terminals, start owned bounded work, close one, and confirm the other remains usable.",
+        "After confirming the final close, return to the expected surviving surface and verify the owned process is gone.",
+        "Cancellation must retain the pane and running process. Do not claim cleanup solely because a tab disappears."
+      ],
+      "observation_refs": [
+        {
+          "path": "../evidence/t3-live/observations.md",
+          "line": 115
+        }
+      ]
+    },
+    {
+      "id": "PROVIDER-01",
+      "title": "Show a provider failure, refresh it, and distinguish visible recovery from diagnosis",
+      "observations": [
+        116,
+        120
+      ],
+      "runtime_status": "error_refresh_pending_and_later_banner_absence_verified",
+      "observed": "A Codex banner reported a provider probe failure with workspace routing discovery timed out. Refresh entered a disabled in-flight state. A later fresh observation found the banner absent.",
+      "transition": "Provider probe failure → error snapshot with wrapped error.message → active provider banner → guarded refresh with instanceId/refreshModels → RPC instance refresh/model refresh → updated provider publication → banner eligible to disappear.",
+      "source_claims": [
+        {
+          "claim": "probeCodexAppServerProvider initializes the client, reads the account, then performs skills, model and configuration discovery with deadlines.",
+          "anchor": {
+            "path": "apps/server/src/provider/CodexProvider.ts",
+            "symbol": "probeCodexAppServerProvider",
+            "start_line": 596,
+            "end_line": 660,
+            "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/server/src/provider/CodexProvider.ts#L596-L660"
+          }
+        },
+        {
+          "claim": "The failure branch formats Codex app-server provider probe failed from error.message. The separate outer timeout branch uses different text.",
+          "anchor": {
+            "path": "apps/server/src/provider/CodexProvider.ts",
+            "symbol": "probeResult failure and timeout branches",
+            "start_line": 840,
+            "end_line": 899,
+            "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/server/src/provider/CodexProvider.ts#L840-L899"
+          }
+        },
+        {
+          "claim": "A protocol request error can preserve the upstream error message and retain method/request id metadata. The screenshot did not expose that metadata.",
+          "anchor": {
+            "path": "packages/effect-codex-app-server/src/errors.ts",
+            "symbol": "CodexAppServerRequestError",
+            "start_line": 250,
+            "end_line": 282,
+            "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/packages/effect-codex-app-server/src/errors.ts#L250-L282"
+          }
+        },
+        {
+          "claim": "The banner displays status.message. Ready/disabled states have no banner key, while a dismissed matching key can also suppress the banner.",
+          "anchor": {
+            "path": "apps/web/src/components/chat/ProviderStatusBanner.tsx",
+            "symbol": "getProviderStatusBannerKey / shouldShowProviderStatusBanner / getProviderStatusMessage",
+            "start_line": 26,
+            "end_line": 76,
+            "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/ProviderStatusBanner.tsx#L26-L76"
+          }
+        },
+        {
+          "claim": "Refresh guards concurrent activations, sets pending, requests the selected instance with refreshModels:true and resets pending after the command returns.",
+          "anchor": {
+            "path": "apps/web/src/components/chat/ProviderStatusBanner.tsx",
+            "symbol": "refresh",
+            "start_line": 107,
+            "end_line": 123,
+            "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/ProviderStatusBanner.tsx#L107-L123"
+          }
+        },
+        {
+          "claim": "The Refresh button is disabled while pending or unauthorized, and changes its label to Refreshing.",
+          "anchor": {
+            "path": "apps/web/src/components/chat/ProviderStatusBanner.tsx",
+            "symbol": "Refresh button",
+            "start_line": 166,
+            "end_line": 175,
+            "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/ProviderStatusBanner.tsx#L166-L175"
+          }
+        },
+        {
+          "claim": "The client refresh command uses single-flight concurrency. Because the banner sends no cwd, the server chooses instance refresh rather than the workspace snapshot branch.",
+          "anchor": {
+            "path": "packages/client-runtime/src/state/server.ts",
+            "symbol": "refreshProviders",
+            "start_line": 1472,
+            "end_line": 1508,
+            "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/packages/client-runtime/src/state/server.ts#L1472-L1508"
+          }
+        },
+        {
+          "claim": "The RPC invalidates requested model caches, awaits instance refresh, optionally refreshes instance models and refreshes the instance again.",
+          "anchor": {
+            "path": "apps/server/src/ws.ts",
+            "symbol": "serverRefreshProviders",
+            "start_line": 2391,
+            "end_line": 2449,
+            "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/server/src/ws.ts#L2391-L2449"
+          }
+        },
+        {
+          "claim": "refreshOneSource refreshes and reads the latest provider snapshot before synchronizing it, rejecting stale replaced instances.",
+          "anchor": {
+            "path": "apps/server/src/provider/ProviderRegistry.ts",
+            "symbol": "refreshOneSource / refreshInstance",
+            "start_line": 613,
+            "end_line": 628,
+            "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/server/src/provider/ProviderRegistry.ts#L613-L628"
+          }
+        },
+        {
+          "claim": "refreshInstance resolves the current instance and delegates to refreshOneSource.",
+          "anchor": {
+            "path": "apps/server/src/provider/ProviderRegistry.ts",
+            "symbol": "refreshInstance",
+            "start_line": 693,
+            "end_line": 702,
+            "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/server/src/provider/ProviderRegistry.ts#L693-L702"
+          }
+        }
+      ],
+      "limits": [
+        "The observed phrase matches the propagated-error branch, not T3's generic outer-timeout message. The originating RPC, response payload, provider route and timeout cause remain unknown.",
+        "The banner appeared during terminal inspection; no source/runtime evidence links terminal keystrokes to this provider failure.",
+        "A later absent banner establishes visible recovery. It does not alone prove a ready snapshot, successful model execution or the cause of recovery.",
+        "Do not identify the workspace snapshot refresh path merely from the words workspace routing in the error. The clicked banner refresh passes an instance id and no cwd."
+      ],
+      "ferrite_acceptance": [
+        "Display the actionable provider error without replacing or discarding the user's thread, terminal state or draft.",
+        "Refresh must visibly enter one pending state, reject repeat activation, then leave pending and show the new status or a recoverable error.",
+        "Verify the final status and a bounded provider action separately if claiming functional recovery.",
+        "For diagnosis, retain the correlated request method/id, error code/message, timing and relevant route metadata without collecting credentials."
+      ],
+      "observation_refs": [
+        {
+          "path": "../evidence/t3-live/observations.md",
+          "line": 116
+        },
+        {
+          "path": "../evidence/t3-live/observations.md",
+          "line": 120
+        }
+      ]
+    }
+  ],
+  "unresolved": [
+    "Rendered Markdown content Find and exact focus route of the explorer-search attempt.",
+    "Editor dependency internals of Find and any save-specific Command-S handling.",
+    "Exact source of the provider discovery error, including RPC metadata and runtime payload.",
+    "Independent provider ready-state/model action after refresh.",
+    "Persisted terminal history deletion, forced termination escalation and all descendant cleanup."
+  ],
+  "principles_applied": [
+    {
+      "name": "Experience First",
+      "decision": "Acceptance criteria require completed file navigation, focused search, persisted edits and owned process cleanup rather than visible controls."
+    },
+    {
+      "name": "Prove It Works",
+      "decision": "Kept parent runtime evidence separate from source support; qualified Command-S causality, rendered Find and provider recovery."
+    },
+    {
+      "name": "Poteto mode / How",
+      "decision": "Pinned every installed-path anchor to the app's source SHA and followed UI actions into stores, RPC and backend side effects."
+    }
+  ]
+}
+

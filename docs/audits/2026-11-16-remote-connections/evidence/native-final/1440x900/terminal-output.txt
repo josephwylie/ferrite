@@ -1,0 +1,3 @@
+127.0.0.1 61619 127.0.0.1 61604
+/private/tmp/ferrite-remote-b3lvgix_/remote-project
+FERRITE_SSH_TERMINAL_61604

@@ -1,0 +1,601 @@
+//! The Settings sheet as a view of its own (ADR 0041). It owns what only
+//! the sheet reads: whether it is up, its exit, the page shown, the search
+//! field, the path last copied and its focus. It draws from what the
+//! Cockpit gives it (`SettingsInputs`), asked for each render, so the
+//! Cockpit's own notify still redraws it; and what the operator asks of the
+//! window it says as a `SettingsEvent`, which the Cockpit answers once the
+//! sheet's own update has ended.
+
+use super::*;
+use ferrite_core::settings::Settings;
+use ferrite_core::ModelInfo;
+use gpui::component::input::InputState;
+use gpui::{App, WeakEntity};
+use std::path::PathBuf;
+use std::rc::Rc;
+
+pub(crate) struct SettingsView {
+    cockpit: WeakEntity<CockpitView>,
+    /// The sheet is up.
+    pub(crate) open: bool,
+    /// The sheet on its way out.
+    exit: ferrite_ui::motion::Exits<()>,
+    /// The page the sidebar has selected; each opening starts on the first.
+    pub(crate) page: settings::PageKey,
+    /// The search field, made with the sheet (it needs a window) and
+    /// dropped with it, so each opening starts with an empty query.
+    pub(crate) search: Option<Entity<InputState>>,
+    /// The About path copied last, shown with a check until the sheet
+    /// closes.
+    pub(crate) copied: Option<&'static str>,
+    pub(crate) focus: FocusHandle,
+}
+
+/// What the sheet draws from, as the Cockpit has it this frame.
+pub(crate) struct SettingsInputs {
+    pub settings: Settings,
+    /// In `Provider::ALL` order.
+    pub providers: Vec<ProviderInputs>,
+    /// The CLIs' versions, once probed: (claude, codex).
+    pub cli_versions: Option<(SharedString, SharedString)>,
+    /// The machine the window is on, as Settings names it.
+    pub place: SharedString,
+    /// Where the settings, the Threads and the logs live.
+    pub dir: PathBuf,
+    // Rows of features that have no view of their own yet, built by the
+    // Cockpit with its own listeners.
+    pub permissions: Vec<settings::Group>,
+    pub machine: settings::Group,
+    pub server: Vec<settings::Row>,
+    pub ferrite_update: Vec<settings::Row>,
+    pub connections: Vec<settings::Group>,
+}
+
+/// One provider's models and CLI, as the sheet's rows need them.
+pub(crate) struct ProviderInputs {
+    pub provider: Provider,
+    pub catalog: Vec<ModelInfo>,
+    /// What its CLI announced: the effort ladder reads it.
+    pub announced: Vec<ModelInfo>,
+    /// Its CLI's update line: what the check found, and the button.
+    pub update: (SharedString, Option<SharedString>),
+}
+
+/// What the sheet asks of the window.
+#[derive(Clone)]
+pub(crate) enum SettingsEvent {
+    /// A setting changed: saved and applied through `change_settings`.
+    Change(Rc<dyn Fn(&mut Settings)>),
+    StepTextSize(i32),
+    PlaySound(Sound),
+    ChooseSound(Sound),
+    UpdateCli(Provider),
+    CopyDiagnostics,
+    /// The sheet went to another page.
+    Paged(settings::PageKey),
+    /// The close button or a press on the veil closed it.
+    Closed,
+}
+
+impl EventEmitter<SettingsEvent> for SettingsView {}
+
+impl SettingsView {
+    pub(super) fn new(cockpit: WeakEntity<CockpitView>, cx: &mut Context<Self>) -> Self {
+        Self {
+            cockpit,
+            open: false,
+            exit: Default::default(),
+            page: settings::PageKey::default(),
+            search: None,
+            copied: None,
+            focus: cx.focus_handle(),
+        }
+    }
+
+    /// Open the sheet on its first page with nothing searched or copied,
+    /// or close it. Whether it is now open.
+    pub(super) fn toggle(&mut self, cx: &mut Context<Self>) -> bool {
+        self.open = !self.open;
+        if self.open {
+            self.page = settings::PageKey::default();
+            self.search = None;
+            self.copied = None;
+        }
+        cx.notify();
+        self.open
+    }
+
+    pub(super) fn close(&mut self, cx: &mut Context<Self>) {
+        self.open = false;
+        cx.notify();
+    }
+
+    /// A listener that says `event` to the Cockpit.
+    fn teller(cx: &Context<Self>) -> impl Fn(SettingsEvent, &mut App) + Clone + 'static {
+        let view = cx.entity().downgrade();
+        move |event, cx| {
+            view.update(cx, |_, cx| cx.emit(event)).ok();
+        }
+    }
+
+    /// A row's change, said to the Cockpit to save.
+    fn change<T: Clone + 'static>(
+        cx: &Context<Self>,
+        write: impl Fn(&mut Settings, T) + 'static,
+    ) -> impl Fn(T, &mut App) + 'static {
+        let tell = Self::teller(cx);
+        let write = Rc::new(write);
+        move |value, cx| {
+            let write = write.clone();
+            tell(
+                SettingsEvent::Change(Rc::new(move |settings| write(settings, value.clone()))),
+                cx,
+            );
+        }
+    }
+
+    /// The searchable sheet, or nothing while it is closed and gone.
+    fn sheet(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Option<AnyElement> {
+        // Closed, it fades out over `DIALOG_OUT`, drawn from the same state.
+        let leaving = self
+            .exit
+            .stage(
+                self.open.then_some(&()),
+                |_, _| true,
+                ferrite_ui::motion::DIALOG_OUT,
+                cx.background_executor().now(),
+                ferrite_ui::motion::reduced_motion(cx),
+            )
+            .map(|((), left)| left);
+        if !self.open && leaving.is_none() {
+            return None;
+        }
+        let search = self
+            .search
+            .get_or_insert_with(|| {
+                cx.new(|cx| InputState::new(window, cx).placeholder("Search"))
+            })
+            .clone();
+        let inputs = self
+            .cockpit
+            .update(cx, |cockpit, cx| cockpit.settings_inputs(window, cx))
+            .ok()?;
+        let pages = self.pages(inputs, cx);
+        let select = {
+            let view = cx.entity().downgrade();
+            let search = search.clone();
+            move |page: settings::PageKey, window: &mut Window, cx: &mut App| {
+                // Choosing a page ends a search: the page shows whole.
+                search.update(cx, |search, cx| search.set_value("", window, cx));
+                let _ = view.update(cx, |view, cx| view.show_page(page, cx));
+            }
+        };
+        let view = cx.entity().downgrade();
+        let step = {
+            let view = view.clone();
+            move |delta, _: &mut Window, cx: &mut App| {
+                let _ = view.update(cx, |view, cx| view.show_page(view.page.step(delta), cx));
+            }
+        };
+        let close = move |_: &mut Window, cx: &mut App| {
+            let _ = view.update(cx, |view, cx| {
+                view.close(cx);
+                cx.emit(SettingsEvent::Closed);
+            });
+        };
+        Some(crate::frame().settings(
+            ferrite_ui::frame::SettingsSheet {
+                pages,
+                selected: self.page,
+                search,
+                focus: self.focus.clone(),
+                select: Rc::new(select),
+                step: Box::new(step),
+                close: Rc::new(close),
+                leaving,
+            },
+            window,
+            cx,
+        ))
+    }
+
+    fn show_page(&mut self, page: settings::PageKey, cx: &mut Context<Self>) {
+        self.page = page;
+        cx.emit(SettingsEvent::Paged(page));
+        cx.notify();
+    }
+
+    fn pages(&self, inputs: SettingsInputs, cx: &Context<Self>) -> Vec<settings::Page> {
+        let SettingsInputs {
+            settings,
+            providers,
+            cli_versions,
+            place,
+            dir,
+            permissions,
+            machine,
+            server,
+            ferrite_update,
+            connections,
+        } = inputs;
+        let tell = Self::teller(cx);
+        let defaults = vec![settings::choices(
+            "settings-provider",
+            "Provider",
+            "What a new thread starts on",
+            Provider::ALL
+                .into_iter()
+                .map(|provider| {
+                    (
+                        ferrite_ui::provider::title(provider).into(),
+                        settings.default_provider == provider,
+                        provider,
+                    )
+                })
+                .collect(),
+            Self::change(cx, |settings, provider| settings.default_provider = provider),
+        )];
+        let mut new_thread_groups = vec![settings::Group::new(None).rows(defaults)];
+        for ProviderInputs {
+            provider,
+            catalog,
+            announced,
+            ..
+        } in &providers
+        {
+            let provider = *provider;
+            let chosen = settings.model_for(provider).map(str::to_string);
+            let model = settings::chooser(
+                if provider == Provider::Claude {
+                    "settings-claude-model"
+                } else {
+                    "settings-codex-model"
+                },
+                // The group names the provider: `Claude › Model`.
+                "Model",
+                "",
+                settings::model_options(
+                    ferrite_core::providers::models::menu(catalog.clone(), chosen.as_deref()),
+                    chosen.as_deref(),
+                ),
+                Self::change(cx, move |settings, value| {
+                    settings.set_model_for(provider, value)
+                }),
+            );
+            let effort = settings.effort_for(provider).map(str::to_string);
+            let mut ladder = ferrite_core::providers::models::efforts_for(
+                provider,
+                chosen.as_deref(),
+                announced,
+            );
+            // A saved value remains visible even if the current model's
+            // announcement no longer includes it; presentation never rewrites it.
+            if let Some(effort) = &effort {
+                if !ladder.contains(effort) {
+                    ladder.push(effort.clone());
+                }
+            }
+            let effort = settings::choices(
+                if provider == Provider::Claude {
+                    "settings-claude-effort"
+                } else {
+                    "settings-codex-effort"
+                },
+                "Effort",
+                // Said once, in the first group: it holds for both.
+                if provider == Provider::Claude {
+                    "Each thread can change its own"
+                } else {
+                    ""
+                },
+                std::iter::once(None)
+                    .chain(ladder.into_iter().map(Some))
+                    .map(|value| {
+                        let label = value
+                            .as_deref()
+                            .map(effort_title)
+                            .unwrap_or_else(|| settings::CLI_DEFAULT.into());
+                        (label.into(), effort == value, value)
+                    })
+                    .collect(),
+                Self::change(cx, move |settings, value| {
+                    settings.set_effort_for(provider, value)
+                }),
+            );
+            new_thread_groups.push(provider_group(provider).rows([model, effort]));
+        }
+        let behaviour = vec![
+            settings::toggle(
+                "settings-auto-title",
+                "Name threads automatically",
+                "Titled from the first prompt until you rename it",
+                settings.auto_title,
+                Self::change(cx, |s, v| s.auto_title = v),
+            ),
+            settings::toggle(
+                "settings-confirm-delete",
+                "Confirm before deleting a thread",
+                "Ask before removing a thread and its transcript",
+                settings.confirm_delete,
+                Self::change(cx, |s, v| s.confirm_delete = v),
+            ),
+            settings::toggle(
+                "settings-nav-collapsed",
+                "Start with the sidebar collapsed",
+                "cmd-B toggles it any time",
+                settings.nav_collapsed,
+                Self::change(cx, |s, v| s.nav_collapsed = v),
+            ),
+        ];
+        let size = settings.reading_size;
+        let reading = vec![settings::stepper(
+            "settings-text-size",
+            "Text size",
+            "Transcript text in every Pane, from 12 to 24px",
+            format!("{}px", size.px()).into(),
+            size > ferrite_core::settings::ReadingSize::SMALLEST,
+            size < ferrite_core::settings::ReadingSize::LARGEST,
+            {
+                let tell = tell.clone();
+                move |delta, cx| tell(SettingsEvent::StepTextSize(delta), cx)
+            },
+        )];
+        let sounds = vec![
+            settings::toggle(
+                "settings-sounds",
+                "Play sounds",
+                "A chime when a thread finishes or needs you, unless you are looking at it",
+                settings.sounds,
+                Self::change(cx, |s, v| s.sounds = v),
+            ),
+            // Under `Play sounds`, which they depend on.
+            Self::sound_file_row(&settings, "settings-done-sound", "Finished sound", Sound::Done, cx)
+                .nested(),
+            Self::sound_file_row(
+                &settings,
+                "settings-needs-you-sound",
+                "Needs-you sound",
+                Sound::NeedsYou,
+                cx,
+            )
+            .nested(),
+        ];
+        let provider_sounds = Provider::ALL.map(|provider| {
+            let (id, title) = match provider {
+                Provider::Claude => ("settings-claude-sounds", "Sounds for Claude threads"),
+                Provider::Codex => ("settings-codex-sounds", "Sounds for Codex threads"),
+            };
+            settings::toggle(
+                id,
+                title,
+                "",
+                settings.provider_sounds(provider),
+                Self::change(cx, move |s, v| s.set_provider_sounds(provider, v)),
+            )
+            .nested()
+        });
+        let system = vec![settings::toggle(
+            "settings-system-notifications",
+            "System notifications",
+            "When Ferrite is in the background · clicking one opens its thread",
+            settings.system_notifications,
+            Self::change(cx, |s, v| s.system_notifications = v),
+        )];
+        let (claude, codex) =
+            cli_versions.unwrap_or_else(|| ("checking…".into(), "checking…".into()));
+        let copied = self.copied;
+        let copy = |key: &'static str, cx: &Context<Self>| {
+            let view = cx.entity().downgrade();
+            move |cx: &mut App| {
+                let _ = view.update(cx, |view, cx| {
+                    view.copied = Some(key);
+                    cx.notify();
+                });
+            }
+        };
+        let mut clis: Vec<settings::Row> = providers
+            .into_iter()
+            .map(|ProviderInputs { provider, update, .. }| {
+                let (id, version) = match provider {
+                    Provider::Claude => ("settings-update-claude", claude.clone()),
+                    Provider::Codex => ("settings-update-codex", codex.clone()),
+                };
+                let (detail, button) = update;
+                let tell = tell.clone();
+                settings::action(
+                    id,
+                    ferrite_ui::provider::cli(provider),
+                    detail,
+                    version,
+                    button,
+                    move |_, cx| tell(SettingsEvent::UpdateCli(provider), cx),
+                )
+            })
+            .collect();
+        clis.push(settings::toggle(
+            "settings-auto-update-clis",
+            "Update the CLIs automatically",
+            // One line (`settings::hint`): the reason first.
+            format!("New models need a newer CLI · installed on {place} when its Threads are idle"),
+            settings.auto_update_clis,
+            Self::change(cx, |s, v| s.auto_update_clis = v),
+        ));
+        let mut about = vec![
+            settings::fact(
+                "Version",
+                version_label(env!("CARGO_PKG_VERSION"), crate::DEV).into(),
+            ),
+            settings::path_fact(
+                "Threads",
+                dir.join("threads").display().to_string(),
+                copied == Some("Threads"),
+                copy("Threads", cx),
+            ),
+            settings::path_fact(
+                "Settings file",
+                dir.join(ferrite_core::settings::Settings::FILE)
+                    .display()
+                    .to_string(),
+                copied == Some("Settings file"),
+                copy("Settings file", cx),
+            ),
+            settings::action(
+                "settings-copy-diagnostics",
+                "Diagnostics",
+                "Version, CLIs, the last crash and the log's tail, for a bug report",
+                ferrite_core::diagnostics::logs(&dir)
+                    .display()
+                    .to_string()
+                    .into(),
+                Some(
+                    if copied == Some("Diagnostics") {
+                        "Copied"
+                    } else {
+                        "Copy"
+                    }
+                    .into(),
+                ),
+                move |_, cx| tell(SettingsEvent::CopyDiagnostics, cx),
+            ),
+        ];
+        about.splice(1..1, ferrite_update);
+        let mut about = vec![settings::Group::new(None).rows(about)];
+        about.push(settings::Group::new(Some("Provider CLIs")).rows(clis));
+        vec![
+            settings::page(settings::PageKey::NewThreads, new_thread_groups),
+            settings::page(settings::PageKey::Permissions, permissions),
+            settings::page(
+                settings::PageKey::Behaviour,
+                vec![
+                    settings::Group::new(Some("Reading")).rows(reading),
+                    settings::Group::new(Some("Threads and navigation")).rows(behaviour),
+                    machine,
+                ],
+            ),
+            settings::page(
+                settings::PageKey::Notifications,
+                vec![
+                    settings::Group::new(Some("Sounds"))
+                        .rows(sounds)
+                        .rows(provider_sounds),
+                    settings::Group::new(Some("System")).rows(system),
+                ],
+            ),
+            settings::page(
+                settings::PageKey::Server,
+                vec![settings::Group::new(None).rows(server)],
+            ),
+            settings::page(settings::PageKey::Connections, connections),
+            settings::page(settings::PageKey::About, about),
+        ]
+    }
+
+    /// The line for one chime: the file it plays (or the built-in), `Play`
+    /// to hear it, `Choose…` for a file of the operator's own, and `Use
+    /// built-in` to go back.
+    fn sound_file_row(
+        settings: &Settings,
+        id: &'static str,
+        title: &'static str,
+        sound: Sound,
+        cx: &Context<Self>,
+    ) -> settings::Row {
+        let file = settings.sound_file(sound);
+        let tell = Self::teller(cx);
+        let play: settings::Act = Rc::new({
+            let tell = tell.clone();
+            move |cx| tell(SettingsEvent::PlaySound(sound), cx)
+        });
+        let choose: settings::Act = Rc::new(move |cx| tell(SettingsEvent::ChooseSound(sound), cx));
+        let mut acts = vec![("Play", play), ("Choose\u{2026}", choose)];
+        if file.is_some() {
+            let reset = Self::change(cx, move |s, ()| s.set_sound_file(sound, None));
+            acts.push(("Use built-in", Rc::new(move |cx: &mut App| reset((), cx))));
+        }
+        settings::file_choice(
+            id,
+            title,
+            if cfg!(windows) { "A WAV file" } else { "" },
+            file,
+            "Built-in",
+            acts,
+        )
+    }
+}
+
+impl Render for SettingsView {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        ferrite_ui::loops_overlay::begin(window, cx.entity_id());
+        self.sheet(window, cx)
+            .unwrap_or_else(|| div().into_any_element())
+    }
+}
+
+impl CockpitView {
+    /// Everything the sheet draws from. It never reads the sheet: the
+    /// sheet calls it while its own update is running.
+    pub(super) fn settings_inputs(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> SettingsInputs {
+        let place = self.machine_place();
+        let providers = Provider::ALL
+            .into_iter()
+            .map(|provider| ProviderInputs {
+                provider,
+                catalog: self.cockpit.model_catalog(provider),
+                announced: self.cockpit.announced_models(provider),
+                update: crate::cli_updates::describe(
+                    provider,
+                    self.cli_updates.state(provider),
+                    self.prefs.settings.auto_update_clis,
+                    self.cockpit.live_sessions(provider),
+                    &place,
+                ),
+            })
+            .collect();
+        SettingsInputs {
+            connections: self.connection_settings(window, cx),
+            settings: self.prefs.settings.clone(),
+            providers,
+            cli_versions: self.cli_versions.clone(),
+            place,
+            dir: self.prefs.dir.clone(),
+            permissions: self.permission_groups(cx),
+            machine: self.machine_group(cx),
+            server: self.server_rows(cx),
+            ferrite_update: self.ferrite_update_rows(cx),
+        }
+    }
+
+    pub(super) fn on_settings_event(
+        &mut self,
+        _: Entity<SettingsView>,
+        event: &SettingsEvent,
+        cx: &mut Context<Self>,
+    ) {
+        match event.clone() {
+            SettingsEvent::Change(change) => self.change_settings(|settings| change(settings), cx),
+            SettingsEvent::StepTextSize(delta) => self.step_text_size(delta, cx),
+            SettingsEvent::PlaySound(sound) => self.chime(sound),
+            SettingsEvent::ChooseSound(sound) => self.choose_sound_file(sound, cx),
+            SettingsEvent::UpdateCli(provider) => self.update_cli(provider, cx),
+            SettingsEvent::CopyDiagnostics => self.copy_diagnostics(cx),
+            SettingsEvent::Paged(page) => {
+                if page != settings::PageKey::Connections {
+                    self.connections.editor = None;
+                }
+                cx.notify();
+            }
+            SettingsEvent::Closed => {
+                self.connections.editor = None;
+                cx.notify();
+            }
+        }
+    }
+
+    pub(crate) fn settings_open(&self, cx: &App) -> bool {
+        self.settings_view.read(cx).open
+    }
+}

@@ -5,7 +5,7 @@
 //!
 //! What a connection is sent waits in its [`Outbox`]: one ordered queue
 //! that never drops. Adjacent deltas of one Thread merge while they wait;
-//! a state message (a Thread's state, the Roster, the Groups …) supersedes
+//! a state message (a Thread's state, the Roster, the registry …) supersedes
 //! the one of its kind still waiting and joins the back; and a client that
 //! falls more than [`LAGGED_BYTES`] behind is closed `lagged` and
 //! reconnects. What is too large to queue — a Thread's history — is read on
@@ -278,7 +278,6 @@ enum Slot {
     ToolDraft(ThreadId, String),
     Digest(ThreadId),
     Roster,
-    Groups,
     Registry,
     Notices,
     Providers,
@@ -291,7 +290,6 @@ fn slot(message: &ServerMessage) -> Option<Slot> {
         ServerMessage::ToolDraft { thread, id, .. } => Slot::ToolDraft(*thread, id.clone()),
         ServerMessage::Digest { thread, .. } => Slot::Digest(*thread),
         ServerMessage::Roster { .. } => Slot::Roster,
-        ServerMessage::Groups { .. } => Slot::Groups,
         ServerMessage::Registry { .. } => Slot::Registry,
         ServerMessage::Notices { .. } => Slot::Notices,
         ServerMessage::Providers { .. } => Slot::Providers,

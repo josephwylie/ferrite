@@ -48,6 +48,7 @@ pub(crate) struct Mirror {
 struct Facts {
     generation: u64,
     provider: Provider,
+    project: Option<crate::workspace::registry::ProjectId>,
     model: Option<String>,
     effort: Option<String>,
     title: Option<String>,
@@ -65,10 +66,12 @@ struct Facts {
     commands: Vec<SessionCommand>,
     models: Vec<ModelInfo>,
     permission_mode: Option<String>,
+    sandbox: Option<String>,
     permission_modes: Vec<PermissionModeChoice>,
     controls: Vec<ControlKind>,
     store_error: Option<String>,
     for_draft: bool,
+    resume_lost: bool,
     recovered: usize,
     wants_listing: bool,
     history_errors: HashMap<String, String>,
@@ -95,6 +98,7 @@ impl From<ThreadState> for Facts {
         Self {
             generation: state.generation,
             provider: state.provider,
+            project: state.project,
             model: state.model,
             effort: state.effort,
             title: state.title,
@@ -115,6 +119,7 @@ impl From<ThreadState> for Facts {
             commands: state.commands.iter().map(Into::into).collect(),
             models: state.models,
             permission_mode: state.permission_mode,
+            sandbox: state.sandbox,
             permission_modes: state
                 .permission_modes
                 .into_iter()
@@ -130,6 +135,7 @@ impl From<ThreadState> for Facts {
                 .collect(),
             store_error: state.store_error,
             for_draft: state.for_draft,
+            resume_lost: state.resume_lost,
             recovered: state.recovered.len(),
             wants_listing: state.wants_listing,
             history_errors: state
@@ -631,6 +637,10 @@ impl<'a> ThreadView<'a> {
         self.facts.provider
     }
 
+    pub fn project_id(&self) -> Option<crate::workspace::registry::ProjectId> {
+        self.facts.project
+    }
+
     /// The model this Thread chose before its first prompt (#25) — the ✓ in
     /// the provider picker. `None` is the provider's default.
     pub fn model(&self) -> Option<&'a str> {
@@ -839,6 +849,12 @@ impl<'a> ThreadView<'a> {
         &self.facts.models
     }
 
+    /// Its provider cannot resume the conversation it saved: a fresh one
+    /// is on offer (`Cockpit::start_fresh_conversation`).
+    pub fn resume_lost(&self) -> bool {
+        self.facts.resume_lost
+    }
+
     /// How many prompts the provider handed back wait for the Composer.
     pub fn recovered(&self) -> Option<usize> {
         (self.facts.recovered > 0).then_some(self.facts.recovered)
@@ -847,6 +863,12 @@ impl<'a> ThreadView<'a> {
     /// The live Session's permission mode (#23): the meta row's mode chip.
     pub fn permission_mode(&self) -> Option<&'a str> {
         self.facts.permission_mode.as_deref()
+    }
+
+    /// The sandbox its provider announced for the live Session: the
+    /// approval card's context word.
+    pub fn sandbox(&self) -> Option<&'a str> {
+        self.facts.sandbox.as_deref()
     }
 }
 

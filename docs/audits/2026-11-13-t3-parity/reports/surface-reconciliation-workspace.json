@@ -1,0 +1,2185 @@
+{
+  "status": "complete",
+  "title": "Workspace tools surface reconciliation",
+  "installed_t3_commit": "1264c206aee0dce805d6279809118bc091f29d2f",
+  "newer_comparison_commit": "74573fc29b901bafbf8f1dbb2eb29606da1fa448",
+  "ferrite_source_commit": "62947f91d5cd6ee494aaae9ed09d794a853e5bab",
+  "source_files": [
+    {
+      "path": "apps/web/src/components/chat/ChatRightPanel.tsx",
+      "url": "https://raw.githubusercontent.com/pingdotgg/t3code/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/ChatRightPanel.tsx",
+      "commit": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "sha256": "f149a30f1ab8aa193cfbfd995971198410f6adb0c250d97d4fbaefad900a2513",
+      "line_count": 51,
+      "same_as_newer": true
+    },
+    {
+      "path": "apps/web/src/components/preview/PreviewPanelShell.tsx",
+      "url": "https://raw.githubusercontent.com/pingdotgg/t3code/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/preview/PreviewPanelShell.tsx",
+      "commit": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "sha256": "d54df2ef4ea19d539a4853b6ed616659ac316df69ddff9f20b7d687dbf34409c",
+      "line_count": 211,
+      "same_as_newer": false
+    },
+    {
+      "path": "apps/web/src/components/RightPanelTabs.tsx",
+      "url": "https://raw.githubusercontent.com/pingdotgg/t3code/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/RightPanelTabs.tsx",
+      "commit": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "sha256": "de3aeb1ec4c7c10e5aefba9a7ca4a0514b10a3e41d11231359545ac683d2f0a3",
+      "line_count": 1582,
+      "same_as_newer": false
+    },
+    {
+      "path": "apps/web/src/components/RightPanelSheet.tsx",
+      "url": "https://raw.githubusercontent.com/pingdotgg/t3code/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/RightPanelSheet.tsx",
+      "commit": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "sha256": "67a33d3e35cce125ab4caee3b0cdb250cc7db4d4e0709fb110ea2571829e7d29",
+      "line_count": 31,
+      "same_as_newer": false
+    },
+    {
+      "path": "apps/web/src/rightPanelStore.ts",
+      "url": "https://raw.githubusercontent.com/pingdotgg/t3code/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/rightPanelStore.ts",
+      "commit": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "sha256": "9c165e539cd80cce2d7abe540fe7b3672ffdb8c9ed8d2b8f5ae5eff27a19f650",
+      "line_count": 1293,
+      "same_as_newer": true
+    },
+    {
+      "path": "apps/web/src/rightPanelLayout.ts",
+      "url": "https://raw.githubusercontent.com/pingdotgg/t3code/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/rightPanelLayout.ts",
+      "commit": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "sha256": "0cb5f90ce96bc1b6bd618adbec4c208d5e41dcdeb70ee20b051fea4fcc660ffc",
+      "line_count": 3,
+      "same_as_newer": true
+    },
+    {
+      "path": "apps/web/src/panelAnimations.ts",
+      "url": "https://raw.githubusercontent.com/pingdotgg/t3code/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/panelAnimations.ts",
+      "commit": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "sha256": "7e77b90f51d77aa57873f83d357f9cc816fd9d659bfdd6f8e8bcbc23afaf678a",
+      "line_count": 69,
+      "same_as_newer": true
+    },
+    {
+      "path": "apps/web/src/hooks/usePreviewPanelInlineSize.ts",
+      "url": "https://raw.githubusercontent.com/pingdotgg/t3code/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/hooks/usePreviewPanelInlineSize.ts",
+      "commit": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "sha256": "a1d9192d2df745d1d3c0f3fa80c22b77b5f0fe714916ec2b9035b2392a0e32a6",
+      "line_count": 74,
+      "same_as_newer": true
+    },
+    {
+      "path": "apps/web/src/hooks/useResizableWidth.ts",
+      "url": "https://raw.githubusercontent.com/pingdotgg/t3code/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/hooks/useResizableWidth.ts",
+      "commit": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "sha256": "c0edea409280f93b81646a3effb1544baf96c498d735273c14b9df7185602d59",
+      "line_count": 118,
+      "same_as_newer": true
+    },
+    {
+      "path": "apps/web/src/components/chat/RightPanelSurfaceContent.tsx",
+      "url": "https://raw.githubusercontent.com/pingdotgg/t3code/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/RightPanelSurfaceContent.tsx",
+      "commit": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "sha256": "5cbe5a9ad8e0c7a9fa9fab78d0d8673045442c22a774eb58d70b0d74130aa13e",
+      "line_count": 242,
+      "same_as_newer": true
+    },
+    {
+      "path": "apps/web/src/components/chat/ChatTerminalDrawers.tsx",
+      "url": "https://raw.githubusercontent.com/pingdotgg/t3code/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/ChatTerminalDrawers.tsx",
+      "commit": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "sha256": "1f04b50588e24b4bf513ecdfed3f2392a5b44e8b269ceecbf040465798ed4ebe",
+      "line_count": 107,
+      "same_as_newer": true
+    },
+    {
+      "path": "apps/web/src/components/PersistentThreadTerminals.tsx",
+      "url": "https://raw.githubusercontent.com/pingdotgg/t3code/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/PersistentThreadTerminals.tsx",
+      "commit": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "sha256": "d896390e0d89cb0dc5ee4f8931c6ebc7f8b60e27209984913622dab50e39fccd",
+      "line_count": 416,
+      "same_as_newer": true
+    },
+    {
+      "path": "apps/web/src/components/chat/useChatTerminalActions.ts",
+      "url": "https://raw.githubusercontent.com/pingdotgg/t3code/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/useChatTerminalActions.ts",
+      "commit": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "sha256": "7d1b517e67727c76793c89b7a14bab069dc16e72c3152f0ac914bb7eab60db21",
+      "line_count": 465,
+      "same_as_newer": true
+    },
+    {
+      "path": "apps/web/src/components/terminal/useThreadTerminalActions.ts",
+      "url": "https://raw.githubusercontent.com/pingdotgg/t3code/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/terminal/useThreadTerminalActions.ts",
+      "commit": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "sha256": "5383074bc0aa0849b77a3e44f55e5d21fb63ab5840ef779ccafa30de1b10cb40",
+      "line_count": 152,
+      "same_as_newer": true
+    },
+    {
+      "path": "apps/web/src/components/ThreadTerminalDrawer.tsx",
+      "url": "https://raw.githubusercontent.com/pingdotgg/t3code/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/ThreadTerminalDrawer.tsx",
+      "commit": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "sha256": "eaf1bc363368e60bcfb080b458cee3d0472a040ccb3cd7108c0c51e666854e2c",
+      "line_count": 1991,
+      "same_as_newer": false
+    },
+    {
+      "path": "apps/web/src/components/chat/useRightPanelActions.ts",
+      "url": "https://raw.githubusercontent.com/pingdotgg/t3code/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/useRightPanelActions.ts",
+      "commit": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "sha256": "356b2e9682917f2d45ee02fd23cd1750a8ba1186466ef0a86fa8b944cf93620d",
+      "line_count": 350,
+      "same_as_newer": true
+    },
+    {
+      "path": "apps/web/src/components/chat/SideChatPane.tsx",
+      "url": "https://raw.githubusercontent.com/pingdotgg/t3code/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/SideChatPane.tsx",
+      "commit": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "sha256": "d487c01b2179fb0869d81018f8e92e71c7e4f92ec206036c8f21371343e92a42",
+      "line_count": 183,
+      "same_as_newer": true
+    },
+    {
+      "path": "apps/web/src/components/chat/useSideChat.ts",
+      "url": "https://raw.githubusercontent.com/pingdotgg/t3code/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/useSideChat.ts",
+      "commit": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "sha256": "501cc9ca0fd857397992708d4b582b0b4665bea8fb48e8c1fa1a3fe79e76bd58",
+      "line_count": 126,
+      "same_as_newer": true
+    },
+    {
+      "path": "apps/web/src/components/DiffPanel.tsx",
+      "url": "https://raw.githubusercontent.com/pingdotgg/t3code/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/DiffPanel.tsx",
+      "commit": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "sha256": "3a0a91c03f1c549fa9a45f97d0457fef1b614e60fde7a43fc5cdb30fcf4f6358",
+      "line_count": 1542,
+      "same_as_newer": false
+    },
+    {
+      "path": "apps/web/src/components/DiffPanelShell.tsx",
+      "url": "https://raw.githubusercontent.com/pingdotgg/t3code/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/DiffPanelShell.tsx",
+      "commit": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "sha256": "a79e8c085fc3e37efb41eeaf233242dd15b5d9b6267558d9c05438f4f73bb866",
+      "line_count": 116,
+      "same_as_newer": true
+    },
+    {
+      "path": "apps/web/src/components/files/FileBrowserPanel.tsx",
+      "url": "https://raw.githubusercontent.com/pingdotgg/t3code/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/files/FileBrowserPanel.tsx",
+      "commit": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "sha256": "8791842ed10d0fab37b80b42428727cdbd8f69a44b11aab606704e17a366883a",
+      "line_count": 569,
+      "same_as_newer": false
+    },
+    {
+      "path": "apps/web/src/components/files/FilePreviewPanel.tsx",
+      "url": "https://raw.githubusercontent.com/pingdotgg/t3code/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/files/FilePreviewPanel.tsx",
+      "commit": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "sha256": "dddf7d64735bd7dc1ad4e61b94bcf4a39fdba66398c6623ba1fa0768334561f3",
+      "line_count": 1777,
+      "same_as_newer": false
+    },
+    {
+      "path": "apps/web/src/components/files/fileSaveSessions.ts",
+      "url": "https://raw.githubusercontent.com/pingdotgg/t3code/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/files/fileSaveSessions.ts",
+      "commit": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "sha256": "d3f2ef20ff2bc63ab14d8ae748ce87d5800b74e89b6cc1f2a660e3a935d8cd58",
+      "line_count": 178,
+      "same_as_newer": true
+    },
+    {
+      "path": "apps/web/src/components/files/fileSaveCoordinator.ts",
+      "url": "https://raw.githubusercontent.com/pingdotgg/t3code/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/files/fileSaveCoordinator.ts",
+      "commit": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "sha256": "525b788264f26dad43f4de5b2d8f6dc5a32a69845fb1e3f47415ac26e2727915",
+      "line_count": 107,
+      "same_as_newer": true
+    },
+    {
+      "path": "apps/web/src/components/CommandPalette.tsx",
+      "url": "https://raw.githubusercontent.com/pingdotgg/t3code/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/CommandPalette.tsx",
+      "commit": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "sha256": "54ec3619007598f3a729d968cd600ee56cbdbefb129d8e939de5d774042403ee",
+      "line_count": 3051,
+      "same_as_newer": false
+    },
+    {
+      "path": "apps/web/src/components/search/ProjectContentSearchDialog.tsx",
+      "url": "https://raw.githubusercontent.com/pingdotgg/t3code/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/search/ProjectContentSearchDialog.tsx",
+      "commit": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "sha256": "91e2690c1cab5dcb7691b72428cdc7e71c88ba1da30923d55b3b57db5719d950",
+      "line_count": 330,
+      "same_as_newer": true
+    },
+    {
+      "path": "apps/web/src/components/pullRequest/PullRequestsPage.tsx",
+      "url": "https://raw.githubusercontent.com/pingdotgg/t3code/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/pullRequest/PullRequestsPage.tsx",
+      "commit": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "sha256": "d3e700eec271f007c8e44ded854d989772aaad9005237cd789eda1f47eff5ffc",
+      "line_count": 1641,
+      "same_as_newer": true
+    },
+    {
+      "path": "apps/web/src/components/pullRequest/PullRequestDetailPanel.tsx",
+      "url": "https://raw.githubusercontent.com/pingdotgg/t3code/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/pullRequest/PullRequestDetailPanel.tsx",
+      "commit": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "sha256": "5b1e0049bc2e0c1da81305e73ce96782a906ac628afcb552d869cb45bfd0a3d3",
+      "line_count": 2011,
+      "same_as_newer": false
+    },
+    {
+      "path": "apps/web/src/components/ChatView.tsx",
+      "url": "https://raw.githubusercontent.com/pingdotgg/t3code/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/ChatView.tsx",
+      "commit": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "sha256": "c04f7ebfbed10af5afc938609ab3eada4d767a60a6ab483d875973fff50b49c4",
+      "line_count": 4019,
+      "same_as_newer": false
+    },
+    {
+      "path": "apps/web/src/lib/workspaceFocus.ts",
+      "url": "https://raw.githubusercontent.com/pingdotgg/t3code/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/lib/workspaceFocus.ts",
+      "commit": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "sha256": "dd8541c48fce346afd695451e7ec70bb3eac2d95b06d9acb0b726c82882ca877",
+      "line_count": 429,
+      "same_as_newer": false
+    },
+    {
+      "path": "apps/web/src/hooks/useRightPanelSurfaceClose.ts",
+      "url": "https://raw.githubusercontent.com/pingdotgg/t3code/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/hooks/useRightPanelSurfaceClose.ts",
+      "commit": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "sha256": "575b298ad5393b6f8615dd14bd485f6e5140abac6f2fb3eea82c0a7016a4b7dc",
+      "line_count": 170,
+      "same_as_newer": true
+    },
+    {
+      "path": "apps/web/src/components/ui/sheet.tsx",
+      "url": "https://raw.githubusercontent.com/pingdotgg/t3code/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/ui/sheet.tsx",
+      "commit": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "sha256": "4a087e47a0438cdd849d0f757a6f7c192b3bf6938e6f405695f183748e317544",
+      "line_count": 172,
+      "same_as_newer": true
+    },
+    {
+      "path": "apps/web/src/terminalState.ts",
+      "url": "https://raw.githubusercontent.com/pingdotgg/t3code/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/terminalState.ts",
+      "error": "HTTP Error 404: Not Found"
+    },
+    {
+      "path": "apps/web/src/terminalUiStateStore.ts",
+      "url": "https://raw.githubusercontent.com/pingdotgg/t3code/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/terminalUiStateStore.ts",
+      "commit": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "sha256": "d208fa962720dd467139941eeb7c1516a9040d6d1a0e26b9144e424ac2d52078",
+      "line_count": 778,
+      "same_as_newer": true
+    },
+    {
+      "path": "apps/web/src/lib/terminalFocus.ts",
+      "url": "https://raw.githubusercontent.com/pingdotgg/t3code/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/lib/terminalFocus.ts",
+      "commit": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "sha256": "6afac50715cb1d8ed91b9eb6ffc6280484d4e22be3de7060a469f429ab3a8365",
+      "line_count": 191,
+      "same_as_newer": false
+    },
+    {
+      "path": "apps/web/src/lib/terminalCloseConfirm.ts",
+      "url": "https://raw.githubusercontent.com/pingdotgg/t3code/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/lib/terminalCloseConfirm.ts",
+      "commit": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "sha256": "5d9b4c345be5c4a1e7cc7f6562e2b899b7e74d8a72ffb90facc244491fef88e8",
+      "line_count": 35,
+      "same_as_newer": true
+    },
+    {
+      "path": "apps/web/src/components/files/FileExplorerPane.tsx",
+      "url": "https://raw.githubusercontent.com/pingdotgg/t3code/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/files/FileExplorerPane.tsx",
+      "commit": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "sha256": "73662606c874a9e4d185875f01699d15c9a54d4e11bc7d75da02aa9aa8c70a38",
+      "line_count": 114,
+      "same_as_newer": true
+    },
+    {
+      "path": "apps/web/src/closedViewStore.ts",
+      "url": "https://raw.githubusercontent.com/pingdotgg/t3code/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/closedViewStore.ts",
+      "commit": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "sha256": "74f3c4c520397d015714124d39e2ae829e8ddfc049ca7aef6b2e0d51a97bdae7",
+      "line_count": 145,
+      "same_as_newer": true
+    },
+    {
+      "path": "apps/web/src/components/pullRequest/ThreadPullRequestsPanel.tsx",
+      "url": "https://raw.githubusercontent.com/pingdotgg/t3code/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/pullRequest/ThreadPullRequestsPanel.tsx",
+      "commit": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "sha256": "b5a753b65e1695e9b15696bb1455dffdb733de6a5a55ce87a8a3d049abba32c6",
+      "line_count": 492,
+      "same_as_newer": true
+    },
+    {
+      "path": "apps/web/src/components/device/DevicePanel.tsx",
+      "url": "https://raw.githubusercontent.com/pingdotgg/t3code/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/device/DevicePanel.tsx",
+      "commit": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "sha256": "818f440082f30991424a85bed2233401e91dbe453214f3b502534ffa73114211",
+      "line_count": 496,
+      "same_as_newer": true
+    }
+  ],
+  "anchors": {
+    "host": {
+      "kind": "t3-installed",
+      "path": "apps/web/src/components/chat/ChatRightPanel.tsx",
+      "line": 19,
+      "symbol": "ChatRightPanel",
+      "claim": "Chat inline host or a separate sheet host; preserves shared tab contract.",
+      "commit": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/ChatRightPanel.tsx#L19",
+      "line_sha256": "bd57467f3b5e3d42e203b63eb918dd9b92b9f1433184e644fac11e062d564c4f"
+    },
+    "mount": {
+      "kind": "t3-installed",
+      "path": "apps/web/src/components/ChatView.tsx",
+      "line": 3931,
+      "symbol": "ChatView right-panel mount",
+      "claim": "Right panel is a sibling of the conversation column, omitted in embedded side chats.",
+      "commit": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/ChatView.tsx#L3931",
+      "line_sha256": "2bcc7e1fec90e3b17405d49234fa1f0383fc23277e2563b67cf8f641ae1fffa7"
+    },
+    "maximize": {
+      "kind": "t3-installed",
+      "path": "apps/web/src/components/ChatView.tsx",
+      "line": 3286,
+      "symbol": "ChatView maximized column",
+      "claim": "Maximize shrinks the chat column to zero and marks it inert.",
+      "commit": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/ChatView.tsx#L3286",
+      "line_sha256": "195732123e07a690a8770fd417fc605078f2cd541ed482767732e66f93aedb8f"
+    },
+    "shell": {
+      "kind": "t3-installed",
+      "path": "apps/web/src/components/preview/PreviewPanelShell.tsx",
+      "line": 65,
+      "symbol": "PreviewPanelShellFrame",
+      "claim": "Workspace area, visibility, sizing, and resource-independent panel frame.",
+      "commit": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/preview/PreviewPanelShell.tsx#L65",
+      "line_sha256": "ebb913ce27f8540ddceac94ef3693eefcf8b13b736c44c05fc6aeff8db3a58cf"
+    },
+    "shell_focus": {
+      "kind": "t3-installed",
+      "path": "apps/web/src/components/preview/PreviewPanelShell.tsx",
+      "line": 132,
+      "symbol": "collapse focus effect",
+      "claim": "Move focus out before setting inert on the hidden panel.",
+      "commit": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/preview/PreviewPanelShell.tsx#L132",
+      "line_sha256": "bf096d023fa3f67784a7d01cefdda2d2570a752297378e9f08c7a87930306df9"
+    },
+    "shell_motion": {
+      "kind": "t3-installed",
+      "path": "apps/web/src/components/preview/PreviewPanelShell.tsx",
+      "line": 78,
+      "symbol": "widthTransition",
+      "claim": "Animate open/close, suppress transitions for other width changes.",
+      "commit": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/preview/PreviewPanelShell.tsx#L78",
+      "line_sha256": "cdb1a9b131bb00d479b89c7fc4df5a56b76639beca4843d364dbe6d6628c58e0"
+    },
+    "size": {
+      "kind": "t3-installed",
+      "path": "apps/web/src/hooks/usePreviewPanelInlineSize.ts",
+      "line": 13,
+      "symbol": "inline size constants",
+      "claim": "540px default, 360px minimum, viewport and sibling-column caps.",
+      "commit": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/hooks/usePreviewPanelInlineSize.ts#L13",
+      "line_sha256": "47e43e4b6115915c1164589cf7f431204a59734a49162c5983d9c6c53780694a"
+    },
+    "resize": {
+      "kind": "t3-installed",
+      "path": "apps/web/src/hooks/useResizableWidth.ts",
+      "line": 63,
+      "symbol": "commitWidth / drag.finish",
+      "claim": "Only deliberate width commits write the saved width; derived bounds are separate.",
+      "commit": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/hooks/useResizableWidth.ts#L63",
+      "line_sha256": "638bc2b46e1207a4004a9d8ff0439c2b1a7b6539bf52b779477ce69b8254fb77"
+    },
+    "breakpoint": {
+      "kind": "t3-installed",
+      "path": "apps/web/src/rightPanelLayout.ts",
+      "line": 1,
+      "symbol": "RIGHT_PANEL_INLINE_LAYOUT_MEDIA_QUERY",
+      "claim": "Chat sheet breakpoint is max-width 980px.",
+      "commit": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/rightPanelLayout.ts#L1",
+      "line_sha256": "a84ebb9495521f50c328f54e200654ffb543494f53e5967425df933b5864191d"
+    },
+    "sheet": {
+      "kind": "t3-installed",
+      "path": "apps/web/src/components/RightPanelSheet.tsx",
+      "line": 20,
+      "symbol": "RightPanelSheet SheetPopup",
+      "claim": "Retained right sheet; separate 760px width rule; supplied animation duration.",
+      "commit": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/RightPanelSheet.tsx#L20",
+      "line_sha256": "0f80274b787084ed62d3929d92355b93d6265eb601f8c5cae8abb6a86fbf765c"
+    },
+    "sheet_motion": {
+      "kind": "t3-installed",
+      "path": "apps/web/src/components/ui/sheet.tsx",
+      "line": 74,
+      "symbol": "SheetPopup transitionStyle",
+      "claim": "Backdrop and translated popup share duration; zero disables their transition.",
+      "commit": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/ui/sheet.tsx#L74",
+      "line_sha256": "b1c93400b93ea8c87582049bd0d80f179141ba4225ba76c64523f04ee6089a20"
+    },
+    "motion": {
+      "kind": "t3-installed",
+      "path": "apps/web/src/panelAnimations.ts",
+      "line": 31,
+      "symbol": "usePanelAnimationSettings",
+      "claim": "Duration, reduced motion and route suppression gate shared motion.",
+      "commit": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/panelAnimations.ts#L31",
+      "line_sha256": "78f55e818e4cbb17135a0d2f4905e7471a90c530ff7cce3267fd2e6b19d749b8"
+    },
+    "presence": {
+      "kind": "t3-installed",
+      "path": "apps/web/src/panelAnimations.ts",
+      "line": 41,
+      "symbol": "usePanelPresence",
+      "claim": "Exit retention has timeout cancellation and thread-scope boundary.",
+      "commit": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/panelAnimations.ts#L41",
+      "line_sha256": "e12d7318aba3f463baa9693b5a2461951d5622bfd7f92cd76f4f460bf5c86438"
+    },
+    "focus": {
+      "kind": "t3-installed",
+      "path": "apps/web/src/lib/workspaceFocus.ts",
+      "line": 12,
+      "symbol": "workspaceAreaProps",
+      "claim": "Named region and order form the workspace focus model.",
+      "commit": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/lib/workspaceFocus.ts#L12",
+      "line_sha256": "c54936084790c812333c909cc116339bf2903d1d48641810f5dae4c4a529f241"
+    },
+    "focus_boundary": {
+      "kind": "t3-installed",
+      "path": "apps/web/src/lib/workspaceFocus.ts",
+      "line": 232,
+      "symbol": "workspace focus move",
+      "claim": "Visible modal/menu boundaries contain traversal rather than leaking it into the page.",
+      "commit": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/lib/workspaceFocus.ts#L232",
+      "line_sha256": "0cddca156bcbd24f88f65839931c81cab0668cd883e677e85404d442f3b25f24"
+    },
+    "focus_open": {
+      "kind": "t3-installed",
+      "path": "apps/web/src/lib/workspaceFocus.ts",
+      "line": 375,
+      "symbol": "startWorkspaceFocus",
+      "claim": "Explicit panel action requests focus; standalone PR route has separate content focus.",
+      "commit": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/lib/workspaceFocus.ts#L375",
+      "line_sha256": "d66c85b43112b23dc05574416b6cc4d78d4c0f1a6a63405bd9e8aab885354475"
+    },
+    "surfaces": {
+      "kind": "t3-installed",
+      "path": "apps/web/src/rightPanelStore.ts",
+      "line": 37,
+      "symbol": "RightPanelSurface",
+      "claim": "Resource identity distinguishes file, browser, terminal group, PR target and side chat.",
+      "commit": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/rightPanelStore.ts#L37",
+      "line_sha256": "69d5fd74e0bbae0ba769cbdd3f3c844117ead33b15f29a58f7a85efee2e1c0fb"
+    },
+    "state": {
+      "kind": "t3-installed",
+      "path": "apps/web/src/rightPanelStore.ts",
+      "line": 93,
+      "symbol": "ThreadRightPanelState",
+      "claim": "Ordered tabs, selected resource, visibility and maximize are distinct state.",
+      "commit": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/rightPanelStore.ts#L93",
+      "line_sha256": "f57b546446ec5ac70b6724e2c927d96df197280a7b6e009a7d481eb40194edad"
+    },
+    "upsert": {
+      "kind": "t3-installed",
+      "path": "apps/web/src/rightPanelStore.ts",
+      "line": 309,
+      "symbol": "upsertSurface",
+      "claim": "Resource selection deduplicates tabs and opens the owning panel.",
+      "commit": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/rightPanelStore.ts#L309",
+      "line_sha256": "1a2dd2b87a77702a5971d52cca2384bdf34ccf9a2e8aaef442da0049bc90fea7"
+    },
+    "persist": {
+      "kind": "t3-installed",
+      "path": "apps/web/src/rightPanelStore.ts",
+      "line": 1187,
+      "symbol": "persist.partialize",
+      "claim": "Thread panel metadata persists; synthetic global PR workspace tabs are excluded.",
+      "commit": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/rightPanelStore.ts#L1187",
+      "line_sha256": "0d3d2f5a8b2fc178b4e5ab7eb9c8c886e2e08b03608f0bd3200c3fb76b4aec0c"
+    },
+    "close": {
+      "kind": "t3-installed",
+      "path": "apps/web/src/rightPanelStore.ts",
+      "line": 972,
+      "symbol": "closeSurface",
+      "claim": "Last-tab close clears visible panel; hidden panel and destroyed tab are different operations.",
+      "commit": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/rightPanelStore.ts#L972",
+      "line_sha256": "a1c2f7856089e39c3a72b5019eb4385a6006d3361786de3726c42d1699897bf8"
+    },
+    "closed": {
+      "kind": "t3-installed",
+      "path": "apps/web/src/rightPanelStore.ts",
+      "line": 1218,
+      "symbol": "closed-view subscription",
+      "claim": "Remember eligible closed surfaces; live browsers and terminals use resource-specific paths.",
+      "commit": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/rightPanelStore.ts#L1218",
+      "line_sha256": "3e656f37736f9233d32bd3abddfd8346e4fc52f1b510e983dec99f6268cd65d4"
+    },
+    "launcher": {
+      "kind": "t3-installed",
+      "path": "apps/web/src/components/RightPanelTabs.tsx",
+      "line": 1097,
+      "symbol": "addSurfaceActions",
+      "claim": "Common Add menu declares placement, letter shortcuts, capability reasons and handlers.",
+      "commit": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/RightPanelTabs.tsx#L1097",
+      "line_sha256": "a71ddb6e1dd04095cc569a99bbdb7fac6a21151491e38e71d30565cddd518dc4"
+    },
+    "empty": {
+      "kind": "t3-installed",
+      "path": "apps/web/src/components/RightPanelTabs.tsx",
+      "line": 1529,
+      "symbol": "RightPanelEmptyState branch",
+      "claim": "An empty panel is an actionable launcher, not the chat composer.",
+      "commit": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/RightPanelTabs.tsx#L1529",
+      "line_sha256": "743812dca95977e1582e38bd66c73a373d15c76eef86602061c861cf7b81ec90"
+    },
+    "tab_keys": {
+      "kind": "t3-installed",
+      "path": "apps/web/src/components/RightPanelTabs.tsx",
+      "line": 964,
+      "symbol": "PanelTab keyboard handler",
+      "claim": "Tab navigation has a keyboard-owned event path.",
+      "commit": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/RightPanelTabs.tsx#L964",
+      "line_sha256": "be1b5c4e09a901ceaddd03d34de2ccc14133b029d51f5d7a7a27cd2747a5ea7d"
+    },
+    "tab_overflow": {
+      "kind": "t3-installed",
+      "path": "apps/web/src/components/RightPanelTabs.tsx",
+      "line": 1069,
+      "symbol": "updateTabScrollState",
+      "claim": "Outer tabstrip measures overflow and exposes horizontal navigation.",
+      "commit": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/RightPanelTabs.tsx#L1069",
+      "line_sha256": "926eb11dd1a5f176575e6e942840ee05a1d5b783260122d233f274cda9540a06"
+    },
+    "release": {
+      "kind": "t3-installed",
+      "path": "apps/web/src/hooks/useRightPanelSurfaceClose.ts",
+      "line": 54,
+      "symbol": "releaseSurfaceResources",
+      "claim": "Closing releases browser/terminal resources; side chats delete only if unused.",
+      "commit": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/hooks/useRightPanelSurfaceClose.ts#L54",
+      "line_sha256": "30846873c34f872b536888c5066716f2d293c5ce65c7e5fde4a9ffda0697d13c"
+    },
+    "close_confirm": {
+      "kind": "t3-installed",
+      "path": "apps/web/src/hooks/useRightPanelSurfaceClose.ts",
+      "line": 137,
+      "symbol": "closeSurface",
+      "claim": "Single terminal-surface close has explicit confirmation and later resource release.",
+      "commit": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/hooks/useRightPanelSurfaceClose.ts#L137",
+      "line_sha256": "8f2d435b4f005993ce3f94c5f2a67a711dac45bd396b9be5738c3f5a50e5a257"
+    },
+    "pr_owner": {
+      "kind": "t3-installed",
+      "path": "apps/web/src/components/pullRequest/PullRequestsPage.tsx",
+      "line": 180,
+      "symbol": "rightPanelRef",
+      "claim": "Global PR workspace uses its synthetic owner rather than the active conversation.",
+      "commit": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/pullRequest/PullRequestsPage.tsx#L180",
+      "line_sha256": "ce936ae4e035e66903ee5b9996cce268772f098c3df95b67dad571a5f535768e"
+    },
+    "pr_select": {
+      "kind": "t3-installed",
+      "path": "apps/web/src/components/pullRequest/PullRequestsPage.tsx",
+      "line": 1123,
+      "symbol": "selectEntry",
+      "claim": "A list row carries explicit project, environment, repository, number and host.",
+      "commit": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/pullRequest/PullRequestsPage.tsx#L1123",
+      "line_sha256": "feb6ed95f8c3546f1e234e0a8c65f5d23aa3aa1fa8016242cc0a99af49412b90"
+    },
+    "pr_layout": {
+      "kind": "t3-installed",
+      "path": "apps/web/src/components/pullRequest/PullRequestsPage.tsx",
+      "line": 1495,
+      "symbol": "PullRequestsPage render",
+      "claim": "Global list/detail has direct inline panel and half-window default with its own key.",
+      "commit": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/pullRequest/PullRequestsPage.tsx#L1495",
+      "line_sha256": "f384a560ae4d5337eccc7844047383cd9b8afad74c35d65301676e6773de3fe9"
+    },
+    "pr_detail": {
+      "kind": "t3-installed",
+      "path": "apps/web/src/components/chat/RightPanelSurfaceContent.tsx",
+      "line": 120,
+      "symbol": "pull-request branch",
+      "claim": "Native detail receives explicit reference, selected subtab, reveal anchor and thread context.",
+      "commit": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/RightPanelSurfaceContent.tsx#L120",
+      "line_sha256": "258bc8db88cd37482b1716f4dd752c53a4ea496516a7f7484d1b5c607f5f614e"
+    },
+    "pr_list": {
+      "kind": "t3-installed",
+      "path": "apps/web/src/components/pullRequest/ThreadPullRequestsPanel.tsx",
+      "line": 364,
+      "symbol": "ThreadPullRequestsPanel",
+      "claim": "Linked list is a thread-owned, capability-gated surface with a real empty state.",
+      "commit": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/pullRequest/ThreadPullRequestsPanel.tsx#L364",
+      "line_sha256": "07e59ef0ad72e8cb472a4faa7e2f9246d09ef63479d90fa1386deecb67402369"
+    },
+    "pr_link": {
+      "kind": "t3-installed",
+      "path": "apps/web/src/components/pullRequest/ThreadPullRequestsPanel.tsx",
+      "line": 158,
+      "symbol": "linked row onClick",
+      "claim": "Linked PR row opens the target in its owning thread.",
+      "commit": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/pullRequest/ThreadPullRequestsPanel.tsx#L158",
+      "line_sha256": "90b7859da8a58c5481c0084ebde7f04138ff2ec5b5d2a015ec583c80091fef60"
+    },
+    "pr_tabs": {
+      "kind": "t3-installed",
+      "path": "apps/web/src/components/pullRequest/PullRequestDetailPanel.tsx",
+      "line": 1872,
+      "symbol": "detail tab content",
+      "claim": "Summary, Timeline and Code are detail subviews; visited tab content can remain mounted.",
+      "commit": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/pullRequest/PullRequestDetailPanel.tsx#L1872",
+      "line_sha256": "0ec33d387874d6d107d7b657c0843ca321f61bfad5ba0f9711b18b21086c12a4"
+    },
+    "files_dispatch": {
+      "kind": "t3-installed",
+      "path": "apps/web/src/components/chat/RightPanelSurfaceContent.tsx",
+      "line": 203,
+      "symbol": "files/file branch",
+      "claim": "Explorer and file selection share FilePreviewPanel with workspace and reveal request identity.",
+      "commit": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/RightPanelSurfaceContent.tsx#L203",
+      "line_sha256": "9e4d1d151b180d6d14aa72b5fe53f9e820431ba69139556d10794d3113eee5ce"
+    },
+    "file_open": {
+      "kind": "t3-installed",
+      "path": "apps/web/src/rightPanelStore.ts",
+      "line": 812,
+      "symbol": "openFile",
+      "claim": "Opening a file removes the standalone Files tab and upserts a resource tab.",
+      "commit": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/rightPanelStore.ts#L812",
+      "line_sha256": "926c05d0cdc5e2d3857c1061b1e59c07ef00605e33f437dedac6bb5476daf256"
+    },
+    "file_tree": {
+      "kind": "t3-installed",
+      "path": "apps/web/src/components/files/FilePreviewPanel.tsx",
+      "line": 1619,
+      "symbol": "FileExplorerPane branch",
+      "claim": "Explorer can coexist with selected file inside the resource view.",
+      "commit": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/files/FilePreviewPanel.tsx#L1619",
+      "line_sha256": "f869be4eef320610972d6d29b574776c048b8eea914e25c395c576b8be75e205"
+    },
+    "file_modes": {
+      "kind": "t3-installed",
+      "path": "apps/web/src/components/files/FilePreviewPanel.tsx",
+      "line": 1127,
+      "symbol": "revealHandled / rendered modes",
+      "claim": "Line reveals take precedence over incompatible rendered preferences; editability is capability-gated.",
+      "commit": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/files/FilePreviewPanel.tsx#L1127",
+      "line_sha256": "0ff5be47e8338e71904790dcaea906fe25302639d57181ee61f240b97eb44ae9"
+    },
+    "file_focus": {
+      "kind": "t3-installed",
+      "path": "apps/web/src/components/files/FilePreviewPanel.tsx",
+      "line": 1165,
+      "symbol": "focusEditorFromContent",
+      "claim": "Focus restores a real editor caret, not merely focus on its wrapper.",
+      "commit": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/files/FilePreviewPanel.tsx#L1165",
+      "line_sha256": "bf99fa25cef12a70c72bf38d31e7c026f7d1c5c775df13ac0245239d52fb99d0"
+    },
+    "file_render": {
+      "kind": "t3-installed",
+      "path": "apps/web/src/components/files/FilePreviewPanel.tsx",
+      "line": 1566,
+      "symbol": "file body dispatch",
+      "claim": "Rendered Markdown, source, editor and media/document modes have distinct bodies.",
+      "commit": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/files/FilePreviewPanel.tsx#L1566",
+      "line_sha256": "8514a67178f6c014145c8966b6aea57c59a9b4f8ac7835e936bc9887a56e84ff"
+    },
+    "file_save": {
+      "kind": "t3-installed",
+      "path": "apps/web/src/components/files/fileSaveSessions.ts",
+      "line": 139,
+      "symbol": "fileSaveSessions",
+      "claim": "Per-file save service uses a 500ms debounce and final-release flush.",
+      "commit": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/files/fileSaveSessions.ts#L139",
+      "line_sha256": "5e50770d2d1ced8eb8a72b63e5e98f7ff347d0b8327cccc61e483b85aed5b920"
+    },
+    "file_order": {
+      "kind": "t3-installed",
+      "path": "apps/web/src/components/files/fileSaveCoordinator.ts",
+      "line": 26,
+      "symbol": "FileSaveCoordinator.change",
+      "claim": "Ordered revisions coordinate pending edits and persistence.",
+      "commit": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/files/fileSaveCoordinator.ts#L26",
+      "line_sha256": "e156bcb77858b2babdb81451ed7ee96a5190efc58ca4d93a4917ef8e08a101a5"
+    },
+    "explorer_size": {
+      "kind": "t3-installed",
+      "path": "apps/web/src/components/files/FileExplorerPane.tsx",
+      "line": 16,
+      "symbol": "FileExplorerPane",
+      "claim": "Resizable explorer has separate saved width and keyboard-resizable separator.",
+      "commit": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/files/FileExplorerPane.tsx#L16",
+      "line_sha256": "7ae7cc848f758ee9b3e388185ac1721a4c74ab7f85702e0c94eef7f429124b9d"
+    },
+    "search_overlay": {
+      "kind": "t3-installed",
+      "path": "apps/web/src/components/CommandPalette.tsx",
+      "line": 361,
+      "symbol": "CommandPaletteDialog",
+      "claim": "Filename and content search are modal modes with focus restoration.",
+      "commit": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/CommandPalette.tsx#L361",
+      "line_sha256": "cc2ee3ec2d6e414ba2180950acc13552339dea0a52002331555841930c732003"
+    },
+    "search_match": {
+      "kind": "t3-installed",
+      "path": "apps/web/src/components/search/ProjectContentSearchDialog.tsx",
+      "line": 152,
+      "symbol": "openMatch",
+      "claim": "Close content search and open the exact file and line in the workspace.",
+      "commit": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/search/ProjectContentSearchDialog.tsx#L152",
+      "line_sha256": "34cd84a778c2768d1c5a3f760b1fc8a01a34ecd73dd1b730ea91deff656f0571"
+    },
+    "search_state": {
+      "kind": "t3-installed",
+      "path": "apps/web/src/components/search/ProjectContentSearchDialog.tsx",
+      "line": 111,
+      "symbol": "content search state",
+      "claim": "Query, match options and selection belong to the search dialog.",
+      "commit": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/search/ProjectContentSearchDialog.tsx#L111",
+      "line_sha256": "b5c8bd6f3fce47c4f70c3dca1dd91a010bbb883685e0f0251a48cfa0081a2a90"
+    },
+    "diff_dispatch": {
+      "kind": "t3-installed",
+      "path": "apps/web/src/components/chat/RightPanelSurfaceContent.tsx",
+      "line": 108,
+      "symbol": "diff branch",
+      "claim": "Diff embeds into the common workspace frame.",
+      "commit": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/RightPanelSurfaceContent.tsx#L108",
+      "line_sha256": "5870bdeade7181048c2dc088ba3d42feae74e5ae769624def1a96670caaca7d6"
+    },
+    "diff_scope": {
+      "kind": "t3-installed",
+      "path": "apps/web/src/components/DiffPanel.tsx",
+      "line": 283,
+      "symbol": "diffSelection",
+      "claim": "Git branch, unstaged, commit, turn and tool-call scopes are distinct source selections.",
+      "commit": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/DiffPanel.tsx#L283",
+      "line_sha256": "6feb1d46831b5fc9b3b72510419f740a2ce44a3144f7da4365d6ae9e2f7c0cde"
+    },
+    "diff_layout": {
+      "kind": "t3-installed",
+      "path": "apps/web/src/components/DiffPanel.tsx",
+      "line": 1177,
+      "symbol": "Diff layout",
+      "claim": "Shared client layout preference and separate wrapping control.",
+      "commit": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/DiffPanel.tsx#L1177",
+      "line_sha256": "a354511b2b40a9df87f2d191c3f81f024769155a676daf695d2ab6bc9b640ca8"
+    },
+    "diff_render": {
+      "kind": "t3-installed",
+      "path": "apps/web/src/components/DiffPanel.tsx",
+      "line": 1489,
+      "symbol": "diff options / FileExplorerPane",
+      "claim": "Split/unified code body, horizontal overflow and a resizable changed-file tree.",
+      "commit": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/DiffPanel.tsx#L1489",
+      "line_sha256": "39f7d2b38307807ea1417cfcea83b0896df1e81396bb0ebc5928f1e4bfb26f4b"
+    },
+    "drawer_mount": {
+      "kind": "t3-installed",
+      "path": "apps/web/src/components/ChatView.tsx",
+      "line": 3915,
+      "symbol": "ChatTerminalDrawers mount",
+      "claim": "Bottom drawer belongs to the conversation column independently of right-panel contents.",
+      "commit": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/ChatView.tsx#L3915",
+      "line_sha256": "db259bb9c6c77a1f09cd7b4a26360d2ad70de4e4dc9da0370ae754935f92eea6"
+    },
+    "drawer_retention": {
+      "kind": "t3-installed",
+      "path": "apps/web/src/components/chat/ChatTerminalDrawers.tsx",
+      "line": 41,
+      "symbol": "ChatTerminalDrawers",
+      "claim": "Keeps a bounded set of recently used drawer views mounted and scopes exit presence.",
+      "commit": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/ChatTerminalDrawers.tsx#L41",
+      "line_sha256": "d0a36f0776f4fc992b7cd215049d283a21510b82e174ccc6f3b15c63e54f0946"
+    },
+    "drawer_partition": {
+      "kind": "t3-installed",
+      "path": "apps/web/src/components/PersistentThreadTerminals.tsx",
+      "line": 124,
+      "symbol": "panelTerminalIds / drawerTerminalSessions",
+      "claim": "Panel-owned terminal IDs are excluded from drawer sessions.",
+      "commit": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/PersistentThreadTerminals.tsx#L124",
+      "line_sha256": "f657a1e797c6b45ae57b8a244f0a7991f804b6069ee3d2d66d6a5f763939747d"
+    },
+    "drawer_motion": {
+      "kind": "t3-installed",
+      "path": "apps/web/src/components/PersistentThreadTerminals.tsx",
+      "line": 241,
+      "symbol": "drawer grid",
+      "claim": "Drawer animates grid rows under the common motion gate.",
+      "commit": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/PersistentThreadTerminals.tsx#L241",
+      "line_sha256": "f384a560ae4d5337eccc7844047383cd9b8afad74c35d65301676e6773de3fe9"
+    },
+    "drawer_entry": {
+      "kind": "t3-installed",
+      "path": "apps/web/src/components/chat/useChatTerminalActions.ts",
+      "line": 137,
+      "symbol": "setTerminalOpen",
+      "claim": "Drawer visibility updates terminal UI state and requests drawer terminal focus.",
+      "commit": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/useChatTerminalActions.ts#L137",
+      "line_sha256": "d9d907cbe4e261cfd0c14e5f680711cd9acd6ed8910c975a1ede00ba562d3259"
+    },
+    "drawer_store": {
+      "kind": "t3-installed",
+      "path": "apps/web/src/terminalUiStateStore.ts",
+      "line": 769,
+      "symbol": "terminal UI persistence",
+      "claim": "Separate persisted per-thread terminal state includes drawer visibility, height and groups.",
+      "commit": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/terminalUiStateStore.ts#L769",
+      "line_sha256": "3e874b4ac8fc37d658f2412447a0a2f8244e3d5fa0c672d523e6abe6e391071b"
+    },
+    "terminal_add": {
+      "kind": "t3-installed",
+      "path": "apps/web/src/components/chat/useChatTerminalActions.ts",
+      "line": 330,
+      "symbol": "addTerminalSurface",
+      "claim": "Allocate and place terminal in a right-panel surface, then focus its actual terminal.",
+      "commit": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/useChatTerminalActions.ts#L330",
+      "line_sha256": "9f56dfa479f1176ceb3f888fa7ff0adea856245eaf154a303579fe5438d4403d"
+    },
+    "terminal_launch": {
+      "kind": "t3-installed",
+      "path": "apps/web/src/components/terminal/useThreadTerminalActions.ts",
+      "line": 73,
+      "symbol": "defaultLaunchLocation / launchTerminal",
+      "claim": "Terminal launch preserves intended project/worktree and session target identity.",
+      "commit": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/terminal/useThreadTerminalActions.ts#L73",
+      "line_sha256": "28ddfbcd526b41f3590db097dca931bb6f04cc2829105ed5a017ac270dde7a0d"
+    },
+    "terminal_panel": {
+      "kind": "t3-installed",
+      "path": "apps/web/src/components/PersistentThreadTerminals.tsx",
+      "line": 380,
+      "symbol": "PersistentThreadTerminalPanel",
+      "claim": "The same terminal renderer is hosted in panel mode with surface-owned split group.",
+      "commit": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/PersistentThreadTerminals.tsx#L380",
+      "line_sha256": "f384a560ae4d5337eccc7844047383cd9b8afad74c35d65301676e6773de3fe9"
+    },
+    "terminal_geometry": {
+      "kind": "t3-installed",
+      "path": "apps/web/src/components/ThreadTerminalDrawer.tsx",
+      "line": 1512,
+      "symbol": "terminal area and drawer bounds",
+      "claim": "Drawer owns an independent workspace focus area and height bounded by composer geometry.",
+      "commit": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/ThreadTerminalDrawer.tsx#L1512",
+      "line_sha256": "0a84000f02c89c1759dcc7fdb213bb41f4c7b28d4ff93f7eadd839cdcbb02978"
+    },
+    "terminal_close": {
+      "kind": "t3-installed",
+      "path": "apps/web/src/components/ThreadTerminalDrawer.tsx",
+      "line": 1691,
+      "symbol": "confirmCloseTerminal",
+      "claim": "Closing a pane confirms its terminal identity before the operation.",
+      "commit": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/ThreadTerminalDrawer.tsx#L1691",
+      "line_sha256": "8298f3292fe668c4636cff3996b1d5054a9f4cb778c89f19ff9c6ed414bd0c0e"
+    },
+    "terminal_mode": {
+      "kind": "t3-installed",
+      "path": "apps/web/src/components/ThreadTerminalDrawer.tsx",
+      "line": 1833,
+      "symbol": "terminal aside",
+      "claim": "Panel fills its parent; drawer owns border-top and independent height.",
+      "commit": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/ThreadTerminalDrawer.tsx#L1833",
+      "line_sha256": "f384a560ae4d5337eccc7844047383cd9b8afad74c35d65301676e6773de3fe9"
+    },
+    "side_host": {
+      "kind": "t3-installed",
+      "path": "apps/web/src/components/chat/SideChatPane.tsx",
+      "line": 45,
+      "symbol": "hostRightPanel effect",
+      "claim": "Embedded side chat routes tool opens to its parent workspace host.",
+      "commit": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/SideChatPane.tsx#L45",
+      "line_sha256": "deb1e75ab1abfbd235587e0f4ec95b173bf8da27a64ba229738086cc0176965d"
+    },
+    "side_embed": {
+      "kind": "t3-installed",
+      "path": "apps/web/src/components/chat/SideChatPane.tsx",
+      "line": 170,
+      "symbol": "embedded ChatView",
+      "claim": "Real conversation and composer render under separate background-thread/composer contexts.",
+      "commit": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/SideChatPane.tsx#L170",
+      "line_sha256": "00db1618f37f6c51a9f4cad897bfe293ff5b48393eb4186193f1b63c31301774"
+    },
+    "side_delete": {
+      "kind": "t3-installed",
+      "path": "apps/web/src/components/chat/SideChatPane.tsx",
+      "line": 93,
+      "symbol": "deleteSideChat",
+      "claim": "Delete explicitly confirms and clears history; ordinary Close has different lifetime.",
+      "commit": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/SideChatPane.tsx#L93",
+      "line_sha256": "4d3acda6495f331a936e6cce50b2da810867fc3a499936a3bbde4c487ff4669c"
+    },
+    "device": {
+      "kind": "t3-installed",
+      "path": "apps/web/src/components/device/DevicePanel.tsx",
+      "line": 50,
+      "symbol": "DevicePanel",
+      "claim": "Device identity/session and in-flight operations are scoped to environment/thread.",
+      "commit": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/device/DevicePanel.tsx#L50",
+      "line_sha256": "2f2a7d41fc70363eab066cd365b5384dadde33c8439d7868ec16e2e7ef96f611"
+    },
+    "device_setup": {
+      "kind": "t3-installed",
+      "path": "apps/web/src/components/device/DevicePanel.tsx",
+      "line": 203,
+      "symbol": "device setup branch",
+      "claim": "Unavailable/not-onboarded device surface becomes setup dialog, not browser emulation.",
+      "commit": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/device/DevicePanel.tsx#L203",
+      "line_sha256": "441766496c06328b47620707f65162cf48fd1c0d63a6183bce380b613ad6381e"
+    },
+    "browser_host": {
+      "kind": "t3-installed",
+      "path": "apps/web/src/components/chat/RightPanelSurfaceContent.tsx",
+      "line": 86,
+      "symbol": "preview branch",
+      "claim": "Browser session is embedded under one resource tab in the shared workspace.",
+      "commit": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/RightPanelSurfaceContent.tsx#L86",
+      "line_sha256": "eba991082dbfe7c748f4cb0d6482e5d43e8fd600231b82ad4420f2899d3d01a6"
+    },
+    "visibility_actions": {
+      "kind": "t3-installed",
+      "path": "apps/web/src/components/chat/useRightPanelActions.ts",
+      "line": 165,
+      "symbol": "closePreviewPanel",
+      "claim": "Resource-specific hide actions may hand browser/device to floating presentation.",
+      "commit": "1264c206aee0dce805d6279809118bc091f29d2f",
+      "url": "https://github.com/pingdotgg/t3code/blob/1264c206aee0dce805d6279809118bc091f29d2f/apps/web/src/components/chat/useRightPanelActions.ts#L165",
+      "line_sha256": "aaa99a11dfaf9e3e7bc810c90aaff956dd0d0299776d65a0d08683fa52a2c900"
+    },
+    "f_surface": {
+      "kind": "ferrite-source",
+      "path": "crates/ferrite-cockpit/src/cockpit/surfaces.rs",
+      "line": 28,
+      "symbol": "SurfaceId",
+      "claim": "Ferrite has shared outer tabs but Files and Browser are singleton hosts; PR identity is number only.",
+      "commit": "62947f91d5cd6ee494aaae9ed09d794a853e5bab",
+      "url": "/Users/josephwylie/Desktop/Projects/ferrite/crates/ferrite-cockpit/src/cockpit/surfaces.rs:28",
+      "line_sha256": "9ff4226629994a991532aaed0c7828d1dfb33f0069dd3ff587f2bc01ddda7a57",
+      "file_sha256": "205394d1e024b7bc983ab2f7ed9b372bf2e648c129ef846df36c6551c32d64af"
+    },
+    "f_state": {
+      "kind": "ferrite-source",
+      "path": "crates/ferrite-cockpit/src/cockpit/surfaces.rs",
+      "line": 88,
+      "symbol": "ThreadSurfaces",
+      "claim": "Per-thread active tab, width, maximize and remembered closed tabs.",
+      "commit": "62947f91d5cd6ee494aaae9ed09d794a853e5bab",
+      "url": "/Users/josephwylie/Desktop/Projects/ferrite/crates/ferrite-cockpit/src/cockpit/surfaces.rs:88",
+      "line_sha256": "08d774caacc828f23482b66eeb65be089ba92021b8ef113421a31422f37f0e96",
+      "file_sha256": "205394d1e024b7bc983ab2f7ed9b372bf2e648c129ef846df36c6551c32d64af"
+    },
+    "f_panel": {
+      "kind": "ferrite-source",
+      "path": "crates/ferrite-cockpit/src/cockpit/panel.rs",
+      "line": 550,
+      "symbol": "panel_element",
+      "claim": "Absolute right panel with shared outer strip and active body.",
+      "commit": "62947f91d5cd6ee494aaae9ed09d794a853e5bab",
+      "url": "/Users/josephwylie/Desktop/Projects/ferrite/crates/ferrite-cockpit/src/cockpit/panel.rs:550",
+      "line_sha256": "d6c844b4fccf2b06b339e85b581c19be559b2a2908e278ab0d98718eba88f3b3",
+      "file_sha256": "f95a3a9e7a7bae8b0f56fb108d2b7d283fd654b9d282dc1c0c8014546deca653"
+    },
+    "f_floor": {
+      "kind": "ferrite-source",
+      "path": "crates/ferrite-cockpit/src/cockpit/panel.rs",
+      "line": 149,
+      "symbol": "floor_w",
+      "claim": "Per-tool automatic minimums differ, including Files/Changes share of available window.",
+      "commit": "62947f91d5cd6ee494aaae9ed09d794a853e5bab",
+      "url": "/Users/josephwylie/Desktop/Projects/ferrite/crates/ferrite-cockpit/src/cockpit/panel.rs:149",
+      "line_sha256": "45982df87572da590a89e606c20bf6e365b587698a0655ba3412432fecc9f064",
+      "file_sha256": "f95a3a9e7a7bae8b0f56fb108d2b7d283fd654b9d282dc1c0c8014546deca653"
+    },
+    "f_tend": {
+      "kind": "ferrite-source",
+      "path": "crates/ferrite-cockpit/src/cockpit/panel.rs",
+      "line": 368,
+      "symbol": "tend_panel",
+      "claim": "Writes larger tool floor into saved thread width.",
+      "commit": "62947f91d5cd6ee494aaae9ed09d794a853e5bab",
+      "url": "/Users/josephwylie/Desktop/Projects/ferrite/crates/ferrite-cockpit/src/cockpit/panel.rs:368",
+      "line_sha256": "b828a31608e1831b958ff84ff3a8bbf7c848961c739b63b45758485a5c99be2c",
+      "file_sha256": "f95a3a9e7a7bae8b0f56fb108d2b7d283fd654b9d282dc1c0c8014546deca653"
+    },
+    "f_restore": {
+      "kind": "ferrite-source",
+      "path": "crates/ferrite-cockpit/src/cockpit/panel.rs",
+      "line": 130,
+      "symbol": "survives_restart",
+      "claim": "Restore excludes live Browser, terminal, side-chat and agent surfaces.",
+      "commit": "62947f91d5cd6ee494aaae9ed09d794a853e5bab",
+      "url": "/Users/josephwylie/Desktop/Projects/ferrite/crates/ferrite-cockpit/src/cockpit/panel.rs:130",
+      "line_sha256": "3ae51376a37a70325badce00e39f9a77d21c4a63697aa9f58751b4445993e084",
+      "file_sha256": "f95a3a9e7a7bae8b0f56fb108d2b7d283fd654b9d282dc1c0c8014546deca653"
+    },
+    "f_release": {
+      "kind": "ferrite-source",
+      "path": "crates/ferrite-cockpit/src/cockpit/panel.rs",
+      "line": 313,
+      "symbol": "release_surface",
+      "claim": "Close destroys tool-specific resource; side chat invokes close_side_tab.",
+      "commit": "62947f91d5cd6ee494aaae9ed09d794a853e5bab",
+      "url": "/Users/josephwylie/Desktop/Projects/ferrite/crates/ferrite-cockpit/src/cockpit/panel.rs:313",
+      "line_sha256": "5d9b546fca63253b1052411917d7b97c4f95d53a6ae41e77f1974c48d3bf3b9b",
+      "file_sha256": "f95a3a9e7a7bae8b0f56fb108d2b7d283fd654b9d282dc1c0c8014546deca653"
+    },
+    "f_dispatch": {
+      "kind": "ferrite-source",
+      "path": "crates/ferrite-cockpit/src/cockpit/panel.rs",
+      "line": 627,
+      "symbol": "surface_body",
+      "claim": "Actual rendered counterpart map for every Ferrite panel kind.",
+      "commit": "62947f91d5cd6ee494aaae9ed09d794a853e5bab",
+      "url": "/Users/josephwylie/Desktop/Projects/ferrite/crates/ferrite-cockpit/src/cockpit/panel.rs:627",
+      "line_sha256": "75c191a353b6b5040d1aee0c020fb863493f619bf119461078527d7ca60331d1",
+      "file_sha256": "f95a3a9e7a7bae8b0f56fb108d2b7d283fd654b9d282dc1c0c8014546deca653"
+    },
+    "f_launcher": {
+      "kind": "ferrite-source",
+      "path": "crates/ferrite-cockpit/src/cockpit/panel/strip.rs",
+      "line": 134,
+      "symbol": "opener_unavailable / run_opener",
+      "claim": "Plus/empty launcher routes through one surface opener and explains local-checkout gating.",
+      "commit": "62947f91d5cd6ee494aaae9ed09d794a853e5bab",
+      "url": "/Users/josephwylie/Desktop/Projects/ferrite/crates/ferrite-cockpit/src/cockpit/panel/strip.rs:134",
+      "line_sha256": "870d148292a60bb61d7c2632d69066ad8cd0c8cc2f8238612061e78fb30e128a",
+      "file_sha256": "c7e59ae787866379697e3319cc185a8982d85f904afd23870a3b91bfb2b7ab15"
+    },
+    "f_tools": {
+      "kind": "ferrite-source",
+      "path": "crates/ferrite-cockpit/src/cockpit/tools.rs",
+      "line": 43,
+      "symbol": "toggle_terminal",
+      "claim": "Cmd-J activates an existing right-panel terminal or creates one, not a bottom drawer.",
+      "commit": "62947f91d5cd6ee494aaae9ed09d794a853e5bab",
+      "url": "/Users/josephwylie/Desktop/Projects/ferrite/crates/ferrite-cockpit/src/cockpit/tools.rs:43",
+      "line_sha256": "0abdb3e6bf4bd72e930a1b5e8db419e1ed828556a6af55cebc441953984acd1d",
+      "file_sha256": "722c90d1c3dc6b1c3f5fd1acc5d5cef9bf17f6eb35e14b7b2c5bad82658ab7ef"
+    },
+    "f_files_state": {
+      "kind": "ferrite-source",
+      "path": "crates/ferrite-cockpit/src/cockpit/tools/files.rs",
+      "line": 89,
+      "symbol": "Files",
+      "claim": "Singleton Files keeps an independent inner file-tab vector and selected index.",
+      "commit": "62947f91d5cd6ee494aaae9ed09d794a853e5bab",
+      "url": "/Users/josephwylie/Desktop/Projects/ferrite/crates/ferrite-cockpit/src/cockpit/tools/files.rs:89",
+      "line_sha256": "a6e3afba20b2a1c52276811aaad96a9f8740128a811c3e4c95460fd9b64869ca",
+      "file_sha256": "1440e32c66d8e4cb86b35add67978df8ed94b586b3fc32c61032fb7fb329f1c8"
+    },
+    "f_files_open": {
+      "kind": "ferrite-source",
+      "path": "crates/ferrite-cockpit/src/cockpit/tools/files.rs",
+      "line": 159,
+      "symbol": "open_in_files",
+      "claim": "File opens and line reveals go into the nested Files state.",
+      "commit": "62947f91d5cd6ee494aaae9ed09d794a853e5bab",
+      "url": "/Users/josephwylie/Desktop/Projects/ferrite/crates/ferrite-cockpit/src/cockpit/tools/files.rs:159",
+      "line_sha256": "4ed204a0c439d097e60851d19ac5619c28891dcc8eab171c226731582349e153",
+      "file_sha256": "1440e32c66d8e4cb86b35add67978df8ed94b586b3fc32c61032fb7fb329f1c8"
+    },
+    "f_file_modes": {
+      "kind": "ferrite-source",
+      "path": "crates/ferrite-cockpit/src/cockpit/tools/files.rs",
+      "line": 201,
+      "symbol": "tab_body",
+      "claim": "UTF-8 text routes to prose or code; non-text is rejected rather than unified rich preview dispatch.",
+      "commit": "62947f91d5cd6ee494aaae9ed09d794a853e5bab",
+      "url": "/Users/josephwylie/Desktop/Projects/ferrite/crates/ferrite-cockpit/src/cockpit/tools/files.rs:201",
+      "line_sha256": "99feef7581bffaa15339c764050aadccde210d170bbd0845f56e44200298881c",
+      "file_sha256": "1440e32c66d8e4cb86b35add67978df8ed94b586b3fc32c61032fb7fb329f1c8"
+    },
+    "f_file_tabs": {
+      "kind": "ferrite-source",
+      "path": "crates/ferrite-cockpit/src/cockpit/tools/files.rs",
+      "line": 469,
+      "symbol": "Files inner strip",
+      "claim": "Inner tabs render separately from the shared outer strip.",
+      "commit": "62947f91d5cd6ee494aaae9ed09d794a853e5bab",
+      "url": "/Users/josephwylie/Desktop/Projects/ferrite/crates/ferrite-cockpit/src/cockpit/tools/files.rs:469",
+      "line_sha256": "b58336f8c0a3c177b14624bd4eb6fdf5714480131bdbf79011bb1528997e3869",
+      "file_sha256": "1440e32c66d8e4cb86b35add67978df8ed94b586b3fc32c61032fb7fb329f1c8"
+    },
+    "f_file_find": {
+      "kind": "ferrite-source",
+      "path": "crates/ferrite-cockpit/src/cockpit/tools/files.rs",
+      "line": 297,
+      "symbol": "go_to_file",
+      "claim": "Go to file exposes and focuses tree filter instead of a project-content search modal.",
+      "commit": "62947f91d5cd6ee494aaae9ed09d794a853e5bab",
+      "url": "/Users/josephwylie/Desktop/Projects/ferrite/crates/ferrite-cockpit/src/cockpit/tools/files.rs:297",
+      "line_sha256": "2f0600a6119662c427fdfaffb09e355fadc066c1b65ac99af939000a3a7796d0",
+      "file_sha256": "1440e32c66d8e4cb86b35add67978df8ed94b586b3fc32c61032fb7fb329f1c8"
+    },
+    "f_editor": {
+      "kind": "ferrite-source",
+      "path": "crates/ferrite-cockpit/src/cockpit/tools/editor.rs",
+      "line": 135,
+      "symbol": "Editor save",
+      "claim": "File write path is separate from the workspace preview reader.",
+      "commit": "62947f91d5cd6ee494aaae9ed09d794a853e5bab",
+      "url": "/Users/josephwylie/Desktop/Projects/ferrite/crates/ferrite-cockpit/src/cockpit/tools/editor.rs:135",
+      "line_sha256": "fcbc017acc78c76738b461d866c667715cc06845bec019742624c0507f507116",
+      "file_sha256": "9480f70c4ec756e9fc6cb061d55d798bcc0c40fa18c68bcd743b1a98657cd991"
+    },
+    "f_changes": {
+      "kind": "ferrite-source",
+      "path": "crates/ferrite-cockpit/src/cockpit/tools/changes.rs",
+      "line": 36,
+      "symbol": "Diff / scope model",
+      "claim": "Changes panel has its own scope and review state.",
+      "commit": "62947f91d5cd6ee494aaae9ed09d794a853e5bab",
+      "url": "/Users/josephwylie/Desktop/Projects/ferrite/crates/ferrite-cockpit/src/cockpit/tools/changes.rs:36",
+      "line_sha256": "39f5d8cece0d3a1508c23e82a15cfcfbbdd7ea64a1c1704734a95082b414cf2b",
+      "file_sha256": "a948736a850cb78b0c9dde425d0e1a948d3656eecec4e58cb6add5da36e1d87c"
+    },
+    "f_hunks": {
+      "kind": "ferrite-source",
+      "path": "crates/ferrite-cockpit/src/cockpit/panel/hunks.rs",
+      "line": 26,
+      "symbol": "MAX_LINES",
+      "claim": "Panel diff deliberately caps displayed rows at 120 per file.",
+      "commit": "62947f91d5cd6ee494aaae9ed09d794a853e5bab",
+      "url": "/Users/josephwylie/Desktop/Projects/ferrite/crates/ferrite-cockpit/src/cockpit/panel/hunks.rs:26",
+      "line_sha256": "ee87257989939a40b69a0df465aa1e762cff91bc232ae258a07a3c3f19633b65",
+      "file_sha256": "7cf0608ad913bd0c01698d410df90498c3487cb6c17898dbdd29739aa9e7d8fc"
+    },
+    "f_review": {
+      "kind": "ferrite-source",
+      "path": "crates/ferrite-cockpit/src/cockpit/beside.rs",
+      "line": 224,
+      "symbol": "open_review",
+      "claim": "Full review occupies a board reader slot and has independent focus, not a workspace tab.",
+      "commit": "62947f91d5cd6ee494aaae9ed09d794a853e5bab",
+      "url": "/Users/josephwylie/Desktop/Projects/ferrite/crates/ferrite-cockpit/src/cockpit/beside.rs:224",
+      "line_sha256": "086d4fee646878f356123408d70ce925019c3b2d12f09aaecfa36f43244f1300",
+      "file_sha256": "e9afbd5575311d33c846f295498bdbb820712e6783a3a12afbbe74241e90a0ca"
+    },
+    "f_review_motion": {
+      "kind": "ferrite-source",
+      "path": "crates/ferrite-cockpit/src/cockpit/beside.rs",
+      "line": 12,
+      "symbol": "ReviewSlot motion contract",
+      "claim": "Reader slot has its own documented open/close animation and restoration contract.",
+      "commit": "62947f91d5cd6ee494aaae9ed09d794a853e5bab",
+      "url": "/Users/josephwylie/Desktop/Projects/ferrite/crates/ferrite-cockpit/src/cockpit/beside.rs:12",
+      "line_sha256": "82ab855e8d968d3b536fb88eb57fa0323af7e5b30adbdfa8fe6c89ac9173ade8",
+      "file_sha256": "e9afbd5575311d33c846f295498bdbb820712e6783a3a12afbbe74241e90a0ca"
+    },
+    "f_review_search": {
+      "kind": "ferrite-source",
+      "path": "crates/ferrite-cockpit/src/review.rs",
+      "line": 1175,
+      "symbol": "open_search",
+      "claim": "Repository review search is an existing separate presentation; it is not Files explorer search.",
+      "commit": "62947f91d5cd6ee494aaae9ed09d794a853e5bab",
+      "url": "/Users/josephwylie/Desktop/Projects/ferrite/crates/ferrite-cockpit/src/review.rs:1175",
+      "line_sha256": "fa476f6eb22c62680206d17bd7143c22a214ab026b2557ad4df86ceac37875a1",
+      "file_sha256": "927a6c53bcea861c5f8fc9f85d63ee292b19634706c3f1328363a86ec28db884"
+    },
+    "f_terminal": {
+      "kind": "ferrite-source",
+      "path": "crates/ferrite-cockpit/src/cockpit/tools/terminal.rs",
+      "line": 93,
+      "symbol": "new_terminal_surface",
+      "claim": "Native PTY creates one panel tab per shell; spawn failure returns without visible surface.",
+      "commit": "62947f91d5cd6ee494aaae9ed09d794a853e5bab",
+      "url": "/Users/josephwylie/Desktop/Projects/ferrite/crates/ferrite-cockpit/src/cockpit/tools/terminal.rs:93",
+      "line_sha256": "d0519cd92a306ec6883552cf4a12f7569802135e9573c859b7e9c977af675b9a",
+      "file_sha256": "88793c5fdf9f4e4b327eacbc08a778240bce6b145bbf28ef091d702560920c15"
+    },
+    "f_terminal_focus": {
+      "kind": "ferrite-source",
+      "path": "crates/ferrite-cockpit/src/cockpit/tools/terminal.rs",
+      "line": 200,
+      "symbol": "tend_terminal",
+      "claim": "Terminal has a real delayed focus handoff.",
+      "commit": "62947f91d5cd6ee494aaae9ed09d794a853e5bab",
+      "url": "/Users/josephwylie/Desktop/Projects/ferrite/crates/ferrite-cockpit/src/cockpit/tools/terminal.rs:200",
+      "line_sha256": "257c5953f8297db64f938a1f5fc0614e4ecd45312cc9141100ded157a97ca500",
+      "file_sha256": "88793c5fdf9f4e4b327eacbc08a778240bce6b145bbf28ef091d702560920c15"
+    },
+    "f_side": {
+      "kind": "ferrite-source",
+      "path": "crates/ferrite-cockpit/src/cockpit/side_chat.rs",
+      "line": 169,
+      "symbol": "open_side_chat",
+      "claim": "Side chat is a panel tool with backing fork and own composer.",
+      "commit": "62947f91d5cd6ee494aaae9ed09d794a853e5bab",
+      "url": "/Users/josephwylie/Desktop/Projects/ferrite/crates/ferrite-cockpit/src/cockpit/side_chat.rs:169",
+      "line_sha256": "a1ca2dd5c8b9bd1187fb63b050981f6f1b006b69f2691dfe505c1fcb2db55512",
+      "file_sha256": "15c9371a17f092aa0d8d34b6a5ee8c1372d7187c8df9ca558100000ed2cfc0eb"
+    },
+    "f_side_close": {
+      "kind": "ferrite-source",
+      "path": "crates/ferrite-cockpit/src/cockpit/side_chat.rs",
+      "line": 308,
+      "symbol": "close_side_tab",
+      "claim": "Ordinary tab close removes side-chat state and retires its backing thread.",
+      "commit": "62947f91d5cd6ee494aaae9ed09d794a853e5bab",
+      "url": "/Users/josephwylie/Desktop/Projects/ferrite/crates/ferrite-cockpit/src/cockpit/side_chat.rs:308",
+      "line_sha256": "85c5ef196a89d70681dd09a2c3a544810ecb5c504befedb49e1fca53e14e53ae",
+      "file_sha256": "15c9371a17f092aa0d8d34b6a5ee8c1372d7187c8df9ca558100000ed2cfc0eb"
+    },
+    "f_pr_entry": {
+      "kind": "ferrite-source",
+      "path": "crates/ferrite-cockpit/src/cockpit.rs",
+      "line": 1827,
+      "symbol": "open_pr",
+      "claim": "Common PR opener sends URL to browser action.",
+      "commit": "62947f91d5cd6ee494aaae9ed09d794a853e5bab",
+      "url": "/Users/josephwylie/Desktop/Projects/ferrite/crates/ferrite-cockpit/src/cockpit.rs:1827",
+      "line_sha256": "67e715357e11f9b4f0ed58d9620d3317a3aed44bd2adb5fb3e14bde56323e481",
+      "file_sha256": "5d93de49ceee4ff3ec58bb1447bcb5267d4940b9b560bbd50945e5c264f7e804"
+    },
+    "f_pr_detail": {
+      "kind": "ferrite-source",
+      "path": "crates/ferrite-cockpit/src/cockpit/panel/pull_request.rs",
+      "line": 453,
+      "symbol": "pr_surface",
+      "claim": "Native PR detail exists behind a separate entry path.",
+      "commit": "62947f91d5cd6ee494aaae9ed09d794a853e5bab",
+      "url": "/Users/josephwylie/Desktop/Projects/ferrite/crates/ferrite-cockpit/src/cockpit/panel/pull_request.rs:453",
+      "line_sha256": "d8ae0fe362ef425ca02d22241dda1059393ee85e2ca201aef15eebe9a6426fa4",
+      "file_sha256": "2feae82d7def613841d3d629014696b4b2f4a5f5d577a1304407f9c0cec66d5d"
+    },
+    "f_focus": {
+      "kind": "ferrite-source",
+      "path": "crates/ferrite-cockpit/src/cockpit.rs",
+      "line": 10220,
+      "symbol": "root focus ownership",
+      "claim": "Current focus reconciliation must be considered with Files native-control ownership.",
+      "commit": "62947f91d5cd6ee494aaae9ed09d794a853e5bab",
+      "url": "/Users/josephwylie/Desktop/Projects/ferrite/crates/ferrite-cockpit/src/cockpit.rs:10220",
+      "line_sha256": "5c3355b6e39f98d593a6aede2b753180ffcb2d04da5e1572c143c53822d8b0bf",
+      "file_sha256": "5d93de49ceee4ff3ec58bb1447bcb5267d4940b9b560bbd50945e5c264f7e804"
+    }
+  },
+  "surfaces": [
+    {
+      "id": "WS-01",
+      "title": "Workspace frame and geometry",
+      "contract": {
+        "purpose": "Keep a usable conversation beside a predictable thread-owned tool destination.",
+        "placement": "ChatRightPanel is a sibling of the chat column. PreviewPanelShell owns divider, visibility and workspace region. The floating thread-details card is a separate surface.",
+        "entry": "Panel toggle, resource open, tab selection and maximize/restore. Explicit user actions request destination focus; automatic reveals have a separate revision boundary.",
+        "coexistence": "Inline tools share the row with conversation and navigation. Maximize reduces chat to zero width and makes it inert; bottom terminal is independently inside the chat column.",
+        "focus": "Named regions support F 6 and remembered focus. Collapse moves focus before making hidden content inert.",
+        "motion": "Shared presence retains same-thread exit content and cancels on reopen. Width transitions apply to visibility, not unrelated width changes. Installed duration defaults to zero; reduced motion and route suppression gate it.",
+        "lifetime": "Hide retains tab identity. Close releases resources by kind. A visually hidden surface is not necessarily a stopped process.",
+        "persistence": "Thread width defaults to 540 CSS px, minimum 360, with viewport/sibling caps. Drag commits width; temporary clamping is separate.",
+        "responsive": "Chat uses a right sheet at max-width 980 unless maximized. Sheet has its own 760 px rule. This is not the standalone PR responsive path."
+      },
+      "t3_source_anchor_ids": [
+        "host",
+        "mount",
+        "maximize",
+        "shell",
+        "shell_focus",
+        "shell_motion",
+        "size",
+        "resize",
+        "breakpoint",
+        "sheet",
+        "sheet_motion",
+        "motion",
+        "presence",
+        "focus",
+        "focus_open"
+      ],
+      "ferrite_source_anchor_ids": [
+        "f_panel",
+        "f_floor",
+        "f_tend",
+        "f_state",
+        "f_dispatch"
+      ],
+      "runtime": {
+        "owner": "parent; no new runtime by this worker",
+        "observed": [
+          "T3 maximize/restore and browser hide/reopen retaining tab and draft were observed.",
+          "Ferrite Overview 320 px became 864 px after Files/Changes without divider input and remained wide through recorded return/closure/restart."
+        ],
+        "not_verified": [
+          "T3 right-panel interpolation, F 6, deliberate resize persistence and narrow geometry are unexecuted.",
+          "Only T3 left-sidebar closing interpolation at 400 ms was observed; settled Ferrite headless images cannot certify motion."
+        ]
+      },
+      "ferrite": {
+        "actual_counterpart": "Ferrite has a common absolute right panel and per-thread tab/width/maximize state. tend_panel writes a larger surface floor into that saved width.",
+        "misplaced_or_incomplete_substitute": "Shared component presence does not establish coherent geometry. Floors, nav auto-fold and persistence produced the oversized reopen. Overview also places thread metadata in the workspace location."
+      },
+      "prior_audit_coverage": [
+        "panel-tools-018; panel-runtime-correction.md upgrades the width ratchet to runtime.",
+        "input-focus-003/004/005 and motion findings retain their own evidence levels."
+      ],
+      "omitted_production_requirements": [
+        "Separate chosen width from temporary minima and verify return after each wide tool.",
+        "Capture conversation, nav and tool geometry together at narrow widths.",
+        "Verify focus and hit targets through hide, maximize, thread switch and rapid reversal."
+      ]
+    },
+    {
+      "id": "WS-02",
+      "title": "Resource tabs and launcher",
+      "contract": {
+        "purpose": "Give each resource one owner, title, activation and close/recovery contract.",
+        "placement": "RightPanelTabs supplies shared outer strip, add menu, empty launcher and content body.",
+        "entry": "Add panel surface, empty launcher, resource links and reopen converge on the surface store; disabled actions explain capability reasons.",
+        "coexistence": "One tool body is active. Other resource sessions may continue while their tabs are inactive.",
+        "focus": "Tabs have keyboard handlers and overflow reveal. Enter in the launcher belongs to its selection, never an unrelated composer.",
+        "motion": "Uses common frame motion; tab overflow navigation is separate from open/close interpolation.",
+        "lifetime": "Hide, selected close, close others/all and reopen differ. Browser and terminal resource release is specialized.",
+        "persistence": "Thread metadata persists in a versioned store; synthetic global PR tabs are excluded. Metadata persistence does not prove process survival.",
+        "responsive": "Inline and sheet hosts share the strip. Overflow must keep active tabs and close controls reachable."
+      },
+      "t3_source_anchor_ids": [
+        "surfaces",
+        "state",
+        "upsert",
+        "persist",
+        "close",
+        "closed",
+        "launcher",
+        "empty",
+        "tab_keys",
+        "tab_overflow",
+        "release",
+        "close_confirm"
+      ],
+      "ferrite_source_anchor_ids": [
+        "f_surface",
+        "f_state",
+        "f_launcher",
+        "f_release",
+        "f_restore",
+        "f_file_tabs"
+      ],
+      "runtime": {
+        "owner": "parent; no new runtime by this worker",
+        "observed": [
+          "T3 launcher exposed Browser, Terminal, Files, Diff, Pull request, Linked pull requests, Device and Side chat; selected opens are recorded separately.",
+          "Ferrite launcher Enter submitted PANEL_ENTER_SENTINEL to the provider; the selected Files opener did not open.",
+          "Ferrite 18 kept inner Files tabs clipped strip controls beyond the window."
+        ],
+        "not_verified": [
+          "T3 every launcher letter, unavailable state, drag, bulk close, overflow and restart variant were not run."
+        ]
+      },
+      "ferrite": {
+        "actual_counterpart": "Ferrite has deduplicated outer tabs, close-family methods, reopen metadata and explanatory plus-menu rows.",
+        "misplaced_or_incomplete_substitute": "Files and Browser add inner tab hierarchies under singleton outer tabs. Outer-strip tests cannot certify their inner close/overflow behavior. A working letter shortcut does not rescue misrouted Enter."
+      },
+      "prior_audit_coverage": [
+        "input-focus-002 runtime-interactions.md; panel-tools-005/006; files-runtime-correction.md."
+      ],
+      "omitted_production_requirements": [
+        "Define resource and close target at each tab level; justify any nesting.",
+        "Test pointer/Enter/Escape/modifiers with a protected unsent draft.",
+        "Verify overflow, active reveal and recovery across both outer and retained inner tab systems."
+      ]
+    },
+    {
+      "id": "WS-03",
+      "title": "Standalone Pull requests workspace",
+      "contract": {
+        "purpose": "Browse and filter PRs independently of the selected conversation.",
+        "placement": "Dedicated /pull-requests route keeps app sidebar and owns list plus native detail tabs under a synthetic panel owner.",
+        "entry": "Global utility entry loads saved filters. Row selection carries explicit environment/project/host/repository/number; Escape returns to prior thread.",
+        "coexistence": "List and detail share the main row independently of thread tool tabs.",
+        "focus": "Route entry requests its own workspace region; page-specific close/toggle shortcuts honor palette boundaries.",
+        "motion": "Uses shared presence/shell. No standalone PR interpolation was captured.",
+        "lifetime": "Global detail tabs belong to this workspace, not the selected thread. Leaving the route and closing a detail are different actions.",
+        "persistence": "List preferences and width have separate keys. Synthetic PR tabs are explicitly excluded from thread-panel persistence.",
+        "responsive": "Page directly renders mode=inline with half-window default and its own width key. Chat's 980 px sheet behavior does not apply; narrow PR composition needs its own check."
+      },
+      "t3_source_anchor_ids": [
+        "pr_owner",
+        "pr_select",
+        "pr_layout",
+        "persist",
+        "focus_open"
+      ],
+      "ferrite_source_anchor_ids": [
+        "f_surface",
+        "f_pr_entry",
+        "f_pr_detail"
+      ],
+      "runtime": {
+        "owner": "parent; no new runtime by this worker",
+        "observed": [
+          "T3 global entry loaded real authored rows; Merged changed route/results; Escape returned to the thread and reopen retained Merged.",
+          "Plain ferrite search and PR #246 detail were observed. Cleanup restored empty query, Open and All."
+        ],
+        "not_verified": [
+          "Other filters, pagination, global-tab restart and narrow layout were not executed.",
+          "Installed parser deliberately ignores repo: qualification; mixed results were not certified as a new runtime defect."
+        ]
+      },
+      "ferrite": {
+        "actual_counterpart": "Ferrite has branch PR facts, native detail and browser routes. No equivalent global list destination was identified in the traced audit.",
+        "misplaced_or_incomplete_substitute": "Native detail or a GitHub page does not substitute for an independently navigable PR workspace. Earlier treatment of the inbox as optional must be reconciled with the user's explicit PRs-view complaint."
+      },
+      "prior_audit_coverage": [
+        "pr-navigation-03; t3-pr-live-source-match.md cases 01\u201304."
+      ],
+      "omitted_production_requirements": [
+        "Make the global entry reach its intended usable destination.",
+        "Keep list scope independent from explicit detail target and restore prior draft on return.",
+        "Exercise narrow list/detail, empty/loading/error and selected-target removal."
+      ]
+    },
+    {
+      "id": "WS-04",
+      "title": "Linked PR list and thread-native detail",
+      "contract": {
+        "purpose": "Read a thread's associated PRs and an explicit PR target beside its conversation.",
+        "placement": "Linked pull requests is its own thread list surface; a selected target opens native detail with Summary/Guide/Timeline/Code subviews.",
+        "entry": "Linked row, sidebar badge, Add Pull request and Add Linked pull requests. Cross-thread badge must activate the same owner receiving panel state.",
+        "coexistence": "Detail stays beside chat; subtabs belong inside one PR resource, while multiple PR targets are outer tabs.",
+        "focus": "Detail shortcuts require the visible active resource. Location-specific right-click behavior must be tested separately.",
+        "motion": "Inherits frame motion. Mounted invisible detail content is not proof of visible content or a screen-reader defect.",
+        "lifetime": "Last-tab close hides the panel; badge upserts the explicit target. Link/unlink association is independent of checkout or remote mutation.",
+        "persistence": "PR metadata includes project/repository/host/number and subtab. PR Code file-tree preference is global, so closing cannot restore it.",
+        "responsive": "Chat-hosted detail uses inline/sheet; global-page detail uses that page's different inline path."
+      },
+      "t3_source_anchor_ids": [
+        "pr_detail",
+        "pr_list",
+        "pr_link",
+        "pr_tabs",
+        "surfaces",
+        "close",
+        "upsert"
+      ],
+      "ferrite_source_anchor_ids": [
+        "f_pr_entry",
+        "f_pr_detail",
+        "f_surface"
+      ],
+      "runtime": {
+        "owner": "parent; no new runtime by this worker",
+        "observed": [
+          "T3 linked PR #246 to Calculator; with another Sonnet thread selected, the badge activated Calculator and opened correct native merged detail.",
+          "Close/reopen and local unlink were observed. Sidebar badge right-click opened thread actions, without Open PR.",
+          "Ferrite cross-thread badge failed; same-thread badge opened Browser; Overview reached working native Summary/Timeline."
+        ],
+        "not_verified": [
+          "Multiple-linked list, errors, modifiers and every lifecycle remain unexecuted.",
+          "T3 same-identity freshness was not tested; Ferrite stale refresh is independently reproduced."
+        ]
+      },
+      "ferrite": {
+        "actual_counterpart": "Ferrite has native detail, but common open_pr routes to Browser and its surface identity is only a PR number within thread context.",
+        "misplaced_or_incomplete_substitute": "Underlining or changing a hidden B panel while A stays selected is not navigation. A branch-bound read cannot stand in for the clicked explicit PR."
+      },
+      "prior_audit_coverage": [
+        "pr-navigation-01/02/04; pr-entry-runtime-correction.md; pr-operations-001."
+      ],
+      "omitted_production_requirements": [
+        "Assert selected thread/project/repository/number/tab and loaded visible body after the rendered click.",
+        "Keep native open, external open, association and remote action distinct.",
+        "Refresh changed comments/body/checks without changing PR identity; reopen is not the same test."
+      ]
+    },
+    {
+      "id": "WS-05",
+      "title": "Files explorer and file resource tabs",
+      "contract": {
+        "purpose": "Navigate the actual workspace without losing conversation or file location.",
+        "placement": "Files/file share FilePreviewPanel. Explorer fills the body alone or forms a resizable column beside a selected file; files use outer resource tabs.",
+        "entry": "Add Files, tree selection, file link and search result. openFile removes the standalone Files placeholder, deduplicates path and increments reveal identity.",
+        "coexistence": "Explorer and file coexist inside the active resource view; other files remain shared tabs.",
+        "focus": "Tree selection/Enter can focus the editor. Explorer filter owns its text; path/line reveal must reach the intended file.",
+        "motion": "Frame motion is shared; explorer divider follows input. No file-opening animation was measured.",
+        "lifetime": "Body switching and pending saves have separate lifetimes. Workspace mutations and revisits must refresh clean state.",
+        "persistence": "Resource metadata persists with the thread. Explorer has separate saved width, default 256 px; tab persistence does not imply all tree state persists.",
+        "responsive": "Explorer resizes independently when a file is selected. Chat's sheet does not alone prove the inner columns remain usable."
+      },
+      "t3_source_anchor_ids": [
+        "files_dispatch",
+        "file_open",
+        "file_tree",
+        "explorer_size",
+        "file_focus"
+      ],
+      "ferrite_source_anchor_ids": [
+        "f_files_state",
+        "f_files_open",
+        "f_file_tabs",
+        "f_file_find",
+        "f_restore"
+      ],
+      "runtime": {
+        "owner": "parent; no new runtime by this worker",
+        "observed": [
+          "T3 opened README source/rendered and followed long-guide.md into another tab.",
+          "Ferrite same-tab revisit retained stale Markdown; expanded tree missed added/deleted children;18 kept tabs clipped inner strip controls."
+        ],
+        "not_verified": [
+          "T3 large tree, rename/delete, mutation refresh, file overflow and restart were not run.",
+          "Ferrite dirty-buffer recovery was not established through controls because typing focus failed."
+        ]
+      },
+      "ferrite": {
+        "actual_counterpart": "Ferrite singleton Files has its own Vec<Tab>, active index, preview promotion and tree, separate from SurfaceId::File previews.",
+        "misplaced_or_incomplete_substitute": "Nested tabs bypass common outer-strip behavior. The same path can get different editing, preview and line handling depending on entry."
+      },
+      "prior_audit_coverage": [
+        "panel-tools-003/005/006; files-runtime-correction.md; input-focus-010."
+      ],
+      "omitted_production_requirements": [
+        "Unify resource ownership across tree/link/search/attachment entry.",
+        "Check external mutation and clean-buffer revisit during agent work.",
+        "Keep tab/close controls reachable through many files, switching and restart."
+      ]
+    },
+    {
+      "id": "WS-06",
+      "title": "Source, rendered documents and media",
+      "contract": {
+        "purpose": "Show the same file as editable source or accurate preview, with trustworthy save state.",
+        "placement": "FilePreviewPanel dispatches editor/source, Markdown, table, Mermaid, browser-backed HTML/PDF and document/media bodies; attachments retain distinct identity.",
+        "entry": "Rendered/source toggle and line reveal. Requested source line overrides incompatible rendering preference until handled.",
+        "coexistence": "Modes share file identity; explorer remains where supported. A document preview is not automatically an editable text buffer.",
+        "focus": "Editor establishes a caret and owns typing/Find. Rendered-content Find is a separate unresolved behavior; read-only/truncated state must be explicit.",
+        "motion": "Uses frame lifecycle. Loading/read-error/pending-save geometry needs checking independently of panel motion.",
+        "lifetime": "Per-file save sessions serialize revisions, debounce 500 ms and flush final release. This is source support, not proof of every conflict recovery.",
+        "persistence": "Rendered preferences may be global; save coordination is environment/cwd/file scoped, while resource tabs are thread scoped.",
+        "responsive": "Wrap, horizontal scrolling, tables and media have inner bounds beyond the outer sheet contract."
+      },
+      "t3_source_anchor_ids": [
+        "file_modes",
+        "file_render",
+        "file_focus",
+        "file_save",
+        "file_order",
+        "files_dispatch"
+      ],
+      "ferrite_source_anchor_ids": [
+        "f_file_modes",
+        "f_editor",
+        "f_files_open",
+        "f_dispatch"
+      ],
+      "runtime": {
+        "owner": "parent; no new runtime by this worker",
+        "observed": [
+          "T3 source/rendered Markdown, source Find and reversible on-disk edit were verified. Autosave prevents attributing writes specifically to Command-S.",
+          "Ferrite editor/filter typing reached the main composer."
+        ],
+        "not_verified": [
+          "Rendered Find, media formats, failed save, immediate-close save and external conflicts remain unexecuted.",
+          "Ferrite dirty-save/error variants were not tested through a real dirty buffer."
+        ]
+      },
+      "ferrite": {
+        "actual_counterpart": "Ferrite Code/Prose/Unshown branches send rich prose directly to a reader and reject non-UTF 8; other preview paths support richer content.",
+        "misplaced_or_incomplete_substitute": "An image lightbox elsewhere does not certify opening the image from Files. Read-only prose without source/line navigation is not an editable document counterpart."
+      },
+      "prior_audit_coverage": [
+        "panel-tools-001/002/007/008 source findings; runtime-interactions.md focus result; t3-files-terminal-live-source-match.md FILES 02/03/05."
+      ],
+      "omitted_production_requirements": [
+        "Use consistent identity and dispatch across entry points; show unsupported formats clearly.",
+        "Retain dirty/pending/error state until disk confirmation; preserve text across recoverable failure.",
+        "Test editor, explorer, rendered content, browser and composer shortcuts with a protected draft."
+      ]
+    },
+    {
+      "id": "WS-07",
+      "title": "Project content search and filename palette",
+      "contract": {
+        "purpose": "Find a file or matching source line across the intended workspace.",
+        "placement": "CommandPalette has files and content modal modes. ProjectContentSearchDialog is distinct from tree filtering and thread Find.",
+        "entry": "Content shortcut/palette action opens workspace search; selecting a current readable match closes it and opens exact file+line.",
+        "coexistence": "Modal overlays workspace; destination becomes an ordinary resource tab, not another persistent reader.",
+        "focus": "Search input/result selection owns keys. Cancel restores prior owner; navigation hands focus to its destination. Modal boundaries contain traversal.",
+        "motion": "Dialog lifecycle is separate from panel width motion; interpolation was not measured.",
+        "lifetime": "Query/options/selection are dialog state. Superseded async results must not open a previous workspace.",
+        "persistence": "Search state is not file-tab metadata or rendered-mode preference; restart retention is not claimed.",
+        "responsive": "Modal bounds/result window need separate long-path, small-width and large-result checks."
+      },
+      "t3_source_anchor_ids": [
+        "search_overlay",
+        "search_match",
+        "search_state",
+        "focus_boundary"
+      ],
+      "ferrite_source_anchor_ids": [
+        "f_file_find",
+        "f_tools",
+        "f_review_search",
+        "f_review"
+      ],
+      "runtime": {
+        "owner": "parent; no new runtime by this worker",
+        "observed": [
+          "T3 content search returned 82 matches in 3 files; README line 8 opened source. Exact highlight geometry was not measured."
+        ],
+        "not_verified": [
+          "Invalid regex, stale-query cancellation, inaccessible workspace and every filename-picker path were unexecuted.",
+          "Ferrite separate Review search was not runtime checked."
+        ]
+      },
+      "ferrite": {
+        "actual_counterpart": "Ferrite has filename filtering in Files and repository content search in its separate Review reader.",
+        "misplaced_or_incomplete_substitute": "Command-Shift-F opening a filename filter is not content search. Review search existing elsewhere does not prove the expected global entry or file handoff."
+      },
+      "prior_audit_coverage": [
+        "input-focus-009/010; t3-files-terminal-live-source-match.md FILES 04. Cross-surface search ownership was not an explicit earlier repair unit."
+      ],
+      "omitted_production_requirements": [
+        "Distinguish current-file, thread, filename and project-content search in labels and dispatch.",
+        "Open a known offscreen match and assert file, line, content and focus.",
+        "Replace/cancel query or workspace mid-read and reject stale activation."
+      ]
+    },
+    {
+      "id": "WS-08",
+      "title": "Diff workspace versus separate Review reader",
+      "contract": {
+        "purpose": "Read the intended complete change set with scope and review meaning intact.",
+        "placement": "T3 Diff embeds into common workspace with scope selector, code and file tree. PR Code is a separate PR-specific body.",
+        "entry": "Add Diff selects branch scope; other paths select turn, commit, unstaged or tool-call scope.",
+        "coexistence": "Diff stays beside chat; inner tree/code share one resource while selected scope is separate state.",
+        "focus": "Scope, file/code navigation and selection own their input; reveal should yield to manual navigation.",
+        "motion": "Workspace motion applies. Ferrite's separate Review reader already has its own animated slot contract; not all Ferrite motion is absent.",
+        "lifetime": "Data and reviewed revision require mutation refresh. A renderer's existence does not prove complete rows or visible stage errors.",
+        "persistence": "Selected scope has its own store; Split/Stacked is client preference, tree visibility its own key, wrapping local state.",
+        "responsive": "Separate resizable tree and unwrapped horizontal code scrolling still need narrow geometry checks."
+      },
+      "t3_source_anchor_ids": [
+        "diff_dispatch",
+        "diff_scope",
+        "diff_layout",
+        "diff_render"
+      ],
+      "ferrite_source_anchor_ids": [
+        "f_changes",
+        "f_hunks",
+        "f_review",
+        "f_review_motion",
+        "f_review_search"
+      ],
+      "runtime": {
+        "owner": "parent; no new runtime by this worker",
+        "observed": [
+          "T3 PR Code showed actual diff, Split/tree and explicit partial-data warning; this was not every ordinary Diff scope.",
+          "Ferrite long fixture showed+160/-160 and first hunk; source caps panel at 120 rows. Scrolling to omission notice was not established."
+        ],
+        "not_verified": [
+          "Ordinary T3 turn/commit/unstaged/tool-call and remote review/stage mutations were unexecuted.",
+          "Ferrite full Review reader stayed unchecked in the Files correction."
+        ]
+      },
+      "ferrite": {
+        "actual_counterpart": "Ferrite has Changes panel and richer ReviewView in a distinct board reader slot: Solo splits Pane|review; group/fullscreen splits the pane cell, with independent focus/closure.",
+        "misplaced_or_incomplete_substitute": "A richer reader elsewhere does not repair expected Changes-panel truncation. Conversely, that reader exists and should not be reimplemented because the panel is shallow."
+      },
+      "prior_audit_coverage": [
+        "panel-tools-009\u2013014; files-runtime-correction.md. Initial audit excluded the full Review slot and its relationship to panel entry."
+      ],
+      "omitted_production_requirements": [
+        "Choose a primary review presentation and make entries reach it with explicit scope.",
+        "Read the final long-patch line and disclose partial data accurately.",
+        "Tie reviewed marks/drafts to revision and surface stage/refresh errors."
+      ]
+    },
+    {
+      "id": "WS-09",
+      "title": "Bottom terminal drawer",
+      "contract": {
+        "purpose": "Run commands below conversation while another workspace tool remains beside it.",
+        "placement": "ChatTerminalDrawers mounts independently inside chat; drawer has own height. Embedded side chats omit it.",
+        "entry": "Terminal visibility and project-script/code-block execution use drawer state. Add Terminal in workspace is another destination.",
+        "coexistence": "Chat, drawer and right PR/Files/browser can coexist. Panel terminal IDs are excluded from drawer sessions.",
+        "focus": "Drawer owns an independent terminal workspace region and active group; typing/interrupt must reach the intended session.",
+        "motion": "Grid-row transition uses common gate and thread-scoped retention; no native drawer motion was recorded.",
+        "lifetime": "Bounded recently used views remain mounted. View retention and server session lifetime differ; hide does not imply process termination.",
+        "persistence": "Separate versioned store saves thread drawer visibility, height, IDs and groups. Process survival across restart is unverified.",
+        "responsive": "Height is clamped using conversation/composer bounds; narrow composition must include drawer and right sheet together."
+      },
+      "t3_source_anchor_ids": [
+        "drawer_mount",
+        "drawer_retention",
+        "drawer_partition",
+        "drawer_motion",
+        "drawer_entry",
+        "drawer_store",
+        "terminal_geometry",
+        "terminal_mode"
+      ],
+      "ferrite_source_anchor_ids": [
+        "f_tools",
+        "f_terminal",
+        "f_panel",
+        "f_surface"
+      ],
+      "runtime": {
+        "owner": "parent; no new runtime by this worker",
+        "observed": [
+          "The earlier native audit exercised workspace terminal tabs. Subsequent parent-owned checks opened the bottom drawer beside loaded README and an intact composer draft, then closed the empty shell through its confirmation. No drawer command or split was exercised. See ../evidence/surface-reconciliation/observations.md."
+        ],
+        "not_verified": [
+          "Drawer resize, motion interpolation, command execution, splits, thread-switch retention and process survival remain unverified."
+        ]
+      },
+      "ferrite": {
+        "actual_counterpart": "Ferrite Cmd-J activates/creates a right-panel Terminal tab. No independent bottom drawer was identified in the traced cockpit layout.",
+        "misplaced_or_incomplete_substitute": "That tab replaces visible Files/PR/browser. It does not supply drawer coexistence. This architectural difference is separate from missing split shells."
+      },
+      "prior_audit_coverage": [
+        "panel-tools-015\u2013017 covered spawn/splits/links but omitted drawer placement. Source-supported parity decision, not a new runtime-proven defect."
+      ],
+      "omitted_production_requirements": [
+        "Explicitly decide drawer parity; do not silently credit the panel terminal.",
+        "If supported, verify chat+drawer+right tool with independent focus and close.",
+        "Separate hidden-view retention, session ownership and process termination."
+      ]
+    },
+    {
+      "id": "WS-10",
+      "title": "Workspace terminal tabs and splits",
+      "contract": {
+        "purpose": "Provide an interactive shell or split-shell group as a tool resource.",
+        "placement": "PersistentThreadTerminalPanel hosts the terminal renderer in panel mode; outer surface owns IDs and split direction.",
+        "entry": "Add Terminal places destination before launch, then focuses its terminal; split creates another pane in its group.",
+        "coexistence": "Several shells can share one tab. Bottom drawer is separate; other workspace tools stay inactive tabs.",
+        "focus": "Terminal input/copy/interrupt and hidden visibility have explicit session ownership. Close must not target the parent conversation.",
+        "motion": "Frame handles visibility; resizing follows direct geometry. Split animation/smoothness was not measured.",
+        "lifetime": "Observed individual closes confirmed process stop/history clear. Resource close releases sessions; bulk-close is a separate branch.",
+        "persistence": "Tab/group metadata differs from process state. Closed terminals are excluded from generic panel-tab reopen memory.",
+        "responsive": "Panel fills host, unlike drawer height. Split orientations/limits and minimum dimensions need checks."
+      },
+      "t3_source_anchor_ids": [
+        "terminal_add",
+        "terminal_launch",
+        "terminal_panel",
+        "terminal_geometry",
+        "terminal_close",
+        "terminal_mode",
+        "drawer_partition",
+        "close_confirm",
+        "release"
+      ],
+      "ferrite_source_anchor_ids": [
+        "f_terminal",
+        "f_terminal_focus",
+        "f_tools",
+        "f_surface"
+      ],
+      "runtime": {
+        "owner": "parent; no new runtime by this worker",
+        "observed": [
+          "T3 actual command printed cwd/sentinel; Ctrl-C interrupted 120-second command; horizontal split created second pane; confirmed closes removed both and final process inspection found no command."
+        ],
+        "not_verified": [
+          "Vertical split, limits, failure/retry, links, clipboard/IME and all close shortcuts were not run. No new Ferrite terminal runtime here."
+        ]
+      },
+      "ferrite": {
+        "actual_counterpart": "Ferrite has real PTYs, delayed focus, selection/copy/paste and one outer tab per shell. No split-group shape; spawn failure returns silently.",
+        "misplaced_or_incomplete_substitute": "Multiple tabs do not provide simultaneous splits. A PTY does not prove safe Cmd-W routing or launch feedback."
+      },
+      "prior_audit_coverage": [
+        "panel-tools-015/016/017; input-focus-004 source-only terminal-close branch; t3-files-terminal-live-source-match.md."
+      ],
+      "omitted_production_requirements": [
+        "Verify cwd/live output/interrupt/cancel/confirmed cleanup through rendered controls.",
+        "If splits are in scope, test sibling survival and usable minimum geometry.",
+        "Retain an actionable launch/error/retry surface."
+      ]
+    },
+    {
+      "id": "WS-11",
+      "title": "Side-chat workspace placement and lifetime",
+      "contract": {
+        "purpose": "Keep a real separate conversation beside its parent with deliberate lifetime boundaries.",
+        "placement": "SideChatPane embeds ChatView under separate composer/background contexts; tool opens register the parent's workspace host.",
+        "entry": "Add Side chat; ordinary Close; explicit Delete; reopen used conversation.",
+        "coexistence": "Parent and side chat coexist. Embedded chat does not recursively mount another panel/drawer; another active tool may replace its visible body.",
+        "focus": "Main/side composers own independent text. Child tool focus routes through the designated host.",
+        "motion": "Uses common frame; no side-specific interpolation measured.",
+        "lifetime": "T3 close deletes only an unused side chat; explicit Delete clears history after confirmation. Used history remains reopenable.",
+        "persistence": "Surface remembers thread identity while conversation/draft have their own stores; keeping a component is not persistence.",
+        "responsive": "Embedded transcript/composer inherit workspace width/sheet and must remain usable without recursive panel widths."
+      },
+      "t3_source_anchor_ids": [
+        "side_host",
+        "side_embed",
+        "side_delete",
+        "release",
+        "closed",
+        "mount",
+        "drawer_mount"
+      ],
+      "ferrite_source_anchor_ids": [
+        "f_side",
+        "f_side_close",
+        "f_release",
+        "f_restore"
+      ],
+      "runtime": {
+        "owner": "parent; no new runtime by this worker",
+        "observed": [
+          "T3 real Sol side reply and next-message Bring back delivery were verified; closing and Cmd-Shift-T restored original prompt/response/context."
+        ],
+        "not_verified": [
+          "Delete, unsent draft disposal, creation failure, tool switch during generation, restart and narrow focus were not executed.",
+          "Ferrite deletion-conflation is source-supported; this worker did not reproduce close/reopen."
+        ]
+      },
+      "ferrite": {
+        "actual_counterpart": "Ferrite backing fork and composer exist. Ordinary release_surface calls close_side_tab, removes local state and retires backing thread; Delete reaches the same close path.",
+        "misplaced_or_incomplete_substitute": "Close and Delete are conflated in inspected source. Generic reopenable SurfaceId does not prove a retired conversation can recover."
+      },
+      "prior_audit_coverage": [
+        "Earlier presence inventory omitted this lifetime contract. Conversation reconciliation owns provider/transfer semantics; workspace owns placement/closure."
+      ],
+      "omitted_production_requirements": [
+        "Separate Close from Delete for used chats and verify real history/draft recovery.",
+        "Route embedded tools through parent host without recursive panels or wrong-root focus.",
+        "Protect parent/side drafts during streaming, approval and tool switching."
+      ]
+    },
+    {
+      "id": "WS-12",
+      "title": "Device tool and setup modal",
+      "contract": {
+        "purpose": "Inspect/control an actual device session scoped to thread.",
+        "placement": "Distinct device resource carries host/device/platform; unavailable onboarding renders setup dialog.",
+        "entry": "Add Device opens setup or device surface with environment/thread-scoped operations.",
+        "coexistence": "Device resource/floating presentation differs from browser mobile emulation; setup has a modal boundary.",
+        "focus": "Input targets selected device; pending operations retain originating scope.",
+        "motion": "Uses workspace/dialog hosts; stream responsiveness or motion unobserved.",
+        "lifetime": "View visibility and device session lifetime differ; late operations cannot appear under another thread.",
+        "persistence": "Panel target metadata is represented; transport/setup restart persistence is not certified.",
+        "responsive": "Device viewport/setup bounds require independent checks."
+      },
+      "t3_source_anchor_ids": [
+        "device",
+        "device_setup",
+        "surfaces",
+        "launcher"
+      ],
+      "ferrite_source_anchor_ids": [
+        "f_surface",
+        "f_dispatch",
+        "f_launcher"
+      ],
+      "runtime": {
+        "owner": "parent; no new runtime by this worker",
+        "observed": [
+          "Device control was inspected; device hub was not installed. Browser iPhone emulation was separately exercised."
+        ],
+        "not_verified": [
+          "No real device setup, connection or lifecycle was executed."
+        ]
+      },
+      "ferrite": {
+        "actual_counterpart": "No Device surface in Ferrite's inspected dispatch/opener set. Browser is a separate capability.",
+        "misplaced_or_incomplete_substitute": "Browser emulation cannot count as connected-device support. This is a distinct product-scope decision, not a defect inferred from disabled integration."
+      },
+      "prior_audit_coverage": [
+        "Initial panel-tools inventory omitted this surface; native ledger correctly left device integration unverified."
+      ],
+      "omitted_production_requirements": [
+        "Record actual-device scope separately from browser emulation.",
+        "If in scope, make setup/error/pending destination deliberate and retain originating identity."
+      ]
+    },
+    {
+      "id": "WS-13",
+      "title": "Browser resource host boundary",
+      "contract": {
+        "purpose": "Host web sessions without input collisions or losing conversation context.",
+        "placement": "PreviewPanel embeds under shared resource strip keyed by session; floating preview is another presentation.",
+        "entry": "Chat link action, Add Browser, target-blank and address navigation; ordinary external and native PR preferences differ.",
+        "coexistence": "Browser coexists with chat/drawer; a floating preview can coexist with another tab.",
+        "focus": "Web content, address, Find and composer require separate input owners.",
+        "motion": "Frame motion differs from browser loading/page retention; neither certifies complete chrome quality.",
+        "lifetime": "Close releases session; hide may invoke float/miniplayer policy before hiding panel.",
+        "persistence": "Resource metadata and runtime browser identity differ; reopen is browser-specific.",
+        "responsive": "Workspace bounds, device emulation and floating windows are distinct geometry layers."
+      },
+      "t3_source_anchor_ids": [
+        "browser_host",
+        "surfaces",
+        "visibility_actions",
+        "release",
+        "closed"
+      ],
+      "ferrite_source_anchor_ids": [
+        "f_surface",
+        "f_dispatch",
+        "f_release"
+      ],
+      "runtime": {
+        "owner": "parent; no new runtime by this worker",
+        "observed": [
+          "Parent verified input/navigation/Find/close/reopen/hide/draft retention/error recovery and floating coexistence. Floating activation remained confounded."
+        ],
+        "not_verified": [
+          "No whole-browser quality pass; browser report retains prompt() error and unexecuted variants."
+        ]
+      },
+      "ferrite": {
+        "actual_counterpart": "Ferrite singleton Browser has inner page tabs and shares padded preview body with files.",
+        "misplaced_or_incomplete_substitute": "A webview existing does not certify surrounding hierarchy or natural input. Outer/inner bars and padding must be reviewed as the actual whole."
+      },
+      "prior_audit_coverage": [
+        "browser.md; input-focus.md; t3-browser-live-source-match.md. Browser reconciliation owns chrome defects."
+      ],
+      "omitted_production_requirements": [
+        "Verify whole composition, usable viewport and control hierarchy.",
+        "Distinguish hidden/floated/closed/reopened states while preserving drafts."
+      ]
+    },
+    {
+      "id": "WS-14",
+      "title": "Transient menus, confirmations and sheets",
+      "contract": {
+        "purpose": "Contain temporary choices without submitting unrelated work.",
+        "placement": "Add/context menus, search modal, PR picker, terminal close and device setup are owned transient layers; a narrow sheet is a host, not another tool.",
+        "entry": "Each trigger has explicit owner and scope; launcher shortcut respects other layers.",
+        "coexistence": "Underlying resource stays identifiable; closing layer must not close parent conversation.",
+        "focus": "Escape dismisses active layer; Enter activates its selection; cancel restores prior owner. Modal/menu boundaries constrain traversal.",
+        "motion": "Sheet duration is explicit, including zero. Menu motion cannot substitute for sidebar/workspace interpolation.",
+        "lifetime": "Popup state is ephemeral; confirmed resource close follows its resource lifecycle while cancellation preserves it.",
+        "persistence": "Popup retention differs from saved preferences and does not imply restart restoration.",
+        "responsive": "Anchoring/clipping at small sizes and nested submenu focus require direct checks."
+      },
+      "t3_source_anchor_ids": [
+        "launcher",
+        "empty",
+        "focus_boundary",
+        "sheet",
+        "sheet_motion",
+        "search_overlay",
+        "close_confirm",
+        "device_setup"
+      ],
+      "ferrite_source_anchor_ids": [
+        "f_launcher",
+        "f_release",
+        "f_panel"
+      ],
+      "runtime": {
+        "owner": "parent; no new runtime by this worker",
+        "observed": [
+          "T3 terminal confirmations and specific PR filter/link/unlink flows were observed.",
+          "Ferrite launcher Enter sent draft and ordinary link-menu Escape remained open in earlier runtime."
+        ],
+        "not_verified": [
+          "Every submenu, cancellation, bulk-close, traversal and modal geometry branch was not executed."
+        ]
+      },
+      "ferrite": {
+        "actual_counterpart": "Ferrite has real menus/guards but focus/actions are distributed across cockpit/tool modules.",
+        "misplaced_or_incomplete_substitute": "Menu visibility does not establish layer ownership. Working letter keys cannot excuse Enter reaching chat; one context menu cannot certify every link."
+      },
+      "prior_audit_coverage": [
+        "input-focus-002/003/004/005; runtime-interactions.md. Layer geometry/focus restoration was often omitted from control inventories."
+      ],
+      "omitted_production_requirements": [
+        "Record trigger, active layer, focus, outcome and restored owner.",
+        "Test cancel/return with unrelated drafts and running tools protected.",
+        "Capture clipping, occlusion and invisible exit hit targets."
+      ]
+    }
+  ],
+  "surface_count": 14,
+  "date": "2026-11-14",
+  "evidence_rules": [
+    "Source contracts, bounded native outcomes, Ferrite headless outcomes and product decisions are separate evidence.",
+    "No new UI, model, tests, builds or product edits were performed. Parent owns runtime.",
+    "No universal case pass follows from a visible control or one completed journey.",
+    "All T3 source anchors use installed1264c. Newer74573fc is comparison metadata only.",
+    "Ferrite source62947f91 matches prior runtime baseline. Separate Review, details card, browser and provider child surfaces are not interchangeable substitutes.",
+    "These WS identifiers are surface-map records, not new defects added to the177-finding count."
+  ],
+  "scope_boundaries": {
+    "conversation": "surface-reconciliation-conversation.md owns root/provider-child conversation semantics, composer and Bring back delivery; this report owns side-chat host/lifetime.",
+    "browser": "surface-reconciliation-browser.md owns detailed browser chrome and internals; this report owns its workspace placement.",
+    "shell": "The floating thread-details card and global settings route/modal belong to shell/conversation mapping, not RightPanelKind. Sidebar motion is not evidence for right-panel motion."
+  },
+  "prior_reports": [
+    "panel-tools.md",
+    "panel-runtime-correction.md",
+    "files-runtime-correction.md",
+    "runtime-interactions.md",
+    "input-focus.md",
+    "pr-entry-runtime-correction.md",
+    "t3-pr-live-source-match.md",
+    "t3-files-terminal-live-source-match.md",
+    "t3-browser-live-source-match.md",
+    "t3-surface-contracts.md",
+    "t3-live-coverage-reconciliation.md"
+  ],
+  "omitted_architectural_requirements": [
+    {
+      "id": "WREQ-01",
+      "surfaces": [
+        "WS-01",
+        "WS-02"
+      ],
+      "requirement": "Shared geometry/focus/lifetime contract across all tools, including deliberate resize versus automatic minima.",
+      "evidence": "Ferrite width ratchet and launcher Enter are runtime-reproduced; other variants remain source/planned."
+    },
+    {
+      "id": "WREQ-02",
+      "surfaces": [
+        "WS-03",
+        "WS-04"
+      ],
+      "requirement": "Distinct global PR workspace, thread association list and explicit native PR target; never count Browser or hidden panel state as equivalent destination.",
+      "evidence": "T3 bounded native global/cross-thread journey; Ferrite existing cross-thread red."
+    },
+    {
+      "id": "WREQ-03",
+      "surfaces": [
+        "WS-05",
+        "WS-06",
+        "WS-07"
+      ],
+      "requirement": "Coherent file resource topology across explorer, source/rendered/media, search and link entry rather than disconnected inner tabs/readers.",
+      "evidence": "Ferrite stale/overflow/focus runtime; remaining save/persistence variants unexecuted."
+    },
+    {
+      "id": "WREQ-04",
+      "surfaces": [
+        "WS-08"
+      ],
+      "requirement": "Decide how Changes and full Review reader relate; existing richer reader cannot silently stand in for shallow/truncated panel.",
+      "evidence": "Source architectural distinction; full Review runtime not checked."
+    },
+    {
+      "id": "WREQ-05",
+      "surfaces": [
+        "WS-09",
+        "WS-10"
+      ],
+      "requirement": "Treat bottom-drawer coexistence separately from shell capability and terminal splits.",
+      "evidence": "Installed source supports drawer; parent only exercised workspace terminal."
+    },
+    {
+      "id": "WREQ-06",
+      "surfaces": [
+        "WS-11"
+      ],
+      "requirement": "Separate ordinary side-chat close from deletion and preserve reopenable used history.",
+      "evidence": "T3 close/reopen native; Ferrite closure conflation source-supported."
+    },
+    {
+      "id": "WREQ-07",
+      "surfaces": [
+        "WS-12",
+        "WS-13"
+      ],
+      "requirement": "Separate actual-device tool, browser emulation, browser host and floating presentation.",
+      "evidence": "Device unavailable/inspected; browser specific journeys observed."
+    },
+    {
+      "id": "WREQ-08",
+      "surfaces": [
+        "WS-14"
+      ],
+      "requirement": "Transient-layer focus, cancellation, anchoring and natural keys are production requirements, not menu-presence checks.",
+      "evidence": "Selected native journeys and Ferrite launcher failure; exhaustive variants unexecuted."
+    }
+  ],
+  "observation_path": "docs/audits/2026-11-13-t3-parity/evidence/t3-live/observations.md",
+  "observation_sha256": "ee2739e94e1d8d6b0fa3c924debebf8b6228f2c96d969af347bf33c80eb9630b",
+  "validation": {
+    "surface_count": 14,
+    "contract_dimensions_per_surface": 9,
+    "t3_source_files": 39,
+    "t3_anchors": 70,
+    "ferrite_anchors": 28,
+    "exact_lines_and_source_hashes_checked": true,
+    "tests_builds_ui_models": 0,
+    "unavailable_path_guesses": [
+      "apps/web/src/terminalState.ts"
+    ]
+  },
+  "markdown_sha256": "18f3cc267cce2f58e4a691a45e4631eded3119ae8ae0359e6232257491fb4adb"
+}

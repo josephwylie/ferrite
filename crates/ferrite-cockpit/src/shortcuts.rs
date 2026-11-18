@@ -5,7 +5,7 @@
 //!
 //! The palette's input row (the `search` icon, the filter, `esc`), its
 //! section headings by where a key acts — `Threads`, `Board`, `Composer`,
-//! `Decision`, `Wall`, `Transcript` — rows with the label at the left and
+//! `Decision`, `Transcript` — rows with the label at the left and
 //! the chord at the right, and the palette's footer, `↑↓ scroll · esc`. Typing keeps the rows whose label, section or chord
 //! match, as the palette filters. The floats' own keys (the palette's, the
 //! list's, this sheet's) and the Review slot's are in their footers, so the
@@ -35,7 +35,6 @@ pub(crate) enum Place {
     Board,
     Composer,
     Decision,
-    Wall,
     Transcript,
     Review,
 }
@@ -47,7 +46,6 @@ impl Place {
             Place::Board => "Board",
             Place::Composer => "Composer",
             Place::Decision => "Decision",
-            Place::Wall => "Wall",
             Place::Transcript => "Transcript",
             Place::Review => "Review",
         }
@@ -67,7 +65,6 @@ pub(crate) enum Entry {
 pub(crate) fn label(action: &str, context: Option<&str>) -> Option<Entry> {
     use Entry::{Hidden, Row};
     use Place::*;
-    let wall = context == Some("Wall");
     // The file editor edits as the Composer does: its keys are the same
     // rows, not new ones.
     if context == Some(ferrite_ui::keymap::FILE_EDITOR)
@@ -80,14 +77,23 @@ pub(crate) fn label(action: &str, context: Option<&str>) -> Option<Entry> {
         // Threads.
         "cockpit::NewThread" => Row(Threads, "New thread"),
         "cockpit::NewWorktreeThread" => Row(Threads, "New worktree thread"),
-        "cockpit::NewGroup" => Row(Threads, "New group"),
-        "palette::OpenGroups" => Row(Threads, "Open a group"),
         "palette::Toggle" => Row(Threads, "Commands"),
         "cockpit::CloseThread" => Row(Threads, "Park thread"),
         "cockpit::ReopenThread" => Row(Threads, "Reopen last"),
         "palette::ShowParked" => Row(Threads, "Show parked"),
         "palette::ReviewBranch" => Row(Threads, "Review branch"),
         "cockpit::NextDecision" => Row(Threads, "Next request"),
+        "cockpit::NextThread" => Row(Threads, "Next thread"),
+        "cockpit::PreviousThread" => Row(Threads, "Previous thread"),
+        "cockpit::FocusThread1" => Row(Threads, "Go to thread 1\u{2013}9"),
+        "cockpit::FocusThread2"
+        | "cockpit::FocusThread3"
+        | "cockpit::FocusThread4"
+        | "cockpit::FocusThread5"
+        | "cockpit::FocusThread6"
+        | "cockpit::FocusThread7"
+        | "cockpit::FocusThread8"
+        | "cockpit::FocusThread9" => Hidden,
         "cockpit::ToggleNotifications" => Row(Threads, "Inbox"),
         "nav::Focus" => Row(Threads, "Focus sidebar"),
         "cockpit::OpenSettings" => Row(Threads, "Settings"),
@@ -99,20 +105,10 @@ pub(crate) fn label(action: &str, context: Option<&str>) -> Option<Entry> {
         // The board.
         "cockpit::GoBack" => Row(Board, "Back"),
         "cockpit::GoForward" => Row(Board, "Forward"),
-        "cockpit::NextPane" => Row(Board, "Next pane"),
-        "cockpit::PreviousPane" => Row(Board, "Previous pane"),
-        "cockpit::FocusThread1" => Row(Board, "Focus pane 1\u{2013}9"),
-        "cockpit::FocusThread2"
-        | "cockpit::FocusThread3"
-        | "cockpit::FocusThread4"
-        | "cockpit::FocusThread5"
-        | "cockpit::FocusThread6"
-        | "cockpit::FocusThread7"
-        | "cockpit::FocusThread8"
-        | "cockpit::FocusThread9" => Hidden,
-        "cockpit::ToggleFullscreen" => Row(Board, "Fullscreen pane"),
         "cockpit::ToggleNav" => Row(Board, "Toggle sidebar"),
         "cockpit::TogglePanel" => Row(Board, "Toggle panel"),
+        "cockpit::ToggleDetails" => Row(Board, "Toggle thread details"),
+        "cockpit::CloseDetails" => Row(Board, "Close thread details"),
         "cockpit::ToggleTerminal" => Row(Board, "Terminal"),
         "cockpit::ToggleChanges" => Row(Board, "Changes"),
         "cockpit::ToggleFiles" => Row(Board, "Files"),
@@ -125,19 +121,19 @@ pub(crate) fn label(action: &str, context: Option<&str>) -> Option<Entry> {
         "empty_board::Previous" => Row(Board, "Empty board: previous"),
         "empty_board::Next" => Row(Board, "Empty board: next"),
         "empty_board::Run" => Row(Board, "Empty board: run"),
-        // A Decision row (and the wall's quick answers).
-        "cockpit::Allow" if wall => Row(Wall, "Allow"),
-        "cockpit::Deny" if wall => Row(Wall, "Deny"),
-        "cockpit::Always" if wall => Row(Wall, "Always allow"),
-        "cockpit::PickOption1" if wall => Row(Wall, "Answer 1\u{2013}3"),
-        "cockpit::PickOption2" | "cockpit::PickOption3" if wall => Hidden,
-        "cockpit::Allow" => Row(Decision, "Allow"),
-        "cockpit::Deny" => Row(Decision, "Deny"),
-        "cockpit::Always" => Row(Decision, "Always allow"),
+        "pull_requests::Previous" => Row(Board, "Pull requests: previous"),
+        "pull_requests::Next" => Row(Board, "Pull requests: next"),
+        "pull_requests::Open" => Row(Board, "Pull requests: open"),
+        "pull_requests::Back" => Row(Board, "Pull requests: back"),
+        // A Decision row.
+        "cockpit::Allow" => Row(Decision, "Allow, on a subagent's request"),
+        "cockpit::Deny" => Row(Decision, "Deny, on a subagent's request"),
+        "cockpit::Always" => Row(Decision, "Always allow, on a subagent's request"),
         // The approval card's chorded buttons: they act with text on the
         // line, where the letters type.
         "cockpit::AllowOnce" => Row(Decision, "Allow once, from any line"),
         "cockpit::AlwaysAllow" => Row(Decision, "Always allow, from any line"),
+        "cockpit::DenyOnce" => Row(Decision, "Deny, from any line"),
         "cockpit::PickOption1" => Row(Decision, "Pick 1\u{2013}3"),
         "cockpit::PickOption2" | "cockpit::PickOption3" => Hidden,
         "cockpit::PickOption4" => Row(Decision, "Pick 4"),
@@ -154,6 +150,14 @@ pub(crate) fn label(action: &str, context: Option<&str>) -> Option<Entry> {
         "status::CycleMode" => Row(Composer, "Cycle permission mode"),
         "shortcuts::Toggle" => Row(Composer, "Shortcuts"),
         "cockpit::BandCycle" => Row(Composer, "Accept suggestion / next chip"),
+        "cockpit::FocusNextArea" => Row(Board, "Next area (conversation, panel)"),
+        "cockpit::FocusPreviousArea" => Row(Board, "Previous area"),
+        "cockpit::PanelControlPrevious"
+        | "cockpit::PanelControlNext"
+        | "cockpit::PanelControlFirst"
+        | "cockpit::PanelControlLast"
+        | "cockpit::PanelControlClose"
+        | "cockpit::PanelControlMenu" => Hidden,
         "cockpit::HistoryOlder" => Row(Composer, "Previous prompt"),
         "cockpit::HistoryNewer" => Row(Composer, "Next prompt"),
         "composer::Up" => Row(Composer, "Line up"),
@@ -189,6 +193,7 @@ pub(crate) fn label(action: &str, context: Option<&str>) -> Option<Entry> {
         "cockpit::MenuDismiss" => Row(Composer, "Menu: close"),
         // The transcript.
         "cockpit::CopySelection" => Row(Transcript, "Copy selection"),
+        "cockpit::CiteSelection" => Row(Transcript, "Quote selection into the prompt"),
         "cockpit::ToggleTool" => Row(Transcript, "Open or fold a tool call"),
         "cockpit::StopAgent" => Row(Transcript, "Stop the agent"),
         "cockpit::ToolCyclePrevious" => Row(Transcript, "Previous tool call"),
@@ -207,7 +212,6 @@ pub(crate) fn label(action: &str, context: Option<&str>) -> Option<Entry> {
         | "palette::SelectNext"
         | "palette::SelectPrevious"
         | "palette::Confirm"
-        | "palette::Preview"
         | "palette::Dismiss"
         | "palette::NextType"
         | "palette::PreviousType"
@@ -261,6 +265,9 @@ pub(crate) fn label(action: &str, context: Option<&str>) -> Option<Entry> {
         | "review::Close"
         | "review::Search"
         | "review::SaveComment"
+        | "cite::SaveComment"
+        | "cite::SaveAndSendComment"
+        | "cite::CancelComment"
         | "review::CancelComment"
         | "review::OpenFound"
         | "review::CloseSearch"
@@ -288,7 +295,7 @@ pub(crate) struct SheetRow {
 }
 
 /// The sheet's rows for a key table, in section order, each action once
-/// (its first binding in a place wins: `⌘N` before `⌘T`). The pane digits
+/// (its first binding in a place wins: `⌘N` before `⌘T`). The thread digits
 /// and the answer digits read as one row each (`⌘1…9`, `1…3`).
 pub(crate) fn rows(table: &[Binding]) -> Vec<SheetRow> {
     let mut rows: Vec<SheetRow> = Vec::new();
@@ -477,7 +484,7 @@ mod tests {
     }
 
     /// The sheet reads the table: its sections in order, each action once,
-    /// the digits gathered, the Decision and wall keys in their own places,
+    /// the digits gathered, the Decision keys in their own place,
     /// the editing keys included.
     #[test]
     fn the_sheet_lists_the_table_by_place() {
@@ -497,16 +504,20 @@ mod tests {
             "Park follows the existing close-thread binding"
         );
         assert_eq!(
-            find(Place::Board, "Focus pane 1\u{2013}9"),
+            find(Place::Threads, "Go to thread 1\u{2013}9"),
             "cmd-1\u{2026}9"
         );
-        assert_eq!(find(Place::Decision, "Allow"), "Y");
+        assert!(
+            rows.iter()
+                .all(|row| !(row.place == Place::Decision && row.label == "Allow")),
+            "no bare letter answers an approval"
+        );
+        assert!(find(Place::Decision, "Allow once, from any line").contains("cmd"));
         assert_eq!(find(Place::Decision, "Pick 1\u{2013}3"), "1\u{2026}3");
         assert_eq!(
             find(Place::Decision, "Amend (a note with the answer)"),
             "\u{21e5}"
         );
-        assert_eq!(find(Place::Wall, "Answer 1\u{2013}3"), "1\u{2026}3");
         assert_eq!(
             find(Place::Composer, "Cycle permission mode"),
             "shift-\u{21e5}"
@@ -541,7 +552,7 @@ mod tests {
         assert_eq!(labels("").len(), rows.len());
         assert_eq!(labels("park"), ["Show parked", "Park thread"]);
         assert!(
-            labels("wall").contains(&"Always allow"),
+            labels("decision").contains(&"Allow, on a subagent's request"),
             "a section matches"
         );
         assert!(labels("cmd-k").contains(&"Commands"), "a chord matches");

@@ -264,27 +264,299 @@ fn a_tap_on_a_file_card_opens_it_while_other_text_is_highlighted(cx: &mut TestAp
     assert_eq!(copied(cx), None, "the tap let go of the old highlight");
 }
 
-/// A right-click on a link opens its own menu — Open link, Copy link — and
-/// not the message's, nor the Pane's; Copy link copies the address.
+fn right_click(at: Point<Pixels>, cx: &mut gpui::VisualTestContext) {
+    cx.simulate_mouse_down(at, MouseButton::Right, gpui::Modifiers::none());
+    cx.simulate_mouse_up(at, MouseButton::Right, gpui::Modifiers::none());
+    tick(cx);
+}
+
+fn menu_row(index: usize, cx: &mut gpui::VisualTestContext) {
+    let row = debug_bounds(cx, format!("answer-menu-row-{index}")).expect("a menu row");
+    cx.simulate_click(row.center(), gpui::Modifiers::none());
+    tick(cx);
+}
+
+/// A right-click on a link opens its own menu, and not the message's nor
+/// the Pane's: the two browsers, then Copy, which copies the address.
 #[gpui::test]
 fn a_right_click_on_a_link_offers_the_links_actions(cx: &mut TestAppContext) {
     let (view, cx) = linked_answer("link-menu", cx);
     let at = on_link(&view, cx);
-    cx.simulate_mouse_down(at, MouseButton::Right, gpui::Modifiers::none());
-    cx.simulate_mouse_up(at, MouseButton::Right, gpui::Modifiers::none());
-    tick(cx);
+    right_click(at, cx);
     assert!(cx.debug_bounds("answer-menu").is_some(), "a menu opens");
-    assert!(cx.debug_bounds("answer-menu-row-1").is_some());
+    assert!(cx.debug_bounds("answer-menu-row-2").is_some());
     assert!(
-        cx.debug_bounds("answer-menu-row-2").is_none(),
-        "a web link has Open and Copy only"
+        cx.debug_bounds("answer-menu-row-3").is_none(),
+        "a web link has two browsers and Copy"
     );
     browser_closed(&view, cx);
-    let copy = cx.debug_bounds("answer-menu-row-1").unwrap();
-    cx.simulate_click(copy.center(), gpui::Modifiers::none());
-    tick(cx);
+    menu_row(2, cx);
     assert_eq!(
         cx.read_from_clipboard().and_then(|item| item.text()).as_deref(),
-        Some(URL)
+        Some(URL),
+        "the address, not the label"
     );
+}
+
+#[gpui::test]
+fn escape_closes_the_links_menu(cx: &mut TestAppContext) {
+    let (view, cx) = linked_answer("link-menu-escape", cx);
+    bind_production_keys(cx);
+    let at = on_link(&view, cx);
+    right_click(at, cx);
+    assert!(cx.debug_bounds("answer-menu").is_some(), "a menu opens");
+    cx.simulate_keystrokes("escape");
+    tick(cx);
+    assert!(cx.debug_bounds("answer-menu").is_none(), "esc closes it");
+    assert_eq!(cx.opened_url(), None, "and opens nothing");
+}
+
+#[gpui::test]
+fn the_links_menu_chooses_the_browser(cx: &mut TestAppContext) {
+    let (view, cx) = linked_answer("link-menu-doors", cx);
+    let at = on_link(&view, cx);
+    right_click(at, cx);
+    menu_row(0, cx);
+    browser_opened(&view, cx);
+
+    let at = on_link(&view, cx);
+    right_click(at, cx);
+    menu_row(1, cx);
+    assert_eq!(cx.opened_url().as_deref(), Some(URL), "the system's browser");
+}
+
+/// ⌘-click (Ctrl elsewhere) is the system's browser, as on the PR badge.
+#[gpui::test]
+fn a_command_click_on_a_link_opens_the_system_browser(cx: &mut TestAppContext) {
+    let (view, cx) = linked_answer("link-click-command", cx);
+    let at = on_link(&view, cx);
+    let secondary = if cfg!(target_os = "macos") {
+        gpui::Modifiers::command()
+    } else {
+        gpui::Modifiers::control()
+    };
+    cx.simulate_click(at, secondary);
+    assert_eq!(cx.opened_url().as_deref(), Some(URL));
+    assert!(view.read_with(cx, |view, _| !view.panes[0].preview.is_open()));
+}
+
+/// A link activated by key is a click with no modifier: the primary door.
+#[test]
+fn a_key_press_is_the_primary_door() {
+    let key = gpui::ClickEvent::Keyboard(gpui::KeyboardClickEvent {
+        button: gpui::KeyboardButton::Enter,
+        bounds: gpui::Bounds::default(),
+    });
+    assert_eq!(ferrite_pane::link_target::Open::of(&key), ferrite_pane::link_target::Open::Primary);
+}
+
+/// An answer with `#212` in a checkout whose origin is `origin`, if any:
+/// the click and the menu agree on the address, and the renderer's own
+/// `issue:` never reaches the OS.
+fn issue_answer<'a>(
+    name: &str,
+    origin: Option<&str>,
+    cx: &'a mut TestAppContext,
+) -> (gpui::Entity<CockpitView>, &'a mut gpui::VisualTestContext) {
+    let (core, fake, checkout) = bound_cockpit(name, Provider::Claude);
+    if let Some(origin) = origin {
+        std::fs::create_dir_all(checkout.join(".git")).unwrap();
+        std::fs::write(
+            checkout.join(".git/config"),
+            format!("[remote \"origin\"]\n\turl = {origin}\n"),
+        )
+        .unwrap();
+    }
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    hide_panel(&view, cx);
+    cx.simulate_resize(gpui::size(px(1000.), px(700.)));
+    fake.streams.borrow()[0]
+        .send(SessionEvent::TextDelta {
+            text: "Fixed in #212 already.\n\n".into(),
+        })
+        .unwrap();
+    tick(cx);
+    (view, cx)
+}
+
+/// The PR the Panel shows beside the conversation, if it shows one.
+fn shown_pr(view: &Entity<CockpitView>, cx: &mut gpui::VisualTestContext) -> Option<u64> {
+    view.read_with(cx, |view, _| {
+        assert!(!view.destination_shown(), "the conversation keeps the board");
+        match view.shown_surface(0)? {
+            crate::cockpit::surfaces::SurfaceId::PullRequest(number) => Some(number),
+            _ => None,
+        }
+    })
+}
+
+fn close_panel(view: &Entity<CockpitView>, cx: &mut gpui::VisualTestContext) {
+    hide_panel(view, cx);
+    tick(cx);
+}
+
+/// `#212` in a GitHub checkout is that repository's PR: a press opens its
+/// native detail beside the conversation, not a browser; the menu still
+/// offers both browsers, and Copy gives the forge address.
+#[gpui::test]
+fn a_pr_number_opens_its_native_detail_and_copies_its_forge_address(cx: &mut TestAppContext) {
+    let page = "https://github.com/owner/repo/issues/212";
+    let (view, cx) = issue_answer("link-issue-origin", Some("git@github.com:owner/repo.git"), cx);
+    let at = caret(&view, cx, 0, 11);
+    cx.simulate_click(at, gpui::Modifiers::none());
+    assert_eq!(shown_pr(&view, cx), Some(212));
+    browser_closed(&view, cx);
+    close_panel(&view, cx);
+
+    let at = caret(&view, cx, 0, 11);
+    right_click(at, cx);
+    menu_row(3, cx);
+    assert_eq!(cx.read_from_clipboard().and_then(|item| item.text()).as_deref(), Some(page));
+    let at = caret(&view, cx, 0, 11);
+    right_click(at, cx);
+    menu_row(2, cx);
+    assert_eq!(cx.opened_url().as_deref(), Some(page));
+}
+
+/// The repository's own PR address in prose opens the same native detail;
+/// another repository's stays a web page.
+#[gpui::test]
+fn a_pr_address_of_this_repository_opens_its_native_detail(cx: &mut TestAppContext) {
+    let (core, fake, checkout) = bound_cockpit("link-pr-address", Provider::Claude);
+    std::fs::create_dir_all(checkout.join(".git")).unwrap();
+    std::fs::write(
+        checkout.join(".git/config"),
+        "[remote \"origin\"]\n\turl = https://github.com/owner/repo.git\n",
+    )
+    .unwrap();
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    hide_panel(&view, cx);
+    cx.simulate_resize(gpui::size(px(1000.), px(700.)));
+    fake.streams.borrow()[0]
+        .send(SessionEvent::TextDelta {
+            text: "Opened https://github.com/owner/repo/pull/305 today.\n\nSee https://github.com/other/repo/pull/9 too.\n\n".into(),
+        })
+        .unwrap();
+    tick(cx);
+    let at = caret(&view, cx, 0, 12);
+    cx.simulate_click(at, gpui::Modifiers::none());
+    assert_eq!(shown_pr(&view, cx), Some(305));
+    assert_eq!(cx.opened_url(), None);
+    close_panel(&view, cx);
+
+    let at = caret(&view, cx, 1, 8);
+    cx.simulate_click(at, gpui::Modifiers::none());
+    browser_opened(&view, cx);
+}
+
+/// No origin, no address: the press and the rows say why, and nothing is
+/// handed to the OS.
+#[gpui::test]
+fn an_issue_reference_without_an_origin_is_unavailable_not_issue_colon(cx: &mut TestAppContext) {
+    let (view, cx) = issue_answer("link-issue-no-origin", None, cx);
+    let at = caret(&view, cx, 0, 11);
+    cx.simulate_click(at, gpui::Modifiers::none());
+    assert_eq!(cx.opened_url(), None);
+    assert!(view.read_with(cx, |view, _| !view.panes[0].preview.is_open()));
+
+    right_click(at, cx);
+    menu_row(1, cx);
+    assert_eq!(cx.opened_url(), None, "a disabled row opens nothing");
+    assert_eq!(cx.read_from_clipboard().and_then(|item| item.text()), None);
+}
+
+/// A file chip that names a line opens its reader with the caret there.
+#[gpui::test]
+fn a_tap_on_a_file_chip_with_a_line_opens_the_reader_at_that_line(cx: &mut TestAppContext) {
+    let (core, fake, workspace) = bound_cockpit("link-tap-file-line", Provider::Claude);
+    let file = workspace.join("guide.rs");
+    std::fs::write(&file, "a\nb\nc\n").unwrap();
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    hide_panel(&view, cx);
+    cx.simulate_resize(gpui::size(px(1200.), px(700.)));
+    fake.streams.borrow()[0]
+        .send(SessionEvent::TextDelta {
+            text: "Read [guide](guide.rs:2) next.\n\n".into(),
+        })
+        .unwrap();
+    tick(cx);
+    let card = debug_bounds(cx, format!("file-attachment-{}", file.display()))
+        .expect("the file link is a card");
+    tap(cx, card.center() + gpui::point(px(1.), px(0.)));
+    let thread = view.read_with(cx, |view, _| view.panes[0].thread().unwrap());
+    let editor = view.read_with(cx, |view, _| view.files_editor_of(thread).expect("a code file"));
+    editor.update(cx, |editor, cx| {
+        editor.type_text("X", cx);
+        editor.save(cx);
+    });
+    cx.run_until_parked();
+    assert_eq!(std::fs::read_to_string(&file).unwrap(), "a\nXb\nc\n");
+}
+
+/// A link in an answer is a keyboard stop in the transcript's Tab walk,
+/// ahead of a later code block's Copy: Tab reaches it from the composer, ⏎
+/// opens exactly its address, and the next render leaves focus on it.
+#[gpui::test]
+fn tab_reaches_a_link_and_enter_opens_it(cx: &mut TestAppContext) {
+    fn on(cx: &mut gpui::VisualTestContext, context: &str) -> bool {
+        cx.update(|window, _| {
+            window
+                .context_stack()
+                .iter()
+                .any(|stack| stack.contains(context))
+        })
+    }
+    let (core, fake) = cockpit("link-tab-enter", 1);
+    bind_production_keys(cx);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(1000.), px(700.)));
+    let stream = fake.streams.borrow();
+    stream[0]
+        .send(SessionEvent::TextDelta {
+            text: "Read [the docs](https://example.com/docs) now.\n\n```rust\n    first();\n```"
+                .into(),
+        })
+        .unwrap();
+    stream[0]
+        .send(SessionEvent::TurnEnded {
+            outcome: ferrite_core::TurnOutcome::Completed,
+            cost_usd: None,
+        })
+        .unwrap();
+    drop(stream);
+    tick(cx);
+    cx.update(|window, cx| {
+        let composer = view.read(cx).panes[0].composer.focus_handle(cx);
+        window.focus(&composer, cx);
+    });
+
+    cx.simulate_keystrokes("tab");
+    assert!(on(cx, "LinkStop"), "Tab from the composer reaches the link first");
+    cx.simulate_keystrokes("tab");
+    assert!(on(cx, "TranscriptCodeActions"), "then the code block's actions");
+    cx.simulate_keystrokes("shift-tab");
+    assert!(on(cx, "LinkStop"));
+
+    cx.update(|_, cx| view.update(cx, |_, cx| cx.notify()));
+    tick(cx);
+    assert!(on(cx, "LinkStop"), "a render does not pull focus back to the composer");
+
+    cx.simulate_keystrokes("enter");
+    cx.simulate_event(gpui::KeyUpEvent {
+        keystroke: gpui::Keystroke::parse("enter").unwrap(),
+    });
+    let urls = view.read_with(cx, |view, _| view.panes[0].preview.take_browser_urls());
+    assert_eq!(urls, ["https://example.com/docs"]);
+    assert_eq!(cx.opened_url(), None, "the link opens inside Ferrite");
+}
+
+/// The pointer keeps its own press path: pressing a link opens it and never
+/// leaves the keyboard's stop focused, so no focus ring flashes on a click.
+#[gpui::test]
+fn a_press_on_a_link_leaves_no_stop_focused(cx: &mut TestAppContext) {
+    let (view, cx) = linked_answer("link-click-unfocused", cx);
+    let at = on_link(&view, cx);
+    cx.simulate_click(at, gpui::Modifiers::none());
+    browser_opened(&view, cx);
+    assert!(!cx.update(|window, _| ferrite_pane::rich::controls_focused(window)));
 }

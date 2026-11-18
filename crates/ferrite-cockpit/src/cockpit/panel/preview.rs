@@ -92,7 +92,7 @@ impl Default for PreviewTab {
 /// the keyboard; the bar is the transcript's, `ferrite_pane::find`): a file's
 /// lines, or a rendered Markdown document's text.
 pub(crate) struct PreviewFind {
-    bar: ferrite_pane::find::Find,
+    pub(in crate::cockpit) bar: ferrite_pane::find::Find,
     /// The document it searches: the bar closes with it, and another one
     /// opening closes it too (`tend_previews`).
     path: PathBuf,
@@ -104,6 +104,25 @@ pub(crate) struct PreviewFind {
 }
 
 impl PreviewFind {
+    pub(in crate::cockpit) fn new(bar: ferrite_pane::find::Find, path: PathBuf) -> Self {
+        Self {
+            bar,
+            path,
+            reveal: 0,
+            start_in_view: false,
+        }
+    }
+
+    /// Have the active occurrence scrolled into view once it paints; a new
+    /// query (`start_in_view`) starts on the first occurrence in view.
+    pub(in crate::cockpit) fn reveal_when_painted(&mut self, start_in_view: bool) {
+        let report = self.bar.report();
+        report.revealed.set(None);
+        report.ahead.set(None);
+        self.reveal = ferrite_pane::find::REVEAL_FRAMES;
+        self.start_in_view = start_in_view;
+    }
+
     /// Whether the bar's line holds the keyboard.
     pub(crate) fn holds_focus(&self, window: &Window, cx: &gpui::App) -> bool {
         self.bar.holds_focus(window, cx)
@@ -129,7 +148,15 @@ impl CockpitView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.empty_shown = false;
+        if let Some(thread) = self.focused_thread().filter(|thread| self.uses_remote_files(*thread)) {
+            self.open_in_files(thread, path, line, true, cx);
+            return;
+        }
+        if self.on_machine() {
+            self.nav_notice.hint("Start a Thread in this remote workspace before opening its files.");
+            cx.notify();
+            return;
+        }
         if let Some(pane) = self.panes.get(self.focused()) {
             pane.preview.open(path, line, &[], window, cx);
         }
@@ -184,6 +211,22 @@ impl CockpitView {
         }
     }
 
+    fn retry_preview(
+        &mut self,
+        thread: ThreadId,
+        path: &Path,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(index) = self.pane_for(thread) {
+            self.panes[index].preview_tab.documents.remove(path);
+            self.panes[index]
+                .preview
+                .open(path.to_path_buf(), None, &[], window, cx);
+        }
+        cx.notify();
+    }
+
     /// A File tab's title: the command's or page's own name where it has
     /// one, else the file's.
     pub(in crate::cockpit) fn file_surface_title(&self, thread: ThreadId, path: &Path) -> SharedString {
@@ -202,8 +245,25 @@ impl CockpitView {
     /// list; the preview follows the File tab the Panel shows. A find bar
     /// closes with its document, and a Markdown reveal that is due settles.
     pub(in crate::cockpit) fn tend_previews(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        for pane in &self.panes {
+            pane.preview.settle_attachment_open(window, cx);
+        }
+        let requests: Vec<_> = self.panes.iter().flat_map(|pane| {
+            pane.preview.take_file_requests().into_iter().map(|request| (pane.thread(), request))
+        }).collect();
+        for (thread, request) in requests {
+            match thread {
+                Some(thread) => self.open_in_files(thread, request.path, request.line, true, cx),
+                None => self.nav_notice.hint("Start a Thread in this remote workspace before opening its files."),
+            }
+        }
+        let mut image_pending = false;
         for pane in &mut self.panes {
             for annotation in pane.preview.take_annotation_requests() {
+                if annotation.original().is_none() {
+                    pane.preview.loading_annotation(annotation, window);
+                    continue;
+                }
                 let image = pane
                     .thread()
                     .ok_or_else(|| {
@@ -235,11 +295,23 @@ impl CockpitView {
                     match pending.image.try_recv() {
                         Ok(Ok(image)) => pane.preview.open_annotation(pending.annotation, image, window),
                         Ok(Err(error)) => pane.preview.annotation_error(&pending.annotation, format!("The retained capture could not be opened: {error}. Reopen the annotation to try again."), window),
-                        Err(std::sync::mpsc::TryRecvError::Empty) => pane.preview_tab.annotation_image = Some(pending),
+                        Err(std::sync::mpsc::TryRecvError::Empty) => {
+                            pane.preview_tab.annotation_image = Some(pending);
+                            image_pending = true;
+                        }
                         Err(std::sync::mpsc::TryRecvError::Disconnected) => pane.preview.annotation_error(&pending.annotation, "The retained capture could not be loaded. Reopen the annotation to try again.".into(), window),
                     }
                 }
             }
+        }
+        if image_pending {
+            // The image is read on a thread of its own, and only a frame
+            // looks for it: ask for another, or an idle window never shows it.
+            cx.spawn(async move |this, cx| {
+                cx.background_executor().timer(crate::cockpit::beside::ANSWER_POLL).await;
+                this.update(cx, |_, cx| cx.notify()).ok();
+            })
+            .detach();
         }
         let first = !std::mem::replace(&mut self.panel.tended, true);
         let mut opened_surfaces = Vec::new();
@@ -287,7 +359,7 @@ impl CockpitView {
         }
         for (thread, id) in opened_surfaces {
             if self.active_surface(thread).as_ref() != Some(&id) || !self.panel_open(thread) {
-                self.surfaces_mut(thread).upsert(id);
+                self.apply_surface(thread, SurfaceAction::Open(id));
             }
         }
         // After the opened ones take their tabs, or the tab shown before
@@ -401,14 +473,16 @@ impl CockpitView {
                             .child(annotation.comment().to_owned()),
                     )
                 })
+                .child(ferrite_pane::annotation_editor::annotation_context(annotation))
                 .child(match image {
                     Some(image) => {
                         ferrite_pane::annotation_editor::annotation_stage(annotation, image.clone())
                     }
+                    None if annotation.original().is_none() => div().into_any_element(),
                     None => div().child("Loading capture…").into_any_element(),
                 })
                 .into_any_element(),
-            Body::Unshown(why) => unshown(why, &document.path, cx),
+            Body::Unshown(why) => unshown(why, &document.path, pane.thread(), cx),
             Body::Page(page) => match page.shown(cx) {
                 Shown::Live(web) => div()
                     .id("preview-page")
@@ -424,8 +498,7 @@ impl CockpitView {
                     cant_show(
                         "This page can't show here",
                         Some(why),
-                        "open in browser",
-                        move |_, cx| cx.open_url(&url),
+                        vec![("open in browser", Box::new(move |_, cx| cx.open_url(&url)))],
                         cx,
                     )
                 }
@@ -448,53 +521,58 @@ impl CockpitView {
             }
             None => body.into_any_element(),
         };
-        let page = document.page().map(|page| page.source().clone());
-        let title = match &page {
-            Some(page) => page.title(),
-            None => self.preview_title(pane, &document),
-        };
-        let label = match page {
-            Some(_) => self.page_title_menu(owner, title.clone(), cx),
-            None => head_title(title.clone())
-                .children(document.line().map(|line| head_suffix(format!(":{line}")))),
-        };
-        // A file (not a command's output, which no file holds, nor a page,
-        // whose menu does it) can have its path copied, as the head reads
-        // it, and open in its own app.
-        let file = match &document.body {
-            Body::BrowserAnnotation {
-                annotation,
-                image: Some(image),
-            } => Some((image.clone(), annotation.original().display().to_string())),
-            _ => (document.name.is_none() && document.page().is_none())
-                .then(|| (document.path.clone(), title.clone())),
-        };
-        let doors = file
-            .map(|(original, shown)| {
-                [
-                    div()
-                        .debug_selector(|| "preview-copy-path".into())
-                        .child(
-                            ferrite_ui::components::copy_button("preview-copy-path", shown)
-                                .tooltip_text("Copy path")
-                                .door(ICON_BUTTON, ICON_BUTTON_GLYPH, R_CONTROL),
+        // The browser's page strip is its own head, under the panel's
+        // Browser tab.
+        let head = (!matches!(document.body, Body::Browser)).then(|| {
+            let page = document.page().map(|page| page.source().clone());
+            let title = match &page {
+                Some(page) => page.title(),
+                None => self.preview_title(pane, &document),
+            };
+            let label = match page {
+                Some(_) => self.page_title_menu(owner, title.clone(), cx),
+                None => head_title(title.clone())
+                    .children(document.line().map(|line| head_suffix(format!(":{line}")))),
+            };
+            // A file (not a command's output, which no file holds, nor a page,
+            // whose menu does it) can have its path copied, as the head reads
+            // it, and open in its own app.
+            let file = match &document.body {
+                Body::BrowserAnnotation {
+                    annotation,
+                    image: Some(image),
+                } => annotation.original().map(|original| (image.clone(), original.display().to_string())),
+                _ => (document.name.is_none() && document.page().is_none())
+                    .then(|| (document.path.clone(), title.clone())),
+            };
+            let doors = file
+                .map(|(original, shown)| {
+                    [
+                        div()
+                            .debug_selector(|| "preview-copy-path".into())
+                            .child(
+                                ferrite_ui::components::copy_button("preview-copy-path", shown)
+                                    .tooltip_text("Copy path")
+                                    .door(ICON_BUTTON, ICON_BUTTON_GLYPH, R_CONTROL),
+                            )
+                            .into_any_element(),
+                        head_door(
+                            "open-original-image",
+                            "preview-original".into(),
+                            ferrite_ui::icons::EXTERNAL,
                         )
+                        .tooltip(ferrite_ui::menu::tooltip("Open in its app"))
+                        .on_click(move |_, window, cx| {
+                            cx.stop_propagation();
+                            ferrite_pane::preview::open_original(&original, window, cx);
+                        })
                         .into_any_element(),
-                    head_door(
-                        "open-original-image",
-                        "preview-original".into(),
-                        ferrite_ui::icons::EXTERNAL,
-                    )
-                    .tooltip(ferrite_ui::menu::tooltip("Open in its app"))
-                    .on_click(move |_, window, cx| {
-                        cx.stop_propagation();
-                        ferrite_pane::preview::open_original(&original, window, cx);
-                    })
-                    .into_any_element(),
-                ]
-            })
-            .into_iter()
-            .flatten();
+                    ]
+                })
+                .into_iter()
+                .flatten();
+            reading_head(label, doors)
+        });
         div()
             .debug_selector(|| "panel-preview".into())
             .track_focus(pane.preview.focus_handle())
@@ -510,7 +588,7 @@ impl CockpitView {
             .whitespace_normal()
             .text_size(px(FS_UI))
             .line_height(px(LH_UI))
-            .child(reading_head(label, doors))
+            .children(head)
             .child(body)
             .child(pane::card_ring(paint::CARD_RING))
             .on_action(cx.listener(move |view, _: &Close, _, cx| {
@@ -688,14 +766,12 @@ impl CockpitView {
             .as_ref()
             .is_none_or(|find| find.path != document.path)
         {
-            tab.find = Some(PreviewFind {
-                bar: ferrite_pane::find::Find::new(cx, move |view: &mut Self, cx| {
+            tab.find = Some(PreviewFind::new(
+                ferrite_pane::find::Find::new(cx, move |view: &mut Self, cx| {
                     view.refind_preview(owner, cx)
                 }),
-                path: document.path,
-                reveal: 0,
-                start_in_view: false,
-            });
+                document.path,
+            ));
             cx.notify();
         }
         if let Some(find) = &tab.find {
@@ -873,31 +949,59 @@ fn numbered_lines(
 
 /// A file the preview cannot show: why, quietly, centred on the card, and
 /// its original a click away — the image viewer's own note's twin.
-fn unshown(why: &Unshown, path: &Path, cx: &mut Context<CockpitView>) -> AnyElement {
+fn unshown(
+    why: &Unshown,
+    path: &Path,
+    thread: Option<ThreadId>,
+    cx: &mut Context<CockpitView>,
+) -> AnyElement {
     let (note, detail) = match why {
         Unshown::Binary => ("This is not a text file", None),
         Unshown::Unreadable(error) => ("Could not read this file", Some(error.clone())),
     };
     let original = path.to_path_buf();
-    cant_show(
-        note,
-        detail,
+    let mut doors: Vec<Door> = vec![(
         "open original",
-        move |window, cx| ferrite_pane::preview::open_original(&original, window, cx),
-        cx,
-    )
+        Box::new(move |window, cx| ferrite_pane::preview::open_original(&original, window, cx)),
+    )];
+    if let (Unshown::Unreadable(_), Some(thread)) = (why, thread) {
+        let view = cx.entity();
+        let path = path.to_path_buf();
+        doors.insert(
+            0,
+            (
+                "try again",
+                Box::new(move |window, cx| {
+                    view.update(cx, |view, cx| view.retry_preview(thread, &path, window, cx))
+                }),
+            ),
+        );
+    }
+    cant_show(note, detail, doors, cx)
 }
 
-/// The "can't show" note: what, why under it, and the one door that shows
-/// it elsewhere.
+type Door = (&'static str, Box<dyn Fn(&mut Window, &mut gpui::App)>);
+
 fn cant_show(
     note: &'static str,
     detail: Option<SharedString>,
-    door: &'static str,
-    open: impl Fn(&mut Window, &mut gpui::App) + 'static,
+    doors: Vec<Door>,
     cx: &mut Context<CockpitView>,
 ) -> AnyElement {
     use ferrite_ui::theme::*;
+    let doors = doors.into_iter().map(|(label, open)| {
+        let id = SharedString::from(format!("preview-{}", label.replace(' ', "-")));
+        let selector = id.clone();
+        ferrite_ui::components::form_button(id, cx)
+            .debug_selector(move || selector.to_string())
+            .h(px(ROW))
+            .px(px(CH))
+            .child(ferrite_ui::components::form_label(label, INK_SUBTLE))
+            .on_click(move |_, window, cx| {
+                cx.stop_propagation();
+                open(window, cx);
+            })
+    });
     div()
         .debug_selector(|| "preview-unshown".into())
         .flex_1()
@@ -917,17 +1021,7 @@ fn cant_show(
                 .text_center()
                 .child(detail)
         }))
-        .child(
-            ferrite_ui::components::form_button("preview-open-original", cx)
-                .debug_selector(|| "preview-open-original".into())
-                .h(px(ROW))
-                .px(px(CH))
-                .child(ferrite_ui::components::form_label(door, INK_SUBTLE))
-                .on_click(move |_, window, cx| {
-                    cx.stop_propagation();
-                    open(window, cx);
-                }),
-        )
+        .child(div().flex().gap(px(SPACE_2)).children(doors))
         .into_any_element()
 }
 
@@ -945,11 +1039,7 @@ fn reveal_found(tab: &mut PreviewTab, text: &Text, markdown: bool, start_in_view
         return;
     };
     if markdown {
-        let report = find.bar.report();
-        report.revealed.set(None);
-        report.ahead.set(None);
-        find.reveal = ferrite_pane::find::REVEAL_FRAMES;
-        find.start_in_view = start_in_view;
+        find.reveal_when_painted(start_in_view);
         return;
     }
     tab.scroll
@@ -985,7 +1075,11 @@ fn slide_to(line: &str, found: &std::ops::Range<usize>, slid: f32, view: f32) ->
 /// has painted, a new query moves to the first occurrence in view (or the
 /// first below it) and paints again; then an occurrence outside the
 /// preview's view scrolls a third of the way down.
-fn settle_markdown_found(find: &mut PreviewFind, scroll: &ScrollHandle, window: &mut Window) {
+pub(in crate::cockpit) fn settle_markdown_found(
+    find: &mut PreviewFind,
+    scroll: &ScrollHandle,
+    window: &mut Window,
+) {
     if find.reveal == 0 {
         return;
     }

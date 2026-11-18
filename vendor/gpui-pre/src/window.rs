@@ -2655,6 +2655,12 @@ impl Window {
         self.on_next_frame(move |_, cx| cx.notify(entity));
     }
 
+    /// Ferrite's patch: whether a callback already waits on the next frame, so
+    /// a redraw can join that frame instead of asking for one of its own.
+    pub fn frame_requested(&self) -> bool {
+        !self.next_frame_callbacks.borrow().is_empty()
+    }
+
     /// Runs all callbacks scheduled via [`Self::on_next_frame`], returning how many ran.
     ///
     /// Tests have no platform frame loop, so this simulates the delivery of the

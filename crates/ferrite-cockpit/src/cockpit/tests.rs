@@ -1,13 +1,16 @@
 mod archive;
+mod attachments;
 mod attention_alerts;
 mod background_work;
 mod boards;
 mod changes;
 mod checks;
+mod column_motion;
 mod completion_checks;
 mod coordinator;
 mod composer_chips;
 mod browser_annotations;
+mod browser_chrome;
 mod composer_controls;
 mod composer_menus;
 mod core_transcript_parity;
@@ -15,6 +18,7 @@ mod decision_cards;
 mod decisions_parity;
 mod diagnostics;
 mod delivery;
+mod details;
 mod direction;
 mod drafts;
 mod factory;
@@ -24,33 +28,42 @@ mod find;
 mod floats_parity;
 mod forks;
 mod frame_parity;
-mod fullscreen;
 mod image_viewer;
 mod interaction_regressions;
+mod key_ownership;
 mod key_shortcuts;
 mod layout_polish;
 mod leaving;
 mod link_clicks;
+mod link_targets;
 mod loops_overlay;
 mod machines;
 mod nav_list;
 mod nav_parity;
+mod nav_outcomes;
 mod nav_shelves;
 mod navigation;
 mod output_cards;
 mod owned_threads;
 mod panel;
+mod panel_persistence;
+mod panel_width;
+pub(super) mod panel_focus;
 mod panel_preview;
 mod parking;
 mod pr;
+mod pr_actions;
+mod pr_reads;
 mod project_picker;
 mod provider_controls;
 mod provider_forms;
 mod provider_navigation;
 mod provider_picker;
+mod prs;
 mod queued_prompts;
 mod reader_motion;
 mod render_performance;
+mod reopen;
 mod retention;
 mod review;
 mod row_menu;
@@ -62,12 +75,17 @@ mod stale_chrome;
 mod starts;
 mod startup;
 mod subagents;
-mod thread_groups;
 mod terminal;
+mod thread_keys;
 mod tools;
+mod citing;
 mod transcript_pointer;
+mod scroll_continuity;
 mod send_scroll;
+mod resume_recovery;
+mod sends;
 mod transcript_rows;
+mod tray_motion;
 mod ui_a;
 mod ui_b;
 mod ui_c;
@@ -114,9 +132,12 @@ struct Scripted {
     sent: Rc<RefCell<Vec<String>>>,
     answered: Rc<RefCell<Vec<(String, DecisionAnswer)>>>,
     controls: Rc<RefCell<Vec<ferrite_core::SessionControl>>>,
+    /// While set, the provider refuses every Session control.
+    fail_control: Rc<RefCell<bool>>,
     native_controls: Rc<RefCell<bool>>,
     withheld: Rc<RefCell<Vec<ferrite_core::ControlKind>>>,
     modes: Rc<RefCell<Option<Vec<ferrite_core::PermissionModeChoice>>>>,
+    sandbox: Rc<RefCell<Option<String>>>,
     file_searches: Rc<RefCell<Vec<(String, ferrite_core::providers::FileSearchReply)>>>,
     native_files: Rc<RefCell<bool>>,
     effort_answers: EffortAnswers,
@@ -152,10 +173,16 @@ impl Session for Scripted {
             vec![]
         }
     }
+    fn sandbox(&self) -> Option<String> {
+        self.sandbox.borrow().clone()
+    }
     fn supports_control(&self, kind: ferrite_core::ControlKind) -> bool {
         *self.native_controls.borrow() && !self.withheld.borrow().contains(&kind)
     }
     fn control(&mut self, action: ferrite_core::SessionControl) -> std::io::Result<()> {
+        if *self.fail_control.borrow() {
+            return Err(std::io::Error::other("stub refused the control"));
+        }
         self.controls.borrow_mut().push(action);
         Ok(())
     }
@@ -249,15 +276,26 @@ struct Fake {
     /// While set, spawn refuses — how a test fails a bootstrap (#29).
     fail: Rc<RefCell<bool>>,
     fail_send: Rc<RefCell<bool>>,
+    /// The next start waits on this, then fails with the words it hears:
+    /// a Session that is still starting while prompts are held for it.
+    start_gate: Rc<RefCell<Option<Receiver<String>>>>,
+    /// A provider that refuses to resume this native id, in these words.
+    refused_resume: Rc<RefCell<Option<(String, String)>>>,
+    /// The native id each start asked to resume, in call order.
+    resumed: Rc<RefCell<Vec<Option<String>>>>,
     sent: Rc<RefCell<Vec<String>>>,
     /// Every Decision answer that went out, with the Decision's id.
     answered: Rc<RefCell<Vec<(String, DecisionAnswer)>>>,
     controls: Rc<RefCell<Vec<ferrite_core::SessionControl>>>,
+    /// While set, the provider refuses every Session control.
+    fail_control: Rc<RefCell<bool>>,
     native_controls: Rc<RefCell<bool>>,
     /// Controls the native ones leave out, as a provider without them does.
     withheld: Rc<RefCell<Vec<ferrite_core::ControlKind>>>,
     /// When set, the permission modes every Session offers.
     modes: Rc<RefCell<Option<Vec<ferrite_core::PermissionModeChoice>>>>,
+    /// When set, the sandbox every Session says it runs in.
+    sandbox: Rc<RefCell<Option<String>>>,
     file_searches: Rc<RefCell<Vec<(String, ferrite_core::providers::FileSearchReply)>>>,
     native_files: Rc<RefCell<bool>>,
     effort_answers: EffortAnswers,
@@ -286,6 +324,30 @@ impl Spawner for Fake {
         self.model_discovery.borrow_mut().take()
     }
 
+    fn start(
+        &mut self,
+        request: ferrite_core::cockpit::SpawnRequest,
+    ) -> std::io::Result<ferrite_core::session::SessionLifecycle> {
+        self.resumed
+            .borrow_mut()
+            .push(request.resume.map(str::to_string));
+        let refused = self.refused_resume.borrow().clone();
+        if let Some((_, words)) = refused.filter(|(id, _)| request.resume == Some(id.as_str())) {
+            return ferrite_core::session::SessionLifecycle::background(move || {
+                Err(ferrite_core::providers::ResumeRefused::error(true, words))
+            });
+        }
+        let Some(gate) = self.start_gate.borrow_mut().take() else {
+            return self
+                .spawn(request)
+                .map(ferrite_core::session::SessionLifecycle::ready);
+        };
+        ferrite_core::session::SessionLifecycle::background(move || {
+            let words = gate.recv().unwrap_or_else(|_| "the gate closed".into());
+            Err(std::io::Error::other(words))
+        })
+    }
+
     fn spawn(
         &mut self,
         request: ferrite_core::cockpit::SpawnRequest,
@@ -309,9 +371,11 @@ impl Spawner for Fake {
             sent: self.sent.clone(),
             answered: self.answered.clone(),
             controls: self.controls.clone(),
+            fail_control: self.fail_control.clone(),
             native_controls: self.native_controls.clone(),
             withheld: self.withheld.clone(),
             modes: self.modes.clone(),
+            sandbox: self.sandbox.clone(),
             file_searches: self.file_searches.clone(),
             native_files: self.native_files.clone(),
             effort_answers: self.effort_answers.clone(),
@@ -319,35 +383,20 @@ impl Spawner for Fake {
     }
 }
 
+/// A file on disk named `file` in a scratch directory of its own: an
+/// attachment must exist to be sent.
+fn real_file(dir: &str, file: &str) -> std::path::PathBuf {
+    let dir = scratch(dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join(file);
+    std::fs::write(&path, b"x").unwrap();
+    path
+}
+
 fn scratch(name: &str) -> std::path::PathBuf {
     let dir = std::env::temp_dir().join(format!("ferrite-view-{}-{name}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     dir
-}
-
-/// Put every open Thread into one Group. A multi-Pane view **is** a Group
-/// (#28), so any test that wants more than one Pane on screen has to say
-/// which Group they share — `View::Solo` shows exactly the focused Pane.
-fn group_all(cockpit: &mut Cockpit) -> GroupId {
-    let threads = cockpit.threads();
-    let group = cockpit
-        .apply_group(GroupChange::Create {
-            first: threads[0],
-            second: threads[1],
-        })
-        .unwrap()
-        .group
-        .unwrap();
-    for thread in &threads[2..] {
-        cockpit
-            .apply_group(GroupChange::Join {
-                thread: *thread,
-                group,
-                index: None,
-            })
-            .unwrap();
-    }
-    group
 }
 
 /// Hold this test's wall clock still, for a test that counts renders. The
@@ -533,6 +582,20 @@ fn spoken(fake: &Fake, stream: usize) {
         .unwrap();
 }
 
+/// The agent on `stream` works, and the window's next sweep comes round: what
+/// it changed on disk is for the panel to follow.
+fn agent_worked(view: &gpui::Entity<CockpitView>, fake: &Fake, stream: usize, cx: &mut gpui::VisualTestContext) {
+    fake.streams.borrow()[stream]
+        .send(SessionEvent::TextDelta { text: "Edited.".into() })
+        .unwrap();
+    view.update(cx, |view, cx| {
+        view.swept = cx.background_executor().now() - SWEEP_INTERVAL;
+        view.pump(cx);
+    });
+    cx.run_until_parked();
+    tick(cx);
+}
+
 /// Open every settled turn's fold on Pane 0 (`DisclosureId::Turn`), for a
 /// test whose subject is the work rows the fold hides.
 fn open_folds(view: &gpui::Entity<CockpitView>, cx: &mut gpui::VisualTestContext) {
@@ -570,6 +633,14 @@ fn open_live(cx: &mut gpui::VisualTestContext) {
         .center();
     cx.simulate_click(live, gpui::Modifiers::none());
     tick(cx);
+}
+
+/// The quotes and comments of `replies`, without where they came from.
+fn quotes(replies: &[ferrite_core::replies::Reply]) -> Vec<(&str, &str)> {
+    replies
+        .iter()
+        .map(|reply| (reply.quote.as_str(), reply.text.as_str()))
+        .collect()
 }
 
 fn tick(cx: &mut gpui::VisualTestContext) {

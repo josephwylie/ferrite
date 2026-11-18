@@ -1,0 +1,313 @@
+[
+  {
+    "id": "panel-tools-001",
+    "title": "A failed file save is silent and closing the file discards the edited buffer",
+    "priority": "P0",
+    "category": "defect",
+    "evidence_level": "source-proven",
+    "impact": "An operator can lose unsaved work when the file becomes unwritable or its parent directory disappears. P0 follows this audit's data-loss rule; this is conditional, not a claim that ordinary saves fail.",
+    "ferrite_evidence": [
+      "crates/ferrite-cockpit/src/cockpit/tools/editor.rs:135-140",
+      "crates/ferrite-cockpit/src/cockpit/tools/files.rs:256-268"
+    ],
+    "t3_evidence": [
+      "apps/web/src/components/files/fileSaveCoordinator.ts:67-88",
+      "apps/web/src/components/files/fileSaveSessions.ts:46-59,96-120,153-161"
+    ],
+    "recommendation": "Return structured save results, report failures, keep the tab and draft on failure, and make close/save decisions explicit. Use atomic replacement to avoid partial-write corruption.",
+    "acceptance": "In a disposable checkout, deny writes after editing. Save displays the filesystem error. Closing preserves the exact draft and offers retry or explicit discard. Restore permission and verify that retry writes the draft."
+  },
+  {
+    "id": "panel-tools-002",
+    "title": "Cached editor buffers can overwrite newer agent or other-thread changes",
+    "priority": "P0",
+    "category": "defect",
+    "evidence_level": "source-proven",
+    "impact": "An agent and operator often edit the same checkout. A later save from an old file buffer can erase the agent's changes. Two Ferrite threads pointing at one checkout also create independent buffers.",
+    "ferrite_evidence": [
+      "crates/ferrite-cockpit/src/cockpit/tools.rs:20-26",
+      "crates/ferrite-cockpit/src/cockpit/tools/files.rs:159-191,201-241",
+      "crates/ferrite-cockpit/src/cockpit/tools/editor.rs:66-83,135-140"
+    ],
+    "t3_evidence": [
+      "apps/web/src/components/files/FilePreviewPanel.tsx:1322-1335",
+      "apps/web/src/components/files/fileSaveSessions.ts:46-59,135-161"
+    ],
+    "recommendation": "Track disk revisions, refresh clean buffers on workspace changes, and block or reconcile conflicting saves. Coordinate writes by canonical workspace and file, not by thread alone.",
+    "acceptance": "Open the same file in two threads sharing a checkout. Change a different line in each, and repeat with an external agent edit. No successful save silently removes the other edit; a conflict is visible and recoverable."
+  },
+  {
+    "id": "panel-tools-003",
+    "title": "The file tree never refreshes cached directory entries or Git status",
+    "priority": "P1",
+    "category": "defect",
+    "evidence_level": "source-proven",
+    "impact": "Files created, deleted, or renamed by an agent are missing or stale in an already opened tree. Git colors remain based on its initial snapshot.",
+    "ferrite_evidence": [
+      "crates/ferrite-cockpit/src/cockpit/tools/tree.rs:43-76,135-140",
+      "crates/ferrite-cockpit/src/cockpit/tools/files.rs:118-154,44-58",
+      "crates/ferrite-cockpit/src/cockpit/panel.rs:314-325"
+    ],
+    "t3_evidence": [
+      "apps/web/src/components/files/FileBrowserPanel.tsx:64-80,420-432"
+    ],
+    "recommendation": "Invalidate directories and Git status on workspace mutation and expose Refresh. Keep expanded paths and selection while applying updates.",
+    "acceptance": "With Files already open, create, rename, delete, and modify files through a terminal or agent. Tree rows and status update without restarting or changing threads; manual refresh also works."
+  },
+  {
+    "id": "panel-tools-004",
+    "title": "File discovery silently omits entries beyond fixed limits",
+    "priority": "P2",
+    "category": "partial-capability",
+    "evidence_level": "source-proven",
+    "impact": "Large directories and repositories can contain files that the tree or fuzzy search never exposes, without a truncation notice.",
+    "ferrite_evidence": [
+      "crates/ferrite-cockpit/src/cockpit/tools/files.rs:735-750",
+      "crates/ferrite-cockpit/src/cockpit/tools/tree.rs:13-16,143-178"
+    ],
+    "t3_evidence": [],
+    "recommendation": "Use incremental directory traversal and virtualized rows. If a limit remains, expose it and allow explicit loading or exact-path opening.",
+    "acceptance": "Use a fixture with 1,100 files in one folder and a target after the 20,000th search entry. The final tree entry and target are reachable, or the UI explicitly provides continuation."
+  },
+  {
+    "id": "panel-tools-005",
+    "title": "Nested file tabs overflow into an inaccessible clipped region",
+    "priority": "P1",
+    "category": "interaction",
+    "evidence_level": "source-proven",
+    "impact": "Opening many files can put the active file's tab and close control offscreen. The unified panel strip's overflow controls do not control this separate strip.",
+    "ferrite_evidence": [
+      "crates/ferrite-cockpit/src/cockpit/tools/files.rs:467-543",
+      "crates/ferrite-cockpit/src/cockpit/tools/files.rs:244-253",
+      "docs/adr/0039-the-panel-is-one-tabbed-surface-host.md:15-29"
+    ],
+    "t3_evidence": [
+      "apps/web/src/rightPanelStore.ts:812-844"
+    ],
+    "recommendation": "Move editable files into the shared panel surface list. If retaining an inner strip, add overflow navigation and automatic active-tab reveal with the same keyboard and close semantics.",
+    "acceptance": "Open 20 kept files at a narrow panel width. Reach, activate, and close every tab by mouse and keyboard. A newly opened or reactivated file always has a visible selected tab."
+  },
+  {
+    "id": "panel-tools-006",
+    "title": "Restart restores the Files shell but loses its open files and tool preferences",
+    "priority": "P2",
+    "category": "partial-capability",
+    "evidence_level": "source-proven",
+    "impact": "Operators lose their file working set, selected file, explorer visibility, editor preferences, Changes scope, and review state after restarting.",
+    "ferrite_evidence": [
+      "crates/ferrite-cockpit/src/cockpit/surfaces.rs:304-314,342-354",
+      "crates/ferrite-cockpit/src/cockpit/tools/files.rs:138-149,275-293",
+      "crates/ferrite-cockpit/src/cockpit/tools/changes.rs:145-159"
+    ],
+    "t3_evidence": [
+      "apps/web/src/rightPanelStore.ts:812-844,1190-1204",
+      "apps/web/src/components/files/FilePreviewPanel.tsx:1348-1357"
+    ],
+    "recommendation": "Persist canonical file surfaces, active file, and stable tool preferences. Define separate restoration rules for process resources and unsaved drafts.",
+    "acceptance": "After restart, restore saved file tabs and active file, chosen tree visibility and wrapping, and the intended review scope. Unsaved drafts must be recovered or safely flushed, never silently lost."
+  },
+  {
+    "id": "panel-tools-007",
+    "title": "Markdown and prose files cannot be edited or navigated to a requested source line in Files",
+    "priority": "P2",
+    "category": "partial-capability",
+    "evidence_level": "source-proven",
+    "impact": "README files, instructions, and text documents open as rendered prose with no source-edit mode. Source links to their line numbers lose their target after redirecting into Files.",
+    "ferrite_evidence": [
+      "crates/ferrite-cockpit/src/cockpit/tools/files.rs:192-196,201-228,668-687",
+      "crates/ferrite-pane/src/preview.rs:592-606"
+    ],
+    "t3_evidence": [
+      "apps/web/src/components/files/FilePreviewPanel.tsx:1211-1235,1648-1658"
+    ],
+    "recommendation": "Separate presentation mode from editability. Preserve line intent and switch to source view for line links, with an explicit render/source toggle.",
+    "acceptance": "Edit and save README.md and notes.txt. Follow README.md:80 from a conversation and verify source line 80 is visible and highlighted; switching back to rendered view preserves the file."
+  },
+  {
+    "id": "panel-tools-008",
+    "title": "Opening image or document files from the tree bypasses the available preview path",
+    "priority": "P2",
+    "category": "partial-capability",
+    "evidence_level": "source-proven",
+    "impact": "The Files tree tells users that an image is not text instead of showing it. PDFs, audio, video, and document previews also lack the richer in-panel handling available in T3.",
+    "ferrite_evidence": [
+      "crates/ferrite-cockpit/src/cockpit/tools/files.rs:178-189,201-212,688-696",
+      "crates/ferrite-cockpit/src/cockpit/panel/preview.rs:1-6",
+      "crates/ferrite-pane/src/preview.rs:49-81"
+    ],
+    "t3_evidence": [
+      "apps/web/src/components/files/FilePreviewPanel.tsx:193-225,244-287,335-382,1596-1610"
+    ],
+    "recommendation": "Unify file opening around file-type dispatch. Reuse Ferrite's image viewer from Files and prioritize PDF, media, and table previews based on actual workflows.",
+    "acceptance": "Open a PNG from both tree and transcript and reach equivalent image controls. Open a PDF and receive a preview or a specific supported fallback, not a generic text-decoding failure."
+  },
+  {
+    "id": "panel-tools-009",
+    "title": "Changes cuts each file at 120 displayed lines with no expansion action",
+    "priority": "P1",
+    "category": "defect",
+    "evidence_level": "source-proven",
+    "impact": "A primary review view hides later changes in a large file. A user can mark the file reviewed without having a way to inspect its omitted hunks in that view.",
+    "ferrite_evidence": [
+      "crates/ferrite-cockpit/src/cockpit/panel/hunks.rs:21-26,364-425",
+      "crates/ferrite-cockpit/src/cockpit/tools/changes.rs:819-845"
+    ],
+    "t3_evidence": [
+      "apps/web/src/components/DiffPanel.tsx:1505-1525"
+    ],
+    "recommendation": "Give Changes a full diff renderer with lazy hunk loading or virtualization. Keep summary caps only in explicitly abbreviated Overview cards.",
+    "acceptance": "Create a diff with more than 200 changed lines and a distinctive deletion near the end. The user can inspect that deletion in Changes and reach every omitted hunk before marking the file reviewed."
+  },
+  {
+    "id": "panel-tools-010",
+    "title": "Disabling diff wrapping clips long lines instead of allowing horizontal scrolling",
+    "priority": "P2",
+    "category": "defect",
+    "evidence_level": "source-proven",
+    "impact": "Long changed expressions become unreadable once wrap is disabled, even though that is the intended mode for comparing code alignment.",
+    "ferrite_evidence": [
+      "crates/ferrite-cockpit/src/cockpit/panel/hunks.rs:334-357,393-410",
+      "crates/ferrite-cockpit/src/cockpit/tools/changes.rs:365,840-845"
+    ],
+    "t3_evidence": [
+      "apps/web/src/components/DiffPanel.tsx:1515-1519"
+    ],
+    "recommendation": "Use a horizontal scroll container for unwrapped diffs and preserve readable line-number and sign gutters.",
+    "acceptance": "Put a changed token at column 250, disable wrapping, and scroll to inspect and select that token without resizing the whole window."
+  },
+  {
+    "id": "panel-tools-011",
+    "title": "Hide whitespace changes only removes blank changed lines",
+    "priority": "P2",
+    "category": "defect",
+    "evidence_level": "source-proven",
+    "impact": "Indentation-only and trailing-space changes still dominate reviews when the operator explicitly asks to hide whitespace changes.",
+    "ferrite_evidence": [
+      "crates/ferrite-cockpit/src/cockpit/tools/changes.rs:190-202,365-366,840-845"
+    ],
+    "t3_evidence": [
+      "apps/web/src/components/DiffPanel.tsx:373-384",
+      "apps/server/src/vcs/GitVcsDriverCore.ts:3748,3797"
+    ],
+    "recommendation": "Compute the diff using an ignore-whitespace option and keep displayed statistics consistent with it.",
+    "acceptance": "Use separate indentation-only, trailing-space-only, and substantive edits. With the option on, only substantive changes remain; turn it off to restore all changes."
+  },
+  {
+    "id": "panel-tools-012",
+    "title": "Changes stays stale after workspace edits and reviewed marks survive changed contents",
+    "priority": "P2",
+    "category": "defect",
+    "evidence_level": "source-proven",
+    "impact": "The review can show yesterday's loaded content while an agent keeps editing. A reviewed checkmark can remain on a file whose contents changed or whose comparison scope changed.",
+    "ferrite_evidence": [
+      "crates/ferrite-cockpit/src/cockpit/tools/changes.rs:221-232,284-329,345-357,385-394",
+      "crates/ferrite-cockpit/src/cockpit/panel.rs:254-265"
+    ],
+    "t3_evidence": [
+      "apps/web/src/components/DiffPanel.tsx:350-390,549-556"
+    ],
+    "recommendation": "Refresh on a workspace revision signal and associate reviewed state with a diff/content identity. Preserve scroll and folds independently of review validity.",
+    "acceptance": "Mark a file reviewed, modify it, and return to Changes. Updated hunks appear and the reviewed mark clears. A changed comparison base does not inherit unrelated reviewed marks."
+  },
+  {
+    "id": "panel-tools-013",
+    "title": "Changes lacks full diff navigation and comparison controls present in T3",
+    "priority": "P2",
+    "category": "missing-capability",
+    "evidence_level": "source-proven",
+    "impact": "Large code reviews require more scanning and external tooling. The panel cannot show old and new code side by side, reveal a file through a changes tree, or select a particular completed turn or commit.",
+    "ferrite_evidence": [
+      "crates/ferrite-cockpit/src/cockpit/tools/changes.rs:5-17,36-62",
+      "crates/ferrite-cockpit/src/cockpit/panel/hunks.rs:21-26,44-49,303-327,334-410"
+    ],
+    "t3_evidence": [
+      "apps/web/src/components/DiffPanel.tsx:329-364,1197-1220,1515-1542"
+    ],
+    "recommendation": "Build on the existing review core while giving the panel a full diff presentation and explicit scope model. Treat turn history as a separate product decision if checkpoints are not available.",
+    "acceptance": "Switch stacked/split views, jump to a changed file, read old/new line numbers and syntax, and compare a selected commit or completed turn without leaving the panel. If a capability is deferred, document the supported panel scope."
+  },
+  {
+    "id": "panel-tools-014",
+    "title": "Stage and unstage failures are discarded",
+    "priority": "P2",
+    "category": "defect",
+    "evidence_level": "source-proven",
+    "impact": "A Git lock, permission error, or repository failure makes the stage button appear to do nothing. The operator cannot tell whether the operation ran or what to fix.",
+    "ferrite_evidence": [
+      "crates/ferrite-cockpit/src/cockpit/tools/changes.rs:180-187,260-280,806-816"
+    ],
+    "t3_evidence": [],
+    "recommendation": "Return a typed result from staging, display stderr on failure, prevent duplicate in-flight actions, and refresh only with a clear operation outcome.",
+    "acceptance": "In a disposable repository, create a temporary index lock, click Stage, and see a precise error. Remove the lock and retry successfully. Do the equivalent for Unstage."
+  },
+  {
+    "id": "panel-tools-015",
+    "title": "Terminal startup failures leave no visible result",
+    "priority": "P1",
+    "category": "defect",
+    "evidence_level": "source-proven",
+    "impact": "Terminal is a primary debugging fallback. A failed shell launch makes its menu item and shortcut look broken.",
+    "ferrite_evidence": [
+      "crates/ferrite-cockpit/src/cockpit/tools/terminal.rs:93-116"
+    ],
+    "t3_evidence": [
+      "apps/web/src/components/ThreadTerminalDrawer.tsx:194-207,1079-1088"
+    ],
+    "recommendation": "Represent terminal startup as loading, running, or failed. Retain the failed surface so the operator can read the error and retry.",
+    "acceptance": "Force a shell or cwd startup failure in a disposable thread. Both the menu and shortcut display the same actionable failure and recover after fixing the cause."
+  },
+  {
+    "id": "panel-tools-016",
+    "title": "Terminal surfaces cannot split into simultaneous shells",
+    "priority": "P2",
+    "category": "missing-capability",
+    "evidence_level": "source-proven",
+    "impact": "Running a server and a command side by side requires switching tabs or using an external terminal.",
+    "ferrite_evidence": [
+      "crates/ferrite-cockpit/src/cockpit/tools/terminal.rs:50-61,174-185,242-292",
+      "crates/ferrite-cockpit/src/cockpit/surfaces.rs:29-42"
+    ],
+    "t3_evidence": [
+      "apps/web/src/rightPanelStore.ts:42-47,165-173",
+      "apps/web/src/components/ThreadTerminalDrawer.tsx:1763-1786"
+    ],
+    "recommendation": "Add split groups only if this everyday multitasking workflow is in scope; retain simple single-terminal tabs as the default.",
+    "acceptance": "Run a server in one split and commands in the other, resize each pane, focus by keyboard, and close one pane without terminating its sibling."
+  },
+  {
+    "id": "panel-tools-017",
+    "title": "Terminal output has no URL or file-path opening flow",
+    "priority": "P2",
+    "category": "missing-capability",
+    "evidence_level": "source-proven",
+    "impact": "Users must copy a localhost URL or compiler file path manually instead of opening the browser or file directly from terminal output.",
+    "ferrite_evidence": [
+      "crates/ferrite-terminal/src/view.rs:570-612",
+      "crates/ferrite-cockpit/src/cockpit/tools/terminal.rs:119-149,242-264"
+    ],
+    "t3_evidence": [
+      "apps/web/src/components/ThreadTerminalDrawer.tsx:975-1024"
+    ],
+    "recommendation": "Parse URLs and file locations from terminal text or terminal hyperlink metadata and use the existing browser/file entry points.",
+    "acceptance": "Print a localhost address, an HTTPS URL, and a relative path with a line number. Open each with the documented gesture and verify the correct destination and line."
+  },
+  {
+    "id": "panel-tools-018",
+    "title": "Panel sizing cannot adapt to narrow layouts or recover a smaller width after wide tools",
+    "priority": "P2",
+    "category": "interaction",
+    "evidence_level": "inferred",
+    "impact": "The panel can consume disproportionate space on a small window. Opening Files or Changes permanently raises the saved width until the operator resizes it, even after returning to Overview.",
+    "ferrite_evidence": [
+      "crates/ferrite-cockpit/src/cockpit/panel.rs:149-177,368-383,606-619",
+      "crates/ferrite-ui/src/theme.rs:989,2027-2029"
+    ],
+    "t3_evidence": [
+      "apps/web/src/rightPanelLayout.ts:1-3",
+      "apps/web/src/components/chat/ChatRightPanel.tsx:14-49",
+      "apps/web/src/components/RightPanelSheet.tsx:20-25"
+    ],
+    "recommendation": "Define narrow-window behavior and preserve a user-chosen compact width separately from temporary tool minimums. Consider a sheet or explicit panel-only mode.",
+    "acceptance": "At 800, 1,000, and 1,400 pixel window widths, open each tool and return to Overview. All controls remain reachable and chat remains usable; temporary tool expansion does not silently replace the operator's compact width."
+  }
+]

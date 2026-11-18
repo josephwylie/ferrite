@@ -10,6 +10,7 @@
 //! release parks them all. Released back on the first card, it parks that
 //! one alone.
 
+use super::nav_view::{NavEvent, NavView};
 use super::*;
 
 /// A Park press held down: the card it started on, and every card drawn
@@ -20,12 +21,12 @@ pub(super) struct ParkSweep {
     swept: Vec<ThreadId>,
 }
 
-impl CockpitView {
+impl NavView {
     /// The cards `from..=to` spans in the nav's last drawing order, either
     /// way round; just `from` when either is not drawn. Read between
     /// frames only: a render is redrawing the order.
     fn drawn_span(&self, from: ThreadId, to: ThreadId) -> Vec<ThreadId> {
-        let drawn = self.nav_drawn.borrow();
+        let drawn = self.drawn.borrow();
         let at = |thread| drawn.iter().position(|drawn| *drawn == thread);
         match (at(from), at(to)) {
             (Some(a), Some(b)) => drawn[a.min(b)..=a.max(b)].to_vec(),
@@ -35,7 +36,7 @@ impl CockpitView {
 
     /// Whether `thread`'s card wears the picked fill.
     pub(super) fn card_picked(&self, thread: ThreadId) -> bool {
-        self.nav_picked.contains(&thread)
+        self.picked.contains(&thread)
             || self
                 .park_sweep
                 .as_ref()
@@ -45,8 +46,8 @@ impl CockpitView {
     /// What a menu opened on `thread` acts on: the whole pick when the
     /// card is in it, else the Thread alone.
     pub(super) fn menu_threads(&self, thread: ThreadId) -> Vec<ThreadId> {
-        if self.nav_picked.len() > 1 && self.nav_picked.contains(&thread) {
-            self.nav_picked.clone()
+        if self.picked.len() > 1 && self.picked.contains(&thread) {
+            self.picked.clone()
         } else {
             vec![thread]
         }
@@ -63,37 +64,37 @@ impl CockpitView {
         cx: &mut Context<Self>,
     ) -> bool {
         if modifiers.platform {
-            match self.nav_picked.iter().position(|picked| *picked == thread) {
+            match self.picked.iter().position(|picked| *picked == thread) {
                 Some(at) => {
-                    self.nav_picked.remove(at);
+                    self.picked.remove(at);
                 }
-                None => self.nav_picked.push(thread),
+                None => self.picked.push(thread),
             }
         } else if modifiers.shift {
             let anchor = self
-                .nav_picked
+                .picked
                 .last()
                 .copied()
-                .or(self.focused_thread())
+                .or_else(|| self.inputs(cx).and_then(|inputs| inputs.shown))
                 .unwrap_or(thread);
-            self.nav_picked = self.drawn_span(anchor, thread);
+            self.picked = self.drawn_span(anchor, thread);
         } else {
-            if !self.nav_picked.is_empty() {
-                self.nav_picked.clear();
-                self.notify_part(parts::Part::Nav, cx);
+            if !self.picked.is_empty() {
+                self.picked.clear();
+                cx.notify();
             }
             return false;
         }
-        self.notify_part(parts::Part::Nav, cx);
+        cx.notify();
         true
     }
 
     /// A right press on a card outside the pick lets the pick go: the menu
     /// is that card's alone.
     pub(super) fn pick_for_menu(&mut self, thread: ThreadId, cx: &mut Context<Self>) {
-        if !self.nav_picked.contains(&thread) && !self.nav_picked.is_empty() {
-            self.nav_picked.clear();
-            self.notify_part(parts::Part::Nav, cx);
+        if !self.picked.contains(&thread) && !self.picked.is_empty() {
+            self.picked.clear();
+            cx.notify();
         }
     }
 
@@ -103,7 +104,7 @@ impl CockpitView {
             from: thread,
             swept: vec![thread],
         });
-        self.notify_part(parts::Part::Nav, cx);
+        cx.notify();
     }
 
     /// The pointer, held down, over `thread`'s card: the sweep reaches it.
@@ -118,7 +119,7 @@ impl CockpitView {
             .filter(|sweep| sweep.swept != swept)
         {
             sweep.swept = swept;
-            self.notify_part(parts::Part::Nav, cx);
+            cx.notify();
         }
     }
 
@@ -127,10 +128,8 @@ impl CockpitView {
         let Some(sweep) = self.park_sweep.take() else {
             return;
         };
-        let threads = sweep.swept;
-        self.nav_picked.retain(|picked| !threads.contains(picked));
-        self.park_listed(&threads, cx);
-        self.notify_part(parts::Part::Nav, cx);
+        cx.emit(NavEvent::Park(sweep.swept));
+        cx.notify();
     }
 
     /// A card's pointer wiring, at every place the nav lists one: it joins
@@ -142,10 +141,10 @@ impl CockpitView {
         thread: ThreadId,
         cx: &mut Context<Self>,
     ) -> Stateful<Div> {
-        self.nav_drawn.borrow_mut().push(thread);
-        card.on_mouse_move(cx.listener(move |view, event: &MouseMoveEvent, _, cx| {
+        self.drawn.borrow_mut().push(thread);
+        card.on_mouse_move(cx.listener(move |nav, event: &MouseMoveEvent, _, cx| {
             if event.pressed_button == Some(MouseButton::Left) {
-                view.sweep_over(thread, cx);
+                nav.sweep_over(thread, cx);
             }
         }))
     }
@@ -156,14 +155,14 @@ impl CockpitView {
         list: Stateful<Div>,
         cx: &mut Context<Self>,
     ) -> Stateful<Div> {
-        list.capture_any_mouse_up(cx.listener(|view, event: &MouseUpEvent, _, cx| {
+        list.capture_any_mouse_up(cx.listener(|nav, event: &MouseUpEvent, _, cx| {
             if event.button == MouseButton::Left {
-                view.finish_park_sweep(cx);
+                nav.finish_park_sweep(cx);
             }
         }))
         .on_mouse_up_out(
             MouseButton::Left,
-            cx.listener(|view, _: &MouseUpEvent, _, cx| view.finish_park_sweep(cx)),
+            cx.listener(|nav, _: &MouseUpEvent, _, cx| nav.finish_park_sweep(cx)),
         )
     }
 }

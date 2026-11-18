@@ -78,26 +78,22 @@ fn a_request_toast_stands_top_right_clear_of_the_composer(cx: &mut TestAppContex
     );
 }
 
-/// A finished turn keeps its toast rule: with the nav folded, an off-board
-/// Thread's finish toasts (only `⏎ open`), clear of every Pane head, and it
-/// goes once its Thread lands on the board.
+/// A finished turn keeps its toast rule: with the nav folded, a Thread off
+/// screen toasts its finish (only `⏎ open`), clear of the view's head, and
+/// the toast goes once its Thread is on screen.
 #[gpui::test]
-fn the_rails_one_toast_clears_every_pane_head_and_goes_on_landing(cx: &mut TestAppContext) {
-    // A board of two, and a third Thread off it.
+fn the_rails_one_toast_clears_the_view_head_and_goes_on_landing(cx: &mut TestAppContext) {
+    // One Thread on screen, and another off it.
     let (mut core, fake) = cockpit("toast-geometry", 3);
     let threads = core.threads();
-    core.apply_group(GroupChange::Create {
-        first: threads[0],
-        second: threads[1],
-    })
-    .unwrap();
-    let group = core.groups().of(threads[0]).unwrap().id;
-    core.send(threads[2], "task".into());
+    let _ = core.send(threads[2], "task".into());
     core.pump();
-    core.enter_group(group).unwrap();
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     cx.simulate_resize(gpui::size(px(1440.), px(900.)));
-    view.update(cx, |view, cx| view.set_nav_collapsed(true, cx));
+    view.update(cx, |view, cx| {
+        view.focus_thread(threads[0], cx);
+        view.set_nav_collapsed(true, cx);
+    });
     tick(cx);
     fake.streams.borrow()[2]
         .send(SessionEvent::TurnEnded {
@@ -108,7 +104,7 @@ fn the_rails_one_toast_clears_every_pane_head_and_goes_on_landing(cx: &mut TestA
     tick(cx);
     ring(cx);
     view.read_with(cx, |view, _| {
-        assert_eq!(view.needs_you.toasts().len(), 1, "one toast, off the board")
+        assert_eq!(view.needs_you.toasts().len(), 1, "one toast, off screen")
     });
     let selector: &'static str = format!("toast-{}", threads[2].get()).leak();
     let toast = cx.debug_bounds(selector).expect("the toast is up");
@@ -116,23 +112,20 @@ fn the_rails_one_toast_clears_every_pane_head_and_goes_on_landing(cx: &mut TestA
     assert!(cx.debug_bounds(open).is_some(), "a finish offers `⏎ open`");
     let allow: &'static str = format!("toast-allow-{}", threads[2].get()).leak();
     assert!(cx.debug_bounds(allow).is_none(), "and no answers");
-    for thread in &threads[..2] {
-        let head: &'static str = format!("pane-head-{}", thread.get()).leak();
-        let head = cx.debug_bounds(head).expect("the board shows a Pane head");
-        // Clear of it: under it, or beside it over the panel's column.
-        assert!(
-            !head.intersects(&toast),
-            "a toast {toast:?} would cover the Pane head at {head:?}"
-        );
-    }
+    let head = cx.debug_bounds("view-head").expect("the view's head");
+    // Clear of it: under it, or beside it over the panel's column.
+    assert!(
+        !head.intersects(&toast),
+        "a toast {toast:?} would cover the view head at {head:?}"
+    );
 
-    // The Thread lands on the board: its toast goes.
+    // The Thread comes on screen: its toast goes.
     view.update(cx, |view, cx| view.land_on_thread(threads[2], cx));
     tick(cx);
     view.read_with(cx, |view, _| {
         assert!(
             view.needs_you.toasts().is_empty(),
-            "a Thread on the board has no toast"
+            "a Thread on screen has no toast"
         )
     });
     assert!(cx.debug_bounds(selector).is_none());

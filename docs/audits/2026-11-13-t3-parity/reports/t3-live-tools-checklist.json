@@ -1,0 +1,3482 @@
+{
+  "title": "T3 native live tools checklist",
+  "source_commit": "74573fc29b901bafbf8f1dbb2eb29606da1fa448",
+  "source_root": "/tmp/ferrite-t3-audit-source-20261113",
+  "prepared_from": "source and local Ferrite Git metadata; no live T3 verification by this worker",
+  "all_cases_initial_status": "not-run",
+  "execution_owner": "parent agent; native UI and authorized Sol and Sonnet subscription runs remain with parent",
+  "sources": {
+    "host": [
+      "apps/web/src/components/RightPanelTabs.tsx",
+      "apps/web/src/components/chat/ChatRightPanel.tsx",
+      "apps/web/src/hooks/usePreviewPanelInlineSize.ts",
+      "apps/web/src/components/sidebar/SidebarChrome.tsx"
+    ],
+    "pr_list": [
+      "apps/web/src/components/pullRequest/PullRequestsPage.tsx",
+      "apps/web/src/components/pullRequest/PullRequestsColumn.tsx",
+      "apps/web/src/components/pullRequest/PullRequestListFilters.tsx",
+      "apps/web/src/components/pullRequest/pullRequestListOptions.ts",
+      "apps/web/src/components/pullRequest/PullRequestListEmptyState.tsx"
+    ],
+    "pr_detail": [
+      "apps/web/src/components/pullRequest/PullRequestDetailPanel.tsx",
+      "apps/web/src/components/pullRequest/PullRequestChecksPopover.tsx",
+      "apps/web/src/components/pullRequest/PullRequestSummaryTab.tsx",
+      "apps/web/src/components/pullRequest/PullRequestTimelineTab.tsx",
+      "apps/web/src/components/pullRequest/PullRequestCodeTab.tsx"
+    ],
+    "pr_actions": [
+      "apps/web/src/components/pullRequest/PullRequestActionsMenu.tsx",
+      "apps/web/src/components/pullRequest/PullRequestDetailActions.tsx",
+      "apps/web/src/components/pullRequest/PullRequestReviewForm.tsx",
+      "apps/web/src/components/pullRequest/PullRequestCommentForm.tsx",
+      "apps/web/src/components/pullRequest/PullRequestMarkdownEditor.tsx",
+      "apps/web/src/components/pullRequest/PullRequestThreadLinks.tsx",
+      "apps/web/src/components/pullRequest/LinkPullRequestDialog.tsx"
+    ],
+    "pr_errors": [
+      "apps/web/src/components/pullRequest/PullRequestsUnavailableState.tsx",
+      "apps/web/src/components/pullRequest/PullRequestActivityUnavailableState.tsx",
+      "apps/web/src/components/pullRequest/PullRequestDiffUnavailableState.tsx"
+    ],
+    "files": [
+      "apps/web/src/components/files/FileBrowserPanel.tsx",
+      "apps/web/src/components/files/FilePreviewPanel.tsx",
+      "apps/web/src/components/files/FileExplorerPane.tsx",
+      "apps/web/src/components/files/fileEditorDismissal.ts"
+    ],
+    "diff": [
+      "apps/web/src/components/DiffPanel.tsx",
+      "apps/web/src/components/diffs/DiffFileTree.tsx",
+      "apps/web/src/components/GitActionsControl.tsx",
+      "apps/web/src/components/GitActionsControl.logic.ts"
+    ],
+    "terminal": [
+      "apps/web/src/components/ThreadTerminalDrawer.tsx",
+      "apps/web/src/components/terminal/useThreadTerminalActions.ts",
+      "apps/web/src/lib/terminalCloseConfirm.ts"
+    ],
+    "lifecycle": [
+      "apps/web/src/components/CommandPalette.tsx",
+      "apps/web/src/components/CommandPaletteAddProject.tsx",
+      "apps/web/src/components/threadActionMenu.logic.ts",
+      "apps/web/src/components/Sidebar.tsx",
+      "apps/web/src/components/sidebar/SidebarThreadRow.tsx",
+      "apps/web/src/components/settings/ArchivedThreadsPanel.tsx",
+      "apps/web/src/components/settings/ProjectSettingsPanel.tsx"
+    ],
+    "settings": [
+      "apps/web/src/components/settings/settingsSearch.ts",
+      "apps/web/src/components/settings/SettingsSidebarNav.tsx",
+      "apps/web/src/routes/_chat.settings.tsx",
+      "apps/web/src/components/settings/SettingsScopeContext.tsx"
+    ],
+    "schedules": [
+      "apps/web/src/components/settings/ScheduledTasksSettings.tsx"
+    ],
+    "guides": [
+      "apps/web/src/components/pullRequest/PullRequestGuideTab.tsx",
+      "apps/web/src/components/pullRequest/guide/PullRequestGuideRunCoordinator.tsx"
+    ]
+  },
+  "fixtures": {
+    "scratch": "Independent disposable local Git repo or copy/clone; never edit the active Ferrite checkout",
+    "real_pr_origin": "https://github.com/josephwylie/ferrite.git",
+    "known_local_merged": [
+      {
+        "number": 189,
+        "merge_commit": "265fae71",
+        "title": "Second code review fixes for #162",
+        "url": "https://github.com/josephwylie/ferrite/pull/189"
+      },
+      {
+        "number": 187,
+        "merge_commit": "7fe477e2",
+        "title": "The app owns the window’s frame",
+        "url": "https://github.com/josephwylie/ferrite/pull/187"
+      }
+    ],
+    "limits": "Local merge history establishes historical PR identity, not current remote availability/auth/checks/comments. Browser remote branch names do not establish current open PR IDs."
+  },
+  "cases": [
+    {
+      "id": "H01",
+      "group": "host",
+      "title": "Surface creation, activation, and duplicate avoidance",
+      "entry": "Add panel surface / Open a surface → Files, Diff, Terminal, Browser, Pull request",
+      "fixture": "Scratch thread A; panel initially closed",
+      "steps": "Open each applicable surface from its visible menu. Reopen the same file and PR. Click every resulting tab.",
+      "assertions": "Correct body under the selected title; no stale body from the previous surface; resource reopens activate rather than duplicate; unavailable choices explain why.",
+      "cleanup": "Close audit-created tabs; preserve any pre-existing tabs.",
+      "mode": "local-reversible",
+      "source_groups": [
+        "host"
+      ],
+      "priority": "P1",
+      "status": "not-run",
+      "evidence": [],
+      "source_bindings": [
+        {
+          "path": "apps/web/src/rightPanelStore.ts",
+          "line": 267,
+          "symbol": "pullRequestSurfaceId / RightPanelSurface",
+          "state_or_branch": "Surface identity includes the PR target. ThreadRightPanelState stores surfaces and activeSurfaceId. Reopening a resource must activate its existing identity.",
+          "anchor": "export function pullRequestSurfaceId"
+        }
+      ],
+      "provider_contract": "shared-client",
+      "source_match_result": "pending live observation",
+      "source_version_match": "not checked against installed T3",
+      "live_variants": []
+    },
+    {
+      "id": "H02",
+      "group": "host",
+      "title": "Per-thread panel target ownership",
+      "entry": "Two scratch thread rows; Add panel surface",
+      "fixture": "Scratch threads A and B with distinct filenames and terminal text",
+      "steps": "A opens Files and B opens Terminal. With A selected, click the PR badge on B. Repeat with B selected and its own badge. Exercise a linked PR count if available. Alternate threads and open resources again.",
+      "assertions": "The clicked row thread becomes the route when its PR opens in the right panel. Title, project, PR number, selected tab, and displayed body agree after every click. A hidden panel update with no route change fails.",
+      "cleanup": "Return to original selected thread; close only audit tabs.",
+      "mode": "local-reversible",
+      "source_groups": [
+        "host"
+      ],
+      "priority": "P1",
+      "status": "not-run",
+      "evidence": [],
+      "source_bindings": [
+        {
+          "path": "apps/web/src/components/sidebar/SidebarThreadRow.tsx",
+          "line": 962,
+          "symbol": "handlePrClick / handlePrListClick",
+          "state_or_branch": "openPrLink receives the clicked row threadRef. If the panel opens on a non-route thread, onThreadActivate changes the route to that thread.",
+          "anchor": "const handlePrClick ="
+        }
+      ],
+      "provider_contract": "host-capabilities",
+      "source_match_result": "pending live observation",
+      "source_version_match": "not checked against installed T3",
+      "live_variants": []
+    },
+    {
+      "id": "H03",
+      "group": "host",
+      "title": "Width and reopen sequence",
+      "entry": "Panel resize edge; Add panel surface; collapse/maximize controls",
+      "fixture": "Fresh scratch thread at recorded window size",
+      "steps": "Measure closed/open width. Drag compact, open Files→Browser→Diff→PR, collapse/reopen, switch thread and return. Maximize/restore once.",
+      "assertions": "User-chosen width survives appropriate transitions; no tool permanently enlarges the panel without a resize; conversation stays usable; drag follows pointer and finishes on outside release.",
+      "cleanup": "Restore original size and maximization.",
+      "mode": "local-reversible",
+      "source_groups": [
+        "host"
+      ],
+      "priority": "P1",
+      "status": "not-run",
+      "evidence": [],
+      "source_bindings": [
+        {
+          "path": "apps/web/src/hooks/usePreviewPanelInlineSize.ts",
+          "line": 20,
+          "symbol": "usePreviewPanelInlineSize / getPreviewPanelMaxWidth",
+          "state_or_branch": "useResizableWidth persists widthStorageKey. Default width is 540, minimum is 360, and the maximum caps the viewport fraction and remaining chat width.",
+          "anchor": "export function usePreviewPanelInlineSize"
+        }
+      ],
+      "provider_contract": "shared-client",
+      "source_match_result": "pending live observation",
+      "source_version_match": "not checked against installed T3",
+      "live_variants": []
+    },
+    {
+      "id": "H04",
+      "group": "host",
+      "title": "Tabs support normal mouse and keyboard interactions",
+      "entry": "Tab context menu: Close, Close others, Close to the right, Close all; Scroll tabs left/right",
+      "fixture": "Only audit-created tabs in scratch thread",
+      "steps": "Overflow the strip with several files; inspect menus; test wheel/trackpad, keyboard focus, close button, and supported middle-click. Run close variants only on audit tabs.",
+      "assertions": "Active tab stays visible; close picks a sensible neighbor; tab close never selects an unrelated resource; focus and keyboard continue to work afterward.",
+      "cleanup": "Close remaining audit tabs.",
+      "mode": "local-reversible",
+      "source_groups": [
+        "host"
+      ],
+      "priority": "P1",
+      "status": "not-run",
+      "evidence": [],
+      "source_bindings": [
+        {
+          "path": "apps/web/src/components/RightPanelTabs.tsx",
+          "line": 1180,
+          "symbol": "RightPanelTabs.handleTabContextMenu / handleTabAuxClick",
+          "state_or_branch": "Context items call close-one, close-others, close-to-right, and close-all callbacks. Middle click calls the close path. Keyboard and pointer activation must agree.",
+          "anchor": "const handleTabContextMenu ="
+        }
+      ],
+      "provider_contract": "shared-client",
+      "source_match_result": "pending live observation",
+      "source_version_match": "not checked against installed T3",
+      "live_variants": []
+    },
+    {
+      "id": "H05",
+      "group": "host",
+      "title": "Animation and reduced-motion contract",
+      "entry": "Settings → Appearance → Panel animations; Toggle main sidebar",
+      "fixture": "Scratch thread; record existing animation preference",
+      "steps": "Capture both left-sidebar and right-panel open and close at the recorded current setting. Set a nonzero local duration if needed to exercise the supported animation path. Reverse transitions rapidly, then restore the original setting. Record reduced-motion preference without changing the OS setting.",
+      "assertions": "Record actual default separately from available motion. No invisible hit target, stuck width, focus in a closed panel, or old content during reversal. Still screenshots cannot prove smoothness.",
+      "cleanup": "Restore duration and any changed reduced-motion preference; do not alter OS accessibility settings merely for this test.",
+      "mode": "local-reversible",
+      "source_groups": [
+        "host"
+      ],
+      "priority": "P1",
+      "status": "not-run",
+      "evidence": [],
+      "source_bindings": [
+        {
+          "path": "apps/web/src/panelAnimations.ts",
+          "line": 31,
+          "symbol": "usePanelAnimationSettings / usePanelPresence",
+          "state_or_branch": "active requires a positive duration, no reduced-motion preference, and no navigation suppression. Closing retains the same scope value until the exit duration ends.",
+          "anchor": "export function usePanelAnimationSettings"
+        },
+        {
+          "path": "packages/contracts/src/settings.ts",
+          "line": 164,
+          "symbol": "DEFAULT_PANEL_ANIMATION_DURATION_MS",
+          "state_or_branch": "The source default is zero. First record the installed setting. Test positive-duration animation separately from the default.",
+          "anchor": "const DEFAULT_PANEL_ANIMATION_DURATION_MS"
+        },
+        {
+          "path": "apps/web/src/components/ui/sidebar.tsx",
+          "line": 301,
+          "symbol": "Sidebar panelAnimationsActive",
+          "state_or_branch": "Sidebar motion uses the configured duration and reduced-motion preference. Navigation suppression intentionally does not snap a closing sidebar sheet.",
+          "anchor": "const panelAnimationsActive ="
+        }
+      ],
+      "provider_contract": "shared-client",
+      "source_match_result": "pending live observation",
+      "source_version_match": "not checked against installed T3",
+      "live_variants": []
+    },
+    {
+      "id": "H06",
+      "group": "host",
+      "title": "Narrow window and focus routing",
+      "entry": "Window edge; panel resize handle; Tab / Escape / app keybindings",
+      "fixture": "Scratch thread with Files, PR or Terminal open",
+      "steps": "Resize around 980px and 760px source thresholds; traverse controls with keyboard; click composer after panel input and back.",
+      "assertions": "Inline/sheet switch is usable; no clipped action row, overlapping hit regions, lost draft, or shortcut stolen by hidden controls. Installed-version thresholds may differ and must be recorded.",
+      "cleanup": "Restore window geometry and input focus.",
+      "mode": "local-reversible",
+      "source_groups": [
+        "host"
+      ],
+      "priority": "P1",
+      "status": "not-run",
+      "evidence": [],
+      "source_bindings": [
+        {
+          "path": "apps/web/src/components/chat/ChatRightPanel.tsx",
+          "line": 19,
+          "symbol": "ChatRightPanel",
+          "state_or_branch": "The chat panel passes its measured inline width and sheetAnimationDurationMs into the shared side-panel layout. Verify both inline and sheet modes.",
+          "anchor": "export function ChatRightPanel"
+        }
+      ],
+      "provider_contract": "shared-client",
+      "source_match_result": "pending live observation",
+      "source_version_match": "not checked against installed T3",
+      "live_variants": []
+    },
+    {
+      "id": "P01",
+      "group": "pr_list",
+      "title": "Standalone PR workspace is reachable",
+      "entry": "Pull requests; Refresh pull requests",
+      "fixture": "Read-only PR fixture project, initially no selected PR",
+      "steps": "Open the visible Pull requests navigation entry from a thread and from the home state; refresh once.",
+      "assertions": "List is accessible independently of a current branch PR; loading completes to real rows, honest empty state, or actionable error; current project/server scope is visible.",
+      "cleanup": "Restore prior view and filters.",
+      "mode": "read-only",
+      "source_groups": [
+        "pr_list"
+      ],
+      "priority": "P1",
+      "status": "not-run",
+      "evidence": [],
+      "source_bindings": [
+        {
+          "path": "apps/web/src/components/sidebar/SidebarChrome.tsx",
+          "line": 234,
+          "symbol": "SidebarUtilityMenu.handlePullRequestsClick",
+          "state_or_branch": "The utility menu has an explicit route action for the standalone Pull requests page. Verify the page, selection, and history destination.",
+          "anchor": "const handlePullRequestsClick ="
+        }
+      ],
+      "provider_contract": "host-capabilities",
+      "source_match_result": "pending live observation",
+      "source_version_match": "not checked against installed T3",
+      "live_variants": []
+    },
+    {
+      "id": "P02",
+      "group": "pr_list",
+      "title": "Involvement and lifecycle filters are independent",
+      "entry": "All / Reviewing / Authored; All / Open / Closed / Merged",
+      "fixture": "Ferrite-origin scratch clone; known merged #189 and #187",
+      "steps": "Switch involvement and state independently. Use Merged to find known references, then restore.",
+      "assertions": "Rows match both filters; selected detail does not silently become a different PR; counts/empty explanation are coherent.",
+      "cleanup": "Restore prior involvement/state filters.",
+      "mode": "read-only",
+      "source_groups": [
+        "pr_list"
+      ],
+      "priority": "P1",
+      "status": "not-run",
+      "evidence": [],
+      "source_bindings": [
+        {
+          "path": "apps/web/src/components/pullRequest/pullRequestListOptions.ts",
+          "line": 19,
+          "symbol": "INVOLVEMENT_TABS / STATE_TABS",
+          "state_or_branch": "Involvement and state are separate option sets. Each selected filter must change only its own query field.",
+          "anchor": "export const INVOLVEMENT_TABS"
+        }
+      ],
+      "provider_contract": "host-capabilities",
+      "source_match_result": "pending live observation",
+      "source_version_match": "not checked against installed T3",
+      "live_variants": []
+    },
+    {
+      "id": "P03",
+      "group": "pr_list",
+      "title": "Project, server, and host scopes do not leak selection",
+      "entry": "Filters → All projects / All servers; host selector",
+      "fixture": "Scratch project plus existing project only if already available",
+      "steps": "Select scratch project; inspect host/server scope; change filter while a PR detail is open.",
+      "assertions": "List filtering and selected PR identity are explicit; no same-number PR from another repo appears under stale header; unavailable project explains its state.",
+      "cleanup": "Restore scope; do not connect a new server.",
+      "mode": "read-only",
+      "source_groups": [
+        "pr_list"
+      ],
+      "priority": "P1",
+      "status": "not-run",
+      "evidence": [],
+      "source_bindings": [
+        {
+          "path": "apps/web/src/components/pullRequest/PullRequestsPage.tsx",
+          "line": 290,
+          "symbol": "PullRequestsPage.scopeKey / usePullRequestScope",
+          "state_or_branch": "The list scope key includes environment, assignment, state, involvement, project, host, draft, review, checks, author, and labels. Cached results must match that scope.",
+          "anchor": "const scopeKey ="
+        }
+      ],
+      "provider_contract": "host-capabilities",
+      "source_match_result": "pending live observation",
+      "source_version_match": "not checked against installed T3",
+      "live_variants": []
+    },
+    {
+      "id": "P04",
+      "group": "pr_list",
+      "title": "Search works for number, text, and label syntax",
+      "entry": "Search pull requests; placeholder Search pull requests, or label:bug",
+      "fixture": "Known #189 and a visible row with a label, if available",
+      "steps": "Search number/title, a visible label: value, then a nonsense token; clear with normal keyboard editing.",
+      "assertions": "Results correspond to query; no-results is recoverable; typing does not trigger global shortcuts; clearing restores rows.",
+      "cleanup": "Clear audit query.",
+      "mode": "read-only",
+      "source_groups": [
+        "pr_list"
+      ],
+      "priority": "P1",
+      "status": "not-run",
+      "evidence": [],
+      "source_bindings": [
+        {
+          "path": "apps/web/src/components/pullRequest/PullRequestListFilters.tsx",
+          "line": 96,
+          "symbol": "PullRequestSearchInput",
+          "state_or_branch": "The input keeps a draft and reports the query through onChange. Test typed text, clear, label syntax, and the resulting list scope.",
+          "anchor": "export function PullRequestSearchInput"
+        }
+      ],
+      "provider_contract": "host-capabilities",
+      "source_match_result": "pending live observation",
+      "source_version_match": "not checked against installed T3",
+      "live_variants": []
+    },
+    {
+      "id": "P05",
+      "group": "pr_list",
+      "title": "Advanced filter combinations remain understandable",
+      "entry": "Filters → Drafts only / Hide drafts; Approved / Changes requested / Review required / No reviews; Passing / Failing; Author; Labels",
+      "fixture": "Available rows; record which facet values exist",
+      "steps": "Combine draft, review and check filters; search authors and labels; remove one filter at a time.",
+      "assertions": "Selected facets remain visible; labels do not collide; empty state says Nothing under these filters; clearing does not discard unrelated filters.",
+      "cleanup": "Restore every filter changed.",
+      "mode": "read-only",
+      "source_groups": [
+        "pr_list"
+      ],
+      "priority": "P1",
+      "status": "not-run",
+      "evidence": [],
+      "source_bindings": [
+        {
+          "path": "apps/web/src/components/pullRequest/PullRequestListFilters.tsx",
+          "line": 469,
+          "symbol": "PullRequestFiltersMenu / PullRequestAuthorChoices / PullRequestLabelChoices",
+          "state_or_branch": "Menu controls represent independent draft, review, checks, author, and label fields. Facet choices and selected labels must survive reopening.",
+          "anchor": "export function PullRequestFiltersMenu"
+        }
+      ],
+      "provider_contract": "host-capabilities",
+      "source_match_result": "pending live observation",
+      "source_version_match": "not checked against installed T3",
+      "live_variants": []
+    },
+    {
+      "id": "P06",
+      "group": "pr_list",
+      "title": "Sorting states have visible meaning",
+      "entry": "Merge readiness / Blocked on me / Recently updated / Newest shown / Oldest shown / Largest shown / Smallest shown",
+      "fixture": "At least two real PR rows",
+      "steps": "Switch sort options; compare visible dates or change sizes and inspect grouped sections.",
+      "assertions": "Order matches label within available loaded results; a partial result set is not presented as exhaustive; selected row remains identifiable.",
+      "cleanup": "Restore previous sort.",
+      "mode": "read-only",
+      "source_groups": [
+        "pr_list"
+      ],
+      "priority": "P1",
+      "status": "not-run",
+      "evidence": [],
+      "source_bindings": [
+        {
+          "path": "apps/web/src/components/pullRequest/pullRequestListOptions.ts",
+          "line": 32,
+          "symbol": "SORT_OPTIONS",
+          "state_or_branch": "The list provides explicit sort values. PullRequestsPage uses eager stats for ready, largest, and smallest, so wait for actual ordering before passing.",
+          "anchor": "export const SORT_OPTIONS"
+        }
+      ],
+      "provider_contract": "host-capabilities",
+      "source_match_result": "pending live observation",
+      "source_version_match": "not checked against installed T3",
+      "live_variants": []
+    },
+    {
+      "id": "P07",
+      "group": "pr_list",
+      "title": "List keyboard navigation opens the intended PR",
+      "entry": "PR rows; Search pull requests",
+      "fixture": "Known merged #189 and #187",
+      "steps": "Use keyboard to move through rows and open, then repeat with pointer; return/back and reopen.",
+      "assertions": "Focus is visible; selected PR number/repo matches the chosen row; no extra click needed; back restores useful list position.",
+      "cleanup": "Close only newly opened PR tabs.",
+      "mode": "read-only",
+      "source_groups": [
+        "pr_list"
+      ],
+      "priority": "P1",
+      "status": "not-run",
+      "evidence": [],
+      "source_bindings": [
+        {
+          "path": "apps/web/src/components/pullRequest/PullRequestsPage.tsx",
+          "line": 1481,
+          "symbol": "PullRequestsPage.onKeyDown",
+          "state_or_branch": "The page keyboard handler operates on its displayed entries and current selection. Verify the selected PR identity after navigation, not only the row highlight.",
+          "anchor": "const onKeyDown = (event: KeyboardEvent)"
+        }
+      ],
+      "provider_contract": "host-capabilities",
+      "source_match_result": "pending live observation",
+      "source_version_match": "not checked against installed T3",
+      "live_variants": []
+    },
+    {
+      "id": "P08",
+      "group": "pr_list",
+      "title": "Multiple PR tabs remain distinct",
+      "entry": "PR row clicks; panel PR tabs; Close others",
+      "fixture": "Known #189 and #187 in same repo; second repo only if already available",
+      "steps": "Open both; alternate tabs; close one; reopen the same number.",
+      "assertions": "Distinct number/title/target; no duplicated or swapped body; correct tab survives closing; same-target reopen avoids unnecessary duplication.",
+      "cleanup": "Close audit PR tabs.",
+      "mode": "read-only",
+      "source_groups": [
+        "pr_list"
+      ],
+      "priority": "P1",
+      "status": "not-run",
+      "evidence": [],
+      "source_bindings": [
+        {
+          "path": "apps/web/src/components/pullRequest/PullRequestsPage.tsx",
+          "line": 1125,
+          "symbol": "PullRequestsPage entry selection / openPullRequest",
+          "state_or_branch": "A list entry opens a PR surface under the standalone page panel ref. Tabs must retain distinct target identities and selected bodies.",
+          "anchor": "useRightPanelStore.getState().openPullRequest(rightPanelRef, entry)"
+        }
+      ],
+      "provider_contract": "host-capabilities",
+      "source_match_result": "pending live observation",
+      "source_version_match": "not checked against installed T3",
+      "live_variants": []
+    },
+    {
+      "id": "P09",
+      "group": "pr_list",
+      "title": "Empty and unavailable projects have useful recovery",
+      "entry": "No projects in this workspace / No pull requests / Nothing under these filters / Pull requests unavailable",
+      "fixture": "A scratch repo without a remote; nonsense search for empty result",
+      "steps": "Observe no-remote and filtered-empty states without changing live auth; inspect offered navigation/retry links.",
+      "assertions": "Each condition is distinguished; no misleading spinner forever; recovery returns to list without losing user context.",
+      "cleanup": "Remove filters; leave live auth/config unchanged.",
+      "mode": "read-only",
+      "source_groups": [
+        "pr_list"
+      ],
+      "priority": "P1",
+      "status": "not-run",
+      "evidence": [],
+      "source_bindings": [
+        {
+          "path": "apps/web/src/components/pullRequest/PullRequestListEmptyState.tsx",
+          "line": 48,
+          "symbol": "PullRequestListEmptyState",
+          "state_or_branch": "Empty rendering distinguishes the lack of projects, filtered-out entries, and no PRs. Recovery must change the cause, not only dismiss the message.",
+          "anchor": "export function PullRequestListEmptyState"
+        }
+      ],
+      "provider_contract": "host-capabilities",
+      "source_match_result": "pending live observation",
+      "source_version_match": "not checked against installed T3",
+      "live_variants": []
+    },
+    {
+      "id": "P10",
+      "group": "pr_detail",
+      "title": "Summary resolves the exact requested PR",
+      "entry": "Summary; PR number/repo header",
+      "fixture": "Known merged #189, optionally #187",
+      "steps": "Open detail from list. Compare number, repository, title, state, base/head, changed-file count and description to its visible list identity.",
+      "assertions": "Complete target identity; body has readable Markdown/code/links; merged state is settled rather than showing active merge affordance; data is not borrowed from prior tab.",
+      "cleanup": "Return to list or keep this audit PR for next cases.",
+      "mode": "read-only",
+      "source_groups": [
+        "pr_detail"
+      ],
+      "priority": "P1",
+      "status": "not-run",
+      "evidence": [],
+      "source_bindings": [
+        {
+          "path": "apps/web/src/components/pullRequest/usePullRequestDetail.ts",
+          "line": 49,
+          "symbol": "usePullRequestDetail / pullRequestRefKey",
+          "state_or_branch": "Detail, activity, checks, cached snapshots, and shared summaries resolve under environment plus project, host, repository, and number. Confirm every visible field belongs to that key.",
+          "anchor": "export function usePullRequestDetail"
+        }
+      ],
+      "provider_contract": "host-capabilities",
+      "source_match_result": "pending live observation",
+      "source_version_match": "not checked against installed T3",
+      "live_variants": []
+    },
+    {
+      "id": "P11",
+      "group": "pr_detail",
+      "title": "Checks expand into actionable detail",
+      "entry": "Checks / Checks: <summary>; individual check row",
+      "fixture": "Real PR with at least one check; unavailable checks recorded as fixture gap",
+      "steps": "Open checks popover; inspect name, status, description and any outbound detail link; open one read-only detail destination if available.",
+      "assertions": "Summary matches individual rows; pending/failure/skipped are distinguishable; tooltip is not the only way to read essential data; link activates correct check.",
+      "cleanup": "Close popover and extra external tab.",
+      "mode": "read-only",
+      "source_groups": [
+        "pr_detail"
+      ],
+      "priority": "P1",
+      "status": "not-run",
+      "evidence": [],
+      "source_bindings": [
+        {
+          "path": "apps/web/src/components/pullRequest/PullRequestChecksPopover.tsx",
+          "line": 30,
+          "symbol": "LazyChecksBody / ChecksBody",
+          "state_or_branch": "The checks popover loads detail when opened and keeps showAll state. Confirm individual job identity, status, and outbound target.",
+          "anchor": "function LazyChecksBody"
+        },
+        {
+          "path": "apps/web/src/components/pullRequest/usePullRequestDetail.ts",
+          "line": 63,
+          "symbol": "usePullRequestDetail.supportsChecks",
+          "state_or_branch": "The separate checks query requires server capability pullRequestChecks. Live refresh runs for an open PR with supported checks. A missing capability is not a proven UI failure.",
+          "anchor": "const supportsChecks ="
+        }
+      ],
+      "provider_contract": "host-capabilities",
+      "source_match_result": "pending live observation",
+      "source_version_match": "not checked against installed T3",
+      "live_variants": []
+    },
+    {
+      "id": "P12",
+      "group": "pr_detail",
+      "title": "Native refresh updates the actual displayed review",
+      "entry": "More pull request actions → Refresh",
+      "fixture": "Known PR with loaded Summary and Timeline",
+      "steps": "Capture Summary, Timeline, and Code contents. Use Refresh and record loading and settled states. Compare a naturally changed read-only PR if one is available. Record checked-at or query evidence if safely exposed. A spinner alone cannot pass freshness.",
+      "assertions": "Detail and activity refresh under the same PR identity. Existing useful content remains or has clear loading status. Errors are visible. Check whether checks data revalidates through its separate query instead of assuming the Refresh button directly calls checks refresh. Unchanged static data alone cannot prove freshness.",
+      "cleanup": "Close menu; no host writes.",
+      "mode": "read-only",
+      "source_groups": [
+        "pr_actions",
+        "pr_detail"
+      ],
+      "priority": "P1",
+      "status": "not-run",
+      "evidence": [],
+      "source_bindings": [
+        {
+          "path": "apps/web/src/components/pullRequest/PullRequestDetailPanel.tsx",
+          "line": 665,
+          "symbol": "PullRequestDetailPanel.refetchFromHost / refreshDetail",
+          "state_or_branch": "Explicit refresh invalidates the host cache, refreshes detail, activity, and stack, then increments refreshToken. Observe content or read evidence, not only the spinner.",
+          "anchor": "const refetchFromHost = async"
+        },
+        {
+          "path": "apps/web/src/components/pullRequest/PullRequestCodeTab.tsx",
+          "line": 552,
+          "symbol": "PullRequestCodeTab.appliedRefreshToken",
+          "state_or_branch": "A new refreshToken resets diff slices, forgets the applied page, and refreshes first-page diff and viewed-file data.",
+          "anchor": "const appliedRefreshToken ="
+        }
+      ],
+      "provider_contract": "host-capabilities",
+      "source_match_result": "pending live observation",
+      "source_version_match": "not checked against installed T3",
+      "live_variants": []
+    },
+    {
+      "id": "P13",
+      "group": "pr_detail",
+      "title": "Timeline preserves discussion structure",
+      "entry": "Timeline; Open activity on host; More replies if present",
+      "fixture": "A PR with comments/reviews/replies; inspect #189/#187 to choose",
+      "steps": "Read chronology, authored timestamps, review verdicts, resolved/outdated threads, replies, snippets and host link. Expand collapsed/reply groups.",
+      "assertions": "Order is coherent; replies remain attached to their thread; resolved/outdated state is visible; code context and Markdown remain readable.",
+      "cleanup": "Collapse optional expansions if restoring initial state matters.",
+      "mode": "read-only",
+      "source_groups": [
+        "pr_detail"
+      ],
+      "priority": "P1",
+      "status": "not-run",
+      "evidence": [],
+      "source_bindings": [
+        {
+          "path": "apps/web/src/components/pullRequest/PullRequestTimelineTab.tsx",
+          "line": 732,
+          "symbol": "PullRequestTimelineTab / ReviewThreadEvent",
+          "state_or_branch": "Timeline builds activity events and keys review threads by resolution and dismissed state. Inspect grouped replies, collapsed discussions, and exact linked anchors.",
+          "anchor": "export function PullRequestTimelineTab"
+        }
+      ],
+      "provider_contract": "host-capabilities",
+      "source_match_result": "pending live observation",
+      "source_version_match": "not checked against installed T3",
+      "live_variants": []
+    },
+    {
+      "id": "P14",
+      "group": "pr_detail",
+      "title": "Timeline can attach context without sending",
+      "entry": "Timeline → Add to chat",
+      "fixture": "Scratch thread A and a comment/activity item",
+      "steps": "Use Add to chat, type a distinct audit note beside the resulting context, switch away/back, then remove the attachment.",
+      "assertions": "Attached item retains PR/repo/activity identity and user annotation; composer input remains editable; no prompt is sent automatically.",
+      "cleanup": "Delete only audit draft text and context attachment.",
+      "mode": "local-reversible",
+      "source_groups": [
+        "pr_detail",
+        "pr_actions"
+      ],
+      "priority": "P1",
+      "status": "not-run",
+      "evidence": [],
+      "source_bindings": [
+        {
+          "path": "apps/web/src/components/pullRequest/PullRequestTimelineTab.tsx",
+          "line": 205,
+          "symbol": "AddToChatButton / PullRequestTimelineTab.onAddToChat",
+          "state_or_branch": "The button passes the selected comment into local chat context. The composer must retain the comment target and additional typed text.",
+          "anchor": "onClick={() => onAddToChat(comment)}"
+        }
+      ],
+      "provider_contract": "host-capabilities",
+      "source_match_result": "pending live observation",
+      "source_version_match": "not checked against installed T3",
+      "live_variants": []
+    },
+    {
+      "id": "P15",
+      "group": "pr_detail",
+      "title": "Code tab presents the correct whole change",
+      "entry": "Code; Diff scope: All commits",
+      "fixture": "Known merged PR with multiple changed files",
+      "steps": "Open Code, browse file tree, collapse/expand files, switch between All commits and one visible commit.",
+      "assertions": "Hunks/path/additions/deletions correspond to selected scope; target label updates; unavailable/truncated portions are explicit.",
+      "cleanup": "Restore All commits and original file selection.",
+      "mode": "read-only",
+      "source_groups": [
+        "pr_detail"
+      ],
+      "priority": "P1",
+      "status": "not-run",
+      "evidence": [],
+      "source_bindings": [
+        {
+          "path": "apps/web/src/components/pullRequest/PullRequestCodeTab.tsx",
+          "line": 424,
+          "symbol": "PullRequestCodeTab.sliceState / scopeKey",
+          "state_or_branch": "Diff slices belong to the current PR and commit scope. Changing the scope must not retain files or comments from a previous PR.",
+          "anchor": "const [sliceState, setSliceState]"
+        }
+      ],
+      "provider_contract": "host-capabilities",
+      "source_match_result": "pending live observation",
+      "source_version_match": "not checked against installed T3",
+      "live_variants": []
+    },
+    {
+      "id": "P16",
+      "group": "pr_detail",
+      "title": "PR diff remains usable at realistic widths",
+      "entry": "Diff layout; Stacked diff view / Split diff view; Enable diff line wrapping; Hide test files; Show file tree",
+      "fixture": "Known PR with long lines and test files if available",
+      "steps": "Toggle each presentation control, drag explorer width with pointer and keyboard, navigate a distant file, then resize panel.",
+      "assertions": "No horizontal content traps or missing line numbers; active file follows selection; wrapping/test filtering affects only intended display.",
+      "cleanup": "Restore layout/wrapping/tree/test-filter settings.",
+      "mode": "read-only",
+      "source_groups": [
+        "pr_detail"
+      ],
+      "priority": "P1",
+      "status": "not-run",
+      "evidence": [],
+      "source_bindings": [
+        {
+          "path": "apps/web/src/components/pullRequest/PullRequestCodeTab.tsx",
+          "line": 400,
+          "symbol": "PullRequestCodeTab.foldChoices / wordWrapOverride / fileTreeOpen",
+          "state_or_branch": "Fold, wrapping, file-tree, hidden-test, and selection state are distinct. Verify content and scroll after each view change.",
+          "anchor": "const [foldChoices, setFoldChoices]"
+        }
+      ],
+      "provider_contract": "host-capabilities",
+      "source_match_result": "pending live observation",
+      "source_version_match": "not checked against installed T3",
+      "live_variants": []
+    },
+    {
+      "id": "P17",
+      "group": "pr_detail",
+      "title": "Viewed state distinguishes local and host persistence",
+      "entry": "Viewed / Changed; These ticks are kept here, not on the host",
+      "fixture": "Known read-only PR",
+      "steps": "Inspect viewed controls and locality notice. Do not toggle when it would mark viewed on the host. If explicitly local-only, toggle one file, navigate away/back, then restore.",
+      "assertions": "A local-only tick is honestly labelled; changed-since-viewed is distinct; hidden files do not misstate completion.",
+      "cleanup": "Undo local tick; no host viewed-state mutation.",
+      "mode": "inspect-or-local",
+      "source_groups": [
+        "pr_detail"
+      ],
+      "priority": "P1",
+      "status": "not-run",
+      "evidence": [],
+      "source_bindings": [
+        {
+          "path": "apps/web/src/components/pullRequest/PullRequestCodeTab.tsx",
+          "line": 539,
+          "symbol": "PullRequestCodeTab.viewedFilesStore / usePullRequestFilesViewed",
+          "state_or_branch": "Viewed-file storage is a capability value. A host-backed toggle can write remotely. Only exercise a positively identified local-only viewed store during the read-only pass.",
+          "anchor": "const viewedFilesStore = detail.capabilities.viewedFiles"
+        }
+      ],
+      "provider_contract": "host-capabilities",
+      "source_match_result": "pending live observation",
+      "source_version_match": "not checked against installed T3",
+      "live_variants": []
+    },
+    {
+      "id": "P18",
+      "group": "pr_actions",
+      "title": "Review draft supports text, verdict and preview without submission",
+      "entry": "Review summary; Review verdict → Comment / Approve / Request changes; Submit review",
+      "fixture": "Known PR where review form is offered; scratch context",
+      "steps": "Enter a clearly synthetic draft, switch offered verdicts, inspect validation and Markdown preview if present. Navigate within PR and return. Never press submit shortcut or Submit review.",
+      "assertions": "Draft text survives harmless tab changes; required summary rule is clear; disabled submit is understandable; permission/self-review restriction is explicit.",
+      "cleanup": "Clear audit review draft and inline drafts; verify no posted activity.",
+      "mode": "draft-only",
+      "source_groups": [
+        "pr_actions"
+      ],
+      "priority": "P1",
+      "status": "not-run",
+      "evidence": [],
+      "source_bindings": [
+        {
+          "path": "apps/web/src/components/pullRequest/PullRequestReviewForm.tsx",
+          "line": 52,
+          "symbol": "PullRequestReviewForm / usePullRequestReviewStore",
+          "state_or_branch": "summaries and drafts are keyed by pullRequestReviewKey. requestedVerdict is local. submit calls pullRequestEnvironment.submitReview and then clears submitted draft data only after success.",
+          "anchor": "export function PullRequestReviewForm"
+        }
+      ],
+      "provider_contract": "host-capabilities",
+      "source_match_result": "pending live observation",
+      "source_version_match": "not checked against installed T3",
+      "live_variants": []
+    },
+    {
+      "id": "P19",
+      "group": "pr_actions",
+      "title": "Inline review comments retain range and typed note",
+      "entry": "Code line selection / comment affordance; Add to agent",
+      "fixture": "Known PR with text diff",
+      "steps": "Select a single changed line and multi-line range; open comment editor; type a note; inspect add-to-review vs agent context actions. Use only local draft action.",
+      "assertions": "Correct path and side/range are retained; quote/context and typed text coexist; switching files does not silently drop local draft.",
+      "cleanup": "Remove audit inline drafts and composer attachments; never publish.",
+      "mode": "draft-only",
+      "source_groups": [
+        "pr_detail",
+        "pr_actions"
+      ],
+      "priority": "P1",
+      "status": "not-run",
+      "evidence": [],
+      "source_bindings": [
+        {
+          "path": "apps/web/src/components/pullRequest/PullRequestCodeTab.tsx",
+          "line": 591,
+          "symbol": "PullRequestCodeTab.canCommentOnLines / canSelectLines / rangeComments",
+          "state_or_branch": "Inline host comments require capability and permission and only work on the whole-change scope. Agent context is local and can remain available without host comment permission.",
+          "anchor": "const canCommentOnLines ="
+        }
+      ],
+      "provider_contract": "host-capabilities",
+      "source_match_result": "pending live observation",
+      "source_version_match": "not checked against installed T3",
+      "live_variants": []
+    },
+    {
+      "id": "P20",
+      "group": "pr_actions",
+      "title": "Comment composer is readable and cancel-safe",
+      "entry": "Leave a comment; Write / Preview; comment submit control",
+      "fixture": "Known PR with comment permission",
+      "steps": "Type synthetic Markdown with a link and code; switch Write/Preview; inspect mention completion if offered. Do not submit or use submit keyboard chord.",
+      "assertions": "Preview corresponds to text; focus returns to editor; no submission on ordinary Enter; input state persists only as expected.",
+      "cleanup": "Clear text and close editor; confirm Timeline unchanged.",
+      "mode": "draft-only",
+      "source_groups": [
+        "pr_actions"
+      ],
+      "priority": "P1",
+      "status": "not-run",
+      "evidence": [],
+      "source_bindings": [
+        {
+          "path": "apps/web/src/components/pullRequest/PullRequestCommentForm.tsx",
+          "line": 20,
+          "symbol": "PullRequestCommentForm.body / submitting",
+          "state_or_branch": "Comment body is local until the submit handler calls the host. The submitting mode distinguishes comment, close, and reopen.",
+          "anchor": "export function PullRequestCommentForm"
+        },
+        {
+          "path": "apps/web/src/components/pullRequest/PullRequestMarkdownEditor.tsx",
+          "line": 19,
+          "symbol": "PullRequestMarkdownEditor.draft / preview / seed",
+          "state_or_branch": "Write and Preview share the draft. Changing previews must not drop text or trigger submission.",
+          "anchor": "export function PullRequestMarkdownEditor"
+        }
+      ],
+      "provider_contract": "host-capabilities",
+      "source_match_result": "pending live observation",
+      "source_version_match": "not checked against installed T3",
+      "live_variants": []
+    },
+    {
+      "id": "P21",
+      "group": "pr_actions",
+      "title": "Edit/reply/resolve controls do not masquerade as local UI",
+      "entry": "Edit comment; reply field; Resolve thread / reopen control if offered",
+      "fixture": "Existing PR activity, preferably own comment only if one already exists",
+      "steps": "Inspect available controls, permission hints and draft editors. Do not save, react, resolve, reopen, or edit someone else’s content.",
+      "assertions": "Controls are scoped to correct item; edit/reply drafts have visible cancel; unavailable operations are explained rather than dead links.",
+      "cleanup": "Cancel editors; verify no new or changed activity.",
+      "mode": "inspect-only",
+      "source_groups": [
+        "pr_actions"
+      ],
+      "priority": "P1",
+      "status": "not-run",
+      "evidence": [],
+      "source_bindings": [
+        {
+          "path": "apps/web/src/components/pullRequest/PullRequestTimelineTab.tsx",
+          "line": 230,
+          "symbol": "ConversationCard.editing / saving",
+          "state_or_branch": "Editing and saving are separate states. Comment edits, reactions, and thread resolution cross the host mutation boundary.",
+          "anchor": "function ConversationCard"
+        }
+      ],
+      "provider_contract": "host-capabilities",
+      "source_match_result": "pending live observation",
+      "source_version_match": "not checked against installed T3",
+      "live_variants": []
+    },
+    {
+      "id": "P22",
+      "group": "pr_actions",
+      "title": "PR links support normal browser/context behavior",
+      "entry": "PR context menu: Copy link; Open on GitHub. Markdown HTTP link: Open in integrated browser; Open in system browser; Copy Link.",
+      "fixture": "Known merged PR and scratch composer containing its URL",
+      "steps": "Right-click the PR badge and a normal Markdown HTTP link. Select each supported read-only open action once and verify the actual URL. Copy the link and inspect its value without exposing unrelated clipboard history. Test modifier click separately.",
+      "assertions": "Normal click opens intended native target when configured; external path remains available; copy result matches exact URL/number; right-click does more than inert underline.",
+      "cleanup": "Close external audit tab; restore preference and clipboard if needed.",
+      "mode": "local-reversible",
+      "source_groups": [
+        "pr_actions"
+      ],
+      "priority": "P1",
+      "status": "not-run",
+      "evidence": [],
+      "source_bindings": [
+        {
+          "path": "apps/web/src/components/pullRequest/PullRequestActionsMenu.tsx",
+          "line": 155,
+          "symbol": "PullRequestActionsMenu.openOnHostText / copyReference",
+          "state_or_branch": "The menu separates open-on-host from Copy link and Copy reference. Verify each destination and the native context menu independently.",
+          "anchor": "openOnHostText: string"
+        },
+        {
+          "path": "apps/web/src/components/pullRequest/pullRequestLinkContextMenu.ts",
+          "line": 26,
+          "symbol": "showPullRequestLinkContextMenu",
+          "state_or_branch": "The PR context menu offers Copy link and Open on the host. The open-external branch calls api.shell.openExternal with the clicked URL.",
+          "anchor": "export async function showPullRequestLinkContextMenu"
+        },
+        {
+          "path": "apps/web/src/components/chat/externalLinkContextMenu.ts",
+          "line": 88,
+          "symbol": "showExternalLinkContextMenu",
+          "state_or_branch": "HTTP links offer Open in integrated browser when available, Open in system browser, and Copy Link. Each action calls a distinct handler.",
+          "anchor": "export async function showExternalLinkContextMenu"
+        }
+      ],
+      "provider_contract": "host-capabilities",
+      "source_match_result": "pending live observation",
+      "source_version_match": "not checked against installed T3",
+      "live_variants": []
+    },
+    {
+      "id": "P23",
+      "group": "pr_actions",
+      "title": "Link PR dialog validates and targets the chosen thread",
+      "entry": "Link pull request; Pull request URL or #42; Choose a thread",
+      "fixture": "Scratch thread only; known #189 URL",
+      "steps": "Open Link pull request; try malformed text then valid full URL; inspect target repo/number. Link only to scratch thread if supported, switch threads, and inspect linked indicator.",
+      "assertions": "Malformed input produces inline validation; valid absolute URL avoids ambiguous repo; linked badge reveals correct native PR from another selected thread.",
+      "cleanup": "Unlink scratch association if offered or remove scratch thread during cleanup; never link existing user thread.",
+      "mode": "local-reversible",
+      "source_groups": [
+        "pr_actions"
+      ],
+      "priority": "P1",
+      "status": "not-run",
+      "evidence": [],
+      "source_bindings": [
+        {
+          "path": "apps/web/src/components/pullRequest/LinkPullRequestDialog.tsx",
+          "line": 89,
+          "symbol": "LinkPullRequestDialog.resolved / dirty / submitError / pending",
+          "state_or_branch": "Validation resolves URL or number against the target thread project. The linking command must use that threadRef and environment.",
+          "anchor": "const resolved = resolveLinkPullRequestInput"
+        }
+      ],
+      "provider_contract": "host-capabilities",
+      "source_match_result": "pending live observation",
+      "source_version_match": "not checked against installed T3",
+      "live_variants": []
+    },
+    {
+      "id": "P24",
+      "group": "pr_actions",
+      "title": "Linked threads and stacks navigate correctly",
+      "entry": "Linked pull requests; linked-thread count; Stack <n>, layer <n>; Retry stack refresh",
+      "fixture": "Scratch linked PR; real stack only if already present",
+      "steps": "Open linked PR collection, navigate linked thread, inspect stack layer/menu if available.",
+      "assertions": "Links preserve selected repo and environment; layer navigation updates detail; unavailable stack explains retry without dumping the user elsewhere.",
+      "cleanup": "Close audit linked panels; restore selection.",
+      "mode": "read-only",
+      "source_groups": [
+        "pr_actions",
+        "pr_detail"
+      ],
+      "priority": "P1",
+      "status": "not-run",
+      "evidence": [],
+      "source_bindings": [
+        {
+          "path": "apps/web/src/components/pullRequest/PullRequestThreadLinks.tsx",
+          "line": 92,
+          "symbol": "EnabledPullRequestThreadLinks.changeLink / linkedThreads",
+          "state_or_branch": "Relations are environment-scoped and filtered to visible threads. Link changes are local T3 relations, while navigation must target the selected related thread.",
+          "anchor": "const changeLink = async"
+        },
+        {
+          "path": "apps/web/src/components/pullRequest/PullRequestDetailPanel.tsx",
+          "line": 606,
+          "symbol": "PullRequestDetailPanel.supportsStackActions / stackOwnsMerge",
+          "state_or_branch": "Stacks require server support and detail capabilities stacks and stackActions. Native stack membership can own the merge route.",
+          "anchor": "const supportsStackActions ="
+        }
+      ],
+      "provider_contract": "host-capabilities",
+      "source_match_result": "pending live observation",
+      "source_version_match": "not checked against installed T3",
+      "live_variants": []
+    },
+    {
+      "id": "P25",
+      "group": "pr_actions",
+      "title": "Mutation menus expose honest state and cancel correctly",
+      "entry": "More pull request actions; Merge now → Confirm merge?; Close pull request → Confirm close?; Revert changes → Confirm revert?",
+      "fixture": "Real PR appropriate to state; no mutation authorization",
+      "steps": "Inspect menu first. Only where source and visible UI both show a two-step arm, arm once and dismiss with Escape/outside click. Reopen to verify disarmed state.",
+      "assertions": "Correct PR target remains visible; arm is explicit and resets on dismissal/navigation; no mutation occurs. Ready for review, Convert to draft, Reopen, Disable auto-merge and Allow edits from maintainers are immediate writes: do not click.",
+      "cleanup": "Dismiss all menus; verify original state unchanged.",
+      "mode": "inspect-and-cancel",
+      "source_groups": [
+        "pr_actions"
+      ],
+      "priority": "P1",
+      "status": "not-run",
+      "evidence": [],
+      "source_bindings": [
+        {
+          "path": "apps/web/src/components/pullRequest/PullRequestActionsMenu.tsx",
+          "line": 159,
+          "symbol": "PullRequestActionsMenu.inlineConfirm / pendingAction / saveMaintainerEdits",
+          "state_or_branch": "Some actions arm an inline confirmation. Maintainer edits issue update immediately. Inspect each handler boundary before clicking an enabled action.",
+          "anchor": "const inlineConfirm = useInlineActionConfirm"
+        }
+      ],
+      "provider_contract": "host-capabilities",
+      "source_match_result": "pending live observation",
+      "source_version_match": "not checked against installed T3",
+      "live_variants": []
+    },
+    {
+      "id": "P26",
+      "group": "pr_actions",
+      "title": "Checkout choices disclose their destination",
+      "entry": "Check out → In a separate worktree / In this repository",
+      "fixture": "Read-only PR fixture project",
+      "steps": "Open the checkout menu and inspect environment and destination choices. Dismiss before checkout. An optional actual checkout is a separate parent-owned local-reversible test restricted to the disposable clone.",
+      "assertions": "Separate worktree and current repository are visibly different; pending/error state has a clear destination; no silent change to source checkout.",
+      "cleanup": "Cancel menu; if parent explicitly runs scratch checkout, track worktree path and remove only after thread closure.",
+      "mode": "inspect-and-cancel",
+      "source_groups": [
+        "pr_actions"
+      ],
+      "priority": "P1",
+      "status": "not-run",
+      "evidence": [],
+      "source_bindings": [
+        {
+          "path": "apps/web/src/components/pullRequest/PullRequestDetailActions.tsx",
+          "line": 75,
+          "symbol": "PullRequestCheckoutMenu.onCheckout",
+          "state_or_branch": "The worktree and local choices call onCheckout with different modes. The menu is disabled without checkoutRoot or while a handoff is active.",
+          "anchor": "export function PullRequestCheckoutMenu"
+        }
+      ],
+      "provider_contract": "host-capabilities",
+      "source_match_result": "pending live observation",
+      "source_version_match": "not checked against installed T3",
+      "live_variants": []
+    },
+    {
+      "id": "P27",
+      "group": "pr_actions",
+      "title": "Agent handoffs preserve PR context",
+      "entry": "Ask a question; Explain this PR; Fix findings; Write guide / Rewrite guide",
+      "fixture": "Scratch thread; parent-controlled Sol session only",
+      "steps": "Inspect labels first. Ask a question may attach context; verify behavior before typing. Explain/Fix/Write guide can start an agent immediately and must be exercised only by parent with chosen provider.",
+      "assertions": "Handoff names exact repo/PR; correct scratch thread opens; live progress and cancellation are visible; no publishing/forge writes requested.",
+      "cleanup": "Stop and close any parent-created agent/thread; remove audit attachments.",
+      "mode": "parent-agent",
+      "source_groups": [
+        "pr_actions"
+      ],
+      "priority": "P1",
+      "status": "not-run",
+      "evidence": [],
+      "source_bindings": [
+        {
+          "path": "apps/web/src/components/pullRequest/usePullRequestActions.ts",
+          "line": 266,
+          "symbol": "usePullRequestHandoffs / writeHandoffToComposer",
+          "state_or_branch": "Handoff state prevents duplicate preparation. Composer context and automatic agent starts are separate outcomes. Parent owns any model run and thread cleanup.",
+          "anchor": "export function usePullRequestHandoffs"
+        }
+      ],
+      "provider_contract": "host-and-agent",
+      "source_match_result": "pending live observation",
+      "source_version_match": "not checked against installed T3",
+      "live_variants": []
+    },
+    {
+      "id": "P28",
+      "group": "guides",
+      "title": "Guide empty, running, stopped and stale states",
+      "entry": "Guide; Write guide / Rewrite; Rewrite",
+      "fixture": "Existing guide preferred; parent-controlled generation if required",
+      "steps": "Read an existing guide and navigate its stops/excerpts. Inspect empty-state writer choice. Parent may run one bounded guide only under intended subscription/provider.",
+      "assertions": "Guide stays tied to PR head; stop selection reveals correct files/ranges; running and failed states are visible; stale guide is marked after changed head if safely observable.",
+      "cleanup": "Cancel active run; close generated scratch thread; do not leave background generation.",
+      "mode": "parent-agent",
+      "source_groups": [
+        "guides"
+      ],
+      "priority": "P2",
+      "status": "not-run",
+      "evidence": [],
+      "source_bindings": [
+        {
+          "path": "apps/web/src/components/pullRequest/PullRequestGuideTab.tsx",
+          "line": 22,
+          "symbol": "PullRequestGuideTab",
+          "state_or_branch": "Guide content, loading, failure, and running state come from the guide query and run state. Inspect available states and let the parent own any generation.",
+          "anchor": "export function PullRequestGuideTab"
+        },
+        {
+          "path": "apps/web/src/components/pullRequest/guide/PullRequestGuideRunCoordinator.tsx",
+          "line": 27,
+          "symbol": "startGuideRunNotifications",
+          "state_or_branch": "The coordinator tracks running watches and handles guide updates. Closing the tab must not be treated as proof that generation stopped.",
+          "anchor": "export function startGuideRunNotifications"
+        }
+      ],
+      "provider_contract": "host-and-agent",
+      "source_match_result": "pending live observation",
+      "source_version_match": "not checked against installed T3",
+      "live_variants": []
+    },
+    {
+      "id": "P29",
+      "group": "pr_errors",
+      "title": "PR list/detail errors recover without losing usable content",
+      "entry": "Pull requests unavailable; Refresh; More pull request actions → Refresh",
+      "fixture": "Naturally disconnected/unavailable project or read-only nonexistent PR URL in scratch context",
+      "steps": "Use malformed Link PR input for client validation; use nonexistent reference only for read-only missing-resource behavior. Never revoke credentials or disconnect user environment to manufacture failure.",
+      "assertions": "Error is specific, wrapped and actionable; previously loaded list can remain with stale notice; retry works if prerequisite restored; wrong-repo errors never show stale previous PR as current.",
+      "cleanup": "Remove scratch invalid reference; restore selection.",
+      "mode": "conditional-read-only",
+      "source_groups": [
+        "pr_errors",
+        "pr_list",
+        "pr_actions"
+      ],
+      "priority": "P1",
+      "status": "not-run",
+      "evidence": [],
+      "source_bindings": [
+        {
+          "path": "apps/web/src/components/pullRequest/PullRequestsPage.tsx",
+          "line": 433,
+          "symbol": "PullRequestsPage.loaded / invalidating / hostReads",
+          "state_or_branch": "The workspace retains loaded snapshots through refresh and host read errors. Check the visible stale-data notice and whether old rows remain usable.",
+          "anchor": "const [loaded, setLoaded]"
+        },
+        {
+          "path": "apps/web/src/components/pullRequest/PullRequestsUnavailableState.tsx",
+          "line": 8,
+          "symbol": "PullRequestsUnavailableState",
+          "state_or_branch": "The unavailable component receives the error and recovery action. Exercise only a safe missing reference or naturally unavailable connection.",
+          "anchor": "export function PullRequestsUnavailableState"
+        }
+      ],
+      "provider_contract": "host-capabilities",
+      "source_match_result": "pending live observation",
+      "source_version_match": "not checked against installed T3",
+      "live_variants": []
+    },
+    {
+      "id": "P30",
+      "group": "pr_errors",
+      "title": "Diff/activity failures have local retry and external escape",
+      "entry": "Could not load pull request activity → Retry; Try again; Open on GitHub; Technical details",
+      "fixture": "Natural missing/oversized/unavailable content only, otherwise fixture-blocked",
+      "steps": "If error occurs, expand technical details and use retry; open the PR externally read-only; resize panel.",
+      "assertions": "Summary, cause, remedy, and long details remain readable; retry is actionable; no clipped line with hidden remedy; already loaded content is not incorrectly cleared elsewhere.",
+      "cleanup": "Close details and extra external tab.",
+      "mode": "conditional-read-only",
+      "source_groups": [
+        "pr_errors"
+      ],
+      "priority": "P1",
+      "status": "not-run",
+      "evidence": [],
+      "source_bindings": [
+        {
+          "path": "apps/web/src/components/pullRequest/PullRequestActivityUnavailableState.tsx",
+          "line": 7,
+          "symbol": "PullRequestActivityUnavailableState",
+          "state_or_branch": "Activity failure has its own retry. Detail loading success does not establish Timeline success.",
+          "anchor": "export function PullRequestActivityUnavailableState"
+        },
+        {
+          "path": "apps/web/src/components/pullRequest/PullRequestDiffUnavailableState.tsx",
+          "line": 11,
+          "symbol": "PullRequestDiffUnavailableState",
+          "state_or_branch": "Diff failure exposes a retry, an external target, and technical details. Test text wrapping and target preservation.",
+          "anchor": "export function PullRequestDiffUnavailableState"
+        }
+      ],
+      "provider_contract": "host-capabilities",
+      "source_match_result": "pending live observation",
+      "source_version_match": "not checked against installed T3",
+      "live_variants": []
+    },
+    {
+      "id": "F01",
+      "group": "files",
+      "title": "Files entry and tree navigation",
+      "entry": "Add panel surface → Files; Search files; Refresh workspace files",
+      "fixture": "Scratch tree with nested folders and duplicate filenames",
+      "steps": "Open tree, expand/collapse nested folders with pointer and arrows, search relative name/path, clear, refresh.",
+      "assertions": "No blank tree after refresh; indentation and selection are clear; duplicate basenames remain distinguishable; keyboard expands a folder without accidental file open.",
+      "cleanup": "Clear search and restore expansion if needed.",
+      "mode": "local-reversible",
+      "source_groups": [
+        "host",
+        "files"
+      ],
+      "priority": "P1",
+      "status": "not-run",
+      "evidence": [],
+      "source_bindings": [
+        {
+          "path": "apps/web/src/components/files/FileBrowserPanel.tsx",
+          "line": 420,
+          "symbol": "FileBrowserPanel.handleRefresh / query / expansionRoot",
+          "state_or_branch": "File tree search and expansion use environment plus cwd. Refresh must update the directory data and selected file without navigating to another checkout.",
+          "anchor": "const handleRefresh ="
+        }
+      ],
+      "provider_contract": "environment-capabilities",
+      "source_match_result": "pending live observation",
+      "source_version_match": "not checked against installed T3",
+      "live_variants": []
+    },
+    {
+      "id": "F02",
+      "group": "files",
+      "title": "Open files and navigate retained breadcrumbs",
+      "entry": "File row; File contents; breadcrumb folders",
+      "fixture": "Scratch nested src/sample.ts and docs/sample.ts",
+      "steps": "Open both files; traverse parent breadcrumbs and a retained child; click file links with line targets when available.",
+      "assertions": "Correct full path/content shown; repeated opens do not duplicate unnecessarily; line target is visible and highlighted, not only scrolled somewhere nearby.",
+      "cleanup": "Close file tabs.",
+      "mode": "local-reversible",
+      "source_groups": [
+        "files"
+      ],
+      "priority": "P1",
+      "status": "not-run",
+      "evidence": [],
+      "source_bindings": [
+        {
+          "path": "apps/web/src/components/files/FilePreviewPanel.tsx",
+          "line": 1321,
+          "symbol": "FilePreviewPanel / useFileLineReveal",
+          "state_or_branch": "relativePath, revealLine, and revealRequestId identify the requested file and location. Same basenames and repeated line opens must retain correct context.",
+          "anchor": "const onFilePostRender = useFileLineReveal"
+        }
+      ],
+      "provider_contract": "environment-capabilities",
+      "source_match_result": "pending live observation",
+      "source_version_match": "not checked against installed T3",
+      "live_variants": []
+    },
+    {
+      "id": "F03",
+      "group": "files",
+      "title": "Large file and long-line behavior",
+      "entry": "Enable word wrap / Disable word wrap; source view",
+      "fixture": "Scratch long-lines.txt and a large generated text file; no private files",
+      "steps": "Open each, scroll rapidly, select/copy near top and lower region, resize narrow/wide, toggle wrapping.",
+      "assertions": "No missing text, jumps to wrong position, unusable horizontal trap, or misleading truncation; any first-1MB limit is explicit.",
+      "cleanup": "Close files; restore wrapping.",
+      "mode": "local-reversible",
+      "source_groups": [
+        "files"
+      ],
+      "priority": "P1",
+      "status": "not-run",
+      "evidence": [],
+      "source_bindings": [
+        {
+          "path": "apps/web/src/components/files/FilePreviewPanel.tsx",
+          "line": 1738,
+          "symbol": "WorkspaceLargeTextPreview",
+          "state_or_branch": "Large text uses a separate preview with saving, revision, and loaded URL state. Verify the supported limit and recovery from a failed load.",
+          "anchor": "export function WorkspaceLargeTextPreview"
+        }
+      ],
+      "provider_contract": "environment-capabilities",
+      "source_match_result": "pending live observation",
+      "source_version_match": "not checked against installed T3",
+      "live_variants": []
+    },
+    {
+      "id": "F04",
+      "group": "files",
+      "title": "Markdown and delimited data have useful alternate views",
+      "entry": "Rendered/source toggle; Full file; CSV table view",
+      "fixture": "Scratch Markdown with table/code/link/task-list and small CSV/TSV",
+      "steps": "Switch rendered/source views; follow a local link; test table scroll and copy; inspect Markdown task checkbox without editing source user data.",
+      "assertions": "Rendering and source agree; tables fit/scroll; external/local links keep their meaning; toggles do not lose selected file or scroll unexpectedly.",
+      "cleanup": "Restore display preference; any checkbox edit only in scratch and undo afterward.",
+      "mode": "local-reversible",
+      "source_groups": [
+        "files"
+      ],
+      "priority": "P1",
+      "status": "not-run",
+      "evidence": [],
+      "source_bindings": [
+        {
+          "path": "apps/web/src/components/files/FilePreviewPanel.tsx",
+          "line": 1182,
+          "symbol": "FilePreviewPanel.renderMarkdownPreferred / renderTablePreferred",
+          "state_or_branch": "Markdown and table view choices persist separately. Switching representation must keep the file target and text intact.",
+          "anchor": "const [renderMarkdownPreferred, setRenderMarkdownPreferred]"
+        }
+      ],
+      "provider_contract": "environment-capabilities",
+      "source_match_result": "pending live observation",
+      "source_version_match": "not checked against installed T3",
+      "live_variants": []
+    },
+    {
+      "id": "F05",
+      "group": "files",
+      "title": "Media/document previews have finished loading/error states",
+      "entry": "Files → image, PDF, audio/video, office/font/binary preview as fixture permits",
+      "fixture": "Public/synthetic local files only; representative files created by parent if available",
+      "steps": "Open representative supported types, zoom/pan/page/play where visible, then malformed file and missing path.",
+      "assertions": "Correct preview vs unsupported explanation; text does not spill; loading/error controls remain reachable; unsupported does not appear as blank.",
+      "cleanup": "Pause media; close viewers; no external upload.",
+      "mode": "local-reversible",
+      "source_groups": [
+        "files"
+      ],
+      "priority": "P2",
+      "status": "not-run",
+      "evidence": [],
+      "source_bindings": [
+        {
+          "path": "apps/web/src/components/files/FilePreviewPanel.tsx",
+          "line": 401,
+          "symbol": "WorkspaceDocumentPreview / WorkspaceImagePreview / WorkspaceVideoPreview / WorkspaceAudioPreview",
+          "state_or_branch": "Each media or document renderer handles a resolved resource. Verify supported content, failure state, and width on the installed platform.",
+          "anchor": "function WorkspaceDocumentPreview"
+        }
+      ],
+      "provider_contract": "environment-capabilities",
+      "source_match_result": "pending live observation",
+      "source_version_match": "not checked against installed T3",
+      "live_variants": []
+    },
+    {
+      "id": "F06",
+      "group": "files",
+      "title": "Local file editing saves the intended file",
+      "entry": "File contents editor; normal save chord; pending/unsaved indicator",
+      "fixture": "Scratch text file with known marker only",
+      "steps": "Edit one marker, save, switch file and back, reopen after tab close. Then make unsaved edit and attempt close to inspect dismissal choices.",
+      "assertions": "Saved bytes appear on reread; unsaved/pending/error status is visible; close behavior preserves or explicitly discards draft; editing never leaks into composer.",
+      "cleanup": "Restore scratch marker or discard audit draft; close file.",
+      "mode": "local-reversible",
+      "source_groups": [
+        "files"
+      ],
+      "priority": "P1",
+      "status": "not-run",
+      "evidence": [],
+      "source_bindings": [
+        {
+          "path": "apps/web/src/components/files/FilePreviewPanel.tsx",
+          "line": 765,
+          "symbol": "EditableFileSurface.saveTarget / handleEditChange",
+          "state_or_branch": "Edits enter useFileSaveSession using environment, cwd, and relativePath. Confirm the scratch file bytes after save and after an unsaved-close decision.",
+          "anchor": "const saveTarget = { environmentId, cwd, relativePath }"
+        }
+      ],
+      "provider_contract": "environment-capabilities",
+      "source_match_result": "pending live observation",
+      "source_version_match": "not checked against installed T3",
+      "live_variants": []
+    },
+    {
+      "id": "F07",
+      "group": "files",
+      "title": "File context and dragging attach usable context",
+      "entry": "File context → Copy mention / Add to chat; drag file into composer",
+      "fixture": "Scratch thread and selected file",
+      "steps": "Copy mention; Add to chat; drag file into composer with an existing typed note; inspect attachment then remove.",
+      "assertions": "Correct path and range/contents policy visible; note survives; drag highlight ends after drop/cancel; attachment does not consume whole composer.",
+      "cleanup": "Remove audit text and attachments; restore clipboard if needed.",
+      "mode": "local-reversible",
+      "source_groups": [
+        "files"
+      ],
+      "priority": "P1",
+      "status": "not-run",
+      "evidence": [],
+      "source_bindings": [
+        {
+          "path": "apps/web/src/components/files/FileBrowserPanel.tsx",
+          "line": 192,
+          "symbol": "FileBrowserPanel.showEntryContextMenu / dragMention",
+          "state_or_branch": "Copy mention and Add to chat serialize panelPath. Drag uses createFileTreeDragMentionController. Check the inserted target and note without sending.",
+          "anchor": "const showEntryContextMenu ="
+        }
+      ],
+      "provider_contract": "environment-capabilities",
+      "source_match_result": "pending live observation",
+      "source_version_match": "not checked against installed T3",
+      "live_variants": []
+    },
+    {
+      "id": "F08",
+      "group": "files",
+      "title": "File selection comments retain typed text",
+      "entry": "File range selection; comment/context affordance",
+      "fixture": "Scratch editable/read-only source preview",
+      "steps": "Select line and range; enter annotation; attach via offered local review/context action; switch file and return.",
+      "assertions": "Range, file, quote and added text survive; editing annotation is possible; keyboard selection and context menu behave normally.",
+      "cleanup": "Remove audit annotations and composer context.",
+      "mode": "local-reversible",
+      "source_groups": [
+        "files"
+      ],
+      "priority": "P1",
+      "status": "not-run",
+      "evidence": [],
+      "source_bindings": [
+        {
+          "path": "apps/web/src/components/files/FilePreviewPanel.tsx",
+          "line": 831,
+          "symbol": "EditableFileSurface.submitAnnotationEntry / lineAnnotations",
+          "state_or_branch": "The selection annotation preserves the entry range and submits the typed text through the composer context path. Test cancellation and two selections.",
+          "anchor": "const submitAnnotationEntry ="
+        }
+      ],
+      "provider_contract": "environment-capabilities",
+      "source_match_result": "pending live observation",
+      "source_version_match": "not checked against installed T3",
+      "live_variants": []
+    },
+    {
+      "id": "F09",
+      "group": "files",
+      "title": "Explorer resizing and external open are predictable",
+      "entry": "Show file explorer / Hide file explorer; Resize file explorer; Open in; Open file in preview browser",
+      "fixture": "Scratch HTML and text file",
+      "steps": "Resize explorer with mouse then arrows/Home/End; toggle explorer; inspect/open local file externally or preview HTML as appropriate.",
+      "assertions": "Tree/content keep usable widths; width persists sensibly; correct file opens; closing preview restores useful focus.",
+      "cleanup": "Close external audit window/tab; restore explorer width and visibility.",
+      "mode": "local-reversible",
+      "source_groups": [
+        "files"
+      ],
+      "priority": "P1",
+      "status": "not-run",
+      "evidence": [],
+      "source_bindings": [
+        {
+          "path": "apps/web/src/components/files/FileExplorerPane.tsx",
+          "line": 16,
+          "symbol": "FileExplorerPane",
+          "state_or_branch": "The explorer width has responsive limits and resize handlers. Verify pointer and keyboard adjustments plus the preview body width.",
+          "anchor": "export function FileExplorerPane"
+        },
+        {
+          "path": "apps/web/src/components/files/FilePreviewPanel.tsx",
+          "line": 1360,
+          "symbol": "FilePreviewPanel.handleOpenInBrowser",
+          "state_or_branch": "HTML-style preview follows a separate browser action. Opening it must preserve file identity and existing editor state.",
+          "anchor": "const handleOpenInBrowser ="
+        }
+      ],
+      "provider_contract": "environment-capabilities",
+      "source_match_result": "pending live observation",
+      "source_version_match": "not checked against installed T3",
+      "live_variants": []
+    },
+    {
+      "id": "D01",
+      "group": "diff",
+      "title": "Local Changes/Diff exposes known staged and unstaged changes",
+      "entry": "Add panel surface → Diff; Diff scope selector",
+      "fixture": "Scratch Git repo with committed baseline, staged addition, unstaged edit, rename/delete, untracked file",
+      "steps": "Open Diff; select each offered scope; compare file counts and hunks with known fixture.",
+      "assertions": "No missed new/deleted file; staged and unstaged distinctions are honest; scope label reflects actual comparison.",
+      "cleanup": "Restore prior scope; keep fixture changes for later cases.",
+      "mode": "read-only",
+      "source_groups": [
+        "host",
+        "diff"
+      ],
+      "priority": "P1",
+      "status": "not-run",
+      "evidence": [],
+      "source_bindings": [
+        {
+          "path": "apps/web/src/components/DiffPanel.tsx",
+          "line": 400,
+          "symbol": "DiffPanel.branchDiffPreview / selectedGitSource",
+          "state_or_branch": "The source of rendered changes depends on thread route, cwd, diffSelection, and selectedGitSource. Compare each known local change to its actual row and patch.",
+          "anchor": "const branchDiffPreview = useEnvironmentQuery"
+        }
+      ],
+      "provider_contract": "environment-capabilities",
+      "source_match_result": "pending live observation",
+      "source_version_match": "not checked against installed T3",
+      "live_variants": []
+    },
+    {
+      "id": "D02",
+      "group": "diff",
+      "title": "Base comparison and commit scope remain explicit",
+      "entry": "Change comparison target. Currently <ref>; Search refs; All commits or offered scope",
+      "fixture": "Scratch branches main and audit-change with local commits",
+      "steps": "Change base to known local ref; inspect remote-only choice without using network checkout; select commit scope.",
+      "assertions": "Base/head shown correctly; no stale diff from previous ref; unavailable comparison has actionable error, not empty success.",
+      "cleanup": "Restore original base/scope.",
+      "mode": "read-only",
+      "source_groups": [
+        "diff"
+      ],
+      "priority": "P1",
+      "status": "not-run",
+      "evidence": [],
+      "source_bindings": [
+        {
+          "path": "apps/web/src/components/DiffPanel.tsx",
+          "line": 335,
+          "symbol": "DiffPanel.selectedBaseRef / selectedCommitSha",
+          "state_or_branch": "Base ref and commit scope derive from diffSelection. Verify the header, list, and patch all change together.",
+          "anchor": "const selectedBaseRef ="
+        }
+      ],
+      "provider_contract": "environment-capabilities",
+      "source_match_result": "pending live observation",
+      "source_version_match": "not checked against installed T3",
+      "live_variants": []
+    },
+    {
+      "id": "D03",
+      "group": "diff",
+      "title": "Diff presentation controls work with real content",
+      "entry": "Refresh diff; Expand all files / Collapse all files; Stacked diff view / Split diff view; Hide test files; Show file tree",
+      "fixture": "Scratch diff with long lines and test file",
+      "steps": "Refresh after parent edits scratch file; toggle presentation controls, select tree rows, copy path and code.",
+      "assertions": "New contents arrive; selection stays sensible; wrap/whitespace/test filtering is consistent; colors and line numbers remain readable.",
+      "cleanup": "Restore presentation settings.",
+      "mode": "local-reversible",
+      "source_groups": [
+        "diff"
+      ],
+      "priority": "P1",
+      "status": "not-run",
+      "evidence": [],
+      "source_bindings": [
+        {
+          "path": "apps/web/src/components/DiffPanel.tsx",
+          "line": 477,
+          "symbol": "DiffPanel.refreshDiffFromUserAction / fileTreeOpen / wordWrapOverride",
+          "state_or_branch": "Explicit refresh invokes the preview query. Presentation controls must preserve the current source and selected file.",
+          "anchor": "const refreshDiffFromUserAction ="
+        }
+      ],
+      "provider_contract": "environment-capabilities",
+      "source_match_result": "pending live observation",
+      "source_version_match": "not checked against installed T3",
+      "live_variants": []
+    },
+    {
+      "id": "D04",
+      "group": "diff",
+      "title": "Reviewing a diff can attach context without sending",
+      "entry": "Diff line/range selection; comment/add-to-chat action",
+      "fixture": "Scratch diff and composer with typed annotation",
+      "steps": "Select changed lines, add local review/context note, change file and return.",
+      "assertions": "Correct before/after side and line range; note remains editable; composer text is not replaced; no agent prompt is sent without explicit send.",
+      "cleanup": "Clear audit review annotations and draft attachments.",
+      "mode": "local-reversible",
+      "source_groups": [
+        "diff"
+      ],
+      "priority": "P1",
+      "status": "not-run",
+      "evidence": [],
+      "source_bindings": [
+        {
+          "path": "apps/web/src/components/DiffPanel.tsx",
+          "line": 1467,
+          "symbol": "DiffPanel.reviewSectionId / reviewSectionTitle",
+          "state_or_branch": "Review context is scoped to branch, commit, turn, or tool call. The added context must include the right scope, line range, and typed note.",
+          "anchor": "sectionId={reviewSectionId}"
+        }
+      ],
+      "provider_contract": "environment-capabilities",
+      "source_match_result": "pending live observation",
+      "source_version_match": "not checked against installed T3",
+      "live_variants": []
+    },
+    {
+      "id": "D05",
+      "group": "diff",
+      "title": "Git actions disclose exactly what would be changed",
+      "entry": "Git actions / Git action options; Commit, Push, Pull, Commit & push, Push & create PR, Publish repository",
+      "fixture": "Scratch repo; active user repo inspection only",
+      "steps": "Inspect available actions and disabled reasons for clean/dirty/no-remote states. Open a form only if it does not execute. Do not click one-shot Pull/Push/combined actions.",
+      "assertions": "Label reflects current state; file selection and target branch are clear; generated text is not assumed free/no-agent; errors have useful context.",
+      "cleanup": "Cancel opened form; leave repository unchanged.",
+      "mode": "inspect-and-cancel",
+      "source_groups": [
+        "diff"
+      ],
+      "priority": "P1",
+      "status": "not-run",
+      "evidence": [],
+      "source_bindings": [
+        {
+          "path": "apps/web/src/components/GitActionsControl.logic.ts",
+          "line": 109,
+          "symbol": "buildMenuItems / resolveQuickAction",
+          "state_or_branch": "Git status decides offered actions and the primary action label. Labels can combine commit, push, and PR creation. Do not activate a combined write to inspect it.",
+          "anchor": "export function buildMenuItems"
+        }
+      ],
+      "provider_contract": "environment-capabilities",
+      "source_match_result": "pending live observation",
+      "source_version_match": "not checked against installed T3",
+      "live_variants": []
+    },
+    {
+      "id": "D06",
+      "group": "diff",
+      "title": "Commit form is complete and cancel-safe",
+      "entry": "Commit message placeholder Leave empty to auto-generate; file list; Open <file> in editor",
+      "fixture": "Scratch dirty repo only",
+      "steps": "Open commit UI if source/visible control is a form; inspect file include/exclude, type manual message, open one file, then cancel. Do not execute commit or generation in this pass.",
+      "assertions": "Form distinguishes selected files/staged changes; cancel leaves original working tree/index and message policy understood; no accidental commit from Enter in field.",
+      "cleanup": "Cancel; discard form draft if possible; record before/after local status.",
+      "mode": "inspect-and-cancel",
+      "source_groups": [
+        "diff"
+      ],
+      "priority": "P1",
+      "status": "not-run",
+      "evidence": [],
+      "source_bindings": [
+        {
+          "path": "apps/web/src/components/GitActionsControl.tsx",
+          "line": 995,
+          "symbol": "GitActionsControl.isCommitDialogOpen / dialogCommitMessage / excludedFiles",
+          "state_or_branch": "Commit dialog text and file exclusions are draft UI. Confirming can write Git data and an empty message can invoke generation.",
+          "anchor": "const [isCommitDialogOpen, setIsCommitDialogOpen]"
+        }
+      ],
+      "provider_contract": "environment-capabilities",
+      "source_match_result": "pending live observation",
+      "source_version_match": "not checked against installed T3",
+      "live_variants": []
+    },
+    {
+      "id": "D07",
+      "group": "diff",
+      "title": "Publishing and branch-changing dialogs are inspectable",
+      "entry": "Publish repository; Private / Public; remote-name input; Branch selector → Search refs...",
+      "fixture": "Scratch repo without remote for publish form; scratch branch picker",
+      "steps": "Inspect repository name/owner/visibility and branch/worktree options; cancel every publishing/create/delete action.",
+      "assertions": "Destination and visibility are explicit; missing permission and name validation are readable; no silent publish or checkout occurs during menu inspection.",
+      "cleanup": "Cancel; no network writes or user checkout mutation.",
+      "mode": "inspect-and-cancel",
+      "source_groups": [
+        "diff"
+      ],
+      "priority": "P1",
+      "status": "not-run",
+      "evidence": [],
+      "source_bindings": [
+        {
+          "path": "apps/web/src/components/GitActionsControl.tsx",
+          "line": 447,
+          "symbol": "PublishRepositoryDialog / pendingDefaultBranchAction",
+          "state_or_branch": "Publishing has provider, repository, visibility, remote, protocol, and step state. Inspect these fields and dismiss before the write.",
+          "anchor": "function PublishRepositoryDialog"
+        }
+      ],
+      "provider_contract": "environment-capabilities",
+      "source_match_result": "pending live observation",
+      "source_version_match": "not checked against installed T3",
+      "live_variants": []
+    },
+    {
+      "id": "T01",
+      "group": "terminal",
+      "title": "Terminal opens in the correct checkout",
+      "entry": "Add panel surface → Terminal; New Terminal",
+      "fixture": "Scratch thread A in known scratch repo",
+      "steps": "Open terminal; run pwd and a simple deterministic printf marker; open Files/PR and return.",
+      "assertions": "cwd matches thread checkout, output arrives live, terminal is not recreated or replaced by Background view on return.",
+      "cleanup": "Run exit in audit shell when done.",
+      "mode": "local-process",
+      "source_groups": [
+        "host",
+        "terminal"
+      ],
+      "priority": "P1",
+      "status": "not-run",
+      "evidence": [],
+      "source_bindings": [
+        {
+          "path": "apps/web/src/components/terminal/useThreadTerminalActions.ts",
+          "line": 28,
+          "symbol": "useThreadTerminalActions / terminalEnvironment.open",
+          "state_or_branch": "The terminal opens with its explicit launch location and scoped threadRef. A printed cwd is the runtime assertion.",
+          "anchor": "export function useThreadTerminalActions"
+        }
+      ],
+      "provider_contract": "environment-capabilities",
+      "source_match_result": "pending live observation",
+      "source_version_match": "not checked against installed T3",
+      "live_variants": []
+    },
+    {
+      "id": "T02",
+      "group": "terminal",
+      "title": "Input focus and ordinary terminal keys work",
+      "entry": "Terminal viewport; composer; app shortcuts",
+      "fixture": "Scratch shell with no user job",
+      "steps": "Type a multiline quoted command, use arrows/Home/End/backspace, copy/paste, Ctrl-C on a harmless foreground sleep; alternate composer and terminal focus.",
+      "assertions": "Keys go to the visible focused surface; terminal control keys do not send chat; app navigation does not leave terminal focused invisibly.",
+      "cleanup": "Cancel foreground command; clear scratch composer text.",
+      "mode": "local-process",
+      "source_groups": [
+        "terminal"
+      ],
+      "priority": "P1",
+      "status": "not-run",
+      "evidence": [],
+      "source_bindings": [
+        {
+          "path": "apps/web/src/components/ThreadTerminalDrawer.tsx",
+          "line": 495,
+          "symbol": "TerminalSessionViewport",
+          "state_or_branch": "Input and session output pass through the active terminal viewport. Verify focus and rendered output without accidentally typing into the composer.",
+          "anchor": "function TerminalSessionViewport"
+        }
+      ],
+      "provider_contract": "environment-capabilities",
+      "source_match_result": "pending live observation",
+      "source_version_match": "not checked against installed T3",
+      "live_variants": []
+    },
+    {
+      "id": "T03",
+      "group": "terminal",
+      "title": "Horizontal/vertical splits have independent sessions",
+      "entry": "Split Terminal Horizontally / Split Terminal Vertically; New Terminal",
+      "fixture": "Scratch thread; short marker per shell",
+      "steps": "Create two split panes then a separate terminal; print distinct markers; switch active panes/groups; resize panel and test split limit if cheap.",
+      "assertions": "Input/output stays with active pane; Single / Stacked / Side by side grouping matches geometry; limit disabled reason visible; no mixed streams.",
+      "cleanup": "Exit and close every audit shell/pane.",
+      "mode": "local-process",
+      "source_groups": [
+        "terminal"
+      ],
+      "priority": "P1",
+      "status": "not-run",
+      "evidence": [],
+      "source_bindings": [
+        {
+          "path": "apps/web/src/components/ThreadTerminalDrawer.tsx",
+          "line": 1596,
+          "symbol": "ThreadTerminalDrawer.onSplitTerminalAction / onSplitTerminalVerticalAction",
+          "state_or_branch": "Horizontal and vertical split commands choose different layouts. Independent terminal markers must remain in their own session.",
+          "anchor": "const onSplitTerminalVerticalAction ="
+        }
+      ],
+      "provider_contract": "environment-capabilities",
+      "source_match_result": "pending live observation",
+      "source_version_match": "not checked against installed T3",
+      "live_variants": []
+    },
+    {
+      "id": "T04",
+      "group": "terminal",
+      "title": "Terminal context menu adds meaningful text",
+      "entry": "Add to chat / Copy / Paste / Select all / Jump to latest",
+      "fixture": "Scratch shell output with distinct first/last lines",
+      "steps": "Select output, right-click, copy and Add to chat; keep an existing composer note; scroll up then Jump to latest.",
+      "assertions": "Copied/attached text matches selection, not full private buffer; terminal origin/context remains identifiable; annotation survives; jump reaches current output.",
+      "cleanup": "Clear audit attachment/note; restore clipboard if needed.",
+      "mode": "local-process",
+      "source_groups": [
+        "terminal"
+      ],
+      "priority": "P1",
+      "status": "not-run",
+      "evidence": [],
+      "source_bindings": [
+        {
+          "path": "apps/web/src/components/ThreadTerminalDrawer.tsx",
+          "line": 583,
+          "symbol": "TerminalSessionViewport.handleAddTerminalContext",
+          "state_or_branch": "Selected terminal output becomes TerminalContextSelection. Confirm the copied or attached selection and retained composer note.",
+          "anchor": "const handleAddTerminalContext ="
+        }
+      ],
+      "provider_contract": "environment-capabilities",
+      "source_match_result": "pending live observation",
+      "source_version_match": "not checked against installed T3",
+      "live_variants": []
+    },
+    {
+      "id": "T05",
+      "group": "terminal",
+      "title": "Terminal links use the correct target and line",
+      "entry": "Terminal path:line and http URL link",
+      "fixture": "Scratch output containing absolute file path:line and controlled localhost URL",
+      "steps": "Click and modifier/right-click supported links; close resulting preview; return to terminal.",
+      "assertions": "File goes to exact line; URL opens intended browser/external destination; trailing punctuation is not included; focus restoration works.",
+      "cleanup": "Close audit preview/external tab; stop any parent fixture server.",
+      "mode": "local-process",
+      "source_groups": [
+        "terminal"
+      ],
+      "priority": "P1",
+      "status": "not-run",
+      "evidence": [],
+      "source_bindings": [
+        {
+          "path": "apps/web/src/components/ThreadTerminalDrawer.tsx",
+          "line": 522,
+          "symbol": "TerminalSessionViewport.linkPath",
+          "state_or_branch": "Detected file links and external URLs route through different open paths. Confirm exact file line and browser URL after the click.",
+          "anchor": "const [linkPath, setLinkPath]"
+        }
+      ],
+      "provider_contract": "environment-capabilities",
+      "source_match_result": "pending live observation",
+      "source_version_match": "not checked against installed T3",
+      "live_variants": []
+    },
+    {
+      "id": "T06",
+      "group": "terminal",
+      "title": "Close, reconnect, thread switch, and restart do not orphan work",
+      "entry": "Close Terminal / Close <label>; terminal tab close",
+      "fixture": "Audit shell with harmless foreground process; second scratch thread",
+      "steps": "Attempt close and inspect running-process confirmation; cancel once, then stop the job and close. Switch threads while output is producing. Restart persistence only if parent already plans app restart.",
+      "assertions": "Cancel preserves session; confirmed close actually ends owned process; hidden thread output remains correctly scoped; restored terminal status is honest.",
+      "cleanup": "Exit/terminate every audit process and verify no live job or terminal remains.",
+      "mode": "local-process",
+      "source_groups": [
+        "terminal"
+      ],
+      "priority": "P1",
+      "status": "not-run",
+      "evidence": [],
+      "source_bindings": [
+        {
+          "path": "apps/web/src/components/terminal/useThreadTerminalActions.ts",
+          "line": 118,
+          "symbol": "useThreadTerminalActions.closeTerminalSession",
+          "state_or_branch": "The close command is sent for the selected terminal and target thread. A closed tab alone does not prove the process ended.",
+          "anchor": "const closeTerminalSession ="
+        },
+        {
+          "path": "apps/web/src/lib/terminalCloseConfirm.ts",
+          "line": 9,
+          "symbol": "confirmTerminalClose",
+          "state_or_branch": "Closing a live session can require confirmation. Cancel and confirm are distinct tests. Only confirm for audit-created terminal processes.",
+          "anchor": "export async function confirmTerminalClose"
+        }
+      ],
+      "provider_contract": "environment-capabilities",
+      "source_match_result": "pending live observation",
+      "source_version_match": "not checked against installed T3",
+      "live_variants": []
+    },
+    {
+      "id": "L01",
+      "group": "lifecycle",
+      "title": "Add existing scratch folder uses a clear project target",
+      "entry": "Add project → Local folder / Add existing project",
+      "fixture": "Prepared scratch project path",
+      "steps": "Use visible picker to add only scratch folder; inspect selected environment, path, name; open project.",
+      "assertions": "Project appears once in sidebar, correct root displayed; no accidental clone/publish; duplicate add focuses existing project rather than duplicating.",
+      "cleanup": "Remove/archive only scratch project after threads/processes close.",
+      "mode": "local-reversible",
+      "source_groups": [
+        "lifecycle"
+      ],
+      "priority": "P1",
+      "status": "not-run",
+      "evidence": [],
+      "source_bindings": [
+        {
+          "path": "apps/web/src/components/CommandPalette.tsx",
+          "line": 1997,
+          "symbol": "OpenCommandPaletteDialog.handleAddProject",
+          "state_or_branch": "Adding a folder resolves the chosen environment and cwd. Verify the scratch root and project identity after creation.",
+          "anchor": "const handleAddProject ="
+        }
+      ],
+      "provider_contract": "shared-client",
+      "source_match_result": "pending live observation",
+      "source_version_match": "not checked against installed T3",
+      "live_variants": []
+    },
+    {
+      "id": "L02",
+      "group": "lifecycle",
+      "title": "New project and clone flows expose destinations",
+      "entry": "New project; Add project remote input; Host for the new repository; Select where to clone",
+      "fixture": "No actual remote clone required; scratch parent directory",
+      "steps": "Inspect local vs hosted project mode, names and destination fields, and invalid URL/name validation. Cancel before create/clone/publish.",
+      "assertions": "Local creation distinct from hosted repository creation; environment/root visible; errors stay near field; Escape and back preserve expected state.",
+      "cleanup": "Cancel modal and clear unsaved form.",
+      "mode": "inspect-and-cancel",
+      "source_groups": [
+        "lifecycle"
+      ],
+      "priority": "P1",
+      "status": "not-run",
+      "evidence": [],
+      "source_bindings": [
+        {
+          "path": "apps/web/src/components/CommandPalette.tsx",
+          "line": 529,
+          "symbol": "OpenCommandPaletteDialog.newProjectFlow / addProjectCloneFlow / newProjectPublishes",
+          "state_or_branch": "New folder, clone, and publish use separate flow state. Inspect destination and selected host before dismissing.",
+          "anchor": "const [newProjectFlow, setNewProjectFlow]"
+        }
+      ],
+      "provider_contract": "shared-client",
+      "source_match_result": "pending live observation",
+      "source_version_match": "not checked against installed T3",
+      "live_variants": []
+    },
+    {
+      "id": "L03",
+      "group": "lifecycle",
+      "title": "Draft thread retains text and chosen scope",
+      "entry": "New thread in... / New thread without a project; New thread in <project>",
+      "fixture": "Scratch project A and optional No project draft",
+      "steps": "Create unsent draft, type marker, switch project/thread and return; change branch/environment picker only where safe.",
+      "assertions": "Draft text and chosen scope remain paired; no provider starts merely from typing; draft indicator and Discard draft work.",
+      "cleanup": "Discard audit draft after verifying confirmation semantics.",
+      "mode": "local-reversible",
+      "source_groups": [
+        "lifecycle"
+      ],
+      "priority": "P1",
+      "status": "not-run",
+      "evidence": [],
+      "source_bindings": [
+        {
+          "path": "apps/web/src/hooks/useHandleNewThread.ts",
+          "line": 87,
+          "symbol": "createNewThreadHandler / seedPrompt",
+          "state_or_branch": "Draft reuse checks existing user content and preserves it across awaits. Workspace, model selection, and runtime mode are separate context values.",
+          "anchor": "export function createNewThreadHandler"
+        }
+      ],
+      "provider_contract": "shared-client",
+      "source_match_result": "pending live observation",
+      "source_version_match": "not checked against installed T3",
+      "live_variants": []
+    },
+    {
+      "id": "L04",
+      "group": "lifecycle",
+      "title": "Sent scratch threads have a complete lifecycle",
+      "entry": "New thread; provider/model picker; send/stop controls",
+      "fixture": "Two scratch threads. Parent selects the authorized Sol and Sonnet subscriptions and records actual provider instance and model for each.",
+      "steps": "Parent sends one bounded harmless prompt, observes live output, stops a second bounded run, resumes/follows up only as needed.",
+      "assertions": "Provider/effort/status are visible; stop is real; thread stays selected; output is complete and composer usable afterward.",
+      "cleanup": "Stop and close every audit thread/run; no replacement-model leftovers.",
+      "mode": "parent-agent",
+      "source_groups": [
+        "lifecycle"
+      ],
+      "priority": "P1",
+      "status": "not-run",
+      "evidence": [],
+      "source_bindings": [
+        {
+          "path": "apps/web/src/components/ChatView.tsx",
+          "line": 1492,
+          "symbol": "ChatView.pendingBackgroundTasks / serverProjection",
+          "state_or_branch": "Actual sent turns appear in the projection, including pending background work. Parent must observe start, output, completion, and cleanup under the selected provider.",
+          "anchor": "const pendingBackgroundTasks ="
+        },
+        {
+          "path": "apps/server/src/orchestration-v2/Adapters/CodexAdapterV2.ts",
+          "line": 255,
+          "symbol": "CodexProviderCapabilitiesV2",
+          "state_or_branch": "Codex declares streaming tool output, native subagent thread IDs, wait, close, and fork support. Record the actual installed provider and model before using this contract.",
+          "anchor": "export const CodexProviderCapabilitiesV2"
+        },
+        {
+          "path": "apps/server/src/orchestration-v2/Adapters/ClaudeAdapterV2.ts",
+          "line": 489,
+          "symbol": "ClaudeProviderCapabilitiesV2",
+          "state_or_branch": "Claude declares assistant and reasoning streaming, no streaming tool output, and completed tool output. It emits subagent lifecycle but does not expose native child IDs or native wait, close, or fork capabilities.",
+          "anchor": "export const ClaudeProviderCapabilitiesV2"
+        }
+      ],
+      "provider_contract": "agent-provider",
+      "source_match_result": "pending live observation",
+      "source_version_match": "not checked against installed T3",
+      "live_variants": [],
+      "required_provider_variants": [
+        "Authorized Sol selection mapped to the observed Codex provider instance",
+        "Authorized Sonnet selection mapped to the observed Claude provider instance"
+      ]
+    },
+    {
+      "id": "L05",
+      "group": "lifecycle",
+      "title": "Thread rename and title input behave naturally",
+      "entry": "Thread title; Rename thread",
+      "fixture": "Scratch thread",
+      "steps": "Rename via context menu; test empty input, Escape cancellation, Enter commit, and selection/editing; navigate away/back.",
+      "assertions": "Empty title rejected without losing old title; Escape restores old value; committed title appears in sidebar/header/search.",
+      "cleanup": "Restore audit title or remove scratch thread.",
+      "mode": "local-reversible",
+      "source_groups": [
+        "lifecycle"
+      ],
+      "priority": "P1",
+      "status": "not-run",
+      "evidence": [],
+      "source_bindings": [
+        {
+          "path": "apps/web/src/components/sidebar/SidebarThreadRow.tsx",
+          "line": 602,
+          "symbol": "ThreadRenameInput.handleKeyDown",
+          "state_or_branch": "Rename input has commit and cancel callbacks. Verify saved title and Escape cancellation without starting a new turn.",
+          "anchor": "function ThreadRenameInput"
+        }
+      ],
+      "provider_contract": "shared-client",
+      "source_match_result": "pending live observation",
+      "source_version_match": "not checked against installed T3",
+      "live_variants": []
+    },
+    {
+      "id": "L06",
+      "group": "lifecycle",
+      "title": "Pin, settle, snooze, wake, and unread are reversible",
+      "entry": "Pin thread / Unpin thread; Settle thread / Un-settle thread; Snooze → Custom…; Wake thread; Mark unread",
+      "fixture": "Idle scratch thread only",
+      "steps": "Exercise pin/unpin; settle/unsettle; inspect custom snooze and cancel, or short snooze then immediate Wake; mark unread then revisit.",
+      "assertions": "Row moves predictably; no lost selection/draft; Undo notice works where offered; snooze wake state and unread indicator clear appropriately.",
+      "cleanup": "Restore original scratch state; cancel scheduled snooze.",
+      "mode": "local-reversible",
+      "source_groups": [
+        "lifecycle"
+      ],
+      "priority": "P1",
+      "status": "not-run",
+      "evidence": [],
+      "source_bindings": [
+        {
+          "path": "apps/web/src/components/Sidebar.tsx",
+          "line": 2608,
+          "symbol": "Sidebar.handleThreadContextMenu",
+          "state_or_branch": "Pin, settle, snooze, wake, and unread act on the clicked ScopedThreadRef. Verify row placement and status after each reversible action.",
+          "anchor": "const handleThreadContextMenu ="
+        }
+      ],
+      "provider_contract": "shared-client",
+      "source_match_result": "pending live observation",
+      "source_version_match": "not checked against installed T3",
+      "live_variants": []
+    },
+    {
+      "id": "L07",
+      "group": "lifecycle",
+      "title": "Thread search and project grouping preserve intended navigation",
+      "entry": "Search threads; Search projects; All projects; Show all projects / Filter by <project>",
+      "fixture": "Two scratch threads with distinct titles and markers",
+      "steps": "Search partial title/content where supported; switch grouping/filter; use keyboard and pointer to open result; clear search.",
+      "assertions": "Correct thread activates; result text and focus are visible; clearing search restores list without taking user to Background work.",
+      "cleanup": "Clear audit searches and restore grouping/filter.",
+      "mode": "local-reversible",
+      "source_groups": [
+        "lifecycle"
+      ],
+      "priority": "P1",
+      "status": "not-run",
+      "evidence": [],
+      "source_bindings": [
+        {
+          "path": "apps/web/src/components/Sidebar.tsx",
+          "line": 1522,
+          "symbol": "Sidebar.handleThreadSearchKeyDown / threadSearchQuery",
+          "state_or_branch": "Search highlighting, filtered entries, and activation use their own state. Verify keyboard and pointer selection after grouping changes.",
+          "anchor": "const handleThreadSearchKeyDown ="
+        }
+      ],
+      "provider_contract": "shared-client",
+      "source_match_result": "pending live observation",
+      "source_version_match": "not checked against installed T3",
+      "live_variants": []
+    },
+    {
+      "id": "L08",
+      "group": "lifecycle",
+      "title": "Thread context copies and branch reuse are scoped",
+      "entry": "Copy → Path / Branch / Thread / Thread ID; New thread on <branch>; Project settings",
+      "fixture": "Scratch thread with branch",
+      "steps": "Copy each value and inspect; open new thread on same branch without sending; open project settings from row.",
+      "assertions": "Copied identifiers correspond to clicked thread, not selected neighbor; new draft inherits intended branch/project; settings scope is correct.",
+      "cleanup": "Discard extra draft; restore clipboard if needed.",
+      "mode": "local-reversible",
+      "source_groups": [
+        "lifecycle"
+      ],
+      "priority": "P1",
+      "status": "not-run",
+      "evidence": [],
+      "source_bindings": [
+        {
+          "path": "apps/web/src/components/threadActionMenu.logic.ts",
+          "line": 116,
+          "symbol": "buildThreadActionMenuItems",
+          "state_or_branch": "Context actions depend on the thread branch and project. Copy actions and New thread on branch must reference the clicked row.",
+          "anchor": "export function buildThreadActionMenuItems"
+        }
+      ],
+      "provider_contract": "shared-client",
+      "source_match_result": "pending live observation",
+      "source_version_match": "not checked against installed T3",
+      "live_variants": []
+    },
+    {
+      "id": "L09",
+      "group": "lifecycle",
+      "title": "Archive and deletion affordances disclose consequences",
+      "entry": "Archive thread; Settings → Archive → Unarchive / Delete; Delete",
+      "fixture": "Idle scratch thread; confirmation preference recorded",
+      "steps": "Inspect archive/delete confirmation without committing deletion. If parent separately permits reversible scratch archive, archive then Unarchive and inspect restoration. Never archive/delete user thread.",
+      "assertions": "Running thread action disabled appropriately; confirmation identifies exact thread; archive restore preserves content/context; delete is visually distinct.",
+      "cleanup": "Cancel deletion; restore scratch archive state.",
+      "mode": "inspect-and-cancel",
+      "source_groups": [
+        "lifecycle"
+      ],
+      "priority": "P1",
+      "status": "not-run",
+      "evidence": [],
+      "source_bindings": [
+        {
+          "path": "apps/web/src/components/settings/ArchivedThreadsPanel.tsx",
+          "line": 150,
+          "symbol": "ArchivedThreadsPanel.handleThreadAction / pendingKeys",
+          "state_or_branch": "Archive actions track pending thread keys and distinguish unarchive from delete. Inspect deletion then cancel. Restore only audit-created archived threads.",
+          "anchor": "const handleThreadAction ="
+        }
+      ],
+      "provider_contract": "shared-client",
+      "source_match_result": "pending live observation",
+      "source_version_match": "not checked against installed T3",
+      "live_variants": []
+    },
+    {
+      "id": "L10",
+      "group": "lifecycle",
+      "title": "Multi-selection never targets hidden/unselected threads",
+      "entry": "Sidebar range/modifier selection; Settle (<count>), Snooze (<count>), Mark unread (<count>), Delete (<count>)",
+      "fixture": "Two audit-only rows plus a user row left untouched",
+      "steps": "Select audit rows, inspect batch menu count, change selection with modifiers and cancel; optionally reversible Mark unread only.",
+      "assertions": "Count and highlight agree; hidden filters do not broaden target unexpectedly; context click preserves intended selection; Escape clears.",
+      "cleanup": "Clear selection; leave user rows untouched.",
+      "mode": "inspect-or-local",
+      "source_groups": [
+        "lifecycle"
+      ],
+      "priority": "P1",
+      "status": "not-run",
+      "evidence": [],
+      "source_bindings": [
+        {
+          "path": "apps/web/src/components/Sidebar.tsx",
+          "line": 2306,
+          "symbol": "Sidebar.handleMultiSelectContextMenu",
+          "state_or_branch": "Batch actions receive the selected thread set. Compare menu counts and actual selected IDs before a reversible scratch-only action.",
+          "anchor": "const handleMultiSelectContextMenu ="
+        }
+      ],
+      "provider_contract": "shared-client",
+      "source_match_result": "pending live observation",
+      "source_version_match": "not checked against installed T3",
+      "live_variants": []
+    },
+    {
+      "id": "L11",
+      "group": "lifecycle",
+      "title": "Project settings preserve root and distinguish grouping",
+      "entry": "Project settings → Name / Project icon / Pin / Checkouts / Danger",
+      "fixture": "Scratch project only",
+      "steps": "Inspect checkouts and grouping scope; change scratch display name and restore; inspect remove/archive danger controls then cancel.",
+      "assertions": "Name/icon affect intended logical project; checkout path/environment shown; remove checkout and delete project consequences explicit.",
+      "cleanup": "Restore name/icon/pin; cancel danger actions.",
+      "mode": "local-reversible",
+      "source_groups": [
+        "lifecycle"
+      ],
+      "priority": "P1",
+      "status": "not-run",
+      "evidence": [],
+      "source_bindings": [
+        {
+          "path": "apps/web/src/components/settings/ProjectSettingsPanel.tsx",
+          "line": 251,
+          "symbol": "ProjectDetail / CheckoutGroupingSelect",
+          "state_or_branch": "ProjectDetail edits the selected project or group. Checkout grouping is a separate choice. Verify root, current checkout, and scope labels.",
+          "anchor": "function ProjectDetail"
+        }
+      ],
+      "provider_contract": "shared-client",
+      "source_match_result": "pending live observation",
+      "source_version_match": "not checked against installed T3",
+      "live_variants": []
+    },
+    {
+      "id": "L12",
+      "group": "lifecycle",
+      "title": "Worktree controls disclose local changes and ownership",
+      "entry": "Branch picker; Start worktree from remote; Settings → Worktrees",
+      "fixture": "Scratch clone only; no active user worktree",
+      "steps": "Inspect base/branch choices and cleanup list. If parent creates a scratch worktree, verify thread/terminal cwd and dirty protection before cleanup.",
+      "assertions": "New worktree has explicit path/branch; no source checkout change; Keep worktrees with local changes honored; cleanup never claims user worktree.",
+      "cleanup": "Close scratch thread/process first; remove only owned worktree when appropriate.",
+      "mode": "inspect-or-local",
+      "source_groups": [
+        "lifecycle",
+        "settings"
+      ],
+      "priority": "P1",
+      "status": "not-run",
+      "evidence": [],
+      "source_bindings": [
+        {
+          "path": "apps/web/src/components/settings/WorktreesSettings.tsx",
+          "line": 54,
+          "symbol": "WorktreesSettingsPanel / StartFromRemoteRow",
+          "state_or_branch": "Worktree defaults are scoped settings. Inspect cleanup and destination behavior only on an audit checkout with known ownership.",
+          "anchor": "export function WorktreesSettingsPanel"
+        },
+        {
+          "path": "apps/web/src/components/settings/StorageSettings.tsx",
+          "line": 548,
+          "symbol": "WorktreeCleanupSection / RetentionControl",
+          "state_or_branch": "Cleanup retention is scoped. Saving an age can start cleanup, so enabling first creates a draft. Inspect Keep worktrees with local changes without saving a cleanup rule.",
+          "anchor": "export function WorktreeCleanupSection"
+        }
+      ],
+      "provider_contract": "shared-client",
+      "source_match_result": "pending live observation",
+      "source_version_match": "not checked against installed T3",
+      "live_variants": []
+    },
+    {
+      "id": "S01",
+      "group": "settings",
+      "title": "Settings navigation/search and modal focus are complete",
+      "entry": "Settings; Search settings; Settings sections; Settings content",
+      "fixture": "Existing config read-only; record starting view",
+      "steps": "Open Settings, use search for Panel animations and a nonexistent term, navigate sections by keyboard, close with Escape/back.",
+      "assertions": "Search reaches correct row and scope; no results is clear; focus stays in modal; close returns to prior thread without changing it.",
+      "cleanup": "Clear search; close modal.",
+      "mode": "read-only",
+      "source_groups": [
+        "settings"
+      ],
+      "priority": "P1",
+      "status": "not-run",
+      "evidence": [],
+      "source_bindings": [
+        {
+          "path": "apps/web/src/components/settings/SettingsSidebarNav.tsx",
+          "line": 212,
+          "symbol": "SettingsSidebarNav.handleSearchResultClick / handleSearchKeyDown",
+          "state_or_branch": "Settings search selects a section and target anchor. Verify focus and the visible control, not only the URL hash.",
+          "anchor": "const handleSearchResultClick ="
+        }
+      ],
+      "provider_contract": "shared-client",
+      "source_match_result": "pending live observation",
+      "source_version_match": "not checked against installed T3",
+      "live_variants": []
+    },
+    {
+      "id": "S02",
+      "group": "settings",
+      "title": "Scope is explicit and overrides do not silently affect all projects",
+      "entry": "Settings target/scope selector; Project defaults and overrides",
+      "fixture": "Scratch project and device scope",
+      "steps": "Switch All/device, environment, project, checkout scopes where offered; inspect inherited value and unavailable-target notices; do not alter global provider settings.",
+      "assertions": "Scope labels match actual target; inherited vs override distinguished; unsupported setting gives useful owning-scope navigation.",
+      "cleanup": "Restore original scope.",
+      "mode": "read-only",
+      "source_groups": [
+        "settings"
+      ],
+      "priority": "P1",
+      "status": "not-run",
+      "evidence": [],
+      "source_bindings": [
+        {
+          "path": "apps/web/src/components/settings/useScopedSettings.ts",
+          "line": 100,
+          "symbol": "useUpdateScopedSettings / useScopedSettings / useScopedSettingSource",
+          "state_or_branch": "A selected scope produces a write plan. Mixed values and inherited sources must be visible before any scratch-only preference change.",
+          "anchor": "export function useUpdateScopedSettings"
+        },
+        {
+          "path": "apps/web/src/routes/_chat.settings.tsx",
+          "line": 45,
+          "symbol": "SettingsScopeBoundary",
+          "state_or_branch": "Device-only and environment-backed pages have different scope requirements. An unavailable target must show its scope notice.",
+          "anchor": "function SettingsScopeBoundary"
+        }
+      ],
+      "provider_contract": "environment-capabilities",
+      "source_match_result": "pending live observation",
+      "source_version_match": "not checked against installed T3",
+      "live_variants": []
+    },
+    {
+      "id": "S03",
+      "group": "settings",
+      "title": "General controls are readable and reversible",
+      "entry": "General → Language; Time format; Thread notifications; In-app notifications; Restore device defaults",
+      "fixture": "Record values; use read-only inspection first",
+      "steps": "Inspect each row and selection menu at narrow/wide widths. Do not invoke Restore device defaults. Optionally change one harmless display value then restore.",
+      "assertions": "Labels explain impact; keyboard selection works; disabled/read-only reasons visible; restore-default button is not mistaken for a local reset.",
+      "cleanup": "Restore any changed display value.",
+      "mode": "inspect-or-local",
+      "source_groups": [
+        "settings"
+      ],
+      "priority": "P1",
+      "status": "not-run",
+      "evidence": [],
+      "source_bindings": [
+        {
+          "path": "apps/web/src/components/settings/SettingsPanels.tsx",
+          "line": 778,
+          "symbol": "GeneralSettingsPanel",
+          "state_or_branch": "General reads scoped settings. Confirm current values and restore each temporary preference to its recorded value.",
+          "anchor": "export function GeneralSettingsPanel"
+        }
+      ],
+      "provider_contract": "shared-client",
+      "source_match_result": "pending live observation",
+      "source_version_match": "not checked against installed T3",
+      "live_variants": []
+    },
+    {
+      "id": "S04",
+      "group": "settings",
+      "title": "Appearance supports coherent theme, contrast, and motion",
+      "entry": "Appearance → Color scheme / Themes / Contrast / Glass opacity / Panel animations / Interface font / Prompt font / Code font / Terminal font",
+      "fixture": "Recorded original appearance values",
+      "steps": "Preview light/dark and a narrow panel; inspect typography controls. Parent may alter local appearance briefly and restore. Record both sidebar transitions at nonzero duration.",
+      "assertions": "No unreadable text, clipping, low-contrast selection, wrong-color icons, or font-dependent control overlap; actual motion matches chosen setting.",
+      "cleanup": "Restore all appearance values.",
+      "mode": "local-reversible",
+      "source_groups": [
+        "settings"
+      ],
+      "priority": "P1",
+      "status": "not-run",
+      "evidence": [],
+      "source_bindings": [
+        {
+          "path": "apps/web/src/components/settings/AppearanceSettingsPanel.tsx",
+          "line": 87,
+          "symbol": "AppearanceSettingsPanel / isImportThemeOpen",
+          "state_or_branch": "Appearance has scoped settings and a separate theme-import dialog. Test reversible presentation values without importing or replacing a theme.",
+          "anchor": "export function AppearanceSettingsPanel"
+        },
+        {
+          "path": "apps/web/src/panelAnimations.ts",
+          "line": 31,
+          "symbol": "usePanelAnimationSettings",
+          "state_or_branch": "Appearance motion is conditional on duration and reduced motion. Correlate the configured value with both opening and closing frames.",
+          "anchor": "export function usePanelAnimationSettings"
+        }
+      ],
+      "provider_contract": "shared-client",
+      "source_match_result": "pending live observation",
+      "source_version_match": "not checked against installed T3",
+      "live_variants": []
+    },
+    {
+      "id": "S05",
+      "group": "settings",
+      "title": "Chat preferences correspond to observed composer behavior",
+      "entry": "Chat → Chat width / Word wrap / Composer context / Tool calls in chat / Render math / Rich text composer / Send shortcut / Follow-up behavior / Response streaming",
+      "fixture": "Scratch draft; avoid sending on changed shortcut",
+      "steps": "Inspect settings and test harmless draft/selection behavior; if changing send shortcut, record and restore before any prompt.",
+      "assertions": "Previewed control state matches actual chat; annotation/draft is preserved; Enter/newline/send meaning is clear; streaming display choice does not hide ongoing work.",
+      "cleanup": "Restore changed values and discard scratch draft.",
+      "mode": "inspect-or-local",
+      "source_groups": [
+        "settings"
+      ],
+      "priority": "P1",
+      "status": "not-run",
+      "evidence": [],
+      "source_bindings": [
+        {
+          "path": "apps/web/src/components/settings/SettingsPanels.tsx",
+          "line": 1140,
+          "symbol": "ChatSettingsPanel / ToolCallVisibilityRow",
+          "state_or_branch": "Chat rendering and composer preferences read scoped settings. Reopen a scratch draft to verify the chosen behavior and restore it.",
+          "anchor": "export function ChatSettingsPanel"
+        }
+      ],
+      "provider_contract": "shared-client",
+      "source_match_result": "pending live observation",
+      "source_version_match": "not checked against installed T3",
+      "live_variants": []
+    },
+    {
+      "id": "S06",
+      "group": "settings",
+      "title": "Diff preferences match both local and PR viewers",
+      "entry": "Diffs & pull requests → Hide whitespace changes / Default diff file state / Diff layout / Open pull requests and changes panels proactively",
+      "fixture": "Scratch diff plus known PR",
+      "steps": "Inspect defaults; if changed locally, reopen both viewers and compare.",
+      "assertions": "Same preference has consistent meaning; proactive opening does not replace user-selected surface unexpectedly; changes are scoped honestly.",
+      "cleanup": "Restore values.",
+      "mode": "inspect-or-local",
+      "source_groups": [
+        "settings"
+      ],
+      "priority": "P1",
+      "status": "not-run",
+      "evidence": [],
+      "source_bindings": [
+        {
+          "path": "apps/web/src/components/settings/SettingsPanels.tsx",
+          "line": 1501,
+          "symbol": "DiffsSettingsPanel",
+          "state_or_branch": "Diff defaults are shared configuration. Compare their effect in local Diff and PR Code, including any per-view override.",
+          "anchor": "export function DiffsSettingsPanel"
+        }
+      ],
+      "provider_contract": "host-capabilities",
+      "source_match_result": "pending live observation",
+      "source_version_match": "not checked against installed T3",
+      "live_variants": []
+    },
+    {
+      "id": "S07",
+      "group": "settings",
+      "title": "Shortcut editor captures and cancels without trapping keys",
+      "entry": "Keybindings → Search keybindings; Edit shortcut for <command>; When; Cancel new keybinding; Open keybindings.json",
+      "fixture": "No global shortcut changes needed",
+      "steps": "Search panel/terminal commands; open editor, press harmless candidate chord, cancel; inspect conflict/when editor; do not save conflicts.",
+      "assertions": "Capture receives chord without executing it; Escape cancels predictably; existing binding remains; search and condition text readable.",
+      "cleanup": "Cancel edits; do not alter keybindings.json.",
+      "mode": "inspect-and-cancel",
+      "source_groups": [
+        "settings"
+      ],
+      "priority": "P1",
+      "status": "not-run",
+      "evidence": [],
+      "source_bindings": [
+        {
+          "path": "apps/web/src/components/settings/KeybindingsSettings.tsx",
+          "line": 1317,
+          "symbol": "KeybindingsSettingsPanel / isAddingBinding / query",
+          "state_or_branch": "Shortcut creation has a separate draft state. Record conflicts, cancel the capture, and verify no binding was saved.",
+          "anchor": "export function KeybindingsSettingsPanel"
+        }
+      ],
+      "provider_contract": "shared-client",
+      "source_match_result": "pending live observation",
+      "source_version_match": "not checked against installed T3",
+      "live_variants": []
+    },
+    {
+      "id": "S08",
+      "group": "settings",
+      "title": "Providers expose availability without requiring credential access",
+      "entry": "Providers → Default model / Fallback model / Permissions / Usage providers / Text generators / Provider update checks",
+      "fixture": "Existing settings; parent controls actual Sol selection",
+      "steps": "Inspect available-provider and health/status rows; account names only as necessary, never reveal/copy tokens. Do not sign in/out, update/install, change fallback, or start auth terminal.",
+      "assertions": "Unavailable provider is explained; model/account/usage ownership clear; disabled actions give reasons; no fake success state.",
+      "cleanup": "Close settings; leave auth and provider preferences unchanged.",
+      "mode": "inspect-only",
+      "source_groups": [
+        "settings"
+      ],
+      "priority": "P1",
+      "status": "not-run",
+      "evidence": [],
+      "source_bindings": [
+        {
+          "path": "apps/web/src/components/settings/ProviderSettingsPanel.tsx",
+          "line": 535,
+          "symbol": "EnvironmentProviderSettings / isRefreshingProviders / isAddInstanceDialogOpen",
+          "state_or_branch": "Provider cards are keyed by driver and instance. Capability, policy, connection, and permission checks gate edits. Inspect availability without reading auth material or changing providers.",
+          "anchor": "export function EnvironmentProviderSettings"
+        }
+      ],
+      "provider_contract": "agent-provider",
+      "source_match_result": "pending live observation",
+      "source_version_match": "not checked against installed T3",
+      "live_variants": []
+    },
+    {
+      "id": "S09",
+      "group": "settings",
+      "title": "Thread automation settings disclose consequences",
+      "entry": "Threads → Auto-settle inactive threads / Compact idle threads / Auto-settle merged threads / Keep threads with a PR / Days of inactivity before auto-settle / Continue threads after restarts",
+      "fixture": "Read-only settings",
+      "steps": "Inspect scope, dependencies and disabled rows; compare per-thread Auto-settle behavior → Follow settings / Never without changing user thread.",
+      "assertions": "Rules and scope are understandable; unavailable server capability distinguished from off; no automation is accidentally enabled.",
+      "cleanup": "Leave all rules unchanged.",
+      "mode": "inspect-only",
+      "source_groups": [
+        "settings"
+      ],
+      "priority": "P1",
+      "status": "not-run",
+      "evidence": [],
+      "source_bindings": [
+        {
+          "path": "apps/web/src/components/settings/SettingsPanels.tsx",
+          "line": 1708,
+          "symbol": "ThreadsSettingsPanel",
+          "state_or_branch": "The section reads environment, connected environments, target, scope, and mixed settings. Inspect auto-settle and continuation choices without enabling background work.",
+          "anchor": "export function ThreadsSettingsPanel"
+        }
+      ],
+      "provider_contract": "shared-client",
+      "source_match_result": "pending live observation",
+      "source_version_match": "not checked against installed T3",
+      "live_variants": []
+    },
+    {
+      "id": "S10",
+      "group": "settings",
+      "title": "Browser defaults and access controls are understandable",
+      "entry": "Browser → Agent browser access / Browser profiles / Default browser profile / Default browser viewport / Default browser zoom / Default browser appearance / Open links in / Search engine / Open pull requests in T3 Code",
+      "fixture": "Existing profile; controlled page only",
+      "steps": "Inspect profile selector and defaults; test PR-link behavior against recorded preference; do not inspect cookies/passwords/profile files.",
+      "assertions": "User navigation and agent access distinguished; disabled controls explain missing bridge; URL-opening preference matches actual result.",
+      "cleanup": "Restore any temporary link-opening preference; close audit browser tabs.",
+      "mode": "inspect-or-local",
+      "source_groups": [
+        "settings"
+      ],
+      "priority": "P1",
+      "status": "not-run",
+      "evidence": [],
+      "source_bindings": [
+        {
+          "path": "apps/web/src/components/settings/IntegrationsSettings.tsx",
+          "line": 1581,
+          "symbol": "BrowserSettingsPanel / PullRequestLinksOpenInAppSetting",
+          "state_or_branch": "Browser defaults, profile choices, link target, PR routing, and recording options are distinct. PR routing uses pullRequestLinksOpenInApp and must match the observed click.",
+          "anchor": "export function BrowserSettingsPanel"
+        }
+      ],
+      "provider_contract": "host-capabilities",
+      "source_match_result": "pending live observation",
+      "source_version_match": "not checked against installed T3",
+      "live_variants": []
+    },
+    {
+      "id": "S11",
+      "group": "settings",
+      "title": "Device settings have honest availability and safe cancellation",
+      "entry": "Devices → Device sources / Agents can use devices / Use devices / Local simulators",
+      "fixture": "No device creation or connection required",
+      "steps": "Inspect available sources and empty/disconnected states; open add/source dialog only to cancel; do not launch simulators or attach private device data.",
+      "assertions": "Prerequisites and authorization state explicit; unavailable device surface does not appear broken or blank.",
+      "cleanup": "Cancel dialogs; no device/session left running.",
+      "mode": "inspect-only",
+      "source_groups": [
+        "settings"
+      ],
+      "priority": "P1",
+      "status": "not-run",
+      "evidence": [],
+      "source_bindings": [
+        {
+          "path": "apps/web/src/components/settings/IntegrationsSettings.tsx",
+          "line": 1622,
+          "symbol": "DevicesSettingsPanel / DeviceIntegrationSettings",
+          "state_or_branch": "Device integration renders capability and connection state. Configuration can start or alter integration processes, so inspect and cancel.",
+          "anchor": "export function DevicesSettingsPanel"
+        }
+      ],
+      "provider_contract": "environment-capabilities",
+      "source_match_result": "pending live observation",
+      "source_version_match": "not checked against installed T3",
+      "live_variants": []
+    },
+    {
+      "id": "S12",
+      "group": "schedules",
+      "title": "Schedule editor validates without creating ongoing work",
+      "entry": "Scheduled tasks → New task; Schedule type; At a time / Once / Every interval; Enabled",
+      "fixture": "Scratch project selected in unsaved form",
+      "steps": "Open New task; inspect project/workspace/destination thread, enter synthetic title/prompt, inspect schedule controls and invalid time/interval, then cancel.",
+      "assertions": "Time zone and destination visible; invalid inputs block saving; description explains new vs existing thread/worktree; cancelling creates no task.",
+      "cleanup": "Cancel without Save/Run now; verify list has no audit task.",
+      "mode": "inspect-and-cancel",
+      "source_groups": [
+        "schedules"
+      ],
+      "priority": "P1",
+      "status": "not-run",
+      "evidence": [],
+      "source_bindings": [
+        {
+          "path": "apps/web/src/components/settings/ScheduledTasksSettings.tsx",
+          "line": 1337,
+          "symbol": "ScheduledTaskEditorForm.draft / submissionPending / activeSelection",
+          "state_or_branch": "The editor draft includes schedule, project, checkout, destination, and model. Validation and cancel can be tested without saving or running the task.",
+          "anchor": "function ScheduledTaskEditorForm"
+        }
+      ],
+      "provider_contract": "agent-provider",
+      "source_match_result": "pending live observation",
+      "source_version_match": "not checked against installed T3",
+      "live_variants": []
+    },
+    {
+      "id": "S13",
+      "group": "schedules",
+      "title": "Existing task management does not expose webhook secrets",
+      "entry": "Actions for <task>; Deliveries; Edit task",
+      "fixture": "Existing tasks only if already relevant; otherwise skip",
+      "steps": "Inspect action names and status metadata. Do not open/copy Webhook URL, expand request headers/body, run, enable, delete, or rotate token. Prefer an unsaved scratch editor.",
+      "assertions": "Last-run status and errors readable; destructive/run controls distinguishable; task ownership/destination clear.",
+      "cleanup": "Close dialog; leave existing schedules unchanged.",
+      "mode": "inspect-only",
+      "source_groups": [
+        "schedules"
+      ],
+      "priority": "P2",
+      "status": "not-run",
+      "evidence": [],
+      "source_bindings": [
+        {
+          "path": "apps/web/src/components/settings/ScheduledTasksSettings.tsx",
+          "line": 728,
+          "symbol": "ScheduledTaskRow.busy / deliveriesOpen",
+          "state_or_branch": "Task actions and webhook delivery details are separate from metadata. Do not run, enable, delete, rotate, reveal, or copy private webhook values.",
+          "anchor": "function ScheduledTaskRow"
+        }
+      ],
+      "provider_contract": "shared-client",
+      "source_match_result": "pending live observation",
+      "source_version_match": "not checked against installed T3",
+      "live_variants": []
+    },
+    {
+      "id": "S14",
+      "group": "settings",
+      "title": "Source-control settings match actual host behavior",
+      "entry": "Source control → Automatically pull / Default merge method / Git fetch interval / Follow pull request templates / Commit and pull request writing / Source control writer model / Review guides (beta)",
+      "fixture": "Read-only settings",
+      "steps": "Inspect defaults and host availability without triggering fetch/auth/generation. Inspect merge-method menu from PR without changing host.",
+      "assertions": "Host, environment and writer-model roles are clear; auto-pull is not enabled inadvertently; templates and guide settings indicate scope.",
+      "cleanup": "Leave settings unchanged.",
+      "mode": "inspect-only",
+      "source_groups": [
+        "settings"
+      ],
+      "priority": "P1",
+      "status": "not-run",
+      "evidence": [],
+      "source_bindings": [
+        {
+          "path": "apps/web/src/components/settings/SourceControlSettings.tsx",
+          "line": 395,
+          "symbol": "SourceControlSettingsPanel",
+          "state_or_branch": "Provider discovery and VCS status are distinct. Provider toggles change picker availability. Inspect account availability without exposing tokens or changing host configuration.",
+          "anchor": "export function SourceControlSettingsPanel"
+        }
+      ],
+      "provider_contract": "host-capabilities",
+      "source_match_result": "pending live observation",
+      "source_version_match": "not checked against installed T3",
+      "live_variants": []
+    },
+    {
+      "id": "S15",
+      "group": "settings",
+      "title": "Worktree cleanup is transparent and safe to inspect",
+      "entry": "Worktrees → Worktree cleanup / Keep worktrees with local changes / Worktree location / Delete now",
+      "fixture": "Read-only list; only audit-owned tree eligible for later removal",
+      "steps": "Inspect listed paths, dirty protection, retention and cleanup preview if available. Do not press Delete now on user data.",
+      "assertions": "List distinguishes active, dirty and removable entries; controls state exact scope; no silent cleanup during inspection.",
+      "cleanup": "Close panel; audit tree removal belongs after thread/process closure.",
+      "mode": "inspect-only",
+      "source_groups": [
+        "settings"
+      ],
+      "priority": "P1",
+      "status": "not-run",
+      "evidence": [],
+      "source_bindings": [
+        {
+          "path": "apps/web/src/components/settings/WorktreesSettings.tsx",
+          "line": 54,
+          "symbol": "WorktreesSettingsPanel",
+          "state_or_branch": "The section presents worktree configuration. A cleanup action must be matched to its actual confirmation and ownership checks before any later deletion.",
+          "anchor": "export function WorktreesSettingsPanel"
+        },
+        {
+          "path": "apps/web/src/components/settings/StorageSettings.tsx",
+          "line": 548,
+          "symbol": "WorktreeCleanupSection / RetentionControl",
+          "state_or_branch": "Cleanup retention is scoped. Saving an age can start cleanup, so enabling first creates a draft. Inspect Keep worktrees with local changes without saving a cleanup rule.",
+          "anchor": "export function WorktreeCleanupSection"
+        }
+      ],
+      "provider_contract": "shared-client",
+      "source_match_result": "pending live observation",
+      "source_version_match": "not checked against installed T3",
+      "live_variants": []
+    },
+    {
+      "id": "S16",
+      "group": "settings",
+      "title": "Environment connections report status without modifying topology",
+      "entry": "Environments → This machine / Local environment / Linked environments / Environments / Load balancing / Network access",
+      "fixture": "Current connections only",
+      "steps": "Read status and capability summaries; inspect add connection form and cancel; do not disconnect/restart user server or change network exposure.",
+      "assertions": "Connected/disconnected/unsupported states distinct; actions have clear target and error context; no credential details needed.",
+      "cleanup": "Cancel form; leave connections unchanged.",
+      "mode": "inspect-only",
+      "source_groups": [
+        "settings"
+      ],
+      "priority": "P1",
+      "status": "not-run",
+      "evidence": [],
+      "source_bindings": [
+        {
+          "path": "apps/web/src/components/settings/ConnectionsSettings.tsx",
+          "line": 238,
+          "symbol": "ConnectionsSettingsContent / addBackendDialogOpen / disableTailscaleServeDialogOpen",
+          "state_or_branch": "Environment setup, exposure, Tailscale, and WSL have separate pending and dialog state. Inspect status and cancel setup without altering connection topology.",
+          "anchor": "function ConnectionsSettingsContent"
+        }
+      ],
+      "provider_contract": "environment-capabilities",
+      "source_match_result": "pending live observation",
+      "source_version_match": "not checked against installed T3",
+      "live_variants": []
+    },
+    {
+      "id": "S17",
+      "group": "settings",
+      "title": "Sharing controls distinguish local links from published access",
+      "entry": "Sharing & access → Guest links / Pull request sharing / Publish agent activity; Share with guest",
+      "fixture": "Scratch thread; existing grants read-only",
+      "steps": "Inspect sharing dialog descriptions and permission scopes without creating a link or grant; cancel.",
+      "assertions": "Who gains access and what they can do is explicit; scope includes intended thread/project; no automatic share on dialog open.",
+      "cleanup": "Cancel; verify no audit guest link/grant created.",
+      "mode": "inspect-and-cancel",
+      "source_groups": [
+        "settings"
+      ],
+      "priority": "P1",
+      "status": "not-run",
+      "evidence": [],
+      "source_bindings": [
+        {
+          "path": "apps/web/src/components/settings/AuthorizedClientsSettings.tsx",
+          "line": 585,
+          "symbol": "AuthorizedClientsHeaderAction / isCreatingPairingLink",
+          "state_or_branch": "Creating a pairing link writes access state. Opening the dialog is safe, but creating, revealing, or revoking a real user link is outside this pass.",
+          "anchor": "export const AuthorizedClientsHeaderAction"
+        }
+      ],
+      "provider_contract": "environment-capabilities",
+      "source_match_result": "pending live observation",
+      "source_version_match": "not checked against installed T3",
+      "live_variants": []
+    },
+    {
+      "id": "S18",
+      "group": "settings",
+      "title": "Secrets surface has safe empty and unavailable states",
+      "entry": "Secrets → Secret providers / Add secret provider",
+      "fixture": "Only if feature visible; no existing value inspection",
+      "steps": "Open section; inspect provider type/options in unsaved add form, using no actual credential; cancel.",
+      "assertions": "Unavailable/feature-gated state is clear; fields remain masked; validation cannot leak a value in toast.",
+      "cleanup": "Cancel; do not reveal, copy, rotate, or save secrets.",
+      "mode": "inspect-only",
+      "source_groups": [
+        "settings"
+      ],
+      "priority": "P2",
+      "status": "not-run",
+      "evidence": [],
+      "source_bindings": [
+        {
+          "path": "apps/web/src/components/settings/SecretsSettings.tsx",
+          "line": 37,
+          "symbol": "SecretsSettingsPanel / EnvironmentSecretProviders",
+          "state_or_branch": "Secret providers are scoped to environments. Inspect the section and masked controls without revealing values or removing a provider.",
+          "anchor": "export function SecretsSettingsPanel"
+        }
+      ],
+      "provider_contract": "environment-capabilities",
+      "source_match_result": "pending live observation",
+      "source_version_match": "not checked against installed T3",
+      "live_variants": []
+    },
+    {
+      "id": "S19",
+      "group": "settings",
+      "title": "Maintenance has useful diagnostics and explicit destructive actions",
+      "entry": "Maintenance → Artifacts and logs / Diagnostics / OpenTelemetry export; diagnostics detail page",
+      "fixture": "Metadata only; no log export necessary",
+      "steps": "Inspect headings, disk/process summaries and action labels; avoid raw logs that may include user data, stop/restart processes, cleanup, or telemetry export.",
+      "assertions": "Diagnosis state is readable; actions identify process/retention scope and cancellation; no blanket success when backend unavailable.",
+      "cleanup": "Close diagnostic view; no process setting changed.",
+      "mode": "inspect-only",
+      "source_groups": [
+        "settings"
+      ],
+      "priority": "P1",
+      "status": "not-run",
+      "evidence": [],
+      "source_bindings": [
+        {
+          "path": "apps/web/src/components/settings/SettingsPanels.tsx",
+          "line": 2132,
+          "symbol": "MaintenanceSettingsPanel",
+          "state_or_branch": "Maintenance reads settings scope and connected environments. Identify read-only summaries separately from export, stop, reset, or cleanup actions.",
+          "anchor": "export function MaintenanceSettingsPanel"
+        },
+        {
+          "path": "apps/web/src/components/settings/StorageSettings.tsx",
+          "line": 373,
+          "symbol": "CleanupSection.pending",
+          "state_or_branch": "Delete now invokes cleanup across its selected scope. Do not click during this read-only pass.",
+          "anchor": "function CleanupSection"
+        }
+      ],
+      "provider_contract": "shared-client",
+      "source_match_result": "pending live observation",
+      "source_version_match": "not checked against installed T3",
+      "live_variants": []
+    },
+    {
+      "id": "S20",
+      "group": "settings",
+      "title": "Labs and gated features explain their status",
+      "entry": "Labs → Guest links / Linked environments / Suggest next prompt / Fast worktree checkout / Simlock device hosts (alpha) as available",
+      "fixture": "Installed build may omit or rename feature rows",
+      "steps": "Inspect offered flags and descriptions; compare gating with related navigation, without enabling experimental features.",
+      "assertions": "A gated/unavailable surface is labelled, not counted as a broken control; current source presence does not prove installed availability.",
+      "cleanup": "Leave flags unchanged.",
+      "mode": "inspect-only",
+      "source_groups": [
+        "settings"
+      ],
+      "priority": "P2",
+      "status": "not-run",
+      "evidence": [],
+      "source_bindings": [
+        {
+          "path": "apps/web/src/components/settings/LabsSettingsPanel.tsx",
+          "line": 17,
+          "symbol": "LabsSettingsPanel / GuestLinksRow / LinkedEnvironmentsRow",
+          "state_or_branch": "Labs exposes gated settings. Record visible availability and explanatory text without enabling capabilities or guest access.",
+          "anchor": "export function LabsSettingsPanel"
+        }
+      ],
+      "provider_contract": "shared-client",
+      "source_match_result": "pending live observation",
+      "source_version_match": "not checked against installed T3",
+      "live_variants": []
+    },
+    {
+      "id": "S21",
+      "group": "settings",
+      "title": "About and update UI are complete without installing anything",
+      "entry": "About → Version / Update track / t3 command / Mobile app / Welcome page / Privacy policy / Open source licenses",
+      "fixture": "Existing app build",
+      "steps": "Record displayed version/build; inspect update track and release-note view if present; open licenses/privacy read-only. Do not install, restart, or change update track.",
+      "assertions": "Installed version recorded against source pin; links open correctly; no invisible close/focus trap; update state is honest.",
+      "cleanup": "Close extra pages; return to original view.",
+      "mode": "read-only",
+      "source_groups": [
+        "settings"
+      ],
+      "priority": "P2",
+      "status": "not-run",
+      "evidence": [],
+      "source_bindings": [
+        {
+          "path": "apps/web/src/components/settings/SettingsPanels.tsx",
+          "line": 2271,
+          "symbol": "AboutSettingsPanel / AboutVersionSection",
+          "state_or_branch": "Version and update state are separate from installing or switching channels. Inspect the current version and links without applying an update.",
+          "anchor": "export function AboutSettingsPanel"
+        }
+      ],
+      "provider_contract": "shared-client",
+      "source_match_result": "pending live observation",
+      "source_version_match": "not checked against installed T3",
+      "live_variants": []
+    },
+    {
+      "id": "S22",
+      "group": "settings",
+      "title": "Voice controls can be inspected without recording",
+      "entry": "Voice → Transcribe with / Microphone / Dictation shortcut / Transcription language / Dictionary / Cleanup model / Test microphone / Test model",
+      "fixture": "No audio recording in this checklist unless parent explicitly chooses it",
+      "steps": "Inspect choices and capability text; open dictionary editor only to cancel. Test microphone/model may record/download/run a model: do not invoke during passive pass.",
+      "assertions": "Input/output ownership and model prerequisite explicit; controls fit narrow settings panel; unavailable hardware has recovery.",
+      "cleanup": "Cancel editor; no recording/download/model process left active.",
+      "mode": "inspect-only",
+      "source_groups": [
+        "settings"
+      ],
+      "priority": "P2",
+      "status": "not-run",
+      "evidence": [],
+      "source_bindings": [
+        {
+          "path": "apps/web/src/components/settings/VoiceSettingsPanel.tsx",
+          "line": 1191,
+          "symbol": "VoiceSettingsPanel / SpeechModelBrowser / TranscriptionTest",
+          "state_or_branch": "Voice can start microphone capture, downloads, cleanup model calls, or test transcription. Inspect configuration and cancel without those side effects.",
+          "anchor": "export function VoiceSettingsPanel"
+        }
+      ],
+      "provider_contract": "agent-provider",
+      "source_match_result": "pending live observation",
+      "source_version_match": "not checked against installed T3",
+      "live_variants": []
+    },
+    {
+      "id": "S23",
+      "group": "settings",
+      "title": "SnapShot options and saved-artifact privacy are clear",
+      "entry": "SnapShots → Include app text / Capture shortcut / Capture sound / Capture flash / Capture animations",
+      "fixture": "Only synthetic scratch content on screen",
+      "steps": "Inspect values; parent may capture one scratch-only image to test open/save. No user transcript or settings secrets in capture.",
+      "assertions": "Capture has correct scope, readable result and completion feedback; animated capture includes real time sequence; save/open is reachable.",
+      "cleanup": "Close/delete only audit capture if not needed as evidence; restore preferences.",
+      "mode": "inspect-or-local",
+      "source_groups": [
+        "settings"
+      ],
+      "priority": "P2",
+      "status": "not-run",
+      "evidence": [],
+      "source_bindings": [
+        {
+          "path": "apps/web/src/components/settings/SnapShotSettings.tsx",
+          "line": 81,
+          "symbol": "SnapShotSettings.setupBusy / savedShortcut",
+          "state_or_branch": "SnapShot setup and shortcut recording have separate state. Any actual capture must use a scratch-only visible target and be removed afterward.",
+          "anchor": "export function SnapShotSettings"
+        }
+      ],
+      "provider_contract": "shared-client",
+      "source_match_result": "pending live observation",
+      "source_version_match": "not checked against installed T3",
+      "live_variants": []
+    },
+    {
+      "id": "S24",
+      "group": "settings",
+      "title": "Archive navigation is usable without modifying user history",
+      "entry": "Archive; Unarchive <title>; Delete <title>",
+      "fixture": "Scratch archived thread if parent exercised L09; otherwise inspect only",
+      "steps": "Search/scroll available archive list; inspect labels and target; restore scratch thread if present; cancel deletion.",
+      "assertions": "Correct project/thread identity; empty/archive-unavailable state clear; restoring returns content; Delete not conflated with Unarchive.",
+      "cleanup": "Restore scratch thread, leave user archive unchanged.",
+      "mode": "inspect-or-local",
+      "source_groups": [
+        "settings",
+        "lifecycle"
+      ],
+      "priority": "P1",
+      "status": "not-run",
+      "evidence": [],
+      "source_bindings": [
+        {
+          "path": "apps/web/src/components/settings/ArchivedThreadsPanel.tsx",
+          "line": 32,
+          "symbol": "ArchivedThreadsPanel.pendingKeys",
+          "state_or_branch": "Archive list navigation is read-only. Unarchive and Delete are write actions scoped to a specific thread.",
+          "anchor": "export function ArchivedThreadsPanel"
+        }
+      ],
+      "provider_contract": "shared-client",
+      "source_match_result": "pending live observation",
+      "source_version_match": "not checked against installed T3",
+      "live_variants": []
+    },
+    {
+      "id": "X01",
+      "group": "host",
+      "title": "Browser opening does not disrupt PR/file work",
+      "entry": "Browser tab; Add panel surface → Browser; address field",
+      "fixture": "Controlled local/static page; scratch Files and PR tabs",
+      "steps": "Open URL, switch file/PR/browser rapidly, close browser and reopen; inspect nested chrome and loading/control positions.",
+      "assertions": "Correct surface stays active; browser controls stable during load; panel does not become disproportionately wide; user inputs act on visible surface.",
+      "cleanup": "Close audit page tabs; stop parent local server when unused.",
+      "mode": "local-reversible",
+      "source_groups": [
+        "host"
+      ],
+      "priority": "P1",
+      "status": "not-run",
+      "evidence": [],
+      "source_bindings": [
+        {
+          "path": "apps/web/src/components/RightPanelTabs.tsx",
+          "line": 735,
+          "symbol": "resolvePullRequestTabLink / RightPanelTabs",
+          "state_or_branch": "PR tabs resolve their native target separately from Browser tabs. Opening a URL must not replace or duplicate an unrelated PR or file.",
+          "anchor": "export function resolvePullRequestTabLink"
+        },
+        {
+          "path": "apps/web/src/components/chat/externalLinkContextMenu.ts",
+          "line": 88,
+          "symbol": "showExternalLinkContextMenu",
+          "state_or_branch": "HTTP links offer Open in integrated browser when available, Open in system browser, and Copy Link. Each action calls a distinct handler.",
+          "anchor": "export async function showExternalLinkContextMenu"
+        },
+        {
+          "path": "apps/web/src/browser/useOpenLink.ts",
+          "line": 21,
+          "symbol": "useOpenLink / resolveLinkTarget",
+          "state_or_branch": "The selected link preference, modifiers, target thread, and in-app availability decide the destination. App-open failure can fall back to the system browser.",
+          "anchor": "export function useOpenLink"
+        }
+      ],
+      "provider_contract": "host-capabilities",
+      "source_match_result": "pending live observation",
+      "source_version_match": "not checked against installed T3",
+      "live_variants": []
+    },
+    {
+      "id": "X02",
+      "group": "host",
+      "title": "Side chat can be opened and dismissed without losing parent draft",
+      "entry": "Add panel surface → Side chat",
+      "fixture": "Scratch parent thread; parent controls any Sol request",
+      "steps": "Open empty side chat, type unsent marker, switch panel/thread, return, close with unsaved text. Actual send only by parent.",
+      "assertions": "Parent and side-chat drafts separate; target/model context visible; close/reopen behavior honest; no background run starts from opening alone.",
+      "cleanup": "Discard audit draft; stop/close any parent-started side-chat agent.",
+      "mode": "inspect-or-parent-agent",
+      "source_groups": [
+        "host"
+      ],
+      "priority": "P1",
+      "status": "not-run",
+      "evidence": [],
+      "source_bindings": [
+        {
+          "path": "apps/web/src/components/chat/useSideChat.ts",
+          "line": 26,
+          "symbol": "useSideChat.start / open",
+          "state_or_branch": "Opening can fork a side-chat thread. A nonempty prompt also starts a turn. Track the child even when no model call occurs, then clean it up.",
+          "anchor": "export function useSideChat"
+        },
+        {
+          "path": "apps/web/src/components/chat/SideChatPane.tsx",
+          "line": 36,
+          "symbol": "SideChatPane.parentRef / threadRef / mergeBack / deleteThread",
+          "state_or_branch": "Side chat has its own scoped thread and explicit parent. Bring back and Delete are separate actions, not equivalents of closing the panel.",
+          "anchor": "export default function SideChatPane"
+        }
+      ],
+      "provider_contract": "agent-provider",
+      "source_match_result": "pending live observation",
+      "source_version_match": "not checked against installed T3",
+      "live_variants": []
+    },
+    {
+      "id": "X03",
+      "group": "host",
+      "title": "Subagent and background surfaces are distinct",
+      "entry": "Visible agent/subagent row; live-output or background-work control",
+      "fixture": "Parent creates one bounded Sol-run child/background fixture if supported",
+      "steps": "Open child while streaming, select live output, navigate parent/back, close/reopen child tab, inspect nested agent if available.",
+      "assertions": "The clicked child identity and transcript match. Provider-supported output updates appear before completion. The live-output action does not navigate to an unrelated empty Background view. Claude completed tool output is distinct from Codex streamed tool output. Reopening retains content and parent navigation returns to the correct thread.",
+      "cleanup": "Parent stops every created child and background process; verify closed.",
+      "mode": "parent-agent",
+      "source_groups": [
+        "host"
+      ],
+      "priority": "P1",
+      "status": "not-run",
+      "evidence": [],
+      "source_bindings": [
+        {
+          "path": "apps/web/src/components/ChatView.tsx",
+          "line": 833,
+          "symbol": "ChatView.providerSubagentStatus / isProviderSubagent / parentSubagentThreadRef",
+          "state_or_branch": "Provider-native children have their own thread identity and status. Their read-only bar replaces the composer. Background tasks are derived separately from the projection.",
+          "anchor": "const providerSubagentStatus ="
+        },
+        {
+          "path": "apps/web/src/components/chat/ProviderSubagentBar.tsx",
+          "line": 14,
+          "symbol": "ProviderSubagentBar.live",
+          "state_or_branch": "Live status derives from isOrchestrationV2WorkActive. Parent must verify child output, parent navigation, status completion, and provider cleanup independently.",
+          "anchor": "export function ProviderSubagentBar"
+        },
+        {
+          "path": "apps/server/src/orchestration-v2/Adapters/CodexAdapterV2.ts",
+          "line": 255,
+          "symbol": "CodexProviderCapabilitiesV2",
+          "state_or_branch": "Codex declares streaming tool output, native subagent thread IDs, wait, close, and fork support. Record the actual installed provider and model before using this contract.",
+          "anchor": "export const CodexProviderCapabilitiesV2"
+        },
+        {
+          "path": "apps/server/src/orchestration-v2/Adapters/ClaudeAdapterV2.ts",
+          "line": 489,
+          "symbol": "ClaudeProviderCapabilitiesV2",
+          "state_or_branch": "Claude declares assistant and reasoning streaming, no streaming tool output, and completed tool output. It emits subagent lifecycle but does not expose native child IDs or native wait, close, or fork capabilities.",
+          "anchor": "export const ClaudeProviderCapabilitiesV2"
+        },
+        {
+          "path": "apps/server/src/orchestration-v2/Adapters/ClaudeAdapterV2.ts",
+          "line": 3725,
+          "symbol": "claudeToolResultSettlesSubagent",
+          "state_or_branch": "An asynchronous Agent launch acknowledgement does not settle a Claude child. The task notification supplies the completion event.",
+          "anchor": "function claudeToolResultSettlesSubagent"
+        },
+        {
+          "path": "apps/server/src/orchestration-v2/Adapters/CodexAdapterV2.ts",
+          "line": 2889,
+          "symbol": "reportSubagentProgress",
+          "state_or_branch": "A Codex native child running item updates its parent subagent progress row. Repeated identical progress is not emitted again.",
+          "anchor": "const reportSubagentProgress ="
+        }
+      ],
+      "provider_contract": "agent-provider",
+      "source_match_result": "pending live observation",
+      "source_version_match": "not checked against installed T3",
+      "live_variants": [],
+      "required_provider_variants": [
+        "Authorized Sol selection mapped to the observed Codex provider instance",
+        "Authorized Sonnet selection mapped to the observed Claude provider instance"
+      ]
+    },
+    {
+      "id": "X04",
+      "group": "host",
+      "title": "Notification/action overlays return to intended target",
+      "entry": "Done / Approval / Input / Failed / Woke indicators; toast action",
+      "fixture": "Scratch run produces one bounded actionable state, parent-controlled",
+      "steps": "Open notification/attention state from another selected thread; follow its action then back; dismiss toast with keyboard and pointer.",
+      "assertions": "Correct thread/surface becomes visible on first action; toast does not obscure composer/panel controls; dismiss does not accidentally submit or select underlying UI.",
+      "cleanup": "Resolve/cancel audit prompt and stop run; clear only audit notifications.",
+      "mode": "parent-agent",
+      "source_groups": [
+        "host",
+        "lifecycle"
+      ],
+      "priority": "P1",
+      "status": "not-run",
+      "evidence": [],
+      "source_bindings": [
+        {
+          "path": "apps/web/src/components/ThreadNotificationCoordinator.tsx",
+          "line": 63,
+          "symbol": "startThreadNotifications",
+          "state_or_branch": "Notifications retain environmentId and threadId. Clicking navigates through buildThreadRouteParams. Validate the destination before testing any follow-up action.",
+          "anchor": "export function startThreadNotifications"
+        }
+      ],
+      "provider_contract": "shared-client",
+      "source_match_result": "pending live observation",
+      "source_version_match": "not checked against installed T3",
+      "live_variants": []
+    },
+    {
+      "id": "X05",
+      "group": "host",
+      "title": "Command palette routes to same destinations as visible controls",
+      "entry": "Command palette; Open a surface / Add project / Project settings / known setting search",
+      "fixture": "Scratch thread; use shortcut displayed by installed app",
+      "steps": "Open the same Files/Diff/PR/settings target through palette and visible controls; keyboard-select and Escape/back.",
+      "assertions": "Same target and state; no hidden-thread routing; shortcuts usable with panel open; existing drafts and scroll position preserved.",
+      "cleanup": "Close palette and audit surfaces.",
+      "mode": "read-only",
+      "source_groups": [
+        "host",
+        "lifecycle",
+        "settings"
+      ],
+      "priority": "P1",
+      "status": "not-run",
+      "evidence": [],
+      "source_bindings": [
+        {
+          "path": "apps/web/src/components/CommandPalette.tsx",
+          "line": 404,
+          "symbol": "OpenCommandPaletteDialog / searchState",
+          "state_or_branch": "Command search, browse navigation, and add-project flows have separate state. Compare resulting scoped destinations with their visible-button equivalents.",
+          "anchor": "function OpenCommandPaletteDialog"
+        }
+      ],
+      "provider_contract": "shared-client",
+      "source_match_result": "pending live observation",
+      "source_version_match": "not checked against installed T3",
+      "live_variants": []
+    },
+    {
+      "id": "X06",
+      "group": "host",
+      "title": "Final reopen/resume audit catches half-finished persistence",
+      "entry": "Thread switching; close/reopen surface; app restart only if parent has authorized/planned one",
+      "fixture": "Completed scratch A/B flows; tracked owned processes",
+      "steps": "Revisit every used surface from a different thread, then after closing its tab; where restart is in scope, capture state before/after.",
+      "assertions": "No named but blank tab; no stale target or unexpected massive width; pending/failed operations explained; no orphan activity silently continues.",
+      "cleanup": "Complete global cleanup ledger below.",
+      "mode": "local-reversible",
+      "source_groups": [
+        "host"
+      ],
+      "priority": "P1",
+      "status": "not-run",
+      "evidence": [],
+      "source_bindings": [
+        {
+          "path": "apps/web/src/rightPanelStore.ts",
+          "line": 485,
+          "symbol": "migratePersistedRightPanelState / ThreadRightPanelState",
+          "state_or_branch": "Persisted panel state restores valid per-thread resources and excludes the standalone PR panel key. Distinguish intended persistence from leftover audit work.",
+          "anchor": "export function migratePersistedRightPanelState"
+        }
+      ],
+      "provider_contract": "shared-client",
+      "source_match_result": "pending live observation",
+      "source_version_match": "not checked against installed T3",
+      "live_variants": []
+    }
+  ],
+  "throughput_checkpoint": "n/a, read-only investigation",
+  "skill_application": {
+    "skill": "/Users/josephwylie/.codex/skills/pstack-poteto-mode/SKILL.md",
+    "principles": [
+      {
+        "name": "Prove It Works",
+        "source": "/Users/josephwylie/.codex/pstack/skills/principle-prove-it-works/SKILL.md",
+        "choice": "Every case stays not-run until the parent observes its asserted UI result. Source existence cannot produce a pass."
+      }
+    ],
+    "delegation": "No further explorers or explainers. Parent explicitly prohibited more agents."
+  },
+  "source_correlation_rule": "Before each actual test, read the cited implementation and record the installed app version. After the action, record matching runtime target, content, and state. If source and installed build differ, label version mismatch; do not infer a defect solely from the pinned source.",
+  "provider_contracts": {
+    "shared-client": "Client-side interaction does not by itself prove any provider workflow. Record selected environment and any capability-gated UI. Run once per relevant layout, with provider repetition only when the observed path depends on provider state.",
+    "host-capabilities": "The safe real fixture is GitHub. Do not generalize it to other hosts. sourceControlClients supplies terminology and URL parsing. GitLab uses MR and merge request. PullRequestDetail.capabilities and viewerPermissions decide comments, reviews, edits, viewed storage, stacks, and actions. Server pullRequestChecks gates the checks query. Lack of a permission or capability is fixture-blocked unless the UI misrepresents it.",
+    "agent-provider": "Parent may use the authorized Sol and Sonnet subscriptions in T3. Record the actual provider instance, model, effort, account kind without identity or secrets, and child/thread IDs. Do not infer one provider stream from the other. A provider-native child is not necessarily an independently writable chat.",
+    "host-and-agent": "Apply both host-capabilities and agent-provider. Record the host PR identity and agent destination. Preparing a worktree, attaching context, and automatically starting a turn are separate actions.",
+    "environment-capabilities": "File access, terminal availability, and device or remote execution depend on the selected environment and its granted scopes. A local scratch success does not prove remote behavior. Use existing safe remote fixtures only, otherwise label the remote variant fixture-blocked."
+  },
+  "provider_contract_sources": [
+    {
+      "path": "packages/source-control-definitions/src/registry.ts",
+      "symbol": "builtInSourceControlDefinitions",
+      "line": 18,
+      "state_or_branch": "Registry includes GitHub, Cursor Origin, GitLab, GitCafe, Forgejo, Bitbucket, and Azure DevOps. URL and remote recognition order differ."
+    },
+    {
+      "path": "packages/source-control-gitlab/src/shared/definition.ts",
+      "symbol": "definition.changeRequest",
+      "line": 34,
+      "state_or_branch": "GitLab labels are MR and merge request."
+    },
+    {
+      "path": "apps/web/src/components/pullRequest/usePullRequestDetail.ts",
+      "symbol": "usePullRequestDetail",
+      "line": 49,
+      "state_or_branch": "Server checks capability and source-control write scope alter available detail actions."
+    },
+    {
+      "path": "apps/web/src/components/pullRequest/PullRequestCodeTab.tsx",
+      "symbol": "hostReview / viewedFilesStore",
+      "line": 539,
+      "state_or_branch": "Host review capabilities, viewer permissions, and viewed-file storage must be recorded per fixture."
+    },
+    {
+      "path": "apps/web/src/components/ChatView.tsx",
+      "symbol": "showProviderSubagentBar",
+      "line": 1746,
+      "state_or_branch": "Provider-native subagents do not accept composer messages. Their approvals and questions go to the top-level parent."
+    }
+  ],
+  "evidence_requirements": {
+    "before": "Case ID, installed T3 version, selected environment/project/thread or draft, model/provider if applicable, current URL or PR number, panel state, and full-window screenshot.",
+    "action": "Exact visible label, input text without secrets, pointer or keyboard method, and time. Use a normal rendered control. Direct store mutation or helper calls cannot pass a native journey.",
+    "after": "Full-window screenshot plus relevant close-up, resulting route and selected thread, active tab, content identity, loading/settled state, and any error. Include actual saved bytes or process state when the assertion needs them.",
+    "motion": "Capture a frame sequence or video for opening, closing, and reversal. Still before/after images only prove end states. Record animation setting and reduced-motion state.",
+    "source_match": "Read the cited symbol before running the case. Record which handler/state matches the observed result. A source-installed-version mismatch stays a separate uncertainty.",
+    "failure": "Repeat once from a known state if safe. Preserve precise steps and targets. Record reproduction count and whether the failure is functional, visual, interaction, provider capability, fixture-blocked, or version mismatch.",
+    "cleanup": "Record every created thread, draft, child, terminal/process, tab, checkout/worktree, project entry, file, and changed preference. Confirm stopped/closed/restored state directly. Closing a tab does not prove a process stopped."
+  },
+  "result_template": {
+    "case_id": "",
+    "variant": "",
+    "installed_version": "",
+    "provider_instance": "",
+    "model": "",
+    "environment_id": "",
+    "project_id": "",
+    "thread_or_draft_id": "",
+    "before_target": "",
+    "action_label": "",
+    "input_method": "",
+    "after_target": "",
+    "expected": "",
+    "observed": "",
+    "source_symbol": "",
+    "source_match": "",
+    "status": "not-run",
+    "evidence_paths": [],
+    "cleanup_owned_ids": [],
+    "cleanup_verified": false,
+    "limits": []
+  },
+  "status_values": [
+    "not-run",
+    "pass",
+    "fail",
+    "fixture-blocked",
+    "version-mismatch",
+    "inspect-only-complete"
+  ],
+  "safe_fixture_recipe": [
+    "Create two audit-named scratch threads in an independent disposable local Git repository. Use unique text markers per thread and file.",
+    "For real read-only PR data, use an independent disposable local clone or copy of Ferrite with its GitHub origin. Keep active Ferrite checkout untouched. The local merge history identifies PR 189 and PR 187 without any host write.",
+    "Before opening a Git-backed project, inspect Automatically pull and other background source-control defaults. The disposable clone contains any checkout changes or fetches.",
+    "Prepare nested files with duplicate basenames, Markdown, CSV or TSV, a long line, and a large text file. Add baseline commits and known staged, unstaged, renamed, deleted, and untracked scratch changes.",
+    "Use available tiny media fixtures for previews. If a format requires an unavailable renderer or permission, record that branch as fixture-blocked. Do not install tools just to manufacture coverage.",
+    "Use harmless terminal commands that print distinct markers and cwd. Any running-process test uses an audit-owned short-lived process. Track its PID and terminal ID.",
+    "Use only naturally available read-only PR changes for refresh freshness. Use empty filters, invalid input, or a nonexistent read-only reference for safe error paths. Do not log out, remove credentials, or disconnect user environments.",
+    "Parent owns all Sol and Sonnet turns, subagents, guides, handoffs, cancellation, and thread closure. No model was run by the checklist author."
+  ],
+  "mutation_boundaries": {
+    "immediate_host_writes_do_not_click": [
+      "Ready for review",
+      "Convert to draft",
+      "Reopen pull request",
+      "Disable auto-merge",
+      "Allow edits from maintainers",
+      "Submit review",
+      "Submit comment",
+      "Save edited comment",
+      "Resolve or reopen review thread",
+      "Reaction",
+      "Request reviewer",
+      "Host-backed Viewed toggle"
+    ],
+    "arm_only_if_both_source_and_ui_confirm_two_steps": [
+      "Merge now",
+      "Enable auto-merge",
+      "Close pull request",
+      "Revert changes"
+    ],
+    "inspect_then_cancel": [
+      "Delete branch",
+      "Publish repository",
+      "Create PR",
+      "Push",
+      "Pull",
+      "Commit confirmation",
+      "Checkout destination",
+      "Delete thread",
+      "Delete project",
+      "Delete now",
+      "Reset defaults",
+      "Change update track",
+      "Install update",
+      "Create pairing link",
+      "Reveal secret or webhook endpoint"
+    ],
+    "may_start_agent_parent_only": [
+      "Explain this PR",
+      "Fix findings",
+      "Write guide",
+      "Rewrite guide",
+      "Regenerate title",
+      "Automatic commit or PR writing",
+      "Voice Test model",
+      "Side chat with a nonempty prompt"
+    ],
+    "local_reversible_only_in_owned_fixture": [
+      "Change file bytes",
+      "Link a PR to an audit thread",
+      "Rename or pin an audit thread",
+      "Settle or snooze an audit thread",
+      "Change presentation preference with recorded original value",
+      "Open or close an audit terminal",
+      "Draft review text without submission"
+    ]
+  }
+}

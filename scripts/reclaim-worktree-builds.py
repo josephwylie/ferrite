@@ -3,16 +3,16 @@
 the main checkout's build back in place of their own.
 
 Each worktree builds into its own `target/`, which starts as a clone of the
-main checkout's and costs no disk until the worktree builds (see
-scripts/warm-worktree.sh). What it builds is its own, and nothing else takes
-it away, so many worktrees fill a disk. Below MIN_FREE_GB free, the idle
+main checkout's and costs no disk until either of the two builds (see
+scripts/warm-worktree.sh). What a worktree builds is its own, and its clone
+keeps what the main checkout has rebuilt since, so many worktrees fill a disk. Below MIN_FREE_GB free, the idle
 worktree that built longest ago has its build replaced by a fresh clone, then
 the next, until there is room. A worktree so treated loses only what it
 compiled for its own branch, and compiles that again on its next build.
 
 A worktree is left alone while cargo or rustc runs in it, when it built in the
-last IDLE_MINUTES, and when it has built nothing since it was warmed (there is
-nothing to take). The main checkout is never touched, and neither is any file
+last IDLE_MINUTES, and when neither it nor the main checkout has built since
+it was warmed (its clone still costs nothing). The main checkout is never touched, and neither is any file
 outside a `target/`.
 
 The git hooks run it on every commit and checkout (scripts/git-hooks), which
@@ -52,10 +52,14 @@ def free_gb(path):
 
 
 def last_built(debug):
-    """When anything was last compiled into `debug`: its newest artifact."""
+    """When anything was last compiled into `debug`: its newest fingerprint.
+
+    Cargo keeps each compiled unit under `build/<package>/<hash>/`, and
+    rewrites that unit's `fingerprint/` each time it builds it.
+    """
     try:
         return max(
-            (entry.stat(follow_symlinks=False).st_mtime for entry in os.scandir(debug / "deps")),
+            (stamp.stat().st_mtime for stamp in debug.glob("build/*/*/fingerprint/*")),
             default=0,
         )
     except OSError:
@@ -68,10 +72,11 @@ def building_in():
     return [line[1:] for line in lines if line.startswith("n/")]
 
 
-def idle_builds(worktrees):
+def idle_builds(main, worktrees):
     """Each idle worktree's build directory with when it last built, oldest first."""
     busy = building_in()
     recent = time.time() - IDLE_MINUTES * 60
+    main_built = last_built(main / "target" / "debug")
     idle = []
     for worktree in worktrees:
         debug = worktree / "target" / "debug"
@@ -81,7 +86,8 @@ def idle_builds(worktrees):
             continue
         built = last_built(debug)
         warmed = debug / ".warmed"
-        if built >= recent or (warmed.exists() and built <= warmed.stat().st_mtime):
+        costs_nothing = warmed.exists() and max(built, main_built) <= warmed.stat().st_mtime
+        if built >= recent or costs_nothing:
             continue
         idle.append((built, worktree, debug))
     return sorted(idle)
@@ -115,7 +121,7 @@ def main():
         return
 
     if DRY_RUN:
-        for built, worktree, _ in idle_builds(worktrees):
+        for built, worktree, _ in idle_builds(main, worktrees):
             log(f"would reclaim {worktree.name} (idle {(time.time() - built) / 3600:.1f} h)")
         return
 
@@ -126,7 +132,7 @@ def main():
     except BlockingIOError:
         return
 
-    for built, worktree, debug in idle_builds(worktrees):
+    for built, worktree, debug in idle_builds(main, worktrees):
         idle_hours = (time.time() - built) / 3600
         reclaim(worktree, debug)
         freed, free = free_gb(main) - free, free_gb(main)

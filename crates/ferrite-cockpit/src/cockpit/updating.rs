@@ -131,7 +131,7 @@ impl CockpitView {
                     self.in_flight()
                         .map(|what| format!("{what}. The update stops them."))
                 } else {
-                    self.leaving_warning()
+                    self.leaving_warning(cx)
                 };
                 let view = cx.entity().downgrade();
                 let leave = move |_: &mut Window, cx: &mut gpui::App| {

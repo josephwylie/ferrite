@@ -1445,6 +1445,8 @@ impl Record {
             SessionEvent::AccountPlan { .. }
             | SessionEvent::Handshake { .. }
             | SessionEvent::HookRan { .. } => return None,
+            // The provider's late no to a control: live, not history.
+            SessionEvent::ControlRefused { .. } => return None,
             SessionEvent::ScheduledWork { .. } => return None,
         })
     }
@@ -1779,8 +1781,6 @@ pub struct Store {
     shared: std::sync::Arc<Shared>,
     #[cfg(test)]
     fail_create: bool,
-    #[cfg(test)]
-    fail_delete: bool,
     /// Held by a test: a large switch's exchanges are not read until it
     /// lets go, so the switch is seen pending however fast the read is.
     #[cfg(test)]
@@ -2050,7 +2050,7 @@ fn log_stamp(path: &Path) -> Option<(u64, u128)> {
 }
 
 /// Put `bytes` in place of a small whole-file document (the settings, the
-/// registry, the Groups) so that a crash or power cut at any moment leaves
+/// registry) so that a crash or power cut at any moment leaves
 /// the old file or the new one, never a torn one: written beside, synced
 /// behind a barrier so the contents reach the drive before the rename can
 /// (ADR 0009), renamed over, the rename made durable by syncing the
@@ -2396,8 +2396,6 @@ impl Store {
             #[cfg(test)]
             fail_create: false,
             #[cfg(test)]
-            fail_delete: false,
-            #[cfg(test)]
             exchange_reads: None,
         }
     }
@@ -2709,12 +2707,6 @@ impl Store {
         self
     }
 
-    #[cfg(test)]
-    pub(crate) fn refuse_delete(mut self) -> Self {
-        self.fail_delete = true;
-        self
-    }
-
     /// Mint a new Thread from an already-resolved workspace binding. The
     /// Thread is durable before this returns: a crash immediately after
     /// still shows it. The store runs no git and places no paths — worktree
@@ -2903,10 +2895,6 @@ impl Store {
     /// The caller settles the worktree's fate first — anything still under
     /// the Thread's directory goes with it.
     pub fn delete(&self, id: ThreadId) -> io::Result<()> {
-        #[cfg(test)]
-        if self.fail_delete {
-            return Err(io::Error::other("stub refused Thread deletion"));
-        }
         self.writable()?;
         // A parking Thread's writer still holds its log open; whatever it
         // had left to sync goes with the Thread.
@@ -3783,6 +3771,26 @@ impl Store {
             through,
             self.activity_limits,
         )
+    }
+
+    /// A Thread's whole conversation as plain text (`transcript::plain_text`),
+    /// replayed from its log under no Block or byte limit: what the
+    /// Thread's capped view (`Activity`'s limits) no longer holds. The log
+    /// lags a running turn by the flush interval. Reads the whole file:
+    /// call it on a worker.
+    pub fn full_history_text(&self, id: ThreadId) -> Result<String, LoadError> {
+        let limits = crate::activity::ActivityLimits {
+            blocks_per_subject: usize::MAX,
+            content_bytes_per_subject: usize::MAX,
+            ..self.activity_limits
+        };
+        let mut activity = crate::activity::Activity::new(limits);
+        for input in self.load(id)?.activity_inputs() {
+            activity.apply(input);
+        }
+        Ok(crate::transcript::plain_text(
+            activity.view().main().transcript().blocks(),
+        ))
     }
 
     /// One Thread's log as it stands at `through` (`ThreadWriter::checkpoint`),

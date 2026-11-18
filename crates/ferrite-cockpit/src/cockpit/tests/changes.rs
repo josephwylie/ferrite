@@ -15,6 +15,14 @@ fn window<'a>(
     name: &str,
     cx: &'a mut TestAppContext,
 ) -> (Entity<CockpitView>, ThreadId, &'a mut gpui::VisualTestContext) {
+    let (view, _fake, _repo, thread, cx) = window_with_agent(name, cx);
+    (view, thread, cx)
+}
+
+fn window_with_agent<'a>(
+    name: &str,
+    cx: &'a mut TestAppContext,
+) -> (Entity<CockpitView>, Fake, std::path::PathBuf, ThreadId, &'a mut gpui::VisualTestContext) {
     let base = scratch(name);
     let repo = repo_in(&base);
     std::fs::write(repo.join("a.rs"), "one\ntwo\n").unwrap();
@@ -24,15 +32,15 @@ fn window<'a>(
     std::fs::write(repo.join("b.rs"), "new\n").unwrap();
     let fake = Fake::default();
     let store = Store::open(base.join("store")).unwrap();
-    let mut core = Cockpit::new(store, Box::new(fake));
-    core.open(Provider::Claude, WorkspaceChoice::Main { checkout: repo }).unwrap();
+    let mut core = Cockpit::new(store, Box::new(fake.clone()));
+    core.open(Provider::Claude, WorkspaceChoice::Main { checkout: repo.clone() }).unwrap();
     bind_production_keys(cx);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     hold_nav_open(&view, cx);
     cx.simulate_resize(gpui::size(px(1900.), px(900.)));
     tick(cx);
     let thread = view.read_with(cx, |view, _| view.panes[0].thread().unwrap());
-    (view, thread, cx)
+    (view, fake, repo, thread, cx)
 }
 
 /// Press the door and wait for the read to land.
@@ -46,6 +54,17 @@ fn opened(view: &Entity<CockpitView>, thread: ThreadId, cx: &mut gpui::VisualTes
         std::thread::sleep(std::time::Duration::from_millis(5));
     }
     panic!("the read never landed");
+}
+
+#[gpui::test]
+fn changes_follow_the_agents_edits_without_a_refresh(cx: &mut TestAppContext) {
+    let (view, fake, repo, thread, cx) = window_with_agent("changes-follow", cx);
+    opened(&view, thread, cx);
+    assert_eq!(view.read_with(cx, |view, _| view.changes_read(Diff::Changes(thread))), Some(2));
+    std::fs::remove_file(repo.join("b.rs")).unwrap();
+    agent_worked(&view, &fake, 0, cx);
+    wait_for_changes(&view, thread, cx, |view, diff| view.changes_read(diff) == Some(1));
+    assert_eq!(view.read_with(cx, |view, _| view.changes_read(Diff::Changes(thread))), Some(1));
 }
 
 #[gpui::test]
@@ -225,4 +244,113 @@ fn the_stage_button_moves_a_file_into_and_out_of_the_index(cx: &mut TestAppConte
         std::thread::sleep(std::time::Duration::from_millis(5));
     }
     assert_eq!(staged(&repo), ["a.rs"]);
+}
+
+fn repo_of(name: &str) -> std::path::PathBuf {
+    std::env::temp_dir().join(format!("ferrite-view-{}-{name}", std::process::id())).join("repo")
+}
+
+/// Wait until the Changes read lands again after `press`.
+fn reread(view: &Entity<CockpitView>, thread: ThreadId, cx: &mut gpui::VisualTestContext) {
+    wait_for_changes(view, thread, cx, |view, diff| view.changes_read(diff).is_some());
+}
+
+fn wait_for_changes(
+    view: &Entity<CockpitView>,
+    thread: ThreadId,
+    cx: &mut gpui::VisualTestContext,
+    ready: impl Fn(&CockpitView, Diff) -> bool,
+) {
+    for _ in 0..400 {
+        tick(cx);
+        if view.read_with(cx, |view, _| ready(view, Diff::Changes(thread))) {
+            return;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    panic!("the read never landed");
+}
+
+#[gpui::test]
+fn a_file_longer_than_the_overview_cap_is_reviewable_to_its_last_line(cx: &mut TestAppContext) {
+    let (view, thread, cx) = window("changes-long", cx);
+    let body: String = (0..300).map(|n| format!("changed {n}\n")).collect();
+    std::fs::write(repo_of("changes-long").join("a.rs"), body).unwrap();
+    opened(&view, thread, cx);
+    let last = cx.debug_bounds("panel-hunk-0-301").expect("the 302nd line of the first file is drawn");
+    assert!(last.size.width > px(0.));
+    assert!(cx.debug_bounds("panel-hunk-0-302").is_none(), "and no more than the diff holds");
+}
+
+#[gpui::test]
+fn an_unwrapped_long_line_scrolls_sideways_to_its_tail(cx: &mut TestAppContext) {
+    let (view, thread, cx) = window("changes-wide", cx);
+    let wide = format!("{}TAIL", "abcdefghij".repeat(60));
+    std::fs::write(repo_of("changes-wide").join("a.rs"), format!("one\n{wide}\n")).unwrap();
+    opened(&view, thread, cx);
+    assert!(cx.debug_bounds("panel-hunks-scroll-0").is_none(), "wrapped lines need no scroller");
+    let wrap = cx.debug_bounds("changes-wrap").unwrap();
+    cx.simulate_click(wrap.center(), gpui::Modifiers::none());
+    tick(cx);
+    let scroller = cx.debug_bounds("panel-hunks-scroll-0").expect("unwrapped: a scroller");
+    let line = cx.debug_bounds("panel-hunk-0-2").expect("the long line");
+    assert_eq!(line.size.height, px(ferrite_ui::theme::LH_PANEL_DIFF), "one row");
+    assert!(line.size.width > scroller.size.width, "the line keeps its width");
+    let before = cx.debug_bounds("panel-hunk-0-2").unwrap().left();
+    cx.simulate_event(gpui::ScrollWheelEvent {
+        position: scroller.center(),
+        delta: gpui::ScrollDelta::Pixels(gpui::point(px(-5_000.), px(0.))),
+        ..Default::default()
+    });
+    cx.run_until_parked();
+    tick(cx);
+    let after = cx.debug_bounds("panel-hunk-0-2").unwrap();
+    assert!(after.left() < before, "scrolled sideways");
+    assert!(after.right() <= scroller.right() + px(1.), "the tail is in view");
+}
+
+#[gpui::test]
+fn a_reviewed_file_changed_afterwards_is_unreviewed_and_open_again(cx: &mut TestAppContext) {
+    let (view, thread, cx) = window("changes-stale", cx);
+    opened(&view, thread, cx);
+    let mark = cx.debug_bounds("changes-reviewed-0").unwrap();
+    cx.simulate_click(mark.center(), gpui::Modifiers::none());
+    tick(cx);
+    assert!(cx.debug_bounds("panel-hunks-0").is_none(), "reviewed folds it");
+    let again = |text: &str, cx: &mut gpui::VisualTestContext| {
+        std::fs::write(repo_of("changes-stale").join("a.rs"), text).unwrap();
+        let refresh = cx.debug_bounds("changes-refresh").unwrap();
+        cx.simulate_click(refresh.center(), gpui::Modifiers::none());
+        reread(&view, thread, cx);
+    };
+    again("one\n2\n", cx);
+    assert!(cx.debug_bounds("panel-hunks-0").is_none(), "the same content stays reviewed");
+    again("one\nTWO\n", cx);
+    assert!(cx.debug_bounds("panel-hunks-0").is_some(), "other content shows its hunks again");
+    let state = cx.debug_bounds("changes-reviewed-0").unwrap();
+    assert!(state.size.width > px(0.));
+    view.read_with(cx, |view, _| assert!(!view.changes_reviewed_for_test(Diff::Changes(thread), "a.rs")));
+}
+
+#[gpui::test]
+fn a_refused_stage_names_its_file_and_git_and_a_retry_stages_it(cx: &mut TestAppContext) {
+    let (view, thread, cx) = window("changes-locked", cx);
+    let repo = repo_of("changes-locked");
+    opened(&view, thread, cx);
+    let lock = repo.join(".git/index.lock");
+    std::fs::write(&lock, "").unwrap();
+    let button = cx.debug_bounds("changes-stage-0").unwrap();
+    cx.simulate_click(button.center(), gpui::Modifiers::none());
+    view.update(cx, |view, cx| view.reread_changes(Diff::Changes(thread), cx));
+    wait_for_changes(&view, thread, cx, |view, diff| view.changes_stage_failure_for_test(diff).is_some());
+    assert!(cx.debug_bounds("changes-stage-failure").is_some(), "the refusal is shown");
+    let said = view.read_with(cx, |view, _| view.changes_stage_failure_for_test(Diff::Changes(thread))).unwrap();
+    assert!(said.contains("a.rs") && said.contains("index.lock"), "{said}");
+    std::fs::remove_file(&lock).unwrap();
+    let button = cx.debug_bounds("changes-stage-0").unwrap();
+    cx.simulate_click(button.center(), gpui::Modifiers::none());
+    wait_for_changes(&view, thread, cx, |view, diff| view.changes_stage_failure_for_test(diff).is_none());
+    assert!(cx.debug_bounds("changes-stage-failure").is_none(), "the retry cleared it");
+    let out = std::process::Command::new("git").args(["diff", "--cached", "--name-only"]).current_dir(&repo).output().unwrap();
+    assert_eq!(String::from_utf8_lossy(&out.stdout).trim(), "a.rs");
 }

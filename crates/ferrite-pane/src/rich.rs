@@ -5,22 +5,27 @@ use gpui::component::input::{Textarea, TextareaState};
 use gpui::{prelude::*, px, rems, rgb, rgba, App, Entity, Focusable, SharedString, Window};
 use std::{cell::RefCell, collections::HashMap, rc::Rc};
 
+use crate::link_target::{LinkTarget, Open};
 use ferrite_ui::theme;
 
 pub fn init(cx: &mut App) {
-    cx.bind_keys([gpui::KeyBinding::new(
-        "enter",
-        gpui::NoAction {},
-        Some("TranscriptCodeActions"),
-    )]);
+    cx.bind_keys(CONTROL_CONTEXTS.map(|context| {
+        gpui::KeyBinding::new("enter", gpui::NoAction {}, Some(context))
+    }));
 }
 
-/// Code controls form a native keyboard island inside the transcript.
-pub fn code_actions_focused(window: &Window) -> bool {
-    window
-        .context_stack()
-        .iter()
-        .any(|context| context.contains("TranscriptCodeActions"))
+/// The key contexts of the transcript's native controls: a code block's
+/// actions and an inline link's tab stop (the toolkit's `LinkStop`).
+const CONTROL_CONTEXTS: [&str; 2] = ["TranscriptCodeActions", "LinkStop"];
+
+/// Code actions and links form a native keyboard island inside the
+/// transcript: Tab walks them and ⏎ presses the focused one.
+pub fn controls_focused(window: &Window) -> bool {
+    window.context_stack().iter().any(|context| {
+        CONTROL_CONTEXTS
+            .iter()
+            .any(|name| context.contains(name))
+    })
 }
 
 /// Replace a native text output's source without losing the reader's
@@ -614,33 +619,31 @@ impl gpui::RenderOnce for Markdown {
                 if !activate {
                     return;
                 }
-                if let Some(number) = url.strip_prefix(ISSUE_SCHEME) {
-                    if let Some(page) = link_cwd
-                        .as_deref()
-                        .and_then(|cwd| crate::file_links::issue_url(cwd, number))
-                    {
-                        if !link_preview.as_ref().is_some_and(|preview| preview.open_url(&page, window)) {
-                            cx.open_url(&page);
-                        }
-                    }
-                    return;
-                }
                 let from_call = url.starts_with(PATH_SCHEME);
-                let url = url.strip_prefix(PATH_SCHEME).unwrap_or(url);
-                if let Some(file) = crate::file_links::FileLink::resolve(url, link_cwd.as_deref()) {
+                let target = LinkTarget::resolve(url, link_cwd.as_deref());
+                match (&target, from_call, link_scope.clone()) {
                     // A call's path opens where a prose path's ⌘-click does:
                     // the Thread's preview, in Files.
-                    if let (true, Some(scope)) = (from_call, link_scope.clone()) {
+                    (LinkTarget::File(file), true, Some(scope)) => {
+                        let at = file.location.as_deref().and_then(crate::file_links::location_line);
                         let target = crate::file_links::PathTarget::new(file.path.clone())
-                            .at_line(file.location.as_deref().and_then(crate::file_links::location_line))
+                            .at_line(at)
                             .in_scope(scope);
                         crate::file_links::open_target(&target, window, cx);
-                    } else {
-                        file.open(window, cx);
                     }
-                } else {
-                    if !link_preview.as_ref().is_some_and(|preview| preview.open_url(url, window)) {
-                        cx.open_url(url);
+                    (LinkTarget::RepoPullRequest { number, url }, _, scope) => {
+                        let how = Open::of(event);
+                        let routed = how == Open::Primary
+                            && scope.is_some_and(|scope| {
+                                crate::file_links::open_pull_request(&scope, *number, url.clone(), window, cx)
+                            });
+                        if !routed {
+                            let browser = if how == Open::Primary { Open::Integrated } else { how };
+                            LinkTarget::External(url.clone()).open(browser, link_preview.as_ref(), window, cx);
+                        }
+                    }
+                    _ => {
+                        target.open(Open::of(event), link_preview.as_ref(), window, cx);
                     }
                 }
             })
@@ -920,6 +923,7 @@ fn style_hanging(rem_size: gpui::Pixels, base: gpui::Pixels, hang: f32) -> TextV
         .with_link(rgb(theme::LINK_INK).into())
         .with_link_underline(Some(rgb(theme::LINK_INK).into()))
         .with_link_underline_on_hover(true)
+        .with_link_focus(Some(rgba(theme::FOCUS_RING).into()))
         // An image in an answer sits in the prompt image's frame:
         // `IMAGE_CELLS` wide at the prose's size, a 1px `LINE` edge.
         .with_image(
@@ -3271,5 +3275,52 @@ mod cache_cost_tests {
             }
             assert_eq!(cache.cached_ids().len(), 12, "frame {frame}");
         }
+    }
+}
+
+#[cfg(test)]
+mod stream_fade_tests {
+    use super::*;
+    use gpui::{div, Context, Render, TestAppContext};
+
+    struct Stream {
+        cache: TextCache,
+        source: String,
+    }
+
+    impl Render for Stream {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            div().w(px(360.)).child(
+                Markdown::new("stream", self.source.clone(), self.cache.clone()).streaming(true),
+            )
+        }
+    }
+
+    /// The fade counts a view's text in bytes from one frame to the next,
+    /// and Markdown that closes shrinks what the last frame counted: `**a`
+    /// is three bytes until its `**` closes. The old end then falls inside
+    /// the `→` that follows, which crashed the window (Nov 2026, five
+    /// reports in two days).
+    #[gpui::test]
+    fn a_fade_paints_when_closing_markdown_leaves_its_start_inside_a_character(
+        cx: &mut TestAppContext,
+    ) {
+        cx.update(crate::pane::init_components);
+        let (stream, cx) = cx.add_window_view(|_, _| Stream {
+            cache: TextCache::default(),
+            source: "**a".into(),
+        });
+        let draw = |cx: &mut gpui::VisualTestContext| {
+            cx.run_until_parked();
+            cx.update(|window, cx| {
+                let _ = window.draw(cx);
+            });
+        };
+        draw(cx);
+        stream.update(cx, |stream, cx| {
+            stream.source = "**a** →b".into();
+            cx.notify();
+        });
+        draw(cx);
     }
 }

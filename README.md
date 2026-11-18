@@ -12,8 +12,8 @@ full transcript and a prompt box. A medium one shows progress and stats. A tiny
 one is just a status light.
 
 When an agent needs your permission or asks you a question, that's a
-**Decision**. You can answer it with one key from anywhere, even from a tiny
-Pane — you don't have to click into it first.
+**Decision**. Answer it with the Allow and Deny buttons, or the `cmd-enter` and
+`shift-cmd-enter` chords from a Pane's Composer. On the Wall, one key does it.
 
 Ferrite doesn't talk to any API itself. It runs the real `claude` and `codex`
 CLIs and shows you what they print.
@@ -99,13 +99,20 @@ Shortcuts below use `cmd`; on Windows use `ctrl`.
 - `cmd-g` — open a Group: the command palette, scoped to Groups
 - `cmd-shift-g` — new Group: the focused Thread plus a new one beside it
 - `escape` — interrupt whatever's running
-- `y` / `n` / `a` — answer a Decision: allow, deny, or always allow. Works from
-  the focused Pane or from any Pane, however small.
+- `cmd-enter` / `shift-cmd-enter` — answer a Decision in a Pane: allow once, or
+  always allow. On the Wall, `y` / `n` / `a` allow, deny, or always allow.
 - `cmd-]` / `cmd-[` — next / previous Pane
 - `cmd-d` — jump to the next Decision
 - `cmd-shift-enter` — make the focused Pane fullscreen (and back)
-- `cmd-f` — find in the focused Pane's transcript, or in its reader when you
-  last pressed there. A capital letter makes the search match case.
+- `f6` / `shift-f6` — move the keyboard between the conversation and the
+  Panel's controls (tabs, `+`, maximize, and a pull request's header and
+  views). There `left` / `right` / `home` / `end` move between controls,
+  `enter` or `space` presses one, `shift-f10` opens its menu, `delete` closes
+  a tab, `tab` leaves for the next area and `escape` returns to the
+  conversation.
+- `cmd-f` — find in the focused Pane's transcript, in its reader when you
+  last pressed there, or in the file open in the Files panel when the
+  keyboard is in it. A capital letter makes the search match case.
   `enter` / `shift-enter` (or `cmd-g` / `cmd-shift-g`) — next / previous
   match; `escape` closes the bar.
 - `cmd-=` / `cmd--` — bigger or smaller transcript text, 12–24px, in every Pane;

@@ -44,7 +44,7 @@ fn edited(name: &str) -> (Cockpit, Fake, std::path::PathBuf) {
 /// an `Edit` of `src/nav.rs` the files-changed card lists, then its end.
 fn tidied(core: &mut Cockpit, fake: &Fake, repo: &std::path::Path) {
     let thread = core.threads()[0];
-    core.send(thread, "Tidy the nav".into());
+    let _ = core.send(thread, "Tidy the nav".into());
     let path = repo.join("src/nav.rs").display().to_string();
     let stream = fake.streams.borrow()[0].clone();
     for event in [
@@ -451,7 +451,7 @@ fn the_last_turn_reads_what_changed_since_the_prompt(cx: &mut TestAppContext) {
     tick(cx);
     view.update(cx, |view, _| {
         let thread = view.panes[0].thread().unwrap();
-        view.cockpit.send(thread, "Add notes".into());
+        let _ = view.cockpit.send(thread, "Add notes".into());
     });
     // The turn's write lands once its start is snapshotted, never in it.
     turn_host_wrote(cx, snapshotted);

@@ -1,0 +1,57 @@
+{
+  "sources": [
+    {
+      "path": "07-chat-completed.jpg",
+      "sha256": "53b5a7022551e25b4a88654a07d454d496df367a77049d646263fa42ed5c8a47",
+      "logical_viewport": [
+        1470,
+        923
+      ],
+      "device_pixel_ratio": 2,
+      "pixel_dimensions": [
+        2940,
+        1846
+      ],
+      "image_format": "JPEG",
+      "crop_px": [
+        0,
+        0,
+        2940,
+        1846
+      ],
+      "surface": "Actual installed T3 native application",
+      "installed_version": "0.1.10-nightly.20261111.4544",
+      "capture_method": "cua_repl native getScreenshot; original bytes, no conversion",
+      "provider": "Actual Codex GPT-6.1-Sol Low, synthetic local reference project; not a remote T3 connection",
+      "project": "/var/folders/5y/hnh41b2j29z8kqxy7ftzfdn80000gn/T/ferrite-parity-t3-wiwj0w7m",
+      "thread_url": "t3code://app/#/e10f8bba-80bf-4bb7-a23b-23a50cbf0e58/c6c04b8b-52d1-4eb7-8604-357ae2203e87"
+    },
+    {
+      "path": "/Users/josephwylie/Desktop/Projects/ferrite-remote-connections/docs/audits/2026-11-16-remote-connections/parity/native-7/link-existing-thread-completed-1470x923.png",
+      "sha256": "760dd45d1226b3e2c13e9a5f726bb1aef12c6ca910ec94855d728e07890c47ed",
+      "logical_viewport": [
+        1470,
+        923
+      ],
+      "device_pixel_ratio": 2.0,
+      "pixel_dimensions": [
+        2940,
+        1846
+      ],
+      "image_format": "PNG",
+      "crop_px": [
+        0,
+        0,
+        2940,
+        1846
+      ],
+      "surface": "Ferrite native headless Driver",
+      "provider": "simulated Codex app-server, no model API calls",
+      "source_commit": "545742f1e82335a1ae24016f4eb6250e68af5223",
+      "binary_sha256": "8362b7bca5fc616cd93722d8704ca61821323798227e7904af1514025ee97da4"
+    }
+  ],
+  "comparison_sha256": "c46bd1c6ee381d2734909a95e6189b475555ebaf725cd6581f1c38105990c3cb",
+  "composition": "Native pixel crops, side by side, no scaling or retouching",
+  "verdict": "requires parent visual review"
+}

@@ -14,7 +14,7 @@ fn wheel(cx: &mut gpui::VisualTestContext, position: gpui::Point<Pixels>, dy: f3
 fn wheel_over_a_large_pinned_prompt_scrolls_the_transcript(cx: &mut TestAppContext) {
     let (mut core, fake) = cockpit("large-pinned-wheel", 1);
     let thread = core.threads()[0];
-    core.send(
+    let _ = core.send(
         thread,
         (0..60).map(|n| format!("Long prompt line {n}\n")).collect(),
     );
@@ -73,7 +73,7 @@ fn selecting_below_a_large_pinned_prompt_keeps_the_scroll_position(cx: &mut Test
 fn selection_keeps_position(cx: &mut TestAppContext, name: &str, prompt: &str) {
     let (mut core, fake) = cockpit(name, 1);
     let thread = core.threads()[0];
-    core.send(thread, prompt.into());
+    let _ = core.send(thread, prompt.into());
     bind_production_keys(cx);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     cx.simulate_resize(gpui::size(px(1000.), px(700.)));
@@ -184,7 +184,7 @@ fn a_thread_keeps_its_scroll_position_while_another_shows(cx: &mut TestAppContex
 fn a_send_scrolls_its_prompt_to_the_top(cx: &mut TestAppContext) {
     let (mut core, fake) = cockpit("send-scrolls-prompt-up", 1);
     let thread = core.threads()[0];
-    core.send(thread, "first".into());
+    let _ = core.send(thread, "first".into());
     cx.update(|cx| {
         cx.bind_keys([KeyBinding::new("enter", Submit, None)]);
     });
@@ -228,7 +228,7 @@ fn a_send_scrolls_its_prompt_to_the_top(cx: &mut TestAppContext) {
 fn a_long_transcript_has_a_scrollbar_over_its_list(cx: &mut TestAppContext) {
     let (mut core, fake) = cockpit("transcript-scrollbar", 1);
     let thread = core.threads()[0];
-    core.send(thread, "first".into());
+    let _ = core.send(thread, "first".into());
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     cx.simulate_resize(gpui::size(px(1000.), px(700.)));
     fake.streams.borrow()[0]

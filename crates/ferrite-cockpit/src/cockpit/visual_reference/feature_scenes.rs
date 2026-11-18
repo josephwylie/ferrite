@@ -8,7 +8,7 @@
 
 use ferrite_core::protocol::{
     ReviewPullRequest, WireCheck, WireCheckStatus, WireMerge, WirePr, WirePrComment,
-    WirePrCommentKind, WirePrState, WireReply, WireSync,
+    WirePrCommentKind, WirePrState, WireReply, WireReviewState, WireSync,
 };
 use ferrite_core::store::Provider;
 use ferrite_core::workspace::{CheckState, PrState, PullRequest};
@@ -20,9 +20,9 @@ use ferrite_reviewr::model::{ChangeKind, ChangedFile, Comment, Rev, Scope as Rev
 use ferrite_reviewr::search::{CodeHit, FileHit, SearchResults};
 use gpui::{AppContext, Focusable};
 
-use super::{conversation, Feed, Scene, Setup};
+use super::{Feed, Scene, Setup, conversation};
 use crate::cockpit::panel::Opener;
-use crate::cockpit::surfaces::{SurfaceId, ThreadSurfaces};
+use crate::cockpit::surfaces::SurfaceId;
 use crate::review::ReviewView;
 
 /// Every state this module draws, at the app size.
@@ -56,6 +56,9 @@ pub(super) const STATES: &[&str] = &[
     "panel-empty",
     "panel-maximized",
     "panel-pr",
+    "panel-pr-merging",
+    "panel-pr-merge-failed",
+    "panel-pr-merged",
     "scroll-to-end",
     "send-landed",
     "composer-tokens",
@@ -65,6 +68,8 @@ pub(super) const STATES: &[&str] = &[
     "compaction",
     "long-prompt",
     "cite",
+    "annotation-editor",
+    "cite-comment",
     "factory",
     "factory-workflows",
     "factory-start-schedule",
@@ -79,6 +84,8 @@ pub(super) fn handles(state: &str) -> bool {
 
 pub(super) fn build(state: &str) -> (Scene, Setup) {
     match state {
+        "annotation-editor" => annotation_editor(),
+        "cite-comment" => cite_comment(),
         "review-uncommitted" => review(Staged::Uncommitted),
         "review-commits" => review(Staged::Commits),
         "review-pr" => review(Staged::Pr),
@@ -110,15 +117,26 @@ pub(super) fn build(state: &str) -> (Scene, Setup) {
         }
         "page-pane" => page_pane(),
         "lightbox" => lightbox(),
-        "files-code" => tools("files-code", &[Opener::Files], Some("crates/ferrite-ui/src/motion.rs")),
+        "files-code" => tools(
+            "files-code",
+            &[Opener::Files],
+            Some("crates/ferrite-ui/src/motion.rs"),
+        ),
         "files-empty" => tools("files-empty", &[Opener::Files], None),
-        "changes-split" => tools("changes-split", &[Opener::Files, Opener::Changes], Some("crates/ferrite-ui/src/motion.rs")),
+        "changes-split" => tools(
+            "changes-split",
+            &[Opener::Files, Opener::Changes],
+            Some("crates/ferrite-ui/src/motion.rs"),
+        ),
         "terminal" => tools("terminal", &[Opener::Terminal], None),
         "panel-tabs" => panel("panel-tabs", PanelStaged::Tabs),
         "panel-plusmenu" => panel("panel-plusmenu", PanelStaged::PlusMenu),
         "panel-empty" => panel("panel-empty", PanelStaged::Empty),
         "panel-maximized" => panel("panel-maximized", PanelStaged::Maximized),
-        "panel-pr" => panel_pr(),
+        "panel-pr" => panel_pr("panel-pr", PrStaged::Ready),
+        "panel-pr-merging" => panel_pr("panel-pr-merging", PrStaged::Merging),
+        "panel-pr-merge-failed" => panel_pr("panel-pr-merge-failed", PrStaged::MergeFailed),
+        "panel-pr-merged" => panel_pr("panel-pr-merged", PrStaged::Merged),
         "scroll-to-end" => scroll_to_end(),
         "send-landed" => send_landed(),
         "composer-tokens" => composer_tokens(),
@@ -170,7 +188,6 @@ fn review(staged: Staged) -> (Scene, Setup) {
         let reading = view.prefs.settings.reading_size;
         let review =
             cx.new(|cx| ReviewView::new(composer.clone(), ReviewScope::Uncommitted, reading, cx));
-        view.empty_shown = false;
         view.panes[index].review.show(review.clone(), "main".into());
         window.focus(&review.focus_handle(cx), cx);
         review.update(cx, |review, cx| {
@@ -345,6 +362,7 @@ fn pull_request() -> ReviewPullRequest {
     let check = |name: &str, status| WireCheck {
         name: name.into(),
         status,
+        url: None,
     };
     ReviewPullRequest {
         noun: "PR".into(),
@@ -355,6 +373,12 @@ fn pull_request() -> ReviewPullRequest {
             body: "Live rows reserve their status line from the first frame, so a \
                    Thread that starts streaming no longer shifts the tree."
                 .into(),
+            author: Some("josephwylie".into()),
+            author_avatar_url: None,
+            updated_at: Some("2026-10-15T09:20:00Z".into()),
+            changed_files: Some(3),
+            additions: Some(42),
+            deletions: Some(12),
             state: WirePrState::Open,
             draft: false,
             head: "fix/nav-jitter".into(),
@@ -369,9 +393,13 @@ fn pull_request() -> ReviewPullRequest {
             ],
             comments: vec![
                 WirePrComment {
+                    id: None,
+                    author_is_bot: false,
+                    place: None,
                     kind: WirePrCommentKind::Review,
                     author: "maria".into(),
                     anchor: "review".into(),
+                    verdict: Some(WireReviewState::Commented),
                     body: "Looks right. One question on parked rows.".into(),
                     snippet: None,
                     created_at: "2026-10-15T09:12:00Z".into(),
@@ -380,15 +408,21 @@ fn pull_request() -> ReviewPullRequest {
                     replies: Vec::new(),
                 },
                 WirePrComment {
+                    id: None,
+                    author_is_bot: false,
+                    place: None,
                     kind: WirePrCommentKind::Finding,
                     author: "maria".into(),
                     anchor: "crates/ferrite/src/nav.rs:439-442".into(),
+                    verdict: None,
                     body: "Does a parked row still take the reserved line?".into(),
                     snippet: Some("+    let summary = facts\n+        .summary".into()),
                     created_at: "2026-10-15T09:14:00Z".into(),
                     resolved: false,
                     outdated: false,
                     replies: vec![WireReply {
+                        id: None,
+                        author_is_bot: false,
                         author: "joseph".into(),
                         body: "No: the next commit keeps it to open Threads.".into(),
                         created_at: "2026-10-15T09:20:00Z".into(),
@@ -455,7 +489,6 @@ fn reader() -> (Scene, Setup) {
     let setup: Setup = Box::new(move |view, window, cx| {
         std::fs::create_dir_all(file.parent().unwrap()).unwrap();
         std::fs::write(&file, NAV_RS).unwrap();
-        view.empty_shown = false;
         view.open_preview(file.clone(), Some(14), window, cx);
     });
     (scene, setup)
@@ -516,7 +549,7 @@ fn find() -> (Scene, Setup) {
 fn scroll_to_end() -> (Scene, Setup) {
     let mut scene = conversation("scroll-to-end");
     let thread = scene.core.roster().focused_thread().expect("focus");
-    scene
+    let _ = scene
         .core
         .send(thread, "Now check the parked rows by hand.".into());
     scene.core.pump();
@@ -541,7 +574,8 @@ fn send_landed() -> (Scene, Setup) {
         let Some(thread) = view.focused_thread() else {
             return;
         };
-        view.cockpit
+        let _ = view
+            .cockpit
             .send(thread, "Push the branch with the nav fix.".into());
         view.scroll_transcript_to_new_prompt(view.focused(), cx);
     });
@@ -558,7 +592,7 @@ fn reply_card() -> (Scene, Setup) {
         let index = view.focused();
         view.panes[index].composer.update(cx, |composer, cx| {
             composer.reply(
-                ferrite_pane::quote::Reply::new("Both commands ran.", "testing"),
+                ferrite_core::replies::Reply::new("Both commands ran.", "testing"),
                 cx,
             );
             // An image beside it: both are tiles of the one tray row.
@@ -628,18 +662,27 @@ fn panel(state: &str, staged: PanelStaged) -> (Scene, Setup) {
         match staged {
             PanelStaged::Tabs => {}
             PanelStaged::PlusMenu => view.open_surface_menu(cx),
-            PanelStaged::Empty => view.close_surfaces(thread, ThreadSurfaces::close_all, cx),
+            PanelStaged::Empty => view.close_surfaces(thread, crate::cockpit::surfaces::CloseSelection::All, cx),
             PanelStaged::Maximized => view.toggle_panel_maximized(thread, cx),
         }
     });
     (scene, setup)
 }
 
+#[derive(Clone, Copy)]
+enum PrStaged {
+    Ready,
+    Merging,
+    MergeFailed,
+    Merged,
+}
+
 /// The pull request Surface on Summary, the PR open and ready to merge:
-/// every check green, Merge as the primary action.
-fn panel_pr() -> (Scene, Setup) {
-    let scene = conversation("panel-pr");
-    let setup: Setup = Box::new(|view, _, cx| {
+/// every check green, Merge as the primary action, or a merge of it
+/// partway through `staged`.
+fn panel_pr(label: &'static str, staged: PrStaged) -> (Scene, Setup) {
+    let scene = conversation(label);
+    let setup: Setup = Box::new(move |view, _, cx| {
         let Some(thread) = view.focused_thread() else {
             return;
         };
@@ -649,11 +692,19 @@ fn panel_pr() -> (Scene, Setup) {
         for check in &mut pr.checks {
             check.status = WireCheckStatus::Success;
         }
+        let merged = matches!(staged, PrStaged::Merged);
+        if merged {
+            pr.state = WirePrState::Merged;
+        }
         view.facts.pr_answered(
             thread,
             Some(PullRequest {
                 number: pr.number,
-                state: PrState::Open,
+                state: if merged {
+                    PrState::Merged
+                } else {
+                    PrState::Open
+                },
                 draft: false,
                 url: Some(pr.url.clone()),
                 title: Some(pr.title.clone()),
@@ -661,7 +712,14 @@ fn panel_pr() -> (Scene, Setup) {
                 runs: Vec::new(),
             }),
         );
+        let number = pr.number;
         view.fixture_pr_snapshot(thread, pr);
+        match staged {
+            PrStaged::Ready => {}
+            PrStaged::Merging => view.fixture_pr_merge_running(thread, number),
+            PrStaged::MergeFailed => view.fixture_pr_merge_failed(thread, number),
+            PrStaged::Merged => view.fixture_pr_merge_done(thread, number),
+        }
         view.open_pr_surface(thread, cx);
     });
     (scene, setup)
@@ -699,12 +757,12 @@ fn nav_states() -> (Scene, Setup) {
     let shop = scene.project("shop");
 
     let (working, feed) = scene.open(Provider::Claude, &shop, "Stripe webhook retries");
-    scene.core.send(working, "Retry failed webhooks.".into());
+    let _ = scene.core.send(working, "Retry failed webhooks.".into());
     feed.boot(Provider::Claude, 48_000)
         .text("Writing the backoff; the idempotency key already lands in orders.");
 
     let (blocked, feed) = scene.open(Provider::Codex, &shop, "Cart copy pass");
-    scene
+    let _ = scene
         .core
         .send(blocked, "Rewrite the cart's empty state.".into());
     feed.boot(Provider::Codex, 12_000)
@@ -712,7 +770,7 @@ fn nav_states() -> (Scene, Setup) {
         .approval("grep", "rg -n 'Your cart is empty' web/");
 
     let (done, done_feed) = scene.open(Provider::Claude, &shop, "Order confirmation emails");
-    scene
+    let _ = scene
         .core
         .send(done, "Send confirmations from the new template.".into());
     done_feed
@@ -720,7 +778,7 @@ fn nav_states() -> (Scene, Setup) {
         .text("Done: the template renders and the PR is up.");
 
     let (checking, feed) = scene.open(Provider::Claude, &shop, "Tax rounding");
-    scene
+    let _ = scene
         .core
         .send(checking, "Round tax per line, not per order.".into());
     feed.boot(Provider::Claude, 22_000)
@@ -768,7 +826,7 @@ fn mermaid() -> (Scene, Setup) {
     let mut scene = Scene::new("mermaid");
     let ferrite = scene.project("ferrite");
     let (thread, feed) = scene.open(Provider::Claude, &ferrite, "Webhook retry flow");
-    scene
+    let _ = scene
         .core
         .send(thread, "Draw how a failed webhook is retried.".into());
     feed.boot(Provider::Claude, 26_000)
@@ -798,7 +856,7 @@ fn toast_done() -> (Scene, Setup) {
     let ferrite = scene.project("ferrite");
     let focused = scene.core.roster().focused_thread().expect("focus");
     let (notes, feed) = scene.open(Provider::Claude, &ferrite, "Release notes 0.9");
-    scene
+    let _ = scene
         .core
         .send(notes, "Draft the 0.9 release notes.".into());
     feed.boot(Provider::Claude, 31_000)
@@ -937,7 +995,7 @@ fn wrap_up(spent: bool) -> (Scene, Setup) {
     let mut scene = Scene::new(if spent { "wrap-up-spent" } else { "wrap-up" });
     let ferrite = scene.project("ferrite");
     let (thread, feed) = scene.open(Provider::Claude, &ferrite, "Append line to notes.txt");
-    scene.core.send(
+    let _ = scene.core.send(
         thread,
         "Append the line \"second line\" to notes.txt. Then stop and ask me whether to commit it."
             .into(),
@@ -965,7 +1023,7 @@ fn wrap_up(spent: bool) -> (Scene, Setup) {
         });
     if spent {
         scene.core.pump();
-        scene.core.send(thread, "Commit it".into());
+        let _ = scene.core.send(thread, "Commit it".into());
     }
     (scene, Box::new(|_, _, _| {}))
 }
@@ -988,7 +1046,7 @@ fn output_cards(label: &str) -> (super::Scene, std::path::PathBuf) {
     .unwrap();
     std::fs::write(ferrite.join("NOTES.md"), "# Q3 notes\n").unwrap();
     let (thread, feed) = scene.open(Provider::Claude, &ferrite, "Q3 sales report");
-    scene.core.send(
+    let _ = scene.core.send(
         thread,
         "Build a one-page Q3 sales report and serve it.".into(),
     );
@@ -1043,7 +1101,6 @@ fn output_cards(label: &str) -> (super::Scene, std::path::PathBuf) {
 fn page_pane() -> (Scene, Setup) {
     let (scene, page) = output_cards("page-pane");
     let setup: Setup = Box::new(move |view, window, _| {
-        view.empty_shown = false;
         view.panes[0]
             .preview
             .open_page(ferrite_pane::page::PageSource::File(page.clone()), window);
@@ -1057,8 +1114,7 @@ fn lightbox() -> (Scene, Setup) {
     let scene = conversation("lightbox");
     let shots = scene.root.join("shots");
     std::fs::create_dir_all(&shots).unwrap();
-    let source = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("fixtures");
+    let source = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("fixtures");
     let gallery: Vec<std::path::PathBuf> = ["approval-wide", "decision-wide", "edges-wide"]
         .iter()
         .map(|name| {
@@ -1109,16 +1165,16 @@ fn composer_stop() -> (Scene, Setup) {
     let mut scene = Scene::new("composer-stop");
     let ferrite = scene.project("ferrite");
     let (thread, feed) = scene.open(Provider::Claude, &ferrite, "Composer queue polish");
-    scene
+    let _ = scene
         .core
         .send(thread, "Tighten the queued prompt rows.".into());
     feed.boot(Provider::Claude, 64_000)
         .text("Checking how the stack clips when three or more rows are held");
     scene.core.pump();
     let setup: Setup = Box::new(|view, _, cx| {
-        view.panes[0]
-            .composer
-            .update(cx, |composer, cx| composer.set("Also keep the take-back key".into(), cx));
+        view.panes[0].composer.update(cx, |composer, cx| {
+            composer.set("Also keep the take-back key".into(), cx)
+        });
     });
     (scene, setup)
 }
@@ -1129,9 +1185,9 @@ fn head_breadcrumb() -> (Scene, Setup) {
     let scene = conversation("head-breadcrumb");
     let setup: Setup = Box::new(|view, window, cx| {
         if let Some(thread) = view.focused_thread() {
-            ferrite_ui::motion::hover_listener(
-                format!("view-title-hover-{}", thread.get()).into(),
-            )(&true, window, cx);
+            ferrite_ui::motion::hover_listener(format!("view-title-hover-{}", thread.get()).into())(
+                &true, window, cx,
+            );
         }
     });
     (scene, setup)
@@ -1185,7 +1241,7 @@ fn long_prompt() -> (Scene, Setup) {
     let ferrite = scene.project("ferrite");
     let (thread, feed) = scene.open(Provider::Claude, &ferrite, "Audit the pane crate");
     let paragraph = "Walk every module under the pane crate and list which of them still hold a second owner of the same state, then say what the single owner would be and what it would cost to move. ";
-    scene.core.send(thread, paragraph.repeat(5));
+    let _ = scene.core.send(thread, paragraph.repeat(5));
     feed.boot(Provider::Claude, 64_000)
         .text("Starting with the transcript module.")
         .end(0.03);
@@ -1399,6 +1455,64 @@ fn factory_coordinator() -> (Scene, Setup) {
         view.factory_surface(crate::cockpit::workflows::Surface::Coordinator, cx);
         view.accept_proposal("p-1", cx);
         view.dismiss_proposal("p-2", cx);
+    });
+    (scene, setup)
+}
+
+fn annotation_editor() -> (Scene, Setup) {
+    use ferrite_core::browser::{Document, TabId};
+    use ferrite_core::browser_annotations::{self, Capture, Selection, Viewport};
+    let scene = conversation("annotation-editor");
+    let image = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("fixtures/approval-wide.png");
+    let png = std::fs::read(&image).unwrap();
+    let dimensions = image::load_from_memory(&png).unwrap();
+    let annotation = browser_annotations::retain(
+        &scene.root.join("annotation"),
+        Capture {
+            document: Document {
+                tab: TabId(1),
+                generation: 1,
+            },
+            native_generation: 1,
+            url: "https://example.test/review".into(),
+            viewport: Viewport {
+                width_css: dimensions.width() as f64,
+                height_css: dimensions.height() as f64,
+                device_scale: 1.,
+            },
+            selection: Selection::Region {
+                x: 20.,
+                y: 20.,
+                width: 150.,
+                height: 80.,
+            },
+        },
+        &png,
+        "Make the primary action clearer".into(),
+        vec![],
+    )
+    .unwrap();
+    let setup: Setup = Box::new(move |view, _, cx| {
+        let thread = view.panes[view.focused()].thread().unwrap();
+        view.fixture_annotation_editor(thread, annotation, image, cx);
+    });
+    (scene, setup)
+}
+
+fn cite_comment() -> (Scene, Setup) {
+    let scene = conversation("cite-comment");
+    let setup: Setup = Box::new(|view, _, cx| {
+        let index = view.focused();
+        view.panes[index].composer.update(cx, |composer, cx| {
+            composer.cite_with_comment(
+                ferrite_core::replies::Reply::new(
+                    "The nav rows jump by a line when a Thread starts streaming.",
+                    "",
+                ),
+                None,
+                cx,
+            );
+        });
     });
     (scene, setup)
 }

@@ -177,6 +177,52 @@ mod tests {
     }
 
     #[test]
+    fn pins_highlighted_spans_per_language() {
+        let h = Highlighter::new(mocha());
+        let render = |content: &str, lang: &str| -> Vec<String> {
+            h.highlight(content, Some(lang))
+                .iter()
+                .map(|line| {
+                    line.iter()
+                        .map(|s| {
+                            format!(
+                                "{}#{:02x}{:02x}{:02x}",
+                                s.text, s.color.0, s.color.1, s.color.2
+                            )
+                        })
+                        .collect::<Vec<_>>()
+                        .join("|")
+                })
+                .collect()
+        };
+        let rust = "fn main() {\n    let s = \"hi\"; // note\n}\n";
+        let ts = "const n: number = 42;\nexport function f(a: string) { return `x${a}`; }\n";
+        let py = "def f(x):\n    return x * 2  # twice\n";
+        assert_eq!(
+            render(rust, "rs"),
+            [
+                r##"fn#cba6f7| #cdd6f4|main#89b4fa|(#9399b2|)#9399b2| #cdd6f4|{#9399b2|#cdd6f4"##,
+                r##"    #cdd6f4|let#cba6f7| s #cdd6f4|=#94e2d5| #cdd6f4|"#a6e3a1|hi#a6e3a1|"#a6e3a1|;#9399b2| #cdd6f4|//#9399b2| note#9399b2"##,
+                r##"}#9399b2|#cdd6f4"##,
+            ]
+        );
+        assert_eq!(
+            render(ts, "ts"),
+            [
+                r##"const#cba6f7| #cdd6f4|n#cdd6f4|:#94e2d5| #f9e2af|number#cba6f7| #f9e2af|=#94e2d5| #cdd6f4|42#fab387|;#9399b2|#cdd6f4"##,
+                r##"export#cba6f7| #cdd6f4|function#cba6f7| #cdd6f4|f#89b4fa|(#9399b2|a#eba0ac|:#94e2d5| #f9e2af|string#cba6f7|)#9399b2| #cdd6f4|{#9399b2| #cdd6f4|return#cba6f7| #cdd6f4|`#a6e3a1|x#a6e3a1|${#9399b2|a#cdd6f4|}#9399b2|`#a6e3a1|;#9399b2| #cdd6f4|}#9399b2|#cdd6f4"##,
+            ]
+        );
+        assert_eq!(
+            render(py, "py"),
+            [
+                r##"def#cba6f7| #cdd6f4|f#89b4fa|(#9399b2|x#eba0ac|)#9399b2|:#9399b2|#cdd6f4"##,
+                r##"    #cdd6f4|return#cba6f7| #cdd6f4|x#cdd6f4| #cdd6f4|*#94e2d5| #cdd6f4|2#fab387|  #cdd6f4|##9399b2| twice#9399b2"##,
+            ]
+        );
+    }
+
+    #[test]
     fn unknown_language_is_one_plain_span_per_line() {
         let h = Highlighter::new(mocha());
         let lines = h.highlight("alpha\nbeta\n", None);

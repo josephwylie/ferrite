@@ -50,12 +50,26 @@ fn annotation_editor_pointer_feedback_preserves_capture(cx: &mut TestAppContext)
     let (root, retained, png) = evidence("drawing-tools");
     let original = retained.clone();
     let (editor, cx) = cx.add_window_view(|_, cx| {
-        AnnotationEditor::new(retained.clone(), retained.original().into(), cx)
+        AnnotationEditor::new(retained.clone(), retained.original().unwrap().into(), cx)
     });
     cx.simulate_resize(size(px(600.), px(700.)));
+    let picture = editor.read_with(cx, |editor, _| editor.picture_bounds().unwrap());
+    assert_eq!(
+        picture.size,
+        size(px(600.), px(300.)),
+        "Controls overlay the full capture canvas"
+    );
+    let popover = cx.debug_bounds("annotation-popover").unwrap();
+    assert_eq!(popover.size.width, px(360.), "T3 compact composer width");
+    assert!(
+        popover.size.height <= px(52.),
+        "Options start collapsed: {popover:?}"
+    );
+    assert!(cx.debug_bounds("annotation-ink-Blue").is_none());
     let rectangle = cx
         .debug_bounds("annotation-tool-Rectangle")
         .expect("Rectangle tool");
+    assert_eq!(rectangle.size.height, px(32.), "T3 drawing tool height");
     cx.simulate_click(rectangle.center(), Modifiers::none());
     let bounds = editor.read_with(cx, |editor, _| editor.picture_bounds().unwrap());
     let from = bounds.origin + point(bounds.size.width * 0.25, bounds.size.height * 0.25);
@@ -74,7 +88,7 @@ fn annotation_editor_pointer_feedback_preserves_capture(cx: &mut TestAppContext)
                     height: 200.
                 },
                 ink: Ink {
-                    color: "#f3767b".into(),
+                    color: "#346bf1".into(),
                     width: 3.
                 }
             }]
@@ -87,9 +101,13 @@ fn annotation_editor_pointer_feedback_preserves_capture(cx: &mut TestAppContext)
     });
     // Every drawing tool reaches the same public feedback collection through
     // its real toolbar and pointer handlers; no native BrowserView is involved.
+    let options = cx.debug_bounds("annotation-options").unwrap();
+    assert_eq!(options.size, size(px(32.), px(32.)));
+    cx.simulate_click(options.center(), Modifiers::none());
     let blue = cx.debug_bounds("annotation-ink-Blue").unwrap();
     cx.simulate_click(blue.center(), Modifiers::none());
     let width = cx.debug_bounds("annotation-width-6").unwrap();
+    assert_eq!(width.size.height, px(28.), "T3 style control height");
     cx.simulate_click(width.center(), Modifiers::none());
     for (name, selector) in [
         ("Pen", "annotation-tool-Pen"),
@@ -142,7 +160,7 @@ fn annotation_editor_pointer_feedback_preserves_capture(cx: &mut TestAppContext)
             assert_eq!(
                 ink,
                 &Ink {
-                    color: "#8cb9f4".into(),
+                    color: "#346bf1".into(),
                     width: 6.
                 }
             );
@@ -198,7 +216,7 @@ fn annotation_editor_pointer_feedback_preserves_capture(cx: &mut TestAppContext)
     cx.simulate_click(cancel.center(), Modifiers::none());
     assert!(cancelled.get());
     assert_eq!(retained, original);
-    assert_eq!(std::fs::read(retained.original()).unwrap(), png);
+    assert_eq!(std::fs::read(retained.original().unwrap()).unwrap(), png);
     std::fs::remove_dir_all(root).unwrap();
 }
 
@@ -208,9 +226,13 @@ fn annotation_editor_retains_literal_initial_feedback(cx: &mut TestAppContext) {
     let literal = browser_annotations::compose("Comment", &[], &[retained.clone()]);
     let retained = retained.with_feedback(literal.clone(), vec![]).unwrap();
     let (editor, cx) = cx.add_window_view(|_, cx| {
-        AnnotationEditor::new(retained.clone(), retained.original().into(), cx)
+        AnnotationEditor::new(retained.clone(), retained.original().unwrap().into(), cx)
     });
     cx.simulate_resize(size(px(320.), px(480.)));
+    let popover = cx.debug_bounds("annotation-popover").unwrap();
+    assert_eq!(popover.size.width, px(304.), "T3 keeps 8px at both edges");
+    assert!(popover.left() >= px(8.) && popover.right() <= px(312.));
+    assert!(popover.top() >= px(8.) && popover.bottom() <= px(472.));
     let feedback = Rc::new(std::cell::RefCell::new(None));
     let captured = feedback.clone();
     let _subscription = editor.update(cx, |_, cx| {
@@ -236,6 +258,35 @@ fn annotation_editor_retains_literal_initial_feedback(cx: &mut TestAppContext) {
     cx.simulate_click(add.center(), Modifiers::none());
     assert_eq!(feedback.borrow().as_ref(), Some(&literal));
     assert_eq!(retained.comment(), literal);
-    assert_eq!(std::fs::read(retained.original()).unwrap(), png);
+    assert_eq!(std::fs::read(retained.original().unwrap()).unwrap(), png);
     std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn annotation_editor_placement_chooses_adjacent_space_and_clamps_edges() {
+    let viewport = Bounds::new(point(px(100.), px(200.)), size(px(600.), px(700.)));
+    let extent = size(px(360.), px(50.));
+    let target =
+        |x, y, width, height| Bounds::new(point(px(x), px(y)), size(px(width), px(height)));
+    assert_eq!(
+        editor_position(viewport, target(120., 230., 90., 60.), extent),
+        point(px(218.), px(230.))
+    );
+    assert_eq!(
+        editor_position(viewport, target(600., 230., 80., 60.), extent),
+        point(px(232.), px(230.))
+    );
+    assert_eq!(
+        editor_position(viewport, target(120., 230., 560., 60.), extent),
+        point(px(320.), px(298.))
+    );
+    assert_eq!(
+        editor_position(viewport, target(120., 820., 560., 60.), extent),
+        point(px(320.), px(762.))
+    );
+    let narrow = Bounds::new(point(px(0.), px(0.)), size(px(320.), px(480.)));
+    assert_eq!(
+        editor_position(narrow, target(0., 0., 320., 480.), size(px(304.), px(50.))),
+        point(px(8.), px(422.))
+    );
 }

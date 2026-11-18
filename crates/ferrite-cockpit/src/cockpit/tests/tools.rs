@@ -3,7 +3,7 @@
 //! door, the head row's tabs, `+` menu, maximize and edge, and "Open a
 //! surface".
 use super::*;
-use crate::cockpit::surfaces::SurfaceId;
+use crate::cockpit::surfaces::{SurfaceAction, SurfaceId};
 use ferrite_ui::theme::*;
 
 fn solo<'a>(
@@ -108,7 +108,6 @@ fn a_tab_dragged_past_six_pixels_moves_and_five_is_a_click(cx: &mut TestAppConte
     upsert(&view, thread, SurfaceId::Changes, cx);
     upsert(&view, thread, SurfaceId::Background, cx);
     let changes = cx.debug_bounds("panel-tab-Changes").unwrap().center();
-    let overview = cx.debug_bounds("panel-tab-Overview").unwrap().center();
     // 5px and back onto itself: a click, which shows it.
     cx.simulate_mouse_down(changes, gpui::MouseButton::Left, gpui::Modifiers::none());
     let near = gpui::point(changes.x + px(5.), changes.y);
@@ -118,7 +117,10 @@ fn a_tab_dragged_past_six_pixels_moves_and_five_is_a_click(cx: &mut TestAppConte
     let (tabs, active) = panel_tabs(&view, thread, cx);
     assert_eq!(tabs, [SurfaceId::Overview, SurfaceId::Changes, SurfaceId::Background]);
     assert_eq!(active, Some(SurfaceId::Changes));
-    // Dragged onto Overview: it moves there.
+    // Dragged onto Overview: it moves there. The shown tool's floor sets the
+    // Panel's width, so the tabs are read again.
+    let changes = cx.debug_bounds("panel-tab-Changes").unwrap().center();
+    let overview = cx.debug_bounds("panel-tab-Overview").unwrap().center();
     cx.simulate_mouse_down(changes, gpui::MouseButton::Left, gpui::Modifiers::none());
     cx.simulate_mouse_move(overview, gpui::MouseButton::Left, gpui::Modifiers::none());
     cx.simulate_mouse_up(overview, gpui::MouseButton::Left, gpui::Modifiers::none());
@@ -292,12 +294,15 @@ fn the_tabs_survive_a_restart(cx: &mut TestAppContext) {
     let dir = scratch("surfaces-restart-prefs");
     std::fs::create_dir_all(&dir).unwrap();
     let mut surfaces = crate::cockpit::surfaces::Surfaces::default();
-    let state = surfaces.entry(thread, true);
-    state.upsert(SurfaceId::Changes);
-    state.upsert(SurfaceId::Background);
-    state.activate(&SurfaceId::Changes);
-    state.maximized = true;
-    state.width = 700.;
+    for action in [
+        SurfaceAction::Open(SurfaceId::Changes),
+        SurfaceAction::Open(SurfaceId::Background),
+        SurfaceAction::Activate(SurfaceId::Changes),
+        SurfaceAction::Resize(700.),
+        SurfaceAction::ToggleMaximized,
+    ] {
+        surfaces.apply(thread, true, action);
+    }
     surfaces.save(&dir).unwrap();
     let prefs = Preferences {
         dir,

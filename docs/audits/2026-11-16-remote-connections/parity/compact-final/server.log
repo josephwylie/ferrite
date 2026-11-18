@@ -1,0 +1,5 @@
+ferrite: server: 0.4.0 listening, boot 1732f-18e88c47f543c6a8
+ferrite: could not discover Claude models: Provider closed during command discovery
+ferrite: codex CLI 999999.0.0 is newer than Ferrite is tested against (below 1.0.0); running it anyway
+ferrite: server: stopping: signalled
+ferrite: quitting: 0 sessions ended

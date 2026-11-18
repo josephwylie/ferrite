@@ -79,7 +79,9 @@ pub fn paths(text: &str, cwd: Option<&Path>) -> Vec<PathBuf> {
             continue;
         }
         let path = PathBuf::from(candidate);
-        let path = if path.is_absolute() {
+        // `has_root`, not `is_absolute`: a remote Server's `/home/...` is no
+        // drive path, yet it is absolute on the machine that reads it.
+        let path = if path.has_root() {
             path
         } else if let Some(cwd) = cwd {
             cwd.join(path)

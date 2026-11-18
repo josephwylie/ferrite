@@ -18,9 +18,10 @@
 //! (`Role::Field`) never does, and may name its float's own context.
 
 use std::ops::Range;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
+use ferrite_core::attachment::{Destination, Source};
 use ferrite_core::browser_annotations::{self, Annotation};
 use ferrite_reviewr::model::{Comment as ReviewComment, CommentStore};
 
@@ -34,8 +35,13 @@ use gpui::{
     UnderlineStyle, Window, WrappedLine,
 };
 
+mod citations;
+mod departed;
+pub use citations::{CancelComment, CommentOpened, OpenSource, SaveAndSendComment, SaveComment};
+
 use crate::line::Line;
-use crate::quote::Reply;
+use ferrite_core::draft_content::{DraftContent, ReviewNote};
+use ferrite_core::replies::Reply;
 use ferrite_ui::pointer::Pointer;
 
 actions!(
@@ -136,18 +142,53 @@ pub(crate) fn key_context(role: Role, empty: bool, history: bool, menu: bool) ->
 /// `@` menus following what the operator is typing (#23).
 pub struct Edited;
 
+/// What one send took out of a Composer: the typed parts of the draft, kept
+/// apart so `Composer::restore` can put it back exactly, and the `prompt` the
+/// wire was given.
+#[derive(Clone, Debug)]
+pub struct SentDraft {
+    prompt: String,
+    content: DraftContent,
+}
+
+impl SentDraft {
+    /// The words the send put on the wire.
+    pub fn prompt(&self) -> &str {
+        &self.prompt
+    }
+
+    /// What the operator typed, without the attachments the wire also got.
+    pub fn line(&self) -> &str {
+        &self.content.text
+    }
+
+    /// The draft as its typed parts.
+    pub fn content(&self) -> &DraftContent {
+        &self.content
+    }
+}
+
 pub struct Composer {
     focus_handle: FocusHandle,
     files_focus: FocusHandle,
     line: Line,
-    files: Vec<PathBuf>,
+    files: crate::draft_files::DraftFiles,
     /// When each file was added to the draft, while it may still be growing
     /// in (`attachments`).
     files_added: std::collections::HashMap<PathBuf, std::time::Instant>,
+    /// The reply added last and when, while it may still be growing in.
+    reply_added: Option<(usize, std::time::Instant)>,
+    /// What was taken off the draft a moment ago, still closing its place
+    /// in the tray (`departed`).
+    leaving: Vec<departed::Departed>,
     /// Transcript passages the operator is replying to (a selection's
     /// Reply), each with what they said about it: Reply cards in the tray,
     /// sent ahead of the line's words (`crate::quote`).
     replies: Vec<Reply>,
+    /// What the tray shows of them: which is open, its comment field.
+    citations: citations::Citations,
+    /// The tray is shut to its count (`attachments`).
+    tray_shut: bool,
     /// Review comments gathered from the Review beside this Pane (ADR
     /// 0021): one attachment on the shelf, sent after the line's text.
     review: CommentStore,
@@ -229,9 +270,13 @@ impl Composer {
             focus_handle: cx.focus_handle(),
             files_focus: cx.focus_handle(),
             line: Line::default(),
-            files: Vec::new(),
+            files: crate::draft_files::DraftFiles::new(),
             files_added: Default::default(),
+            reply_added: None,
+            leaving: Vec::new(),
             replies: Vec::new(),
+            citations: citations::Citations::default(),
+            tray_shut: false,
             review: CommentStore::new(),
             browser_annotations: Vec::new(),
             chips: Vec::new(),
@@ -287,7 +332,6 @@ impl Composer {
         self.line.set_atoms(atoms);
     }
 
-
     /// Every caret drawn and when, and when its blink last restarted: the
     /// cockpit's tests of the blink drawn by the loops overlay.
     #[cfg(any(test, feature = "test-support"))]
@@ -325,10 +369,66 @@ impl Composer {
     /// How many attachments the draft holds: its files, and its review
     /// comments as one.
     pub fn attachment_count(&self) -> usize {
-        self.files.len()
+        self.files.paths().len()
             + self.replies.len()
             + self.browser_annotations.len()
             + usize::from(!self.review.is_empty())
+    }
+
+    pub fn files(&self) -> &[PathBuf] {
+        self.files.paths()
+    }
+
+    /// Where this Composer's agent is, and where the bytes of what it
+    /// sends are kept.
+    pub fn aim_files(&mut self, destination: Destination, store: PathBuf, cx: &mut Context<Self>) {
+        self.files.aim(destination, store);
+        cx.notify();
+    }
+
+    /// Whether an attached file is one a send cannot take, each looked at
+    /// again now: one repaired since it failed no longer is. The tray says
+    /// which, and why.
+    pub fn has_blocked_file(&mut self, cx: &mut Context<Self>) -> bool {
+        self.files.inspect_all();
+        cx.notify();
+        self.files.blocked().is_some()
+    }
+
+    /// Swap the files of this computer for retained copies of their bytes:
+    /// a send's attachments are what its history keeps. False when one could
+    /// not be copied, which the tray then says. A file inside `workspace`
+    /// stays the live path the agent edits.
+    pub fn retain_files(&mut self, workspace: Option<&Path>, cx: &mut Context<Self>) -> bool {
+        let kept = self.files.retain(workspace);
+        cx.notify();
+        kept
+    }
+
+    pub fn pending_uploads(&mut self, cx: &mut Context<Self>) -> Vec<(PathBuf, u64)> {
+        let pending = self.files.pending_uploads();
+        if !pending.is_empty() {
+            cx.notify();
+        }
+        pending
+    }
+
+    pub fn uploading_file(&self, path: &Path, attempt: u64) -> bool {
+        self.files.uploading(path, attempt)
+    }
+
+    pub fn upload_progress(&mut self, path: &Path, attempt: u64, sent: u64, total: u64, cx: &mut Context<Self>) {
+        if self.files.progress(path, attempt, sent, total) {
+            cx.notify();
+        }
+    }
+
+    pub fn finish_upload(&mut self, path: &Path, attempt: u64, result: Result<PathBuf, String>, cx: &mut Context<Self>) -> bool {
+        if !self.files.uploaded(path, attempt, result) {
+            return false;
+        }
+        self.edited(cx);
+        true
     }
 
     pub fn browser_annotations(&self) -> &[Annotation] {
@@ -370,74 +470,158 @@ impl Composer {
         }
     }
 
+    /// The tray over the line: the draft's files, annotations and review
+    /// comments, then its replies as chips (`citations`). Two or more shut
+    /// to their count; open, they never outgrow `ATTACH_TRAY_MAX_H`, so the
+    /// line and Send stay on screen however narrow the Pane is.
     pub fn attachments(
         entity: &Entity<Self>,
         preview: &crate::preview::Preview,
         cx: &App,
     ) -> Option<gpui::AnyElement> {
         let composer = entity.read(cx);
-        if composer.attachment_count() == 0 {
+        let count = composer.attachment_count();
+        let now = cx.background_executor().now();
+        let mut ghosts = composer.departed(now).peekable();
+        if count == 0 && ghosts.peek().is_none() {
             return None;
         }
-        let files = composer.files.clone();
+        let emptied = (count == 0).then(|| ghosts.map(|ghost| ghost.left).max()).flatten();
+        let mut files = Vec::new();
+        let mut readiness = composer.files.readiness().clone();
+        let mut closing = std::collections::HashMap::new();
+        let kept = composer.files.paths();
+        for place in composer.places(kept.len(), now, |gone| matches!(gone, departed::Gone::File { .. })) {
+            match place {
+                departed::Place::Kept(index) => files.push(kept[index].clone()),
+                departed::Place::Gone(ghost) => {
+                    let departed::Gone::File { path, readiness: state } = &ghost.what else {
+                        continue;
+                    };
+                    files.push(path.clone());
+                    readiness.extend(state.clone().map(|state| (path.clone(), state)));
+                    closing.insert(path.clone(), ghost.left);
+                }
+            }
+        }
         let added = composer.files_growing(cx);
-        let replies = composer.replies.clone();
         let comments = composer.review.len();
         let annotations = composer.browser_annotations.clone();
+        let has_shelf = !files.is_empty() || !annotations.is_empty() || comments > 0;
         let focus = composer.files_focus.clone();
+        let shut = composer.tray_shut && count > 1;
         let remove_file = entity.downgrade();
-        let remove_reply = entity.downgrade();
+        let retry_file = entity.downgrade();
         let drop_review = entity.downgrade();
         let remove_annotation = entity.downgrade();
-        Some(
+        let shelf = has_shelf.then(|| {
+            crate::attachments::Attachments::new("prompt-attachments", files, preview)
+                .added(added)
+                .closing(closing)
+                .readiness(readiness)
+                .sources(composer.files.local().iter().cloned().collect(), composer.files.uploaded_paths())
+                .on_retry(move |path, _, cx| {
+                    let _ = retry_file.update(cx, |composer, cx| {
+                        composer.files.retry(path);
+                        composer.edited(cx);
+                    });
+                })
+                .review(comments)
+                .annotations(annotations)
+                .on_remove_annotation(move |id, window, cx| {
+                    let _ = remove_annotation.update(cx, |composer, cx| {
+                        let tray_held = composer.files_focus.contains_focused(window, cx);
+                        composer.remove_browser_annotation(id, cx);
+                        composer.refocus_after_removal(tray_held, window, cx);
+                    });
+                })
+                .in_island()
+                .on_remove(move |remove, window, cx| {
+                    let _ = remove_file
+                        .update(cx, |composer, cx| composer.remove_file(remove, window, cx));
+                })
+                .on_drop_review(move |window, cx| {
+                    let _ = drop_review.update(cx, |composer, cx| {
+                        let tray_held = composer.files_focus.contains_focused(window, cx);
+                        composer.review.take_all();
+                        composer.refocus_after_removal(tray_held, window, cx);
+                        composer.edited(cx);
+                    });
+                })
+        });
+        let toggle = entity.downgrade();
+        let header = (count > 1).then(|| {
+            ferrite_ui::components::button("tray-toggle")
+                .debug_selector(|| "tray-toggle".into())
+                .tab_stop(true)
+                .key_context("PromptAttachment")
+                .p_0()
+                .px(px(ferrite_ui::theme::SPACE_1))
+                .h(px(ferrite_ui::theme::ATTACH_CHIP_H))
+                .flex()
+                .self_start()
+                .justify_start()
+                .items_center()
+                .gap(px(ferrite_ui::theme::CH))
+                .text_size(px(ferrite_ui::theme::FS_META))
+                .text_color(gpui::rgb(ferrite_ui::theme::INK_SUBTLE))
+                .accessibility_label(format!("{count} attachments"))
+                .child(ferrite_ui::icons::icon(
+                    if shut {
+                        ferrite_ui::icons::CHEVRON_RIGHT
+                    } else {
+                        ferrite_ui::icons::CHEVRON_DOWN
+                    },
+                    ferrite_ui::theme::ATTACH_THUMB,
+                    ferrite_ui::theme::INK_SUBTLE,
+                ))
+                .child(SharedString::from(format!("{count} attachments")))
+                .on_click(move |_, _, cx| {
+                    let _ = toggle.update(cx, |composer, cx| {
+                        composer.tray_shut = !composer.tray_shut;
+                        cx.notify();
+                    });
+                })
+        });
+        let body = (!shut).then(|| {
             div()
+                .id("pending-attachment-body")
+                .debug_selector(|| "pending-attachment-body".into())
+                .flex()
+                .flex_col()
+                .gap(px(ferrite_ui::theme::CH))
+                .min_w_0()
+                .max_h(px(ferrite_ui::theme::ATTACH_TRAY_MAX_H))
+                .overflow_y_scroll()
+                .children(shelf)
+                .children(citations::tray(entity, now, cx))
+        });
+        let tray = div()
                 .id("pending-attachment-tray")
                 .debug_selector(|| "pending-attachment-tray".into())
-                .track_focus(&focus)
-                .tab_stop(true)
-                .child(
-                    crate::attachments::Attachments::new("prompt-attachments", files, preview)
-                        .added(added)
-                        .review(comments)
-                        .annotations(annotations)
-                        .on_remove_annotation(move |id, window, cx| {
-                            let _ = remove_annotation.update(cx, |composer, cx| {
-                                composer.remove_browser_annotation(id, cx);
-                                composer.focus_handle.focus(window, cx);
-                            });
-                        })
-                        .replies(replies)
-                        .in_island()
-                        .on_remove_reply(move |index, window, cx| {
-                            let _ = remove_reply.update(cx, |composer, cx| {
-                                if index < composer.replies.len() {
-                                    composer.replies.remove(index);
-                                }
-                                composer.focus_handle.focus(window, cx);
-                                composer.edited(cx);
-                            });
-                        })
-                        .on_remove(move |remove, window, cx| {
-                            let _ = remove_file.update(cx, |composer, cx| {
-                                composer.files.retain(|path| path != remove);
-                                composer.focus_handle.focus(window, cx);
-                                composer.edited(cx);
-                            });
-                        })
-                        .on_drop_review(move |window, cx| {
-                            let _ = drop_review.update(cx, |composer, cx| {
-                                composer.review.take_all();
-                                composer.focus_handle.focus(window, cx);
-                                composer.edited(cx);
-                            });
-                        }),
-                )
-                .into_any_element(),
-        )
+                .when(emptied.is_none(), |tray| tray.track_focus(&focus).tab_stop(true))
+                .flex()
+                .flex_col()
+                .gap(px(ferrite_ui::theme::CH))
+                .children(header)
+                .children(body)
+                .into_any_element();
+        Some(match emptied {
+            Some(left) => ferrite_ui::motion::slip_shut(
+                "pending-attachment-tray-out",
+                left,
+                ferrite_ui::motion::CHIP_OUT,
+                tray,
+            )
+            .into_any_element(),
+            None => tray.into_any_element(),
+        })
     }
 
     pub fn focus_target(&self, window: &Window, cx: &App) -> FocusHandle {
-        if self.files_focus.contains_focused(window, cx) {
+        if let Some(field) = self.comment_focus(window, cx) {
+            field
+        } else if self.files_focus.contains_focused(window, cx) {
             self.files_focus.clone()
         } else {
             self.focus_handle.clone()
@@ -491,40 +675,137 @@ impl Composer {
         }
     }
 
-    /// Put a line back into the Composer, ready to edit at its end. The
-    /// review comments stay as they are: they are not part of the line.
+    /// Put prompt text back into the Composer, ready to edit at its end.
+    /// The review comments and picked tokens stay as they are: they are not
+    /// part of the text. Only text that existed as a string alone (a
+    /// recalled or retrieved prompt) comes here; a draft is `load`ed.
     pub fn set(&mut self, text: String, cx: &mut Context<Self>) {
-        self.files_added.clear();
-        if matches!(self.role, Role::Field(_)) {
-            // Fields hold literal values, including captured page text and
-            // comments. Only a prompt recalls attachment/reply context.
-            self.line.set(text);
-            self.files.clear();
-            self.replies.clear();
-            self.browser_annotations.clear();
+        // Fields hold literal values, including captured page text and
+        // comments. Only a prompt recalls attachment/reply context.
+        let content = if matches!(self.role, Role::Field(_)) {
+            DraftContent {
+                text,
+                ..DraftContent::default()
+            }
         } else {
-            let (text, files, annotations) = browser_annotations::split(text);
-            let (replies, text) = crate::quote::split(&text);
-            self.files = files;
-            self.browser_annotations = annotations;
-            self.line.set(text.to_string());
-            self.replies = replies;
+            DraftContent::from_prompt(text)
+        };
+        self.put(content, cx);
+    }
+
+    /// Replace everything the Composer holds with `content`, as it was
+    /// saved.
+    pub fn load(&mut self, content: DraftContent, cx: &mut Context<Self>) {
+        self.review = CommentStore::new();
+        for note in content.review.clone() {
+            self.review.add(note.into());
         }
+        self.chips = content
+            .chips
+            .iter()
+            .cloned()
+            .map(SharedString::from)
+            .collect();
+        self.put(content, cx);
+    }
+
+    /// Replace the line, files, replies and annotations with those of
+    /// `content`, leaving the review comments and picked tokens.
+    pub fn put(&mut self, content: DraftContent, cx: &mut Context<Self>) {
+        self.files_added.clear();
+        self.leaving.clear();
+        self.reply_added = None;
+        self.line.set(content.text);
+        self.files.replace(content.files, content.local);
+        self.replies = content.replies;
+        self.reset_citations();
+        self.browser_annotations = content.annotations;
         self.edited(cx);
+    }
+
+    /// Everything the Composer holds, as its typed parts.
+    pub fn content(&self) -> DraftContent {
+        let (files, local) = self.files.content_paths();
+        DraftContent {
+            text: self.line.text().to_string(),
+            files,
+            local,
+            replies: self.replies.clone(),
+            review: self.review.iter().map(ReviewNote::from).collect(),
+            annotations: self.browser_annotations.clone(),
+            chips: self.chips.iter().map(ToString::to_string).collect(),
+        }
     }
 
     /// Hand the line to the Pane and clear it — pills and all.
     pub fn take(&mut self, cx: &mut Context<Self>) -> String {
-        let text = self.prompt();
+        self.take_draft(cx).prompt
+    }
+
+    /// `take`, keeping everything it cleared: the sender holds it until the
+    /// send is admitted, and `restore`s it if it is not.
+    pub fn take_draft(&mut self, cx: &mut Context<Self>) -> SentDraft {
+        // A comment still open in its field goes with its quote.
+        self.commit_comment(cx);
+        let draft = SentDraft {
+            prompt: self.prompt(),
+            content: self.content(),
+        };
         self.line.take();
         self.files.clear();
-        self.files_added.clear();
         self.replies.clear();
+        self.reset_citations();
         self.review.take_all();
         self.browser_annotations.clear();
         self.chips.clear();
+        self.files_added.clear();
+        self.leaving.clear();
+        self.reply_added = None;
         self.edited(cx);
-        text
+        draft
+    }
+
+    /// Put a `SentDraft` back whole beside what the operator has typed
+    /// since: the restored words go ahead of the new ones when `prepend`,
+    /// after them otherwise. Attachments already on the shelf are not added
+    /// twice.
+    pub fn restore(&mut self, draft: SentDraft, prepend: bool, cx: &mut Context<Self>) {
+        self.restore_content(draft.content, prepend, cx);
+    }
+
+    /// `restore` for typed parts that never went out as a send: a prompt
+    /// handed back, a queued one taken back to edit.
+    pub fn restore_content(
+        &mut self,
+        content: DraftContent,
+        prepend: bool,
+        cx: &mut Context<Self>,
+    ) {
+        let typed = self.line.text().to_string();
+        let line = match (content.text.is_empty(), typed.is_empty(), prepend) {
+            (_, true, _) => content.text,
+            (true, false, _) => typed,
+            (false, false, true) => format!("{}\n\n{typed}", content.text),
+            (false, false, false) => format!("{typed}\n\n{}", content.text),
+        };
+        self.line.set(line);
+        self.files.merge(content.files, content.local, prepend);
+        merge(&mut self.replies, content.replies, prepend);
+        self.reset_citations();
+        merge(&mut self.browser_annotations, content.annotations, prepend);
+        for note in content.review {
+            let comment = note.into();
+            if !self.review.iter().any(|kept| kept == &comment) {
+                self.review.add(comment);
+            }
+        }
+        for chip in content.chips {
+            let chip = SharedString::from(chip);
+            if !self.chips.contains(&chip) {
+                self.chips.push(chip);
+            }
+        }
+        self.edited(cx);
     }
 
     /// Whether the line holds no text — what gives Backspace its
@@ -536,7 +817,7 @@ impl Composer {
     pub fn prompt(&self) -> String {
         browser_annotations::compose(
             &ferrite_reviewr::ferrite::attach(&self.quoted_line(), &self.review),
-            &self.files,
+            &self.files.wire_paths(),
             &self.browser_annotations,
         )
     }
@@ -545,13 +826,17 @@ impl Composer {
     /// takes back, so a round trip through history or a merged held
     /// prompt neither repeats the comments nor writes them into the line.
     pub fn editable(&self) -> String {
-        browser_annotations::compose(&self.quoted_line(), &self.files, &self.browser_annotations)
+        browser_annotations::compose(
+            &self.quoted_line(),
+            &self.files.wire_paths(),
+            &self.browser_annotations,
+        )
     }
 
     /// The line with its quotes ahead of it, as the wire reads it.
     fn quoted_line(&self) -> String {
         let line = wire_text(self.line.text(), &self.tokens());
-        crate::quote::compose(&self.replies, &line)
+        ferrite_core::replies::compose(&self.replies, &line)
     }
 
     /// The files added a moment ago, still growing into the tray
@@ -569,17 +854,47 @@ impl Composer {
             .collect()
     }
 
+    /// Attach files of the Thread's workspace.
     pub fn add_files(&mut self, paths: &[PathBuf], cx: &mut Context<Self>) {
+        self.attach(paths, Source::Workspace, cx);
+    }
+
+    /// Attach files of this computer: a picker's, a drop's, a paste's.
+    pub fn add_local_files(&mut self, paths: &[PathBuf], cx: &mut Context<Self>) {
+        self.attach(paths, Source::Local, cx);
+    }
+
+    fn attach(&mut self, paths: &[PathBuf], source: Source, cx: &mut Context<Self>) {
         let now = cx.background_executor().now();
-        self.files_added
-            .retain(|_, at| now.saturating_duration_since(*at) < ferrite_ui::motion::CHIP_IN.duration());
+        self.files_added.retain(|_, at| {
+            now.saturating_duration_since(*at) < ferrite_ui::motion::CHIP_IN.duration()
+        });
         for path in paths {
-            if !self.files.contains(path) {
-                self.files.push(path.clone());
+            if self.files.add(path, source) {
+                self.leaving.retain(|ghost| {
+                    !matches!(&ghost.what, departed::Gone::File { path: gone, .. } if gone == path)
+                });
                 self.files_added.insert(path.clone(), now);
             }
         }
         self.edited(cx);
+    }
+
+    /// A pasted screenshot's bytes, kept in the app's own store so the
+    /// draft and its history outlive the process.
+    fn keep_pasted_image(&self, image: &gpui::Image) -> Option<PathBuf> {
+        let name = format!("pasted-{:016x}.{}", image.id, image.format.extension());
+        match ferrite_core::attachment::retain_bytes(
+            image.bytes(),
+            name.as_ref(),
+            self.files.store(),
+        ) {
+            Ok(path) => Some(path),
+            Err(error) => {
+                ferrite_core::log!("the pasted image could not be saved: {error}");
+                None
+            }
+        }
     }
 
     /// Paste native file clipboard entries as attachments, falling back to
@@ -604,12 +919,12 @@ impl Composer {
             .collect();
         if paths.is_empty() {
             paths.extend(item.entries().iter().filter_map(|entry| match entry {
-                ClipboardEntry::Image(image) => spill_pasted_image(image),
+                ClipboardEntry::Image(image) => self.keep_pasted_image(image),
                 _ => None,
             }));
         }
         if !paths.is_empty() {
-            self.add_files(&paths, cx);
+            self.add_local_files(&paths, cx);
         } else if let Some(text) = item.text() {
             // The draft holds hard newlines now, so pasted ones stay — only
             // carriage returns are normalized.
@@ -635,8 +950,7 @@ impl Composer {
         self.edited(cx);
     }
 
-    /// Type `text` at the caret — the letter path of a y/n/a key pressed
-    /// while the line already holds a sentence.
+    /// Type `text` at the caret.
     pub fn insert(&mut self, text: &str, cx: &mut Context<Self>) {
         self.line.replace(None, text);
         self.edited(cx);
@@ -646,6 +960,7 @@ impl Composer {
     /// stays as typed.
     pub fn reply(&mut self, reply: Reply, cx: &mut Context<Self>) {
         self.replies.push(reply);
+        self.reply_added = Some((self.replies.len() - 1, cx.background_executor().now()));
         self.edited(cx);
     }
 
@@ -684,9 +999,14 @@ impl Composer {
         if same {
             return;
         }
-        let name = |command: &ferrite_core::SessionCommand| SharedString::from(command.name.clone());
+        let name =
+            |command: &ferrite_core::SessionCommand| SharedString::from(command.name.clone());
         self.commands = commands.iter().map(name).collect();
-        self.skills = commands.iter().filter(|command| command.is_skill()).map(name).collect();
+        self.skills = commands
+            .iter()
+            .filter(|command| command.is_skill())
+            .map(name)
+            .collect();
         self.atomize();
         cx.notify();
     }
@@ -889,7 +1209,7 @@ impl Composer {
         self.edited(cx);
     }
 
-    pub(crate) fn select_all(&mut self, _: &SelectAll, _: &mut Window, cx: &mut Context<Self>) {
+    pub fn select_all(&mut self, _: &SelectAll, _: &mut Window, cx: &mut Context<Self>) {
         self.line.select_all();
         self.edited(cx);
     }
@@ -1421,7 +1741,13 @@ impl Layout {
         let font_size = style.font_size.to_pixels(window.rem_size());
         let lines: Vec<WrappedLine> = window
             .text_system()
-            .shape_text(SharedString::from(shaped), font_size, &runs, wrap_width, None)
+            .shape_text(
+                SharedString::from(shaped),
+                font_size,
+                &runs,
+                wrap_width,
+                None,
+            )
             .map(|lines| lines.into_vec())
             .unwrap_or_default();
         let mut rows = Vec::new();
@@ -1480,7 +1806,11 @@ impl Layout {
 
     /// Where each token's icon paints in `bounds` scrolled by `scroll`
     /// rows: a `TOKEN_ICON` square over its slot, centred on its row.
-    fn icons(&self, bounds: Bounds<Pixels>, scroll: usize) -> Vec<(Bounds<Pixels>, &'static str, f32, u32)> {
+    fn icons(
+        &self,
+        bounds: Bounds<Pixels>,
+        scroll: usize,
+    ) -> Vec<(Bounds<Pixels>, &'static str, f32, u32)> {
         let side = px(ferrite_ui::theme::TOKEN_ICON);
         self.tokens
             .iter()
@@ -1671,13 +2001,12 @@ impl Element for LineElement {
         let focused =
             self.composer.read(cx).focus_handle.is_focused(window) && window.is_window_active();
         let now = cx.background_executor().now();
-        let (blink_from, lit, under_float) = self.composer.update(cx, |composer, _| {
+        let (blink_from, lit, under_float) = self.composer.update(cx, |composer, cx| {
             composer.sync_focus(focused, now);
-            (
-                composer.blink_from,
-                composer.caret_lit,
-                composer.caret_under_float,
-            )
+            // One caret at a time: the comment field that holds the keyboard
+            // has it, so the main line's lit one goes dark.
+            let lit = composer.caret_lit && composer.comment_focus(window, cx).is_none();
+            (composer.blink_from, lit, composer.caret_under_float)
         });
         // A lit line (Solo's, the focused board Pane's) draws its block
         // whoever holds the keyboard — solid and still, but blinking under
@@ -1776,7 +2105,11 @@ impl Element for LineElement {
             // the row to where it leaves; a token selected whole is washed
             // as a unit, rounded (T3's node selection).
             let token = layout.tokens.iter().any(|token| token.range == selected);
-            let radius = px(if token { ferrite_ui::theme::TOKEN_SELECTION_R } else { 0. });
+            let radius = px(if token {
+                ferrite_ui::theme::TOKEN_SELECTION_R
+            } else {
+                0.
+            });
             let quads = layout
                 .rows
                 .iter()
@@ -1827,7 +2160,8 @@ impl Element for LineElement {
         #[cfg(any(test, feature = "test-support"))]
         {
             let tokens = layout.tokens.clone();
-            self.composer.update(cx, |composer, _| composer.last_tokens = tokens);
+            self.composer
+                .update(cx, |composer, _| composer.last_tokens = tokens);
         }
         PrepaintState {
             layout: Some(layout),
@@ -2098,32 +2432,6 @@ impl Element for CaretOverlay {
     }
 }
 
-/// Write clipboard image bytes to a per-process scratch file and return its
-/// path. The name carries the pasted image's own id, so pasting the same
-/// screenshot twice reuses one file instead of growing the directory.
-fn spill_pasted_image(image: &gpui::Image) -> Option<PathBuf> {
-    let dir = std::env::temp_dir().join(format!("ferrite-pastes-{}", std::process::id()));
-    let path = dir.join(format!(
-        "pasted-{:016x}.{}",
-        image.id,
-        image.format.extension()
-    ));
-    if path.exists() {
-        return Some(path);
-    }
-    if let Err(error) = std::fs::create_dir_all(&dir).and_then(|()| {
-        // A partly written file would attach as a corrupt image, so publish
-        // the name only once every byte is on disk.
-        let scratch = path.with_extension("part");
-        std::fs::write(&scratch, image.bytes())?;
-        std::fs::rename(&scratch, &path)
-    }) {
-        ferrite_core::log!("the pasted image could not be saved: {error}");
-        return None;
-    }
-    Some(path)
-}
-
 /// The face each Composer's line was last laid out in, for the font-role
 /// tests: the line is code text (theme rule 6).
 #[cfg(any(test, feature = "test-support"))]
@@ -2141,6 +2449,17 @@ pub mod testing {
 
     pub fn face(id: EntityId, cx: &App) -> Option<SharedString> {
         cx.try_global::<Faces>()?.0.get(&id).cloned()
+    }
+}
+
+/// `restored` joins `kept`, minus what `kept` already holds: ahead of it when
+/// `prepend`, else after.
+fn merge<T: PartialEq>(kept: &mut Vec<T>, mut restored: Vec<T>, prepend: bool) {
+    restored.retain(|item| !kept.contains(item));
+    if prepend {
+        kept.splice(0..0, restored);
+    } else {
+        kept.extend(restored);
     }
 }
 
@@ -2167,8 +2486,14 @@ mod tests {
     fn a_known_command_is_a_token_unpicked() {
         let commands = set(&["to-spec", "mattpocock-skills:grill-with-docs"]);
         let text = "for their venue /mattpocock-skills:grill-with-docs";
-        assert_eq!(ranges(tokens(text, &[], &commands, &none())), [16..text.len()]);
-        assert_eq!(ranges(tokens("/to-spec now", &[], &commands, &none())), [0..8]);
+        assert_eq!(
+            ranges(tokens(text, &[], &commands, &none())),
+            [16..text.len()]
+        );
+        assert_eq!(
+            ranges(tokens("/to-spec now", &[], &commands, &none())),
+            [0..8]
+        );
         assert!(tokens("/to-specs a/to-spec /to", &[], &commands, &none()).is_empty());
         assert_eq!(
             ranges(tokens("/to-spec @a", &shared(&["@a"]), &commands, &none())),
@@ -2189,7 +2514,11 @@ mod tests {
                 .collect()
         };
         assert_eq!(kinds("$tdd"), [TokenKind::Skill]);
-        assert_eq!(kinds("/tdd"), [TokenKind::Skill], "a skill typed the old way");
+        assert_eq!(
+            kinds("/tdd"),
+            [TokenKind::Skill],
+            "a skill typed the old way"
+        );
         assert_eq!(kinds("/compact"), [TokenKind::Command]);
         assert_eq!(kinds("@src/lib.rs"), [TokenKind::File]);
         assert!(kinds("$nope").is_empty(), "an unknown name is prose");
@@ -2273,7 +2602,13 @@ mod tests {
     #[test]
     fn runs_split_at_token_and_marked_boundaries() {
         let text = "read @a now";
-        let runs = runs_for(&base(), text.len(), Some(8..11), &[(5..7, TokenKind::File)], None);
+        let runs = runs_for(
+            &base(),
+            text.len(),
+            Some(8..11),
+            &[(5..7, TokenKind::File)],
+            None,
+        );
         let lens: Vec<usize> = runs.iter().map(|run| run.len).collect();
         assert_eq!(lens.iter().sum::<usize>(), text.len());
         assert_eq!(lens, [5, 2, 1, 3]);
@@ -2472,7 +2807,7 @@ mod tests {
             assert_eq!(composer.attachment_count(), 1);
             assert_eq!(browser_annotations::split(composer.editable()).2, [second]);
         });
-        assert_eq!(std::fs::read(first.original()).unwrap(), png);
+        assert_eq!(std::fs::read(first.original().unwrap()).unwrap(), png);
         std::fs::remove_dir_all(root).unwrap();
     }
 

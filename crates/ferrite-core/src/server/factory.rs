@@ -207,7 +207,12 @@ impl Server {
                 }
                 // A parked Worker is reopened in place to be told.
                 if self.engine.thread(thread).is_none() && self.factory.task_of(thread).is_some() {
-                    let _ = self.execute(crate::protocol::Op::Revive { thread });
+                    if let Err(error) = self.execute(crate::protocol::Op::Revive { thread }) {
+                        crate::log!(
+                            "server: parked Worker {thread} could not be reopened: {}",
+                            error.message
+                        );
+                    }
                 }
                 let prompt = AgentPromptParams {
                     thread,
@@ -238,11 +243,6 @@ impl Server {
                 }
             }
             Effect::DeleteThread { thread } => {
-                if self.engine.groups().of(thread).is_some() {
-                    let _ = self.execute(crate::protocol::Op::Group {
-                        change: (&crate::groups::GroupChange::Leave { thread }).into(),
-                    });
-                }
                 if let Err(error) = self.execute(crate::protocol::Op::Delete { thread }) {
                     crate::log!("server: a Worker could not be deleted: {}", error.message);
                 }
@@ -411,6 +411,7 @@ impl Server {
                 workspace,
                 agent.effort,
                 launch,
+                crate::engine::MakeCheckout::BeforeReply,
             )
             .map_err(|error| error.to_string())?;
         if let Some(title) = title {

@@ -5,15 +5,16 @@
 //!   as context, Pin as chapter │ Fork from here;
 //! - **a prompt:** Copy message, Copy message as Markdown │ Attach message
 //!   as context │ Rewind to here, Fork from here;
-//! - **a link** (a press that landed on one): Open link, Copy link, and for
-//!   a file's path, Open in Files.
+//! - **a link** (a press that landed on one): where it opens (an address in
+//!   the integrated or the system browser, a file in its place), Copy, and
+//!   for a file's path, Open in Files. What has no address says why.
 //!
 //! Every row is the same face (the UI font, no shortcut glyphs); a row's
 //! subtitle is a smaller muted line under its label. The menu opens in one
 //! frame and a right-click on a message clears the selection, as Claude's.
 //! Attach is a Reply card in the Composer's tray, so it is offered only
-//! where the Pane has a Composer (`TranscriptInput::quotes`); Rewind and
-//! Fork only where the agent can (`TranscriptInput::rewind`), disabled
+//! where the Pane has a Composer (`TranscriptPresentation::quotes`); Rewind and
+//! Fork only where the agent can (`TranscriptPresentation::rewind`), disabled
 //! with the reason while it cannot be asked now.
 //!
 //! Pin as chapter marks the answer in this transcript only: the minimum
@@ -24,8 +25,8 @@ use gpui::prelude::*;
 use gpui::{AnyElement, ClipboardItem, Context, MouseButton, Pixels, Point, SharedString};
 
 use super::{PromptAction, TranscriptEvent, TranscriptView};
-use crate::file_links::FileLink;
-use crate::quote::Reply;
+use crate::link_target::{LinkTarget, Open};
+use ferrite_core::replies::Reply;
 use ferrite_ui::menu;
 
 /// What the menu is on.
@@ -39,8 +40,8 @@ pub(super) enum Target {
         block: BlockId,
         cuts: Option<Result<(), SharedString>>,
     },
-    /// A link: its destination, and the file it names.
-    Link { url: String, file: Option<FileLink> },
+    /// A link, by the destination it resolves to.
+    Link(LinkTarget),
 }
 
 /// The menu while it is open: what it acts on and where it hangs.
@@ -64,8 +65,10 @@ pub(super) enum Verb {
     Unpin,
     Rewind,
     Fork,
-    OpenLink,
+    /// Open a link in the door `Open` names.
+    OpenLink(Open),
     CopyLink,
+    CopyPath,
     OpenInFiles,
 }
 
@@ -79,8 +82,11 @@ impl Verb {
             Verb::Unpin => "Unpin chapter",
             Verb::Rewind => "Rewind to here",
             Verb::Fork => "Fork from here",
-            Verb::OpenLink => "Open link",
-            Verb::CopyLink => "Copy link",
+            Verb::OpenLink(Open::Primary) => "Open",
+            Verb::OpenLink(Open::Integrated) => "Open in integrated browser",
+            Verb::OpenLink(Open::System) => "Open in system browser",
+            Verb::CopyLink => "Copy link address",
+            Verb::CopyPath => "Copy path",
             Verb::OpenInFiles => "Open in Files",
         }
     }
@@ -101,7 +107,13 @@ type Row = (Verb, Option<SharedString>);
 impl TranscriptView {
     /// A menu's rows, `None` a rule between groups (Claude's).
     pub(super) fn menu_rows(&self, menu: &MessageMenu) -> Vec<Option<Row>> {
-        let attach = self.input.quotes.then_some((Verb::Attach, None));
+        let attach = self.input.presentation.quotes.then(|| {
+            let too_long = crate::quote::too_long(&menu.markdown);
+            (
+                Verb::Attach,
+                too_long.then(|| SharedString::from(crate::quote::TOO_LONG_TO_ATTACH)),
+            )
+        });
         let copies = [Some((Verb::Copy, None)), Some((Verb::CopyMarkdown, None))];
         let group = |rows: Vec<Option<Row>>| rows.into_iter().flatten().collect::<Vec<_>>();
         let mut groups: Vec<Vec<Option<Row>>> = Vec::new();
@@ -114,7 +126,7 @@ impl TranscriptView {
                     Verb::Pin
                 };
                 groups.push(vec![attach.clone(), Some((pin, None))]);
-                if let Some(allowed) = &self.input.rewind {
+                if let Some(allowed) = &self.input.presentation.rewind {
                     groups.push(vec![Some((Verb::Fork, allowed.clone().err()))]);
                 }
             }
@@ -129,12 +141,27 @@ impl TranscriptView {
                     ]);
                 }
             }
-            Target::Link { file, .. } => {
-                groups.push(vec![
-                    Some((Verb::OpenLink, None)),
-                    Some((Verb::CopyLink, None)),
-                ]);
-                if file.is_some() {
+            Target::Link(target) => {
+                let unavailable = target.address().err();
+                let row = |verb| Some((verb, unavailable.clone()));
+                let (opens, copy) = match target {
+                    LinkTarget::External(_) => (
+                        vec![row(Verb::OpenLink(Open::Integrated)), row(Verb::OpenLink(Open::System))],
+                        Verb::CopyLink,
+                    ),
+                    LinkTarget::RepoPullRequest { .. } => (
+                        vec![
+                            row(Verb::OpenLink(Open::Primary)),
+                            row(Verb::OpenLink(Open::Integrated)),
+                            row(Verb::OpenLink(Open::System)),
+                        ],
+                        Verb::CopyLink,
+                    ),
+                    LinkTarget::File(_) => (vec![row(Verb::OpenLink(Open::Primary))], Verb::CopyPath),
+                    _ => (vec![row(Verb::OpenLink(Open::Primary))], Verb::CopyLink),
+                };
+                groups.push(opens.into_iter().chain([row(copy)]).collect());
+                if matches!(target, LinkTarget::File(_)) {
                     groups.push(vec![Some((Verb::OpenInFiles, None))]);
                 }
             }
@@ -167,7 +194,12 @@ impl TranscriptView {
             (Verb::CopyMarkdown, _) => copy(&menu.markdown, cx),
             (Verb::Attach, _) => {
                 if let Some(passage) = crate::quote::passage(&menu.markdown) {
-                    cx.emit(TranscriptEvent::Reply(Reply::new(passage, "")));
+                    let block = match &menu.target {
+                        Target::Answer { last } => Some(*last),
+                        Target::Prompt { block, .. } => Some(*block),
+                        Target::Link(_) => None,
+                    };
+                    cx.emit(TranscriptEvent::Reply(Reply::new(passage, ""), block, None));
                 }
             }
             (Verb::Pin, Target::Answer { last }) => {
@@ -189,17 +221,25 @@ impl TranscriptView {
                 action: PromptAction::Fork,
                 at: menu.at,
             }),
-            (Verb::OpenLink, Target::Link { url, file }) => match file {
-                Some(file) => file.open(window, cx),
-                None => {
-                    if !self.input.preview.open_url(url, window) { cx.open_url(url); }
-                },
-            },
-            (Verb::CopyLink, Target::Link { url, .. }) => copy(url, cx),
-            (Verb::OpenInFiles, Target::Link { file: Some(file), .. }) => {
+            (Verb::OpenLink(how), Target::Link(target)) => {
+                if !target.open(how, Some(&self.input.body.preview), window, cx) {
+                    if let LinkTarget::RepoPullRequest { number, url } = target {
+                        cx.emit(TranscriptEvent::OpenPullRequest {
+                            number: *number,
+                            url: url.clone(),
+                        });
+                    }
+                }
+            }
+            (Verb::CopyLink | Verb::CopyPath, Target::Link(target)) => {
+                if let Ok(address) = target.address() {
+                    copy(&address, cx);
+                }
+            }
+            (Verb::OpenInFiles, Target::Link(LinkTarget::File(file))) => {
                 cx.emit(TranscriptEvent::OpenReader {
                     path: file.path.clone(),
-                    line: None,
+                    line: file.location.as_deref().and_then(crate::file_links::location_line),
                 })
             }
             _ => {}
@@ -277,9 +317,10 @@ impl TranscriptView {
     ) {
         gpui::base::TextSelection::clear(window, cx);
         if let Some(url) = gpui::base::text::pressed_link(cx) {
-            let url = url.to_string();
-            let file = FileLink::resolve(&url, self.input.workspace.as_deref());
-            menu.target = Target::Link { url, file };
+            menu.target = Target::Link(LinkTarget::resolve(
+                &url,
+                self.input.presentation.workspace.as_deref(),
+            ));
         }
         self.open_message_menu(menu, cx);
     }

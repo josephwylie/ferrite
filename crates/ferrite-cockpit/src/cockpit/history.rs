@@ -1,6 +1,6 @@
 //! Back and forward through where the operator has been (Claude's title-bar
-//! arrows, ⌘[ / ⌘]): the Thread in Solo, a Group, and a Subagent opened
-//! from a Pane.
+//! arrows, ⌘[ / ⌘]): the Thread on screen, on its Main transcript or a
+//! Subagent's.
 //!
 //! The history watches rather than being told. Every frame the Cockpit
 //! names where it is (`CockpitView::place`) and `History::visit` keeps it:
@@ -9,13 +9,13 @@
 //! Subagent's row, a draft's first send — is recorded without one of them
 //! knowing. A step back or forward lands through the same doors the
 //! pointer uses, and the frame after it names where it landed: that
-//! replaces the entry stepped to (core may show a Thread in its Group
-//! rather than alone), and is never a new visit.
+//! replaces the entry stepped to (a Subagent gone since shows Main), and
+//! is never a new visit.
 //!
 //! A draft and the empty board are no place: there is nothing to come
-//! back to once they are gone. A place that went away — a Thread deleted,
-//! a Group dissolved — is pruned before it can be stepped to, so the arrows
-//! are disabled exactly when there is nowhere to go.
+//! back to once they are gone. A place that went away — a Thread deleted —
+//! is pruned before it can be stepped to, so the arrows are disabled
+//! exactly when there is nowhere to go.
 
 use super::*;
 use ferrite_core::activity::Subject;
@@ -25,25 +25,12 @@ actions!(cockpit, [GoBack, GoForward]);
 /// How many places the history keeps: the oldest goes first.
 const DEPTH: usize = 50;
 
-/// Somewhere the history can go back to.
+/// Somewhere the history can go back to: a Thread on screen, on its Main
+/// transcript or a Subagent's.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) enum Place {
-    /// A Thread shown alone, on its Main transcript or a Subagent's.
-    Thread(ThreadId, Subject),
-    /// A Group, and the Pane in it opened on a Subagent, if one is. Focus
-    /// moving between its Panes is not a place; opening a Subagent is.
-    Group(GroupId, Option<(ThreadId, Subject)>),
-}
-
-impl Place {
-    /// The Threads this place needs to exist.
-    fn threads(&self) -> impl Iterator<Item = ThreadId> + '_ {
-        match self {
-            Place::Thread(thread, _) => Some(*thread),
-            Place::Group(_, drill) => drill.as_ref().map(|(thread, _)| *thread),
-        }
-        .into_iter()
-    }
+pub(crate) struct Place {
+    thread: ThreadId,
+    subject: Subject,
 }
 
 #[derive(Default)]
@@ -146,19 +133,11 @@ impl CockpitView {
             let index = self.pane_for(thread)?;
             Some(self.panes[index].selected.clone())
         };
-        match self.cockpit.roster().view() {
-            View::Solo => {
-                let thread = self.focused_thread()?;
-                Some(Place::Thread(thread, subject_of(thread)?))
-            }
-            View::Group(group) => {
-                let drill = self.focused_thread().and_then(|thread| {
-                    let subject = subject_of(thread)?;
-                    (subject != Subject::Main).then_some((thread, subject))
-                });
-                Some(Place::Group(group, drill))
-            }
-        }
+        let thread = self.focused_thread()?;
+        Some(Place {
+            thread,
+            subject: subject_of(thread)?,
+        })
     }
 
     /// The root render's hook: forget what is gone, keep where the
@@ -168,13 +147,7 @@ impl CockpitView {
         let cockpit = &self.cockpit;
         let exists =
             |thread: ThreadId| cockpit.thread(thread).is_some() || parked.contains(&thread);
-        self.history.prune(|place| {
-            let group = match place {
-                Place::Group(group, _) => cockpit.groups().get(*group).is_some(),
-                Place::Thread(..) => true,
-            };
-            group && place.threads().all(&exists)
-        });
+        self.history.prune(|place| exists(place.thread));
         let place = self.place();
         self.history.visit(place);
     }
@@ -193,8 +166,8 @@ impl CockpitView {
     }
 
     /// Show the place one entry back or forward, through the doors the
-    /// pointer uses: a parked Thread is revived, a Group entered, a
-    /// Subagent opened — or put away for Main.
+    /// pointer uses: a parked Thread is revived, a Subagent opened — or put
+    /// away for Main.
     pub(super) fn step_history(
         &mut self,
         delta: isize,
@@ -204,30 +177,13 @@ impl CockpitView {
         let Some(place) = self.history.step(delta) else {
             return;
         };
-        match place {
-            Place::Thread(thread, subject) => {
-                if self.pane_for(thread).is_some() {
-                    self.focus_thread(thread, cx);
-                } else {
-                    self.revive_thread(thread, cx);
-                }
-                self.show_subject(thread, subject, window, cx);
-            }
-            Place::Group(group, drill) => {
-                // Leaving a Subagent for its Group's Main: the Pane that
-                // was opened on it goes back to Main.
-                let from = self.focused_thread();
-                self.enter_group(group, cx);
-                match drill {
-                    Some((thread, subject)) => self.show_subject(thread, subject, window, cx),
-                    None => {
-                        if let Some(thread) = from {
-                            self.show_subject(thread, Subject::Main, window, cx);
-                        }
-                    }
-                }
-            }
+        let Place { thread, subject } = place;
+        if self.pane_for(thread).is_some() {
+            self.focus_thread(thread, cx);
+        } else {
+            self.revive_thread(thread, cx);
         }
+        self.show_subject(thread, subject, window, cx);
         cx.notify();
     }
 
@@ -253,7 +209,10 @@ mod tests {
     use super::*;
 
     fn thread(id: u64) -> Place {
-        Place::Thread(ThreadId::new(id), Subject::Main)
+        Place {
+            thread: ThreadId::new(id),
+            subject: Subject::Main,
+        }
     }
 
     fn walked(places: &[u64]) -> History {
@@ -286,15 +245,14 @@ mod tests {
         assert!(!history.can_go_forward());
     }
 
-    /// Where a step lands replaces the entry stepped to: core showed the
-    /// Thread in its Group, and that is no new visit.
+    /// Where a step lands replaces the entry stepped to, and that is no
+    /// new visit.
     #[test]
     fn a_step_that_lands_elsewhere_replaces_its_entry() {
         let mut history = walked(&[1, 2, 3]);
         history.step(-1);
-        let group = Place::Group(GroupId::new(9), None);
-        history.visit(Some(group.clone()));
-        assert_eq!(history.places, [thread(1), group, thread(3)]);
+        history.visit(Some(thread(9)));
+        assert_eq!(history.places, [thread(1), thread(9), thread(3)]);
         assert!(history.can_go_forward(), "the forward run survives");
     }
 

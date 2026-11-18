@@ -1,43 +1,7 @@
 //! Pointer work in the transcript: focus, scroll and text selection.
 #[allow(unused_imports)]
 use super::*;
-use ferrite_pane::quote::Reply;
-
-/// #15 AC1: a click lands the operator on a Pane — the focus ring moves,
-/// and the keyboard follows it into that Pane's Composer.
-#[gpui::test]
-fn clicking_a_pane_focuses_it_and_the_keyboard_follows(cx: &mut TestAppContext) {
-    let (mut core, _fake) = cockpit("click-focus", 2);
-    let group = group_all(&mut core);
-    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
-    view.update(cx, |view, cx| view.enter_group(group, cx));
-    // Two Panes side by side, each big enough to hold a Composer even
-    // with the 208px nav (#21) taken off the left.
-    cx.simulate_resize(gpui::size(px(1800.), px(600.)));
-    tick(cx);
-    view.read_with(cx, |view, _| assert_eq!(view.focused(), 0));
-
-    cx.simulate_click(gpui::point(px(1200.), px(300.)), gpui::Modifiers::none());
-
-    view.read_with(cx, |view, _| {
-        assert_eq!(view.focused(), 1, "the click moved the focus ring");
-    });
-
-    cx.simulate_input("hi");
-
-    let (left, right) = view.update(cx, |view, cx| {
-        (
-            view.panes[0]
-                .composer
-                .update(cx, |composer, cx| composer.take(cx)),
-            view.panes[1]
-                .composer
-                .update(cx, |composer, cx| composer.take(cx)),
-        )
-    });
-    assert_eq!(right, "hi", "typing lands in the clicked Pane");
-    assert_eq!(left, "", "and nowhere else");
-}
+use ferrite_core::replies::Reply;
 
 /// #15 AC4: wheel-scrolling into history detaches from the tail — new
 /// Blocks must not yank the reader down — and scrolling back to the
@@ -481,14 +445,26 @@ fn a_sweep_across_a_tool_row_copies_its_text_and_never_its_chrome(cx: &mut TestA
 
 /// A selection's Cite button is offered once a drag has selected a passage,
 /// in the focused transcript.
-fn offered(view: &gpui::Entity<CockpitView>, cx: &mut gpui::VisualTestContext) -> bool {
+pub(super) fn offered(view: &gpui::Entity<CockpitView>, cx: &mut gpui::VisualTestContext) -> bool {
     view.read_with(cx, |view, cx| {
         view.panes[0].transcript().unwrap().read(cx).reply_offered()
     })
 }
 
+/// The comment popover a Cite opened is there, and ⏎ closes it, keeping
+/// the citation as it stands.
+fn save_comment(cx: &mut gpui::VisualTestContext) {
+    assert!(
+        cx.debug_bounds("cite-comment-field").is_some(),
+        "Cite opens the comment popover"
+    );
+    cx.simulate_keystrokes("enter");
+    tick(cx);
+    assert!(cx.debug_bounds("cite-panel").is_none(), "⏎ closes it");
+}
+
 /// Drag from block `from`'s byte to block `to`'s, and let go.
-fn drag(
+pub(super) fn drag(
     view: &gpui::Entity<CockpitView>,
     cx: &mut gpui::VisualTestContext,
     from: (usize, usize),
@@ -505,7 +481,8 @@ fn drag(
 
 /// A selection's Cite (T3's): a drag offers the glass button where the
 /// mouse went up; Cite makes a Reply card in the Composer's tray (the
-/// draft's words untouched) without sending a message. Cites stack, each
+/// draft's words untouched) and opens its comment popover, without sending
+/// a message; ⏎ saves it with no comment. Cites stack, each
 /// card's × removes it, and the sent prompt carries them ahead of its words
 /// as block quotes, its bubble drawing the quote rows.
 #[gpui::test]
@@ -549,7 +526,8 @@ fn a_selections_cite_becomes_a_tray_card_and_sends(cx: &mut TestAppContext) {
     );
     assert!((cite.size.height - px(ferrite_ui::theme::SELECTION_CITE_H)).abs() < px(1.));
 
-    // Cite hands the passage to the tray at once: no card, no message.
+    // Cite hands the passage to the tray at once and opens its comment
+    // popover: no message.
     let sent_before = fake.sent.borrow().len();
     cx.simulate_click(cite.center(), gpui::Modifiers::none());
     tick(cx);
@@ -558,38 +536,40 @@ fn a_selections_cite_becomes_a_tray_card_and_sends(cx: &mut TestAppContext) {
     view.read_with(cx, |view, cx| {
         let composer = view.panes[0].composer.read(cx);
         assert_eq!(composer.text(), "Look:", "the draft's words stay as typed");
-        assert_eq!(composer.replies(), [Reply::new("ph", "")]);
+        assert_eq!(quotes(composer.replies()), [("ph", "")]);
+        assert!(composer.replies()[0].source.is_some(), "it names its source");
     });
-    let chip = cx.debug_bounds("tray-reply-0").expect("a tray card");
+    let chip = cx.debug_bounds("cite-chip-0").expect("a tray chip");
     assert!(
-        (chip.size.width - px(ferrite_ui::theme::COMPOSER_THUMB)).abs() < px(1.)
-            && (chip.size.height - px(ferrite_ui::theme::COMPOSER_THUMB)).abs() < px(1.),
-        "an attachment tile's square: {chip:?}"
+        (chip.size.height - px(ferrite_ui::theme::ATTACH_CHIP_H)).abs() < px(1.),
+        "a one-line chip, not a tile: {chip:?}"
     );
+    save_comment(cx);
 
     // A second passage, across lines, stacks beside the first.
     drag(&view, cx, (4, 3), (5, 4));
     let cite = cx.debug_bounds("selection-reply-quote").expect("Cite");
     cx.simulate_click(cite.center(), gpui::Modifiers::none());
     tick(cx);
+    save_comment(cx);
     view.read_with(cx, |view, cx| {
         assert_eq!(
-            view.panes[0].composer.read(cx).replies(),
-            [Reply::new("ph", ""), Reply::new("vo\nchar", "")]
+            quotes(view.panes[0].composer.read(cx).replies()),
+            [("ph", ""), ("vo\nchar", "")]
         );
     });
-    assert!(cx.debug_bounds("tray-reply-1").is_some());
+    assert!(cx.debug_bounds("cite-chip-1").is_some());
 
     // Each card's × takes that reply alone.
     let remove = cx
-        .debug_bounds("tray-reply-0-remove")
+        .debug_bounds("cite-chip-0-remove")
         .expect("a draft's card removes");
     cx.simulate_click(remove.center(), gpui::Modifiers::none());
     tick(cx);
     view.read_with(cx, |view, cx| {
         assert_eq!(
-            view.panes[0].composer.read(cx).replies(),
-            [Reply::new("vo\nchar", "")]
+            quotes(view.panes[0].composer.read(cx).replies()),
+            [("vo\nchar", "")]
         );
     });
 
@@ -610,7 +590,7 @@ fn a_selections_cite_becomes_a_tray_card_and_sends(cx: &mut TestAppContext) {
         "the sent prompt draws its Quote row"
     );
     assert!(
-        cx.debug_bounds("tray-reply-0").is_none(),
+        cx.debug_bounds("cite-chip-0").is_none(),
         "the tray is empty"
     );
 }
@@ -811,7 +791,7 @@ fn redraw_chrome_only(view: &gpui::Entity<CockpitView>, cx: &mut gpui::VisualTes
 fn a_plain_drag_selects_after_frames_that_reuse_the_panes(cx: &mut TestAppContext) {
     let (mut core, fake) = cockpit("drag-after-chrome-frames", 1);
     let thread = core.threads()[0];
-    core.send(thread, "the prompt words".into());
+    let _ = core.send(thread, "the prompt words".into());
     bind_production_keys(cx);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     cx.simulate_resize(gpui::size(px(1000.), px(700.)));
@@ -894,11 +874,12 @@ fn the_cite_button_stays_under_the_pointer_and_its_press_fires(cx: &mut TestAppC
     tick(cx);
     view.read_with(cx, |view, cx| {
         assert_eq!(
-            view.panes[0].composer.read(cx).replies(),
-            [Reply::new("beta", "")],
+            quotes(view.panes[0].composer.read(cx).replies()),
+            [("beta", "")],
             "its press quotes the passage"
         );
     });
+    save_comment(cx);
 
     // A double-click's word offers it too, after T3's multi-click wait.
     let word = caret(&view, cx, 1, 8);
@@ -965,7 +946,7 @@ fn a_prompt_with_three_replies_draws_each_quote_with_its_words(cx: &mut TestAppC
     view.update(cx, |view, cx| {
         view.panes[0].composer.update(cx, |composer, cx| {
             composer.set(
-                ferrite_pane::quote::compose(&replies, "the main message"),
+                ferrite_core::replies::compose(&replies, "the main message"),
                 cx,
             );
         });
@@ -995,7 +976,7 @@ fn a_prompt_with_three_replies_draws_each_quote_with_its_words(cx: &mut TestAppC
     assert!(last.bottom() <= bubble.top(), "the quotes stand over the bubble");
     assert_eq!(
         fake.sent.borrow().last().map(String::as_str),
-        Some(ferrite_pane::quote::compose(&replies, "the main message").as_str())
+        Some(ferrite_core::replies::compose(&replies, "the main message").as_str())
     );
 }
 

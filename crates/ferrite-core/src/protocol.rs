@@ -24,7 +24,6 @@ use std::time::Duration;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use crate::activity::{ActivityEvent, ActivityInput, AgentKey, DecisionHandle, Subject};
-use crate::groups::{GroupChange, GroupId};
 use crate::store::{LogRecord, Provider};
 use crate::transcript::Input;
 use crate::workspace::registry::ProjectId;
@@ -64,6 +63,8 @@ pub enum ClientMessage {
     Command(Command),
     BrowserReply {
         request: u64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        boot_id: Option<String>,
         thread: ThreadId,
         owner: crate::browser::Owner,
         document: crate::browser::Document,
@@ -108,6 +109,8 @@ pub enum Capability {
     /// This client can draw Visuals for an agent.
     RenderVisual,
     ConversationBrowser,
+    /// Browser controls require a server grant at the native Ready boundary.
+    BrowserDispatch,
     /// This client lists the Server's parked Threads off its `parked`
     /// message: a window on a machine, whose logs stay there (ADR 0026).
     ParkedThreads,
@@ -146,12 +149,26 @@ pub struct Command {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "op", rename_all = "snake_case")]
 pub enum Op {
+    Attachment { request: crate::attachment_transfer::Request },
+    Changes { request: crate::changes::Request },
+    FileOperation {
+        request: crate::file_operations::Request,
+    },
+    BrowserDispatch {
+        request: u64,
+        boot_id: String,
+        thread: ThreadId,
+        owner: crate::browser::Owner,
+        document: crate::browser::Document,
+        revision: u64,
+    },
     BrowserCapture {
         thread: ThreadId,
         owner: crate::browser::Owner,
         lease: crate::browser::Lease,
         capture: crate::browser_annotations::Capture,
-        png: WirePng,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        png: Option<WirePng>,
     },
     BrowserCaptureImage {
         thread: ThreadId,
@@ -215,9 +232,10 @@ pub enum Op {
         effort: Option<String>,
         workspace: WireChoice,
         prompt: String,
+        /// Retired with Groups: never sent, and ignored.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         group: Option<GroupId>,
-        /// The loose Thread the new one makes a Group with once it starts.
+        /// Retired with Groups: never sent, and ignored.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         new_group_with: Option<ThreadId>,
     },
@@ -325,6 +343,11 @@ pub enum Op {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         model: Option<String>,
     },
+    /// Start a fresh native conversation for a Thread whose provider can no
+    /// longer resume its own (`ThreadState::resume_lost`).
+    StartFresh {
+        thread: ThreadId,
+    },
     Snooze {
         thread: ThreadId,
         until: Option<std::time::SystemTime>,
@@ -339,7 +362,7 @@ pub enum Op {
     Revive {
         thread: ThreadId,
     },
-    /// Every member of a Group opened.
+    /// Retired with Groups: answered `unsupported`.
     ReviveGroup {
         group: GroupId,
     },
@@ -349,10 +372,11 @@ pub enum Op {
     Import {
         path: PathBuf,
     },
+    /// Retired with Groups: answered `unsupported`.
     Group {
         change: WireGroupChange,
     },
-    /// A Group's arrangement; none puts it back on the default grid.
+    /// Retired with Groups: answered `unsupported`.
     Layout {
         group: GroupId,
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -383,6 +407,18 @@ pub enum Op {
     },
     /// Settings changed on disk: reread them for the next Session.
     SettingsChanged,
+    /// The Server's own defaults (`ServerDefaults`): read from its
+    /// `settings.json`, or, with `set`, written there and read back. Either
+    /// way replied `server_defaults`, as the file now says.
+    ServerDefaults {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        set: Option<crate::settings::ServerDefaults>,
+    },
+    /// What the provider CLIs are on the machine the Server runs on, and
+    /// the one update that would replace one of them.
+    Cli {
+        action: CliAction,
+    },
     /// A provider's CLI was replaced on disk: its Sessions restart on the
     /// new release as they idle, and its models are asked for again.
     CliReplaced {
@@ -465,6 +501,11 @@ pub enum Op {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         since: Option<String>,
     },
+    /// The published diff of one pull request in `path`'s repository. Replied `review`.
+    ReviewPullRequestDiff {
+        path: PathBuf,
+        number: u64,
+    },
     /// The branch's commits since its base at `path`, for a review's
     /// commits scope (ADR 0021). Replied `commits`.
     ListCommits {
@@ -487,6 +528,18 @@ pub enum Op {
     /// `review_pull_request`.
     ReviewPullRequest {
         path: PathBuf,
+        /// Pull request `number` of the checkout's repository instead of
+        /// the branch's own.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        number: Option<u64>,
+    },
+    /// The pull requests of the repository the checkout at `path` belongs
+    /// to, the newest first, as `filter` admits them. Replied
+    /// `review_pull_requests`.
+    ListPullRequests {
+        path: PathBuf,
+        #[serde(default)]
+        filter: review::WirePrFilter,
     },
     /// Every file of the checkout at `path`, for a review's all-files
     /// list (ADR 0021). Replied `all_files`.
@@ -527,7 +580,8 @@ impl Op {
     /// a new one is placed here on purpose.
     pub fn thread(&self) -> Option<ThreadId> {
         match self {
-            Op::BrowserCapture { thread, .. }
+            Op::BrowserDispatch { thread, .. }
+            | Op::BrowserCapture { thread, .. }
             | Op::BrowserCaptureImage { thread, .. }
             | Op::BrowserProtect { thread, .. }
             | Op::BrowserRelease { thread, .. }
@@ -554,6 +608,7 @@ impl Op {
             | Op::SetModel { thread, .. }
             | Op::SetEffort { thread, .. }
             | Op::SetProvider { thread, .. }
+            | Op::StartFresh { thread, .. }
             | Op::Snooze { thread, .. }
             | Op::Rename { thread, .. }
             | Op::Park { thread, .. }
@@ -579,16 +634,23 @@ impl Op {
             | Op::Coordinator { .. }
             | Op::Notice { .. }
             | Op::SettingsChanged
+            | Op::ServerDefaults { .. }
+            | Op::Cli { .. }
             | Op::CliReplaced { .. }
             | Op::Focused { .. }
             | Op::ListDir { .. }
+            | Op::FileOperation { .. }
+            | Op::Attachment { .. }
+            | Op::Changes { .. }
             | Op::ListRepo { .. }
             | Op::ReviewDiff { .. }
             | Op::ReviewRead { .. }
+            | Op::ReviewPullRequestDiff { .. }
             | Op::ListCommits { .. }
             | Op::SearchRepo { .. }
             | Op::ReadFile { .. }
             | Op::ReviewPullRequest { .. }
+            | Op::ListPullRequests { .. }
             | Op::ListFiles { .. }
             | Op::ListBases { .. }
             | Op::PickBase { .. }
@@ -747,6 +809,23 @@ pub enum WireControl {
     Unknown,
 }
 
+/// A Group's number. Groups are gone; generation 1 still spells the
+/// commands and messages that named one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct GroupId(u64);
+
+impl GroupId {
+    pub fn new(value: u64) -> Self {
+        Self(value)
+    }
+
+    pub fn get(self) -> u64 {
+        self.0
+    }
+}
+
+/// Retired with Groups: `Op::Group`'s change, decoded and refused.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum WireGroupChange {
@@ -966,6 +1045,99 @@ pub enum CoordinatorAction {
     Unknown,
 }
 
+/// What a `cli` command asks of the machine the Server runs on.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum CliAction {
+    /// Which copy of each CLI the machine runs.
+    Versions,
+    /// `Versions`, and what the registry says is newest. Reaches the
+    /// network from that machine.
+    Check,
+    /// Install the newest release of `provider`'s CLI on that machine.
+    Update {
+        provider: Provider,
+    },
+    #[serde(other)]
+    Unknown,
+}
+
+/// The copy of a provider CLI a machine runs.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CliBinary {
+    pub version: String,
+    pub path: PathBuf,
+}
+
+/// One provider's CLI as a machine has it: the copy it runs (none when no
+/// copy answers) and, for a `check`, how that compares to the newest.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CliReport {
+    pub provider: Provider,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub binary: Option<CliBinary>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub status: Option<CliStatus>,
+}
+
+/// What a check found, as it crosses the wire.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum CliStatus {
+    Missing,
+    UpToDate {
+        current: String,
+    },
+    Available {
+        current: String,
+        latest: String,
+        #[serde(default)]
+        upgrade: Option<crate::providers::update::Upgrade>,
+    },
+    #[serde(other)]
+    Unknown,
+}
+
+impl From<crate::providers::update::Status> for CliStatus {
+    fn from(status: crate::providers::update::Status) -> Self {
+        use crate::providers::update::Status;
+        match status {
+            Status::Missing => CliStatus::Missing,
+            Status::UpToDate { current } => CliStatus::UpToDate { current },
+            Status::Available {
+                current,
+                latest,
+                upgrade,
+            } => CliStatus::Available {
+                current,
+                latest,
+                upgrade,
+            },
+        }
+    }
+}
+
+impl CliStatus {
+    /// The check's finding, or `None` for one this build does not know.
+    pub fn known(self) -> Option<crate::providers::update::Status> {
+        use crate::providers::update::Status;
+        match self {
+            CliStatus::Missing => Some(Status::Missing),
+            CliStatus::UpToDate { current } => Some(Status::UpToDate { current }),
+            CliStatus::Available {
+                current,
+                latest,
+                upgrade,
+            } => Some(Status::Available {
+                current,
+                latest,
+                upgrade,
+            }),
+            CliStatus::Unknown => None,
+        }
+    }
+}
+
 /// What a GitHub start's pickers list (#225).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
@@ -1023,6 +1195,9 @@ pub enum ServerMessage {
         document: crate::browser::Document,
         revision: u64,
         control: crate::browser::Control,
+        /// A dispatch-capable server's boot identity. Absent on legacy peers.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        dispatch: Option<String>,
     },
     Browser {
         thread: ThreadId,
@@ -1109,13 +1284,12 @@ pub enum ServerMessage {
         revision: u64,
         roster: SharedRoster,
     },
+    /// Retired with Groups: never sent, and ignored.
     Groups {
         revision: u64,
         groups: serde_json::Value,
     },
-    /// A Group left with one member, gone: ahead of the Groups without it,
-    /// so every window showing it lands on its survivor, as the window
-    /// that dissolved it does, whatever else it hears in between.
+    /// Retired with Groups: never sent, and ignored.
     Dissolved {
         group: GroupId,
         survivor: ThreadId,
@@ -1249,7 +1423,7 @@ pub struct Snapshot {
     pub threads: Vec<ThreadState>,
     pub roster: SharedRoster,
     pub decisions: Vec<PendingEntry>,
-    /// `groups.json`, as the Store writes it.
+    /// Retired with Groups: never sent, and ignored.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub groups: Option<serde_json::Value>,
     /// `registry.json`, as the Store writes it.
@@ -1346,6 +1520,8 @@ pub enum ErrorCode {
     UnsupportedGeneration,
     /// The client fell more than the reliable queue's bound behind.
     Lagged,
+    /// The act may or may not have happened: no reply came.
+    Unconfirmed,
     #[serde(other)]
     Unknown,
 }
@@ -1354,6 +1530,14 @@ pub enum ErrorCode {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Done {
+    Attachment { reply: crate::attachment_transfer::Reply },
+    Changes { reply: crate::changes::Reply },
+    FileOperation {
+        reply: crate::file_operations::Reply,
+    },
+    BrowserDispatch {
+        remaining_ms: u64,
+    },
     BrowserCapture {
         annotation: crate::browser_annotations::Annotation,
     },
@@ -1418,13 +1602,14 @@ pub enum Done {
     Threads {
         threads: Vec<ThreadId>,
     },
+    /// A sent prompt is waiting for its Session to start.
+    Held,
     /// A prompt handed back, and whether it goes ahead of the draft.
     Recovered {
         text: String,
         prepend: bool,
     },
-    /// A Group change: the Group it made or changed, and the Groups it
-    /// left with a single member, gone.
+    /// Retired with Groups: never sent.
     Grouped {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         group: Option<GroupId>,
@@ -1478,6 +1663,18 @@ pub enum Done {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         unread: Option<review::WirePrUnread>,
     },
+    /// A `list_pull_requests`' rows, or the note in their place.
+    ReviewPullRequests {
+        #[serde(default)]
+        rows: Vec<review::WirePrRow>,
+        /// The forge holds more than the rows.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        more: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        note: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        unread: Option<review::WirePrUnread>,
+    },
     /// A `list_files`' entries in path order: every file, and each
     /// ignored directory whole.
     AllFiles {
@@ -1493,6 +1690,19 @@ pub enum Done {
     /// What a `git_hub` ask listed: repositories or labels.
     Names {
         names: Vec<String>,
+    },
+    /// A Server's `settings.json` defaults, as read back.
+    ServerDefaults {
+        defaults: crate::settings::ServerDefaults,
+    },
+    /// Each provider CLI the Server's machine has, from a `cli` ask.
+    Clis {
+        clis: Vec<CliReport>,
+    },
+    /// A `cli` update that ran: the copy that answers `--version` now.
+    CliUpdated {
+        provider: Provider,
+        binary: CliBinary,
     },
     /// A `pull_request`'s reading: `gh pr view`'s JSON as `gh` printed it
     /// (`workspace::pr_view`), or none when `gh` had nothing to say — no
@@ -1607,6 +1817,8 @@ pub struct ThreadState {
     pub generation: u64,
     pub provider: Provider,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project: Option<crate::workspace::registry::ProjectId>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub effort: Option<String>,
@@ -1647,6 +1859,8 @@ pub struct ThreadState {
     pub models: Vec<crate::ModelInfo>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub permission_mode: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sandbox: Option<String>,
     #[serde(default)]
     pub permission_modes: Vec<WirePermissionMode>,
     #[serde(default)]
@@ -1657,6 +1871,10 @@ pub struct ThreadState {
     /// Draft's until it settles.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub for_draft: bool,
+    /// The provider has no conversation under the id the Thread saved, and
+    /// says so: the Thread offers a fresh one (`Op::StartFresh`).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub resume_lost: bool,
     /// Prompts the provider gave back, for the Composer (`take_recovered`).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub recovered: Vec<WireRecovered>,
@@ -1935,6 +2153,10 @@ pub enum Live {
         id: String,
         name: String,
         outcome: Option<String>,
+    },
+    ControlRefused {
+        control: WireControl,
+        message: String,
     },
     /// Tool clocks a replay restores, in milliseconds by call id.
     RestoreTimings {
@@ -2219,7 +2441,7 @@ pub fn welcome(
         generation: GENERATION,
         server,
         boot_id,
-        capabilities: Vec::new(),
+        capabilities: vec![Capability::BrowserDispatch],
         error: (generation != GENERATION).then(|| WireError {
             code: ErrorCode::UnsupportedGeneration,
             message: format!("this server speaks generation {GENERATION}, not {generation}"),
@@ -2367,6 +2589,10 @@ fn main_outgoing(input: &Input, duration: Option<Duration>) -> Outgoing {
             id: id.clone(),
             name: name.clone(),
             outcome: outcome.clone(),
+        },
+        Input::Event(SessionEvent::ControlRefused { control, message }) => Live::ControlRefused {
+            control: control.into(),
+            message: message.clone(),
         },
         // Queue acknowledgements and scheduled work are the Thread's state,
         // not its Activity's; the highlighter is each side's own; `Answered`
@@ -2536,6 +2762,10 @@ pub fn incoming(
                     id: id.clone(),
                     name: name.clone(),
                     outcome: outcome.clone(),
+                }),
+                Live::ControlRefused { control, message } => main(SessionEvent::ControlRefused {
+                    control: control.try_into().ok()?,
+                    message: message.clone(),
                 }),
                 Live::RestoreTimings { subject, timings } => ActivityInput::RestoreTimings {
                     subject: subject.try_into().ok()?,
@@ -3192,84 +3422,6 @@ impl TryFrom<&WireBinding> for WorkspaceBinding {
                 path: path.clone(),
             },
             WireBinding::Unknown => return Err(Unknown),
-        })
-    }
-}
-
-impl From<&GroupChange> for WireGroupChange {
-    fn from(change: &GroupChange) -> Self {
-        match change.clone() {
-            GroupChange::Create { first, second } => Self::Create { first, second },
-            GroupChange::Join {
-                thread,
-                group,
-                index,
-            } => Self::Join {
-                thread,
-                group,
-                index,
-            },
-            GroupChange::Include {
-                thread,
-                group,
-                index,
-            } => Self::Include {
-                thread,
-                group,
-                index,
-            },
-            GroupChange::Leave { thread } => Self::Leave { thread },
-            GroupChange::ReorderMember {
-                group,
-                thread,
-                index,
-            } => Self::ReorderMember {
-                group,
-                thread,
-                index,
-            },
-            GroupChange::MoveGroup { group, index } => Self::MoveGroup { group, index },
-            GroupChange::Rename { group, title } => Self::Rename { group, title },
-        }
-    }
-}
-
-impl TryFrom<&WireGroupChange> for GroupChange {
-    type Error = Unknown;
-    fn try_from(change: &WireGroupChange) -> Result<Self, Unknown> {
-        Ok(match change.clone() {
-            WireGroupChange::Create { first, second } => Self::Create { first, second },
-            WireGroupChange::Join {
-                thread,
-                group,
-                index,
-            } => Self::Join {
-                thread,
-                group,
-                index,
-            },
-            WireGroupChange::Include {
-                thread,
-                group,
-                index,
-            } => Self::Include {
-                thread,
-                group,
-                index,
-            },
-            WireGroupChange::Leave { thread } => Self::Leave { thread },
-            WireGroupChange::ReorderMember {
-                group,
-                thread,
-                index,
-            } => Self::ReorderMember {
-                group,
-                thread,
-                index,
-            },
-            WireGroupChange::MoveGroup { group, index } => Self::MoveGroup { group, index },
-            WireGroupChange::Rename { group, title } => Self::Rename { group, title },
-            WireGroupChange::Unknown => return Err(Unknown),
         })
     }
 }

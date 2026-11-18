@@ -3,7 +3,8 @@
 Status: accepted 2026-10-15 (Herdr benchmark, Hygiene). Amended
 2026-10-20 by ADR 0032: a revive starts no Session, so there is nothing
 to stagger; `revive_after` and `LAUNCH_STAGGER` are gone. The
-preparation still runs ahead of every start.
+preparation still runs ahead of every start. Amended 2026-11-17: a first
+send's new Thread prepares its checkout this way too.
 
 ## Context
 
@@ -57,10 +58,21 @@ the pump adopts it when ready or shows "could not start" in the Pane.
 - Every restart of a worktree-bound Thread asks git once (`git worktree
   list`, the adoption check) on the spawning thread, never the UI's.
 - Several revivals may place worktrees in one repository at once.
-  `workspace::ensure_worktree` takes a process-wide lock around its
-  `prune` and `add`: git marks a half-made worktree "initializing" only
+  `workspace::ensure_worktree` and `workspace::add_worktree` take one
+  process-wide lock around their `prune` and `add`: git marks a half-made worktree "initializing" only
   after creating its admin directory, and a `prune` in that instant would
   remove it.
-- `open_choice` (a new Thread) still makes its worktree inline: its rollback
-  (registry entry, store) depends on knowing the outcome before the Thread
-  exists. Revival has nothing to roll back.
+- A first send (a Bootstrap) makes its new Thread's checkout the same
+  way: the branch switch or `git worktree add` its choice asks, then
+  `placement`, all in its first start's preparation. The loop keeps only
+  the registry reservation, the store and the Thread, which stays pending
+  until the start settles. A start that fails rolls the Thread back and
+  forgets a reservation whose tree never stood (`forget_unmade`), and the
+  refusal reaches the window as the first send's result.
+- A Thread opened outright (`thread.start`, a Factory Worker) still makes
+  its checkout before `open_choice` answers, on the loop: those callers
+  reply with the outcome, and a Thread left behind by a failed first start
+  would be rebound to the main checkout by the next worktree listing (an
+  unregistered worktree missing from git's list goes back to main) or hold
+  its Factory Task in Working. Moving them off the loop needs a reply that
+  waits for the start, as a first send's does.

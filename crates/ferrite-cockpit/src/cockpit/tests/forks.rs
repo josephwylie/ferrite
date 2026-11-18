@@ -95,10 +95,9 @@ fn an_answers_menu_copies_replies_and_forks(cx: &mut TestAppContext) {
     cx.simulate_click(reply.center(), gpui::Modifiers::none());
     tick(cx);
     view.read_with(cx, |view, cx| {
-        assert_eq!(
-            view.panes[0].composer.read(cx).replies(),
-            [ferrite_pane::quote::Reply::new("alpha", "")]
-        );
+        let replies = view.panes[0].composer.read(cx).replies().to_vec();
+        assert_eq!(quotes(&replies), [("alpha", "")]);
+        assert!(replies[0].source.is_some(), "the whole answer names its source");
     });
 
     // Fork from here, past the rule.
@@ -140,8 +139,8 @@ fn an_agent_that_cannot_fork_offers_none(cx: &mut TestAppContext) {
 fn the_menu_and_the_palette_fork_and_rewind(cx: &mut TestAppContext) {
     let (view, fake, cx) = answered("menu-fork", cx);
     let thread = view.read_with(cx, |view, _| view.panes[0].thread().unwrap());
-    let fork = view.read_with(cx, |view, _| {
-        view.context_rows(MenuTarget::Thread(thread))
+    let fork = view.read_with(cx, |view, cx| {
+        view.context_rows(MenuTarget::Thread(thread), cx)
             .into_iter()
             .flatten()
             .find(|(_, verb)| *verb == MenuVerb::Fork)
@@ -167,7 +166,7 @@ fn the_menu_and_the_palette_fork_and_rewind(cx: &mut TestAppContext) {
 
     // A sent prompt goes out under its id: the palette's Rewind opens its
     // menu.
-    view.update(cx, |view, _| view.cockpit.send(thread, "again".into()));
+    let _ = view.update(cx, |view, _| view.cockpit.send(thread, "again".into()));
     fake.streams.borrow()[0]
         .send(SessionEvent::TurnEnded {
             outcome: ferrite_core::TurnOutcome::Completed,
@@ -196,7 +195,7 @@ fn the_menu_and_the_palette_fork_and_rewind(cx: &mut TestAppContext) {
 #[gpui::test]
 fn the_rewind_menu_offers_the_code_only_where_the_agent_restores_files(cx: &mut TestAppContext) {
     // The rows never depend on which prompt: any block names one.
-    let labels = |view: &CockpitView, thread| {
+    let labels = |view: &CockpitView, thread, cx: &gpui::App| {
         let block = view
             .cockpit
             .thread(thread)
@@ -204,17 +203,17 @@ fn the_rewind_menu_offers_the_code_only_where_the_agent_restores_files(cx: &mut 
         let Some(block) = block else {
             return Vec::new();
         };
-        view.context_rows(MenuTarget::Prompt { thread, block })
+        view.context_rows(MenuTarget::Prompt { thread, block }, cx)
             .into_iter()
             .flatten()
             .map(|(item, _)| item.label.to_string())
             .collect::<Vec<_>>()
     };
     let (view, _fake, cx) = answered("rewind-code", cx);
-    view.read_with(cx, |view, _| {
+    view.read_with(cx, |view, cx| {
         let thread = view.cockpit.threads()[0];
         assert_eq!(
-            labels(view, thread),
+            labels(view, thread, cx),
             ["Rewind conversation", "Rewind conversation and code"]
         );
     });
@@ -231,9 +230,9 @@ fn the_rewind_menu_offers_the_code_only_where_the_agent_restores_files(cx: &mut 
         })
         .unwrap();
     tick(cx);
-    view.read_with(cx, |view, _| {
+    view.read_with(cx, |view, cx| {
         let thread = view.cockpit.threads()[0];
-        assert_eq!(labels(view, thread), ["Rewind conversation"]);
+        assert_eq!(labels(view, thread, cx), ["Rewind conversation"]);
     });
 }
 
@@ -269,7 +268,7 @@ fn right_clicking_an_answer_or_a_prompt_opens_the_message_menu(cx: &mut TestAppC
     assert!(cx.debug_bounds("answer-chapter").is_some(), "pinned");
 
     // A prompt: the same menu with its own rows.
-    view.update(cx, |view, _| view.cockpit.send(thread, "again".into()));
+    let _ = view.update(cx, |view, _| view.cockpit.send(thread, "again".into()));
     fake.streams.borrow()[0]
         .send(SessionEvent::TextDelta {
             text: "bravo\n\n".into(),

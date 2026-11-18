@@ -577,8 +577,6 @@ pub mod words {
     pub const SETTING_UP: &str = "setting up";
     /// Held by the operator.
     pub const PAUSED: &str = "paused";
-    /// Parked: no Session in memory, one keystroke from coming back.
-    pub const PARKED: &str = "parked";
     /// Ferrite cannot observe it.
     pub const UNAVAILABLE: &str = "unavailable";
     /// An answer is on its way to the provider.
@@ -846,10 +844,6 @@ pub const GLYPH_GUTTER: f32 = 2.0 * CH;
 /// 108 cells — the prose measure: the most a paragraph, a code block or a
 /// table runs before it wraps, at any reading size.
 pub const MEASURE_CH: f32 = 108.0;
-/// A floor under the face's advance for laying out against text width
-/// estimates (a title's floor). With one monospace face every advance is
-/// `CODE_ADVANCE`; this stays a floor so a short label is never padded.
-pub const UI_ADVANCE_FLOOR: f32 = 0.5;
 
 /// The non-ASCII glyphs Geist Mono sets: every one is in its cmap (asserted
 /// by `theme::tests`). A rule the tests enforce, so it compiles only with
@@ -910,6 +904,9 @@ pub const R_TIGHT: f32 = 2.0;
 // --------------------------------------------------------- shell and board
 
 pub const NAV_WIDTH: f32 = 256.0;
+/// 208px — the narrowest the nav resizes to, and its width in a window
+/// too narrow to leave the board 640px beside the default.
+pub const NAV_MIN_W: f32 = 208.0;
 pub const NAV_COLUMN_W: f32 = NAV_WIDTH + 2.0 * NAV_INSET;
 /// 44px — the head row (SPEC §4), ADR 0014's titlebar grown into the row
 /// that holds the traffic lights over the nav, the view head over the board
@@ -960,6 +957,8 @@ pub const HISTORY_ARROW_DISABLED_INK: u32 = INK_SUBTLE;
 /// diff, preview, files, `⋯`): `ICON_BUTTON` doors 4 apart, Claude's 32pt
 /// pitch (claude/answer-done.png x 1738–1898), the panel toggle the last.
 pub const TITLE_TOOLS_GAP: f32 = SPACE_1;
+/// The title bar's two tools, the details card's toggle and the panel's.
+pub const TITLE_TOOLS_W: f32 = 2.0 * ICON_BUTTON + TITLE_TOOLS_GAP;
 pub const CONTROL_CHIP_PAD_X: f32 = 10.0;
 pub const CONTROL_CHIP_GAP: f32 = SPACE_1_5;
 pub const CONTROL_CHIP_ICON: f32 = 14.0;
@@ -1031,6 +1030,8 @@ pub const SURFACE_TAB_DRAG: f32 = 6.0;
 /// `SURFACE_TAB_SCROLL_MIN`.
 pub const SURFACE_TAB_SCROLL_MIN: f32 = 120.0;
 pub const SURFACE_TAB_SCROLL_SHARE: f32 = 0.75;
+/// A chevron with nothing more that way keeps its slot, dimmed.
+pub const SURFACE_TAB_CHEVRON_SPENT_OPACITY: f32 = 0.35;
 /// The head's `+` (T3's `icon-xs` ghost, `Plus size-3.5`).
 pub const SURFACE_PLUS: f32 = 24.0;
 pub const SURFACE_PLUS_GLYPH: f32 = 14.0;
@@ -1205,6 +1206,14 @@ pub const FLOAT_PAD: f32 = SPACE_1;
 pub const FLOAT_PAD_X: f32 = MENU_ROW_INSET_X + MENU_ROW_PAD_X;
 /// The gap a float keeps from the control that opened it.
 pub const FLOAT_OFFSET: f32 = 6.0;
+/// The Thread details card: T3's 280 wide, 12 off the edges it hangs from
+/// (`threadDetailsCardLayout`).
+pub const DETAILS_W: f32 = 280.0;
+pub const DETAILS_GAP: f32 = 12.0;
+/// The narrowest Pane that floats the card: the card and its gap take at
+/// most half of it, so what is left still holds the transcript's centred
+/// hero line and its Composer. Narrower, the Overview opens in the Panel.
+pub const DETAILS_MIN_PANE_W: f32 = 2.0 * (DETAILS_W + DETAILS_GAP);
 /// The context menu's least width (it grows to its longest verb beside
 /// its key: Claude's row menu is 165, claude/row-menu.png), and any
 /// floating list's height cap before it scrolls.
@@ -1971,11 +1980,6 @@ pub const SELECTION_CITE_EDGE: f32 = 8.0;
 pub const SELECTION_CITE_NEAR: f32 = 8.0;
 pub const SELECTION_CITE_BELOW: f32 = 4.0;
 pub const SELECTION_CITE_MULTI_CLICK_MS: u64 = 500;
-/// A sent Reply in the Composer's tray (`claude/reply-sent-chip.png`), an
-/// image card's size, ring and `×`: the typed words behind a quote bar at
-/// its top, cut at `REPLY_TILE_LINES`, a muted `Reply` at its foot, on the
-/// file chip's `RAISED` ground.
-pub const REPLY_TILE_LINES: usize = 3;
 /// **The side chat** (Claude's, `claude/sidechat-open.png`): the right
 /// pane's other body, `SIDE_CHAT_W` wide beside the thread, which reflows
 /// narrower. Its head is a tab strip (`Side chat ×`, `+`) in the row's
@@ -2020,6 +2024,9 @@ pub const TERMINAL_PILL_LIFT: f32 = 28.0;
 /// `FILES_INDENT` in, a git status marked by a `FILES_STATUS_DOT` dot at
 /// the row's end.
 pub const FILES_TREE_W: f32 = 240.0;
+/// The least the editor beside the tree keeps; a Panel narrower than the
+/// tree and this has the tree as a page over the editor.
+pub const FILES_EDITOR_MIN_W: f32 = 260.0;
 /// The Panel's least width while Files or Changes shows (`files-code.png`:
 /// the column 1000 of 1666, the thread 666): `FILES_SHARE` of the room
 /// right of the nav, never under `FILES_MIN_W`. Wide or maximized, the
@@ -2138,7 +2145,7 @@ const _: () = assert!(SCROLLBAR_GUTTER <= PANE_PAD_X);
 // (end WP-B) — append above this line only
 
 // ======================================== WP-C · pane frame, levels, board, titlebar
-// Owner: WP-C (the pane shell, head, wall tiles, board, seams, titlebar.)
+// Owner: WP-C (the pane shell, head, board, seams, titlebar.)
 // Edit values and append tokens only inside this section.
 //
 // **One plane** (theme rule 2, SPEC §4). The window is the nav and the
@@ -2173,14 +2180,6 @@ const _: () = assert!(SCROLLBAR_GUTTER <= PANE_PAD_X);
 // `failed` `BLOCKED`, the elapsed time and an unseen `done` `INK_SUBTLE`),
 // then the provider's 13px logo and the fill button. No band on the
 // focused head: the ring says focus. A draft carries its × instead.
-//
-// **Two altitudes** (R12): a Pane reads its transcript from 300px wide and
-// 360px tall (`docview::Level::for_cell`); smaller, it is a wall tile. One
-// Level per board (rule 2.3.5), with `LEVEL_HYSTERESIS`. A tile is the
-// head, its state word at the strong weight in its colour, half a row, its
-// last `WALL_LINES` lines — one `INK_SUBTLE` run each, glyph included —
-// and, while it waits, quick answers boxed in `paint::LINE`; no meter, no
-// sparkline.
 //
 // **The window chrome** (ADR 0014, SPEC §4). The head row is the nav's top
 // chrome, the traffic lights' row and the window's drag strip, and the slot
@@ -2217,20 +2216,13 @@ pub const CAPTION_RESIZE_EDGE: f32 = 4.0;
 pub const CAPTION_CLOSE: u32 = 0xc42b1c;
 pub const CAPTION_CLOSE_PRESSED: u32 = 0x9b2218;
 pub const CAPTION_CLOSE_INK: u32 = 0xffffff;
-/// The smallest window the chrome still lays out in: the nav plus one wall
-/// tile and the Windows caption group.
+/// The smallest window the chrome still lays out in.
 pub const WINDOW_MIN_W: f32 = 640.0;
 pub const WINDOW_MIN_H: f32 = 420.0;
 
-/// How far every cell must clear a Level's size threshold, on both axes,
-/// before the board steps *up* to it (`CockpitView::board_level`); it steps
-/// down at the plain threshold. 24px keeps a resize that hovers at an edge
-/// from flickering the whole board between tiers.
-pub const LEVEL_HYSTERESIS: f32 = 24.0;
-
 /// 8px — the gutter between two cards on a board, the tree's gap
-/// (`layout::Tree::rects`): the core's `GRID_GAP`, so the default grid's
-/// equal cells stay equal. Its centre line is the seam.
+/// (`layout::Tree::rects`): the core's `GRID_GAP`. Its centre line is the
+/// seam.
 pub const BOARD_SEAM: f32 = GRID_GAP;
 /// 2px — the line a seam draws in its gutter under the pointer and while
 /// held (`SEAM_HOVER`); at rest the gutter alone separates the cards.
@@ -2248,26 +2240,6 @@ pub const HEAD_PAD_X: f32 = CH;
 pub const PANE_HEAD_PAD_L: f32 = 14.0;
 pub const PANE_HEAD_PAD_R: f32 = SPACE_1_5;
 pub const PANE_HEAD_GAP: f32 = SPACE_2;
-/// 14px — the provider's logo and a mark's icon in the Group head.
-pub const PANE_HEAD_ICON: f32 = 14.0;
-/// The width a dot mark lays out at in the Group head: the dot and a pixel
-/// each side, as the mockup's box.
-pub const PANE_HEAD_DOT_W: f32 = NAV_DOT + 2.0;
-/// 14px — the fill button's `maximize` glyph.
-pub const PANE_HEAD_FILL_GLYPH: f32 = 14.0;
-
-/// The compact Composer (SPEC §5.9 item 5, `pane::compact_composer`): a
-/// 38px box `COMPACT_COMPOSER_INSET` in from the card's sides and foot,
-/// padded 12 before the input and 7 after the send circle (24, its
-/// `arrow-up` 12).
-pub const COMPACT_COMPOSER_H: f32 = 38.0;
-pub const COMPACT_COMPOSER_INSET: f32 = 10.0;
-pub const COMPACT_COMPOSER_PAD_L: f32 = SPACE_3;
-/// Off the space scale: centres the 24px circle 7px from the box's edge,
-/// as the mockup draws it.
-pub const COMPACT_COMPOSER_PAD_R: f32 = 7.0;
-pub const SEND_CIRCLE_SM: f32 = SPACE_6;
-pub const SEND_GLYPH_SM: f32 = SPACE_3;
 
 /// The failure strip (SPEC §5.9 item 4): 36 high at `R_CARD` on
 /// `FAILURE_WASH`, padded 12 / 6, its `x-circle` 14, its `Retry` 26 high
@@ -2295,13 +2267,6 @@ pub const BACKGROUND_DIALOG_SECTION_GAP: f32 = 20.0;
 /// What follows the title (`label: activity`) reads at 60% of the muted ink.
 pub const BACKGROUND_LINE_DETAIL_OPACITY: f32 = 0.6;
 pub const BACKGROUND_LINE_ACTIONS_GAP: f32 = 10.0;
-/// The floor a head title keeps however narrow the head (a shorter title
-/// keeps its whole text). There is no cap — a long title takes the width
-/// the head has.
-pub const HEAD_TITLE_MIN_W: f32 = 96.0;
-/// How much readier a Group head's title is to shrink than its state word
-/// (flex shrink factors): the title ellipsizes to its floor first.
-pub const HEAD_TITLE_SHRINK: f32 = 64.0;
 /// The checks card (`open_checks`, a palette command): wide enough for a
 /// matrix job's own name — `test (windows-latest, stable)` — beside its
 /// state word, which is the whole reason the card exists.
@@ -2319,18 +2284,6 @@ pub const CHECKS_ROW_H: f32 = FLOAT_ROW_H;
 /// heading itself is the menu section title (`FLOAT_SECTION_H`).
 pub const CHECKS_GROUP_GAP: f32 = MENU_GROUP_GAP;
 
-/// The wall tile's body: half a row above and below, two cells in.
-pub const WALL_PAD_Y: f32 = HALF_ROW;
-pub const WALL_PAD_X: f32 = 2.0 * CH;
-/// How many rows of a tile's last transcript lines it shows, dim, under its
-/// state word (a wrapped prose line spends two).
-pub const WALL_LINES: usize = 3;
-/// A quick answer at the wall: `1 allow` as an edgeless secondary button,
-/// 22px tall (a line and a pixel above and below), a cell of padding each
-/// side, a cell between buttons, half a row above the row.
-pub const QUICK_ANSWER_H: f32 = LH_UI + 2.0;
-pub const QUICK_ANSWER_PAD_X: f32 = CH;
-pub const QUICK_ANSWER_GAP: f32 = CH;
 
 /// The reader's code (the Panel's preview of a file as numbered lines):
 /// the transcript's code size, a step under its prose (13 at Standard),
@@ -2610,6 +2563,12 @@ pub const ATTACH_REMOVE_ICON: f32 = 10.0;
 pub const COMPOSER_THUMB: f32 = 88.0;
 pub const THUMB_REMOVE: f32 = 20.0;
 pub const THUMB_REMOVE_INSET: f32 = SPACE_1;
+/// The pending tray never grows past this: a narrow Pane wraps its chips
+/// into more rows, and the rows scroll here so the field and Send stay on
+/// screen. A shut tray is one `ATTACH_CHIP_H` row, its count.
+pub const ATTACH_TRAY_MAX_H: f32 = 7.0 * SPACE_6;
+/// A reply's quote, opened in the tray, scrolls past this height.
+pub const CITE_QUOTE_MAX_H: f32 = 5.0 * LH_META;
 /// In Solo the pending files ride inside the box, a row of chips
 /// `COMPOSER_INPUT_PAD_X` in and `COMPOSER_INPUT_PAD_T` under its top (or
 /// the queued row), `ATTACH_ROW_GAP` over the text.
@@ -3176,9 +3135,13 @@ pub const SUBAGENT_NAME_GAP: f32 = SPACE_2;
 // truncating box is pinned to what its row leaves it, measured from the
 // face's own advances (`nav::Measure`).
 
-pub const NAV_INSET: f32 = SPACE_3;
-pub const NAV_INSET_Y: f32 = 40.0;
-pub const NAV_R: f32 = 18.0;
+/// T3 Code dark navigation, independent of the global panel paint.
+pub const NAV_BACKGROUND: Paint = Paint::solid(0x000000);
+/// T3 workspace topbar height, including brand and history controls.
+pub const NAV_HEADER_H: f32 = 52.0;
+pub const NAV_INSET: f32 = 0.0;
+pub const NAV_INSET_Y: f32 = 0.0;
+pub const NAV_R: f32 = 0.0;
 pub const NAV_COL_PAD: f32 = SPACE_2;
 pub const NAV_EDGE_TAB_W: f32 = 14.0;
 pub const NAV_EDGE_TAB_H: f32 = 44.0;
@@ -3204,7 +3167,7 @@ pub const NAV_ICON: f32 = 16.0;
 pub const NAV_ICON_GAP: f32 = 10.0;
 /// 14px — under the views, before the tree.
 pub const NAV_VIEWS_GAP: f32 = 14.0;
-/// 26px — a section heading (`Projects`, `Groups`, `Recent`): 12/500
+/// 26px — a section heading (`Projects`, `Recent`): 12/500
 /// `INK_SUBTLE`, padding 0 6 0 10, its 22px `+` at the right.
 pub const NAV_HEADING_H: f32 = 26.0;
 pub const NAV_HEADING_PAD_R: f32 = SPACE_1_5;
@@ -3282,6 +3245,9 @@ pub const NAV_SCROLLBAR_GUTTER: f32 = NAV_COL_PAD;
 pub const NAV_SCROLLBAR_INSET: f32 = 1.0;
 const _: () = assert!(NAV_SCROLLBAR_GUTTER == 2. * NAV_SCROLLBAR_INSET + SCROLLBAR_THUMB_W_HOVER);
 pub const NAV_AUTO_FOLD_BOARD_W: f32 = 560.0;
+/// The narrowest the Pane is let fall to: the nav folds to its rail
+/// rather than let the Pane drop under it.
+pub const NAV_AUTO_FOLD_PANE_W: f32 = 200.0;
 pub const NAV_AUTO_FOLD_HYSTERESIS: f32 = 24.0;
 
 // **The Thread card** (`nav::card`, T3 Code's `SidebarThreadRow`,
@@ -3528,13 +3494,17 @@ pub const PROJECT_HUES: [u32; 18] = [
 // (`MOTION_EASE_*`, `--cds-ease-*`). `motion.rs` maps each entry to the
 // Ferrite surface that wears it. The rules every animated surface follows:
 //
-// - **Menus and popovers snap; dialogs, the palette and toasts fade out.**
-//   A menu, a popover, a fold of tool steps, the sidebar (cmd-B) and the
-//   panel land on their frame, open and shut, as Claude's do. A sheet, the
-//   palette and a toast leave as a face no pointer finds (`motion::float_out`,
-//   `toast_out`), their veil fading with them. A board slot is no float:
-//   the Review slides in and, a little quicker, out (`MOTION_SLOT_OPEN_MS` /
-//   `MOTION_SLOT_CLOSE_MS`), its Pane giving way and taking the room back.
+// - **Menus and popovers settle from their opener; a tool step snaps.**
+//   A menu comes in over `MOTION_MENU_IN_MS` and a popover, the larger
+//   surface, over `MOTION_POPOVER_IN_MS`, each from the edge it hangs on
+//   (`motion::float_in`); one the Cockpit can redraw after it closed goes
+//   as a face no pointer finds, quicker (`motion::float_gone`). A fold of
+//   tool steps lands on its frame. A sheet, the palette and a toast leave
+//   as a face no pointer finds (`motion::float_out`, `toast_out`), their
+//   veil fading with them. A board slot is no float: the Review slides in and,
+//   a little quicker, out (`MOTION_SLOT_OPEN_MS` / `MOTION_SLOT_CLOSE_MS`),
+//   its Pane giving way and taking the room back; the sidebar (cmd-B) and
+//   the panel slide over `MOTION_DUR_BASE_MS` (`motion::COLUMN`).
 // - **One hover blend for buttons (`MOTION_DUR_FAST_MS`, the quart); list
 //   rows and menu rows snap.** A button's ground blends over 60ms and its
 //   press squishes it (`MOTION_PRESS_SCALE`); a nav row, a menu row and the
@@ -3655,11 +3625,16 @@ pub const MOTION_FADE_QUICK_MS: u64 = 150;
 /// glyph shrinks to this scale as it fades, the arriving one grows from it
 /// (an `svg` transform: the icon swap's scale without its blur).
 pub const MOTION_SEND_GLYPH_FROM: f32 = 0.5;
-/// `menu-in`: 0ms — a menu snaps open and shut, as Claude's `Menu`,
-/// `ContextMenu` and `Popover` do. At 0 the entrance draws its element as
-/// it is (`motion::menu_in`); the shift and opacity below are its face
-/// should it ever run again.
-pub const MOTION_MENU_IN_MS: u64 = 0;
+/// A menu (a context menu, an answer's menu) settles in over 100ms and
+/// goes in 80ms. T3's own menus snap; this is the operator's preference.
+pub const MOTION_MENU_IN_MS: u64 = 100;
+pub const MOTION_MENU_OUT_MS: u64 = 80;
+/// A popover (the model picker, the permission menu, the plan, checks and
+/// session cards) is a larger surface: T3's scale and fade it. It settles
+/// in over `MOTION_DUR_SNAP_MS`, so it never trails the keys that opened
+/// it, and goes in 100ms.
+pub const MOTION_POPOVER_IN_MS: u64 = MOTION_DUR_SNAP_MS;
+pub const MOTION_POPOVER_OUT_MS: u64 = 100;
 pub const MOTION_MENU_SHIFT: f32 = 2.0;
 /// The opacity a menu starts from: it is already legible on its first frame.
 pub const MOTION_MENU_FROM_OPACITY: f32 = 0.3;
@@ -3725,6 +3700,9 @@ pub const SCROLL_END_SHOW_DELAY_MS: u64 = 150;
 /// `MOTION_EASE_SNAP` (T3's `--ease-drawer`).
 pub const MOTION_CHIP_IN_MS: u64 = 300;
 pub const MOTION_CHIP_FROM_SCALE: f32 = 0.95;
+/// An attachment or citation taken off a draft closes its place along its
+/// row over this, as it fades.
+pub const MOTION_CHIP_OUT_MS: u64 = 160;
 /// A toast's timing: it comes in over `MOTION_DUR_BASE_MS` on the quart,
 /// sliding its own height out from under the edge it hangs on, and leaves
 /// over the same, shrinking to `MOTION_TOAST_OUT_SCALE` as it fades (the
@@ -3776,7 +3754,8 @@ pub const MOTION_RECEDE_MS: u64 = 150;
 /// 150ms on `MOTION_EASE_OUT` (T3's `Sidebar.motion.ts`).
 pub const MOTION_NAV_LIST_MS: u64 = 150;
 /// A shelf header's chevron turns over 150ms on `MOTION_EASE_STANDARD`
-/// (Tailwind's `transition-transform`); the shelf itself snaps.
+/// (Tailwind's `transition-transform`); the shelf's body folds with it over
+/// `MOTION_FOLD_MS`.
 pub const MOTION_SHELF_CHEVRON_MS: u64 = 150;
 /// A slim row's time gives way to its action over 150ms on
 /// `MOTION_EASE_STANDARD`, and its badge comes up to full colour.

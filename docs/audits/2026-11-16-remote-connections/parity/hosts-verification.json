@@ -1,0 +1,7 @@
+{
+  "command": "cargo nextest run -p ferrite-core -E 'test(machine::hosts::)'",
+  "nextest_run_id": "7e35d0d6-d94a-4605-91e3-861d287ec7a9",
+  "result": "6 passed; 1751 skipped",
+  "typecheck": "Deferred to final integrated check",
+  "evidence": "functions exec session 85936; exit 0"
+}

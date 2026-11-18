@@ -439,10 +439,10 @@ impl NeedsYou {
     /// one arrived at on screen), so neither rings again for what it rang
     /// already, and what waits, stands or is posted goes on. A system
     /// notification keeps its tag: the notification centre holds it so.
-    pub fn moved(self, left: &MachineKey, arrived: &MachineKey) -> Self {
+    pub fn moved(self, left: Option<&MachineKey>, arrived: Option<&MachineKey>) -> Self {
         let rekey = |away: Option<MachineKey>| match away {
-            None => Some(left.clone()),
-            Some(key) if key == *arrived => None,
+            None => left.cloned(),
+            Some(key) if Some(&key) == arrived => None,
             other => other,
         };
         let realert = |alert: Alert| Alert {
@@ -1195,7 +1195,7 @@ mod tests {
         let ring = needs_you.ring(start + ALERT_DELAY, &|_| Some(true), &|_| false);
         assert_eq!(ring.rang.len(), 3, "box's two and the finish here");
 
-        let mut needs_you = needs_you.moved(&home, &on_box);
+        let mut needs_you = needs_you.moved(Some(&home), Some(&on_box));
         let later = start + 2 * ALERT_DELAY;
         assert_eq!(needs_you.presented(Some(&home)), Some(finished));
         assert_eq!(needs_you.presented(None), None, "box had no Notice");
@@ -1253,7 +1253,7 @@ mod tests {
         needs_you.hear(Some(on_box.clone()), [], [], at);
         needs_you.hear(Some(on_box.clone()), [], [(asking.clone(), false)], at);
 
-        let mut needs_you = needs_you.moved(&home, &on_box);
+        let mut needs_you = needs_you.moved(Some(&home), Some(&on_box));
         assert_eq!(needs_you.toasts().len(), 1, "box3's toast stands on");
         assert_eq!(needs_you.toasts()[0].alert.away, Some(box3));
         assert_eq!(

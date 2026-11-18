@@ -546,8 +546,8 @@ fn a_late_listing_is_dropped_by_a_palette_reopened_elsewhere(cx: &mut TestAppCon
     assert!(late.is_err(), "its answer has nowhere to land");
 }
 
-/// ⌘K's import over the empty board shown on purpose lands on the
-/// import, not on the board it was picked from.
+/// ⌘K's import over the empty board, its one Thread closed, lands on
+/// the import, not on the board it was picked from.
 #[gpui::test]
 fn palette_import_from_the_empty_board_shows_the_import(cx: &mut TestAppContext) {
     let (core, _fake) = cockpit("import-empty-board", 1);
@@ -560,12 +560,12 @@ fn palette_import_from_the_empty_board_shows_the_import(cx: &mut TestAppContext)
     );
     bind_production_keys(cx);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
-    view.update(cx, |view, cx| {
-        view.session_file_roots = roots;
-        view.show_empty_board(cx);
-    });
+    view.update(cx, |view, _| view.session_file_roots = roots);
     cx.simulate_resize(gpui::size(px(1000.), px(700.)));
     tick(cx);
+    cx.simulate_keystrokes("cmd-w");
+    tick(cx);
+    assert!(view.read_with(cx, |view, _| view.empty_board_shown()));
 
     cx.simulate_keystrokes("cmd-k");
     tick(cx);

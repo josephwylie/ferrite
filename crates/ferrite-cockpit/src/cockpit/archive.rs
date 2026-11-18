@@ -5,6 +5,7 @@
 //! and the Workers it had.
 
 use super::*;
+use super::destination::{Destination, Shows};
 use ferrite_core::factory::{self as core_factory, Task};
 use ferrite_core::protocol::TaskAction;
 use ferrite_pane::composer::{Composer, Role};
@@ -22,18 +23,18 @@ pub(crate) struct Archive {
 impl CockpitView {
     /// Show the shown Project's Archive in the board's place.
     pub(crate) fn open_archive(&mut self, cx: &mut Context<Self>) {
-        let Some(view) = self.factory_view.as_ref() else {
+        let Some(view) = self.factory() else {
             return;
         };
         if view.archive.search.is_none() {
             let search = cx.new(Composer::new);
             search.update(cx, |field, cx| field.set_role(Role::Field(None), cx));
             cx.observe(&search, |_, _, cx| cx.notify()).detach();
-            if let Some(view) = self.factory_view.as_mut() {
+            if let Some(view) = self.factory_mut() {
                 view.archive.search = Some(search);
             }
         }
-        if let Some(view) = self.factory_view.as_mut() {
+        if let Some(view) = self.factory_mut() {
             view.archive.shown = true;
             view.open = None;
         }
@@ -42,7 +43,7 @@ impl CockpitView {
 
     pub(crate) fn close_archive(&mut self, cx: &mut Context<Self>) {
         self.read_worker(None, cx);
-        if let Some(view) = self.factory_view.as_mut() {
+        if let Some(view) = self.factory_mut() {
             view.archive.shown = false;
             view.open = None;
         }
@@ -55,16 +56,19 @@ impl CockpitView {
     /// reopened is parked again.
     pub(crate) fn read_worker(&mut self, thread: Option<ThreadId>, cx: &mut Context<Self>) {
         let was = self
-            .factory_view
-            .as_mut()
+            .factory_mut()
             .and_then(|view| view.archive.reading.take());
         if let Some((was, true)) = was.filter(|(was, _)| Some(*was) != thread) {
             if let Err(error) = self.cockpit.park(was) {
                 ferrite_core::log!("factory: an earlier Worker could not be parked again: {error}");
             }
             let focused = self.cockpit.roster().focused();
-            if let Some(view) = self.factory_view.as_mut() {
-                view.focus_at_open = focused;
+            if let Some(Destination {
+                shows: Shows::Factory(_),
+                focus_at_open,
+            }) = self.destination.as_mut()
+            {
+                *focus_at_open = focused;
             }
         }
         if let Some(thread) = thread {
@@ -76,8 +80,12 @@ impl CockpitView {
             // Reopening it moves the roster's focus before this window has
             // its Pane: that is not the operator leaving the board.
             let focused = self.cockpit.roster().focused();
-            if let Some(view) = self.factory_view.as_mut() {
-                view.focus_at_open = focused;
+            if let Some(Destination {
+                shows: Shows::Factory(view),
+                focus_at_open,
+            }) = self.destination.as_mut()
+            {
+                *focus_at_open = focused;
                 match reopened {
                     Ok(reopened) => view.archive.reading = Some((thread, reopened)),
                     Err(error) => {
@@ -93,7 +101,7 @@ impl CockpitView {
 
     /// The earlier Worker being read, if it is one of `task`'s.
     pub(super) fn worker_reading(&self, task: &Task) -> Option<ThreadId> {
-        let (thread, _) = self.factory_view.as_ref()?.archive.reading?;
+        let (thread, _) = self.factory()?.archive.reading?;
         task.every_worker().contains(&thread).then_some(thread)
     }
 
@@ -149,8 +157,7 @@ impl CockpitView {
 
     /// What the Archive is searched for now.
     fn archive_query(&self, cx: &gpui::App) -> String {
-        self.factory_view
-            .as_ref()
+        self.factory()
             .and_then(|view| view.archive.search.as_ref())
             .map(|search| search.read(cx).text().to_string())
             .unwrap_or_default()
@@ -160,8 +167,7 @@ impl CockpitView {
     /// search).
     pub(crate) fn set_archive_search(&mut self, text: &str, cx: &mut Context<Self>) {
         let Some(search) = self
-            .factory_view
-            .as_ref()
+            .factory()
             .and_then(|view| view.archive.search.clone())
         else {
             return;
@@ -172,7 +178,7 @@ impl CockpitView {
 
     /// The Archive's search field holds the keyboard while it shows.
     pub(super) fn archive_focus(&self, cx: &gpui::App) -> Option<FocusHandle> {
-        let view = self.factory_view.as_ref()?;
+        let view = self.factory()?;
         if !view.archive.shown || view.surface != super::workflows::Surface::Board {
             return None;
         }
@@ -181,7 +187,7 @@ impl CockpitView {
 
     /// Clear: the Completed Tasks go to the Archive at once.
     pub(crate) fn clear_completed(&mut self, cx: &mut Context<Self>) {
-        let Some(project) = self.factory_view.as_ref().map(|view| view.project) else {
+        let Some(project) = self.factory().map(|view| view.project) else {
             return;
         };
         self.task_command(TaskAction::Clear { project }, cx);
@@ -218,7 +224,7 @@ impl CockpitView {
     /// Why the Factory's store could not be read, over the board.
     pub(super) fn factory_trouble(&self) -> Option<AnyElement> {
         use ferrite_ui::theme::*;
-        let project = self.factory_view.as_ref()?.project;
+        let project = self.factory()?.project;
         let trouble = self.cockpit.factory().trouble_of(project)?.to_string();
         Some(
             div()
@@ -250,7 +256,7 @@ impl CockpitView {
     /// most recently archived first, the open one's panel beside them.
     pub(super) fn archive_surface(&self, window: &mut Window, cx: &mut Context<Self>) -> Div {
         use ferrite_ui::theme::*;
-        let Some(view) = self.factory_view.as_ref() else {
+        let Some(view) = self.factory() else {
             return div();
         };
         let project = view.project;

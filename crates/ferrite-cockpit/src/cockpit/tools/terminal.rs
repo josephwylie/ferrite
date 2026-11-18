@@ -15,7 +15,10 @@
 //! - **Attach as context** is the Reply card in the Composer's tray, the
 //!   same one the message menu's `Attach message as context` makes.
 
-use ferrite_pane::quote::Reply;
+use std::path::Path;
+
+use ferrite_core::{machine::Bridge, replies::Reply};
+use ferrite_pane::link_target::LinkTarget;
 use ferrite_terminal::{Cursor, Settings, Terminal, TerminalEvent, TerminalView};
 use ferrite_ui::icons;
 use ferrite_ui::theme;
@@ -47,10 +50,25 @@ pub(crate) enum Sub {
 /// The scrollbacks the menu offers.
 const SCROLLBACKS: [usize; 3] = [1_000, theme::TERMINAL_SCROLLBACK, 100_000];
 
+/// A shell's standing: running, or the reason it never started.
+enum Shell {
+    Running(Entity<TerminalView>),
+    Failed(String),
+}
+
 struct Tab {
     /// `Terminal N`'s N, and its Surface's (`SurfaceId::Terminal`).
     number: u64,
-    view: Entity<TerminalView>,
+    shell: Shell,
+}
+
+impl Tab {
+    fn view(&self) -> Option<&Entity<TerminalView>> {
+        match &self.shell {
+            Shell::Running(view) => Some(view),
+            Shell::Failed(_) => None,
+        }
+    }
 }
 
 #[derive(Default)]
@@ -87,6 +105,21 @@ fn scrollback_label(lines: usize) -> String {
     format!("{out} lines")
 }
 
+fn spawn_shell(
+    machine: Option<&Bridge>,
+    directory: &Path,
+    scrollback: usize,
+    size: (u16, u16),
+) -> std::io::Result<Terminal> {
+    match machine {
+        Some(machine) => {
+            let (program, args) = machine.terminal_command(directory)?;
+            Terminal::spawn_command(&std::env::temp_dir(), &program, args, scrollback, size)
+        }
+        None => Terminal::spawn(directory, scrollback, size),
+    }
+}
+
 impl CockpitView {
     /// One more shell in the Thread's folder, its Surface opened and
     /// shown (⌘J's first, the `+` menu's Terminal).
@@ -94,26 +127,60 @@ impl CockpitView {
         let Some(directory) = self.thread_path(thread) else {
             return;
         };
+        let shell = self.start_shell(thread, &directory, cx);
+        let terminals = self.tools.terminals.entry(thread).or_default();
+        terminals.made += 1;
+        let number = terminals.made;
+        terminals.tabs.push(Tab { number, shell });
+        self.tools.terminal_focus_wanted = true;
+        self.upsert_surface(thread, SurfaceId::Terminal(number), cx);
+    }
+
+    /// A shell in `directory`, or the reason there is none: its Surface
+    /// says why instead of the door looking dead.
+    fn start_shell(&mut self, thread: ThreadId, directory: &Path, cx: &mut Context<Self>) -> Shell {
         let prefs = &self.tools.terminal_prefs;
         let (settings, scrollback) = (prefs.settings, prefs.scrollback);
         // The column's width in cells, reckoned from the face's usual advance.
         let columns = ((theme::TERMINAL_W - 2. * theme::TERMINAL_PAD_X)
             / (theme::FS_TERMINAL * theme::CODE_ADVANCE)) as u16;
         let lines = (theme::TERMINAL_FIRST_ROWS) as u16;
-        let Ok(shell) = Terminal::spawn(&directory, scrollback, (columns, lines)) else {
+        match spawn_shell(self.cockpit.machine().map(AsRef::as_ref), directory, scrollback, (columns, lines)) {
+            Ok(shell) => {
+                let view = cx.new(|cx| TerminalView::new(shell, settings, cx));
+                cx.subscribe(&view, move |cockpit, view, event: &TerminalEvent, cx| {
+                    cockpit.terminal_event(thread, view, event, cx)
+                })
+                .detach();
+                Shell::Running(view)
+            }
+            Err(error) => Shell::Failed(error.to_string()),
+        }
+    }
+
+    /// Start shell `number` again, where it failed to start.
+    fn retry_terminal(&mut self, thread: ThreadId, number: u64, cx: &mut Context<Self>) {
+        let failed = self
+            .tools
+            .terminals
+            .get(&thread)
+            .and_then(|terminals| terminals.tabs.iter().find(|tab| tab.number == number))
+            .is_some_and(|tab| matches!(tab.shell, Shell::Failed(_)));
+        let Some(directory) = self.thread_path(thread).filter(|_| failed) else {
             return;
         };
-        let view = cx.new(|cx| TerminalView::new(shell, settings, cx));
-        cx.subscribe(&view, move |cockpit, view, event: &TerminalEvent, cx| {
-            cockpit.terminal_event(thread, view, event, cx)
-        })
-        .detach();
-        let terminals = self.tools.terminals.entry(thread).or_default();
-        terminals.made += 1;
-        let number = terminals.made;
-        terminals.tabs.push(Tab { number, view });
+        let shell = self.start_shell(thread, &directory, cx);
+        let Some(tab) = self
+            .tools
+            .terminals
+            .get_mut(&thread)
+            .and_then(|terminals| terminals.tabs.iter_mut().find(|tab| tab.number == number))
+        else {
+            return;
+        };
+        tab.shell = shell;
         self.tools.terminal_focus_wanted = true;
-        self.upsert_surface(thread, SurfaceId::Terminal(number), cx);
+        cx.notify();
     }
 
     fn terminal_event(
@@ -139,13 +206,45 @@ impl CockpitView {
                 self.tools.terminal_selected = view.read(cx).selection().is_some();
                 self.open_context_menu(MenuTarget::Terminal(thread), *at, cx)
             }
-            TerminalEvent::Exited => {
+            TerminalEvent::Failed(status) if self.cockpit.machine().is_some() => {
+                if let Some(tab) = self.tools.terminals.get_mut(&thread).and_then(|terminals| {
+                    terminals.tabs.iter_mut().find(|tab| tab.view() == Some(&view))
+                }) {
+                    tab.shell = Shell::Failed(format!(
+                        "The remote terminal ended ({status}). Check the connection in Settings, then try again."
+                    ));
+                    cx.notify();
+                }
+            }
+            TerminalEvent::Exited | TerminalEvent::Failed(_) => {
                 if let Some(number) = self.terminal_number(thread, &view) {
                     self.end_terminal(thread, number, cx);
                     self.forget_surface(thread, &SurfaceId::Terminal(number));
                 }
             }
+            TerminalEvent::Open(address) => self.open_terminal_address(thread, address, cx),
             TerminalEvent::Title(_) => {}
+        }
+    }
+
+    /// A ⌘-press on an address in the shell: it opens where the Panel
+    /// opens it (`Destination`), against the folder the shell started in.
+    fn open_terminal_address(&mut self, thread: ThreadId, address: &str, cx: &mut Context<Self>) {
+        let folder = self.thread_path(thread);
+        match Destination::of(address, folder.as_deref()) {
+            Some(Destination::Web(url)) => {
+                self.browser_action(thread, ferrite_core::browser::Action::Open { url }, cx)
+            }
+            Some(Destination::File(file)) => {
+                if let Some(index) = self.pane_for(thread) {
+                    let line = file.line();
+                    self.open_preview_from(index, file.path, line, cx);
+                }
+            }
+            Some(Destination::PullRequest { number, url }) => {
+                self.open_named_pr(thread, number, url, cx)
+            }
+            None => {}
         }
     }
 
@@ -155,7 +254,7 @@ impl CockpitView {
             .get(&thread)?
             .tabs
             .iter()
-            .find(|tab| tab.view == *view)
+            .find(|tab| tab.view() == Some(view))
             .map(|tab| tab.number)
     }
 
@@ -174,7 +273,7 @@ impl CockpitView {
     fn terminal_of(&self, thread: ThreadId, number: u64) -> Option<Entity<TerminalView>> {
         let terminals = self.tools.terminals.get(&thread)?;
         let tab = terminals.tabs.iter().find(|tab| tab.number == number)?;
-        Some(tab.view.clone())
+        tab.view().cloned()
     }
 
     /// The shell `thread`'s Panel shows, if it shows one.
@@ -233,8 +332,8 @@ impl CockpitView {
         }
         let prefs = &self.tools.terminal_prefs;
         let (settings, scrollback) = (prefs.settings, prefs.scrollback);
-        for tab in self.tools.terminals.get(&thread).into_iter().flat_map(|t| &t.tabs) {
-            tab.view.update(cx, |view, cx| view.configure(settings, scrollback, cx));
+        for view in self.tools.terminals.get(&thread).into_iter().flat_map(|t| &t.tabs).filter_map(Tab::view) {
+            view.update(cx, |view, cx| view.configure(settings, scrollback, cx));
         }
         cx.notify();
     }
@@ -242,23 +341,24 @@ impl CockpitView {
     /// The right-click menu's rows.
     pub(in crate::cockpit) fn terminal_context_rows(&self) -> Vec<Option<(menu::Item, MenuVerb)>> {
         let selected = self.tools.terminal_selected;
-        let row = |label: &'static str, chord: &'static str, verb: Verb, enabled: bool| {
-            let mut item = menu::Item::new(label);
-            if !chord.is_empty() {
-                item = item.shortcut(chord);
-            }
+        let row = |label: &'static str, action: &str, verb: Verb, enabled: bool| {
+            let chord = ferrite_ui::components::bound_chord_in(
+                action,
+                Some(ferrite_ui::keymap::TERMINAL),
+            );
+            let mut item = menu::Item::new(label).shortcut(chord.unwrap_or_default());
             item.disabled = !enabled;
             Some((item, MenuVerb::Terminal(verb)))
         };
         let mut rows = Vec::new();
         if selected {
-            rows.push(row("Attach selection as context", "shift-cmd-L", Verb::Attach, true));
+            rows.push(row("Attach selection as context", "terminal::Attach", Verb::Attach, true));
             rows.push(None);
         }
         rows.extend([
-            row("Copy", "cmd-C", Verb::Copy, selected),
-            row("Paste", "cmd-V", Verb::Paste, true),
-            row("Select all", "cmd-A", Verb::SelectAll, true),
+            row("Copy", "terminal::Copy", Verb::Copy, selected),
+            row("Paste", "terminal::Paste", Verb::Paste, true),
+            row("Select all", "terminal::SelectAll", Verb::SelectAll, true),
             None,
             row("Clear terminal", "", Verb::Clear, true),
         ]);
@@ -322,7 +422,19 @@ impl CockpitView {
 
     /// Shell `number`'s Surface: its row (`⋯`), then the grid.
     pub(in crate::cockpit) fn terminal_pane(&self, thread: ThreadId, number: u64, cx: &mut Context<Self>) -> Div {
-        let body = self.terminal_of(thread, number);
+        let failure = self
+            .tools
+            .terminals
+            .get(&thread)
+            .and_then(|terminals| terminals.tabs.iter().find(|tab| tab.number == number))
+            .and_then(|tab| match &tab.shell {
+                Shell::Failed(why) => Some(why.clone()),
+                Shell::Running(_) => None,
+            });
+        let body = match failure {
+            Some(why) => Some(Self::terminal_failure(why, thread, number, cx)),
+            None => self.terminal_of(thread, number).map(IntoElement::into_any_element),
+        };
         let more = ferrite_pane::preview::head_door("terminal-more", "terminal-more".into(), icons::ELLIPSIS)
             .tooltip(ferrite_ui::menu::tooltip("More"))
             .on_click(cx.listener(move |view, event: &ClickEvent, _, cx| {
@@ -336,6 +448,35 @@ impl CockpitView {
             .size_full()
             .child(super::surface_bar().child(div().flex_1()).child(more))
             .child(div().flex_1().min_h_0().children(body))
+    }
+
+    /// Why the shell never started, and a way to try again.
+    fn terminal_failure(why: String, thread: ThreadId, number: u64, cx: &mut Context<Self>) -> AnyElement {
+        use theme::*;
+        div()
+            .debug_selector(|| "terminal-failed".into())
+            .flex()
+            .flex_col()
+            .size_full()
+            .items_center()
+            .justify_center()
+            .gap(px(SPACE_2))
+            .px(px(SPACE_4))
+            .text_size(px(FS_LABEL))
+            .text_color(rgb(INK_SUBTLE))
+            .child(div().w_full().text_center().whitespace_normal().child("The terminal could not start"))
+            .child(div().w_full().text_center().whitespace_normal().child(why))
+            .child(
+                ferrite_ui::components::form_button("terminal-retry", cx)
+                    .debug_selector(|| "terminal-retry".into())
+                    .h(px(ROW))
+                    .px(px(CH))
+                    .child(ferrite_ui::components::form_label("Try again", INK_SUBTLE))
+                    .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
+                        view.retry_terminal(thread, number, cx)
+                    })),
+            )
+            .into_any_element()
     }
 }
 
@@ -375,12 +516,103 @@ impl CockpitView {
 
 #[cfg(test)]
 mod tests {
-    use super::scrollback_label;
+    use super::{scrollback_label, spawn_shell, Bridge};
 
     #[test]
     fn scrollback_reads_with_thousands_separators() {
         assert_eq!(scrollback_label(1_000), "1,000 lines");
         assert_eq!(scrollback_label(10_000), "10,000 lines");
         assert_eq!(scrollback_label(100_000), "100,000 lines");
+    }
+
+    #[test]
+    fn a_remote_terminal_never_falls_back_to_a_local_shell() {
+        let directory = std::env::temp_dir();
+        let bridge = Bridge::new(
+            "remote fixture",
+            directory.join("unused-terminal-bridge.sock"),
+            Box::new(|| unreachable!("terminal startup does not dial the Server")),
+        );
+        let error = spawn_shell(Some(&bridge), &directory, 1000, (80, 24))
+            .err()
+            .expect("a non-SSH remote must fail even when the folder exists locally");
+        assert_eq!(error.kind(), std::io::ErrorKind::Unsupported);
+    }
+}
+
+/// Where a printed address goes: a web address to the Thread's browser, a
+/// path to the Panel's editor, a PR of the checkout's repository to its
+/// native detail (`open_named_pr`). Other schemes a program names stay shut:
+/// terminal output is not trusted with the OS's openers.
+#[derive(Debug, PartialEq)]
+enum Destination {
+    Web(String),
+    File(ferrite_pane::file_links::FileLink),
+    PullRequest { number: u64, url: String },
+}
+
+impl Destination {
+    fn of(address: &str, folder: Option<&std::path::Path>) -> Option<Self> {
+        match LinkTarget::resolve(address, folder) {
+            LinkTarget::External(url) if url.starts_with("http://") || url.starts_with("https://") => {
+                Some(Self::Web(url))
+            }
+            LinkTarget::File(file) => Some(Self::File(file)),
+            LinkTarget::RepoPullRequest { number, url } => Some(Self::PullRequest { number, url }),
+            _ => None,
+        }
+    }
+}
+
+#[cfg(test)]
+mod destination_tests {
+    use super::*;
+    use std::path::Path;
+
+    #[test]
+    fn web_addresses_go_to_the_browser_and_paths_to_the_editor_at_their_line() {
+        let folder = Path::new("/work/app");
+        assert_eq!(
+            Destination::of("http://localhost:5173/app", Some(folder)),
+            Some(Destination::Web("http://localhost:5173/app".into()))
+        );
+        assert_eq!(
+            Destination::of("https://example.com/docs", Some(folder)),
+            Some(Destination::Web("https://example.com/docs".into()))
+        );
+        let Some(Destination::File(file)) = Destination::of("src/main.rs:12", Some(folder)) else {
+            panic!("a path opens in the editor");
+        };
+        assert_eq!(file.path, folder.join("src").join("main.rs"));
+        assert_eq!(file.line(), Some(12));
+    }
+
+    /// `gh pr create`'s printed address of the checkout's own repository
+    /// reads natively, keeping the address as printed.
+    #[test]
+    fn a_pr_address_of_the_checkouts_repository_reads_natively() {
+        let folder = std::env::temp_dir().join(format!("ferrite-terminal-pr-{}", std::process::id()));
+        std::fs::create_dir_all(folder.join(".git")).unwrap();
+        std::fs::write(
+            folder.join(".git/config"),
+            "[remote \"origin\"]\n\turl = git@github.com:owner/repo.git\n",
+        )
+        .unwrap();
+        let printed = "https://github.com/owner/repo/pull/123/files";
+        assert_eq!(
+            Destination::of(printed, Some(&folder)),
+            Some(Destination::PullRequest { number: 123, url: printed.into() })
+        );
+        assert_eq!(
+            Destination::of("https://github.com/other/repo/pull/9", Some(&folder)),
+            Some(Destination::Web("https://github.com/other/repo/pull/9".into()))
+        );
+        let _ = std::fs::remove_dir_all(folder);
+    }
+
+    #[test]
+    fn other_schemes_stay_shut() {
+        assert_eq!(Destination::of("mailto:a@b.c", None), None);
+        assert_eq!(Destination::of("slack://open", None), None);
     }
 }

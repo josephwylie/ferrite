@@ -59,7 +59,7 @@ impl FileLink {
                 if path.is_absolute() {
                     path
                 } else {
-                    cwd?.join(path)
+                    under(cwd?, &path)
                 }
             }
         };
@@ -67,6 +67,22 @@ impl FileLink {
             path,
             location: location.map(str::to_owned),
         })
+    }
+
+    /// The path with the position it names, as an editor takes it:
+    /// `/repo/src/main.rs:42`, or `...rs#L12-L15` for a range.
+    pub fn address(&self) -> String {
+        let path = self.path.display();
+        match self.location.as_deref() {
+            Some(location) if location.starts_with('L') => format!("{path}#{location}"),
+            Some(location) => format!("{path}:{location}"),
+            None => path.to_string(),
+        }
+    }
+
+    /// The line the location names (`12` of `:12:5`, of `#L12-L15`).
+    pub fn line(&self) -> Option<u32> {
+        self.location.as_deref().and_then(location_line)
     }
 
     pub fn url(&self) -> Option<String> {
@@ -86,6 +102,12 @@ impl FileLink {
             cx.open_url(&url);
         }
     }
+}
+
+/// `relative` under `root` in the platform's separators: an agent writes
+/// `src/main.rs` on Windows too, and Copy and the editor get `src\main.rs`.
+fn under(root: &Path, relative: &Path) -> PathBuf {
+    root.join(relative.components().collect::<PathBuf>())
 }
 
 fn split_location(value: &str) -> (&str, Option<&str>) {
@@ -170,13 +192,16 @@ impl PathTarget {
 
 type OpenReader = Rc<dyn Fn(PathBuf, Option<u32>, &mut Window, &mut App)>;
 type OpenThread = Rc<dyn Fn(ferrite_core::ThreadId, &mut Window, &mut App)>;
+type OpenPullRequest = Rc<dyn Fn(u64, String, &mut Window, &mut App)>;
 
 /// What a transcript does with a press on a link in its prose: ⌘-click on a
-/// path opens the Thread's preview, a Thread link opens that Thread.
+/// path opens the Thread's preview, a Thread link opens that Thread, and a
+/// link to one of its repository's pull requests opens that PR's detail.
 #[derive(Clone)]
 pub(crate) struct ScopeRoute {
     pub reader: OpenReader,
     pub thread: OpenThread,
+    pub pull_request: OpenPullRequest,
 }
 
 /// Where ⌘-click on a target goes, by the transcript namespace hosting it,
@@ -255,6 +280,21 @@ pub(crate) fn open_thread(
     if let Some(open) = handler {
         open(thread, window, cx);
     }
+}
+
+/// Open the PR a prose link names, through the transcript hosting `scope`.
+/// Answers whether a transcript took it.
+pub(crate) fn open_pull_request(
+    scope: &str,
+    number: u64,
+    url: String,
+    window: &mut Window,
+    cx: &mut App,
+) -> bool {
+    let handler = cx
+        .try_global::<PathScopes>()
+        .and_then(|scopes| scopes.open.get(scope).map(|(_, route)| route.pull_request.clone()));
+    handler.map(|open| open(number, url, window, cx)).is_some()
 }
 
 /// A transcript renders `scope` anew: the first target of each path laid
@@ -500,7 +540,7 @@ impl TargetContext {
         }) {
             let path = PathBuf::from(known);
             return Some(match (&self.workspace, path.is_absolute()) {
-                (Some(root), false) => root.join(path),
+                (Some(root), false) => under(root, &path),
                 _ => path,
             });
         }
@@ -508,7 +548,7 @@ impl TargetContext {
         let path = if Path::new(raw).is_absolute() {
             PathBuf::from(raw)
         } else {
-            root.join(raw)
+            under(root, Path::new(raw))
         };
         (inside_checkout(&path, root).is_some() && is_file(&path)).then_some(path)
     }
@@ -654,14 +694,18 @@ thread_local! {
 /// (`git@github.com:owner/repo.git` → `https://github.com/owner/repo/issues/212`),
 /// read once per checkout from its git config.
 pub(crate) fn issue_url(workspace: &Path, number: &str) -> Option<String> {
-    let base = ORIGINS.with(|cache| {
+    Some(format!("{}/issues/{number}", origin_base(workspace)?))
+}
+
+/// The web address of the forge repository `workspace`'s origin names.
+pub fn origin_base(workspace: &Path) -> Option<String> {
+    ORIGINS.with(|cache| {
         cache
             .borrow_mut()
             .entry(workspace.to_path_buf())
             .or_insert_with(|| origin_web_base(workspace))
             .clone()
-    })?;
-    Some(format!("{base}/issues/{number}"))
+    })
 }
 
 /// The origin remote's web base for the git checkout holding `dir`.
@@ -764,6 +808,7 @@ pub(crate) mod tests {
     }
     /// A checkout and a symlink to it, as `/tmp` is to `/private/tmp` on
     /// macOS: (the checkout's real path, the link the Thread stands in).
+    #[cfg(unix)]
     pub(crate) fn symlinked_checkout(name: &str) -> (PathBuf, PathBuf) {
         let dir = std::env::temp_dir().join(format!("ferrite-{name}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
@@ -775,6 +820,7 @@ pub(crate) mod tests {
 
     /// The agent names a file by its real path while the Thread stands in
     /// the checkout through a symlink: the file is still the checkout's.
+    #[cfg(unix)]
     #[test]
     fn a_checkout_reached_through_a_symlink_holds_its_real_paths() {
         let (real, link) = symlinked_checkout("inside-checkout");
@@ -795,7 +841,7 @@ pub(crate) mod tests {
         let cwd = checkout.as_path();
         assert_eq!(
             FileLink::resolve("docs/report.md", Some(cwd)).unwrap().path,
-            cwd.join("docs/report.md")
+            cwd.join("docs").join("report.md")
         );
         assert!(FileLink::resolve("report.md", None).is_none());
         for url in [

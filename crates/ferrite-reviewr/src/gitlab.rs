@@ -512,14 +512,14 @@ fn fetch_checks(
         }
         let allow_failure = job["allow_failure"].as_bool().unwrap_or(false);
         let status = job_status(job["status"].as_str().unwrap_or_default(), allow_failure);
-        upsert_latest(&mut checks, Check { name, status });
+        upsert_latest(&mut checks, Check { name, status, url: None });
     }
     // A header-less response past the cap can only be reported as capped.
     let capped = job_pages.map_or(rows.len() >= crate::forge::SURFACE_CAP, |total| total > 1);
     if capped {
         // A capped page could hide a failed job, so the pipeline's own verdict stands in.
         let status = pipeline_status(pipeline["status"].as_str().unwrap_or_default());
-        upsert_latest(&mut checks, Check { name: "pipeline".to_string(), status });
+        upsert_latest(&mut checks, Check { name: "pipeline".to_string(), status, url: None });
     }
     Ok((checks, capped))
 }
@@ -566,6 +566,12 @@ fn build_snapshot(
         title: mr["title"].as_str().unwrap_or_default().to_string(),
         url: mr["web_url"].as_str().unwrap_or_default().to_string(),
         body: mr["description"].as_str().unwrap_or_default().to_string(),
+        author: mr["author"]["username"].as_str().map(str::to_string),
+        author_avatar_url: mr["author"]["avatar_url"].as_str().map(str::to_string),
+        updated_at: mr["updated_at"].as_str().map(str::to_string),
+        changed_files: mr["changes_count"].as_str().and_then(|count| count.parse().ok()),
+        additions: None,
+        deletions: None,
         // A missing state reads as closed, never reviewable.
         state: parse_state(mr["state"].as_str().unwrap_or_default()),
         is_draft: mr["draft"].as_bool().unwrap_or(false),
@@ -642,6 +648,7 @@ fn replies_from_discussion(discussion: &Value) -> Vec<Reply> {
         .map(|note| {
             let author = note["author"]["username"].as_str().unwrap_or("").to_string();
             Reply {
+                id: crate::forge::provider_id(&note["id"]),
                 author_is_bot: is_gitlab_bot(&author),
                 author,
                 body: note["body"].as_str().unwrap_or("").trim().to_string(),
@@ -676,10 +683,12 @@ fn merge_comments(discussions: &[Value], approvals: &Value) -> Vec<Comment> {
             (CommentKind::Comment, "comment".to_string(), None, false)
         };
         out.push(Comment {
+            id: crate::forge::provider_id(&root["id"]),
             kind,
             author_is_bot: is_gitlab_bot(&author),
             author,
             anchor,
+            verdict: None,
             place,
             body: root["body"].as_str().unwrap_or("").trim().to_string(),
             snippet: None,
@@ -802,6 +811,25 @@ mod tests {
         assert_eq!(s.base_ref, "main");
         assert_eq!(s.merge, Merge::Clean);
         assert!(!s.comments_truncated && !s.checks_truncated);
+    }
+
+    #[test]
+    fn snapshot_carries_header_metadata_and_leaves_capped_counts_unknown() {
+        let mut mr = mr_node();
+        mr["author"] = json!({"username": "ada", "avatar_url": "https://example.test/ada.png"});
+        mr["updated_at"] = json!("2026-11-16T08:00:00Z");
+        mr["changes_count"] = json!("3");
+        let read = |mr: &Value| {
+            build_snapshot(mr, Sync::Unknown, Vec::new(), &[], &json!({}), false, false)
+        };
+        let pr = read(&mr);
+        assert_eq!(pr.author.as_deref(), Some("ada"));
+        assert_eq!(pr.author_avatar_url.as_deref(), Some("https://example.test/ada.png"));
+        assert_eq!(pr.updated_at.as_deref(), Some("2026-11-16T08:00:00Z"));
+        assert_eq!(pr.changed_files, Some(3));
+        assert_eq!((pr.additions, pr.deletions), (None, None));
+        mr["changes_count"] = json!("1000+");
+        assert_eq!(read(&mr).changed_files, None);
     }
 
     #[test]

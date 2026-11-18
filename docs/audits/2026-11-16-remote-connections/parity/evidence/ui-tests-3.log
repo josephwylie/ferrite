@@ -1,0 +1,228 @@
+warning: variable does not need to be mutable
+   --> crates/ferrite-core/src/server/tests/drive.rs:121:13
+    |
+121 |     let mut driven = attach_driven(&harness.address);
+    |         ----^^^^^^
+    |         |
+    |         help: remove this `mut`
+    |
+    = note: `#[warn(unused_mut)]` (part of `#[warn(unused)]`) on by default
+
+warning: `ferrite-core` (lib test) generated 1 warning (run `cargo fix --lib -p ferrite-core --tests` to apply 1 suggestion)
+warning: unreachable pattern
+   --> crates/ferrite-pane/src/link_target.rs:165:40
+    |
+142 |             Self::External(url) | Self::RepoPullRequest { url, .. } => {
+    |                                   --------------------------------- matches all the relevant values
+...
+165 |             Self::PullRequest { .. } | Self::RepoPullRequest { .. } | Self::Thread(_) => false,
+    |                                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^ no value can reach this
+    |
+    = note: `#[warn(unreachable_patterns)]` (part of `#[warn(unused)]`) on by default
+
+warning: `ferrite-pane` (lib) generated 1 warning
+warning: `ferrite-pane` (lib test) generated 1 warning (1 duplicate)
+   Compiling ferrite-cockpit v0.4.0 (/Users/josephwylie/Desktop/Projects/ferrite-remote-connections/crates/ferrite-cockpit)
+warning: unused variable: `open`
+     --> crates/ferrite-cockpit/src/cockpit.rs:11567:13
+      |
+11567 |         let open = self.cockpit.thread(thread).filter(|open| open.resume_lost())?;
+      |             ^^^^ help: if this is intentional, prefix it with an underscore: `_open`
+      |
+      = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+warning: variable does not need to be mutable
+   --> crates/ferrite-cockpit/src/cockpit/tests/changes.rs:310:13
+    |
+310 |     let mut again = |text: &str, cx: &mut gpui::VisualTestContext| {
+    |         ----^^^^^
+    |         |
+    |         help: remove this `mut`
+    |
+    = note: `#[warn(unused_mut)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused variable: `engine`
+   --> crates/ferrite-cockpit/src/cockpit/tests/browser_chrome.rs:467:10
+    |
+467 |     let (engine, view, thread, cx) = browser_window(cx, "bnt-draft");
+    |          ^^^^^^ help: if this is intentional, prefix it with an underscore: `_engine`
+
+warning: variable does not need to be mutable
+    --> crates/ferrite-cockpit/src/cockpit/tests/render_performance.rs:2779:13
+     |
+2779 |     let mut watch = |cx: &mut gpui::VisualTestContext, ms: u64| {
+     |         ----^^^^^
+     |         |
+     |         help: remove this `mut`
+
+warning: unused variable: `overview`
+   --> crates/ferrite-cockpit/src/cockpit/tests/tools.rs:111:9
+    |
+111 |     let overview = cx.debug_bounds("panel-tab-Overview").unwrap().center();
+    |         ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_overview`
+
+warning: unused `Admission` that must be used
+   --> crates/ferrite-cockpit/src/cockpit/tests/find.rs:265:5
+    |
+265 |     core.send(thread, "Look into it".into());
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = note: a refused or unconfirmed send leaves the draft with the caller
+    = note: `#[warn(unused_must_use)]` (part of `#[warn(unused)]`) on by default
+help: if you wish to disregard this recommendation, use `let _ = ...` to ignore the value
+    |
+265 |     let _ = core.send(thread, "Look into it".into());
+    |     +++++++
+
+warning: unused `Admission` that must be used
+   --> crates/ferrite-cockpit/src/cockpit/tests/find.rs:327:5
+    |
+327 |     core.send(thread, "Ship it".into());
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = note: a refused or unconfirmed send leaves the draft with the caller
+help: if you wish to disregard this recommendation, use `let _ = ...` to ignore the value
+    |
+327 |     let _ = core.send(thread, "Ship it".into());
+    |     +++++++
+
+warning: unused `Admission` that must be used
+   --> crates/ferrite-cockpit/src/cockpit/tests/retention.rs:159:5
+    |
+159 |     core.send(thread, "the very first question".into());
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = note: a refused or unconfirmed send leaves the draft with the caller
+help: if you wish to disregard this recommendation, use `let _ = ...` to ignore the value
+    |
+159 |     let _ = core.send(thread, "the very first question".into());
+    |     +++++++
+
+warning: unused `Admission` that must be used
+   --> crates/ferrite-cockpit/src/cockpit/tests/send_scroll.rs:788:9
+    |
+788 |         core.send(thread, "turn 0".into());
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = note: a refused or unconfirmed send leaves the draft with the caller
+help: if you wish to disregard this recommendation, use `let _ = ...` to ignore the value
+    |
+788 |         let _ = core.send(thread, "turn 0".into());
+    |         +++++++
+
+warning: unused `Admission` that must be used
+   --> crates/ferrite-cockpit/src/cockpit/tests/send_scroll.rs:795:13
+    |
+795 |             view.update(cx, |view, _| view.cockpit.send(thread, format!("turn {turn}")));
+    |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = note: a refused or unconfirmed send leaves the draft with the caller
+help: if you wish to disregard this recommendation, use `let _ = ...` to ignore the value
+    |
+795 |             let _ = view.update(cx, |view, _| view.cockpit.send(thread, format!("turn {turn}")));
+    |             +++++++
+
+warning: unused `Admission` that must be used
+   --> crates/ferrite-cockpit/src/cockpit/tests/send_scroll.rs:868:9
+    |
+868 |         core.send(thread, "turn 0".into());
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = note: a refused or unconfirmed send leaves the draft with the caller
+help: if you wish to disregard this recommendation, use `let _ = ...` to ignore the value
+    |
+868 |         let _ = core.send(thread, "turn 0".into());
+    |         +++++++
+
+warning: unused `Admission` that must be used
+   --> crates/ferrite-cockpit/src/cockpit/tests/send_scroll.rs:875:13
+    |
+875 |             view.update(cx, |view, _| view.cockpit.send(thread, format!("turn {turn}")));
+    |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = note: a refused or unconfirmed send leaves the draft with the caller
+help: if you wish to disregard this recommendation, use `let _ = ...` to ignore the value
+    |
+875 |             let _ = view.update(cx, |view, _| view.cockpit.send(thread, format!("turn {turn}")));
+    |             +++++++
+
+warning: linker stderr: ld: __eh_frame section too large (max 16MB) to encode dwarf unwind offsets in compact unwind table, performance of exception handling might be affected
+  |
+  = note: `#[warn(linker_messages)]` on by default
+
+warning: `ferrite-cockpit` (lib test) generated 13 warnings (run `cargo fix --lib -p ferrite-cockpit --tests` to apply 5 suggestions)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 31.89s
+warning: the following packages contain code that will be rejected by a future version of Rust: block v0.1.6
+note: to see what the problems were, use the option `--future-incompat-report`, or run `cargo report future-incompatibilities --id 1`
+────────────
+ Nextest run ID 5eddf73c-d3c9-4dfc-a616-6de7f64becb5 with nextest profile: default
+    Starting 72 tests across 4 binaries (2877 tests skipped)
+        PASS [   0.029s] ( 1/72) ferrite-cockpit cockpit::connections::tests::ssh_autocomplete_prioritizes_alias_prefixes_then_matches_resolved_addresses
+        PASS [   0.035s] ( 2/72) ferrite-cockpit cockpit::connections::tests::ssh_autocomplete_omits_saved_aliases_and_keeps_every_other_match
+        PASS [   0.382s] ( 3/72) ferrite-cockpit cockpit::tests::attachments::an_image_the_header_reader_does_not_know_is_still_drawn
+        PASS [   0.608s] ( 4/72) ferrite-cockpit cockpit::tests::attachments::a_pasted_screenshot_outlives_the_launch
+        PASS [   0.646s] ( 5/72) ferrite-cockpit cockpit::tests::attachments::a_file_attached_from_the_workspace_is_sent_as_its_own_path
+        PASS [   0.666s] ( 6/72) ferrite-cockpit cockpit::tests::attachments::a_workspace_file_that_goes_missing_stops_the_send
+        PASS [   0.671s] ( 7/72) ferrite-cockpit cockpit::tests::attachments::remote_upload_admission_preserves_a_new_thread_draft_until_ready
+        PASS [   0.743s] ( 8/72) ferrite-cockpit cockpit::tests::attachments::a_dropped_file_inside_the_workspace_is_sent_as_its_own_path
+        PASS [   0.751s] ( 9/72) ferrite-cockpit cockpit::tests::attachments::a_file_repaired_at_the_same_path_sends_without_a_retry
+        PASS [   0.915s] (10/72) ferrite-cockpit cockpit::tests::attachments::a_dropped_image_that_is_gone_stops_the_send_until_it_is_repaired
+        PASS [   0.522s] (11/72) ferrite-cockpit cockpit::tests::attachments::remote_upload_admission_preserves_an_existing_thread_draft_until_ready
+        PASS [   0.951s] (12/72) ferrite-cockpit cockpit::tests::attachments::a_local_file_bound_for_a_machine_waits_for_upload_and_a_workspace_file_does_not
+        PASS [   0.971s] (13/72) ferrite-cockpit cockpit::tests::attachments::an_image_over_the_inline_limit_goes_as_a_path_and_says_so
+        PASS [   0.899s] (14/72) ferrite-cockpit cockpit::tests::changes::a_file_longer_than_the_overview_cap_is_reviewable_to_its_last_line
+        FAIL [   0.955s] (15/72) ferrite-cockpit cockpit::tests::changes::a_refused_stage_names_its_file_and_git_and_a_retry_stages_it
+  stdout ───
+
+    running 1 test
+    test cockpit::tests::changes::a_refused_stage_names_its_file_and_git_and_a_retry_stages_it ... FAILED
+
+    failures:
+
+    failures:
+        cockpit::tests::changes::a_refused_stage_names_its_file_and_git_and_a_retry_stages_it
+
+    test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1259 filtered out; finished in 0.92s
+
+  stderr ───
+
+    thread 'cockpit::tests::changes::a_refused_stage_names_its_file_and_git_and_a_retry_stages_it' (54077615) panicked at crates/ferrite-cockpit/src/cockpit/tests/changes.rs:342:5:
+    the retry cleared it
+    note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+  Cancelling due to test failure: 9 tests still running
+        PASS [   1.072s] (16/72) ferrite-cockpit cockpit::tests::attachments::what_is_sent_is_the_bytes_the_draft_kept
+        PASS [   1.142s] (17/72) ferrite-cockpit cockpit::tests::changes::an_empty_uncommitted_scope_offers_the_branch_diff
+        PASS [   1.143s] (18/72) ferrite-cockpit cockpit::tests::changes::an_unwrapped_long_line_scrolls_sideways_to_its_tail
+        PASS [   1.023s] (19/72) ferrite-cockpit cockpit::tests::changes::marking_reviewed_folds_the_file_and_a_press_on_its_head_folds_it
+        PASS [   1.011s] (20/72) ferrite-cockpit cockpit::tests::changes::the_filter_narrows_the_files_listed
+        PASS [   1.002s] (21/72) ferrite-cockpit cockpit::tests::changes::the_menus_hold_what_the_spec_names_and_a_scope_rereads
+        FAIL [   1.105s] (22/72) ferrite-cockpit cockpit::tests::changes::changes_follow_the_agents_edits_without_a_refresh
+  stdout ───
+
+    running 1 test
+    test cockpit::tests::changes::changes_follow_the_agents_edits_without_a_refresh ... FAILED
+
+    failures:
+
+    failures:
+        cockpit::tests::changes::changes_follow_the_agents_edits_without_a_refresh
+
+    test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1259 filtered out; finished in 1.07s
+
+  stderr ───
+
+    thread 'cockpit::tests::changes::changes_follow_the_agents_edits_without_a_refresh' (54078234) panicked at crates/ferrite-cockpit/src/cockpit/tests/changes.rs:66:5:
+    assertion `left == right` failed
+      left: Some(2)
+     right: Some(1)
+    note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+        PASS [   0.636s] (23/72) ferrite-cockpit cockpit::tests::changes::the_pane_lists_each_changed_file_with_its_hunks_and_stat
+        PASS [   1.520s] (24/72) ferrite-cockpit cockpit::tests::changes::a_reviewed_file_changed_afterwards_is_unreviewed_and_open_again
+────────────
+     Summary [   2.232s] 24/72 tests run: 22 passed, 2 failed, 2877 skipped
+        FAIL [   0.955s] (15/72) ferrite-cockpit cockpit::tests::changes::a_refused_stage_names_its_file_and_git_and_a_retry_stages_it
+        FAIL [   1.105s] (22/72) ferrite-cockpit cockpit::tests::changes::changes_follow_the_agents_edits_without_a_refresh
+warning: 48/72 tests were not run due to test failure (run with --no-fail-fast to run all tests, or run with --max-fail)
+error: test run failed

@@ -19,6 +19,7 @@
 //! with its letter; one that cannot run here is dimmed and says why.
 
 use super::*;
+use crate::cockpit::tab_scroll::{self, Side};
 use ferrite_ui::icons::{self, icon};
 
 /// One row of the `+` menu and of "Open a surface", in T3's order.
@@ -87,12 +88,6 @@ impl Opener {
     }
 }
 
-/// How far a chevron scrolls a strip showing `visible` of its tabs.
-pub(crate) fn tab_scroll_step(visible: f32) -> f32 {
-    use ferrite_ui::theme::{SURFACE_TAB_SCROLL_MIN, SURFACE_TAB_SCROLL_SHARE};
-    (visible * SURFACE_TAB_SCROLL_SHARE).max(SURFACE_TAB_SCROLL_MIN)
-}
-
 /// A Surface's icon in its tab. Overview and Background have no T3
 /// counterpart: the Panel's own `PANEL_RIGHT`, and `CLOCK` for work left
 /// running.
@@ -133,12 +128,15 @@ pub(crate) fn surface_selector(id: &SurfaceId) -> String {
 impl CockpitView {
     /// Why `opener` cannot run for `thread` now (the row stays, dimmed,
     /// saying so), or None.
-    pub(crate) fn opener_unavailable(&self, thread: ThreadId, opener: Opener) -> Option<&'static str> {
-        let local = self.thread_path(thread).is_some() && !self.on_machine();
+    pub(crate) fn opener_unavailable(
+        &self,
+        thread: ThreadId,
+        opener: Opener,
+    ) -> Option<&'static str> {
+        let checkout = self.thread_path(thread).is_some();
         match opener {
-            Opener::Terminal | Opener::Changes | Opener::Files if !local => {
-                Some("Needs a checkout on this computer")
-            }
+            Opener::Terminal | Opener::Files if !checkout => Some("Needs a checkout"),
+            Opener::Changes if !checkout => Some("Needs a checkout"),
             Opener::PullRequest if self.facts.pr(thread).is_none() => {
                 Some("No pull request on this branch")
             }
@@ -174,7 +172,10 @@ impl CockpitView {
 
     /// The `+` menu's rows: every opener, its letter at the row's end, an
     /// unavailable one disabled with its reason.
-    pub(in crate::cockpit) fn surface_menu_rows(&self, thread: ThreadId) -> Vec<Option<(menu::Item, MenuVerb)>> {
+    pub(in crate::cockpit) fn surface_menu_rows(
+        &self,
+        thread: ThreadId,
+    ) -> Vec<Option<(menu::Item, MenuVerb)>> {
         Opener::ALL
             .into_iter()
             .map(|opener| {
@@ -191,26 +192,42 @@ impl CockpitView {
 
     /// A tab's right-click menu: its closes, each disabled where it would
     /// close nothing, a File's path first.
-    pub(in crate::cockpit) fn surface_tab_rows(&self, thread: ThreadId, at: usize) -> Vec<Option<(menu::Item, MenuVerb)>> {
+    pub(in crate::cockpit) fn surface_tab_rows(
+        &self,
+        thread: ThreadId,
+        at: usize,
+    ) -> Vec<Option<(menu::Item, MenuVerb)>> {
         let Some(state) = self.panel.surfaces.get(thread) else {
             return Vec::new();
         };
         let count = state.tabs.len();
-        let row = |label: &'static str, verb: MenuVerb, enabled: bool| {
+        let row = |label: SharedString, verb: MenuVerb, enabled: bool| {
             let mut item = menu::Item::new(label);
             item.disabled = !enabled;
             Some((item, verb))
         };
         let mut rows = Vec::new();
         if let Some(SurfaceId::File(_)) = state.tabs.get(at) {
-            rows.push(row("Copy path", MenuVerb::CopyPath, true));
+            rows.push(row("Copy path".into(), MenuVerb::CopyPath, true));
             rows.push(None);
         }
+        let close = match state.tabs.get(at).map(|id| id.lifecycle().close) {
+            Some(Close::End(what)) => format!("End {what}").into(),
+            _ => "Close".into(),
+        };
         rows.extend([
-            row("Close", MenuVerb::CloseSurface, at < count),
-            row("Close others", MenuVerb::CloseOtherSurfaces, count > 1),
-            row("Close to the right", MenuVerb::CloseSurfacesRight, at + 1 < count),
-            row("Close all", MenuVerb::CloseAllSurfaces, count > 0),
+            row(close, MenuVerb::CloseSurface, at < count),
+            row(
+                "Close others".into(),
+                MenuVerb::CloseOtherSurfaces,
+                count > 1,
+            ),
+            row(
+                "Close to the right".into(),
+                MenuVerb::CloseSurfacesRight,
+                at + 1 < count,
+            ),
+            row("Close all".into(), MenuVerb::CloseAllSurfaces, count > 0),
         ]);
         rows
     }
@@ -234,9 +251,15 @@ impl CockpitView {
         };
         match verb {
             MenuVerb::CloseSurface => self.close_surface(thread, &id, cx),
-            MenuVerb::CloseOtherSurfaces => self.close_surfaces(thread, |state| state.close_others(&id), cx),
-            MenuVerb::CloseSurfacesRight => self.close_surfaces(thread, |state| state.close_right(&id), cx),
-            MenuVerb::CloseAllSurfaces => self.close_surfaces(thread, ThreadSurfaces::close_all, cx),
+            MenuVerb::CloseOtherSurfaces => {
+                self.close_surfaces(thread, CloseSelection::Others(id), cx)
+            }
+            MenuVerb::CloseSurfacesRight => {
+                self.close_surfaces(thread, CloseSelection::Right(id), cx)
+            }
+            MenuVerb::CloseAllSurfaces => {
+                self.close_surfaces(thread, CloseSelection::All, cx)
+            }
             MenuVerb::CopyPath => {
                 if let SurfaceId::File(path) = &id {
                     cx.write_to_clipboard(ClipboardItem::new_string(path.display().to_string()));
@@ -253,10 +276,11 @@ impl CockpitView {
         match id {
             SurfaceId::SideChat(tab) => self.side_chat_running(thread, *tab),
             SurfaceId::Agent(key) => self.agent_running(thread, key),
-            SurfaceId::Background => self
-                .cockpit
-                .thread(thread)
-                .is_some_and(|open| open.transcript().background_calls().any(|call| call.in_background())),
+            SurfaceId::Background => self.cockpit.thread(thread).is_some_and(|open| {
+                open.transcript()
+                    .background_calls()
+                    .any(|call| call.in_background())
+            }),
             _ => false,
         }
     }
@@ -291,19 +315,20 @@ impl CockpitView {
         };
         let active = self.active_surface(thread);
         let maximized = state.is_some_and(|state| state.maximized);
-        let strip = div()
-            .debug_selector(|| "panel-tabs".into())
-            .flex()
-            .items_center()
-            .gap(px(SURFACE_HEAD_GAP))
-            // T3's `w-max min-w-full`: as wide as its tabs, so they
-            // overflow the scroll rather than squeeze.
-            .flex_shrink_0()
-            .min_w_full()
-            .children(tabs.iter().enumerate().map(|(at, id)| {
-                self.surface_tab(thread, at, id, active.as_ref() == Some(id), cx)
-            }))
-            .child(self.surface_plus(thread, cx));
+        let strip =
+            div()
+                .debug_selector(|| "panel-tabs".into())
+                .flex()
+                .items_center()
+                .gap(px(SURFACE_HEAD_GAP))
+                // T3's `w-max min-w-full`: as wide as its tabs, so they
+                // overflow the scroll rather than squeeze.
+                .flex_shrink_0()
+                .min_w_full()
+                .children(tabs.iter().enumerate().map(|(at, id)| {
+                    self.surface_tab(thread, at, id, active.as_ref() == Some(id), cx)
+                }))
+                .child(self.surface_plus(thread, cx));
         // Each face its own id: a tooltip shown before the toggle belongs to
         // the old face and goes with it, not left reading the old label.
         let (id, glyph) = if maximized {
@@ -311,7 +336,18 @@ impl CockpitView {
         } else {
             ("panel-maximize", icons::MAXIMIZE)
         };
-        let maximize = ferrite_pane::preview::head_door(id, id.into(), glyph)
+        let name = if maximized {
+            "Restore panel size"
+        } else {
+            "Maximize panel"
+        };
+        let semantics = Semantics::button(name);
+        let handle = self.panel_control(PanelControl::Maximize, semantics.clone(), cx);
+        let maximize = controls::focusable(
+            ferrite_pane::preview::head_door(id, id.into(), glyph),
+            &handle,
+            &semantics,
+        )
         .occlude()
         .tooltip(ferrite_ui::menu::tooltip(if maximized {
             "Restore panel size"
@@ -322,47 +358,22 @@ impl CockpitView {
             cx.stop_propagation();
             view.toggle_panel_maximized(thread, cx);
         }));
-        // The chevrons show only on overflow, each at an end with more.
         let scroll = &self.panel.tabs_scroll;
-        // A chevron's ease, where this frame has it; landed, the strip is
-        // the operator's to scroll again.
-        if let Some(tween) = self.panel.tabs_tween.get() {
-            let now = cx.background_executor().now();
-            let reduced = ferrite_ui::motion::reduced_motion(cx);
-            scroll.set_offset(gpui::point(px(-tween.value(now, reduced)), scroll.offset().y));
-            if !tween.running(now, reduced) {
-                self.panel.tabs_tween.set(None);
-            }
-        }
-        let scrolled = -f32::from(scroll.offset().x);
-        let most = f32::from(scroll.max_offset().x);
-        let chevron = |side: &'static str, glyph: &'static str, shows: bool, toward: f32| {
-            shows.then(|| {
-                let key = SharedString::from(format!("panel-tabs-{side}"));
-                div()
-                    .id(key.clone())
-                    .debug_selector({
-                        let key = key.clone();
-                        move || key.to_string()
-                    })
-                    .flex()
-                    .flex_shrink_0()
-                    .items_center()
-                    .justify_center()
-                    .size(px(SURFACE_PLUS))
-                    .rounded(px(R_CONTROL))
-                    .occlude()
-                    .hover_raised(key)
-                    .child(icon(glyph, ICON_CHEVRON, INK_SUBTLE))
-                    .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                    .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
-                        cx.stop_propagation();
-                        view.scroll_surface_tabs(toward, cx);
-                    }))
-            })
+        scroll.settle(cx);
+        let chevron = |side: Side| {
+            tab_scroll::chevron(
+                "panel-tabs",
+                side,
+                scroll,
+                cx.listener(move |view, _: &ClickEvent, _, cx| {
+                    cx.stop_propagation();
+                    view.panel.tabs_scroll.ease(side, cx);
+                    cx.notify();
+                }),
+            )
         };
-        // The title bar's Panel toggle keeps the row's right end.
-        let toggle = ICON_BUTTON + TITLE_TOOLS_GAP;
+        // The title bar's tools keep the row's right end.
+        let toggle = TITLE_TOOLS_W + TITLE_TOOLS_GAP;
         div()
             .debug_selector(|| "panel-head".into())
             .flex()
@@ -372,65 +383,39 @@ impl CockpitView {
             .h(px(WIN_CHROME_H))
             .pl(px(SURFACE_HEAD_PAD_L))
             .pr(px(super::tools_inset() + toggle))
-            .children(chevron("left", icons::BACK, scrolled > 0.5, -1.))
             .child(
                 div()
-                    .id("panel-tab-scroll")
                     .flex()
                     .flex_1()
                     .min_w_0()
-                    .overflow_x_scroll()
-                    .track_scroll(&self.panel.tabs_scroll)
-                    // The wheel's vertical turn scrolls the tabs sideways.
-                    .on_scroll_wheel(cx.listener(|view, event: &gpui::ScrollWheelEvent, window, cx| {
-                        let delta = event.delta.pixel_delta(window.line_height());
-                        if delta.y.abs() > delta.x.abs() {
-                            view.scroll_surface_tabs_by(-f32::from(delta.y), cx);
-                        }
-                    }))
-                    .child(strip),
+                    .items_center()
+                    .children(chevron(Side::Left))
+                    .child(
+                        div()
+                            .id("panel-tab-scroll")
+                            .flex()
+                            .flex_1()
+                            .min_w_0()
+                            .overflow_x_scroll()
+                            .track_scroll(&**scroll)
+                            // The wheel's vertical turn scrolls the tabs sideways.
+                            .on_scroll_wheel(cx.listener(
+                                |view, event: &gpui::ScrollWheelEvent, window, cx| {
+                                    if view.panel.tabs_scroll.wheel(event, window) {
+                                        cx.notify();
+                                    }
+                                },
+                            ))
+                            .child(strip),
+                    )
+                    .children(chevron(Side::Right)),
             )
-            .children(chevron("right", icons::CHEVRON_RIGHT, scrolled < most - 0.5, 1.))
             .child(maximize)
-    }
-
-    /// A chevron's press: the tabs ease `toward` (-1 left, 1 right) by
-    /// `tab_scroll_step` of what shows; under reduced motion they jump.
-    fn scroll_surface_tabs(&mut self, toward: f32, cx: &mut Context<Self>) {
-        let scroll = &self.panel.tabs_scroll;
-        let visible = f32::from(scroll.bounds().size.width);
-        let most = f32::from(scroll.max_offset().x).max(0.);
-        let at = -f32::from(scroll.offset().x);
-        let to = (at + toward * tab_scroll_step(visible)).clamp(0., most);
-        let now = cx.background_executor().now();
-        let reduced = ferrite_ui::motion::reduced_motion(cx);
-        self.panel.tabs_tween.set(Some(ferrite_ui::motion::Tween::retarget(
-            self.panel.tabs_tween.take(),
-            at,
-            to,
-            ferrite_ui::motion::TAB_SCROLL,
-            now,
-            reduced,
-        )));
-        cx.notify();
     }
 
     /// Whether the strip is mid-ease: the frame must be drawn again.
     pub(in crate::cockpit) fn tabs_scrolling(&self, cx: &gpui::App) -> bool {
-        let now = cx.background_executor().now();
-        let reduced = ferrite_ui::motion::reduced_motion(cx);
-        self.panel.tabs_tween.get().is_some_and(|tween| tween.running(now, reduced))
-    }
-
-    /// The tabs scrolled `by` sideways, within their overflow (the wheel's
-    /// turn, which stops a chevron's ease).
-    fn scroll_surface_tabs_by(&mut self, by: f32, cx: &mut Context<Self>) {
-        self.panel.tabs_tween.set(None);
-        let scroll = &self.panel.tabs_scroll;
-        let most = f32::from(scroll.max_offset().x);
-        let at = (-f32::from(scroll.offset().x) + by).clamp(0., most.max(0.));
-        scroll.set_offset(gpui::point(px(-at), scroll.offset().y));
-        cx.notify();
+        self.panel.tabs_scroll.running(cx) || self.files_tabs_scrolling(cx)
     }
 
     /// One tab (T3's `group/tab`, see the module doc).
@@ -462,7 +447,10 @@ impl CockpitView {
             // A pull request's icon says its state, in its state's ink.
             let (glyph, ink) = match (id, self.pr_tone(thread)) {
                 (SurfaceId::PullRequest(_), Some(tone)) => (tone.glyph(), tone.ink()),
-                _ => (surface_icon(id), if active { INK_STRONG } else { INK_SUBTLE }),
+                _ => (
+                    surface_icon(id),
+                    if active { INK_STRONG } else { INK_SUBTLE },
+                ),
             };
             let pending = self.surface_pending(thread, id).then(|| {
                 div()
@@ -506,9 +494,13 @@ impl CockpitView {
         let pressed = id.clone();
         let middle = id.clone();
         let held = id.clone();
+        let control = PanelControl::Tab(id.clone());
+        let semantics = Semantics::tab(self.surface_title(thread, id), active);
+        let handle = self.panel_control(control.clone(), semantics.clone(), cx);
         div()
             .id(element)
             .debug_selector(move || selector.clone())
+            .relative()
             .flex()
             .flex_shrink_0()
             .items_center()
@@ -527,10 +519,15 @@ impl CockpitView {
                 if active {
                     face.hover_carried(key).text_color(rgb(INK_STRONG))
                 } else {
-                    face.hover_row(key)
-                        .text_color(rgb(if hovered { INK_STRONG } else { INK_SUBTLE }))
+                    face.hover_row(key).text_color(rgb(if hovered {
+                        INK_STRONG
+                    } else {
+                        INK_SUBTLE
+                    }))
                 }
             })
+            .map(|tab| controls::focusable(tab, &handle, &semantics))
+            .child(self.measured(control))
             .child(close)
             .child(
                 div()
@@ -569,7 +566,11 @@ impl CockpitView {
                 MouseButton::Right,
                 cx.listener(move |view, event: &MouseDownEvent, _, cx| {
                     cx.stop_propagation();
-                    view.open_context_menu(MenuTarget::SurfaceTab { thread, at }, event.position, cx);
+                    view.open_context_menu(
+                        MenuTarget::SurfaceTab { thread, at },
+                        event.position,
+                        cx,
+                    );
                 }),
             )
             .into_any_element()
@@ -580,8 +581,8 @@ impl CockpitView {
         use ferrite_ui::theme::*;
         let id = gpui::ElementId::from("panel-plus");
         let key = ferrite_ui::pointer::hover_key(&id);
-        let drawn: std::rc::Rc<std::cell::Cell<Option<gpui::Bounds<Pixels>>>> = Default::default();
-        let measured = drawn.clone();
+        let semantics = Semantics::button("Open a surface");
+        let handle = self.panel_control(PanelControl::Plus, semantics.clone(), cx);
         div()
             .id(id)
             .debug_selector(|| "panel-plus".into())
@@ -594,27 +595,14 @@ impl CockpitView {
             .rounded(px(R_CONTROL))
             .occlude()
             .hover_raised(key)
-            .child(
-                gpui::canvas(move |bounds, _, _| measured.set(Some(bounds)), |_, _, _, _| {})
-                    .absolute()
-                    .size_full(),
-            )
+            .map(|plus| controls::focusable(plus, &handle, &semantics))
+            .child(self.measured(PanelControl::Plus))
             .child(icon(icons::PLUS, SURFACE_PLUS_GLYPH, INK_SUBTLE))
             .tooltip(ferrite_ui::menu::tooltip("Open a surface"))
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-            .on_click(cx.listener(move |view, event: &ClickEvent, _, cx| {
+            .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
                 cx.stop_propagation();
-                // Under the `+`, its left edge on the button's.
-                let at = drawn.get().map_or(event.position(), |plus| {
-                    gpui::point(plus.left(), plus.bottom() + px(FLOAT_OFFSET))
-                });
-                view.open_context_menu_at(
-                    MenuTarget::SurfaceMenu(thread),
-                    at,
-                    gpui::Anchor::TopLeft,
-                    None,
-                    cx,
-                );
+                view.open_panel_menu(PanelControl::Plus, MenuTarget::SurfaceMenu(thread), cx);
             }))
             .into_any_element()
     }
@@ -626,12 +614,18 @@ impl CockpitView {
             return;
         };
         if !self.panel_open(thread) {
-            self.surfaces_mut(thread).set_open(true);
+            self.apply_surface(thread, SurfaceAction::SetOpen(true));
         }
         let window = self.panel.window_w;
-        let left = window - self.panel_column_w() + ferrite_ui::theme::SURFACE_HEAD_PAD_L;
+        let left = window - self.panel_target_w() + ferrite_ui::theme::SURFACE_HEAD_PAD_L;
         let at = gpui::point(px(left), px(ferrite_ui::theme::WIN_CHROME_H));
-        self.open_context_menu_at(MenuTarget::SurfaceMenu(thread), at, gpui::Anchor::TopLeft, None, cx);
+        self.open_context_menu_at(
+            MenuTarget::SurfaceMenu(thread),
+            at,
+            gpui::Anchor::TopLeft,
+            None,
+            cx,
+        );
     }
 
     /// "Open a surface": the Panel with no tab shown (T3's empty panel).
@@ -670,6 +664,7 @@ impl CockpitView {
         div()
             .id("panel-empty")
             .debug_selector(|| "panel-empty".into())
+            .key_context(ferrite_ui::keymap::PANEL_EMPTY)
             .track_focus(&self.panel_empty_focus)
             // T3's empty panel is the Panel's focus target: a press in it
             // takes the keyboard from the Composer, so its letters work.

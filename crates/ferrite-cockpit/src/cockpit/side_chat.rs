@@ -34,9 +34,10 @@ use std::collections::VecDeque;
 use super::*;
 
 use ferrite_core::activity::Subject;
+use ferrite_core::cockpit::Admission;
+use ferrite_core::replies::Reply;
 use ferrite_core::workspace::WorkspaceBinding;
 use ferrite_pane::composer::Role;
-use ferrite_pane::quote::Reply;
 use ferrite_ui::icons::{self, icon};
 
 gpui::actions!(side_chat, [Ask]);
@@ -216,7 +217,7 @@ impl CockpitView {
             line.set_visible_row_limit(ferrite_pane::composer::MAX_ROWS, cx);
             if let Some(passage) = passage {
                 // The caret lands under the quote.
-                let quote = ferrite_pane::quote::compose(&[Reply::new(passage, "")], "");
+                let quote = ferrite_core::replies::compose(&[Reply::new(passage, "")], "");
                 line.insert(&format!("{quote}\n\n"), cx);
             }
             line
@@ -299,7 +300,7 @@ impl CockpitView {
         });
         if worktree {
             let _ = self.cockpit.park(thread);
-        } else if let Err(error) = self.cockpit.delete(thread) {
+        } else if let Err(error) = self.delete_thread(thread) {
             ferrite_core::log!("side chat thread {thread} could not be deleted: {error:?}");
         }
     }
@@ -362,18 +363,22 @@ impl CockpitView {
         if field.read(cx).text().trim().is_empty() {
             return;
         }
-        let text = field
-            .update(cx, |field, cx| field.take(cx))
-            .trim()
-            .to_string();
-        if self
+        let draft = field.update(cx, |field, cx| field.take_draft(cx));
+        let text = draft.prompt().trim().to_string();
+        let admitted = if self
             .cockpit
             .thread(thread)
             .is_some_and(|open| open.needs_queue())
         {
-            self.cockpit.queue(thread, text);
+            self.cockpit.queue(thread, text)
         } else {
-            self.cockpit.send(thread, text);
+            matches!(
+                self.cockpit.send(thread, text),
+                Admission::Delivered | Admission::Held
+            )
+        };
+        if !admitted {
+            field.update(cx, |field, cx| field.restore(draft, true, cx));
         }
         if let Some(entity) = self.side_transcript(owner) {
             entity.update(cx, |transcript, cx| transcript.scroll_to_bottom(cx));
@@ -470,16 +475,18 @@ impl CockpitView {
             &conversation.pane,
             conversation.inherited,
             None,
+            None,
             cx,
         );
     }
 
     /// Tell `pane`'s transcript what `subject` of `thread` holds after its
-    /// first `skip` blocks, `note` standing under the first prompt — the
+    /// first `skip` blocks, `note` standing under the first prompt. The
     /// compact, read-only twin of `sync_transcript`, for the right pane's
-    /// bodies (the side chat's tabs, a subagent's drill-in): no Decision
-    /// strip, subagents or rewinds, and no Reply (they have no Composer of
-    /// a Pane's to reply into).
+    /// bodies (the side chat's tabs, a subagent's drill-in): no subagents,
+    /// rewinds or Reply, as they have no Pane's Composer to reply into.
+    /// `decisions` is the row after the last, where the view answers the
+    /// Decisions `subject` waits on.
     pub(super) fn sync_compact_transcript(
         &self,
         thread: ThreadId,
@@ -487,6 +494,7 @@ impl CockpitView {
         pane: &PaneView,
         skip: usize,
         note: Option<SharedString>,
+        decisions: Option<ferrite_pane::transcript::TranscriptTail>,
         cx: &mut Context<Self>,
     ) {
         let Some(open) = self.cockpit.thread(thread) else {
@@ -508,56 +516,32 @@ impl CockpitView {
             focused: true,
             reduce_motion: cx.reduce_motion(),
         });
+        let pending_call = decisions
+            .as_ref()
+            .and_then(|_| {
+                open.activity()
+                    .pending_decisions()
+                    .iter()
+                    .find(|request| subagents::shown_for(subject, request))
+            })
+            .map(|request| request.decision.tool_use_id.clone())
+            .filter(|call| !call.is_empty());
         let workspace =
             ferrite_core::workspace::effective_cwd(open.session_project_root(), open.workspace())
                 .map(std::path::Path::to_path_buf);
-        let key = ferrite_pane::transcript::TranscriptKey {
-            namespace: namespace.clone(),
-            content_revision: revision,
-            display_revision: pane.disclosure_revision(),
-            focused: true,
-            signal_status: Some(status),
-            reading_size,
-            working: working.as_ref().map(|working| working.key),
-            tail: None,
-            pending_call: None,
-            workspace: workspace.clone(),
-            solo: false,
-            thinking: self.prefs.settings.show_thinking,
-            agents: Default::default(),
-            rewind: None,
-            quotes: false,
-            skills: open.commands().len(),
-            note: note.clone(),
-            queued: 0,
-        };
-        let Some(entity) = pane.transcript() else {
-            return;
-        };
-        if entity.read(cx).matches(&key) {
-            return;
-        }
-        let mut blocks = pane::rendered_window(transcript.blocks(), Level::Transcript).to_vec();
-        let first = transcript.blocks().len() - blocks.len();
-        blocks.drain(..skip.saturating_sub(first).min(blocks.len()));
-        let disclosure = pane.transcript_disclosure_snapshot();
-        let input = ferrite_pane::transcript::TranscriptInput {
+        let presentation = ferrite_pane::transcript::TranscriptPresentation {
             thread,
+            selection_scope: pane.selection_scope,
+            disclosure_focus: pane.tool_focus(),
             namespace,
             content_revision: revision,
             display_revision: pane.disclosure_revision(),
-            blocks,
-            signal_status: Some(status),
             focused: true,
+            signal_status: Some(status),
             reading_size,
-            selection_scope: pane.selection_scope,
-            preview: pane.preview.clone(),
-            expanded: disclosure.0,
-            target: disclosure.1,
-            disclosure_focus: disclosure.2,
             working,
-            tail: None,
-            pending_call: None,
+            tail: decisions,
+            pending_call,
             workspace,
             solo: false,
             thinking: self.prefs.settings.show_thinking,
@@ -566,11 +550,35 @@ impl CockpitView {
             quotes: false,
             reply_to: open.provider().to_string().into(),
             skills: open.commands().into(),
+            cited: Default::default(),
             note,
+            earlier: None,
             queued: 0,
         };
+        let Some(entity) = pane.transcript() else {
+            return;
+        };
         let selection = self.selection.clone();
-        entity.update(cx, |transcript, cx| transcript.sync(input, selection, cx));
+        entity.update(cx, |view, cx| {
+            view.reconcile(
+                presentation,
+                || {
+                    let mut blocks =
+                        pane::rendered_window(transcript.blocks()).to_vec();
+                    let first = transcript.blocks().len() - blocks.len();
+                    blocks.drain(..skip.saturating_sub(first).min(blocks.len()));
+                    let disclosure = pane.transcript_disclosure_snapshot();
+                    ferrite_pane::transcript::TranscriptBody {
+                        blocks,
+                        preview: pane.preview.clone(),
+                        expanded: disclosure.0,
+                        target: disclosure.1,
+                    }
+                },
+                selection,
+                cx,
+            );
+        });
     }
 
     /// A tab's transcript asks for something: a tool row folds or unfolds
@@ -784,7 +792,7 @@ impl CockpitView {
         let (Some(run), Some(index)) = (self.side_run(owner, id), self.pane_for(owner)) else {
             return;
         };
-        let quote = ferrite_pane::quote::compose(&[Reply::new(format!("From a side chat:\n{run}"), "")], "");
+        let quote = ferrite_core::replies::compose(&[Reply::new(format!("From a side chat:\n{run}"), "")], "");
         self.panes[index]
             .composer
             .update(cx, |composer, cx| composer.insert(&format!("{quote}\n\n"), cx));

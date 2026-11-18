@@ -45,11 +45,58 @@ pub(crate) enum SurfaceId {
     PullRequest(u64),
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Close {
+    /// Nothing outlives the tab but its identity: the Surface reads what it
+    /// shows from the Thread.
+    Hide,
+    /// The view is put away; the durable subject (a file on disk, an agent's
+    /// saved history) stays, and reopening builds the view again from it.
+    Release,
+    /// The resource ends with its tab, and nothing brings it back. Names
+    /// what ends, for the menu's `End <what>`.
+    End(&'static str),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Restart {
+    /// The tab returns, and builds what it shows from its subject as it is
+    /// shown; a subject that is gone says so in the tab.
+    Restore,
+    /// The resource ended with the window (no process or page survives), so
+    /// the tab does not return.
+    Ends,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct Lifecycle {
+    pub(crate) close: Close,
+    pub(crate) restart: Restart,
+}
+
+impl Lifecycle {
+    const fn new(close: Close, restart: Restart) -> Self {
+        Self { close, restart }
+    }
+
+    pub(crate) fn reopenable(self) -> bool {
+        !matches!(self.close, Close::End(_))
+    }
+}
+
 impl SurfaceId {
-    /// Whether a closed tab of this kind can come back: a closed shell or
-    /// live page cannot.
-    fn reopenable(&self) -> bool {
-        !matches!(self, Self::Terminal(_) | Self::Browser)
+    pub(crate) fn lifecycle(&self) -> Lifecycle {
+        match self {
+            Self::Overview
+            | Self::Changes
+            | Self::Files
+            | Self::Background
+            | Self::PullRequest(_) => Lifecycle::new(Close::Hide, Restart::Restore),
+            Self::File(_) | Self::Agent(_) => Lifecycle::new(Close::Release, Restart::Restore),
+            Self::Browser => Lifecycle::new(Close::End("page"), Restart::Ends),
+            Self::Terminal(_) => Lifecycle::new(Close::End("shell"), Restart::Ends),
+            Self::SideChat(_) => Lifecycle::new(Close::End("side chat"), Restart::Ends),
+        }
     }
 }
 
@@ -81,6 +128,7 @@ impl PrTab {
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct ThreadSurfaces {
     pub(crate) open: bool,
+    pub(crate) details_inline_open: bool,
     pub(crate) active: Option<SurfaceId>,
     pub(crate) tabs: Vec<SurfaceId>,
     pub(crate) maximized: bool,
@@ -101,6 +149,7 @@ impl ThreadSurfaces {
     pub(crate) fn new(open: bool) -> Self {
         Self {
             open,
+            details_inline_open: true,
             active: Some(SurfaceId::Overview),
             tabs: vec![SurfaceId::Overview],
             maximized: false,
@@ -179,7 +228,10 @@ impl ThreadSurfaces {
         self.revision += 1;
         let gone = self.tabs.remove(at);
         if self.active.as_ref() == Some(&gone) {
-            self.active = self.tabs.get(at.min(self.tabs.len().saturating_sub(1))).cloned();
+            self.active = self
+                .tabs
+                .get(at.min(self.tabs.len().saturating_sub(1)))
+                .cloned();
         }
         self.remember(gone);
     }
@@ -204,7 +256,11 @@ impl ThreadSurfaces {
         };
         self.revision += 1;
         let gone = self.tabs.split_off(at + 1);
-        if self.active.as_ref().is_some_and(|active| gone.contains(active)) {
+        if self
+            .active
+            .as_ref()
+            .is_some_and(|active| gone.contains(active))
+        {
             self.active = Some(id.clone());
         }
         self.remember_all(gone);
@@ -228,6 +284,10 @@ impl ThreadSurfaces {
         self.tabs.insert(index.min(self.tabs.len()), tab);
     }
 
+    pub(crate) fn can_reopen(&self) -> bool {
+        !self.closed.is_empty()
+    }
+
     /// Bring back the last tab closed that can come back, shown.
     pub(crate) fn reopen_closed(&mut self) -> Option<SurfaceId> {
         let id = self.closed.pop()?;
@@ -241,7 +301,10 @@ impl ThreadSurfaces {
         if let Some(at) = self.tabs.iter().position(|tab| tab == id) {
             self.tabs.remove(at);
             if self.active.as_ref() == Some(id) {
-                self.active = self.tabs.get(at.min(self.tabs.len().saturating_sub(1))).cloned();
+                self.active = self
+                    .tabs
+                    .get(at.min(self.tabs.len().saturating_sub(1)))
+                    .cloned();
             }
         }
         self.closed.retain(|closed| closed != id);
@@ -259,17 +322,42 @@ impl ThreadSurfaces {
     }
 
     fn remember(&mut self, id: SurfaceId) {
-        if id.reopenable() {
+        if id.lifecycle().reopenable() {
             self.closed.retain(|closed| *closed != id);
             self.closed.push(id);
         }
     }
 }
 
-/// Every Thread's Panel.
-#[derive(Default)]
+#[derive(Clone, Debug)]
+pub(crate) enum CloseSelection {
+    One(SurfaceId),
+    Others(SurfaceId),
+    Right(SurfaceId),
+    All,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) enum SurfaceAction {
+    Open(SurfaceId),
+    Reveal { id: SurfaceId, seen: u64 },
+    Activate(SurfaceId),
+    Close(CloseSelection),
+    Forget(SurfaceId),
+    Reopen,
+    SetOpen(bool),
+    ToggleMaximized,
+    Resize(f32),
+    Move { id: SurfaceId, index: usize },
+    ToggleDetails,
+    SelectPrTab { number: u64, tab: PrTab },
+}
+
+/// Every Thread's Panel. Mutations keep their persistence revision here.
+#[derive(Clone, Default)]
 pub(crate) struct Surfaces {
     threads: HashMap<ThreadId, ThreadSurfaces>,
+    revision: u64,
 }
 
 impl Surfaces {
@@ -278,15 +366,65 @@ impl Surfaces {
     }
 
     /// `thread`'s Panel, made with `open` as its first state.
-    pub(crate) fn entry(&mut self, thread: ThreadId, open: bool) -> &mut ThreadSurfaces {
+    fn entry(&mut self, thread: ThreadId, open: bool) -> &mut ThreadSurfaces {
         self.threads
             .entry(thread)
             .or_insert_with(|| ThreadSurfaces::new(open))
     }
 
+    pub(crate) fn revision(&self) -> u64 {
+        self.revision
+    }
+
+    /// Returns false only when an agent's reveal loses to an operator action.
+    pub(crate) fn apply(&mut self, thread: ThreadId, open: bool, action: SurfaceAction) -> bool {
+        let existed = self.threads.contains_key(&thread);
+        let state = self.entry(thread, open);
+        let before = PersistedThread::of(thread, state);
+        let mut accepted = true;
+        match action {
+            SurfaceAction::Open(id) => {
+                state.upsert(id);
+            }
+            SurfaceAction::Reveal { id, seen } => accepted = state.reveal(id, seen),
+            SurfaceAction::Activate(id) => state.activate(&id),
+            SurfaceAction::Close(selection) => match selection {
+                CloseSelection::One(id) => state.close(&id),
+                CloseSelection::Others(id) => state.close_others(&id),
+                CloseSelection::Right(id) => state.close_right(&id),
+                CloseSelection::All => state.close_all(),
+            },
+            SurfaceAction::Forget(id) => state.forget(&id),
+            SurfaceAction::Reopen => {
+                state.reopen_closed();
+            }
+            SurfaceAction::SetOpen(open) => state.set_open(open),
+            SurfaceAction::ToggleMaximized => state.set_maximized(!state.maximized),
+            SurfaceAction::Resize(width) => {
+                if state.maximized {
+                    state.set_maximized(false);
+                }
+                state.width = width;
+            }
+            SurfaceAction::Move { id, index } => state.move_to(&id, index),
+            SurfaceAction::ToggleDetails => state.details_inline_open = !state.details_inline_open,
+            SurfaceAction::SelectPrTab { number, tab } => {
+                state.pr_tabs.insert(number, tab);
+            }
+        }
+        if !existed || PersistedThread::of(thread, state) != before {
+            self.revision += 1;
+        }
+        accepted
+    }
+
     /// Keep only the Threads `keep` says still exist.
     pub(crate) fn retain(&mut self, keep: impl Fn(ThreadId) -> bool) {
+        let before = self.threads.len();
         self.threads.retain(|thread, _| keep(*thread));
+        if self.threads.len() != before {
+            self.revision += 1;
+        }
     }
 }
 
@@ -295,22 +433,43 @@ impl Surfaces {
 const SCHEMA_VERSION: u32 = 1;
 pub(crate) const FILE_NAME: &str = "panel.json";
 
-#[derive(Serialize, Deserialize)]
+#[derive(PartialEq, Serialize, Deserialize)]
 struct Persisted {
     version: u32,
     threads: Vec<PersistedThread>,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(PartialEq, Serialize, Deserialize)]
 struct PersistedThread {
     thread: u64,
     open: bool,
+    #[serde(default = "details_inline_default")]
+    details_inline_open: bool,
     tabs: Vec<SurfaceId>,
     active: Option<SurfaceId>,
     maximized: bool,
     width: f32,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pr_tabs: BTreeMap<u64, PrTab>,
+}
+
+impl PersistedThread {
+    fn of(thread: ThreadId, surfaces: &ThreadSurfaces) -> Self {
+        Self {
+            thread: thread.get(),
+            open: surfaces.open,
+            details_inline_open: surfaces.details_inline_open,
+            tabs: surfaces.tabs.clone(),
+            active: surfaces.active.clone(),
+            maximized: surfaces.maximized,
+            width: surfaces.width,
+            pr_tabs: surfaces.pr_tabs.clone(),
+        }
+    }
+}
+
+fn details_inline_default() -> bool {
+    true
 }
 
 impl Surfaces {
@@ -337,28 +496,31 @@ impl Surfaces {
         Ok(migrate(persisted, resolves))
     }
 
-    /// Write `<dir>/panel.json`, so that a crash at any moment leaves the
-    /// old file or the new one.
-    pub(crate) fn save(&self, dir: &Path) -> io::Result<()> {
+    fn persisted(&self) -> Persisted {
         let mut threads: Vec<PersistedThread> = self
             .threads
             .iter()
-            .map(|(thread, surfaces)| PersistedThread {
-                thread: thread.get(),
-                open: surfaces.open,
-                tabs: surfaces.tabs.clone(),
-                active: surfaces.active.clone(),
-                maximized: surfaces.maximized,
-                width: surfaces.width,
-                pr_tabs: surfaces.pr_tabs.clone(),
-            })
+            .map(|(thread, surfaces)| PersistedThread::of(*thread, surfaces))
             .collect();
         threads.sort_by_key(|thread| thread.thread);
-        let bytes = serde_json::to_vec_pretty(&Persisted {
+        Persisted {
             version: SCHEMA_VERSION,
             threads,
-        })
-        .map_err(io::Error::other)?;
+        }
+    }
+
+    /// A machine switch rebuilds resources just as loading this file does.
+    pub(crate) fn restart_resources(&mut self) {
+        let before = self.persisted();
+        let mut restored = migrate(self.persisted(), |_, id| id.lifecycle().restart == Restart::Restore);
+        restored.revision = self.revision + u64::from(before != restored.persisted());
+        *self = restored;
+    }
+
+    /// Write `<dir>/panel.json`, so that a crash at any moment leaves the
+    /// old file or the new one.
+    pub(crate) fn save(&self, dir: &Path) -> io::Result<()> {
+        let bytes = serde_json::to_vec_pretty(&self.persisted()).map_err(io::Error::other)?;
         std::fs::create_dir_all(dir)?;
         ferrite_core::store::replace_file(&dir.join(FILE_NAME), &bytes)
     }
@@ -385,13 +547,15 @@ fn migrate(persisted: Persisted, resolves: impl Fn(ThreadId, &SurfaceId) -> bool
                 tabs.push(id);
             }
         }
-        let active = shown_at.and_then(|at| tabs.get(at.min(tabs.len().saturating_sub(1))).cloned());
+        let active =
+            shown_at.and_then(|at| tabs.get(at.min(tabs.len().saturating_sub(1))).cloned());
         let mut pr_tabs = stored.pr_tabs;
         pr_tabs.retain(|number, _| tabs.contains(&SurfaceId::PullRequest(*number)));
         threads.insert(
             thread,
             ThreadSurfaces {
                 open: stored.open,
+                details_inline_open: stored.details_inline_open,
                 active,
                 tabs,
                 maximized: stored.maximized,
@@ -402,7 +566,10 @@ fn migrate(persisted: Persisted, resolves: impl Fn(ThreadId, &SurfaceId) -> bool
             },
         );
     }
-    Surfaces { threads }
+    Surfaces {
+        threads,
+        revision: 0,
+    }
 }
 
 #[cfg(test)]
@@ -431,7 +598,10 @@ mod tests {
         let mut panel = ThreadSurfaces::new(true);
         panel.upsert(file("a.rs"));
         panel.upsert(file("b.rs"));
-        assert_eq!(panel.tabs, [SurfaceId::Overview, file("a.rs"), file("b.rs")]);
+        assert_eq!(
+            panel.tabs,
+            [SurfaceId::Overview, file("a.rs"), file("b.rs")]
+        );
         assert_eq!(panel.active, Some(file("b.rs")));
         panel.upsert(file("a.rs"));
         assert_eq!(panel.tabs.len(), 3, "deduped by path");
@@ -442,13 +612,19 @@ mod tests {
     fn reveal_is_refused_after_an_operator_action() {
         let mut panel = ThreadSurfaces::new(true);
         let seen = panel.revision();
-        assert!(panel.reveal(SurfaceId::Changes, seen), "nothing happened since");
+        assert!(
+            panel.reveal(SurfaceId::Changes, seen),
+            "nothing happened since"
+        );
         assert_eq!(panel.active, Some(SurfaceId::Changes));
         assert_eq!(panel.revision(), seen, "a reveal is not the operator's");
 
         let seen = panel.revision();
         panel.activate(&SurfaceId::Overview);
-        assert!(!panel.reveal(SurfaceId::Files, seen), "the operator chose Overview");
+        assert!(
+            !panel.reveal(SurfaceId::Files, seen),
+            "the operator chose Overview"
+        );
         assert_eq!(panel.active, Some(SurfaceId::Overview));
         assert!(!panel.tabs.contains(&SurfaceId::Files));
 
@@ -468,6 +644,24 @@ mod tests {
     }
 
     #[test]
+    fn operator_precedence_is_independent_of_the_persistence_revision() {
+        let thread = ThreadId::new(1);
+        let mut surfaces = Surfaces::default();
+        surfaces.apply(thread, true, SurfaceAction::Open(SurfaceId::Overview));
+        let saved = surfaces.revision();
+        let seen = surfaces.get(thread).unwrap().revision();
+        surfaces.apply(thread, true, SurfaceAction::Activate(SurfaceId::Overview));
+        assert_eq!(surfaces.revision(), saved, "the persisted tabs are unchanged");
+        assert!(!surfaces.apply(
+            thread,
+            true,
+            SurfaceAction::Reveal { id: SurfaceId::Files, seen },
+        ));
+        assert_eq!(surfaces.get(thread).unwrap().active, Some(SurfaceId::Overview));
+        assert_eq!(surfaces.revision(), saved, "a refused reveal needs no save");
+    }
+
+    #[test]
     fn reopen_closed_skips_terminals_and_live_browser_tabs() {
         let mut panel = ThreadSurfaces::new(true);
         panel.upsert(SurfaceId::Changes);
@@ -478,7 +672,11 @@ mod tests {
         panel.close(&SurfaceId::Browser);
         assert_eq!(panel.reopen_closed(), Some(SurfaceId::Changes));
         assert_eq!(panel.active, Some(SurfaceId::Changes));
-        assert_eq!(panel.reopen_closed(), None, "a shell or a page cannot come back");
+        assert_eq!(
+            panel.reopen_closed(),
+            None,
+            "a shell or a page cannot come back"
+        );
     }
 
     #[test]
@@ -490,7 +688,11 @@ mod tests {
         panel.close(&file("a"));
         assert_eq!(panel.active, Some(file("b")), "the tab now in its place");
         panel.close(&file("b"));
-        assert_eq!(panel.active, Some(SurfaceId::Overview), "at the end, the one before");
+        assert_eq!(
+            panel.active,
+            Some(SurfaceId::Overview),
+            "at the end, the one before"
+        );
         panel.close(&SurfaceId::Overview);
         assert_eq!(panel.active, None, "Open a surface");
         assert!(panel.open, "the Panel stays on");
@@ -515,15 +717,30 @@ mod tests {
         panel.activate(&file("a"));
         panel.close_right(&file("b"));
         assert_eq!(panel.tabs, [SurfaceId::Overview, file("a"), file("b")]);
-        assert_eq!(panel.active, Some(file("a")), "the shown tab was left of it");
+        assert_eq!(
+            panel.active,
+            Some(file("a")),
+            "the shown tab was left of it"
+        );
         let mut panel = tabs();
         panel.close_right(&file("a"));
-        assert_eq!(panel.active, Some(file("a")), "the shown tab went: `a` takes it");
-        assert_eq!(panel.reopen_closed(), Some(file("c")), "the shown one comes back first");
+        assert_eq!(
+            panel.active,
+            Some(file("a")),
+            "the shown tab went: `a` takes it"
+        );
+        assert_eq!(
+            panel.reopen_closed(),
+            Some(file("c")),
+            "the shown one comes back first"
+        );
 
         let mut panel = tabs();
         panel.move_to(&file("c"), 0);
-        assert_eq!(panel.tabs, [file("c"), SurfaceId::Overview, file("a"), file("b")]);
+        assert_eq!(
+            panel.tabs,
+            [file("c"), SurfaceId::Overview, file("a"), file("b")]
+        );
         assert_eq!(panel.active, Some(file("c")));
         panel.move_to(&file("c"), 99);
         assert_eq!(panel.tabs.last(), Some(&file("c")), "clamped to the end");
@@ -535,7 +752,8 @@ mod tests {
     }
 
     fn scratch(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("ferrite-surfaces-{name}-{}", std::process::id()));
+        let dir =
+            std::env::temp_dir().join(format!("ferrite-surfaces-{name}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         dir
     }
@@ -553,19 +771,46 @@ mod tests {
         panel.activate(&file("a.rs"));
         panel.maximized = true;
         panel.width = 512.;
+        panel.details_inline_open = false;
         surfaces.save(&dir).unwrap();
 
         let loaded = Surfaces::load(&dir, |_, _| true).unwrap();
         let panel = loaded.get(thread).expect("the Thread's Panel");
         assert_eq!(
             panel.tabs,
-            [SurfaceId::Overview, file("a.rs"), SurfaceId::Changes, SurfaceId::PullRequest(48)]
+            [
+                SurfaceId::Overview,
+                file("a.rs"),
+                SurfaceId::Changes,
+                SurfaceId::PullRequest(48)
+            ]
         );
         assert_eq!(panel.pr_tab(48), PrTab::Timeline, "a PR keeps its view");
         assert_eq!(panel.pr_tab(7), PrTab::Summary);
         assert_eq!(panel.active, Some(file("a.rs")));
         assert!(panel.maximized && panel.open);
         assert_eq!(panel.width, 512.);
+        assert!(!panel.details_inline_open);
+    }
+
+    #[test]
+    fn details_inline_visibility_defaults_open_and_is_saved_per_thread() {
+        let dir = scratch("details-inline");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join(FILE_NAME), br#"{"version":1,"threads":[{"thread":7,"open":false,"tabs":["overview"],"active":"overview","maximized":false,"width":0}]}"#).unwrap();
+        let mut surfaces = Surfaces::load(&dir, |_, _| true).unwrap();
+        let first = ThreadId::new(7);
+        let second = ThreadId::new(8);
+        assert!(
+            surfaces.get(first).unwrap().details_inline_open,
+            "older files start inline context visible"
+        );
+        surfaces.entry(first, false).details_inline_open = false;
+        assert!(surfaces.entry(second, false).details_inline_open);
+        surfaces.save(&dir).unwrap();
+        let restored = Surfaces::load(&dir, |_, _| true).unwrap();
+        assert!(!restored.get(first).unwrap().details_inline_open);
+        assert!(restored.get(second).unwrap().details_inline_open);
     }
 
     #[test]
@@ -575,7 +820,10 @@ mod tests {
         std::fs::write(dir.join(FILE_NAME), br#"{"version": 99, "threads": []}"#).unwrap();
         let error = Surfaces::load(&dir, |_, _| true).err().expect("refused");
         assert_eq!(error.kind(), io::ErrorKind::InvalidData);
-        assert!(Surfaces::load(&scratch("missing"), |_, _| true).unwrap().threads.is_empty());
+        assert!(Surfaces::load(&scratch("missing"), |_, _| true)
+            .unwrap()
+            .threads
+            .is_empty());
     }
 
     #[test]
@@ -594,10 +842,8 @@ mod tests {
         surfaces.entry(lone, true).upsert(file("deleted"));
         surfaces.save(&dir).unwrap();
 
-        let loaded = Surfaces::load(&dir, |thread, id| {
-            thread != gone && *id != file("deleted")
-        })
-        .unwrap();
+        let loaded =
+            Surfaces::load(&dir, |thread, id| thread != gone && *id != file("deleted")).unwrap();
         assert!(loaded.get(gone).is_none(), "a deleted Thread's Panel goes");
         let panel = loaded.get(kept).unwrap();
         assert_eq!(panel.tabs, [SurfaceId::Overview, file("a"), file("c")]);

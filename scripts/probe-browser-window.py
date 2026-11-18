@@ -129,7 +129,9 @@ def main():
     parser.add_argument('--work-orders', action='store_true', help='complete one real work order through the provider')
     parser.add_argument('--compare-executable', type=Path, help='retain PE header diagnostics for a matching naked Windows build')
     parser.add_argument('--startup-only', action='store_true', help='diagnose native startup only; never browser acceptance')
+    parser.add_argument('--mock-keychain', action='store_true', help='use an isolated test keychain on macOS; does not verify production credential storage')
     args = parser.parse_args()
+    if args.mock_keychain and platform.system() != 'Darwin':parser.error('--mock-keychain requires macOS')
     if not 1 <= args.tasks <= 10:parser.error('--tasks must be between 1 and10')
     if sum((args.held_screenshot,args.work_orders,args.annotations,args.boundaries))>1:
         parser.error('Choose one feature scenario per isolated launch')
@@ -148,7 +150,7 @@ def main():
                  'provider-result.tmp', 'provider-trace.json', 'provider-definitions.json',
                  'provider-host.jsonl', 'provider-requests.jsonl', 'startup-comparison.json', 'oracle.json',
                  'work-order-oracle.json', 'work-order-oracle-at-exit.json', 'work-order-trace.json', 'work-order-results.json',
-                 'phase.json', 'phase-events.jsonl', 'controller-phases.jsonl', 'boundary-results.json', 'boundary-trace.json', 'boundary-ui-request.json', 'boundary-ui-answer.json', 'completion-gate-arm', 'completion-gate-dispatched', 'completion-gate-release', 'resources-raw.json', 'resources-report.json', 'annotation-before-send.json', 'window-annotations-sent.png', 'annotation-collected.png', 'annotation-review.png', 'browser-viewport.json',
+                 'phase.json', 'phase-events.jsonl', 'controller-phases.jsonl', 'boundary-results.json', 'boundary-trace.json', 'boundary-ui-request.json', 'boundary-ui-answer.json', 'completion-gate-arm', 'completion-gate-dispatched', 'completion-gate-release', 'dispatch-gate-arm', 'dispatch-gate-waiting', 'dispatch-gate-release', 'resources-raw.json', 'resources-report.json', 'annotation-before-send.json', 'window-annotations-sent.png', 'annotation-collected.png', 'annotation-review.png', 'browser-viewport.json',
                  'window-work-order.png', 'window-work-order-before.png', 'provider-screenshot.png', 'window-held-screenshot.png', 'window-provider-error.png', 'window-boundaries.png', 'boundary-oracle-at-exit.json', 'lifecycle-before-restoration.json', 'lifecycle-restoration.json', 'window-restored.png',
                  'cleanup-error.txt', 'cleanup-processes.json', 'shutdown-samples.json', 'oracle-at-exit.json', 'window-before.png', 'window-after.png',
                  'window-provider.png', 'window-current.png'):
@@ -172,6 +174,7 @@ def main():
         'logical_cpus':os.cpu_count(),'processor':platform.processor(),
         'platform':platform.platform(), 'architecture':platform.machine(),
         'provider':args.provider, 'work_orders':args.work_orders, 'diagnostic_only':args.startup_only,
+        'keychain_mode':'mock for isolated fixture' if args.mock_keychain else 'production OS keychain',
         'profile_mode':'isolated temporary production profile',
     }, indent=2), encoding='utf-8')
     if os.name == 'nt':
@@ -219,6 +222,7 @@ def main():
         (root/'settings.json').write_text(json.dumps({'check_for_updates':False, 'start_at_login':False, 'auto_update_clis':False}), encoding='utf-8')
         env = os.environ.copy()
         env.update(FERRITE_STORE=str(root/'threads'), FERRITE_BROWSER_PROFILE=str(root/'profile'),
+                   FERRITE_BROWSER_SMOKE_MOCK_KEYCHAIN='1' if args.mock_keychain else '0',
                    TERM='dumb',
                    FERRITE_BROWSER_WINDOW_URL=url, FERRITE_BROWSER_WINDOW_OUTPUT=str(output))
         if args.provider:

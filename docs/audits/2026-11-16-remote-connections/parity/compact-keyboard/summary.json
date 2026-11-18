@@ -1,0 +1,135 @@
+{
+  "owned_processes_stopped": true,
+  "screenshots": [
+    {
+      "time": 1794837801.313021,
+      "kind": "screenshot",
+      "path": "/Users/josephwylie/Desktop/Projects/ferrite-remote-connections/docs/audits/2026-11-16-remote-connections/parity/compact-keyboard/01-settings-640x420.png",
+      "sha256": "526e4986c92b7e2ddcf546a1e59ccecb1ee5ec8d53694fe50ea9058803d31b02",
+      "logical_viewport": [
+        640,
+        420
+      ],
+      "device_pixel_ratio": 2.0,
+      "pixel_dimensions": [
+        1280,
+        840
+      ],
+      "image_format": "PNG",
+      "crop_px": [
+        0,
+        0,
+        1280,
+        840
+      ],
+      "surface": "Ferrite native headless Driver",
+      "provider": "simulated Codex app-server, no model API calls",
+      "source_commit": "c3743ff834284fbb27d459afc8d1bcbd90f7f514",
+      "binary_sha256": "332f91c83d1f0c7083b2efa7e55bdaa66049bac0e5d1b817ebeb032f64e32851"
+    },
+    {
+      "time": 1794837802.685504,
+      "kind": "screenshot",
+      "path": "/Users/josephwylie/Desktop/Projects/ferrite-remote-connections/docs/audits/2026-11-16-remote-connections/parity/compact-keyboard/02-remote-link-640x420.png",
+      "sha256": "c90e5811a3cb206562010868365cb23df6cfcf38f61833df60d6ffdd6088ddcc",
+      "logical_viewport": [
+        640,
+        420
+      ],
+      "device_pixel_ratio": 2.0,
+      "pixel_dimensions": [
+        1280,
+        840
+      ],
+      "image_format": "PNG",
+      "crop_px": [
+        0,
+        0,
+        1280,
+        840
+      ],
+      "surface": "Ferrite native headless Driver",
+      "provider": "simulated Codex app-server, no model API calls",
+      "source_commit": "c3743ff834284fbb27d459afc8d1bcbd90f7f514",
+      "binary_sha256": "332f91c83d1f0c7083b2efa7e55bdaa66049bac0e5d1b817ebeb032f64e32851"
+    },
+    {
+      "time": 1794837803.802908,
+      "kind": "screenshot",
+      "path": "/Users/josephwylie/Desktop/Projects/ferrite-remote-connections/docs/audits/2026-11-16-remote-connections/parity/compact-keyboard/03-ssh-640x420.png",
+      "sha256": "949964ca541058681939969b292af1fa0d246aaed07ee927d177ca15752e67ca",
+      "logical_viewport": [
+        640,
+        420
+      ],
+      "device_pixel_ratio": 2.0,
+      "pixel_dimensions": [
+        1280,
+        840
+      ],
+      "image_format": "PNG",
+      "crop_px": [
+        0,
+        0,
+        1280,
+        840
+      ],
+      "surface": "Ferrite native headless Driver",
+      "provider": "simulated Codex app-server, no model API calls",
+      "source_commit": "c3743ff834284fbb27d459afc8d1bcbd90f7f514",
+      "binary_sha256": "332f91c83d1f0c7083b2efa7e55bdaa66049bac0e5d1b817ebeb032f64e32851"
+    },
+    {
+      "time": 1794837804.9713888,
+      "kind": "screenshot",
+      "path": "/Users/josephwylie/Desktop/Projects/ferrite-remote-connections/docs/audits/2026-11-16-remote-connections/parity/compact-keyboard/04-submit-focused-640x420.png",
+      "sha256": "8ff83865d965752037bee2578c0289d9e20fb974e4bdf626f69ebc7a2385c645",
+      "logical_viewport": [
+        640,
+        420
+      ],
+      "device_pixel_ratio": 2.0,
+      "pixel_dimensions": [
+        1280,
+        840
+      ],
+      "image_format": "PNG",
+      "crop_px": [
+        0,
+        0,
+        1280,
+        840
+      ],
+      "surface": "Ferrite native headless Driver",
+      "provider": "simulated Codex app-server, no model API calls",
+      "source_commit": "c3743ff834284fbb27d459afc8d1bcbd90f7f514",
+      "binary_sha256": "332f91c83d1f0c7083b2efa7e55bdaa66049bac0e5d1b817ebeb032f64e32851"
+    },
+    {
+      "time": 1794837805.8709278,
+      "kind": "screenshot",
+      "path": "/Users/josephwylie/Desktop/Projects/ferrite-remote-connections/docs/audits/2026-11-16-remote-connections/parity/compact-keyboard/05-validation-640x420.png",
+      "sha256": "8ff83865d965752037bee2578c0289d9e20fb974e4bdf626f69ebc7a2385c645",
+      "logical_viewport": [
+        640,
+        420
+      ],
+      "device_pixel_ratio": 2.0,
+      "pixel_dimensions": [
+        1280,
+        840
+      ],
+      "image_format": "PNG",
+      "crop_px": [
+        0,
+        0,
+        1280,
+        840
+      ],
+      "surface": "Ferrite native headless Driver",
+      "provider": "simulated Codex app-server, no model API calls",
+      "source_commit": "c3743ff834284fbb27d459afc8d1bcbd90f7f514",
+      "binary_sha256": "332f91c83d1f0c7083b2efa7e55bdaa66049bac0e5d1b817ebeb032f64e32851"
+    }
+  ]
+}

@@ -133,6 +133,7 @@ pub struct Response {
 pub(crate) struct Request {
     pub thread: ThreadId,
     pub operation: Operation,
+    pub deadline: std::time::Instant,
     pub reply: mpsc::SyncSender<Result<Response, String>>,
 }
 
@@ -158,6 +159,7 @@ impl ThreadClient {
     /// Nonblocking, like the visual renderer seam. The consumer must use a
     /// bounded wait; a disconnected server drops the reply immediately.
     pub fn submit(&self, operation: Operation) -> mpsc::Receiver<Result<Response, String>> {
+        let deadline = crate::clock::instant() + std::time::Duration::from_secs(45);
         let (reply, answer) = mpsc::sync_channel(1);
         let _ = self
             .client
@@ -167,6 +169,7 @@ impl ThreadClient {
             .send(Request {
                 thread: self.thread,
                 operation,
+                deadline,
                 reply,
             });
         answer

@@ -12,8 +12,9 @@ reconstructed from memory.
 ## Decision
 
 - `ferrite_core::diagnostics` owns one process-wide log under
-  `~/.ferrite/logs`: `ferrite.log`, rotated to `ferrite.log.1` past 1 MB, so
-  it never holds more than about 2 MB. `log!` writes a timestamped line to
+  `~/.ferrite/logs`: the window's is `ferrite.log` and the Server's is
+  `server.log` (ADR 0025). Each rotates to `<name>.1` past 1 MB, so it
+  never holds more than about 2 MB. `log!` writes a timestamped line to
   it and still prints to stderr. Process-wide on purpose: a Session ending
   on a reader thread and a panic on any thread reach the same file without
   threading a handle through the core.
@@ -29,7 +30,7 @@ reconstructed from memory.
   park, a delete, the memory watchdog's restart, a restart onto an updated
   CLI, and the quit.
 - Settings › About's Diagnostics copies a report — version, platform, CLI
-  versions, the newest crash report and the log's last 200 lines — for the
+  versions, the newest crash report and the last 200 lines of each log — for the
   operator to paste into a bug report. Nothing is sent anywhere.
 
 ## Consequences
@@ -40,7 +41,7 @@ reconstructed from memory.
   stderr stay out of the log: command-line usage errors (said to the
   terminal that typed them) and opt-in instruments (`FERRITE_CEF_TRACE`,
   the perf probes).
-- The report is gathered on a background thread: it reads up to the whole
-  2 MB pair.
+- The report is gathered on a background thread: it reads up to both
+  2 MB pairs.
 - Test runs never call `open`, so they write no files; the hook's own test
   runs in its own binary, the hook being process-wide.

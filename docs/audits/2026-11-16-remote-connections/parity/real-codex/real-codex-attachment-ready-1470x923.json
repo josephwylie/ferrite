@@ -1,0 +1,24 @@
+{
+  "path": "/Users/josephwylie/Desktop/Projects/ferrite-remote-connections/docs/audits/2026-11-16-remote-connections/parity/real-codex/real-codex-attachment-ready-1470x923.png",
+  "sha256": "8d5d12a4406df18912407eae0fbec46d18fb4cbdcf2767a7ebbe61927b3e1160",
+  "logical_viewport": [
+    1470,
+    923
+  ],
+  "device_pixel_ratio": 2.0,
+  "pixel_dimensions": [
+    2940,
+    1846
+  ],
+  "image_format": "PNG",
+  "crop_px": [
+    0,
+    0,
+    2940,
+    1846
+  ],
+  "surface": "Ferrite native headless Driver",
+  "provider": "Actual installed OpenAI Codex app-server; no simulated provider for this turn",
+  "source_commit": "c3743ff834284fbb27d459afc8d1bcbd90f7f514",
+  "binary_sha256": "332f91c83d1f0c7083b2efa7e55bdaa66049bac0e5d1b817ebeb032f64e32851"
+}

@@ -155,6 +155,11 @@ unsafe fn build_classes() {
             );
 
             decl.add_method(
+                sel!(onReduceMotionChange:),
+                on_reduce_motion_change as extern "C" fn(&mut Object, Sel, id),
+            );
+
+            decl.add_method(
                 sel!(onSystemWake:),
                 on_system_wake as extern "C" fn(&mut Object, Sel, id),
             );
@@ -177,6 +182,7 @@ pub(crate) struct MacPlatformState {
     reopen: Option<Box<dyn FnMut()>>,
     on_keyboard_layout_change: Option<Box<dyn FnMut()>>,
     on_thermal_state_change: Option<Box<dyn FnMut()>>,
+    on_reduce_motion_change: Option<Box<dyn FnMut()>>,
     on_system_wake: Option<Box<dyn FnMut()>>,
     system_wake_observer_registered: bool,
     quit: Option<Box<dyn FnMut() -> bool>>,
@@ -234,6 +240,7 @@ impl MacPlatform {
             dock_menu: None,
             on_keyboard_layout_change: None,
             on_thermal_state_change: None,
+            on_reduce_motion_change: None,
             on_system_wake: None,
             system_wake_observer_registered: false,
             menus: None,
@@ -972,6 +979,19 @@ impl Platform for MacPlatform {
         self.0.lock().on_thermal_state_change = Some(callback);
     }
 
+    fn on_reduce_motion_change(&self, callback: Box<dyn FnMut()>) {
+        self.0.lock().on_reduce_motion_change = Some(callback);
+    }
+
+    fn reduce_motion(&self) -> bool {
+        // SAFETY: NSWorkspace is available for the app's lifetime.
+        unsafe {
+            let workspace: id = msg_send![class!(NSWorkspace), sharedWorkspace];
+            let reduced: BOOL = msg_send![workspace, accessibilityDisplayShouldReduceMotion];
+            reduced != NO
+        }
+    }
+
     fn on_system_wake(&self, callback: Box<dyn FnMut()>) {
         let mut state = self.0.lock();
         state.on_system_wake = Some(callback);
@@ -1304,6 +1324,14 @@ extern "C" fn did_finish_launching(this: &mut Object, _: Sel, _: id) {
             object: process_info
         ];
 
+        let workspace: id = msg_send![class!(NSWorkspace), sharedWorkspace];
+        let workspace_center: id = msg_send![workspace, notificationCenter];
+        let _: () = msg_send![workspace_center, addObserver: this as id
+            selector: sel!(onReduceMotionChange:)
+            name: ns_string("NSWorkspaceAccessibilityDisplayOptionsDidChangeNotification")
+            object: nil
+        ];
+
         let observer = this as *mut Object as id;
         let platform = get_mac_platform(this);
         let callback = {
@@ -1392,6 +1420,29 @@ extern "C" fn on_thermal_state_change(this: &mut Object, _: Sel, _: id) {
                 .0
                 .lock()
                 .on_thermal_state_change
+                .get_or_insert(callback);
+        }
+    }
+}
+
+extern "C" fn on_reduce_motion_change(this: &mut Object, _: Sel, _: id) {
+    // Deferred like the thermal notification: it can arrive while the App is borrowed.
+    let platform = unsafe { get_mac_platform(this) };
+    let platform_ptr = platform as *const MacPlatform as *mut c_void;
+    unsafe {
+        DispatchQueue::main().exec_async_f(platform_ptr, on_reduce_motion_change);
+    }
+
+    extern "C" fn on_reduce_motion_change(context: *mut c_void) {
+        let platform = unsafe { &*(context as *const MacPlatform) };
+        let mut lock = platform.0.lock();
+        if let Some(mut callback) = lock.on_reduce_motion_change.take() {
+            drop(lock);
+            callback();
+            platform
+                .0
+                .lock()
+                .on_reduce_motion_change
                 .get_or_insert(callback);
         }
     }

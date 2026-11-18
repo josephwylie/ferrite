@@ -710,6 +710,7 @@ pub struct App {
     pub(crate) keystroke_interceptors: SubscriberSet<(), KeystrokeObserver>,
     pub(crate) keyboard_layout_observers: SubscriberSet<(), Handler>,
     pub(crate) thermal_state_observers: SubscriberSet<(), Handler>,
+    pub(crate) reduce_motion_observers: SubscriberSet<(), Handler>,
     pub(crate) system_wake_observers: SubscriberSet<(), Handler>,
     pub(crate) release_listeners: SubscriberSet<EntityId, ReleaseListener>,
     pub(crate) global_observers: SubscriberSet<TypeId, Handler>,
@@ -844,6 +845,7 @@ impl App {
                 keystroke_interceptors: SubscriberSet::new(),
                 keyboard_layout_observers: SubscriberSet::new(),
                 thermal_state_observers: SubscriberSet::new(),
+                reduce_motion_observers: SubscriberSet::new(),
                 system_wake_observers: SubscriberSet::new(),
                 global_observers: SubscriberSet::new(),
                 quit_observers: SubscriberSet::new(),
@@ -898,6 +900,18 @@ impl App {
                 if let Some(app) = app.upgrade() {
                     let cx = &mut app.borrow_mut();
                     cx.thermal_state_observers
+                        .clone()
+                        .retain(&(), move |callback| (callback)(cx));
+                }
+            }
+        }));
+
+        platform.on_reduce_motion_change(Box::new({
+            let app = Rc::downgrade(&app);
+            move || {
+                if let Some(app) = app.upgrade() {
+                    let cx = &mut app.borrow_mut();
+                    cx.reduce_motion_observers
                         .clone()
                         .retain(&(), move |callback| (callback)(cx));
                 }
@@ -1362,6 +1376,27 @@ impl App {
         F: 'static + FnMut(&mut App),
     {
         let (subscription, activate) = self.thermal_state_observers.insert(
+            (),
+            Box::new(move |cx| {
+                callback(cx);
+                true
+            }),
+        );
+        activate();
+        subscription
+    }
+
+    /// Whether the system asks for reduced motion.
+    pub fn system_reduce_motion(&self) -> bool {
+        self.platform.reduce_motion()
+    }
+
+    /// Invokes a handler when the system's reduced motion setting may have changed.
+    pub fn on_system_reduce_motion_change<F>(&self, mut callback: F) -> Subscription
+    where
+        F: 'static + FnMut(&mut App),
+    {
+        let (subscription, activate) = self.reduce_motion_observers.insert(
             (),
             Box::new(move |cx| {
                 callback(cx);

@@ -1,10 +1,10 @@
 //! Feedback on retained evidence. This surface never owns a live BrowserView.
 //! The local display cache is separate from the immutable Server receipt.
-use crate::composer::{Composer, Role};
+use crate::composer::{Composer, Edited, Role};
 use ferrite_core::browser_annotations::{
-    Annotation, Drawing, Ink, Point as EvidencePoint, Rect, Selection, Viewport,
+    Annotation, Drawing, Ink, LiveScreenshot, Point as EvidencePoint, Rect, Selection, Viewport,
 };
-use ferrite_ui::{components, theme};
+use ferrite_ui::{components, icons, theme};
 use gpui::{
     canvas, div, point, prelude::*, px, rgb, size, AnyElement, App, AvailableSpace, Bounds,
     Context, Entity, EventEmitter, MouseButton, Pixels, Window,
@@ -55,6 +55,7 @@ pub struct AnnotationEditor {
     undo: Vec<Vec<Drawing>>,
     gesture: Option<Vec<EvidencePoint>>,
     picture: Rc<Cell<Option<Bounds<Pixels>>>>,
+    options_expanded: bool,
 }
 impl EventEmitter<EditorEvent> for AnnotationEditor {}
 impl gpui::Focusable for AnnotationEditor {
@@ -67,9 +68,12 @@ impl AnnotationEditor {
         let comment = cx.new(|cx| {
             let mut field = Composer::new(cx);
             field.set_role(Role::Field(Some("AnnotationEditor")), cx);
+            field.set_visible_row_limit(4, cx);
             field.set(retained.comment().into(), cx);
             field
         });
+        cx.subscribe(&comment, |_, _, _: &Edited, cx| cx.notify())
+            .detach();
         let label = cx.new(|cx| {
             let mut field = Composer::new(cx);
             field.set_role(Role::Field(Some("AnnotationEditor")), cx);
@@ -83,18 +87,22 @@ impl AnnotationEditor {
             label,
             tool: Tool::Pen,
             ink: Ink {
-                color: format!("#{:06x}", theme::RED),
+                color: format!("#{:06x}", theme::SEND_LIT),
                 width: 3.,
             },
             redo: vec![],
             undo: vec![],
             gesture: None,
             picture: Rc::default(),
+            options_expanded: false,
         }
     }
     pub fn select_tool(&mut self, tool: Tool, cx: &mut Context<Self>) {
         self.gesture = None;
         self.tool = tool;
+        if tool == Tool::Text {
+            self.options_expanded = true;
+        }
         cx.notify();
     }
     pub fn drawings(&self) -> &[Drawing] {
@@ -127,7 +135,7 @@ impl AnnotationEditor {
         if bounds.size.width <= px(0.) || bounds.size.height <= px(0.) {
             return None;
         }
-        let viewport = &self.retained.capture().viewport;
+        let viewport = &display_viewport(&self.retained);
         Some(EvidencePoint {
             x: (f32::from(at.x - bounds.origin.x) / f32::from(bounds.size.width)) as f64
                 * viewport.width_css,
@@ -202,9 +210,169 @@ impl AnnotationEditor {
         cx.notify();
     }
 }
+fn control(
+    id: impl Into<gpui::ElementId>,
+    selected: bool,
+    cx: &App,
+) -> gpui::component::button::Button {
+    let rest = if selected {
+        theme::Paint((theme::SEND_LIT << 8) | 26)
+    } else {
+        theme::Paint(theme::TRANSPARENT)
+    };
+    components::form_button_on(id, rest, cx)
+        .h(px(28.))
+        .px(px(8.))
+        .rounded(px(6.))
+        .text_size(px(12.))
+        .line_height(px(16.))
+        .font_weight(theme::W_LABEL)
+        .text_color(rgb(if selected {
+            theme::SEND_LIT
+        } else {
+            theme::INK_STRONG
+        }))
+}
+
+fn control_label(text: impl Into<gpui::SharedString>, size: f32, ink: u32) -> gpui::Div {
+    div()
+        .text_size(px(size))
+        .line_height(px(if size == 14. { 20. } else { 16. }))
+        .font_weight(theme::W_LABEL)
+        .text_color(rgb(ink))
+        .child(text.into())
+}
+
+fn control_group() -> gpui::Div {
+    div()
+        .flex()
+        .flex_wrap()
+        .items_center()
+        .gap(px(2.))
+        .p(px(4.))
+        .border_1()
+        .border_color(rgb(theme::LINE))
+        .rounded(px(8.))
+        .bg(rgb(theme::CARD))
+}
+
+fn field() -> gpui::Div {
+    div()
+        .min_w_0()
+        .min_h(px(28.))
+        .px(px(8.))
+        .py(px(4.))
+        .rounded(px(6.))
+        .border_1()
+        .border_color(rgb(theme::INPUT_EDGE))
+        .bg(rgb(theme::FRAME))
+}
+
+fn feedback_bounds(selection: &Selection, drawings: &[Drawing]) -> Option<Rect> {
+    let mut bounds: Option<Bounds<f64>> = None;
+    let mut include = |x, y| {
+        let next = Bounds {
+            origin: point(x, y),
+            size: size(0., 0.),
+        };
+        bounds = Some(bounds.map_or(next, |current| current.union(&next)));
+    };
+    match selection {
+        Selection::Region {
+            x,
+            y,
+            width,
+            height,
+        } => {
+            include(*x, *y);
+            include(x + width, y + height);
+        }
+        Selection::Element { context } => {
+            let r = &context.bounds_css;
+            include(r.x, r.y);
+            include(r.x + r.width, r.y + r.height);
+        }
+        Selection::Live { feedback } => {
+            if let LiveScreenshot::Captured { crop } = &feedback.screenshot {
+                include(0., 0.);
+                include(crop.width, crop.height);
+            }
+        }
+        Selection::Unknown => {}
+    }
+    for drawing in drawings {
+        match drawing {
+            Drawing::Pen { points, .. } => {
+                for p in points {
+                    include(p.x, p.y);
+                }
+            }
+            Drawing::Line { from, to, .. } | Drawing::Arrow { from, to, .. } => {
+                include(from.x, from.y);
+                include(to.x, to.y);
+            }
+            Drawing::Rectangle { bounds, .. } | Drawing::Ellipse { bounds, .. } => {
+                include(bounds.x, bounds.y);
+                include(bounds.x + bounds.width, bounds.y + bounds.height);
+            }
+            Drawing::Text { at, .. } | Drawing::Step { at, .. } => include(at.x, at.y),
+            Drawing::Unknown => {}
+        }
+    }
+    bounds.map(|bounds| Rect {
+        x: bounds.origin.x,
+        y: bounds.origin.y,
+        width: bounds.size.width,
+        height: bounds.size.height,
+    })
+}
+
+fn editor_position(
+    viewport: Bounds<Pixels>,
+    target: Bounds<Pixels>,
+    extent: gpui::Size<Pixels>,
+) -> gpui::Point<Pixels> {
+    let gap = px(8.);
+    let candidates = [
+        point(target.right() + gap, target.top()),
+        point(target.left() - extent.width - gap, target.top()),
+        point(target.right() - extent.width, target.bottom() + gap),
+        point(
+            target.right() - extent.width,
+            target.top() - extent.height - gap,
+        ),
+    ];
+    let overflow = |p: gpui::Point<Pixels>| {
+        (viewport.left() - p.x).max(px(0.))
+            + (viewport.top() - p.y).max(px(0.))
+            + (p.x + extent.width - viewport.right()).max(px(0.))
+            + (p.y + extent.height - viewport.bottom()).max(px(0.))
+    };
+    let best = candidates
+        .into_iter()
+        .reduce(|best, candidate| {
+            if overflow(candidate) < overflow(best) {
+                candidate
+            } else {
+                best
+            }
+        })
+        .unwrap();
+    point(
+        best.x.clamp(
+            viewport.left() + gap,
+            (viewport.right() - extent.width - gap).max(viewport.left() + gap),
+        ),
+        best.y.clamp(
+            viewport.top() + gap,
+            (viewport.bottom() - extent.height - gap).max(viewport.top() + gap),
+        ),
+    )
+}
+
 impl Render for AnnotationEditor {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let mut tools = div().flex().flex_wrap().gap(px(theme::SPACE_1));
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let mut tools = control_group().occlude();
         for tool in [
             Tool::Pen,
             Tool::Line,
@@ -215,15 +383,21 @@ impl Render for AnnotationEditor {
             Tool::Text,
         ] {
             tools = tools.child(
-                components::form_button(
+                control(
                     gpui::SharedString::from(format!("annotation-tool-{}", tool.label())),
+                    self.tool == tool,
                     cx,
                 )
+                .h(px(32.))
+                .px(px(10.))
+                .text_size(px(14.))
+                .line_height(px(20.))
                 .debug_selector(move || format!("annotation-tool-{}", tool.label()).into())
-                .child(components::form_label(
+                .child(control_label(
                     tool.label(),
+                    14.,
                     if self.tool == tool {
-                        theme::BLUE
+                        theme::SEND_LIT
                     } else {
                         theme::INK_STRONG
                     },
@@ -231,25 +405,21 @@ impl Render for AnnotationEditor {
                 .on_click(cx.listener(move |this, _, _, cx| this.select_tool(tool, cx))),
             );
         }
-        let mut inks = div().flex().flex_wrap().gap(px(theme::SPACE_1));
+        let mut inks = control_group();
         for (name, color) in [
             ("Red", theme::RED),
-            ("Blue", theme::BLUE),
+            ("Blue", theme::SEND_LIT),
             ("Green", theme::GREEN),
             ("White", theme::INK_STRONG),
         ] {
             inks = inks.child(
-                components::form_button_on(
+                control(
                     gpui::SharedString::from(format!("annotation-ink-{name}")),
-                    if self.ink.color == format!("#{color:06x}") {
-                        theme::paint::SELECTED
-                    } else {
-                        theme::Paint(theme::TRANSPARENT)
-                    },
+                    self.ink.color == format!("#{color:06x}"),
                     cx,
                 )
                 .debug_selector(move || format!("annotation-ink-{name}").into())
-                .child(components::form_label(name, color))
+                .child(control_label(name, 12., color))
                 .on_click(cx.listener(move |this, _, _, cx| {
                     this.ink.color = format!("#{color:06x}");
                     cx.notify();
@@ -258,15 +428,17 @@ impl Render for AnnotationEditor {
         }
         for width in [1, 3, 6] {
             inks = inks.child(
-                components::form_button(
+                control(
                     gpui::SharedString::from(format!("annotation-width-{width}")),
+                    self.ink.width == width as f64,
                     cx,
                 )
                 .debug_selector(move || format!("annotation-width-{width}").into())
-                .child(components::form_label(
+                .child(control_label(
                     format!("{width} px"),
+                    12.,
                     if self.ink.width == width as f64 {
-                        theme::BLUE
+                        theme::SEND_LIT
                     } else {
                         theme::INK_STRONG
                     },
@@ -285,6 +457,8 @@ impl Render for AnnotationEditor {
         {
             drawings.push(operation);
         }
+        let target = feedback_bounds(&self.retained.capture().selection, &drawings);
+        let viewport = display_viewport(&self.retained);
         let editor = self.gesture.as_ref().map(|_| cx.entity().downgrade());
         let stage = stage(
             &self.retained,
@@ -322,12 +496,264 @@ impl Render for AnnotationEditor {
                 cx.stop_propagation();
             }),
         );
+        let stage = stage.child(
+            canvas(
+                |_, _, _| {},
+                move |_, _, window, _| {
+                    if let Some(editor) = editor {
+                        let moved = editor.clone();
+                        window.on_mouse_event(move |event: &gpui::MouseMoveEvent, phase, _, cx| {
+                            if phase == gpui::DispatchPhase::Capture
+                                && event.pressed_button == Some(MouseButton::Left)
+                            {
+                                moved
+                                    .update(cx, |this, cx| {
+                                        if let Some(p) = this.location(event.position) {
+                                            if let Some(points) = this.gesture.as_mut() {
+                                                points.push(p);
+                                            }
+                                        }
+                                        cx.notify();
+                                    })
+                                    .ok();
+                            }
+                        });
+                        window.on_mouse_event(move |event: &gpui::MouseUpEvent, phase, _, cx| {
+                            if phase == gpui::DispatchPhase::Capture
+                                && event.button == MouseButton::Left
+                            {
+                                editor
+                                    .update(cx, |this, cx| this.finish(event.position, cx))
+                                    .ok();
+                            }
+                        });
+                    }
+                },
+            )
+            .absolute()
+            .inset_0(),
+        );
+        let history = div()
+            .flex()
+            .flex_wrap()
+            .gap(px(2.))
+            .child(
+                control("annotation-undo", false, cx)
+                    .child(control_label("Undo", 12., theme::INK_STRONG))
+                    .on_click(cx.listener(|this, _, _, cx| this.undo(cx))),
+            )
+            .child(
+                control("annotation-redo", false, cx)
+                    .child(control_label("Redo", 12., theme::INK_STRONG))
+                    .on_click(cx.listener(|this, _, _, cx| this.redo(cx))),
+            )
+            .child(
+                control("annotation-clear", false, cx)
+                    .child(control_label("Clear drawings", 12., theme::INK_STRONG))
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        if !this.drawings.is_empty() {
+                            this.checkpoint();
+                            this.drawings.clear();
+                        }
+                        cx.notify();
+                    })),
+            )
+            .child(
+                control("annotation-cancel", false, cx)
+                    .debug_selector(|| "annotation-cancel".into())
+                    .child(control_label("Cancel", 12., theme::INK_STRONG))
+                    .on_click(cx.listener(|_, _, _, cx| cx.emit(EditorEvent::Cancelled))),
+            );
+        let focused = gpui::Focusable::focus_handle(self.comment.read(cx), cx).is_focused(window);
+        let comment = div()
+            .relative()
+            .flex()
+            .flex_1()
+            .min_w_0()
+            .min_h(px(32.))
+            .max_h(px(96.))
+            .py(px(6.))
+            .border_b_1()
+            .border_color(if focused {
+                rgb(theme::SEND_LIT).into()
+            } else {
+                gpui::Hsla::transparent_black()
+            })
+            .text_size(px(14.))
+            .line_height(px(20.))
+            .debug_selector(|| "annotation-comment".into())
+            .when(self.comment.read(cx).is_empty(), |field| {
+                field.child(
+                    div()
+                        .absolute()
+                        .top(px(6.))
+                        .left_0()
+                        .text_color(rgb(theme::INK_SUBTLE))
+                        .child("Describe the change…"),
+                )
+            })
+            .child(self.comment.clone());
+        let composer = div()
+            .id("annotation-popover")
+            .debug_selector(|| "annotation-popover".into())
+            .occlude()
+            .flex()
+            .flex_col()
+            .min_w_0()
+            .overflow_y_scroll()
+            .rounded(px(12.))
+            .border_1()
+            .border_color(rgb(theme::LINE))
+            .bg(rgb(theme::CARD))
+            .shadow(components::float_shadow())
+            .child(
+                div()
+                    .flex()
+                    .items_start()
+                    .gap(px(8.))
+                    .p(px(8.))
+                    .child(
+                        control("annotation-options", self.options_expanded, cx)
+                            .debug_selector(|| "annotation-options".into())
+                            .w(px(32.))
+                            .h(px(32.))
+                            .p_0()
+                            .flex_shrink_0()
+                            .child(icons::icon(icons::LIST_FILTER, 15., theme::INK_SUBTLE))
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.options_expanded = !this.options_expanded;
+                                cx.notify();
+                            })),
+                    )
+                    .child(comment)
+                    .child(
+                        components::faded_button(
+                            "annotation-add",
+                            rgb(theme::SEND_LIT).into(),
+                            rgb(theme::SEND_LIT_HOVER).into(),
+                            rgb(theme::SEND_LIT_HOVER).into(),
+                            rgb(theme::ON_SEND_LIT).into(),
+                            cx,
+                        )
+                        .tab_stop(true)
+                        .h(px(32.))
+                        .px(px(12.))
+                        .rounded(px(6.))
+                        .flex_shrink_0()
+                        .debug_selector(|| "annotation-add".into())
+                        .child(control_label("Attach", 14., theme::ON_SEND_LIT))
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            cx.emit(EditorEvent::Added {
+                                comment: this.comment.read(cx).text().to_owned(),
+                                drawings: this.drawings.clone(),
+                            });
+                        })),
+                    ),
+            )
+            .when(self.options_expanded, |popover| {
+                popover.child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap(px(4.))
+                        .p(px(8.))
+                        .border_t_1()
+                        .border_color(rgb(theme::LINE))
+                        .child(
+                            inks.border_0()
+                                .rounded_none()
+                                .p_0()
+                                .bg(gpui::Hsla::transparent_black()),
+                        )
+                        .when(self.tool == Tool::Text, |options| {
+                            options
+                                .child(
+                                    div()
+                                        .text_size(px(12.))
+                                        .line_height(px(16.))
+                                        .text_color(rgb(theme::INK_SUBTLE))
+                                        .child("Text label"),
+                                )
+                                .child(
+                                    field()
+                                        .debug_selector(|| "annotation-label".into())
+                                        .child(self.label.clone()),
+                                )
+                        })
+                        .child(history),
+                )
+            });
+        let picture = self.picture.clone();
+        let chrome = canvas(
+            move |bounds, window, cx| {
+                let available_width = (bounds.size.width - px(16.)).max(px(1.));
+                let mut tools = tools
+                    .max_w(available_width)
+                    .shadow(components::float_shadow())
+                    .into_any_element();
+                let toolbar_size = tools.layout_as_root(
+                    size(AvailableSpace::MaxContent, AvailableSpace::MinContent),
+                    window,
+                    cx,
+                );
+                tools.prepaint_at(
+                    bounds.origin + point((bounds.size.width - toolbar_size.width) / 2., px(10.)),
+                    window,
+                    cx,
+                );
+                let mut composer = composer
+                    .w(px(360.).min(available_width))
+                    .max_h((bounds.size.height - px(16.)).max(px(1.)))
+                    .into_any_element();
+                let extent = composer.layout_as_root(
+                    size(AvailableSpace::MinContent, AvailableSpace::MinContent),
+                    window,
+                    cx,
+                );
+                let target = picture
+                    .get()
+                    .zip(target)
+                    .map(|(picture, target)| {
+                        Bounds::from_corners(
+                            map(
+                                &EvidencePoint {
+                                    x: target.x,
+                                    y: target.y,
+                                },
+                                picture,
+                                &viewport,
+                            ),
+                            map(
+                                &EvidencePoint {
+                                    x: target.x + target.width,
+                                    y: target.y + target.height,
+                                },
+                                picture,
+                                &viewport,
+                            ),
+                        )
+                    })
+                    .unwrap_or(Bounds {
+                        origin: bounds.center(),
+                        size: size(px(0.), px(0.)),
+                    });
+                composer.prepaint_at(editor_position(bounds, target, extent), window, cx);
+                (tools, composer)
+            },
+            |_, (mut tools, mut composer), window, cx| {
+                tools.paint(window, cx);
+                composer.paint(window, cx);
+            },
+        )
+        .absolute()
+        .inset_0();
         div()
             .id("annotation-editor")
             .debug_selector(|| "annotation-editor".into())
+            .relative()
             .size_full()
             .min_w_0()
-            .overflow_y_scroll()
+            .overflow_hidden()
             .key_context("AnnotationEditor")
             .on_action(cx.listener(|_, _: &Cancel, _, cx| {
                 cx.emit(EditorEvent::Cancelled);
@@ -341,131 +767,64 @@ impl Render for AnnotationEditor {
             }))
             .flex()
             .flex_col()
-            .gap(px(theme::SPACE_2))
-            .p(px(theme::SPACE_2))
             .font_family(theme::FONT_UI)
-            .text_size(px(theme::FS_UI))
-            .line_height(px(theme::LH_UI))
+            .text_size(px(14.))
+            .line_height(px(20.))
             .text_color(rgb(theme::INK_STRONG))
-            .child(div().child("Browser annotation"))
-            .child(
-                div()
-                    .min_w_0()
-                    .truncate()
-                    .text_color(rgb(theme::INK_SUBTLE))
-                    .child(self.retained.capture().url.clone()),
-            )
-            .child(tools)
-            .child(inks)
-            .when(self.tool == Tool::Text, |d| {
-                d.child(div().child("Text label — type here, then click the image"))
-                    .child(
-                        div()
-                            .debug_selector(|| "annotation-label".into())
-                            .child(self.label.clone()),
-                    )
-            })
-            .child(
-                stage.child(
-                    canvas(
-                        |_, _, _| {},
-                        move |_, _, window, _| {
-                            if let Some(editor) = editor {
-                                let moved = editor.clone();
-                                window.on_mouse_event(
-                                    move |event: &gpui::MouseMoveEvent, phase, _, cx| {
-                                        if phase == gpui::DispatchPhase::Capture
-                                            && event.pressed_button == Some(MouseButton::Left)
-                                        {
-                                            moved
-                                                .update(cx, |this, cx| {
-                                                    if let Some(p) = this.location(event.position) {
-                                                        if let Some(points) = this.gesture.as_mut()
-                                                        {
-                                                            points.push(p);
-                                                        }
-                                                    }
-                                                    cx.notify();
-                                                })
-                                                .ok();
-                                        }
-                                    },
-                                );
-                                window.on_mouse_event(
-                                    move |event: &gpui::MouseUpEvent, phase, _, cx| {
-                                        if phase == gpui::DispatchPhase::Capture
-                                            && event.button == MouseButton::Left
-                                        {
-                                            editor
-                                                .update(cx, |this, cx| {
-                                                    this.finish(event.position, cx)
-                                                })
-                                                .ok();
-                                        }
-                                    },
-                                );
-                            }
-                        },
-                    )
-                    .absolute()
-                    .inset_0(),
-                ),
-            )
-            .child(
-                div()
-                    .flex()
-                    .gap(px(theme::SPACE_1))
-                    .child(
-                        components::form_button("annotation-undo", cx)
-                            .child("Undo")
-                            .on_click(cx.listener(|this, _, _, cx| this.undo(cx))),
-                    )
-                    .child(
-                        components::form_button("annotation-redo", cx)
-                            .child("Redo")
-                            .on_click(cx.listener(|this, _, _, cx| this.redo(cx))),
-                    )
-                    .child(
-                        components::form_button("annotation-clear", cx)
-                            .child("Clear drawings")
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                if !this.drawings.is_empty() {
-                                    this.checkpoint();
-                                    this.drawings.clear();
-                                }
-                                cx.notify();
-                            })),
-                    ),
-            )
-            .child(div().child("Comment"))
-            .child(
-                div()
-                    .debug_selector(|| "annotation-comment".into())
-                    .child(self.comment.clone()),
-            )
-            .child(
-                div()
-                    .flex()
-                    .gap(px(theme::SPACE_2))
-                    .child(
-                        components::primary_button("annotation-add", false, cx)
-                            .debug_selector(|| "annotation-add".into())
-                            .child("Add to chat")
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                cx.emit(EditorEvent::Added {
-                                    comment: this.comment.read(cx).text().to_owned(),
-                                    drawings: this.drawings.clone(),
-                                });
-                            })),
-                    )
-                    .child(
-                        components::form_button("annotation-cancel", cx)
-                            .debug_selector(|| "annotation-cancel".into())
-                            .child("Cancel")
-                            .on_click(cx.listener(|_, _, _, cx| cx.emit(EditorEvent::Cancelled))),
-                    ),
-            )
+            .child(stage)
+            .child(chrome)
     }
+}
+
+fn display_viewport(annotation: &Annotation) -> Viewport {
+    if let Selection::Live { feedback } = &annotation.capture().selection {
+        if let LiveScreenshot::Captured { crop } = &feedback.screenshot {
+            return Viewport {
+                width_css: crop.width,
+                height_css: crop.height,
+                device_scale: annotation.capture().viewport.device_scale,
+            };
+        }
+    }
+    annotation.capture().viewport.clone()
+}
+
+pub fn annotation_context(annotation: &Annotation) -> AnyElement {
+    let mut context = div().flex().flex_col().gap(px(theme::SPACE_2));
+    if let Selection::Live { feedback } = &annotation.capture().selection {
+        if let LiveScreenshot::Unavailable { reason } = &feedback.screenshot {
+            context = context.child(format!("Screenshot unavailable. {reason}"));
+        }
+        for target in &feedback.elements {
+            let label = target
+                .element
+                .component_name
+                .as_deref()
+                .unwrap_or(&target.element.tag_name);
+            context = context.child(format!(
+                "{label} · {}",
+                target.element.selector.as_deref().unwrap_or("Element")
+            ));
+            if let Some(source) = &target.element.source {
+                if let Some(file) = &source.file_name {
+                    context = context.child(format!("{file}:{}", source.line_number.unwrap_or(1)));
+                }
+            }
+        }
+        if !feedback.regions.is_empty() {
+            context = context.child(format!("{} region targets", feedback.regions.len()));
+        }
+        if !feedback.strokes.is_empty() {
+            context = context.child(format!("{} drawn strokes", feedback.strokes.len()));
+        }
+        for change in &feedback.style_changes {
+            context = context.child(format!(
+                "{}: {} → {}",
+                change.property, change.previous_value, change.value
+            ));
+        }
+    }
+    context.into_any_element()
 }
 
 /// Review the recorded selection and operations without consulting a live page.
@@ -484,7 +843,7 @@ fn stage(
     drawings: Vec<Drawing>,
     picture: Rc<Cell<Option<Bounds<Pixels>>>>,
 ) -> gpui::Div {
-    let viewport = annotation.capture().viewport.clone();
+    let viewport = display_viewport(annotation);
     if !viewport.width_css.is_finite()
         || !viewport.height_css.is_finite()
         || viewport.width_css <= 0.
@@ -501,6 +860,7 @@ fn stage(
             .flex_1()
             .child("The retained image is unavailable. Reopen the annotation to try again.");
     }
+    let painted_selection = !matches!(annotation.capture().selection, Selection::Live { .. });
     let preview_drawings = drawings.clone();
     let selection = match &annotation.capture().selection {
         Selection::Region {
@@ -515,6 +875,12 @@ fn stage(
             height: *height,
         },
         Selection::Element { context } => context.bounds_css.clone(),
+        Selection::Live { .. } => Rect {
+            x: 0.,
+            y: 0.,
+            width: viewport.width_css,
+            height: viewport.height_css,
+        },
         Selection::Unknown => {
             picture.set(None);
             return div()
@@ -578,18 +944,40 @@ fn stage(
                 move |_, (mut image, labels, bounds, viewport), window, cx| {
                     image.paint(window, cx);
                     window.with_content_mask(Some(gpui::ContentMask { bounds }), |window| {
-                        paint(
-                            &Drawing::Rectangle {
-                                bounds: selection.clone(),
-                                ink: Ink {
-                                    color: format!("#{:06x}", theme::BLUE),
-                                    width: 1.,
+                        if painted_selection {
+                            let selected = Bounds::from_corners(
+                                map(
+                                    &EvidencePoint {
+                                        x: selection.x,
+                                        y: selection.y,
+                                    },
+                                    bounds,
+                                    &viewport,
+                                ),
+                                map(
+                                    &EvidencePoint {
+                                        x: selection.x + selection.width,
+                                        y: selection.y + selection.height,
+                                    },
+                                    bounds,
+                                    &viewport,
+                                ),
+                            );
+                            let fill: gpui::Hsla = rgb(theme::SEND_LIT).into();
+                            window.paint_quad(gpui::fill(selected, fill.opacity(0.1)));
+                            paint(
+                                &Drawing::Rectangle {
+                                    bounds: selection.clone(),
+                                    ink: Ink {
+                                        color: format!("#{:06x}", theme::SEND_LIT),
+                                        width: 2.,
+                                    },
                                 },
-                            },
-                            bounds,
-                            &viewport,
-                            window,
-                        );
+                                bounds,
+                                &viewport,
+                                window,
+                            );
+                        }
                         for drawing in &drawings {
                             paint(drawing, bounds, &viewport, window);
                         }

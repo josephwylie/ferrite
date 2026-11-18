@@ -21,7 +21,7 @@ fn command_rows(
 fn run(view: &Entity<CockpitView>, index: usize, cx: &mut gpui::VisualTestContext) {
     cx.update(|window, cx| {
         view.update(cx, |view, cx| {
-            view.run_palette_act(Act::Command(Command::User(index)), false, window, cx)
+            view.run_palette_act(Act::Command(Command::User(index)), window, cx)
         })
     });
 }
@@ -85,7 +85,7 @@ fn reset_keys_forgets_the_operators_keys(cx: &mut TestAppContext) {
     assert!(command_rows(&view, cx).iter().any(|(_, act)| *act == reset));
     cx.update(|window, cx| {
         view.update(cx, |view, cx| {
-            view.run_palette_act(reset.clone(), false, window, cx)
+            view.run_palette_act(reset.clone(), window, cx)
         })
     });
     tick(cx);

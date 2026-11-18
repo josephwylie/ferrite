@@ -53,12 +53,18 @@ impl CockpitView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
-        let (thread, generation) = self.mode_picker?;
+        let ((thread, generation, from_picker), left) = self.standing(
+            |exits| &mut exits.mode,
+            self.mode_picker
+                .map(|(thread, generation)| (thread, generation, self.mode_menu.from_picker)),
+            POPOVER,
+            cx,
+        )?;
         let open = self.cockpit.thread(thread)?;
         if open.generation() != generation {
             return None;
         }
-        let key = if self.mode_menu.from_picker {
+        let key = if from_picker {
             SharedString::from(model_picker::PICKER_PERMISSIONS)
         } else {
             chip_trigger(thread)
@@ -173,7 +179,7 @@ impl CockpitView {
             .child(preview);
         // Over its chip from the chip's left; over the picker's button,
         // from that button's right (T3's `align="end"`).
-        let (anchor, x) = if self.mode_menu.from_picker {
+        let (anchor, x) = if from_picker {
             (gpui::Anchor::BottomRight, trigger.right())
         } else {
             (gpui::Anchor::BottomLeft, trigger.left())
@@ -184,7 +190,9 @@ impl CockpitView {
                     .anchor(anchor)
                     .position(gpui::point(x, trigger.top() - px(FLOAT_OFFSET)))
                     .snap_to_window_with_margin(px(GRID_PAD))
-                    .child(ferrite_ui::motion::menu_in(
+                    .child(ferrite_ui::motion::float_at(
+                        POPOVER,
+                        left,
                         "mode-menu-in",
                         menu,
                         ferrite_ui::motion::Opens::Up,

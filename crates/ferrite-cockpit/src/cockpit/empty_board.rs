@@ -10,7 +10,6 @@
 //! The rows are a list with its own focus and key context (`EmptyBoard`):
 //! `empty_board::Next` / `Previous` move the selection, `Run` does what the
 //! row says (the floats package binds ↑ ↓ ⏎). A press does the same.
-//! `show_empty_board` shows it while Threads stay open.
 
 use super::*;
 
@@ -88,19 +87,9 @@ fn home_row(
 }
 
 impl CockpitView {
-    /// Show the empty board while Threads stay open — a fixture's door
-    /// (tests, visual references): the app reaches it only when no Pane is
-    /// visible. The next landing on a Pane leaves it.
-    #[cfg(any(test, feature = "visual-reference"))]
-    pub(crate) fn show_empty_board(&mut self, cx: &mut Context<Self>) {
-        self.empty_shown = true;
-        self.empty_cursor = 0;
-        cx.notify();
-    }
-
     /// Whether the empty board is what the board draws this frame.
     pub(super) fn empty_board_shown(&self) -> bool {
-        self.empty_shown || self.visible_indices().is_empty()
+        self.visible_indices().is_empty()
     }
 
     /// The hook the root render calls (frame's actions): the empty board's
@@ -114,8 +103,7 @@ impl CockpitView {
     }
 
     /// The ways to start, in order: only those that would do something
-    /// now (a parked Thread to reopen, a Group to open), as the palette
-    /// offers them.
+    /// now (a parked Thread to reopen), as the palette offers them.
     fn start_rows(&self) -> Vec<StartRow> {
         use ferrite_ui::icons;
         let mut rows = vec![
@@ -138,14 +126,6 @@ impl CockpitView {
                 icons::REFRESH,
                 "Reopen last",
                 Box::new(ReopenThread),
-            ));
-        }
-        if self.cockpit.groups().iter().next().is_some() {
-            rows.push(StartRow::new(
-                "palette::OpenGroups",
-                icons::BOARD,
-                "Open a group",
-                Box::new(crate::palette::OpenGroups),
             ));
         }
         rows.push(StartRow::new(
@@ -215,7 +195,6 @@ impl CockpitView {
             return;
         };
         self.empty_cursor = at;
-        self.empty_shown = false;
         window.dispatch_action(row.run, cx);
         cx.notify();
     }
@@ -287,6 +266,46 @@ impl CockpitView {
         )
     }
 
+    pub(super) fn no_environment(&self, cx: &mut Context<Self>) -> Div {
+        use ferrite_ui::theme::*;
+        div()
+            .debug_selector(|| "no-environment".into())
+            .size_full()
+            .flex()
+            .flex_col()
+            .items_center()
+            .justify_center()
+            .gap(px(16.))
+            .px(px(24.))
+            .child(
+                div()
+                    .text_size(px(20.))
+                    .text_color(rgb(INK_STRONG))
+                    .child("No environment enabled"),
+            )
+            .child(
+                div()
+                    .text_size(px(14.))
+                    .text_color(rgb(INK_SUBTLE))
+                    .child("Add a remote environment or turn on Local in Connections."),
+            )
+            .child(
+                ferrite_ui::components::form_button("no-environment-connections", cx)
+                    .debug_selector(|| "no-environment-connections".into())
+                    .accessibility_label("Open Connections")
+                    .px(px(16.))
+                    .py(px(8.))
+                    .child("Open Connections")
+                    .on_click(cx.listener(|view, _, _, cx| {
+                        view.settings_view.update(cx, |settings, _| {
+                            settings.open = true;
+                            settings.page = settings::PageKey::Connections;
+                        });
+                        cx.notify();
+                    })),
+            )
+    }
+
     /// The board with no Pane on it (see the module doc).
     pub(super) fn empty_board(&self, cx: &mut Context<Self>) -> Div {
         use ferrite_ui::theme::*;
@@ -306,8 +325,8 @@ impl CockpitView {
             .flex_col()
             .w_full();
         let rows = self.start_rows();
-        // The rows offered can shrink under the cursor (the last Group
-        // dissolved): it holds on the last.
+        // The rows offered can shrink under the cursor (the last parked
+        // Thread reopened): it holds on the last.
         let cursor = self.empty_cursor.min(rows.len() - 1);
         for (at, row) in rows.into_iter().enumerate() {
             let StartRow {
@@ -370,7 +389,6 @@ impl CockpitView {
             .hover_row(format!("empty-board-recent-{}", thread.get()))
             .press_row()
             .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
-                view.empty_shown = false;
                 if open {
                     view.focus_thread(thread, cx);
                 } else {

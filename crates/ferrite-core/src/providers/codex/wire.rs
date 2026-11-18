@@ -1239,17 +1239,19 @@ pub(super) fn input_items(text: &str, skills: &[SessionCommand], cwd: Option<&Pa
             rest = after[name.len()..].trim_start();
         }
     }
-    for (start, _) in rest.match_indices('/') {
+    let authored = crate::replies::authored(rest);
+    let scanned = authored.as_ref();
+    for (start, _) in scanned.match_indices('/') {
         // Match the composer's file-completion precedence: @paths are files,
         // even when the final path component happens to name a skill.
-        if rest[..start]
+        if scanned[..start]
             .rsplit(char::is_whitespace)
             .next()
             .is_some_and(|token| token.starts_with('@'))
         {
             continue;
         }
-        let name = rest[start + 1..]
+        let name = scanned[start + 1..]
             .split(char::is_whitespace)
             .next()
             .unwrap_or("");
@@ -1273,7 +1275,7 @@ pub(super) fn input_items(text: &str, skills: &[SessionCommand], cwd: Option<&Pa
             "path": skill.path.as_deref().expect("filtered on is_some"),
         }));
     }
-    for path in crate::prompt_files::paths(rest, cwd) {
+    for path in crate::prompt_files::paths(scanned, cwd) {
         if !path.is_file() {
             continue;
         }
@@ -1518,7 +1520,7 @@ mod tests {
     fn variant(event: &SessionEvent) -> Option<&'static str> {
         Some(match event {
             // Shared progress is proved through the public Session replay in
-            // tests/provider_progress.rs, including captured native messages.
+            // tests/it/provider_progress.rs, including captured native messages.
             SessionEvent::ReasoningSummaryPart { .. }
             | SessionEvent::Progress { .. }
             | SessionEvent::ToolOutputDelta { .. }
@@ -1564,6 +1566,8 @@ mod tests {
             SessionEvent::Handshake { .. } => return None,
             // Claude's hooks.
             SessionEvent::HookRan { .. } => return None,
+            // Claude's reply to a control it first accepted.
+            SessionEvent::ControlRefused { .. } => return None,
             // The resume capture clears its goal.
             SessionEvent::ScheduledWork { .. } => "ScheduledWork",
             SessionEvent::ContextUsage { .. } | SessionEvent::UsageDetails { .. } => return None,
@@ -2390,11 +2394,11 @@ mod tests {
         assert_eq!(
             input_items(&text, &[], None),
             [
-                serde_json::json!({"type": "localImage", "path": annotation.original()}),
+                serde_json::json!({"type": "localImage", "path": annotation.original().unwrap()}),
                 serde_json::json!({"type": "text", "text": text}),
             ]
         );
-        assert_eq!(std::fs::read(annotation.original()).unwrap(), png);
+        assert_eq!(std::fs::read(annotation.original().unwrap()).unwrap(), png);
         std::fs::remove_dir_all(root).unwrap();
     }
 
@@ -2413,6 +2417,64 @@ mod tests {
                 serde_json::json!({"type": "localImage", "path": image}),
                 serde_json::json!({"type": "mention", "name": "records.zip", "path": file}),
                 serde_json::json!({"type": "text", "text": text}),
+            ]
+        );
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn quoted_file_and_skill_syntax_is_reference_text_not_input() {
+        use crate::replies::{compose, Reply};
+        let dir = std::env::temp_dir().join(format!("ferrite-inert-quote-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        for name in ["pic.png", "clip.wav", "notes.txt"] {
+            std::fs::write(dir.join(name), b"fixture").unwrap();
+        }
+        let skills = parse_skills(&skills_result());
+        let quote = "see @pic.png @clip.wav @notes.txt and /probe-body";
+        let prompt = compose(&[Reply::new(quote, "")], "what does this mean?");
+        assert_eq!(
+            input_items(&prompt, &skills, Some(&dir)),
+            [serde_json::json!({"type": "text", "text": prompt})]
+        );
+
+        let trailer = crate::prompt_files::compose(&prompt, &[dir.join("pic.png")]);
+        assert_eq!(
+            input_items(&trailer, &skills, Some(&dir)),
+            [
+                serde_json::json!({"type": "localImage", "path": dir.join("pic.png")}),
+                serde_json::json!({"type": "text", "text": trailer}),
+            ],
+            "an explicit attachment still rides"
+        );
+        let own = compose(&[Reply::new(quote, "")], "and /probe-body @notes.txt");
+        assert_eq!(
+            input_items(&own, &skills, Some(&dir)).len(),
+            3,
+            "typed mentions still ride"
+        );
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn a_quote_and_an_attachment_with_no_typed_words_keeps_the_quote_inert() {
+        use crate::replies::{compose, Reply};
+        let dir = std::env::temp_dir().join(format!("ferrite-bare-quote-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        for name in ["pic.png", "other.png"] {
+            std::fs::write(dir.join(name), b"fixture").unwrap();
+        }
+        let prompt = crate::prompt_files::compose(
+            &compose(&[Reply::new("see @pic.png", "")], ""),
+            &[dir.join("other.png")],
+        );
+        assert_eq!(
+            input_items(&prompt, &[], Some(&dir)),
+            [
+                serde_json::json!({"type": "localImage", "path": dir.join("other.png")}),
+                serde_json::json!({"type": "text", "text": prompt}),
             ]
         );
         std::fs::remove_dir_all(dir).unwrap();

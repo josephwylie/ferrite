@@ -250,6 +250,13 @@ pub trait Platform: 'static {
     fn thermal_state(&self) -> ThermalState;
     fn on_thermal_state_change(&self, callback: Box<dyn FnMut()>);
 
+    /// Whether the system asks for reduced motion.
+    fn reduce_motion(&self) -> bool {
+        false
+    }
+    /// Invokes `callback` when the system's reduced motion setting may have changed.
+    fn on_reduce_motion_change(&self, _callback: Box<dyn FnMut()>) {}
+
     /// Sets the application's process-wide identity and user-visible name.
     ///
     /// The identifier is used for platform identity mechanisms such as the
@@ -2899,7 +2906,7 @@ mod image_tests {
     fn test_image_to_image_data_applies_exif_orientation() {
         let image = Image::from_bytes(
             ImageFormat::Jpeg,
-            include_bytes!("../examples/image/exif-orientation-rotate-180.jpg").to_vec(),
+            include_bytes!("../tests/fixtures/image/exif-orientation-rotate-180.jpg").to_vec(),
         );
 
         let render_image = image.to_image_data(SvgRenderer::new(Arc::new(()))).unwrap();

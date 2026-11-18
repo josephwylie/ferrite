@@ -31,7 +31,7 @@ syntect = { version = "5.3.0", default-features = false, features = ["parsing", 
 tempfile = "3"
 # Parses RFC 3339 forge timestamps.
 time = { version = "0.3", features = ["parsing"] }
-two-face = "0.5.2"
+two-face = { version = "0.5.2", default-features = false, features = ["syntect-fancy"] }
 # Program lookup the way a shell does it: the executable bit on unix, PATHEXT on Windows
 # (so `az` finds `az.cmd`), and never the current directory for a bare name.
 which = "8.0.6"

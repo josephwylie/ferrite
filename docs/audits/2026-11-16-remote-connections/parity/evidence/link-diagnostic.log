@@ -1,0 +1,33 @@
+{
+  "root": "/private/tmp/ferrite-remote-35mnoabd",
+  "store": "/private/tmp/ferrite-remote-35mnoabd/client/threads",
+  "remote_store": "/private/tmp/ferrite-remote-35mnoabd/remote/threads",
+  "binary": "/Users/josephwylie/Desktop/Projects/ferrite-remote-connections/target/debug/ferrite",
+  "server": "/Users/josephwylie/Desktop/Projects/ferrite-remote-connections/target/debug/ferrited",
+  "processes": [],
+  "ssh_transport": "actual OpenSSH localhost",
+  "filesystem": "localhost SSH fixture shares the host filesystem; SSH request logs prove routing",
+  "credentials": "fixture-passphrase is a synthetic, task-only test credential",
+  "provider": "simulated Codex app-server, no model API calls",
+  "port": 53724
+}
+{"passed": true, "nonroot": true, "strict_modes": true, "pid": 11351}
+Launched isolated local/remote Servers and native headless window.
+Traceback (most recent call last):
+  File "/tmp/ferrite-link-diagnostic.py", line 22, in <module>
+    p.workspace_flow(ui,'link',shot); p.disconnect_remove(ui,'link')
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^
+  File "/Users/josephwylie/Desktop/Projects/ferrite-remote-connections/scripts/verify-remote-parity.py", line 339, in workspace_flow
+    opened = remote_cli(ui, "project", "open", "--cwd", str(project))
+  File "/Users/josephwylie/Desktop/Projects/ferrite-remote-connections/scripts/verify-remote-parity.py", line 279, in remote_cli
+    return BASE.cli(ui.output, ui.state, ["--machine", machine, *args])
+           ~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/josephwylie/Desktop/Projects/ferrite-remote-connections/scripts/verify-remote-connections.py", line 305, in cli
+    return command(output, [state["binary"], *args], env=environment(state, remote),
+                   cwd=Path(state["root"]) / "remote-project", check=check)
+  File "/Users/josephwylie/Desktop/Projects/ferrite-remote-connections/scripts/verify-remote-connections.py", line 67, in command
+    raise RuntimeError(f"{argv[0]} exited {result.returncode}\n{result.stderr}\n{result.stdout}")
+RuntimeError: /Users/josephwylie/Desktop/Projects/ferrite-remote-connections/target/debug/ferrite exited 1
+{"id":"1","error":{"code":"server_unavailable","message":"ssh: Could not resolve hostname ferrite-link:03c90f60b122c868e3a671b0a061c43f: nodename nor servname provided, or not known"}}
+
+

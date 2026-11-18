@@ -293,7 +293,7 @@ fn delayed_replacement_failure_preserves_header_and_the_original_session() {
     });
     assert_eq!(cockpit.peek(thread).unwrap().provider, Provider::Claude);
     assert_eq!(original.dropped.load(Ordering::SeqCst), 0);
-    cockpit.send(thread, "old still serves".into());
+    let _ = cockpit.send(thread, "old still serves".into());
     assert_eq!(original.sent(), ["old still serves"]);
 }
 
@@ -303,13 +303,13 @@ fn handover_commit_and_delivery_wait_for_readiness_and_failed_send_keeps_carry()
     let (new, mut replacement) = planned(true);
     let mut cockpit = cockpit("handover", vec![old, new]);
     let thread = cockpit.open(Provider::Claude, workspace()).unwrap();
-    cockpit.send(thread, "before".into());
+    let _ = cockpit.send(thread, "before".into());
     original.ended();
     cockpit.pump();
     cockpit
         .set_provider(thread, choice(Provider::Codex))
         .unwrap();
-    cockpit.send(thread, "after".into());
+    let _ = cockpit.send(thread, "after".into());
     assert!(cockpit
         .engine()
         .store
@@ -342,7 +342,7 @@ fn handover_commit_and_delivery_wait_for_readiness_and_failed_send_keeps_carry()
         .expect("the failed prompt is back in the Composer");
     assert_eq!(prompt, "after");
     replacement.fail_send.store(false, Ordering::SeqCst);
-    cockpit.send(thread, prompt);
+    let _ = cockpit.send(thread, prompt);
     let sent = replacement.sent();
     assert_eq!(sent.len(), 1);
     assert!(sent[0].contains("before") && sent[0].ends_with("after"));
@@ -365,7 +365,7 @@ fn failed_handover_rewrite_leaves_no_durable_handover_and_keeps_serving() {
     let (new, mut replacement) = planned(true);
     let mut cockpit = cockpit("handover-store-fail", vec![old, new]);
     let thread = cockpit.open(Provider::Claude, workspace()).unwrap();
-    cockpit.send(thread, "before".into());
+    let _ = cockpit.send(thread, "before".into());
     original.ended();
     cockpit.pump();
     cockpit
@@ -386,40 +386,8 @@ fn failed_handover_rewrite_leaves_no_durable_handover_and_keeps_serving() {
     assert_eq!(snapshot.provider(), Provider::Claude);
     assert!(snapshot.last_handover().is_none());
     assert_eq!(original.dropped.load(Ordering::SeqCst), 0);
-    cockpit.send(thread, "still old".into());
+    let _ = cockpit.send(thread, "still old".into());
     assert_eq!(original.sent(), ["before", "still old"]);
-}
-
-#[test]
-fn grouped_draft_revalidates_membership_before_delivering() {
-    let (first, _) = planned(false);
-    let (second, _) = planned(false);
-    let (new, mut replacement) = planned(true);
-    let mut cockpit = cockpit("group-changed", vec![first, second, new]);
-    let first = cockpit.open(Provider::Claude, workspace()).unwrap();
-    let second = cockpit.open(Provider::Claude, workspace()).unwrap();
-    let group = cockpit
-        .apply_group(GroupChange::Create { first, second })
-        .unwrap()
-        .group
-        .unwrap();
-    cockpit.enter_group(group).unwrap();
-    // The shortcut path is the one that still scopes a Draft to its Group;
-    // plain `open_draft` is deliberately loose.
-    let draft = cockpit.open_draft_in_current_view();
-    cockpit
-        .bootstrap_draft(draft, choice(Provider::Claude), workspace(), "join", None)
-        .unwrap();
-    // Group can change through another operator action during startup.
-    cockpit
-        .apply_group(GroupChange::Leave { thread: first })
-        .unwrap();
-    replacement.ready();
-    let completed = settle(&mut cockpit);
-    assert!(completed.result.is_err());
-    assert!(replacement.sent().is_empty());
-    assert!(cockpit.roster().draft_scope(draft).is_some());
-    assert_eq!(cockpit.threads().len(), 2);
 }
 
 #[test]
@@ -427,11 +395,13 @@ fn effort_waits_for_startup_without_losing_the_pending_prompt() {
     let (plan, mut provider) = planned(true);
     let mut cockpit = cockpit("startup-effort", vec![plan]);
     let thread = cockpit.open(Provider::Claude, workspace()).unwrap();
-    cockpit.send(thread, "waiting".into());
-    assert!(matches!(
-        cockpit.set_effort(thread, Some("high".into())),
-        Err(ProvisionError::Busy)
-    ));
+    let _ = cockpit.send(thread, "waiting".into());
+    assert_eq!(
+        cockpit.set_effort(thread, Some("high".into()))
+        .unwrap_err()
+        .to_string(),
+        ProvisionError::Busy.to_string()
+    );
     assert_eq!(cockpit.peek(thread).unwrap().effort, None);
     assert_eq!(
         cockpit
@@ -467,17 +437,19 @@ fn effort_waits_for_handover_then_tunes_in_place_without_consuming_context() {
     let (new, mut replacement) = planned(true);
     let mut cockpit = cockpit("handover-effort", vec![old, new]);
     let thread = cockpit.open(Provider::Claude, workspace()).unwrap();
-    cockpit.send(thread, "before".into());
+    let _ = cockpit.send(thread, "before".into());
     original.ended();
     cockpit.pump();
     cockpit
         .set_provider(thread, choice(Provider::Codex))
         .unwrap();
-    cockpit.send(thread, "after".into());
-    assert!(matches!(
-        cockpit.set_effort(thread, Some("high".into())),
-        Err(ProvisionError::Busy)
-    ));
+    let _ = cockpit.send(thread, "after".into());
+    assert_eq!(
+        cockpit.set_effort(thread, Some("high".into()))
+        .unwrap_err()
+        .to_string(),
+        ProvisionError::Busy.to_string()
+    );
     assert_eq!(cockpit.peek(thread).unwrap().provider, Provider::Claude);
     assert_eq!(
         cockpit
@@ -507,7 +479,7 @@ fn effort_waits_for_handover_then_tunes_in_place_without_consuming_context() {
             .unwrap()
             .delivered
     );
-    cockpit.send(thread, prompt);
+    let _ = cockpit.send(thread, prompt);
     let sent = replacement.sent();
     assert_eq!(sent.len(), 1);
     assert!(sent[0].contains("before") && sent[0].ends_with("after"));
