@@ -4,7 +4,6 @@
 //! what the window names and raises is what is on screen.
 #[allow(unused_imports)]
 use super::*;
-use crate::cockpit::direction::DirectField;
 use crate::cockpit::workflows::Surface;
 use ferrite_core::factory::{Board, Command, Status, Task, Template};
 
@@ -293,17 +292,13 @@ fn an_answer_sent_lets_the_keyboard_go(cx: &mut TestAppContext) {
     wide(cx);
     view.update(cx, |view, cx| {
         view.open_task("t-1", cx);
-        view.focus_direct(DirectField::Answer, cx);
+        view.focus_answer(cx);
     });
     tick(cx);
     cx.simulate_input("mango");
     tick(cx);
     assert_eq!(
-        view.read_with(cx, |view, cx| view.direct_text(
-            "t-1",
-            DirectField::Answer,
-            cx
-        )),
+        view.read_with(cx, |view, cx| view.answer_text("t-1", cx)),
         "mango"
     );
     view.update(cx, |view, cx| view.send_answer(cx));
@@ -311,8 +306,8 @@ fn an_answer_sent_lets_the_keyboard_go(cx: &mut TestAppContext) {
     let answer_holds = |view: &Entity<CockpitView>, cx: &mut gpui::VisualTestContext| {
         cx.update(|window, cx| {
             let view = view.read(cx);
-            view.task_drafts("t-1")
-                .is_some_and(|drafts| drafts.answer.read(cx).focus_handle(cx).is_focused(window))
+            view.answer_box("t-1")
+                .is_some_and(|answer| answer.read(cx).focus_handle(cx).is_focused(window))
         })
     };
     assert!(!answer_holds(&view, cx), "sent: the answer box lets go");
@@ -363,7 +358,7 @@ fn the_worker_tab_takes_the_keyboard_from_the_overviews_field(cx: &mut TestAppCo
     wide(cx);
     view.update(cx, |view, cx| {
         view.open_task("t-1", cx);
-        view.focus_direct(DirectField::Answer, cx);
+        view.focus_answer(cx);
     });
     tick(cx);
     click(cx, "task-tab-worker");

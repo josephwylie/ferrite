@@ -6,10 +6,10 @@ date: 2026-11-18
 # One sheet at a time, in one host
 
 Ferrite has five sheets: Settings, the Project card, the Background work
-dialog, the New task sheet and the Rework/Direct sheet. Each drew its own
-veil and wrote its own outside press, fade, focus and Escape. Only
-Settings and the Project card closed each other, by hand, in their
-openers. Two of the five have no Escape.
+dialog, the New task sheet and a Task's Rework or Direct this task sheet.
+Each drew its own veil and wrote its own outside press, fade, focus and
+Escape. Only Settings and the Project card closed each other, by hand, in
+their openers. Two of the five have no Escape.
 
 ## Decision
 
@@ -52,8 +52,24 @@ openers. Two of the five have no Escape.
   start, open the Process menu, close. Starting the Task stays the
   root's. The sheet is its Factory's: once that Factory no longer shows,
   the sheet closes, and a Task started closes it. Escape now closes it,
-  and a menu it opened closes before it. The Rework/Direct sheet moves in
-  later.
+  and a menu it opened closes before it.
+- **A Task's Rework or Direct this task sheet is the fifth.** The two
+  kinds share a Task, one text field, a card and their close, so they are
+  one view, `DirectView` (`cockpit/direct_view.rs`), and one `Sheet` variant.
+  Which of the two it is, with what it chooses (the Rework's recipient;
+  the Step a redirect sends to, the Steps it skips, what follows), is its
+  `Choice`. It owns its Task, its field, which holds the keyboard, and
+  whether a send was tried. It emits `DirectEvent`: send the rework,
+  apply the redirect, open a chooser's menu, close. A Step or a recipient
+  picked in that menu reaches the view through the root. Sending stays
+  the root's, as does a refusal, said on the Task's panel with the sheet
+  left up. The answer box stays on the panel: it is drawn there, not on
+  a sheet. The sheet is its Factory's and its Task's: once that Factory
+  no longer shows or the Task leaves the board, it closes, and a send
+  taken closes it. Escape now closes it, and a menu it opened closes
+  before it.
+- **All five sheets are in the host.** No sheet draws its own veil, and
+  `hide_sheet` is the one close path for every one of them.
 - **What was typed outlives its sheet as plain values.** The view is
   dropped on a close, so what must survive the close leaves with the
   sheet (`sheet_gone`) as plain values, kept by what outlives the sheet,
@@ -63,7 +79,10 @@ openers. Two of the five have no Escape.
   (`KeptNewTask`), so they go when the Factory does, and a Task started
   spends them. A refusal and which field held the keyboard are not kept.
   Nor are the caret, the selection or the undo history: the sheet reopens
-  on its instructions with the caret at the end.
+  on its instructions with the caret at the end. A Task's Rework and
+  Direct this task keep, per Task on its Factory (`KeptDirection`), each
+  kind's text and choices apart from the other's, and a send taken spends
+  its own kind's only. Whether a send was tried is not kept.
 
 ## Precedent
 

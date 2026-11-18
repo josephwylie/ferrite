@@ -231,10 +231,10 @@ impl CockpitView {
             view.open = Some(task.to_string());
             view.tab = TaskTab::Overview;
             view.note = None;
-            view.direct.focused = None;
+            view.direct.answering = false;
             view.revealed.set(None);
         }
-        self.ensure_drafts(task, cx);
+        self.ensure_answer(task, cx);
         cx.notify();
     }
 
@@ -317,15 +317,15 @@ impl CockpitView {
             }
         }
         if let Some(open) = self.open_task_now().map(|task| task.id.clone()) {
-            self.ensure_drafts(&open, cx);
+            self.ensure_answer(&open, cx);
         }
         self.ensure_fields(cx);
         cx.notify();
     }
 
     /// What holds the keyboard while the Factory shows: the Worker's
-    /// Composer on its tab, else the window's own. The New task sheet's
-    /// field is the sheet host's (`Sheet::focus`).
+    /// Composer on its tab, else the window's own. A sheet's field is the
+    /// sheet host's (`Sheet::focus`).
     pub(super) fn factory_focus(&self, window: &Window, cx: &gpui::App) -> Option<FocusHandle> {
         let view = self.factory()?;
         if let Some(focus) = self.direct_focus(cx) {

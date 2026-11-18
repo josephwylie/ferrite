@@ -19,6 +19,7 @@ pub(crate) mod decisions;
 mod delivery;
 mod destination;
 mod details;
+mod direct_view;
 pub(crate) mod direction;
 mod drafts;
 mod float_exits;
@@ -8388,7 +8389,7 @@ impl CockpitView {
             .collect();
         // The open Task's Worker, drawn in its panel, streams whole too.
         self.leave_destination_if_moved();
-        self.close_new_task_of_gone_factory(cx);
+        self.close_sheet_with_nothing_to_draw(cx);
         let drawn: Vec<ThreadId> = match self.factory_worker_drawn() {
             Some(worker) => vec![worker],
             None => drawn,
@@ -9074,7 +9075,6 @@ impl CockpitView {
             .children(self.model_picker_element(window, cx))
             .children(self.mode_menu_element(window, cx))
             .child(self.sheets.clone())
-            .children(self.direct_sheet(window, cx))
             .children(self.toast_float(window, cx))
             .children(self.sheet_floats(window, cx))
             .children(self.lightbox_element(cx))

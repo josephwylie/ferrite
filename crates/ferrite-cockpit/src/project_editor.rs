@@ -16,10 +16,6 @@ const WIDTH: f32 = 600.;
 /// The sheet sizes to its content up to here; past it the body scrolls.
 const MAX_HEIGHT: f32 = 520.;
 
-pub fn veil() -> Div {
-    sheet::veil()
-}
-
 /// The sheet, as tall as its content up to `MAX_HEIGHT` (and the viewport
 /// share every sheet keeps, of a window `viewport_h` tall), past which the
 /// body scrolls between the fixed head and footer.

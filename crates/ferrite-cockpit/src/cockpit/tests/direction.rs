@@ -4,7 +4,7 @@
 //! settings with what ends in Completed.
 #[allow(unused_imports)]
 use super::*;
-use crate::cockpit::direction::{DirectField, TaskPick};
+use crate::cockpit::direction::{DirectSheet, TaskPick};
 use crate::cockpit::workflows::{Field, Pick};
 use ferrite_core::factory::{Board, Destination, Override, Status, Task, ThenReturn};
 use ferrite_core::protocol::TaskAction;
@@ -101,12 +101,23 @@ fn asks(view: &Entity<CockpitView>, cx: &mut gpui::VisualTestContext) -> Vec<Tas
     view.read_with(cx, |view, _| view.cockpit.fixture_task_asks().to_vec())
 }
 
-fn text(
-    view: &Entity<CockpitView>,
-    cx: &mut gpui::VisualTestContext,
-    field: DirectField,
-) -> String {
-    view.read_with(cx, |view, cx| view.direct_text("t-1", field, cx))
+/// A Rework or Direct this task sheet is up.
+fn up(view: &Entity<CockpitView>, cx: &mut gpui::VisualTestContext) -> bool {
+    view.read_with(cx, |view, cx| view.direct_sheet(cx).is_some())
+}
+
+/// What the Task's answer box holds.
+fn answer(view: &Entity<CockpitView>, cx: &mut gpui::VisualTestContext) -> String {
+    view.read_with(cx, |view, cx| view.answer_text("t-1", cx))
+}
+
+/// What the sheet up holds in its field: the feedback or the note.
+fn typed(view: &Entity<CockpitView>, cx: &mut gpui::VisualTestContext) -> String {
+    view.read_with(cx, |view, cx| {
+        view.direct_sheet(cx)
+            .map(|sheet| sheet.read(cx).field.read(cx).text().to_string())
+            .unwrap_or_default()
+    })
 }
 
 /// AC: a question is answered in the Task: the asker and the question
@@ -130,7 +141,7 @@ fn the_answer_box_answers_the_question_and_keeps_what_was_typed(cx: &mut TestApp
     click(cx, "task-answer");
     cx.simulate_input("Off; opt in only");
     tick(cx);
-    assert_eq!(text(&view, cx, DirectField::Answer), "Off; opt in only");
+    assert_eq!(answer(&view, cx), "Off; opt in only");
 
     view.update(cx, |view, cx| {
         view.task_tab(crate::cockpit::factory::TaskTab::Activity, cx)
@@ -144,7 +155,7 @@ fn the_answer_box_answers_the_question_and_keeps_what_was_typed(cx: &mut TestApp
     view.update(cx, |view, cx| view.open_task("t-1", cx));
     tick(cx);
     assert_eq!(
-        text(&view, cx, DirectField::Answer),
+        answer(&view, cx),
         "Off; opt in only",
         "survives a tab switch and the panel closing"
     );
@@ -159,7 +170,7 @@ fn the_answer_box_answers_the_question_and_keeps_what_was_typed(cx: &mut TestApp
         }]
     );
     assert_eq!(
-        text(&view, cx, DirectField::Answer),
+        answer(&view, cx),
         "",
         "cleared once taken"
     );
@@ -242,7 +253,7 @@ fn the_rework_sheet_needs_feedback_and_keeps_it(cx: &mut TestAppContext) {
     assert!(!shows(cx, "rework-sheet"));
     click(cx, "task-rework-open");
     assert_eq!(
-        text(&view, cx, DirectField::Feedback),
+        typed(&view, cx),
         "Mention --fast in the README",
         "survives the sheet closing"
     );
@@ -301,7 +312,7 @@ fn the_redirect_sheet_sends_one_task_and_keeps_its_choices(cx: &mut TestAppConte
     click(cx, "task-redirect-open");
     assert!(shows(cx, "redirect-skip-s-2-on"), "choices kept");
     assert!(shows(cx, "redirect-then-1-on"));
-    assert_eq!(text(&view, cx, DirectField::Note), "Only the docs changed");
+    assert_eq!(typed(&view, cx), "Only the docs changed");
 
     click(cx, "redirect-apply");
     assert_eq!(
@@ -333,7 +344,7 @@ fn each_sheet_opens_with_the_keyboard_on_its_field(cx: &mut TestAppContext) {
     assert!(shows(cx, "factory-field-focused"));
     cx.simulate_input("Tighten");
     tick(cx);
-    assert_eq!(text(&view, cx, DirectField::Feedback), "Tighten", "the feedback, on open");
+    assert_eq!(typed(&view, cx), "Tighten", "the feedback, on open");
     click(cx, "direct-cancel");
 
     click(cx, "task-redirect-open");
@@ -344,7 +355,7 @@ fn each_sheet_opens_with_the_keyboard_on_its_field(cx: &mut TestAppContext) {
     cx.simulate_input(" only");
     tick(cx);
     assert_eq!(
-        text(&view, cx, DirectField::Note),
+        typed(&view, cx),
         "Docs only",
         "the note, on open and after a press on its choices"
     );
@@ -370,14 +381,14 @@ fn a_sheet_closed_leaves_the_answer_box_without_the_keyboard(cx: &mut TestAppCon
     assert!(shows(cx, "rework-sheet"));
     cx.simulate_input("Again");
     tick(cx);
-    assert_eq!(text(&view, cx, DirectField::Feedback), "Again");
-    assert_eq!(text(&view, cx, DirectField::Answer), "Mango");
+    assert_eq!(typed(&view, cx), "Again");
+    assert_eq!(answer(&view, cx), "Mango");
     click(cx, "direct-cancel");
     assert!(!shows(cx, "rework-sheet"));
     let answer_holds = cx.update(|window, cx| {
         view.read(cx)
-            .task_drafts("t-1")
-            .is_some_and(|drafts| drafts.answer.read(cx).focus_handle(cx).is_focused(window))
+            .answer_box("t-1")
+            .is_some_and(|answer| answer.read(cx).focus_handle(cx).is_focused(window))
     });
     assert!(!answer_holds);
 }
@@ -406,15 +417,15 @@ fn each_sheet_keeps_its_own_words_and_choices_until_sent(cx: &mut TestAppContext
     click(cx, "direct-cancel");
 
     click(cx, "task-rework-open");
-    assert_eq!(text(&view, cx, DirectField::Feedback), "Fix the docs");
+    assert_eq!(typed(&view, cx), "Fix the docs");
     click(cx, "rework-send");
     click(cx, "task-rework-open");
-    assert_eq!(text(&view, cx, DirectField::Feedback), "", "spent once sent");
+    assert_eq!(typed(&view, cx), "", "spent once sent");
     cx.simulate_input("Again");
     click(cx, "rework-send");
 
     click(cx, "task-redirect-open");
-    assert_eq!(text(&view, cx, DirectField::Note), "Docs only", "the other sheet's stays");
+    assert_eq!(typed(&view, cx), "Docs only", "the other sheet's stays");
     click(cx, "redirect-apply");
     assert_eq!(
         asks(&view, cx),
@@ -458,7 +469,7 @@ fn a_refused_send_stays_on_its_sheet(cx: &mut TestAppContext) {
     click(cx, "rework-send");
     assert!(shows(cx, "rework-sheet"), "the sheet stays up");
     assert!(!shows(cx, "rework-missing"));
-    assert_eq!(text(&view, cx, DirectField::Feedback), "Fix it");
+    assert_eq!(typed(&view, cx), "Fix it");
     assert!(view.read_with(cx, |view, _| view.factory().unwrap().note.is_some()));
 }
 
@@ -492,6 +503,7 @@ fn a_sheet_follows_its_task_and_goes_with_it(cx: &mut TestAppContext) {
     });
     tick(cx);
     assert!(!shows(cx, "redirect-sheet"), "goes with its Task");
+    assert!(!up(&view, cx), "closed, not only undrawn");
 }
 
 /// Leaving the Factory takes the sheet, and what was typed in it.
@@ -513,10 +525,11 @@ fn leaving_the_factory_takes_the_sheet_and_its_words(cx: &mut TestAppContext) {
     tick(cx);
     assert!(view.read_with(cx, |view, _| view.factory().is_none()));
     assert!(!shows(cx, "rework-sheet"));
+    assert!(!up(&view, cx), "closed, not only undrawn");
     view.update(cx, |view, cx| view.open_task("t-1", cx));
     tick(cx);
     click(cx, "task-rework-open");
-    assert_eq!(text(&view, cx, DirectField::Feedback), "");
+    assert_eq!(typed(&view, cx), "");
 }
 
 /// A menu a sheet opened closes with the sheet.
@@ -531,10 +544,95 @@ fn a_menu_the_sheet_opened_goes_with_it(cx: &mut TestAppContext) {
     click(cx, "task-rework-open");
     click(cx, "rework-to");
     assert!(shows(cx, "context-menu"), "the recipient menu");
-    view.update(cx, |view, cx| view.close_direct_sheet(cx));
+    view.update(cx, |view, cx| view.hide_sheet(cx));
     tick(cx);
     assert!(!shows(cx, "context-menu"));
     assert!(!shows(cx, "rework-sheet"));
+}
+
+/// Escape, its close button, Cancel and a press on the veil each close
+/// each sheet. A menu it opened closes before it does.
+#[gpui::test]
+fn escape_the_close_button_and_the_veil_each_close_each_sheet(cx: &mut TestAppContext) {
+    let (view, cx) = panel(
+        cx,
+        "direct-close",
+        Status::Approval,
+        serde_json::json!({ "result": "Checks pass" }),
+    );
+    for sheet in [DirectSheet::Rework, DirectSheet::Redirect] {
+        let open = |cx: &mut gpui::VisualTestContext| {
+            view.update(cx, |view, cx| view.open_direct_sheet(sheet, cx));
+            tick(cx);
+            assert!(up(&view, cx), "{sheet:?}: the sheet is up");
+        };
+        open(cx);
+        cx.simulate_keystrokes("escape");
+        cx.run_until_parked();
+        assert!(!up(&view, cx), "{sheet:?}: escape closes it");
+
+        for button in ["direct-close", "direct-cancel"] {
+            open(cx);
+            click(cx, button);
+            assert!(!up(&view, cx), "{sheet:?}: {button} closes it");
+        }
+
+        open(cx);
+        cx.simulate_click(gpui::point(px(20.), px(780.)), gpui::Modifiers::none());
+        cx.run_until_parked();
+        assert!(!up(&view, cx), "{sheet:?}: a press on the veil closes it");
+    }
+
+    view.update(cx, |view, cx| view.open_direct_sheet(DirectSheet::Rework, cx));
+    tick(cx);
+    click(cx, "rework-to");
+    assert!(shows(cx, "context-menu"), "the recipient menu");
+    cx.simulate_keystrokes("escape");
+    tick(cx);
+    assert!(!shows(cx, "context-menu"), "escape closes the menu first");
+    assert!(up(&view, cx), "and leaves the sheet up");
+    cx.simulate_keystrokes("escape");
+    cx.run_until_parked();
+    assert!(!up(&view, cx));
+}
+
+/// A Task's sheet, Settings and the New task sheet replace one another
+/// with no exit, and what was typed stays for the sheet's next opening.
+#[gpui::test]
+fn a_tasks_sheet_and_another_sheet_replace_one_another(cx: &mut TestAppContext) {
+    let (view, cx) = panel(
+        cx,
+        "direct-replace",
+        Status::Approval,
+        serde_json::json!({ "result": "Checks pass" }),
+    );
+    let open = |cx: &mut gpui::VisualTestContext| {
+        view.update(cx, |view, cx| view.open_direct_sheet(DirectSheet::Rework, cx));
+        tick(cx);
+    };
+    open(cx);
+    cx.simulate_input("Kept");
+    tick(cx);
+    cx.simulate_keystrokes("cmd-,");
+    tick(cx);
+    assert!(view.read_with(cx, |view, cx| view.settings_open(cx)), "Settings replaces the sheet");
+    assert!(!up(&view, cx));
+    assert!(!shows(cx, "rework-sheet"), "with no exit");
+
+    open(cx);
+    assert!(!view.read_with(cx, |view, cx| view.settings_open(cx)), "the sheet replaces Settings");
+    assert!(!shows(cx, "settings-card"));
+    assert_eq!(typed(&view, cx), "Kept");
+
+    view.update(cx, |view, cx| view.open_new_task(cx));
+    tick(cx);
+    assert!(view.read_with(cx, |view, cx| view.new_task(cx).is_some()), "New task replaces it");
+    assert!(!up(&view, cx));
+    assert!(!shows(cx, "rework-sheet"));
+    open(cx);
+    assert!(view.read_with(cx, |view, cx| view.new_task(cx).is_none()), "and it replaces New task");
+    assert!(!shows(cx, "new-task-card"));
+    assert_eq!(typed(&view, cx), "Kept");
 }
 
 /// AC: a Workflow's approval settings choose who approves; agent approval
