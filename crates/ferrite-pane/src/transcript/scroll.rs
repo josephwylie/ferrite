@@ -360,13 +360,22 @@ impl TranscriptScroll {
     /// offset, measurement and tail-follow transition.
     fn hold_reading_place(&self, rows: &TranscriptRows) -> bool {
         let viewport = self.list.viewport_bounds();
+        let reflowed = self
+            .reading
+            .borrow()
+            .clone()
+            .filter(|place| place.width != viewport.size.width);
         if self.list.is_following_tail() {
-            self.reading.take();
-            return false;
+            if reflowed.is_none() {
+                self.reading.take();
+                return false;
+            }
+            // Rows rewrapped shorter than the held offset: the list clamped
+            // to its end and took that as the reader returning to it.
+            self.list.pause_following_tail();
         }
         let mut adjusted = false;
-        let held = self.reading.borrow().clone();
-        if let Some(place) = held.filter(|place| place.width != viewport.size.width) {
+        if let Some(place) = reflowed {
             if let Some(index) = rows.position(&place.row) {
                 if let Some(bounds) = self.list.bounds_for_item(index) {
                     let delta = bounds.top() + bounds.size.height * place.along
