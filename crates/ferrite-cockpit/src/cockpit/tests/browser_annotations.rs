@@ -148,3 +148,30 @@ fn browser_annotation_retained_editor_adds_original_evidence_without_a_live_page
     assert_eq!(std::fs::read(original.original().unwrap()).unwrap(), png);
     std::fs::remove_dir_all(root).unwrap();
 }
+
+/// A live annotation's Send sends the Composer under it, so it is off
+/// while any sheet covers that Composer, and back once the sheet closes.
+#[gpui::test]
+fn a_live_annotation_cannot_send_under_a_sheet(cx: &mut TestAppContext) {
+    use ferrite_pane::visual::web::fake::Call;
+    let (engine, view, _thread, cx) = super::browser_chrome::browser_window(cx, "ba-under-sheet");
+    let send_enabled = || {
+        engine.journal().iter().rev().find_map(|call| match call {
+            Call::AnnotationStarted(_, enabled) | Call::AnnotationSendEnabled(enabled) => Some(*enabled),
+            _ => None,
+        })
+    };
+    let annotate = cx.debug_bounds("browser-annotate").expect("live page offers annotation");
+    cx.simulate_click(annotate.center(), gpui::Modifiers::none());
+    tick(cx);
+    assert_eq!(send_enabled(), Some(true), "Send sends, with no sheet up");
+    view.update(cx, |view, cx| view.toggle_settings(cx));
+    tick(cx);
+    assert_eq!(send_enabled(), Some(false), "not under Settings");
+    view.update(cx, |view, cx| view.hide_sheet(cx));
+    tick(cx);
+    assert_eq!(send_enabled(), Some(true), "back once it closes");
+    view.update(cx, |view, cx| view.open_project_creator(cx));
+    tick(cx);
+    assert_eq!(send_enabled(), Some(false), "not under the Project card");
+}

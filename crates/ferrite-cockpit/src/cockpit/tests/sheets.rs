@@ -4,7 +4,7 @@
 use super::*;
 
 fn up(view: &Entity<CockpitView>, cx: &mut gpui::VisualTestContext) -> (bool, bool) {
-    view.read_with(cx, |view, cx| (view.settings_open(cx), view.project_editor_open(cx)))
+    view.read_with(cx, |view, cx| (view.settings_open(cx), view.project_card(cx).is_some()))
 }
 
 /// Opening one sheet over the other leaves exactly one up, and only that
@@ -129,7 +129,7 @@ fn closing_settings_drops_the_connection_editor(cx: &mut TestAppContext) {
     view.update(cx, |view, cx| view.open_project_creator(cx));
     tick(cx);
     view.read_with(cx, |view, cx| {
-        assert!(view.project_editor_open(cx));
+        assert!(view.project_card(cx).is_some());
         assert!(view.connections.editor.is_none(), "the card drops the editor");
     });
 }

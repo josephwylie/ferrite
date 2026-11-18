@@ -214,7 +214,7 @@ impl CockpitView {
             && self.pane_for(thread).is_some_and(|index| {
                 self.panes[index].is_main() && self.panes[index].composer.read(cx).comment_valid(cx)
             })
-            && !self.project_editor_open(cx)
+            && !self.sheet_up(cx)
             && self.snooze_editor.is_none()
             && self.rename.is_none()
     }

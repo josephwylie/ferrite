@@ -637,7 +637,7 @@ fn a_project_in_use_keeps_its_remove_verb_disabled(cx: &mut TestAppContext) {
     tick(cx);
     view.read_with(cx, |view, cx| {
         assert!(view.cockpit.registry().project(project).is_some());
-        assert!(view.project_editor_open(cx), "the sheet stays up");
+        assert!(view.project_card(cx).is_some(), "the sheet stays up");
     });
 }
 

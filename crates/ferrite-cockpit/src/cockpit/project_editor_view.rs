@@ -653,10 +653,6 @@ impl CockpitView {
         }
     }
 
-    pub(crate) fn project_editor_open(&self, cx: &App) -> bool {
-        self.sheets.read(cx).project_editor().is_some()
-    }
-
     /// The Project card, while it is up.
     pub(crate) fn project_card(&self, cx: &App) -> Option<Entity<ProjectEditorView>> {
         self.sheets.read(cx).project_editor().cloned()

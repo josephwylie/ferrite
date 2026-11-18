@@ -59,6 +59,8 @@ pub enum Call {
     BrowserResize(BrowserViewport),
     BrowserNavigate(String),
     AnnotationStarted(u64, bool),
+    /// Whether the annotation's Send may send changed.
+    AnnotationSendEnabled(bool),
     AnnotationFinished(u64),
     /// The operator replied to a script dialog.
     DialogAnswered(DialogAnswer),
@@ -270,6 +272,7 @@ impl Engine for FakeEngine {
             viewport: Cell::new(viewport),
             annotation: Cell::new(None),
             annotation_finishing: Cell::new(false),
+            annotation_send_enabled: Cell::new(false),
             annotation_events: RefCell::default(),
             wake,
         });
@@ -330,6 +333,7 @@ struct BrowserNavigation {
     viewport: Cell<BrowserViewport>,
     annotation: Cell<Option<u64>>,
     annotation_finishing: Cell<bool>,
+    annotation_send_enabled: Cell<bool>,
     annotation_events: RefCell<VecDeque<crate::visual::live_annotation::Event>>,
     wake: Rc<dyn Fn()>,
 }
@@ -376,6 +380,7 @@ impl BrowserView for BrowserHandle {
         }
         self.navigation.annotation.set(Some(generation));
         self.navigation.annotation_finishing.set(false);
+        self.navigation.annotation_send_enabled.set(send_enabled);
         self.navigation.annotation_events.borrow_mut().push_back(crate::visual::live_annotation::Event::Ready);
         self.journal.borrow_mut().push(Call::AnnotationStarted(generation, send_enabled));
         (self.navigation.wake)();
@@ -383,6 +388,11 @@ impl BrowserView for BrowserHandle {
     }
     fn take_annotation_event(&self) -> Option<crate::visual::live_annotation::Event> {
         self.navigation.annotation_events.borrow_mut().pop_front()
+    }
+    fn set_annotation_send_enabled(&self, enabled: bool) {
+        if self.navigation.annotation_send_enabled.replace(enabled) != enabled {
+            self.journal.borrow_mut().push(Call::AnnotationSendEnabled(enabled));
+        }
     }
     fn finish_annotation(&self, generation: u64) {
         if self.navigation.annotation.get() == Some(generation)

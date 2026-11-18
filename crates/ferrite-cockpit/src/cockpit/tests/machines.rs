@@ -1349,7 +1349,7 @@ fn a_draft_on_a_machine_starts_a_thread_in_a_directory_typed_there(cx: &mut Test
     cx.simulate_keystrokes("enter");
     let project = view.update(cx, |view, cx| {
         assert!(
-            !view.project_editor_open(cx),
+            view.project_card(cx).is_none(),
             "the next ↵ confirms the card, adding nothing more"
         );
         let project = view.cockpit.registry().projects().last().unwrap().clone();

@@ -105,7 +105,7 @@ fn the_project_card_stages_directories_and_registers_on_confirm(cx: &mut TestApp
         );
 
         view.confirm_project_editor(cx);
-        assert!(!view.project_editor_open(cx));
+        assert!(view.project_card(cx).is_none());
         assert_eq!(view.cockpit.registry().projects().len(), before + 1);
 
         let project = view
@@ -147,7 +147,7 @@ fn the_project_card_edits_an_existing_project(cx: &mut TestAppContext) {
         name.update(cx, |name, cx| name.set("Renamed".into(), cx));
         view.confirm_project_editor(cx);
 
-        assert!(!view.project_editor_open(cx));
+        assert!(view.project_card(cx).is_none());
         assert_eq!(
             view.cockpit.registry().project(project).unwrap().title,
             "Renamed"
