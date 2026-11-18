@@ -44,8 +44,26 @@ openers. Two of the five have no Escape.
   and emits `BackgroundDialogEvent`: stop, open an agent's thread, close.
   The stopping stays the root's, because the background line under the
   transcript stops the same work. A dialog whose Thread is no longer open
-  closes. The New task sheet and the Rework/Direct sheet move in later,
-  one per change.
+  closes.
+- **The New task sheet is the fourth.** `NewTaskView`
+  (`cockpit/new_task_view.rs`) owns its instructions and PR fields, which
+  of them holds the keyboard, the process chosen, the request that makes a
+  second Start the same Task, and a refusal. It emits `NewTaskEvent`:
+  start, open the Process menu, close. Starting the Task stays the
+  root's. The sheet is its Factory's: once that Factory no longer shows,
+  the sheet closes, and a Task started closes it. Escape now closes it,
+  and a menu it opened closes before it. The Rework/Direct sheet moves in
+  later.
+- **What was typed outlives its sheet as plain values.** The view is
+  dropped on a close, so what must survive the close leaves with the
+  sheet (`sheet_gone`) as plain values, kept by what outlives the sheet,
+  and seeds the next view. A view is never kept alive out of sight. The
+  New task sheet keeps each field's text and attachments
+  (`DraftContent`), its process and its request on its Factory
+  (`KeptNewTask`), so they go when the Factory does, and a Task started
+  spends them. A refusal and which field held the keyboard are not kept.
+  Nor are the caret, the selection or the undo history: the sheet reopens
+  on its instructions with the caret at the end.
 
 ## Precedent
 

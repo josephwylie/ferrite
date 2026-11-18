@@ -16,6 +16,9 @@ pub(crate) struct FactoryFixture {
     pub(crate) factory: Option<Factory>,
     /// Its Task asks, kept to be read back (`fixture_record_tasks`).
     pub(crate) asks: Option<Vec<TaskAction>>,
+    /// A Start is answered with the Task it made (`fixture_start_tasks`),
+    /// not as a change.
+    pub(crate) starts: bool,
     /// What its GitHub login lists (`fixture_github`): each repository and
     /// its labels, in place of `gh`.
     pub(crate) github: Option<Vec<(String, Vec<String>)>>,
@@ -33,8 +36,14 @@ impl FactoryFixture {
         let command = match op {
             Op::Task { action } => {
                 let asks = self.asks.as_mut()?;
+                let started = self.starts && matches!(action, TaskAction::Start { .. });
                 asks.push(action);
-                return Some((Ok(Some(Done::Changed { changed: true })), None));
+                let done = if started {
+                    Done::Task { task: format!("started-{}", asks.len()) }
+                } else {
+                    Done::Changed { changed: true }
+                };
+                return Some((Ok(Some(done)), None));
             }
             Op::Workflow { action } => {
                 self.factory.as_ref()?;

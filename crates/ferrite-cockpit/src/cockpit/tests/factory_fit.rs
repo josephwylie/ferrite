@@ -592,9 +592,8 @@ fn the_new_task_sheet_closes_with_its_menu_and_keeps_its_words(cx: &mut TestAppC
     view.update(cx, |view, cx| view.open_new_task(cx));
     tick(cx);
     let typed = view.read_with(cx, |view, cx| {
-        view.factory()
-            .and_then(|view| view.sheet.as_ref())
-            .map(|sheet| sheet.instructions.read(cx).text().to_string())
+        view.new_task(cx)
+            .map(|sheet| sheet.read(cx).instructions.read(cx).text().to_string())
     });
     assert_eq!(typed.as_deref(), Some("Fix the login flake"));
 }

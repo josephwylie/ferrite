@@ -2662,6 +2662,12 @@ impl Cockpit {
         self.factory_fixture.get_or_insert_default().asks = Some(Vec::new());
     }
 
+    /// `fixture_record_tasks`, with each Start answered as a Task made.
+    pub fn fixture_start_tasks(&mut self) {
+        self.fixture_record_tasks();
+        self.factory_fixture.get_or_insert_default().starts = true;
+    }
+
     pub fn fixture_task_asks(&self) -> &[crate::protocol::TaskAction] {
         self.factory_fixture
             .as_ref()

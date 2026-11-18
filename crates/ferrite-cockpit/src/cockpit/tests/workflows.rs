@@ -443,8 +443,8 @@ fn routes_problems_and_pickers(cx: &mut TestAppContext) {
     view.update(cx, |view, cx| view.open_new_task(cx));
     tick(cx);
     assert!(shows(cx, "new-task-process"));
-    view.read_with(cx, |view, _| {
-        let picks = view.process_picks();
+    view.read_with(cx, |view, cx| {
+        let picks = view.process_picks(cx);
         assert_eq!(picks.len(), 2, "one-off and the saved Workflow");
         assert_eq!(
             picks[1].0.label.as_ref(),

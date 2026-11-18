@@ -6,6 +6,7 @@
 //! Cockpit's (`show_sheet`, `hide_sheet`).
 
 use super::background_dialog_view::BackgroundDialogView;
+use super::new_task_view::NewTaskView;
 use super::project_editor_view::ProjectEditorView;
 use super::settings_view::SettingsView;
 use super::*;
@@ -20,6 +21,7 @@ pub(crate) enum Sheet {
     Settings(Entity<SettingsView>),
     ProjectEditor(Entity<ProjectEditorView>),
     BackgroundDialog(Entity<BackgroundDialogView>),
+    NewTask(Entity<NewTaskView>),
 }
 
 impl Sheet {
@@ -28,6 +30,7 @@ impl Sheet {
             Sheet::Settings(view) => view.read(cx).focus.clone(),
             Sheet::ProjectEditor(view) => view.read(cx).focus.clone(),
             Sheet::BackgroundDialog(view) => view.read(cx).focus.clone(),
+            Sheet::NewTask(view) => view.read(cx).focus(cx),
         }
     }
 
@@ -38,6 +41,7 @@ impl Sheet {
             Sheet::Settings(_) => "settings-card-in",
             Sheet::ProjectEditor(_) => "project-editor-card-in",
             Sheet::BackgroundDialog(_) => "background-dialog-in",
+            Sheet::NewTask(_) => "new-task-card-in",
         }
     }
 
@@ -46,6 +50,7 @@ impl Sheet {
             Sheet::Settings(view) => view.update(cx, |view, cx| view.card(window, cx)),
             Sheet::ProjectEditor(view) => view.update(cx, |view, cx| view.card(window, cx)),
             Sheet::BackgroundDialog(view) => view.update(cx, |view, cx| view.card(window, cx)),
+            Sheet::NewTask(view) => view.update(cx, |view, cx| view.card(window, cx)),
         }
     }
 }
@@ -91,6 +96,13 @@ impl Sheets {
     pub(super) fn background_dialog(&self) -> Option<&Entity<BackgroundDialogView>> {
         match self.up() {
             Some(Sheet::BackgroundDialog(view)) => Some(view),
+            _ => None,
+        }
+    }
+
+    pub(super) fn new_task(&self) -> Option<&Entity<NewTaskView>> {
+        match self.up() {
+            Some(Sheet::NewTask(view)) => Some(view),
             _ => None,
         }
     }
@@ -177,7 +189,7 @@ impl CockpitView {
     /// Put `sheet` up in place of whatever was.
     pub(super) fn show_sheet(&mut self, sheet: Sheet, cx: &mut Context<Self>) {
         if let Some(replaced) = self.sheets.update(cx, |sheets, cx| sheets.show(sheet, cx)) {
-            self.sheet_gone(replaced);
+            self.sheet_gone(replaced, cx);
         }
         cx.notify();
     }
@@ -188,15 +200,16 @@ impl CockpitView {
         let Some(gone) = self.sheets.update(cx, |sheets, cx| sheets.hide(cx)) else {
             return false;
         };
-        self.sheet_gone(gone);
+        self.sheet_gone(gone, cx);
         cx.notify();
         true
     }
 
     /// What goes with a sheet, closed or replaced.
-    fn sheet_gone(&mut self, gone: Sheet) {
+    fn sheet_gone(&mut self, gone: Sheet, cx: &App) {
         match gone {
             Sheet::Settings(_) => self.connections.editor = None,
+            Sheet::NewTask(sheet) => self.new_task_gone(&sheet, cx),
             Sheet::ProjectEditor(_) | Sheet::BackgroundDialog(_) => {}
         }
     }

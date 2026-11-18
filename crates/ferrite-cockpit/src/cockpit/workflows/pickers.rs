@@ -172,12 +172,7 @@ impl CockpitView {
             Pick::Delete(step) => self.delete_step(step, cx),
             Pick::Start(pick) => self.apply_start_pick(pick, cx),
             Pick::Process(workflow) => {
-                if let Some(sheet) = self
-                    .factory_mut()
-                    .and_then(|view| view.sheet.as_mut())
-                {
-                    sheet.workflow = workflow;
-                }
+                self.set_new_task_workflow(workflow, cx);
                 cx.notify();
             }
             Pick::Task(pick) => self.apply_task_pick(pick, cx),
@@ -366,14 +361,13 @@ impl CockpitView {
 
     /// The New task sheet's process choices: one-off, and each saved
     /// Workflow at its latest version.
-    pub(crate) fn process_picks(&self) -> Vec<(ferrite_ui::menu::Item, Pick)> {
+    pub(crate) fn process_picks(&self, cx: &gpui::App) -> Vec<(ferrite_ui::menu::Item, Pick)> {
         let Some(project) = self.factory_project() else {
             return Vec::new();
         };
         let chosen = self
-            .factory()
-            .and_then(|view| view.sheet.as_ref())
-            .and_then(|sheet| sheet.workflow.clone());
+            .new_task(cx)
+            .and_then(|sheet| sheet.read(cx).workflow.clone());
         let mut picks = vec![(
             ferrite_ui::menu::Item::new("One-off: a single agent").checked(chosen.is_none()),
             Pick::Process(None),
