@@ -118,6 +118,7 @@ impl WebView {
                 image: RefCell::new(None),
                 retired: RefCell::new(Vec::new()),
                 hovered: Cell::new(false),
+                pointer: Cell::new(None),
                 pressed: Cell::new(false),
                 frames: Cell::new(0),
             });
@@ -322,6 +323,9 @@ struct Inner {
     /// Replaced images, dropped from the atlas on the next paint.
     retired: RefCell<Vec<Arc<RenderImage>>>,
     hovered: Cell<bool>,
+    /// Where the last move into the view was in the window. Windows repeats
+    /// WM_MOUSEMOVE for a cursor that has not moved; a repeat is not input.
+    pointer: Cell<Option<Point<Pixels>>>,
     /// A button went down over the view and hasn't come up: moves and the
     /// release go to the page wherever the pointer is.
     pressed: Cell<bool>,
@@ -438,6 +442,7 @@ impl Inner {
         // Pointer cleanup also happens when a preview leaves the element tree.
         // It is not operator intervention and must not invalidate agent work.
         if matches!(input, Input::Leave) {
+            self.pointer.set(None);
             if let Some(browser) = self.browser.borrow().as_ref() {
                 browser.input(input.clone());
                 if let Some(before) = self.before_input.borrow().as_ref() {
@@ -629,6 +634,11 @@ impl Element for WebViewElement {
             }
             if hb.is_hovered(window) || inner.pressed.get() {
                 inner.hovered.set(true);
+                if inner.pointer.replace(Some(event.position)) == Some(event.position)
+                    && !inner.pressed.get()
+                {
+                    return;
+                }
                 let (x, y) = local(event.position);
                 inner.input(Input::Move {
                     x,
@@ -918,6 +928,28 @@ mod tests {
                     modifiers: web::Modifiers::default()
                 },
                 Input::Leave,
+            ]
+        );
+    }
+
+    #[gpui::test]
+    fn a_pointer_resting_over_the_view_moves_it_once(cx: &mut TestAppContext) {
+        let (engine, _host, cx) = fixture(cx);
+        let _ = opened(&engine);
+        let resting = point(px(LEFT + 15.), px(TOP + 20.));
+        // Windows repeats WM_MOUSEMOVE for a cursor that has not moved.
+        for _ in 0..3 {
+            cx.simulate_mouse_move(resting, None, Modifiers::default());
+        }
+        cx.simulate_mouse_move(point(px(5.), px(5.)), None, Modifiers::default());
+        cx.simulate_mouse_move(resting, None, Modifiers::default());
+        let m = web::Modifiers::default();
+        assert_eq!(
+            inputs(&engine),
+            [
+                Input::Move { x: 15., y: 20., modifiers: m },
+                Input::Leave,
+                Input::Move { x: 15., y: 20., modifiers: m },
             ]
         );
     }

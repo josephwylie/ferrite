@@ -70,7 +70,7 @@ impl CockpitView {
                     }
                     if history {
                         frames += 1;
-                        return annotations::history(&view,window,cx,&output,&mut history_stage);
+                        return annotations::history(&view,window,cx,&output,&mut history_stage,frames);
                     }
                     if provider_started {
                         if let Some(quiet) = quiet_started {
@@ -292,7 +292,7 @@ impl CockpitView {
                 "window_pointer_input": clicked, "rendered_frames": frames,
                 "provider_requested": provider, "annotations": annotate, "boundaries": boundaries, "annotation_history": history, "held_screenshot": held_screenshot, "scenario_thread": scenario_thread, "work_orders": work_orders, "provider_started": provider_started,
                 "elapsed_ms": started.elapsed().as_millis(),
-                "scope": if boundaries { "actual provider/manual/stale/uncertain/recovery boundaries with independent page oracle" } else if history { "restart and native history review of original annotation evidence with zero eager pages" } else if annotate { "actual annotation overlay, all drawing controls, review/remove/batch Composer send and native provider PNG delivery" } else if work_orders { "one prescribed work order through actual provider and owning Preview; annotations are not tested" } else if held_screenshot { "first provider Screenshot during a held operator gesture; no mutation receipt permitted" } else { "operator Preview and optional actual provider Observe/Click/Observe; annotations are not tested" },
+                "scope": if boundaries { "actual provider/manual/stale/uncertain/recovery boundaries with independent page oracle" } else if history { "restart and native history review of original annotation evidence with zero eager pages" } else if annotate { "in-page annotation editor stroke, element and region capture, review/remove/batch Composer send and native provider PNG delivery" } else if work_orders { "one prescribed work order through actual provider and owning Preview; annotations are not tested" } else if held_screenshot { "first provider Screenshot during a held operator gesture; no mutation receipt permitted" } else { "operator Preview and optional actual provider Observe/Click/Observe; annotations are not tested" },
             });
             let _ = std::fs::write(output.join("window-result.json"), serde_json::to_vec_pretty(&result).unwrap());
             let _ = cx.update(|cx| cx.quit());

@@ -216,6 +216,13 @@ def main():
 
     server = http.server.ThreadingHTTPServer(('127.0.0.1', 0), Fixture)
     threading.Thread(target=server.serve_forever, daemon=True).start()
+    if os.name == 'nt':
+        # The scenario drives the pointer itself. The runner's idle cursor sits
+        # at the screen centre, over the page, and Windows sends it mouse moves
+        # whenever a window appears, so park it in the corner the window leaves.
+        import ctypes
+        user32 = ctypes.windll.user32
+        user32.SetCursorPos(user32.GetSystemMetrics(0) - 1, user32.GetSystemMetrics(1) - 1)
     url = f'http://127.0.0.1:{server.server_port}/'+('boundaries' if args.boundaries else '')
     with tempfile.TemporaryDirectory(prefix='ferrite-window-') as temporary:
         root = Path(temporary)

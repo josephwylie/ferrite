@@ -21,6 +21,8 @@ pub(super) struct Session {
     action: Option<Action>,
     restore_failed: bool,
     recovering: bool,
+    /// The guest editor has installed its listeners and takes page input.
+    ready: bool,
 }
 struct Guard {
     owner: Owner,
@@ -74,6 +76,7 @@ impl CockpitView {
             action: None,
             restore_failed: false,
             recovering: false,
+            ready: false,
         });
         self.upsert_surface(thread, super::super::surfaces::SurfaceId::Browser, cx);
     }
@@ -90,17 +93,14 @@ impl CockpitView {
             .native
             .browser_viewport()
     }
+    /// None while no annotation session is open.
     #[cfg(feature = "browser-smoke")]
-    pub(in crate::cockpit) fn browser_smoke_annotation_picture(
+    pub(in crate::cockpit) fn browser_smoke_annotation_ready(
         &self,
         thread: ThreadId,
-        cx: &gpui::App,
-    ) -> Option<gpui::Bounds<Pixels>> {
+    ) -> Option<bool> {
         let session = self.browsers.threads.get(&thread)?.annotation.as_ref()?;
-        match &session.phase {
-            Phase::Editing(editor) => editor.read(cx).picture_bounds(),
-            _ => None,
-        }
+        Some(session.ready && matches!(session.phase, Phase::Live))
     }
 
     pub(in crate::cockpit) fn browser_annotation_focus(
@@ -185,6 +185,7 @@ impl CockpitView {
                     action: None,
                     restore_failed: false,
                     recovering: false,
+                    ready: false,
                 };
                 if let Err(error) =
                     native.start_annotation(generation, self.annotation_send_enabled(thread, cx))
@@ -384,6 +385,7 @@ impl CockpitView {
                         action: None,
                         restore_failed: false,
                         recovering: false,
+                        ready: false,
                     })
                 }
                 Err(error) => {
@@ -435,7 +437,10 @@ impl CockpitView {
                         break;
                     };
                     match event {
-                        LiveEvent::Ready => cx.notify(),
+                        LiveEvent::Ready => {
+                            session.ready = true;
+                            cx.notify();
+                        }
                         LiveEvent::Closed => {
                             if let Some(guard) = session.guard.as_mut() {
                                 guard.restored = true;
