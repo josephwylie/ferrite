@@ -1183,7 +1183,7 @@ fn build(state: &str, label: &str) -> (Scene, Setup) {
             }
             let setup: Setup = Box::new(|view, _, cx| {
                 let pane = view.panes[0].identity;
-                view.show_popup(Popup::Attach { pane, focus: cx.focus_handle() }, cx);
+                view.show_popup(super::Popup::Attach { pane, focus: cx.focus_handle() }, cx);
             });
             (scene, setup)
         }

@@ -100,6 +100,10 @@ jobs:
           cargo nextest run "${args[@]}" --features gpui-pre-macos/test-support --locked --no-fail-fast --retries 2 --final-status-level flaky
       - name: Build app
         run: cargo build -p ferrite --locked
+      # Nothing else builds the scene fixtures behind this feature, so a
+      # change to what they call broke them unseen.
+      - name: Check the visual-reference build
+        run: cargo check -p ferrite --locked --features visual-reference
       # Last, so a new raw press does not hide the tests' results. The cap
       # keeps the vendored crates' own deny attributes from stopping clippy;
       # bash's pipefail fails the step if clippy errors (docs/adr/0044).
