@@ -9,6 +9,9 @@ use super::mode_menu::ModeMenu;
 use super::model_picker::ModelPicker;
 use super::*;
 use ferrite_ui::motion::{self, FloatMotion, Opens};
+use std::cell::RefCell;
+use std::collections::HashMap;
+use std::rc::Rc;
 use std::time::Instant;
 
 /// A popup the slot can hold. The set is closed: one variant per kind.
@@ -69,13 +72,8 @@ impl Popup {
     /// own: on the control that toggles it, which must shut it rather than
     /// see it closed and open it again, or on a surface drawn beside it (a
     /// context menu's submenu, the model picker's mode menu).
-    fn owns(&self, at: Point<Pixels>, triggers: &FloatTriggers) -> bool {
-        let hit = |key: &str| {
-            triggers
-                .borrow()
-                .get(key)
-                .is_some_and(|bounds| bounds.contains(&at))
-        };
+    fn owns(&self, at: Point<Pixels>, triggers: &Triggers) -> bool {
+        let hit = |key: &str| triggers.hit(key, at);
         match self {
             Popup::Mode(menu) => hit(&mode_menu::chip_trigger(menu.thread)),
             Popup::ModelPicker(picker) => {
@@ -110,6 +108,24 @@ pub(super) struct Popups {
     /// What held focus before the popups took it, and where they last put
     /// it: the keyboard goes back only while it is still there.
     back: Option<(Back, FocusHandle)>,
+    triggers: Triggers,
+}
+
+/// Where each control a popup hangs from stood as last laid out, by key,
+/// recorded in prepaint. Every control's is kept, not only the open
+/// popup's: a popup hangs from its control on its first frame, and a frame
+/// that replays a cached view lays none of its controls out again.
+#[derive(Default)]
+struct Triggers(Rc<RefCell<HashMap<SharedString, gpui::Bounds<Pixels>>>>);
+
+impl Triggers {
+    fn get(&self, key: &str) -> Option<gpui::Bounds<Pixels>> {
+        self.0.borrow().get(key).copied()
+    }
+
+    fn hit(&self, key: &str, at: Point<Pixels>) -> bool {
+        self.get(key).is_some_and(|bounds| bounds.contains(&at))
+    }
 }
 
 impl Popups {
@@ -458,21 +474,18 @@ impl CockpitView {
     /// picker, only that menu shuts, unless the press is on the button
     /// that toggles it.
     fn pressed_outside(&mut self, id: &'static str, at: Point<Pixels>, cx: &mut Context<Self>) {
-        let triggers = &self.float_triggers;
-        let hit = |key: &str| {
-            triggers
-                .borrow()
-                .get(key)
-                .is_some_and(|bounds| bounds.contains(&at))
-        };
         if id == PICKER_MODE {
-            if !hit(model_picker::PICKER_PERMISSIONS) {
+            if !self.popups.triggers.hit(model_picker::PICKER_PERMISSIONS, at) {
                 if let Some(Popup::ModelPicker(picker)) = self.popups.up_mut() {
                     picker.kind.mode = None;
                     cx.notify();
                 }
             }
-        } else if self.popups.up().is_some_and(|popup| !popup.owns(at, triggers)) {
+        } else if self
+            .popups
+            .up()
+            .is_some_and(|popup| !popup.owns(at, &self.popups.triggers))
+        {
             self.close_popup(cx);
         }
     }
@@ -480,10 +493,27 @@ impl CockpitView {
     /// Where the control `key` stood as last laid out, for a popup to hang
     /// from; none yet asks for the frame that lays it out.
     pub(super) fn hang_from(&self, key: &str, window: &mut Window) -> Option<gpui::Bounds<Pixels>> {
-        let trigger = self.float_triggers.borrow().get(key).copied();
+        let trigger = self.popups.triggers.get(key);
         if trigger.is_none() {
             motion::request_frame(window);
         }
         trigger
+    }
+
+    /// Where the control `key` stands as last laid out, if it has been.
+    pub(super) fn trigger(&self, key: &str) -> Option<gpui::Bounds<Pixels>> {
+        self.popups.triggers.get(key)
+    }
+
+    /// Records the laid-out bounds of a control a popup hangs from, under
+    /// `key`.
+    pub(super) fn record_trigger(
+        &self,
+        key: SharedString,
+    ) -> impl FnOnce(gpui::Bounds<Pixels>, &mut Window, &mut gpui::App) + 'static {
+        let sink = self.popups.triggers.0.clone();
+        move |bounds, _, _| {
+            sink.borrow_mut().insert(key, bounds);
+        }
     }
 }

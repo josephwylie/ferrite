@@ -1364,7 +1364,7 @@ fn a_draft_on_a_machine_starts_a_thread_in_a_directory_typed_there(cx: &mut Test
         }
         let draft = view.panes[view.focused()].draft().unwrap();
         let offered = view
-            .band_rows(draft, pane::BandChip::Project, cx)
+            .project_menu_rows(draft, cx)
             .into_iter()
             .any(|row| row.consequence == Consequence::Band(BandChoice::Project(project)));
         assert!(offered, "the machine's Project is on the draft's chip");

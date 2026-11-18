@@ -64,10 +64,6 @@ mod user_commands;
 mod view_head;
 pub(crate) mod workflows;
 
-/// Card triggers' bounds by key, recorded in prepaint.
-type FloatTriggers =
-    std::rc::Rc<std::cell::RefCell<std::collections::HashMap<SharedString, gpui::Bounds<Pixels>>>>;
-
 use self::context_menu::{MenuTarget, MenuVerb};
 use self::popups::Popup;
 use self::model_picker::Column;
@@ -515,9 +511,6 @@ pub struct CockpitView {
     /// The Threads the titler is naming right now: their cards draw the
     /// title at `NAV_CARD_RETITLING_OPACITY` until its answer lands.
     titling: std::collections::HashSet<ThreadId>,
-    /// Each bar card trigger's bounds as last laid out (a draft's band
-    /// chips), recorded in prepaint: what a bar card hangs from.
-    float_triggers: FloatTriggers,
     /// Frames each open card has waited for its trigger's or Pane's
     /// geometry, by trigger key (`card_corner`); none once it has some.
     card_waits: std::cell::RefCell<std::collections::HashMap<String, u8>>,
@@ -1425,7 +1418,6 @@ impl CockpitView {
             usage_popover_held: false,
             session_control_error: None,
             titling: std::collections::HashSet::new(),
-            float_triggers: FloatTriggers::default(),
             card_waits: Default::default(),
             nav_collapsed: prefs.settings.nav_collapsed,
             nav_auto_fold: std::cell::Cell::new(false),
@@ -5801,19 +5793,22 @@ impl CockpitView {
             self.close_popup(cx);
             return;
         }
-        if chip == pane::BandChip::Provider {
-            if self.model_picker_open(identity) {
-                self.close_popup(cx);
-            } else {
-                self.open_model_picker(identity, Column::List, cx);
+        let rows = match chip {
+            pane::BandChip::Provider => {
+                if self.model_picker_open(identity) {
+                    self.close_popup(cx);
+                } else {
+                    self.open_model_picker(identity, Column::List, cx);
+                }
+                return;
             }
-            return;
-        }
+            pane::BandChip::Project => self.project_menu_rows(draft, cx),
+            pane::BandChip::Workspace => self.workspace_menu_rows(draft, cx),
+        };
         let project = draft.binding.project();
         // The menu answers about the checkout as it stands now; until git
         // says, it names the last answer.
         self.look_up_checkouts([project], cx);
-        let rows = self.band_rows(draft, chip, cx);
         // The arrows start on the standing choice — bare ↵ re-picks it.
         let selected = rows.iter().position(|row| row.active).unwrap_or(0);
         let menu = Popover {
@@ -5879,7 +5874,7 @@ impl CockpitView {
         else {
             return;
         };
-        let rows = self.band_rows(draft, pane::BandChip::Workspace, cx);
+        let rows = self.workspace_menu_rows(draft, cx);
         let Some(open) = self.band_menu_mut() else {
             return;
         };
@@ -5974,170 +5969,153 @@ impl CockpitView {
         }
     }
 
-    /// One chip's rows for the focused draft. The workspace chip is scoped
+    /// The project chip's rows for `draft`.
+    fn project_menu_rows(&self, draft: &pane::DraftBinding, cx: &Context<Self>) -> Vec<Row> {
+        let mut rows: Vec<Row> = self
+            .cockpit
+            .registry()
+            .projects()
+            .iter()
+            .map(|project| {
+                let detail = if project.additional_roots.is_empty() {
+                    project.root.display().to_string()
+                } else {
+                    let count = project.additional_roots.len();
+                    format!(
+                        "{} · +{count} director{}",
+                        project.root.display(),
+                        if count == 1 { "y" } else { "ies" }
+                    )
+                };
+                band_row(
+                    SharedString::from(project.title.clone()),
+                    SharedString::from(detail),
+                    draft.binding.project() == project.id,
+                    BandChoice::Project(project.id),
+                )
+            })
+            .collect();
+        // Explicit type-a-path grammar. Ordinary drafted prose is
+        // never reinterpreted or erased as registry input.
+        let typed = self
+            .panes
+            .get(self.focused())
+            .map(|pane| pane.composer.read(cx).text().trim().to_string())
+            .unwrap_or_default();
+        if let Some(path) = typed
+            .strip_prefix("path ")
+            .map(str::trim)
+            .filter(|p| !p.is_empty())
+        {
+            rows.push(band_row(
+                SharedString::from(format!("add {path}")),
+                SharedString::from("register path"),
+                false,
+                // As typed: `~` is the home of the computer the
+                // Server runs on, which spells it out.
+                BandChoice::RegisterPath(path.into()),
+            ));
+        }
+        // The same verb the nav's dropdown ends on, opening the
+        // same card: one way to add a Project, wherever it is
+        // asked for.
+        rows.push(band_row(
+            SharedString::from("Add project…"),
+            SharedString::from("name it and choose its directories"),
+            false,
+            BandChoice::AddProject,
+        ));
+        rows
+    }
+
+    /// The workspace chip's rows for `draft`, scoped
     /// to the chosen project alone: its checked-out branch, each of the
     /// repo's other worktrees (as git lists them, hand-made ones included),
     /// each other local branch, and the two ways to start a fresh branch —
     /// no global list anywhere. The git half comes from `repo_listing`,
     /// read once at open; until it lands the rows are the checkout and the
     /// fresh starts.
-    fn band_rows(
-        &self,
-        draft: &pane::DraftBinding,
-        chip: pane::BandChip,
-        cx: &Context<Self>,
-    ) -> Vec<Row> {
-        match chip {
-            pane::BandChip::Provider => {
-                let (rows, _) = self.provider_rows(
-                    draft.binding.provider().provider,
-                    draft.binding.provider().model.as_deref(),
-                    None,
-                    false,
-                    |choice| Consequence::Band(BandChoice::Provider(choice)),
-                );
-                rows
+    fn workspace_menu_rows(&self, draft: &pane::DraftBinding, cx: &Context<Self>) -> Vec<Row> {
+        // Where the repo already stands, then the fresh starts:
+        // the checkout as it is, each other worktree, each other
+        // branch, then a new branch — beside the operator, or off
+        // in an isolated worktree.
+        let project = draft.binding.project();
+        let target = draft.binding.target();
+        let checked_out = self.checked_out_branch(project, cx);
+        let mut rows = vec![band_row(
+            SharedString::from("Current checkout"),
+            checked_out.clone(),
+            *target == DraftTarget::Main,
+            BandChoice::Target(DraftTarget::Main),
+        )];
+        let listing = self
+            .repo_listing
+            .as_ref()
+            .filter(|(listed, _)| *listed == project)
+            .map(|(_, listing)| listing);
+        // A branch already on offer as the checkout or as a
+        // worktree is not offered again as a plain branch: git
+        // would refuse to switch the checkout onto it anyway.
+        let mut offered: Vec<&str> = vec![checked_out.as_ref()];
+        for worktree in listing
+            .map(|listing| listing.worktrees.as_slice())
+            .unwrap_or_default()
+        {
+            let directory = worktree
+                .path
+                .file_name()
+                .map(|name| name.to_string_lossy().into_owned())
+                .unwrap_or_else(|| worktree.path.display().to_string());
+            let (name, detail) = match &worktree.branch {
+                Some(branch) => (branch.clone(), directory),
+                None => (directory, "detached".to_string()),
+            };
+            if let Some(branch) = &worktree.branch {
+                offered.push(branch);
             }
-            pane::BandChip::Project => {
-                let mut rows: Vec<Row> = self
-                    .cockpit
-                    .registry()
-                    .projects()
-                    .iter()
-                    .map(|project| {
-                        let detail = if project.additional_roots.is_empty() {
-                            project.root.display().to_string()
-                        } else {
-                            let count = project.additional_roots.len();
-                            format!(
-                                "{} · +{count} director{}",
-                                project.root.display(),
-                                if count == 1 { "y" } else { "ies" }
-                            )
-                        };
-                        band_row(
-                            SharedString::from(project.title.clone()),
-                            SharedString::from(detail),
-                            draft.binding.project() == project.id,
-                            BandChoice::Project(project.id),
-                        )
-                    })
-                    .collect();
-                // Explicit type-a-path grammar. Ordinary drafted prose is
-                // never reinterpreted or erased as registry input.
-                let typed = self
-                    .panes
-                    .get(self.focused())
-                    .map(|pane| pane.composer.read(cx).text().trim().to_string())
-                    .unwrap_or_default();
-                if let Some(path) = typed
-                    .strip_prefix("path ")
-                    .map(str::trim)
-                    .filter(|p| !p.is_empty())
-                {
-                    rows.push(band_row(
-                        SharedString::from(format!("add {path}")),
-                        SharedString::from("register path"),
-                        false,
-                        // As typed: `~` is the home of the computer the
-                        // Server runs on, which spells it out.
-                        BandChoice::RegisterPath(path.into()),
-                    ));
-                }
-                // The same verb the nav's dropdown ends on, opening the
-                // same card: one way to add a Project, wherever it is
-                // asked for.
-                rows.push(band_row(
-                    SharedString::from("Add project…"),
-                    SharedString::from("name it and choose its directories"),
-                    false,
-                    BandChoice::AddProject,
-                ));
-                rows
-            }
-            pane::BandChip::Workspace => {
-                // Where the repo already stands, then the fresh starts:
-                // the checkout as it is, each other worktree, each other
-                // branch, then a new branch — beside the operator, or off
-                // in an isolated worktree.
-                let project = draft.binding.project();
-                let target = draft.binding.target();
-                let checked_out = self.checked_out_branch(project, cx);
-                let mut rows = vec![band_row(
-                    SharedString::from("Current checkout"),
-                    checked_out.clone(),
-                    *target == DraftTarget::Main,
-                    BandChoice::Target(DraftTarget::Main),
-                )];
-                let listing = self
-                    .repo_listing
-                    .as_ref()
-                    .filter(|(listed, _)| *listed == project)
-                    .map(|(_, listing)| listing);
-                // A branch already on offer as the checkout or as a
-                // worktree is not offered again as a plain branch: git
-                // would refuse to switch the checkout onto it anyway.
-                let mut offered: Vec<&str> = vec![checked_out.as_ref()];
-                for worktree in listing
-                    .map(|listing| listing.worktrees.as_slice())
-                    .unwrap_or_default()
-                {
-                    let directory = worktree
-                        .path
-                        .file_name()
-                        .map(|name| name.to_string_lossy().into_owned())
-                        .unwrap_or_else(|| worktree.path.display().to_string());
-                    let (name, detail) = match &worktree.branch {
-                        Some(branch) => (branch.clone(), directory),
-                        None => (directory, "detached".to_string()),
-                    };
-                    if let Some(branch) = &worktree.branch {
-                        offered.push(branch);
-                    }
-                    rows.push(band_row(
-                        SharedString::from(format!("Previous worktree ({name})")),
-                        SharedString::from(detail),
-                        matches!(
-                            target,
-                            DraftTarget::Existing { path, .. } if *path == worktree.path
-                        ),
-                        BandChoice::Target(DraftTarget::Existing {
-                            branch: name,
-                            path: worktree.path.clone(),
-                        }),
-                    ));
-                }
-                for branch in listing
-                    .map(|listing| listing.branches.as_slice())
-                    .unwrap_or_default()
-                {
-                    if offered.contains(&branch.as_str()) {
-                        continue;
-                    }
-                    rows.push(band_row(
-                        SharedString::from(branch.clone()),
-                        SharedString::from("existing branch"),
-                        matches!(target, DraftTarget::Branch { name } if name == branch),
-                        BandChoice::Target(DraftTarget::Branch {
-                            name: branch.clone(),
-                        }),
-                    ));
-                }
-                rows.push(band_row(
-                    SharedString::from("New branch"),
-                    SharedString::from("in the project checkout"),
-                    *draft.binding.target() == DraftTarget::NewBranch,
-                    BandChoice::Target(DraftTarget::NewBranch),
-                ));
-                rows.push(band_row(
-                    SharedString::from("New worktree"),
-                    SharedString::from("in an isolated checkout"),
-                    *draft.binding.target() == DraftTarget::New,
-                    BandChoice::Target(DraftTarget::New),
-                ));
-                rows
-            }
+            rows.push(band_row(
+                SharedString::from(format!("Previous worktree ({name})")),
+                SharedString::from(detail),
+                matches!(
+                    target,
+                    DraftTarget::Existing { path, .. } if *path == worktree.path
+                ),
+                BandChoice::Target(DraftTarget::Existing {
+                    branch: name,
+                    path: worktree.path.clone(),
+                }),
+            ));
         }
+        for branch in listing
+            .map(|listing| listing.branches.as_slice())
+            .unwrap_or_default()
+        {
+            if offered.contains(&branch.as_str()) {
+                continue;
+            }
+            rows.push(band_row(
+                SharedString::from(branch.clone()),
+                SharedString::from("existing branch"),
+                matches!(target, DraftTarget::Branch { name } if name == branch),
+                BandChoice::Target(DraftTarget::Branch {
+                    name: branch.clone(),
+                }),
+            ));
+        }
+        rows.push(band_row(
+            SharedString::from("New branch"),
+            SharedString::from("in the project checkout"),
+            *draft.binding.target() == DraftTarget::NewBranch,
+            BandChoice::Target(DraftTarget::NewBranch),
+        ));
+        rows.push(band_row(
+            SharedString::from("New worktree"),
+            SharedString::from("in an isolated checkout"),
+            *draft.binding.target() == DraftTarget::New,
+            BandChoice::Target(DraftTarget::New),
+        ));
+        rows
     }
 
     /// Re-derive the open project popover's rows from the Composer line —
@@ -6153,7 +6131,7 @@ impl CockpitView {
         let Some(draft) = self.panes.get(self.focused()).and_then(|pane| pane.draft()) else {
             return;
         };
-        let rows = self.band_rows(draft, pane::BandChip::Project, cx);
+        let rows = self.project_menu_rows(draft, cx);
         if let Some(open) = self.band_menu_mut() {
             open.selected = open.selected.min(rows.len().saturating_sub(1));
             open.rows = rows;
@@ -6969,7 +6947,7 @@ impl CockpitView {
             FLOAT_OFFSET, GRID_PAD, MENU_WINDOW_MARGIN, SLASH_MENU_W, WORKSPACE_MENU_W,
         };
         let Band { chip, from_hero: hero } = open.kind;
-        let trigger = self.float_triggers.borrow().get(&open.kind.trigger()).copied()?;
+        let trigger = self.trigger(&open.kind.trigger())?;
         // Above its chip on the strip over the box; or below the hero's
         // project word, as Codex's switcher drops.
         let (anchor, at, opens) = if hero {
@@ -9415,17 +9393,6 @@ impl CockpitView {
             self.submit(&Submit, window, cx);
         }
         cx.notify();
-    }
-
-    /// Records a card trigger's laid-out bounds under `key`.
-    fn record_trigger(
-        &self,
-        key: SharedString,
-    ) -> impl FnOnce(gpui::Bounds<Pixels>, &mut Window, &mut gpui::App) + 'static {
-        let sink = self.float_triggers.clone();
-        move |bounds, _, _| {
-            sink.borrow_mut().insert(key, bounds);
-        }
     }
 
     /// Where a card hangs (`FloatPlace::card_corner`). Until its trigger

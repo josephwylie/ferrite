@@ -34,7 +34,7 @@ pub use composer::{
     toolbar_chip, ComposerControls, PrimaryActions,
 };
 use composer::{composer_region, env_face, ComposerStack};
-pub use menus::{menu_item, menu_popover, menu_row, picker_row, picker_section, MenuRow};
+pub use menus::{menu_item, menu_popover, menu_row, picker_row, MenuRow};
 use output::{call_body, diff_rows, hunk_rows, render_diff, running_tests, DiffRow};
 pub use output::{diff_number_cells, test_elbow, DiffKind, DiffPaint, TestElbow};
 pub(crate) use text::{collect_block_text, collect_group_text, group_live, group_tools, is_agent_card};
@@ -60,7 +60,6 @@ use ferrite_core::docview::{is_test_run, passed_count};
 use ferrite_core::followup::{self, Followup};
 use ferrite_core::progress::Phase;
 use ferrite_core::roster::{DraftId, PaneIdentity};
-use ferrite_core::store::Provider;
 use ferrite_core::transcript::{
     Block, BlockId, Body, Diff, Span, Status, Style, Token, ToolBlock, ToolState, Transcript,
 };
@@ -3863,6 +3862,7 @@ fn joined_runs(
 mod tests {
     use super::*;
     use ferrite_core::docview::Instruments;
+    use ferrite_core::store::Provider;
     use ferrite_core::transcript::Class;
     /// A multi-line queued prompt reads as one line in its one-line row.
     #[test]

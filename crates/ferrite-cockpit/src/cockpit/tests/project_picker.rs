@@ -16,7 +16,7 @@ fn the_project_chip_picks_a_project_or_adds_one(cx: &mut TestAppContext) {
     view.update(cx, |view, cx| {
         view.open_draft(DraftTarget::Main, cx);
         let draft = view.panes[view.focused()].draft().unwrap();
-        let rows = view.band_rows(draft, pane::BandChip::Project, cx);
+        let rows = view.project_menu_rows(draft, cx);
 
         let labels: Vec<_> = rows.iter().map(|row| row.row.name.to_string()).collect();
         assert_eq!(

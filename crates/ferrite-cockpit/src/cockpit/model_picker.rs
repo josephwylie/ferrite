@@ -811,9 +811,7 @@ impl CockpitView {
             return None;
         };
         let left = self
-            .float_triggers
-            .borrow()
-            .get(chip_trigger(open.pane).as_ref())
+            .trigger(&chip_trigger(open.pane))
             .map_or(field.left(), |chip| chip.left());
         let viewport = f32::from(window.viewport_size().width);
         let width = (MODEL_PICKER_LIST_W + REASONING_W).min(viewport - 2. * GRID_PAD);
