@@ -66,9 +66,24 @@ fn panel<'a>(
     status: Status,
     extra: serde_json::Value,
 ) -> (Entity<CockpitView>, &'a mut gpui::VisualTestContext) {
+    window(cx, name, status, extra, true)
+}
+
+/// A window with the Task's panel open, its production keys bound; its
+/// Task asks kept, or `recorded` false, refused for want of a Server.
+fn window<'a>(
+    cx: &'a mut TestAppContext,
+    name: &str,
+    status: Status,
+    extra: serde_json::Value,
+    recorded: bool,
+) -> (Entity<CockpitView>, &'a mut gpui::VisualTestContext) {
     let (mut core, _fake) = cockpit(name, 1);
     let project = core.project_id(core.threads()[0]).unwrap();
-    core.fixture_record_tasks();
+    if recorded {
+        core.fixture_record_tasks();
+    }
+    bind_production_keys(cx);
     core.fixture_factory(Board {
         workflows: Vec::new(),
         tasks: vec![task(project, status, extra)],
@@ -302,6 +317,224 @@ fn the_redirect_sheet_sends_one_task_and_keeps_its_choices(cx: &mut TestAppConte
         }]
     );
     assert!(!shows(cx, "redirect-sheet"));
+}
+
+/// Each sheet opens with the keyboard on its one field, and a press on
+/// its other controls leaves it there.
+#[gpui::test]
+fn each_sheet_opens_with_the_keyboard_on_its_field(cx: &mut TestAppContext) {
+    let (view, cx) = panel(
+        cx,
+        "direct-keyboard",
+        Status::Approval,
+        serde_json::json!({ "result": "Checks pass" }),
+    );
+    click(cx, "task-rework-open");
+    assert!(shows(cx, "factory-field-focused"));
+    cx.simulate_input("Tighten");
+    tick(cx);
+    assert_eq!(text(&view, cx, DirectField::Feedback), "Tighten", "the feedback, on open");
+    click(cx, "direct-cancel");
+
+    click(cx, "task-redirect-open");
+    assert!(shows(cx, "factory-field-focused"));
+    cx.simulate_input("Docs");
+    click(cx, "redirect-skip-s-2");
+    click(cx, "redirect-then-1");
+    cx.simulate_input(" only");
+    tick(cx);
+    assert_eq!(
+        text(&view, cx, DirectField::Note),
+        "Docs only",
+        "the note, on open and after a press on its choices"
+    );
+}
+
+/// The answer box typed into before a sheet opened does not have the
+/// keyboard back once the sheet closes.
+#[gpui::test]
+fn a_sheet_closed_leaves_the_answer_box_without_the_keyboard(cx: &mut TestAppContext) {
+    let (view, cx) = panel(
+        cx,
+        "direct-answer-keyboard",
+        Status::NeedsHuman,
+        serde_json::json!({
+            "question": {"id": 3, "text": "Which fruit?", "asker": "Review", "worker": 40},
+            "asked": 3,
+            "reason": "Review asks: Which fruit?",
+        }),
+    );
+    click(cx, "task-answer");
+    cx.simulate_input("Mango");
+    click(cx, "task-send-back");
+    assert!(shows(cx, "rework-sheet"));
+    cx.simulate_input("Again");
+    tick(cx);
+    assert_eq!(text(&view, cx, DirectField::Feedback), "Again");
+    assert_eq!(text(&view, cx, DirectField::Answer), "Mango");
+    click(cx, "direct-cancel");
+    assert!(!shows(cx, "rework-sheet"));
+    let answer_holds = cx.update(|window, cx| {
+        view.read(cx)
+            .task_drafts("t-1")
+            .is_some_and(|drafts| drafts.answer.read(cx).focus_handle(cx).is_focused(window))
+    });
+    assert!(!answer_holds);
+}
+
+/// What each sheet was left holding stays for its next opening, apart from
+/// the other's, and a send spends its own only.
+#[gpui::test]
+fn each_sheet_keeps_its_own_words_and_choices_until_sent(cx: &mut TestAppContext) {
+    let (view, cx) = panel(
+        cx,
+        "direct-kept-apart",
+        Status::Approval,
+        serde_json::json!({ "result": "Checks pass" }),
+    );
+    let pick = |view: &Entity<CockpitView>, cx: &mut gpui::VisualTestContext, pick: TaskPick| {
+        view.update(cx, |view, cx| view.apply_pick(Pick::Task(pick), cx));
+        tick(cx);
+    };
+    click(cx, "task-rework-open");
+    cx.simulate_input("Fix the docs");
+    pick(&view, cx, TaskPick::ReworkTo(Destination::Step("s-2".into())));
+    click(cx, "direct-cancel");
+    click(cx, "task-redirect-open");
+    cx.simulate_input("Docs only");
+    pick(&view, cx, TaskPick::RedirectTo("s-3".into()));
+    click(cx, "direct-cancel");
+
+    click(cx, "task-rework-open");
+    assert_eq!(text(&view, cx, DirectField::Feedback), "Fix the docs");
+    click(cx, "rework-send");
+    click(cx, "task-rework-open");
+    assert_eq!(text(&view, cx, DirectField::Feedback), "", "spent once sent");
+    cx.simulate_input("Again");
+    click(cx, "rework-send");
+
+    click(cx, "task-redirect-open");
+    assert_eq!(text(&view, cx, DirectField::Note), "Docs only", "the other sheet's stays");
+    click(cx, "redirect-apply");
+    assert_eq!(
+        asks(&view, cx),
+        [
+            TaskAction::Rework {
+                task: "t-1".into(),
+                feedback: "Fix the docs".into(),
+                to: Some(Destination::Step("s-2".into())),
+            },
+            TaskAction::Rework {
+                task: "t-1".into(),
+                feedback: "Again".into(),
+                to: None,
+            },
+            TaskAction::Redirect {
+                task: "t-1".into(),
+                direction: Override {
+                    to: "s-3".into(),
+                    skip: Vec::new(),
+                    then: ThenReturn::Routes,
+                    note: "Docs only".into(),
+                },
+            },
+        ]
+    );
+}
+
+/// A send the Server refuses leaves the sheet up with what was typed, and
+/// the refusal said on the panel.
+#[gpui::test]
+fn a_refused_send_stays_on_its_sheet(cx: &mut TestAppContext) {
+    let (view, cx) = window(
+        cx,
+        "direct-refused",
+        Status::Approval,
+        serde_json::json!({ "result": "Checks pass" }),
+        false,
+    );
+    click(cx, "task-rework-open");
+    cx.simulate_input("Fix it");
+    click(cx, "rework-send");
+    assert!(shows(cx, "rework-sheet"), "the sheet stays up");
+    assert!(!shows(cx, "rework-missing"));
+    assert_eq!(text(&view, cx, DirectField::Feedback), "Fix it");
+    assert!(view.read_with(cx, |view, _| view.factory().unwrap().note.is_some()));
+}
+
+/// A sheet stays up as its Task moves on, and goes once its Task leaves
+/// the board.
+#[gpui::test]
+fn a_sheet_follows_its_task_and_goes_with_it(cx: &mut TestAppContext) {
+    let (view, cx) = panel(
+        cx,
+        "direct-task-moves",
+        Status::Approval,
+        serde_json::json!({ "result": "Checks pass" }),
+    );
+    let project = view.read_with(cx, |view, _| view.factory().unwrap().project);
+    click(cx, "task-redirect-open");
+    view.update(cx, |view, _| {
+        view.cockpit.fixture_factory(Board {
+            workflows: Vec::new(),
+            tasks: vec![task(project, Status::Working, serde_json::json!({}))],
+            ..Default::default()
+        })
+    });
+    tick(cx);
+    assert!(shows(cx, "redirect-sheet"), "stays up as its Task moves on");
+    view.update(cx, |view, _| {
+        view.cockpit.fixture_factory(Board {
+            workflows: Vec::new(),
+            tasks: Vec::new(),
+            ..Default::default()
+        })
+    });
+    tick(cx);
+    assert!(!shows(cx, "redirect-sheet"), "goes with its Task");
+}
+
+/// Leaving the Factory takes the sheet, and what was typed in it.
+#[gpui::test]
+fn leaving_the_factory_takes_the_sheet_and_its_words(cx: &mut TestAppContext) {
+    let (view, cx) = panel(
+        cx,
+        "direct-leave",
+        Status::Approval,
+        serde_json::json!({ "result": "Checks pass" }),
+    );
+    click(cx, "task-rework-open");
+    cx.simulate_input("Gone");
+    tick(cx);
+    view.update(cx, |view, cx| {
+        let thread = view.focused_thread().unwrap();
+        view.focus_thread(thread, cx)
+    });
+    tick(cx);
+    assert!(view.read_with(cx, |view, _| view.factory().is_none()));
+    assert!(!shows(cx, "rework-sheet"));
+    view.update(cx, |view, cx| view.open_task("t-1", cx));
+    tick(cx);
+    click(cx, "task-rework-open");
+    assert_eq!(text(&view, cx, DirectField::Feedback), "");
+}
+
+/// A menu a sheet opened closes with the sheet.
+#[gpui::test]
+fn a_menu_the_sheet_opened_goes_with_it(cx: &mut TestAppContext) {
+    let (view, cx) = panel(
+        cx,
+        "direct-menu",
+        Status::Approval,
+        serde_json::json!({ "result": "Checks pass" }),
+    );
+    click(cx, "task-rework-open");
+    click(cx, "rework-to");
+    assert!(shows(cx, "context-menu"), "the recipient menu");
+    view.update(cx, |view, cx| view.close_direct_sheet(cx));
+    tick(cx);
+    assert!(!shows(cx, "context-menu"));
+    assert!(!shows(cx, "rework-sheet"));
 }
 
 /// AC: a Workflow's approval settings choose who approves; agent approval
