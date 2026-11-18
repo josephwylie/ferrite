@@ -568,6 +568,9 @@ wrap_dev_tools_message_observer! {
     }
 }
 
+#[cfg(test)]
+static READ_TURNS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
 fn serve(
     stream: TcpStream,
     id: u64,
@@ -627,6 +630,8 @@ fn serve(
         return;
     }
     while !stop.load(Ordering::Relaxed) && !peer_stop.load(Ordering::Relaxed) {
+        #[cfg(test)]
+        READ_TURNS.fetch_add(1, Ordering::Relaxed);
         for _ in 0..64 {
             let Ok(value) = outgoing.try_recv() else {
                 break;
@@ -660,4 +665,126 @@ fn serve(
     peer_stop.store(true, Ordering::Relaxed);
     let _ = socket.close(None);
     let _ = send.try_send(Incoming::Closed(id));
+}
+
+#[cfg(test)]
+mod tests {
+    use std::io::{Read, Write};
+
+    use tungstenite::protocol::Role;
+    use tungstenite::WebSocket;
+
+    use super::*;
+
+    fn connect(control: &Control, delay: Duration) -> WebSocket<TcpStream> {
+        let endpoint = control.endpoint();
+        let address = endpoint
+            .url
+            .strip_prefix("ws://")
+            .and_then(|rest| rest.strip_suffix("/ferrite"))
+            .unwrap()
+            .to_owned();
+        let mut stream = TcpStream::connect(&address).unwrap();
+        std::thread::sleep(delay);
+        write!(
+            stream,
+            "GET /ferrite HTTP/1.1\r\nHost: {address}\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\
+             Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\
+             Authorization: {}\r\n\r\n",
+            endpoint.authorization
+        )
+        .unwrap();
+        stream
+            .set_read_timeout(Some(Duration::from_secs(2)))
+            .unwrap();
+        let mut response = Vec::new();
+        let mut byte = [0u8; 1];
+        while !response.ends_with(b"\r\n\r\n") {
+            match stream.read(&mut byte) {
+                Ok(1) => response.push(byte[0]),
+                other => panic!(
+                    "upgrade response ended early with {other:?} after {:?}",
+                    String::from_utf8_lossy(&response)
+                ),
+            }
+        }
+        let response = String::from_utf8_lossy(&response);
+        assert!(
+            response.starts_with("HTTP/1.1 101"),
+            "expected a 101 upgrade, got {response:?}"
+        );
+        stream
+            .set_read_timeout(Some(Duration::from_millis(20)))
+            .unwrap();
+        WebSocket::from_raw_socket(stream, Role::Client, None)
+    }
+
+    fn read_text(control: &mut Control, socket: &mut WebSocket<TcpStream>) -> String {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while Instant::now() < deadline {
+            control.pump();
+            match socket.read() {
+                Ok(Message::Text(text)) => return text,
+                Ok(_) => {}
+                Err(Error::Io(e))
+                    if matches!(
+                        e.kind(),
+                        std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+                    ) => {}
+                Err(e) => panic!("controller socket failed: {e}"),
+            }
+        }
+        panic!("no message from the controller within 5 s");
+    }
+
+    fn connected_peer(control: &mut Control) -> u64 {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while Instant::now() < deadline {
+            control.pump();
+            if let Some(peer) = control.connections.keys().next() {
+                return *peer;
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        panic!("the controller never registered the peer");
+    }
+
+    #[test]
+    fn a_client_that_sends_its_upgrade_late_still_connects() {
+        let mut control = Control::start().unwrap();
+        let mut socket = connect(&control, Duration::from_millis(150));
+        socket
+            .send(Message::Text(
+                json!({"id":1,"method":"Browser.getVersion"}).to_string(),
+            ))
+            .unwrap();
+        let reply: Value = serde_json::from_str(&read_text(&mut control, &mut socket)).unwrap();
+        assert_eq!(reply["id"], 1);
+        assert_eq!(reply["result"]["product"], "Ferrite/CEF");
+    }
+
+    #[test]
+    fn a_message_larger_than_the_socket_buffer_reaches_a_slow_reader_whole() {
+        let mut control = Control::start().unwrap();
+        let mut socket = connect(&control, Duration::ZERO);
+        let peer = connected_peer(&mut control);
+        let blob = "x".repeat(4 * 1024 * 1024);
+        control.output(peer, json!({"blob": blob}));
+        std::thread::sleep(Duration::from_millis(300));
+        let message: Value = serde_json::from_str(&read_text(&mut control, &mut socket)).unwrap();
+        assert_eq!(message["blob"].as_str().map(str::len), Some(blob.len()));
+    }
+
+    #[test]
+    fn an_idle_peer_waits_for_input_instead_of_spinning() {
+        let mut control = Control::start().unwrap();
+        let _socket = connect(&control, Duration::ZERO);
+        connected_peer(&mut control);
+        std::thread::sleep(Duration::from_millis(50));
+        let before = READ_TURNS.load(Ordering::Relaxed);
+        std::thread::sleep(Duration::from_millis(200));
+        let turns = READ_TURNS.load(Ordering::Relaxed) - before;
+        // A 10 ms read timeout allows about 20 turns in 200 ms.
+        assert!(turns <= 40, "the idle peer's read loop turned {turns} times in 200 ms");
+    }
 }
