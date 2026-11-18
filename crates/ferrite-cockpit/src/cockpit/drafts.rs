@@ -117,12 +117,14 @@ impl CockpitView {
         }
     }
 
-    /// Delete `thread`, and with it the sources its quotes were cited from.
+    /// Delete `thread`, and with it the sources its quotes were cited from
+    /// and, at the next frame, its Panel.
     pub(super) fn delete_thread(
         &mut self,
         thread: ThreadId,
     ) -> std::io::Result<()> {
         self.cockpit.delete(thread)?;
+        self.panel.deleted.push(thread);
         if self.cited_sources.forget(thread) {
             if let Err(error) = self.cited_sources.save(&self.prefs.dir) {
                 ferrite_core::log!("cited sources were not saved: {error}");

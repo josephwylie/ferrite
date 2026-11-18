@@ -98,6 +98,16 @@ fn deleting_a_thread_ends_the_shells_its_panel_held(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
+fn a_parked_thread_keeps_its_shells(cx: &mut TestAppContext) {
+    let (view, thread, cx) = window("terminal-thread-parked", cx);
+    opened(&view, cx);
+    press_nav_verb(&view, thread, MenuVerb::Park, cx);
+    assert!(view.read_with(cx, |view, _| view.cockpit.thread(thread).is_none()), "the Thread is parked");
+    assert_eq!(numbers(&view, thread, cx), [1], "its shell runs on");
+    assert!(panel_tabs(&view, thread, cx).0.contains(&SurfaceId::Terminal(1)), "and keeps its tab");
+}
+
+#[gpui::test]
 fn a_local_shell_with_a_failed_exit_still_closes_its_tab(cx: &mut TestAppContext) {
     let (view, thread, cx) = window("terminal-local-exit", cx);
     opened(&view, cx);
