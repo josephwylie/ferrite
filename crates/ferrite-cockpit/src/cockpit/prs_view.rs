@@ -921,7 +921,6 @@ impl PrsView {
     }
 }
 
-
 impl Render for PrsView {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let open = self
