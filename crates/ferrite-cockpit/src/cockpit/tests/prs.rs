@@ -196,8 +196,8 @@ fn the_footer_opens_the_prs_from_an_empty_board(cx: &mut TestAppContext) {
     assert!(shows(cx, "prs-board"));
     lands(cx, "prs-row-7");
     assert!(shows(cx, "prs-row-3"), "its rows");
-    world.view.read_with(cx, |view, _| {
-        assert_eq!(view.prs.project, Some(world.project))
+    world.view.read_with(cx, |view, cx| {
+        assert_eq!(view.prs.read(cx).project, Some(world.project))
     });
 }
 
@@ -210,8 +210,8 @@ fn the_footer_opens_the_prs_from_a_thread_without_one(cx: &mut TestAppContext) {
     click(cx, "nav-pull-requests");
     assert!(shows(cx, "prs-board"), "opened without a PR on the branch");
     lands(cx, "prs-row-3");
-    world.view.read_with(cx, |view, _| {
-        assert_ne!(view.prs.project, Some(world.project))
+    world.view.read_with(cx, |view, cx| {
+        assert_ne!(view.prs.read(cx).project, Some(world.project))
     });
 }
 
@@ -328,21 +328,29 @@ fn back_from_a_pr_returns_to_the_list_as_it_was_left(cx: &mut TestAppContext) {
     click(cx, "prs-filter-All");
     lands(cx, "prs-rows");
     world.view.update(cx, |view, cx| {
-        view.prs.scroll.set_offset(gpui::point(px(0.), px(-300.)));
+        view.prs
+            .read(cx)
+            .scroll
+            .set_offset(gpui::point(px(0.), px(-300.)));
         cx.notify();
     });
     tick(cx);
-    let at = world.view.read_with(cx, |view, _| view.prs.scroll.offset());
+    let at = world
+        .view
+        .read_with(cx, |view, cx| view.prs.read(cx).scroll.offset());
     assert!(at.y < px(0.), "scrolled");
-    world.view.update(cx, |view, cx| view.open_pr_detail(7, cx));
+    world.view.update(cx, |view, cx| {
+        view.prs.update(cx, |prs, cx| prs.open_detail(7, cx))
+    });
     tick(cx);
     assert!(shows(cx, "prs-detail") && !shows(cx, "prs-rows"));
     click(cx, "prs-back");
     assert!(shows(cx, "prs-rows"), "the list again");
-    world.view.read_with(cx, |view, _| {
-        assert_eq!(view.prs.filter, WirePrFilter::All, "its filter");
-        assert_eq!(view.prs.selected, Some(7), "its marked row");
-        assert_eq!(view.prs.scroll.offset(), at, "its scroll");
+    world.view.read_with(cx, |view, cx| {
+        let prs = view.prs.read(cx);
+        assert_eq!(prs.filter, WirePrFilter::All, "its filter");
+        assert_eq!(prs.selected, Some(7), "its marked row");
+        assert_eq!(prs.scroll.offset(), at, "its scroll");
     });
 }
 
@@ -514,8 +522,9 @@ fn the_prs_view_is_walked_by_keys(cx: &mut TestAppContext) {
     let (world, cx) = world("prs-keys", 0, two_rows(), false, cx);
     click(cx, "nav-pull-requests");
     lands(cx, "prs-row-3");
-    let marked =
-        |cx: &mut gpui::VisualTestContext| world.view.read_with(cx, |view, _| view.prs.selected);
+    let marked = |cx: &mut gpui::VisualTestContext| {
+        world.view.read_with(cx, |view, cx| view.prs.read(cx).selected)
+    };
     cx.simulate_keystrokes("down");
     assert_eq!(marked(cx), Some(7), "the first row");
     cx.simulate_keystrokes("down");

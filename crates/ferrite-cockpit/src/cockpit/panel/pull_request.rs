@@ -525,14 +525,20 @@ impl CockpitView {
                 .surfaces
                 .get(thread)
                 .map_or(PrTab::Summary, |state| state.pr_tab(target.number)),
-            PrSource::Project(_) => self.prs.tab,
+            PrSource::Project(_) => self.prs.read(cx).tab(),
         };
         if was != tab {
             self.panel.pr_picked = Some(cx.background_executor().now());
         }
         match target.source {
             PrSource::Thread(thread) => self.select_pr_tab(thread, target.number, tab, cx),
-            PrSource::Project(_) => self.select_prs_tab(tab, cx),
+            PrSource::Project(_) => {
+                if tab == PrTab::Code {
+                    self.ensure_pr_changes(target, cx);
+                }
+                self.prs.update(cx, |prs, cx| prs.set_tab(tab, cx));
+                cx.notify();
+            }
         }
     }
 
