@@ -161,6 +161,70 @@ fn the_more_menu_holds_claudes_four_rows(cx: &mut TestAppContext) {
     );
 }
 
+/// What the `⋯` menu sets is the window's: the menu shows it the next time
+/// it opens, whichever shell it opens over.
+#[gpui::test]
+fn a_more_menu_choice_shows_when_the_menu_opens_again(cx: &mut TestAppContext) {
+    let (view, thread, cx) = window("terminal-more-choice", cx);
+    opened(&view, cx);
+    let verbs = [
+        crate::cockpit::tools::TerminalVerb::ToggleBlink,
+        crate::cockpit::tools::TerminalVerb::ToggleCopyOnSelect,
+        crate::cockpit::tools::TerminalVerb::Cursor(ferrite_terminal::Cursor::Bar),
+        crate::cockpit::tools::TerminalVerb::Scrollback(1_000),
+    ];
+    cx.update(|window, cx| {
+        view.update(cx, |view, cx| {
+            for verb in verbs {
+                view.run_menu_verb(MenuTarget::TerminalMore(thread), MenuVerb::Terminal(verb), window, cx);
+            }
+        })
+    });
+    opened(&view, cx);
+    view.update(cx, |view, cx| {
+        view.open_context_menu(MenuTarget::TerminalMore(thread), gpui::point(px(1700.), px(60.)), cx)
+    });
+    let rows = view.read_with(cx, |view, _| {
+        view.context_menu()
+            .unwrap()
+            .rows
+            .iter()
+            .flatten()
+            .map(|(item, _)| (item.label.to_string(), item.checked, item.detail.as_ref().map(|d| d.to_string())))
+            .collect::<Vec<_>>()
+    });
+    assert_eq!(
+        rows,
+        [
+            ("Cursor style".into(), false, Some("Bar".into())),
+            ("Blink cursor".into(), false, None),
+            ("Copy on select".into(), true, None),
+            ("Scrollback".into(), false, Some("1,000 lines".into())),
+        ]
+    );
+}
+
+/// ⌘J back to a shell already open hands it the keyboard again.
+#[gpui::test]
+fn cmd_j_back_to_an_open_shell_gives_it_the_keyboard(cx: &mut TestAppContext) {
+    let (view, thread, cx) = window("terminal-cmd-j-focus", cx);
+    opened(&view, cx);
+    let shell = view.read_with(cx, |view, _| view.terminal_view(thread)).unwrap();
+    view.update(cx, |view, cx| view.activate_surface(thread, &SurfaceId::Overview, cx));
+    let composer = view.read_with(cx, |view, cx| view.panes[0].composer.read(cx).focus_handle(cx));
+    cx.update(|window, cx| window.focus(&composer, cx));
+    tick(cx);
+    let shell_focused = |cx: &mut gpui::VisualTestContext| {
+        cx.update(|window, cx| shell.focus_handle(cx).is_focused(window))
+    };
+    assert!(!shell_focused(cx), "the Composer has the keyboard");
+    cx.simulate_keystrokes("cmd-j");
+    tick(cx);
+    tick(cx);
+    assert_eq!(panel_tabs(&view, thread, cx).1, Some(SurfaceId::Terminal(1)));
+    assert!(shell_focused(cx), "the shell took the keyboard");
+}
+
 #[gpui::test]
 fn a_selection_offers_attach_and_attaches_as_a_reply_tile(cx: &mut TestAppContext) {
     let (view, thread, cx) = window("terminal-attach", cx);
