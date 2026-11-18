@@ -4224,8 +4224,7 @@ impl CockpitView {
                 return;
             }
         }
-        if self.panel_control_focused(window) {
-            self.leave_panel(window, cx);
+        if self.leave_control(window, cx) {
             return;
         }
         if self.settings_open(cx) && self.connections.editor.is_some() {
@@ -8906,7 +8905,7 @@ impl CockpitView {
                 }
             }))
             .on_key_down(cx.listener(|view, event: &gpui::KeyDownEvent, window, cx| {
-                view.typing_leaves_panel(&event.keystroke, window, cx);
+                view.typing_leaves_control(&event.keystroke, window, cx);
             }))
             .on_action(cx.listener(Self::open_settings))
             .map(|root| self.register_board_actions(root, cx))

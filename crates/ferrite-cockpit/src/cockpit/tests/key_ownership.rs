@@ -373,3 +373,111 @@ fn a_question_mark_typed_on_the_panel_is_text_for_the_composer(cx: &mut TestAppC
     );
     assert_eq!(composer_text(&view, cx), "?why");
 }
+
+/// A settled turn that ran one tool, so the transcript draws its shut
+/// `Worked for` fold, the Composer empty and holding the keyboard.
+fn settled_tool_turn(cx: &mut TestAppContext) -> (Entity<CockpitView>, &mut gpui::VisualTestContext) {
+    let (mut core, fake) = cockpit("key-tool-fold", 1);
+    let thread = core.threads()[0];
+    let _ = core.send(thread, "prior prompt".into());
+    bind_production_keys(cx);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(1000.), px(700.)));
+    let stream = fake.streams.borrow();
+    stream[0]
+        .send(SessionEvent::ToolStarted {
+            id: "toolu_9".into(),
+            name: "Bash".into(),
+            input: serde_json::json!({ "command": "echo hi" }),
+        })
+        .unwrap();
+    stream[0]
+        .send(SessionEvent::ToolCompleted {
+            id: "toolu_9".into(),
+            output: "hi".into(),
+            is_error: false,
+            result: ferrite_core::ToolResult::Opaque,
+        })
+        .unwrap();
+    stream[0]
+        .send(SessionEvent::TurnEnded {
+            outcome: ferrite_core::TurnOutcome::Completed,
+            cost_usd: None,
+        })
+        .unwrap();
+    drop(stream);
+    tick(cx);
+    assert!(cx.debug_bounds("turn-fold").is_some(), "the turn's fold is drawn");
+    assert_eq!(composer_text(&view, cx), "");
+    (view, cx)
+}
+
+fn fold_lit(cx: &mut gpui::VisualTestContext) -> bool {
+    cx.debug_bounds("tool-disclosure-keyboard-target").is_some()
+}
+
+#[gpui::test]
+fn escape_on_a_tabbed_fold_gives_the_composer_back_its_typing(cx: &mut TestAppContext) {
+    let (view, cx) = settled_tool_turn(cx);
+    cx.simulate_keystrokes("tab");
+    tick(cx);
+    assert!(fold_lit(cx), "Tab lights the fold");
+    cx.simulate_keystrokes("escape");
+    tick(cx);
+    assert!(!fold_lit(cx), "Escape puts the fold's light out");
+    cx.simulate_input("after");
+    tick(cx);
+    assert_eq!(composer_text(&view, cx), "after");
+}
+
+#[gpui::test]
+fn letters_typed_on_a_tabbed_fold_go_to_the_composer(cx: &mut TestAppContext) {
+    let (view, cx) = settled_tool_turn(cx);
+    cx.simulate_keystrokes("tab");
+    tick(cx);
+    assert!(fold_lit(cx), "Tab lights the fold");
+    cx.simulate_keystrokes("space");
+    tick(cx);
+    assert!(cx.debug_bounds("turn-fold-open").is_some(), "Space opens the fold");
+    cx.simulate_keystrokes("enter");
+    tick(cx);
+    assert!(cx.debug_bounds("turn-fold-shut").is_some(), "Enter shuts it");
+    assert_eq!(composer_text(&view, cx), "", "neither key typed");
+    cx.simulate_input("typed");
+    tick(cx);
+    assert_eq!(composer_text(&view, cx), "typed");
+    assert!(!fold_lit(cx), "the keyboard left the fold");
+}
+
+#[gpui::test]
+fn letters_and_escape_on_a_tabbed_copy_go_to_the_composer(cx: &mut TestAppContext) {
+    let (core, fake) = cockpit("key-code-copy", 1);
+    bind_production_keys(cx);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(1000.), px(700.)));
+    fake.streams.borrow()[0]
+        .send(SessionEvent::TextDelta {
+            text: "```rust\n    first();\n```".into(),
+        })
+        .unwrap();
+    spoken(&fake, 0);
+    tick(cx);
+    let on_copy = |cx: &mut gpui::VisualTestContext| {
+        cx.update(|window, _| ferrite_pane::rich::controls_focused(window))
+    };
+    cx.simulate_keystrokes("shift-tab");
+    tick(cx);
+    assert!(on_copy(cx), "Shift-Tab reaches the code block's Copy");
+    cx.simulate_input("a");
+    tick(cx);
+    assert!(!on_copy(cx), "typing left Copy");
+    cx.simulate_keystrokes("shift-tab");
+    tick(cx);
+    assert!(on_copy(cx), "Shift-Tab reaches Copy again");
+    cx.simulate_keystrokes("escape");
+    tick(cx);
+    assert!(!on_copy(cx), "Escape left Copy");
+    cx.simulate_input("b");
+    tick(cx);
+    assert_eq!(composer_text(&view, cx), "ab");
+}

@@ -248,10 +248,30 @@ impl CockpitView {
         cx.notify();
     }
 
-    /// A character no stop bound, typed with the keyboard on a stop, is
+    /// The keyboard leaves a control that reads no letters for the
+    /// conversation: a Panel stop, or the transcript row or code action Tab
+    /// put it on in the focused Pane. Whether it was on one.
+    pub(in crate::cockpit) fn leave_control(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        let index = self.focused();
+        let in_transcript = self.panes.get(index).is_some_and(|pane| {
+            pane.tool_focus().contains_focused(window, cx)
+                || (pane.transcript_focus.contains_focused(window, cx)
+                    && ferrite_pane::rich::controls_focused(window))
+        });
+        if !in_transcript && !self.panel_control_focused(window) {
+            return false;
+        }
+        if let Some(pane) = self.panes.get_mut(index) {
+            pane.clear_tool_target();
+        }
+        self.leave_panel(window, cx);
+        true
+    }
+
+    /// A character no control bound, typed with the keyboard on one, is
     /// text for the conversation: the Composer takes the keyboard and the
     /// character with it.
-    pub(in crate::cockpit) fn typing_leaves_panel(
+    pub(in crate::cockpit) fn typing_leaves_control(
         &mut self,
         keystroke: &gpui::Keystroke,
         window: &mut Window,
@@ -265,16 +285,14 @@ impl CockpitView {
         }) else {
             return;
         };
-        if !self.panel_control_focused(window) {
+        if !self.leave_control(window, cx) {
             return;
         }
-        let Some(pane) = self.panes.get(self.focused()) else {
-            return;
-        };
         // The Composer is not the focus yet, so the platform would hand
-        // this character to the stop, which takes none.
-        pane.composer.update(cx, |composer, cx| composer.insert(text, cx));
-        self.leave_panel(window, cx);
+        // this character to the control, which takes none.
+        if let Some(composer) = self.panes.get(self.focused()).map(|pane| pane.composer.clone()) {
+            composer.update(cx, |composer, cx| composer.insert(text, cx));
+        }
         cx.stop_propagation();
     }
 
