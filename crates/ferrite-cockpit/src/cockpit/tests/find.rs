@@ -126,6 +126,28 @@ fn find_scrolls_to_an_occurrence_the_list_has_not_laid_out(cx: &mut TestAppConte
 }
 
 #[gpui::test]
+fn a_press_on_the_bar_takes_the_keys_back_from_the_composer(cx: &mut TestAppContext) {
+    let (core, fake) = cockpit("find-pressed", 1);
+    bind_production_keys(cx);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    super::hold_nav_open(&view, cx);
+    cx.simulate_resize(gpui::size(px(1000.), px(700.)));
+    say(&fake, "Step one is a mark.\n\n");
+    tick(cx);
+    open(cx);
+    let composer = cx.debug_bounds("composer-block").expect("the Composer");
+    cx.simulate_click(composer.center(), gpui::Modifiers::none());
+    tick(cx);
+    let bar = cx.debug_bounds("find-bar").expect("the bar stays open");
+    cx.simulate_click(gpui::point(bar.left() + px(60.), bar.center().y), gpui::Modifiers::none());
+    tick(cx);
+    cx.simulate_input("mark");
+    settle(&view, cx);
+    assert_eq!(state(&view, cx).unwrap().count.as_deref(), Some("1/1"));
+    assert_eq!(composer_text(&view, cx), "");
+}
+
+#[gpui::test]
 fn find_steps_both_ways_and_wraps(cx: &mut TestAppContext) {
     let (core, fake) = cockpit("find-steps", 1);
     bind_production_keys(cx);
