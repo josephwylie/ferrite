@@ -380,6 +380,9 @@ pub mod paint {
     pub const PRESS: Paint = SELECTION_HOVER;
     /// The hover face of a groundless control or row (`HOVER_WASH`).
     pub const HOVER: Paint = Paint(super::HOVER_WASH);
+    /// An icon button's hover face. With no label and no edge its ground is
+    /// all that says it is a button, so it steps further than `HOVER`.
+    pub const ICON_HOVER: Paint = Paint(super::NAV_CARD_HOVER);
     /// The send circle.
     pub const SEND: Paint = Paint::solid(super::SEND);
     /// A float's ground, its edge (and the rules inside it), a row under

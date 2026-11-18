@@ -1445,7 +1445,7 @@ impl IconSize {
 
 /// The one icon-only button: `glyph` centred in a `size` square, in
 /// `NAV_ICON_INK` rising to `INK_STRONG` with the hover blend, on nothing at
-/// rest, `paint::HOVER` under the pointer and `paint::PRESS` pressed
+/// rest, `paint::ICON_HOVER` under the pointer and `paint::PRESS` pressed
 /// (`faded_button`). A tab stop with the focus ring; Enter and Space press it.
 /// `label` is its name to assistive technology; its id is its
 /// `debug_selector`. The caller adds a tooltip (`Tip`) and the press
@@ -1486,7 +1486,7 @@ fn icon_face(
     let (rest, hover) = if toggled == Some(true) {
         (theme::paint::SELECTED, theme::paint::SELECTION_HOVER)
     } else {
-        (theme::Paint(theme::TRANSPARENT), theme::paint::HOVER)
+        (theme::Paint(theme::TRANSPARENT), theme::paint::ICON_HOVER)
     };
     let t = motion::hover_t(&crate::pointer::hover_key(&ElementId::from(id.clone())));
     let ink = motion::mix(rgba(theme::NAV_ICON_INK).into(), rgb(theme::INK_STRONG).into(), t);
