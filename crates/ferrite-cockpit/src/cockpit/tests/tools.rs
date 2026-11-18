@@ -383,6 +383,17 @@ fn the_plus_stays_in_view_past_overflowing_tabs(cx: &mut TestAppContext) {
     tick(cx);
     let target = view.read_with(cx, |view, _| view.context_menu().map(|menu| menu.target.clone()));
     assert_eq!(target, Some(MenuTarget::SurfaceMenu(thread)), "its menu is up");
+    // So near the window's edge the menu has no room to line up with the
+    // `+`: it moves in, and still hangs under it.
+    let menu = cx.debug_bounds("context-menu").expect("the menu is drawn");
+    let window = gpui::Bounds::new(gpui::point(px(0.), px(0.)), gpui::size(px(1900.), px(900.)));
+    assert!(plus.left() + menu.size.width > window.right(), "the + {plus:?} is near the edge");
+    assert!(within(menu, window), "the menu {menu:?} lies in the window");
+    assert_eq!(
+        menu.top() - plus.bottom(),
+        px(ferrite_ui::theme::MENU_UNDER_GAP),
+        "the menu {menu:?} hangs under the + {plus:?}"
+    );
 }
 
 /// With motion on, a chevron eases the strip to where it sends it (T3's

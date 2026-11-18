@@ -1168,17 +1168,18 @@ impl CockpitView {
             .child(shell)
             .children(side);
         let opens = hang.map_or(ferrite_ui::motion::Opens::Down, |(opens, _)| opens);
+        // Every menu moves in from the window's edge rather than switch
+        // sides: switched, a hung menu would lose its drop and lie over its
+        // trigger. Its height already fits the room it hangs in.
         let placed = match (open.drop, opens) {
             (Some(_), ferrite_ui::motion::Opens::Up) => anchored().anchor(bottom_of(open.corner)).position(open.at),
             (Some(drop), _) => anchored()
                 .anchor(open.corner)
                 .position(open.at)
                 .offset(gpui::point(px(0.), drop)),
-            (None, _) => anchored()
-                .anchor(open.corner)
-                .position(open.at)
-                .snap_to_window_with_margin(pad),
-        };
+            (None, _) => anchored().anchor(open.corner).position(open.at),
+        }
+        .snap_to_window_with_margin(pad);
         Some(
             placed
                 .child(self.popup_face(face, "context-menu-in", shell, opens, cx))
