@@ -1349,7 +1349,7 @@ fn a_draft_on_a_machine_starts_a_thread_in_a_directory_typed_there(cx: &mut Test
     cx.simulate_keystrokes("enter");
     let project = view.update(cx, |view, cx| {
         assert!(
-            !view.project_editor_open(cx),
+            view.project_card(cx).is_none(),
             "the next ↵ confirms the card, adding nothing more"
         );
         let project = view.cockpit.registry().projects().last().unwrap().clone();
@@ -2370,6 +2370,42 @@ fn local_environment_switch_persists_and_empty_client_blocks_new_threads(cx: &mu
         });
     }
     assert!(cx.debug_bounds("no-environment-connections").is_some());
+}
+
+/// The empty board's `Open Connections` opens Settings as ⌘, does: it
+/// asks the machine for its defaults, which land or say why not.
+#[gpui::test]
+fn open_connections_asks_the_machines_defaults(cx: &mut TestAppContext) {
+    bind_production_keys(cx);
+    let machines = cx.new(|_| {
+        let mut machines = machines("open-connections", None);
+        machines.set_local_enabled(false);
+        machines.settings_changed(&[]);
+        machines
+    });
+    let core = machines
+        .update(cx, |machines, _| machines.go_to(None))
+        .unwrap()
+        .unwrap();
+    let (root, cx) = machine_window(cx, core, machines);
+    cx.simulate_resize(gpui::size(px(1000.), px(700.)));
+    let view = shown(&root, cx);
+    view.update(cx, |view, cx| {
+        view.prefs.settings.local_environment_enabled = false;
+        view.hide_sheet(cx);
+    });
+    tick(cx);
+    let open = cx.debug_bounds("no-environment-connections").expect("Open Connections");
+    cx.simulate_click(open.center(), gpui::Modifiers::none());
+    tick(cx);
+    view.read_with(cx, |view, cx| {
+        assert!(view.settings_open(cx), "Settings opens");
+        assert!(view.on_machine());
+        assert!(
+            view.environment.defaults.is_some() || view.environment.defaults_error.is_some(),
+            "the machine's defaults were asked"
+        );
+    });
 }
 
 #[gpui::test]

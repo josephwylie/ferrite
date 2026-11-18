@@ -311,10 +311,9 @@ impl CockpitView {
         }
     }
 
-    /// The sheet gone, closed or replaced: any menu it opened goes with it,
-    /// and what was typed stays on its Factory, if that still shows.
+    /// The sheet gone, closed or replaced: what was typed stays on its
+    /// Factory, if that still shows.
     pub(super) fn new_task_gone(&mut self, sheet: &Entity<NewTaskView>, cx: &App) {
-        self.close_factory_menu();
         let sheet = sheet.read(cx);
         if let Some(view) = self.factory_mut().filter(|view| view.project == sheet.project) {
             view.kept = Some(sheet.kept(cx));

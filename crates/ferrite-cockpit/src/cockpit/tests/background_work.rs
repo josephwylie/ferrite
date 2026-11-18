@@ -67,6 +67,28 @@ fn details_opens_the_background_work_dialog(cx: &mut TestAppContext) {
     );
 }
 
+/// Once the last piece of work ends, the dialog stays up and says there is
+/// none, rather than draw nothing under its title.
+#[gpui::test]
+fn the_background_work_dialog_says_when_no_work_is_left(cx: &mut TestAppContext) {
+    let (core, fake) = cockpit("background-dialog-empty", 1);
+    let (_view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    running(&fake, &[("task:1", "cargo test")]);
+    tick(cx);
+    let details = bounds(cx, "background-details".into());
+    cx.simulate_click(details.center(), gpui::Modifiers::none());
+    tick(cx);
+    assert!(debug_bounds(cx, "background-dialog-empty".into()).is_none(), "work is listed");
+    running(&fake, &[]);
+    tick(cx);
+    assert!(debug_bounds(cx, "background-dialog".into()).is_some(), "the dialog stays up");
+    assert!(debug_bounds(cx, "background-dialog-section".into()).is_none());
+    assert!(
+        debug_bounds(cx, "background-dialog-empty".into()).is_some(),
+        "it says there is no background work"
+    );
+}
+
 /// One Claude subagent goes by three names (its `Agent` call, its task and
 /// its agent id, joined by aliases): the line counts the agent once.
 #[gpui::test]

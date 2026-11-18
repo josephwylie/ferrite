@@ -683,11 +683,11 @@ fn the_pr_surface_is_worked_from_the_keyboard(cx: &mut TestAppContext) {
     );
     press("shift-f10", cx);
     assert!(
-        view.read_with(cx, |view, _| view.context_menu.is_some()),
+        view.read_with(cx, |view, _| view.context_menu().is_some()),
         "⇧F10 opens the number's menu"
     );
     press("escape", cx);
-    assert!(view.read_with(cx, |view, _| view.context_menu.is_none()));
+    assert!(view.read_with(cx, |view, _| view.context_menu().is_none()));
     assert_eq!(
         focused_control(&view, cx),
         Some(PanelControl::PrNumber),

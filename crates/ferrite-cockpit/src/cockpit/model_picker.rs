@@ -1408,7 +1408,8 @@ impl CockpitView {
         } else {
             INK_SUBTLE
         };
-        let lit = opens.is_some() && self.mode_picker == opens;
+        let lit = opens.is_some()
+            && self.mode_menu().map(|open| (open.thread, open.generation)) == opens;
         Some(
             ferrite_ui::components::on_bounds(
                 div()
@@ -1433,7 +1434,7 @@ impl CockpitView {
                                 .text_color(rgb(INK_STRONG))
                         })
                     })
-                    .tooltip(ferrite_ui::menu::tooltip("Permission mode"))
+                    .tip_unless_open(lit, "Permission mode")
                     .on_mouse_down(
                         MouseButton::Left,
                         cx.listener(move |view, _: &MouseDownEvent, _, cx| {

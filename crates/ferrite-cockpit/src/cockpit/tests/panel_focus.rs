@@ -277,11 +277,11 @@ fn a_menu_from_a_control_gives_the_keyboard_back_when_it_closes(cx: &mut TestApp
     activate("enter", cx);
     assert!(
         cx.debug_bounds("context-menu").is_some()
-            || view.read_with(cx, |view, _| view.context_menu.is_some())
+            || view.read_with(cx, |view, _| view.context_menu().is_some())
     );
     press("escape", cx);
     assert!(
-        view.read_with(cx, |view, _| view.context_menu.is_none()),
+        view.read_with(cx, |view, _| view.context_menu().is_none()),
         "esc closes the menu first"
     );
     assert_eq!(
@@ -292,11 +292,11 @@ fn a_menu_from_a_control_gives_the_keyboard_back_when_it_closes(cx: &mut TestApp
 
     press("shift-f10", cx);
     assert!(
-        view.read_with(cx, |view, _| view.context_menu.is_some()),
+        view.read_with(cx, |view, _| view.context_menu().is_some()),
         "⇧F10 opens the stop's menu"
     );
     press("t", cx);
-    assert!(view.read_with(cx, |view, _| view.context_menu.is_none()));
+    assert!(view.read_with(cx, |view, _| view.context_menu().is_none()));
     assert_eq!(
         composer_text(&view, cx),
         SENTINEL,

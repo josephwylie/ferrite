@@ -90,7 +90,7 @@ fn open_in_opens_its_submenu_beside_the_menu(cx: &mut TestAppContext) {
         "{first:?} level with {parent:?}"
     );
     view.read_with(cx, |view, _| {
-        let (_, rows) = view.context_menu.as_ref().unwrap().sub.clone().unwrap();
+        let (_, rows) = view.context_menu().unwrap().sub.clone().unwrap();
         let names: Vec<_> = rows
             .iter()
             .map(|(item, _)| item.label.to_string())
@@ -140,7 +140,7 @@ fn a_closed_menu_fades_out_and_takes_no_input(cx: &mut TestAppContext) {
     cx.run_until_parked();
     step(16, cx);
     assert!(
-        view.read_with(cx, |view, _| view.context_menu.is_none()),
+        view.read_with(cx, |view, _| view.context_menu().is_none()),
         "input is released at once"
     );
     assert!(cx.debug_bounds("context-menu").is_some(), "the face is still leaving");
@@ -152,7 +152,7 @@ fn a_closed_menu_fades_out_and_takes_no_input(cx: &mut TestAppContext) {
     cx.simulate_keystrokes("escape");
     open(cx);
     step(16, cx);
-    assert!(view.read_with(cx, |view, _| view.context_menu.is_some()));
+    assert!(view.read_with(cx, |view, _| view.context_menu().is_some()));
     assert_eq!(
         cx.debug_bounds("context-menu").iter().count(),
         1,
@@ -182,7 +182,7 @@ fn the_row_menu_is_walked_with_the_arrow_keys(cx: &mut TestAppContext) {
     });
     tick(cx);
     let cursor = |cx: &mut gpui::VisualTestContext| {
-        view.read_with(cx, |view, _| view.context_menu.as_ref().map(|open| open.cursor))
+        view.read_with(cx, |view, _| view.context_menu().map(|open| open.cursor))
     };
     assert_eq!(cursor(cx), Some(MenuCursor::Idle));
     cx.simulate_keystrokes("down");
@@ -194,7 +194,7 @@ fn the_row_menu_is_walked_with_the_arrow_keys(cx: &mut TestAppContext) {
     cx.simulate_keystrokes("up up");
     tick(cx);
     let last = view.read_with(cx, |view, _| {
-        view.context_menu.as_ref().unwrap().rows.len() - 1
+        view.context_menu().unwrap().rows.len() - 1
     });
     assert!(
         matches!(cursor(cx), Some(MenuCursor::Row(at)) if at >= last - 1),
@@ -245,13 +245,13 @@ fn an_open_menu_joins_the_root_context_and_global_chords_still_act(cx: &mut Test
     let root = cx.update(|window, _| window.context_stack());
     assert!(
         root.iter()
-            .any(|context| context.contains("Ferrite") && context.contains("ContextMenu")),
+            .any(|context| context.contains("Ferrite") && context.contains("Popup")),
         "the menu is added to the root's context, not put in its place: {root:?}"
     );
     cx.simulate_keystrokes("tab");
     tick(cx);
     assert!(
-        view.read_with(cx, |view, _| view.context_menu.is_some()),
+        view.read_with(cx, |view, _| view.context_menu().is_some()),
         "the Cockpit's ⇥ stands down for the open menu"
     );
     cx.simulate_keystrokes("cmd-,");
@@ -283,8 +283,7 @@ fn a_menu_from_a_button_stays_in_the_window(cx: &mut TestAppContext) {
         tick(cx);
         let menu = cx.debug_bounds("context-menu").expect("the menu");
         view.update(cx, |view, cx| {
-            view.context_menu = None;
-            cx.notify();
+            view.close_popup(cx);
         });
         tick(cx);
         (button, menu)

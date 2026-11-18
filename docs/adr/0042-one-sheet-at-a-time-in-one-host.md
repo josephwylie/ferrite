@@ -9,7 +9,7 @@ Ferrite has five sheets: Settings, the Project card, the Background work
 dialog, the New task sheet and a Task's Rework or Direct this task sheet.
 Each drew its own veil and wrote its own outside press, fade, focus and
 Escape. Only Settings and the Project card closed each other, by hand, in
-their openers. Two of the five have no Escape.
+their openers. Two of the five had no Escape.
 
 ## Decision
 
@@ -69,7 +69,8 @@ their openers. Two of the five have no Escape.
   taken closes it. Escape now closes it, and a menu it opened closes
   before it.
 - **All five sheets are in the host.** No sheet draws its own veil, and
-  `hide_sheet` is the one close path for every one of them.
+  `hide_sheet` is the one close path for every one of them. ADR 0043 does
+  the same for the menus and cards that hang over the window.
 - **What was typed outlives its sheet as plain values.** The view is
   dropped on a close, so what must survive the close leaves with the
   sheet (`sheet_gone`) as plain values, kept by what outlives the sheet,

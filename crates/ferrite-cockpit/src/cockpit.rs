@@ -22,7 +22,6 @@ mod details;
 mod direct_view;
 pub(crate) mod direction;
 mod drafts;
-mod float_exits;
 pub(crate) mod empty_board;
 pub(crate) mod environment;
 pub(crate) mod factory;
@@ -42,6 +41,7 @@ mod nav_view;
 mod palette;
 pub(crate) mod panel;
 mod parts;
+mod popups;
 mod prs;
 mod sends;
 mod server;
@@ -67,7 +67,8 @@ pub(crate) mod workflows;
 type FloatTriggers =
     std::rc::Rc<std::cell::RefCell<std::collections::HashMap<SharedString, gpui::Bounds<Pixels>>>>;
 
-use self::context_menu::{ContextMenu, MenuTarget, MenuVerb};
+use self::context_menu::{MenuTarget, MenuVerb};
+use self::popups::Popup;
 use self::model_picker::{Column, ModelPicker};
 use ferrite_ui::components::home_relative;
 use ferrite_ui::components::Tip as _;
@@ -75,6 +76,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 #[cfg(feature = "visual-reference")]
 #[path = "visual_reference.rs"]
 pub mod visual_reference;
+#[cfg(feature = "headless")]
+pub mod changes_frames;
 
 use std::time::Duration;
 
@@ -129,7 +132,6 @@ use ferrite_pane::link_target::{LinkTarget, Open};
 use ferrite_pane::decision;
 use ferrite_pane::pane::{self, PaneView};
 use ferrite_ui::menu;
-use ferrite_ui::motion::POPOVER;
 use crate::project_editor;
 use ferrite_pane::select::TranscriptText;
 use ferrite_ui::frame::settings;
@@ -488,11 +490,9 @@ pub struct CockpitView {
     /// to be the row you are looking at.
     rename: Option<(RenameTarget, Entity<ferrite_pane::composer::Composer>)>,
     snooze_editor: Option<snooze::Editor>,
-    /// The right-click menu, if one is up: what it is about, where it was
-    /// summoned, and which destructive row is armed for its second press.
-    context_menu: Option<ContextMenu>,
-    /// What held focus before the open menu took it (`tend_menu_focus`).
-    menu_return: Option<context_menu::MenuReturn>,
+    /// The one popup that is up: the context menu, the mode menu, or the
+    /// plan, checks or session controls card (ADR 0043).
+    popups: popups::Popups,
     /// The Solo view's right panel (`panel`): its tab per Thread and
     /// whether the window has room for it.
     panel: panel::Panel,
@@ -506,21 +506,12 @@ pub struct CockpitView {
     panel_closing_focus: gpui::FocusHandle,
     /// Back and forward through where the operator has been (`history`).
     history: history::History,
-    session_controls: Option<(ThreadId, u64)>,
-    /// The Composer's mode menu, open on one Thread's Session generation.
-    mode_picker: Option<(ThreadId, u64)>,
-    /// Where the open mode menu hangs, and what it previews.
-    mode_menu: mode_menu::ModeMenu,
     /// The Composer's `+` menu, open on one Pane.
     attach_menu: Option<ferrite_core::roster::PaneIdentity>,
     /// Holds every footer's plan-usage popover open, its ring's own clicks
     /// aside: a visual-reference scene's (`usagepopover`), never the app's.
     usage_popover_held: bool,
     session_control_error: Option<(ThreadId, u64, String)>,
-    /// The header `ci` mark's checks card, tied to its Thread (#29). The runs it lists are read from the same cached
-    /// `BranchStatus` the mark was drawn from, so the card can never
-    /// disagree with the mark that opened it.
-    context_checks: Option<ThreadId>,
     /// The Threads the titler is naming right now: their cards draw the
     /// title at `NAV_CARD_RETITLING_OPACITY` until its answer lands.
     titling: std::collections::HashSet<ThreadId>,
@@ -566,8 +557,6 @@ pub struct CockpitView {
     /// The sheet that is up, Settings, the Project card or the
     /// `Background work` dialog (ADR 0042).
     sheets: Entity<sheets::Sheets>,
-    /// The menus and popovers on their way out (`float_exits`).
-    float_exits: float_exits::Held,
     /// The work `Stop` on the background-work line was pressed for, by
     /// Thread and Session generation (a provider reuses task ids): the line
     /// reads `Stopping...` until it ends, or `Retry` once one refused.
@@ -647,8 +636,6 @@ pub struct CockpitView {
     /// The empty board's selected row, and the list's own focus.
     empty_cursor: usize,
     empty_focus: FocusHandle,
-    /// The plan card (`open_plan`), tied to its Thread.
-    plan_card: Option<ThreadId>,
     /// The Pane whose preview took the last press: ⌘F finds there. A
     /// press hands the keyboard back to the Pane, so focus cannot say it.
     preview_pressed: Option<PaneIdentity>,
@@ -1448,20 +1435,15 @@ impl CockpitView {
             asking_repo: None,
             rename: None,
             snooze_editor: None,
-            context_menu: None,
-            menu_return: None,
+            popups: Default::default(),
             panel,
             panel_empty_focus: cx.focus_handle(),
             panel_keys: cx.focus_handle(),
             panel_closing_focus: cx.focus_handle(),
             history: Default::default(),
-            session_controls: None,
-            mode_picker: None,
-            mode_menu: Default::default(),
             attach_menu: None,
             usage_popover_held: false,
             session_control_error: None,
-            context_checks: None,
             titling: std::collections::HashSet::new(),
             float_triggers: FloatTriggers::default(),
             band_from_hero: false,
@@ -1483,7 +1465,6 @@ impl CockpitView {
             cited_sources,
             prefs,
             sheets,
-            float_exits: Default::default(),
             background_stops: Default::default(),
             background_stop_sends: 0,
             maximized: false,
@@ -1518,7 +1499,6 @@ impl CockpitView {
             preview_pressed: None,
             reader_slides: Default::default(),
             columns: columns::Columns::new(),
-            plan_card: None,
             launch_provider,
             machines: None,
             connections: connections::Connections::default(),
@@ -2403,7 +2383,7 @@ impl CockpitView {
         self.fetch_attachment_previews(cx);
         self.note_work(&frame);
         self.prune_background_stops();
-        self.close_background_dialog_of_closed_thread(cx);
+        self.close_sheet_with_nothing_to_draw(cx);
         self.pump_browsers(cx);
         if let Some(card) = self.project_card(cx) {
             card.update(cx, |card, cx| card.poll_remote_path(cx));
@@ -2894,9 +2874,7 @@ impl CockpitView {
     fn overlay_open(&self, cx: &gpui::App) -> bool {
         self.sheet_up(cx)
             || self.popover.is_some()
-            || self.context_checks.is_some()
-            || self.plan_card.is_some()
-            || self.context_menu.is_some()
+            || self.popup_up()
             || self.sheet_float_open()
     }
 
@@ -3049,11 +3027,7 @@ impl CockpitView {
         if !has_checks {
             return;
         }
-        self.popover = None;
-        self.context_menu = None;
-        self.plan_card = None;
-        self.context_checks = Some(thread);
-        cx.notify();
+        self.show_popup(Popup::Checks(thread), cx);
     }
 
     /// The palette's `plan` command (F-11): the focused Thread's plan as a
@@ -3071,11 +3045,7 @@ impl CockpitView {
         {
             return;
         }
-        self.popover = None;
-        self.context_menu = None;
-        self.context_checks = None;
-        self.plan_card = Some(thread);
-        cx.notify();
+        self.show_popup(Popup::Plan(thread), cx);
     }
 
     /// The palette's `install CLI updates` command (F-11): every provider
@@ -3101,12 +3071,14 @@ impl CockpitView {
     /// then one row per step — done `INK_SUBTLE` behind a dim check, the
     /// step being worked `INK_STRONG` behind the strong `❯`, the rest
     /// `INK_STRONG` behind a faint ring.
-    fn plan_card_element(&self, window: &mut Window, cx: &mut Context<Self>) -> Option<AnyElement> {
+    fn plan_card_element(
+        &self,
+        thread: ThreadId,
+        face: popups::Face,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Option<AnyElement> {
         use ferrite_ui::theme::*;
-        let (thread, left) = self.standing(|exits| &mut exits.plan, self.plan_card, POPOVER, cx)?;
-        if self.focused_thread() != Some(thread) {
-            return None;
-        }
         let open = self.cockpit.thread(thread)?;
         let transcript = open.transcript();
         let todos = transcript.todos()?;
@@ -3165,36 +3137,20 @@ impl CockpitView {
                     ),
             );
         }
-        let card = card
-            .id("plan-card")
-            .debug_selector(|| "plan-card".into())
-            .on_mouse_down(
-                MouseButton::Left,
-                cx.listener(|_, _: &MouseDownEvent, _, cx| cx.stop_propagation()),
-            )
-            .when(left.is_none(), |card| {
-                card.on_mouse_down_out(cx.listener(|view, _: &MouseDownEvent, _, cx| {
-                    if view.plan_card.take().is_some() {
-                        cx.notify();
-                    }
-                }))
-            });
+        let card = card.id("plan-card").debug_selector(|| "plan-card".into());
         Some(
-            deferred(
-                anchored()
-                    .anchor(gpui::Anchor::TopRight)
-                    .position(at)
-                    .snap_to_window_with_margin(px(GRID_PAD))
-                    .child(ferrite_ui::motion::float_at(
-                        POPOVER,
-                        left,
-                        "plan-card-in",
-                        card,
-                        ferrite_ui::motion::Opens::Down,
-                    )),
-            )
-            .with_priority(2)
-            .into_any_element(),
+            anchored()
+                .anchor(gpui::Anchor::TopRight)
+                .position(at)
+                .snap_to_window_with_margin(px(GRID_PAD))
+                .child(self.popup_face(
+                    face,
+                    "plan-card-in",
+                    card,
+                    ferrite_ui::motion::Opens::Down,
+                    cx,
+                ))
+                .into_any_element(),
         )
     }
 
@@ -3730,13 +3686,6 @@ impl CockpitView {
             return;
         }
         self.show_settings(cx);
-        self.popover = None;
-        self.context_menu = None;
-        if self.cli_versions.is_none() {
-            self.probe_cli_versions(cx);
-        }
-        self.ask_server_defaults();
-        cx.notify();
     }
 
     /// One beat of the updater: ask the registry when due, then install
@@ -4264,22 +4213,13 @@ impl CockpitView {
     }
 
     fn interrupt(&mut self, _: &Interrupt, window: &mut Window, cx: &mut Context<Self>) {
+        if self.close_popup(cx) {
+            return;
+        }
         if let Some(transcript) = self.panes.get(self.focused()).and_then(|pane| pane.transcript()) {
             if transcript.update(cx, |transcript, cx| transcript.dismiss_offer(cx)) {
                 return;
             }
-        }
-        if self.context_checks.take().is_some() {
-            cx.notify();
-            return;
-        }
-        if self.session_controls.take().is_some() {
-            cx.notify();
-            return;
-        }
-        if self.context_menu.take().is_some() {
-            cx.notify();
-            return;
         }
         if self.panel_control_focused(window) {
             self.leave_panel(window, cx);
@@ -6560,12 +6500,13 @@ impl CockpitView {
         .flatten();
         let identity = self.panes[index].identity;
         let group = model_picker::chip_trigger(identity);
+        let picker_up = self.model_picker_open(identity);
         let face = pane::model_effort_chip(pane::ModelChip {
             mark: ferrite_ui::provider::mark(provider),
             model: model_label,
             effort: effort.map(|effort| pane::sentence_case(&effort).into()),
             loading: false,
-            open: self.model_picker_open(identity),
+            open: picker_up,
             group: group.clone(),
         });
         let control = pane::draft_picker(
@@ -6574,7 +6515,7 @@ impl CockpitView {
             face,
             cx,
         )
-        .tip("Model and effort");
+        .tip_unless_open(picker_up, "Model and effort");
         Some(self.model_chip_control(index, control, cx))
     }
 
@@ -6827,7 +6768,7 @@ impl CockpitView {
             width: Some(ferrite_ui::theme::ATTACH_MENU_W),
             hang_left: true,
             id: SharedString::from(format!("attach-menu-{index}")),
-            trigger: pane::attach_button(cx),
+            trigger: pane::attach_button(self.attach_menu == Some(identity), cx),
             choices,
             open: self.attach_menu == Some(identity),
             return_focus: self.panes[index].composer.focus_handle(cx),
@@ -6836,7 +6777,7 @@ impl CockpitView {
                     if open {
                         view.focus_pane(index);
                         view.popover = None;
-                        view.mode_picker = None;
+                        view.close_popup(cx);
                         view.attach_menu = Some(identity);
                     } else if view.attach_menu == Some(identity) {
                         view.attach_menu = None;
@@ -8228,7 +8169,7 @@ impl Render for CockpitView {
         }
         self.hear_nav(window, cx);
         self.tend_history();
-        self.tend_menu_focus(window, cx);
+        self.tend_popup_focus(window, cx);
         let root = self.render_cockpit(window, cx);
         // The motion tail: the cockpit is the window's root view, so this
         // runs once per frame, after every hover blend has been read. A
@@ -8389,7 +8330,6 @@ impl CockpitView {
             .collect();
         // The open Task's Worker, drawn in its panel, streams whole too.
         self.leave_destination_if_moved();
-        self.close_sheet_with_nothing_to_draw(cx);
         let drawn: Vec<ThreadId> = match self.factory_worker_drawn() {
             Some(worker) => vec![worker],
             None => drawn,
@@ -8413,40 +8353,6 @@ impl CockpitView {
         self.tend_side_chat(window, cx);
         self.tend_terminal(window, cx);
         self.tend_agent_drills(cx);
-
-        // The card belongs to the mark that opened it: leaving that Pane,
-        // or the refresh that drops the PR out of the header, takes the
-        // card with it. A card outliving its mark would be
-        // claiming CI for a Pane that is no longer saying anything about it.
-        if self.context_checks.is_some_and(|thread| {
-            self.focused_thread() != Some(thread)
-                || self.sheet_up(cx)
-                || self.facts.pr(thread).is_none_or(|pr| pr.checks.is_none())
-        }) {
-            self.context_checks = None;
-        }
-
-        if self.session_controls.is_some_and(|(thread, generation)| {
-            self.settings_open(cx)
-                || self.focused_thread() != Some(thread)
-                || self
-                    .cockpit
-                    .thread(thread)
-                    .is_none_or(|open| open.generation() != generation)
-        }) {
-            self.session_controls = None;
-        }
-
-        if self.mode_picker.is_some_and(|(thread, generation)| {
-            self.settings_open(cx)
-                || self.focused_thread() != Some(thread)
-                || self
-                    .cockpit
-                    .thread(thread)
-                    .is_none_or(|open| open.generation() != generation)
-        }) {
-            self.mode_picker = None;
-        }
 
         // The popover belongs to the focused Pane's Composer (#23):
         // leaving that Pane closes it here — and a
@@ -8665,11 +8571,9 @@ impl CockpitView {
         let panel_keys_held =
             self.panel_keys.contains_focused(window, cx) || self.panel_control_focused(window);
         let dialog_took_focus = self.browsers.focus_shown_dialogs(window, cx);
-        if dialog_took_focus {
-            // A page's dialog is modal: it closes an open menu and keeps the keys.
-            self.context_menu = None;
-            self.menu_return = None;
-        }
+        // Here, before focus is handed out: a page's dialog is modal and
+        // keeps the keys, and a popup left up would take them back.
+        self.close_popup_with_nothing_to_draw(dialog_took_focus, cx);
         if window.has_active_dialog(cx)
             || dialog_took_focus
             || self.browsers.dialog_holds_focus(window, cx)
@@ -8686,8 +8590,8 @@ impl CockpitView {
             || pane_control_focused
         {
             // Native text, dialogs, and the Inbox keep their own keyboard focus.
-        } else if self.context_menu.is_some() {
-            // An open menu holds the keyboard at the root (`tend_menu_focus`).
+        } else if self.popup_up() {
+            // A popup holds the keyboard at the root (`tend_popup_focus`).
         } else if let Some(focus) = self.sheets.read(cx).up().map(|sheet| sheet.focus(cx)) {
             // The pump must not steal focus from a sheet's fields or controls.
             if !focus.contains_focused(window, cx) && !self.connection_holds_focus(window, cx) {
@@ -8779,9 +8683,9 @@ impl CockpitView {
             .font_family(ferrite_ui::theme::FONT_UI)
             .map(ferrite_ui::components::tabular)
             .track_focus(&self.focus)
-            // An open menu joins the context; the keymap's rows stand down
-            // for it.
-            .key_context(ferrite_ui::keymap::root_context(self.context_menu.is_some()).as_str())
+            // A popup joins the context; the keymap's rows stand down for
+            // it.
+            .key_context(ferrite_ui::keymap::root_context(self.popup_up()).as_str())
             // Nothing that acts on a lost machine's Threads is listened for
             // until it is back (ADR 0026).
             .when(!lost, |root| {
@@ -8978,12 +8882,6 @@ impl CockpitView {
                         }
                         dismissed = true;
                     }
-                    if view.context_menu.take().is_some() {
-                        dismissed = true;
-                    }
-                    if view.mode_picker.take().is_some() {
-                        dismissed = true;
-                    }
                     // A press outside the editor abandons the rename — the
                     // operator looked away, which is escape, not enter.
                     // It notifies itself, so it is not counted above.
@@ -9002,22 +8900,17 @@ impl CockpitView {
             // one on a transcript (#27).
             // The nav on the left at its own width, the Cockpit filling the
             // rest on the `--ground`.
-            // A right press anywhere no row claimed closes the menu.
-            .on_mouse_down(
-                MouseButton::Right,
-                cx.listener(|view, _: &MouseDownEvent, _, cx| {
-                    if view.context_menu.take().is_some() {
-                        cx.notify();
-                    }
-                }),
-            )
-            // An open menu's one-letter keys run their rows before any
-            // field under it reads the letter.
+            // While a popup is up the keys are its own (`tend_popup_focus`):
+            // Escape closes it, and the context menu's one-letter keys and
+            // arrows run its rows before any field under it reads them.
             .capture_key_down(cx.listener(|view, event: &gpui::KeyDownEvent, window, cx| {
-                if let Some(index) = view.menu_mnemonic(&event.keystroke) {
+                let key = &event.keystroke;
+                if key.key == "escape" && !key.modifiers.modified() && view.close_popup(cx) {
+                    cx.stop_propagation();
+                } else if let Some(index) = view.menu_mnemonic(key) {
                     cx.stop_propagation();
                     view.press_menu_row(index, window, cx);
-                } else if view.menu_navigate(&event.keystroke, window, cx) {
+                } else if view.menu_navigate(key, window, cx) {
                     cx.stop_propagation();
                 }
             }))
@@ -9067,13 +8960,9 @@ impl CockpitView {
             .children(self.panel_element(window, cx))
             .child(self.plane_seams(panel_w))
             .children(self.title_tools_element(cx))
-            .children(self.plan_card_element(window, cx))
-            .children(self.context_menu_element(window, cx))
-            .children(self.session_controls_element(window, cx))
-            .children(self.context_checks_element(window, cx))
             .children(self.band_menu_element(window, cx))
             .children(self.model_picker_element(window, cx))
-            .children(self.mode_menu_element(window, cx))
+            .children(self.popup_element(window, cx))
             .child(self.sheets.clone())
             .children(self.toast_float(window, cx))
             .children(self.sheet_floats(window, cx))
@@ -9659,9 +9548,16 @@ impl CockpitView {
     }
 
     /// A Pane's own card: off its Composer's right edge opening up, its
-    /// head's opening down, inside the Pane.
+    /// head's opening down, inside the Pane. A head card hangs under the
+    /// Thread details card while that is drawn, since it sits in the same
+    /// corner.
     fn pane_card_corner(&self, identity: PaneIdentity, up: bool) -> Option<Point<Pixels>> {
-        let geometry = self.panes[self.index_of(identity)?].geometry.get();
+        let pane = &self.panes[self.index_of(identity)?];
+        if let Some(details) = pane.details.drawn.get().filter(|_| !up) {
+            let limit_right = f32::from(details.right());
+            return Some(ferrite_ui::components::FloatPlace { floor: 0., limit_right }.card_corner(details, false));
+        }
+        let geometry = pane.geometry.get();
         let card = geometry.card?;
         let limit_right = f32::from(card.right()) - ferrite_ui::theme::PANE_PAD_X;
         let (floor, trigger) = if up {
@@ -9786,9 +9682,10 @@ impl CockpitView {
         let mode = open.permission_mode().unwrap_or("default").to_string();
         let label = pane::permission_mode_label(&mode, &modes);
         let key = thread.get() as usize;
+        let menu_up = self.mode_menu().is_some_and(|menu| menu.thread == thread && !menu.from_picker);
         let trigger = pane::toolbar_chip(("mode-picker", key), cx)
             .debug_selector(move || format!("mode-picker-{key}"))
-            .tip("Permission mode")
+            .tip_unless_open(menu_up, "Permission mode")
             .child(pane::mode_chip(label, &mode));
         let wrap = |chip: AnyElement| {
             div()
@@ -9820,15 +9717,12 @@ impl CockpitView {
 
     fn session_controls_element(
         &self,
+        thread: ThreadId,
+        generation: u64,
+        face: popups::Face,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
-        let ((thread, generation), left) = self.standing(
-            |exits| &mut exits.session,
-            self.session_controls,
-            POPOVER,
-            cx,
-        )?;
         let at = self.card_corner(
             format!("session-{}", thread.get()),
             CardFrom::Composer(PaneIdentity::Thread(thread)),
@@ -10202,35 +10096,19 @@ impl CockpitView {
                     })),
             );
         }
-        let card = card
-            .on_mouse_down(
-                MouseButton::Left,
-                cx.listener(|_, _: &MouseDownEvent, _, cx| cx.stop_propagation()),
-            )
-            .when(left.is_none(), |card| {
-                card.on_mouse_down_out(cx.listener(move |view, _: &MouseDownEvent, _, cx| {
-                    if view.session_controls.take().is_some() {
-                        cx.notify();
-                    }
-                }))
-            });
         Some(
-            deferred(
-                anchored()
-                    .anchor(gpui::Anchor::BottomRight)
-                    .position(at)
-                    .snap_to_window_with_margin(px(ferrite_ui::theme::GRID_PAD))
-                    .child(ferrite_ui::motion::float_at(
-                        POPOVER,
-                        left,
-                        "session-controls-in",
-                        card,
-                        ferrite_ui::motion::Opens::Up,
-                    ))
-                    .into_any_element(),
-            )
-            .with_priority(2)
-            .into_any_element(),
+            anchored()
+                .anchor(gpui::Anchor::BottomRight)
+                .position(at)
+                .snap_to_window_with_margin(px(ferrite_ui::theme::GRID_PAD))
+                .child(self.popup_face(
+                    face,
+                    "session-controls-in",
+                    card,
+                    ferrite_ui::motion::Opens::Up,
+                    cx,
+                ))
+                .into_any_element(),
         )
     }
 
@@ -10240,11 +10118,11 @@ impl CockpitView {
     /// listener needs this view's `Context`.
     fn context_checks_element(
         &self,
+        thread: ThreadId,
+        face: popups::Face,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
-        let (thread, left) =
-            self.standing(|exits| &mut exits.checks, self.context_checks, POPOVER, cx)?;
         let at = self.card_corner(
             format!("ci-{}", thread.get()),
             CardFrom::Head(PaneIdentity::Thread(thread)),
@@ -10267,8 +10145,7 @@ impl CockpitView {
                     cx.listener(move |view, _: &MouseDownEvent, _, cx| {
                         cx.stop_propagation();
                         view.browser_action(thread, ferrite_core::browser::Action::Open { url: url.clone() }, cx);
-                        view.context_checks = None;
-                        cx.notify();
+                        view.close_popup(cx);
                     }),
                 ),
                 None => row,
@@ -10276,36 +10153,22 @@ impl CockpitView {
         }
         let card = card
             .id("context-checks-card")
-            .debug_selector(|| "context-checks-card".into())
-            .on_mouse_down(
-                MouseButton::Left,
-                cx.listener(|_, _: &MouseDownEvent, _, cx| cx.stop_propagation()),
-            )
-            .when(left.is_none(), |card| {
-                card.on_mouse_down_out(cx.listener(|view, _: &MouseDownEvent, _, cx| {
-                    if view.context_checks.take().is_some() {
-                        cx.notify();
-                    }
-                }))
-            });
+            .debug_selector(|| "context-checks-card".into());
         // The mark rides the Pane head's checkout line: the card drops
         // below it, from its left edge.
         Some(
-            deferred(
-                anchored()
-                    .anchor(gpui::Anchor::TopRight)
-                    .position(at)
-                    .snap_to_window_with_margin(px(ferrite_ui::theme::GRID_PAD))
-                    .child(ferrite_ui::motion::float_at(
-                        POPOVER,
-                        left,
-                        "context-checks-in",
-                        card,
-                        ferrite_ui::motion::Opens::Down,
-                    )),
-            )
-            .with_priority(2)
-            .into_any_element(),
+            anchored()
+                .anchor(gpui::Anchor::TopRight)
+                .position(at)
+                .snap_to_window_with_margin(px(ferrite_ui::theme::GRID_PAD))
+                .child(self.popup_face(
+                    face,
+                    "context-checks-in",
+                    card,
+                    ferrite_ui::motion::Opens::Down,
+                    cx,
+                ))
+                .into_any_element(),
         )
     }
 
@@ -10352,17 +10215,18 @@ impl CockpitView {
         let effort = self.thread_effort(&open);
         let key = thread.get() as usize;
         let identity = PaneIdentity::Thread(thread);
+        let picker_up = self.model_picker_open(identity);
         let face = pane::model_effort_chip(pane::ModelChip {
             mark: ferrite_ui::provider::mark(provider),
             model: label,
             effort: effort.map(|effort| pane::sentence_case(&effort).into()),
             loading: open.starting(),
-            open: self.model_picker_open(identity),
+            open: picker_up,
             group: model_picker::chip_trigger(identity),
         });
         let control = pane::toolbar_chip(("model-picker", key), cx)
             .debug_selector(move || format!("model-picker-{key}"))
-            .tip(hold.unwrap_or("Model and effort"))
+            .tip_unless_open(picker_up, hold.unwrap_or("Model and effort"))
             .child(face);
         Some(self.model_chip_control(index, control, cx))
     }
@@ -10424,7 +10288,7 @@ impl CockpitView {
             return;
         }
         self.popover = None;
-        self.context_menu = None;
+        self.close_popup(cx);
         self.floats.palette = None;
         self.floats.shortcuts = None;
         let first = self.first_nav_card(cx);

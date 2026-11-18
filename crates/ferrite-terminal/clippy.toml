@@ -1,0 +1,16 @@
+# Feature code presses through a shared ferrite-ui control (docs/adr/0044).
+# Each feature crate carries this same file; scripts/check_raw_presses.py
+# counts what it flags against scripts/raw-presses.json.
+disallowed-methods = [
+    { path = "gpui::StatefulInteractiveElement::on_click", reason = "press through a shared ferrite-ui control, not a raw element (docs/adr/0044)" },
+    { path = "gpui::StatefulInteractiveElement::on_aux_click", reason = "press through a shared ferrite-ui control, not a raw element (docs/adr/0044)" },
+    { path = "gpui::InteractiveElement::on_mouse_down", reason = "press through a shared ferrite-ui control, not a raw element (docs/adr/0044)" },
+    { path = "gpui::InteractiveElement::on_any_mouse_down", reason = "press through a shared ferrite-ui control, not a raw element (docs/adr/0044)" },
+    { path = "gpui::InteractiveElement::on_mouse_up", reason = "press through a shared ferrite-ui control, not a raw element (docs/adr/0044)" },
+    { path = "gpui::Interactivity::on_click", reason = "press through a shared ferrite-ui control, not a raw element (docs/adr/0044)" },
+    { path = "gpui::Interactivity::on_aux_click", reason = "press through a shared ferrite-ui control, not a raw element (docs/adr/0044)" },
+    { path = "gpui::Interactivity::on_mouse_down", reason = "press through a shared ferrite-ui control, not a raw element (docs/adr/0044)" },
+    { path = "gpui::Interactivity::on_any_mouse_down", reason = "press through a shared ferrite-ui control, not a raw element (docs/adr/0044)" },
+    { path = "gpui::Interactivity::on_mouse_up", reason = "press through a shared ferrite-ui control, not a raw element (docs/adr/0044)" },
+    { path = "gpui::InteractiveText::on_click", reason = "press through a shared ferrite-ui control, not a raw element (docs/adr/0044)" },
+]

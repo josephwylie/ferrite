@@ -474,7 +474,7 @@ impl CockpitView {
                 cx.listener(move |view, event: &MouseDownEvent, _, cx| {
                     cx.stop_propagation();
                     if event.click_count >= 2 {
-                        view.context_menu = None;
+                        view.close_popup(cx);
                         view.start_rename(RenameTarget::ViewTitle(thread), cx);
                     } else {
                         view.open_context_menu(MenuTarget::Thread(thread), event.position, cx);

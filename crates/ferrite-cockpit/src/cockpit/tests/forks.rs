@@ -184,7 +184,7 @@ fn the_menu_and_the_palette_fork_and_rewind(cx: &mut TestAppContext) {
         view.run_command(crate::palette::Command::Rewind, window, cx)
     });
     view.read_with(cx, |view, _| {
-        let menu = view.context_menu.as_ref().expect("the Rewind menu");
+        let menu = view.context_menu().expect("the Rewind menu");
         assert!(matches!(menu.target, MenuTarget::Prompt { thread: on, .. } if on == thread));
     });
 }

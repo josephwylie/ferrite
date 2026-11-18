@@ -557,12 +557,19 @@ impl CockpitView {
         self.sheets.read(cx).settings().cloned()
     }
 
-    /// Put Settings up, on its first page, in place of any other sheet.
+    /// Put Settings up, on its first page, in place of any other sheet,
+    /// and ask for what it shows: the CLIs' versions and the machine's
+    /// defaults. Every opener comes here.
     pub(crate) fn show_settings(&mut self, cx: &mut Context<Self>) -> Entity<SettingsView> {
         let cockpit = cx.weak_entity();
         let view = cx.new(|cx| SettingsView::new(cockpit, cx));
         cx.subscribe(&view, Self::on_settings_event).detach();
         self.show_sheet(sheets::Sheet::Settings(view.clone()), cx);
+        self.popover = None;
+        if self.cli_versions.is_none() {
+            self.probe_cli_versions(cx);
+        }
+        self.ask_server_defaults();
         view
     }
 }

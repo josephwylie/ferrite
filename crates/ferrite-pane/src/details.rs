@@ -77,6 +77,9 @@ pub struct DetailsCard {
     pub scroll: ScrollHandle,
     pub measurements: Rc<RefCell<Measurements>>,
     pub canvas: Rc<Cell<Option<Bounds<Pixels>>>>,
+    /// Where the card was last drawn, `None` while it is not: the cards
+    /// that hang from the Pane's head hang under it.
+    pub drawn: Rc<Cell<Option<Bounds<Pixels>>>>,
     pub top_inset: Cell<f32>,
     pub fit_width: Cell<Option<f32>>,
     /// Where the opening control was last laid out: a press on it is the
@@ -93,6 +96,7 @@ impl DetailsCard {
             scroll: ScrollHandle::new(),
             measurements: Rc::default(),
             canvas: Rc::default(),
+            drawn: Rc::default(),
             top_inset: Cell::new(0.),
             fit_width: Cell::new(None),
             opener: Rc::default(),

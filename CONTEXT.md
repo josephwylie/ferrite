@@ -154,6 +154,13 @@ Project card, Background work, New task, and a Task's Rework or Direct
 this task. One is up at a time.
 _Avoid_: modal.
 
+**Popup**
+A menu or small card that hangs from a point or a control over the window,
+with no veil: the context menu, the permission mode menu, and the plan,
+checks and session controls cards. One is up at a time. While it is up it
+holds the keyboard; Escape or a press outside closes it.
+_Avoid_: float, overlay.
+
 **Composer**
 The prompt box at the bottom of a Pane: text that wraps and
 grows a row per line, keyboard-driven menus, queue-while-busy.

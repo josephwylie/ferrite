@@ -142,8 +142,7 @@ fn the_plus_menu_lists_every_surface_with_its_letter(cx: &mut TestAppContext) {
     cx.simulate_click(plus.center(), gpui::Modifiers::none());
     tick(cx);
     let rows = view.read_with(cx, |view, _| {
-        view.context_menu
-            .as_ref()
+        view.context_menu()
             .unwrap()
             .rows
             .iter()
@@ -180,7 +179,7 @@ fn the_plus_menu_lists_every_surface_with_its_letter(cx: &mut TestAppContext) {
         .0
         .iter()
         .any(|tab| matches!(tab, SurfaceId::SideChat(_))));
-    if view.read_with(cx, |view, _| view.context_menu.is_none()) {
+    if view.read_with(cx, |view, _| view.context_menu().is_none()) {
         cx.simulate_click(plus.center(), gpui::Modifiers::none());
         tick(cx);
     }
