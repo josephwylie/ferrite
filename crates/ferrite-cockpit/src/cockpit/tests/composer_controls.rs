@@ -169,9 +169,9 @@ fn composer_busy_tuning_choices_explain_and_preserve_selection(cx: &mut TestAppC
     view.update_in(cx, |view, window, cx| {
         view.open_provider_picker(thread, cx);
         let pick = view
-            .popover
-            .as_ref()
+            .model_picker()
             .unwrap()
+            .0
             .rows
             .iter()
             .position(|row| !row.inert && !row.active)
@@ -186,18 +186,15 @@ fn composer_busy_tuning_choices_explain_and_preserve_selection(cx: &mut TestAppC
         );
         let _ = window;
         view.pick_model_row(pick, cx);
-        let menu = view.popover.as_ref().expect("explanation stays open");
-        assert_eq!(menu.hold, Some(TUNING_BUSY_HINT));
+        let (menu, picker) = view.model_picker().expect("explanation stays open");
+        assert_eq!(picker.hold, Some(TUNING_BUSY_HINT));
         assert!(menu.rows.iter().all(|row| row.inert));
         assert!(menu.rows.iter().any(|row| row.active));
         assert_eq!(view.cockpit.thread(thread).unwrap().model(), Some("sonnet"));
         view.open_effort_picker(thread, cx);
-        let menu = view.popover.as_ref().unwrap();
-        assert_eq!(menu.hold, Some(TUNING_BUSY_HINT));
+        let (_, picker) = view.model_picker().unwrap();
+        assert_eq!(picker.hold, Some(TUNING_BUSY_HINT));
         // SPEC §5.5: each busy choice is disabled, the reason its tooltip.
-        let Kind::Provider(picker) = &menu.kind else {
-            panic!("the model picker");
-        };
         assert!(!picker.efforts.is_empty());
         assert!(picker.efforts.iter().all(|rung| rung.inert));
         assert_eq!(
@@ -216,15 +213,11 @@ fn composer_busy_tuning_choices_explain_and_preserve_selection(cx: &mut TestAppC
         .unwrap();
     tick(cx);
     view.read_with(cx, |view, _| {
-        let menu = view
-            .popover
-            .as_ref()
+        let (menu, picker) = view
+            .model_picker()
             .expect("finishing keeps the picker open");
-        assert_eq!(menu.hold, None);
+        assert_eq!(picker.hold, None);
         assert!(menu.rows.iter().any(|row| !row.inert));
-        let Kind::Provider(picker) = &menu.kind else {
-            panic!("the model picker");
-        };
         assert_eq!(
             picker.efforts.iter().find(|rung| rung.active).unwrap().name,
             "High"
@@ -245,11 +238,8 @@ fn a_tuning_change_waiting_on_the_provider_holds_the_pickers(cx: &mut TestAppCon
         view.pick_effort(thread, Some("high".into()), cx);
         assert_eq!(view.cockpit.thread(thread).unwrap().effort(), None);
         view.open_effort_picker(thread, cx);
-        let menu = view.popover.as_ref().unwrap();
-        assert_eq!(menu.hold, Some(TUNING_PENDING_HINT));
-        let Kind::Provider(picker) = &menu.kind else {
-            panic!("the model picker");
-        };
+        let (_, picker) = view.model_picker().unwrap();
+        assert_eq!(picker.hold, Some(TUNING_PENDING_HINT));
         assert!(picker.efforts.iter().all(|rung| rung.inert));
     });
     fake.effort_answers
@@ -262,14 +252,10 @@ fn a_tuning_change_waiting_on_the_provider_holds_the_pickers(cx: &mut TestAppCon
     tick(cx);
     view.read_with(cx, |view, _| {
         assert_eq!(view.cockpit.thread(thread).unwrap().effort(), Some("high"));
-        let menu = view
-            .popover
-            .as_ref()
+        let (_, picker) = view
+            .model_picker()
             .expect("the answer keeps the picker open");
-        assert_eq!(menu.hold, None);
-        let Kind::Provider(picker) = &menu.kind else {
-            panic!("the model picker");
-        };
+        assert_eq!(picker.hold, None);
         assert!(picker.efforts.iter().any(|rung| !rung.inert));
         assert_eq!(
             picker.efforts.iter().find(|rung| rung.active).unwrap().name,
@@ -341,8 +327,7 @@ fn the_toolbar_chips_open_their_pickers_with_and_without_a_session(cx: &mut Test
         cx.run_until_parked();
         tick(cx);
         view.read_with(cx, |view, _| {
-            let open = view.popover.as_ref().expect("the chip opens its picker");
-            assert!(matches!(open.kind, Kind::Provider(_)));
+            assert!(view.model_picker().is_some(), "the chip opens its picker");
         });
         let menu = cx.debug_bounds("model-picker").expect("the picker is drawn");
         assert!(menu.bottom() <= at.top(), "{menu:?} above {at:?}");
@@ -351,8 +336,7 @@ fn the_toolbar_chips_open_their_pickers_with_and_without_a_session(cx: &mut Test
             "the effort rides the model picker as its column"
         );
         view.update(cx, |view, cx| {
-            view.popover = None;
-            cx.notify();
+            view.close_popup(cx);
         });
         tick(cx);
     }
@@ -658,10 +642,7 @@ fn effort_opens_the_picker_on_its_reasoning_column(cx: &mut TestAppContext) {
     tick(cx);
     let column = |view: &gpui::Entity<CockpitView>, cx: &mut gpui::VisualTestContext| {
         view.read_with(cx, |view, _| {
-            let open = view.popover.as_ref().expect("the picker is open");
-            let Kind::Provider(picker) = &open.kind else {
-                panic!("the model picker");
-            };
+            let (_, picker) = view.model_picker().expect("the picker is open");
             (
                 picker.column,
                 picker.efforts.iter().position(|rung| rung.active),
@@ -674,8 +655,7 @@ fn effort_opens_the_picker_on_its_reasoning_column(cx: &mut TestAppContext) {
     assert_eq!(Some(cursor), active, "on the level in force");
     assert!(cx.debug_bounds("model-picker-reasoning").is_some());
     view.update(cx, |view, cx| {
-        view.popover = None;
-        cx.notify();
+        view.close_popup(cx);
     });
     tick(cx);
     let chip = debug_bounds(cx, format!("model-picker-{}", thread.get())).expect("the chip");

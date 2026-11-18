@@ -139,7 +139,7 @@ impl CockpitView {
 
     /// An empty draft's hero project word (`pane::start_hero`, Codex's
     /// home): the draft's Project, a switcher that drops the Project menu
-    /// under it (`band_from_hero`).
+    /// under it (`Band::from_hero`).
     pub(super) fn draft_hero(&self, index: usize, cx: &mut Context<Self>) -> Option<pane::Hero> {
         let draft = self.panes[index].draft()?;
         let project = self
@@ -158,8 +158,7 @@ impl CockpitView {
                 if let Some(at) = view.panes.iter().position(|pane| pane.composer == composer) {
                     view.focus_pane(at);
                 }
-                view.open_band_popover(pane::BandChip::Project, cx);
-                view.band_from_hero = true;
+                view.open_band_menu(pane::BandChip::Project, true, cx);
             }),
         );
         Some(pane::Hero::Project(

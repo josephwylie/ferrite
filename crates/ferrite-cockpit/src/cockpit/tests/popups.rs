@@ -13,9 +13,21 @@ enum Kind {
     Plan,
     Checks,
     Session,
+    Picker,
+    Attach,
+    Band,
 }
 
-const KINDS: [Kind; 5] = [Kind::Menu, Kind::Mode, Kind::Plan, Kind::Checks, Kind::Session];
+/// Every popup a Thread's window can open.
+const KINDS: [Kind; 7] = [
+    Kind::Menu,
+    Kind::Mode,
+    Kind::Plan,
+    Kind::Checks,
+    Kind::Session,
+    Kind::Picker,
+    Kind::Attach,
+];
 
 impl Kind {
     fn selector(self) -> &'static str {
@@ -25,6 +37,9 @@ impl Kind {
             Kind::Plan => "plan-card",
             Kind::Checks => "context-checks-card",
             Kind::Session => "session-controls-card",
+            Kind::Picker => "model-picker",
+            Kind::Attach => "choice-menu",
+            Kind::Band => "composer-menu",
         }
     }
 }
@@ -39,13 +54,43 @@ fn up(view: &Entity<CockpitView>, cx: &mut gpui::VisualTestContext) -> Vec<Kind>
                 Popup::Plan(_) => Kind::Plan,
                 Popup::Checks(_) => Kind::Checks,
                 Popup::Session { .. } => Kind::Session,
+                Popup::ModelPicker(_) => Kind::Picker,
+                Popup::Band(_) => Kind::Band,
+                Popup::Attach { .. } => Kind::Attach,
             })
             .into_iter()
             .collect()
     })
 }
 
+/// A press on the control whose selector is `selector`.
+fn press(cx: &mut gpui::VisualTestContext, selector: String) {
+    let at = debug_bounds(cx, selector.clone()).expect(&selector);
+    cx.simulate_click(at.center(), gpui::Modifiers::none());
+}
+
+/// The control a Composer popup opens from: the model chip, the `+`, the
+/// draft's Project chip.
+fn control(view: &Entity<CockpitView>, kind: Kind, cx: &mut gpui::VisualTestContext) -> String {
+    let key = view.read_with(cx, |view, _| view.panes[0].thread().map(|thread| thread.get()));
+    match kind {
+        Kind::Mode => format!("mode-picker-{}", key.unwrap()),
+        Kind::Picker => format!("model-picker-{}", key.unwrap()),
+        Kind::Attach => "composer-attach".into(),
+        Kind::Band => "band-chip-0".into(),
+        _ => unreachable!("{kind:?} opens from no control"),
+    }
+}
+
 fn open(view: &Entity<CockpitView>, kind: Kind, cx: &mut gpui::VisualTestContext) {
+    if matches!(kind, Kind::Picker | Kind::Attach | Kind::Band) {
+        let control = control(view, kind, cx);
+        press(cx, control);
+        tick(cx);
+        assert_eq!(up(view, cx), [kind], "{kind:?} opens");
+        assert!(cx.debug_bounds(kind.selector()).is_some(), "{kind:?} is drawn");
+        return;
+    }
     let thread = view.read_with(cx, |view, _| view.panes[0].thread().unwrap());
     cx.update(|window, cx| {
         view.update(cx, |view, cx| match kind {
@@ -56,11 +101,12 @@ fn open(view: &Entity<CockpitView>, kind: Kind, cx: &mut gpui::VisualTestContext
             ),
             Kind::Mode => {
                 let generation = view.cockpit.thread(thread).unwrap().generation();
-                view.toggle_mode_menu(thread, generation, false, cx);
+                view.toggle_mode_menu(thread, generation, cx);
             }
             Kind::Plan => view.open_plan(window, cx),
             Kind::Checks => view.open_checks(window, cx),
             Kind::Session => view.run_command(crate::palette::Command::BackgroundTasks, window, cx),
+            Kind::Picker | Kind::Attach | Kind::Band => unreachable!(),
         })
     });
     tick(cx);
@@ -128,7 +174,7 @@ fn press_nowhere(cx: &mut gpui::VisualTestContext) {
 #[gpui::test]
 fn escape_closes_a_menu_or_card_and_stops_no_turn(cx: &mut TestAppContext) {
     let (view, fake, cx) = window(cx, "popups-escape", 1);
-    for kind in [Kind::Menu, Kind::Checks, Kind::Session] {
+    for kind in [Kind::Menu, Kind::Checks, Kind::Session, Kind::Picker, Kind::Attach] {
         open(&view, kind, cx);
         cx.simulate_keystrokes("escape");
         tick(cx);
@@ -174,33 +220,22 @@ fn escape_on_the_mode_menu_leaves_a_waiting_decision_unanswered(cx: &mut TestApp
 #[gpui::test]
 fn the_mode_menu_from_the_model_picker_goes_before_it_and_with_it(cx: &mut TestAppContext) {
     let (view, _fake, cx) = window(cx, "popups-mode-from-picker", 1);
-    let thread = view.read_with(cx, |view, _| view.panes[0].thread().unwrap());
-    let picker_open = |cx: &mut gpui::VisualTestContext| {
-        view.read_with(cx, |view, _| view.model_picker_open(PaneIdentity::Thread(thread)))
-    };
-    let chip = debug_bounds(cx, format!("model-picker-{}", thread.get())).expect("the model chip");
-    cx.simulate_click(chip.center(), gpui::Modifiers::none());
-    tick(cx);
-    assert!(picker_open(cx), "the chip opens the picker");
+    open(&view, Kind::Picker, cx);
     let from_picker = |cx: &mut gpui::VisualTestContext| {
-        let button = cx.debug_bounds("model-picker-permissions").expect("the picker's mode button");
-        cx.simulate_click(button.center(), gpui::Modifiers::none());
+        press(cx, "model-picker-permissions".into());
         tick(cx);
-        assert_eq!(up(&view, cx), [Kind::Mode], "the picker's button opens the mode menu");
+        assert!(cx.debug_bounds("mode-menu").is_some(), "the picker's button opens the mode menu");
+        assert!(up(&view, cx).contains(&Kind::Picker), "over the picker");
     };
 
     from_picker(cx);
     cx.simulate_keystrokes("escape");
     tick(cx);
-    assert_eq!(up(&view, cx), [], "the first escape closes the menu");
-    assert!(picker_open(cx), "and leaves the picker up");
+    assert!(cx.debug_bounds("mode-menu").is_none(), "the first escape closes the menu");
+    assert_eq!(up(&view, cx), [Kind::Picker], "and leaves the picker up");
 
     from_picker(cx);
-    view.update(cx, |view, cx| {
-        view.popover = None;
-        cx.notify();
-    });
-    tick(cx);
+    press_nowhere(cx);
     assert_eq!(up(&view, cx), [], "the picker closing takes the menu");
     assert!(cx.debug_bounds("mode-menu").is_none());
 }
@@ -266,21 +301,140 @@ fn a_press_outside_closes_a_popup(cx: &mut TestAppContext) {
     }
 }
 
-/// A second press on the mode chip shuts its menu and does not open it
-/// again.
+/// A second press on the control a popup opened from shuts it and does
+/// not open it again: the mode chip, the model chip, the `+`.
 #[gpui::test]
-fn a_second_press_on_the_mode_chip_shuts_its_menu(cx: &mut TestAppContext) {
+fn a_second_press_on_its_control_shuts_a_popup(cx: &mut TestAppContext) {
     let (view, _fake, cx) = window(cx, "popups-mode-chip", 1);
-    let thread = view.read_with(cx, |view, _| view.panes[0].thread().unwrap());
-    let chip = debug_bounds(cx, format!("mode-picker-{}", thread.get())).expect("the mode chip");
-    cx.simulate_click(chip.center(), gpui::Modifiers::none());
+    for kind in [Kind::Mode, Kind::Picker, Kind::Attach] {
+        let control = control(&view, kind, cx);
+        press(cx, control.clone());
+        tick(cx);
+        assert_eq!(up(&view, cx), [kind], "a press opens {kind:?}");
+        press(cx, control);
+        tick(cx);
+        assert_eq!(up(&view, cx), [], "a second press shuts {kind:?}");
+        tick(cx);
+        assert_eq!(up(&view, cx), [], "and {kind:?} stays shut");
+    }
+}
+
+/// With a Decision waiting and the Composer empty, Escape on the model
+/// picker or the `+` menu closes it and answers nothing, and the keyboard
+/// is the Composer's again.
+#[gpui::test]
+fn escape_on_a_composer_popup_leaves_a_waiting_decision_unanswered(cx: &mut TestAppContext) {
+    let (view, fake, cx) = window(cx, "popups-escape-composer", 1);
+    fake.streams.borrow()[0].send(decision("perm_composer")).unwrap();
     tick(cx);
-    assert_eq!(up(&view, cx), [Kind::Mode], "a press opens it");
-    cx.simulate_click(chip.center(), gpui::Modifiers::none());
+    let composer = view.read_with(cx, |view, cx| view.panes[0].composer.focus_handle(cx));
+    for kind in [Kind::Picker, Kind::Attach] {
+        open(&view, kind, cx);
+        cx.simulate_keystrokes("escape");
+        tick(cx);
+        assert!(fake.answered.borrow().is_empty(), "{kind:?}: the Decision still waits");
+        assert_eq!(*fake.interrupts.borrow(), 0, "{kind:?}: escape stops no turn");
+        assert_eq!(up(&view, cx), [], "escape closes {kind:?}");
+        assert!(
+            cx.update(|window, _| composer.is_focused(window)),
+            "{kind:?}: the Composer has the keyboard back"
+        );
+    }
+}
+
+/// The model picker's search line has the keyboard while it is up: what
+/// is typed filters the list and never reaches the Composer under it.
+#[gpui::test]
+fn typing_in_the_model_picker_filters_it(cx: &mut TestAppContext) {
+    let (view, _fake, cx) = window(cx, "popups-picker-typing", 1);
+    open(&view, Kind::Picker, cx);
+    assert!(cx.debug_bounds("model-picker-row-0").is_some(), "the picker lists models");
+    cx.simulate_input("zzzz");
     tick(cx);
-    assert_eq!(up(&view, cx), [], "a second press shuts it");
+    assert!(cx.debug_bounds("model-picker-row-0").is_none(), "nothing matches zzzz");
+    assert_eq!(composer_text(&view, cx), "", "the Composer heard none of it");
+    assert_eq!(up(&view, cx), [Kind::Picker]);
+}
+
+/// The `+` menu's keys are its own: the arrows walk it and Enter picks
+/// `Slash commands`, which starts a command on the line.
+#[gpui::test]
+fn the_attach_menu_takes_the_arrows_and_enter(cx: &mut TestAppContext) {
+    let (view, _fake, cx) = window(cx, "popups-attach-keys", 1);
+    open(&view, Kind::Attach, cx);
+    cx.simulate_keystrokes("down down enter");
     tick(cx);
-    assert_eq!(up(&view, cx), [], "and it stays shut");
+    assert!(!up(&view, cx).contains(&Kind::Attach), "the pick closes the + menu");
+    assert_eq!(composer_text(&view, cx), "/", "Slash commands starts one on the line");
+}
+
+/// A draft with its band, the Project chip pressable.
+fn draft_window<'a>(
+    cx: &'a mut TestAppContext,
+    name: &str,
+) -> (Entity<CockpitView>, &'a mut gpui::VisualTestContext) {
+    let (core, _fake) = cockpit(name, 1);
+    bind_production_keys(cx);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(1200.), px(800.)));
+    view.update(cx, |view, cx| view.open_draft(DraftTarget::Main, cx));
+    tick(cx);
+    (view, cx)
+}
+
+/// A draft's Project menu is a popup like any other: its chip opens it and
+/// shuts it, the arrows and Enter pick in it, and Escape, a press outside
+/// or a sheet opening close it.
+#[gpui::test]
+fn a_band_menu_opens_and_closes_as_a_popup(cx: &mut TestAppContext) {
+    let (view, cx) = draft_window(cx, "popups-band");
+    let chip = control(&view, Kind::Band, cx);
+
+    open(&view, Kind::Band, cx);
+    press(cx, chip.clone());
+    tick(cx);
+    assert_eq!(up(&view, cx), [], "a second press on the chip shuts it");
+
+    open(&view, Kind::Band, cx);
+    cx.simulate_keystrokes("escape");
+    tick(cx);
+    assert_eq!(up(&view, cx), [], "escape closes it");
+
+    open(&view, Kind::Band, cx);
+    press_nowhere(cx);
+    assert_eq!(up(&view, cx), [], "a press outside closes it");
+
+    open(&view, Kind::Band, cx);
+    cx.simulate_keystrokes("cmd-,");
+    tick(cx);
+    assert!(view.read_with(cx, |view, cx| view.settings_open(cx)), "Settings opens");
+    assert_eq!(up(&view, cx), [], "Settings closes it");
+    cx.simulate_keystrokes("cmd-,");
+    tick(cx);
+
+    open(&view, Kind::Band, cx);
+    view.update(cx, |view, cx| {
+        let at = gpui::point(px(300.), px(200.));
+        view.open_context_menu(MenuTarget::Parked, at, cx)
+    });
+    tick(cx);
+    assert_eq!(up(&view, cx), [Kind::Menu], "a context menu over it leaves one up");
+}
+
+/// The Workspace menu's arrows and Enter pick a workspace for the draft.
+#[gpui::test]
+fn a_band_menu_takes_the_arrows_and_enter(cx: &mut TestAppContext) {
+    let (view, cx) = draft_window(cx, "popups-band-keys");
+    press(cx, "band-chip-1".into());
+    tick(cx);
+    assert_eq!(up(&view, cx), [Kind::Band], "the Workspace chip opens its menu");
+    cx.simulate_keystrokes("down enter");
+    tick(cx);
+    assert_eq!(up(&view, cx), [], "the pick closes it");
+    let target = view.read_with(cx, |view, _| {
+        view.panes[view.focused()].draft().unwrap().binding.target().clone()
+    });
+    assert!(!matches!(target, DraftTarget::Main), "the pick moved the draft off the checkout");
 }
 
 /// A Factory menu opened from a sheet goes with the sheet: a press on the

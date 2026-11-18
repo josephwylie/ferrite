@@ -110,15 +110,3 @@ pub fn picker_row(
     }
     ferrite_ui::menu::item_row(id, &item, cursor, false)
 }
-
-/// A picker's section row: the Provider's logomark in its brand colour (the
-/// one place brand colour is allowed) and its name, lowercase, with an
-/// optional note after a `·` (`codex · handover`). Non-interactive — the
-/// arrows skip it.
-pub fn picker_section(provider: Provider, note: SharedString) -> Div {
-    ferrite_ui::menu::section(
-        ferrite_ui::provider::word(provider),
-        Some(ferrite_ui::provider::mark(provider)),
-        (!note.is_empty()).then_some(note),
-    )
-}

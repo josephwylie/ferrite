@@ -694,7 +694,9 @@ pub struct ChoiceMenu {
     pub trigger: gpui::component::button::Button,
     pub choices: Vec<components::Choice>,
     pub submenus: Vec<Submenu>,
-    pub open: bool,
+    /// Open, with the keyboard on this handle; `None` while shut. The
+    /// caller owns the handle, so it knows where the keyboard is.
+    pub open: Option<gpui::FocusHandle>,
     pub return_focus: gpui::FocusHandle,
     pub on_open: OpenChanged,
     pub on_pick: Picked,
@@ -750,7 +752,6 @@ impl RenderOnce for QuietTrigger {
 
 #[derive(Default)]
 struct ChoiceState {
-    focus: Option<gpui::FocusHandle>,
     /// The cursor row (an index into the choices, or `choices.len() + k`
     /// for the `k`th submenu row); `None` while closed.
     cursor: Option<usize>,
@@ -1404,11 +1405,8 @@ fn chevron_cell(value: &SharedString, lit: bool) -> Div {
 impl RenderOnce for ChoiceMenu {
     fn render(self, window: &mut gpui::Window, cx: &mut gpui::App) -> impl IntoElement {
         use gpui::component::popover::Popover;
-        let state = window.use_keyed_state(self.id.clone(), cx, |_, cx| ChoiceState {
-            focus: Some(cx.focus_handle()),
-            ..Default::default()
-        });
-        if !self.open {
+        let state = window.use_keyed_state(self.id.clone(), cx, |_, _| ChoiceState::default());
+        if self.open.is_none() {
             state.update(cx, |state, _| {
                 state.cursor = None;
                 state.sub = None;
@@ -1421,27 +1419,22 @@ impl RenderOnce for ChoiceMenu {
                 .or_else(|| (!self.submenus.is_empty()).then_some(self.choices.len()));
             state.update(cx, |state, _| state.cursor = first);
         }
-        let focus = state
-            .read(cx)
-            .focus
-            .clone()
-            .expect("the menu's focus is made with it");
         let on_open = self.on_open.clone();
         let mut popover = Popover::new(SharedString::from(format!("choice:{}", self.id)))
             .appearance(false)
             .overlay_closable(false)
             .trigger(QuietTrigger {
                 // Pressed while its menu is open (Claude's chips).
-                button: if self.open {
+                button: if self.open.is_some() {
                     self.trigger.bg(paint::CHIP_OPEN)
                 } else {
                     self.trigger
                 },
                 measure: self.place.map(|_| state.clone()),
             })
-            .open(self.open)
+            .open(self.open.is_some())
             .on_open_change(move |open, window, cx| on_open(*open, window, cx));
-        if self.open {
+        if let Some(focus) = self.open {
             let content = Rc::new(ChoiceContent {
                 choices: self.choices,
                 submenus: self.submenus,

@@ -169,9 +169,8 @@ fn a_draft_band_menu_hangs_off_its_chip_in_the_bar(cx: &mut TestAppContext) {
     }
     view.read_with(cx, |view, _| {
         assert!(view
-            .popover
-            .as_ref()
-            .is_some_and(|open| matches!(open.kind, Kind::Band(pane::BandChip::Project))));
+            .band_menu()
+            .is_some_and(|open| open.kind.chip == pane::BandChip::Project));
     });
     let rows = cx
         .debug_bounds("composer-menu-rows")
@@ -255,7 +254,8 @@ fn the_plus_menu_reaches_the_connectors(cx: &mut TestAppContext) {
     tick(cx);
     let open = |view: &gpui::Entity<CockpitView>, cx: &mut gpui::VisualTestContext| {
         view.update(cx, |view, cx| {
-            view.attach_menu = Some(view.panes[0].identity);
+            let pane = view.panes[0].identity;
+            view.show_popup(Popup::Attach { pane, focus: cx.focus_handle() }, cx);
             cx.notify();
         });
         tick(cx);
@@ -294,7 +294,7 @@ fn the_plus_menu_reaches_the_connectors(cx: &mut TestAppContext) {
     tick(cx);
     assert!(cx.debug_bounds("panel").is_some(), "the panel shows");
     view.read_with(cx, |view, _| {
-        assert!(view.attach_menu.is_none(), "a pick closes the menu");
+        assert!(view.popup().is_none(), "a pick closes the menu");
         let thread = view.panes[0].thread().expect("a Thread");
         assert_eq!(
             view.active_surface(thread),
@@ -328,7 +328,8 @@ fn the_plus_menu_opens_each_plugins_commands(cx: &mut TestAppContext) {
         .unwrap();
     tick(cx);
     view.update(cx, |view, cx| {
-        view.attach_menu = Some(view.panes[0].identity);
+        let pane = view.panes[0].identity;
+            view.show_popup(Popup::Attach { pane, focus: cx.focus_handle() }, cx);
         cx.notify();
     });
     tick(cx);
@@ -348,7 +349,7 @@ fn the_plus_menu_opens_each_plugins_commands(cx: &mut TestAppContext) {
     tick(cx);
     assert_eq!(composer_text(&view, cx), "/tdd:green ");
     view.read_with(cx, |view, cx| {
-        assert!(view.attach_menu.is_none(), "a pick closes the menu");
+        assert!(view.popup().is_none(), "a pick closes the menu");
         assert_eq!(
             view.panes[0].composer.read(cx).chips(),
             [SharedString::from("/tdd:green")]

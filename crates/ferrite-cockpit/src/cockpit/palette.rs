@@ -1056,7 +1056,6 @@ impl CockpitView {
                         Popup::Mode(super::mode_menu::ModeMenu {
                             thread,
                             generation,
-                            from_picker: false,
                             preview: None,
                         }),
                         cx,

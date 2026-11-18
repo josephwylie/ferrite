@@ -1,7 +1,7 @@
 //! Picking a provider, a model and an effort.
 #[allow(unused_imports)]
 use super::*;
-use crate::cockpit::model_picker::Tab;
+use crate::cockpit::model_picker::{ModelPicker, Tab};
 
 #[gpui::test]
 fn draft_commands_arrive_before_first_send_and_follow_provider_changes(cx: &mut TestAppContext) {
@@ -150,7 +150,7 @@ fn discovery_updates_an_open_draft_picker_without_starting_a_session(cx: &mut Te
     cx.simulate_resize(gpui::size(px(1000.), px(700.)));
     tick(cx);
     view.update(cx, |view, cx| {
-        view.open_band_popover(pane::BandChip::Provider, cx)
+        view.open_band_menu(pane::BandChip::Provider, false, cx)
     });
     let models = vec![ferrite_core::ModelInfo {
         value: "gpt-future-model".into(),
@@ -164,9 +164,9 @@ fn discovery_updates_an_open_draft_picker_without_starting_a_session(cx: &mut Te
     tick(cx);
     let index = view.read_with(cx, |view, _| {
         assert_eq!(view.cockpit.model_catalog(Provider::Codex), models);
-        view.popover
-            .as_ref()
+        view.model_picker()
             .unwrap()
+            .0
             .rows
             .iter()
             .position(|row| row.name.as_ref() == "Future Model")
@@ -203,7 +203,7 @@ fn discovery_updates_an_open_draft_picker_without_starting_a_session(cx: &mut Te
             models,
             "an empty discovery keeps the last usable menu"
         );
-        view.popover = None;
+        view.close_popup(cx);
         view.show_settings(cx);
         cx.notify();
     });
@@ -242,12 +242,8 @@ fn discovery_updates_an_open_draft_picker_without_starting_a_session(cx: &mut Te
 }
 
 /// The open model picker, read.
-fn picker(view: &CockpitView) -> (&Popover, &ModelPicker) {
-    let open = view.popover.as_ref().expect("the model picker is open");
-    let Kind::Provider(picker) = &open.kind else {
-        panic!("the popover is not the model picker");
-    };
-    (open, picker)
+fn picker(view: &CockpitView) -> (&Popover<ModelPicker>, &ModelPicker) {
+    view.model_picker().expect("the model picker is open")
 }
 
 /// The names the picker lists now, in order.
@@ -431,7 +427,7 @@ fn a_draft_inherits_the_focused_provider_model_and_only_announced_models(cx: &mu
             )
             .unwrap();
         view.open_draft(DraftTarget::Main, cx);
-        view.open_band_popover(pane::BandChip::Provider, cx);
+        view.open_band_menu(pane::BandChip::Provider, false, cx);
     });
 
     view.update(cx, |view, cx| {
@@ -506,10 +502,7 @@ fn the_first_prompt_fixes_the_provider_but_the_model_picker_stays_open(cx: &mut 
     cx.simulate_keystrokes("enter");
     cx.run_until_parked();
     view.read_with(cx, |view, _| {
-        assert!(matches!(
-            view.popover.as_ref().expect("the picker opened").kind,
-            Kind::Provider(_)
-        ));
+        assert!(view.model_picker().is_some(), "the picker opened");
     });
     assert_eq!(composer_text(&view, cx), "", "the pick never lands as slash text");
 }
@@ -528,12 +521,12 @@ fn escape_in_an_open_picker_never_interrupts_the_agent(cx: &mut TestAppContext) 
     cx.run_until_parked();
     cx.simulate_keystrokes("enter");
     tick(cx);
-    view.read_with(cx, |view, _| assert!(view.popover.is_some(), "the picker opened"));
+    view.read_with(cx, |view, _| assert!(view.model_picker().is_some(), "the picker opened"));
 
     cx.simulate_keystrokes("escape");
     tick(cx);
     assert_eq!(*fake.interrupts.borrow(), 0, "Escape only closes the picker");
-    view.read_with(cx, |view, _| assert!(view.popover.is_none()));
+    view.read_with(cx, |view, _| assert!(view.model_picker().is_none()));
     cx.simulate_keystrokes("escape");
     tick(cx);
     assert_eq!(*fake.interrupts.borrow(), 1, "the Composer's Escape stops it");
@@ -679,7 +672,7 @@ fn command_digits_jump_to_the_listed_models(cx: &mut TestAppContext) {
     tick(cx);
     view.read_with(cx, |view, _| {
         assert_eq!(view.cockpit.thread(thread).and_then(|open| open.model()), Some("opus"));
-        assert!(view.popover.is_some(), "the docked picker stays open");
+        assert!(view.model_picker().is_some(), "the docked picker stays open");
     });
     cx.simulate_input("hai");
     tick(cx);
@@ -792,8 +785,8 @@ fn favourites_persist_and_open_the_picker(cx: &mut TestAppContext) {
     let saved = ferrite_core::settings::Settings::load(&dir).unwrap();
     assert_eq!(saved.favourite_models.len(), 1, "saved at once");
     view.update(cx, |view, cx| {
-        assert!(view.popover.is_some(), "the star is not a pick");
-        view.popover = None;
+        assert!(view.model_picker().is_some(), "the star is not a pick");
+        view.close_popup(cx);
         view.open_provider_picker(thread, cx);
         assert_eq!(picker(view).1.tab, Tab::Favourites);
         assert_eq!(listed(view), [name.clone()]);
@@ -948,7 +941,7 @@ fn the_draft_model_chip_sets_its_effort_in_the_reasoning_column(cx: &mut TestApp
     cx.simulate_click(pick.center(), gpui::Modifiers::none());
     tick(cx);
     view.read_with(cx, |view, _| {
-        assert!(view.popover.is_some(), "the docked picker stays open");
+        assert!(view.model_picker().is_some(), "the docked picker stays open");
         let draft = view.panes[view.focused()].draft().expect("still a draft");
         assert_eq!(draft.binding.effort(), Some("high"));
     });
@@ -987,7 +980,7 @@ fn clicking_the_footer_chip_opens_the_provider_picker(cx: &mut TestAppContext) {
                 gpui::Modifiers::none(),
             );
             cx.run_until_parked();
-            if view.read_with(cx, |view, _| view.popover.is_some()) {
+            if view.read_with(cx, |view, _| view.model_picker().is_some()) {
                 opened = true;
                 break 'sweep;
             }
@@ -995,9 +988,6 @@ fn clicking_the_footer_chip_opens_the_provider_picker(cx: &mut TestAppContext) {
     }
     assert!(opened, "the sweep never found the chip");
     view.read_with(cx, |view, _| {
-        assert!(matches!(
-            view.popover.as_ref().expect("open").kind,
-            Kind::Provider(_)
-        ));
+        assert!(view.model_picker().is_some(), "open");
     });
 }

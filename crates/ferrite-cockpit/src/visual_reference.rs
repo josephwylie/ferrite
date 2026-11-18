@@ -1145,7 +1145,7 @@ fn build(state: &str, label: &str) -> (Scene, Setup) {
             let setup: Setup = Box::new(|view, _, cx| {
                 let thread = view.panes[0].thread().expect("a Thread Pane");
                 let generation = view.cockpit.thread(thread).expect("open").generation();
-                view.toggle_mode_menu(thread, generation, false, cx);
+                view.toggle_mode_menu(thread, generation, cx);
             });
             (scene, setup)
         }
@@ -1181,8 +1181,9 @@ fn build(state: &str, label: &str) -> (Scene, Setup) {
                     feeds[0].send(event).expect("fixture Session is listening");
                 }
             }
-            let setup: Setup = Box::new(|view, _, _| {
-                view.attach_menu = Some(view.panes[0].identity);
+            let setup: Setup = Box::new(|view, _, cx| {
+                let pane = view.panes[0].identity;
+                view.show_popup(Popup::Attach { pane, focus: cx.focus_handle() }, cx);
             });
             (scene, setup)
         }
