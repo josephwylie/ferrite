@@ -59,6 +59,18 @@ that happened to touch it, and nothing in the code said whose a field was.
   since the view lives on through the sheet's fade. Its save stays its
   own, not `change_settings`: it keeps nothing it could not write, and
   will not leave an environment whose files are unsaved.
+- **PRs is the fifth.** `PrsView` (`cockpit/prs_view.rs`) owns the PRs
+  destination's scope and filter, the lists it has read and the reads still
+  out, the marked row and whether its detail shows, the PR view chosen, its
+  scroll and its focus; its keys answer on its own element. It reads the
+  Projects and an open PR through `prs_inputs`. The root holds it for the
+  window's life, so the list is as it was left at the next visit. It emits
+  `PrsEvent`: the root asks the forge for a list and hands the answer to the
+  view to wait on, reads an opened PR, gives the board back, or opens the
+  Project card. Whether the PRs stand in the board's place stays the root's
+  `destination`, shared with the Factory. The Panel's PR reader has no view
+  of its own yet, so the root draws an open PR's body with its own listeners
+  and hands it over with the inputs, as Settings takes other features' rows.
 
 ## Precedent
 
