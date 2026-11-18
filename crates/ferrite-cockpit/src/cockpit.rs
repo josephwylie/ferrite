@@ -3686,12 +3686,6 @@ impl CockpitView {
             return;
         }
         self.show_settings(cx);
-        self.popover = None;
-        if self.cli_versions.is_none() {
-            self.probe_cli_versions(cx);
-        }
-        self.ask_server_defaults();
-        cx.notify();
     }
 
     /// One beat of the updater: ask the registry when due, then install
