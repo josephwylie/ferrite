@@ -2774,6 +2774,34 @@ fn a_window_on_a_machine_drives_its_threads_through_the_bridge() {
     assert!(said(&sent).contains(&"watch".to_string()));
 }
 
+/// A window on this computer's Server and one on a machine's, through
+/// the bridge, each learn that their Server names the Thread a fork was
+/// made from.
+#[test]
+fn every_window_learns_its_server_names_fork_owners() {
+    let harness = start("fork-of");
+    let local = cockpit(&harness);
+    assert!(local.names_fork_owners(), "this computer's Server says it");
+    let sent = Arc::default();
+    let mut machine = crate::cockpit::Cockpit::attach(crate::cockpit::Attach {
+        store: harness.dir.join("box").join("threads"),
+        server: crate::cockpit::Endpoint::Machine(bridge(&harness, &sent)),
+        client: peer(),
+        renderer: None,
+        browser: false,
+        driven: false,
+        discovery: Box::new(NoDiscovery),
+    })
+    .unwrap();
+    pump_until(&mut machine, |window| {
+        matches!(
+            window.server(),
+            Some(crate::cockpit::ServerState::Attached { .. })
+        )
+    });
+    assert!(machine.names_fork_owners(), "a machine's Server says it");
+}
+
 /// Only the machine on screen streams transcripts: the others' links say
 /// hello and nothing else, and still hear each open Thread's state and
 /// every Decision.

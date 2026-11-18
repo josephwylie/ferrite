@@ -557,6 +557,10 @@ fn each_fork_lands_in_the_tab_of_the_thread_it_forks(cx: &mut TestAppContext) {
 fn a_focus_asked_while_a_fork_is_on_its_way_lands_the_window(cx: &mut TestAppContext) {
     let (view, fake, cx) = answered("side-chat-focus-meanwhile", cx);
     let owner = owner(&view, cx);
+    assert!(
+        view.read_with(cx, |view, _| view.cockpit.names_fork_owners()),
+        "a Server that names a fork's owner"
+    );
     let other = view.update(cx, |view, _| {
         view.cockpit
             .open(Provider::Claude, WorkspaceChoice::Main { checkout: here() })
@@ -579,6 +583,61 @@ fn a_focus_asked_while_a_fork_is_on_its_way_lands_the_window(cx: &mut TestAppCon
         assert!(view.pane_for(other).is_some(), "the other Thread keeps its Pane");
         let fork = shown_fork(view, owner, cx).expect("the tab took its fork");
         assert!(holds(view, fork, "alpha"), "the owner's own fork");
+    });
+}
+
+/// A Server from before `fork_of` (one an update leaves running until
+/// its agents are idle) says a fork opened without naming its owner: the
+/// one side chat waiting still takes it, and the window stays.
+#[gpui::test]
+fn a_server_from_before_fork_of_still_gives_the_waiting_tab_its_fork(cx: &mut TestAppContext) {
+    let (view, fake, cx) = answered("side-chat-old-server", cx);
+    let owner = owner(&view, cx);
+    view.update(cx, |view, _| view.cockpit.fixture_server_before_fork_of());
+    open_chat(&view, cx, None);
+    assert_eq!(fake.forks.borrow().len(), 1, "the fork was asked");
+    view.read_with(cx, |view, cx| {
+        assert_eq!(view.focused_thread(), Some(owner), "the window stays");
+        assert_eq!(view.panes.len(), 1, "the fork is no Pane");
+        let fork = shown_fork(view, owner, cx).expect("the tab took its fork");
+        assert!(holds(view, fork, "alpha"), "the owner's own fork");
+    });
+}
+
+/// Two Threads' side chats wait on a Server from before `fork_of`: a
+/// fork that names no owner could be either's, so neither tab takes it
+/// and it lands as any fork does.
+#[gpui::test]
+fn a_server_from_before_fork_of_guesses_no_owner_between_two(cx: &mut TestAppContext) {
+    let (core, fake) = cockpit("side-chat-old-server-two", 2);
+    *fake.native_controls.borrow_mut() = true;
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(1600.), px(700.)));
+    view.update(cx, |view, _| view.cockpit.fixture_server_before_fork_of());
+    let threads = view.read_with(cx, |view, _| view.cockpit.threads());
+    let (first, second) = (threads[0], threads[1]);
+    for (stream, thread) in [(1, second), (0, first)] {
+        view.update(cx, |view, cx| view.focus_thread(thread, cx));
+        let send = |event| fake.streams.borrow()[stream].send(event).unwrap();
+        send(SessionEvent::TextDelta { text: "said\n\n".into() });
+        send(SessionEvent::TurnEnded {
+            outcome: ferrite_core::TurnOutcome::Completed,
+            cost_usd: None,
+        });
+        tick(cx);
+    }
+    view.update(cx, |view, cx| {
+        view.open_side_chat(first, None, cx);
+        view.open_side_chat(second, None, cx);
+    });
+    tick(cx);
+    tick(cx);
+    assert_eq!(fake.forks.borrow().len(), 2, "both forks were asked");
+    view.read_with(cx, |view, cx| {
+        assert_eq!(shown_fork(view, first, cx), None, "the first tab took no fork");
+        assert_eq!(shown_fork(view, second, cx), None, "the second tab took no fork");
+        let landed = view.focused_thread().unwrap();
+        assert!(![first, second].contains(&landed), "the window lands on a fork");
     });
 }
 

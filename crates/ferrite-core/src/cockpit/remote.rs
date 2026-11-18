@@ -148,6 +148,8 @@ struct Attachment {
     server: ServerInfo,
     /// The Server's boot on this side's clock: `at_ms` counts from it.
     boot: Instant,
+    /// It welcomed this connection with `Capability::ForkOf`.
+    names_fork_owners: bool,
 }
 
 pub(crate) struct Remote {
@@ -234,6 +236,14 @@ impl Remote {
                 attention: self.attention.clone(),
             },
         }
+    }
+
+    /// Whether the Server attached now names a fork's owner in its focus
+    /// (`Capability::ForkOf`); false while detached.
+    pub(crate) fn names_fork_owners(&self) -> bool {
+        self.attachment
+            .as_ref()
+            .is_some_and(|attachment| attachment.names_fork_owners)
     }
 
     /// Where this boot's `at_ms` count from.
@@ -1027,7 +1037,10 @@ impl Remote {
             }
         };
         let ServerMessage::Welcome {
-            server, uptime_ms, ..
+            server,
+            uptime_ms,
+            capabilities,
+            ..
         } = welcome
         else {
             return None;
@@ -1058,6 +1071,7 @@ impl Remote {
             boot_id: snapshot.boot_id.clone(),
             server,
             boot,
+            names_fork_owners: capabilities.contains(&Capability::ForkOf),
         });
         self.backoff = RETRY_FIRST;
         self.attention = None;

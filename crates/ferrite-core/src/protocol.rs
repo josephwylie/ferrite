@@ -117,6 +117,10 @@ pub enum Capability {
     /// This client is a `ferrite --headless` window: the API's `window.*`
     /// actions are for it (ADR 0038).
     Driven,
+    /// This Server's `focus` for a fork that has opened names the Thread
+    /// it was made from in `fork_of`; a Server without it sends that
+    /// `focus` with no `fork_of`.
+    ForkOf,
     #[serde(other)]
     Unknown,
 }
@@ -2445,7 +2449,7 @@ pub fn welcome(
         generation: GENERATION,
         server,
         boot_id,
-        capabilities: vec![Capability::BrowserDispatch],
+        capabilities: vec![Capability::BrowserDispatch, Capability::ForkOf],
         error: (generation != GENERATION).then(|| WireError {
             code: ErrorCode::UnsupportedGeneration,
             message: format!("this server speaks generation {GENERATION}, not {generation}"),

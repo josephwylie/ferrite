@@ -109,6 +109,9 @@ pub struct Cockpit {
     /// A fixture world's Server accepts every browser act
     /// (`fixture_browser_accepts`), answering an empty browser.
     browser_fixture: bool,
+    /// A fixture world's Server is one from before `Capability::ForkOf`
+    /// (`fixture_server_before_fork_of`).
+    server_before_fork_of: bool,
     /// What this window draws at Transcript level (`draws_transcripts`).
     /// `None` for an Engine in this process until its window first says:
     /// until then it streams every open Thread.
@@ -301,6 +304,7 @@ impl Cockpit {
             held_reads: Vec::new(),
             free_disk_fixture: None,
             browser_fixture: false,
+            server_before_fork_of: false,
             drawn: None,
             told: None,
         }
@@ -688,10 +692,18 @@ impl Cockpit {
     /// in-process message crosses as its encoded line, so nothing escapes
     /// the contract.
     fn receive(&mut self) {
+        let before_fork_of = self.server_before_fork_of;
         let arrived: Vec<remote::Arrival> = match &mut self.link {
             Link::InProcess(engine) => engine
                 .take_messages()
                 .into_iter()
+                .map(|message| match message {
+                    ServerMessage::Focus { thread, .. } if before_fork_of => ServerMessage::Focus {
+                        thread,
+                        fork_of: None,
+                    },
+                    message => message,
+                })
                 .map(|message| remote::Arrival::Message(crossed(message)))
                 .chain(
                     engine
@@ -2615,6 +2627,22 @@ impl Cockpit {
     /// A fixture world's browser acts succeed, as a linked Server's would.
     pub fn fixture_browser_accepts(&mut self) {
         self.browser_fixture = true;
+    }
+
+    /// A fixture world's Server is one from before `Capability::ForkOf`:
+    /// its focus for a fork that opened names no `fork_of`.
+    pub fn fixture_server_before_fork_of(&mut self) {
+        self.server_before_fork_of = true;
+    }
+
+    /// Whether this window's Server names the Thread a fork that opened
+    /// was made from (`Capability::ForkOf`). An Engine in this process is
+    /// this build's, so it does.
+    pub fn names_fork_owners(&self) -> bool {
+        match &self.link {
+            Link::InProcess(_) => !self.server_before_fork_of,
+            Link::Server(server) => server.names_fork_owners(),
+        }
     }
 
     /// A fixture world's free disk: from now on the bar's `N GB free`
