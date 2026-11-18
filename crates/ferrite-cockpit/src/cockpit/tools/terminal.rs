@@ -20,7 +20,7 @@ use std::path::Path;
 use ferrite_core::{machine::Bridge, replies::Reply};
 use ferrite_pane::link_target::LinkTarget;
 use ferrite_terminal::{Cursor, Settings, Terminal, TerminalEvent, TerminalView};
-use ferrite_ui::components::MenuPress as _;
+use crate::cockpit::menu_button::{Door, Edge};
 use ferrite_ui::icons;
 use ferrite_ui::theme;
 
@@ -436,18 +436,18 @@ impl CockpitView {
             Some(why) => Some(Self::terminal_failure(why, thread, number, cx)),
             None => self.terminal_of(thread, number).map(IntoElement::into_any_element),
         };
-        let more = ferrite_ui::components::icon_button(
-            "terminal-more",
-            icons::ELLIPSIS,
-            ferrite_ui::components::IconSize::Standard,
+        let more = self.doors().button(
+            ferrite_ui::components::icon_button(
+                "terminal-more",
+                icons::ELLIPSIS,
+                ferrite_ui::components::IconSize::Standard,
+                "More",
+                cx,
+            ),
+            Door::new(MenuTarget::TerminalMore(thread), Edge::Right),
             "More",
             cx,
-        )
-        .tip("More")
-        .on_menu_press(cx.listener(move |view, at: &gpui::Point<Pixels>, _, cx| {
-            cx.stop_propagation();
-            view.open_context_menu(MenuTarget::TerminalMore(thread), *at, cx);
-        }));
+        );
         div()
             .debug_selector(|| "terminal-pane".into())
             .flex()

@@ -32,6 +32,7 @@ mod lightbox;
 mod mode_menu;
 mod model_picker;
 mod machines;
+mod menu_button;
 mod connections;
 mod nav_chrome;
 mod nav_keys;

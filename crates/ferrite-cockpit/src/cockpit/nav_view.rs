@@ -93,6 +93,7 @@ pub(crate) struct NavInputs {
     pub factory: Option<bool>,
     /// The context menu standing, by what it is on.
     pub menu: Option<MenuTarget>,
+    pub doors: menu_button::Doors,
     pub open: HashMap<ThreadId, OpenThread>,
     pub rename: Option<(ThreadId, Entity<Composer>)>,
     pub snooze: Option<snooze::Field>,
@@ -128,8 +129,6 @@ pub(crate) enum MenuAt {
     Point(gpui::Point<Pixels>),
     /// Under a row, as ⇧F10 opens it.
     Under(gpui::Bounds<Pixels>),
-    /// Below a head button, its `corner` on the button's matching edge.
-    Below(gpui::Bounds<Pixels>, gpui::Anchor),
 }
 
 /// What the nav asks of the window.
@@ -149,6 +148,8 @@ pub(crate) enum NavEvent {
     Rename(ThreadId),
     OpenPr(ThreadId, Open),
     Menu(MenuTarget, MenuAt),
+    /// A press on a menu button (`menu_button`).
+    Door(menu_button::Door),
     SetShelfOpen(Shelf, bool),
     Undo(UndoAct),
     FoldMachine(usize),
@@ -163,6 +164,17 @@ pub(crate) enum NavEvent {
 }
 
 impl EventEmitter<NavEvent> for NavView {}
+
+impl menu_button::MenuHost for NavView {
+    fn press_door(&mut self, door: menu_button::Door, _: &mut Window, cx: &mut Context<Self>) {
+        cx.emit(NavEvent::Door(door));
+    }
+
+    fn tip<E: InteractiveElement>(element: E, text: SharedString) -> E {
+        use crate::nav::NavTooltip as _;
+        element.nav_tooltip(text)
+    }
+}
 
 impl NavView {
     pub(super) fn new(cockpit: WeakEntity<CockpitView>, cx: &mut Context<Self>) -> Self {
@@ -292,6 +304,7 @@ impl CockpitView {
                 .map(|project| project.title.clone().into()),
             factory,
             menu: self.context_menu().map(|menu| menu.target),
+            doors: self.doors(),
             open,
             rename: match &self.rename {
                 Some((RenameTarget::Thread(thread), editor)) => Some((*thread, editor.clone())),
@@ -346,10 +359,8 @@ impl CockpitView {
             NavEvent::Menu(target, at) => match at {
                 MenuAt::Point(at) => self.open_context_menu(target, at, cx),
                 MenuAt::Under(row) => self.open_context_menu_under(target, row, cx),
-                MenuAt::Below(button, corner) => {
-                    self.open_context_menu_below(target, button, corner, cx)
-                }
             },
+            NavEvent::Door(door) => self.toggle_door(door, cx),
             NavEvent::SetShelfOpen(shelf, open) => self.set_shelf_open(shelf, open, cx),
             NavEvent::Undo(UndoAct::Parked(parked)) => {
                 self.undo_parked(parked, cx);

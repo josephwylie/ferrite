@@ -213,7 +213,7 @@ fn a_nav_cards_snooze_button_owns_its_menu(cx: &mut TestAppContext) {
         button: format!("nav-card-snooze-{}", thread.get()),
         target: MenuTarget::Snooze(thread),
         rows: labels(&["1 hour", "3 hours", "Tomorrow at 9 am", "Next Monday at 9 am", "Custom…"]),
-        edge: Edge::Right,
+        edge: Edge::Left,
     };
     let card = format!("nav-thread-{}", thread.get());
     let show = move |cx: &mut gpui::VisualTestContext| {

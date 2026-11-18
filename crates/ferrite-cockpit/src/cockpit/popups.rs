@@ -81,7 +81,10 @@ impl Popup {
                     || picker.kind.mode.is_some() && hit(PICKER_MODE)
             }
             Popup::Band(menu) => hit(&menu.kind.trigger()),
-            Popup::ContextMenu(menu) => menu.sub.is_some() && hit(context_menu::SUBMENU),
+            Popup::ContextMenu(menu) => {
+                menu.sub.is_some() && hit(context_menu::SUBMENU)
+                    || menu.from_door && hit(&menu_button::Door::key(menu.target))
+            }
             Popup::Plan(_) | Popup::Checks(_) | Popup::Session { .. } | Popup::Attach { .. } => {
                 false
             }
@@ -115,10 +118,22 @@ pub(super) struct Popups {
 /// recorded in prepaint. Every control's is kept, not only the open
 /// popup's: a popup hangs from its control on its first frame, and a frame
 /// that replays a cached view lays none of its controls out again.
-#[derive(Default)]
-struct Triggers(Rc<RefCell<HashMap<SharedString, gpui::Bounds<Pixels>>>>);
+#[derive(Clone, Default)]
+pub(super) struct Triggers(Rc<RefCell<HashMap<SharedString, gpui::Bounds<Pixels>>>>);
 
 impl Triggers {
+    /// Records the laid-out bounds of a control a popup hangs from, under
+    /// `key`.
+    pub(super) fn record(
+        &self,
+        key: SharedString,
+    ) -> impl FnOnce(gpui::Bounds<Pixels>, &mut Window, &mut gpui::App) + 'static {
+        let sink = self.0.clone();
+        move |bounds, _, _| {
+            sink.borrow_mut().insert(key, bounds);
+        }
+    }
+
     fn get(&self, key: &str) -> Option<gpui::Bounds<Pixels>> {
         self.0.borrow().get(key).copied()
     }
@@ -141,6 +156,10 @@ impl Popups {
             Some(Shown::Up(popup)) => Some(popup),
             _ => None,
         }
+    }
+
+    pub(super) fn triggers(&self) -> Triggers {
+        self.triggers.clone()
     }
 
     /// Drop the popup leaving once its exit has run at `now`.
@@ -511,9 +530,6 @@ impl CockpitView {
         &self,
         key: SharedString,
     ) -> impl FnOnce(gpui::Bounds<Pixels>, &mut Window, &mut gpui::App) + 'static {
-        let sink = self.popups.triggers.0.clone();
-        move |bounds, _, _| {
-            sink.borrow_mut().insert(key, bounds);
-        }
+        self.popups.triggers.record(key)
     }
 }

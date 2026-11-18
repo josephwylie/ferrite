@@ -99,8 +99,7 @@ pub fn search_clear(cx: &App) -> Button {
 
 /// The Filter button: the scoped Project's badge, else the filter glyph.
 pub fn filter_button(project: Option<&str>, cx: &App) -> Button {
-    let button = icon_button("nav-filter", icons::LIST_FILTER, IconSize::Standard, "Filter by project", cx)
-        .nav_tooltip("Filter by project");
+    let button = icon_button("nav-filter", icons::LIST_FILTER, IconSize::Standard, "Filter by project", cx);
     match project {
         None => button,
         Some(name) => {
@@ -121,15 +120,9 @@ pub fn filter_button(project: Option<&str>, cx: &App) -> Button {
 }
 
 /// The Factory button: the factory glyph, with an attention dot at its
-/// corner while a Task needs the operator. Its tooltip stands down while
-/// its menu is `open`, which hangs where the tooltip would.
-pub fn factory_button(needs_you: bool, open: bool, cx: &App) -> Button {
+/// corner while a Task needs the operator.
+pub fn factory_button(needs_you: bool, cx: &App) -> Button {
     let button = icon_button("nav-factory", icons::FACTORY, IconSize::Standard, "Factory", cx);
-    let button = if open {
-        button
-    } else {
-        button.nav_tooltip("Factory")
-    };
     if !needs_you {
         return button;
     }

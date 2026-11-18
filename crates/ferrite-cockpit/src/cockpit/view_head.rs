@@ -20,7 +20,8 @@
 //! their region out of the strip's `Drag` hit test the same way).
 
 use super::*;
-use ferrite_ui::components::{bound_chord, icon_button, icon_toggle, IconSize, MenuPress, Tip};
+use super::menu_button::{Door, Doors, Edge};
+use ferrite_ui::components::{bound_chord, icon_button, icon_toggle, IconSize, Tip};
 use ferrite_ui::{icons, theme};
 
 impl CockpitView {
@@ -501,7 +502,7 @@ impl CockpitView {
                 }),
             )
             .child(title)
-            .child(title_menu(thread, shown, cx))
+            .child(title_menu(&self.doors(), thread, shown, cx))
             .into_any_element()
     }
 }
@@ -544,32 +545,29 @@ fn history_arrow(
 
 /// The title's chevron (T3's, `CHEVRON_DOWN` at 14 in `INK_SUBTLE`):
 /// the Thread's menu (`MenuTarget::Thread`: rename, park, copy its
-/// path…) from the head, where the pointer is. It keeps its place, seen
-/// only while the title is under the pointer (`shown`).
-fn title_menu(thread: ThreadId, shown: bool, cx: &mut Context<CockpitView>) -> AnyElement {
-    control(
-        icon_button(
-            "view-title-menu",
-            icons::CHEVRON_DOWN,
-            IconSize::Compact,
-            "Thread actions",
-            cx,
-        )
-        .debug_selector(move || {
-            if shown {
-                "view-title-chevron-shown"
-            } else {
-                "view-title-menu"
-            }
-            .into()
-        })
-        .opacity(if shown { 1.0 } else { 0.0 })
-        .tip("Thread actions")
-        .on_menu_press(cx.listener(move |view, at: &Point<Pixels>, _, cx| {
-            cx.stop_propagation();
-            view.open_context_menu(MenuTarget::Thread(thread), *at, cx);
-        })),
+/// path…) under it, its left edge on the chevron's. It keeps its place,
+/// seen only while the title is under the pointer (`shown`) or its menu
+/// is up.
+fn title_menu(doors: &Doors, thread: ThreadId, shown: bool, cx: &mut Context<CockpitView>) -> AnyElement {
+    let door = Door::new(MenuTarget::Thread(thread), Edge::Left);
+    let shown = shown || doors.is_up(door);
+    let chevron = icon_button(
+        "view-title-menu",
+        icons::CHEVRON_DOWN,
+        IconSize::Compact,
+        "Thread actions",
+        cx,
     )
+    .debug_selector(move || {
+        if shown {
+            "view-title-chevron-shown"
+        } else {
+            "view-title-menu"
+        }
+        .into()
+    })
+    .opacity(if shown { 1.0 } else { 0.0 });
+    control(doors.button(chevron, door, "Thread actions", cx))
 }
 
 /// The breadcrumb parent's room as the last frame laid it out.
