@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """reclaim-worktree-builds.py — when the disk runs low, give idle worktrees
-the main checkout's build back in place of their own.
+the main checkout's build back in place of their own, then drop what the main
+checkout's own crates last built long ago.
 
 Each worktree builds into its own `target/`, which starts as a clone of the
 main checkout's and costs no disk until either of the two builds (see
@@ -12,8 +13,16 @@ compiled for its own branch, and compiles that again on its next build.
 
 A worktree is left alone while cargo or rustc runs in it, when it built in the
 last IDLE_MINUTES, and when neither it nor the main checkout has built since
-it was warmed (its clone still costs nothing). The main checkout is never touched, and neither is any file
-outside a `target/`.
+it was warmed (its clone still costs nothing).
+
+The main checkout's build is taken from last, and only where it is dead
+weight. Cargo keeps one unit per feature set, toolchain and dependency
+version, and a crate under `crates/` leaves the old ones behind each time one
+of those moves: 169 units of `ferrite-core` on the day this was written. A
+unit of such a crate not built in STALE_HOURS is dropped, while nothing
+compiles there. A unit still wanted compiles again on the next build; a
+dependency's units are kept, since those stay good for as long as the lock
+file does. No file outside a `target/` is touched.
 
 The git hooks run it on every commit and checkout (scripts/git-hooks), which
 is as often as agents are at work; a launchd timer cannot, since macOS keeps
@@ -33,6 +42,7 @@ from pathlib import Path
 
 MIN_FREE_GB = 15
 IDLE_MINUTES = 30
+STALE_HOURS = 24
 
 SCRIPTS = Path(__file__).resolve().parent
 DRY_RUN = "--dry-run" in sys.argv
@@ -51,7 +61,7 @@ def free_gb(path):
     return disk.f_bavail * disk.f_frsize / 2**30
 
 
-def last_built(debug):
+def last_built(debug, units="*/*"):
     """When anything was last compiled into `debug`: its newest fingerprint.
 
     Cargo keeps each compiled unit under `build/<package>/<hash>/`, and
@@ -59,11 +69,23 @@ def last_built(debug):
     """
     try:
         return max(
-            (stamp.stat().st_mtime for stamp in debug.glob("build/*/*/fingerprint/*")),
+            (stamp.stat().st_mtime for stamp in debug.glob(f"build/{units}/fingerprint/*")),
             default=0,
         )
     except OSError:
         return 0
+
+
+def stale_units(main):
+    """The main checkout's units of its own crates not built in STALE_HOURS."""
+    debug = main / "target" / "debug"
+    old = time.time() - STALE_HOURS * 3600
+    stale = []
+    for crate in sorted((main / "crates").iterdir()):
+        for unit in (debug / "build" / crate.name).glob("*/"):
+            if last_built(debug, f"{crate.name}/{unit.name}") < old:
+                stale.append(unit)
+    return stale
 
 
 def building_in():
@@ -123,6 +145,7 @@ def main():
     if DRY_RUN:
         for built, worktree, _ in idle_builds(main, worktrees):
             log(f"would reclaim {worktree.name} (idle {(time.time() - built) / 3600:.1f} h)")
+        log(f"would drop {len(stale_units(main))} stale units of the main checkout's own crates")
         return
 
     (main / "target").mkdir(exist_ok=True)
@@ -140,7 +163,18 @@ def main():
         if free >= MIN_FREE_GB:
             return
 
-    busy = len(building_in())
+    busy = building_in()
+    if not any(cwd == str(main) or cwd.startswith(f"{main}/") for cwd in busy):
+        stale = stale_units(main)
+        for unit in stale:
+            subprocess.run(["rm", "-rf", str(unit)])
+        if stale:
+            freed, free = free_gb(main) - free, free_gb(main)
+            log(f"dropped {len(stale)} stale units of the main checkout: {freed:+.1f} GB, {free:.1f} GB free")
+            if free >= MIN_FREE_GB:
+                return
+
+    busy = len(busy)
     log(f"{free:.1f} GB free, under {MIN_FREE_GB}; nothing idle left to reclaim, {busy} compiling")
     notify_once_an_hour(main, f"{free:.0f} GB free and no idle worktree build to reclaim.")
 
