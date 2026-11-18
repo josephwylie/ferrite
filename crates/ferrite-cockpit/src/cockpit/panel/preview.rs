@@ -366,6 +366,7 @@ impl CockpitView {
     /// File tab pressed brings its document back, as last read, or read
     /// afresh after a restart.
     fn sync_previews(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let mut unfillable = Vec::new();
         for index in 0..self.panes.len() {
             let Some(thread) = self.panes[index].thread() else {
                 continue;
@@ -382,9 +383,43 @@ impl CockpitView {
             match pane.preview_tab.documents.get(&wanted) {
                 Some(document) => pane.preview.restore(document.clone()),
                 None if wanted == Path::new(BROWSER_PATH) => pane.preview.show_browser(),
-                None => pane.preview.open(wanted, None, &[], window, cx),
+                None => match self.sent_annotation(thread, &wanted) {
+                    Some(annotation) => pane.preview.review_annotation(annotation, window),
+                    // An image opens in the lightbox and never becomes the
+                    // tab's document, so it would open again every frame.
+                    // Only the history can claim it, and that streams in
+                    // after the first frames draw the Thread.
+                    None if ferrite_pane::image_viewer::is_image(&wanted) => {
+                        if self.cockpit.thread(thread).is_some_and(|open| open.history_loaded()) {
+                            unfillable.push((thread, SurfaceId::File(wanted)));
+                        }
+                    }
+                    None => pane.preview.open(wanted, None, &[], window, cx),
+                },
             }
         }
+        for (thread, id) in unfillable {
+            self.forget_surface(thread, &id);
+        }
+    }
+
+    /// A Browser annotation's review tab is keyed by its capture's PNG,
+    /// which opened as a file would go to the lightbox: after a restart the
+    /// review is rebuilt from the prompt in history that sent it.
+    fn sent_annotation(
+        &self,
+        thread: ThreadId,
+        original: &Path,
+    ) -> Option<ferrite_core::browser_annotations::Annotation> {
+        self.cockpit.thread(thread)?.transcript().blocks().iter().find_map(|block| {
+            let ferrite_core::transcript::Body::Prompt(words) = &block.body else {
+                return None;
+            };
+            ferrite_core::browser_annotations::split(words.clone())
+                .2
+                .into_iter()
+                .find(|annotation| annotation.original() == Some(original))
+        })
     }
 
     /// The Preview tab's body: the preview as a card on the Panel's frame,
