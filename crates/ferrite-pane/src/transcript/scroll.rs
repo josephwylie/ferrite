@@ -151,9 +151,12 @@ impl TranscriptScroll {
         self.gestures_seen.replace(now) != now
     }
 
-    /// Resume native tail following and reveal the newest row.
+    /// Resume native tail following and reveal the newest row. Going to the
+    /// end lets go of the passage held on the way there, so the next layout
+    /// cannot take it for one a reflow lost.
     pub(crate) fn scroll_to_bottom(&self) {
         self.ease.take();
+        self.reading.take();
         self.list.set_follow_mode(FollowMode::Tail);
         self.list.scroll_to_end();
     }
@@ -503,6 +506,25 @@ mod tests {
         assert_eq!(scroll.step_ease(Instant::now(), &after), EaseStep::Idle);
         assert_eq!(scroll.offset(), stood);
         assert!(!scroll.is_following_tail(), "the tail did not take it");
+    }
+
+    /// An ease lands on the end while the passage sampled on its way is
+    /// still held from another width (a column sliding as it lands): the end
+    /// keeps the viewport, and the next layout puts nothing back.
+    #[test]
+    fn landing_on_the_end_lets_go_of_the_passage_held_on_the_way() {
+        let scroll = TranscriptScroll::new(2);
+        let rows = rows_of(&["one", "two"]);
+        *scroll.reading.borrow_mut() = Some(ReadingPlace {
+            row: rows.rows()[0].id().clone(),
+            along: 0.5,
+            line: px(100.),
+            width: px(320.),
+        });
+        scroll.land(None);
+        assert!(scroll.is_following_tail(), "the premise: at the end");
+        assert!(!scroll.hold_reading_place(&rows), "nothing is put back");
+        assert!(scroll.is_following_tail(), "the end keeps the viewport");
     }
 
     #[test]
