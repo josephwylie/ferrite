@@ -583,3 +583,50 @@ fn create_pr_asks_the_agent_for_a_pull_request(cx: &mut TestAppContext) {
         "the press stops at the button"
     );
 }
+
+/// The review's close door closes it. A press that starts on the door and
+/// moves off it picks nothing up, where the same press on the head's title
+/// picks the slot up to move it.
+#[gpui::test]
+fn the_close_door_closes_the_review_and_never_picks_the_slot_up(cx: &mut TestAppContext) {
+    use gpui::{Modifiers, MouseButton};
+    let (core, _fake, _repo) = edited("review-close-door");
+    bind_production_keys(cx);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(1440.), px(900.)));
+    tick(cx);
+    open_review(&view, Scope::Uncommitted, cx);
+    let dragging = |cx: &mut gpui::VisualTestContext| cx.update(|_, cx| cx.has_active_drag());
+
+    let door = cx.debug_bounds("close-review").expect("the head's close door").center();
+    let away = gpui::point(door.x - px(60.), door.y + px(40.));
+    cx.simulate_mouse_down(door, MouseButton::Left, Modifiers::none());
+    cx.simulate_mouse_move(away, MouseButton::Left, Modifiers::none());
+    assert!(!dragging(cx), "a press on the door is not a drag");
+    cx.simulate_mouse_up(away, MouseButton::Left, Modifiers::none());
+    tick(cx);
+    assert!(
+        view.read_with(cx, |view, _| view.panes[0].review.is_open()),
+        "a press released off the door closes nothing"
+    );
+
+    let head = cx.debug_bounds("reader-head").expect("the review's head");
+    let title = gpui::point(head.left() + px(30.), head.center().y);
+    cx.simulate_mouse_down(title, MouseButton::Left, Modifiers::none());
+    cx.simulate_mouse_move(
+        gpui::point(title.x + px(60.), title.y + px(40.)),
+        MouseButton::Left,
+        Modifiers::none(),
+    );
+    assert!(dragging(cx), "the same press on the title picks the slot up");
+    cx.simulate_mouse_up(title, MouseButton::Left, Modifiers::none());
+    tick(cx);
+
+    let door = cx.debug_bounds("close-review").expect("the head's close door");
+    cx.simulate_click(door.center(), Modifiers::none());
+    tick(cx);
+    assert!(
+        view.read_with(cx, |view, _| !view.panes[0].review.is_open()),
+        "the door closes the review"
+    );
+}
