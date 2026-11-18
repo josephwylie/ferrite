@@ -133,6 +133,10 @@ fn another_tab_keeps_the_preview_for_later(cx: &mut TestAppContext) {
     tick(cx);
     assert_eq!(panel_w(cx), Some(ferrite_ui::theme::PANEL_W));
     assert!(cx.debug_bounds("panel-preview").is_none());
+    // At this width the strip overflows: its chevron brings the tab in.
+    let right = cx.debug_bounds("panel-tabs-right").expect("more to the right");
+    cx.simulate_click(right.center(), gpui::Modifiers::none());
+    tick(cx);
     let tab = cx.debug_bounds("panel-tab-File-lines.rs").expect("its tab stays");
     cx.simulate_click(tab.center(), gpui::Modifiers::none());
     tick(cx);

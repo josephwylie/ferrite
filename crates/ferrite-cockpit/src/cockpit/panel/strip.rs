@@ -305,9 +305,9 @@ impl CockpitView {
         }
     }
 
-    /// The head row: the tabs and `+` in a strip that scrolls sideways,
-    /// then maximize, short of the title bar's Panel toggle at the
-    /// window's edge. The gaps drag the window.
+    /// The head row: the tabs in a strip that scrolls sideways, the `+`
+    /// after it, then maximize, short of the title bar's Panel toggle at
+    /// the window's edge. The gaps drag the window.
     pub(super) fn surface_head(&self, thread: ThreadId, cx: &mut Context<Self>) -> Div {
         use ferrite_ui::theme::*;
         let state = self.panel.surfaces.get(thread);
@@ -323,14 +323,14 @@ impl CockpitView {
                 .flex()
                 .items_center()
                 .gap(px(SURFACE_HEAD_GAP))
-                // T3's `w-max min-w-full`: as wide as its tabs, so they
-                // overflow the scroll rather than squeeze.
+                // As wide as its tabs, so they overflow the scroll rather
+                // than squeeze.
                 .flex_shrink_0()
-                .min_w_full()
                 .children(tabs.iter().enumerate().map(|(at, id)| {
                     self.surface_tab(thread, at, id, active.as_ref() == Some(id), cx)
-                }))
-                .child(self.surface_plus(thread, cx));
+                }));
+        // Built before maximize: the keyboard's stops run in build order.
+        let plus = self.surface_plus(thread, cx);
         // Each face its own id: a tooltip shown before the toggle belongs to
         // the old face and goes with it, not left reading the old label.
         let (id, glyph) = if maximized {
@@ -385,10 +385,11 @@ impl CockpitView {
                     .items_center()
                     .children(chevron(Side::Left))
                     .child(
+                        // As wide as the tabs and no wider, so the `+`
+                        // after it follows the last tab until they overflow.
                         div()
                             .id("panel-tab-scroll")
                             .flex()
-                            .flex_1()
                             .min_w_0()
                             .overflow_x_scroll()
                             .track_scroll(&**scroll)
@@ -402,7 +403,14 @@ impl CockpitView {
                             ))
                             .child(strip),
                     )
-                    .children(chevron(Side::Right)),
+                    .children(chevron(Side::Right))
+                    .child(
+                        div()
+                            .flex()
+                            .flex_shrink_0()
+                            .pl(px(SURFACE_HEAD_GAP))
+                            .child(plus),
+                    ),
             )
             .child(maximize)
     }
