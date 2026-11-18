@@ -65,6 +65,15 @@ impl BackgroundDialogView {
         for (work, call) in &work {
             sections = sections.child(Self::work_section(work, call.as_ref(), waiting, cx));
         }
+        if work.is_empty() {
+            sections = sections.child(
+                div()
+                    .debug_selector(|| "background-dialog-empty".into())
+                    .text_size(px(FS_BADGE))
+                    .text_color(rgb(INK_SUBTLE))
+                    .child("No background work"),
+            );
+        }
         let stop = stop.map(|control| {
             div()
                 .flex()
