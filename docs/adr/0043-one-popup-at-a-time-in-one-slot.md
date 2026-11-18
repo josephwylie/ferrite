@@ -94,7 +94,11 @@ While the menu is up the button wears `CHIP_OPEN` and has no tooltip.
 The nav, a view of its own, asks for the press with `NavEvent::Door`.
 The nav's Filter and Factory, a nav card's Snooze, the view title's
 chevron, the more doors of Files, Changes, Terminal and the PR, and the
-Panel's `+` are drawn this way. Before, three ways hung these menus: from
+Panel's `+` are drawn this way. A page card's `⋯` lives in the transcript,
+a view in `ferrite-pane` that holds its own menus and cannot reach the
+slot: it is the same kit `MenuButton`, and the transcript hangs the card's
+menu under the bounds the button records, its right edge on the
+button's. Before, three ways hung these menus: from
 a canvas each button drew itself, at the pointer, over the button, or
 from the Panel's own bounds map. A second press closed the menu and
 opened it again, and the tooltip drew over the menu. Those faults are

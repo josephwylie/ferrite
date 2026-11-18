@@ -15,12 +15,15 @@
 //! A path resolves against the Thread's checkout, as every path target
 //! does (`FileLink::resolve`).
 
+use std::cell::RefCell;
+use std::collections::HashMap;
 use std::path::Path;
+use std::rc::Rc;
 
 use ferrite_core::transcript::outputs::{Changed, Output, Page};
 use ferrite_core::transcript::BlockId;
 use gpui::prelude::*;
-use gpui::{div, px, rgb, AnyElement, ClipboardItem, Context, MouseButton, Pixels, Point};
+use gpui::{div, px, rgb, AnyElement, Bounds, ClipboardItem, Context, MouseButton, Pixels, SharedString};
 
 use super::{
     rows::{RowId, TranscriptRow},
@@ -29,17 +32,22 @@ use super::{
 use crate::pane::DisclosureId;
 use crate::file_links::FileLink;
 use crate::page::PageSource;
+use ferrite_ui::components::{icon_button, IconSize, MenuButton as _, Tip as _};
 use ferrite_ui::icons::{self, icon};
 use ferrite_ui::menu;
 use ferrite_ui::pointer::Pointer;
 use ferrite_ui::theme::{self, paint};
 
-/// A card's menu while it is open: what it is for and where it hangs.
+/// A card's menu while it is open: what it is for and the `⋯` it hangs
+/// under.
 #[derive(Clone, Debug, PartialEq)]
 pub(super) struct OutputMenu {
     target: Opened,
-    at: Point<Pixels>,
+    door: SharedString,
 }
+
+/// Each card's `⋯` as last laid out, by its id.
+pub(super) type Doors = Rc<RefCell<HashMap<SharedString, Bounds<Pixels>>>>;
 
 /// What a card opens, its path resolved.
 #[derive(Clone, Debug, PartialEq)]
@@ -124,7 +132,7 @@ impl TranscriptView {
                     .iter()
                     .filter_map(|output| self.opened(output))
                     .enumerate()
-                    .map(|(index, opened)| card(&key, index, opened, cx)),
+                    .map(|(index, opened)| card(self, &key, index, opened, cx)),
             )
             .into_any_element()
     }
@@ -280,20 +288,33 @@ impl TranscriptView {
         }
     }
 
-    fn open_output_menu(&mut self, target: Opened, at: Point<Pixels>, cx: &mut Context<Self>) {
-        self.output_menu = Some(OutputMenu { target, at });
+    /// A press on `door`, the `⋯` of `target`'s card: its menu shuts if it
+    /// is up, else opens.
+    fn press_output_door(&mut self, target: Opened, door: SharedString, cx: &mut Context<Self>) {
+        let up = self.output_menu.as_ref().is_some_and(|open| open.door == door);
+        self.output_menu = (!up).then_some(OutputMenu { target, door });
         cx.notify();
     }
 
-    /// The open card's menu, hung at the press that opened it.
+    /// The open card's menu, hung under its `⋯`, its right edge on the
+    /// button's. None while the button is not laid out.
     pub(super) fn output_menu_float(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         let open = self.output_menu.clone()?;
+        let door = *self.output_doors.borrow().get(&open.door)?;
+        let doors = self.output_doors.clone();
         let mut shell = menu::shell()
             .debug_selector(|| "output-menu".into())
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-            .on_mouse_down_out(cx.listener(|view, _: &gpui::MouseDownEvent, _, cx| {
-                view.output_menu = None;
-                cx.notify();
+            .on_mouse_down_out(cx.listener(move |view, event: &gpui::MouseDownEvent, _, cx| {
+                // A press on its own button is the button's: it shuts the menu.
+                let on_door = doors
+                    .borrow()
+                    .get(&open.door)
+                    .is_some_and(|door| door.contains(&event.position));
+                if !on_door {
+                    view.output_menu = None;
+                    cx.notify();
+                }
             }));
         for (index, (label, verb)) in open.target.verbs().iter().copied().enumerate() {
             let target = open.target.clone();
@@ -311,12 +332,19 @@ impl TranscriptView {
                     ),
             );
         }
-        Some(super::hang_menu("output-menu-in", open.at, shell))
+        let at = gpui::point(door.right(), door.bottom() + px(theme::MENU_UNDER_GAP));
+        Some(super::hang_menu("output-menu-in", at, gpui::Anchor::TopRight, shell))
     }
 }
 
 /// One card. A press on its body opens it; its doors keep their presses.
-fn card(row: &str, index: usize, opened: Opened, cx: &mut Context<TranscriptView>) -> AnyElement {
+fn card(
+    view: &TranscriptView,
+    row: &str,
+    index: usize,
+    opened: Opened,
+    cx: &mut Context<TranscriptView>,
+) -> AnyElement {
     let key = format!("{row}-{index}");
     let key = key.as_str();
     let (selector, lead, title, detail) = match &opened {
@@ -342,7 +370,7 @@ fn card(row: &str, index: usize, opened: Opened, cx: &mut Context<TranscriptView
                     view.input.body.preview.open_page(shown.clone(), window);
                 }))
                 .into_any_element(),
-                more_door(&format!("{key}-more"), index, opened.clone(), cx),
+                more_door(view, &format!("{key}-more"), index, opened.clone(), cx),
             ]
         }
     };
@@ -581,35 +609,31 @@ fn text_door(
         })
 }
 
-/// A page card's `⋯`.
+/// A page card's `⋯`: a Menu button whose menu hangs under it.
 fn more_door(
+    view: &TranscriptView,
     id: &str,
     index: usize,
     opened: Opened,
     cx: &mut Context<TranscriptView>,
 ) -> AnyElement {
-    let id = gpui::ElementId::from(gpui::SharedString::from(id.to_owned()));
-    let hover = ferrite_ui::pointer::hover_key(&id);
-    div()
-        .id(id)
+    let id = SharedString::from(id.to_owned());
+    let open = view.output_menu.as_ref().is_some_and(|menu| menu.door == id);
+    let doors = view.output_doors.clone();
+    let door = id.clone();
+    let press = cx.listener(move |view, _: &(), _, cx| {
+        view.press_output_door(opened.clone(), door.clone(), cx)
+    });
+    icon_button(id.clone(), icons::ELLIPSIS, IconSize::Standard, "More", cx)
         .debug_selector(move || format!("page-card-more-{index}"))
-        .flex()
-        .flex_shrink_0()
-        .items_center()
-        .justify_center()
-        .size(px(theme::ICON_BUTTON))
-        .rounded(px(theme::R_CONTROL))
-        .hover_raised(hover)
-        .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-        .child(icon(
-            icons::ELLIPSIS,
-            theme::ICON_BUTTON_GLYPH,
-            theme::INK_SUBTLE,
-        ))
-        .on_click(cx.listener(move |view, event: &gpui::ClickEvent, _, cx| {
-            cx.stop_propagation();
-            view.open_output_menu(opened.clone(), event.position(), cx);
-        }))
+        .menu_button(
+            open,
+            |button| button.tip("More"),
+            move |bounds, _, _| {
+                doors.borrow_mut().insert(id, bounds);
+            },
+            move |window, cx| press(&(), window, cx),
+        )
         .into_any_element()
 }
 

@@ -539,8 +539,10 @@ pub struct TranscriptView {
     /// the left press that may be selecting landed.
     reply: Option<reply::SelectionReply>,
     pressed_at: Option<gpui::Point<gpui::Pixels>>,
-    /// A turn card's menu, while open (`outputs`).
+    /// A turn card's menu, while open, and where each card's `⋯` was laid
+    /// out for it to hang under (`outputs`).
     output_menu: Option<outputs::OutputMenu>,
+    output_doors: outputs::Doors,
     /// A message's or a link's menu, while open (`message_menu`).
     message_menu: Option<message_menu::MessageMenu>,
     /// The answers pinned as chapters (`message_menu`), by last block.
@@ -683,6 +685,7 @@ impl TranscriptView {
             reply: None,
             pressed_at: None,
             output_menu: None,
+            output_doors: outputs::Doors::default(),
             message_menu: None,
             pinned: HashSet::new(),
         };
@@ -2590,9 +2593,15 @@ fn arrival_fade(kind: RowKind) -> ferrite_ui::motion::MotionSpec {
 
 /// A transcript menu (a card's, an answer's), hung at the press that
 /// opened it, kept inside the window, over everything after it.
-fn hang_menu(id: &'static str, at: gpui::Point<gpui::Pixels>, shell: gpui::Div) -> AnyElement {
+fn hang_menu(
+    id: &'static str,
+    at: gpui::Point<gpui::Pixels>,
+    corner: gpui::Anchor,
+    shell: gpui::Div,
+) -> AnyElement {
     gpui::deferred(
         gpui::anchored()
+            .anchor(corner)
             .position(at)
             .snap_to_window_with_margin(px(theme::GRID_PAD))
             .child(ferrite_ui::motion::float_in(

@@ -227,6 +227,30 @@ fn a_page_card_opens_the_page_beside_the_transcript(cx: &mut TestAppContext) {
     assert!(cx.debug_bounds("preview-page-title").is_none());
 }
 
+/// A page card's `⋯` is a Menu button: its menu hangs under it, its right
+/// edge on the button's, and a second press shuts it.
+#[gpui::test]
+fn a_page_cards_more_hangs_its_menu_under_it(cx: &mut TestAppContext) {
+    let (view, _, cx) = turn("output-page-more", cx);
+    hide_panel(&view, cx);
+    let more = cx.debug_bounds("page-card-more-1").expect("the server card's ⋯");
+    cx.simulate_click(more.center(), gpui::Modifiers::none());
+    tick(cx);
+    let menu = cx.debug_bounds("output-menu").expect("a press opens its menu");
+    let gap = menu.top() - more.bottom();
+    assert!(
+        gap >= px(0.) && gap <= px(ferrite_ui::theme::FLOAT_OFFSET + 1.),
+        "under its button: menu {menu:?}, button {more:?}"
+    );
+    assert!(
+        (menu.right() - more.right()).abs() <= px(1.),
+        "its right edge on the button's: menu {menu:?}, button {more:?}"
+    );
+    cx.simulate_click(more.center(), gpui::Modifiers::none());
+    tick(cx);
+    assert!(cx.debug_bounds("output-menu").is_none(), "a second press shuts it");
+}
+
 #[gpui::test]
 fn a_local_server_uses_the_thread_browser_preview(cx: &mut TestAppContext) {
     let (view, _, cx) = turn("output-address-card", cx);
