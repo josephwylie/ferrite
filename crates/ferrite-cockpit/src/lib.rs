@@ -9,6 +9,8 @@ mod facts;
 pub mod ferrite_update;
 mod float;
 mod fuzzy;
+#[cfg(any(test, feature = "headless"))]
+mod hands;
 #[cfg(feature = "headless")]
 pub mod headless;
 pub mod machines;

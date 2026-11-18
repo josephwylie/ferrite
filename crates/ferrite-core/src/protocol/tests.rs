@@ -2290,6 +2290,27 @@ fn samples() -> Vec<(&'static str, Sample)> {
             }),
         ),
         (
+            "drive_resize",
+            Sample::Server(ServerMessage::Drive {
+                request: 6,
+                action: crate::drive::Action::Resize(crate::drive::Resize {
+                    width: 700,
+                    height: 900,
+                }),
+            }),
+        ),
+        (
+            "driven_resized",
+            Sample::Client(ClientMessage::Driven {
+                request: 6,
+                ok: Some(crate::drive::Answer::Resized {
+                    width: 700.0,
+                    height: 900.0,
+                }),
+                error: None,
+            }),
+        ),
+        (
             "restarting",
             Sample::Server(ServerMessage::Restarting { when: When::Idle }),
         ),

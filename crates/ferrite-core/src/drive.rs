@@ -18,6 +18,7 @@ pub enum Action {
     Find(Find),
     Shot(Shot),
     Attach(Attach),
+    Resize(Resize),
 }
 
 /// Keystrokes pressed in order, as gpui writes them: `cmd-,`, `escape`,
@@ -92,11 +93,8 @@ impl TryFrom<ClickParams> for Click {
     type Error = String;
 
     fn try_from(params: ClickParams) -> Result<Self, String> {
-        let at = match (params.selector, params.x, params.y) {
-            (Some(selector), None, None) => Target::Selector(selector),
-            (None, Some(x), Some(y)) => Target::Point { x, y },
-            _ => return Err("a click is at a `selector`, or at `x` and `y`".into()),
-        };
+        let at = target(params.selector, params.x, params.y)
+            .ok_or("a click is at a `selector`, or at `x` and `y`")?;
         let press = match (params.double, params.right) {
             (false, false) => Press::Single,
             (true, false) => Press::Double,
@@ -113,10 +111,7 @@ impl TryFrom<ClickParams> for Click {
 
 impl From<Click> for ClickParams {
     fn from(Click { at, press, command }: Click) -> Self {
-        let (selector, x, y) = match at {
-            Target::Selector(selector) => (Some(selector), None, None),
-            Target::Point { x, y } => (None, Some(x), Some(y)),
-        };
+        let (selector, x, y) = at.into_params();
         Self {
             selector,
             x,
@@ -126,6 +121,32 @@ impl From<Click> for ClickParams {
             command,
         }
     }
+}
+
+/// A selector alone, or `x` and `y` together; nothing else is a target.
+fn target(selector: Option<String>, x: Option<u32>, y: Option<u32>) -> Option<Target> {
+    match (selector, x, y) {
+        (Some(selector), None, None) => Some(Target::Selector(selector)),
+        (None, Some(x), Some(y)) => Some(Target::Point { x, y }),
+        _ => None,
+    }
+}
+
+impl Target {
+    fn into_params(self) -> (Option<String>, Option<u32>, Option<u32>) {
+        match self {
+            Target::Selector(selector) => (Some(selector), None, None),
+            Target::Point { x, y } => (None, Some(x), Some(y)),
+        }
+    }
+}
+
+/// The window's new size in logical pixels, as dragging its corner makes
+/// it: never under the least size the app's window keeps.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct Resize {
+    pub width: u32,
+    pub height: u32,
 }
 
 /// Where the last frame drew an element.
@@ -163,4 +184,6 @@ pub enum Answer {
     /// `width` and `height` in the PNG's pixels, `scale` of them to a
     /// logical pixel.
     Shot { path: PathBuf, width: u32, height: u32, scale: f32 },
+    /// The size the window has now.
+    Resized { width: f32, height: f32 },
 }

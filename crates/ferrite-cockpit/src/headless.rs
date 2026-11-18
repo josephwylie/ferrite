@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use ferrite_core::drive::{Action, Answer, Click, Find, Keys, Press, Shot, Target, Text};
+use ferrite_core::drive::{Action, Answer, Click, Find, Keys, Press, Resize, Shot, Target, Text};
 use ferrite_core::settings::Settings;
 use ferrite_ui::keymap::{self, Binding};
 use gpui::{
@@ -169,6 +169,13 @@ fn act(driver: &mut Driver, action: Action) -> Result<Answer, String> {
             driver.update(|view, _, cx| view.attach_local_files(&files.paths, cx))?;
             driver.tick(60);
             Ok(Answer::Attached)
+        }
+        Action::Resize(Resize { width, height }) => {
+            let size = driver.resize(gpui::size(gpui::px(width as f32), gpui::px(height as f32)));
+            Ok(Answer::Resized {
+                width: size.width.into(),
+                height: size.height.into(),
+            })
         }
         Action::Shot(Shot { path }) => {
             if !path.is_absolute() {
@@ -430,6 +437,17 @@ impl Driver {
                 click_count,
             }));
         }
+    }
+
+    /// The window resized to `size` ([`crate::hands::resize`]) and drawn
+    /// at it: the size it has now.
+    pub fn resize(&mut self, size: gpui::Size<gpui::Pixels>) -> gpui::Size<gpui::Pixels> {
+        let size = self
+            .cx
+            .update_window(self.window, |_, window, cx| crate::hands::resize(window, cx, size))
+            .expect("the off-screen window stands");
+        self.tick(60);
+        size
     }
 
     /// Settle the frame and save it as a PNG at `path`.

@@ -234,6 +234,7 @@ fn the_operations_are_the_ones_declared_and_never_renamed() {
             "window.find",
             "window.shot",
             "window.attach",
+            "window.resize",
         ]
     );
 }
@@ -601,6 +602,10 @@ fn samples() -> Vec<Request> {
         })),
         request(Method::WindowAttach(drive::Attach {
             paths: vec![PathBuf::from("/tmp/screenshot.png")],
+        })),
+        request(Method::WindowResize(drive::Resize {
+            width: 700,
+            height: 900,
         })),
     ]
 }
@@ -1435,7 +1440,8 @@ fn a_thread_starts_where_the_cli_runs_unless_told() {
 
 /// The headless window's keys come as every word left; a click is at a
 /// selector or a point, single, double or right, and nothing else; a
-/// shot's path is read from where the CLI runs.
+/// resize is a width and a height; a shot's path is read from where the
+/// CLI runs.
 #[test]
 fn window_actions_read_as_the_window_takes_them() {
     assert_eq!(
@@ -1480,6 +1486,14 @@ fn window_actions_read_as_the_window_takes_them() {
     ] {
         assert!(parse("window.click", wrong).is_err(), "{wrong:?}");
     }
+    assert_eq!(
+        parse("window.resize", &["700", "900"]),
+        Ok(Method::WindowResize(drive::Resize {
+            width: 700,
+            height: 900,
+        }))
+    );
+    assert!(parse("window.resize", &["700"]).is_err(), "a height too");
     assert_eq!(
         parse("window.shot", &["shots/settings.png"]),
         Ok(Method::WindowShot(drive::Shot {

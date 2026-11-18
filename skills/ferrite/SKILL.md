@@ -403,6 +403,7 @@ it never covers or interrupts the user's. The `window` commands drive it:
 "$F" window find settings-close
 "$F" window click --selector settings-close
 "$F" window shot /tmp/settings.png
+"$F" window resize 700 900
 ```
 
 `window key` presses each keystroke in order (`unhandled` lists those
@@ -410,6 +411,10 @@ nothing took). `window click` takes an element's debug selector (its
 `window find` bounds are where it was last drawn) or `--x` and `--y` in
 the window's 1440x900 logical pixels, with `--double` or `--right`.
 `window shot` writes a PNG (2880x1800) the window drew; look at it.
+`window resize` sets the window's size in logical pixels mid-run, as a
+drag of its corner would, and answers the size it has now: never under
+the app window's least size (a smaller one stops there). Points and shots
+follow the new size.
 `window attach` adds local files to the active composer through its normal
 attachment flow, including upload when connected to a remote environment.
 With no headless window attached the server refuses with
