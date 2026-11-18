@@ -1,14 +1,16 @@
-//! The model picker (T3's docked `ProviderModelPicker`): one popover over
-//! the Composer holding the provider rail, the searchable model list, the
-//! Reasoning column and a footer, `MODEL_PICKER_H` tall whatever it shows.
-//! The model chip opens it on the list; `/effort` and the palette's
-//! `effort` open it in the Reasoning column. A pick re-aims the Thread (or
-//! the draft's band) and leaves it open, the keyboard then in the column:
-//! esc or a press outside shuts it.
+//! The model picker (T3's docked `ProviderModelPicker`): a popup
+//! (`Popup::ModelPicker`) over the Composer holding the provider rail, the
+//! searchable model list, the Reasoning column and a footer,
+//! `MODEL_PICKER_H` tall whatever it shows. The model chip opens it on the
+//! list; `/effort` and the palette's `effort` open it in the Reasoning
+//! column. A pick re-aims the Thread (or the draft's band) and leaves it
+//! open, the keyboard then in the column: esc or a press outside shuts it.
+//! The footer's permission mode opens the mode menu inside it
+//! (`ModelPicker::mode`): the first esc shuts that, the next the picker.
 //!
-//! The rows are the popover's own (`Popover::rows`, every Provider's
-//! models, each carrying its pick); the picker keeps which of them the tab
-//! or the search lists, the Reasoning column's rungs and the search line.
+//! The rows are the popup's own (`Popover::rows`, every Provider's models,
+//! each carrying its pick); the picker keeps which of them the tab or the
+//! search lists, the Reasoning column's rungs and the search line.
 
 use super::*;
 use ferrite_pane::composer::Role;
@@ -46,6 +48,12 @@ pub(super) struct ModelPicker {
     /// The `Search models...` line. It holds the keyboard while the picker
     /// is open; the picker's keys ride its `ModelPicker` context.
     pub(super) search: Entity<Composer>,
+    /// The permission mode menu the footer opened over the picker. The
+    /// root holds the keyboard while it is up.
+    pub(super) mode: Option<super::mode_menu::ModeMenu>,
+    /// Why every row is dead for now (`tuning_hold`): a picker built while
+    /// its Thread's turn runs. The disabled rows say it in their tooltip.
+    pub(super) hold: Option<&'static str>,
     /// The rows listed now, in order: indices into `Popover::rows`.
     pub(super) shown: Vec<usize>,
     /// The Reasoning column's rungs, each carrying its pick.
@@ -60,7 +68,6 @@ pub(super) struct ModelPicker {
     pub(super) unavailable: Vec<(Provider, SharedString)>,
     /// The rail pill's slide between tabs.
     pill: std::cell::Cell<Option<ferrite_ui::motion::Tween>>,
-    focused: std::cell::Cell<bool>,
     _edited: gpui::Subscription,
 }
 
@@ -218,8 +225,7 @@ impl CockpitView {
                 };
                 view.focus_pane(index);
                 if view.model_picker_open(identity) {
-                    view.popover = None;
-                    cx.notify();
+                    view.close_popup(cx);
                 } else {
                     view.open_model_picker(identity, Column::List, cx);
                 }
@@ -262,6 +268,8 @@ impl CockpitView {
             tab,
             column,
             search,
+            mode: None,
+            hold: None,
             shown: Vec::new(),
             efforts: Vec::new(),
             effort_cursor: 0,
@@ -269,18 +277,19 @@ impl CockpitView {
             handover: None,
             unavailable: Vec::new(),
             pill: Default::default(),
-            focused: Default::default(),
             _edited: edited,
         };
-        self.popover = Some(Popover {
-            scroll: ScrollHandle::new(),
-            revealed: Default::default(),
-            hold: None,
-            pane,
-            kind: Kind::Provider(Box::new(picker)),
-            rows: Vec::new(),
-            selected: 0,
-        });
+        self.show_popup(
+            Popup::ModelPicker(Box::new(Popover {
+                scroll: ScrollHandle::new(),
+                revealed: Default::default(),
+                pane,
+                kind: picker,
+                rows: Vec::new(),
+                selected: 0,
+            })),
+            cx,
+        );
         self.fill_model_picker(content, None, cx);
     }
 
@@ -288,19 +297,13 @@ impl CockpitView {
     /// an announcement, a turn starting or ending — keeping its tab, its
     /// search, its column (unless `column` moves it) and its cursor's row.
     pub(super) fn rebuild_model_picker(&mut self, column: Option<Column>, cx: &mut Context<Self>) {
-        let Some(pane) = self
-            .popover
-            .as_ref()
-            .filter(|open| matches!(open.kind, Kind::Provider(_)))
-            .map(|open| open.pane)
-        else {
+        let Some(pane) = self.model_picker().map(|(open, _)| open.pane) else {
             return;
         };
         match self.model_picker_content(pane) {
             Some(content) => self.fill_model_picker(content, column, cx),
             None => {
-                self.popover = None;
-                cx.notify();
+                self.close_popup(cx);
             }
         }
     }
@@ -321,16 +324,14 @@ impl CockpitView {
                 })
             })
             .collect();
-        let Some(open) = self.popover.as_mut() else {
+        let Some(open) = self.model_picker_popover_mut() else {
             return;
         };
         let previous = open
             .rows
             .get(open.selected)
             .map(|row| row.consequence.clone());
-        let Kind::Provider(picker) = &mut open.kind else {
-            return;
-        };
+        let picker = &mut open.kind;
         let Content {
             mut rows,
             mut efforts,
@@ -356,7 +357,7 @@ impl CockpitView {
         if let Some(column) = column {
             picker.column = column;
         }
-        open.hold = hold;
+        picker.hold = hold;
         open.rows = rows;
         open.selected = previous
             .and_then(|consequence| open.rows.iter().position(|row| row.consequence == consequence))
@@ -368,19 +369,21 @@ impl CockpitView {
     /// Re-list the open picker's rows for its tab or its search, the
     /// cursor kept on its row while it is listed, else on the first.
     fn list_model_picker(&mut self, cx: &mut Context<Self>) {
+        let Some((open, picker)) = self.model_picker() else {
+            return;
+        };
         let settings = &self.prefs.settings;
-        let Some(open) = self.popover.as_mut() else {
-            return;
-        };
-        let Kind::Provider(picker) = &mut open.kind else {
-            return;
-        };
         let query = picker.query(cx);
-        picker.shown = if query.is_empty() {
+        let shown = if query.is_empty() {
             tab_rows(&open.rows, picker.tab, settings)
         } else {
             ranked(&open.rows, &query, settings)
         };
+        let Some(open) = self.model_picker_popover_mut() else {
+            return;
+        };
+        let picker = &mut open.kind;
+        picker.shown = shown;
         if !picker.shown.contains(&open.selected) {
             open.selected = picker
                 .shown
@@ -521,30 +524,20 @@ impl CockpitView {
     /// The search line moved: list what matches across every Provider, the
     /// keyboard back on the list.
     fn model_picker_searched(&mut self, cx: &mut Context<Self>) {
-        if let Some(Popover {
-            kind: Kind::Provider(picker),
-            ..
-        }) = self.popover.as_mut()
-        {
+        if let Some((_, _, picker)) = self.model_picker_mut() {
             picker.column = Column::List;
         }
         self.list_model_picker(cx);
     }
 
-    fn model_picker(&self) -> Option<(&Popover, &ModelPicker)> {
-        let open = self.popover.as_ref()?;
-        match &open.kind {
-            Kind::Provider(picker) => Some((open, picker)),
-            _ => None,
-        }
+    /// The picker up, and what it lists.
+    pub(super) fn model_picker(&self) -> Option<(&Popover<ModelPicker>, &ModelPicker)> {
+        self.model_picker_popover().map(|open| (open, &open.kind))
     }
 
     fn model_picker_mut(&mut self) -> Option<(&mut Vec<Row>, &mut usize, &mut ModelPicker)> {
-        let open = self.popover.as_mut()?;
-        match &mut open.kind {
-            Kind::Provider(picker) => Some((&mut open.rows, &mut open.selected, picker)),
-            _ => None,
-        }
+        let open = self.model_picker_popover_mut()?;
+        Some((&mut open.rows, &mut open.selected, &mut open.kind))
     }
 
     /// Show `tab`'s models, the rail's pill sliding to its button.
@@ -592,11 +585,8 @@ impl CockpitView {
                     (picker.effort_cursor as isize + delta).clamp(0, last as isize) as usize;
             }
         }
-        if let Some(open) = self.popover.as_ref() {
-            let at = self
-                .model_picker()
-                .and_then(|(_, picker)| picker.shown.iter().position(|row| *row == open.selected));
-            if let Some(at) = at {
+        if let Some((open, picker)) = self.model_picker() {
+            if let Some(at) = picker.shown.iter().position(|row| *row == open.selected) {
                 open.scroll.scroll_to_item(at);
             }
         }
@@ -677,17 +667,6 @@ impl CockpitView {
             return;
         };
         self.pick_model_row(row, cx);
-    }
-
-    fn model_picker_dismiss(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(open) = self.popover.take() else {
-            return;
-        };
-        if let Some(index) = self.index_of(open.pane) {
-            let focus = self.panes[index].composer.read(cx).focus_handle(cx);
-            window.focus(&focus, cx);
-        }
-        cx.notify();
     }
 
     /// Pick model row `row` (an index into the popover's rows): the Thread
@@ -795,9 +774,9 @@ impl CockpitView {
         root.on_action(cx.listener(|view, _: &Up, _, cx| view.model_picker_step(-1, cx)))
             .on_action(cx.listener(|view, _: &Down, _, cx| view.model_picker_step(1, cx)))
             .on_action(cx.listener(|view, _: &Confirm, _, cx| view.model_picker_confirm(cx)))
-            .on_action(
-                cx.listener(|view, _: &Dismiss, window, cx| view.model_picker_dismiss(window, cx)),
-            )
+            .on_action(cx.listener(|view, _: &Dismiss, _, cx| {
+                view.dismiss_popup(cx);
+            }))
             .on_action(cx.listener(|view, _: &Left, window, cx| view.model_picker_left(window, cx)))
             .on_action(
                 cx.listener(|view, _: &Right, window, cx| view.model_picker_right(window, cx)),
@@ -813,25 +792,24 @@ impl CockpitView {
             .on_action(cx.listener(|view, _: &Jump9, _, cx| view.model_picker_jump(8, cx)))
     }
 
-    /// The open picker, hung over its Pane's Composer: its foot
+    /// The picker, hung over its Pane's Composer: its foot
     /// `MODEL_PICKER_GAP` over the box, its left edge at the chip's (T3's
-    /// `side="top" align="start"`), kept inside the window. It waits a
-    /// frame for the box to be laid out.
+    /// `side="top" align="start"`), kept inside the window, and the mode
+    /// menu its footer opened over it. It waits a frame for the box to be
+    /// laid out.
     pub(super) fn model_picker_element(
         &self,
+        open: &Popover<ModelPicker>,
+        face: popups::Face,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
-        let (open, picker) = self.model_picker()?;
+        let picker = &open.kind;
         let index = self.index_of(open.pane)?;
         let Some(field) = self.panes[index].geometry.get().composer else {
             ferrite_ui::motion::request_frame(window);
             return None;
         };
-        if !picker.focused.replace(true) {
-            let focus = picker.search.read(cx).focus_handle(cx);
-            window.focus(&focus, cx);
-        }
         let left = self
             .float_triggers
             .borrow()
@@ -840,27 +818,48 @@ impl CockpitView {
         let viewport = f32::from(window.viewport_size().width);
         let width = (MODEL_PICKER_LIST_W + REASONING_W).min(viewport - 2. * GRID_PAD);
         let surface = self.model_picker_surface(open, picker, width, window, cx);
+        let mode = picker
+            .mode
+            .as_ref()
+            .and_then(|menu| self.picker_mode_element(menu, face, window, cx));
         Some(
-            deferred(
-                anchored()
-                    .anchor(gpui::Anchor::BottomLeft)
-                    .position(gpui::point(left, field.top() - px(MODEL_PICKER_GAP)))
-                    .snap_to_window_with_margin(px(GRID_PAD))
-                    .child(ferrite_ui::motion::float_in(
-                        ferrite_ui::motion::POPOVER,
-                        "model-picker-in",
-                        surface,
-                        ferrite_ui::motion::Opens::Up,
-                    )),
-            )
-            .with_priority(2)
-            .into_any_element(),
+            div()
+                .child(
+                    anchored()
+                        .anchor(gpui::Anchor::BottomLeft)
+                        .position(gpui::point(left, field.top() - px(MODEL_PICKER_GAP)))
+                        .snap_to_window_with_margin(px(GRID_PAD))
+                        .child(self.popup_face(
+                            face,
+                            "model-picker-in",
+                            surface,
+                            ferrite_ui::motion::Opens::Up,
+                            cx,
+                        )),
+                )
+                .children(mode)
+                .into_any_element(),
         )
+    }
+
+    /// Open the permission mode menu over the footer's button, or shut it.
+    fn toggle_picker_mode(&mut self, thread: ThreadId, generation: u64, cx: &mut Context<Self>) {
+        if let Some((_, _, picker)) = self.model_picker_mut() {
+            picker.mode = match picker.mode.take() {
+                Some(_) => None,
+                None => Some(super::mode_menu::ModeMenu {
+                    thread,
+                    generation,
+                    preview: None,
+                }),
+            };
+            cx.notify();
+        }
     }
 
     fn model_picker_surface(
         &self,
-        open: &Popover,
+        open: &Popover<ModelPicker>,
         picker: &ModelPicker,
         width: f32,
         window: &mut Window,
@@ -882,10 +881,6 @@ impl CockpitView {
             .flex()
             .flex_col()
             .overflow_hidden()
-            .on_mouse_down(
-                MouseButton::Left,
-                cx.listener(|_, _: &MouseDownEvent, _, cx| cx.stop_propagation()),
-            )
             .child(body)
             .child(self.model_picker_footer(open, cx))
     }
@@ -997,7 +992,7 @@ impl CockpitView {
 
     fn model_picker_list(
         &self,
-        open: &Popover,
+        open: &Popover<ModelPicker>,
         picker: &ModelPicker,
         searching: bool,
         cx: &mut Context<Self>,
@@ -1089,7 +1084,7 @@ impl CockpitView {
                     star_on_hover: picker.tab == Tab::Favourites && !searching,
                     jump,
                     note: handover.then_some("handover"),
-                    why: open.hold.map(SharedString::from).or_else(|| {
+                    why: picker.hold.map(SharedString::from).or_else(|| {
                         (!row.detail.is_empty()).then(|| row.detail.clone())
                     }),
                 },
@@ -1360,7 +1355,7 @@ impl CockpitView {
     /// far end, opening the permission menu over it. Speed and Ultracode
     /// segments stand only where a model announces them, and no provider
     /// announces either to Ferrite yet.
-    fn model_picker_footer(&self, open: &Popover, cx: &mut Context<Self>) -> Div {
+    fn model_picker_footer(&self, open: &Popover<ModelPicker>, cx: &mut Context<Self>) -> Div {
         div()
             .debug_selector(|| "model-picker-footer".into())
             .flex()
@@ -1408,8 +1403,7 @@ impl CockpitView {
         } else {
             INK_SUBTLE
         };
-        let lit = opens.is_some()
-            && self.mode_menu().map(|open| (open.thread, open.generation)) == opens;
+        let lit = opens.is_some() && self.model_picker().is_some_and(|(_, picker)| picker.mode.is_some());
         Some(
             ferrite_ui::components::on_bounds(
                 div()
@@ -1440,7 +1434,7 @@ impl CockpitView {
                         cx.listener(move |view, _: &MouseDownEvent, _, cx| {
                             cx.stop_propagation();
                             if let Some((thread, generation)) = opens {
-                                view.toggle_mode_menu(thread, generation, true, cx);
+                                view.toggle_picker_mode(thread, generation, cx);
                             }
                         }),
                     )

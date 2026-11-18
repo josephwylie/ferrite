@@ -6,6 +6,7 @@
 
 use super::context_menu::ContextMenu;
 use super::mode_menu::ModeMenu;
+use super::model_picker::ModelPicker;
 use super::*;
 use ferrite_ui::motion::{self, FloatMotion, Opens};
 use std::time::Instant;
@@ -19,6 +20,8 @@ pub(super) enum Popup {
     Plan(ThreadId),
     Checks(ThreadId),
     Session { thread: ThreadId, generation: u64 },
+    /// The model picker, with the mode menu its footer opens inside it.
+    ModelPicker(Box<Popover<ModelPicker>>),
     /// A draft's Project or Workspace menu.
     Band(Popover<Band>),
     /// The Composer's `+` menu on one Pane, the keyboard on `focus`. The
@@ -39,9 +42,16 @@ pub(super) enum Keys {
     Composer(PaneIdentity),
 }
 
+/// The surface of the mode menu inside the model picker, and the key its
+/// bounds are recorded under.
+pub(super) const PICKER_MODE: &str = "picker-mode-in";
+
 impl Popup {
-    fn keys(&self) -> Keys {
+    fn keys(&self, cx: &gpui::App) -> Keys {
         match self {
+            Popup::ModelPicker(picker) if picker.kind.mode.is_none() => {
+                Keys::Field(picker.kind.search.read(cx).focus_handle(cx))
+            }
             Popup::Attach { focus, .. } => Keys::Field(focus.clone()),
             Popup::Band(menu) => Keys::Composer(menu.pane),
             _ => Keys::Root,
@@ -56,20 +66,28 @@ impl Popup {
     }
 
     /// Whether a press at `at`, outside the popup's surface, is still its
-    /// own: on the chip that toggles the mode menu, which must shut it
-    /// rather than see it closed and open it again, or on a context
-    /// menu's submenu, drawn beside the menu.
+    /// own: on the control that toggles it, which must shut it rather than
+    /// see it closed and open it again, or on a surface drawn beside it (a
+    /// context menu's submenu, the model picker's mode menu).
     fn owns(&self, at: Point<Pixels>, triggers: &FloatTriggers) -> bool {
-        let key = match self {
-            Popup::Mode(menu) => mode_menu::trigger_key(menu.thread, menu.from_picker),
-            Popup::Band(menu) => menu.kind.trigger(),
-            Popup::ContextMenu(menu) if menu.sub.is_some() => context_menu::SUBMENU.into(),
-            _ => return false,
+        let hit = |key: &str| {
+            triggers
+                .borrow()
+                .get(key)
+                .is_some_and(|bounds| bounds.contains(&at))
         };
-        triggers
-            .borrow()
-            .get(&key)
-            .is_some_and(|bounds| bounds.contains(&at))
+        match self {
+            Popup::Mode(menu) => hit(&mode_menu::chip_trigger(menu.thread)),
+            Popup::ModelPicker(picker) => {
+                hit(&model_picker::chip_trigger(picker.pane))
+                    || picker.kind.mode.is_some() && hit(PICKER_MODE)
+            }
+            Popup::Band(menu) => hit(&menu.kind.trigger()),
+            Popup::ContextMenu(menu) => menu.sub.is_some() && hit(context_menu::SUBMENU),
+            Popup::Plan(_) | Popup::Checks(_) | Popup::Session { .. } | Popup::Attach { .. } => {
+                false
+            }
+        }
     }
 }
 
@@ -130,6 +148,7 @@ impl Popups {
 
 /// How a popup's face is drawn this frame: its kind's motion, and when it
 /// left if it is leaving.
+#[derive(Clone, Copy)]
 pub(super) struct Face {
     motion: FloatMotion,
     left: Option<Instant>,
@@ -183,12 +202,9 @@ impl CockpitView {
     }
 
     /// Put `popup` up in place of whatever was, with no exit for that one.
-    /// A rename in progress ends and the Composer's popover closes, apart
-    /// from the model picker a mode menu opened from it hangs from.
+    /// A rename in progress ends and the Composer's `/`/`@` menu closes.
     pub(super) fn show_popup(&mut self, popup: Popup, cx: &mut Context<Self>) {
-        if !matches!(&popup, Popup::Mode(menu) if menu.from_picker) {
-            self.popover = None;
-        }
+        self.popover = None;
         if self.rename.is_some() {
             self.finish_rename(false, cx);
         }
@@ -213,13 +229,25 @@ impl CockpitView {
         true
     }
 
+    /// Escape on the popup up: the mode menu inside the model picker shuts
+    /// first, then the popup. Whether anything did.
+    pub(super) fn dismiss_popup(&mut self, cx: &mut Context<Self>) -> bool {
+        if let Some(Popup::ModelPicker(picker)) = self.popups.up_mut() {
+            if picker.kind.mode.take().is_some() {
+                cx.notify();
+                return true;
+            }
+        }
+        self.close_popup(cx)
+    }
+
     /// A popup takes the keyboard whole: the root holds focus while it is
     /// up, or the popup's own field does, so no field under it (a
     /// Decision's, the Composer's) answers its keys. The focus it took
     /// comes back as it closes, unless what it did moved focus elsewhere.
     /// Tended once a frame.
     pub(super) fn tend_popup_focus(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let wants = self.popup().map(|popup| match popup.keys() {
+        let wants = self.popup().map(|popup| match popup.keys(cx) {
             Keys::Root => Some(self.focus.clone()),
             Keys::Field(focus) => Some(focus),
             Keys::Composer(pane) => self
@@ -256,9 +284,23 @@ impl CockpitView {
 
     /// Whether the popup up takes the Cockpit's own keys: the root's key
     /// context then carries `Popup`, and they stand down.
-    pub(super) fn popup_takes_keys(&self) -> bool {
+    pub(super) fn popup_takes_keys(&self, cx: &gpui::App) -> bool {
         self.popup()
-            .is_some_and(|popup| !matches!(popup.keys(), Keys::Composer(_)))
+            .is_some_and(|popup| !matches!(popup.keys(cx), Keys::Composer(_)))
+    }
+
+    pub(super) fn model_picker_popover(&self) -> Option<&Popover<ModelPicker>> {
+        match self.popups.up() {
+            Some(Popup::ModelPicker(picker)) => Some(picker),
+            _ => None,
+        }
+    }
+
+    pub(super) fn model_picker_popover_mut(&mut self) -> Option<&mut Popover<ModelPicker>> {
+        match self.popups.up_mut() {
+            Some(Popup::ModelPicker(picker)) => Some(picker),
+            _ => None,
+        }
     }
 
     pub(super) fn band_menu(&self) -> Option<&Popover<Band>> {
@@ -276,11 +318,12 @@ impl CockpitView {
     }
 
     /// A popup closes once it no longer stands rather than hold the
-    /// keyboard with nothing drawn, or come back later: a Thread's popup
-    /// with its Thread no longer focused or under a sheet, a Session's
-    /// with that Session gone, the checks card with no checks, the plan
-    /// card with no plan, a mode menu from the model picker with the
-    /// picker shut. A page's dialog taking the keyboard closes any.
+    /// keyboard with nothing drawn, or come back later: a Thread's or a
+    /// Pane's popup with it no longer focused or under a sheet, a
+    /// Session's with that Session gone, the checks card with no checks,
+    /// the plan card with no plan, a draft's band menu or picker with the
+    /// draft gone. The mode menu inside the picker goes with its Session.
+    /// A page's dialog taking the keyboard closes any.
     /// Whether `pane` is the focused Pane with no sheet over it: where a
     /// Composer's popup stands.
     fn pane_shown_alone(&self, pane: PaneIdentity, cx: &gpui::App) -> bool {
@@ -293,6 +336,19 @@ impl CockpitView {
         dialog_took_focus: bool,
         cx: &mut Context<Self>,
     ) {
+        let stale_mode = self
+            .model_picker_popover()
+            .and_then(|picker| picker.kind.mode.as_ref())
+            .is_some_and(|menu| {
+                self.cockpit
+                    .thread(menu.thread)
+                    .is_none_or(|open| open.generation() != menu.generation)
+            });
+        if stale_mode {
+            if let Some(picker) = self.model_picker_popover_mut() {
+                picker.kind.mode = None;
+            }
+        }
         let on = |thread: ThreadId, generation: Option<u64>| {
             self.focused_thread() == Some(thread)
                 && !self.sheet_up(cx)
@@ -304,9 +360,16 @@ impl CockpitView {
             None => return,
             Some(_) if dialog_took_focus => false,
             Some(Popup::ContextMenu(_)) => true,
-            Some(Popup::Mode(menu)) => {
-                let picker_up = self.model_picker_open(PaneIdentity::Thread(menu.thread));
-                on(menu.thread, Some(menu.generation)) && (!menu.from_picker || picker_up)
+            Some(Popup::Mode(menu)) => on(menu.thread, Some(menu.generation)),
+            Some(Popup::ModelPicker(picker)) => {
+                let pane = picker.pane;
+                let lives = match pane {
+                    PaneIdentity::Thread(thread) => self.cockpit.thread(thread).is_some(),
+                    PaneIdentity::Draft(_) => self
+                        .index_of(pane)
+                        .is_some_and(|index| self.panes[index].draft().is_some()),
+                };
+                self.pane_shown_alone(pane, cx) && lives
             }
             Some(Popup::Plan(thread)) => {
                 on(*thread, None)
@@ -351,6 +414,7 @@ impl CockpitView {
             Popup::Session { thread, generation } => {
                 self.session_controls_element(*thread, *generation, face, window, cx)
             }
+            Popup::ModelPicker(picker) => self.model_picker_element(picker, face, window, cx),
             Popup::Band(menu) => self.band_menu_element(menu, face, window, cx),
             Popup::Attach { .. } => None,
         }?;
@@ -382,16 +446,44 @@ impl CockpitView {
                 cx.listener(|_, _: &MouseDownEvent, _, cx| cx.stop_propagation()),
             )
             .when(face.left.is_none(), |surface| {
-                surface.on_mouse_down_out(cx.listener(|view, event: &MouseDownEvent, _, cx| {
-                    if !view
-                        .popups
-                        .up()
-                        .is_some_and(|popup| popup.owns(event.position, &view.float_triggers))
-                    {
-                        view.close_popup(cx);
-                    }
+                surface.on_mouse_down_out(cx.listener(move |view, event: &MouseDownEvent, _, cx| {
+                    view.pressed_outside(id, event.position, cx);
                 }))
             });
         motion::float_at(face.motion, face.left, id, surface, opens)
+    }
+
+    /// A press at `at` outside the popup's surface `id`: the popup closes
+    /// unless the press is its own. Outside the mode menu inside the model
+    /// picker, only that menu shuts, unless the press is on the button
+    /// that toggles it.
+    fn pressed_outside(&mut self, id: &'static str, at: Point<Pixels>, cx: &mut Context<Self>) {
+        let triggers = &self.float_triggers;
+        let hit = |key: &str| {
+            triggers
+                .borrow()
+                .get(key)
+                .is_some_and(|bounds| bounds.contains(&at))
+        };
+        if id == PICKER_MODE {
+            if !hit(model_picker::PICKER_PERMISSIONS) {
+                if let Some(Popup::ModelPicker(picker)) = self.popups.up_mut() {
+                    picker.kind.mode = None;
+                    cx.notify();
+                }
+            }
+        } else if self.popups.up().is_some_and(|popup| !popup.owns(at, triggers)) {
+            self.close_popup(cx);
+        }
+    }
+
+    /// Where the control `key` stood as last laid out, for a popup to hang
+    /// from; none yet asks for the frame that lays it out.
+    pub(super) fn hang_from(&self, key: &str, window: &mut Window) -> Option<gpui::Bounds<Pixels>> {
+        let trigger = self.float_triggers.borrow().get(key).copied();
+        if trigger.is_none() {
+            motion::request_frame(window);
+        }
+        trigger
     }
 }

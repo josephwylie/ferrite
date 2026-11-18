@@ -1145,7 +1145,7 @@ fn build(state: &str, label: &str) -> (Scene, Setup) {
             let setup: Setup = Box::new(|view, _, cx| {
                 let thread = view.panes[0].thread().expect("a Thread Pane");
                 let generation = view.cockpit.thread(thread).expect("open").generation();
-                view.toggle_mode_menu(thread, generation, false, cx);
+                view.toggle_mode_menu(thread, generation, cx);
             });
             (scene, setup)
         }

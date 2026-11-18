@@ -587,7 +587,7 @@ fn delayed_bootstrap_preserves_edited_composer_focus_and_another_drafts_picker(
             Some(PaneIdentity::Draft(other))
         );
         assert_eq!(
-            view.popover.as_ref().unwrap().pane,
+            view.model_picker().unwrap().0.pane,
             PaneIdentity::Draft(other)
         );
         let first = view
@@ -599,7 +599,7 @@ fn delayed_bootstrap_preserves_edited_composer_focus_and_another_drafts_picker(
         assert_eq!(sent.lock().unwrap().as_slice(), ["first"]);
         // A changed draft choice cancels the submitted startup before
         // applying the new choice, so the old request can never send.
-        view.popover = None;
+        view.close_popup(cx);
         let composer = view.panes[view.focused()].composer.clone();
         composer.update(cx, |composer, cx| {
             composer.set("cancel on choice".into(), cx)

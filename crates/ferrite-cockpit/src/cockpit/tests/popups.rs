@@ -47,23 +47,19 @@ impl Kind {
 /// The popups up now.
 fn up(view: &Entity<CockpitView>, cx: &mut gpui::VisualTestContext) -> Vec<Kind> {
     view.read_with(cx, |view, _| {
-        let mut up: Vec<Kind> = view
-            .popup()
+        view.popup()
             .map(|popup| match popup {
                 Popup::ContextMenu(_) => Kind::Menu,
                 Popup::Mode(_) => Kind::Mode,
                 Popup::Plan(_) => Kind::Plan,
                 Popup::Checks(_) => Kind::Checks,
                 Popup::Session { .. } => Kind::Session,
+                Popup::ModelPicker(_) => Kind::Picker,
                 Popup::Band(_) => Kind::Band,
                 Popup::Attach { .. } => Kind::Attach,
             })
             .into_iter()
-            .collect();
-        if view.panes.iter().any(|pane| view.model_picker_open(pane.identity)) {
-            up.push(Kind::Picker);
-        }
-        up
+            .collect()
     })
 }
 
@@ -105,7 +101,7 @@ fn open(view: &Entity<CockpitView>, kind: Kind, cx: &mut gpui::VisualTestContext
             ),
             Kind::Mode => {
                 let generation = view.cockpit.thread(thread).unwrap().generation();
-                view.toggle_mode_menu(thread, generation, false, cx);
+                view.toggle_mode_menu(thread, generation, cx);
             }
             Kind::Plan => view.open_plan(window, cx),
             Kind::Checks => view.open_checks(window, cx),

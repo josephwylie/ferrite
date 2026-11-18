@@ -1,21 +1,18 @@
 //! The permission menu (T3's `ComposerPermissionsSection`): the Session's
 //! permission modes as one segmented radio row, the mode under the pointer
 //! named and explained under it. The footer's mode chip opens it over
-//! itself; the model picker's footer opens it over its permissions button.
+//! itself as a popup; the model picker's footer opens it inside the picker
+//! (`ModelPicker::mode`), over its permissions button.
 //! A pick sends the native `SetPermissionMode` (`request_mode`) and shuts
 //! it; ⇧⇥ still cycles the modes without it.
 
 use super::*;
 use ferrite_ui::theme::*;
 
-/// The open menu: the Session it is on, where it hangs, and which mode it
-/// previews.
-#[derive(Clone)]
+/// The open menu: the Session it is on and which mode it previews.
 pub(super) struct ModeMenu {
     pub(super) thread: ThreadId,
     pub(super) generation: u64,
-    /// Opened from the model picker's footer rather than the mode chip.
-    pub(super) from_picker: bool,
     /// The mode under the pointer; else the menu names the mode in force.
     pub(super) preview: Option<String>,
 }
@@ -25,25 +22,9 @@ pub(super) fn chip_trigger(thread: ThreadId) -> SharedString {
     format!("mode-chip-{}", thread.get()).into()
 }
 
-/// The key the control the menu hangs from records its bounds under: the
-/// mode chip, or the model picker's permissions button.
-pub(super) fn trigger_key(thread: ThreadId, from_picker: bool) -> SharedString {
-    if from_picker {
-        model_picker::PICKER_PERMISSIONS.into()
-    } else {
-        chip_trigger(thread)
-    }
-}
-
 impl CockpitView {
     /// Open the permission menu on `thread`'s Session, or shut it.
-    pub(super) fn toggle_mode_menu(
-        &mut self,
-        thread: ThreadId,
-        generation: u64,
-        from_picker: bool,
-        cx: &mut Context<Self>,
-    ) {
+    pub(super) fn toggle_mode_menu(&mut self, thread: ThreadId, generation: u64, cx: &mut Context<Self>) {
         if self
             .mode_menu()
             .is_some_and(|open| (open.thread, open.generation) == (thread, generation))
@@ -54,7 +35,6 @@ impl CockpitView {
                 Popup::Mode(ModeMenu {
                     thread,
                     generation,
-                    from_picker,
                     preview: None,
                 }),
                 cx,
@@ -62,6 +42,7 @@ impl CockpitView {
         }
     }
 
+    /// The menu over its chip, from the chip's left.
     pub(super) fn mode_menu_element(
         &self,
         menu: &ModeMenu,
@@ -69,21 +50,59 @@ impl CockpitView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
+        let trigger = self.hang_from(&chip_trigger(menu.thread), window)?;
+        let surface = self.mode_menu_surface(menu, cx)?;
+        Some(
+            anchored()
+                .anchor(gpui::Anchor::BottomLeft)
+                .position(gpui::point(trigger.left(), trigger.top() - px(FLOAT_OFFSET)))
+                .snap_to_window_with_margin(px(GRID_PAD))
+                .child(self.popup_face(face, "mode-menu-in", surface, ferrite_ui::motion::Opens::Up, cx))
+                .into_any_element(),
+        )
+    }
+
+    /// The menu the model picker's footer opened, over its permissions
+    /// button from that button's right (T3's `align="end"`). A press
+    /// outside it shuts it alone; one on it is the picker's own.
+    pub(super) fn picker_mode_element(
+        &self,
+        menu: &ModeMenu,
+        face: popups::Face,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Option<AnyElement> {
+        let trigger = self.hang_from(model_picker::PICKER_PERMISSIONS, window)?;
+        let surface = self.mode_menu_surface(menu, cx)?;
+        Some(
+            anchored()
+                .anchor(gpui::Anchor::BottomRight)
+                .position(gpui::point(trigger.right(), trigger.top() - px(FLOAT_OFFSET)))
+                .snap_to_window_with_margin(px(GRID_PAD))
+                .child(ferrite_ui::components::on_bounds(
+                    div().child(self.popup_face(
+                        face,
+                        popups::PICKER_MODE,
+                        surface,
+                        ferrite_ui::motion::Opens::Up,
+                        cx,
+                    )),
+                    self.record_trigger(popups::PICKER_MODE.into()),
+                ))
+                .into_any_element(),
+        )
+    }
+
+    fn mode_menu_surface(&self, menu: &ModeMenu, cx: &mut Context<Self>) -> Option<Stateful<Div>> {
         let &ModeMenu {
             thread,
             generation,
-            from_picker,
             ref preview,
         } = menu;
         let open = self.cockpit.thread(thread)?;
         if open.generation() != generation {
             return None;
         }
-        let key = trigger_key(thread, from_picker);
-        let Some(trigger) = self.float_triggers.borrow().get(&key).copied() else {
-            ferrite_ui::motion::request_frame(window);
-            return None;
-        };
         let mut modes = open.permission_modes();
         // Claude's order: `Auto` first.
         modes.sort_by_key(|choice| choice.value != "auto");
@@ -136,7 +155,7 @@ impl CockpitView {
                         MouseButton::Left,
                         cx.listener(move |view, _: &MouseDownEvent, window, cx| {
                             cx.stop_propagation();
-                            view.close_popup(cx);
+                            view.dismiss_popup(cx);
                             view.request_mode(thread, generation, value.clone(), window, cx);
                             cx.notify();
                         }),
@@ -186,26 +205,6 @@ impl CockpitView {
             )
             .child(track)
             .child(preview);
-        // Over its chip from the chip's left; over the picker's button,
-        // from that button's right (T3's `align="end"`).
-        let (anchor, x) = if from_picker {
-            (gpui::Anchor::BottomRight, trigger.right())
-        } else {
-            (gpui::Anchor::BottomLeft, trigger.left())
-        };
-        Some(
-            anchored()
-                .anchor(anchor)
-                .position(gpui::point(x, trigger.top() - px(FLOAT_OFFSET)))
-                .snap_to_window_with_margin(px(GRID_PAD))
-                .child(self.popup_face(
-                    face,
-                    "mode-menu-in",
-                    menu,
-                    ferrite_ui::motion::Opens::Up,
-                    cx,
-                ))
-                .into_any_element(),
-        )
+        Some(menu)
     }
 }

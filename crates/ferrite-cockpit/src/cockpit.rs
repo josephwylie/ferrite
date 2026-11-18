@@ -70,7 +70,7 @@ type FloatTriggers =
 
 use self::context_menu::{MenuTarget, MenuVerb};
 use self::popups::Popup;
-use self::model_picker::{Column, ModelPicker};
+use self::model_picker::Column;
 use ferrite_ui::components::home_relative;
 use ferrite_ui::components::Tip as _;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -983,9 +983,6 @@ struct Popover<K = Kind> {
     /// may be a picker's standing choice below the fold.
     scroll: ScrollHandle,
     revealed: std::cell::Cell<bool>,
-    /// Why every row is dead for now (`tuning_hold`): a picker built while
-    /// its Thread's turn runs. The disabled rows say it in their tooltip.
-    hold: Option<&'static str>,
 }
 
 /// Which popover holds the slot. The rows, keys, dismissal, heal and paint
@@ -1008,11 +1005,6 @@ enum Kind {
         query: String,
         request_id: u64,
     },
-    /// The model picker (`model_picker.rs`): every Provider's models and
-    /// the Reasoning column, a Thread's picks re-aiming it and a draft's
-    /// making its band choice. Opened by the model chip, `/model` and
-    /// `/effort`.
-    Provider(Box<ModelPicker>),
 }
 
 /// #29: a draft's Project or Workspace menu, a popup (`Popup::Band`): one
@@ -1048,21 +1040,6 @@ struct PendingDiscovery {
 }
 
 static NEXT_FILE_SEARCH: AtomicU64 = AtomicU64::new(1);
-
-impl Kind {
-    /// The model picker's own line holds the keyboard while it is open.
-    fn holds_keyboard(&self) -> bool {
-        matches!(self, Kind::Provider(_))
-    }
-
-    /// Text-derived popovers follow the line: `sync_menu` rebuilds them on
-    /// every edit and escape mutes them until the text moves. The rest are
-    /// opened by an act, closed by one, and dismissed by typing a prompt
-    /// over them.
-    fn follows_text(&self) -> bool {
-        matches!(self, Kind::Commands | Kind::Files { .. })
-    }
-}
 
 /// One row beside its own consequence. The paint half is the Pane's
 /// `MenuRow`, reached through `Deref` so a row reads like the line it
@@ -2301,28 +2278,19 @@ impl CockpitView {
             .iter()
             .find(|pane| pane.composer == composer)
             .map(|pane| pane.identity);
-        let picker = self
-            .popover
-            .as_ref()
-            .is_some_and(|open| Some(open.pane) == edited && !open.kind.follows_text());
         let band = self
             .band_menu()
             .filter(|open| Some(open.pane) == edited)
             .map(|open| open.kind.chip);
         if band == Some(pane::BandChip::Project) {
             self.sync_band_rows(cx);
-        } else if !composer.read(cx).is_empty() {
-            if picker {
-                self.popover = None;
-            }
-            if band.is_some() {
-                self.close_popup(cx);
-            }
+        } else if band.is_some() && !composer.read(cx).is_empty() {
+            self.close_popup(cx);
         }
         let popover_on = self.popover.as_ref().map(|open| open.pane);
         if self.suppress_recall_menu_once {
             self.suppress_recall_menu_once = false;
-            self.close_text_menu();
+            self.popover = None;
         } else {
             self.menu_muted = false;
             self.sync_menu(cx);
@@ -2336,18 +2304,6 @@ impl CockpitView {
         match edited {
             Some(edited) if !menu_moved => self.notify_part(parts::Part::Pane(edited), cx),
             _ => cx.notify(),
-        }
-    }
-
-    /// Close the `/`/`@` menu if that is what the slot holds; a picker or
-    /// a band chip is not text-derived and stays.
-    fn close_text_menu(&mut self) {
-        if self
-            .popover
-            .as_ref()
-            .is_some_and(|open| open.kind.follows_text())
-        {
-            self.popover = None;
         }
     }
 
@@ -2429,14 +2385,13 @@ impl CockpitView {
             }
         }
         let models_changed = self.cockpit.take_models_changed();
-        let tuning_availability_changed = self.popover.as_ref().is_some_and(|open| {
-            matches!(open.kind, Kind::Provider(_))
-                && open.pane.thread().is_some_and(|thread| {
-                    self.cockpit
-                        .thread(thread)
-                        .and_then(|thread| tuning_hold(&thread))
-                        != open.hold
-                })
+        let tuning_availability_changed = self.model_picker().is_some_and(|(open, picker)| {
+            open.pane.thread().is_some_and(|thread| {
+                self.cockpit
+                    .thread(thread)
+                    .and_then(|thread| tuning_hold(&thread))
+                    != picker.hold
+            })
         });
         if models_changed || tuning_availability_changed {
             self.refresh_model_picker(cx);
@@ -4223,7 +4178,7 @@ impl CockpitView {
     }
 
     fn interrupt(&mut self, _: &Interrupt, window: &mut Window, cx: &mut Context<Self>) {
-        if self.close_popup(cx) {
+        if self.dismiss_popup(cx) {
             return;
         }
         if let Some(transcript) = self.panes.get(self.focused()).and_then(|pane| pane.transcript()) {
@@ -4711,11 +4666,8 @@ impl CockpitView {
     /// picker or a band chip holds the slot while it is up and is left
     /// alone here.
     fn sync_menu(&mut self, cx: &mut Context<Self>) {
-        if self
-            .popover
-            .as_ref()
-            .is_some_and(|open| !open.kind.follows_text())
-        {
+        // A band menu reads the line itself (`sync_band_rows`).
+        if self.band_menu().is_some() {
             return;
         }
         self.popover = self.derive_menu(cx);
@@ -4766,7 +4718,6 @@ impl CockpitView {
         Some(Popover {
             scroll: ScrollHandle::new(),
             revealed: Default::default(),
-            hold: None,
             pane: identity,
             kind: Kind::Commands,
             rows,
@@ -4839,7 +4790,6 @@ impl CockpitView {
                         return Some(Popover {
                             scroll: ScrollHandle::new(),
                             revealed: Default::default(),
-                            hold: None,
                             pane: identity,
                             kind: Kind::Commands,
                             rows: vec![Row {
@@ -4907,7 +4857,6 @@ impl CockpitView {
                 return Some(Popover {
                     scroll: ScrollHandle::new(),
                     revealed: Default::default(),
-                    hold: None,
                     pane: identity,
                     kind: Kind::Commands,
                     rows,
@@ -4991,7 +4940,6 @@ impl CockpitView {
             return Some(Popover {
                 scroll: ScrollHandle::new(),
                 revealed: Default::default(),
-                hold: None,
                 pane: pane.identity,
                 kind: Kind::Commands,
                 rows,
@@ -5020,7 +4968,6 @@ impl CockpitView {
                 return Some(Popover {
                     scroll: ScrollHandle::new(),
                     revealed: Default::default(),
-                    hold: None,
                     pane: pane.identity,
                     kind: Kind::Files {
                         files: std::rc::Rc::new(Vec::new()),
@@ -5077,7 +5024,6 @@ impl CockpitView {
         Some(Popover {
             scroll: ScrollHandle::new(),
             revealed: Default::default(),
-            hold: None,
             pane: pane.identity,
             kind: Kind::Files {
                 files,
@@ -5190,10 +5136,8 @@ impl CockpitView {
     /// picker takes no mute, since nothing reopens it; a band menu also
     /// returns the chip's tab focus to the prompt line.
     fn menu_dismiss(&mut self, _: &MenuDismiss, _window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(open) = self.popover.take() {
-            if open.kind.follows_text() {
-                self.menu_muted = true;
-            }
+        if self.popover.take().is_some() {
+            self.menu_muted = true;
         } else if self.band_menu().is_some() {
             self.close_popup(cx);
             if let Some(draft) = self.focused_draft_mut() {
@@ -5858,11 +5802,8 @@ impl CockpitView {
             return;
         }
         if chip == pane::BandChip::Provider {
-            if self.popover.as_ref().is_some_and(|open| {
-                open.pane == identity && matches!(open.kind, Kind::Provider(_))
-            }) {
-                self.popover = None;
-                cx.notify();
+            if self.model_picker_open(identity) {
+                self.close_popup(cx);
             } else {
                 self.open_model_picker(identity, Column::List, cx);
             }
@@ -5878,7 +5819,6 @@ impl CockpitView {
         let menu = Popover {
             scroll: ScrollHandle::new(),
             revealed: Default::default(),
-            hold: None,
             pane: identity,
             kind: Band { chip, from_hero },
             rows,
@@ -7010,10 +6950,6 @@ impl CockpitView {
             .popover
             .as_ref()
             .filter(|open| open.pane == self.panes[index].identity)?;
-        // The model picker hangs over the box (`model_picker_element`).
-        if matches!(open.kind, Kind::Provider(_)) {
-            return None;
-        }
         Some(self.menu_surface(open, Some(&open.kind), cx))
     }
 
@@ -7022,7 +6958,7 @@ impl CockpitView {
     /// `FLOAT_OFFSET` over the chip — or, opened from the hero's project
     /// word, `FLOAT_OFFSET` under it — kept inside the window's margin. The chip has been
     /// drawn before it can be pressed, so its bounds are always recorded.
-    pub(super) fn band_menu_element(
+    fn band_menu_element(
         &self,
         open: &Popover<Band>,
         face: popups::Face,
@@ -7186,7 +7122,7 @@ impl CockpitView {
             .map(|row| row.row.detail.clone());
         let row_top = open.selected as f32 * ferrite_ui::theme::FLOAT_ROW_H
             + f32::from(open.scroll.offset().y);
-        let cap = if text.is_some_and(Kind::follows_text) {
+        let cap = if text.is_some() {
             ferrite_ui::theme::SLASH_MENU_MAX_H
         } else {
             ferrite_ui::theme::MENU_MAX_H
@@ -7774,7 +7710,6 @@ fn note_popover(pane: PaneIdentity, note: &'static str) -> Popover {
     Popover {
         scroll: ScrollHandle::new(),
         revealed: Default::default(),
-        hold: None,
         pane,
         kind: Kind::Commands,
         rows: vec![note_row(note)],
@@ -8153,14 +8088,6 @@ fn effort_detail(effort: &str) -> &'static str {
     }
 }
 
-fn provider_of_title(title: &str) -> Option<Provider> {
-    match title {
-        "Claude" => Some(Provider::Claude),
-        "Codex" => Some(Provider::Codex),
-        _ => None,
-    }
-}
-
 impl Render for CockpitView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         ferrite_ui::motion::hover_frame_start(cx);
@@ -8371,24 +8298,12 @@ impl CockpitView {
         self.tend_terminal(window, cx);
         self.tend_agent_drills(cx);
 
-        // The popover belongs to the focused Pane's Composer (#23):
-        // leaving that Pane closes it here — and a
-        // picker closes the moment its offer expires (#25): a band chip
-        // (#29) goes with the draft becoming a Thread. Render is the one
-        // chokepoint every open, pick, dismissal and heal passes.
+        // The `/`/`@` menu belongs to the focused Pane's Composer (#23):
+        // leaving that Pane closes it here.
         if self.popover.as_ref().is_some_and(|open| {
-            let focused = self.panes.get(self.focused());
-            focused.is_none_or(|pane| pane.identity != open.pane)
-                || match &open.kind {
-                    // The model picker outlives the first prompt (the
-                    // model can always change); only its Thread going
-                    // away closes it.
-                    Kind::Provider(_) => match open.pane {
-                        PaneIdentity::Thread(thread) => self.cockpit.thread(thread).is_none(),
-                        PaneIdentity::Draft(_) => focused.is_some_and(|pane| pane.draft().is_none()),
-                    },
-                    Kind::Commands | Kind::Files { .. } => false,
-                }
+            self.panes
+                .get(self.focused())
+                .is_none_or(|pane| pane.identity != open.pane)
         }) {
             self.popover = None;
         }
@@ -8600,11 +8515,7 @@ impl CockpitView {
                 window.focus(&focus, cx);
             }
         } else if field_holds_keyboard {
-        } else if !self
-            .popover
-            .as_ref()
-            .is_some_and(|open| open.kind.holds_keyboard())
-            && !wanted.is_focused(window)
+        } else if !wanted.is_focused(window)
             && (wanted == self.focus || !wanted.contains_focused(window, cx))
         {
             window.focus(&wanted, cx);
@@ -8688,7 +8599,7 @@ impl CockpitView {
             .track_focus(&self.focus)
             // A popup joins the context; the keymap's rows stand down for
             // it.
-            .key_context(ferrite_ui::keymap::root_context(self.popup_takes_keys()).as_str())
+            .key_context(ferrite_ui::keymap::root_context(self.popup_takes_keys(cx)).as_str())
             // Nothing that acts on a lost machine's Threads is listened for
             // until it is back (ADR 0026).
             .when(!lost, |root| {
@@ -8877,12 +8788,10 @@ impl CockpitView {
                 MouseButton::Left,
                 cx.listener(|view, _: &MouseDownEvent, _, cx| {
                     let mut dismissed = false;
-                    if let Some(open) = view.popover.take() {
+                    if view.popover.take().is_some() {
                         // The menu mutes until the text moves, or the very
                         // next frame would reopen it over the same trigger.
-                        if open.kind.follows_text() {
-                            view.menu_muted = true;
-                        }
+                        view.menu_muted = true;
                         dismissed = true;
                     }
                     // A press outside the editor abandons the rename — the
@@ -8908,7 +8817,7 @@ impl CockpitView {
             // arrows run its rows before any field under it reads them.
             .capture_key_down(cx.listener(|view, event: &gpui::KeyDownEvent, window, cx| {
                 let key = &event.keystroke;
-                if key.key == "escape" && !key.modifiers.modified() && view.close_popup(cx) {
+                if key.key == "escape" && !key.modifiers.modified() && view.dismiss_popup(cx) {
                     cx.stop_propagation();
                 } else if let Some(index) = view.menu_mnemonic(key) {
                     cx.stop_propagation();
@@ -8963,7 +8872,6 @@ impl CockpitView {
             .children(self.panel_element(window, cx))
             .child(self.plane_seams(panel_w))
             .children(self.title_tools_element(cx))
-            .children(self.model_picker_element(window, cx))
             .children(self.popup_element(window, cx))
             .child(self.sheets.clone())
             .children(self.toast_float(window, cx))
@@ -9684,7 +9592,7 @@ impl CockpitView {
         let mode = open.permission_mode().unwrap_or("default").to_string();
         let label = pane::permission_mode_label(&mode, &modes);
         let key = thread.get() as usize;
-        let menu_up = self.mode_menu().is_some_and(|menu| menu.thread == thread && !menu.from_picker);
+        let menu_up = self.mode_menu().is_some_and(|menu| menu.thread == thread);
         let trigger = pane::toolbar_chip(("mode-picker", key), cx)
             .debug_selector(move || format!("mode-picker-{key}"))
             .tip_unless_open(menu_up, "Permission mode")
@@ -9705,7 +9613,7 @@ impl CockpitView {
             cx.listener(move |view, _: &MouseDownEvent, _, cx| {
                 cx.stop_propagation();
                 view.focus_pane(index);
-                view.toggle_mode_menu(thread, generation, false, cx);
+                view.toggle_mode_menu(thread, generation, cx);
             }),
         );
         Some(wrap(
