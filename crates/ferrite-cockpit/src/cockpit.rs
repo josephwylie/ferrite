@@ -51,7 +51,7 @@ mod new_task_view;
 mod project_editor_view;
 mod settings_view;
 mod sheets;
-mod side_chat;
+mod side_chat_view;
 mod snooze;
 pub(crate) mod starts;
 mod surfaces;
@@ -423,8 +423,8 @@ pub struct CockpitView {
     )>,
     /// Stable text-run identities; selection itself belongs to GPUI.
     selection: TranscriptText,
-    /// Each Thread's side chat, the right pane's other body.
-    side_chats: side_chat::SideChats,
+    /// Every Thread's side chat, a body of the Panel.
+    side_chat: Entity<side_chat_view::SideChatView>,
     /// Drafts sent while a Session was starting, kept whole until it takes
     /// the prompt or hands it back.
     held_sends: sends::HeldSends,
@@ -450,8 +450,9 @@ pub struct CockpitView {
     /// scroll, keyboard, search, picks and undo notice, and asks the
     /// Cockpit for the rest through `NavEvent`.
     nav_view: Entity<nav_view::NavView>,
-    /// The Cockpit hearing the nav's events, from its first frame.
-    nav_events: Option<gpui::Subscription>,
+    /// The Cockpit hearing the views it answers with the window (the nav,
+    /// the side chat), from its first frame.
+    view_events: Option<[gpui::Subscription; 2]>,
     /// The window's activation, followed into the Cockpit
     /// (`Cockpit::set_window_active`) once the first frame has a window.
     activation: Option<gpui::Subscription>,
@@ -1366,6 +1367,7 @@ impl CockpitView {
         cx.subscribe(&sheets, Self::on_sheets_event).detach();
         let prs = cx.new(|cx| prs_view::PrsView::new(cockpit_weak.clone(), cx));
         cx.subscribe(&prs, Self::on_prs_event).detach();
+        let side_chat = cx.new(|_| side_chat_view::SideChatView::new(cockpit_weak.clone()));
         let mut view = Self {
             cockpit,
             browsers: Default::default(),
@@ -1387,14 +1389,14 @@ impl CockpitView {
             branch_refreshing: false,
             branch_refresh_queued: false,
             selection: TranscriptText::default(),
-            side_chats: Default::default(),
+            side_chat,
             held_sends: Default::default(),
             tools: Default::default(),
             agent_drills: Default::default(),
             native_copy: None,
             nav_filter: None,
             nav_view: cx.new(|cx| nav_view::NavView::new(cockpit_weak, cx)),
-            nav_events: None,
+            view_events: None,
             activation: None,
             popover: None,
             menu_muted: false,
@@ -8071,6 +8073,19 @@ fn effort_detail(effort: &str) -> &'static str {
     }
 }
 
+impl CockpitView {
+    /// The nav's and the side chat's events, heard from the Cockpit's first
+    /// frame: answering some needs the window.
+    fn hear_views(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.view_events.is_none() {
+            self.view_events = Some([
+                cx.subscribe_in(&self.nav_view, window, Self::on_nav_event),
+                cx.subscribe_in(&self.side_chat, window, Self::on_side_chat_event),
+            ]);
+        }
+    }
+}
+
 impl Render for CockpitView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         ferrite_ui::motion::hover_frame_start(cx);
@@ -8094,7 +8109,7 @@ impl Render for CockpitView {
             }));
             self.watch_lost_focus(window, cx);
         }
-        self.hear_nav(window, cx);
+        self.hear_views(window, cx);
         self.tend_history();
         self.tend_popup_focus(window, cx);
         self.tend_sheet_focus(window, cx);
@@ -8278,7 +8293,6 @@ impl CockpitView {
         // compares scalar keys first, so Composer edits repaint Cockpit chrome
         // without cloning or notifying any retained transcript entity.
         self.sync_visible_transcripts(cx);
-        self.tend_side_chat(window, cx);
         self.tend_terminal(window, cx);
         self.tend_agent_drills(cx);
 

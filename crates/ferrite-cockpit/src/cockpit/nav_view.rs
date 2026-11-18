@@ -322,15 +322,7 @@ impl CockpitView {
         }
     }
 
-    /// The nav's events, heard from the Cockpit's first frame: answering
-    /// some needs the window.
-    pub(super) fn hear_nav(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.nav_events.is_none() {
-            self.nav_events = Some(cx.subscribe_in(&self.nav_view, window, Self::on_nav_event));
-        }
-    }
-
-    fn on_nav_event(
+    pub(super) fn on_nav_event(
         &mut self,
         _: &Entity<NavView>,
         event: &NavEvent,

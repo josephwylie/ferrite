@@ -798,7 +798,7 @@ impl CockpitView {
             Some(SurfaceId::Terminal(number)) => {
                 filled(self.terminal_pane(thread, number, cx).into_any_element())
             }
-            Some(SurfaceId::SideChat(tab)) => filled(self.side_chat_body(thread, tab, cx)),
+            Some(SurfaceId::SideChat(_)) => filled(self.side_chat.clone().into_any_element()),
             Some(SurfaceId::Agent(key)) => filled(self.agent_drill_body(thread, &key, cx)),
             Some(SurfaceId::PullRequest(number)) => filled(self.pr_surface(thread, number, cx)),
         };

@@ -257,7 +257,7 @@ impl Content {
 }
 
 impl CockpitView {
-    pub(super) fn details_content(&self, thread: ThreadId) -> Content {
+    pub(super) fn details_content(&self, thread: ThreadId, cx: &gpui::App) -> Content {
         use super::super::surfaces::SurfaceId;
         use ContextCardItem as Item;
         let mut rows = Vec::new();
@@ -376,10 +376,10 @@ impl CockpitView {
                     if let SurfaceId::SideChat(tab) = surface {
                         let mut row = Row::new(
                             Item::SideChats,
-                            self.side_chat_title(thread, *tab).to_string(),
+                            self.side_chat.read(cx).title(thread, *tab).to_string(),
                             icons::MESSAGES_SQUARE,
                         );
-                        if self.side_chat_running(thread, *tab) {
+                        if self.side_chat_running(thread, *tab, cx) {
                             row.meta = Some("Running".to_string());
                         }
                         row.action = Some(Action::Surface(surface.clone()));

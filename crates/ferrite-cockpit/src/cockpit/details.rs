@@ -213,7 +213,7 @@ impl CockpitView {
             DETAILS_GAP
         };
         let available = (f32::from(canvas.size.height) - top - DETAILS_GAP).max(0.);
-        let content = self.details_content(thread);
+        let content = self.details_content(thread, cx);
         let width = (f32::from(canvas.size.width) - 2. * DETAILS_GAP).clamp(0., DETAILS_W);
         let measured = pane.details.measurements.clone();
         measured.borrow_mut().prepare(
