@@ -105,8 +105,7 @@ fn close_reopen_and_files_preferences_restore_with_the_saved_panel(cx: &mut Test
             cx,
         );
         let preview_tabs = view
-            .context_menu
-            .as_ref()
+            .context_menu()
             .unwrap()
             .rows
             .iter()

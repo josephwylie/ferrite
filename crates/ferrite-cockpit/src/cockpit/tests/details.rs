@@ -390,7 +390,7 @@ fn details_preferences_can_empty_and_restore_the_card(cx: &mut TestAppContext) {
     cx.simulate_click(choose.center(), gpui::Modifiers::none());
     tick(cx);
     view.read_with(cx, |view, _| {
-        let menu = view.context_menu.as_ref().unwrap();
+        let menu = view.context_menu().unwrap();
         assert_eq!(menu.target, MenuTarget::Details(thread));
         let items: Vec<_> = menu.rows.iter().flatten().collect();
         assert_eq!(items.len(), 13);

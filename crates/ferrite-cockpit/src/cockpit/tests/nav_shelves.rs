@@ -357,11 +357,10 @@ fn the_keyboard_walks_the_list_and_follows_a_parked_thread(cx: &mut TestAppConte
     for key in ["shift-f10", "menu"] {
         cx.simulate_keystrokes(key);
         tick(cx);
-        let target = view.read_with(cx, |view, _| view.context_menu.as_ref().map(|menu| menu.target));
+        let target = view.read_with(cx, |view, _| view.context_menu().map(|menu| menu.target));
         assert_eq!(target, Some(MenuTarget::Thread(thread)), "{key} opens the cursor's menu");
         view.update(cx, |view, cx| {
-            view.context_menu = None;
-            cx.notify();
+            view.close_popup(cx);
         });
         tick(cx);
     }
@@ -378,7 +377,7 @@ fn the_filter_menu_scopes_a_project(cx: &mut TestAppContext) {
     cx.simulate_mouse_down(button.center(), gpui::MouseButton::Left, gpui::Modifiers::none());
     tick(cx);
     let project = view.read_with(cx, |view, _| {
-        let menu = view.context_menu.as_ref().expect("its menu");
+        let menu = view.context_menu().expect("its menu");
         assert_eq!(menu.target, MenuTarget::NavFilter);
         let verbs: Vec<MenuVerb> = menu.rows.iter().flatten().map(|(_, verb)| *verb).collect();
         assert_eq!(verbs[0], MenuVerb::FilterProject(None), "All projects");

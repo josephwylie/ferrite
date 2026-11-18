@@ -62,7 +62,7 @@ fn the_factory_button_lists_each_project_and_a_fresh_one_is_empty(cx: &mut TestA
     tick(cx);
     view.read_with(cx, |view, _| {
         assert_eq!(
-            view.context_menu.as_ref().map(|menu| menu.target),
+            view.context_menu().map(|menu| menu.target),
             Some(MenuTarget::NavFactory)
         );
     });

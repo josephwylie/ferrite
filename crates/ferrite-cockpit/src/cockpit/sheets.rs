@@ -199,21 +199,24 @@ impl CockpitView {
         self.sheets.read(cx).up().is_some()
     }
 
-    /// Put `sheet` up in place of whatever was.
+    /// Put `sheet` up in place of whatever was. The popup up goes too.
     pub(super) fn show_sheet(&mut self, sheet: Sheet, cx: &mut Context<Self>) {
         if let Some(replaced) = self.sheets.update(cx, |sheets, cx| sheets.show(sheet, cx)) {
             self.sheet_gone(replaced, cx);
         }
+        self.close_popup(cx);
         cx.notify();
     }
 
     /// Close the sheet up, if one is; whether one was. Every close comes
     /// here: Escape, the veil, a sheet's own close button, a sheet done.
+    /// The popup up goes with it, as does a menu the sheet opened.
     pub(super) fn hide_sheet(&mut self, cx: &mut Context<Self>) -> bool {
         let Some(gone) = self.sheets.update(cx, |sheets, cx| sheets.hide(cx)) else {
             return false;
         };
         self.sheet_gone(gone, cx);
+        self.close_popup(cx);
         cx.notify();
         true
     }

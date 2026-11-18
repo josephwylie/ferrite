@@ -138,8 +138,7 @@ fn the_more_menu_holds_claudes_four_rows(cx: &mut TestAppContext) {
         view.open_context_menu(MenuTarget::TerminalMore(thread), gpui::point(px(1700.), px(60.)), cx)
     });
     let rows = view.read_with(cx, |view, _| {
-        view.context_menu
-            .as_ref()
+        view.context_menu()
             .unwrap()
             .rows
             .iter()
@@ -191,7 +190,7 @@ fn a_selection_offers_attach_and_attaches_as_a_reply_tile(cx: &mut TestAppContex
     tick(cx);
     let names = |view: &Entity<CockpitView>, cx: &mut gpui::VisualTestContext| {
         view.read_with(cx, |view, _| {
-            view.context_menu.as_ref().map(|menu| {
+            view.context_menu().map(|menu| {
                 menu.rows.iter().flatten().map(|(item, _)| (item.label.to_string(), item.disabled)).collect::<Vec<_>>()
             })
         })
@@ -207,8 +206,7 @@ fn a_selection_offers_attach_and_attaches_as_a_reply_tile(cx: &mut TestAppContex
         ]
     );
     view.update(cx, |view, cx| {
-        view.context_menu = None;
-        cx.notify();
+        view.close_popup(cx);
     });
     tick(cx);
     let pill = cx.debug_bounds("terminal-attach").unwrap();
@@ -228,8 +226,7 @@ fn with_no_selection_the_menu_has_no_attach_row_and_copy_is_greyed(cx: &mut Test
     tick(cx);
     let _ = thread;
     let rows = view.read_with(cx, |view, _| {
-        view.context_menu
-            .as_ref()
+        view.context_menu()
             .unwrap()
             .rows
             .iter()

@@ -695,7 +695,6 @@ impl CockpitView {
         cx.subscribe(&card, Self::on_project_editor_event).detach();
         self.show_sheet(sheets::Sheet::ProjectEditor(card), cx);
         self.popover = None;
-        self.context_menu = None;
         self.list_remote_path(cx);
         cx.notify();
     }

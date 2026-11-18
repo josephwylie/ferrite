@@ -330,11 +330,11 @@ fn the_composer_mode_chip_opens_a_native_mode_menu_while_idle(cx: &mut TestAppCo
     cx.simulate_click(chip.center(), gpui::Modifiers::none());
     cx.run_until_parked();
     view.read_with(cx, |view, _| {
-        assert!(view.mode_picker.is_some(), "a click opens the mode menu");
+        assert!(view.mode_menu().is_some(), "a click opens the mode menu");
     });
     tick(cx);
     view.read_with(cx, |view, _| {
-        assert!(view.mode_picker.is_some(), "the menu survives a redraw");
+        assert!(view.mode_menu().is_some(), "the menu survives a redraw");
     });
     // The menu rests above its chip (SPEC §5.5), clear of it; its one
     // segment is the pick.

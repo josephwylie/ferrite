@@ -32,16 +32,16 @@ impl Kind {
 /// The popups up now.
 fn up(view: &Entity<CockpitView>, cx: &mut gpui::VisualTestContext) -> Vec<Kind> {
     view.read_with(cx, |view, _| {
-        [
-            (Kind::Menu, view.context_menu.is_some()),
-            (Kind::Mode, view.mode_picker.is_some()),
-            (Kind::Plan, view.plan_card.is_some()),
-            (Kind::Checks, view.context_checks.is_some()),
-            (Kind::Session, view.session_controls.is_some()),
-        ]
-        .into_iter()
-        .filter_map(|(kind, up)| up.then_some(kind))
-        .collect()
+        view.popup()
+            .map(|popup| match popup {
+                Popup::ContextMenu(_) => Kind::Menu,
+                Popup::Mode(_) => Kind::Mode,
+                Popup::Plan(_) => Kind::Plan,
+                Popup::Checks(_) => Kind::Checks,
+                Popup::Session { .. } => Kind::Session,
+            })
+            .into_iter()
+            .collect()
     })
 }
 
@@ -140,7 +140,6 @@ fn escape_closes_a_menu_or_card_and_stops_no_turn(cx: &mut TestAppContext) {
 /// Escape with the permission mode menu or the plan card up closed
 /// neither: it stopped the turn.
 #[gpui::test]
-#[ignore = "bug: escape with the mode menu or the plan card up stops the turn"]
 fn escape_closes_the_mode_menu_and_the_plan_card_and_stops_no_turn(cx: &mut TestAppContext) {
     let (view, fake, cx) = window(cx, "popups-escape-mode", 1);
     for kind in [Kind::Mode, Kind::Plan] {
@@ -155,7 +154,6 @@ fn escape_closes_the_mode_menu_and_the_plan_card_and_stops_no_turn(cx: &mut Test
 /// With a Decision waiting and the Composer empty, Escape on the mode
 /// menu denied the Decision.
 #[gpui::test]
-#[ignore = "bug: escape on the mode menu denies a waiting Decision"]
 fn escape_on_the_mode_menu_leaves_a_waiting_decision_unanswered(cx: &mut TestAppContext) {
     let (view, fake, cx) = window(cx, "popups-escape-decision", 1);
     fake.streams.borrow()[0].send(decision("perm_mode")).unwrap();
@@ -174,7 +172,6 @@ fn escape_on_the_mode_menu_leaves_a_waiting_decision_unanswered(cx: &mut TestApp
 /// The mode menu opened from the model picker's footer is the picker's:
 /// Escape closes the menu alone, and the picker closing takes the menu.
 #[gpui::test]
-#[ignore = "bug: the mode menu outlives the model picker it hangs from"]
 fn the_mode_menu_from_the_model_picker_goes_before_it_and_with_it(cx: &mut TestAppContext) {
     let (view, _fake, cx) = window(cx, "popups-mode-from-picker", 1);
     let thread = view.read_with(cx, |view, _| view.panes[0].thread().unwrap());
@@ -210,7 +207,6 @@ fn the_mode_menu_from_the_model_picker_goes_before_it_and_with_it(cx: &mut TestA
 
 /// Opening any popup over any other leaves the new one up alone.
 #[gpui::test]
-#[ignore = "bug: two popups can be up at once"]
 fn opening_a_popup_over_another_leaves_one_up(cx: &mut TestAppContext) {
     let (view, _fake, cx) = window(cx, "popups-one-up", 1);
     for under in KINDS {
@@ -226,7 +222,6 @@ fn opening_a_popup_over_another_leaves_one_up(cx: &mut TestAppContext) {
 /// The plan card is its Thread's: another Thread taking focus closes it,
 /// and coming back does not bring it back.
 #[gpui::test]
-#[ignore = "bug: the plan card waits out of sight and comes back"]
 fn the_plan_card_closes_when_another_thread_takes_focus(cx: &mut TestAppContext) {
     let (view, _fake, cx) = window(cx, "popups-plan-focus", 2);
     open(&view, Kind::Plan, cx);
@@ -247,7 +242,6 @@ fn the_plan_card_closes_when_another_thread_takes_focus(cx: &mut TestAppContext)
 
 /// A sheet opening closes whatever popup is up.
 #[gpui::test]
-#[ignore = "bug: the plan card stays up under Settings"]
 fn a_sheet_opening_closes_the_popup(cx: &mut TestAppContext) {
     let (view, _fake, cx) = window(cx, "popups-sheet", 1);
     for kind in KINDS {
@@ -312,4 +306,56 @@ fn a_menu_opened_from_a_sheet_goes_with_the_sheet(cx: &mut TestAppContext) {
     tick(cx);
     assert!(!super::sheets::new_task_up(cx));
     assert_eq!(up(&view, cx), [], "the sheet closing takes the menu");
+}
+
+/// A press on a context menu's submenu, drawn beside the menu, is the
+/// menu's own: its row runs.
+#[gpui::test]
+fn a_press_on_a_submenu_row_runs_it(cx: &mut TestAppContext) {
+    use crate::cockpit::context_menu::Submenu;
+    let (view, _fake, cx) = window(cx, "popups-submenu", 1);
+    let thread = view.read_with(cx, |view, _| view.panes[0].thread().unwrap());
+    open(&view, Kind::Menu, cx);
+    let snooze = view.read_with(cx, |view, _| {
+        view.context_menu()
+            .unwrap()
+            .rows
+            .iter()
+            .position(|row| matches!(row, Some((_, MenuVerb::Submenu(Submenu::Snooze)))))
+            .expect("the Snooze row")
+    });
+    let parent = debug_bounds(cx, format!("context-menu-row-{snooze}")).expect("Snooze");
+    cx.simulate_mouse_move(parent.center(), None, gpui::Modifiers::none());
+    tick(cx);
+    let row = cx.debug_bounds("context-submenu-row-0").expect("the pointer opens the submenu");
+    cx.simulate_click(row.center(), gpui::Modifiers::none());
+    tick(cx);
+    assert_eq!(up(&view, cx), [], "the row closes the menu");
+    assert!(
+        view.read_with(cx, |view, _| view.cockpit.thread(thread).unwrap().snooze().is_some()),
+        "and its verb ran"
+    );
+}
+
+/// A card takes the keyboard whole while it is up: a key typed reaches no
+/// field under it, and Escape gives the keyboard back to the Composer.
+#[gpui::test]
+fn a_card_takes_the_keyboard_and_gives_it_back(cx: &mut TestAppContext) {
+    let (view, _fake, cx) = window(cx, "popups-keyboard", 1);
+    let composer = view.read_with(cx, |view, cx| view.panes[0].composer.focus_handle(cx));
+    cx.update(|window, cx| window.focus(&composer, cx));
+    tick(cx);
+    for kind in [Kind::Plan, Kind::Checks, Kind::Session] {
+        open(&view, kind, cx);
+        cx.simulate_keystrokes("x");
+        tick(cx);
+        assert_eq!(composer_text(&view, cx), "", "{kind:?}: the key reached no field");
+        assert_eq!(up(&view, cx), [kind], "{kind:?} stays up");
+        cx.simulate_keystrokes("escape");
+        tick(cx);
+        assert!(
+            cx.update(|window, _| composer.is_focused(window)),
+            "{kind:?}: the Composer has the keyboard back"
+        );
+    }
 }

@@ -291,7 +291,7 @@ impl CockpitView {
                 .and_then(|project| self.cockpit.registry().project(project))
                 .map(|project| project.title.clone().into()),
             factory,
-            menu: self.context_menu.as_ref().map(|menu| menu.target),
+            menu: self.context_menu().map(|menu| menu.target),
             open,
             rename: match &self.rename {
                 Some((RenameTarget::Thread(thread), editor)) => Some((*thread, editor.clone())),

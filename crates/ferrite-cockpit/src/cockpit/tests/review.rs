@@ -343,7 +343,7 @@ fn the_right_click_menu_comments_opens_and_copies(cx: &mut TestAppContext) {
     right_click(second, cx);
     let row = |verb: MenuVerb, cx: &mut gpui::VisualTestContext| {
         view.read_with(cx, |view, _| {
-            let menu = view.context_menu.as_ref().expect("the menu is up");
+            let menu = view.context_menu().expect("the menu is up");
             menu.rows
                 .iter()
                 .position(|row| matches!(row, Some((_, found)) if *found == verb))
@@ -351,7 +351,7 @@ fn the_right_click_menu_comments_opens_and_copies(cx: &mut TestAppContext) {
         })
     };
     view.read_with(cx, |view, _| {
-        let menu = view.context_menu.as_ref().expect("a right-click opens it");
+        let menu = view.context_menu().expect("a right-click opens it");
         assert_eq!(menu.target, MenuTarget::Review { thread, line: 1 });
         let labels: Vec<&str> = menu
             .rows

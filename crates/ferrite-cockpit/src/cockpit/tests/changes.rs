@@ -102,8 +102,7 @@ fn the_menus_hold_what_the_spec_names_and_a_scope_rereads(cx: &mut TestAppContex
     opened(&view, thread, cx);
     let names = |view: &Entity<CockpitView>, cx: &mut gpui::VisualTestContext| {
         view.read_with(cx, |view, _| {
-            view.context_menu
-                .as_ref()
+            view.context_menu()
                 .unwrap()
                 .rows
                 .iter()

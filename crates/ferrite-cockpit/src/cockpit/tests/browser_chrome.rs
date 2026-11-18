@@ -317,10 +317,9 @@ fn a_right_click_on_a_link_offers_the_page_menu(cx: &mut TestAppContext) {
         link: Some("http://localhost:5173/next".into()),
         selection: None,
     });
-    until(cx, |cx| view.read_with(cx, |view, _| view.context_menu.is_some()));
+    until(cx, |cx| view.read_with(cx, |view, _| view.context_menu().is_some()));
     let labels = view.read_with(cx, |view, _| {
-        view.context_menu
-            .as_ref()
+        view.context_menu()
             .unwrap()
             .rows
             .iter()
@@ -415,7 +414,7 @@ fn a_dialog_that_arrives_under_an_open_menu_closes_it_and_takes_the_keys(cx: &mu
     tick(cx);
     let (open, held) = cx.update(|window, cx| {
         let view = view.read(cx);
-        (view.context_menu.is_some(), view.browsers.dialog_holds_focus(window, cx))
+        (view.context_menu().is_some(), view.browsers.dialog_holds_focus(window, cx))
     });
     assert!(!open && held, "the dialog closed the menu and holds the keys");
 }

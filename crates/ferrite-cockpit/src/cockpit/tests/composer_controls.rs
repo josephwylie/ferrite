@@ -324,15 +324,14 @@ fn the_toolbar_chips_open_their_pickers_with_and_without_a_session(cx: &mut Test
         cx.run_until_parked();
         tick(cx);
         view.read_with(cx, |view, _| {
-            assert!(view.mode_picker.is_some(), "the mode chip opens its menu");
+            assert!(view.mode_menu().is_some(), "the mode chip opens its menu");
         });
         let item = cx
             .debug_bounds("mode-segment-0")
             .expect("the mode menu is drawn");
         assert!(item.bottom() <= mode.top(), "{item:?} rests above {mode:?}");
         view.update(cx, |view, cx| {
-            view.mode_picker = None;
-            cx.notify();
+            view.close_popup(cx);
         });
         tick(cx);
         // The model and its effort are one chip: it opens the model
