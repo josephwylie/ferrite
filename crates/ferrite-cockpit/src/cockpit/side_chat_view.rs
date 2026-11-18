@@ -189,6 +189,20 @@ impl CockpitView {
         self.upsert_surface(owner, SurfaceId::SideChat(id), cx);
     }
 
+    /// Whose side chat a focus that names no `fork_of` is for. Only a
+    /// Server from before `Capability::ForkOf` sends a fork's focus that
+    /// way, and then the one Thread waiting on a fork takes it: with two
+    /// waiting it could be either's. Delete once no such Server runs.
+    pub(super) fn unnamed_fork_owner(&self, thread: ThreadId, cx: &gpui::App) -> Option<ThreadId> {
+        if self.cockpit.names_fork_owners() {
+            return None;
+        }
+        self.side_chat
+            .read(cx)
+            .only_waiting()
+            .filter(|owner| *owner != thread)
+    }
+
     /// A Thread the agent made from `owner`, for a fork its side chat
     /// asked: its tab takes it, and the window stays where it was. False
     /// when no tab of `owner` was waiting — an ordinary fork, for the
@@ -548,6 +562,15 @@ impl SideChatView {
         }
         cx.notify();
         Some(true)
+    }
+
+    /// The Thread whose fork a side chat waits on, when it is the only one.
+    fn only_waiting(&self) -> Option<ThreadId> {
+        let mut waiting = self.asked.keys();
+        match (waiting.next(), waiting.next()) {
+            (Some(owner), None) => Some(*owner),
+            _ => None,
+        }
     }
 
     /// An ordinary fork of `owner` was asked, so one its side chat asked
