@@ -4,7 +4,8 @@ use ferrite_core::activity::{
     AgentInfo, AgentStatus, DecisionHandle, PendingDecision, Subject, TranscriptCoverage,
 };
 use ferrite_pane::decision;
-use ferrite_ui::{components, theme};
+use ferrite_ui::components::{self, Tip as _};
+use ferrite_ui::theme;
 use gpui::component::{
     checkbox::Checkbox,
     input::{Input, InputState},
@@ -494,24 +495,18 @@ impl CockpitView {
         };
         let parent = lineage.last().cloned().unwrap_or(Subject::Main);
         let back_to = crumb_name(&parent);
-        let back_button = components::button(("subagent-back", thread.get()))
-            .debug_selector(move || format!("subagent-back-{}", thread.get()))
-            .tab_stop(true)
-            .flex_shrink_0()
-            .w(px(theme::ICON_BUTTON))
-            .h(px(theme::ICON_BUTTON))
-            .p_0()
-            .rounded(px(theme::R_CONTROL))
-            .accessibility_label(format!("Back to {back_to}"))
-            .tooltip_builder(ferrite_ui::menu::tooltip(format!("Back to {back_to}")))
-            .child(ferrite_ui::icons::icon(
-                ferrite_ui::icons::BACK,
-                theme::ICON_BUTTON_GLYPH,
-                theme::INK_SUBTLE,
-            ))
-            .on_click(cx.listener(move |view, _: &ClickEvent, window, cx| {
-                view.select_subject(thread, parent.clone(), window, cx)
-            }));
+        let back_label = format!("Back to {back_to}");
+        let back_button = components::icon_button(
+            format!("subagent-back-{}", thread.get()),
+            ferrite_ui::icons::BACK,
+            components::IconSize::Standard,
+            back_label.clone(),
+            cx,
+        )
+        .tip(back_label)
+        .on_click(cx.listener(move |view, _: &ClickEvent, window, cx| {
+            view.select_subject(thread, parent.clone(), window, cx)
+        }));
         let name = agent_name(agent.info());
         let word = state_word(agent.status(), agent.fresh());
         let running = agent.fresh()
