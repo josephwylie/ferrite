@@ -6,7 +6,8 @@
 
 use super::*;
 use crate::cockpit::surfaces::{SurfaceId, Surfaces};
-use ferrite_ui::theme::{DOCK_THREAD_MIN_W, MOTION_DUR_BASE_MS, PANEL_W};
+use crate::cockpit::panel::least_w;
+use ferrite_ui::theme::{CAPTION_ALLOWANCE, DOCK_THREAD_MIN_W, MOTION_DUR_BASE_MS};
 
 fn window<'a>(
     name: &str,
@@ -83,18 +84,18 @@ fn fold_nav(folded: bool, view: &Entity<CockpitView>, cx: &mut gpui::VisualTestC
 #[gpui::test]
 fn the_panel_slides_open_and_shut(cx: &mut TestAppContext) {
     let (view, cx) = window("column-panel-slide", 1600., cx);
-    assert_eq!(panel_w(cx), PANEL_W, "first paint is at rest");
+    assert_eq!(panel_w(cx), least_w(), "first paint is at rest");
 
     toggle_panel(&view, cx);
     at(MOTION_DUR_BASE_MS / 4, cx);
     let closing = panel_w(cx);
     assert!(
-        closing > 0.0 && closing < PANEL_W - 20.0,
+        closing > 0.0 && closing < least_w() - 20.0,
         "mid-close: {closing}"
     );
     let right = card_right(&view, cx);
     assert!(
-        right > 1600. - PANEL_W + 20.0 && right < 1600.,
+        right > 1600. - least_w() + 20.0 && right < 1600.,
         "the board follows: {right}"
     );
     assert!((1600. - right - closing).abs() < 0.5, "to the drawn edge");
@@ -108,11 +109,11 @@ fn the_panel_slides_open_and_shut(cx: &mut TestAppContext) {
     at(MOTION_DUR_BASE_MS / 4, cx);
     let opening = panel_w(cx);
     assert!(
-        opening > 0.0 && opening < PANEL_W - 20.0,
+        opening > 0.0 && opening < least_w() - 20.0,
         "mid-open: {opening}"
     );
     at(MOTION_DUR_BASE_MS, cx);
-    assert_eq!(panel_w(cx), PANEL_W);
+    assert_eq!(panel_w(cx), least_w());
     assert_eq!(frame(cx), 0);
 }
 
@@ -124,7 +125,7 @@ fn a_reversal_starts_from_the_current_frame(cx: &mut TestAppContext) {
     toggle_panel(&view, cx);
     at(MOTION_DUR_BASE_MS / 2, cx);
     let before = panel_w(cx);
-    assert!(before > 0.0 && before < PANEL_W, "mid-close: {before}");
+    assert!(before > 0.0 && before < least_w(), "mid-close: {before}");
 
     toggle_panel(&view, cx);
     at(1, cx);
@@ -136,7 +137,7 @@ fn a_reversal_starts_from_the_current_frame(cx: &mut TestAppContext) {
     at(MOTION_DUR_BASE_MS / 4, cx);
     assert!(panel_w(cx) > after, "and now opening");
     at(MOTION_DUR_BASE_MS, cx);
-    assert_eq!(panel_w(cx), PANEL_W);
+    assert_eq!(panel_w(cx), least_w());
 }
 
 /// Drag the panel's edge to `x` with the real pointer, and let go.
@@ -226,7 +227,7 @@ fn reduced_motion_lands_both_columns(cx: &mut TestAppContext) {
     toggle_panel(&view, cx);
     fold_nav(false, &view, cx);
     frame(cx);
-    assert_eq!(panel_w(cx), PANEL_W);
+    assert_eq!(panel_w(cx), least_w());
     assert_eq!(board_left(cx), COLUMN_WIDTH);
     assert_eq!(frame(cx), 0);
 }
@@ -252,18 +253,18 @@ fn drawn_w(view: &Entity<CockpitView>, cx: &mut gpui::VisualTestContext) -> f32 
 fn a_tools_floor_is_not_the_operators_width(cx: &mut TestAppContext) {
     let (view, cx) = window("column-floor", 1600., cx);
     let thread = thread(&view, cx);
-    assert_eq!(drawn_w(&view, cx), PANEL_W);
+    assert_eq!(drawn_w(&view, cx), least_w());
 
     show(&view, SurfaceId::Files, cx);
     let files = drawn_w(&view, cx);
     assert!(files > 700.0, "Files takes most of the window: {files}");
     show(&view, SurfaceId::Overview, cx);
-    assert_eq!(drawn_w(&view, cx), PANEL_W, "back to the compact width");
+    assert_eq!(drawn_w(&view, cx), least_w(), "back to the compact width");
 
     toggle_panel(&view, cx);
     toggle_panel(&view, cx);
     settle(cx);
-    assert_eq!(drawn_w(&view, cx), PANEL_W, "closed and reopened");
+    assert_eq!(drawn_w(&view, cx), least_w(), "closed and reopened");
 
     view.update(cx, |view, _| view.flush_panel_persistence());
     let (saved, dir) = view.read_with(cx, |view, _| {
@@ -308,13 +309,14 @@ fn a_dragged_width_survives_a_visit_to_a_wider_tool(cx: &mut TestAppContext) {
 /// is compact again after it.
 #[gpui::test]
 fn a_wide_tool_in_a_narrow_window_leaves_the_board_its_least(cx: &mut TestAppContext) {
-    let (view, cx) = window("column-narrow", 900., cx);
+    let width = 900. + CAPTION_ALLOWANCE;
+    let (view, cx) = window("column-narrow", width, cx);
     show(&view, SurfaceId::Files, cx);
     let files = drawn_w(&view, cx);
-    assert!(files <= 900. - DOCK_THREAD_MIN_W, "{files}");
+    assert!(files <= width - DOCK_THREAD_MIN_W, "{files}");
     assert!(card_right(&view, cx) >= DOCK_THREAD_MIN_W - 1.0);
     show(&view, SurfaceId::Overview, cx);
-    assert_eq!(drawn_w(&view, cx), PANEL_W);
+    assert_eq!(drawn_w(&view, cx), least_w());
 }
 
 /// The keyboard inside a Panel that slides shut is taken back at once: what

@@ -276,8 +276,9 @@ fn a_right_click_summons_the_menu_and_delete_takes_two_presses(cx: &mut TestAppC
     let thread = view.read_with(cx, |view, _| view.panes[0].thread().unwrap());
 
     // Right-click inside the focused Pane's transcript.
+    let card = cx.update(|window, cx| view.read(cx).pane_rects(window))[0].1;
     cx.simulate_mouse_down(
-        gpui::point(px(600.), px(300.)),
+        gpui::point(px(card.x + card.w / 2.), px(300.)),
         gpui::MouseButton::Right,
         gpui::Modifiers::none(),
     );

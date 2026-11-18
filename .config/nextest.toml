@@ -3,26 +3,13 @@
 # Each line is a debt: fix the test or the product, then delete the line. A
 # `full-ci` label runs the Windows check on a PR.
 #
-# After the browser-annotation test, the Panel's tab strip: a click lands on
-# the wrong tab or nothing, and the chevron never shows. Likely cause,
-# unmeasured: Windows reserves 138px of the 320px Panel head for its caption
-# buttons. `menu_buttons::the_panels_plus_owns_its_menu` presses the same `+`
-# and finds no menu, so it waits on the same cause.
-#
-# Last, connection pairing: the host field is empty after select-all then
-# paste (`settings_window.rs:878`).
+# Besides the browser-annotation test, connection pairing: the host field is
+# empty after select-all then paste (`settings_window.rs:878`).
 [[profile.default.overrides]]
 platform = 'cfg(windows)'
 default-filter = '''
 not (
     test(=cockpit::tests::browser_annotations::browser_annotation_history_keeps_a_distinct_reviewable_capture)
-  | test(=cockpit::tests::panel_preview::another_tab_keeps_the_preview_for_later)
-  | test(=cockpit::tests::provider_controls::background_work_lives_in_its_row_the_rail_and_the_pane)
-  | test(=cockpit::tests::side_chat::side_chat_tabs_are_separate_conversations)
-  | test(=cockpit::tests::tools::a_tab_dragged_past_six_pixels_moves_and_five_is_a_click)
-  | test(=cockpit::tests::tools::overflowing_tabs_show_chevrons_that_scroll_the_strip)
-  | test(=cockpit::tests::tools::the_plus_menu_lists_every_surface_with_its_letter)
-  | test(=cockpit::tests::menu_buttons::the_panels_plus_owns_its_menu)
   | test(=cockpit::tests::settings_window::connection_pairing_url_paste_fills_host_and_code_after_replacing_text)
 )
 '''

@@ -3,6 +3,7 @@
 //! door, the head row's tabs, `+` menu, maximize and edge, and "Open a
 //! surface".
 use super::*;
+use crate::cockpit::panel::least_w;
 use crate::cockpit::surfaces::{SurfaceAction, SurfaceId};
 use ferrite_ui::theme::*;
 
@@ -107,7 +108,15 @@ fn a_tab_dragged_past_six_pixels_moves_and_five_is_a_click(cx: &mut TestAppConte
     let (view, thread, cx) = solo("surfaces-tab-drag", cx);
     upsert(&view, thread, SurfaceId::Changes, cx);
     upsert(&view, thread, SurfaceId::Background, cx);
+    // Wide enough to show all three tabs, as the operator would make it.
+    let edge = cx.debug_bounds("panel-edge").unwrap().center();
+    let to = gpui::point(px(1900. - 480.), edge.y);
+    cx.simulate_mouse_down(edge, gpui::MouseButton::Left, gpui::Modifiers::none());
+    cx.simulate_mouse_move(to, gpui::MouseButton::Left, gpui::Modifiers::none());
+    cx.simulate_mouse_up(to, gpui::MouseButton::Left, gpui::Modifiers::none());
+    tick(cx);
     let changes = cx.debug_bounds("panel-tab-Changes").unwrap().center();
+    cx.simulate_mouse_move(changes, None, gpui::Modifiers::none());
     // 5px and back onto itself: a click, which shows it.
     cx.simulate_mouse_down(changes, gpui::MouseButton::Left, gpui::Modifiers::none());
     let near = gpui::point(changes.x + px(5.), changes.y);
@@ -225,7 +234,7 @@ fn an_empty_panel_says_open_a_surface_and_takes_its_keys(cx: &mut TestAppContext
 fn maximize_covers_all_but_the_boards_least_and_restores(cx: &mut TestAppContext) {
     let (view, thread, cx) = solo("surfaces-maximize", cx);
     let rest = cx.debug_bounds("panel").unwrap().size.width;
-    assert_eq!(rest, px(PANEL_W));
+    assert_eq!(rest, px(least_w()));
     let door = cx.debug_bounds("panel-maximize").expect("in the head row");
     cx.simulate_click(door.center(), gpui::Modifiers::none());
     tick(cx);
@@ -276,11 +285,11 @@ fn the_left_edge_resizes_the_panel_never_under_its_floor(cx: &mut TestAppContext
     cx.simulate_mouse_move(to, gpui::MouseButton::Left, gpui::Modifiers::none());
     cx.simulate_mouse_up(to, gpui::MouseButton::Left, gpui::Modifiers::none());
     tick(cx);
-    assert_eq!(cx.debug_bounds("panel").unwrap().size.width, px(PANEL_W));
+    assert_eq!(cx.debug_bounds("panel").unwrap().size.width, px(least_w()));
     // A Terminal widens it to its own floor.
     cx.simulate_keystrokes("cmd-j");
     tick(cx);
-    assert_eq!(cx.debug_bounds("panel").unwrap().size.width, px(TERMINAL_W));
+    assert_eq!(cx.debug_bounds("panel").unwrap().size.width, px(TERMINAL_W + CAPTION_ALLOWANCE));
     assert_eq!(panel_tabs(&view, thread, cx).1, Some(SurfaceId::Terminal(1)));
 }
 
@@ -344,6 +353,52 @@ fn overflowing_tabs_show_chevrons_that_scroll_the_strip(cx: &mut TestAppContext)
     assert!(cx.debug_bounds("panel-tabs-left").is_some(), "now more to the left");
     assert_eq!(crate::cockpit::panel::tab_scroll_step(100.), SURFACE_TAB_SCROLL_MIN);
     assert_eq!(crate::cockpit::panel::tab_scroll_step(400.), 300.);
+}
+
+/// However many tabs the strip holds, the `+` stays in the head's row,
+/// clear of the right chevron and of maximize, and a click on it opens its
+/// menu.
+#[gpui::test]
+fn the_plus_stays_in_view_past_overflowing_tabs(cx: &mut TestAppContext) {
+    let (view, thread, cx) = solo("surfaces-overflow-plus", cx);
+    let overview = cx.debug_bounds("panel-tab-Overview").unwrap();
+    let plus = cx.debug_bounds("panel-plus").expect("the +");
+    assert_eq!(plus.left() - overview.right(), px(SURFACE_HEAD_GAP), "the + follows the last tab");
+    for at in 0..12 {
+        upsert(&view, thread, SurfaceId::File(format!("/tmp/overflowing-plus-{at}.rs").into()), cx);
+    }
+    view.update(cx, |view, cx| view.activate_surface(thread, &SurfaceId::Overview, cx));
+    tick(cx);
+    tick(cx);
+    let head = cx.debug_bounds("panel-head").unwrap();
+    let plus = cx.debug_bounds("panel-plus").expect("the +");
+    let maximize = cx.debug_bounds("panel-maximize").unwrap();
+    let right = cx.debug_bounds("panel-tabs-right").expect("the strip overflows");
+    let within = |inner: gpui::Bounds<Pixels>, outer: gpui::Bounds<Pixels>| {
+        inner.left() >= outer.left() && inner.right() <= outer.right()
+    };
+    assert!(within(plus, head), "the + {plus:?} lies in the head {head:?}");
+    assert!(plus.right() <= maximize.left(), "the + {plus:?} is clear of maximize {maximize:?}");
+    assert!(plus.left() >= right.right(), "the + {plus:?} is past the chevron {right:?}");
+    cx.simulate_click(plus.center(), gpui::Modifiers::none());
+    tick(cx);
+    let target = view.read_with(cx, |view, _| view.context_menu().map(|menu| menu.target.clone()));
+    assert_eq!(target, Some(MenuTarget::SurfaceMenu(thread)), "its menu is up");
+    // Near the window's edge (macOS) the menu has no room to line up with
+    // the `+` and moves in; short of the caption buttons (Windows) it has.
+    let menu = cx.debug_bounds("context-menu").expect("the menu is drawn");
+    let window = gpui::Bounds::new(gpui::point(px(0.), px(0.)), gpui::size(px(1900.), px(900.)));
+    assert!(within(menu, window), "the menu {menu:?} lies in the window");
+    if plus.left() + menu.size.width <= window.right() {
+        assert_eq!(menu.left(), plus.left(), "the menu {menu:?} lines up with the + {plus:?}");
+    } else {
+        assert!(menu.left() < plus.left(), "the menu {menu:?} moves in from the + {plus:?}");
+    }
+    assert_eq!(
+        menu.top() - plus.bottom(),
+        px(ferrite_ui::theme::MENU_UNDER_GAP),
+        "the menu {menu:?} hangs under the + {plus:?}"
+    );
 }
 
 /// With motion on, a chevron eases the strip to where it sends it (T3's

@@ -215,10 +215,22 @@ fn arrowing_along_overflowing_tabs_scrolls_each_stop_into_view(cx: &mut TestAppC
     press("f6", cx);
     press("home", cx);
     settle(cx);
-    press("end left", cx);
+    press("end left left", cx);
+    settle(cx);
+    assert!(
+        shown(cx, "panel-tab-File-a-long-file-name-13.rs"),
+        "the last tab, at the strip's far end, is in view"
+    );
+    press("right", cx);
     settle(cx);
     assert_eq!(focused_control(&view, cx), Some(PanelControl::Plus));
-    assert!(shown(cx, "panel-plus"), "the + at the strip's far end is in view");
+    let plus = cx.debug_bounds("panel-plus").expect("the + is drawn");
+    let maximize = cx.debug_bounds("panel-maximize").unwrap();
+    let strip = view.read_with(cx, |view, _| view.panel.tabs_scroll.bounds());
+    assert!(
+        plus.left() >= strip.right() && plus.right() <= maximize.left(),
+        "the + is in view past the strip"
+    );
     press("home", cx);
     settle(cx);
     let slid = view.read_with(cx, |view, _| view.panel.tabs_scroll.offset().x);

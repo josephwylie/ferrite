@@ -126,9 +126,9 @@ fn a_file_opens_in_the_panel_and_closes(cx: &mut TestAppContext) {
     // The Panel widens to read it (SPEC §5.6.3): the board gives up what
     // it gains.
     let wide = view.read_with(cx, |view, _| view.board_right());
-    assert!(wide > ferrite_ui::theme::PANEL_W);
+    assert!(wide > crate::cockpit::panel::least_w());
     assert!(
-        (narrowed - (whole - (wide - ferrite_ui::theme::PANEL_W))).abs() <= 1.0,
+        (narrowed - (whole - (wide - crate::cockpit::panel::least_w()))).abs() <= 1.0,
         "the board gives way: {narrowed} of {whole}"
     );
     assert!(cx.debug_bounds("panel-preview").is_some());
@@ -152,7 +152,8 @@ fn a_file_opens_in_the_panel_and_closes(cx: &mut TestAppContext) {
 /// at the mockups' 1600×960.
 #[gpui::test]
 fn the_solo_card_sits_on_the_frame(cx: &mut TestAppContext) {
-    use ferrite_ui::theme::{HAIRLINE_W, PANEL_W, WIN_CHROME_H};
+    use crate::cockpit::panel::least_w;
+    use ferrite_ui::theme::{HAIRLINE_W, WIN_CHROME_H};
     let (core, _fake) = cockpit("frame-solo-card", 1);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     hold_nav_open(&view, cx);
@@ -161,14 +162,14 @@ fn the_solo_card_sits_on_the_frame(cx: &mut TestAppContext) {
     let rects = cx.update(|window, cx| view.read(cx).pane_rects(window));
     let card = rects[0].1;
     assert_eq!((card.x, card.y), (nav::COLUMN_WIDTH, WIN_CHROME_H));
-    assert_eq!(card.x + card.w, 1600. - PANEL_W);
+    assert_eq!(card.x + card.w, 1600. - least_w());
     assert_eq!(card.y + card.h, 960., "no gutter under it");
     let panel = cx.debug_bounds("panel").expect("the panel");
     assert_eq!(
         panel,
         gpui::Bounds::new(
-            gpui::point(px(1600. - PANEL_W), px(0.)),
-            gpui::size(px(PANEL_W), px(960. - HAIRLINE_W))
+            gpui::point(px(1600. - least_w()), px(0.)),
+            gpui::size(px(least_w()), px(960. - HAIRLINE_W))
         )
     );
     let key = view.read_with(cx, |view, _| view.panes[0].thread().unwrap().get());

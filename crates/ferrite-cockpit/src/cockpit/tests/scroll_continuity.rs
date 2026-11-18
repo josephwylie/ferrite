@@ -5,7 +5,7 @@
 use super::send_scroll::{answered, answered_with, at, scroll, scrolled_away, send, transcript};
 use super::*;
 use ferrite_pane::transcript::Page;
-use ferrite_ui::theme::{MOTION_SCROLL_MAX_MS, SCROLL_END_SHOW_DELAY_MS};
+use ferrite_ui::theme::{CAPTION_ALLOWANCE, MOTION_SCROLL_MAX_MS, SCROLL_END_SHOW_DELAY_MS};
 
 /// How far a held passage may drift: a fraction of a row cannot know a
 /// paragraph's fixed gap, so the passage lands within a few lines.
@@ -70,7 +70,7 @@ fn a_held_sentence_stays_put_through_reflow(cx: &mut TestAppContext) {
     cx.simulate_keystrokes("cmd-alt-b");
     settle(cx);
     for width in [760., 1300., 900., 1000.] {
-        cx.simulate_resize(gpui::size(px(width), px(700.)));
+        cx.simulate_resize(gpui::size(px(width + CAPTION_ALLOWANCE), px(700.)));
         settle(cx);
     }
     let widths: std::collections::BTreeSet<_> = frames
