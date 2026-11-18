@@ -22,6 +22,7 @@ mod details;
 mod direct_view;
 pub(crate) mod direction;
 mod drafts;
+mod fields;
 pub(crate) mod empty_board;
 pub(crate) mod environment;
 pub(crate) mod factory;
@@ -369,6 +370,10 @@ pub struct CockpitView {
     /// the cockpit's own actions are never reached — at wall range, where no
     /// Pane holds a Composer, this handle is what keeps the keyboard alive.
     focus: FocusHandle,
+    /// What held the keyboard when the pump last looked, and what the pump
+    /// wanted it on then (`fields`).
+    focus_seen: Option<FocusHandle>,
+    handed: Option<FocusHandle>,
     perf: Option<Perf>,
     /// When the watchdog last swept, on the executor's clock (the wall
     /// clock in the app, the fake one under test, so a loaded test machine
@@ -1396,6 +1401,8 @@ impl CockpitView {
             browsers: Default::default(),
             panes: Vec::new(),
             focus: cx.focus_handle(),
+            focus_seen: None,
+            handed: None,
             perf: std::env::var("FERRITE_PERF").is_ok().then(|| Perf {
                 frames: 0,
                 since: std::time::Instant::now(),
@@ -8166,6 +8173,7 @@ impl Render for CockpitView {
                     cx.notify();
                 }
             }));
+            self.watch_lost_focus(window, cx);
         }
         self.hear_nav(window, cx);
         self.tend_history();
@@ -8570,6 +8578,7 @@ impl CockpitView {
         // pressed, or a Files editor or filter being typed in.
         let panel_keys_held =
             self.panel_keys.contains_focused(window, cx) || self.panel_control_focused(window);
+        let field_holds_keyboard = self.field_holds_keyboard(&wanted, window, cx);
         let dialog_took_focus = self.browsers.focus_shown_dialogs(window, cx);
         // Here, before focus is handed out: a page's dialog is modal and
         // keeps the keys, and a popup left up would take them back.
@@ -8597,6 +8606,7 @@ impl CockpitView {
             if !focus.contains_focused(window, cx) && !self.connection_holds_focus(window, cx) {
                 window.focus(&focus, cx);
             }
+        } else if field_holds_keyboard {
         } else if !self
             .popover
             .as_ref()

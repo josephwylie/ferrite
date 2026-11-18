@@ -120,10 +120,13 @@ pub enum Role {
     Field(Option<&'static str>),
 }
 
+/// The context every Composer's focused node carries, whatever its role.
+pub const KEY_CONTEXT: &str = "Composer";
+
 /// The focused node's key context for a line in this state.
 pub(crate) fn key_context(role: Role, empty: bool, history: bool, menu: bool) -> gpui::KeyContext {
     let mut context = gpui::KeyContext::default();
-    context.add("Composer");
+    context.add(KEY_CONTEXT);
     if history {
         context.add("ComposerHistory");
     }

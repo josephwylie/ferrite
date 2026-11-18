@@ -238,6 +238,110 @@ fn a_press_on_the_filter_keeps_the_keys_typed_there(cx: &mut TestAppContext) {
     assert_eq!(field.read_with(cx, |field, _| field.text().to_string()), "b.rs");
 }
 
+/// The Changes filter, pressed, with `typed` typed into it.
+fn typed_into_the_filter(typed: &str, cx: &mut gpui::VisualTestContext) {
+    let filter = cx.debug_bounds("changes-filter").expect("the filter is drawn");
+    cx.simulate_click(filter.center(), gpui::Modifiers::none());
+    tick(cx);
+    cx.simulate_input(typed);
+    tick(cx);
+}
+
+fn filter_text(view: &Entity<CockpitView>, thread: ThreadId, cx: &mut gpui::VisualTestContext) -> String {
+    let field = view.read_with(cx, |view, _| view.changes_filter(Diff::Changes(thread)).unwrap());
+    field.read_with(cx, |field, _| field.text().to_string())
+}
+
+#[gpui::test]
+fn a_sheet_opening_over_the_filter_takes_the_keyboard(cx: &mut TestAppContext) {
+    let (view, thread, cx) = window("changes-filter-sheet", cx);
+    opened(&view, thread, cx);
+    typed_into_the_filter("b", cx);
+    cx.simulate_keystrokes("cmd-,");
+    tick(cx);
+    let sheet_has_keys = cx.update(|window, cx| {
+        let view = view.read(cx);
+        let focus = view.sheets.read(cx).up().expect("Settings is up").focus(cx);
+        focus.contains_focused(window, cx)
+    });
+    assert!(sheet_has_keys);
+    cx.simulate_input("x");
+    tick(cx);
+    assert_eq!(filter_text(&view, thread, cx), "b");
+}
+
+#[gpui::test]
+fn a_menu_over_the_filter_holds_the_keys_and_gives_them_back_as_it_closes(cx: &mut TestAppContext) {
+    let (view, thread, cx) = window("changes-filter-menu", cx);
+    opened(&view, thread, cx);
+    typed_into_the_filter("b", cx);
+    view.update(cx, |view, cx| {
+        view.open_context_menu(MenuTarget::ChangesMore(Diff::Changes(thread)), gpui::point(px(900.), px(500.)), cx)
+    });
+    tick(cx);
+    assert!(cx.update(|window, cx| view.read(cx).focus.is_focused(window)), "the root holds the keys");
+    cx.simulate_keystrokes("escape");
+    tick(cx);
+    assert!(view.read_with(cx, |view, _| view.context_menu().is_none()));
+    cx.simulate_input(".rs");
+    tick(cx);
+    assert_eq!(filter_text(&view, thread, cx), "b.rs");
+}
+
+#[gpui::test]
+fn another_tab_shown_takes_the_keys_from_the_filter_back_to_the_composer(cx: &mut TestAppContext) {
+    let (view, thread, cx) = window("changes-filter-tab", cx);
+    opened(&view, thread, cx);
+    typed_into_the_filter("b", cx);
+    let overview = cx.debug_bounds("panel-tab-Overview").expect("the Overview tab");
+    cx.simulate_click(overview.center(), gpui::Modifiers::none());
+    tick(cx);
+    cx.simulate_input("hi");
+    tick(cx);
+    assert_eq!(composer_text(&view, cx), "hi");
+    assert_eq!(filter_text(&view, thread, cx), "b");
+}
+
+#[gpui::test]
+fn f6_from_the_filter_steps_to_the_panels_controls(cx: &mut TestAppContext) {
+    let (view, thread, cx) = window("changes-filter-f6", cx);
+    opened(&view, thread, cx);
+    typed_into_the_filter("b", cx);
+    cx.simulate_keystrokes("f6");
+    tick(cx);
+    assert!(cx.update(|window, cx| view.read(cx).panel_control_focused(window)));
+    cx.simulate_keystrokes("f6");
+    tick(cx);
+    cx.simulate_input("hi");
+    tick(cx);
+    assert_eq!(composer_text(&view, cx), "hi");
+    assert_eq!(filter_text(&view, thread, cx), "b");
+}
+
+#[gpui::test]
+fn moving_to_another_thread_takes_the_keys_from_the_filter_with_it(cx: &mut TestAppContext) {
+    let (view, _fake, repo, thread, cx) = window_with_agent("changes-filter-thread", cx);
+    view.update(cx, |view, cx| {
+        view.cockpit.open(Provider::Claude, WorkspaceChoice::Main { checkout: repo }).unwrap();
+        view.sync_panes(cx);
+    });
+    tick(cx);
+    let other = view.read_with(cx, |view, _| {
+        view.panes.iter().filter_map(|pane| pane.thread()).find(|&id| id != thread).unwrap()
+    });
+    view.update(cx, |view, cx| view.focus_thread(thread, cx));
+    tick(cx);
+    opened(&view, thread, cx);
+    typed_into_the_filter("b", cx);
+    view.update(cx, |view, cx| view.focus_thread(other, cx));
+    tick(cx);
+    cx.simulate_input("hi");
+    tick(cx);
+    let composer = view.read_with(cx, |view, _| view.panes[view.pane_for(other).unwrap()].composer.clone());
+    assert_eq!(composer.read_with(cx, |composer, _| composer.text().to_string()), "hi");
+    assert_eq!(filter_text(&view, thread, cx), "b");
+}
+
 #[gpui::test]
 fn the_stage_button_moves_a_file_into_and_out_of_the_index(cx: &mut TestAppContext) {
     let (view, thread, cx) = window("changes-stage", cx);
