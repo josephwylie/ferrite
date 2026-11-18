@@ -169,6 +169,69 @@ fn a_connection_save_failure_keeps_the_form_and_runtime_unchanged(cx: &mut TestA
 }
 
 #[gpui::test]
+fn leaving_the_connections_page_drops_the_connection_editor(cx: &mut TestAppContext) {
+    let (core, _fake) = cockpit("connection-page-leave", 1);
+    bind_production_keys(cx);
+    let (_view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(1000.), px(700.)));
+    tick(cx);
+    cx.simulate_keystrokes("cmd-,");
+    tick(cx);
+    let click = |selector: &'static str, cx: &mut gpui::VisualTestContext| {
+        let hit = cx.debug_bounds(selector).expect(selector).center();
+        cx.simulate_click(hit, gpui::Modifiers::none());
+        tick(cx);
+    };
+    click("settings-page-connections", cx);
+    click("connection-add", cx);
+    assert!(cx.debug_bounds("connection-dialog").is_some());
+    click("settings-page-about", cx);
+    click("settings-page-connections", cx);
+    assert!(cx.debug_bounds("connection-dialog").is_none(), "another page dropped the editor");
+    assert!(cx.debug_bounds("connection-add").is_some());
+}
+
+#[gpui::test]
+fn a_ready_setup_replaces_the_environment_it_edits_and_keeps_its_warning(
+    cx: &mut TestAppContext,
+) {
+    use ferrite_core::machine::{setup::Event, Machine};
+    let (core, _fake) = cockpit("connection-ready-replaces", 1);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    tick(cx);
+    let saved = Machine {
+        name: "box".into(),
+        target: "me@box".into(),
+        enabled: false,
+    };
+    let other = Machine::new("other.example");
+    view.update_in(cx, |view, window, cx| {
+        view.prefs.settings.machines = vec![saved.clone(), other.clone()];
+        view.toggle_settings(cx);
+        view.edit_connection(Some(saved.clone()), window, cx);
+    });
+    tick(cx);
+    let ready = Machine {
+        enabled: true,
+        ..saved.clone()
+    };
+    view.update(cx, |view, cx| {
+        view.connection_event(Event::Warning("Host key added.".into()), cx);
+        view.connection_event(Event::Ready(ready.clone()), cx);
+    });
+    tick(cx);
+    view.update_in(cx, |view, window, cx| {
+        assert_eq!(view.prefs.settings.machines, vec![ready.clone(), other.clone()]);
+        let note = view
+            .connection_settings(window, cx)
+            .into_iter()
+            .find(|group| group.title == Some("Environments"))
+            .and_then(|group| group.note);
+        assert_eq!(note.as_deref(), Some("Host key added."));
+    });
+}
+
+#[gpui::test]
 fn reconnect_leaves_search_and_rejects_another_saved_target(cx: &mut TestAppContext) {
     use ferrite_core::machine::Machine;
     let (core, _fake) = cockpit("connection-collision", 1);
