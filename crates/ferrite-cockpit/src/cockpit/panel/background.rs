@@ -255,15 +255,14 @@ impl CockpitView {
         let target: StopTarget = stop_targets(&open, std::slice::from_ref(work)).pop()?;
         let generation = open.generation();
         Some(
-            crate::nav::icon_button(
+            ferrite_ui::components::icon_button(
                 SharedString::from(format!("background-stop-{}", work.handle())),
                 icons::STOP,
-                ferrite_ui::theme::PANEL_ROW_ICON,
-                ferrite_ui::theme::ICON_BUTTON,
-                ferrite_ui::theme::R_CONTROL,
+                ferrite_ui::components::IconSize::Standard,
+                "Stop",
+                cx,
             )
-            .flex_shrink_0()
-            .tooltip(ferrite_ui::menu::tooltip("Stop"))
+            .tip("Stop")
             .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
                 cx.stop_propagation();
                 view.send_stop(thread, generation, target.clone(), cx);

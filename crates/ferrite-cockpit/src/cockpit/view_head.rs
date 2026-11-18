@@ -20,6 +20,7 @@
 //! their region out of the strip's `Drag` hit test the same way).
 
 use super::*;
+use ferrite_ui::components::{bound_chord, icon_button, icon_toggle, IconSize, MenuPress, Tip};
 use ferrite_ui::{icons, theme};
 
 impl CockpitView {
@@ -144,22 +145,24 @@ impl CockpitView {
             "Back",
             "cockpit::GoBack",
             self.history.can_go_back(),
-        )
-        .on_click(cx.listener(|view, _: &ClickEvent, window, cx| {
-            cx.stop_propagation();
-            view.step_history(-1, window, cx);
-        }));
+            cx.listener(|view, _: &ClickEvent, window, cx| {
+                cx.stop_propagation();
+                view.step_history(-1, window, cx);
+            }),
+            cx,
+        );
         let forward = history_arrow(
             "history-forward",
             icons::FORWARD,
             "Forward",
             "cockpit::GoForward",
             self.history.can_go_forward(),
-        )
-        .on_click(cx.listener(|view, _: &ClickEvent, window, cx| {
-            cx.stop_propagation();
-            view.step_history(1, window, cx);
-        }));
+            cx.listener(|view, _: &ClickEvent, window, cx| {
+                cx.stop_propagation();
+                view.step_history(1, window, cx);
+            }),
+            cx,
+        );
         div()
             .debug_selector(|| "history-arrows".into())
             .flex()
@@ -239,16 +242,16 @@ impl CockpitView {
         if !self.panel_toggle_shown() {
             return None;
         }
-        let panel = crate::nav::icon_button(
+        let panel = icon_toggle(
             "panel-toggle",
             icons::PANEL_RIGHT,
-            theme::ICON_BUTTON_GLYPH,
-            theme::ICON_BUTTON,
-            theme::R_CONTROL,
+            IconSize::Standard,
+            "Toggle panel",
+            self.panel_pane().is_some(),
+            cx,
         )
         .occlude()
-        .when(self.panel_pane().is_some(), |door| door.bg(theme::paint::SELECTED))
-        .tooltip(ferrite_ui::menu::action_tooltip("Toggle panel", "cockpit::TogglePanel"))
+        .tip_with_key("Toggle panel", bound_chord("cockpit::TogglePanel"))
         .on_click(cx.listener(|view, _: &ClickEvent, _, cx| {
             cx.stop_propagation();
             view.toggle_panel_now(cx);
@@ -503,40 +506,40 @@ impl CockpitView {
     }
 }
 
-/// One history arrow: the sidebar toggle's door while there is somewhere
-/// to go, else its glyph in `HISTORY_ARROW_DISABLED_INK` with no hover.
-/// The tooltip shows either way, so the chord is learnt at the ends too.
+/// One history arrow: an icon button pressing `step` while there is
+/// somewhere to go, else its glyph in `HISTORY_ARROW_DISABLED_INK` with no
+/// hover and no press. The tooltip shows either way, so the chord is learnt
+/// at the ends too.
 fn history_arrow(
     key: &'static str,
     glyph: &'static str,
     label: &'static str,
     action: &'static str,
     enabled: bool,
-) -> Stateful<Div> {
-    let door = if enabled {
-        crate::nav::icon_button(
-            key,
+    step: impl Fn(&ClickEvent, &mut Window, &mut gpui::App) + 'static,
+    cx: &gpui::App,
+) -> AnyElement {
+    if enabled {
+        return icon_button(key, glyph, IconSize::Standard, label, cx)
+            .tip_with_key(label, bound_chord(action))
+            .on_click(step)
+            .into_any_element();
+    }
+    div()
+        .id(key)
+        .debug_selector(move || key.into())
+        .flex()
+        .flex_shrink_0()
+        .items_center()
+        .justify_center()
+        .size(px(theme::ICON_BUTTON))
+        .child(ferrite_ui::icons::icon(
             glyph,
             theme::ICON_BUTTON_GLYPH,
-            theme::ICON_BUTTON,
-            theme::R_CONTROL,
-        )
-    } else {
-        div()
-            .id(key)
-            .debug_selector(move || key.into())
-            .flex()
-            .flex_shrink_0()
-            .items_center()
-            .justify_center()
-            .size(px(theme::ICON_BUTTON))
-            .child(ferrite_ui::icons::icon(
-                glyph,
-                theme::ICON_BUTTON_GLYPH,
-                theme::HISTORY_ARROW_DISABLED_INK,
-            ))
-    };
-    door.tooltip(ferrite_ui::menu::action_tooltip(label, action))
+            theme::HISTORY_ARROW_DISABLED_INK,
+        ))
+        .tooltip(ferrite_ui::menu::action_tooltip(label, action))
+        .into_any_element()
 }
 
 /// The title's chevron (T3's, `CHEVRON_DOWN` at 14 in `INK_SUBTLE`):
@@ -545,12 +548,12 @@ fn history_arrow(
 /// only while the title is under the pointer (`shown`).
 fn title_menu(thread: ThreadId, shown: bool, cx: &mut Context<CockpitView>) -> AnyElement {
     control(
-        crate::nav::icon_button(
+        icon_button(
             "view-title-menu",
             icons::CHEVRON_DOWN,
-            theme::HEAD_CHEVRON,
-            theme::NAV_HEADING_BUTTON,
-            theme::R_CONTROL,
+            IconSize::Compact,
+            "Thread actions",
+            cx,
         )
         .debug_selector(move || {
             if shown {
@@ -561,14 +564,11 @@ fn title_menu(thread: ThreadId, shown: bool, cx: &mut Context<CockpitView>) -> A
             .into()
         })
         .opacity(if shown { 1.0 } else { 0.0 })
-        .tooltip(ferrite_ui::menu::tooltip("Thread actions"))
-        .on_mouse_down(
-            MouseButton::Left,
-            cx.listener(move |view, event: &MouseDownEvent, _, cx| {
-                cx.stop_propagation();
-                view.open_context_menu(MenuTarget::Thread(thread), event.position, cx);
-            }),
-        ),
+        .tip("Thread actions")
+        .on_menu_press(cx.listener(move |view, at: &Point<Pixels>, _, cx| {
+            cx.stop_propagation();
+            view.open_context_menu(MenuTarget::Thread(thread), *at, cx);
+        })),
     )
 }
 
