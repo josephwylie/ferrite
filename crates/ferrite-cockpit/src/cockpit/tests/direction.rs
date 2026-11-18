@@ -361,10 +361,10 @@ fn each_sheet_opens_with_the_keyboard_on_its_field(cx: &mut TestAppContext) {
     );
 }
 
-/// The answer box typed into before a sheet opened does not have the
-/// keyboard back once the sheet closes.
+/// The answer box typed into before a sheet opened has the keyboard back
+/// once the sheet closes, as any field drawn under a sheet does.
 #[gpui::test]
-fn a_sheet_closed_leaves_the_answer_box_without_the_keyboard(cx: &mut TestAppContext) {
+fn a_sheet_closed_gives_the_answer_box_back_the_keyboard(cx: &mut TestAppContext) {
     let (view, cx) = panel(
         cx,
         "direct-answer-keyboard",
@@ -385,12 +385,9 @@ fn a_sheet_closed_leaves_the_answer_box_without_the_keyboard(cx: &mut TestAppCon
     assert_eq!(answer(&view, cx), "Mango");
     click(cx, "direct-cancel");
     assert!(!shows(cx, "rework-sheet"));
-    let answer_holds = cx.update(|window, cx| {
-        view.read(cx)
-            .answer_box("t-1")
-            .is_some_and(|answer| answer.read(cx).focus_handle(cx).is_focused(window))
-    });
-    assert!(!answer_holds);
+    cx.simulate_input(" now");
+    tick(cx);
+    assert_eq!(answer(&view, cx), "Mango now");
 }
 
 /// What each sheet was left holding stays for its next opening, apart from

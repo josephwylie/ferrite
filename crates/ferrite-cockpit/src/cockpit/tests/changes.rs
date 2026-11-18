@@ -271,6 +271,42 @@ fn a_sheet_opening_over_the_filter_takes_the_keyboard(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
+fn a_sheet_closing_over_the_filter_gives_it_back_the_keys(cx: &mut TestAppContext) {
+    let (view, thread, cx) = window("changes-filter-sheet-closed", cx);
+    opened(&view, thread, cx);
+    typed_into_the_filter("b", cx);
+    cx.simulate_keystrokes("cmd-,");
+    tick(cx);
+    assert!(view.read_with(cx, |view, cx| view.sheet_up(cx)), "Settings is up");
+    cx.simulate_keystrokes("escape");
+    tick(cx);
+    assert!(!view.read_with(cx, |view, cx| view.sheet_up(cx)), "Settings closed");
+    cx.simulate_input(".rs");
+    tick(cx);
+    assert_eq!(filter_text(&view, thread, cx), "b.rs");
+    assert_eq!(composer_text(&view, cx), "");
+}
+
+/// A sheet closing over a field no longer drawn leaves the keyboard to the
+/// pump, which hands it to the Composer.
+#[gpui::test]
+fn a_sheet_closing_after_the_filter_went_gives_the_composer_the_keys(cx: &mut TestAppContext) {
+    let (view, thread, cx) = window("changes-filter-sheet-gone", cx);
+    opened(&view, thread, cx);
+    typed_into_the_filter("b", cx);
+    cx.simulate_keystrokes("cmd-,");
+    tick(cx);
+    view.update(cx, |view, cx| view.upsert_surface(thread, crate::cockpit::surfaces::SurfaceId::Overview, cx));
+    tick(cx);
+    assert!(cx.debug_bounds("changes-filter").is_none(), "the filter is not drawn");
+    cx.simulate_keystrokes("escape");
+    tick(cx);
+    cx.simulate_input("hi");
+    tick(cx);
+    assert_eq!(composer_text(&view, cx), "hi");
+}
+
+#[gpui::test]
 fn a_menu_over_the_filter_holds_the_keys_and_gives_them_back_as_it_closes(cx: &mut TestAppContext) {
     let (view, thread, cx) = window("changes-filter-menu", cx);
     opened(&view, thread, cx);

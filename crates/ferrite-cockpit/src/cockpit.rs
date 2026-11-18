@@ -8173,6 +8173,7 @@ impl Render for CockpitView {
         self.hear_nav(window, cx);
         self.tend_history();
         self.tend_popup_focus(window, cx);
+        self.tend_sheet_focus(window, cx);
         let root = self.render_cockpit(window, cx);
         // The motion tail: the cockpit is the window's root view, so this
         // runs once per frame, after every hover blend has been read. A
