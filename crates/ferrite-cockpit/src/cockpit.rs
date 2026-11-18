@@ -450,8 +450,9 @@ pub struct CockpitView {
     /// scroll, keyboard, search, picks and undo notice, and asks the
     /// Cockpit for the rest through `NavEvent`.
     nav_view: Entity<nav_view::NavView>,
-    /// The Cockpit hearing the nav's events, from its first frame.
-    nav_events: Option<gpui::Subscription>,
+    /// The Cockpit hearing the views it answers with the window (the nav,
+    /// the side chat), from its first frame.
+    view_events: Option<[gpui::Subscription; 2]>,
     /// The window's activation, followed into the Cockpit
     /// (`Cockpit::set_window_active`) once the first frame has a window.
     activation: Option<gpui::Subscription>,
@@ -1367,7 +1368,6 @@ impl CockpitView {
         let prs = cx.new(|cx| prs_view::PrsView::new(cockpit_weak.clone(), cx));
         cx.subscribe(&prs, Self::on_prs_event).detach();
         let side_chat = cx.new(|_| side_chat_view::SideChatView::new(cockpit_weak.clone()));
-        cx.subscribe(&side_chat, Self::on_side_chat_event).detach();
         let mut view = Self {
             cockpit,
             browsers: Default::default(),
@@ -1396,7 +1396,7 @@ impl CockpitView {
             native_copy: None,
             nav_filter: None,
             nav_view: cx.new(|cx| nav_view::NavView::new(cockpit_weak, cx)),
-            nav_events: None,
+            view_events: None,
             activation: None,
             popover: None,
             menu_muted: false,
@@ -8073,6 +8073,19 @@ fn effort_detail(effort: &str) -> &'static str {
     }
 }
 
+impl CockpitView {
+    /// The nav's and the side chat's events, heard from the Cockpit's first
+    /// frame: answering some needs the window.
+    fn hear_views(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.view_events.is_none() {
+            self.view_events = Some([
+                cx.subscribe_in(&self.nav_view, window, Self::on_nav_event),
+                cx.subscribe_in(&self.side_chat, window, Self::on_side_chat_event),
+            ]);
+        }
+    }
+}
+
 impl Render for CockpitView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         ferrite_ui::motion::hover_frame_start(cx);
@@ -8096,7 +8109,7 @@ impl Render for CockpitView {
             }));
             self.watch_lost_focus(window, cx);
         }
-        self.hear_nav(window, cx);
+        self.hear_views(window, cx);
         self.tend_history();
         self.tend_popup_focus(window, cx);
         self.tend_sheet_focus(window, cx);

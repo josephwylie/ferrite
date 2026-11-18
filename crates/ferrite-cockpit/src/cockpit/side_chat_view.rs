@@ -254,13 +254,14 @@ impl CockpitView {
 
     pub(super) fn on_side_chat_event(
         &mut self,
-        _: Entity<SideChatView>,
+        _: &Entity<SideChatView>,
         event: &SideChatEvent,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         match event {
             SideChatEvent::Ask { tab, fork, draft } => self.ask_side_chat(*tab, *fork, draft, cx),
-            SideChatEvent::BringBack { owner, fork } => self.bring_back(*owner, *fork, cx),
+            SideChatEvent::BringBack { owner, fork } => self.bring_back(*owner, *fork, window, cx),
             SideChatEvent::Trash { owner, tab } => {
                 self.close_surface(*owner, &SurfaceId::SideChat(*tab), cx)
             }
@@ -362,7 +363,7 @@ impl CockpitView {
     /// Bring back: `fork`'s latest run goes into the main Thread's next
     /// message, quoted in its composer (T3's merge-back, which adds the
     /// side chat to that message). Nothing while it cannot run.
-    fn bring_back(&mut self, owner: ThreadId, fork: Fork, cx: &mut Context<Self>) {
+    fn bring_back(&mut self, owner: ThreadId, fork: Fork, window: &mut Window, cx: &mut Context<Self>) {
         use gpui::component::{notification::Notification, WindowExt};
         if self.bring_back_blocked(owner, Some(fork)).is_some() {
             return;
@@ -374,20 +375,12 @@ impl CockpitView {
         self.panes[index]
             .composer
             .update(cx, |composer, cx| composer.insert(&format!("{quote}\n\n"), cx));
-        // The press that asked was in this window; the toast needs it, and
-        // an event reaches the Cockpit without one.
-        if let Some(window) = cx.active_window() {
-            cx.defer(move |cx| {
-                let _ = window.update(cx, |_, window, cx| {
-                    window.push_notification(
-                        Notification::new()
-                            .title("Brought back")
-                            .message("The main thread gets this side chat with your next message there."),
-                        cx,
-                    );
-                });
-            });
-        }
+        window.push_notification(
+            Notification::new()
+                .title("Brought back")
+                .message("The main thread gets this side chat with your next message there."),
+            cx,
+        );
         cx.notify();
     }
 
