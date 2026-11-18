@@ -572,26 +572,12 @@ impl CockpitView {
 
     /// The `+` after the last tab: the opener menu under it.
     fn surface_plus(&self, thread: ThreadId, cx: &mut Context<Self>) -> AnyElement {
-        use ferrite_ui::theme::*;
-        let id = gpui::ElementId::from("panel-plus");
-        let key = ferrite_ui::pointer::hover_key(&id);
         let semantics = Semantics::button("Open a surface");
         let handle = self.panel_control(PanelControl::Plus, semantics.clone(), cx);
-        let plus = div()
-            .id(id)
-            .debug_selector(|| "panel-plus".into())
-            .relative()
-            .flex()
-            .flex_shrink_0()
-            .items_center()
-            .justify_center()
-            .size(px(SURFACE_PLUS))
-            .rounded(px(R_CONTROL))
-            .occlude()
-            .hover_raised(key)
-            .map(|plus| controls::focusable(plus, &handle, &semantics))
-            .child(self.measured(PanelControl::Plus))
-            .child(icon(icons::PLUS, SURFACE_PLUS_GLYPH, INK_SUBTLE));
+        let plus =
+            controls::icon_stop("panel-plus", icons::PLUS, IconSize::Compact, &handle, &semantics, cx)
+                .occlude()
+                .child(self.measured(PanelControl::Plus));
         self.doors()
             .button(plus, plus_door(thread), "Open a surface", cx)
             .into_any_element()
