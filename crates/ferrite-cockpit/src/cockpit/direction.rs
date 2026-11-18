@@ -1,7 +1,8 @@
 //! Where a Task needs the operator, in its panel (#222): the question and
 //! its answer box, a Worker's Provider Decision (answered in the Worker
 //! tab, never the Inbox), Ready to approve with what is approved, and the
-//! Rework and Direct this task sheets.
+//! buttons that open the Rework and Direct this task sheets
+//! (`direct_view`), whose sends are here.
 //!
 //! What the operator types is kept per Task for as long as the Factory
 //! view is open, so it survives closing a sheet, the panel, a tab switch
@@ -9,6 +10,7 @@
 
 use std::collections::HashMap;
 
+use super::direct_view::{Choice, KeptDirection};
 use super::*;
 use ferrite_core::factory::{
     self as core_factory, Approver, Destination, Override, Status, StepId, Task, TaskId, ThenReturn,
@@ -16,44 +18,7 @@ use ferrite_core::factory::{
 use ferrite_core::protocol::TaskAction;
 use ferrite_pane::composer::{Composer, Role};
 
-/// One Task's unsent words and choices.
-pub(crate) struct TaskDrafts {
-    pub(crate) answer: Entity<Composer>,
-    pub(crate) feedback: Entity<Composer>,
-    pub(crate) note: Entity<Composer>,
-    /// The rework recipient chosen for this Task; none, the Workflow's.
-    pub(crate) rework_to: Option<Destination>,
-    pub(crate) redirect_to: Option<StepId>,
-    pub(crate) skip: Vec<StepId>,
-    pub(crate) then: ThenReturn,
-}
-
-/// A text field of a Task's say.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum DirectField {
-    Answer,
-    Feedback,
-    Note,
-}
-
-impl DirectField {
-    fn key(self) -> &'static str {
-        match self {
-            DirectField::Answer => "task-answer",
-            DirectField::Feedback => "rework-feedback",
-            DirectField::Note => "redirect-note",
-        }
-    }
-
-    fn of(self, drafts: &TaskDrafts) -> &Entity<Composer> {
-        match self {
-            DirectField::Answer => &drafts.answer,
-            DirectField::Feedback => &drafts.feedback,
-            DirectField::Note => &drafts.note,
-        }
-    }
-}
-
+/// Which of a Task's two sheets: Rework, or Direct this task.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum DirectSheet {
     Rework,
@@ -63,12 +28,12 @@ pub(crate) enum DirectSheet {
 /// The Factory view's say state.
 #[derive(Default)]
 pub(crate) struct Direct {
-    pub(crate) drafts: HashMap<TaskId, TaskDrafts>,
-    /// The open sheet, and its Task.
-    pub(crate) sheet: Option<(TaskId, DirectSheet)>,
-    /// Its primary action was pressed: say what is missing.
-    pub(crate) tried: bool,
-    pub(crate) focused: Option<DirectField>,
+    /// Each Task's answer box, made once.
+    pub(crate) answers: HashMap<TaskId, Entity<Composer>>,
+    /// The open Task's answer box holds the keyboard.
+    pub(crate) answering: bool,
+    /// Each Task's Rework and Direct this task sheets as last closed.
+    pub(crate) kept: HashMap<TaskId, KeptDirection>,
 }
 
 /// What a press of one of the sheets' choosers sets.
@@ -89,6 +54,25 @@ pub(crate) fn chooser(
     cx: &mut Context<CockpitView>,
 ) -> gpui::component::button::Button {
     let picks = std::rc::Rc::new(picks);
+    picker_button(
+        selector,
+        text,
+        flagged,
+        move |view: &mut CockpitView, trigger, at, cx| {
+            view.open_picks((*picks).clone(), &trigger, at, cx)
+        },
+        cx,
+    )
+}
+
+/// The chooser face for any view, `press` given where its rows go.
+pub(crate) fn picker_button<V: 'static>(
+    selector: &'static str,
+    text: String,
+    flagged: bool,
+    press: impl Fn(&mut V, super::workflows::Trigger, Point<Pixels>, &mut Context<V>) + 'static,
+    cx: &mut Context<V>,
+) -> gpui::component::button::Button {
     let look = ferrite_ui::controls::Look {
         flagged,
         full_width: true,
@@ -107,18 +91,18 @@ pub(crate) fn chooser(
         .child(trigger.probe())
         .on_click(cx.listener(move |view, event: &ClickEvent, _, cx| {
             cx.stop_propagation();
-            view.open_picks((*picks).clone(), &trigger, event.position(), cx);
+            press(view, trigger.clone(), event.position(), cx);
         }))
 }
 
 /// Two or more choices side by side, full width: the shared segments, the
 /// chosen one selected as `{selector}-{at}-on`.
-pub(crate) fn segmented<T: Copy + PartialEq + 'static>(
+pub(crate) fn segmented<V: 'static, T: Copy + PartialEq + 'static>(
     selector: &'static str,
     chosen: T,
     options: &[(T, &'static str)],
-    pick: impl Fn(&mut CockpitView, T, &mut Context<CockpitView>) + Clone + 'static,
-    cx: &mut Context<CockpitView>,
+    pick: impl Fn(&mut V, T, &mut Context<V>) + Clone + 'static,
+    cx: &mut Context<V>,
 ) -> Div {
     let mut track =
         ferrite_ui::controls::segments(true).debug_selector(move || selector.to_string());
@@ -165,7 +149,7 @@ pub(super) fn meta(text: impl Into<SharedString>) -> Div {
 }
 
 /// How a Destination reads as a rework recipient or what follows approval.
-fn read(task: &Task, to: &Destination) -> String {
+pub(super) fn read(task: &Task, to: &Destination) -> String {
     match &task.workflow {
         Some(run) => run.definition.route_label("", to),
         None => to.word(),
@@ -173,70 +157,50 @@ fn read(task: &Task, to: &Destination) -> String {
 }
 
 impl CockpitView {
-    /// The Task's drafts, made once.
-    pub(crate) fn ensure_drafts(&mut self, task: &str, cx: &mut Context<Self>) {
-        let Some(view) = self.factory() else {
-            return;
-        };
-        if view.direct.drafts.contains_key(task) {
+    /// The Task's answer box, made once.
+    pub(crate) fn ensure_answer(&mut self, task: &str, cx: &mut Context<Self>) {
+        if self
+            .factory()
+            .is_none_or(|view| view.direct.answers.contains_key(task))
+        {
             return;
         }
-        let field = |cx: &mut Context<Self>| {
-            let composer = cx.new(Composer::new);
-            composer.update(cx, |composer, cx| composer.set_role(Role::Field(None), cx));
-            cx.observe(&composer, |_, _, cx| cx.notify()).detach();
-            composer
-        };
-        let drafts = TaskDrafts {
-            answer: field(cx),
-            feedback: field(cx),
-            note: field(cx),
-            rework_to: None,
-            redirect_to: None,
-            skip: Vec::new(),
-            then: ThenReturn::Routes,
-        };
+        let composer = cx.new(Composer::new);
+        composer.update(cx, |composer, cx| composer.set_role(Role::Field(None), cx));
+        cx.observe(&composer, |_, _, cx| cx.notify()).detach();
         if let Some(view) = self.factory_mut() {
-            view.direct.drafts.insert(task.to_string(), drafts);
+            view.direct.answers.insert(task.to_string(), composer);
         }
     }
 
-    pub(crate) fn task_drafts(&self, task: &str) -> Option<&TaskDrafts> {
-        self.factory()?.direct.drafts.get(task)
+    pub(crate) fn answer_box(&self, task: &str) -> Option<&Entity<Composer>> {
+        self.factory()?.direct.answers.get(task)
     }
 
-    fn task_drafts_mut(&mut self, task: &str) -> Option<&mut TaskDrafts> {
-        self.factory_mut()?.direct.drafts.get_mut(task)
-    }
-
-    /// What a Task's field holds now.
-    pub(crate) fn direct_text(&self, task: &str, field: DirectField, cx: &gpui::App) -> String {
-        self.task_drafts(task)
-            .map(|drafts| field.of(drafts).read(cx).text().to_string())
+    /// What a Task's answer box holds now.
+    pub(crate) fn answer_text(&self, task: &str, cx: &gpui::App) -> String {
+        self.answer_box(task)
+            .map(|answer| answer.read(cx).text().to_string())
             .unwrap_or_default()
     }
 
-    /// The field holding the keyboard on the open Task's say, while it is
-    /// on screen: its sheet, or the answer box on the Board's Overview.
+    /// The open Task's answer box, while it holds the keyboard on the
+    /// Board's Overview. A sheet's field is the sheet host's.
     pub(super) fn direct_focus(&self, cx: &gpui::App) -> Option<FocusHandle> {
         let view = self.factory()?;
-        let field = view.direct.focused?;
-        let task = match &view.direct.sheet {
-            Some((task, _)) => task.as_str(),
-            None if view.surface == super::workflows::Surface::Board
-                && view.tab == super::factory::TaskTab::Overview =>
-            {
-                view.open.as_deref()?
-            }
-            None => return None,
-        };
-        let drafts = view.direct.drafts.get(task)?;
-        Some(field.of(drafts).read(cx).focus_handle(cx))
+        if !view.direct.answering
+            || view.surface != super::workflows::Surface::Board
+            || view.tab != super::factory::TaskTab::Overview
+        {
+            return None;
+        }
+        let answer = view.direct.answers.get(view.open.as_deref()?)?;
+        Some(answer.read(cx).focus_handle(cx))
     }
 
-    pub(crate) fn focus_direct(&mut self, field: DirectField, cx: &mut Context<Self>) {
+    pub(crate) fn focus_answer(&mut self, cx: &mut Context<Self>) {
         if let Some(view) = self.factory_mut() {
-            view.direct.focused = Some(field);
+            view.direct.answering = true;
         }
         cx.notify();
     }
@@ -254,17 +218,6 @@ impl CockpitView {
         taken
     }
 
-    fn clear_field(&mut self, task: &str, field: DirectField, cx: &mut Context<Self>) {
-        if let Some(composer) = self
-            .task_drafts(task)
-            .map(|drafts| field.of(drafts).clone())
-        {
-            composer.update(cx, |composer, cx| {
-                composer.take(cx);
-            });
-        }
-    }
-
     /// Send the answer typed for the open Task's question.
     pub(crate) fn send_answer(&mut self, cx: &mut Context<Self>) {
         let Some(task) = self.open_task_now().cloned() else {
@@ -273,7 +226,7 @@ impl CockpitView {
         let Some(question) = task.oversight.question.as_ref() else {
             return;
         };
-        let text = self.direct_text(&task.id, DirectField::Answer, cx);
+        let text = self.answer_text(&task.id, cx);
         if text.trim().is_empty() {
             if let Some(view) = self.factory_mut() {
                 view.note = Some("Write the answer first.".into());
@@ -287,10 +240,14 @@ impl CockpitView {
             question: Some(question.id),
         };
         if self.direct_command(action, cx) {
-            self.clear_field(&task.id, DirectField::Answer, cx);
+            if let Some(answer) = self.answer_box(&task.id).cloned() {
+                answer.update(cx, |answer, cx| {
+                    answer.take(cx);
+                });
+            }
             // Answered, the box lets the keyboard go.
             if let Some(view) = self.factory_mut() {
-                view.direct.focused = None;
+                view.direct.answering = false;
             }
         }
     }
@@ -302,183 +259,99 @@ impl CockpitView {
         self.direct_command(TaskAction::Approve { task }, cx);
     }
 
-    /// Open a sheet on the open Task, with what was typed in it before.
-    pub(crate) fn open_direct_sheet(&mut self, sheet: DirectSheet, cx: &mut Context<Self>) {
-        let Some(task) = self.open_task_now().map(|task| task.id.clone()) else {
-            return;
-        };
-        self.ensure_drafts(&task, cx);
-        if let Some(view) = self.factory_mut() {
-            view.direct.sheet = Some((task, sheet));
-            view.direct.tried = false;
-            view.direct.focused = Some(match sheet {
-                DirectSheet::Rework => DirectField::Feedback,
-                DirectSheet::Redirect => DirectField::Note,
-            });
-        }
-        cx.notify();
+    /// The sheet up and its Task as the board has it now, with what the
+    /// sheet holds: its Task, its text trimmed and its choice.
+    fn direct_send(&self, cx: &gpui::App) -> Option<(TaskId, String, Choice)> {
+        let sheet = self.direct_sheet(cx)?;
+        let sheet = sheet.read(cx);
+        self.direct_inputs(sheet.project, &sheet.task)?;
+        let text = sheet.field.read(cx).text().trim().to_string();
+        Some((sheet.task.clone(), text, sheet.choice.clone()))
     }
 
-    /// Close the sheet; what was typed stays for the next time.
-    pub(crate) fn close_direct_sheet(&mut self, cx: &mut Context<Self>) {
-        if let Some(view) = self.factory_mut() {
-            view.direct.sheet = None;
-            view.direct.tried = false;
-            view.direct.focused = None;
+    /// A send taken: the sheet closes and what it held is spent.
+    fn direct_sent(&mut self, task: &str, sheet: DirectSheet, cx: &mut Context<Self>) {
+        self.hide_sheet(cx);
+        if let Some(kept) = self
+            .factory_mut()
+            .and_then(|view| view.direct.kept.get_mut(task))
+        {
+            kept.spend(sheet);
         }
-        self.close_factory_menu();
-        cx.notify();
-    }
-
-    fn sheet_task(&self) -> Option<Task> {
-        let (task, _) = self.factory()?.direct.sheet.as_ref()?;
-        self.cockpit.factory().task(task).cloned()
     }
 
     /// Send for rework: feedback is needed; the recipient is the one
     /// chosen, else the Workflow's.
     pub(crate) fn send_rework(&mut self, cx: &mut Context<Self>) {
-        let Some(task) = self.sheet_task() else {
+        let Some((task, feedback, Choice::Rework(choice))) = self.direct_send(cx) else {
             return;
         };
-        if let Some(view) = self.factory_mut() {
-            view.direct.tried = true;
-        }
-        let feedback = self.direct_text(&task.id, DirectField::Feedback, cx);
-        if feedback.trim().is_empty() {
-            cx.notify();
+        if feedback.is_empty() {
             return;
         }
-        let to = self
-            .task_drafts(&task.id)
-            .and_then(|drafts| drafts.rework_to.clone());
         let action = TaskAction::Rework {
-            task: task.id.clone(),
-            feedback: feedback.trim().to_string(),
-            to,
+            task: task.clone(),
+            feedback,
+            to: choice.to,
         };
         if self.direct_command(action, cx) {
-            self.clear_field(&task.id, DirectField::Feedback, cx);
-            if let Some(drafts) = self.task_drafts_mut(&task.id) {
-                drafts.rework_to = None;
-            }
-            self.close_direct_sheet(cx);
+            self.direct_sent(&task, DirectSheet::Rework, cx);
         }
     }
 
     /// Apply the redirect: a Step is needed.
     pub(crate) fn apply_redirect(&mut self, cx: &mut Context<Self>) {
-        let Some(task) = self.sheet_task() else {
+        let Some((task, note, Choice::Redirect(choice))) = self.direct_send(cx) else {
             return;
         };
-        if let Some(view) = self.factory_mut() {
-            view.direct.tried = true;
-        }
-        let note = self.direct_text(&task.id, DirectField::Note, cx);
-        let Some(drafts) = self.task_drafts(&task.id) else {
-            return;
-        };
-        let Some(to) = drafts.redirect_to.clone() else {
-            cx.notify();
+        let Some(to) = choice.to else {
             return;
         };
         let action = TaskAction::Redirect {
-            task: task.id.clone(),
+            task: task.clone(),
             direction: Override {
-                skip: drafts
+                skip: choice
                     .skip
                     .iter()
                     .filter(|step| **step != to)
                     .cloned()
                     .collect(),
                 to,
-                then: drafts.then,
-                note: note.trim().to_string(),
+                then: choice.then,
+                note,
             },
         };
         if self.direct_command(action, cx) {
-            self.clear_field(&task.id, DirectField::Note, cx);
-            if let Some(drafts) = self.task_drafts_mut(&task.id) {
-                drafts.redirect_to = None;
-                drafts.skip.clear();
-                drafts.then = ThenReturn::Routes;
-            }
-            self.close_direct_sheet(cx);
+            self.direct_sent(&task, DirectSheet::Redirect, cx);
         }
     }
 
-    pub(crate) fn toggle_skip(&mut self, step: StepId, cx: &mut Context<Self>) {
-        let Some((task, _)) = self
-            .factory()
-            .and_then(|view| view.direct.sheet.clone())
-        else {
-            return;
-        };
-        if let Some(drafts) = self.task_drafts_mut(&task) {
-            match drafts.skip.iter().position(|each| *each == step) {
-                Some(at) => {
-                    drafts.skip.remove(at);
-                }
-                None => drafts.skip.push(step),
-            }
-        }
-        cx.notify();
-    }
-
-    pub(crate) fn set_then(&mut self, then: ThenReturn, cx: &mut Context<Self>) {
-        let Some((task, _)) = self
-            .factory()
-            .and_then(|view| view.direct.sheet.clone())
-        else {
-            return;
-        };
-        if let Some(drafts) = self.task_drafts_mut(&task) {
-            drafts.then = then;
-        }
-        cx.notify();
-    }
-
+    /// A recipient or a Step chosen in the picker a sheet opened.
     pub(crate) fn apply_task_pick(&mut self, pick: TaskPick, cx: &mut Context<Self>) {
-        let Some((task, _)) = self
-            .factory()
-            .and_then(|view| view.direct.sheet.clone())
-        else {
-            return;
-        };
-        if let Some(drafts) = self.task_drafts_mut(&task) {
-            match pick {
-                TaskPick::ReworkTo(to) => drafts.rework_to = Some(to),
-                TaskPick::RedirectTo(to) => {
-                    drafts.skip.retain(|each| *each != to);
-                    drafts.redirect_to = Some(to);
-                }
-            }
+        if let Some(sheet) = self.direct_sheet(cx) {
+            sheet.update(cx, |sheet, cx| sheet.pick(pick, cx));
         }
-        cx.notify();
     }
 
     // ----------------------------------------------------------- drawing
 
-    /// One of the Task's text fields: its label over its Composer.
-    fn direct_input(
+    /// The Task's answer box: its label over its Composer.
+    fn answer_input(
         &self,
         task: &str,
-        field: DirectField,
         label: &'static str,
         window: &Window,
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
-        let composer = field.of(self.task_drafts(task)?).clone();
+        let composer = self.answer_box(task)?.clone();
         let focused = composer.read(cx).focus_handle(cx).is_focused(window);
-        let key = field.key();
+        let key = "task-answer";
         Some(
             div()
                 .id(key)
                 .debug_selector(move || key.to_string())
                 .capture_any_mouse_down(
-                    cx.listener(move |view, _: &MouseDownEvent, _, cx| {
-                        view.focus_direct(field, cx)
-                    }),
+                    cx.listener(move |view, _: &MouseDownEvent, _, cx| view.focus_answer(cx)),
                 )
                 .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                 .child(crate::project_editor::text_field(
@@ -553,13 +426,7 @@ impl CockpitView {
                                 .debug_selector(|| "task-question-text".into())
                                 .child(SharedString::from(question.text.clone())),
                         )
-                        .children(self.direct_input(
-                            &task.id,
-                            DirectField::Answer,
-                            "Your answer",
-                            window,
-                            cx,
-                        ))
+                        .children(self.answer_input(&task.id, "Your answer", window, cx))
                         .child(meta(format!(
                             "{} resumes with the question and your answer.",
                             question.asker
@@ -745,277 +612,5 @@ impl CockpitView {
             }
         }
         out
-    }
-
-    /// The open Rework or Direct this task sheet, over the window.
-    pub(super) fn direct_sheet(
-        &self,
-        window: &Window,
-        cx: &mut Context<Self>,
-    ) -> Option<AnyElement> {
-        use ferrite_ui::theme::*;
-        let view = self.factory()?;
-        let (id, sheet) = view.direct.sheet.clone()?;
-        let task = self.cockpit.factory().task(&id)?.clone();
-        let run = task.workflow.as_ref()?;
-        let definition = &run.definition;
-        let drafts = self.task_drafts(&id)?;
-        let tried = view.direct.tried;
-        let close = ferrite_ui::sheet::sheet_close("direct-close", "Close", cx).on_click(
-            cx.listener(|view, _: &ClickEvent, _, cx| {
-                cx.stop_propagation();
-                view.close_direct_sheet(cx);
-            }),
-        );
-        let cancel = ferrite_ui::components::ghost_button("direct-cancel", "Cancel", cx)
-            .debug_selector(|| "direct-cancel".into())
-            .on_click(cx.listener(|view, _: &ClickEvent, _, cx| {
-                cx.stop_propagation();
-                view.close_direct_sheet(cx);
-            }));
-        let label = |text: &'static str| {
-            div()
-                .text_size(px(FS_META))
-                .font_weight(W_LABEL)
-                .text_color(rgb(INK_SUBTLE))
-                .child(text)
-        };
-        let (title, intro, body, primary) = match sheet {
-            DirectSheet::Rework => {
-                let feedback = self.direct_text(&id, DirectField::Feedback, cx);
-                let missing = tried && feedback.trim().is_empty();
-                let to = drafts
-                    .rework_to
-                    .clone()
-                    .unwrap_or_else(|| definition.approval.rework_to.clone());
-                let picks: Vec<(ferrite_ui::menu::Item, super::workflows::Pick)> = definition
-                    .steps
-                    .iter()
-                    .map(|step| Destination::Step(step.id.clone()))
-                    .chain([Destination::Coordinator])
-                    .map(|each| {
-                        (
-                            ferrite_ui::menu::Item::new(read(&task, &each)).checked(each == to),
-                            super::workflows::Pick::Task(TaskPick::ReworkTo(each)),
-                        )
-                    })
-                    .collect();
-                let mut body =
-                    div()
-                        .flex()
-                        .flex_col()
-                        .gap(px(SPACE_3))
-                        .children(self.direct_input(
-                            &id,
-                            DirectField::Feedback,
-                            "Feedback",
-                            window,
-                            cx,
-                        ));
-                if missing {
-                    body = body.child(
-                        crate::project_editor::error_line(
-                            "Write the feedback the agent works from.".into(),
-                        )
-                        .debug_selector(|| "rework-missing".into()),
-                    );
-                }
-                body = body
-                    .child(label("Send to"))
-                    .child(chooser("rework-to", read(&task, &to), false, picks, cx))
-                    .child(meta(format!(
-                        "The workflow sends rework to {}. Choosing another recipient affects this \
-                         task only.",
-                        read(&task, &definition.approval.rework_to)
-                    )));
-                let send = crate::project_editor::primary_button(
-                    "rework-send",
-                    "Send for rework",
-                    false,
-                    cx,
-                )
-                .debug_selector(|| "rework-send".into())
-                .on_click(cx.listener(|view, _: &ClickEvent, _, cx| {
-                    cx.stop_propagation();
-                    view.send_rework(cx)
-                }));
-                (
-                    format!("Rework task #{id}"),
-                    "Your feedback is added to the task's context and travels with every later step.",
-                    body,
-                    send,
-                )
-            }
-            DirectSheet::Redirect => {
-                let target = drafts
-                    .redirect_to
-                    .as_deref()
-                    .and_then(|step| definition.step(step));
-                let picks = definition
-                    .steps
-                    .iter()
-                    .map(|step| {
-                        let current = task.step.as_deref() == Some(step.id.as_str());
-                        let mut item = ferrite_ui::menu::Item::new(if current {
-                            format!("{} \u{b7} current", step.name)
-                        } else {
-                            step.name.clone()
-                        });
-                        item = item.checked(target.is_some_and(|target| target.id == step.id));
-                        (
-                            item,
-                            super::workflows::Pick::Task(TaskPick::RedirectTo(step.id.clone())),
-                        )
-                    })
-                    .collect();
-                let mut body = div()
-                    .flex()
-                    .flex_col()
-                    .gap(px(SPACE_3))
-                    .child(label("Send to"))
-                    .child(chooser(
-                        "redirect-to",
-                        target.map_or_else(
-                            || "Choose an agent".to_string(),
-                            |step| step.name.clone(),
-                        ),
-                        tried && target.is_none(),
-                        picks,
-                        cx,
-                    ));
-                if tried && target.is_none() {
-                    body = body.child(
-                        crate::project_editor::error_line(
-                            "Choose the agent that takes the task.".into(),
-                        )
-                        .debug_selector(|| "redirect-missing".into()),
-                    );
-                }
-                if task.status == Status::Working {
-                    body = body.child(meta(
-                        "The current attempt is superseded; any late result from it is ignored.",
-                    ));
-                }
-                let mut skips = div()
-                    .debug_selector(|| "redirect-skips".into())
-                    .flex()
-                    .flex_col()
-                    .gap(px(SPACE_1));
-                for step in definition
-                    .steps
-                    .iter()
-                    .filter(|step| Some(step.id.as_str()) != drafts.redirect_to.as_deref())
-                {
-                    let on = drafts.skip.contains(&step.id);
-                    let key = format!("redirect-skip-{}{}", step.id, if on { "-on" } else { "" });
-                    let id = step.id.clone();
-                    skips = skips.child(
-                        div()
-                            .id(SharedString::from(key.clone()))
-                            .debug_selector(move || key.clone())
-                            .flex()
-                            .items_center()
-                            .gap(px(SPACE_2))
-                            .cursor_pointer()
-                            .child(
-                                div()
-                                    .size(px(ROW_ICON + SPACE_1))
-                                    .flex()
-                                    .items_center()
-                                    .justify_center()
-                                    .rounded(px(R_CONTROL))
-                                    .border_1()
-                                    .border_color(paint::FIELD_RING)
-                                    .when(on, |box_| {
-                                        box_.child(ferrite_ui::icons::icon(
-                                            ferrite_ui::icons::CHECK,
-                                            ROW_ICON,
-                                            INK_STRONG,
-                                        ))
-                                    }),
-                            )
-                            .child(SharedString::from(step.name.clone()))
-                            .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
-                                view.toggle_skip(id.clone(), cx)
-                            })),
-                    );
-                }
-                body = body
-                    .child(label("Skip for this task"))
-                    .child(meta(
-                        "When a route reaches a skipped agent, the task moves on as if it had \
-                         finished.",
-                    ))
-                    .child(skips)
-                    .child(label("Then"))
-                    .child(segmented(
-                        "redirect-then",
-                        drafts.then,
-                        &[
-                            (ThenReturn::Routes, "Follow the workflow's routes"),
-                            (ThenReturn::Me, "Return it to me to approve"),
-                        ],
-                        |view, then, cx| view.set_then(then, cx),
-                        cx,
-                    ))
-                    .children(self.direct_input(
-                        &id,
-                        DirectField::Note,
-                        "Feedback (optional)",
-                        window,
-                        cx,
-                    ));
-                let apply = crate::project_editor::primary_button(
-                    "redirect-apply",
-                    "Apply to this task",
-                    false,
-                    cx,
-                )
-                .debug_selector(|| "redirect-apply".into())
-                .on_click(cx.listener(|view, _: &ClickEvent, _, cx| {
-                    cx.stop_propagation();
-                    view.apply_redirect(cx)
-                }));
-                (
-                    format!("Direct task #{id}"),
-                    "Applies to this task only. The saved workflow and its other tasks are \
-                     unchanged.",
-                    body,
-                    apply,
-                )
-            }
-        };
-        let key = match sheet {
-            DirectSheet::Rework => "rework-sheet",
-            DirectSheet::Redirect => "redirect-sheet",
-        };
-        let card = crate::project_editor::card(f32::from(window.viewport_size().height))
-            .id(key)
-            .debug_selector(move || key.to_string())
-            .on_mouse_down(
-                MouseButton::Left,
-                cx.listener(|_, _: &MouseDownEvent, _, cx| cx.stop_propagation()),
-            )
-            .child(crate::project_editor::head(title.into(), close))
-            .child(crate::project_editor::body().child(meta(intro)).child(body))
-            .child(crate::project_editor::footer(
-                div(),
-                div()
-                    .flex()
-                    .items_center()
-                    .gap(px(SPACE_2))
-                    .child(cancel)
-                    .child(primary),
-            ));
-        let veil = crate::project_editor::veil()
-            .on_mouse_down(
-                MouseButton::Left,
-                cx.listener(|view, _: &MouseDownEvent, _, cx| {
-                    cx.stop_propagation();
-                    view.close_direct_sheet(cx);
-                }),
-            )
-            .child(card);
-        Some(deferred(veil).with_priority(3).into_any_element())
     }
 }

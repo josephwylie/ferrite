@@ -150,7 +150,8 @@ Thread's header remains the durable truth about that Thread.
 
 **Sheet**
 A dialog that covers the whole window over a dimmed veil: Settings, the
-Project card, Background work, New task, Rework/Direct.
+Project card, Background work, New task, and a Task's Rework or Direct
+this task. One is up at a time.
 _Avoid_: modal.
 
 **Composer**

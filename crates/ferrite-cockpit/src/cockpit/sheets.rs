@@ -6,6 +6,7 @@
 //! Cockpit's (`show_sheet`, `hide_sheet`).
 
 use super::background_dialog_view::BackgroundDialogView;
+use super::direct_view::DirectView;
 use super::new_task_view::NewTaskView;
 use super::project_editor_view::ProjectEditorView;
 use super::settings_view::SettingsView;
@@ -22,6 +23,8 @@ pub(crate) enum Sheet {
     ProjectEditor(Entity<ProjectEditorView>),
     BackgroundDialog(Entity<BackgroundDialogView>),
     NewTask(Entity<NewTaskView>),
+    /// A Task's Rework or Direct this task sheet.
+    Direct(Entity<DirectView>),
 }
 
 impl Sheet {
@@ -31,6 +34,7 @@ impl Sheet {
             Sheet::ProjectEditor(view) => view.read(cx).focus.clone(),
             Sheet::BackgroundDialog(view) => view.read(cx).focus.clone(),
             Sheet::NewTask(view) => view.read(cx).focus(cx),
+            Sheet::Direct(view) => view.read(cx).focus(cx),
         }
     }
 
@@ -42,6 +46,7 @@ impl Sheet {
             Sheet::ProjectEditor(_) => "project-editor-card-in",
             Sheet::BackgroundDialog(_) => "background-dialog-in",
             Sheet::NewTask(_) => "new-task-card-in",
+            Sheet::Direct(_) => "direct-card-in",
         }
     }
 
@@ -51,6 +56,7 @@ impl Sheet {
             Sheet::ProjectEditor(view) => view.update(cx, |view, cx| view.card(window, cx)),
             Sheet::BackgroundDialog(view) => view.update(cx, |view, cx| view.card(window, cx)),
             Sheet::NewTask(view) => view.update(cx, |view, cx| view.card(window, cx)),
+            Sheet::Direct(view) => view.update(cx, |view, cx| view.card(window, cx)),
         }
     }
 }
@@ -103,6 +109,13 @@ impl Sheets {
     pub(super) fn new_task(&self) -> Option<&Entity<NewTaskView>> {
         match self.up() {
             Some(Sheet::NewTask(view)) => Some(view),
+            _ => None,
+        }
+    }
+
+    pub(super) fn direct(&self) -> Option<&Entity<DirectView>> {
+        match self.up() {
+            Some(Sheet::Direct(view)) => Some(view),
             _ => None,
         }
     }
@@ -210,7 +223,27 @@ impl CockpitView {
         match gone {
             Sheet::Settings(_) => self.connections.editor = None,
             Sheet::NewTask(sheet) => self.new_task_gone(&sheet, cx),
+            Sheet::Direct(sheet) => self.direct_gone(&sheet, cx),
             Sheet::ProjectEditor(_) | Sheet::BackgroundDialog(_) => {}
+        }
+    }
+
+    /// A Factory's sheet closes once it has nothing to draw (its Factory
+    /// no longer shows, or its Task left the board) rather than hold the
+    /// keyboard with no card drawn.
+    pub(super) fn close_sheet_with_nothing_to_draw(&mut self, cx: &mut Context<Self>) {
+        let gone = match self.sheets.read(cx).up() {
+            Some(Sheet::NewTask(sheet)) => {
+                self.factory().map(|view| view.project) != Some(sheet.read(cx).project)
+            }
+            Some(Sheet::Direct(sheet)) => {
+                let sheet = sheet.read(cx);
+                self.direct_inputs(sheet.project, &sheet.task).is_none()
+            }
+            _ => false,
+        };
+        if gone {
+            self.hide_sheet(cx);
         }
     }
 

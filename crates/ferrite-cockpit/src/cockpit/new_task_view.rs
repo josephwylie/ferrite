@@ -321,17 +321,6 @@ impl CockpitView {
         }
     }
 
-    /// The sheet is its Factory's: once that no longer shows, the sheet
-    /// closes rather than hold the keyboard with no card drawn.
-    pub(super) fn close_new_task_of_gone_factory(&mut self, cx: &mut Context<Self>) {
-        let gone = self.new_task(cx).is_some_and(|sheet| {
-            self.factory().map(|view| view.project) != Some(sheet.read(cx).project)
-        });
-        if gone {
-            self.hide_sheet(cx);
-        }
-    }
-
     /// Start: the Task, its worktree and its Worker, in the Server. Its
     /// panel opens on it, and the next New task starts empty; a refusal
     /// stays on the sheet.
