@@ -1270,7 +1270,7 @@ impl CockpitView {
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "headless"))]
 impl CockpitView {
     /// How many files the last read found, once it has landed.
     pub(in crate::cockpit) fn changes_read(&self, diff: Diff) -> Option<usize> {
@@ -1279,6 +1279,10 @@ impl CockpitView {
             _ => None,
         }
     }
+}
+
+#[cfg(test)]
+impl CockpitView {
 
     pub(in crate::cockpit) fn changes_reviewed_for_test(&self, diff: Diff, path: &str) -> bool {
         self.tools

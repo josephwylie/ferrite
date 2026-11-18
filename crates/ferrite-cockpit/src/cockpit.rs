@@ -76,6 +76,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 #[cfg(feature = "visual-reference")]
 #[path = "visual_reference.rs"]
 pub mod visual_reference;
+#[cfg(feature = "headless")]
+pub mod changes_frames;
 
 use std::time::Duration;
 
