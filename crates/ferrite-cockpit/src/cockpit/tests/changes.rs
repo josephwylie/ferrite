@@ -46,14 +46,7 @@ fn window_with_agent<'a>(
 /// Press the door and wait for the read to land.
 fn opened(view: &Entity<CockpitView>, thread: ThreadId, cx: &mut gpui::VisualTestContext) {
     view.update(cx, |view, cx| view.run_opener(thread, Opener::Changes, cx));
-    for _ in 0..400 {
-        tick(cx);
-        if view.read_with(cx, |view, _| view.changes_read(Diff::Changes(thread)).is_some()) {
-            return;
-        }
-        std::thread::sleep(std::time::Duration::from_millis(5));
-    }
-    panic!("the read never landed");
+    wait_for_changes(view, thread, cx, |view, diff| view.changes_read(diff).is_some());
 }
 
 #[gpui::test]
@@ -354,11 +347,9 @@ fn the_stage_button_moves_a_file_into_and_out_of_the_index(cx: &mut TestAppConte
     assert!(staged(&repo).is_empty());
     let button = cx.debug_bounds("changes-stage-0").expect("a stage button on the first file");
     cx.simulate_click(button.center(), gpui::Modifiers::none());
-    for _ in 0..400 {
+    let started = std::time::Instant::now();
+    while staged(&repo).is_empty() && started.elapsed() < READ_LOST_AFTER {
         tick(cx);
-        if !staged(&repo).is_empty() {
-            break;
-        }
         std::thread::sleep(std::time::Duration::from_millis(5));
     }
     assert_eq!(staged(&repo), ["a.rs"]);
@@ -373,20 +364,25 @@ fn reread(view: &Entity<CockpitView>, thread: ThreadId, cx: &mut gpui::VisualTes
     wait_for_changes(view, thread, cx, |view, diff| view.changes_read(diff).is_some());
 }
 
+const READ_LOST_AFTER: std::time::Duration = std::time::Duration::from_secs(60);
+
 fn wait_for_changes(
     view: &Entity<CockpitView>,
     thread: ThreadId,
     cx: &mut gpui::VisualTestContext,
     ready: impl Fn(&CockpitView, Diff) -> bool,
 ) {
-    for _ in 0..400 {
+    // By the clock, not by a count of looks: git reading a large diff on a
+    // loaded runner takes longer than any count that is quick here.
+    let started = std::time::Instant::now();
+    loop {
         tick(cx);
         if view.read_with(cx, |view, _| ready(view, Diff::Changes(thread))) {
             return;
         }
+        assert!(started.elapsed() < READ_LOST_AFTER, "the read never landed");
         std::thread::sleep(std::time::Duration::from_millis(5));
     }
-    panic!("the read never landed");
 }
 
 #[gpui::test]
