@@ -398,10 +398,13 @@ impl CockpitView {
         let heard = !known.is_empty();
         let keep = |thread| !deleted.contains(&thread) && (!heard || known.contains(&thread));
         for (thread, tabs) in self.panel.surfaces.retain(keep) {
+            // Releasing a side chat deletes its fork, a Thread of its own.
+            // Only a Thread this window deleted takes them with it: one
+            // merely missing from the list is too thin a reason to delete
+            // another.
+            let side_chats_go = deleted.contains(&thread);
             for id in tabs {
-                // A side chat's fork is a Thread of its own; deleting its
-                // owner has never decided the fork's fate.
-                if !matches!(id, SurfaceId::SideChat(_)) {
+                if side_chats_go || !matches!(id, SurfaceId::SideChat(_)) {
                     self.release_surface(thread, &id, cx);
                 }
             }
