@@ -9,7 +9,7 @@ Ferrite has five sheets: Settings, the Project card, the Background work
 dialog, the New task sheet and a Task's Rework or Direct this task sheet.
 Each drew its own veil and wrote its own outside press, fade, focus and
 Escape. Only Settings and the Project card closed each other, by hand, in
-their openers. Two of the five have no Escape.
+their openers. Two of the five had no Escape.
 
 ## Decision
 
