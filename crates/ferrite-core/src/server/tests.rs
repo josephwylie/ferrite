@@ -32,6 +32,11 @@ mod progress;
 mod publish;
 mod starts;
 
+/// How long a test waits for something that must arrive. The wait ends the
+/// moment it arrives, so this costs time only on a slow machine. A wait that
+/// proves nothing arrives keeps its own short limit: every run pays for it.
+const PATIENCE: Duration = Duration::from_secs(30);
+
 pub(super) fn scratch(name: &str) -> PathBuf {
     let dir = std::env::temp_dir().join(format!("fs-{}-{name}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
@@ -326,7 +331,7 @@ fn serve_configured(
         answers,
         queued,
         browser,
-        browser_disk: disk.recv_timeout(Duration::from_secs(5)).unwrap(),
+        browser_disk: disk.recv_timeout(PATIENCE).unwrap(),
         installed,
         tools,
     }
@@ -407,13 +412,9 @@ impl Window {
             .collect()
     }
 
-    /// Take what arrives until `done` holds, for at most five seconds.
+    /// Take what arrives until `done` holds, for at most [`PATIENCE`].
     fn until(&mut self, done: impl Fn(&Self) -> bool) {
-        self.until_within(Duration::from_secs(5), done);
-    }
-
-    fn until_within(&mut self, limit: Duration, done: impl Fn(&Self) -> bool) {
-        let deadline = Instant::now() + limit;
+        let deadline = Instant::now() + PATIENCE;
         while !done(self) {
             let left = deadline.saturating_duration_since(Instant::now());
             assert!(!left.is_zero(), "timed out");
@@ -482,7 +483,7 @@ fn open(window: &mut Window, harness: &Harness) -> (ThreadId, Sender<SessionEven
     };
     let provider = harness
         .sessions
-        .recv_timeout(Duration::from_secs(5))
+        .recv_timeout(PATIENCE)
         .unwrap();
     (thread, provider)
 }
@@ -864,7 +865,7 @@ fn an_answer_to_a_replaced_sessions_decision_is_refused() {
     );
     let successor = harness
         .sessions
-        .recv_timeout(Duration::from_secs(5))
+        .recv_timeout(PATIENCE)
         .unwrap();
     successor.send(decision()).unwrap();
     window.until(|window| window.decisions.len() == 3);
@@ -944,10 +945,7 @@ fn a_history_larger_than_the_lag_limit_still_arrives() {
 
     let mut late = attach(&harness.address);
     late.watch(thread, None);
-    late.until_within(
-        Duration::from_secs(30),
-        shows_turn(format!("turn {}", turns - 1)),
-    );
+    late.until(shows_turn(format!("turn {}", turns - 1)));
     assert!(late.replies.is_empty(), "{:?}", late.replies);
     let reply = late.command(4, Op::SettingsChanged);
     assert!(matches!(reply, ServerMessage::Reply { error: None, .. }));
@@ -1004,7 +1002,7 @@ fn a_resume_after_a_reopen_needs_no_second_history() {
     );
     let provider = harness
         .sessions
-        .recv_timeout(Duration::from_secs(5))
+        .recv_timeout(PATIENCE)
         .unwrap();
     let heard = |text: &'static str| {
         move |window: &Window| window.said(thread).iter().any(|said| said.contains(text))
@@ -1112,7 +1110,7 @@ fn a_resume_never_crosses_a_reopened_thread() {
     );
     let provider = harness
         .sessions
-        .recv_timeout(Duration::from_secs(5))
+        .recv_timeout(PATIENCE)
         .unwrap();
     let dots = ".".repeat(after as usize + 2);
     for _ in 0..dots.len() {
@@ -1210,11 +1208,11 @@ fn a_restart_when_idle_waits_for_the_turn_and_happens_once() {
         .unwrap();
     let successor = harness
         .relaunched
-        .recv_timeout(Duration::from_secs(5))
+        .recv_timeout(PATIENCE)
         .unwrap();
     assert_eq!(successor, std::env::current_exe().unwrap());
     let restarting = loop {
-        match window.client.messages.recv_timeout(Duration::from_secs(5)) {
+        match window.client.messages.recv_timeout(PATIENCE) {
             Ok(ServerMessage::Restarting { when }) => break when,
             Ok(_) => continue,
             Err(error) => panic!("no restarting: {error}"),
@@ -1272,7 +1270,7 @@ fn a_restart_when_idle_waits_for_background_work() {
     provider.send(background(TaskStatus::Completed)).unwrap();
     harness
         .relaunched
-        .recv_timeout(Duration::from_secs(5))
+        .recv_timeout(PATIENCE)
         .expect("restarted once the shell ended");
 }
 
@@ -1335,22 +1333,27 @@ fn cockpit(harness: &Harness) -> crate::cockpit::Cockpit {
     .unwrap()
 }
 
-/// Pump a window until `done` holds, for at most five seconds.
+/// Pump a window until `done` holds, for at most [`PATIENCE`].
 fn pump_until(
     window: &mut crate::cockpit::Cockpit,
     done: impl Fn(&crate::cockpit::Cockpit) -> bool,
 ) {
-    pump_until_within(window, Duration::from_secs(5), done);
+    let deadline = Instant::now() + PATIENCE;
+    while !done(window) {
+        assert!(Instant::now() < deadline, "timed out");
+        window.pump();
+        std::thread::sleep(Duration::from_millis(5));
+    }
 }
 
-/// Pump a window until what it was asked holds `done`, for at most five
-/// seconds, answering all it was asked. A Task's alert follows the board
+/// Pump a window until what it was asked holds `done`, for at most
+/// [`PATIENCE`], answering all it was asked. A Task's alert follows the board
 /// that shows it, so a wait on the board alone can end before the alert.
 fn pump_until_asked(
     window: &mut crate::cockpit::Cockpit,
     done: impl Fn(&[crate::cockpit::Asked]) -> bool,
 ) -> Vec<crate::cockpit::Asked> {
-    let deadline = Instant::now() + Duration::from_secs(5);
+    let deadline = Instant::now() + PATIENCE;
     let mut asked = window.take_asked();
     while !done(&asked) {
         assert!(Instant::now() < deadline, "timed out: {asked:?}");
@@ -1359,19 +1362,6 @@ fn pump_until_asked(
         std::thread::sleep(Duration::from_millis(5));
     }
     asked
-}
-
-fn pump_until_within(
-    window: &mut crate::cockpit::Cockpit,
-    limit: Duration,
-    done: impl Fn(&crate::cockpit::Cockpit) -> bool,
-) {
-    let deadline = Instant::now() + limit;
-    while !done(window) {
-        assert!(Instant::now() < deadline, "timed out");
-        window.pump();
-        std::thread::sleep(Duration::from_millis(5));
-    }
 }
 
 /// Whether the window's digest of `thread` reads `said` on its wall card.
@@ -1415,7 +1405,7 @@ fn a_window_attached_over_the_socket_drives_the_servers_threads() {
         .unwrap();
     let provider = harness
         .sessions
-        .recv_timeout(Duration::from_secs(5))
+        .recv_timeout(PATIENCE)
         .unwrap();
     assert!(window
         .visible()
@@ -1483,7 +1473,7 @@ fn a_reopened_window_can_answer_questions() {
             .unwrap();
         let provider = harness
             .sessions
-            .recv_timeout(Duration::from_secs(5))
+            .recv_timeout(PATIENCE)
             .unwrap();
         provider.send(decision()).unwrap();
         let pending = |window: &crate::cockpit::Cockpit| {
@@ -1682,9 +1672,9 @@ fn spoken(engine: &mut Engine, thread: ThreadId, agent: &Sender<SessionEvent>) {
     });
 }
 
-/// Pump `engine` until `done`, failing as `what` after five seconds.
+/// Pump `engine` until `done`, failing as `what` after [`PATIENCE`].
 fn pump_engine_until(engine: &mut Engine, what: &str, done: impl Fn(&Engine) -> bool) {
-    let deadline = Instant::now() + Duration::from_secs(5);
+    let deadline = Instant::now() + PATIENCE;
     while !done(engine) {
         assert!(Instant::now() < deadline, "{what}");
         engine.pump();
@@ -1784,7 +1774,7 @@ fn a_boot_starts_the_agent_of_a_thread_with_queued_prompts() {
     revive_launch(&mut next, launch_threads(&Store::open(&store).unwrap()));
     assert_eq!(next.threads(), vec![idle, queued]);
     resumed
-        .recv_timeout(Duration::from_secs(5))
+        .recv_timeout(PATIENCE)
         .expect("the queued Thread's agent started");
     assert!(resumed.try_recv().is_err(), "and only that one");
 }
@@ -2173,7 +2163,7 @@ fn escape_while_the_agent_starts_gives_the_prompt_back() {
     let (mut engine, thread) = restored("restored-escape", spawner);
     let _ = engine.send(thread, "go".into());
     started
-        .recv_timeout(Duration::from_secs(5))
+        .recv_timeout(PATIENCE)
         .expect("the send started the agent");
     engine.interrupt(thread);
     engine.pump();
@@ -2282,7 +2272,7 @@ fn writing_to_a_restored_thread_starts_its_agent_unseen() {
     composing(&mut engine, thread);
 
     started
-        .recv_timeout(Duration::from_secs(5))
+        .recv_timeout(PATIENCE)
         .expect("the agent started");
     let view = engine.thread(thread).unwrap();
     assert!(!view.starting(), "a wake shows nothing");
@@ -2322,7 +2312,7 @@ fn writing_during_a_provider_change_starts_no_other_agent() {
     let (mut engine, thread) = restored("restored-switch", spawner);
     composing(&mut engine, thread);
     started
-        .recv_timeout(Duration::from_secs(5))
+        .recv_timeout(PATIENCE)
         .expect("writing started the agent");
     engine
         .set_provider(
@@ -2334,7 +2324,7 @@ fn writing_during_a_provider_change_starts_no_other_agent() {
         )
         .unwrap();
     started
-        .recv_timeout(Duration::from_secs(5))
+        .recv_timeout(PATIENCE)
         .expect("the change started an agent");
     composing(&mut engine, thread);
     assert!(started.try_recv().is_err(), "and nothing else did");
@@ -2377,7 +2367,7 @@ fn asking_a_thread_without_its_agent_starts_it_and_asks_it() {
         .unwrap();
     let files = engine.search_files(thread, "parser.rs").unwrap();
     let _agent = started
-        .recv_timeout(Duration::from_secs(5))
+        .recv_timeout(PATIENCE)
         .expect("asking started the agent");
     assert!(started.try_recv().is_err(), "once");
     assert!(!engine.thread(thread).unwrap().starting(), "unseen");
@@ -2391,7 +2381,7 @@ fn asking_a_thread_without_its_agent_starts_it_and_asks_it() {
         *controls.lock().unwrap(),
         vec![crate::SessionControl::RefreshMcp]
     );
-    let found = files.recv_timeout(Duration::from_secs(5)).unwrap().unwrap();
+    let found = files.recv_timeout(PATIENCE).unwrap().unwrap();
     assert_eq!(found[0].path, "parser.rs");
 }
 
@@ -2776,7 +2766,7 @@ fn a_window_on_a_machine_drives_its_threads_through_the_bridge() {
         .unwrap();
     let provider = harness
         .sessions
-        .recv_timeout(Duration::from_secs(5))
+        .recv_timeout(PATIENCE)
         .unwrap();
     let _ = window.send(thread, "go".into());
     provider.send(text("on it")).unwrap();
@@ -2796,7 +2786,7 @@ fn a_machine_off_screen_streams_status_and_never_a_transcript() {
         crate::cockpit::Endpoint::Machine(bridge(&harness, &sent)),
         peer(),
     );
-    let deadline = Instant::now() + Duration::from_secs(5);
+    let deadline = Instant::now() + PATIENCE;
     let until = |status: &mut crate::cockpit::ServerStatus,
                  done: &dyn Fn(&[crate::cockpit::StatusRow]) -> bool| {
         while !done(&status.rows()) {
@@ -2817,7 +2807,7 @@ fn a_machine_off_screen_streams_status_and_never_a_transcript() {
         .unwrap();
     let provider = harness
         .sessions
-        .recv_timeout(Duration::from_secs(5))
+        .recv_timeout(PATIENCE)
         .unwrap();
     until(&mut status, &|rows| {
         rows.iter().any(|row| row.thread == thread)
@@ -2863,11 +2853,11 @@ impl Caller {
         link::send(&mut self.stream, &request).unwrap();
     }
 
-    /// The next line, within five seconds.
+    /// The next line, within [`PATIENCE`].
     fn next(&self) -> serde_json::Value {
         self.heard
-            .recv_timeout(Duration::from_secs(5))
-            .expect("an answer within five seconds")
+            .recv_timeout(PATIENCE)
+            .expect("an answer in time")
     }
 
     /// Nothing arrives for a while.
@@ -2911,7 +2901,7 @@ fn a_prompt_with_wait_answers_once_the_agent_worked_and_settled() {
     let thread = info["thread"].as_u64().unwrap();
     let provider = harness
         .sessions
-        .recv_timeout(Duration::from_secs(5))
+        .recv_timeout(PATIENCE)
         .unwrap();
 
     caller.ask(
@@ -3102,7 +3092,7 @@ fn focus_and_toasts_reach_the_windows() {
         let message = window
             .client
             .messages
-            .recv_timeout(Duration::from_secs(5))
+            .recv_timeout(PATIENCE)
             .unwrap();
         if matches!(
             message,
@@ -3163,7 +3153,7 @@ fn a_prompt_queued_behind_a_turn_waits_for_its_own() {
     turn_ends(&provider);
     caller.quiet();
     // The prompt reaches the provider's queue on the server's own thread.
-    let deadline = Instant::now() + Duration::from_secs(5);
+    let deadline = Instant::now() + PATIENCE;
     let client_id = loop {
         if let Some(id) = harness.queued.lock().unwrap().first() {
             break id.clone();
@@ -3203,7 +3193,7 @@ fn a_starting_session_holds_one_prompt_and_queues_another() {
     let thread = started["result"]["thread"]["thread"].as_u64().unwrap();
     let _provider = harness
         .sessions
-        .recv_timeout(Duration::from_secs(5))
+        .recv_timeout(PATIENCE)
         .unwrap();
 
     caller.ask(
@@ -3226,7 +3216,7 @@ fn a_starting_session_holds_one_prompt_and_queues_another() {
         serde_json::json!({ "thread": thread, "until": "working" }),
     );
     assert!(working.get("result").is_some(), "{working}");
-    let deadline = Instant::now() + Duration::from_secs(5);
+    let deadline = Instant::now() + PATIENCE;
     while harness.queued.lock().unwrap().is_empty() {
         assert!(
             Instant::now() < deadline,
@@ -3255,7 +3245,7 @@ fn a_held_prompt_keeps_a_plain_wait_waiting() {
     let thread = started["result"]["thread"]["thread"].as_u64().unwrap();
     let provider = harness
         .sessions
-        .recv_timeout(Duration::from_secs(5))
+        .recv_timeout(PATIENCE)
         .unwrap();
     let sent = caller.answer(
         "2",
@@ -3306,7 +3296,7 @@ fn a_half_closed_caller_still_hears_its_wait() {
     caller.quiet();
     turn_ends(&provider);
     script
-        .set_read_timeout(Some(Duration::from_secs(5)))
+        .set_read_timeout(Some(PATIENCE))
         .unwrap();
     let mut line = String::new();
     BufReader::new(script).read_line(&mut line).unwrap();
@@ -3327,14 +3317,14 @@ fn tell(window: &mut Window, id: u64, op: Op) {
     );
 }
 
-/// The next message of one kind a window is told, within five seconds.
+/// The next message of one kind a window is told, within [`PATIENCE`].
 fn told(window: &mut Window, wanted: impl Fn(&ServerMessage) -> bool) -> ServerMessage {
     loop {
         let message = window
             .client
             .messages
-            .recv_timeout(Duration::from_secs(5))
-            .expect("a message within five seconds");
+            .recv_timeout(PATIENCE)
+            .expect("a message in time");
         if wanted(&message) {
             return message;
         }
@@ -3376,7 +3366,7 @@ fn a_thread_reports_what_a_coordinator_reads_of_it() {
     );
     let provider = harness
         .sessions
-        .recv_timeout(Duration::from_secs(5))
+        .recv_timeout(PATIENCE)
         .unwrap();
     let thread_id = ThreadId::new(thread);
     assert_eq!(
@@ -3442,7 +3432,7 @@ fn a_thread_reports_what_a_coordinator_reads_of_it() {
             cost_usd: None,
         })
         .unwrap();
-    let deadline = Instant::now() + Duration::from_secs(5);
+    let deadline = Instant::now() + PATIENCE;
     let ended = loop {
         let got = caller.answer("5", "thread.get", serde_json::json!({ "thread": thread }));
         if got["result"]["thread"]["attention_seq"] == 2 || Instant::now() >= deadline {
@@ -3454,7 +3444,7 @@ fn a_thread_reports_what_a_coordinator_reads_of_it() {
 
     // A window that left takes what it said with it.
     drop(window);
-    let deadline = Instant::now() + Duration::from_secs(5);
+    let deadline = Instant::now() + PATIENCE;
     let away = loop {
         let got = caller.answer("6", "thread.get", serde_json::json!({ "thread": thread }));
         if got["result"]["thread"]["focused"] == false || Instant::now() >= deadline {
@@ -3479,7 +3469,7 @@ fn a_thread_blocked_as_it_starts_is_not_ready() {
     );
     let provider = harness
         .sessions
-        .recv_timeout(Duration::from_secs(5))
+        .recv_timeout(PATIENCE)
         .unwrap();
     caller.quiet();
     provider.send(decision()).unwrap();
@@ -3592,7 +3582,7 @@ fn api_revival_scopes_launch_overrides_to_their_provider() {
     let thread = started["result"]["thread"]["thread"].clone();
     let provider = harness
         .sessions
-        .recv_timeout(Duration::from_secs(5))
+        .recv_timeout(PATIENCE)
         .unwrap();
     provider
         .send(SessionEvent::Init {
@@ -3600,7 +3590,7 @@ fn api_revival_scopes_launch_overrides_to_their_provider() {
             model: "codex-model".into(),
         })
         .unwrap();
-    let deadline = Instant::now() + Duration::from_secs(5);
+    let deadline = Instant::now() + PATIENCE;
     loop {
         let got = caller.answer("2", "thread.get", serde_json::json!({ "thread": thread }));
         if got["result"]["thread"]["provider_session"] == "codex-current" {
@@ -3661,7 +3651,7 @@ fn a_revived_thread_counts_on_from_its_boot() {
     let turn = |caller: &mut Caller, id: &str| {
         let provider = harness
             .sessions
-            .recv_timeout(Duration::from_secs(5))
+            .recv_timeout(PATIENCE)
             .unwrap();
         caller.answer(
             id,
@@ -3674,7 +3664,7 @@ fn a_revived_thread_counts_on_from_its_boot() {
                 cost_usd: None,
             })
             .unwrap();
-        let deadline = Instant::now() + Duration::from_secs(5);
+        let deadline = Instant::now() + PATIENCE;
         loop {
             let got = caller.answer(id, "thread.get", serde_json::json!({ "thread": thread }));
             if got["result"]["thread"]["completion_seq"].is_u64() || Instant::now() >= deadline {
@@ -4136,7 +4126,7 @@ fn the_cli_prints_answers_refusals_and_events() {
     );
     let api = harness.api.clone();
     std::thread::spawn(move || crate::api::cli::call(&subscribe, &api, &mut out, &mut io::sink()));
-    let next = || line(&said.recv_timeout(Duration::from_secs(5)).unwrap());
+    let next = || line(&said.recv_timeout(PATIENCE).unwrap());
     assert_eq!(next()["result"]["threads"][0]["attention"], "idle");
     call(&harness).answer(
         "1",
@@ -4554,7 +4544,7 @@ fn a_small_history_never_waits_on_a_big_one() {
     }
     small_provider.send(text("small\n\n")).unwrap();
     turn_ends(&small_provider);
-    other.until_within(Duration::from_secs(30), |other| {
+    other.until(|other| {
         [big, small].iter().all(|thread| {
             other
                 .digest(*thread)
@@ -4603,7 +4593,7 @@ fn a_thread_drawn_again_arrives_whole() {
     turn_ends(&provider);
     provider.send(text("latest\n\n")).unwrap();
     turn_ends(&provider);
-    other.until_within(Duration::from_secs(30), |other| {
+    other.until(|other| {
         other.digest(thread).is_some_and(|digest| {
             !digest.at_work
                 && digest
@@ -4621,7 +4611,7 @@ fn a_thread_drawn_again_arrives_whole() {
     // Drawn every frame as fast as the window can, as the app draws while
     // the pieces cross.
     window.draws_transcripts([thread]);
-    let deadline = Instant::now() + Duration::from_secs(5);
+    let deadline = Instant::now() + PATIENCE;
     while !shows(&window, thread, "latest") {
         assert!(Instant::now() < deadline, "timed out");
         window.pump();
@@ -5066,7 +5056,7 @@ fn a_window_sees_its_restart_through() {
     assert_eq!(window.server_restart(), Some(&ServerRestart::Restarting));
     harness
         .relaunched
-        .recv_timeout(Duration::from_secs(5))
+        .recv_timeout(PATIENCE)
         .unwrap();
     assert_eq!(harness.server.join().unwrap(), 0);
     pump_until(&mut window, |window| {
@@ -5084,7 +5074,7 @@ fn a_window_sees_its_restart_through() {
     gone(&harness.address);
     gone(&harness.api);
     let _successor = serve_in(harness.dir.clone(), None);
-    pump_until_within(&mut window, Duration::from_secs(10), |window| {
+    pump_until(&mut window, |window| {
         window.server_restart() != Some(&ServerRestart::Restarting)
     });
     assert_eq!(
@@ -5117,7 +5107,7 @@ fn a_restart_not_back_in_time_reads_failed_until_it_is() {
     window.restart_server(When::Now).unwrap();
     harness
         .relaunched
-        .recv_timeout(Duration::from_secs(5))
+        .recv_timeout(PATIENCE)
         .unwrap();
     clock.advance(Duration::from_secs(29));
     window.pump();
@@ -5135,7 +5125,7 @@ fn a_restart_not_back_in_time_reads_failed_until_it_is() {
     gone(&harness.address);
     gone(&harness.api);
     let _successor = serve_in(harness.dir.clone(), None);
-    pump_until_within(&mut window, Duration::from_secs(10), |window| {
+    pump_until(&mut window, |window| {
         matches!(
             window.server_restart(),
             Some(ServerRestart::Restarted { .. })
@@ -5157,7 +5147,7 @@ fn browser_requests_use_an_attached_thread_window_without_a_synthetic_client() {
     };
     let unavailable = harness.browser.for_thread(thread).submit(request());
     assert!(unavailable
-        .recv_timeout(Duration::from_secs(5))
+        .recv_timeout(PATIENCE)
         .unwrap()
         .is_err());
     let Attached { mut client, .. } = Client::attach(
@@ -5189,7 +5179,7 @@ fn browser_requests_use_an_attached_thread_window_without_a_synthetic_client() {
         if matches!(
             client
                 .messages
-                .recv_timeout(Duration::from_secs(5))
+                .recv_timeout(PATIENCE)
                 .unwrap(),
             ServerMessage::Reply { id: 4, .. }
         ) {
@@ -5197,7 +5187,7 @@ fn browser_requests_use_an_attached_thread_window_without_a_synthetic_client() {
         }
     }
     let reply = harness.browser.for_thread(thread).submit(request());
-    let result = reply.recv_timeout(Duration::from_secs(5)).unwrap().unwrap();
+    let result = reply.recv_timeout(PATIENCE).unwrap().unwrap();
     assert_eq!(result.state.tabs[0].url, "https://example.com/account");
     let mut realized = false;
     while !realized {
@@ -5208,7 +5198,7 @@ fn browser_requests_use_an_attached_thread_window_without_a_synthetic_client() {
             ..
         } = client
             .messages
-            .recv_timeout(Duration::from_secs(5))
+            .recv_timeout(PATIENCE)
             .unwrap()
         {
             assert_eq!(got, thread);
@@ -5256,7 +5246,7 @@ fn browser_test_window(harness: &Harness, thread: ThreadId) -> crate::link::Clie
         if matches!(
             client
                 .messages
-                .recv_timeout(Duration::from_secs(5))
+                .recv_timeout(PATIENCE)
                 .unwrap(),
             ServerMessage::Reply { id: 77, .. }
         ) {
@@ -5281,7 +5271,7 @@ fn browser_test_answer(
             dispatch,
         } = client
             .messages
-            .recv_timeout(Duration::from_secs(5))
+            .recv_timeout(PATIENCE)
             .unwrap()
         {
             assert_eq!(control, expected);
@@ -5332,7 +5322,7 @@ fn browser_requests_require_readable_observation_after_operator_or_uncertain_inp
         .submit(browser_test_action(Action::Open {
             url: "https://example.com/form".into(),
         }))
-        .recv_timeout(Duration::from_secs(5))
+        .recv_timeout(PATIENCE)
         .unwrap()
         .unwrap();
     let owner = opened.state.owner.unwrap();
@@ -5354,7 +5344,7 @@ fn browser_requests_require_readable_observation_after_operator_or_uncertain_inp
             error: None,
         } = owner_window
             .messages
-            .recv_timeout(Duration::from_secs(5))
+            .recv_timeout(PATIENCE)
             .unwrap()
         {
             break revision;
@@ -5396,7 +5386,7 @@ fn browser_requests_require_readable_observation_after_operator_or_uncertain_inp
             value: serde_json::json!({"png":"fixture"}),
         },
     );
-    shot.recv_timeout(Duration::from_secs(5)).unwrap().unwrap();
+    shot.recv_timeout(PATIENCE).unwrap().unwrap();
     assert!(agent
         .submit(Operation::Control {
             observation: None,
@@ -5404,7 +5394,7 @@ fn browser_requests_require_readable_observation_after_operator_or_uncertain_inp
             revision,
             control: click.clone()
         })
-        .recv_timeout(Duration::from_secs(2))
+        .recv_timeout(PATIENCE)
         .unwrap()
         .is_err());
     assert!(agent
@@ -5412,7 +5402,7 @@ fn browser_requests_require_readable_observation_after_operator_or_uncertain_inp
             document,
             url: "https://example.com/other".into()
         }))
-        .recv_timeout(Duration::from_secs(2))
+        .recv_timeout(PATIENCE)
         .unwrap()
         .is_err());
     let observe = agent.submit(Operation::Control {
@@ -5429,7 +5419,7 @@ fn browser_requests_require_readable_observation_after_operator_or_uncertain_inp
         },
     );
     let fresh = observe
-        .recv_timeout(Duration::from_secs(5))
+        .recv_timeout(PATIENCE)
         .unwrap()
         .unwrap()
         .observation
@@ -5437,7 +5427,7 @@ fn browser_requests_require_readable_observation_after_operator_or_uncertain_inp
     let other_agent = harness.browser.for_thread(thread);
     let state = other_agent
         .submit(Operation::State)
-        .recv_timeout(Duration::from_secs(5))
+        .recv_timeout(PATIENCE)
         .unwrap()
         .unwrap();
     assert!(
@@ -5451,7 +5441,7 @@ fn browser_requests_require_readable_observation_after_operator_or_uncertain_inp
             observation: None,
             control: click.clone()
         })
-        .recv_timeout(Duration::from_secs(2))
+        .recv_timeout(PATIENCE)
         .unwrap()
         .is_err());
     assert!(other_agent
@@ -5459,7 +5449,7 @@ fn browser_requests_require_readable_observation_after_operator_or_uncertain_inp
             document,
             url: "https://example.com/other".into()
         }))
-        .recv_timeout(Duration::from_secs(2))
+        .recv_timeout(PATIENCE)
         .unwrap()
         .is_err());
     let write = agent.submit(Operation::Control {
@@ -5475,12 +5465,12 @@ fn browser_requests_require_readable_observation_after_operator_or_uncertain_inp
             error: "connection lost after click dispatch".into(),
         },
     );
-    assert!(write.recv_timeout(Duration::from_secs(5)).unwrap().is_err());
+    assert!(write.recv_timeout(PATIENCE).unwrap().is_err());
     assert!(agent
         .submit(browser_test_action(Action::Open {
             url: "https://example.com/other".into()
         }))
-        .recv_timeout(Duration::from_secs(2))
+        .recv_timeout(PATIENCE)
         .unwrap()
         .is_err());
     let shot = agent.submit(Operation::Control {
@@ -5496,7 +5486,7 @@ fn browser_requests_require_readable_observation_after_operator_or_uncertain_inp
             value: serde_json::json!({"png":"fixture"}),
         },
     );
-    shot.recv_timeout(Duration::from_secs(5)).unwrap().unwrap();
+    shot.recv_timeout(PATIENCE).unwrap().unwrap();
     assert!(agent
         .submit(Operation::Control {
             observation: None,
@@ -5504,7 +5494,7 @@ fn browser_requests_require_readable_observation_after_operator_or_uncertain_inp
             revision,
             control: click.clone()
         })
-        .recv_timeout(Duration::from_secs(2))
+        .recv_timeout(PATIENCE)
         .unwrap()
         .is_err());
     let observe = agent.submit(Operation::Control {
@@ -5521,7 +5511,7 @@ fn browser_requests_require_readable_observation_after_operator_or_uncertain_inp
         },
     );
     let fresh = observe
-        .recv_timeout(Duration::from_secs(5))
+        .recv_timeout(PATIENCE)
         .unwrap()
         .unwrap()
         .observation
@@ -5539,7 +5529,7 @@ fn browser_requests_require_readable_observation_after_operator_or_uncertain_inp
             value: serde_json::json!({"clicked":true}),
         },
     );
-    write.recv_timeout(Duration::from_secs(5)).unwrap().unwrap();
+    write.recv_timeout(PATIENCE).unwrap().unwrap();
     window.command(99, Op::Stop { when: When::Now });
     assert_eq!(harness.server.join().unwrap(), 0);
 }
@@ -5551,7 +5541,7 @@ fn browser_test_command(client: &mut crate::link::Client, id: u64, op: Op) -> Se
     loop {
         let message = client
             .messages
-            .recv_timeout(Duration::from_secs(5))
+            .recv_timeout(PATIENCE)
             .unwrap();
         if matches!(message, ServerMessage::Reply { id: got, .. } if got == id) {
             return message;
@@ -5571,7 +5561,7 @@ fn browser_requests_reject_old_input_and_retain_unwatched_dirty_pages() {
         .submit(browser_test_action(Action::Open {
             url: "https://example.com/first".into(),
         }))
-        .recv_timeout(Duration::from_secs(5))
+        .recv_timeout(PATIENCE)
         .unwrap()
         .unwrap();
     let owner = first.state.owner.unwrap();
@@ -5580,7 +5570,7 @@ fn browser_requests_reject_old_input_and_retain_unwatched_dirty_pages() {
         .submit(browser_test_action(Action::Open {
             url: "https://example.com/second".into(),
         }))
-        .recv_timeout(Duration::from_secs(5))
+        .recv_timeout(PATIENCE)
         .unwrap()
         .unwrap();
     assert!(
@@ -5701,7 +5691,7 @@ fn browser_requests_reject_old_input_and_retain_unwatched_dirty_pages() {
             ..
         } = owner_window
             .messages
-            .recv_timeout(Duration::from_secs(5))
+            .recv_timeout(PATIENCE)
             .expect("inactive transcript must retain its browser owner")
         {
             assert_eq!(got, thread);
@@ -5714,7 +5704,7 @@ fn browser_requests_reject_old_input_and_retain_unwatched_dirty_pages() {
     }
     let retained = agent
         .submit(Operation::State)
-        .recv_timeout(Duration::from_secs(5))
+        .recv_timeout(PATIENCE)
         .unwrap()
         .unwrap();
     assert_eq!(retained.state.owner, Some(owner));
@@ -5730,7 +5720,7 @@ fn browser_requests_reject_old_input_and_retain_unwatched_dirty_pages() {
             owner: None, state, ..
         } = next_window
             .messages
-            .recv_timeout(Duration::from_secs(5))
+            .recv_timeout(PATIENCE)
             .expect("actual connection loss must retire its browser documents")
         {
             assert!(state.tabs.iter().all(|tab| !tab.live));
@@ -5771,7 +5761,7 @@ fn browser_test_observe(
         },
     );
     answer
-        .recv_timeout(Duration::from_secs(5))
+        .recv_timeout(PATIENCE)
         .unwrap()
         .unwrap()
 }
@@ -5814,7 +5804,7 @@ fn browser_requests_wait_for_the_latest_manual_gesture_to_settle() {
         .submit(browser_test_action(Action::Open {
             url: "https://example.com/form".into(),
         }))
-        .recv_timeout(Duration::from_secs(5))
+        .recv_timeout(PATIENCE)
         .unwrap()
         .unwrap();
     let owner = opened.state.owner.unwrap();
@@ -5831,7 +5821,7 @@ fn browser_requests_wait_for_the_latest_manual_gesture_to_settle() {
     assert!(
         agent
             .submit(Operation::State)
-            .recv_timeout(Duration::from_secs(5))
+            .recv_timeout(PATIENCE)
             .unwrap()
             .unwrap()
             .state
@@ -5888,7 +5878,7 @@ fn browser_requests_wait_for_the_latest_manual_gesture_to_settle() {
             value: serde_json::json!({"saved":true}),
         },
     );
-    write.recv_timeout(Duration::from_secs(5)).unwrap().unwrap();
+    write.recv_timeout(PATIENCE).unwrap().unwrap();
     let cancelled = browser_test_input(&mut owner_window, 305, thread, owner, document);
     let ServerMessage::Reply {
         ok: Some(Done::Browser { state }),
@@ -5962,7 +5952,7 @@ fn browser_requests_hold_uncertain_work_when_the_caller_misses_its_reply() {
         .submit(browser_test_action(Action::Open {
             url: "https://example.com/form".into(),
         }))
-        .recv_timeout(Duration::from_secs(5))
+        .recv_timeout(PATIENCE)
         .unwrap()
         .unwrap();
     let document = opened.state.tabs[0].document();
@@ -5991,7 +5981,7 @@ fn browser_requests_hold_uncertain_work_when_the_caller_misses_its_reply() {
     browser_test_command(&mut owner_window, 401, Op::SettingsChanged);
     let state = agent
         .submit(Operation::State)
-        .recv_timeout(Duration::from_secs(5))
+        .recv_timeout(PATIENCE)
         .unwrap()
         .unwrap();
     assert!(
@@ -6002,7 +5992,7 @@ fn browser_requests_hold_uncertain_work_when_the_caller_misses_its_reply() {
         .submit(browser_test_action(Action::Open {
             url: "https://example.com/other".into()
         }))
-        .recv_timeout(Duration::from_secs(5))
+        .recv_timeout(PATIENCE)
         .unwrap()
         .is_err());
     let observed = browser_test_observe(&mut owner_window, &agent, document, 0);
@@ -6015,7 +6005,7 @@ fn browser_requests_hold_uncertain_work_when_the_caller_misses_its_reply() {
             },
             observation: observed.observation,
         })
-        .recv_timeout(Duration::from_secs(5))
+        .recv_timeout(PATIENCE)
         .unwrap()
         .unwrap();
     assert_eq!(opened.state.tabs.len(), 2);
@@ -6039,7 +6029,7 @@ fn snooze_is_shared_and_survives_server_restart_without_a_session() {
         .unwrap();
     harness
         .sessions
-        .recv_timeout(Duration::from_secs(5))
+        .recv_timeout(PATIENCE)
         .unwrap();
     let until = crate::clock::system_time() + Duration::from_secs(3600);
     first.snooze_thread(thread, Some(until)).unwrap();
@@ -6095,7 +6085,7 @@ fn browser_requests_allow_operator_recovery_without_discarding_annotation_protec
         .submit(browser_test_action(Action::Open {
             url: "https://example.com/form".into(),
         }))
-        .recv_timeout(Duration::from_secs(5))
+        .recv_timeout(PATIENCE)
         .unwrap()
         .unwrap();
     let owner = opened.state.owner.unwrap();
@@ -6117,7 +6107,7 @@ fn browser_requests_allow_operator_recovery_without_discarding_annotation_protec
             request, revision, ..
         } = owner_window
             .messages
-            .recv_timeout(Duration::from_secs(5))
+            .recv_timeout(PATIENCE)
             .unwrap()
         {
             break (request, revision);
@@ -6130,7 +6120,7 @@ fn browser_requests_allow_operator_recovery_without_discarding_annotation_protec
                 action: Action::Reload { document },
                 observation: Some(receipt)
             })
-            .recv_timeout(Duration::from_secs(5))
+            .recv_timeout(PATIENCE)
             .unwrap()
             .is_err(),
         "agent operations cannot impersonate operator recovery"
@@ -6155,7 +6145,7 @@ fn browser_requests_allow_operator_recovery_without_discarding_annotation_protec
     let next = state.tabs[0].document();
     assert_ne!(next, document);
     assert!(pending
-        .recv_timeout(Duration::from_secs(5))
+        .recv_timeout(PATIENCE)
         .unwrap()
         .unwrap_err()
         .contains("uncertain"));
@@ -6194,7 +6184,7 @@ fn browser_requests_allow_operator_recovery_without_discarding_annotation_protec
         },
     );
     assert!(uncertain
-        .recv_timeout(Duration::from_secs(5))
+        .recv_timeout(PATIENCE)
         .unwrap()
         .is_err());
     let ServerMessage::Reply {
@@ -6222,7 +6212,7 @@ fn browser_requests_allow_operator_recovery_without_discarding_annotation_protec
                 observation: None,
                 control: Control::Observe
             })
-            .recv_timeout(Duration::from_secs(5))
+            .recv_timeout(PATIENCE)
             .unwrap()
             .is_err(),
         "read-only capture must not allow an agent observation to discharge uncertainty"
@@ -6252,7 +6242,7 @@ fn browser_requests_allow_operator_recovery_without_discarding_annotation_protec
     );
     let retained = agent
         .submit(Operation::State)
-        .recv_timeout(Duration::from_secs(5))
+        .recv_timeout(PATIENCE)
         .unwrap()
         .unwrap();
     assert!(
@@ -6262,7 +6252,7 @@ fn browser_requests_allow_operator_recovery_without_discarding_annotation_protec
     assert!(retained.observation.is_none());
     assert!(agent
         .submit(browser_test_action(Action::Close { tab: next.tab }))
-        .recv_timeout(Duration::from_secs(5))
+        .recv_timeout(PATIENCE)
         .unwrap()
         .is_err());
     let ServerMessage::Reply {
@@ -6285,7 +6275,7 @@ fn browser_requests_allow_operator_recovery_without_discarding_annotation_protec
         .submit(browser_test_action(Action::Open {
             url: "https://example.com/next".into(),
         }))
-        .recv_timeout(Duration::from_secs(5))
+        .recv_timeout(PATIENCE)
         .unwrap()
         .unwrap();
     assert_ne!(reopened.state.tabs[0].id, next.tab);
@@ -6305,7 +6295,7 @@ fn browser_requests_cannot_promote_reads_started_before_operator_settlement() {
         .submit(browser_test_action(Action::Open {
             url: "https://example.com/form".into(),
         }))
-        .recv_timeout(Duration::from_secs(5))
+        .recv_timeout(PATIENCE)
         .unwrap()
         .unwrap();
     let owner = opened.state.owner.unwrap();
@@ -6320,7 +6310,7 @@ fn browser_requests_cannot_promote_reads_started_before_operator_settlement() {
     let request = loop {
         if let ServerMessage::BrowserRequest { request, .. } = owner_window
             .messages
-            .recv_timeout(Duration::from_secs(5))
+            .recv_timeout(PATIENCE)
             .unwrap()
         {
             break request;
@@ -6352,7 +6342,7 @@ fn browser_requests_cannot_promote_reads_started_before_operator_settlement() {
         .unwrap();
     assert!(
         early
-            .recv_timeout(Duration::from_secs(5))
+            .recv_timeout(PATIENCE)
             .unwrap()
             .unwrap()
             .observation
@@ -6380,7 +6370,7 @@ fn browser_requests_cannot_promote_reads_started_before_operator_settlement() {
         },
     );
     assert!(uncertain
-        .recv_timeout(Duration::from_secs(5))
+        .recv_timeout(PATIENCE)
         .unwrap()
         .is_err());
     let overlapping = agent.submit(Operation::Control {
@@ -6392,7 +6382,7 @@ fn browser_requests_cannot_promote_reads_started_before_operator_settlement() {
     let request = loop {
         if let ServerMessage::BrowserRequest { request, .. } = owner_window
             .messages
-            .recv_timeout(Duration::from_secs(5))
+            .recv_timeout(PATIENCE)
             .unwrap()
         {
             break request;
@@ -6431,7 +6421,7 @@ fn browser_requests_cannot_promote_reads_started_before_operator_settlement() {
         .unwrap();
     assert!(
         overlapping
-            .recv_timeout(Duration::from_secs(5))
+            .recv_timeout(PATIENCE)
             .unwrap()
             .is_err(),
         "capture cannot let an already queued read discharge uncertainty"
@@ -6447,7 +6437,7 @@ fn browser_requests_cannot_promote_reads_started_before_operator_settlement() {
     );
     let state = agent
         .submit(Operation::State)
-        .recv_timeout(Duration::from_secs(5))
+        .recv_timeout(PATIENCE)
         .unwrap()
         .unwrap();
     assert!(state.state.tabs[0].protected);

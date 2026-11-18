@@ -271,7 +271,7 @@ fn a_squatted_worktree_path_rolls_the_first_send_back() {
 }
 
 fn settle_first_send(engine: &mut Engine) -> io::Result<crate::engine::Bootstrapped> {
-    let deadline = Instant::now() + Duration::from_secs(10);
+    let deadline = Instant::now() + PATIENCE;
     loop {
         assert!(Instant::now() < deadline, "the first send never settled");
         engine.pump();

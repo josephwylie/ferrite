@@ -30,7 +30,7 @@ fn one_off(
     let task = started["task"]["id"].as_str().unwrap().to_string();
     let agent = harness
         .sessions
-        .recv_timeout(Duration::from_secs(5))
+        .recv_timeout(PATIENCE)
         .expect("a Worker started");
     let worker = worker_of(caller, &task);
     (task, worker, agent)
@@ -132,7 +132,7 @@ fn saved_workflow(harness: &Harness, project: &str, start: serde_json::Value) ->
 }
 
 fn wait_for(what: &str, done: impl Fn() -> bool) {
-    let deadline = Instant::now() + Duration::from_secs(5);
+    let deadline = Instant::now() + PATIENCE;
     while !done() {
         assert!(Instant::now() < deadline, "timed out waiting for {what}");
         std::thread::sleep(Duration::from_millis(10));

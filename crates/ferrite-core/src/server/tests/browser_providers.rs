@@ -12,7 +12,7 @@ fn stub(dir: &Path, script: &str) -> String {
 }
 
 fn lines_until(path: &Path, done: impl Fn(&Value) -> bool) -> Vec<Value> {
-    let deadline = Instant::now() + Duration::from_secs(10);
+    let deadline = Instant::now() + PATIENCE;
     loop {
         let lines: Vec<Value> = std::fs::read_to_string(path)
             .unwrap_or_default()
@@ -244,7 +244,7 @@ fn both_providers_deliver_screenshot_png_content_from_the_bound_live_tab() {
             .submit(browser_test_action(Action::Open {
                 url: "https://example.com/screenshot".into(),
             }))
-            .recv_timeout(Duration::from_secs(5))
+            .recv_timeout(PATIENCE)
             .unwrap()
             .unwrap();
         let (session, host) = provider_call(
@@ -358,7 +358,7 @@ fn both_providers_reject_page_supplied_thread_routing_without_opening_a_tab() {
             .browser
             .for_thread(thread)
             .submit(crate::browser::Operation::State)
-            .recv_timeout(Duration::from_secs(5))
+            .recv_timeout(PATIENCE)
             .unwrap()
             .unwrap();
         assert!(

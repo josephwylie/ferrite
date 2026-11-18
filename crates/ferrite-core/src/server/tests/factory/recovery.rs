@@ -24,7 +24,7 @@ fn one_off(harness: &Harness, repo: &Path, instructions: &str) -> String {
 
 /// Until `thread` was told `text`.
 fn told(caller: &mut Caller, thread: ThreadId, text: &str) -> String {
-    let deadline = Instant::now() + Duration::from_secs(5);
+    let deadline = Instant::now() + PATIENCE;
     loop {
         let read = read(caller, thread);
         if read.contains(text) {
@@ -68,20 +68,20 @@ fn a_session_that_dies_is_revived_once_then_stops_and_another_project_is_untouch
     let task = one_off(&harness, &repo, "Fix the flaky test");
     let agent = harness
         .sessions
-        .recv_timeout(Duration::from_secs(5))
+        .recv_timeout(PATIENCE)
         .unwrap();
     let worker = worker_of(&mut caller, &task);
     let other = one_off(&harness, &other_repo, "Bump the version");
     let other_agent = harness
         .sessions
-        .recv_timeout(Duration::from_secs(5))
+        .recv_timeout(PATIENCE)
         .unwrap();
     let other_worker = worker_of(&mut caller, &other);
 
     exit(agent);
     let revived = harness
         .sessions
-        .recv_timeout(Duration::from_secs(5))
+        .recv_timeout(PATIENCE)
         .expect("the same Thread on a new Session");
     let read = told(&mut caller, worker, "ended unexpectedly");
     assert!(read.contains("outcome `finished`"), "{read}");
@@ -125,7 +125,7 @@ fn a_session_that_dies_is_revived_once_then_stops_and_another_project_is_untouch
     ok(&harness, "task.resume", serde_json::json!({ "task": task }));
     let _resumed = harness
         .sessions
-        .recv_timeout(Duration::from_secs(5))
+        .recv_timeout(PATIENCE)
         .expect("Resume starts its Session");
     told(&mut caller, worker, "resumed this task");
 }
@@ -186,7 +186,7 @@ fn a_restart_mid_step_and_mid_approval_revives_once_and_waits() {
         .to_string();
     let building = harness
         .sessions
-        .recv_timeout(Duration::from_secs(5))
+        .recv_timeout(PATIENCE)
         .unwrap();
     let builder = worker_of(&mut caller, &waiting);
     ok_in(
@@ -200,7 +200,7 @@ fn a_restart_mid_step_and_mid_approval_revives_once_and_waits() {
     let working = one_off(&harness, &repo, "Fix the flaky test");
     let _agent = harness
         .sessions
-        .recv_timeout(Duration::from_secs(5))
+        .recv_timeout(PATIENCE)
         .unwrap();
     let worker = worker_of(&mut caller, &working);
 
@@ -208,7 +208,7 @@ fn a_restart_mid_step_and_mid_approval_revives_once_and_waits() {
     let mut caller = call(&harness);
     let revived = harness
         .sessions
-        .recv_timeout(Duration::from_secs(5))
+        .recv_timeout(PATIENCE)
         .expect("the working Worker, revived");
     told(&mut caller, worker, "Ferrite restarted");
     let still = task_until(&mut caller, &working, |_| true);
@@ -258,7 +258,7 @@ fn a_restart_mid_step_and_mid_approval_revives_once_and_waits() {
         "task.delete",
         serde_json::json!({ "task": waiting }),
     );
-    let deadline = Instant::now() + Duration::from_secs(5);
+    let deadline = Instant::now() + PATIENCE;
     while log.exists() {
         assert!(Instant::now() < deadline, "deleted with its Task");
         std::thread::sleep(Duration::from_millis(10));

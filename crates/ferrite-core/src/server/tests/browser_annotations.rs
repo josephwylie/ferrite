@@ -17,7 +17,7 @@ fn request(client: &mut Client, id: u64, op: Op) -> Result<Option<Done>, WireErr
     loop {
         if let ServerMessage::Reply { id: got, ok, error } = client
             .messages
-            .recv_timeout(Duration::from_secs(5))
+            .recv_timeout(PATIENCE)
             .unwrap()
         {
             if got == id {
@@ -39,7 +39,7 @@ fn browser_annotation_receipt_survives_navigation_and_fetches_only_retained_imag
         .submit(browser_test_action(Action::Open {
             url: "https://example.test/captured".into(),
         }))
-        .recv_timeout(Duration::from_secs(5))
+        .recv_timeout(PATIENCE)
         .unwrap()
         .unwrap();
     let owner = opened.state.owner.unwrap();
@@ -119,7 +119,7 @@ fn browser_annotation_receipt_survives_navigation_and_fetches_only_retained_imag
     let annotation = loop {
         if let ServerMessage::Reply { id: 902, ok, error } = owner_window
             .messages
-            .recv_timeout(Duration::from_secs(5))
+            .recv_timeout(PATIENCE)
             .unwrap()
         {
             assert!(error.is_none());
@@ -208,7 +208,7 @@ fn browser_metadata_waits_off_pump_and_acknowledges_ordered_durable_results() {
     loop {
         if let ServerMessage::Reply { id, .. } = window
             .messages
-            .recv_timeout(Duration::from_secs(5))
+            .recv_timeout(PATIENCE)
             .unwrap()
         {
             assert_eq!(id, 913, "browser completion preceded its durable write");
@@ -220,7 +220,7 @@ fn browser_metadata_waits_off_pump_and_acknowledges_ordered_durable_results() {
         loop {
             if let ServerMessage::Reply { id, ok, error } = window
                 .messages
-                .recv_timeout(Duration::from_secs(5))
+                .recv_timeout(PATIENCE)
                 .unwrap()
             {
                 assert_eq!(id, expected);
@@ -242,7 +242,7 @@ fn browser_metadata_waits_off_pump_and_acknowledges_ordered_durable_results() {
         .browser
         .for_thread(thread)
         .submit(crate::browser::Operation::State)
-        .recv_timeout(Duration::from_secs(5))
+        .recv_timeout(PATIENCE)
         .unwrap()
         .unwrap();
     let owner = live.state.owner.unwrap();
@@ -284,7 +284,7 @@ fn browser_metadata_waits_off_pump_and_acknowledges_ordered_durable_results() {
     loop {
         if let ServerMessage::Reply { id: 914, ok, error } = window
             .messages
-            .recv_timeout(Duration::from_secs(5))
+            .recv_timeout(PATIENCE)
             .unwrap()
         {
             assert!(ok.is_none());
@@ -296,7 +296,7 @@ fn browser_metadata_waits_off_pump_and_acknowledges_ordered_durable_results() {
         .browser
         .for_thread(thread)
         .submit(crate::browser::Operation::State)
-        .recv_timeout(Duration::from_secs(5))
+        .recv_timeout(PATIENCE)
         .unwrap()
         .unwrap();
     assert_eq!(state.state.tabs.len(), 2);
