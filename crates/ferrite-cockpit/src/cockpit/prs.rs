@@ -443,6 +443,7 @@ impl CockpitView {
                     "Add project",
                     cx,
                 )
+                .debug_selector(|| "prs-add-project".into())
                 .on_click(cx.listener(|view, _: &ClickEvent, _, cx| {
                     cx.stop_propagation();
                     view.open_project_creator(cx);

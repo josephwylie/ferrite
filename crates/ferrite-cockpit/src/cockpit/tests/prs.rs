@@ -641,3 +641,77 @@ fn a_foreign_pr_with_the_same_number_keeps_its_repository(cx: &mut TestAppContex
         );
     });
 }
+
+/// Another Project chosen in the scope bar reads its own list, and the row
+/// marked on the last one is let go: ⏎ opens nothing until a row is marked.
+#[gpui::test]
+fn choosing_another_project_reads_its_list_and_lets_the_mark_go(cx: &mut TestAppContext) {
+    let (world, cx) = world("prs-scope", 1, two_rows(), false, cx);
+    click(cx, "nav-pull-requests");
+    lands(cx, "prs-row-3");
+    cx.simulate_keystrokes("down");
+    click(cx, &format!("prs-project-{}", world.project.get()));
+    lands(cx, "prs-row-7");
+    cx.simulate_keystrokes("enter");
+    tick(cx);
+    assert!(!shows(cx, "prs-detail"), "no row marked on the new list");
+    cx.simulate_keystrokes("down");
+    cx.simulate_keystrokes("enter");
+    tick(cx);
+    assert!(shows(cx, "prs-detail"), "a row marked again opens");
+}
+
+/// A state filter reads that state's list, and an empty one says so.
+#[gpui::test]
+fn a_filter_reads_its_own_list(cx: &mut TestAppContext) {
+    let (world, cx) = world("prs-filter-empty", 0, two_rows(), false, cx);
+    world.view.update(cx, |view, _| {
+        view.cockpit
+            .fixture_pr_list(world.path.clone(), WirePrFilter::Closed, list_of(Vec::new(), false))
+    });
+    click(cx, "nav-pull-requests");
+    lands(cx, "prs-row-7");
+    click(cx, "prs-filter-Closed");
+    lands(cx, "prs-empty");
+    assert!(!shows(cx, "prs-row-7"));
+    click(cx, "prs-filter-Open");
+    lands(cx, "prs-row-7");
+}
+
+/// With no Project, the view says so and offers to add one.
+#[gpui::test]
+fn with_no_project_the_view_offers_to_add_one(cx: &mut TestAppContext) {
+    let (core, _fake) = cockpit("prs-no-project", 0);
+    bind_production_keys(cx);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    hold_nav_open(&view, cx);
+    cx.simulate_resize(gpui::size(px(1900.), px(900.)));
+    tick(cx);
+    view.update(cx, |view, _| {
+        let projects: Vec<ProjectId> =
+            view.cockpit.registry().projects().iter().map(|project| project.id).collect();
+        for project in projects {
+            view.cockpit.remove_project(project).unwrap();
+        }
+    });
+    click(cx, "nav-pull-requests");
+    assert!(shows(cx, "prs-no-project"));
+    click(cx, "prs-add-project");
+    lands(cx, "project-editor-card");
+}
+
+/// A PR opened again shows the view it was left on, under the view's head.
+#[gpui::test]
+fn a_pr_opened_again_keeps_the_view_it_was_left_on(cx: &mut TestAppContext) {
+    let (_world, cx) = world("prs-tab-kept", 0, two_rows(), false, cx);
+    click(cx, "nav-pull-requests");
+    lands(cx, "prs-row-7");
+    assert!(shows(cx, "view-head-prs"), "the head names the destination");
+    click(cx, "prs-row-7");
+    lands(cx, "pr-body");
+    click(cx, "pr-tab-Timeline");
+    lands(cx, "pr-snippet-0");
+    click(cx, "prs-back");
+    click(cx, "prs-row-7");
+    lands(cx, "pr-snippet-0");
+}
