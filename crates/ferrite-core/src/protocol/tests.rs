@@ -2290,6 +2290,50 @@ fn samples() -> Vec<(&'static str, Sample)> {
             }),
         ),
         (
+            "drive_resize",
+            Sample::Server(ServerMessage::Drive {
+                request: 6,
+                action: crate::drive::Action::Resize(crate::drive::Resize {
+                    width: 700,
+                    height: 900,
+                }),
+            }),
+        ),
+        (
+            "driven_resized",
+            Sample::Client(ClientMessage::Driven {
+                request: 6,
+                ok: Some(crate::drive::Answer::Resized {
+                    width: 700.0,
+                    height: 900.0,
+                }),
+                error: None,
+            }),
+        ),
+        (
+            "drive_drag",
+            Sample::Server(ServerMessage::Drive {
+                request: 7,
+                action: crate::drive::Action::Drag(crate::drive::Drag {
+                    from: crate::drive::Target::Selector("panel-edge".into()),
+                    to: crate::drive::Target::Point { x: 900, y: 400 },
+                }),
+            }),
+        ),
+        (
+            "driven_dragged",
+            Sample::Client(ClientMessage::Driven {
+                request: 7,
+                ok: Some(crate::drive::Answer::Dragged {
+                    from_x: 1000.0,
+                    from_y: 400.0,
+                    to_x: 900.0,
+                    to_y: 400.0,
+                }),
+                error: None,
+            }),
+        ),
+        (
             "restarting",
             Sample::Server(ServerMessage::Restarting { when: When::Idle }),
         ),

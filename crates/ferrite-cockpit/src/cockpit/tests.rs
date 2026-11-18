@@ -28,6 +28,7 @@ mod find;
 mod floats_parity;
 mod forks;
 mod frame_parity;
+mod hands;
 mod image_viewer;
 mod interaction_regressions;
 mod key_ownership;
