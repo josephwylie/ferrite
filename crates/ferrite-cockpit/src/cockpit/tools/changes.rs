@@ -28,6 +28,7 @@ use ferrite_ui::icons;
 use ferrite_ui::theme::{self, paint};
 
 use ferrite_pane::composer::{Composer, Role};
+use gpui::{list, App, ListAlignment, ListOffset, ListState};
 
 use super::*;
 use crate::cockpit::context_menu::Submenu;
@@ -108,6 +109,9 @@ pub(crate) enum Verb {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct Sub;
 
+/// How far past the list's viewport files are laid out.
+const OVERDRAW: f32 = 400.0;
+
 /// How many branches `Compare against ›` lists.
 const BRANCHES_LISTED: usize = 20;
 
@@ -167,7 +171,12 @@ pub(crate) struct Changes {
     hide_whitespace: bool,
     /// Test files left out of the list (`is_test_path`).
     hide_tests: bool,
-    scroll: ScrollHandle,
+    /// The list of files, one item each: only the files in view are laid
+    /// out.
+    scroll: ListState,
+    /// Where in the read's files each item of the list is: the files the
+    /// filter and Hide test files leave.
+    listed: Vec<usize>,
     /// The branches `Compare against ›` lists, as of the last read.
     branches: Vec<String>,
     /// Bumped by every read, so a late answer for an old scope is dropped.
@@ -209,6 +218,34 @@ impl Changes {
         }
     }
 
+    /// List the files the filter and Hide test files leave, every one
+    /// measured again on the next frame (a fold, the wrap or the read may
+    /// have changed its height), at the same place in the list. Until a
+    /// read lands the list stands as it was.
+    fn relist(&mut self, cx: &App) {
+        let Load::Read(files) = &self.load else {
+            return;
+        };
+        let wanted = self.filter.read(cx).text().trim().to_lowercase();
+        let listed: Vec<usize> = files
+            .iter()
+            .enumerate()
+            .filter(|(_, file)| wanted.is_empty() || file.path.to_lowercase().contains(&wanted))
+            .filter(|(_, file)| !self.hide_tests || !is_test_path(&file.path))
+            .map(|(at, _)| at)
+            .collect();
+        if listed.len() == self.scroll.item_count() {
+            self.scroll.remeasure_items(0..listed.len());
+        } else {
+            let top = self.scroll.logical_scroll_top();
+            self.scroll.reset(listed.len());
+            if top.item_ix < listed.len() {
+                self.scroll.scroll_to(top);
+            }
+        }
+        self.listed = listed;
+    }
+
     pub(super) fn new(scope: Scope, filter: Entity<Composer>) -> Self {
         Self {
             scope,
@@ -218,7 +255,8 @@ impl Changes {
             wrap: true,
             hide_whitespace: false,
             hide_tests: false,
-            scroll: ScrollHandle::new(),
+            scroll: ListState::new(0, ListAlignment::Top, px(OVERDRAW)),
+            listed: Vec::new(),
             branches: Vec::new(),
             generation: 0,
             stage_generation: 0,
@@ -378,7 +416,10 @@ impl CockpitView {
                 field.set_role(Role::Field(None), cx);
                 field
             });
-            cx.subscribe(&filter, |_, _, _: &ferrite_pane::composer::Edited, cx| {
+            cx.subscribe(&filter, move |view, _, _: &ferrite_pane::composer::Edited, cx| {
+                if let Some(changes) = view.tools.changes.get_mut(&diff) {
+                    changes.relist(cx);
+                }
                 cx.notify()
             })
             .detach();
@@ -434,6 +475,7 @@ impl CockpitView {
                         Ok(files) => {
                             changes.forget_stale_reviews(&files);
                             changes.load = Load::Read(files);
+                            changes.relist(cx);
                         }
                         Err(error) if matches!(changes.load, Load::Read(_)) => {
                             changes.refresh_failure = Some(error.to_string().into());
@@ -471,9 +513,20 @@ impl CockpitView {
             return;
         };
         changes.folded.remove(path);
+        changes.relist(cx);
         if let Load::Read(files) = &changes.load {
-            if let Some(at) = files.iter().position(|file| file.path == path) {
-                changes.scroll.scroll_to_item(at);
+            let item = files
+                .iter()
+                .position(|file| file.path == path)
+                .and_then(|at| changes.listed.iter().position(|&listed| listed == at));
+            if let Some(item) = item {
+                // A file the list has not laid out has no height yet, so a
+                // reveal would stop short of it.
+                if changes.scroll.bounds_for_item(item).is_some() {
+                    changes.scroll.scroll_to_reveal_item(item);
+                } else {
+                    changes.scroll.scroll_to(ListOffset { item_ix: item, offset_in_item: px(0.) });
+                }
             }
         }
         cx.notify();
@@ -575,6 +628,7 @@ impl CockpitView {
                         }
                         Err(why) => Load::Failed(why.to_string().into()),
                     };
+                    changes.relist(cx);
                     cx.notify();
                 }
             }).ok();
@@ -620,6 +674,7 @@ impl CockpitView {
                 return;
             }
         }
+        changes.relist(cx);
         cx.notify();
     }
 
@@ -628,6 +683,7 @@ impl CockpitView {
             if !changes.folded.remove(path) {
                 changes.folded.insert(path.to_string());
             }
+            changes.relist(cx);
             cx.notify();
         }
     }
@@ -642,6 +698,7 @@ impl CockpitView {
                     changes.folded.insert(path.to_string());
                 }
             }
+            changes.relist(cx);
             cx.notify();
         }
     }
@@ -732,36 +789,26 @@ impl CockpitView {
             Load::Read(files) if files.is_empty() => self
                 .changes_empty(diff, &changes.scope, cx)
                 .into_any_element(),
-            Load::Read(files) => {
-                let wanted = changes.filter.read(cx).text().trim().to_lowercase();
-                let listed: Vec<_> = files
-                    .iter()
-                    .enumerate()
-                    .filter(|(_, file)| {
-                        wanted.is_empty() || file.path.to_lowercase().contains(&wanted)
-                    })
-                    .filter(|(_, file)| !changes.hide_tests || !is_test_path(&file.path))
-                    .collect();
-                let list = if listed.is_empty() {
+            Load::Read(_) => {
+                let list = if changes.listed.is_empty() {
                     self.changes_note("No files match").into_any_element()
                 } else {
                     div()
-                        .id("changes-scroll")
                         .debug_selector(|| "changes-scroll".into())
                         .flex()
                         .flex_col()
                         .flex_1()
                         .min_h_0()
-                        .overflow_y_scroll()
-                        .track_scroll(&changes.scroll)
-                        .children(
-                            listed
-                                .into_iter()
-                                .map(|(at, file)| self.changes_file(diff, changes, at, file, cx)),
+                        .child(
+                            list(
+                                changes.scroll.clone(),
+                                cx.processor(move |view, item, _, cx| view.changes_item(diff, item, cx)),
+                            )
+                            .size_full(),
                         )
                         .into_any_element()
                 };
-                let empty = wanted.is_empty();
+                let empty = changes.filter.read(cx).text().trim().is_empty();
                 div()
                     .flex()
                     .flex_col()
@@ -1098,6 +1145,21 @@ impl CockpitView {
             )
     }
 
+    /// The list's `item`th file, as wide as the list so an unwrapped
+    /// file's own scroller carries its long lines sideways.
+    fn changes_item(&self, diff: Diff, item: usize, cx: &mut Context<Self>) -> AnyElement {
+        let Some(changes) = self.tools.changes.get(&diff) else {
+            return div().into_any_element();
+        };
+        let Load::Read(files) = &changes.load else {
+            return div().into_any_element();
+        };
+        let Some((at, file)) = changes.listed.get(item).and_then(|&at| Some((at, files.get(at)?))) else {
+            return div().into_any_element();
+        };
+        self.changes_file(diff, changes, at, file, cx).w_full().into_any_element()
+    }
+
     fn changes_file(
         &self,
         diff: Diff,
@@ -1294,6 +1356,10 @@ impl CockpitView {
     pub(in crate::cockpit) fn changes_stage_failure_for_test(&self, diff: Diff) -> Option<String> {
         let failure = self.tools.changes.get(&diff)?.stage_failure.as_ref()?;
         Some(format!("{} {}", failure.path, failure.message))
+    }
+
+    pub(in crate::cockpit) fn toggle_fold_for_test(&mut self, diff: Diff, path: &str, cx: &mut Context<Self>) {
+        self.toggle_fold(diff, path, cx);
     }
 
     pub(in crate::cockpit) fn changes_filter(&self, diff: Diff) -> Option<Entity<Composer>> {
