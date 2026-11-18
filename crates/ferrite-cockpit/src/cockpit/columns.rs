@@ -85,9 +85,13 @@ impl Columns {
     }
 }
 
+/// The board's least width beside the nav: a wider nav gives way to it, down
+/// to the nav's own minimum.
+const BOARD_MIN_W: f32 = 640.0;
+
 fn clamp_nav_width(preferred: f32, viewport: f32, brand: f32) -> f32 {
     let minimum = ferrite_ui::theme::NAV_MIN_W.max(brand.ceil());
-    let maximum = minimum.max(viewport.floor() - 640.0);
+    let maximum = minimum.max(viewport.floor() - BOARD_MIN_W);
     let preferred = if preferred.is_finite() {
         preferred
     } else {
