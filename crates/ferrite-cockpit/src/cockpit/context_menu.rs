@@ -5,6 +5,7 @@
 //! row's arming, a parent row's submenu beside it (`Submenu`), and the
 //! verbs the rows run (`run_menu_verb`).
 
+use super::menu_button::Edge;
 use super::*;
 use ferrite_pane::link_target::{thread_link, Open};
 
@@ -161,16 +162,19 @@ pub(super) enum Submenu {
 pub(super) struct ContextMenu {
     pub(super) target: MenuTarget,
     pub(super) at: Point<Pixels>,
-    /// The menu's corner at `at`: its top left at the pointer, its top
-    /// right under the `⋯` it opened from (`open_context_menu_under`).
+    /// The menu's corner at `at`: its top left at the pointer, the corner
+    /// on its button's edge under a button (`open_context_menu_below`).
     pub(super) corner: gpui::Anchor,
-    /// Opened from a `⋯`: `at` is `MENU_UNDER_GAP` over the button and
+    /// Opened under a button: `at` is `MENU_UNDER_GAP` over the button and
     /// this drops the menu to the same gap under it. Where the window has
     /// less room below than the menu needs, the menu scrolls there, or
     /// hangs over the button where even two rows would not fit (see
     /// `context_menu_element`). None at the pointer.
     pub(super) drop: Option<Pixels>,
     pub(super) rows: Vec<Option<(menu::Item, MenuVerb)>>,
+    /// Opened from its own button (`menu_button::Door`): a press there is
+    /// the button's, which shuts it.
+    pub(super) from_door: bool,
     /// The destructive row pressed once, waiting for its confirmation.
     pub(super) armed: Option<usize>,
     /// The submenu open beside its parent row: that row's index and the
@@ -241,37 +245,37 @@ impl CockpitView {
         self.open_context_menu_at(target, at, gpui::Anchor::TopLeft, None, cx);
     }
 
-    /// The menu a row's `⋯` opens, as Claude's: under the button, its right
-    /// edge on the button's, `MENU_UNDER_GAP` below it, scrolling where the
-    /// window has less room below than its rows need and over the button
-    /// where it has room for less than two.
+    /// The menu ⇧F10 opens under a row, as Claude's `⋯` does: under it,
+    /// its right edge on the row's.
     pub(super) fn open_context_menu_under(
         &mut self,
         target: MenuTarget,
-        button: gpui::Bounds<Pixels>,
+        row: gpui::Bounds<Pixels>,
         cx: &mut Context<Self>,
     ) {
-        self.open_context_menu_below(target, button, gpui::Anchor::TopRight, cx);
+        self.open_context_menu_below(target, row, Edge::Right, false, cx);
     }
 
-    /// The same drop under `button`, the menu's `corner` (`TopLeft` or
-    /// `TopRight`) on the button's matching edge: a button at the start
-    /// of a row hangs its menu from its left edge.
+    /// The menu under `button`, its `edge` on the button's matching edge,
+    /// `MENU_UNDER_GAP` below it, scrolling where the window has less room
+    /// below than its rows need and over the button where it has room for
+    /// less than two.
     pub(super) fn open_context_menu_below(
         &mut self,
         target: MenuTarget,
         button: gpui::Bounds<Pixels>,
-        corner: gpui::Anchor,
+        edge: Edge,
+        from_door: bool,
         cx: &mut Context<Self>,
     ) {
         let gap = px(ferrite_ui::theme::MENU_UNDER_GAP);
-        let x = match corner {
-            gpui::Anchor::TopLeft => button.left(),
-            _ => button.right(),
+        let (x, corner) = match edge {
+            Edge::Left => (button.left(), gpui::Anchor::TopLeft),
+            Edge::Right => (button.right(), gpui::Anchor::TopRight),
         };
         let at = gpui::point(x, button.top() - gap);
         let drop = button.size.height + gap * 2.;
-        self.open_context_menu_at(target, at, corner, Some(drop), cx);
+        self.show_context_menu(target, at, corner, Some(drop), from_door, cx);
     }
 
     pub(super) fn open_context_menu_at(
@@ -282,6 +286,18 @@ impl CockpitView {
         drop: Option<Pixels>,
         cx: &mut Context<Self>,
     ) {
+        self.show_context_menu(target, at, corner, drop, false, cx);
+    }
+
+    fn show_context_menu(
+        &mut self,
+        target: MenuTarget,
+        at: Point<Pixels>,
+        corner: gpui::Anchor,
+        drop: Option<Pixels>,
+        from_door: bool,
+        cx: &mut Context<Self>,
+    ) {
         let rows = self.context_rows(target, cx);
         self.show_popup(
             Popup::ContextMenu(ContextMenu {
@@ -290,6 +306,7 @@ impl CockpitView {
                 corner,
                 drop,
                 rows,
+                from_door,
                 armed: None,
                 sub: None,
                 cursor: MenuCursor::Idle,

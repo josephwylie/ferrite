@@ -24,7 +24,7 @@ use std::collections::{HashMap, HashSet};
 use std::hash::{DefaultHasher, Hash, Hasher};
 
 use ferrite_core::changes::Scope as ReadScope;
-use ferrite_ui::components::MenuPress as _;
+use crate::cockpit::menu_button::{Door, Edge};
 use ferrite_ui::icons;
 use ferrite_ui::theme::{self, paint};
 
@@ -1125,20 +1125,18 @@ impl CockpitView {
                     }),
             )
             .child(
-                tools.child(
+                tools.child(self.doors().button(
                     ferrite_ui::components::icon_button(
                         "changes-more",
                         icons::ELLIPSIS,
                         ferrite_ui::components::IconSize::Standard,
                         "More",
                         cx,
-                    )
-                    .tip("More")
-                    .on_menu_press(cx.listener(move |view, at: &gpui::Point<Pixels>, _, cx| {
-                        cx.stop_propagation();
-                        view.open_context_menu(MenuTarget::ChangesMore(diff), *at, cx);
-                    })),
-                ),
+                    ),
+                    Door::new(MenuTarget::ChangesMore(diff), Edge::Right),
+                    "More",
+                    cx,
+                )),
             )
     }
 

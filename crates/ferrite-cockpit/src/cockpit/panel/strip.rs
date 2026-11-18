@@ -19,6 +19,7 @@
 //! with its letter; one that cannot run here is dimmed and says why.
 
 use super::*;
+use crate::cockpit::menu_button::{Door, Edge};
 use crate::cockpit::tab_scroll::{self, Side};
 use ferrite_ui::icons::{self, icon};
 
@@ -583,7 +584,7 @@ impl CockpitView {
         let key = ferrite_ui::pointer::hover_key(&id);
         let semantics = Semantics::button("Open a surface");
         let handle = self.panel_control(PanelControl::Plus, semantics.clone(), cx);
-        div()
+        let plus = div()
             .id(id)
             .debug_selector(|| "panel-plus".into())
             .relative()
@@ -597,13 +598,9 @@ impl CockpitView {
             .hover_raised(key)
             .map(|plus| controls::focusable(plus, &handle, &semantics))
             .child(self.measured(PanelControl::Plus))
-            .child(icon(icons::PLUS, SURFACE_PLUS_GLYPH, INK_SUBTLE))
-            .tooltip(ferrite_ui::menu::tooltip("Open a surface"))
-            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-            .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
-                cx.stop_propagation();
-                view.open_panel_menu(PanelControl::Plus, MenuTarget::SurfaceMenu(thread), cx);
-            }))
+            .child(icon(icons::PLUS, SURFACE_PLUS_GLYPH, INK_SUBTLE));
+        self.doors()
+            .button(plus, plus_door(thread), "Open a surface", cx)
             .into_any_element()
     }
 
@@ -756,4 +753,9 @@ pub(crate) fn soft_key_cap(key: &'static str) -> Div {
         .font_weight(W_LABEL)
         .text_color(rgb(INK_SUBTLE))
         .child(key)
+}
+
+/// The `+`'s menu, hung from its left edge.
+pub(super) fn plus_door(thread: ThreadId) -> Door {
+    Door::new(MenuTarget::SurfaceMenu(thread), Edge::Left)
 }

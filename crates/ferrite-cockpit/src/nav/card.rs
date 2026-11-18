@@ -724,7 +724,8 @@ fn strip_button(key: SharedString, selector: String) -> Stateful<Div> {
         .on_hover(motion::hover_snap(key))
 }
 
-/// The strip's Snooze: a 12px clock. The cockpit opens its menu.
+/// The strip's Snooze: a 12px clock, the face of the button that opens
+/// its menu.
 pub fn snooze_button(thread: ThreadId) -> Stateful<Div> {
     let key = SharedString::from(format!("nav-card-snooze-{}", thread.get()));
     let ink = if hovered(&key) {
@@ -733,7 +734,6 @@ pub fn snooze_button(thread: ThreadId) -> Stateful<Div> {
         INK_SUBTLE
     };
     strip_button(key, format!("nav-card-snooze-{}", thread.get()))
-        .nav_tooltip("Snooze thread")
         .child(icon(icons::CLOCK, NAV_SNOOZE_GLYPH, ink))
 }
 

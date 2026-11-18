@@ -74,16 +74,13 @@ impl CockpitView {
         view.picks = picks;
         let target = context_menu::MenuTarget::Factory;
         match trigger.bounds() {
-            Some(under) => {
-                let gap = px(ferrite_ui::theme::MENU_UNDER_GAP);
-                self.open_context_menu_at(
-                    target,
-                    gpui::point(under.left(), under.top() - gap),
-                    gpui::Anchor::TopLeft,
-                    Some(under.size.height + gap * 2.),
-                    cx,
-                );
-            }
+            Some(under) => self.open_context_menu_below(
+                target,
+                under,
+                crate::cockpit::menu_button::Edge::Left,
+                false,
+                cx,
+            ),
             None => self.open_context_menu(target, at, cx),
         }
     }
