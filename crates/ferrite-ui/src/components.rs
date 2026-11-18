@@ -1378,6 +1378,109 @@ pub fn secondary_button(
     )
 }
 
+/// The sizes an icon button comes in: its square, its glyph and its corner.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum IconSize {
+    /// 20px around a 12px glyph: a button inside a field (search's clear).
+    Inline,
+    /// `NAV_HEADING_BUTTON` (22px) around a `HEAD_CHEVRON` glyph: beside a
+    /// heading (the title's chevron).
+    Compact,
+    /// `ICON_BUTTON` (28px) around an `ICON_BUTTON_GLYPH`: a bar's or a
+    /// head's button.
+    Standard,
+    /// `NAV_FOOT_BUTTON` (32px) at `NAV_FOOT_BUTTON_R` around an
+    /// `ICON_BUTTON_GLYPH`: the nav's foot.
+    Large,
+}
+
+impl IconSize {
+    /// The square's side, the glyph's size and the corner's radius.
+    fn metrics(self) -> (f32, f32, f32) {
+        match self {
+            IconSize::Inline => (
+                theme::NAV_SEARCH_CLEAR_GLYPH + 2.0 * theme::NAV_SEARCH_ROW_GAP,
+                theme::NAV_SEARCH_CLEAR_GLYPH,
+                theme::R_CONTROL,
+            ),
+            IconSize::Compact => (theme::NAV_HEADING_BUTTON, theme::HEAD_CHEVRON, theme::R_CONTROL),
+            IconSize::Standard => (theme::ICON_BUTTON, theme::ICON_BUTTON_GLYPH, theme::R_CONTROL),
+            IconSize::Large => (
+                theme::NAV_FOOT_BUTTON,
+                theme::ICON_BUTTON_GLYPH,
+                theme::NAV_FOOT_BUTTON_R,
+            ),
+        }
+    }
+}
+
+/// The one icon-only button: `glyph` centred in a `size` square, in
+/// `NAV_ICON_INK` rising to `INK_STRONG` with the hover blend, on nothing at
+/// rest, `paint::HOVER` under the pointer and `paint::PRESS` pressed
+/// (`faded_button`). A tab stop with the focus ring; Enter and Space press it.
+/// `label` is its name to assistive technology; its id is its
+/// `debug_selector`. The caller adds a tooltip (`Tip`) and the press
+/// (`on_click`).
+pub fn icon_button(
+    id: impl Into<SharedString>,
+    glyph: &'static str,
+    size: IconSize,
+    label: impl Into<SharedString>,
+    cx: &App,
+) -> Button {
+    icon_face(id.into(), glyph, size, label.into(), None, cx)
+}
+
+/// [`icon_button`] that turns something on and off (the Panel, the
+/// details): on, it rests on `paint::SELECTED` and steps to
+/// `SELECTION_HOVER` under the pointer, and says it is pressed.
+pub fn icon_toggle(
+    id: impl Into<SharedString>,
+    glyph: &'static str,
+    size: IconSize,
+    label: impl Into<SharedString>,
+    on: bool,
+    cx: &App,
+) -> Button {
+    icon_face(id.into(), glyph, size, label.into(), Some(on), cx)
+}
+
+fn icon_face(
+    id: SharedString,
+    glyph: &'static str,
+    size: IconSize,
+    label: SharedString,
+    toggled: Option<bool>,
+    cx: &App,
+) -> Button {
+    let (edge, glyph_size, radius) = size.metrics();
+    let (rest, hover) = if toggled == Some(true) {
+        (theme::paint::SELECTED, theme::paint::SELECTION_HOVER)
+    } else {
+        (theme::Paint(theme::TRANSPARENT), theme::paint::HOVER)
+    };
+    let t = motion::hover_t(&crate::pointer::hover_key(&ElementId::from(id.clone())));
+    let ink = motion::mix(rgba(theme::NAV_ICON_INK).into(), rgb(theme::INK_STRONG).into(), t);
+    let selector = id.clone();
+    faded_button(
+        id,
+        rest.into(),
+        hover.into(),
+        theme::paint::PRESS.into(),
+        rgb(theme::INK_STRONG).into(),
+        cx,
+    )
+    .tab_stop(true)
+    .debug_selector(move || selector.to_string())
+    .accessibility_label(label)
+    .when_some(toggled, Button::toggled)
+    .flex_shrink_0()
+    .size(px(edge))
+    .p_0()
+    .rounded(px(radius))
+    .child(icons::icon(glyph, glyph_size, theme::INK_STRONG).text_color(ink))
+}
+
 // ------------------------------------------------------------------ menus
 
 /// One menu row's content.
@@ -2503,5 +2606,61 @@ mod tests {
         let painted = painted.expect("the shimmer painted lit");
         assert!(painted.ends_with('…'), "cut with an ellipsis: {painted:?}");
         assert!(painted.len() < "Checking the supplied arguments".len());
+    }
+
+    /// The shared icon button presses from the pointer and, as a tab stop,
+    /// from Enter and Space once Tab lands on it.
+    #[gpui::test]
+    fn an_icon_button_presses_by_pointer_and_from_the_keyboard(cx: &mut gpui::TestAppContext) {
+        use std::{cell::Cell, rc::Rc};
+
+        use gpui::{ClickEvent, KeyDownEvent, KeyUpEvent, Keystroke, Modifiers};
+
+        struct Bar(Rc<Cell<usize>>, Rc<Cell<usize>>);
+        impl gpui::Render for Bar {
+            fn render(&mut self, _: &mut Window, cx: &mut gpui::Context<Self>) -> impl IntoElement {
+                let (presses, keyed) = (self.0.clone(), self.1.clone());
+                div().tab_group().child(
+                    icon_button("icon-under-test", icons::CLOSE, IconSize::Standard, "Close", cx)
+                        .on_click(move |event, _, _| {
+                            presses.set(presses.get() + 1);
+                            if matches!(event, ClickEvent::Keyboard(_)) {
+                                keyed.set(keyed.get() + 1);
+                            }
+                        }),
+                )
+            }
+        }
+
+        cx.update(theme::init_components);
+        let (presses, keyed) = (Rc::new(Cell::new(0)), Rc::new(Cell::new(0)));
+        let (_, cx) = cx.add_window_view({
+            let (presses, keyed) = (presses.clone(), keyed.clone());
+            move |_, _| Bar(presses, keyed)
+        });
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+        let button = cx.debug_bounds("icon-under-test").expect("the button, under its id");
+        assert_eq!(button.size, gpui::size(px(theme::ICON_BUTTON), px(theme::ICON_BUTTON)));
+        cx.simulate_click(button.center(), Modifiers::default());
+        assert_eq!(presses.get(), 1, "a press runs its handler");
+        assert_eq!(keyed.get(), 0);
+
+        cx.update(|window, cx| {
+            assert!(window.focused(cx).is_none(), "a press does not take focus");
+            window.focus_next(cx);
+            assert!(window.focused(cx).is_some(), "Tab stops on it");
+            window.draw(cx).clear(cx);
+        });
+        for key in ["enter", "space"] {
+            let keystroke = Keystroke::parse(key).unwrap();
+            cx.simulate_event(KeyDownEvent {
+                keystroke: keystroke.clone(),
+                is_held: false,
+                prefer_character_input: false,
+            });
+            cx.simulate_event(KeyUpEvent { keystroke });
+        }
+        assert_eq!(presses.get(), 3, "Enter and Space each press it once");
+        assert_eq!(keyed.get(), 2);
     }
 }
