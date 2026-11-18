@@ -39,7 +39,7 @@ use crate::review::{
     BasePicked, BasesAsked, CommitPicked, FileOpened, FilesAsked, MenuAsked, PrAsked, ReviewView,
     ScopePicked, Searched,
 };
-use ferrite_pane::preview::{head_door, reading_head};
+use ferrite_pane::preview::reading_head;
 use ferrite_reviewr::ferrite::Read;
 use ferrite_reviewr::model::{CommitPick, Scope};
 use ferrite_ui::motion::{Reveal, SLOT_CLOSE, SLOT_OPEN};
@@ -651,18 +651,20 @@ impl CockpitView {
                     .text_color(rgb(INK_SUBTLE))
                     .child(format!(" \u{b7} {}", shown.title)),
             );
-        let close = head_door(
+        let close = ferrite_ui::components::icon_button(
             "close-review",
-            format!("review-close-{}", owner.get()),
             ferrite_ui::icons::CLOSE,
+            ferrite_ui::components::IconSize::Standard,
+            "Close the review",
+            cx,
         )
-        .tooltip(ferrite_ui::menu::tooltip_with_key(
+        .tip_with_key(
             "Close the review",
             ferrite_ui::components::bound_chord_in(
                 "reader::Close",
                 Some(ferrite_ui::keymap::READER),
             ),
-        ))
+        )
         .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
             cx.stop_propagation();
             if let Some(index) = view.pane_for(owner) {
