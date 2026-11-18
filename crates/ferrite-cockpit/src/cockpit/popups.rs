@@ -333,13 +333,6 @@ impl CockpitView {
         }
     }
 
-    /// A popup closes once it no longer stands rather than hold the
-    /// keyboard with nothing drawn, or come back later: a Thread's or a
-    /// Pane's popup with it no longer focused or under a sheet, a
-    /// Session's with that Session gone, the checks card with no checks,
-    /// the plan card with no plan, a draft's band menu or picker with the
-    /// draft gone. The mode menu inside the picker goes with its Session.
-    /// A page's dialog taking the keyboard closes any.
     /// Whether `pane` is the focused Pane with no sheet over it: where a
     /// Composer's popup stands.
     fn pane_shown_alone(&self, pane: PaneIdentity, cx: &gpui::App) -> bool {
@@ -347,6 +340,13 @@ impl CockpitView {
             && !self.sheet_up(cx)
     }
 
+    /// A popup closes once it no longer stands rather than hold the
+    /// keyboard with nothing drawn, or come back later: a Thread's or a
+    /// Pane's popup with it no longer focused or under a sheet, a
+    /// Session's with that Session gone, the checks card with no checks,
+    /// the plan card with no plan, a draft's band menu or picker with the
+    /// draft gone. The mode menu inside the picker goes with its Session.
+    /// A page's dialog taking the keyboard closes any.
     pub(super) fn close_popup_with_nothing_to_draw(
         &mut self,
         dialog_took_focus: bool,
