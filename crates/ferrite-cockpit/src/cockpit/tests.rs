@@ -51,6 +51,7 @@ mod panel_width;
 pub(super) mod panel_focus;
 mod panel_preview;
 mod parking;
+mod popups;
 mod pr;
 mod pr_actions;
 mod pr_reads;
