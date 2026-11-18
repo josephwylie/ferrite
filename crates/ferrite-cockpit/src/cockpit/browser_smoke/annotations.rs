@@ -86,7 +86,6 @@ impl Scenario {
             12 => {
                 if window.debug_bounds("browser-annotation-review").is_none() { return Ok(false); }
                 window.render_to_image().map_err(|e|e.to_string())?.save(output.join("annotation-review.png")).map_err(|e|e.to_string())?;
-                if !click(window,cx,"preview-close") { return Ok(false); }
                 let focus=view.read(cx).panes[view.read(cx).pane_for(thread).ok_or("missing Composer")?].composer.read(cx).focus_handle(cx);
                 window.focus(&focus,cx);
                 self.stage=13;
