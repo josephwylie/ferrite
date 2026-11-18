@@ -87,10 +87,6 @@ impl Persistence {
         }
     }
 
-    pub(super) fn surfaces_pending(&self, surfaces: &Surfaces) -> bool {
-        surfaces.revision() != self.saved.surfaces
-    }
-
     fn snapshot(&self, surfaces: &Surfaces, working_sets: &WorkingSets) -> Option<Snapshot> {
         let revision = Revision::of(surfaces, working_sets);
         (revision != self.saved).then(|| Snapshot {

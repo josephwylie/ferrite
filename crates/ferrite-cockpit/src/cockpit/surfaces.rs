@@ -418,13 +418,19 @@ impl Surfaces {
         accepted
     }
 
-    /// Keep only the Threads `keep` says still exist.
-    pub(crate) fn retain(&mut self, keep: impl Fn(ThreadId) -> bool) {
-        let before = self.threads.len();
-        self.threads.retain(|thread, _| keep(*thread));
-        if self.threads.len() != before {
+    /// Keep only the Threads `keep` says still exist. The others' tabs come
+    /// back, for what each held to be released.
+    #[must_use]
+    pub(crate) fn retain(&mut self, keep: impl Fn(ThreadId) -> bool) -> Vec<(ThreadId, Vec<SurfaceId>)> {
+        let gone: Vec<_> = self
+            .threads
+            .extract_if(|thread, _| !keep(*thread))
+            .map(|(thread, state)| (thread, state.tabs))
+            .collect();
+        if !gone.is_empty() {
             self.revision += 1;
         }
+        gone
     }
 }
 

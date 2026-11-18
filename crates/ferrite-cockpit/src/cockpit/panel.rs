@@ -98,6 +98,10 @@ pub(crate) struct Panel {
     pr_armed: Option<pr_read::PrTarget>,
     /// The keyboard stops of the head and a pull request's header.
     pub(crate) focus: PanelFocus,
+    /// Threads this window deleted, for the next frame to forget. Deleting
+    /// the last one leaves `known_threads` empty, which by itself reads as a
+    /// Server not yet heard from.
+    pub(in crate::cockpit) deleted: Vec<ThreadId>,
 }
 
 impl Panel {
@@ -150,6 +154,7 @@ impl Panel {
             pr_actions: Default::default(),
             pr_armed: None,
             focus: Default::default(),
+            deleted: Vec::new(),
         }
     }
 }
@@ -383,16 +388,28 @@ impl CockpitView {
         known
     }
 
-    fn prepare_panel_persistence(&mut self) {
-        if self.panel.persistence.surfaces_pending(&self.panel.surfaces) {
-            let known = self.known_threads();
-            if !known.is_empty() {
-                self.panel.surfaces.retain(|thread| known.contains(&thread));
-                self.panel.focus.retain_threads(|thread| known.contains(&thread));
-                self.panel.pr_actions.retain_threads(&known);
+    /// A Thread deleted, here or by the Server, takes its Panel with it and
+    /// releases what each tab held, as a closed tab does.
+    fn forget_gone_threads(&mut self, cx: &mut Context<Self>) {
+        let deleted = std::mem::take(&mut self.panel.deleted);
+        let known = self.known_threads();
+        // A Server not yet heard from knows no Thread: absence alone is no
+        // deletion then.
+        let heard = !known.is_empty();
+        let keep = |thread| !deleted.contains(&thread) && (!heard || known.contains(&thread));
+        for (thread, tabs) in self.panel.surfaces.retain(keep) {
+            for id in tabs {
+                // A side chat's fork is a Thread of its own; deleting its
+                // owner has never decided the fork's fate.
+                if !matches!(id, SurfaceId::SideChat(_)) {
+                    self.release_surface(thread, &id, cx);
+                }
             }
         }
-        self.sync_working_sets();
+        if heard {
+            self.panel.focus.retain_threads(|thread| known.contains(&thread));
+            self.panel.pr_actions.retain_threads(&known);
+        }
     }
 
     pub(crate) fn successor_panel(&mut self) -> Panel {
@@ -401,7 +418,8 @@ impl CockpitView {
     }
 
     pub(super) fn pump_panel_persistence(&mut self, cx: &mut Context<Self>) {
-        self.prepare_panel_persistence();
+        self.forget_gone_threads(cx);
+        self.sync_working_sets();
         self.panel.persistence.pump(
             &self.prefs.dir,
             &self.panel.surfaces,
@@ -411,7 +429,7 @@ impl CockpitView {
     }
 
     pub(super) fn flush_panel_persistence(&mut self) {
-        self.prepare_panel_persistence();
+        self.sync_working_sets();
         if let Err(error) = self.panel.persistence.flush(
             &self.prefs.dir,
             &self.panel.surfaces,
