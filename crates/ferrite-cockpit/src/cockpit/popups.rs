@@ -1,8 +1,8 @@
 //! The one place a popup is up (ADR 0043). `Popups` holds the popup that
 //! is up, or the one fading out after a close. `show_popup` is every open
 //! and replaces whatever was up, at once; `close_popup` is every close.
-//! While a popup is up it holds the keyboard at the root, Escape closes
-//! it, and so does a press outside it.
+//! While a popup is up it says where the keyboard is (`Keys`), Escape
+//! closes it, and so does a press outside it.
 
 use super::context_menu::ContextMenu;
 use super::mode_menu::ModeMenu;
@@ -11,7 +11,6 @@ use ferrite_ui::motion::{self, FloatMotion, Opens};
 use std::time::Instant;
 
 /// A popup the slot can hold. The set is closed: one variant per kind.
-#[derive(Clone)]
 pub(super) enum Popup {
     /// Also the Factory's picks, the nav's menus and Snooze.
     ContextMenu(ContextMenu),
@@ -20,9 +19,28 @@ pub(super) enum Popup {
     Plan(ThreadId),
     Checks(ThreadId),
     Session { thread: ThreadId, generation: u64 },
+    /// The Composer's `+` menu on one Pane, the keyboard on `focus`. The
+    /// kit draws it beside its `+` and reads its own keys.
+    Attach { pane: PaneIdentity, focus: FocusHandle },
+}
+
+/// Where the keyboard is while a popup is up.
+pub(super) enum Keys {
+    /// The root holds it, so no field under the popup hears a key and the
+    /// Cockpit's own keys stand down.
+    Root,
+    /// A field of the popup's own holds it.
+    Field(FocusHandle),
 }
 
 impl Popup {
+    fn keys(&self) -> Keys {
+        match self {
+            Popup::Attach { focus, .. } => Keys::Field(focus.clone()),
+            _ => Keys::Root,
+        }
+    }
+
     fn motion(&self) -> FloatMotion {
         match self {
             Popup::ContextMenu(_) => motion::MENU,
@@ -63,8 +81,9 @@ enum Back {
 #[derive(Default)]
 pub(super) struct Popups {
     shown: Option<Shown>,
-    /// What held focus before the popup up took it.
-    back: Option<Back>,
+    /// What held focus before the popups took it, and where they last put
+    /// it: the keyboard goes back only while it is still there.
+    back: Option<(Back, FocusHandle)>,
 }
 
 impl Popups {
@@ -82,17 +101,20 @@ impl Popups {
         }
     }
 
-    /// What to draw at `now`: the popup up, or the one leaving with when
-    /// it left, until its exit has run.
-    fn drawn(&mut self, now: Instant) -> Option<(Popup, Option<Instant>)> {
+    /// Drop the popup leaving once its exit has run at `now`.
+    fn settle(&mut self, now: Instant) {
         if let Some(Shown::Leaving(popup, left)) = &self.shown {
             if now.saturating_duration_since(*left) >= popup.motion().out.duration() {
                 self.shown = None;
             }
         }
+    }
+
+    /// What to draw: the popup up, or the one leaving with when it left.
+    fn drawn(&self) -> Option<(&Popup, Option<Instant>)> {
         match &self.shown {
-            Some(Shown::Up(popup)) => Some((popup.clone(), None)),
-            Some(Shown::Leaving(popup, left)) => Some((popup.clone(), Some(*left))),
+            Some(Shown::Up(popup)) => Some((popup, None)),
+            Some(Shown::Leaving(popup, left)) => Some((popup, Some(*left))),
             None => None,
         }
     }
@@ -132,6 +154,14 @@ impl CockpitView {
     pub(super) fn mode_menu(&self) -> Option<&ModeMenu> {
         match self.popups.up() {
             Some(Popup::Mode(menu)) => Some(menu),
+            _ => None,
+        }
+    }
+
+    /// Where the `+` menu open on `pane` holds the keyboard.
+    pub(super) fn attach_menu_focus(&self, pane: PaneIdentity) -> Option<FocusHandle> {
+        match self.popups.up() {
+            Some(Popup::Attach { pane: on, focus }) if *on == pane => Some(focus.clone()),
             _ => None,
         }
     }
@@ -176,26 +206,35 @@ impl CockpitView {
     }
 
     /// A popup takes the keyboard whole: the root holds focus while it is
-    /// up, so no field's bindings (a Decision's, the Composer's) answer
-    /// its keys. The focus it took comes back as it closes, unless what it
-    /// did moved focus elsewhere. Tended once a frame.
+    /// up, or the popup's own field does, so no field under it (a
+    /// Decision's, the Composer's) answers its keys. The focus it took
+    /// comes back as it closes, unless what it did moved focus elsewhere.
+    /// Tended once a frame.
     pub(super) fn tend_popup_focus(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.popup_up() {
-            if self.popups.back.is_none() {
-                let nav = self.nav_view.read(cx);
-                self.popups.back = Some(if nav.holds_keys(window) {
-                    Back::Nav(nav.cursor.clone())
-                } else {
-                    Back::Focus(window.focused(cx).unwrap_or_else(|| self.focus.clone()))
-                });
-            }
+        let wants = self.popup().map(|popup| match popup.keys() {
+            Keys::Root => self.focus.clone(),
+            Keys::Field(focus) => focus,
+        });
+        if let Some(wants) = wants {
+            let back = match self.popups.back.take() {
+                Some((back, _)) => back,
+                None => {
+                    let nav = self.nav_view.read(cx);
+                    if nav.holds_keys(window) {
+                        Back::Nav(nav.cursor.clone())
+                    } else {
+                        Back::Focus(window.focused(cx).unwrap_or_else(|| self.focus.clone()))
+                    }
+                }
+            };
             // A press that opened another popup over this one may have
             // focused a field under it.
-            if !self.focus.is_focused(window) {
-                window.focus(&self.focus, cx);
+            if !wants.is_focused(window) {
+                window.focus(&wants, cx);
             }
-        } else if let Some(back) = self.popups.back.take() {
-            if self.focus.is_focused(window) {
+            self.popups.back = Some((back, wants));
+        } else if let Some((back, given)) = self.popups.back.take() {
+            if given.is_focused(window) || self.focus.is_focused(window) {
                 match back {
                     Back::Nav(cursor) => self.focus_nav_on(cursor, window, cx),
                     Back::Focus(handle) => window.focus(&handle, cx),
@@ -204,12 +243,25 @@ impl CockpitView {
         }
     }
 
+    /// Whether the popup up keeps the keyboard at the root: the root's key
+    /// context then carries `Popup`, and the Cockpit's own keys stand down.
+    pub(super) fn popup_holds_root(&self) -> bool {
+        self.popup().is_some_and(|popup| matches!(popup.keys(), Keys::Root))
+    }
+
     /// A popup closes once it no longer stands rather than hold the
     /// keyboard with nothing drawn, or come back later: a Thread's popup
     /// with its Thread no longer focused or under a sheet, a Session's
     /// with that Session gone, the checks card with no checks, the plan
     /// card with no plan, a mode menu from the model picker with the
     /// picker shut. A page's dialog taking the keyboard closes any.
+    /// Whether `pane` is the focused Pane with no sheet over it: where a
+    /// Composer's popup stands.
+    fn pane_shown_alone(&self, pane: PaneIdentity, cx: &gpui::App) -> bool {
+        self.panes.get(self.focused()).is_some_and(|focused| focused.identity == pane)
+            && !self.sheet_up(cx)
+    }
+
     pub(super) fn close_popup_with_nothing_to_draw(
         &mut self,
         dialog_took_focus: bool,
@@ -241,6 +293,7 @@ impl CockpitView {
                 on(*thread, None) && self.facts.pr(*thread).is_some_and(|pr| pr.checks.is_some())
             }
             Some(Popup::Session { thread, generation }) => on(*thread, Some(*generation)),
+            Some(Popup::Attach { pane, .. }) => self.pane_shown_alone(*pane, cx),
         };
         if !stands {
             self.close_popup(cx);
@@ -254,19 +307,21 @@ impl CockpitView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
-        let (popup, left) = self.popups.drawn(cx.background_executor().now())?;
+        self.popups.settle(cx.background_executor().now());
+        let (popup, left) = self.popups.drawn()?;
         let face = Face {
             motion: popup.motion(),
             left,
         };
         let element = match popup {
-            Popup::ContextMenu(menu) => self.context_menu_element(&menu, face, window, cx),
+            Popup::ContextMenu(menu) => self.context_menu_element(menu, face, window, cx),
             Popup::Mode(menu) => self.mode_menu_element(menu, face, window, cx),
-            Popup::Plan(thread) => self.plan_card_element(thread, face, window, cx),
-            Popup::Checks(thread) => self.context_checks_element(thread, face, window, cx),
+            Popup::Plan(thread) => self.plan_card_element(*thread, face, window, cx),
+            Popup::Checks(thread) => self.context_checks_element(*thread, face, window, cx),
             Popup::Session { thread, generation } => {
-                self.session_controls_element(thread, generation, face, window, cx)
+                self.session_controls_element(*thread, *generation, face, window, cx)
             }
+            Popup::Attach { .. } => None,
         }?;
         Some(
             deferred(element)

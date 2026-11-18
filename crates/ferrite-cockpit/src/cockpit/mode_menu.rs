@@ -64,16 +64,16 @@ impl CockpitView {
 
     pub(super) fn mode_menu_element(
         &self,
-        menu: ModeMenu,
+        menu: &ModeMenu,
         face: popups::Face,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
-        let ModeMenu {
+        let &ModeMenu {
             thread,
             generation,
             from_picker,
-            preview,
+            ref preview,
         } = menu;
         let open = self.cockpit.thread(thread)?;
         if open.generation() != generation {
@@ -88,7 +88,7 @@ impl CockpitView {
         // Claude's order: `Auto` first.
         modes.sort_by_key(|choice| choice.value != "auto");
         let current = open.permission_mode().unwrap_or("default").to_string();
-        let shown = preview.unwrap_or_else(|| current.clone());
+        let shown = preview.clone().unwrap_or_else(|| current.clone());
         let last = modes.len().saturating_sub(1);
         let mut track = div()
             .debug_selector(|| "mode-segments".into())

@@ -1181,8 +1181,9 @@ fn build(state: &str, label: &str) -> (Scene, Setup) {
                     feeds[0].send(event).expect("fixture Session is listening");
                 }
             }
-            let setup: Setup = Box::new(|view, _, _| {
-                view.attach_menu = Some(view.panes[0].identity);
+            let setup: Setup = Box::new(|view, _, cx| {
+                let pane = view.panes[0].identity;
+                view.show_popup(Popup::Attach { pane, focus: cx.focus_handle() }, cx);
             });
             (scene, setup)
         }

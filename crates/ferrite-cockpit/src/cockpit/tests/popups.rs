@@ -55,14 +55,12 @@ fn up(view: &Entity<CockpitView>, cx: &mut gpui::VisualTestContext) -> Vec<Kind>
                 Popup::Plan(_) => Kind::Plan,
                 Popup::Checks(_) => Kind::Checks,
                 Popup::Session { .. } => Kind::Session,
+                Popup::Attach { .. } => Kind::Attach,
             })
             .into_iter()
             .collect();
         if view.panes.iter().any(|pane| view.model_picker_open(pane.identity)) {
             up.push(Kind::Picker);
-        }
-        if view.attach_menu.is_some() {
-            up.push(Kind::Attach);
         }
         if view.popover.as_ref().is_some_and(|open| matches!(open.kind, super::Kind::Band(_))) {
             up.push(Kind::Band);

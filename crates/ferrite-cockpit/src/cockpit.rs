@@ -508,8 +508,6 @@ pub struct CockpitView {
     panel_closing_focus: gpui::FocusHandle,
     /// Back and forward through where the operator has been (`history`).
     history: history::History,
-    /// The Composer's `+` menu, open on one Pane.
-    attach_menu: Option<ferrite_core::roster::PaneIdentity>,
     /// Holds every footer's plan-usage popover open, its ring's own clicks
     /// aside: a visual-reference scene's (`usagepopover`), never the app's.
     usage_popover_held: bool,
@@ -1444,7 +1442,6 @@ impl CockpitView {
             panel_keys: cx.focus_handle(),
             panel_closing_focus: cx.focus_handle(),
             history: Default::default(),
-            attach_menu: None,
             usage_popover_held: false,
             session_control_error: None,
             titling: std::collections::HashSet::new(),
@@ -6766,31 +6763,30 @@ impl CockpitView {
         .collect();
         let weak = cx.entity().downgrade();
         let picker = weak.clone();
+        let open = self.attach_menu_focus(identity);
         ferrite_ui::menu::ChoiceMenu {
             submenus: self.attach_submenus(index, cx),
             width: Some(ferrite_ui::theme::ATTACH_MENU_W),
             hang_left: true,
             id: SharedString::from(format!("attach-menu-{index}")),
-            trigger: pane::attach_button(self.attach_menu == Some(identity), cx),
+            trigger: pane::attach_button(open.is_some(), cx),
             choices,
-            open: self.attach_menu == Some(identity),
+            open,
             return_focus: self.panes[index].composer.focus_handle(cx),
             on_open: std::rc::Rc::new(move |open, _, cx| {
                 let _ = weak.update(cx, |view, cx| {
                     if open {
                         view.focus_pane(index);
-                        view.popover = None;
+                        let focus = cx.focus_handle();
+                        view.show_popup(Popup::Attach { pane: identity, focus }, cx);
+                    } else if view.attach_menu_focus(identity).is_some() {
                         view.close_popup(cx);
-                        view.attach_menu = Some(identity);
-                    } else if view.attach_menu == Some(identity) {
-                        view.attach_menu = None;
                     }
-                    cx.notify();
                 });
             }),
+            // The kit closes the menu after every pick.
             on_pick: std::rc::Rc::new(move |at, _, cx| {
                 let _ = picker.update(cx, |view, cx| {
-                    view.attach_menu = None;
                     match at {
                         0 => view.attach_files(index, false, cx),
                         1 => view.attach_files(index, true, cx),
@@ -6893,7 +6889,6 @@ impl CockpitView {
                 on_pick: std::rc::Rc::new(move |at, _, cx| {
                     let act = acts.get(at).cloned().flatten();
                     let _ = view.update(cx, |view, cx| {
-                        view.attach_menu = None;
                         match act {
                             Some(act) => view.run_session_control(thread, generation, act),
                             None => view.open_panel(thread, cx),
@@ -6945,7 +6940,6 @@ impl CockpitView {
                             };
                             let token = format!("/{name}");
                             let _ = view.update(cx, |view, cx| {
-                                view.attach_menu = None;
                                 view.panes[index]
                                     .composer
                                     .clone()
@@ -8676,7 +8670,7 @@ impl CockpitView {
             .track_focus(&self.focus)
             // A popup joins the context; the keymap's rows stand down for
             // it.
-            .key_context(ferrite_ui::keymap::root_context(self.popup_up()).as_str())
+            .key_context(ferrite_ui::keymap::root_context(self.popup_holds_root()).as_str())
             // Nothing that acts on a lost machine's Threads is listened for
             // until it is back (ADR 0026).
             .when(!lost, |root| {
