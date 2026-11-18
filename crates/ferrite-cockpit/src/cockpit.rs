@@ -33,7 +33,7 @@ mod mode_menu;
 mod model_picker;
 mod machines;
 mod menu_button;
-mod connections;
+mod connections_view;
 mod nav_chrome;
 mod nav_keys;
 mod nav_list;
@@ -638,7 +638,7 @@ pub struct CockpitView {
     /// The machines this window can be on (ADR 0026); `None` in a window
     /// on an Engine of its own.
     machines: Option<Entity<crate::machines::Machines>>,
-    connections: connections::Connections,
+    connections: connections_view::Connections,
 }
 
 /// The Cockpit asks its window to put it on machine `index` (ADR 0026),
@@ -1473,7 +1473,7 @@ impl CockpitView {
             columns: columns::Columns::new(),
             launch_provider,
             machines: None,
-            connections: connections::Connections::default(),
+            connections: connections_view::Connections::default(),
         };
         // A Cockpit notification is the earliest common point after core
         // state changes and before GPUI draws cached transcript children.
