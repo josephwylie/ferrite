@@ -382,9 +382,31 @@ impl CockpitView {
             match pane.preview_tab.documents.get(&wanted) {
                 Some(document) => pane.preview.restore(document.clone()),
                 None if wanted == Path::new(BROWSER_PATH) => pane.preview.show_browser(),
-                None => pane.preview.open(wanted, None, &[], window, cx),
+                None => match self.sent_annotation(thread, &wanted) {
+                    Some(annotation) => pane.preview.review_annotation(annotation, window),
+                    None => pane.preview.open(wanted, None, &[], window, cx),
+                },
             }
         }
+    }
+
+    /// A Browser annotation's review tab is keyed by its capture's PNG,
+    /// which opened as a file would go to the lightbox: after a restart the
+    /// review is rebuilt from the prompt in history that sent it.
+    fn sent_annotation(
+        &self,
+        thread: ThreadId,
+        original: &Path,
+    ) -> Option<ferrite_core::browser_annotations::Annotation> {
+        self.cockpit.thread(thread)?.transcript().blocks().iter().find_map(|block| {
+            let ferrite_core::transcript::Body::Prompt(words) = &block.body else {
+                return None;
+            };
+            ferrite_core::browser_annotations::split(words.clone())
+                .2
+                .into_iter()
+                .find(|annotation| annotation.original() == Some(original))
+        })
     }
 
     /// The Preview tab's body: the preview as a card on the Panel's frame,

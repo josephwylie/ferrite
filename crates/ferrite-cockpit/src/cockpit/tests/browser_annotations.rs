@@ -72,6 +72,94 @@ fn browser_annotation_history_keeps_a_distinct_reviewable_capture(cx: &mut TestA
     std::fs::remove_dir_all(root).unwrap();
 }
 
+/// After a restart the Panel brings back the review's tab, keyed by the
+/// capture's PNG; the review, not the PNG in the lightbox, comes back with it.
+#[gpui::test]
+fn browser_annotation_review_reopens_after_a_restart(cx: &mut TestAppContext) {
+    use ferrite_core::browser::{Document, TabId};
+    use ferrite_core::browser_annotations::{self, Capture, Selection, Viewport};
+    let (core, fake) = cockpit("ba-restart", 1);
+    let store = std::env::temp_dir().join(format!("ferrite-view-{}-ba-restart", std::process::id()));
+    let mut prefs = Preferences::ephemeral();
+    prefs.dir = scratch("ba-restart-settings");
+    let settings = prefs.dir.clone();
+    bind_production_keys(cx);
+    let (view, window) = add_cockpit_window(cx, |_, cx| {
+        CockpitView::new_with_settings(core, Provider::Claude, prefs, cx)
+    });
+    window.simulate_resize(gpui::size(px(1500.), px(900.)));
+    let root = std::env::temp_dir().join(format!("ferrite-restart-annotation-{}", std::process::id()));
+    let annotation = browser_annotations::retain(
+        &root,
+        Capture {
+            document: Document {
+                tab: TabId(5),
+                generation: 1,
+            },
+            native_generation: 1,
+            url: "https://example.test/restarted".into(),
+            viewport: Viewport {
+                width_css: 1.,
+                height_css: 1.,
+                device_scale: 1.,
+            },
+            selection: Selection::Region {
+                x: 0.,
+                y: 0.,
+                width: 1.,
+                height: 1.,
+            },
+        },
+        include_bytes!("../../../../ferrite-core/tests/fixtures/browser-original.png"),
+        "Still here".into(),
+        vec![],
+    )
+    .unwrap();
+    tick(window);
+    view.update(window, |view, cx| {
+        view.panes[0].composer.update(cx, |composer, cx| {
+            composer.set("Review after restart".into(), cx);
+            composer.add_browser_annotation(annotation.clone(), cx);
+        });
+    });
+    tick(window);
+    window.simulate_keystrokes("enter");
+    tick(window);
+    let chip = window.debug_bounds("review-browser-annotation-0").unwrap();
+    window.simulate_click(chip.center(), gpui::Modifiers::none());
+    until(window, |cx| cx.debug_bounds("annotation-stage").is_some());
+    let thread = view.update(window, |view, _| {
+        view.flush_panel_persistence();
+        let thread = view.panes[0].thread().unwrap();
+        // Quitting parks every Thread; that writes the prompt history reads back.
+        view.cockpit.park(thread).unwrap();
+        thread
+    });
+    drop(view);
+
+    let mut core = Cockpit::new(Store::open(&store).unwrap(), Box::new(fake));
+    core.reopen(thread).unwrap();
+    let mut prefs = Preferences::ephemeral();
+    prefs.dir = settings;
+    let (_view, window) = add_cockpit_window(cx, |_, cx| {
+        CockpitView::new_with_settings(core, Provider::Claude, prefs, cx)
+    });
+    window.simulate_resize(gpui::size(px(1500.), px(900.)));
+    until(window, |cx| cx.debug_bounds("annotation-stage").is_some());
+    assert!(
+        window.debug_bounds("lightbox").is_none(),
+        "the restored tab is the review, not its capture in the lightbox"
+    );
+    let chip = window
+        .debug_bounds("review-browser-annotation-0")
+        .expect("history draws the sent annotation");
+    window.simulate_click(chip.center(), gpui::Modifiers::none());
+    until(window, |cx| cx.debug_bounds("annotation-stage").is_some());
+    assert!(window.debug_bounds("browser-annotation-review").is_some());
+    assert!(window.debug_bounds("lightbox").is_none());
+    std::fs::remove_dir_all(root).unwrap();
+}
+
 #[gpui::test]
 fn browser_annotation_retained_editor_adds_original_evidence_without_a_live_page(
     cx: &mut TestAppContext,
