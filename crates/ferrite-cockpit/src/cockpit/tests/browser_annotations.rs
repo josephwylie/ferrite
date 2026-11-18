@@ -72,23 +72,33 @@ fn browser_annotation_history_keeps_a_distinct_reviewable_capture(cx: &mut TestA
     std::fs::remove_dir_all(root).unwrap();
 }
 
-/// After a restart the Panel brings back the review's tab, keyed by the
-/// capture's PNG; the review, not the PNG in the lightbox, comes back with it.
-#[gpui::test]
-fn browser_annotation_review_reopens_after_a_restart(cx: &mut TestAppContext) {
+/// The review of a sent annotation open in the Panel, then the app
+/// restarted on the same store and settings. `quit` parks the Thread as
+/// quitting does, which writes the prompt history reads back; without it
+/// history no longer holds the annotation.
+struct Restarted<'a> {
+    view: Entity<CockpitView>,
+    window: &'a mut gpui::VisualTestContext,
+    thread: ThreadId,
+    capture: std::path::PathBuf,
+    settings: std::path::PathBuf,
+    root: std::path::PathBuf,
+}
+
+fn restarted<'a>(cx: &'a mut TestAppContext, name: &str, quit: bool) -> Restarted<'a> {
     use ferrite_core::browser::{Document, TabId};
     use ferrite_core::browser_annotations::{self, Capture, Selection, Viewport};
-    let (core, fake) = cockpit("ba-restart", 1);
-    let store = std::env::temp_dir().join(format!("ferrite-view-{}-ba-restart", std::process::id()));
+    let (core, fake) = cockpit(name, 1);
+    let store = std::env::temp_dir().join(format!("ferrite-view-{}-{name}", std::process::id()));
     let mut prefs = Preferences::ephemeral();
-    prefs.dir = scratch("ba-restart-settings");
+    prefs.dir = scratch(&format!("{name}-settings"));
     let settings = prefs.dir.clone();
     bind_production_keys(cx);
     let (view, window) = add_cockpit_window(cx, |_, cx| {
         CockpitView::new_with_settings(core, Provider::Claude, prefs, cx)
     });
     window.simulate_resize(gpui::size(px(1500.), px(900.)));
-    let root = std::env::temp_dir().join(format!("ferrite-restart-annotation-{}", std::process::id()));
+    let root = std::env::temp_dir().join(format!("ferrite-{name}-{}", std::process::id()));
     let annotation = browser_annotations::retain(
         &root,
         Capture {
@@ -131,8 +141,9 @@ fn browser_annotation_review_reopens_after_a_restart(cx: &mut TestAppContext) {
     let thread = view.update(window, |view, _| {
         view.flush_panel_persistence();
         let thread = view.panes[0].thread().unwrap();
-        // Quitting parks every Thread; that writes the prompt history reads back.
-        view.cockpit.park(thread).unwrap();
+        if quit {
+            view.cockpit.park(thread).unwrap();
+        }
         thread
     });
     drop(view);
@@ -140,11 +151,26 @@ fn browser_annotation_review_reopens_after_a_restart(cx: &mut TestAppContext) {
     let mut core = Cockpit::new(Store::open(&store).unwrap(), Box::new(fake));
     core.reopen(thread).unwrap();
     let mut prefs = Preferences::ephemeral();
-    prefs.dir = settings;
-    let (_view, window) = add_cockpit_window(cx, |_, cx| {
+    prefs.dir = settings.clone();
+    let (view, window) = add_cockpit_window(cx, |_, cx| {
         CockpitView::new_with_settings(core, Provider::Claude, prefs, cx)
     });
     window.simulate_resize(gpui::size(px(1500.), px(900.)));
+    Restarted {
+        view,
+        window,
+        thread,
+        capture: annotation.original().unwrap().to_path_buf(),
+        settings,
+        root,
+    }
+}
+
+/// After a restart the Panel brings back the review's tab, keyed by the
+/// capture's PNG; the review, not the PNG in the lightbox, comes back with it.
+#[gpui::test]
+fn browser_annotation_review_reopens_after_a_restart(cx: &mut TestAppContext) {
+    let Restarted { window, root, .. } = restarted(cx, "ba-restart", true);
     until(window, |cx| cx.debug_bounds("annotation-stage").is_some());
     assert!(
         window.debug_bounds("lightbox").is_none(),
@@ -157,6 +183,37 @@ fn browser_annotation_review_reopens_after_a_restart(cx: &mut TestAppContext) {
     until(window, |cx| cx.debug_bounds("annotation-stage").is_some());
     assert!(window.debug_bounds("browser-annotation-review").is_some());
     assert!(window.debug_bounds("lightbox").is_none());
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+/// A restored image tab that no prompt in history claims cannot be filled:
+/// it goes, for good, and never traps the window under the lightbox.
+#[gpui::test]
+fn a_restored_image_tab_nothing_claims_goes_without_the_lightbox(cx: &mut TestAppContext) {
+    let Restarted {
+        view,
+        window,
+        thread,
+        capture,
+        settings,
+        root,
+    } = restarted(cx, "ba-restart-unclaimed", false);
+    for _ in 0..5 {
+        tick(window);
+    }
+    assert!(window.debug_bounds("lightbox").is_none(), "no lightbox over the window");
+    window.simulate_input("still mine");
+    tick(window);
+    assert_eq!(composer_text(&view, window), "still mine", "the keyboard is the Pane's");
+    let tab = crate::cockpit::surfaces::SurfaceId::File(capture);
+    view.update(window, |view, _| {
+        assert!(!view.panel.surfaces.get(thread).unwrap().tabs.contains(&tab));
+        view.apply_surface(thread, crate::cockpit::surfaces::SurfaceAction::Reopen);
+        assert!(!view.panel.surfaces.get(thread).unwrap().tabs.contains(&tab), "nor on Reopen");
+        view.flush_panel_persistence();
+    });
+    let saved = crate::cockpit::surfaces::Surfaces::load(&settings, |_, _| true).unwrap();
+    assert!(!saved.get(thread).unwrap().tabs.contains(&tab), "nor at the next launch");
     std::fs::remove_dir_all(root).unwrap();
 }
 
