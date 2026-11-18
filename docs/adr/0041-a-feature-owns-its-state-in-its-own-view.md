@@ -71,6 +71,19 @@ that happened to touch it, and nothing in the code said whose a field was.
   `destination`, shared with the Factory. The Panel's PR reader has no view
   of its own yet, so the root draws an open PR's body with its own listeners
   and hands it over with the inputs, as Settings takes other features' rows.
+- **The Side chat is the sixth.** `SideChatView`
+  (`cockpit/side_chat_view.rs`) owns every Thread's side chats in one
+  view: each tab's field, title and fork once it lands, the tab each
+  Panel last showed, the forks still on their way, the field's wait for
+  the keyboard, and a Trash waiting for its second press. One view, not
+  one per Thread: the forks land in the order they were asked, whichever
+  Thread asked, so one queue has to see them all. The Panel draws it as
+  the body of whichever side chat it shows, and the view reads which
+  that is with its inputs, so the root no longer tends it every frame.
+  It emits `SideChatEvent`: a question for a fork, Bring back, Trash.
+  The fork is a Thread of the engine, so asking for it, binding it when
+  it lands and retiring it with its tab stay the root's, as does which
+  Surface the Panel shows.
 
 ## Precedent
 
