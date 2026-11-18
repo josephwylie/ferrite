@@ -48,6 +48,15 @@ that happened to touch it, and nothing in the code said whose a field was.
 - **ADR 0042 moves part of the last two.** Whether Settings or the
   Project card is up, its exit and its veil are now the sheet host's, and
   each view exists only while its sheet is up.
+- **Connections is the fourth.** `ConnectionsView`
+  (`cockpit/connections_view.rs`) owns the environment editor and the
+  attempt it runs, a Remove waiting for its confirm, and the last error
+  and warning. It emits `ConnectionsEvent`; the root saves and answers by
+  a method on the view. The Settings sheet makes and holds it, so none of
+  it outlives the sheet; the root still closes the editor at the close,
+  since the view lives on through the sheet's fade. Its save stays its
+  own, not `change_settings`: it keeps nothing it could not write, and
+  will not leave an environment whose files are unsaved.
 
 ## Precedent
 
