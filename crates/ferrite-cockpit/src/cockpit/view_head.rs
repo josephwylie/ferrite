@@ -519,12 +519,7 @@ fn history_arrow(
     step: impl Fn(&ClickEvent, &mut Window, &mut gpui::App) + 'static,
     cx: &gpui::App,
 ) -> AnyElement {
-    let state = if enabled {
-        IconState::Plain
-    } else {
-        IconState::Disabled(None)
-    };
-    icon_button_as(key, glyph, IconSize::Standard, label, state, cx)
+    icon_button_as(key, glyph, IconSize::Standard, label, IconState::live(enabled), cx)
         .tip_with_key(label, bound_chord(action))
         .on_click(step)
         .into_any_element()

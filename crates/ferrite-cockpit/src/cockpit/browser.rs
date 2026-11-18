@@ -1306,11 +1306,10 @@ impl CockpitView {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         use ferrite_ui::{
-            components::{icon_button, IconSize, Tip as _},
+            components::{icon_button, icon_button_as, IconSize, IconState, Tip as _},
             icons,
             theme::*,
         };
-        use gpui::component::Disableable as _;
         let Some(thread) = thread else {
             return div()
                 .p(px(16.))
@@ -1421,13 +1420,9 @@ impl CockpitView {
         ] {
             let document = active.map(|tab| tab.document());
             toolbar = toolbar.child(
-                icon_button(id, glyph, IconSize::Standard, label, cx)
-                    .opacity(if enabled { 1. } else { 0.35 })
+                icon_button_as(id, glyph, IconSize::Standard, label, IconState::live(enabled), cx)
                     .tip(label)
                     .on_click(cx.listener(move |this, _, _, cx| {
-                        if !enabled {
-                            return;
-                        }
                         let Some(document) = document else { return };
                         this.browser_action(
                             thread,
@@ -1455,6 +1450,11 @@ impl CockpitView {
             Some("Available when the page finishes loading")
         } else {
             Some("Open a page to annotate it")
+        };
+        let annotate = match annotate_why {
+            Some(why) => IconState::Disabled(Some(why.into())),
+            None if annotating => IconState::Lit,
+            None => IconState::Plain,
         };
         toolbar = toolbar
             .child(
@@ -1489,33 +1489,28 @@ impl CockpitView {
                     })),
             )
             .child(
-                ferrite_ui::components::button("browser-annotate")
-                    .debug_selector(|| "browser-annotate".into())
-                    .tab_stop(true)
-                    .size(px(24.))
-                    .p_0()
-                    .disabled(!annotatable && !annotating)
-                    .when(annotating, |button| {
-                        button.bg(Paint((SEND_LIT << 8) | 26).hsla())
-                    })
-                    .when_some(annotate_why, |button, _| button.opacity(0.35))
-                    .tip(annotate_why.unwrap_or(if annotating {
+                icon_button_as(
+                    "browser-annotate",
+                    icons::SQUARE_PEN,
+                    IconSize::Standard,
+                    "Annotate preview",
+                    annotate,
+                    cx,
+                )
+                .when(annotate_why.is_none(), |button| {
+                    button.tip(if annotating {
                         "Cancel annotation (Esc)"
                     } else {
                         "Annotate preview"
-                    }))
-                    .child(icons::icon(
-                        icons::SQUARE_PEN,
-                        16.,
-                        if annotating { SEND_LIT } else { INK_SUBTLE },
-                    ))
-                    .on_click(cx.listener(move |this, _, window, cx| {
-                        if annotating {
-                            this.close_browser_annotation(thread, cx);
-                        } else {
-                            this.begin_browser_annotation(thread, window, cx);
-                        }
-                    })),
+                    })
+                })
+                .on_click(cx.listener(move |this, _, window, cx| {
+                    if annotating {
+                        this.close_browser_annotation(thread, cx);
+                    } else {
+                        this.begin_browser_annotation(thread, window, cx);
+                    }
+                })),
             )
             .child(
                 icon_button("browser-go", icons::FORWARD, IconSize::Standard, "Go to address", cx)
@@ -1539,22 +1534,28 @@ impl CockpitView {
                 })),
             )
             .child(
-                icon_button(
+                icon_button_as(
                     "browser-open-external",
                     icons::EXTERNAL,
                     IconSize::Standard,
                     "Open in system browser",
+                    IconState::live(active.is_some()),
                     cx,
                 )
-                .opacity(if active.is_some() { 1. } else { 0.35 })
                 .tip("Open in system browser")
                 .on_click(cx.listener(move |this, _, _, cx| {
                     this.run_browser_page_verb(thread, PageVerb::OpenExternal, cx)
                 })),
             )
             .child(
-                icon_button("browser-close-page", icons::CLOSE, IconSize::Standard, "Close tab", cx)
-                .opacity(if active.is_some() { 1. } else { 0.35 })
+                icon_button_as(
+                    "browser-close-page",
+                    icons::CLOSE,
+                    IconSize::Standard,
+                    "Close tab",
+                    IconState::live(active.is_some()),
+                    cx,
+                )
                 .tip("Close tab")
                 .on_click(cx.listener(move |this, _, _, cx| {
                     let tab = this

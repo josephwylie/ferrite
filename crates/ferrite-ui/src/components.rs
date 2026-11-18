@@ -1514,6 +1514,13 @@ pub enum IconState {
     Disabled(Option<SharedString>),
 }
 
+impl IconState {
+    /// `Plain` while `live`, else disabled with no reason to give.
+    pub fn live(live: bool) -> Self {
+        if live { IconState::Plain } else { IconState::Disabled(None) }
+    }
+}
+
 /// The grounds and inks a state draws, at rest and under the pointer.
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct IconFace {
