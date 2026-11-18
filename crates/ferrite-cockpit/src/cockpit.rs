@@ -44,7 +44,7 @@ mod palette;
 pub(crate) mod panel;
 mod parts;
 mod popups;
-mod prs;
+mod prs_view;
 mod sends;
 mod server;
 mod new_task_view;
@@ -620,7 +620,7 @@ pub struct CockpitView {
     /// What stands in the board's place: the Factory or the PRs.
     destination: Option<destination::Destination>,
     /// The PRs destination, kept as it was left while another view shows.
-    prs: prs::PrsView,
+    prs: prs_view::PrsView,
     /// The Tasks whose needs-you toast stands, and the state it announced.
     task_toasts: std::collections::HashMap<String, ferrite_core::factory::Status>,
     /// The empty board's selected row, and the list's own focus.
@@ -1463,7 +1463,7 @@ impl CockpitView {
             decisions: decisions::DecisionState::new(cx.weak_entity()),
             nav_measure_rest: std::cell::Cell::new(false),
             destination: None,
-            prs: prs::PrsView::new(cx),
+            prs: prs_view::PrsView::new(cx),
             task_toasts: Default::default(),
             empty_cursor: 0,
             empty_focus: cx.focus_handle(),
