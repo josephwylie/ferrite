@@ -853,6 +853,10 @@ impl CockpitView {
             .border_color(paint::FIELD_RING)
             .flex()
             .flex_col()
+            // A press anywhere on the card focuses the field, as a press on
+            // a Pane's Composer box does: the window focuses the innermost
+            // handle a press lands in.
+            .track_focus(&tab.field.focus_handle(cx))
             .on_action(cx.listener(Self::send_side_chat))
             .child(
                 div()

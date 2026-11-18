@@ -70,6 +70,8 @@ enum Shown {
 #[derive(Default)]
 pub(crate) struct Sheets {
     shown: Option<Shown>,
+    /// What held the keyboard before the sheet up took it.
+    back: Option<FocusHandle>,
 }
 
 /// The operator pressed the veil, outside the card.
@@ -219,6 +221,32 @@ impl CockpitView {
         self.close_popup(cx);
         cx.notify();
         true
+    }
+
+    /// The keyboard a sheet took comes back as it closes, to what held it
+    /// as the sheet came up, if the last frame drew that; else the focus
+    /// rule decides. Tended once a frame, before that rule hands the sheet
+    /// its focus.
+    pub(super) fn tend_sheet_focus(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let up = self.sheet_up(cx);
+        let focused = window.focused(cx);
+        let back = self.sheets.update(cx, |sheets, _| {
+            if up {
+                if sheets.back.is_none() {
+                    sheets.back = focused;
+                }
+                None
+            } else {
+                sheets.back.take()
+            }
+        });
+        let Some(back) = back else {
+            return;
+        };
+        window.focus(&back, cx);
+        if !self.focus.contains_focused(window, cx) {
+            window.focus(&self.focus, cx);
+        }
     }
 
     /// What goes with a sheet, closed or replaced.

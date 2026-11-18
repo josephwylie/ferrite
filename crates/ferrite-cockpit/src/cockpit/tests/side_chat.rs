@@ -195,6 +195,28 @@ fn a_press_on_the_side_chat_field_takes_the_keys_back_from_the_composer(cx: &mut
     assert_eq!(fake.sent.borrow().last().map(String::as_str), Some("what is alpha?"));
 }
 
+/// The field's card is all one press target, as the Composer's box is: a
+/// press off its text line, by the send glyph, still takes the keys.
+#[gpui::test]
+fn a_press_anywhere_on_the_side_chat_card_takes_the_keys(cx: &mut TestAppContext) {
+    let (view, fake, cx) = answered("side-chat-card-pressed", cx);
+    open_chat(&view, cx, None);
+    let composer = cx.debug_bounds("composer-block").expect("the Composer");
+    cx.simulate_click(composer.center(), gpui::Modifiers::none());
+    tick(cx);
+    let card = cx.debug_bounds("side-chat-composer").expect("the side chat card");
+    let line = cx.debug_bounds("side-chat-placeholder").expect("the text line");
+    let below_line = gpui::point(card.left() + px(8.), card.bottom() - px(6.));
+    assert!(below_line.y > line.bottom(), "the press is off the text line");
+    cx.simulate_click(below_line, gpui::Modifiers::none());
+    tick(cx);
+    cx.simulate_input("what is alpha?");
+    assert_eq!(composer_text(&view, cx), "", "nothing typed into the Composer");
+    cx.simulate_keystrokes("enter");
+    tick(cx);
+    assert_eq!(fake.sent.borrow().last().map(String::as_str), Some("what is alpha?"));
+}
+
 /// A question typed in a tab goes to its fork alone — never the Thread —
 /// and the tab then shows the fork's own words, not the history it
 /// inherited.
