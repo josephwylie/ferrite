@@ -24,14 +24,15 @@ def receive(provider, content, output, probe):
         body=text.split(start,1)[1].split('\n</ferrite_browser_annotations>',1)[0]
         annotations=json.loads(body)
         if len(annotations)!=2:raise ValueError('Batch must contain exactly two retained annotations after removal')
-        if annotations[0]['comment']!='Packaged annotation comment':raise ValueError('Original comment missing')
-        if annotations[1]['comment']!='Immutable element after navigation and close':raise ValueError('Closed-page feedback missing')
-        kinds={drawing['kind'] for drawing in annotations[0]['drawings']}
-        if any(drawing['ink']!={'color':'#8cb9f4','width':6.0} for drawing in annotations[0]['drawings']):raise ValueError('Selected Blue ink/6px width did not survive delivery')
-        if kinds!={'pen','line','arrow','rectangle','ellipse','text','step'}:raise ValueError(f'Actual drawing controls missing: {kinds}')
-        if not any(drawing.get('text')=='Fixture label' for drawing in annotations[0]['drawings']):raise ValueError('Text label missing')
-        if annotations[0]['capture']['selection']['kind']!='region' or annotations[1]['capture']['selection']['kind']!='element':raise ValueError('Region/element capture missing')
+        if annotations[0]['comment']!='Packaged annotation comment':raise ValueError('Drawn feedback comment missing')
+        if annotations[1]['comment']!='Annotated fixture element':raise ValueError('Element feedback comment missing')
+        if any(annotation['capture']['selection']['kind']!='live' for annotation in annotations):raise ValueError('In-page editor capture missing')
+        feedback=[annotation['capture']['selection']['feedback'] for annotation in annotations]
+        if not feedback[0]['strokes']:raise ValueError('Drawn stroke did not survive delivery')
+        if not any(target['element']['tagName']=='button' for target in feedback[1]['elements']):raise ValueError('Picked fixture element did not survive delivery')
+        if any(item['screenshot'].get('kind')!='captured' for item in feedback):raise ValueError(f'Screenshot crop missing: {[item["screenshot"] for item in feedback]}')
         expected={annotation['original_sha256'] for annotation in annotations}
+        if None in expected:raise ValueError('Annotation lost its retained original')
         actual={hashlib.sha256(png).hexdigest() for png in images if png.startswith(b'\x89PNG\r\n\x1a\n')}
         if actual!=expected:raise ValueError('Provider did not receive the original native PNG bytes')
         for index,png in enumerate(images):(output/f'annotation-provider-{index}.png').write_bytes(png)

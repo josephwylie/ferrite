@@ -62,9 +62,14 @@ impl CockpitView {
             let mut reclamation_phase = false;
             let mut frames = 0u64;
             let mut last_error = String::new();
+            let mut last_mouse = None;
             let result = loop {
                 cx.background_executor().timer(Duration::from_millis(150)).await;
                 let step = handle.update(cx, |_, window, cx| -> Result<bool, String> {
+                    if last_mouse != Some(window.mouse_position()) {
+                        last_mouse = Some(window.mouse_position());
+                        trace_input("window-mouse",(window.mouse_position(),window.bounds()));
+                    }
                     if boundaries {
                         if let Some(thread)=scenario_thread { boundary.step(&view,thread,window,cx,&output)?; }
                     }
@@ -251,6 +256,7 @@ impl CockpitView {
                             // controller use. No synthetic unpause or mouse-up.
                             let scale = window.scale_factor();
                             let position = point(px(x_sum as f32 / count as f32 / scale), px(y_sum as f32 / count as f32 / scale));
+                            trace_input("driver-held-down",position);
                             window.dispatch_event(PlatformInput::MouseDown(MouseDownEvent { position, button: MouseButton::Left, modifiers: Modifiers::default(), click_count: 1, first_mouse: false }), cx);
                         }
                         view.update(cx, |view, _| {
@@ -265,6 +271,7 @@ impl CockpitView {
                     let scale = window.scale_factor();
                     let position = point(px(x_sum as f32 / count as f32 / scale), px(y_sum as f32 / count as f32 / scale));
                     let modifiers = Modifiers::default();
+                    trace_input("driver-click",position);
                     window.dispatch_event(PlatformInput::MouseMove(MouseMoveEvent { position, pressed_button: None, modifiers }), cx);
                     window.dispatch_event(PlatformInput::MouseDown(MouseDownEvent { position, button: MouseButton::Left, modifiers, click_count: 1, first_mouse: false }), cx);
                     window.dispatch_event(PlatformInput::MouseUp(MouseUpEvent { position, button: MouseButton::Left, modifiers, click_count: 1 }), cx);
@@ -292,12 +299,21 @@ impl CockpitView {
                 "window_pointer_input": clicked, "rendered_frames": frames,
                 "provider_requested": provider, "annotations": annotate, "boundaries": boundaries, "annotation_history": history, "held_screenshot": held_screenshot, "scenario_thread": scenario_thread, "work_orders": work_orders, "provider_started": provider_started,
                 "elapsed_ms": started.elapsed().as_millis(),
-                "scope": if boundaries { "actual provider/manual/stale/uncertain/recovery boundaries with independent page oracle" } else if history { "restart and native history review of original annotation evidence with zero eager pages" } else if annotate { "actual annotation overlay, all drawing controls, review/remove/batch Composer send and native provider PNG delivery" } else if work_orders { "one prescribed work order through actual provider and owning Preview; annotations are not tested" } else if held_screenshot { "first provider Screenshot during a held operator gesture; no mutation receipt permitted" } else { "operator Preview and optional actual provider Observe/Click/Observe; annotations are not tested" },
+                "scope": if boundaries { "actual provider/manual/stale/uncertain/recovery boundaries with independent page oracle" } else if history { "restart and native history review of original annotation evidence with zero eager pages" } else if annotate { "in-page annotation editor stroke, element and region capture, review/remove/batch Composer send and native provider PNG delivery" } else if work_orders { "one prescribed work order through actual provider and owning Preview; annotations are not tested" } else if held_screenshot { "first provider Screenshot during a held operator gesture; no mutation receipt permitted" } else { "operator Preview and optional actual provider Observe/Click/Observe; annotations are not tested" },
             });
             let _ = std::fs::write(output.join("window-result.json"), serde_json::to_vec_pretty(&result).unwrap());
             let _ = cx.update(|cx| cx.quit());
         }).detach();
     }
+}
+
+/// Names every source of operator input, so a provider refused with "the
+/// operator interacted" shows which input moved the revision.
+pub(in crate::cockpit) fn trace_input(source:&str,detail:impl std::fmt::Debug) {
+    use std::io::Write;
+    let Some(output)=std::env::var_os("FERRITE_BROWSER_WINDOW_OUTPUT") else { return; };
+    let value=serde_json::json!({"source":source,"detail":format!("{detail:?}"),"emitted_unix_ms":std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_millis()});
+    if let Ok(mut file)=std::fs::OpenOptions::new().create(true).append(true).open(PathBuf::from(output).join("operator-input.jsonl")) { let _=writeln!(file,"{value}"); }
 }
 
 fn phase(output:&std::path::Path,name:&str) {
