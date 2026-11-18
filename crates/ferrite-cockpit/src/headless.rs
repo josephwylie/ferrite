@@ -313,7 +313,7 @@ impl Driver {
         self.draw();
     }
 
-    fn draw(&mut self) {
+    pub(crate) fn draw(&mut self) {
         self.cx
             .update_window(self.window, |_, window, cx| {
                 let _ = window.draw(cx);

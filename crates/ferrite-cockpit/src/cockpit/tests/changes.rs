@@ -353,3 +353,140 @@ fn a_refused_stage_names_its_file_and_git_and_a_retry_stages_it(cx: &mut TestApp
     let out = std::process::Command::new("git").args(["diff", "--cached", "--name-only"]).current_dir(&repo).output().unwrap();
     assert_eq!(String::from_utf8_lossy(&out.stdout).trim(), "a.rs");
 }
+
+/// A Thread whose checkout has `files` files of twenty lines, each with
+/// its every other line edited since the commit: each file is taller than
+/// the window.
+fn window_of_files<'a>(
+    name: &str,
+    files: usize,
+    cx: &'a mut TestAppContext,
+) -> (Entity<CockpitView>, ThreadId, &'a mut gpui::VisualTestContext) {
+    let base = scratch(name);
+    let repo = repo_in(&base);
+    let body = |file: usize, edited: bool| -> String {
+        (0..20).map(|n| if edited && n % 2 == 0 { format!("edited {file} {n}\n") } else { format!("line {file} {n}\n") }).collect()
+    };
+    for file in 0..files {
+        std::fs::write(repo.join(format!("f{file:03}.rs")), body(file, false)).unwrap();
+    }
+    git(&repo, &["add", "-A"]);
+    git(&repo, &["commit", "-q", "-m", "files"]);
+    for file in 0..files {
+        std::fs::write(repo.join(format!("f{file:03}.rs")), body(file, true)).unwrap();
+    }
+    let store = Store::open(base.join("store")).unwrap();
+    let mut core = Cockpit::new(store, Box::new(Fake::default()));
+    core.open(Provider::Claude, WorkspaceChoice::Main { checkout: repo.clone() }).unwrap();
+    bind_production_keys(cx);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    hold_nav_open(&view, cx);
+    cx.simulate_resize(gpui::size(px(1900.), px(900.)));
+    tick(cx);
+    let thread = view.read_with(cx, |view, _| view.panes[0].thread().unwrap());
+    (view, thread, cx)
+}
+
+fn file_head(at: usize, cx: &mut gpui::VisualTestContext) -> Option<gpui::Bounds<gpui::Pixels>> {
+    cx.debug_bounds(Box::leak(format!("changes-file-{at}").into_boxed_str()))
+}
+
+/// Which of the first `files` files the last frame laid out.
+fn laid_out(files: usize, cx: &mut gpui::VisualTestContext) -> Vec<usize> {
+    (0..files).filter(|&at| file_head(at, cx).is_some()).collect()
+}
+
+fn scroll_down(by: f32, cx: &mut gpui::VisualTestContext) {
+    let list = cx.debug_bounds("changes-scroll").expect("the list");
+    cx.simulate_event(gpui::ScrollWheelEvent {
+        position: list.center(),
+        delta: gpui::ScrollDelta::Pixels(gpui::point(px(0.), px(-by))),
+        ..Default::default()
+    });
+    cx.run_until_parked();
+    tick(cx);
+}
+
+/// The first file whose head is in view below the list's top, and where.
+fn first_head_in_view(files: usize, cx: &mut gpui::VisualTestContext) -> (usize, gpui::Pixels) {
+    let top = cx.debug_bounds("changes-scroll").unwrap().top();
+    (0..files)
+        .find_map(|at| file_head(at, cx).filter(|head| head.top() >= top).map(|head| (at, head.top())))
+        .expect("a head in view")
+}
+
+#[gpui::test]
+fn a_fold_keeps_the_place_in_the_list(cx: &mut TestAppContext) {
+    let (view, thread, cx) = window_of_files("changes-fold-place", 30, cx);
+    opened(&view, thread, cx);
+    scroll_down(2_000., cx);
+    let (at, top) = first_head_in_view(30, cx);
+    assert!(at > 0, "scrolled past the first file");
+    let head = file_head(at, cx).unwrap();
+    cx.simulate_click(gpui::point(head.left() + px(40.), head.center().y), gpui::Modifiers::none());
+    tick(cx);
+    assert!(cx.debug_bounds(Box::leak(format!("panel-hunks-{at}").into_boxed_str())).is_none(), "folded");
+    assert_eq!(file_head(at, cx).map(|head| head.top()), Some(top), "the folded head stays put");
+    assert!(file_head(at + 1, cx).is_some_and(|next| next.top() < top + px(60.)), "the next file comes up under it");
+}
+
+#[gpui::test]
+fn a_refresh_keeps_the_place_in_the_list(cx: &mut TestAppContext) {
+    let (view, thread, cx) = window_of_files("changes-refresh-place", 30, cx);
+    opened(&view, thread, cx);
+    scroll_down(2_000., cx);
+    let (at, top) = first_head_in_view(30, cx);
+    assert!(at > 0, "scrolled past the first file");
+    let refresh = cx.debug_bounds("changes-refresh").unwrap();
+    cx.simulate_click(refresh.center(), gpui::Modifiers::none());
+    reread(&view, thread, cx);
+    tick(cx);
+    assert_eq!(first_head_in_view(30, cx), (at, top), "the same file at the same place");
+    view.update(cx, |view, cx| view.reread_changes(Diff::Changes(thread), cx));
+    reread(&view, thread, cx);
+    tick(cx);
+    assert_eq!(first_head_in_view(30, cx), (at, top), "and through the agent's reread");
+}
+
+#[gpui::test]
+fn the_filter_lists_only_matches_and_clearing_it_lists_all_again(cx: &mut TestAppContext) {
+    let (view, thread, cx) = window_of_files("changes-filter-many", 30, cx);
+    opened(&view, thread, cx);
+    let field = view.read_with(cx, |view, _| view.changes_filter(Diff::Changes(thread)).unwrap());
+    view.update(cx, |_, cx| field.update(cx, |field, cx| field.set("f027".to_string(), cx)));
+    tick(cx);
+    assert_eq!(laid_out(30, cx), [27], "only f027.rs matches");
+    view.update(cx, |_, cx| field.update(cx, |field, cx| field.set(String::new(), cx)));
+    tick(cx);
+    assert_eq!(laid_out(30, cx).first(), Some(&0), "every file again, from the first");
+}
+
+/// Only the files in view are laid out: a diff six times the size lays
+/// out the same files.
+#[gpui::test]
+fn the_list_lays_out_the_files_in_view_whatever_the_size_of_the_diff(cx: &mut TestAppContext) {
+    let shown = |name: &str, files: usize, cx: &mut TestAppContext| {
+        let (view, thread, cx) = window_of_files(name, files, cx);
+        opened(&view, thread, cx);
+        laid_out(files, cx)
+    };
+    let small = shown("changes-in-view-20", 20, cx);
+    let large = shown("changes-in-view-120", 120, cx);
+    assert!(!small.is_empty() && small.len() < 20, "the window holds fewer than 20 files: {small:?}");
+    assert_eq!(large, small, "the same files in view, the rest not laid out");
+}
+
+/// A Files tab's `Show changes` brings its file into view, unfolded.
+#[gpui::test]
+fn show_changes_brings_a_file_far_down_the_list_into_view(cx: &mut TestAppContext) {
+    let (view, thread, cx) = window_of_files("changes-show", 30, cx);
+    opened(&view, thread, cx);
+    view.update(cx, |view, cx| view.toggle_fold_for_test(Diff::Changes(thread), "f025.rs", cx));
+    view.update(cx, |view, cx| view.show_changes_of(thread, "f025.rs", cx));
+    tick(cx);
+    tick(cx);
+    let list = cx.debug_bounds("changes-scroll").unwrap();
+    let head = file_head(25, cx).expect("f025.rs is laid out");
+    assert!(head.top() >= list.top() && head.bottom() <= list.bottom(), "its head is in view");
+    assert!(cx.debug_bounds("panel-hunks-25").is_some(), "unfolded");
+}
