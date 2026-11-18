@@ -1,10 +1,11 @@
-//! The Settings sheet as a view of its own (ADR 0041). It owns what only
-//! the sheet reads: whether it is up, its exit, the page shown, the search
-//! field, the path last copied and its focus. It draws from what the
-//! Cockpit gives it (`SettingsInputs`), asked for each render, so the
-//! Cockpit's own notify still redraws it; and what the operator asks of the
-//! window it says as a `SettingsEvent`, which the Cockpit answers once the
-//! sheet's own update has ended.
+//! The Settings sheet as a view of its own (ADR 0041), made when it opens
+//! and dropped once it has gone (ADR 0042). It owns what only the sheet
+//! reads: the page shown, the search field, the path last copied and its
+//! focus. It draws its card for the sheet host from what the Cockpit gives
+//! it (`SettingsInputs`), asked for each frame, so the Cockpit's own notify
+//! still redraws it; and what the operator asks of the window it says as a
+//! `SettingsEvent`, which the Cockpit answers once the sheet's own update
+//! has ended.
 
 use super::*;
 use ferrite_core::settings::Settings;
@@ -16,14 +17,9 @@ use std::rc::Rc;
 
 pub(crate) struct SettingsView {
     cockpit: WeakEntity<CockpitView>,
-    /// The sheet is up.
-    pub(crate) open: bool,
-    /// The sheet on its way out.
-    exit: ferrite_ui::motion::Exits<()>,
     /// The page the sidebar has selected; each opening starts on the first.
     pub(crate) page: settings::PageKey,
-    /// The search field, made with the sheet (it needs a window) and
-    /// dropped with it, so each opening starts with an empty query.
+    /// The search field, made on the first frame (it needs a window).
     pub(crate) search: Option<Entity<InputState>>,
     /// The About path copied last, shown with a check until the sheet
     /// closes.
@@ -73,7 +69,7 @@ pub(crate) enum SettingsEvent {
     CopyDiagnostics,
     /// The sheet went to another page.
     Paged(settings::PageKey),
-    /// The close button or a press on the veil closed it.
+    /// The close button closed it.
     Closed,
 }
 
@@ -83,31 +79,11 @@ impl SettingsView {
     pub(super) fn new(cockpit: WeakEntity<CockpitView>, cx: &mut Context<Self>) -> Self {
         Self {
             cockpit,
-            open: false,
-            exit: Default::default(),
             page: settings::PageKey::default(),
             search: None,
             copied: None,
             focus: cx.focus_handle(),
         }
-    }
-
-    /// Open the sheet on its first page with nothing searched or copied,
-    /// or close it. Whether it is now open.
-    pub(super) fn toggle(&mut self, cx: &mut Context<Self>) -> bool {
-        self.open = !self.open;
-        if self.open {
-            self.page = settings::PageKey::default();
-            self.search = None;
-            self.copied = None;
-        }
-        cx.notify();
-        self.open
-    }
-
-    pub(super) fn close(&mut self, cx: &mut Context<Self>) {
-        self.open = false;
-        cx.notify();
     }
 
     /// A listener that says `event` to the Cockpit.
@@ -134,22 +110,12 @@ impl SettingsView {
         }
     }
 
-    /// The searchable sheet, or nothing while it is closed and gone.
-    fn sheet(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Option<AnyElement> {
-        // Closed, it fades out over `DIALOG_OUT`, drawn from the same state.
-        let leaving = self
-            .exit
-            .stage(
-                self.open.then_some(&()),
-                |_, _| true,
-                ferrite_ui::motion::DIALOG_OUT,
-                cx.background_executor().now(),
-                ferrite_ui::motion::reduced_motion(cx),
-            )
-            .map(|((), left)| left);
-        if !self.open && leaving.is_none() {
-            return None;
-        }
+    /// The searchable sheet's card, for the sheet host.
+    pub(super) fn card(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Option<ferrite_ui::sheet::Drawn> {
         let search = self
             .search
             .get_or_insert_with(|| {
@@ -178,10 +144,7 @@ impl SettingsView {
             }
         };
         let close = move |_: &mut Window, cx: &mut App| {
-            let _ = view.update(cx, |view, cx| {
-                view.close(cx);
-                cx.emit(SettingsEvent::Closed);
-            });
+            let _ = view.update(cx, |_, cx| cx.emit(SettingsEvent::Closed));
         };
         Some(crate::frame().settings(
             ferrite_ui::frame::SettingsSheet {
@@ -191,8 +154,7 @@ impl SettingsView {
                 focus: self.focus.clone(),
                 select: Rc::new(select),
                 step: Box::new(step),
-                close: Rc::new(close),
-                leaving,
+                close: Box::new(close),
             },
             window,
             cx,
@@ -523,14 +485,6 @@ impl SettingsView {
     }
 }
 
-impl Render for SettingsView {
-    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        ferrite_ui::loops_overlay::begin(window, cx.entity_id());
-        self.sheet(window, cx)
-            .unwrap_or_else(|| div().into_any_element())
-    }
-}
-
 impl CockpitView {
     /// Everything the sheet draws from. It never reads the sheet: the
     /// sheet calls it while its own update is running.
@@ -589,13 +543,26 @@ impl CockpitView {
                 cx.notify();
             }
             SettingsEvent::Closed => {
-                self.connections.editor = None;
-                cx.notify();
+                self.hide_sheet(cx);
             }
         }
     }
 
     pub(crate) fn settings_open(&self, cx: &App) -> bool {
-        self.settings_view.read(cx).open
+        self.sheets.read(cx).settings().is_some()
+    }
+
+    /// The Settings sheet, while it is up.
+    pub(crate) fn settings_sheet(&self, cx: &App) -> Option<Entity<SettingsView>> {
+        self.sheets.read(cx).settings().cloned()
+    }
+
+    /// Put Settings up, on its first page, in place of any other sheet.
+    pub(crate) fn show_settings(&mut self, cx: &mut Context<Self>) -> Entity<SettingsView> {
+        let cockpit = cx.weak_entity();
+        let view = cx.new(|cx| SettingsView::new(cockpit, cx));
+        cx.subscribe(&view, Self::on_settings_event).detach();
+        self.show_sheet(sheets::Sheet::Settings(view.clone()), cx);
+        view
     }
 }

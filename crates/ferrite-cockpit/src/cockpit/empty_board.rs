@@ -297,11 +297,9 @@ impl CockpitView {
                     .py(px(8.))
                     .child("Open Connections")
                     .on_click(cx.listener(|view, _, _, cx| {
-                        view.settings_view.update(cx, |settings, _| {
-                            settings.open = true;
+                        view.show_settings(cx).update(cx, |settings, _| {
                             settings.page = settings::PageKey::Connections;
                         });
-                        cx.notify();
                     })),
             )
     }

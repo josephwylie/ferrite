@@ -45,6 +45,7 @@ mod sends;
 mod server;
 mod project_editor_view;
 mod settings_view;
+mod sheets;
 mod side_chat;
 mod snooze;
 pub(crate) mod starts;
@@ -559,13 +560,10 @@ pub struct CockpitView {
     unsent: drafts::Unsent,
     /// Where the quotes of sent prompts were cited from.
     cited_sources: ferrite_core::cited_sources::CitedSources,
-    /// The Settings sheet (ADR 0041).
-    settings_view: Entity<settings_view::SettingsView>,
+    /// The sheet that is up, Settings or the Project card (ADR 0042).
+    sheets: Entity<sheets::Sheets>,
     /// The menus and popovers on their way out (`float_exits`).
     float_exits: float_exits::Held,
-    /// The Project card: creating a Project, or editing the one the nav
-    /// filter names (ADR 0041).
-    project_editor_view: Entity<project_editor_view::ProjectEditorView>,
     /// The Thread whose `Background work` dialog is open
     /// (`background_work.rs`).
     background_dialog: Option<ThreadId>,
@@ -1403,14 +1401,8 @@ impl CockpitView {
             gpui::KeyBinding::new("escape", ferrite_pane::annotation_editor::Cancel, Some("AnnotationEditor")),
         ]);
         let cockpit_weak = cx.weak_entity();
-        let settings_view =
-            cx.new(|cx| settings_view::SettingsView::new(cockpit_weak.clone(), cx));
-        cx.subscribe(&settings_view, Self::on_settings_event).detach();
-        let project_editor_view = cx.new(|cx| {
-            project_editor_view::ProjectEditorView::new(cockpit_weak.clone(), cx)
-        });
-        cx.subscribe(&project_editor_view, Self::on_project_editor_event)
-            .detach();
+        let sheets = cx.new(|_| sheets::Sheets::default());
+        cx.subscribe(&sheets, Self::on_sheets_event).detach();
         let mut view = Self {
             cockpit,
             browsers: Default::default(),
@@ -1489,9 +1481,8 @@ impl CockpitView {
             unsent: drafts::Unsent::load(&prefs.dir),
             cited_sources,
             prefs,
-            settings_view,
+            sheets,
             float_exits: Default::default(),
-            project_editor_view,
             background_dialog: None,
             background_stops: Default::default(),
             background_stop_sends: 0,
@@ -2413,8 +2404,9 @@ impl CockpitView {
         self.note_work(&frame);
         self.prune_background_stops();
         self.pump_browsers(cx);
-        self.project_editor_view
-            .update(cx, |editor, cx| editor.poll_remote_path(cx));
+        if let Some(card) = self.project_card(cx) {
+            card.update(cx, |card, cx| card.poll_remote_path(cx));
+        }
         self.poll_machine_repo(cx);
         let server_moved = self.server_moved();
         // The Server says when its parked Threads' rows moved.
@@ -2892,14 +2884,13 @@ impl CockpitView {
         self.panes[index].prune_tools(&valid);
     }
 
-    /// Whether something floats over the cockpit: a menu, a popover or the
-    /// Settings panel. The titlebar's drag region reads it — a region that
+    /// Whether something floats over the cockpit: a menu, a popover or a
+    /// sheet. The titlebar's drag region reads it — a region that
     /// lies under an open overlay would answer Windows' hit test as the
     /// window frame, and the row under the pointer would never see the
     /// press (the frame's titlebar).
     fn overlay_open(&self, cx: &gpui::App) -> bool {
-        self.settings_open(cx)
-            || self.project_editor_open(cx)
+        self.sheet_up(cx)
             || self.popover.is_some()
             || self.context_checks.is_some()
             || self.plan_card.is_some()
@@ -3732,20 +3723,17 @@ impl CockpitView {
     }
 
     fn toggle_settings(&mut self, cx: &mut Context<Self>) {
-        let open = self.settings_view.update(cx, |settings, cx| settings.toggle(cx));
-        if !open {
-            self.connections.editor = None;
+        if self.settings_open(cx) {
+            self.hide_sheet(cx);
+            return;
         }
-        if open {
-            self.project_editor_view
-                .update(cx, |editor, cx| editor.discard(cx));
-            self.popover = None;
-            self.context_menu = None;
-            if self.cli_versions.is_none() {
-                self.probe_cli_versions(cx);
-            }
-            self.ask_server_defaults();
+        self.show_settings(cx);
+        self.popover = None;
+        self.context_menu = None;
+        if self.cli_versions.is_none() {
+            self.probe_cli_versions(cx);
         }
+        self.ask_server_defaults();
         cx.notify();
     }
 
@@ -3855,10 +3843,12 @@ impl CockpitView {
                 .await;
             this.update(cx, |view, cx| {
                 cx.write_to_clipboard(ClipboardItem::new_string(report));
-                view.settings_view.update(cx, |settings, cx| {
-                    settings.copied = Some("Diagnostics");
-                    cx.notify();
-                });
+                if let Some(settings) = view.settings_sheet(cx) {
+                    settings.update(cx, |settings, cx| {
+                        settings.copied = Some("Diagnostics");
+                        cx.notify();
+                    });
+                }
                 cx.notify();
             })
             .ok();
@@ -4115,15 +4105,13 @@ impl CockpitView {
         }
         // The card's ↵ is its confirm — but in a machine's path field that
         // holds a path, it adds that directory.
-        if self.project_editor_open(cx) {
-            let typed = self
-                .project_editor_view
-                .update(cx, |editor, cx| editor.take_remote_path(window, cx));
+        if let Some(card) = self.project_card(cx) {
+            let typed = card.update(cx, |card, cx| card.take_remote_path(window, cx));
             if let Some(path) = typed {
                 self.adopt_editor_directory(path, cx);
                 return;
             }
-            if self.project_editor_view.read(cx).ready() {
+            if card.read(cx).ready() {
                 self.confirm_project_editor(cx);
             }
             return;
@@ -4295,16 +4283,11 @@ impl CockpitView {
             self.leave_panel(window, cx);
             return;
         }
-        if self.settings_open(cx) {
-            if self.connections.editor.is_some() {
-                self.cancel_connection(window, cx);
-                return;
-            }
-            self.settings_view.update(cx, |settings, cx| settings.close(cx));
-            cx.notify();
+        if self.settings_open(cx) && self.connections.editor.is_some() {
+            self.cancel_connection(window, cx);
             return;
         }
-        if self.close_project_editor(cx) || self.close_background_dialog(cx) {
+        if self.hide_sheet(cx) || self.close_background_dialog(cx) {
             return;
         }
         if self.snooze_editor.is_some() {
@@ -4384,8 +4367,7 @@ impl CockpitView {
     /// line renders from, so the key and the ghost text can never disagree
     /// about whether there is something to accept.
     fn accept_suggestion(&mut self, window: &Window, cx: &mut Context<Self>) -> bool {
-        if self.settings_open(cx)
-            || self.project_editor_open(cx)
+        if self.sheet_up(cx)
             || self.rename.is_some()
             || self.snooze_editor.is_some()
             || self.popover.is_some()
@@ -4425,8 +4407,8 @@ impl CockpitView {
 
     fn band_cycle(&mut self, _: &BandCycle, window: &mut Window, cx: &mut Context<Self>) {
         if self
-            .project_editor_view
-            .update(cx, |editor, cx| editor.tab_remote_path(window, cx))
+            .project_card(cx)
+            .is_some_and(|card| card.update(cx, |card, cx| card.tab_remote_path(window, cx)))
         {
             return;
         }
@@ -4442,8 +4424,7 @@ impl CockpitView {
         if self.accept_suggestion(window, cx) {
             return;
         }
-        if self.settings_open(cx)
-            || self.project_editor_open(cx)
+        if self.sheet_up(cx)
             || self
                 .focused_thread()
                 .and_then(|thread| self.cockpit.thread(thread))
@@ -4488,8 +4469,7 @@ impl CockpitView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.settings_open(cx)
-            || self.project_editor_open(cx)
+        if self.sheet_up(cx)
             || self
                 .focused_thread()
                 .and_then(|thread| self.cockpit.thread(thread))
@@ -8437,8 +8417,7 @@ impl CockpitView {
         // claiming CI for a Pane that is no longer saying anything about it.
         if self.context_checks.is_some_and(|thread| {
             self.focused_thread() != Some(thread)
-                || self.settings_open(cx)
-                || self.project_editor_open(cx)
+                || self.sheet_up(cx)
                 || self.facts.pr(thread).is_none_or(|pr| pr.checks.is_none())
         }) {
             self.context_checks = None;
@@ -8706,15 +8685,9 @@ impl CockpitView {
             // Native text, dialogs, and the Inbox keep their own keyboard focus.
         } else if self.context_menu.is_some() {
             // An open menu holds the keyboard at the root (`tend_menu_focus`).
-        } else if self.settings_open(cx) {
-            // The pump must not steal focus from Settings search or controls.
-            let focus = self.settings_view.read(cx).focus.clone();
+        } else if let Some(focus) = self.sheets.read(cx).up().map(|sheet| sheet.focus(cx)) {
+            // The pump must not steal focus from a sheet's fields or controls.
             if !focus.contains_focused(window, cx) && !self.connection_holds_focus(window, cx) {
-                window.focus(&focus, cx);
-            }
-        } else if self.project_editor_open(cx) {
-            let focus = self.project_editor_view.read(cx).focus.clone();
-            if !focus.contains_focused(window, cx) {
                 window.focus(&focus, cx);
             }
         } else if !self
@@ -9098,8 +9071,7 @@ impl CockpitView {
             .children(self.band_menu_element(window, cx))
             .children(self.model_picker_element(window, cx))
             .children(self.mode_menu_element(window, cx))
-            .child(self.settings_view.clone())
-            .child(self.project_editor_view.clone())
+            .child(self.sheets.clone())
             .children(self.new_task_sheet(window, cx))
             .children(self.direct_sheet(window, cx))
             .children(self.background_dialog_element(window, cx))
@@ -9119,7 +9091,7 @@ impl CockpitView {
         #[cfg(test)]
         drawn::built_pane(self.panes[index].identity);
         let content = self.pane_content(index, window, cx);
-        if self.settings_open(cx) || self.project_editor_open(cx) {
+        if self.sheet_up(cx) {
             return content;
         }
         if !self.panes[index].is_main() {

@@ -500,7 +500,7 @@ fn project_completion_stays_visible_while_a_compact_form_scrolls(cx: &mut TestAp
                     view.adopt_editor_directory(directory.clone(), cx);
                 }
             }
-            let name = view.project_editor_view.read(cx).editor.as_ref().unwrap().name.clone();
+            let name = view.project_card(cx).unwrap().read(cx).name.clone();
             name.update(cx, |name, cx| name.set(title.into(), cx));
         });
         tick(cx);

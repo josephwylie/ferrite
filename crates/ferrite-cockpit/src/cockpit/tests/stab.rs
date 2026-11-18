@@ -182,7 +182,7 @@ fn the_project_name_field_shows_keyboard_focus(cx: &mut TestAppContext) {
     view.update(cx, |view, cx| view.open_project_creator(cx));
     tick(cx);
     let name = view.read_with(cx, |view, cx| {
-        view.project_editor_view.read(cx).editor.as_ref().unwrap().name.clone()
+        view.project_card(cx).unwrap().read(cx).name.clone()
     });
     cx.update(|window, cx| {
         let handle = name.read(cx).focus_handle(cx);
@@ -1100,8 +1100,7 @@ fn the_restart_button_answers_its_press(cx: &mut TestAppContext) {
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     cx.simulate_resize(gpui::size(px(1000.), px(700.)));
     view.update(cx, |view, cx| {
-        view.settings_view.update(cx, |settings, _| {
-            settings.open = true;
+        view.show_settings(cx).update(cx, |settings, _| {
             settings.page = settings::PageKey::Server;
         });
         cx.notify();

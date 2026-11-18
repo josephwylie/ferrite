@@ -148,6 +148,11 @@ The operator's defaults for new Threads (Provider, model, effort,
 permissions) and for the app's behaviour, in one file beside the store. Never history: a
 Thread's header remains the durable truth about that Thread.
 
+**Sheet**
+A dialog that covers the whole window over a dimmed veil: Settings, the
+Project card, Background work, New task, Rework/Direct.
+_Avoid_: modal.
+
 **Composer**
 The prompt box at the bottom of a Pane: text that wraps and
 grows a row per line, keyboard-driven menus, queue-while-busy.

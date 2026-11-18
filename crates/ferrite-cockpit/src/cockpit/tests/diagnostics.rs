@@ -35,7 +35,10 @@ fn copy_diagnostics_puts_the_report_on_the_clipboard(cx: &mut TestAppContext) {
     let (core, _fake) = cockpit("copy-diagnostics", 1);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
 
-    view.update(cx, |view, cx| view.copy_diagnostics(cx));
+    view.update(cx, |view, cx| {
+        view.show_settings(cx);
+        view.copy_diagnostics(cx)
+    });
     cx.run_until_parked();
 
     let report = cx
@@ -47,6 +50,6 @@ fn copy_diagnostics_puts_the_report_on_the_clipboard(cx: &mut TestAppContext) {
     assert!(report.contains("--- ferrite.log, last"), "{report}");
     assert!(report.contains("--- server.log, last"), "{report}");
     view.read_with(cx, |view, cx| {
-        assert_eq!(view.settings_view.read(cx).copied, Some("Diagnostics"))
+        assert_eq!(view.settings_sheet(cx).unwrap().read(cx).copied, Some("Diagnostics"))
     });
 }

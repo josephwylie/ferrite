@@ -1304,7 +1304,8 @@ fn a_draft_on_a_machine_starts_a_thread_in_a_directory_typed_there(cx: &mut Test
 
     let field = view.update(cx, |view, cx| {
         view.open_project_creator(cx);
-        let field = view.project_editor_view.read(cx).editor.as_ref().unwrap().remote.as_ref();
+        let card = view.project_card(cx).unwrap();
+        let field = card.read(cx).remote.as_ref();
         field.expect("a path field on a machine").field.clone()
     });
     assert!(
@@ -1318,7 +1319,7 @@ fn a_draft_on_a_machine_starts_a_thread_in_a_directory_typed_there(cx: &mut Test
     });
     until(cx, |cx| {
         view.read_with(cx, |view, cx| {
-            view.project_editor_view.read(cx).remote_completions(cx) == ["repo"]
+            view.project_card(cx).unwrap().read(cx).remote_completions(cx) == ["repo"]
         })
     });
     tick(cx);
@@ -1340,7 +1341,7 @@ fn a_draft_on_a_machine_starts_a_thread_in_a_directory_typed_there(cx: &mut Test
     cx.simulate_keystrokes("enter");
     view.update(cx, |view, cx| {
         assert_eq!(
-            view.project_editor_view.read(cx).editor.as_ref().unwrap().staged,
+            view.project_card(cx).unwrap().read(cx).staged,
             std::slice::from_ref(&repo)
         );
         assert_eq!(field.read(cx).text(), "", "the field empties");

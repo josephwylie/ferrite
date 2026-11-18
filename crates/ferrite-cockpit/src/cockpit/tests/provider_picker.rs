@@ -204,7 +204,7 @@ fn discovery_updates_an_open_draft_picker_without_starting_a_session(cx: &mut Te
             "an empty discovery keeps the last usable menu"
         );
         view.popover = None;
-        view.settings_view.update(cx, |settings, _| settings.open = true);
+        view.show_settings(cx);
         cx.notify();
     });
     tick(cx);

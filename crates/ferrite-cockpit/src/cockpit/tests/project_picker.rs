@@ -79,12 +79,13 @@ fn the_project_card_stages_directories_and_registers_on_confirm(cx: &mut TestApp
         let before = view.cockpit.registry().projects().len();
         view.open_project_creator(cx);
         assert!(
-            !view.project_editor_view.read(cx).ready(),
+            !view.project_card(cx).unwrap().read(cx).ready(),
             "a Project with no directory cannot be created"
         );
 
         view.adopt_editor_directory(main.clone(), cx);
-        let editor = view.project_editor_view.read(cx).editor.as_ref().unwrap();
+        let card = view.project_card(cx).unwrap();
+        let editor = card.read(cx);
         assert_eq!(editor.staged, [main.clone()]);
         assert_eq!(
             editor.name.read(cx).text(),
@@ -94,7 +95,7 @@ fn the_project_card_stages_directories_and_registers_on_confirm(cx: &mut TestApp
 
         view.adopt_editor_directory(extra.clone(), cx);
         assert_eq!(
-            view.project_editor_view.read(cx).editor.as_ref().unwrap().staged,
+            view.project_card(cx).unwrap().read(cx).staged,
             [main.clone(), extra.clone()]
         );
         assert_eq!(
@@ -142,7 +143,7 @@ fn the_project_card_edits_an_existing_project(cx: &mut TestAppContext) {
             "the edit card attaches without waiting for Done"
         );
 
-        let name = view.project_editor_view.read(cx).editor.as_ref().unwrap().name.clone();
+        let name = view.project_card(cx).unwrap().read(cx).name.clone();
         name.update(cx, |name, cx| name.set("Renamed".into(), cx));
         view.confirm_project_editor(cx);
 

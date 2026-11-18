@@ -2,7 +2,7 @@ use std::rc::Rc;
 
 use gpui::prelude::*;
 use gpui::{
-    deferred, div, px, rgb, AnyElement, App, Div, Entity, KeyDownEvent, MouseButton, SharedString,
+    div, px, rgb, AnyElement, App, Div, Entity, KeyDownEvent, MouseButton, SharedString,
     Window,
 };
 
@@ -17,7 +17,7 @@ use ferrite_ui::frame::settings::{Control, Group, Page, PageKey, Row, CLI_DEFAUL
 use ferrite_ui::frame::SettingsSheet;
 use ferrite_ui::icons::{self, icon};
 use ferrite_ui::pointer::Pointer;
-use ferrite_ui::sheet::{sheet, sheet_close, sheet_head, veil};
+use ferrite_ui::sheet::{sheet, sheet_close, sheet_head, Drawn};
 use ferrite_ui::theme::*;
 
 mod connections;
@@ -33,15 +33,13 @@ fn settings_head(close: impl IntoElement) -> Div {
     sheet_head("Settings", close)
 }
 
-/// The searchable Settings sheet over its veil, drawn above the Cockpit's
-/// overlays. A press on the veil or the close button closes it; ↑/↓ step
-/// the sidebar's pages while the sheet itself holds focus (a field or a
-/// control keeps its own arrows).
-/// A sheet that closed (`leaving`) fades out as a face no pointer finds,
-/// over its veil lifting.
-pub fn draw(sheet: SettingsSheet, window: &mut Window, cx: &mut App) -> AnyElement {
+/// The searchable Settings sheet's card, for the Cockpit's sheet host to
+/// lay over its veil, and the connection form above both while one is
+/// being edited. The close button closes it; ↑/↓ step the sidebar's pages
+/// while the sheet itself holds focus (a field or a control keeps its own
+/// arrows).
+pub fn draw(sheet: SettingsSheet, window: &mut Window, cx: &mut App) -> Drawn {
     let SettingsSheet {
-        leaving,
         pages,
         selected,
         search,
@@ -82,43 +80,16 @@ pub fn draw(sheet: SettingsSheet, window: &mut Window, cx: &mut App) -> AnyEleme
             step(delta, window, cx);
         })
         .child(settings_head(
-            sheet_close("settings-close", "Close settings", cx).on_click({
-                let close = close.clone();
-                move |_, window, cx| {
-                    cx.stop_propagation();
-                    close(window, cx);
-                }
+            sheet_close("settings-close", "Close settings", cx).on_click(move |_, window, cx| {
+                cx.stop_propagation();
+                close(window, cx);
             }),
         ))
         .child(body);
-    let sheet = match leaving {
-        Some(left) => ferrite_ui::motion::veil_out(
-            left,
-            ferrite_ui::motion::VEIL,
-            ferrite_ui::sheet::leaving_veil().child(ferrite_ui::motion::dialog_out(left, card)),
-        )
-        .into_any_element(),
-        None => ferrite_ui::motion::veil_in(
-            "settings-veil",
-            ferrite_ui::motion::VEIL,
-            veil()
-                .on_mouse_down(MouseButton::Left, move |_, window, cx| {
-                    cx.stop_propagation();
-                    close(window, cx);
-                })
-                .child(ferrite_ui::motion::dialog_in("settings-card-in", card)),
-        )
-        .into_any_element(),
-    };
-    div()
-        .absolute()
-        .inset_0()
-        .child(deferred(sheet).with_priority(3))
-        .children(
-            connection_form
-                .map(|form| deferred(connections::form(form, window, cx)).with_priority(4)),
-        )
-        .into_any_element()
+    Drawn {
+        card,
+        above: connection_form.map(|form| connections::form(form, window, cx)),
+    }
 }
 
 /// What the content column shows: the selected page, or, while the search

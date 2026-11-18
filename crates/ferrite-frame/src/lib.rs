@@ -9,6 +9,7 @@ mod titlebar;
 use gpui::{AnyElement, App, IntoElement, Menu, Window};
 
 use ferrite_ui::frame::SettingsSheet;
+use ferrite_ui::sheet::Drawn;
 use ferrite_ui::keymap::Binding;
 
 /// The frame, with the menu bar the app sets again whenever the keys are
@@ -22,7 +23,7 @@ impl ferrite_ui::frame::Frame for Frame {
         titlebar::strip(draggable, maximized).into_any_element()
     }
 
-    fn settings(&self, sheet: SettingsSheet, window: &mut Window, cx: &mut App) -> AnyElement {
+    fn settings(&self, sheet: SettingsSheet, window: &mut Window, cx: &mut App) -> Drawn {
         settings::draw(sheet, window, cx)
     }
 

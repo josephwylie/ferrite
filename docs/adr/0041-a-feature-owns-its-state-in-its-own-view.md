@@ -45,6 +45,9 @@ that happened to touch it, and nothing in the code said whose a field was.
   (create, rename, add or remove a directory, remove a Project) stays the
   root's, as do the closes that make the card modal, since they close other
   features' state.
+- **ADR 0042 moves part of the last two.** Whether Settings or the
+  Project card is up, its exit and its veil are now the sheet host's, and
+  each view exists only while its sheet is up.
 
 ## Precedent
 
