@@ -3,32 +3,15 @@
 //! synthesized from our registry; page commands go to that browser's host.
 
 use std::collections::{HashMap, HashSet};
-use std::net::{TcpListener, TcpStream};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc};
 use std::time::{Duration, Instant};
 
 use cef::*;
 use serde_json::{json, Value};
-use tungstenite::handshake::server::{Request, Response};
-use tungstenite::protocol::WebSocketConfig;
-use tungstenite::{accept_hdr_with_config, Error, Message};
 
+use super::super::controller::{Incoming, Output, Peers, LIMIT};
 use super::super::ControllerEndpoint;
-
-const LIMIT: usize = 8 * 1024 * 1024;
-struct Output {
-    send: mpsc::SyncSender<String>,
-    stop: Arc<AtomicBool>,
-    bytes: Arc<std::sync::atomic::AtomicUsize>,
-}
-
-enum Incoming {
-    Open(u64, Output),
-    Command(u64, Value),
-    Closed(u64),
-    Page(String, Value),
-}
 
 struct Connection {
     output: Output,
@@ -51,10 +34,7 @@ struct Pending {
 }
 
 pub(super) struct Control {
-    endpoint: ControllerEndpoint,
-    stop: Arc<AtomicBool>,
-    receive: mpsc::Receiver<Incoming>,
-    send: mpsc::SyncSender<Incoming>,
+    peers: Peers,
     targets: HashMap<String, Target>,
     connections: HashMap<u64, Connection>,
     next_message: i32,
@@ -64,59 +44,8 @@ pub(super) struct Control {
 
 impl Control {
     pub(super) fn start() -> Result<Self, String> {
-        let listener = TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))
-            .map_err(|e| format!("Private browser controller: {e}"))?;
-        listener.set_nonblocking(true).map_err(|e| e.to_string())?;
-        let address = listener.local_addr().map_err(|e| e.to_string())?;
-        let mut secret = [0u8; 32];
-        getrandom::fill(&mut secret).map_err(|e| format!("Controller entropy: {e}"))?;
-        let token: String = secret.iter().map(|byte| format!("{byte:02x}")).collect();
-        let endpoint = ControllerEndpoint {
-            url: format!("ws://{address}/ferrite"),
-            authorization: format!("Bearer {token}"),
-        };
-        let authorization = endpoint.authorization.clone();
-        let stop = Arc::new(AtomicBool::new(false));
-        let (send, receive) = mpsc::sync_channel(32);
-        let thread_stop = stop.clone();
-        let thread_send = send.clone();
-        std::thread::Builder::new()
-            .name("browser-controller".into())
-            .spawn(move || {
-                let mut next = 0u64;
-                // Bound peers, including unauthenticated clients holding an upgrade.
-                let active = Arc::new(std::sync::atomic::AtomicUsize::new(0));
-                while !thread_stop.load(Ordering::Relaxed) {
-                    match listener.accept() {
-                        Ok((stream, _)) => {
-                            if active.load(Ordering::Relaxed) >= 8 {
-                                continue;
-                            }
-                            active.fetch_add(1, Ordering::Relaxed);
-                            next += 1;
-                            let id = next;
-                            let send = thread_send.clone();
-                            let stop = thread_stop.clone();
-                            let authorization = authorization.clone();
-                            let active = active.clone();
-                            std::thread::spawn(move || {
-                                serve(stream, id, authorization, send, stop);
-                                active.fetch_sub(1, Ordering::Relaxed);
-                            });
-                        }
-                        Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
-                            std::thread::sleep(Duration::from_millis(10))
-                        }
-                        Err(_) => break,
-                    }
-                }
-            })
-            .map_err(|e| e.to_string())?;
         Ok(Self {
-            endpoint,
-            stop,
-            receive,
-            send,
+            peers: Peers::start()?,
             targets: HashMap::new(),
             connections: HashMap::new(),
             next_message: 1,
@@ -126,7 +55,7 @@ impl Control {
     }
 
     pub(super) fn endpoint(&self) -> ControllerEndpoint {
-        self.endpoint.clone()
+        self.peers.endpoint()
     }
 
     pub(super) fn register(
@@ -136,7 +65,7 @@ impl Control {
         agent_access: Arc<super::AgentAccess>,
     ) {
         let Some(host) = browser.host() else { return };
-        let mut observer = Observer::new(id.clone(), self.send.clone(), self.overflow.clone());
+        let mut observer = Observer::new(id.clone(), self.peers.sender(), self.overflow.clone());
         let Some(registration) = host.add_dev_tools_message_observer(Some(&mut observer)) else {
             return;
         };
@@ -151,8 +80,7 @@ impl Control {
         let info = self.info(&id);
         for connection in self.connections.values() {
             if connection.discover {
-                emit(
-                    &connection.output,
+                connection.output.emit(
                     json!({"method":"Target.targetCreated","params":{"targetInfo":info}}),
                 );
             }
@@ -170,14 +98,12 @@ impl Control {
             self.targets.remove(&id);
             for connection in self.connections.values_mut() {
                 if connection.sessions.remove(&id).is_some() {
-                    emit(
-                        &connection.output,
+                    connection.output.emit(
                         json!({"method":"Target.detachedFromTarget","params":{"sessionId":id,"targetId":id}}),
                     );
                 }
                 if connection.discover {
-                    emit(
-                        &connection.output,
+                    connection.output.emit(
                         json!({"method":"Target.targetDestroyed","params":{"targetId":id}}),
                     );
                 }
@@ -211,12 +137,16 @@ impl Control {
         // the page. Disconnect; never continue using partially delivered state.
         let overflowed = self.overflow.swap(false, Ordering::Relaxed);
         if overflowed {
+            eprintln!(
+                "ferrite browser controller: closed {} peers, a message to the window was lost",
+                self.connections.len()
+            );
             for connection in self.connections.values() {
-                connection.output.stop.store(true, Ordering::Relaxed);
+                connection.output.close();
             }
         }
         self.connections
-            .retain(|_, connection| !connection.output.stop.load(Ordering::Relaxed));
+            .retain(|_, connection| !connection.output.is_closed());
         self.pending
             .retain(|_, pending| self.connections.contains_key(&pending.peer));
         let expired: Vec<_> = self
@@ -234,13 +164,13 @@ impl Control {
         }
         // Bound controller work so a client cannot starve rendering or input.
         for _ in 0..64 {
-            let Ok(incoming) = self.receive.try_recv() else {
+            let Some(incoming) = self.peers.try_recv() else {
                 break;
             };
             match incoming {
                 Incoming::Open(id, output) => {
-                    if overflowed || output.stop.load(Ordering::Relaxed) {
-                        output.stop.store(true, Ordering::Relaxed);
+                    if overflowed || output.is_closed() {
+                        output.close();
                         continue;
                     }
                     self.connections.insert(
@@ -275,7 +205,7 @@ impl Control {
                         value["sessionId"] = target.clone().into();
                         for connection in self.connections.values() {
                             if connection.sessions.contains_key(&target) {
-                                emit(&connection.output, value.clone());
+                                connection.output.emit(value.clone());
                             }
                         }
                     }
@@ -286,7 +216,7 @@ impl Control {
 
     fn output(&self, peer: u64, value: Value) {
         if let Some(c) = self.connections.get(&peer) {
-            emit(&c.output, value);
+            c.output.emit(value);
         }
     }
     fn error(&self, peer: u64, id: Value, message: &str) {
@@ -315,7 +245,7 @@ impl Control {
             || !self
                 .connections
                 .get(&peer)
-                .is_some_and(|connection| !connection.output.stop.load(Ordering::Relaxed))
+                .is_some_and(|connection| !connection.output.is_closed())
         {
             // A queued command must not run after this peer disconnected or
             // after an observation was lost earlier in the same pump.
@@ -536,25 +466,6 @@ fn read_only_while_paused(method: &str) -> bool {
     )
 }
 
-impl Drop for Control {
-    fn drop(&mut self) {
-        self.stop.store(true, Ordering::Relaxed);
-    }
-}
-
-fn emit(output: &Output, value: Value) {
-    // Slow readers lose the connection rather than blocking the CEF UI thread.
-    let text = value.to_string();
-    let length = text.len();
-    if output.bytes.fetch_add(length, Ordering::Relaxed) + length > 32 * 1024 * 1024 {
-        output.bytes.fetch_sub(length, Ordering::Relaxed);
-        output.stop.store(true, Ordering::Relaxed);
-    } else if output.send.try_send(text).is_err() {
-        output.bytes.fetch_sub(length, Ordering::Relaxed);
-        output.stop.store(true, Ordering::Relaxed);
-    }
-}
-
 wrap_dev_tools_message_observer! {
     struct Observer { target: String, send: mpsc::SyncSender<Incoming>, overflow: Arc<AtomicBool> }
     impl DevToolsMessageObserver {
@@ -566,98 +477,4 @@ wrap_dev_tools_message_observer! {
             1
         }
     }
-}
-
-fn serve(
-    stream: TcpStream,
-    id: u64,
-    authorization: String,
-    send: mpsc::SyncSender<Incoming>,
-    stop: Arc<AtomicBool>,
-) {
-    let _ = stream.set_read_timeout(Some(Duration::from_secs(2)));
-    let _ = stream.set_write_timeout(Some(Duration::from_secs(2)));
-    let config = WebSocketConfig {
-        max_message_size: Some(LIMIT),
-        max_frame_size: Some(LIMIT),
-        ..Default::default()
-    };
-    let socket = accept_hdr_with_config(
-        stream,
-        |request: &Request, response: Response| {
-            // Browsers must never be able to use cookies, query-string credentials,
-            // a forged local Origin or a websocket from page JS to authorize control.
-            let authenticated = request.uri().path() == "/ferrite"
-                && request.uri().query().is_none()
-                && request.headers().get("authorization").is_some_and(|h| {
-                    let actual = h.as_bytes();
-                    let expected = authorization.as_bytes();
-                    actual.len() == expected.len()
-                        && actual
-                            .iter()
-                            .zip(expected)
-                            .fold(0u8, |different, (a, b)| different | (a ^ b))
-                            == 0
-                })
-                && !request.headers().contains_key("origin");
-            if authenticated {
-                Ok(response)
-            } else {
-                Err(tungstenite::http::Response::builder()
-                    .status(403)
-                    .body(Some("Forbidden".into()))
-                    .unwrap())
-            }
-        },
-        Some(config),
-    );
-    let Ok(mut socket) = socket else { return };
-    let _ = socket
-        .get_mut()
-        .set_read_timeout(Some(Duration::from_millis(10)));
-    let (output, outgoing) = mpsc::sync_channel(32);
-    let peer_stop = Arc::new(AtomicBool::new(false));
-    let queued_bytes = Arc::new(std::sync::atomic::AtomicUsize::new(0));
-    let output = Output {
-        send: output,
-        stop: peer_stop.clone(),
-        bytes: queued_bytes.clone(),
-    };
-    if send.try_send(Incoming::Open(id, output)).is_err() {
-        return;
-    }
-    while !stop.load(Ordering::Relaxed) && !peer_stop.load(Ordering::Relaxed) {
-        for _ in 0..64 {
-            let Ok(value) = outgoing.try_recv() else {
-                break;
-            };
-            queued_bytes.fetch_sub(value.len(), Ordering::Relaxed);
-            if socket.send(Message::Text(value)).is_err() {
-                peer_stop.store(true, Ordering::Relaxed);
-                let _ = send.try_send(Incoming::Closed(id));
-                return;
-            }
-        }
-        match socket.read() {
-            Ok(Message::Text(text)) => {
-                let Ok(value) = serde_json::from_str(&text) else {
-                    break;
-                };
-                if send.try_send(Incoming::Command(id, value)).is_err() {
-                    break;
-                }
-            }
-            Ok(Message::Close(_)) => break,
-            Ok(_) => {}
-            Err(Error::Io(e))
-                if matches!(
-                    e.kind(),
-                    std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
-                ) => {}
-            Err(_) => break,
-        }
-    }
-    peer_stop.store(true, Ordering::Relaxed);
-    let _ = socket.close(None);
-    let _ = send.try_send(Incoming::Closed(id));
 }

@@ -62,3 +62,6 @@ windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_
 gpui = { package = "gpui-kit", version = "=0.6.0", features = ["test-support"] }
 ferrite-core = { path = "../ferrite-core", features = ["test-support"] }
 ferrite-ui = { path = "../ferrite-ui", features = ["test-support"] }
+# The browser controller's sockets, tested without the `cef` feature.
+tungstenite = { version = "0.24", default-features = false, features = ["handshake"] }
+getrandom = "0.3"
