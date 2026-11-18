@@ -261,6 +261,34 @@ fn a_shell_added_from_the_plus_menu_takes_the_next_key(cx: &mut TestAppContext) 
     );
 }
 
+/// The `⋯` menu hangs at the window's right edge, so a submenu has no room
+/// on its right: it opens left of the menu, level with its row, inside the
+/// window.
+#[gpui::test]
+fn a_more_menu_submenu_opens_left_when_the_right_has_no_room(cx: &mut TestAppContext) {
+    let (view, _, cx) = window("terminal-more-submenu", cx);
+    opened(&view, cx);
+    let more = cx.debug_bounds("terminal-more").expect("the Menu button");
+    cx.simulate_click(more.center(), gpui::Modifiers::none());
+    tick(cx);
+    let parent = cx.debug_bounds("context-menu-row-0").expect("Cursor style");
+    cx.simulate_mouse_move(parent.center(), None, gpui::Modifiers::none());
+    tick(cx);
+    let menu = cx.debug_bounds("context-menu").expect("the menu");
+    let side = cx.debug_bounds("context-submenu").expect("the pointer opens it");
+    let window = cx.update(|window, _| window.viewport_size());
+    assert!(
+        side.left() >= px(0.) && side.right() <= window.width && side.bottom() <= window.height,
+        "{side:?} inside the window {window:?}"
+    );
+    assert!(
+        (menu.left() - side.right() - px(ferrite_ui::theme::SUBMENU_GAP)).abs() <= px(1.),
+        "{side:?} left of {menu:?}"
+    );
+    let first = cx.debug_bounds("context-submenu-row-0").unwrap();
+    assert!((first.top() - parent.top()).abs() <= px(1.), "{first:?} level with {parent:?}");
+}
+
 #[gpui::test]
 fn a_selection_offers_attach_and_attaches_as_a_reply_tile(cx: &mut TestAppContext) {
     let (view, thread, cx) = window("terminal-attach", cx);
