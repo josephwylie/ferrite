@@ -235,6 +235,7 @@ fn the_operations_are_the_ones_declared_and_never_renamed() {
             "window.shot",
             "window.attach",
             "window.resize",
+            "window.drag",
         ]
     );
 }
@@ -606,6 +607,10 @@ fn samples() -> Vec<Request> {
         request(Method::WindowResize(drive::Resize {
             width: 700,
             height: 900,
+        })),
+        request(Method::WindowDrag(drive::Drag {
+            from: drive::Target::Selector("panel-edge".into()),
+            to: drive::Target::Point { x: 900, y: 400 },
         })),
     ]
 }
@@ -1440,8 +1445,8 @@ fn a_thread_starts_where_the_cli_runs_unless_told() {
 
 /// The headless window's keys come as every word left; a click is at a
 /// selector or a point, single, double or right, and nothing else; a
-/// resize is a width and a height; a shot's path is read from where the
-/// CLI runs.
+/// resize is a width and a height; a drag is from a selector or a point to
+/// a selector or a point; a shot's path is read from where the CLI runs.
 #[test]
 fn window_actions_read_as_the_window_takes_them() {
     assert_eq!(
@@ -1494,6 +1499,34 @@ fn window_actions_read_as_the_window_takes_them() {
         }))
     );
     assert!(parse("window.resize", &["700"]).is_err(), "a height too");
+    assert_eq!(
+        parse(
+            "window.drag",
+            &["--from-selector", "panel-edge", "--to-x", "900", "--to-y", "400"]
+        ),
+        Ok(Method::WindowDrag(drive::Drag {
+            from: drive::Target::Selector("panel-edge".into()),
+            to: drive::Target::Point { x: 900, y: 400 },
+        }))
+    );
+    assert_eq!(
+        parse(
+            "window.drag",
+            &["--from-x", "10", "--from-y", "20", "--to-selector", "panel-tab-Overview"]
+        ),
+        Ok(Method::WindowDrag(drive::Drag {
+            from: drive::Target::Point { x: 10, y: 20 },
+            to: drive::Target::Selector("panel-tab-Overview".into()),
+        }))
+    );
+    for wrong in [
+        &["--from-selector", "a"][..],
+        &["--to-x", "1", "--to-y", "2"],
+        &["--from-x", "1", "--to-selector", "b"],
+        &["--from-selector", "a", "--from-x", "1", "--from-y", "2", "--to-selector", "b"],
+    ] {
+        assert!(parse("window.drag", wrong).is_err(), "{wrong:?}");
+    }
     assert_eq!(
         parse("window.shot", &["shots/settings.png"]),
         Ok(Method::WindowShot(drive::Shot {

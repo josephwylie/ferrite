@@ -19,6 +19,7 @@ pub enum Action {
     Shot(Shot),
     Attach(Attach),
     Resize(Resize),
+    Drag(Drag),
 }
 
 /// Keystrokes pressed in order, as gpui writes them: `cmd-,`, `escape`,
@@ -149,6 +150,77 @@ pub struct Resize {
     pub height: u32,
 }
 
+/// The left button pressed at `from`, moved to `to` in steps while held,
+/// and let go there.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(try_from = "DragParams", into = "DragParams")]
+pub struct Drag {
+    pub from: Target,
+    pub to: Target,
+}
+
+/// A drag as the API and the CLI write it: each end at a selector, or at
+/// a point.
+#[derive(Serialize, Deserialize, JsonSchema)]
+#[schemars(extend("oneOf" = [
+    { "type": "object", "required": ["from_selector", "to_selector"],
+      "properties": { "from_selector": { "type": "string" }, "to_selector": { "type": "string" } } },
+    { "type": "object", "required": ["from_selector", "to_x", "to_y"],
+      "properties": { "from_selector": { "type": "string" }, "to_x": { "type": "integer" }, "to_y": { "type": "integer" } } },
+    { "type": "object", "required": ["from_x", "from_y", "to_selector"],
+      "properties": { "from_x": { "type": "integer" }, "from_y": { "type": "integer" }, "to_selector": { "type": "string" } } },
+    { "type": "object", "required": ["from_x", "from_y", "to_x", "to_y"],
+      "properties": { "from_x": { "type": "integer" }, "from_y": { "type": "integer" }, "to_x": { "type": "integer" }, "to_y": { "type": "integer" } } },
+]))]
+struct DragParams {
+    /// Press at the centre of what the last frame drew for this
+    /// `debug_selector`. Or give `from_x` and `from_y`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    from_selector: Option<String>,
+    /// With `from_y`: the point to press, in the window's logical pixels
+    /// from its top left.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    from_x: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    from_y: Option<u32>,
+    /// Let go at the centre of what the last frame drew for this
+    /// `debug_selector`. Or give `to_x` and `to_y`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    to_selector: Option<String>,
+    /// With `to_y`: the point to let go at.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    to_x: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    to_y: Option<u32>,
+}
+
+impl TryFrom<DragParams> for Drag {
+    type Error = String;
+
+    fn try_from(params: DragParams) -> Result<Self, String> {
+        let from = target(params.from_selector, params.from_x, params.from_y)
+            .ok_or("a drag is from a `from_selector`, or from `from_x` and `from_y`")?;
+        let to = target(params.to_selector, params.to_x, params.to_y)
+            .ok_or("a drag is to a `to_selector`, or to `to_x` and `to_y`")?;
+        Ok(Self { from, to })
+    }
+}
+
+impl From<Drag> for DragParams {
+    fn from(Drag { from, to }: Drag) -> Self {
+        let (from_selector, from_x, from_y) = from.into_params();
+        let (to_selector, to_x, to_y) = to.into_params();
+        Self {
+            from_selector,
+            from_x,
+            from_y,
+            to_selector,
+            to_x,
+            to_y,
+        }
+    }
+}
+
 /// Where the last frame drew an element.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct Find {
@@ -186,4 +258,6 @@ pub enum Answer {
     Shot { path: PathBuf, width: u32, height: u32, scale: f32 },
     /// The size the window has now.
     Resized { width: f32, height: f32 },
+    /// Where the button went down and where it came up.
+    Dragged { from_x: f32, from_y: f32, to_x: f32, to_y: f32 },
 }

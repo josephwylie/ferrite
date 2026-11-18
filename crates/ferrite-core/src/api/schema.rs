@@ -243,6 +243,8 @@ operations! {
         "Stage local files in the focused headless Composer, using absolute paths on the window's computer.";
     WindowResize(drive::Resize) => "window.resize", ["width", "height"], Operator,
         "Resize the headless window, in logical pixels, never under the app window's least size.";
+    WindowDrag(drive::Drag) => "window.drag", [], Operator,
+        "Drag in the headless window with the left button: from a selector or a point, to a selector or a point.";
 }
 
 /// Who may call an operation (#224). A call that names no Thread is the

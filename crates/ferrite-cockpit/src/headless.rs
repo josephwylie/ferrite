@@ -8,7 +8,9 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use ferrite_core::drive::{Action, Answer, Click, Find, Keys, Press, Resize, Shot, Target, Text};
+use ferrite_core::drive::{
+    Action, Answer, Click, Drag, Find, Keys, Press, Resize, Shot, Target, Text,
+};
 use ferrite_core::settings::Settings;
 use ferrite_ui::keymap::{self, Binding};
 use gpui::{
@@ -110,6 +112,17 @@ pub fn run(http: Arc<dyn gpui::http_client::HttpClient>) {
     }
 }
 
+/// The point a target names: a selector's centre as the last frame drew it.
+fn place(driver: &mut Driver, target: Target) -> Result<Point<gpui::Pixels>, String> {
+    match target {
+        Target::Selector(selector) => driver
+            .bounds(&selector)
+            .map(|bounds| bounds.center())
+            .ok_or_else(|| format!("nothing drawn as `{selector}`")),
+        Target::Point { x, y } => Ok(gpui::point(gpui::px(x as f32), gpui::px(y as f32))),
+    }
+}
+
 /// Carry out one action, as the operator's hands would.
 fn act(driver: &mut Driver, action: Action) -> Result<Answer, String> {
     let not_drawn = |selector: &str| format!("nothing drawn as `{selector}`");
@@ -136,16 +149,8 @@ fn act(driver: &mut Driver, action: Action) -> Result<Answer, String> {
             } else {
                 Modifiers::default()
             };
-            let at = match at {
-                Target::Selector(selector) => driver
-                    .click(&selector, button, clicks, modifiers)
-                    .ok_or_else(|| not_drawn(&selector))?,
-                Target::Point { x, y } => {
-                    let at = gpui::point(gpui::px(x as f32), gpui::px(y as f32));
-                    driver.click_at(at, button, clicks, modifiers);
-                    at
-                }
-            };
+            let at = place(driver, at)?;
+            driver.click_at(at, button, clicks, modifiers);
             Ok(Answer::Clicked {
                 x: at.x.into(),
                 y: at.y.into(),
@@ -175,6 +180,18 @@ fn act(driver: &mut Driver, action: Action) -> Result<Answer, String> {
             Ok(Answer::Resized {
                 width: size.width.into(),
                 height: size.height.into(),
+            })
+        }
+        Action::Drag(Drag { from, to }) => {
+            let (from, to) = (place(driver, from)?, place(driver, to)?);
+            for event in crate::hands::drag(from, to) {
+                driver.mouse(event);
+            }
+            Ok(Answer::Dragged {
+                from_x: from.x.into(),
+                from_y: from.y.into(),
+                to_x: to.x.into(),
+                to_y: to.y.into(),
             })
         }
         Action::Shot(Shot { path }) => {

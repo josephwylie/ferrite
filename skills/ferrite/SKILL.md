@@ -404,6 +404,7 @@ it never covers or interrupts the user's. The `window` commands drive it:
 "$F" window click --selector settings-close
 "$F" window shot /tmp/settings.png
 "$F" window resize 700 900
+"$F" window drag --from-selector panel-edge --to-x 1000 --to-y 400
 ```
 
 `window key` presses each keystroke in order (`unhandled` lists those
@@ -415,6 +416,10 @@ the window's 1440x900 logical pixels, with `--double` or `--right`.
 drag of its corner would, and answers the size it has now: never under
 the app window's least size (a smaller one stops there). Points and shots
 follow the new size.
+`window drag` presses the left button at `--from-selector` or `--from-x`
+and `--from-y`, moves to `--to-selector` or `--to-x` and `--to-y` in
+steps with it held, as a hand does, and lets go there; it answers both
+points.
 `window attach` adds local files to the active composer through its normal
 attachment flow, including upload when connected to a remote environment.
 With no headless window attached the server refuses with

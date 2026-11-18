@@ -341,6 +341,7 @@ impl Server {
             Method::WindowAttach(files) => return self.drive(caller_id, id, Action::Attach(files)),
             Method::WindowShot(shot) => return self.drive(caller_id, id, Action::Shot(shot)),
             Method::WindowResize(size) => return self.drive(caller_id, id, Action::Resize(size)),
+            Method::WindowDrag(drag) => return self.drive(caller_id, id, Action::Drag(drag)),
             Method::NotificationShow(params) => {
                 self.say(ServerMessage::Notification {
                     title: params.title,
