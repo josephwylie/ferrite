@@ -1386,11 +1386,11 @@ fn a_draft_on_a_machine_starts_a_thread_in_a_directory_typed_there(cx: &mut Test
             view.checking_out.borrow().is_empty(),
             "no git here was asked what the machine's checkout is on"
         );
-        view.open_band_popover(pane::BandChip::Workspace, cx);
+        view.open_band_menu(pane::BandChip::Workspace, false, cx);
     });
     let rows = |cx: &mut gpui::VisualTestContext| {
         view.read_with(cx, |view, _| {
-            view.popover.as_ref().map_or_else(Vec::new, |popover| {
+            view.band_menu().map_or_else(Vec::new, |popover| {
                 popover
                     .rows
                     .iter()
@@ -1419,7 +1419,7 @@ fn a_draft_on_a_machine_starts_a_thread_in_a_directory_typed_there(cx: &mut Test
     );
 
     view.update(cx, |view, cx| {
-        view.popover = None;
+        view.close_popup(cx);
         composer.update(cx, |composer, cx| composer.set("hello box".into(), cx));
         view.bootstrap_draft(cx);
     });

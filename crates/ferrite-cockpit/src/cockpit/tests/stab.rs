@@ -136,16 +136,16 @@ fn the_popover_keeps_its_keyboard_cursor_in_view(cx: &mut TestAppContext) {
     cx.simulate_resize(gpui::size(px(1000.), px(900.)));
     view.update(cx, |view, cx| {
         view.open_draft(DraftTarget::Main, cx);
-        view.open_band_popover(pane::BandChip::Project, cx);
+        view.open_band_menu(pane::BandChip::Project, false, cx);
     });
     tick(cx);
-    let rows = view.read_with(cx, |view, _| view.popover.as_ref().unwrap().rows.len());
+    let rows = view.read_with(cx, |view, _| view.band_menu().unwrap().rows.len());
     assert!(
         rows as f32 * ferrite_ui::theme::FLOAT_ROW_H > ferrite_ui::theme::MENU_MAX_H,
         "the premise: {rows} rows overflow the list"
     );
     let visible = |cx: &mut gpui::VisualTestContext| {
-        let selected = view.read_with(cx, |view, _| view.popover.as_ref().unwrap().selected);
+        let selected = view.read_with(cx, |view, _| view.band_menu().unwrap().selected);
         let list = cx.debug_bounds("composer-menu-rows").expect("the list");
         let selector: &'static str =
             Box::leak(format!("composer-menu-row-{selected}").into_boxed_str());
@@ -449,9 +449,8 @@ fn a_draft_body_says_how_to_start(cx: &mut TestAppContext) {
     tick(cx);
     view.read_with(cx, |view, _| {
         assert!(
-            view.popover
-                .as_ref()
-                .is_some_and(|open| matches!(open.kind, Kind::Band(pane::BandChip::Project))),
+            view.band_menu()
+                .is_some_and(|open| open.kind.chip == pane::BandChip::Project),
             "the project word switches the Project"
         );
     });
@@ -463,8 +462,7 @@ fn a_draft_body_says_how_to_start(cx: &mut TestAppContext) {
         "it drops under the word: {rows:?} / {word:?}"
     );
     view.update(cx, |view, cx| {
-        view.popover = None;
-        cx.notify();
+        view.close_popup(cx);
     });
     tick(cx);
     assert!(

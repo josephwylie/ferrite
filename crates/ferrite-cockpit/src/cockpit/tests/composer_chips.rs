@@ -169,9 +169,8 @@ fn a_draft_band_menu_hangs_off_its_chip_in_the_bar(cx: &mut TestAppContext) {
     }
     view.read_with(cx, |view, _| {
         assert!(view
-            .popover
-            .as_ref()
-            .is_some_and(|open| matches!(open.kind, Kind::Band(pane::BandChip::Project))));
+            .band_menu()
+            .is_some_and(|open| open.kind.chip == pane::BandChip::Project));
     });
     let rows = cx
         .debug_bounds("composer-menu-rows")

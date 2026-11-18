@@ -19,6 +19,8 @@ pub(super) enum Popup {
     Plan(ThreadId),
     Checks(ThreadId),
     Session { thread: ThreadId, generation: u64 },
+    /// A draft's Project or Workspace menu.
+    Band(Popover<Band>),
     /// The Composer's `+` menu on one Pane, the keyboard on `focus`. The
     /// kit draws it beside its `+` and reads its own keys.
     Attach { pane: PaneIdentity, focus: FocusHandle },
@@ -29,14 +31,19 @@ pub(super) enum Keys {
     /// The root holds it, so no field under the popup hears a key and the
     /// Cockpit's own keys stand down.
     Root,
-    /// A field of the popup's own holds it.
+    /// A field of the popup's own holds it, and the Cockpit's own keys
+    /// stand down.
     Field(FocusHandle),
+    /// The popup's Pane's Composer keeps it, and the Cockpit's keys: a
+    /// band menu rides the Composer's menu keys and the band's tab walk.
+    Composer(PaneIdentity),
 }
 
 impl Popup {
     fn keys(&self) -> Keys {
         match self {
             Popup::Attach { focus, .. } => Keys::Field(focus.clone()),
+            Popup::Band(menu) => Keys::Composer(menu.pane),
             _ => Keys::Root,
         }
     }
@@ -55,6 +62,7 @@ impl Popup {
     fn owns(&self, at: Point<Pixels>, triggers: &FloatTriggers) -> bool {
         let key = match self {
             Popup::Mode(menu) => mode_menu::trigger_key(menu.thread, menu.from_picker),
+            Popup::Band(menu) => menu.kind.trigger(),
             Popup::ContextMenu(menu) if menu.sub.is_some() => context_menu::SUBMENU.into(),
             _ => return false,
         };
@@ -212,10 +220,13 @@ impl CockpitView {
     /// Tended once a frame.
     pub(super) fn tend_popup_focus(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let wants = self.popup().map(|popup| match popup.keys() {
-            Keys::Root => self.focus.clone(),
-            Keys::Field(focus) => focus,
+            Keys::Root => Some(self.focus.clone()),
+            Keys::Field(focus) => Some(focus),
+            Keys::Composer(pane) => self
+                .index_of(pane)
+                .map(|index| self.panes[index].composer.focus_handle(cx)),
         });
-        if let Some(wants) = wants {
+        if let Some(wants) = wants.flatten() {
             let back = match self.popups.back.take() {
                 Some((back, _)) => back,
                 None => {
@@ -243,10 +254,25 @@ impl CockpitView {
         }
     }
 
-    /// Whether the popup up keeps the keyboard at the root: the root's key
-    /// context then carries `Popup`, and the Cockpit's own keys stand down.
-    pub(super) fn popup_holds_root(&self) -> bool {
-        self.popup().is_some_and(|popup| matches!(popup.keys(), Keys::Root))
+    /// Whether the popup up takes the Cockpit's own keys: the root's key
+    /// context then carries `Popup`, and they stand down.
+    pub(super) fn popup_takes_keys(&self) -> bool {
+        self.popup()
+            .is_some_and(|popup| !matches!(popup.keys(), Keys::Composer(_)))
+    }
+
+    pub(super) fn band_menu(&self) -> Option<&Popover<Band>> {
+        match self.popups.up() {
+            Some(Popup::Band(menu)) => Some(menu),
+            _ => None,
+        }
+    }
+
+    pub(super) fn band_menu_mut(&mut self) -> Option<&mut Popover<Band>> {
+        match self.popups.up_mut() {
+            Some(Popup::Band(menu)) => Some(menu),
+            _ => None,
+        }
     }
 
     /// A popup closes once it no longer stands rather than hold the
@@ -293,6 +319,10 @@ impl CockpitView {
                 on(*thread, None) && self.facts.pr(*thread).is_some_and(|pr| pr.checks.is_some())
             }
             Some(Popup::Session { thread, generation }) => on(*thread, Some(*generation)),
+            Some(Popup::Band(menu)) => {
+                self.pane_shown_alone(menu.pane, cx)
+                    && self.index_of(menu.pane).is_some_and(|index| self.panes[index].draft().is_some())
+            }
             Some(Popup::Attach { pane, .. }) => self.pane_shown_alone(*pane, cx),
         };
         if !stands {
@@ -321,6 +351,7 @@ impl CockpitView {
             Popup::Session { thread, generation } => {
                 self.session_controls_element(*thread, *generation, face, window, cx)
             }
+            Popup::Band(menu) => self.band_menu_element(menu, face, window, cx),
             Popup::Attach { .. } => None,
         }?;
         Some(

@@ -518,10 +518,6 @@ pub struct CockpitView {
     /// Each bar card trigger's bounds as last laid out (a draft's band
     /// chips), recorded in prepaint: what a bar card hangs from.
     float_triggers: FloatTriggers,
-    /// The open Project menu came from the start hero's project word
-    /// (`draft_hero`), so it drops below the word rather than standing
-    /// over the strip's chip (`band_menu_element`).
-    band_from_hero: bool,
     /// Frames each open card has waited for its trigger's or Pane's
     /// geometry, by trigger key (`card_corner`); none once it has some.
     card_waits: std::cell::RefCell<std::collections::HashMap<String, u8>>,
@@ -976,10 +972,10 @@ fn rename_field(editor: Entity<ferrite_pane::composer::Composer>, hint: bool) ->
 /// identity. Rows are discovered when it opens and re-derived only by its
 /// kind's own rule, never per frame; each row carries what picking it
 /// does, so the two can never drift apart.
-struct Popover {
+struct Popover<K = Kind> {
     /// The Pane whose Composer holds it.
     pane: PaneIdentity,
-    kind: Kind,
+    kind: K,
     rows: Vec<Row>,
     selected: usize,
     /// The row list's scroll: arrows keep the keyboard cursor in view.
@@ -1017,10 +1013,17 @@ enum Kind {
     /// making its band choice. Opened by the model chip, `/model` and
     /// `/effort`.
     Provider(Box<ModelPicker>),
-    /// #29: one band chip's choices on the focused draft — registry reads,
-    /// never a filesystem scan — except the project chip's type-a-path row,
-    /// which re-derives from the Composer line per edit.
-    Band(pane::BandChip),
+}
+
+/// #29: a draft's Project or Workspace menu, a popup (`Popup::Band`): one
+/// band chip's choices — registry reads, never a filesystem scan — except
+/// the Project chip's type-a-path row, which re-derives from the Composer
+/// line per edit.
+struct Band {
+    chip: pane::BandChip,
+    /// Opened from the start hero's project word (`draft_hero`): it drops
+    /// below the word rather than standing over the strip's chip.
+    from_hero: bool,
 }
 
 struct PendingFileSearch {
@@ -1446,7 +1449,6 @@ impl CockpitView {
             session_control_error: None,
             titling: std::collections::HashSet::new(),
             float_triggers: FloatTriggers::default(),
-            band_from_hero: false,
             card_waits: Default::default(),
             nav_collapsed: prefs.settings.nav_collapsed,
             nav_auto_fold: std::cell::Cell::new(false),
@@ -1948,7 +1950,9 @@ impl CockpitView {
             let open = self
                 .popover
                 .as_ref()
-                .is_some_and(|open| open.pane == pane.identity);
+                .map(|open| open.pane)
+                .or_else(|| self.band_menu().map(|open| open.pane))
+                == Some(pane.identity);
             let lit = index == focused_index;
             pane.composer.update(cx, |composer, cx| {
                 composer.set_menu_open(open, cx);
@@ -2297,17 +2301,23 @@ impl CockpitView {
             .iter()
             .find(|pane| pane.composer == composer)
             .map(|pane| pane.identity);
-        let anchored = self
+        let picker = self
             .popover
             .as_ref()
-            .filter(|open| Some(open.pane) == edited && !open.kind.follows_text());
-        let resync =
-            anchored.is_some_and(|open| matches!(open.kind, Kind::Band(pane::BandChip::Project)));
-        let dismiss = anchored.is_some() && !resync;
-        if resync {
+            .is_some_and(|open| Some(open.pane) == edited && !open.kind.follows_text());
+        let band = self
+            .band_menu()
+            .filter(|open| Some(open.pane) == edited)
+            .map(|open| open.kind.chip);
+        if band == Some(pane::BandChip::Project) {
             self.sync_band_rows(cx);
-        } else if dismiss && !composer.read(cx).is_empty() {
-            self.popover = None;
+        } else if !composer.read(cx).is_empty() {
+            if picker {
+                self.popover = None;
+            }
+            if band.is_some() {
+                self.close_popup(cx);
+            }
         }
         let popover_on = self.popover.as_ref().map(|open| open.pane);
         if self.suppress_recall_menu_once {
@@ -4085,7 +4095,7 @@ impl CockpitView {
             .map(|draft| draft.band_focus)
         {
             match band_focus {
-                Some(chip) => self.open_band_popover(chip, cx),
+                Some(chip) => self.open_band_menu(chip, false, cx),
                 None if self.typed_import(window, cx) => {}
                 None => self.bootstrap_draft(cx),
             }
@@ -4245,8 +4255,8 @@ impl CockpitView {
             return;
         }
         // On a draft, escape returns to the prompt (#29): the band's tab
-        // focus clears. (An open band popover holds the ComposerMenu keys,
-        // so escape there dismisses through `menu_dismiss` instead.)
+        // focus clears. (An open band menu holds the ComposerMenu keys, so
+        // escape there dismisses through `menu_dismiss` instead.)
         if let Some(draft) = self.focused_draft_mut() {
             draft.band_focus = None;
             cx.notify();
@@ -4394,13 +4404,9 @@ impl CockpitView {
             return;
         };
         draft.band_focus = pane::BandChip::next(draft.band_focus);
-        // The popover belongs to the chip it opened from; tab moves on.
-        if self
-            .popover
-            .as_ref()
-            .is_some_and(|open| matches!(open.kind, Kind::Band(_)))
-        {
-            self.popover = None;
+        // The menu belongs to the chip it opened from; tab moves on.
+        if self.band_menu().is_some() {
+            self.close_popup(cx);
         }
         cx.notify();
     }
@@ -5084,9 +5090,8 @@ impl CockpitView {
         })
     }
 
-    /// The menu keys serve whichever popover is up in the Composer's slot:
-    /// the picker while it is open (#11, #25), the `/`/`@` menu otherwise
-    /// — one key context, no second table.
+    /// The menu keys serve whichever rows menu rides the Composer: the
+    /// `/`/`@` menu or a band menu — one key context, no second table.
     fn menu_next(&mut self, _: &MenuNext, _window: &mut Window, cx: &mut Context<Self>) {
         self.step_popover(1, cx);
     }
@@ -5158,73 +5163,71 @@ impl CockpitView {
                     && open.queue().is_empty()))
     }
 
-    /// Clamp-step the open popover's selection.
+    /// Clamp-step the selection of the rows menu riding the Composer.
     fn step_popover(&mut self, delta: isize, cx: &mut Context<Self>) {
-        let Some(open) = &mut self.popover else {
-            return;
+        let stepped = match &mut self.popover {
+            Some(open) => open.step(delta),
+            None => self.band_menu_mut().is_some_and(|open| open.step(delta)),
         };
-        // Inert rows (a picker's section headers) are skipped over: the
-        // arrows land only where ↵ would do something.
-        let mut stepped = open.selected;
-        loop {
-            let next = stepped.saturating_add_signed(delta);
-            if next >= open.rows.len() || (delta < 0 && stepped == 0) {
-                break;
-            }
-            stepped = next;
-            if !open.rows[stepped].inert {
-                break;
-            }
-        }
-        if open.rows.get(stepped).is_some_and(|row| row.inert) {
-            stepped = open.selected;
-        }
-        if stepped != open.selected {
-            open.selected = stepped;
-            open.scroll.scroll_to_item(stepped);
+        if stepped {
             cx.notify();
         }
     }
 
     fn menu_pick(&mut self, _: &MenuPick, window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(at) = self.popover.as_ref().map(|open| open.selected) {
+        let at = match &self.popover {
+            Some(open) => Some(open.selected),
+            None => self.band_menu().map(|open| open.selected),
+        };
+        if let Some(at) = at {
             self.pick(at, window, cx);
         }
     }
 
-    /// Escape while a popover is up closes it and nothing else — the text
-    /// stays, and escape's Interrupt meaning waits for the next press. A
-    /// text-derived menu mutes until the text moves; a picker takes no
-    /// mute, since nothing reopens it; a band chip's popover also returns
-    /// the chip's tab focus to the prompt line.
+    /// Escape while a rows menu rides the Composer closes it and nothing
+    /// else — the text stays, and escape's Interrupt meaning waits for the
+    /// next press. A text-derived menu mutes until the text moves; a
+    /// picker takes no mute, since nothing reopens it; a band menu also
+    /// returns the chip's tab focus to the prompt line.
     fn menu_dismiss(&mut self, _: &MenuDismiss, _window: &mut Window, cx: &mut Context<Self>) {
-        let Some(open) = self.popover.take() else {
-            return;
-        };
-        match open.kind {
-            Kind::Band(_) => {
-                if let Some(draft) = self.focused_draft_mut() {
-                    draft.band_focus = None;
-                }
+        if let Some(open) = self.popover.take() {
+            if open.kind.follows_text() {
+                self.menu_muted = true;
             }
-            Kind::Commands | Kind::Files { .. } => self.menu_muted = true,
-            Kind::Provider(_) => {}
+        } else if self.band_menu().is_some() {
+            self.close_popup(cx);
+            if let Some(draft) = self.focused_draft_mut() {
+                draft.band_focus = None;
+            }
         }
         cx.notify();
     }
 
     /// The shared tail of ↵ and a row click: the row's own consequence,
-    /// dispatched. The popover closes either way — a door it opens (the
+    /// dispatched. The menu closes either way — a door it opens (the
     /// pickers) is a fresh popover in its place.
     fn pick(&mut self, at: usize, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(open) = self.popover.take() else {
-            return;
-        };
-        let Some(row) = open.rows.get(at) else {
+        let (pane, consequence, token_start) = if let Some(open) = self.popover.take() {
+            let Some(row) = open.rows.get(at) else {
+                return;
+            };
+            let token_start = match open.kind {
+                Kind::Files { token_start, .. } => Some(token_start),
+                _ => None,
+            };
+            (open.pane, row.consequence.clone(), token_start)
+        } else if let Some(open) = self.band_menu() {
+            let Some(row) = open.rows.get(at) else {
+                return;
+            };
+            let picked = (open.pane, row.consequence.clone(), None);
+            self.close_popup(cx);
+            picked
+        } else {
             return;
         };
         let Some(composer) = self
-            .index_of(open.pane)
+            .index_of(pane)
             .map(|index| self.panes[index].composer.clone())
         else {
             return;
@@ -5236,7 +5239,7 @@ impl CockpitView {
                 composer.splice(whole, text, cx);
             });
         };
-        match &row.consequence {
+        match &consequence {
             Consequence::Command(name) => {
                 composer.update(cx, |composer, cx| {
                     let cursor = composer.cursor();
@@ -5281,7 +5284,7 @@ impl CockpitView {
             }
             Consequence::Inert => {}
             Consequence::OpenProviderPicker => {
-                if let Some(thread) = open.pane.thread() {
+                if let Some(thread) = pane.thread() {
                     splice_line(cx, "");
                     self.open_provider_picker(thread, cx);
                 }
@@ -5289,8 +5292,8 @@ impl CockpitView {
             Consequence::OpenImportPicker => {
                 // A draft's one line is the `/import` its pick replaces; a
                 // Thread is replaced only while it is blank.
-                let into = match open.pane {
-                    PaneIdentity::Draft(_) => Some(open.pane),
+                let into = match pane {
+                    PaneIdentity::Draft(_) => Some(pane),
                     PaneIdentity::Thread(_) => {
                         splice_line(cx, "");
                         self.import_target(cx)
@@ -5299,10 +5302,9 @@ impl CockpitView {
                 self.open_import_palette(into, window, cx);
             }
             Consequence::Mention(path) => {
-                let Kind::Files { token_start, .. } = &open.kind else {
+                let Some(start) = token_start else {
                     return;
                 };
-                let start = *token_start;
                 let token = format!("@{path}");
                 composer.update(cx, |composer, cx| {
                     let cursor = composer.cursor();
@@ -5311,12 +5313,12 @@ impl CockpitView {
                 });
             }
             Consequence::Provision(choice) => {
-                if let Some(thread) = open.pane.thread() {
+                if let Some(thread) = pane.thread() {
                     self.pick_provider(thread, choice.clone(), cx);
                 }
             }
             Consequence::OpenEffortPicker => {
-                if let Some(thread) = open.pane.thread() {
+                if let Some(thread) = pane.thread() {
                     splice_line(cx, "");
                     // The model picker's Reasoning column, as the
                     // palette's `effort` opens it.
@@ -5324,7 +5326,7 @@ impl CockpitView {
                 }
             }
             Consequence::Effort(effort) => {
-                if let Some(thread) = open.pane.thread() {
+                if let Some(thread) = pane.thread() {
                     self.pick_effort(thread, effort.clone(), cx);
                 }
             }
@@ -5828,29 +5830,33 @@ impl CockpitView {
         draft
     }
 
-    /// Open one chip's popover on the focused draft — the shared tail of a
-    /// chip click and ↵ on a tab-focused chip. Toggles shut when the same
-    /// chip's popover is already up. Rows are registry reads, discovered at
-    /// open — never per frame, never a filesystem scan. Git is asked, off
-    /// the UI thread, what the checkout is on now and — for the workspace
-    /// chip — what the repo holds; the rows take each answer as it lands.
-    fn open_band_popover(&mut self, chip: pane::BandChip, cx: &mut Context<Self>) {
-        // Its chip's menu, unless the hero's word asks after this.
-        self.band_from_hero = false;
+    /// Open one chip's menu on the focused draft — the shared tail of a
+    /// chip click, the hero's project word (`from_hero`) and ↵ on a
+    /// tab-focused chip. Toggles shut when the same chip's menu is already
+    /// up. Rows are registry reads, discovered at open — never per frame,
+    /// never a filesystem scan. Git is asked, off the UI thread, what the
+    /// checkout is on now and — for the workspace chip — what the repo
+    /// holds; the rows take each answer as it lands.
+    pub(super) fn open_band_menu(
+        &mut self,
+        chip: pane::BandChip,
+        from_hero: bool,
+        cx: &mut Context<Self>,
+    ) {
         let Some(pane) = self.panes.get(self.focused()) else {
             return;
         };
         let Some(draft) = pane.draft() else {
             return;
         };
-        if self.popover.as_ref().is_some_and(|open| {
-            matches!(open.kind, Kind::Band(up) if up == chip) && open.pane == pane.identity
-        }) {
-            self.popover = None;
-            cx.notify();
+        let identity = pane.identity;
+        if self
+            .band_menu()
+            .is_some_and(|open| open.kind.chip == chip && open.pane == identity)
+        {
+            self.close_popup(cx);
             return;
         }
-        let identity = pane.identity;
         if chip == pane::BandChip::Provider {
             if self.popover.as_ref().is_some_and(|open| {
                 open.pane == identity && matches!(open.kind, Kind::Provider(_))
@@ -5869,19 +5875,19 @@ impl CockpitView {
         let rows = self.band_rows(draft, chip, cx);
         // The arrows start on the standing choice — bare ↵ re-picks it.
         let selected = rows.iter().position(|row| row.active).unwrap_or(0);
-        self.popover = Some(Popover {
+        let menu = Popover {
             scroll: ScrollHandle::new(),
             revealed: Default::default(),
             hold: None,
             pane: identity,
-            kind: Kind::Band(chip),
+            kind: Band { chip, from_hero },
             rows,
             selected,
-        });
+        };
+        self.show_popup(Popup::Band(menu), cx);
         if chip == pane::BandChip::Workspace {
             self.refresh_repo_listing(project, cx);
         }
-        cx.notify();
     }
 
     /// Ask git, off the UI thread, what `project`'s repo holds for the
@@ -5919,10 +5925,10 @@ impl CockpitView {
     /// its rows and keep the highlighted choice by value, as a finished
     /// model discovery does for the provider picker.
     fn sync_workspace_rows(&mut self, cx: &mut Context<Self>) {
-        let Some(open) = self.popover.as_ref() else {
+        let Some(open) = self.band_menu() else {
             return;
         };
-        if !matches!(open.kind, Kind::Band(pane::BandChip::Workspace)) {
+        if open.kind.chip != pane::BandChip::Workspace {
             return;
         }
         let Some(draft) = self
@@ -5934,7 +5940,7 @@ impl CockpitView {
             return;
         };
         let rows = self.band_rows(draft, pane::BandChip::Workspace, cx);
-        let Some(open) = &mut self.popover else {
+        let Some(open) = self.band_menu_mut() else {
             return;
         };
         let highlighted = open.rows.get(open.selected);
@@ -6199,9 +6205,8 @@ impl CockpitView {
     /// rows follow theirs.
     fn sync_band_rows(&mut self, cx: &mut Context<Self>) {
         let open = self
-            .popover
-            .as_ref()
-            .is_some_and(|open| matches!(open.kind, Kind::Band(pane::BandChip::Project)));
+            .band_menu()
+            .is_some_and(|open| open.kind.chip == pane::BandChip::Project);
         if !open {
             return;
         }
@@ -6209,7 +6214,7 @@ impl CockpitView {
             return;
         };
         let rows = self.band_rows(draft, pane::BandChip::Project, cx);
-        if let Some(open) = &mut self.popover {
+        if let Some(open) = self.band_menu_mut() {
             open.selected = open.selected.min(rows.len().saturating_sub(1));
             open.rows = rows;
         }
@@ -6372,11 +6377,6 @@ impl CockpitView {
                 });
                 self.panes[index].adopt_thread(done.thread);
                 self.promote_draft(id, done.thread, cx);
-                if self.popover.as_ref().is_some_and(|open| {
-                    open.pane == PaneIdentity::Draft(id) && matches!(open.kind, Kind::Band(_))
-                }) {
-                    self.popover = None;
-                }
                 self.sync_panes(cx);
                 self.thread_opened(done.thread, cx);
                 self.refresh_names();
@@ -6461,7 +6461,7 @@ impl CockpitView {
                         {
                             view.focus_pane(at);
                         }
-                        view.open_band_popover(chip, cx);
+                        view.open_band_menu(chip, false, cx);
                     }),
                 );
                 ferrite_ui::components::on_bounds(
@@ -7010,13 +7010,11 @@ impl CockpitView {
             .popover
             .as_ref()
             .filter(|open| open.pane == self.panes[index].identity)?;
-        // The model picker hangs over the box (`model_picker_element`), and
-        // a draft's band menus off their chips in the bar
-        // (`band_menu_element`).
-        if matches!(open.kind, Kind::Provider(_) | Kind::Band(_)) {
+        // The model picker hangs over the box (`model_picker_element`).
+        if matches!(open.kind, Kind::Provider(_)) {
             return None;
         }
-        Some(self.menu_surface(open, cx))
+        Some(self.menu_surface(open, Some(&open.kind), cx))
     }
 
     /// A draft's Project or Workspace menu, hung off its chip on the strip
@@ -7024,33 +7022,31 @@ impl CockpitView {
     /// `FLOAT_OFFSET` over the chip — or, opened from the hero's project
     /// word, `FLOAT_OFFSET` under it — kept inside the window's margin. The chip has been
     /// drawn before it can be pressed, so its bounds are always recorded.
-    fn band_menu_element(&self, window: &Window, cx: &mut Context<Self>) -> Option<AnyElement> {
+    pub(super) fn band_menu_element(
+        &self,
+        open: &Popover<Band>,
+        face: popups::Face,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) -> Option<AnyElement> {
         use ferrite_ui::theme::{
             FLOAT_OFFSET, GRID_PAD, MENU_WINDOW_MARGIN, SLASH_MENU_W, WORKSPACE_MENU_W,
         };
-        let open = self.popover.as_ref()?;
-        let Kind::Band(chip @ (pane::BandChip::Project | pane::BandChip::Workspace)) = open.kind
-        else {
-            return None;
-        };
-        let hero = self.band_from_hero && chip == pane::BandChip::Project;
-        let key = if hero {
-            HERO_TRIGGER.into()
-        } else {
-            band_trigger(chip)
-        };
-        let trigger = self.float_triggers.borrow().get(key.as_ref()).copied()?;
+        let Band { chip, from_hero: hero } = open.kind;
+        let trigger = self.float_triggers.borrow().get(&open.kind.trigger()).copied()?;
         // Above its chip on the strip over the box; or below the hero's
         // project word, as Codex's switcher drops.
-        let (anchor, at) = if hero {
+        let (anchor, at, opens) = if hero {
             (
                 gpui::Anchor::TopLeft,
                 gpui::point(trigger.left(), trigger.bottom() + px(FLOAT_OFFSET)),
+                ferrite_ui::motion::Opens::Down,
             )
         } else {
             (
                 gpui::Anchor::BottomLeft,
                 gpui::point(trigger.left(), trigger.top() - px(FLOAT_OFFSET)),
+                ferrite_ui::motion::Opens::Up,
             )
         };
         // T3 widens the Workspace menu to 336 once it offers a previous
@@ -7064,25 +7060,22 @@ impl CockpitView {
             });
         let width = if previous { WORKSPACE_MENU_W } else { SLASH_MENU_W }
             .min(f32::from(window.viewport_size().width) - 2. * MENU_WINDOW_MARGIN);
+        let surface = div()
+            .debug_selector(|| "composer-menu".into())
+            .w(px(width))
+            .child(self.menu_surface(open, None, cx));
         Some(
-            deferred(
-                anchored()
-                    .anchor(anchor)
-                    .position(at)
-                    .snap_to_window_with_margin(px(GRID_PAD))
-                    .child(
-                        div()
-                            .debug_selector(|| "composer-menu".into())
-                            .w(px(width))
-                            .child(self.menu_surface(open, cx)),
-                    ),
-            )
-            .with_priority(2)
-            .into_any_element(),
+            anchored()
+                .anchor(anchor)
+                .position(at)
+                .snap_to_window_with_margin(px(GRID_PAD))
+                .child(self.popup_face(face, "band-menu-in", surface, opens, cx))
+                .into_any_element(),
         )
     }
 
-    /// The open popover's surface, rows wired to their picks — assembled
+    /// A rows menu's surface — a `/`/`@` menu's (`text`) or a band menu's —
+    /// rows wired to their picks: assembled
     /// here so its clicks land beside every other pointer wire (the root
     /// selector's precedent). Every row is the one menu row: `/`, `@` and
     /// import rows through `pane::menu_row` (slash descriptions in one
@@ -7090,7 +7083,12 @@ impl CockpitView {
     /// strong check on the standing choice; an inert explanation
     /// ("Searching workspace files...", a refusal) is a `menu_note`. The rows scroll
     /// inside the popover's cap.
-    fn menu_surface(&self, open: &Popover, cx: &mut Context<Self>) -> AnyElement {
+    fn menu_surface<K>(
+        &self,
+        open: &Popover<K>,
+        text: Option<&Kind>,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
         fn wire<E: InteractiveElement + IntoElement + 'static>(
             drawn: E,
             at: usize,
@@ -7121,7 +7119,7 @@ impl CockpitView {
         // Slash commands align their descriptions in one column sized to
         // the longest name shown, measured in the row's face (a match
         // draws at `W_LABEL`), so no name is ever cut.
-        let label_w = matches!(open.kind, Kind::Commands).then(|| {
+        let label_w = matches!(text, Some(Kind::Commands)).then(|| {
             let measure = nav::Measure::Text(cx, self.nav_expanded_width());
             open.rows
                 .iter()
@@ -7152,29 +7150,14 @@ impl CockpitView {
                 && row.consequence_is_inert()
                 && row.detail.is_empty()
                 && row.matched.is_empty();
-            let drawn = match open.kind {
-                Kind::Band(pane::BandChip::Provider)
-                    if row.inert
-                        && row.consequence_is_inert()
-                        && provider_of_title(&row.name).is_some() =>
-                {
-                    // A section row carries its own half row of air.
-                    wire(
-                        pane::picker_section(
-                            provider_of_title(&row.name).unwrap(),
-                            row.detail.clone(),
-                        ),
-                        at,
-                        cx,
-                    )
-                }
+            let drawn = match text {
                 _ if explains => wire(ferrite_ui::menu::note(row.name.clone()), at, cx),
-                Kind::Commands | Kind::Files { .. } => wire(
+                Some(_) => wire(
                     pane::menu_row(("composer-menu-row", at), &row.row, cursor, label_w),
                     at,
                     cx,
                 ),
-                Kind::Provider(_) | Kind::Band(_) => wire(
+                None => wire(
                     pane::picker_row(
                         ("composer-menu-row", at),
                         row.name.clone(),
@@ -7196,14 +7179,14 @@ impl CockpitView {
         // at its side (claude/slash-picker.png), so a description cut by the
         // popover's width is still read, by key as well as by pointer. The
         // card stands level with the row, rows being one grid row each.
-        let explained = matches!(open.kind, Kind::Commands)
+        let explained = matches!(text, Some(Kind::Commands))
             .then(|| open.rows.get(open.selected))
             .flatten()
             .filter(|row| !row.row.inert && !row.row.detail.is_empty())
             .map(|row| row.row.detail.clone());
         let row_top = open.selected as f32 * ferrite_ui::theme::FLOAT_ROW_H
             + f32::from(open.scroll.offset().y);
-        let cap = if open.kind.follows_text() {
+        let cap = if text.is_some_and(Kind::follows_text) {
             ferrite_ui::theme::SLASH_MENU_MAX_H
         } else {
             ferrite_ui::theme::MENU_MAX_H
@@ -8059,8 +8042,44 @@ fn effort_chip_label(effort: &str) -> SharedString {
 /// The start hero's project word, as a float trigger (`draft_hero`).
 const HERO_TRIGGER: &str = "start-hero-project";
 
+impl<K> Popover<K> {
+    /// Clamp-step the cursor by `delta`; whether it moved. Inert rows (a
+    /// picker's section headers) are skipped over: the arrows land only
+    /// where ↵ would do something.
+    fn step(&mut self, delta: isize) -> bool {
+        let mut stepped = self.selected;
+        loop {
+            let next = stepped.saturating_add_signed(delta);
+            if next >= self.rows.len() || (delta < 0 && stepped == 0) {
+                break;
+            }
+            stepped = next;
+            if !self.rows[stepped].inert {
+                break;
+            }
+        }
+        if self.rows.get(stepped).is_some_and(|row| row.inert) || stepped == self.selected {
+            return false;
+        }
+        self.selected = stepped;
+        self.scroll.scroll_to_item(stepped);
+        true
+    }
+}
+
 fn band_trigger(chip: pane::BandChip) -> SharedString {
     format!("band-{chip:?}").into()
+}
+
+impl Band {
+    /// The key the control this menu hangs from records its bounds under.
+    fn trigger(&self) -> SharedString {
+        if self.from_hero {
+            HERO_TRIGGER.into()
+        } else {
+            band_trigger(self.chip)
+        }
+    }
 }
 
 /// The effort a chip shows (rule 2.6.5): the Thread's or draft's own
@@ -8368,7 +8387,6 @@ impl CockpitView {
                         PaneIdentity::Thread(thread) => self.cockpit.thread(thread).is_none(),
                         PaneIdentity::Draft(_) => focused.is_some_and(|pane| pane.draft().is_none()),
                     },
-                    Kind::Band(_) => focused.is_some_and(|pane| pane.draft().is_none()),
                     Kind::Commands | Kind::Files { .. } => false,
                 }
         }) {
@@ -8670,7 +8688,7 @@ impl CockpitView {
             .track_focus(&self.focus)
             // A popup joins the context; the keymap's rows stand down for
             // it.
-            .key_context(ferrite_ui::keymap::root_context(self.popup_holds_root()).as_str())
+            .key_context(ferrite_ui::keymap::root_context(self.popup_takes_keys()).as_str())
             // Nothing that acts on a lost machine's Threads is listened for
             // until it is back (ADR 0026).
             .when(!lost, |root| {
@@ -8945,7 +8963,6 @@ impl CockpitView {
             .children(self.panel_element(window, cx))
             .child(self.plane_seams(panel_w))
             .children(self.title_tools_element(cx))
-            .children(self.band_menu_element(window, cx))
             .children(self.model_picker_element(window, cx))
             .children(self.popup_element(window, cx))
             .child(self.sheets.clone())

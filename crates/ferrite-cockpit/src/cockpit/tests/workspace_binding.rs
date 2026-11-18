@@ -126,11 +126,8 @@ fn the_branch_chip_offers_the_checkout_its_other_branch_and_both_new_branch_mode
     cx.simulate_keystrokes("enter");
 
     view.read_with(cx, |view, _| {
-        let popover = view.popover.as_ref().expect("the branch popover is open");
-        assert!(matches!(
-            popover.kind,
-            Kind::Band(pane::BandChip::Workspace)
-        ));
+        let popover = view.band_menu().expect("the branch popover is open");
+        assert_eq!(popover.kind.chip, pane::BandChip::Workspace);
         let rows: Vec<(&str, &str, bool)> = popover
             .rows
             .iter()
@@ -211,8 +208,8 @@ fn the_workspace_chip_scopes_to_the_chosen_project(cx: &mut TestAppContext) {
     cx.simulate_keystrokes("tab");
     cx.simulate_keystrokes("enter");
     view.read_with(cx, |view, _| {
-        let band = view.popover.as_ref().expect("the project popover is open");
-        assert!(matches!(band.kind, Kind::Band(pane::BandChip::Project)));
+        let band = view.band_menu().expect("the project popover is open");
+        assert_eq!(band.kind.chip, pane::BandChip::Project);
         let labels: Vec<&str> = band.rows.iter().map(|row| row.name.as_ref()).collect();
         assert!(labels.contains(&"repo"), "rows: {labels:?}");
         assert!(labels.contains(&"second"), "rows: {labels:?}");
@@ -246,11 +243,8 @@ fn the_workspace_chip_scopes_to_the_chosen_project(cx: &mut TestAppContext) {
     cx.simulate_keystrokes("tab");
     cx.simulate_keystrokes("enter");
     view.read_with(cx, |view, _| {
-        let band = view
-            .popover
-            .as_ref()
-            .expect("the workspace popover is open");
-        assert!(matches!(band.kind, Kind::Band(pane::BandChip::Workspace)));
+        let band = view.band_menu().expect("the workspace popover is open");
+        assert_eq!(band.kind.chip, pane::BandChip::Workspace);
         let labels: Vec<&str> = band.rows.iter().map(|row| row.name.as_ref()).collect();
         assert_eq!(
             labels,
@@ -275,8 +269,8 @@ fn the_workspace_chip_scopes_to_the_chosen_project(cx: &mut TestAppContext) {
     cx.simulate_keystrokes("tab"); // → workspace
     cx.simulate_keystrokes("enter");
     view.read_with(cx, |view, _| {
-        let band = view.popover.as_ref().expect("the workspace popover again");
-        assert!(matches!(band.kind, Kind::Band(pane::BandChip::Workspace)));
+        let band = view.band_menu().expect("the workspace popover again");
+        assert_eq!(band.kind.chip, pane::BandChip::Workspace);
         let draft = view.panes[view.focused()].draft().expect("still a draft");
         assert_ne!(
             draft.binding.project(),
@@ -314,14 +308,8 @@ fn the_workspace_chip_lists_the_repos_other_worktrees_and_local_branches(cx: &mu
     cx.simulate_keystrokes("enter");
 
     view.read_with(cx, |view, _| {
-        let popover = view
-            .popover
-            .as_ref()
-            .expect("the workspace popover is open");
-        assert!(matches!(
-            popover.kind,
-            Kind::Band(pane::BandChip::Workspace)
-        ));
+        let popover = view.band_menu().expect("the workspace popover is open");
+        assert_eq!(popover.kind.chip, pane::BandChip::Workspace);
         let rows: Vec<(&str, &str, bool)> = popover
             .rows
             .iter()
@@ -366,7 +354,7 @@ fn picking_an_existing_worktree_binds_the_thread_to_its_path(cx: &mut TestAppCon
     cx.simulate_keystrokes("down");
     cx.simulate_keystrokes("enter");
     view.read_with(cx, |view, _| {
-        assert!(view.popover.is_none(), "the pick closed the popover");
+        assert!(view.band_menu().is_none(), "the pick closed the popover");
         let draft = view.panes[view.focused()].draft().expect("still a draft");
         match draft.binding.target() {
             DraftTarget::Existing { branch, path } => {
@@ -438,10 +426,7 @@ fn a_repo_without_a_main_branch_offers_no_main_row(cx: &mut TestAppContext) {
     cx.simulate_keystrokes("enter");
 
     view.read_with(cx, |view, _| {
-        let popover = view
-            .popover
-            .as_ref()
-            .expect("the workspace popover is open");
+        let popover = view.band_menu().expect("the workspace popover is open");
         let rows: Vec<(&str, &str)> = popover
             .rows
             .iter()
@@ -586,7 +571,7 @@ fn delayed_bootstrap_preserves_edited_composer_focus_and_another_drafts_picker(
             });
         view.open_draft(DraftTarget::Main, cx);
         let other = view.panes[view.focused()].identity.draft().unwrap();
-        view.open_band_popover(pane::BandChip::Provider, cx);
+        view.open_band_menu(pane::BandChip::Provider, false, cx);
         (submitted, other)
     });
     first_tx.send(()).unwrap();
@@ -737,8 +722,8 @@ fn the_workspace_chip_never_asks_git_on_the_ui_thread(cx: &mut TestAppContext) {
     // The menu's first row names the checkout's branch.
     let checkout_row = |view: &gpui::Entity<CockpitView>, cx: &mut gpui::VisualTestContext| {
         view.read_with(cx, |view, _| {
-            let open = view.popover.as_ref().expect("the workspace menu is open");
-            assert!(matches!(open.kind, Kind::Band(pane::BandChip::Workspace)));
+            let open = view.band_menu().expect("the workspace menu is open");
+            assert_eq!(open.kind.chip, pane::BandChip::Workspace);
             (
                 open.rows[0].name.to_string(),
                 open.rows[0].detail.to_string(),
@@ -747,7 +732,7 @@ fn the_workspace_chip_never_asks_git_on_the_ui_thread(cx: &mut TestAppContext) {
     };
     let toggle_menu = |view: &gpui::Entity<CockpitView>, cx: &mut gpui::VisualTestContext| {
         view.update(cx, |view, cx| {
-            view.open_band_popover(pane::BandChip::Workspace, cx)
+            view.open_band_menu(pane::BandChip::Workspace, false, cx)
         })
     };
     toggle_menu(&view, cx);
@@ -864,13 +849,13 @@ fn the_workspace_menu_with_a_previous_worktree_is_336_or_the_window_less_32(cx: 
             cx.run_until_parked();
         }
         view.read_with(cx, |view, _| {
-            let open = view.popover.as_ref().expect("the workspace popover");
-            assert!(matches!(open.kind, Kind::Band(pane::BandChip::Workspace)));
+            let open = view.band_menu().expect("the workspace popover");
+            assert_eq!(open.kind.chip, pane::BandChip::Workspace);
             assert!(open.rows.iter().any(|row| row.name.starts_with("Previous worktree")));
         });
         let width = cx.debug_bounds("composer-menu").expect("the workspace menu").size.width;
         view.update(cx, |view, cx| {
-            view.popover = None;
+            view.close_popup(cx);
             cx.notify();
         });
         f32::from(width)

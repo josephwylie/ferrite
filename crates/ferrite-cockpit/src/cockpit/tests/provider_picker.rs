@@ -150,7 +150,7 @@ fn discovery_updates_an_open_draft_picker_without_starting_a_session(cx: &mut Te
     cx.simulate_resize(gpui::size(px(1000.), px(700.)));
     tick(cx);
     view.update(cx, |view, cx| {
-        view.open_band_popover(pane::BandChip::Provider, cx)
+        view.open_band_menu(pane::BandChip::Provider, false, cx)
     });
     let models = vec![ferrite_core::ModelInfo {
         value: "gpt-future-model".into(),
@@ -431,7 +431,7 @@ fn a_draft_inherits_the_focused_provider_model_and_only_announced_models(cx: &mu
             )
             .unwrap();
         view.open_draft(DraftTarget::Main, cx);
-        view.open_band_popover(pane::BandChip::Provider, cx);
+        view.open_band_menu(pane::BandChip::Provider, false, cx);
     });
 
     view.update(cx, |view, cx| {
