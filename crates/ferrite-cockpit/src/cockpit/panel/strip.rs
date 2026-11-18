@@ -274,9 +274,9 @@ impl CockpitView {
     /// Whether a Surface has work going on that its tab should say (T3's
     /// pending dot): a side chat answering, an agent working, background
     /// work running.
-    pub(crate) fn surface_pending(&self, thread: ThreadId, id: &SurfaceId) -> bool {
+    pub(crate) fn surface_pending(&self, thread: ThreadId, id: &SurfaceId, cx: &gpui::App) -> bool {
         match id {
-            SurfaceId::SideChat(tab) => self.side_chat_running(thread, *tab),
+            SurfaceId::SideChat(tab) => self.side_chat_running(thread, *tab, cx),
             SurfaceId::Agent(key) => self.agent_running(thread, key),
             SurfaceId::Background => self.cockpit.thread(thread).is_some_and(|open| {
                 open.transcript()
@@ -290,7 +290,7 @@ impl CockpitView {
     /// A tab's title (T3's `surfaceTitle`): the singletons' names, a file's
     /// name (a command's own), the shell's `Terminal N`, the side chat's
     /// title, the agent's task.
-    fn surface_title(&self, thread: ThreadId, id: &SurfaceId) -> SharedString {
+    fn surface_title(&self, thread: ThreadId, id: &SurfaceId, cx: &gpui::App) -> SharedString {
         match id {
             SurfaceId::Overview => "Overview".into(),
             SurfaceId::Changes => "Changes".into(),
@@ -299,7 +299,7 @@ impl CockpitView {
             SurfaceId::Browser => "Browser".into(),
             SurfaceId::File(path) => self.file_surface_title(thread, path),
             SurfaceId::Terminal(number) => format!("Terminal {number}").into(),
-            SurfaceId::SideChat(tab) => self.side_chat_title(thread, *tab),
+            SurfaceId::SideChat(tab) => self.side_chat.read(cx).title(thread, *tab),
             SurfaceId::Agent(key) => self.agent_title(thread, key),
             SurfaceId::PullRequest(number) => format!("#{number}").into(),
         }
@@ -455,7 +455,7 @@ impl CockpitView {
                     if active { INK_STRONG } else { INK_SUBTLE },
                 ),
             };
-            let pending = self.surface_pending(thread, id).then(|| {
+            let pending = self.surface_pending(thread, id, cx).then(|| {
                 div()
                     .debug_selector({
                         let selector = selector.clone();
@@ -498,7 +498,7 @@ impl CockpitView {
         let middle = id.clone();
         let held = id.clone();
         let control = PanelControl::Tab(id.clone());
-        let semantics = Semantics::tab(self.surface_title(thread, id), active);
+        let semantics = Semantics::tab(self.surface_title(thread, id, cx), active);
         let handle = self.panel_control(control.clone(), semantics.clone(), cx);
         div()
             .id(element)
@@ -536,7 +536,7 @@ impl CockpitView {
                 div()
                     .min_w_0()
                     .truncate()
-                    .child(self.surface_title(thread, id)),
+                    .child(self.surface_title(thread, id, cx)),
             )
             .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
                 view.activate_surface(thread, &pressed, cx);

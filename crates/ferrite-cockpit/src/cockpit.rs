@@ -423,8 +423,8 @@ pub struct CockpitView {
     )>,
     /// Stable text-run identities; selection itself belongs to GPUI.
     selection: TranscriptText,
-    /// Each Thread's side chat, the right pane's other body.
-    side_chats: side_chat_view::SideChats,
+    /// Every Thread's side chat, a body of the Panel.
+    side_chat: Entity<side_chat_view::SideChatView>,
     /// Drafts sent while a Session was starting, kept whole until it takes
     /// the prompt or hands it back.
     held_sends: sends::HeldSends,
@@ -1366,6 +1366,8 @@ impl CockpitView {
         cx.subscribe(&sheets, Self::on_sheets_event).detach();
         let prs = cx.new(|cx| prs_view::PrsView::new(cockpit_weak.clone(), cx));
         cx.subscribe(&prs, Self::on_prs_event).detach();
+        let side_chat = cx.new(|_| side_chat_view::SideChatView::new(cockpit_weak.clone()));
+        cx.subscribe(&side_chat, Self::on_side_chat_event).detach();
         let mut view = Self {
             cockpit,
             browsers: Default::default(),
@@ -1387,7 +1389,7 @@ impl CockpitView {
             branch_refreshing: false,
             branch_refresh_queued: false,
             selection: TranscriptText::default(),
-            side_chats: Default::default(),
+            side_chat,
             held_sends: Default::default(),
             tools: Default::default(),
             agent_drills: Default::default(),
@@ -8278,7 +8280,6 @@ impl CockpitView {
         // compares scalar keys first, so Composer edits repaint Cockpit chrome
         // without cloning or notifying any retained transcript entity.
         self.sync_visible_transcripts(cx);
-        self.tend_side_chat(window, cx);
         self.tend_terminal(window, cx);
         self.tend_agent_drills(cx);
 

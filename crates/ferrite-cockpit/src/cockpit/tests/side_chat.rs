@@ -61,37 +61,37 @@ pub(super) fn side_tabs(
 /// What the cases read of the side chat, held here so a move of its
 /// state changes these and not the cases.
 pub(super) fn draft(view: &CockpitView, owner: ThreadId, cx: &gpui::App) -> Option<String> {
-    view.side_chats.draft(owner, cx)
+    view.side_chat.read(cx).draft(owner, cx)
 }
 
-fn titles(view: &CockpitView, owner: ThreadId, _: &gpui::App) -> (Vec<SharedString>, usize) {
-    view.side_chats.titles(owner)
+fn titles(view: &CockpitView, owner: ThreadId, cx: &gpui::App) -> (Vec<SharedString>, usize) {
+    view.side_chat.read(cx).titles(owner)
 }
 
-fn forks(view: &CockpitView, owner: ThreadId, _: &gpui::App) -> Vec<ThreadId> {
-    view.side_chats.threads(owner)
+fn forks(view: &CockpitView, owner: ThreadId, cx: &gpui::App) -> Vec<ThreadId> {
+    view.side_chat.read(cx).threads(owner)
 }
 
-fn owns(view: &CockpitView, thread: ThreadId, _: &gpui::App) -> bool {
-    view.side_chats.owns(thread)
+fn owns(view: &CockpitView, thread: ThreadId, cx: &gpui::App) -> bool {
+    view.side_chat.read(cx).owns(thread)
 }
 
 /// The shown tab's fork, once it has one.
-pub(super) fn shown_fork(view: &CockpitView, owner: ThreadId, _: &gpui::App) -> Option<ThreadId> {
-    view.side_thread(owner)
+pub(super) fn shown_fork(view: &CockpitView, owner: ThreadId, cx: &gpui::App) -> Option<ThreadId> {
+    view.side_chat.read(cx).shown_fork(owner)
 }
 
 fn field_of(
     view: &CockpitView,
     owner: ThreadId,
     index: usize,
-    _: &gpui::App,
+    cx: &gpui::App,
 ) -> Option<Entity<ferrite_pane::composer::Composer>> {
-    view.side_chats.field_of(owner, index).cloned()
+    view.side_chat.read(cx).field_of(owner, index).cloned()
 }
 
-fn bring_back_blocked(view: &CockpitView, owner: ThreadId, id: u64, _: &gpui::App) -> Option<&'static str> {
-    view.bring_back_blocked(owner, id)
+fn bring_back_blocked(view: &CockpitView, owner: ThreadId, id: u64, cx: &gpui::App) -> Option<&'static str> {
+    view.bring_back_blocked(owner, view.side_chat.read(cx).fork(owner, id))
 }
 
 fn shown_pane<R>(
@@ -100,7 +100,7 @@ fn shown_pane<R>(
     cx: &gpui::App,
     read: impl FnOnce(&PaneView, &gpui::App) -> R,
 ) -> Option<R> {
-    Some(read(view.side_chats.pane(owner)?, cx))
+    Some(read(view.side_chat.read(cx).pane(owner)?, cx))
 }
 
 /// Opened, a side chat is a Panel tab (ADR 0039) at least its token wide,

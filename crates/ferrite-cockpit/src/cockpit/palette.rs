@@ -195,7 +195,7 @@ impl CockpitView {
         let rows = match scope {
             PaletteScope::All => {
                 let mut rows = self.palette_thread_rows(cx);
-                rows.extend(self.palette_project_rows());
+                rows.extend(self.palette_project_rows(cx));
                 rows.extend(self.palette_factory_rows());
                 rows.extend(self.palette_command_rows(window, cx));
                 rows
@@ -248,7 +248,7 @@ impl CockpitView {
         match act {
             Act::Thread(thread) => self.land_on_thread(thread, cx),
             Act::Project(project) => {
-                if let Some(thread) = self.project_lead(project) {
+                if let Some(thread) = self.project_lead(project, cx) {
                     self.land_on_thread(thread, cx);
                 }
             }
@@ -389,7 +389,8 @@ impl CockpitView {
         let project_of = |thread: ThreadId| self.facts.get(thread).and_then(|facts| facts.project);
         let open_threads: Vec<ThreadId> = {
             let mut open = self.cockpit.threads();
-            open.retain(|thread| !self.side_chats.owns(*thread) && self.cockpit.operators(*thread));
+            let side_chat = self.side_chat.read(cx);
+            open.retain(|thread| !side_chat.owns(*thread) && self.cockpit.operators(*thread));
             open.sort();
             open
         };
@@ -479,13 +480,13 @@ impl CockpitView {
     /// The Projects to jump to (`Act::Project`), in the registry's order,
     /// each with its open Threads' roll-up and how many there are. A
     /// Project with no open Thread has nowhere to land.
-    fn palette_project_rows(&self) -> Vec<PaletteRow> {
+    fn palette_project_rows(&self, cx: &gpui::App) -> Vec<PaletteRow> {
         self.cockpit
             .registry()
             .projects()
             .iter()
             .filter_map(|project| {
-                let rows = self.project_rows(project.id);
+                let rows = self.project_rows(project.id, cx);
                 let count = rows.len();
                 let status = nav::roll_up(&rows)?;
                 let noun = if count == 1 { "thread" } else { "threads" };
@@ -533,12 +534,12 @@ impl CockpitView {
     }
 
     /// A Project's open Threads' rows, in creation order.
-    fn project_rows(&self, project: ProjectId) -> Vec<nav::ThreadRow> {
+    fn project_rows(&self, project: ProjectId, cx: &gpui::App) -> Vec<nav::ThreadRow> {
         let mut threads = self.cockpit.threads();
         threads.sort();
         threads
             .into_iter()
-            .filter(|thread| !self.side_chats.owns(*thread))
+            .filter(|thread| !self.side_chat.read(cx).owns(*thread))
             .filter(|thread| {
                 self.facts.get(*thread).and_then(|facts| facts.project) == Some(project)
             })
@@ -548,8 +549,8 @@ impl CockpitView {
 
     /// Where jumping to a Project lands: its open Thread that most needs
     /// the operator, the first made among equals.
-    fn project_lead(&self, project: ProjectId) -> Option<ThreadId> {
-        self.project_rows(project)
+    fn project_lead(&self, project: ProjectId, cx: &gpui::App) -> Option<ThreadId> {
+        self.project_rows(project, cx)
             .into_iter()
             .rev()
             .max_by_key(|row| row.status.attention())
