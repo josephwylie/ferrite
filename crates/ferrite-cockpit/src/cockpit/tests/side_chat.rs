@@ -437,6 +437,24 @@ fn a_side_chat_opened_from_the_plus_menu_takes_the_next_key(cx: &mut TestAppCont
     });
 }
 
+/// Deleting a Thread ends its side chats as closing their tabs does: each
+/// fork is retired, none left running where nothing can reach it.
+#[gpui::test]
+fn deleting_a_thread_retires_its_side_chats_forks(cx: &mut TestAppContext) {
+    let (view, _fake, cx) = answered("side-chat-owner-deleted", cx);
+    open_chat(&view, cx, None);
+    let owner = owner(&view, cx);
+    let fork = view
+        .read_with(cx, |view, cx| shown_fork(view, owner, cx))
+        .expect("the side chat has its fork");
+    press_nav_verb(&view, owner, MenuVerb::Delete, cx);
+    view.read_with(cx, |view, cx| {
+        assert!(view.cockpit.thread(owner).is_none(), "the Thread is gone");
+        assert!(view.cockpit.thread(fork).is_none(), "its side chat's fork went with it");
+        assert!(!owns(view, fork, cx), "and the side chat with it");
+    });
+}
+
 /// ⌘W in the field ends its side chat, not the Thread, and the fork goes.
 #[gpui::test]
 fn cmd_w_in_the_side_chat_field_ends_its_tab(cx: &mut TestAppContext) {
