@@ -7,7 +7,7 @@
 //! operator asks of the window it says as a `SettingsEvent`, which the
 //! Cockpit answers once the sheet's own update has ended.
 
-use super::connections_view::ConnectionsView;
+use super::connections_view::{ConnectionsView, PageEvent};
 use super::*;
 use ferrite_core::settings::Settings;
 use ferrite_core::ModelInfo;
@@ -27,6 +27,9 @@ pub(crate) struct SettingsView {
     pub(crate) copied: Option<&'static str>,
     pub(crate) focus: FocusHandle,
     pub(crate) connections: Entity<ConnectionsView>,
+    /// What the Connections page asks of the sheet, heard from the first
+    /// frame: answering needs the window.
+    page_events: Option<gpui::Subscription>,
 }
 
 /// What the sheet draws from, as the Cockpit has it this frame.
@@ -76,8 +79,7 @@ impl EventEmitter<SettingsEvent> for SettingsView {}
 
 impl SettingsView {
     pub(super) fn new(cockpit: WeakEntity<CockpitView>, cx: &mut Context<Self>) -> Self {
-        let sheet = cx.weak_entity();
-        let connections = cx.new(|_| ConnectionsView::new(cockpit.clone(), sheet));
+        let connections = cx.new(|_| ConnectionsView::new(cockpit.clone()));
         Self {
             cockpit,
             page: settings::PageKey::default(),
@@ -85,6 +87,7 @@ impl SettingsView {
             copied: None,
             focus: cx.focus_handle(),
             connections,
+            page_events: None,
         }
     }
 
@@ -118,6 +121,18 @@ impl SettingsView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Option<ferrite_ui::sheet::Drawn> {
+        if self.page_events.is_none() {
+            self.page_events = Some(cx.subscribe_in(
+                &self.connections,
+                window,
+                |view, _, event: &PageEvent, window, cx| match event {
+                    PageEvent::Editing => {
+                        view.reveal(settings::PageKey::Connections, window, cx)
+                    }
+                    PageEvent::Cancelled => view.refocus(window, cx),
+                },
+            ));
+        }
         let search = self
             .search
             .get_or_insert_with(|| {
@@ -173,7 +188,7 @@ impl SettingsView {
     }
 
     /// Show `page` whole: choosing a page ends a search.
-    pub(super) fn reveal(
+    fn reveal(
         &mut self,
         page: settings::PageKey,
         window: &mut Window,
@@ -186,7 +201,7 @@ impl SettingsView {
     }
 
     /// Give the sheet back the keyboard.
-    pub(super) fn refocus(&self, window: &mut Window, cx: &mut Context<Self>) {
+    fn refocus(&self, window: &mut Window, cx: &mut Context<Self>) {
         window.focus(&self.focus, cx);
     }
 

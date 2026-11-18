@@ -4186,7 +4186,7 @@ impl CockpitView {
             .connections(cx)
             .filter(|connections| connections.read(cx).editing())
         {
-            connections.update(cx, |connections, cx| connections.cancel(window, cx));
+            connections.update(cx, |connections, cx| connections.cancel(cx));
             return;
         }
         if self.hide_sheet(cx) {

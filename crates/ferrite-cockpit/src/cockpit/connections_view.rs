@@ -5,9 +5,9 @@
 //! error and warning) goes when the sheet does. What it shows of the
 //! window it reads through `connections_inputs`; what changes the saved
 //! environments, or goes to one, it says as a `ConnectionsEvent`, which
-//! the Cockpit saves and answers.
+//! the Cockpit saves and answers; what it asks of the sheet, as a
+//! `PageEvent`.
 
-use super::settings_view::SettingsView;
 use super::*;
 use crate::machines::{Connection, MachineRow};
 use ferrite_core::cockpit::ServerState;
@@ -20,9 +20,6 @@ use std::rc::Rc;
 
 pub(crate) struct ConnectionsView {
     cockpit: WeakEntity<CockpitView>,
-    /// The sheet the page is on: an edit shows the page, a cancel gives
-    /// the sheet back the keyboard.
-    settings: WeakEntity<SettingsView>,
     editor: Option<Editor>,
     // Not one state with the editor: a Remove can wait while an
     // environment is being added, and an error said while the editor is
@@ -54,6 +51,17 @@ pub(crate) enum ConnectionsEvent {
 }
 
 impl EventEmitter<ConnectionsEvent> for ConnectionsView {}
+
+/// What Connections asks of the sheet it is a page of.
+#[derive(Clone, Copy)]
+pub(crate) enum PageEvent {
+    /// An edit began: show the Connections page whole.
+    Editing,
+    /// The editor was cancelled: the sheet takes the keyboard back.
+    Cancelled,
+}
+
+impl EventEmitter<PageEvent> for ConnectionsView {}
 
 /// What Connections draws from, as the Cockpit has it now.
 #[derive(Default)]
@@ -153,13 +161,9 @@ fn action(
 }
 
 impl ConnectionsView {
-    pub(super) fn new(
-        cockpit: WeakEntity<CockpitView>,
-        settings: WeakEntity<SettingsView>,
-    ) -> Self {
+    pub(super) fn new(cockpit: WeakEntity<CockpitView>) -> Self {
         Self {
             cockpit,
-            settings,
             editor: None,
             removing: None,
             warning: None,
@@ -231,11 +235,9 @@ impl ConnectionsView {
         })
     }
 
-    pub(super) fn cancel(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub(super) fn cancel(&mut self, cx: &mut Context<Self>) {
         self.editor = None;
-        let _ = self
-            .settings
-            .update(cx, |settings, cx| settings.refocus(window, cx));
+        cx.emit(PageEvent::Cancelled);
         cx.notify();
     }
 
@@ -245,9 +247,7 @@ impl ConnectionsView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let _ = self.settings.update(cx, |settings, cx| {
-            settings.reveal(settings::PageKey::Connections, window, cx)
-        });
+        cx.emit(PageEvent::Editing);
         let dir = self.inputs(cx).dir;
         let mode = if machine.as_ref().is_some_and(|machine| !machine.is_link()) {
             ConnectionMode::Ssh
@@ -592,7 +592,7 @@ impl ConnectionsView {
                     return;
                 }
             }
-            self.cancel(window, cx);
+            self.cancel(cx);
             return;
         }
         if editor.mode != ConnectionMode::Ssh
@@ -890,7 +890,7 @@ impl ConnectionsView {
         cx: &mut Context<Self>,
     ) -> settings::ConnectionForm {
         let submit = action(cx, Self::submit);
-        let cancel = action(cx, Self::cancel);
+        let cancel = action(cx, |view, _, cx| view.cancel(cx));
         let verify = action(cx, Self::answer);
         let view = cx.entity().downgrade();
         let choose_host = Rc::new(

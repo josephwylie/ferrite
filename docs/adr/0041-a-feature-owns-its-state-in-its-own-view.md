@@ -52,7 +52,9 @@ that happened to touch it, and nothing in the code said whose a field was.
   (`cockpit/connections_view.rs`) owns the environment editor and the
   attempt it runs, a Remove waiting for its confirm, and the last error
   and warning. It emits `ConnectionsEvent`; the root saves and answers by
-  a method on the view. The Settings sheet makes and holds it, so none of
+  a method on the view. What it asks of the sheet it is a page of (show
+  the page, take the keyboard back) it emits as `PageEvent`, which the
+  sheet hears: it holds no handle to the sheet. The Settings sheet makes and holds it, so none of
   it outlives the sheet; the root still closes the editor at the close,
   since the view lives on through the sheet's fade. Its save stays its
   own, not `change_settings`: it keeps nothing it could not write, and
