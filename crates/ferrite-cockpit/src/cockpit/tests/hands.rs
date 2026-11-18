@@ -36,12 +36,15 @@ fn a_resize_lays_the_window_out_again_and_stops_at_its_least_size(cx: &mut TestA
     let (_view, _thread, cx) = solo("hands-resize", 1440., cx);
     let wide = cx.debug_bounds("composer-block").expect("a Composer at 1440");
 
-    let size = cx.update(|window, cx| hands::resize(window, cx, gpui::size(px(700.), px(900.))));
+    // Above the least width, which is wider where the app draws its own
+    // titlebar.
+    let asked = gpui::size(px(WINDOW_MIN_W + 60.), px(900.));
+    let size = cx.update(|window, cx| hands::resize(window, cx, asked));
     tick(cx);
-    assert_eq!(size, gpui::size(px(700.), px(900.)));
-    let narrow = cx.debug_bounds("composer-block").expect("a Composer at 700");
+    assert_eq!(size, asked);
+    let narrow = cx.debug_bounds("composer-block").expect("a Composer in the narrower window");
     assert_ne!(narrow, wide, "the Composer is laid out for the narrower window");
-    assert!(narrow.right() <= px(700.), "{narrow:?} inside the window");
+    assert!(narrow.right() <= asked.width, "{narrow:?} inside the window");
 
     let size = cx.update(|window, cx| hands::resize(window, cx, gpui::size(px(300.), px(200.))));
     tick(cx);
