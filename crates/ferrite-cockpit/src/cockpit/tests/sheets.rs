@@ -78,7 +78,8 @@ fn escape_the_close_button_and_the_veil_each_close_a_sheet(cx: &mut TestAppConte
     }
 }
 
-/// Closing Settings, by any way out, drops the connection being edited.
+/// Closing Settings, by any way out, drops the connection being edited
+/// at the close, though the view lives on through the sheet's fade.
 #[gpui::test]
 fn closing_settings_drops_the_connection_editor(cx: &mut TestAppContext) {
     let (core, _fake) = cockpit("sheets-connection-editor", 1);
@@ -93,44 +94,48 @@ fn closing_settings_drops_the_connection_editor(cx: &mut TestAppContext) {
             }
         });
         tick(cx);
-        view.update_in(cx, |view, window, cx| view.edit_connection(None, window, cx));
+        let connections = connections_view(&view, cx);
+        connections.update_in(cx, |connections, window, cx| connections.edit(None, window, cx));
         tick(cx);
-        assert!(view.read_with(cx, |view, _| view.connections.editor.is_some()));
+        assert!(connections.read_with(cx, |connections, _| connections.editing()));
+        connections
     };
-    let dropped = |cx: &mut gpui::VisualTestContext, how: &str| {
+    let dropped = |connections: &Entity<super::connections_view::ConnectionsView>,
+                   cx: &mut gpui::VisualTestContext,
+                   how: &str| {
         view.read_with(cx, |view, cx| {
             assert!(!view.settings_open(cx), "{how} closes Settings");
-            assert!(view.connections.editor.is_none(), "{how} drops the editor");
+            assert!(!connections.read(cx).editing(), "{how} drops the editor");
         });
     };
 
-    editing(cx);
+    let connections = editing(cx);
     view.update(cx, |view, cx| view.toggle_settings(cx));
     tick(cx);
-    dropped(cx, "cmd-,");
+    dropped(&connections, cx, "cmd-,");
 
-    editing(cx);
+    let connections = editing(cx);
     view.update(cx, |view, cx| {
         view.settings_sheet(cx)
             .unwrap()
             .update(cx, |_, cx| cx.emit(settings_view::SettingsEvent::Closed))
     });
     tick(cx);
-    dropped(cx, "the close button");
+    dropped(&connections, cx, "the close button");
 
-    editing(cx);
+    let connections = editing(cx);
     view.update(cx, |view, cx| {
         view.sheets.update(cx, |_, cx| cx.emit(crate::cockpit::sheets::Dismissed))
     });
     tick(cx);
-    dropped(cx, "the veil");
+    dropped(&connections, cx, "the veil");
 
-    editing(cx);
+    let connections = editing(cx);
     view.update(cx, |view, cx| view.open_project_creator(cx));
     tick(cx);
     view.read_with(cx, |view, cx| {
         assert!(view.project_card(cx).is_some());
-        assert!(view.connections.editor.is_none(), "the card drops the editor");
+        assert!(!connections.read(cx).editing(), "the card drops the editor");
     });
 }
 

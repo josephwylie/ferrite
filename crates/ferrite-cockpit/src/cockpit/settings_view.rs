@@ -1,12 +1,13 @@
 //! The Settings sheet as a view of its own (ADR 0041), made when it opens
 //! and dropped once it has gone (ADR 0042). It owns what only the sheet
-//! reads: the page shown, the search field, the path last copied and its
-//! focus. It draws its card for the sheet host from what the Cockpit gives
-//! it (`SettingsInputs`), asked for each frame, so the Cockpit's own notify
-//! still redraws it; and what the operator asks of the window it says as a
-//! `SettingsEvent`, which the Cockpit answers once the sheet's own update
-//! has ended.
+//! reads: the page shown, the search field, the path last copied, its
+//! focus, and the Connections page's own view. It draws its card for the
+//! sheet host from what the Cockpit gives it (`SettingsInputs`), asked for
+//! each frame, so the Cockpit's own notify still redraws it; and what the
+//! operator asks of the window it says as a `SettingsEvent`, which the
+//! Cockpit answers once the sheet's own update has ended.
 
+use super::connections_view::{ConnectionsView, PageEvent};
 use super::*;
 use ferrite_core::settings::Settings;
 use ferrite_core::ModelInfo;
@@ -25,6 +26,10 @@ pub(crate) struct SettingsView {
     /// closes.
     pub(crate) copied: Option<&'static str>,
     pub(crate) focus: FocusHandle,
+    pub(crate) connections: Entity<ConnectionsView>,
+    /// What the Connections page asks of the sheet, heard from the first
+    /// frame: answering needs the window.
+    page_events: Option<gpui::Subscription>,
 }
 
 /// What the sheet draws from, as the Cockpit has it this frame.
@@ -44,7 +49,6 @@ pub(crate) struct SettingsInputs {
     pub machine: settings::Group,
     pub server: Vec<settings::Row>,
     pub ferrite_update: Vec<settings::Row>,
-    pub connections: Vec<settings::Group>,
 }
 
 /// One provider's models and CLI, as the sheet's rows need them.
@@ -67,8 +71,6 @@ pub(crate) enum SettingsEvent {
     ChooseSound(Sound),
     UpdateCli(Provider),
     CopyDiagnostics,
-    /// The sheet went to another page.
-    Paged(settings::PageKey),
     /// The close button closed it.
     Closed,
 }
@@ -77,12 +79,15 @@ impl EventEmitter<SettingsEvent> for SettingsView {}
 
 impl SettingsView {
     pub(super) fn new(cockpit: WeakEntity<CockpitView>, cx: &mut Context<Self>) -> Self {
+        let connections = cx.new(|_| ConnectionsView::new(cockpit.clone()));
         Self {
             cockpit,
             page: settings::PageKey::default(),
             search: None,
             copied: None,
             focus: cx.focus_handle(),
+            connections,
+            page_events: None,
         }
     }
 
@@ -116,6 +121,18 @@ impl SettingsView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Option<ferrite_ui::sheet::Drawn> {
+        if self.page_events.is_none() {
+            self.page_events = Some(cx.subscribe_in(
+                &self.connections,
+                window,
+                |view, _, event: &PageEvent, window, cx| match event {
+                    PageEvent::Editing => {
+                        view.reveal(settings::PageKey::Connections, window, cx)
+                    }
+                    PageEvent::Cancelled => view.refocus(window, cx),
+                },
+            ));
+        }
         let search = self
             .search
             .get_or_insert_with(|| {
@@ -124,16 +141,16 @@ impl SettingsView {
             .clone();
         let inputs = self
             .cockpit
-            .update(cx, |cockpit, cx| cockpit.settings_inputs(window, cx))
+            .update(cx, |cockpit, cx| cockpit.settings_inputs(cx))
             .ok()?;
-        let pages = self.pages(inputs, cx);
+        let connections = self
+            .connections
+            .update(cx, |connections, cx| connections.groups(window, cx));
+        let pages = self.pages(inputs, connections, cx);
         let select = {
             let view = cx.entity().downgrade();
-            let search = search.clone();
             move |page: settings::PageKey, window: &mut Window, cx: &mut App| {
-                // Choosing a page ends a search: the page shows whole.
-                search.update(cx, |search, cx| search.set_value("", window, cx));
-                let _ = view.update(cx, |view, cx| view.show_page(page, cx));
+                let _ = view.update(cx, |view, cx| view.reveal(page, window, cx));
             }
         };
         let view = cx.entity().downgrade();
@@ -163,11 +180,37 @@ impl SettingsView {
 
     fn show_page(&mut self, page: settings::PageKey, cx: &mut Context<Self>) {
         self.page = page;
-        cx.emit(SettingsEvent::Paged(page));
+        if page != settings::PageKey::Connections {
+            self.connections
+                .update(cx, |connections, _| connections.close_editor());
+        }
         cx.notify();
     }
 
-    fn pages(&self, inputs: SettingsInputs, cx: &Context<Self>) -> Vec<settings::Page> {
+    /// Show `page` whole: choosing a page ends a search.
+    fn reveal(
+        &mut self,
+        page: settings::PageKey,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(search) = &self.search {
+            search.update(cx, |search, cx| search.set_value("", window, cx));
+        }
+        self.show_page(page, cx);
+    }
+
+    /// Give the sheet back the keyboard.
+    fn refocus(&self, window: &mut Window, cx: &mut Context<Self>) {
+        window.focus(&self.focus, cx);
+    }
+
+    fn pages(
+        &self,
+        inputs: SettingsInputs,
+        connections: Vec<settings::Group>,
+        cx: &Context<Self>,
+    ) -> Vec<settings::Page> {
         let SettingsInputs {
             settings,
             providers,
@@ -178,7 +221,6 @@ impl SettingsView {
             machine,
             server,
             ferrite_update,
-            connections,
         } = inputs;
         let tell = Self::teller(cx);
         let defaults = vec![settings::choices(
@@ -488,11 +530,7 @@ impl SettingsView {
 impl CockpitView {
     /// Everything the sheet draws from. It never reads the sheet: the
     /// sheet calls it while its own update is running.
-    pub(super) fn settings_inputs(
-        &mut self,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> SettingsInputs {
+    pub(super) fn settings_inputs(&mut self, cx: &mut Context<Self>) -> SettingsInputs {
         let place = self.machine_place();
         let providers = Provider::ALL
             .into_iter()
@@ -510,7 +548,6 @@ impl CockpitView {
             })
             .collect();
         SettingsInputs {
-            connections: self.connection_settings(window, cx),
             settings: self.prefs.settings.clone(),
             providers,
             cli_versions: self.cli_versions.clone(),
@@ -536,12 +573,6 @@ impl CockpitView {
             SettingsEvent::ChooseSound(sound) => self.choose_sound_file(sound, cx),
             SettingsEvent::UpdateCli(provider) => self.update_cli(provider, cx),
             SettingsEvent::CopyDiagnostics => self.copy_diagnostics(cx),
-            SettingsEvent::Paged(page) => {
-                if page != settings::PageKey::Connections {
-                    self.connections.editor = None;
-                }
-                cx.notify();
-            }
             SettingsEvent::Closed => {
                 self.hide_sheet(cx);
             }
@@ -564,6 +595,8 @@ impl CockpitView {
         let cockpit = cx.weak_entity();
         let view = cx.new(|cx| SettingsView::new(cockpit, cx));
         cx.subscribe(&view, Self::on_settings_event).detach();
+        let connections = view.read(cx).connections.clone();
+        cx.subscribe(&connections, Self::on_connections_event).detach();
         self.show_sheet(sheets::Sheet::Settings(view.clone()), cx);
         self.popover = None;
         if self.cli_versions.is_none() {
