@@ -6,6 +6,7 @@
 mod agent_pane;
 pub(crate) mod archive;
 mod attachments;
+mod background_dialog_view;
 mod background_work;
 pub(crate) mod beside;
 mod browser;
@@ -560,13 +561,11 @@ pub struct CockpitView {
     unsent: drafts::Unsent,
     /// Where the quotes of sent prompts were cited from.
     cited_sources: ferrite_core::cited_sources::CitedSources,
-    /// The sheet that is up, Settings or the Project card (ADR 0042).
+    /// The sheet that is up, Settings, the Project card or the
+    /// `Background work` dialog (ADR 0042).
     sheets: Entity<sheets::Sheets>,
     /// The menus and popovers on their way out (`float_exits`).
     float_exits: float_exits::Held,
-    /// The Thread whose `Background work` dialog is open
-    /// (`background_work.rs`).
-    background_dialog: Option<ThreadId>,
     /// The work `Stop` on the background-work line was pressed for, by
     /// Thread and Session generation (a provider reuses task ids): the line
     /// reads `Stopping...` until it ends, or `Retry` once one refused.
@@ -1483,7 +1482,6 @@ impl CockpitView {
             prefs,
             sheets,
             float_exits: Default::default(),
-            background_dialog: None,
             background_stops: Default::default(),
             background_stop_sends: 0,
             maximized: false,
@@ -2403,6 +2401,7 @@ impl CockpitView {
         self.fetch_attachment_previews(cx);
         self.note_work(&frame);
         self.prune_background_stops();
+        self.close_background_dialog_of_closed_thread(cx);
         self.pump_browsers(cx);
         if let Some(card) = self.project_card(cx) {
             card.update(cx, |card, cx| card.poll_remote_path(cx));
@@ -4288,7 +4287,7 @@ impl CockpitView {
             self.cancel_connection(window, cx);
             return;
         }
-        if self.hide_sheet(cx) || self.close_background_dialog(cx) {
+        if self.hide_sheet(cx) {
             return;
         }
         if self.snooze_editor.is_some() {
@@ -9075,7 +9074,6 @@ impl CockpitView {
             .child(self.sheets.clone())
             .children(self.new_task_sheet(window, cx))
             .children(self.direct_sheet(window, cx))
-            .children(self.background_dialog_element(window, cx))
             .children(self.toast_float(window, cx))
             .children(self.sheet_floats(window, cx))
             .children(self.lightbox_element(cx))

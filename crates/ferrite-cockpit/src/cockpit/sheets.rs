@@ -5,6 +5,7 @@
 //! drawn. What a sheet changes in the window, and every close, is the
 //! Cockpit's (`show_sheet`, `hide_sheet`).
 
+use super::background_dialog_view::BackgroundDialogView;
 use super::project_editor_view::ProjectEditorView;
 use super::settings_view::SettingsView;
 use super::*;
@@ -18,6 +19,7 @@ use std::time::Instant;
 pub(crate) enum Sheet {
     Settings(Entity<SettingsView>),
     ProjectEditor(Entity<ProjectEditorView>),
+    BackgroundDialog(Entity<BackgroundDialogView>),
 }
 
 impl Sheet {
@@ -25,6 +27,7 @@ impl Sheet {
         match self {
             Sheet::Settings(view) => view.read(cx).focus.clone(),
             Sheet::ProjectEditor(view) => view.read(cx).focus.clone(),
+            Sheet::BackgroundDialog(view) => view.read(cx).focus.clone(),
         }
     }
 
@@ -34,6 +37,7 @@ impl Sheet {
         match self {
             Sheet::Settings(_) => "settings-card-in",
             Sheet::ProjectEditor(_) => "project-editor-card-in",
+            Sheet::BackgroundDialog(_) => "background-dialog-in",
         }
     }
 
@@ -41,6 +45,7 @@ impl Sheet {
         match self {
             Sheet::Settings(view) => view.update(cx, |view, cx| view.card(window, cx)),
             Sheet::ProjectEditor(view) => view.update(cx, |view, cx| view.card(window, cx)),
+            Sheet::BackgroundDialog(view) => view.update(cx, |view, cx| view.card(window, cx)),
         }
     }
 }
@@ -79,6 +84,13 @@ impl Sheets {
     pub(super) fn project_editor(&self) -> Option<&Entity<ProjectEditorView>> {
         match self.up() {
             Some(Sheet::ProjectEditor(view)) => Some(view),
+            _ => None,
+        }
+    }
+
+    pub(super) fn background_dialog(&self) -> Option<&Entity<BackgroundDialogView>> {
+        match self.up() {
+            Some(Sheet::BackgroundDialog(view)) => Some(view),
             _ => None,
         }
     }
@@ -185,7 +197,7 @@ impl CockpitView {
     fn sheet_gone(&mut self, gone: Sheet) {
         match gone {
             Sheet::Settings(_) => self.connections.editor = None,
-            Sheet::ProjectEditor(_) => {}
+            Sheet::ProjectEditor(_) | Sheet::BackgroundDialog(_) => {}
         }
     }
 

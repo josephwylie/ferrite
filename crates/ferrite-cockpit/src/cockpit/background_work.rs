@@ -1,19 +1,19 @@
 //! Background work at the transcript's foot (T3's `ThreadNowLine`, ADR
 //! 0038): while a Thread has work running in the background, the last row
 //! of its Main transcript says so (`Waiting on 2 subagents`), with
-//! `Details`, which opens the `Background work` dialog, and `Stop`. The
+//! `Details`, which opens the `Background work` dialog
+//! (`background_dialog_view.rs`), and `Stop`. The
 //! work itself lives in the rail's Background tasks section and the
 //! Background Surface (`panel::background`); the line and its dialog read
 //! the same calls (`Transcript::background_calls`).
 
 use std::hash::{Hash, Hasher};
 
-use super::panel::background::{label, output_block};
+use super::panel::background::label;
 use super::*;
 
 use ferrite_core::activity::AgentKey;
 use ferrite_core::transcript::tools::{policy, ToolKind};
-use ferrite_core::transcript::ToolBlock;
 use ferrite_pane::pane::{BackgroundTask, WorkKind};
 use ferrite_pane::transcript::TranscriptTail;
 
@@ -213,7 +213,7 @@ fn stop_scope(work: &[Work], targets: &[StopTarget]) -> StopScope {
 
 /// The line's and the dialog's `Stop`, as they draw.
 #[derive(Hash)]
-struct StopControl {
+pub(super) struct StopControl {
     scope: StopScope,
     stopping: bool,
     refused: Option<String>,
@@ -221,7 +221,7 @@ struct StopControl {
 
 /// The refusal, what stays running and the button itself; `prefix` names
 /// them apart in the line and in the dialog.
-fn stop_elements(
+pub(super) fn stop_elements(
     control: &StopControl,
     thread: ThreadId,
     prefix: &'static str,
@@ -421,7 +421,7 @@ impl CockpitView {
     }
 
     /// The `Stop` of `work`: what it says, and where the stops it sent stand.
-    fn stop_control(
+    pub(super) fn stop_control(
         &self,
         open: &ferrite_core::cockpit::ThreadView<'_>,
         thread: ThreadId,
@@ -471,7 +471,7 @@ impl CockpitView {
 
     /// `Stop` on the line or in the dialog: the work they list that this
     /// Session can stop.
-    fn stop_background_work(
+    pub(super) fn stop_background_work(
         &mut self,
         thread: ThreadId,
         work_of: fn(&ferrite_core::cockpit::ThreadView<'_>) -> Vec<Work>,
@@ -587,184 +587,13 @@ impl CockpitView {
     /// `Open` on the line, or `Open thread` in the dialog: the agent the
     /// call started, in the Panel.
     pub(super) fn open_background_agent(&mut self, thread: ThreadId, call: &str, cx: &mut Context<Self>) {
-        self.background_dialog = None;
+        if self.background_dialog(cx).is_some() {
+            self.hide_sheet(cx);
+        }
         if let Some(subject) = self.agent_of_call(thread, call) {
             self.open_agent_drill(thread, subject, cx);
         }
         cx.notify();
-    }
-
-    pub(crate) fn open_background_dialog(&mut self, thread: ThreadId, cx: &mut Context<Self>) {
-        self.background_dialog = Some(thread);
-        cx.notify();
-    }
-
-    /// Close the `Background work` dialog, if it is open; whether it was.
-    pub(super) fn close_background_dialog(&mut self, cx: &mut Context<Self>) -> bool {
-        let was = self.background_dialog.take().is_some();
-        if was {
-            cx.notify();
-        }
-        was
-    }
-
-    /// The `Background work` dialog (T3's `BackgroundWorkDetails`): one
-    /// section per piece of work, 20px apart.
-    pub(super) fn background_dialog_element(
-        &self,
-        window: &Window,
-        cx: &mut Context<Self>,
-    ) -> Option<AnyElement> {
-        use ferrite_ui::theme::*;
-        let thread = self.background_dialog?;
-        let open = self.cockpit.thread(thread)?;
-        let waiting = !open.busy();
-        let mut sections = div().flex().flex_col().gap(px(BACKGROUND_DIALOG_SECTION_GAP));
-        let running = running_work(&open);
-        for work in &running {
-            let call = work
-                .call
-                .as_deref()
-                .and_then(|call| open.transcript().tool(call));
-            sections = sections.child(self.work_section(thread, work, call, waiting, cx));
-        }
-        let stop = self.stop_control(&open, thread, &running).map(|control| {
-            div()
-                .flex()
-                .flex_wrap()
-                .items_baseline()
-                .justify_end()
-                .gap(px(BACKGROUND_LINE_ACTIONS_GAP))
-                .text_size(px(FS_LABEL))
-                .children(stop_elements(
-                    &control,
-                    thread,
-                    "background-dialog",
-                    cx.listener(move |view, _: &ClickEvent, _, cx| {
-                        view.stop_background_work(thread, running_work, cx)
-                    }),
-                ))
-        });
-        let close = ferrite_ui::sheet::sheet_close("background-dialog-close", "Close", cx)
-            .on_click(cx.listener(|view, _: &ClickEvent, _, cx| {
-                view.close_background_dialog(cx);
-            }));
-        let card = ferrite_ui::sheet::sheet_fit(
-            BACKGROUND_DIALOG_W,
-            BACKGROUND_DIALOG_MAX_H.min(f32::from(window.viewport_size().height) * MODAL_VIEWPORT_FRACTION),
-        )
-        .id("background-dialog")
-        .debug_selector(|| "background-dialog".into())
-        .on_mouse_down(
-            MouseButton::Left,
-            cx.listener(|_, _: &MouseDownEvent, _, cx| cx.stop_propagation()),
-        )
-        .child(ferrite_ui::sheet::sheet_head("Background work", close))
-        .child(
-            div()
-                .id("background-dialog-body")
-                .flex()
-                .flex_col()
-                .flex_shrink(1.)
-                .min_h_0()
-                .overflow_y_scroll()
-                .p(px(MODAL_PAD))
-                .child(sections)
-                .children(stop.map(|stop| stop.mt(px(BACKGROUND_DIALOG_SECTION_GAP)))),
-        );
-        let sheet = ferrite_ui::motion::veil_in(
-            "background-dialog-veil",
-            ferrite_ui::motion::VEIL,
-            ferrite_ui::sheet::veil()
-                .on_mouse_down(
-                    MouseButton::Left,
-                    cx.listener(|view, _: &MouseDownEvent, _, cx| {
-                        cx.stop_propagation();
-                        view.close_background_dialog(cx);
-                    }),
-                )
-                .child(ferrite_ui::motion::dialog_in("background-dialog-in", card)),
-        );
-        Some(deferred(sheet).with_priority(3).into_any_element())
-    }
-
-    /// One piece of work in the dialog: its title and standing, the command
-    /// in a box, its output so far, and `Open thread` for an agent.
-    fn work_section(
-        &self,
-        thread: ThreadId,
-        work: &Work,
-        call: Option<&ToolBlock>,
-        waiting: bool,
-        cx: &mut Context<Self>,
-    ) -> Div {
-        use ferrite_ui::theme::*;
-        let agent = work.task.kind == WorkKind::Subagent;
-        let command = call
-            .map(|call| call.summary.trim().to_owned())
-            .filter(|command| !agent && !command.is_empty());
-        let label = work.task.label.trim();
-        let title = if label.is_empty() || command.as_deref() == Some(label) {
-            if agent { "Subagent" } else { "Command" }.to_owned()
-        } else {
-            label.to_owned()
-        };
-        let command = command.map(|command| {
-            div()
-                .p(px(SPACE_3))
-                .rounded(px(R_CONTROL))
-                .border_1()
-                .border_color(paint::FLOAT_EDGE)
-                .bg(paint::RAISED)
-                .font_family(FONT_CODE)
-                .text_size(px(FS_BADGE))
-                .text_color(rgb(INK_STRONG))
-                .child(SharedString::from(command))
-        });
-        let open_thread = work.call.clone().filter(|_| agent).map(|target| {
-            ferrite_pane::pane::inline_button(
-                SharedString::from(format!("background-dialog-open-{target}")),
-                "Open thread",
-            )
-            .debug_selector({
-                let target = target.clone();
-                move || format!("background-dialog-open-{target}")
-            })
-            .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
-                view.open_background_agent(thread, &target, cx);
-            }))
-        });
-        div()
-            .debug_selector(|| "background-dialog-section".into())
-            .flex()
-            .flex_col()
-            .gap(px(SPACE_2))
-            .text_size(px(FS_LABEL))
-            .child(
-                div()
-                    .flex()
-                    .items_baseline()
-                    .justify_between()
-                    .gap(px(SPACE_3))
-                    .child(
-                        div()
-                            .min_w_0()
-                            .truncate()
-                            .font_weight(W_LABEL)
-                            .text_color(rgb(INK_STRONG))
-                            .child(SharedString::from(title)),
-                    )
-                    .child(
-                        div()
-                            .flex_shrink_0()
-                            .text_size(px(FS_BADGE))
-                            .text_color(rgb(INK_SUBTLE))
-                            .child(if waiting { "Waiting" } else { "Running" }),
-                    ),
-            )
-            .children(command)
-            .children(call.map(|call| output_block(call, false, false)))
-            .children(open_thread)
     }
 }
 
