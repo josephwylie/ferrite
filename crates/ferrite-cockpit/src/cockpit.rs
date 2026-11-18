@@ -370,10 +370,7 @@ pub struct CockpitView {
     /// the cockpit's own actions are never reached — at wall range, where no
     /// Pane holds a Composer, this handle is what keeps the keyboard alive.
     focus: FocusHandle,
-    /// What held the keyboard when the pump last looked, and what the pump
-    /// wanted it on then (`fields`).
-    focus_seen: Option<FocusHandle>,
-    handed: Option<FocusHandle>,
+    field_watch: fields::FieldWatch,
     perf: Option<Perf>,
     /// When the watchdog last swept, on the executor's clock (the wall
     /// clock in the app, the fake one under test, so a loaded test machine
@@ -1401,8 +1398,7 @@ impl CockpitView {
             browsers: Default::default(),
             panes: Vec::new(),
             focus: cx.focus_handle(),
-            focus_seen: None,
-            handed: None,
+            field_watch: Default::default(),
             perf: std::env::var("FERRITE_PERF").is_ok().then(|| Perf {
                 frames: 0,
                 since: std::time::Instant::now(),

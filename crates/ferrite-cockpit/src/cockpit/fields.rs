@@ -4,6 +4,16 @@
 
 use super::*;
 
+/// What the rule remembers from the frame before. Private to this module,
+/// so the pump's one call a frame is the only thing that moves it.
+#[derive(Default)]
+pub(super) struct FieldWatch {
+    /// What held the keyboard when the pump last looked.
+    seen: Option<FocusHandle>,
+    /// What the pump wanted the keyboard on then.
+    handed: Option<FocusHandle>,
+}
+
 impl CockpitView {
     /// Whether a text field holds the keyboard the pump must leave alone:
     /// the focused node sits inside a Composer the last frame drew, and that
@@ -16,6 +26,8 @@ impl CockpitView {
     /// (⌘F's bar) takes the keyboard before it is ever drawn. So a focus
     /// that is new since the pump last looked, on something not yet drawn,
     /// is left alone for the one frame that draws it, and judged on the next.
+    ///
+    /// Called once a frame, by the pump: it moves `FieldWatch` on.
     pub(super) fn field_holds_keyboard(
         &mut self,
         wanted: &FocusHandle,
@@ -23,9 +35,13 @@ impl CockpitView {
         cx: &gpui::App,
     ) -> bool {
         let focus = window.focused(cx);
-        let fresh = focus != self.focus_seen;
-        self.focus_seen = focus.clone();
-        let handed = self.handed.replace(wanted.clone()).filter(|handed| *handed != self.focus);
+        let fresh = focus != self.field_watch.seen;
+        self.field_watch.seen = focus.clone();
+        let handed = self
+            .field_watch
+            .handed
+            .replace(wanted.clone())
+            .filter(|handed| *handed != self.focus);
         let Some(focus) = focus else {
             return false;
         };
