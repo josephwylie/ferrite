@@ -113,10 +113,25 @@ pub fn lifting_button(
 /// A text tooltip on a faded kit `Button`, in the floating vocabulary
 /// (`menu::tooltip`). The kit's own `tooltip` rides an `on_hover` listener,
 /// and an element carries one: the blend's. This one is gpui's own.
-pub trait Tip {
+pub trait Tip: Sized {
     fn tip(self, text: impl Into<SharedString>) -> Self;
+    /// `tip`, but none while the popup the control opens is up: the
+    /// tooltip would be drawn over it.
+    fn tip_unless_open(self, open: bool, text: impl Into<SharedString>) -> Self {
+        if open { self } else { self.tip(text) }
+    }
     /// The verb and its key (`menu::tooltip_with_key`): `Open agent ⏎`.
     fn tip_with_key(self, label: impl Into<SharedString>, key: Option<String>) -> Self;
+}
+
+impl Tip for gpui::Stateful<Div> {
+    fn tip(self, text: impl Into<SharedString>) -> Self {
+        self.tooltip(crate::menu::tooltip(text))
+    }
+
+    fn tip_with_key(self, label: impl Into<SharedString>, key: Option<String>) -> Self {
+        self.tooltip(crate::menu::tooltip_with_key(label, key))
+    }
 }
 
 impl Tip for Button {

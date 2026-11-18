@@ -380,3 +380,48 @@ fn a_head_card_hangs_under_the_details_card(cx: &mut TestAppContext) {
         tick(cx);
     }
 }
+
+/// The pointer resting on a control, long past a tooltip's delay.
+fn rest_on(cx: &mut gpui::VisualTestContext, at: gpui::Point<gpui::Pixels>) {
+    cx.simulate_mouse_move(at, None, gpui::Modifiers::none());
+    cx.simulate_mouse_move(at + gpui::point(px(1.), px(0.)), None, gpui::Modifiers::none());
+    cx.executor().advance_clock(Duration::from_secs(1));
+    cx.run_until_parked();
+}
+
+/// A control whose popup is up shows no tooltip over it: the mode chip,
+/// the model chip, the `+` and the model picker's permissions button. At
+/// rest with nothing up, each shows its own.
+#[gpui::test]
+fn a_control_whose_popup_is_up_shows_no_tooltip(cx: &mut TestAppContext) {
+    let (view, _fake, cx) = window(cx, "popups-no-tooltip", 1);
+    let key = view.read_with(cx, |view, _| view.panes[0].thread().unwrap().get());
+    let mut controls = vec![
+        format!("mode-picker-{key}"),
+        format!("model-picker-{key}"),
+        "composer-attach".to_string(),
+    ];
+    controls.push(crate::cockpit::model_picker::PICKER_PERMISSIONS.to_string());
+    for control in controls {
+        let picker_first = control == crate::cockpit::model_picker::PICKER_PERMISSIONS;
+        if picker_first {
+            let chip = debug_bounds(cx, format!("model-picker-{key}")).expect("the model chip");
+            cx.simulate_click(chip.center(), gpui::Modifiers::none());
+            tick(cx);
+        }
+        let at = debug_bounds(cx, control.clone()).expect(&control).center();
+        rest_on(cx, at);
+        assert!(cx.debug_bounds("tooltip").is_some(), "{control}: its tooltip, at rest");
+        cx.simulate_click(at, gpui::Modifiers::none());
+        tick(cx);
+        rest_on(cx, at);
+        assert!(cx.debug_bounds("tooltip").is_none(), "{control}: no tooltip over its popup");
+        cx.simulate_keystrokes("escape");
+        tick(cx);
+        if picker_first {
+            cx.simulate_keystrokes("escape");
+            tick(cx);
+        }
+        press_nowhere(cx);
+    }
+}

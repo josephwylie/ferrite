@@ -6506,12 +6506,13 @@ impl CockpitView {
         .flatten();
         let identity = self.panes[index].identity;
         let group = model_picker::chip_trigger(identity);
+        let picker_up = self.model_picker_open(identity);
         let face = pane::model_effort_chip(pane::ModelChip {
             mark: ferrite_ui::provider::mark(provider),
             model: model_label,
             effort: effort.map(|effort| pane::sentence_case(&effort).into()),
             loading: false,
-            open: self.model_picker_open(identity),
+            open: picker_up,
             group: group.clone(),
         });
         let control = pane::draft_picker(
@@ -6520,7 +6521,7 @@ impl CockpitView {
             face,
             cx,
         )
-        .tip("Model and effort");
+        .tip_unless_open(picker_up, "Model and effort");
         Some(self.model_chip_control(index, control, cx))
     }
 
@@ -6773,7 +6774,7 @@ impl CockpitView {
             width: Some(ferrite_ui::theme::ATTACH_MENU_W),
             hang_left: true,
             id: SharedString::from(format!("attach-menu-{index}")),
-            trigger: pane::attach_button(cx),
+            trigger: pane::attach_button(self.attach_menu == Some(identity), cx),
             choices,
             open: self.attach_menu == Some(identity),
             return_focus: self.panes[index].composer.focus_handle(cx),
@@ -9687,9 +9688,10 @@ impl CockpitView {
         let mode = open.permission_mode().unwrap_or("default").to_string();
         let label = pane::permission_mode_label(&mode, &modes);
         let key = thread.get() as usize;
+        let menu_up = self.mode_menu().is_some_and(|menu| menu.thread == thread && !menu.from_picker);
         let trigger = pane::toolbar_chip(("mode-picker", key), cx)
             .debug_selector(move || format!("mode-picker-{key}"))
-            .tip("Permission mode")
+            .tip_unless_open(menu_up, "Permission mode")
             .child(pane::mode_chip(label, &mode));
         let wrap = |chip: AnyElement| {
             div()
@@ -10219,17 +10221,18 @@ impl CockpitView {
         let effort = self.thread_effort(&open);
         let key = thread.get() as usize;
         let identity = PaneIdentity::Thread(thread);
+        let picker_up = self.model_picker_open(identity);
         let face = pane::model_effort_chip(pane::ModelChip {
             mark: ferrite_ui::provider::mark(provider),
             model: label,
             effort: effort.map(|effort| pane::sentence_case(&effort).into()),
             loading: open.starting(),
-            open: self.model_picker_open(identity),
+            open: picker_up,
             group: model_picker::chip_trigger(identity),
         });
         let control = pane::toolbar_chip(("model-picker", key), cx)
             .debug_selector(move || format!("model-picker-{key}"))
-            .tip(hold.unwrap_or("Model and effort"))
+            .tip_unless_open(picker_up, hold.unwrap_or("Model and effort"))
             .child(face);
         Some(self.model_chip_control(index, control, cx))
     }

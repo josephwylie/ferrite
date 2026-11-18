@@ -127,15 +127,16 @@ pub fn toolbar_chip(
         .rounded(px(theme::R_CONTROL))
 }
 
-/// The toolbar's `+`: a `COMPOSER_ATTACH` square that attaches files.
-pub fn attach_button(cx: &gpui::App) -> gpui::component::button::Button {
+/// The toolbar's `+`: a `COMPOSER_ATTACH` square that attaches files,
+/// with its menu up while `open`.
+pub fn attach_button(open: bool, cx: &gpui::App) -> gpui::component::button::Button {
     chip_button("composer-attach", cx)
         .debug_selector(|| "composer-attach".into())
         .p_0()
         .size(px(theme::COMPOSER_ATTACH))
         .flex_shrink_0()
         .rounded(px(theme::R_CONTROL))
-        .tip("Attach files")
+        .tip_unless_open(open, "Attach files")
         .child(icon(icons::PLUS, theme::COMPOSER_ATTACH_ICON, INK_STRONG))
 }
 

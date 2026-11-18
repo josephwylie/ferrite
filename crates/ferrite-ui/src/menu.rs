@@ -629,7 +629,9 @@ impl gpui::Render for Entering {
         _: &mut gpui::Window,
         _: &mut gpui::Context<Self>,
     ) -> impl gpui::IntoElement {
-        let tip = gpui::div().child(self.tip.clone());
+        let tip = gpui::div()
+            .debug_selector(|| "tooltip".into())
+            .child(self.tip.clone());
         if self.handoff {
             tip.into_any_element()
         } else {
