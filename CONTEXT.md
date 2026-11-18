@@ -162,6 +162,13 @@ menus and attach menu. One is up at a time. While it is up its keys are
 its own; Escape or a press outside closes it.
 _Avoid_: float, overlay.
 
+**Menu button**
+A button that opens the context menu under itself: the nav's Filter and
+Factory, a nav card's Snooze, the view title's chevron, the more doors
+and the Panel's `+`. The menu opens as the pointer goes down, and a
+second press on the button shuts it. While the menu is up the button
+reads as open and shows no tooltip.
+
 **Composer**
 The prompt box at the bottom of a Pane: text that wraps and
 grows a row per line, keyboard-driven menus, queue-while-busy.

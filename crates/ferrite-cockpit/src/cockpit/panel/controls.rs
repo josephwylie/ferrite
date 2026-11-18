@@ -488,13 +488,14 @@ impl CockpitView {
                 };
                 MenuTarget::SurfaceTab { thread, at }
             }
-            PanelControl::Plus => MenuTarget::SurfaceMenu(thread),
+            PanelControl::Plus => return self.toggle_door(super::strip::plus_door(thread), cx),
             PanelControl::PrNumber => MenuTarget::PrLink(thread),
             PanelControl::PrMore => {
                 let Some(pr) = self.pr_snapshot(thread) else {
                     return;
                 };
-                MenuTarget::PrMore(super::pr_read::PrTarget::thread(thread, pr.number))
+                let target = super::pr_read::PrTarget::thread(thread, pr.number);
+                return self.toggle_door(super::pull_request::pr_more_door(target), cx);
             }
             _ => return,
         };

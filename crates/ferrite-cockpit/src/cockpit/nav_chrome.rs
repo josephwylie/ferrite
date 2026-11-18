@@ -4,12 +4,12 @@
 //! requests, Usage, the undo notice behind ⌘Z, free disk and the update
 //! door.
 
-use super::nav_view::{MenuAt, NavEvent, NavInputs, NavView};
+use super::menu_button::{Door, Edge};
+use super::nav_view::{NavEvent, NavInputs, NavView};
 use super::*;
 use crate::nav::{chrome, NavTooltip};
-use ferrite_ui::components::{icon_button, IconSize, MenuPress};
+use ferrite_ui::components::{icon_button, IconSize};
 use ferrite_ui::icons;
-use gpui::component::button::Button;
 use ferrite_pane::composer::{Composer, Edited, Role};
 use ferrite_ui::theme::{MOTION_UNDO_NOTICE_MS, NAV_UNDO_SHOWN_MS};
 
@@ -148,16 +148,22 @@ impl NavView {
                 nav.clear_search(cx);
                 window.blur(cx);
             }));
-        let filter = chrome::filter_button(inputs.filtered.as_deref(), cx);
-        let filter = self.menu_button(filter, MenuTarget::NavFilter, gpui::Anchor::TopRight, cx);
+        let filter = inputs.doors.button(
+            chrome::filter_button(inputs.filtered.as_deref(), cx),
+            Door::new(MenuTarget::NavFilter, Edge::Right),
+            "Filter by project",
+            cx,
+        );
         let factory = inputs.factory.map(|needs_you| {
-            let open = inputs.menu == Some(MenuTarget::NavFactory);
-            self.menu_button(
-                chrome::factory_button(needs_you, open, cx),
-                MenuTarget::NavFactory,
-                gpui::Anchor::TopLeft,
-                cx,
-            )
+            inputs
+                .doors
+                .button(
+                    chrome::factory_button(needs_you, cx),
+                    Door::new(MenuTarget::NavFactory, Edge::Left),
+                    "Factory",
+                    cx,
+                )
+                .into_any_element()
         });
         let add = icon_button("nav-add-project", icons::FOLDER_PLUS, IconSize::Standard, "Add project", cx)
             .nav_tooltip("Add project")
@@ -175,37 +181,9 @@ impl NavView {
             field,
             factory
                 .into_iter()
-                .chain([filter, add.into_any_element(), new.into_any_element()])
+                .chain([filter.into_any_element(), add.into_any_element(), new.into_any_element()])
                 .collect(),
         )
-    }
-
-    /// A head button that opens `target`'s menu under itself, the menu's
-    /// `corner` on the button's matching edge.
-    fn menu_button(
-        &self,
-        button: Button,
-        target: MenuTarget,
-        corner: gpui::Anchor,
-        cx: &mut Context<Self>,
-    ) -> AnyElement {
-        let drawn = std::rc::Rc::new(std::cell::Cell::new(None::<gpui::Bounds<Pixels>>));
-        button
-            .child({
-                let drawn = drawn.clone();
-                gpui::canvas(move |bounds, _, _| drawn.set(Some(bounds)), |_, _, _, _| {})
-                    .absolute()
-                    .size_full()
-            })
-            .on_menu_press(cx.listener(move |_, at: &Point<Pixels>, _, cx| {
-                cx.stop_propagation();
-                let at = match drawn.get() {
-                    Some(button) => MenuAt::Below(button, corner),
-                    None => MenuAt::Point(*at),
-                };
-                cx.emit(NavEvent::Menu(target, at));
-            }))
-            .into_any_element()
     }
 
     /// The results in the list's place: a row per match, the highlighted

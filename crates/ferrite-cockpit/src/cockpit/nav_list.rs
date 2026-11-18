@@ -5,6 +5,7 @@
 //! moves from Active to Working slides there while one that parks leaves
 //! as a ghost and enters the Parked shelf as a slim row.
 
+use super::menu_button::{Door, Edge};
 use super::nav_view::{MenuAt, NavEvent, NavInputs, NavView};
 use super::*;
 use crate::machines::{Connection, MachineRow};
@@ -412,28 +413,15 @@ impl NavView {
         let strip = inputs.open.get(&thread).map(|open| {
             let mut buttons = Vec::new();
             if !open.queued {
-                let drawn = std::rc::Rc::new(std::cell::Cell::new(None::<gpui::Bounds<Pixels>>));
                 buttons.push(
-                    nav::snooze_button(thread)
-                        .relative()
-                        .child({
-                            let drawn = drawn.clone();
-                            gpui::canvas(move |bounds, _, _| drawn.set(Some(bounds)), |_, _, _, _| {})
-                                .absolute()
-                                .size_full()
-                        })
-                        .on_mouse_down(
-                            MouseButton::Left,
-                            cx.listener(move |_, event: &MouseDownEvent, _, cx| {
-                                cx.stop_propagation();
-                                let at = match drawn.get() {
-                                    Some(button) => MenuAt::Under(button),
-                                    None => MenuAt::Point(event.position),
-                                };
-                                cx.emit(NavEvent::Menu(MenuTarget::Snooze(thread), at));
-                            }),
+                    inputs
+                        .doors
+                        .button(
+                            nav::snooze_button(thread),
+                            Door::new(MenuTarget::Snooze(thread), Edge::Left),
+                            "Snooze thread",
+                            cx,
                         )
-                        .on_click(|_, _, cx| cx.stop_propagation())
                         .into_any_element(),
                 );
             }

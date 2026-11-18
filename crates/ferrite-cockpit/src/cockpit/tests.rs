@@ -38,6 +38,7 @@ mod link_clicks;
 mod link_targets;
 mod loops_overlay;
 mod machines;
+mod menu_buttons;
 mod nav_list;
 mod nav_parity;
 mod nav_outcomes;

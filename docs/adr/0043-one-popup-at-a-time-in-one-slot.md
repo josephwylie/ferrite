@@ -45,9 +45,9 @@ the plan card came back on a Thread focused again later.
 - **One outside press.** Every popup's surface closes it on a press
   outside, in the capture phase, so no handler under the press can keep it
   up. A press on the control that toggles a popup (the mode chip, the
-  model chip, a band chip) is left to the control, which shuts it, and a
-  press on a context menu's submenu or the picker's nested mode menu is
-  the popup's. The attach menu is the kit's choice menu and takes its own
+  model chip, a band chip, a context menu's own button) is left to the
+  control, which shuts it, and a press on a context menu's submenu or the
+  picker's nested mode menu is the popup's. The attach menu is the kit's choice menu and takes its own
   outside press.
 - **One rule for a popup with nothing to draw.** The root's render closes
   a popup that no longer stands: a Thread's popup whose Thread is not
@@ -78,6 +78,27 @@ old shape hid are pinned in `cockpit/tests/popups.rs`: a sheet opening
 left the attach menu up, Escape could not close it, Escape on it denied
 a waiting Decision, its arrows and Enter did nothing, and a context menu
 opened over it left both up.
+
+## Menu buttons
+
+A button that opens the context menu is drawn by one function,
+`Doors::button` (`cockpit/menu_button.rs`), on the kit's `MenuButton`
+(`ferrite-ui`). The caller gives the button's face, the menu's target,
+the edge the menu hangs from and the tooltip's words; the function owns
+the rest. The button records its bounds in the slot under a key from its
+target, and the menu hangs under them, `MENU_UNDER_GAP` below, its edge
+on the button's. It opens as the pointer goes down and from Enter or
+Space. The menu remembers it came from its button (`from_door`), so
+`Popup::owns` leaves a second press there to the button, which shuts it.
+While the menu is up the button wears `CHIP_OPEN` and has no tooltip.
+The nav, a view of its own, asks for the press with `NavEvent::Door`.
+The nav's Filter and Factory, a nav card's Snooze, the view title's
+chevron, the more doors of Files, Changes, Terminal and the PR, and the
+Panel's `+` are drawn this way. Before, three ways hung these menus: from
+a canvas each button drew itself, at the pointer, over the button, or
+from the Panel's own bounds map. A second press closed the menu and
+opened it again, and the tooltip drew over the menu. Those faults are
+pinned in `cockpit/tests/menu_buttons.rs`.
 
 ## Precedent
 

@@ -147,32 +147,79 @@ impl Tip for Button {
     }
 }
 
-/// A button that opens a menu opens it as the pointer goes down, as a
-/// macOS pull-down does, and from Enter or Space when it has focus. `open`
-/// gets where: the pointer, or the button's bottom-left corner.
-pub trait MenuPress: Sized {
-    fn on_menu_press(
+/// A control that opens a menu, as a macOS pull-down does: `press` runs as
+/// the pointer goes down on it and from Enter or Space when it has focus,
+/// and the same press shuts the menu again. While `open` it wears
+/// `paint::CHIP_OPEN`, as the Composer's chips do under their menus, and
+/// has no tooltip, which would be drawn over the menu; shut, `tip` gives it
+/// one. `record` gets its bounds as laid out, for the menu to hang from.
+pub trait MenuButton: Styled + InteractiveElement + ParentElement + Sized {
+    fn menu_button(
         self,
-        open: impl Fn(&gpui::Point<gpui::Pixels>, &mut Window, &mut App) + 'static,
+        open: bool,
+        tip: impl FnOnce(Self) -> Self,
+        record: impl FnOnce(gpui::Bounds<gpui::Pixels>, &mut Window, &mut App) + 'static,
+        press: impl Fn(&mut Window, &mut App) + 'static,
     ) -> Self;
 }
 
-impl MenuPress for Button {
-    fn on_menu_press(
-        mut self,
-        open: impl Fn(&gpui::Point<gpui::Pixels>, &mut Window, &mut App) + 'static,
+type MenuPress = std::rc::Rc<dyn Fn(&mut Window, &mut App)>;
+
+fn menu_face<E: Styled + InteractiveElement + ParentElement>(
+    face: E,
+    open: bool,
+    tip: impl FnOnce(E) -> E,
+    record: impl FnOnce(gpui::Bounds<gpui::Pixels>, &mut Window, &mut App) + 'static,
+    press: MenuPress,
+) -> E {
+    let face = if open {
+        face.bg(theme::paint::CHIP_OPEN)
+    } else {
+        tip(face)
+    };
+    let mut face = on_bounds(face, record);
+    face.interactivity()
+        .on_mouse_down(gpui::MouseButton::Left, move |_, window, cx| {
+            cx.stop_propagation();
+            press(window, cx)
+        });
+    face
+}
+
+/// The release that ends a pointer's press is the press's, not a click
+/// for whatever lies under the control.
+fn keyed_press(press: MenuPress) -> impl Fn(&gpui::ClickEvent, &mut Window, &mut App) + 'static {
+    move |event, window, cx| {
+        cx.stop_propagation();
+        if let gpui::ClickEvent::Keyboard(_) = event {
+            press(window, cx);
+        }
+    }
+}
+
+impl MenuButton for Button {
+    fn menu_button(
+        self,
+        open: bool,
+        tip: impl FnOnce(Self) -> Self,
+        record: impl FnOnce(gpui::Bounds<gpui::Pixels>, &mut Window, &mut App) + 'static,
+        press: impl Fn(&mut Window, &mut App) + 'static,
     ) -> Self {
-        let open = std::rc::Rc::new(open);
-        let keyed = open.clone();
-        self.interactivity()
-            .on_mouse_down(gpui::MouseButton::Left, move |event, window, cx| {
-                open(&event.position, window, cx)
-            });
-        self.on_click(move |event, window, cx| {
-            if let gpui::ClickEvent::Keyboard(_) = event {
-                keyed(&event.position(), window, cx);
-            }
-        })
+        let press: MenuPress = std::rc::Rc::new(press);
+        menu_face(self, open, tip, record, press.clone()).on_click(keyed_press(press))
+    }
+}
+
+impl MenuButton for gpui::Stateful<Div> {
+    fn menu_button(
+        self,
+        open: bool,
+        tip: impl FnOnce(Self) -> Self,
+        record: impl FnOnce(gpui::Bounds<gpui::Pixels>, &mut Window, &mut App) + 'static,
+        press: impl Fn(&mut Window, &mut App) + 'static,
+    ) -> Self {
+        let press: MenuPress = std::rc::Rc::new(press);
+        menu_face(self, open, tip, record, press.clone()).on_click(keyed_press(press))
     }
 }
 
@@ -1450,7 +1497,7 @@ impl IconSize {
 /// A press on it never drags the slot or tab it sits on.
 /// `label` is its name to assistive technology; its id is its
 /// `debug_selector`. The caller adds a tooltip (`Tip`) and the press
-/// (`on_click`).
+/// (`on_click`), or makes it a menu's button (`MenuButton`).
 pub fn icon_button(
     id: impl Into<SharedString>,
     glyph: &'static str,
@@ -2742,27 +2789,28 @@ mod tests {
     }
 
     /// A menu's icon button opens it as the pointer goes down, once for the
-    /// whole press, and from Enter at its bottom-left corner.
+    /// whole press, and from Enter.
     #[gpui::test]
     fn a_menu_button_opens_on_the_press_down_and_from_enter(cx: &mut gpui::TestAppContext) {
-        use std::{cell::RefCell, rc::Rc};
+        use std::{cell::Cell, rc::Rc};
 
-        use gpui::{Modifiers, MouseButton, Pixels, Point};
+        use gpui::{Modifiers, MouseButton};
 
-        type Opened = Rc<RefCell<Vec<Point<Pixels>>>>;
-        struct Bar(Opened);
+        struct Bar(Rc<Cell<usize>>);
         impl gpui::Render for Bar {
             fn render(&mut self, _: &mut Window, cx: &mut gpui::Context<Self>) -> impl IntoElement {
                 let opened = self.0.clone();
                 div().tab_group().p(px(10.)).child(
                     icon_button("menu-under-test", icons::FACTORY, IconSize::Standard, "Factory", cx)
-                        .on_menu_press(move |at, _, _| opened.borrow_mut().push(*at)),
+                        .menu_button(false, |button| button, |_, _, _| {}, move |_, _| {
+                            opened.set(opened.get() + 1)
+                        }),
                 )
             }
         }
 
         cx.update(theme::init_components);
-        let opened: Opened = Rc::default();
+        let opened = Rc::new(Cell::new(0));
         let (_, cx) = cx.add_window_view({
             let opened = opened.clone();
             move |_, _| Bar(opened)
@@ -2770,9 +2818,9 @@ mod tests {
         cx.update(|window, cx| window.draw(cx).clear(cx));
         let button = cx.debug_bounds("menu-under-test").expect("the button");
         cx.simulate_mouse_down(button.center(), MouseButton::Left, Modifiers::none());
-        assert_eq!(*opened.borrow(), vec![button.center()], "open on the press down");
+        assert_eq!(opened.get(), 1, "open on the press down");
         cx.simulate_mouse_up(button.center(), MouseButton::Left, Modifiers::none());
-        assert_eq!(opened.borrow().len(), 1, "the release opens nothing more");
+        assert_eq!(opened.get(), 1, "the release opens nothing more");
 
         cx.update(|window, cx| {
             window.focus_next(cx);
@@ -2785,7 +2833,6 @@ mod tests {
             prefer_character_input: false,
         });
         cx.simulate_event(gpui::KeyUpEvent { keystroke: enter });
-        assert_eq!(opened.borrow().len(), 2, "Enter opens it");
-        assert_eq!(opened.borrow()[1], button.bottom_left());
+        assert_eq!(opened.get(), 2, "Enter opens it");
     }
 }

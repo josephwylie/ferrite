@@ -36,7 +36,8 @@ use remote_files::RemoteFiles;
 
 use ferrite_pane::composer::{Composer, Role};
 use ferrite_pane::preview::{open_original, reading_markup, Body as DocBody};
-use ferrite_ui::components::MenuPress as _;
+use crate::cockpit::menu_button::{Door, Edge};
+use ferrite_ui::components::IconSize;
 use ferrite_ui::icons::{self, icon};
 use ferrite_ui::theme::{self};
 
@@ -1209,14 +1210,12 @@ impl CockpitView {
                         view.run_files_verb(thread, Verb::ToggleTree, cx);
                     })),
             )
-            .child(
-                door("files-more", icons::ELLIPSIS, "More", None).on_menu_press(cx.listener(
-                    move |view, at: &gpui::Point<Pixels>, _, cx| {
-                        cx.stop_propagation();
-                        view.open_context_menu(MenuTarget::FilesMore(thread), *at, cx);
-                    },
-                )),
-            )
+            .child(self.doors().button(
+                ferrite_ui::components::icon_button("files-more", icons::ELLIPSIS, IconSize::Standard, "More", cx),
+                Door::new(MenuTarget::FilesMore(thread), Edge::Right),
+                "More",
+                cx,
+            ))
     }
 
     fn files_editor(&self, thread: ThreadId, files: &Files, cx: &mut Context<Self>) -> Div {
