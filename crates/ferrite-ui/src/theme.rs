@@ -2203,6 +2203,15 @@ const _: () = assert!(SCROLLBAR_GUTTER <= PANE_PAD_X);
 /// hang the flyout off-centre — and they run the band's full height,
 /// flush to the window's top-right corner.
 pub const CAPTION_W: f32 = 46.0;
+/// What the caption buttons take from the Panel's head beyond the Panel's
+/// own right padding, where the app draws its own titlebar. The Panel at
+/// every floor, and the window at its least, is that much wider, so the
+/// Panel's tabs and the Thread beside it get the room they have on macOS.
+pub const CAPTION_ALLOWANCE: f32 = if crate::frame::CUSTOM {
+    3.0 * CAPTION_W - PANEL_PAD_R
+} else {
+    0.0
+};
 /// 10px — the caption mark inside that button. Window chrome is smaller
 /// than UI: `ICON_BUTTON_GLYPH` at 16px would read as an app control.
 pub const CAPTION_GLYPH: f32 = 10.0;
@@ -2220,7 +2229,7 @@ pub const CAPTION_CLOSE: u32 = 0xc42b1c;
 pub const CAPTION_CLOSE_PRESSED: u32 = 0x9b2218;
 pub const CAPTION_CLOSE_INK: u32 = 0xffffff;
 /// The smallest window the chrome still lays out in.
-pub const WINDOW_MIN_W: f32 = 640.0;
+pub const WINDOW_MIN_W: f32 = 640.0 + CAPTION_ALLOWANCE;
 pub const WINDOW_MIN_H: f32 = 420.0;
 
 /// 8px — the gutter between two cards on a board, the tree's gap

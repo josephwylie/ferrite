@@ -167,10 +167,11 @@ struct TabPress {
 /// beside a nav drawn `nav` wide (ADR 0039's floor per kind): the
 /// sections' `PANEL_W`; a reading width for a file, the browser or a pull
 /// request; most of the content area for Files and Changes; the side
-/// chat's for a shell, a side chat or an agent.
+/// chat's for a shell, a side chat or an agent. Each with the
+/// `CAPTION_ALLOWANCE`.
 fn floor_w(active: Option<&SurfaceId>, window: f32, nav: f32) -> f32 {
     use ferrite_ui::theme::*;
-    match active {
+    CAPTION_ALLOWANCE + match active {
         None | Some(SurfaceId::Overview | SurfaceId::Background) => PANEL_W,
         Some(SurfaceId::File(_) | SurfaceId::Browser | SurfaceId::PullRequest(_)) => {
             (window * PANEL_PREVIEW_SHARE).clamp(PANEL_PREVIEW_MIN_W, PANEL_PREVIEW_MAX_W)
@@ -183,9 +184,13 @@ fn floor_w(active: Option<&SurfaceId>, window: f32, nav: f32) -> f32 {
     }
 }
 
+/// The least the Panel ever draws: the sections' floor.
+pub(in crate::cockpit) fn least_w() -> f32 {
+    ferrite_ui::theme::PANEL_W + ferrite_ui::theme::CAPTION_ALLOWANCE
+}
+
 fn most_w(window: f32, nav: f32) -> f32 {
-    use ferrite_ui::theme::*;
-    (window - nav - DOCK_THREAD_MIN_W).max(PANEL_W)
+    (window - nav - ferrite_ui::theme::DOCK_THREAD_MIN_W).max(least_w())
 }
 
 /// How wide a Thread's Panel draws: maximized, all it can take; else its
@@ -595,7 +600,7 @@ impl CockpitView {
         };
         let window = self.panel.window_w;
         let nav = self.nav_rest_w();
-        let width = (window - f32::from(position.x)).clamp(ferrite_ui::theme::PANEL_W, most_w(window, nav));
+        let width = (window - f32::from(position.x)).clamp(least_w(), most_w(window, nav));
         self.apply_surface(thread, SurfaceAction::Resize(width));
         cx.notify();
     }
@@ -816,12 +821,7 @@ fn reads_panel_keys(tab: Option<&SurfaceId>) -> bool {
 /// with no column to stand against: the panel's own padding, or on Windows
 /// just left of the caption buttons.
 pub(super) fn tools_inset() -> f32 {
-    use ferrite_ui::theme::{CAPTION_W, PANEL_PAD_R};
-    if ferrite_ui::frame::CUSTOM {
-        3. * CAPTION_W
-    } else {
-        PANEL_PAD_R
-    }
+    ferrite_ui::theme::PANEL_PAD_R + ferrite_ui::theme::CAPTION_ALLOWANCE
 }
 
 /// A section's head, the Panel's one (`PANEL_SECTION_H`): its name in
@@ -893,16 +893,17 @@ mod tests {
     fn the_panel_is_never_under_its_kinds_floor() {
         let window = 1900.;
         let nav = NAV_WIDTH;
-        assert_eq!(panel_w(&showing(SurfaceId::Overview, 0.), window, nav), PANEL_W);
-        assert_eq!(panel_w(&showing(SurfaceId::Terminal(1), 0.), window, nav), TERMINAL_W);
+        let extra = CAPTION_ALLOWANCE;
+        assert_eq!(panel_w(&showing(SurfaceId::Overview, 0.), window, nav), least_w());
+        assert_eq!(panel_w(&showing(SurfaceId::Terminal(1), 0.), window, nav), TERMINAL_W + extra);
         assert_eq!(
             panel_w(&showing(SurfaceId::File("a".into()), 0.), window, nav),
-            (window * PANEL_PREVIEW_SHARE).clamp(PANEL_PREVIEW_MIN_W, PANEL_PREVIEW_MAX_W)
+            (window * PANEL_PREVIEW_SHARE).clamp(PANEL_PREVIEW_MIN_W, PANEL_PREVIEW_MAX_W) + extra
         );
         let files = panel_w(&showing(SurfaceId::Files, 0.), window, nav);
-        assert!((files - 0.6 * (window - NAV_WIDTH)).abs() < 1., "{files}");
+        assert!((files - 0.6 * (window - NAV_WIDTH) - extra).abs() < 1., "{files}");
         let folded = panel_w(&showing(SurfaceId::Files, 0.), window, 0.);
-        assert!((folded - 0.6 * window).abs() < 1., "{folded}");
+        assert!((folded - 0.6 * window - extra).abs() < 1., "{folded}");
         assert_eq!(panel_w(&showing(SurfaceId::Overview, 600.), window, nav), 600.);
     }
 
