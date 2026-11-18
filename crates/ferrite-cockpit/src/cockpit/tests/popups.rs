@@ -359,3 +359,24 @@ fn a_card_takes_the_keyboard_and_gives_it_back(cx: &mut TestAppContext) {
         );
     }
 }
+
+/// A card hanging from a Pane's head hangs under the Thread details card
+/// drawn in that Pane, not over it.
+#[gpui::test]
+fn a_head_card_hangs_under_the_details_card(cx: &mut TestAppContext) {
+    let (view, _fake, cx) = window(cx, "popups-under-details", 1);
+    cx.simulate_resize(gpui::size(px(2400.), px(900.)));
+    tick(cx);
+    let details = cx.debug_bounds("details-card").expect("the details card, inline");
+    for kind in [Kind::Plan, Kind::Checks] {
+        open(&view, kind, cx);
+        let card = cx.debug_bounds(kind.selector()).unwrap();
+        assert!(
+            !card.intersects(&details),
+            "{kind:?} at {card:?} covers the details card at {details:?}"
+        );
+        assert_eq!(card.right(), details.right(), "{kind:?} keeps the details card's right edge");
+        cx.simulate_keystrokes("escape");
+        tick(cx);
+    }
+}

@@ -9553,9 +9553,16 @@ impl CockpitView {
     }
 
     /// A Pane's own card: off its Composer's right edge opening up, its
-    /// head's opening down, inside the Pane.
+    /// head's opening down, inside the Pane. A head card hangs under the
+    /// Thread details card while that is drawn, since it sits in the same
+    /// corner.
     fn pane_card_corner(&self, identity: PaneIdentity, up: bool) -> Option<Point<Pixels>> {
-        let geometry = self.panes[self.index_of(identity)?].geometry.get();
+        let pane = &self.panes[self.index_of(identity)?];
+        if let Some(details) = pane.details.drawn.get().filter(|_| !up) {
+            let limit_right = f32::from(details.right());
+            return Some(ferrite_ui::components::FloatPlace { floor: 0., limit_right }.card_corner(details, false));
+        }
+        let geometry = pane.geometry.get();
         let card = geometry.card?;
         let limit_right = f32::from(card.right()) - ferrite_ui::theme::PANE_PAD_X;
         let (floor, trigger) = if up {
