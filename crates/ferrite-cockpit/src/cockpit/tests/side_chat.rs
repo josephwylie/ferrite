@@ -58,6 +58,51 @@ pub(super) fn side_tabs(
         .collect()
 }
 
+/// What the cases read of the side chat, held here so a move of its
+/// state changes these and not the cases.
+pub(super) fn draft(view: &CockpitView, owner: ThreadId, cx: &gpui::App) -> Option<String> {
+    view.side_chats.draft(owner, cx)
+}
+
+fn titles(view: &CockpitView, owner: ThreadId, _: &gpui::App) -> (Vec<SharedString>, usize) {
+    view.side_chats.titles(owner)
+}
+
+fn forks(view: &CockpitView, owner: ThreadId, _: &gpui::App) -> Vec<ThreadId> {
+    view.side_chats.threads(owner)
+}
+
+fn owns(view: &CockpitView, thread: ThreadId, _: &gpui::App) -> bool {
+    view.side_chats.owns(thread)
+}
+
+/// The shown tab's fork, once it has one.
+pub(super) fn shown_fork(view: &CockpitView, owner: ThreadId, _: &gpui::App) -> Option<ThreadId> {
+    view.side_thread(owner)
+}
+
+fn field_of(
+    view: &CockpitView,
+    owner: ThreadId,
+    index: usize,
+    _: &gpui::App,
+) -> Option<Entity<ferrite_pane::composer::Composer>> {
+    view.side_chats.field_of(owner, index).cloned()
+}
+
+fn bring_back_blocked(view: &CockpitView, owner: ThreadId, id: u64, _: &gpui::App) -> Option<&'static str> {
+    view.bring_back_blocked(owner, id)
+}
+
+fn shown_pane<R>(
+    view: &CockpitView,
+    owner: ThreadId,
+    cx: &gpui::App,
+    read: impl FnOnce(&PaneView, &gpui::App) -> R,
+) -> Option<R> {
+    Some(read(view.side_chats.pane(owner)?, cx))
+}
+
 /// Opened, a side chat is a Panel tab (ADR 0039) at least its token wide,
 /// the thread reflowing narrower beside it; an empty tab says `No messages
 /// yet`; the composer reads `Ask a quick question` — unless the chat
@@ -99,10 +144,10 @@ fn a_side_chat_opens_as_a_panel_tab_with_an_empty_word(cx: &mut TestAppContext) 
     view.read_with(cx, |view, cx| {
         assert_eq!(view.panes.len(), 1, "the fork is no Pane");
         assert_eq!(view.cockpit.threads().len(), 2);
-        let fork = view.side_thread(owner).expect("the tab took the fork");
-        assert!(view.side_chats.owns(fork));
+        let fork = shown_fork(view, owner, cx).expect("the tab took the fork");
+        assert!(owns(view, fork, cx));
         assert_eq!(view.focused_thread(), Some(owner), "the window stays");
-        assert_eq!(view.side_chats.draft(owner, cx).as_deref(), Some(""));
+        assert_eq!(draft(view, owner, cx).as_deref(), Some(""));
     });
 }
 
@@ -114,7 +159,7 @@ fn a_side_chat_opened_over_a_selection_quotes_it(cx: &mut TestAppContext) {
     let owner = owner(&view, cx);
     view.read_with(cx, |view, cx| {
         assert_eq!(
-            view.side_chats.draft(owner, cx).as_deref(),
+            draft(view, owner, cx).as_deref(),
             Some("> two\n> lines\n\n")
         );
     });
@@ -133,11 +178,11 @@ fn side_chat_tabs_are_separate_conversations(cx: &mut TestAppContext) {
     open_chat(&view, cx, None);
     open_chat(&view, cx, None);
     let owner = owner(&view, cx);
-    view.read_with(cx, |view, _| {
-        let (titles, active) = view.side_chats.titles(owner);
+    view.read_with(cx, |view, cx| {
+        let (titles, active) = titles(view, owner, cx);
         assert_eq!(titles, ["Side chat", "Side chat 2"]);
         assert_eq!(active, 1, "the new tab is shown");
-        let forks = view.side_chats.threads(owner);
+        let forks = forks(view, owner, cx);
         assert_eq!(forks.len(), 2, "each tab its own fork");
         assert_ne!(forks[0], forks[1]);
     });
@@ -147,26 +192,26 @@ fn side_chat_tabs_are_separate_conversations(cx: &mut TestAppContext) {
 
     // The first tab is its own conversation: its field is its own.
     view.update(cx, |view, cx| {
-        let field = view.side_chats.field_of(owner, 1).expect("tab 2's field").clone();
+        let field = field_of(view, owner, 1, cx).expect("tab 2's field");
         field.update(cx, |field, cx| field.insert("second", cx));
     });
     let first = debug_bounds(cx, format!("panel-tab-SideChat-{}", ids[0])).unwrap();
     cx.simulate_click(first.center(), gpui::Modifiers::none());
     tick(cx);
     view.read_with(cx, |view, cx| {
-        assert_eq!(view.side_chats.titles(owner).1, 0);
-        assert_eq!(view.side_chats.draft(owner, cx).as_deref(), Some(""));
+        assert_eq!(titles(view, owner, cx).1, 0);
+        assert_eq!(draft(view, owner, cx).as_deref(), Some(""));
     });
 
     // Closing the shown tab leaves the other.
-    let forks = view.read_with(cx, |view, _| view.side_chats.threads(owner));
+    let forks = view.read_with(cx, |view, cx| forks(view, owner, cx));
     let first = crate::cockpit::surfaces::SurfaceId::SideChat(ids[0]);
     view.update(cx, |view, cx| view.close_surface(owner, &first, cx));
     tick(cx);
-    view.read_with(cx, |view, _| {
-        assert_eq!(view.side_chats.titles(owner).0, ["Side chat 2"]);
-        assert!(!view.side_chats.owns(forks[0]), "its fork is retired");
-        assert!(view.side_chats.owns(forks[1]));
+    view.read_with(cx, |view, cx| {
+        assert_eq!(titles(view, owner, cx).0, ["Side chat 2"]);
+        assert!(!owns(view, forks[0], cx), "its fork is retired");
+        assert!(owns(view, forks[1], cx));
     });
 
     // The last closed, no side chat draws.
@@ -174,7 +219,7 @@ fn side_chat_tabs_are_separate_conversations(cx: &mut TestAppContext) {
     view.update(cx, |view, cx| view.close_surface(owner, &last, cx));
     tick(cx);
     assert!(cx.debug_bounds("side-chat").is_none());
-    assert!(view.read_with(cx, |view, _| view.side_chats.titles(owner).0.is_empty()));
+    assert!(view.read_with(cx, |view, cx| titles(view, owner, cx).0.is_empty()));
     assert!(side_tabs(&view, owner, cx).is_empty());
 }
 
@@ -226,7 +271,7 @@ fn a_side_chat_question_goes_to_its_fork_and_shows_only_the_new_words(cx: &mut T
     open_chat(&view, cx, None);
     let owner = owner(&view, cx);
     let fork = view
-        .read_with(cx, |view, _| view.side_thread(owner))
+        .read_with(cx, |view, cx| shown_fork(view, owner, cx))
         .unwrap();
     let sent_before = fake.sent.borrow().len();
 
@@ -239,7 +284,7 @@ fn a_side_chat_question_goes_to_its_fork_and_shows_only_the_new_words(cx: &mut T
         Some("what is alpha?")
     );
     view.read_with(cx, |view, cx| {
-        assert_eq!(view.side_chats.draft(owner, cx).as_deref(), Some(""));
+        assert_eq!(draft(view, owner, cx).as_deref(), Some(""));
         let open = view.cockpit.thread(fork).expect("the fork is open");
         assert!(
             open.transcript().blocks().iter().any(|block| matches!(
@@ -292,7 +337,7 @@ fn the_side_chat_head_brings_back_and_trashes(cx: &mut TestAppContext) {
     let id = side_tabs(&view, owner, cx)[0];
     let head = cx.debug_bounds("side-chat-head").expect("its head");
     assert_eq!(head.size.height, px(ferrite_ui::theme::SURFACE_BAR_H));
-    let blocked = view.read_with(cx, |view, _| view.bring_back_blocked(owner, id));
+    let blocked = view.read_with(cx, |view, cx| bring_back_blocked(view, owner, id, cx));
     assert_eq!(blocked, Some("Available after a finished reply."));
 
     cx.simulate_input("what is alpha?");
@@ -303,7 +348,7 @@ fn the_side_chat_head_brings_back_and_trashes(cx: &mut TestAppContext) {
         text: "Alpha is the first letter.\n\n".into(),
     });
     tick(cx);
-    let blocked = view.read_with(cx, |view, _| view.bring_back_blocked(owner, id));
+    let blocked = view.read_with(cx, |view, cx| bring_back_blocked(view, owner, id, cx));
     assert_eq!(blocked, Some("Available after a finished reply."), "still answering");
     let dot = format!("panel-tab-SideChat-{id}-pending");
     assert!(debug_bounds(cx, dot.clone()).is_some(), "its tab's pending dot");
@@ -313,7 +358,7 @@ fn the_side_chat_head_brings_back_and_trashes(cx: &mut TestAppContext) {
     });
     tick(cx);
     assert!(debug_bounds(cx, dot).is_none(), "answered: no dot");
-    assert_eq!(view.read_with(cx, |view, _| view.bring_back_blocked(owner, id)), None);
+    assert_eq!(view.read_with(cx, |view, cx| bring_back_blocked(view, owner, id, cx)), None);
     let back = cx.debug_bounds("side-chat-bring-back").unwrap();
     cx.simulate_click(back.center(), gpui::Modifiers::none());
     tick(cx);
@@ -329,4 +374,123 @@ fn the_side_chat_head_brings_back_and_trashes(cx: &mut TestAppContext) {
     cx.simulate_click(trash.center(), gpui::Modifiers::none());
     tick(cx);
     assert!(side_tabs(&view, owner, cx).is_empty(), "the second press deletes it");
+}
+
+/// A tab pressed in the head row hands its field the keyboard, and
+/// closing the tab shown hands it to the tab left.
+#[gpui::test]
+fn the_side_chat_tab_shown_takes_the_keys(cx: &mut TestAppContext) {
+    let (view, _fake, cx) = answered("side-chat-tab-keys", cx);
+    open_chat(&view, cx, None);
+    open_chat(&view, cx, None);
+    let owner = owner(&view, cx);
+    let ids = side_tabs(&view, owner, cx);
+    let first = debug_bounds(cx, format!("panel-tab-SideChat-{}", ids[0])).unwrap();
+    cx.simulate_click(first.center(), gpui::Modifiers::none());
+    tick(cx);
+    cx.simulate_input("first");
+    view.read_with(cx, |view, cx| {
+        assert_eq!(draft(view, owner, cx).as_deref(), Some("first"), "the tab pressed");
+        let second = field_of(view, owner, 1, cx).unwrap();
+        assert_eq!(second.read(cx).text(), "", "not the other");
+    });
+    assert_eq!(composer_text(&view, cx), "", "nor the Composer");
+
+    let shown = crate::cockpit::surfaces::SurfaceId::SideChat(ids[0]);
+    view.update(cx, |view, cx| view.close_surface(owner, &shown, cx));
+    tick(cx);
+    cx.simulate_input("left");
+    view.read_with(cx, |view, cx| {
+        assert_eq!(draft(view, owner, cx).as_deref(), Some("left"), "the tab left");
+    });
+}
+
+/// ⌘W in the field ends its side chat, not the Thread, and the fork goes.
+#[gpui::test]
+fn cmd_w_in_the_side_chat_field_ends_its_tab(cx: &mut TestAppContext) {
+    let (view, _fake, cx) = answered("side-chat-cmd-w", cx);
+    open_chat(&view, cx, None);
+    let owner = owner(&view, cx);
+    assert_eq!(side_tabs(&view, owner, cx).len(), 1);
+    cx.simulate_keystrokes("cmd-w");
+    tick(cx);
+    assert!(side_tabs(&view, owner, cx).is_empty(), "the tab is gone");
+    view.read_with(cx, |view, _| {
+        assert_eq!(view.focused_thread(), Some(owner), "the Thread stays");
+        assert_eq!(view.cockpit.threads(), [owner], "the fork is retired");
+    });
+}
+
+/// The palette lists the Thread and never its side chat's fork.
+#[gpui::test]
+fn the_palette_lists_no_side_chat_fork(cx: &mut TestAppContext) {
+    let (view, _fake, cx) = answered("side-chat-palette", cx);
+    open_chat(&view, cx, None);
+    let owner = owner(&view, cx);
+    let fork = view.read_with(cx, |view, cx| shown_fork(view, owner, cx)).unwrap();
+    let rows = cx.update(|_, cx| view.read(cx).palette_thread_rows(cx));
+    let act = |thread| crate::palette::Act::Thread(thread);
+    assert!(rows.iter().any(|row| row.act == act(owner)));
+    assert!(!rows.iter().any(|row| row.act == act(fork)), "no row for the fork");
+}
+
+/// A tool row in a side chat's answer folds and unfolds there.
+#[gpui::test]
+fn a_tool_row_in_a_side_chat_unfolds_in_its_tab(cx: &mut TestAppContext) {
+    let (view, fake, cx) = answered("side-chat-tool", cx);
+    open_chat(&view, cx, None);
+    let owner = owner(&view, cx);
+    cx.simulate_input("what is alpha?");
+    cx.simulate_keystrokes("enter");
+    tick(cx);
+    fake.streams.borrow()[1]
+        .send(SessionEvent::ToolStarted {
+            id: "side-tool".into(),
+            name: "Bash".into(),
+            input: serde_json::json!({ "command": "cat <<'EOF'\nlet answer = 42;\nEOF" }),
+        })
+        .unwrap();
+    fake.streams.borrow()[1]
+        .send(SessionEvent::TextDelta {
+            text: "Next file.\n\n".into(),
+        })
+        .unwrap();
+    fake.streams.borrow()[1]
+        .send(SessionEvent::ToolStarted {
+            id: "next".into(),
+            name: "Read".into(),
+            input: serde_json::json!({ "file_path": "next.rs" }),
+        })
+        .unwrap();
+    tick(cx);
+    tick(cx);
+    let chevron = view
+        .read_with(cx, |view, cx| {
+            shown_pane(view, owner, cx, |pane, cx| pane.tool_bounds("side-tool", cx)).flatten()
+        })
+        .expect("the tool row draws in the tab")
+        .center();
+    let expanded = |view: &CockpitView, cx: &gpui::App| {
+        shown_pane(view, owner, cx, |pane, _| pane.tool_expanded("side-tool"))
+    };
+    assert_eq!(view.read_with(cx, |view, cx| expanded(view, cx)), Some(false));
+    cx.simulate_click(chevron, gpui::Modifiers::none());
+    cx.run_until_parked();
+    assert_eq!(view.read_with(cx, |view, cx| expanded(view, cx)), Some(true));
+}
+
+/// A Thread whose agent cannot fork still gets its tab: no fork is
+/// asked, and the tab says why in the empty word's place.
+#[gpui::test]
+fn a_side_chat_the_agent_cannot_fork_still_opens_its_tab(cx: &mut TestAppContext) {
+    let (core, fake) = cockpit("side-chat-refused", 1);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(1600.), px(700.)));
+    tick(cx);
+    open_chat(&view, cx, None);
+    let owner = owner(&view, cx);
+    assert!(fake.forks.borrow().is_empty(), "no fork is asked");
+    assert_eq!(side_tabs(&view, owner, cx).len(), 1, "the tab is there");
+    assert!(cx.debug_bounds("side-chat-empty").is_some(), "the reason shows");
+    assert!(view.read_with(cx, |view, cx| shown_fork(view, owner, cx)).is_none());
 }

@@ -663,10 +663,13 @@ fn a_selections_side_chat_docks_a_pane_with_the_passage_quoted(cx: &mut TestAppC
         assert_eq!(view.panes.len(), 1, "but no Pane holds it");
         assert_eq!(view.focused_thread(), Some(owner), "the window stays");
         assert_eq!(
-            view.side_chats.draft(owner, cx).as_deref(),
+            super::side_chat::draft(view, owner, cx).as_deref(),
             Some("> ph\n\n")
         );
-        assert!(view.side_thread(owner).is_some(), "the tab took the fork");
+        assert!(
+            super::side_chat::shown_fork(view, owner, cx).is_some(),
+            "the tab took the fork"
+        );
     });
     assert!(cx.debug_bounds("side-chat").is_some());
 

@@ -161,6 +161,13 @@ impl SideChats {
     pub(crate) fn draft(&self, owner: ThreadId, cx: &gpui::App) -> Option<String> {
         Some(self.field(owner)?.read(cx).text().to_string())
     }
+
+    /// The shown tab's pieces, once it has a fork — what the tests press.
+    #[cfg(test)]
+    pub(crate) fn pane(&self, owner: ThreadId) -> Option<&PaneView> {
+        let chat = self.chats.get(&owner)?;
+        Some(&chat.tabs.get(chat.active)?.conversation.as_ref()?.pane)
+    }
 }
 
 impl CockpitView {
