@@ -166,7 +166,7 @@ fn the_toolbar_holds_the_scope_and_the_view_tools(cx: &mut TestAppContext) {
     for tool in ["changes-refresh", "changes-fold-all", "changes-wrap", "changes-whitespace", "changes-hide-tests"] {
         let at = cx.debug_bounds(tool).unwrap_or_else(|| panic!("{tool}"));
         assert!(at.left() > scope.right(), "{tool} at the right");
-        assert_eq!(at.size.height, px(ferrite_ui::theme::SURFACE_PLUS));
+        assert_eq!(at.size.height, px(ferrite_ui::theme::NAV_HEADING_BUTTON));
     }
     let shown = |cx: &mut gpui::VisualTestContext| {
         (0..3)

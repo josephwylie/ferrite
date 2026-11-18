@@ -15,7 +15,7 @@ use gpui::{div, px, rgb, AnyElement, App, Div, SharedString, Stateful};
 use gpui::component::button::Button;
 
 use crate::components;
-use crate::icons::{self, icon};
+use crate::icons;
 use crate::theme::*;
 
 /// A sheet as its owner draws it, for the Cockpit's one sheet host to lay
@@ -101,18 +101,12 @@ pub fn sheet_head(title: impl Into<SharedString>, close: impl IntoElement) -> Di
         .border_color(paint::FLOAT_EDGE)
 }
 
-/// A sheet's close button, the one close control on every sheet: the close
-/// glyph in a 28px square, `paint::RAISED` under the pointer. `sheet_head`
-/// gives it its tooltip, `Close` with `esc` (esc closes it too); `label` is
-/// the longer name a screen reader hears.
+/// A sheet's close button, the one close control on every sheet: the
+/// shared icon button's close. `sheet_head` gives it its tooltip, `Close`
+/// with `esc` (esc closes it too); `label` is the longer name a screen
+/// reader hears.
 pub fn sheet_close(id: &'static str, label: &'static str, cx: &App) -> Button {
-    components::form_button(id, cx)
-        .debug_selector(move || id.into())
-        .w(px(ICON_BUTTON))
-        .h(px(ICON_BUTTON))
-        .p_0()
-        .accessibility_label(label)
-        .child(icon(icons::CLOSE, ICON_BUTTON_GLYPH, INK_STRONG))
+    components::icon_button(id, icons::CLOSE, components::IconSize::Standard, label, cx)
 }
 
 /// The pinned footer under a `FLOAT_EDGE` rule: secondary actions left, the

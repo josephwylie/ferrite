@@ -948,30 +948,19 @@ impl CockpitView {
         use theme::*;
         let all_folded = matches!(&changes.load, Load::Read(files)
             if !files.is_empty() && files.iter().all(|file| changes.folded.contains(&file.path)));
+        // `on` is a toggle's state; a plain verb has none.
         let tool =
-            |key: &'static str, glyph: &'static str, tip: &'static str, on: bool, verb: Verb| {
-                div()
-                    .id(key)
-                    .debug_selector(move || key.into())
-                    .flex()
-                    .flex_shrink_0()
-                    .items_center()
-                    .justify_center()
-                    .size(px(SURFACE_PLUS))
-                    .rounded(px(R_CONTROL))
-                    .when(on, |tool| tool.bg(paint::SELECTED))
-                    .hover_control(key)
-                    .child(icons::icon(
-                        glyph,
-                        SURFACE_PLUS_GLYPH,
-                        if on { INK_STRONG } else { INK_SUBTLE },
-                    ))
-                    .tooltip(ferrite_ui::menu::tooltip(tip))
-                    .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                    .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
-                        cx.stop_propagation();
-                        view.run_changes_verb(diff, verb, cx);
-                    }))
+            |key: &'static str, glyph: &'static str, tip: &'static str, on: Option<bool>, verb: Verb| {
+                use ferrite_ui::components::{icon_button, icon_toggle, IconSize, Tip as _};
+                match on {
+                    Some(on) => icon_toggle(key, glyph, IconSize::Compact, tip, on, cx),
+                    None => icon_button(key, glyph, IconSize::Compact, tip, cx),
+                }
+                .tip(tip)
+                .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
+                    cx.stop_propagation();
+                    view.run_changes_verb(diff, verb, cx);
+                }))
             };
         let (fold_tip, fold_verb) = if all_folded {
             ("Expand all files", Verb::ExpandAll)
@@ -987,35 +976,35 @@ impl CockpitView {
                 "changes-refresh",
                 icons::REFRESH,
                 "Refresh",
-                false,
+                None,
                 Verb::Refresh,
             ))
             .child(tool(
                 "changes-fold-all",
                 icons::COLLAPSE_ALL,
                 fold_tip,
-                false,
+                None,
                 fold_verb,
             ))
             .child(tool(
                 "changes-wrap",
                 icons::TEXT_WRAP,
                 "Word wrap",
-                changes.wrap,
+                Some(changes.wrap),
                 Verb::ToggleWrap,
             ))
             .child(tool(
                 "changes-whitespace",
                 icons::PILCROW,
                 "Hide whitespace changes",
-                changes.hide_whitespace,
+                Some(changes.hide_whitespace),
                 Verb::ToggleWhitespace,
             ))
             .child(tool(
                 "changes-hide-tests",
                 icons::FLASK_OFF,
                 "Hide test files",
-                changes.hide_tests,
+                Some(changes.hide_tests),
                 Verb::ToggleTests,
             ));
         let base = match &changes.scope {

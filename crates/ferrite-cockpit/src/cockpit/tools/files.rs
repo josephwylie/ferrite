@@ -37,7 +37,7 @@ use remote_files::RemoteFiles;
 use ferrite_pane::composer::{Composer, Role};
 use ferrite_pane::preview::{open_original, reading_markup, Body as DocBody};
 use crate::cockpit::menu_button::{Door, Edge};
-use ferrite_ui::components::IconSize;
+use ferrite_ui::components::{icon_button, IconSize, Tip as _};
 use ferrite_ui::icons::{self, icon};
 use ferrite_ui::theme::{self};
 
@@ -1098,27 +1098,14 @@ impl CockpitView {
                 .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| view.select_tab(thread, at, cx)))
                 .child(div().min_w_0().truncate().child(SharedString::from(name)))
                 .child(
-                    {
-                        // This tab's own close: its key names the tab.
-                        let key = SharedString::from(format!("files-tab-close-{at}"));
-                        let selector = key.to_string();
-                        div()
-                            .id(key.clone())
-                            .debug_selector(move || selector.clone())
-                            .flex()
-                            .flex_shrink_0()
-                            .items_center()
-                            .justify_center()
-                            .size(px(PANEL_TAB_H - SPACE_1))
-                            .rounded(px(R_CONTROL))
-                            .hover_control(key)
-                            .child(icon(
-                                if dirty { icons::CIRCLE_DASHED } else { icons::CLOSE },
-                                ICON_BUTTON_GLYPH,
-                                INK_SUBTLE,
-                            ))
-                    }
-                    .tooltip(ferrite_ui::menu::tooltip("Close"))
+                    icon_button(
+                        format!("files-tab-close-{at}"),
+                        if dirty { icons::CIRCLE_DASHED } else { icons::CLOSE },
+                        IconSize::Compact,
+                        "Close",
+                        cx,
+                    )
+                    .tip("Close")
                     .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
                         cx.stop_propagation();
                         view.close_tab(thread, at, cx);

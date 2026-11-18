@@ -21,6 +21,7 @@
 use super::*;
 use crate::cockpit::menu_button::{Door, Edge};
 use crate::cockpit::tab_scroll::{self, Side};
+use ferrite_ui::components::{IconSize, Tip as _};
 use ferrite_ui::icons::{self, icon};
 
 /// One row of the `+` menu and of "Open a surface", in T3's order.
@@ -344,21 +345,13 @@ impl CockpitView {
         };
         let semantics = Semantics::button(name);
         let handle = self.panel_control(PanelControl::Maximize, semantics.clone(), cx);
-        let maximize = controls::focusable(
-            ferrite_pane::preview::head_door(id, id.into(), glyph),
-            &handle,
-            &semantics,
-        )
-        .occlude()
-        .tooltip(ferrite_ui::menu::tooltip(if maximized {
-            "Restore panel size"
-        } else {
-            "Maximize panel"
-        }))
-        .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
-            cx.stop_propagation();
-            view.toggle_panel_maximized(thread, cx);
-        }));
+        let maximize = controls::icon_stop(id, glyph, IconSize::Standard, &handle, &semantics, cx)
+            .occlude()
+            .tip(name)
+            .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
+                cx.stop_propagation();
+                view.toggle_panel_maximized(thread, cx);
+            }));
         let scroll = &self.panel.tabs_scroll;
         scroll.settle(cx);
         let chevron = |side: Side| {
@@ -579,26 +572,12 @@ impl CockpitView {
 
     /// The `+` after the last tab: the opener menu under it.
     fn surface_plus(&self, thread: ThreadId, cx: &mut Context<Self>) -> AnyElement {
-        use ferrite_ui::theme::*;
-        let id = gpui::ElementId::from("panel-plus");
-        let key = ferrite_ui::pointer::hover_key(&id);
         let semantics = Semantics::button("Open a surface");
         let handle = self.panel_control(PanelControl::Plus, semantics.clone(), cx);
-        let plus = div()
-            .id(id)
-            .debug_selector(|| "panel-plus".into())
-            .relative()
-            .flex()
-            .flex_shrink_0()
-            .items_center()
-            .justify_center()
-            .size(px(SURFACE_PLUS))
-            .rounded(px(R_CONTROL))
-            .occlude()
-            .hover_raised(key)
-            .map(|plus| controls::focusable(plus, &handle, &semantics))
-            .child(self.measured(PanelControl::Plus))
-            .child(icon(icons::PLUS, SURFACE_PLUS_GLYPH, INK_SUBTLE));
+        let plus =
+            controls::icon_stop("panel-plus", icons::PLUS, IconSize::Compact, &handle, &semantics, cx)
+                .occlude()
+                .child(self.measured(PanelControl::Plus));
         self.doors()
             .button(plus, plus_door(thread), "Open a surface", cx)
             .into_any_element()

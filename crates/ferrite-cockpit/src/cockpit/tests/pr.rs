@@ -212,7 +212,7 @@ pub(super) fn snapshot(
 }
 
 /// A window on a checkout whose branch has PR #48, read whole as `state`.
-fn with_pr<'a>(
+pub(super) fn with_pr<'a>(
     name: &str,
     state: ferrite_core::protocol::WirePrState,
     cx: &'a mut TestAppContext,
@@ -691,6 +691,43 @@ fn the_pr_surface_is_worked_from_the_keyboard(cx: &mut TestAppContext) {
     assert_eq!(
         focused_control(&view, cx),
         Some(PanelControl::PrNumber),
+        "esc gives the keyboard back"
+    );
+}
+
+/// The PR's More is a stop on the row: ⏎ opens its menu and esc hands the
+/// keyboard back to it.
+#[gpui::test]
+fn enter_on_the_prs_more_opens_its_menu(cx: &mut TestAppContext) {
+    use super::panel_focus::{activate, focused_control, press};
+    use crate::cockpit::panel::PanelControl;
+    let (view, thread, _fake, cx) =
+        with_pr("pr-more-keys", ferrite_core::protocol::WirePrState::Open, cx);
+    view.update(cx, |view, cx| view.open_pr_surface(thread, cx));
+    tick(cx);
+
+    press("f6", cx);
+    press("home", cx);
+    for _ in 0..12 {
+        if focused_control(&view, cx) == Some(PanelControl::PrMore) {
+            break;
+        }
+        press("right", cx);
+    }
+    assert_eq!(focused_control(&view, cx), Some(PanelControl::PrMore));
+    activate("enter", cx);
+    assert!(
+        matches!(
+            view.read_with(cx, |view, _| view.context_menu().map(|menu| menu.target)),
+            Some(MenuTarget::PrMore(_))
+        ),
+        "⏎ opens the PR's menu"
+    );
+    press("escape", cx);
+    assert!(view.read_with(cx, |view, _| view.context_menu().is_none()));
+    assert_eq!(
+        focused_control(&view, cx),
+        Some(PanelControl::PrMore),
         "esc gives the keyboard back"
     );
 }
