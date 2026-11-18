@@ -243,6 +243,18 @@ pub struct Row {
     pub nested: bool,
 }
 
+/// Which side of a row gives way when the two do not fit on one line.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum GivesWay {
+    /// The label and its hint wrap. The control holds its width.
+    Label,
+    /// A fact's value wraps beside a key column of one width.
+    FactValue,
+    /// An action with nothing to do reads as its value, cut to one line
+    /// beside a label that holds its width.
+    ActionValue,
+}
+
 impl Row {
     pub fn new(
         title: impl Into<SharedString>,
@@ -265,12 +277,12 @@ impl Row {
         self
     }
 
-    /// A fact's value gives way (wraps) rather than hold its width.
-    pub fn is_fact(&self) -> bool {
-        matches!(
-            self.control,
-            Control::Fact { .. } | Control::PathFact { .. }
-        )
+    pub fn gives_way(&self) -> GivesWay {
+        match self.control {
+            Control::Fact { .. } | Control::PathFact { .. } => GivesWay::FactValue,
+            Control::Action { button: None, .. } => GivesWay::ActionValue,
+            _ => GivesWay::Label,
+        }
     }
 
     /// Case-insensitive substring on the label, the hint, the option
