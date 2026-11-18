@@ -387,8 +387,12 @@ impl CockpitView {
                     Some(annotation) => pane.preview.review_annotation(annotation, window),
                     // An image opens in the lightbox and never becomes the
                     // tab's document, so it would open again every frame.
+                    // Only the history can claim it, and that streams in
+                    // after the first frames draw the Thread.
                     None if ferrite_pane::image_viewer::is_image(&wanted) => {
-                        unfillable.push((thread, SurfaceId::File(wanted)));
+                        if self.cockpit.thread(thread).is_some_and(|open| open.history_loaded()) {
+                            unfillable.push((thread, SurfaceId::File(wanted)));
+                        }
                     }
                     None => pane.preview.open(wanted, None, &[], window, cx),
                 },

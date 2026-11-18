@@ -578,6 +578,7 @@ impl Mirrors {
             facts: mirror.facts.as_ref()?,
             stand_in: mirror.digest.as_ref().filter(|_| !mirror.loaded),
             digest: mirror.digest.as_ref().map(|held| &held.digest),
+            loaded: mirror.loaded,
         })
     }
 }
@@ -604,6 +605,7 @@ pub struct ThreadView<'a> {
     /// The digest's answers, while this window does not hold the Activity.
     stand_in: Option<&'a HeldDigest>,
     digest: Option<&'a Digest>,
+    loaded: bool,
 }
 
 impl<'a> ThreadView<'a> {
@@ -630,6 +632,12 @@ impl<'a> ThreadView<'a> {
 
     pub fn transcript(&self) -> &'a Transcript {
         self.activity.main().transcript()
+    }
+
+    /// Whether the transcript holds this Thread's history: a window streams
+    /// it only once it draws the Thread, so until then it is empty.
+    pub fn history_loaded(&self) -> bool {
+        self.loaded
     }
 
     /// Which backend serves this Thread.

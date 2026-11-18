@@ -85,7 +85,12 @@ struct Restarted<'a> {
     root: std::path::PathBuf,
 }
 
-fn restarted<'a>(cx: &'a mut TestAppContext, name: &str, quit: bool) -> Restarted<'a> {
+fn restarted<'a>(
+    cx: &'a mut TestAppContext,
+    name: &str,
+    quit: bool,
+    launch: impl FnOnce(&mut Cockpit),
+) -> Restarted<'a> {
     use ferrite_core::browser::{Document, TabId};
     use ferrite_core::browser_annotations::{self, Capture, Selection, Viewport};
     let (core, fake) = cockpit(name, 1);
@@ -150,6 +155,7 @@ fn restarted<'a>(cx: &'a mut TestAppContext, name: &str, quit: bool) -> Restarte
 
     let mut core = Cockpit::new(Store::open(&store).unwrap(), Box::new(fake));
     core.reopen(thread).unwrap();
+    launch(&mut core);
     let mut prefs = Preferences::ephemeral();
     prefs.dir = settings.clone();
     let (view, window) = add_cockpit_window(cx, |_, cx| {
@@ -170,7 +176,7 @@ fn restarted<'a>(cx: &'a mut TestAppContext, name: &str, quit: bool) -> Restarte
 /// capture's PNG; the review, not the PNG in the lightbox, comes back with it.
 #[gpui::test]
 fn browser_annotation_review_reopens_after_a_restart(cx: &mut TestAppContext) {
-    let Restarted { window, root, .. } = restarted(cx, "ba-restart", true);
+    let Restarted { window, root, .. } = restarted(cx, "ba-restart", true, |_| {});
     until(window, |cx| cx.debug_bounds("annotation-stage").is_some());
     assert!(
         window.debug_bounds("lightbox").is_none(),
@@ -197,7 +203,7 @@ fn a_restored_image_tab_nothing_claims_goes_without_the_lightbox(cx: &mut TestAp
         capture,
         settings,
         root,
-    } = restarted(cx, "ba-restart-unclaimed", false);
+    } = restarted(cx, "ba-restart-unclaimed", false, |_| {});
     for _ in 0..5 {
         tick(window);
     }
@@ -214,6 +220,29 @@ fn a_restored_image_tab_nothing_claims_goes_without_the_lightbox(cx: &mut TestAp
     });
     let saved = crate::cockpit::surfaces::Surfaces::load(&settings, |_, _| true).unwrap();
     assert!(!saved.get(thread).unwrap().tabs.contains(&tab), "nor at the next launch");
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+/// A window streams a Thread's history only once it draws it, so the first
+/// frames after launch hold the Thread's facts with no history yet. The
+/// review's tab waits for it rather than going, or opening its capture.
+#[gpui::test]
+fn a_restored_review_waits_for_history_that_lands_after_the_first_frame(cx: &mut TestAppContext) {
+    let Restarted {
+        view,
+        window,
+        thread,
+        capture,
+        root,
+        ..
+    } = restarted(cx, "ba-restart-late", true, |core| {
+        core.draws_transcripts([]);
+        let _ = core.pump();
+    });
+    let tab = crate::cockpit::surfaces::SurfaceId::File(capture);
+    until(window, |cx| cx.debug_bounds("annotation-stage").is_some());
+    assert!(window.debug_bounds("lightbox").is_none());
+    assert!(view.read_with(window, |view, _| view.active_surface(thread) == Some(tab)));
     std::fs::remove_dir_all(root).unwrap();
 }
 
