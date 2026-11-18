@@ -165,12 +165,9 @@ impl CockpitView {
     }
 
     /// Close every other surface a float opening replaces.
-    pub(super) fn clear_for_float(&mut self) {
+    pub(super) fn clear_for_float(&mut self, cx: &mut Context<Self>) {
         self.popover = None;
-        self.context_menu = None;
-        self.session_controls = None;
-        self.mode_picker = None;
-        self.context_checks = None;
+        self.close_popup(cx);
         self.floats.shortcuts = None;
     }
 
@@ -206,7 +203,7 @@ impl CockpitView {
             // Listed off the UI thread: `open_import_palette`.
             PaletteScope::Sessions => Vec::new(),
         };
-        self.clear_for_float();
+        self.clear_for_float(cx);
         let palette = cx.new(|cx| Palette::new(scope, rows, query, cx));
         let focus = palette.read(cx).input.focus_handle(cx);
         self.floats.palette = Some(palette);
@@ -1055,7 +1052,15 @@ impl CockpitView {
             }
             Command::PermissionMode => {
                 if let (Some(thread), Some(generation)) = (thread, generation) {
-                    self.mode_picker = Some((thread, generation));
+                    self.show_popup(
+                        Popup::Mode(super::mode_menu::ModeMenu {
+                            thread,
+                            generation,
+                            from_picker: false,
+                            preview: None,
+                        }),
+                        cx,
+                    );
                 }
             }
             Command::RefreshMcp => {
@@ -1084,7 +1089,7 @@ impl CockpitView {
                     if failed.is_empty() {
                         // Nothing has failed: the card lists every server
                         // with its own reconnect.
-                        self.session_controls = Some((thread, generation));
+                        self.show_popup(Popup::Session { thread, generation }, cx);
                     }
                     for server in failed {
                         self.run_session_control(
@@ -1097,7 +1102,7 @@ impl CockpitView {
             }
             Command::BackgroundTasks => {
                 if let (Some(thread), Some(generation)) = (thread, generation) {
-                    self.session_controls = Some((thread, generation));
+                    self.show_popup(Popup::Session { thread, generation }, cx);
                 }
             }
             Command::ShowChanges => {
@@ -1172,7 +1177,7 @@ impl CockpitView {
             self.close_shortcuts(cx);
             return;
         }
-        self.clear_for_float();
+        self.clear_for_float(cx);
         self.floats.palette = None;
         let sheet = cx.new(Shortcuts::new);
         let focus = sheet.read(cx).input.focus_handle(cx);

@@ -300,8 +300,7 @@ impl CockpitView {
                         .find(|pane| pane.thread() == Some(thread))
                         .is_some_and(|pane| pane.details.on_opener(event.position));
                     let choosing_items = view
-                        .context_menu
-                        .as_ref()
+                        .context_menu()
                         .is_some_and(|menu| menu.target == MenuTarget::Details(thread));
                     if !inline && !on_toggle && !choosing_items {
                         view.close_details(thread, window, cx);

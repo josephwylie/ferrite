@@ -284,8 +284,7 @@ fn a_right_click_summons_the_menu_and_delete_takes_two_presses(cx: &mut TestAppC
     cx.run_until_parked();
     let (delete, count) = view.read_with(cx, |view, cx| {
         let menu = view
-            .context_menu
-            .as_ref()
+            .context_menu()
             .expect("a right-click opens the menu");
         assert_eq!(menu.target, MenuTarget::Pane(thread));
         let labels: Vec<&str> = menu
@@ -314,7 +313,7 @@ fn a_right_click_summons_the_menu_and_delete_takes_two_presses(cx: &mut TestAppC
     // Escape closes it without running anything.
     cx.simulate_keystrokes("escape");
     cx.run_until_parked();
-    view.read_with(cx, |view, _| assert!(view.context_menu.is_none()));
+    view.read_with(cx, |view, _| assert!(view.context_menu().is_none()));
 
     view.update_in(cx, |view, window, cx| {
         view.open_context_menu(
@@ -323,11 +322,11 @@ fn a_right_click_summons_the_menu_and_delete_takes_two_presses(cx: &mut TestAppC
             cx,
         );
         view.press_menu_row(delete, window, cx);
-        let menu = view.context_menu.as_ref().expect("armed, still up");
+        let menu = view.context_menu().expect("armed, still up");
         assert_eq!(menu.armed, Some(delete), "the first press only arms");
         view.press_menu_row(delete, window, cx);
         assert!(
-            view.context_menu.is_none(),
+            view.context_menu().is_none(),
             "the second press runs and closes"
         );
         assert!(
@@ -675,15 +674,14 @@ fn settings_open_on_cmd_comma_and_every_change_saves(cx: &mut TestAppContext) {
             cx,
         );
         let delete = view
-            .context_menu
-            .as_ref()
+            .context_menu()
             .unwrap()
             .rows
             .iter()
             .position(|row| matches!(row, Some((_, MenuVerb::Delete))))
             .unwrap();
         view.press_menu_row(delete, window, cx);
-        assert!(view.context_menu.is_none());
+        assert!(view.context_menu().is_none());
         assert!(view.cockpit.thread(thread).is_none(), "gone on one press");
     });
     let _ = std::fs::remove_dir_all(&dir);

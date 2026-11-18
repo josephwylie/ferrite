@@ -84,8 +84,7 @@ fn turn<'a>(
 
 fn menu_labels(view: &Entity<CockpitView>, cx: &mut gpui::VisualTestContext) -> Vec<String> {
     view.read_with(cx, |view, _| {
-        view.context_menu
-            .as_ref()
+        view.context_menu()
             .map(|menu| {
                 menu.rows
                     .iter()
@@ -195,8 +194,7 @@ fn a_page_card_opens_the_page_beside_the_transcript(cx: &mut TestAppContext) {
         ["Reload", "Open in browser", "Copy path"]
     );
     view.update(cx, |view, cx| {
-        view.context_menu = None;
-        cx.notify();
+        view.close_popup(cx);
     });
     tick(cx);
 

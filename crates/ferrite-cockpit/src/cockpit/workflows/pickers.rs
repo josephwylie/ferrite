@@ -88,17 +88,6 @@ impl CockpitView {
         }
     }
 
-    /// A Factory picker that is up goes with the sheet that opened it.
-    pub(crate) fn close_factory_menu(&mut self) {
-        if self
-            .context_menu
-            .as_ref()
-            .is_some_and(|menu| matches!(menu.target, context_menu::MenuTarget::Factory))
-        {
-            self.context_menu = None;
-        }
-    }
-
     /// The rows of the open Factory picker.
     pub(in crate::cockpit) fn factory_pick_rows(&self) -> Vec<ferrite_ui::menu::Item> {
         self.factory()

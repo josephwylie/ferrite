@@ -372,7 +372,7 @@ fn the_filter_lists_matches_and_a_row_menu_copies_paths(cx: &mut TestAppContext)
     cx.simulate_mouse_down(row.center(), gpui::MouseButton::Right, gpui::Modifiers::none());
     tick(cx);
     view.read_with(cx, |view, _| {
-        let menu = view.context_menu.as_ref().expect("the row's menu");
+        let menu = view.context_menu().expect("the row's menu");
         let names: Vec<_> = menu
             .rows
             .iter()
@@ -413,7 +413,7 @@ fn the_more_menu_holds_only_its_five_settings_and_they_take_effect(cx: &mut Test
     });
     tick(cx);
     view.read_with(cx, |view, _| {
-        let rows = &view.context_menu.as_ref().unwrap().rows;
+        let rows = &view.context_menu().unwrap().rows;
         let names: Vec<_> = rows.iter().flatten().map(|(item, _)| item.label.to_string()).collect();
         assert_eq!(
             names,

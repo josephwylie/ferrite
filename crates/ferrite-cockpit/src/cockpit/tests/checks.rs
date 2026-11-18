@@ -34,9 +34,9 @@ fn the_checks_command_opens_the_checks_it_counts(cx: &mut TestAppContext) {
             "every run behind the rollup gets a row"
         );
     }
-    view.read_with(cx, |view, _| assert!(view.context_checks.is_some()));
+    view.read_with(cx, |view, _| assert!(matches!(view.popup(), Some(Popup::Checks(_)))));
     cx.simulate_keystrokes("escape");
-    view.read_with(cx, |view, _| assert!(view.context_checks.is_none()));
+    view.read_with(cx, |view, _| assert!(!matches!(view.popup(), Some(Popup::Checks(_)))));
 }
 
 /// A PR whose rollup is empty claims nothing about CI, so the checks
@@ -56,5 +56,5 @@ fn a_pr_without_checks_opens_no_checks_card(cx: &mut TestAppContext) {
     });
     tick(cx);
     cx.update(|window, cx| view.update(cx, |view, cx| view.open_checks(window, cx)));
-    view.read_with(cx, |view, _| assert!(view.context_checks.is_none()));
+    view.read_with(cx, |view, _| assert!(!matches!(view.popup(), Some(Popup::Checks(_)))));
 }

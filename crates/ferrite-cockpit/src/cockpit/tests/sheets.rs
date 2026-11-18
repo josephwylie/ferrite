@@ -239,7 +239,7 @@ fn the_background_work_dialog_closes_with_its_thread(cx: &mut TestAppContext) {
 }
 
 /// A window on a Project's Factory board, its Factory live in memory.
-fn factory_window<'a>(
+pub(super) fn factory_window<'a>(
     cx: &'a mut TestAppContext,
     name: &str,
 ) -> (Entity<CockpitView>, &'a mut gpui::VisualTestContext) {
@@ -254,7 +254,7 @@ fn factory_window<'a>(
     (view, cx)
 }
 
-fn new_task_up(cx: &mut gpui::VisualTestContext) -> bool {
+pub(super) fn new_task_up(cx: &mut gpui::VisualTestContext) -> bool {
     cx.debug_bounds("new-task-card").is_some()
 }
 
@@ -270,7 +270,7 @@ fn new_task_typed(view: &Entity<CockpitView>, cx: &mut gpui::VisualTestContext) 
     })
 }
 
-fn press(cx: &mut gpui::VisualTestContext, selector: &'static str) {
+pub(super) fn press(cx: &mut gpui::VisualTestContext, selector: &'static str) {
     let at = cx.debug_bounds(selector).expect(selector).center();
     cx.simulate_click(at, gpui::Modifiers::none());
     tick(cx);

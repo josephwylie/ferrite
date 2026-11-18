@@ -1408,7 +1408,8 @@ impl CockpitView {
         } else {
             INK_SUBTLE
         };
-        let lit = opens.is_some() && self.mode_picker == opens;
+        let lit = opens.is_some()
+            && self.mode_menu().map(|open| (open.thread, open.generation)) == opens;
         Some(
             ferrite_ui::components::on_bounds(
                 div()

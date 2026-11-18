@@ -1027,8 +1027,7 @@ fn build(state: &str, label: &str) -> (Scene, Setup) {
                         ],
                     }),
                 );
-                view.context_checks = Some(thread);
-                cx.notify();
+                view.show_popup(super::Popup::Checks(thread), cx);
             });
             (scene, setup)
         }
@@ -1074,8 +1073,7 @@ fn build(state: &str, label: &str) -> (Scene, Setup) {
                         ],
                     }),
                 );
-                view.context_checks = Some(thread);
-                cx.notify();
+                view.show_popup(super::Popup::Checks(thread), cx);
             });
             (scene, setup)
         }
@@ -1134,20 +1132,20 @@ fn build(state: &str, label: &str) -> (Scene, Setup) {
                     ],
                 })
                 .expect("fixture Session is listening");
-            let setup: Setup = Box::new(|view, _, _| {
+            let setup: Setup = Box::new(|view, _, cx| {
                 let thread = view.panes[0].thread().expect("a Thread Pane");
                 let generation = view.cockpit.thread(thread).expect("open").generation();
-                view.session_controls = Some((thread, generation));
+                view.show_popup(super::Popup::Session { thread, generation }, cx);
             });
             (scene, setup)
         }
         // The Composer footer's mode menu and the box's `+` menu, open.
         "modemenu" => {
             let scene = conversation(label);
-            let setup: Setup = Box::new(|view, _, _| {
+            let setup: Setup = Box::new(|view, _, cx| {
                 let thread = view.panes[0].thread().expect("a Thread Pane");
                 let generation = view.cockpit.thread(thread).expect("open").generation();
-                view.mode_picker = Some((thread, generation));
+                view.toggle_mode_menu(thread, generation, false, cx);
             });
             (scene, setup)
         }

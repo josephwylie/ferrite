@@ -60,29 +60,30 @@ pub const PLATFORM: Platform = Platform::Windows;
 /// The key context of a keystroke no text field takes: the cockpit's own
 /// root holds the keyboard (the transcript, the board), and neither
 /// a Composer nor a kit input is on the focus path.
-pub const NO_TEXT_FIELD: &str = "Ferrite && !Composer && !Input && !ContextMenu";
+pub const NO_TEXT_FIELD: &str = "Ferrite && !Composer && !Input && !Popup";
 
-/// The Composer's caret keys the context menu takes over while it is open.
-pub const COMPOSER_TEXT: &str = "Composer && !ContextMenu";
+/// The Composer's caret keys a popup takes over while it is up.
+pub const COMPOSER_TEXT: &str = "Composer && !Popup";
 
-/// The name of the window root's key context. It carries `ContextMenu`
-/// while a menu is open, beside it.
+/// The name of the window root's key context. It carries `Popup` while a
+/// popup is up, beside it.
 pub const ROOT: &str = "Ferrite";
 
 /// The Cockpit's own key context: a row bound in it acts anywhere in the
 /// Cockpit, and every deeper context — a Composer, a float, the kit's menus,
-/// popovers and dialogs — outranks it. An open context menu takes the
-/// keyboard whole (↵ presses its row, ⎋ closes it, ⇥ goes nowhere), so the
-/// Cockpit's keys, this one's and `NO_TEXT_FIELD`'s, stand down.
-pub const COCKPIT: &str = "Ferrite && !ContextMenu";
+/// popovers and dialogs — outranks it. A popup (a context menu, the mode
+/// menu, a card) takes the keyboard whole (⎋ closes it, ⇥ goes nowhere,
+/// and a menu's ↵ presses its row), so the Cockpit's keys, this one's and
+/// `NO_TEXT_FIELD`'s, stand down.
+pub const COCKPIT: &str = "Ferrite && !Popup";
 
-/// The root's key context, whole: `Ferrite`, with `ContextMenu` while a
-/// menu is open. A key context set on an element replaces the one before
-/// it, so the root builds this once.
-pub fn root_context(menu: bool) -> String {
+/// The root's key context, whole: `Ferrite`, with `Popup` while a popup is
+/// up. A key context set on an element replaces the one before it, so the
+/// root builds this once.
+pub fn root_context(popup: bool) -> String {
     let mut context = String::from(ROOT);
-    if menu {
-        context.push_str(" ContextMenu");
+    if popup {
+        context.push_str(" Popup");
     }
     context
 }
@@ -1083,11 +1084,11 @@ mod tests {
     /// never in none: a binding with none ranks as deep as the deepest and
     /// would take both keys from every float, menu, popover and dialog.
     #[test]
-    fn the_root_context_carries_an_open_menu_beside_ferrite() {
+    fn the_root_context_carries_a_popup_beside_ferrite() {
         assert_eq!(root_context(false), "Ferrite");
-        assert_eq!(root_context(true), "Ferrite ContextMenu");
+        assert_eq!(root_context(true), "Ferrite Popup");
         for stands_down in [COCKPIT, NO_TEXT_FIELD] {
-            assert!(stands_down.ends_with("!ContextMenu"), "{stands_down}");
+            assert!(stands_down.ends_with("!Popup"), "{stands_down}");
         }
     }
 

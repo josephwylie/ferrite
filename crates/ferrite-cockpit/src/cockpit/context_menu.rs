@@ -193,12 +193,9 @@ pub(super) enum MenuCursor {
 const PARTIAL_HISTORY: &str =
     "[Earlier messages are not included: this view keeps only the latest.]";
 
-/// Where the keyboard goes back to as an open menu closes.
-pub(super) enum MenuReturn {
-    /// The nav list held the keys, its cursor here.
-    Nav(Option<crate::nav::NavCursor>),
-    Focus(FocusHandle),
-}
+/// The key the open submenu records its bounds under: a press there is
+/// the menu's, though it lies outside the menu.
+pub(super) const SUBMENU: &str = "context-submenu";
 
 impl CockpitView {
     /// `thread`'s conversation to the clipboard. Once the view dropped its
@@ -233,9 +230,8 @@ impl CockpitView {
         .detach();
     }
 
-    /// Summon the context menu for `target` at the pointer. Whatever else
-    /// was up (a popover, a card, a rename) closes: one floating thing at a
-    /// time.
+    /// Summon the context menu for `target` at the pointer, in place of
+    /// whatever popup was up (`show_popup`).
     pub(super) fn open_context_menu(
         &mut self,
         target: MenuTarget,
@@ -286,23 +282,20 @@ impl CockpitView {
         drop: Option<Pixels>,
         cx: &mut Context<Self>,
     ) {
-        self.popover = None;
-        self.context_checks = None;
-        if self.rename.is_some() {
-            self.finish_rename(false, cx);
-        }
         let rows = self.context_rows(target, cx);
-        self.context_menu = Some(ContextMenu {
-            target,
-            at,
-            corner,
-            drop,
-            rows,
-            armed: None,
-            sub: None,
-            cursor: MenuCursor::Idle,
-        });
-        cx.notify();
+        self.show_popup(
+            Popup::ContextMenu(ContextMenu {
+                target,
+                at,
+                corner,
+                drop,
+                rows,
+                armed: None,
+                sub: None,
+                cursor: MenuCursor::Idle,
+            }),
+            cx,
+        );
     }
 
     /// The rows a target offers. `None` is a gap between groups of rows.
@@ -601,11 +594,11 @@ impl CockpitView {
     /// Open row `parent`'s submenu beside it (a second press on the parent
     /// keeps it open).
     pub(super) fn open_submenu(&mut self, parent: usize, kind: Submenu, cx: &mut Context<Self>) {
-        let Some(target) = self.context_menu.as_ref().map(|open| open.target) else {
+        let Some(target) = self.context_menu().map(|open| open.target) else {
             return;
         };
         let rows = self.submenu_rows(target, kind);
-        if let Some(open) = self.context_menu.as_mut() {
+        if let Some(open) = self.context_menu_mut() {
             if open.sub.as_ref().is_some_and(|(at, _)| *at == parent) {
                 return;
             }
@@ -624,7 +617,7 @@ impl CockpitView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Some(open) = self.context_menu.as_ref() else {
+        let Some(open) = self.context_menu() else {
             return;
         };
         let Some(verb) = open
@@ -637,7 +630,7 @@ impl CockpitView {
             return;
         };
         let target = open.target;
-        self.context_menu = None;
+        self.close_popup(cx);
         self.run_menu_verb(target, verb, window, cx);
         cx.notify();
     }
@@ -645,7 +638,7 @@ impl CockpitView {
     /// The row of the open menu whose one-letter key `keystroke` is
     /// (Claude's row menu: `P` pins), unmodified and case-blind.
     pub(super) fn menu_mnemonic(&self, keystroke: &gpui::Keystroke) -> Option<usize> {
-        let open = self.context_menu.as_ref()?;
+        let open = self.context_menu()?;
         if keystroke.modifiers.modified() || keystroke.key.chars().count() != 1 {
             return None;
         }
@@ -660,46 +653,18 @@ impl CockpitView {
         })
     }
 
-    /// An open menu takes the keyboard whole: the root holds focus while it
-    /// is up, so no field's bindings (a Decision's, the Composer's history)
-    /// answer its keys. The focus it took comes back as it closes, unless
-    /// what it did moved focus elsewhere. Tended once a frame.
-    pub(super) fn tend_menu_focus(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.context_menu.is_some() {
-            if self.menu_return.is_none() {
-                let nav = self.nav_view.read(cx);
-                self.menu_return = Some(if nav.holds_keys(window) {
-                    MenuReturn::Nav(nav.cursor.clone())
-                } else {
-                    MenuReturn::Focus(window.focused(cx).unwrap_or_else(|| self.focus.clone()))
-                });
-            }
-            // A press that opened another menu over this one may have
-            // focused a field under it.
-            if !self.focus.is_focused(window) {
-                window.focus(&self.focus, cx);
-            }
-        } else if let Some(back) = self.menu_return.take() {
-            if self.focus.is_focused(window) {
-                match back {
-                    MenuReturn::Nav(cursor) => self.focus_nav_on(cursor, window, cx),
-                    MenuReturn::Focus(handle) => window.focus(&handle, cx),
-                }
-            }
-        }
-    }
-
     /// ↑ ↓ ← → ⏎ on the open menu. Up and down walk the rows of the menu
     /// (or of its submenu while the cursor is in it) and wrap past the
     /// ends; → enters a submenu, ← leaves it; ⏎ presses the cursor row.
-    /// True when the key was the menu's.
+    /// True when the key was the menu's. (Escape is every popup's:
+    /// `close_popup`.)
     pub(super) fn menu_navigate(
         &mut self,
         keystroke: &gpui::Keystroke,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
-        let Some(open) = self.context_menu.as_mut() else {
+        let Some(open) = self.context_menu_mut() else {
             return false;
         };
         if keystroke.modifiers.modified() {
@@ -753,7 +718,7 @@ impl CockpitView {
                 };
                 let kind = *kind;
                 self.open_submenu(at, kind, cx);
-                if let Some(open) = self.context_menu.as_mut() {
+                if let Some(open) = self.context_menu_mut() {
                     if open.sub.as_ref().is_some_and(|(_, rows)| !rows.is_empty()) {
                         open.cursor = MenuCursor::SubRow(0);
                     }
@@ -774,7 +739,6 @@ impl CockpitView {
                 }
                 return true;
             }
-            ("escape", _) => self.context_menu = None,
             ("left" | "right" | "enter", _) => return true,
             _ => return false,
         }
@@ -791,7 +755,8 @@ impl CockpitView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Some(open) = self.context_menu.as_mut() else {
+        let confirm_delete = self.prefs.settings.confirm_delete;
+        let Some(open) = self.context_menu_mut() else {
             return;
         };
         let Some(Some((item, verb))) = open.rows.get(index) else {
@@ -808,14 +773,14 @@ impl CockpitView {
         // The single-Thread setting is honoured for a single Thread. The
         // bulk delete always asks: one press must never erase a dozen
         // transcripts, whatever the preference says about one.
-        let confirm = self.prefs.settings.confirm_delete || verb != MenuVerb::Delete;
+        let confirm = confirm_delete || verb != MenuVerb::Delete;
         if item.destructive && confirm && open.armed != Some(index) {
             open.armed = Some(index);
             cx.notify();
             return;
         }
         let target = open.target;
-        self.context_menu = None;
+        self.close_popup(cx);
         self.run_menu_verb(target, verb, window, cx);
         cx.notify();
     }
@@ -1051,24 +1016,15 @@ impl CockpitView {
     }
 
     /// The context menu, floated at the pointer and clamped inside the
-    /// window; `deferred` so nothing later in the tree paints over it. A
-    /// press on the menu's own dead space is swallowed.
+    /// window.
     pub(super) fn context_menu_element(
         &self,
+        open: &ContextMenu,
+        face: popups::Face,
         window: &Window,
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
-        let (open, left) = self.standing(
-            |exits| &mut exits.context_menu,
-            self.context_menu.clone(),
-            ferrite_ui::motion::MENU,
-            cx,
-        )?;
-        let open = &open;
-        let mut shell = menu::shell().on_mouse_down(
-            MouseButton::Left,
-            cx.listener(|_, _: &MouseDownEvent, _, cx| cx.stop_propagation()),
-        );
+        let mut shell = menu::shell();
         // Where the open submenu's parent row stands: the submenu's top.
         let mut parent_top = px(ferrite_ui::theme::FLOAT_PAD);
         let mut y = parent_top;
@@ -1110,7 +1066,7 @@ impl CockpitView {
                         // other row, closes it. (The row's own hover is
                         // its fill's.)
                         .on_mouse_move(cx.listener(move |view, _: &gpui::MouseMoveEvent, _, cx| {
-                            let Some(open) = view.context_menu.as_mut() else {
+                            let Some(open) = view.context_menu_mut() else {
                                 return;
                             };
                             match open.rows.get(index) {
@@ -1157,7 +1113,7 @@ impl CockpitView {
             _ => shell.into_any_element(),
         };
         let side = open.sub.as_ref().map(|(parent, rows)| {
-            let mut side = menu::shell().debug_selector(|| "context-submenu".into());
+            let mut side = menu::shell().debug_selector(|| SUBMENU.into());
             for (index, (item, _)) in rows.iter().enumerate() {
                 let parent = *parent;
                 side = side.child(
@@ -1179,12 +1135,15 @@ impl CockpitView {
             }
             // Beside its menu, `SUBMENU_GAP` off its right edge, its first
             // row level with its parent (the shell's pad above both).
-            div()
-                .absolute()
-                .left(gpui::relative(1.))
-                .top(parent_top - px(ferrite_ui::theme::FLOAT_PAD))
-                .pl(px(ferrite_ui::theme::SUBMENU_GAP))
-                .child(side)
+            ferrite_ui::components::on_bounds(
+                div()
+                    .absolute()
+                    .left(gpui::relative(1.))
+                    .top(parent_top - px(ferrite_ui::theme::FLOAT_PAD))
+                    .pl(px(ferrite_ui::theme::SUBMENU_GAP))
+                    .child(side),
+                self.record_trigger(SUBMENU.into()),
+            )
         });
         let shell = div()
             .relative()
@@ -1204,16 +1163,9 @@ impl CockpitView {
                 .snap_to_window_with_margin(pad),
         };
         Some(
-            deferred(placed.child(ferrite_ui::motion::float_at(
-                ferrite_ui::motion::MENU,
-                left,
-                "context-menu-in",
-                shell,
-                opens,
-            )))
-            // Over the sheets (`VEIL_PRIORITY`), whose pickers open it.
-            .with_priority(crate::float::FLOAT_PRIORITY)
-            .into_any_element(),
+            placed
+                .child(self.popup_face(face, "context-menu-in", shell, opens, cx))
+                .into_any_element(),
         )
     }
 }

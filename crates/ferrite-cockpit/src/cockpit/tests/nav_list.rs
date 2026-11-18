@@ -97,7 +97,7 @@ fn under_the_pointer_the_status_gives_way_to_snooze_and_park(cx: &mut TestAppCon
     cx.simulate_click(snooze.center(), gpui::Modifiers::none());
     tick(cx);
     assert_eq!(
-        view.read_with(cx, |view, _| view.context_menu.as_ref().map(|menu| menu.target)),
+        view.read_with(cx, |view, _| view.context_menu().map(|menu| menu.target)),
         Some(MenuTarget::Snooze(thread)),
         "the Snooze menu"
     );
@@ -109,8 +109,7 @@ fn under_the_pointer_the_status_gives_way_to_snooze_and_park(cx: &mut TestAppCon
         "the strip stays up while its menu is open"
     );
     view.update(cx, |view, cx| {
-        view.context_menu = None;
-        cx.notify();
+        view.close_popup(cx);
     });
     tick(cx);
     assert!(cx.debug_bounds(key("nav-card-park")).is_none());
@@ -505,8 +504,7 @@ fn the_parked_shelf_shows_its_rows_and_its_menu_deletes_them(cx: &mut TestAppCon
     cx.run_until_parked();
     let delete = view.read_with(cx, |view, _| {
         let menu = view
-            .context_menu
-            .as_ref()
+            .context_menu()
             .expect("a right press opens the shelf's menu");
         assert_eq!(menu.target, MenuTarget::Parked);
         let labels: Vec<&str> = menu
@@ -523,12 +521,12 @@ fn the_parked_shelf_shows_its_rows_and_its_menu_deletes_them(cx: &mut TestAppCon
     });
     view.update_in(cx, |view, window, cx| {
         view.press_menu_row(delete, window, cx);
-        let menu = view.context_menu.as_ref().expect("armed, still up");
+        let menu = view.context_menu().expect("armed, still up");
         assert_eq!(menu.armed, Some(delete), "the first press only arms");
         assert_eq!(view.facts.parked().len(), 2, "and deletes nothing");
         view.press_menu_row(delete, window, cx);
         assert!(
-            view.context_menu.is_none(),
+            view.context_menu().is_none(),
             "the second press runs and closes"
         );
         assert!(
@@ -662,8 +660,7 @@ fn deleting_every_parked_thread_always_asks_first(cx: &mut TestAppContext) {
         view.prefs.settings.confirm_delete = false;
         view.open_context_menu(MenuTarget::Parked, gpui::point(px(100.), px(600.)), cx);
         let delete = view
-            .context_menu
-            .as_ref()
+            .context_menu()
             .unwrap()
             .rows
             .iter()
@@ -671,8 +668,7 @@ fn deleting_every_parked_thread_always_asks_first(cx: &mut TestAppContext) {
             .unwrap();
         view.press_menu_row(delete, window, cx);
         let menu = view
-            .context_menu
-            .as_ref()
+            .context_menu()
             .expect("still up: one press only arms, whatever the setting says");
         assert_eq!(menu.armed, Some(delete));
         assert_eq!(
@@ -681,7 +677,7 @@ fn deleting_every_parked_thread_always_asks_first(cx: &mut TestAppContext) {
             "nothing was deleted yet"
         );
         view.press_menu_row(delete, window, cx);
-        assert!(view.context_menu.is_none());
+        assert!(view.context_menu().is_none());
         assert!(view.facts.parked().is_empty());
     });
 }

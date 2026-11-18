@@ -20,7 +20,7 @@
 //! | selection move | none | the nav's one selection ground (`paint::SELECTED`) moves at once: selection is keyboard-rate |
 //! | toasts | [`TOAST_IN`] 200ms quart, its own height / [`TOAST_OUT`] 200ms quart to 0.85 | the Needs-you toast (FL-18), hung top right under the window's head, slides out from under it ([`toast_in`]); one that goes on its own fades away shrinking, drawn as a face that answers no pointer ([`toast_out`], [`Exits`]). The kit's toasts (the Server and update toasts) move the same way on the same two tokens (`DefaultToastMotion`; the card through Ferrite's patch to the vendored gpui-component) |
 //! | loops | pulse clock / display | the Composer's caret blink and the spinners ride [`loop_phase`] (one timer on a ~30fps grid, woken only when a loop's picture changes, parks) instead of a per-frame repeat; the working marks (the working line, nav, Pane heads, plan steps), whose orbs move at every instant, and the working line's shimmer, whose crest does, ride [`frame_loop`]: the display's rate, one request a frame for the window, only while one can be seen; no dot breathes |
-//! | menus | [`MENU_IN`] 100ms / [`MENU_OUT`] 80ms quart, 0.98 → 1 about the edge it hangs on, `MOTION_MENU_SHIFT` off its opener | the context menu and an answer's or an output's menu come in ([`float_in`]); the context menu goes as a face no pointer finds ([`float_gone`], [`Exits::standing`]); an answer's and an output's snap shut. Keys select at once |
+//! | menus | [`MENU_IN`] 100ms / [`MENU_OUT`] 80ms quart, 0.98 → 1 about the edge it hangs on, `MOTION_MENU_SHIFT` off its opener | the context menu and an answer's or an output's menu come in ([`float_in`]); the context menu goes as a face no pointer finds ([`float_gone`]); an answer's and an output's snap shut. Keys select at once |
 //! | popovers | [`POPOVER_IN`] 120ms / [`POPOVER_OUT`] 100ms quart, as a menu | the model picker, the permission menu and the plan, checks and session cards come in ([`float_in`]); all but the model picker (its search and focus are its own) go as a face no pointer finds ([`float_gone`]); opening one again draws the open one alone. Under reduced motion all snap |
 //! | dialog | [`DIALOG_IN`] / [`DIALOG_OUT`] 200ms quart, 0.98 ↔ 1 | the Settings and Project sheets, in ([`dialog_in`]) and out ([`dialog_out`]), over their veil fading both ways over [`VEIL`] ([`veil_in`], [`veil_out`]) |
 //! | palette | [`DIALOG_IN`] in from its top, [`PALETTE_OUT`] 120ms out | the palette and the shortcuts sheet ([`dialog_in_casting`], [`float_out`]), their veil fading over [`PALETTE_VEIL`] 50ms both ways |
@@ -566,7 +566,7 @@ where
 /// A menu or popover that went at `left`: it fades and shrinks back toward
 /// its opener over `motion.out`, under a cover that takes every press — a
 /// face no pointer finds. The caller draws it without its own handlers and
-/// stops once `motion.out` has passed ([`Exits::standing`]).
+/// stops once `motion.out` has passed.
 pub fn float_gone<E>(
     motion: FloatMotion,
     left: Instant,
@@ -1555,23 +1555,6 @@ impl<T: Clone> Exits<T> {
             self.leaving = None;
         }
         self.leaving.clone()
-    }
-
-    /// What to draw this frame for a surface `open` or just closed: the
-    /// open one, or the last one open with when it went while `exit` runs.
-    /// Opening it again draws the open one alone, never beside its exit.
-    pub fn standing(
-        &mut self,
-        open: Option<T>,
-        exit: MotionSpec,
-        now: Instant,
-        reduced: bool,
-    ) -> Option<(T, Option<Instant>)> {
-        let leaving = self.stage(open.as_ref(), |_, _| true, exit, now, reduced);
-        match open {
-            Some(open) => Some((open, None)),
-            None => leaving.map(|(gone, left)| (gone, Some(left))),
-        }
     }
 
     /// What stood goes at once, with no exit (the operator answered it).

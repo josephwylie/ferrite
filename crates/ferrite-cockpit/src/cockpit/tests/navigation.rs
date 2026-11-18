@@ -230,15 +230,13 @@ fn the_solo_head_is_a_project_then_title_breadcrumb(cx: &mut TestAppContext) {
     tick(cx);
     view.read_with(cx, |view, _| {
         assert!(
-            view.context_menu
-                .as_ref()
+            view.context_menu()
                 .is_some_and(|menu| menu.target == MenuTarget::Thread(thread)),
             "right-click opens the Thread's menu"
         );
     });
     view.update(cx, |view, cx| {
-        view.context_menu = None;
-        cx.notify();
+        view.close_popup(cx);
     });
     tick(cx);
 

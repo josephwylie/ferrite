@@ -526,10 +526,9 @@ impl CockpitView {
         self.show_sheet(sheets::Sheet::Direct(sheet), cx);
     }
 
-    /// The sheet gone, closed or replaced: any menu it opened goes with it,
-    /// and what it held stays on its Factory, if that still shows.
+    /// The sheet gone, closed or replaced: what it held stays on its
+    /// Factory, if that still shows.
     pub(super) fn direct_gone(&mut self, sheet: &Entity<DirectView>, cx: &App) {
-        self.close_factory_menu();
         let sheet = sheet.read(cx);
         if let Some(view) = self.factory_mut().filter(|view| view.project == sheet.project) {
             sheet.keep(view.direct.kept.entry(sheet.task.clone()).or_default(), cx);
