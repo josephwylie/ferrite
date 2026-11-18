@@ -565,7 +565,10 @@ fn a_focus_asked_while_a_fork_is_on_its_way_lands_the_window(cx: &mut TestAppCon
     tick(cx);
     view.update(cx, |view, cx| {
         view.cockpit
-            .fixture_task_alert(ferrite_core::protocol::ServerMessage::Focus { thread: other });
+            .fixture_task_alert(ferrite_core::protocol::ServerMessage::Focus {
+                thread: other,
+                fork_of: None,
+            });
         view.open_side_chat(owner, None, cx);
     });
     tick(cx);
@@ -576,6 +579,37 @@ fn a_focus_asked_while_a_fork_is_on_its_way_lands_the_window(cx: &mut TestAppCon
         assert!(view.pane_for(other).is_some(), "the other Thread keeps its Pane");
         let fork = shown_fork(view, owner, cx).expect("the tab took its fork");
         assert!(holds(view, fork, "alpha"), "the owner's own fork");
+    });
+}
+
+/// A side chat whose fork failed (Claude's before it has named its
+/// session) leaves no claim behind: the next side chat takes its own
+/// fork, and an ordinary fork of the Thread after it still lands the
+/// window.
+#[gpui::test]
+fn a_failed_fork_leaves_the_next_forks_where_they_belong(cx: &mut TestAppContext) {
+    let (view, fake, cx) = answered("side-chat-fork-failed", cx);
+    let owner = owner(&view, cx);
+    *fake.fail_fork.borrow_mut() = true;
+    open_chat(&view, cx, None);
+    *fake.fail_fork.borrow_mut() = false;
+    open_chat(&view, cx, None);
+    let tabs = side_tabs(&view, owner, cx);
+    view.read_with(cx, |view, cx| {
+        assert_eq!(view.side_chat.read(cx).fork(owner, tabs[0]), None, "the failed fork's tab waits");
+        assert!(view.side_chat.read(cx).fork(owner, tabs[1]).is_some(), "the next tab takes its fork");
+    });
+
+    *fake.fail_fork.borrow_mut() = true;
+    open_chat(&view, cx, None);
+    *fake.fail_fork.borrow_mut() = false;
+    view.update(cx, |view, cx| view.fork_thread(owner, None, None, cx));
+    tick(cx);
+    tick(cx);
+    view.read_with(cx, |view, cx| {
+        let landed = view.focused_thread().unwrap();
+        assert_ne!(landed, owner, "the window lands on the ordinary fork");
+        assert!(!owns(view, landed, cx), "no side chat took it");
     });
 }
 

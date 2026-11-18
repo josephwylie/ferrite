@@ -331,8 +331,9 @@ impl CockpitView {
         draft: Option<String>,
         cx: &mut Context<Self>,
     ) {
-        if let Err(why) = self.cockpit.fork(thread, before.as_deref(), draft) {
-            self.cockpit.say(thread, format!("fork refused: {why}"));
+        match self.cockpit.fork(thread, before.as_deref(), draft) {
+            Ok(()) => self.side_chat.update(cx, |chat, _| chat.forget_fork(thread)),
+            Err(why) => self.cockpit.say(thread, format!("fork refused: {why}")),
         }
         cx.notify();
     }

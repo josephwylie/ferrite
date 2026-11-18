@@ -1335,9 +1335,13 @@ pub enum ServerMessage {
         action: crate::drive::Action,
     },
     /// An API caller asked the windows to land on this Thread
-    /// (`thread.focus`, ADR 0027).
+    /// (`thread.focus`, ADR 0027), or a fork has opened: `fork_of` names
+    /// the Thread it was made from, so the window that asked for it as a
+    /// side chat takes it there instead.
     Focus {
         thread: ThreadId,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        fork_of: Option<ThreadId>,
     },
     /// An API caller's toast (`notification.show`, ADR 0027).
     Notification {

@@ -145,6 +145,7 @@ fn unrelated_messages_do_not_extend_a_commands_reply_deadline() {
         while Instant::now() < until {
             send.send(ServerMessage::Focus {
                 thread: ThreadId::new(99),
+                fork_of: None,
             })
             .unwrap();
             std::thread::sleep(Duration::from_millis(10));
@@ -166,7 +167,7 @@ fn unrelated_messages_do_not_extend_a_commands_reply_deadline() {
     );
     assert!(remote.poll().iter().any(|arrival| matches!(
         arrival,
-        Arrival::Message(ServerMessage::Focus { thread }) if *thread == ThreadId::new(99)
+        Arrival::Message(ServerMessage::Focus { thread, .. }) if *thread == ThreadId::new(99)
     )));
     assert!(matches!(taken.try_recv(), Ok(Op::SettingsChanged)));
     assert!(taken.try_recv().is_err(), "a timed out command was resent");

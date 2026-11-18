@@ -869,7 +869,10 @@ impl Cockpit {
             }
         }
         match &message {
-            ServerMessage::Focus { thread } => self.asked.push(Asked::Focus(*thread)),
+            ServerMessage::Focus { thread, fork_of } => self.asked.push(Asked::Focus {
+                thread: *thread,
+                fork_of: *fork_of,
+            }),
             ServerMessage::Notification {
                 title,
                 body,
@@ -2742,8 +2745,12 @@ fn registered(executed: Result<Option<Done>, WireError>) -> io::Result<ProjectId
 /// What an API caller asked the windows to do (ADR 0027).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Asked {
-    /// Land on this Thread (`thread.focus`).
-    Focus(ThreadId),
+    /// Land on this Thread (`thread.focus`), or a fork of `fork_of` that
+    /// has opened.
+    Focus {
+        thread: ThreadId,
+        fork_of: Option<ThreadId>,
+    },
     /// Show a toast (`notification.show`), ringing its chime; an
     /// important one stays up until dismissed.
     Notification {

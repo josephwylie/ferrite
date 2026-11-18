@@ -2342,6 +2342,7 @@ fn samples() -> Vec<(&'static str, Sample)> {
             "focus",
             Sample::Server(ServerMessage::Focus {
                 thread: ThreadId::new(7),
+                fork_of: None,
             }),
         ),
         (

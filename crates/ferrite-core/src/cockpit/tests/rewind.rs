@@ -157,7 +157,7 @@ fn a_whole_fork_opens_focused_with_its_draft() {
         cockpit
             .take_asked()
             .iter()
-            .any(|asked| matches!(asked, crate::cockpit::Asked::Focus(landed) if *landed == fork)),
+            .any(|asked| *asked == crate::cockpit::Asked::Focus { thread: fork, fork_of: Some(thread) }),
         "the windows land on the fork"
     );
     assert_eq!(

@@ -3104,7 +3104,10 @@ fn focus_and_toasts_reach_the_windows() {
     assert_eq!(
         told,
         [
-            ServerMessage::Focus { thread },
+            ServerMessage::Focus {
+                thread,
+                fork_of: None
+            },
             ServerMessage::Notification {
                 title: "Review ready".into(),
                 body: None,
@@ -3374,7 +3377,10 @@ fn a_thread_reports_what_a_coordinator_reads_of_it() {
             message,
             ServerMessage::Focus { .. }
         )),
-        ServerMessage::Focus { thread: thread_id }
+        ServerMessage::Focus {
+            thread: thread_id,
+            fork_of: None
+        }
     );
 
     tell(
@@ -3732,7 +3738,10 @@ fn a_project_is_focused_by_id() {
             message,
             ServerMessage::Focus { .. }
         )),
-        ServerMessage::Focus { thread }
+        ServerMessage::Focus {
+            thread,
+            fork_of: None
+        }
     );
     let missing = caller.answer(
         "3",

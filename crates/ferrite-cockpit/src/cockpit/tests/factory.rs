@@ -469,7 +469,10 @@ fn focusing_a_worker_by_id_opens_its_tasks_worker_tab(cx: &mut TestAppContext) {
     tick(cx);
     view.update(cx, |view, cx| {
         view.cockpit
-            .fixture_task_alert(ferrite_core::protocol::ServerMessage::Focus { thread: worker });
+            .fixture_task_alert(ferrite_core::protocol::ServerMessage::Focus {
+                thread: worker,
+                fork_of: None,
+            });
         cx.notify();
     });
     tick(cx);
