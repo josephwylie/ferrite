@@ -652,6 +652,63 @@ fn tick(cx: &mut gpui::VisualTestContext) {
     cx.run_until_parked();
 }
 
+/// Connections, with Settings put up for it if it is not.
+fn connections_view(
+    view: &Entity<CockpitView>,
+    cx: &mut gpui::VisualTestContext,
+) -> Entity<super::connections_view::ConnectionsView> {
+    view.update(cx, |view, cx| {
+        if !view.settings_open(cx) {
+            view.show_settings(cx);
+        }
+        view.connections(cx).unwrap()
+    })
+}
+
+/// The groups the Connections page draws now.
+fn connection_groups(
+    view: &Entity<CockpitView>,
+    cx: &mut gpui::VisualTestContext,
+) -> Vec<settings::Group> {
+    connections_view(view, cx)
+        .update_in(cx, |connections, window, cx| connections.groups(window, cx))
+}
+
+/// What the Connections row button `id` does.
+fn connection_act(
+    view: &Entity<CockpitView>,
+    id: &str,
+    cx: &mut gpui::VisualTestContext,
+) -> settings::WindowAct {
+    connection_groups(view, cx)
+        .into_iter()
+        .flat_map(|group| group.rows)
+        .find_map(|row| match row.control {
+            settings::Control::ConnectionRow(row) => row
+                .actions
+                .into_iter()
+                .find(|action| action.id.as_ref() == id)
+                .map(|action| action.act),
+            _ => None,
+        })
+        .expect(id)
+}
+
+/// The confirm of the Remove waiting on the Connections page.
+fn connection_removal(
+    view: &Entity<CockpitView>,
+    cx: &mut gpui::VisualTestContext,
+) -> settings::WindowAct {
+    connection_groups(view, cx)
+        .into_iter()
+        .flat_map(|group| group.rows)
+        .find_map(|row| match row.control {
+            settings::Control::ConnectionRow(row) => row.removal.map(|(confirm, _)| confirm),
+            _ => None,
+        })
+        .expect("a Remove waits for its confirm")
+}
+
 /// `thread`'s Panel tabs, in order, and the one it shows (ADR 0039).
 fn panel_tabs(
     view: &gpui::Entity<CockpitView>,

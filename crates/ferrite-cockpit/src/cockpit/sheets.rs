@@ -250,9 +250,14 @@ impl CockpitView {
     }
 
     /// What goes with a sheet, closed or replaced.
-    fn sheet_gone(&mut self, gone: Sheet, cx: &App) {
+    fn sheet_gone(&mut self, gone: Sheet, cx: &mut App) {
         match gone {
-            Sheet::Settings(_) => self.connections.editor = None,
+            // At the close, not when the fade drops the view: the editor
+            // holds the window's keystrokes and an attempt in flight.
+            Sheet::Settings(sheet) => {
+                let connections = sheet.read(cx).connections.clone();
+                connections.update(cx, |connections, _| connections.close_editor());
+            }
             Sheet::NewTask(sheet) => self.new_task_gone(&sheet, cx),
             Sheet::Direct(sheet) => self.direct_gone(&sheet, cx),
             Sheet::ProjectEditor(_) | Sheet::BackgroundDialog(_) => {}

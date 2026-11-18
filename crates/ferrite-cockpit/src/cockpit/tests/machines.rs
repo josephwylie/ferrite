@@ -398,41 +398,23 @@ fn removing_the_selected_connection_confirms_then_returns_to_this_computer(
         .unwrap();
     let (root, cx) = machine_window(cx, core, machines);
     let remote = shown(&root, cx);
-    let remove = remote.update_in(cx, |view, window, cx| {
+    remote.update(cx, |view, _| {
         view.prefs.settings.machines = vec![Machine {
             name: "box".into(),
             target: "me@box".into(),
             enabled: true,
         }];
-        view.connection_settings(window, cx)
-            .into_iter()
-            .flat_map(|group| group.rows)
-            .find_map(|row| match row.control {
-                settings::Control::ConnectionRow(row) => row
-                    .actions
-                    .into_iter()
-                    .find(|action| action.id.as_ref() == "connection-remove-1")
-                    .map(|action| action.act),
-                _ => None,
-            })
-            .unwrap()
     });
+    let remove = connection_act(&remote, "connection-remove-1", cx);
     cx.update(|window, cx| remove(window, cx));
-    let confirm = remote.update_in(cx, |view, window, cx| {
+    remote.read_with(cx, |view, _| {
         assert_eq!(
             view.prefs.settings.machines.len(),
             1,
             "the first press only asks"
         );
-        view.connection_settings(window, cx)
-            .into_iter()
-            .flat_map(|group| group.rows)
-            .find_map(|row| match row.control {
-                settings::Control::ConnectionRow(row) => row.removal.map(|(confirm, _)| confirm),
-                _ => None,
-            })
-            .unwrap()
     });
+    let confirm = connection_removal(&remote, cx);
     cx.update(|window, cx| confirm(window, cx));
     tick(cx);
     let local = shown(&root, cx);
@@ -2226,41 +2208,15 @@ fn remote_files_block_disconnect_and_remove_before_settings_or_selection_change(
     ] {
         let (root, view, editor, cx) =
             machine_with_edited_remote_file(&format!("remote-files-{name}"), true, unsaved, cx);
-        let action = view.update_in(cx, |view, window, cx| {
-            view.connection_settings(window, cx)
-                .into_iter()
-                .flat_map(|group| group.rows)
-                .find_map(|row| match row.control {
-                    settings::Control::ConnectionRow(row) => row
-                        .actions
-                        .into_iter()
-                        .find(|action| {
-                            action.id.as_ref()
-                                == if remove {
-                                    "connection-remove-1"
-                                } else {
-                                    "connection-toggle-1"
-                                }
-                        })
-                        .map(|action| action.act),
-                    _ => None,
-                })
-                .unwrap()
-        });
+        let id = if remove {
+            "connection-remove-1"
+        } else {
+            "connection-toggle-1"
+        };
+        let action = connection_act(&view, id, cx);
         cx.update(|window, cx| action(window, cx));
         let action = if remove {
-            view.update_in(cx, |view, window, cx| {
-                view.connection_settings(window, cx)
-                    .into_iter()
-                    .flat_map(|group| group.rows)
-                    .find_map(|row| match row.control {
-                        settings::Control::ConnectionRow(row) => {
-                            row.removal.map(|(confirm, _)| confirm)
-                        }
-                        _ => None,
-                    })
-                    .unwrap()
-            })
+            connection_removal(&view, cx)
         } else {
             action
         };
@@ -2342,20 +2298,7 @@ fn local_environment_switch_persists_and_empty_client_blocks_new_threads(cx: &mu
         assert!(view.shown_defaults().is_none());
     });
     for enabled in [true, false] {
-        let toggle = shown(&root, cx).update_in(cx, |view, window, cx| {
-            view.connection_settings(window, cx)
-                .into_iter()
-                .flat_map(|group| group.rows)
-                .find_map(|row| match row.control {
-                    settings::Control::ConnectionRow(row) => row
-                        .actions
-                        .into_iter()
-                        .find(|action| action.id.as_ref() == "connection-toggle-local")
-                        .map(|action| action.act),
-                    _ => None,
-                })
-                .unwrap()
-        });
+        let toggle = connection_act(&shown(&root, cx), "connection-toggle-local", cx);
         cx.update(|window, cx| toggle(window, cx));
         tick(cx);
         assert_eq!(
@@ -2421,20 +2364,7 @@ fn local_environment_switch_preserves_unreadable_settings(cx: &mut TestAppContex
     let (view, cx) = add_cockpit_window(cx, |_, cx| {
         CockpitView::new_with_settings(core, Provider::Codex, prefs, cx)
     });
-    let toggle = view.update_in(cx, |view, window, cx| {
-        view.connection_settings(window, cx)
-            .into_iter()
-            .flat_map(|group| group.rows)
-            .find_map(|row| match row.control {
-                settings::Control::ConnectionRow(row) => row
-                    .actions
-                    .into_iter()
-                    .find(|action| action.id.as_ref() == "connection-toggle-local")
-                    .map(|action| action.act),
-                _ => None,
-            })
-            .unwrap()
-    });
+    let toggle = connection_act(&view, "connection-toggle-local", cx);
     cx.update(|window, cx| toggle(window, cx));
     view.read_with(cx, |view, _| {
         assert!(view.prefs.settings.local_environment_enabled);

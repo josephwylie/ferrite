@@ -638,7 +638,6 @@ pub struct CockpitView {
     /// The machines this window can be on (ADR 0026); `None` in a window
     /// on an Engine of its own.
     machines: Option<Entity<crate::machines::Machines>>,
-    connections: connections_view::Connections,
 }
 
 /// The Cockpit asks its window to put it on machine `index` (ADR 0026),
@@ -1473,7 +1472,6 @@ impl CockpitView {
             columns: columns::Columns::new(),
             launch_provider,
             machines: None,
-            connections: connections_view::Connections::default(),
         };
         // A Cockpit notification is the earliest common point after core
         // state changes and before GPUI draws cached transcript children.
@@ -2330,7 +2328,9 @@ impl CockpitView {
         let shared = self.parts.borrow().on.then(|| self.shared_chrome());
         self.poll_navigation(cx);
         self.poll_machines(cx);
-        self.poll_connections(cx);
+        if let Some(connections) = self.connections(cx) {
+            connections.update(cx, |connections, cx| connections.poll(cx));
+        }
         let commands_changed = self
             .draft_commands
             .as_mut()
@@ -4182,8 +4182,11 @@ impl CockpitView {
         if self.leave_control(window, cx) {
             return;
         }
-        if self.settings_open(cx) && self.connections.editor.is_some() {
-            self.cancel_connection(window, cx);
+        if let Some(connections) = self
+            .connections(cx)
+            .filter(|connections| connections.read(cx).editing())
+        {
+            connections.update(cx, |connections, cx| connections.cancel(window, cx));
             return;
         }
         if self.hide_sheet(cx) {
@@ -8490,7 +8493,10 @@ impl CockpitView {
             // A popup puts the keyboard where it says (`tend_popup_focus`).
         } else if let Some(focus) = self.sheets.read(cx).up().map(|sheet| sheet.focus(cx)) {
             // The pump must not steal focus from a sheet's fields or controls.
-            if !focus.contains_focused(window, cx) && !self.connection_holds_focus(window, cx) {
+            let connection_focused = self
+                .connections(cx)
+                .is_some_and(|connections| connections.read(cx).holds_focus(window, cx));
+            if !focus.contains_focused(window, cx) && !connection_focused {
                 window.focus(&focus, cx);
             }
         } else if field_holds_keyboard {

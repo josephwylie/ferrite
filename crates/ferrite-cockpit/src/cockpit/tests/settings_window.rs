@@ -6,19 +6,16 @@ fn connection_fields(
     view: &Entity<CockpitView>,
     cx: &mut gpui::VisualTestContext,
 ) -> settings::ConnectionFields {
-    view.update_in(cx, |view, window, cx| {
-        view.connection_settings(window, cx)
-            .into_iter()
-            .flat_map(|group| group.rows)
-            .find_map(|row| match row.control {
-                settings::Control::ConnectionForm(settings::ConnectionForm::Editing {
-                    fields,
-                    ..
-                }) => Some(fields),
-                _ => None,
-            })
-            .expect("the connection editor is open")
-    })
+    connection_groups(view, cx)
+        .into_iter()
+        .flat_map(|group| group.rows)
+        .find_map(|row| match row.control {
+            settings::Control::ConnectionForm(settings::ConnectionForm::Editing {
+                fields, ..
+            }) => Some(fields),
+            _ => None,
+        })
+        .expect("the connection editor is open")
 }
 
 #[gpui::test]
@@ -78,8 +75,8 @@ fn connections_keep_failed_input_save_only_ready_and_cancel_with_escape(cx: &mut
         assert_eq!(fields.username.read(cx).value().as_ref(), "developer");
         assert_eq!(fields.port.read(cx).value().as_ref(), "2222");
     });
-    view.update(cx, |view, cx| {
-        view.connection_event(
+    connections_view(&view, cx).update(cx, |connections, cx| {
+        connections.setup_event(
             Event::Failed("Connection refused. Check the host and port.".into()),
             cx,
         )
@@ -97,7 +94,7 @@ fn connections_keep_failed_input_save_only_ready_and_cancel_with_escape(cx: &mut
             view.settings_open(cx),
             "Escape cancels the editor before closing Settings"
         );
-        assert!(view.connections.editor.is_none());
+        assert!(!view.connections(cx).unwrap().read(cx).editing());
     });
     assert!(cx.debug_bounds("connection-add").is_some());
 
@@ -105,13 +102,13 @@ fn connections_keep_failed_input_save_only_ready_and_cancel_with_escape(cx: &mut
     cx.simulate_click(hit, gpui::Modifiers::none());
     tick(cx);
     let machine = Machine::new("ready.example");
-    view.update(cx, |view, cx| {
-        view.connection_event(Event::Ready(machine.clone()), cx);
-        view.connection_event(Event::Ready(machine.clone()), cx);
+    connections_view(&view, cx).update(cx, |connections, cx| {
+        connections.setup_event(Event::Ready(machine.clone()), cx);
+        connections.setup_event(Event::Ready(machine.clone()), cx);
     });
     tick(cx);
-    view.read_with(cx, |view, _| {
-        assert!(view.connections.editor.is_none());
+    view.read_with(cx, |view, cx| {
+        assert!(!view.connections(cx).unwrap().read(cx).editing());
         assert_eq!(view.prefs.settings.machines, vec![machine.clone()]);
         assert_eq!(
             ferrite_core::settings::Settings::load(&view.prefs.dir)
@@ -128,43 +125,36 @@ fn a_connection_save_failure_keeps_the_form_and_runtime_unchanged(cx: &mut TestA
     let (core, _fake) = cockpit("connection-save-failure", 1);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     tick(cx);
-    let open = view.update_in(cx, |view, window, cx| {
-        view.connection_settings(window, cx)
-            .into_iter()
-            .flat_map(|group| group.rows)
-            .find_map(|row| match row.control {
-                settings::Control::ConnectionForm(settings::ConnectionForm::Closed {
-                    open,
-                    ..
-                }) => Some(open),
-                _ => None,
-            })
-            .unwrap()
-    });
+    let open = connection_groups(&view, cx)
+        .into_iter()
+        .flat_map(|group| group.rows)
+        .find_map(|row| match row.control {
+            settings::Control::ConnectionForm(settings::ConnectionForm::Closed { open, .. }) => {
+                Some(open)
+            }
+            _ => None,
+        })
+        .unwrap();
     cx.update(|window, cx| open(window, cx));
     let blocked = scratch("connection-settings-file").join("not-a-directory");
     std::fs::create_dir_all(blocked.parent().unwrap()).unwrap();
     std::fs::write(&blocked, b"keep").unwrap();
-    view.update(cx, |view, cx| {
-        view.prefs.dir = blocked.clone();
-        view.connection_event(Event::Ready(Machine::new("ready.example")), cx);
+    view.update(cx, |view, _| view.prefs.dir = blocked.clone());
+    connections_view(&view, cx).update(cx, |connections, cx| {
+        connections.setup_event(Event::Ready(Machine::new("ready.example")), cx)
     });
-    view.update_in(cx, |view, window, cx| {
-        assert!(view.prefs.settings.machines.is_empty());
-        let error = view
-            .connection_settings(window, cx)
-            .into_iter()
-            .flat_map(|group| group.rows)
-            .find_map(|row| match row.control {
-                settings::Control::ConnectionForm(settings::ConnectionForm::Editing {
-                    error,
-                    ..
-                }) => error,
-                _ => None,
-            })
-            .expect("saving failed inline");
-        assert!(error.contains("not saved"));
-    });
+    view.read_with(cx, |view, _| assert!(view.prefs.settings.machines.is_empty()));
+    let error = connection_groups(&view, cx)
+        .into_iter()
+        .flat_map(|group| group.rows)
+        .find_map(|row| match row.control {
+            settings::Control::ConnectionForm(settings::ConnectionForm::Editing {
+                error, ..
+            }) => error,
+            _ => None,
+        })
+        .expect("saving failed inline");
+    assert!(error.contains("not saved"));
     assert_eq!(std::fs::read(blocked).unwrap(), b"keep");
 }
 
@@ -205,30 +195,63 @@ fn a_ready_setup_replaces_the_environment_it_edits_and_keeps_its_warning(
         enabled: false,
     };
     let other = Machine::new("other.example");
-    view.update_in(cx, |view, window, cx| {
+    view.update(cx, |view, _| {
         view.prefs.settings.machines = vec![saved.clone(), other.clone()];
-        view.toggle_settings(cx);
-        view.edit_connection(Some(saved.clone()), window, cx);
+    });
+    connections_view(&view, cx).update_in(cx, |connections, window, cx| {
+        connections.edit(Some(saved.clone()), window, cx)
     });
     tick(cx);
     let ready = Machine {
         enabled: true,
         ..saved.clone()
     };
-    view.update(cx, |view, cx| {
-        view.connection_event(Event::Warning("Host key added.".into()), cx);
-        view.connection_event(Event::Ready(ready.clone()), cx);
+    connections_view(&view, cx).update(cx, |connections, cx| {
+        connections.setup_event(Event::Warning("Host key added.".into()), cx);
+        connections.setup_event(Event::Ready(ready.clone()), cx);
     });
     tick(cx);
-    view.update_in(cx, |view, window, cx| {
+    view.read_with(cx, |view, _| {
         assert_eq!(view.prefs.settings.machines, vec![ready.clone(), other.clone()]);
-        let note = view
-            .connection_settings(window, cx)
-            .into_iter()
-            .find(|group| group.title == Some("Environments"))
-            .and_then(|group| group.note);
-        assert_eq!(note.as_deref(), Some("Host key added."));
     });
+    let note = connection_groups(&view, cx)
+        .into_iter()
+        .find(|group| group.title == Some("Environments"))
+        .and_then(|group| group.note);
+    assert_eq!(note.as_deref(), Some("Host key added."));
+}
+
+/// What Connections said goes with the Settings sheet it was said on.
+#[gpui::test]
+fn connections_say_nothing_of_a_closed_settings_sheet(cx: &mut TestAppContext) {
+    let (core, _fake) = cockpit("connections-reopen", 1);
+    let prefs = Preferences {
+        unreadable: Some("expected value at line 1 column 1".into()),
+        ..Preferences::ephemeral()
+    };
+    let (view, cx) = add_cockpit_window(cx, |_, cx| {
+        CockpitView::new_with_settings(core, Provider::Codex, prefs, cx)
+    });
+    tick(cx);
+    let error = |cx: &mut gpui::VisualTestContext| {
+        connection_groups(&view, cx)
+            .into_iter()
+            .flat_map(|group| group.rows)
+            .find_map(|row| match row.control {
+                settings::Control::ConnectionForm(settings::ConnectionForm::Closed {
+                    error, ..
+                }) => error,
+                _ => None,
+            })
+    };
+    let toggle = connection_act(&view, "connection-toggle-local", cx);
+    cx.update(|window, cx| toggle(window, cx));
+    assert!(error(cx).is_some_and(|error| error.contains("cannot be saved")));
+    view.update(cx, |view, cx| {
+        view.hide_sheet(cx);
+    });
+    tick(cx);
+    assert_eq!(error(cx), None, "Settings opens again with no error");
 }
 
 #[gpui::test]
@@ -255,7 +278,11 @@ fn reconnect_leaves_search_and_rejects_another_saved_target(cx: &mut TestAppCont
             .update(cx, |search, cx| {
                 search.set_value("first.example", window, cx)
             });
-        view.edit_connection(Some(saved[0].clone()), window, cx);
+    });
+    connections_view(&view, cx).update_in(cx, |connections, window, cx| {
+        connections.edit(Some(saved[0].clone()), window, cx)
+    });
+    view.read_with(cx, |view, cx| {
         assert_eq!(view.settings_sheet(cx).unwrap().read(cx).page, settings::PageKey::Connections);
         assert!(view
             .settings_sheet(cx)
@@ -785,7 +812,7 @@ fn connection_modal_defaults_to_link_traps_tab_and_resets_on_reopen(cx: &mut Tes
         cx.simulate_keystrokes("tab");
         tick(cx);
         let focused = view.update_in(cx, |view, window, cx| {
-            assert!(view.connection_holds_focus(window, cx));
+            assert!(view.connections(cx).unwrap().read(cx).holds_focus(window, cx));
             window.focused(cx).unwrap()
         });
         if !visited.contains(&focused) {
@@ -797,7 +824,7 @@ fn connection_modal_defaults_to_link_traps_tab_and_resets_on_reopen(cx: &mut Tes
         cx.simulate_keystrokes("shift-tab");
         tick(cx);
         view.update_in(cx, |view, window, cx| {
-            assert!(view.connection_holds_focus(window, cx))
+            assert!(view.connections(cx).unwrap().read(cx).holds_focus(window, cx))
         });
     }
     cx.update(|window, cx| {
@@ -833,7 +860,7 @@ fn connection_modal_defaults_to_link_traps_tab_and_resets_on_reopen(cx: &mut Tes
     cx.simulate_keystrokes("escape");
     tick(cx);
     view.read_with(cx, |view, cx| {
-        assert!(view.settings_open(cx) && view.connections.editor.is_none())
+        assert!(view.settings_open(cx) && !view.connections(cx).unwrap().read(cx).editing())
     });
     cx.simulate_keystrokes("escape");
     tick(cx);
@@ -849,9 +876,8 @@ fn connection_modal_does_not_submit_or_close_during_ime_composition(cx: &mut Tes
     tick(cx);
     cx.simulate_keystrokes("cmd-,");
     tick(cx);
-    view.update_in(cx, |view, window, cx| {
-        view.edit_connection(None, window, cx)
-    });
+    connections_view(&view, cx)
+        .update_in(cx, |connections, window, cx| connections.edit(None, window, cx));
     tick(cx);
     let fields = connection_fields(&view, cx);
     cx.update(|window, cx| {
@@ -884,7 +910,8 @@ fn connection_pairing_url_can_be_typed_without_rewriting_its_prefix(cx: &mut Tes
     tick(cx);
     cx.simulate_keystrokes("cmd-,");
     tick(cx);
-    view.update_in(cx, |view, window, cx| view.edit_connection(None, window, cx));
+    connections_view(&view, cx)
+        .update_in(cx, |connections, window, cx| connections.edit(None, window, cx));
     tick(cx);
     let fields = connection_fields(&view, cx);
     let url = "https://backend.example.com/pair#code=0123456789abcdef0123456789abcdef&server=fedcba9876543210fedcba9876543210";
@@ -917,7 +944,8 @@ fn connection_pairing_url_paste_fills_host_and_code_after_replacing_text(cx: &mu
     tick(cx);
     cx.simulate_keystrokes(&ferrite_ui::keymap::PLATFORM.chord(","));
     tick(cx);
-    view.update_in(cx, |view, window, cx| view.edit_connection(None, window, cx));
+    connections_view(&view, cx)
+        .update_in(cx, |connections, window, cx| connections.edit(None, window, cx));
     tick(cx);
     let fields = connection_fields(&view, cx);
     cx.simulate_input("https://backend.example.com");
