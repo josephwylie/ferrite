@@ -64,6 +64,39 @@ fn the_door_opens_a_shell_in_a_panel_tab_and_closing_it_ends_it(cx: &mut TestApp
     assert!(numbers(&view, thread, cx).is_empty(), "its shell ended with it");
 }
 
+/// Run `verb` off `thread`'s nav row menu, pressing twice when the first
+/// press only arms it.
+fn press_nav_verb(
+    view: &Entity<CockpitView>,
+    thread: ThreadId,
+    verb: MenuVerb,
+    cx: &mut gpui::VisualTestContext,
+) {
+    view.update_in(cx, |view, window, cx| {
+        let row = view
+            .context_rows(MenuTarget::Thread(thread), cx)
+            .iter()
+            .position(|row| matches!(row, Some((_, listed)) if *listed == verb))
+            .expect("the nav row's menu has the verb");
+        view.open_context_menu(MenuTarget::Thread(thread), gpui::point(px(600.), px(300.)), cx);
+        view.press_menu_row(row, window, cx);
+        if view.context_menu().is_some() {
+            view.press_menu_row(row, window, cx);
+        }
+    });
+    leap(cx, std::time::Duration::from_secs(1));
+}
+
+#[gpui::test]
+fn deleting_a_thread_ends_the_shells_its_panel_held(cx: &mut TestAppContext) {
+    let (view, thread, cx) = window("terminal-thread-deleted", cx);
+    opened(&view, cx);
+    assert_eq!(numbers(&view, thread, cx), [1]);
+    press_nav_verb(&view, thread, MenuVerb::Delete, cx);
+    assert!(!view.read_with(cx, |view, _| view.known_threads().contains(&thread)), "the Thread is gone");
+    assert!(numbers(&view, thread, cx).is_empty(), "its shell ended with it");
+}
+
 #[gpui::test]
 fn a_local_shell_with_a_failed_exit_still_closes_its_tab(cx: &mut TestAppContext) {
     let (view, thread, cx) = window("terminal-local-exit", cx);
