@@ -317,4 +317,105 @@ impl CockpitView {
             )
             .into_any_element()
     }
+
+    /// Tell `pane`'s transcript what `subject` of `thread` holds after its
+    /// first `skip` blocks, `note` standing under the first prompt. The
+    /// compact, read-only twin of `sync_transcript`, for the right pane's
+    /// bodies (the side chat's tabs, a subagent's drill-in): no subagents,
+    /// rewinds or Reply, as they have no Pane's Composer to reply into.
+    /// `decisions` is the row after the last, where the view answers the
+    /// Decisions `subject` waits on.
+    pub(super) fn sync_compact_transcript(
+        &self,
+        thread: ThreadId,
+        subject: &Subject,
+        pane: &PaneView,
+        skip: usize,
+        note: Option<SharedString>,
+        decisions: Option<ferrite_pane::transcript::TranscriptTail>,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(open) = self.cockpit.thread(thread) else {
+            return;
+        };
+        let Some(subject_view) = open.activity().subject(subject) else {
+            return;
+        };
+        let namespace = pane.text_namespace();
+        let revision = subject_view.presentation_revision();
+        let status = pane::transcript_status(subject_view.status(), subject_view.fresh());
+        let reading_size = self.prefs.settings.reading_size;
+        let transcript = subject_view.transcript();
+        let working = pane::working_tail(pane::WorkingFacts {
+            transcript,
+            thread,
+            starting: open.starting(),
+            solo: false,
+            focused: true,
+            reduce_motion: cx.reduce_motion(),
+        });
+        let pending_call = decisions
+            .as_ref()
+            .and_then(|_| {
+                open.activity()
+                    .pending_decisions()
+                    .iter()
+                    .find(|request| subagents::shown_for(subject, request))
+            })
+            .map(|request| request.decision.tool_use_id.clone())
+            .filter(|call| !call.is_empty());
+        let workspace =
+            ferrite_core::workspace::effective_cwd(open.session_project_root(), open.workspace())
+                .map(std::path::Path::to_path_buf);
+        let presentation = ferrite_pane::transcript::TranscriptPresentation {
+            thread,
+            selection_scope: pane.selection_scope,
+            disclosure_focus: pane.tool_focus(),
+            namespace,
+            content_revision: revision,
+            display_revision: pane.disclosure_revision(),
+            focused: true,
+            signal_status: Some(status),
+            reading_size,
+            working,
+            tail: decisions,
+            pending_call,
+            workspace,
+            solo: false,
+            thinking: self.prefs.settings.show_thinking,
+            agents: Default::default(),
+            rewind: None,
+            quotes: false,
+            reply_to: open.provider().to_string().into(),
+            skills: open.commands().into(),
+            cited: Default::default(),
+            note,
+            earlier: None,
+            queued: 0,
+        };
+        let Some(entity) = pane.transcript() else {
+            return;
+        };
+        let selection = self.selection.clone();
+        entity.update(cx, |view, cx| {
+            view.reconcile(
+                presentation,
+                || {
+                    let mut blocks =
+                        pane::rendered_window(transcript.blocks()).to_vec();
+                    let first = transcript.blocks().len() - blocks.len();
+                    blocks.drain(..skip.saturating_sub(first).min(blocks.len()));
+                    let disclosure = pane.transcript_disclosure_snapshot();
+                    ferrite_pane::transcript::TranscriptBody {
+                        blocks,
+                        preview: pane.preview.clone(),
+                        expanded: disclosure.0,
+                        target: disclosure.1,
+                    }
+                },
+                selection,
+                cx,
+            );
+        });
+    }
 }
