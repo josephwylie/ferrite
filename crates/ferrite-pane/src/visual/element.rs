@@ -923,6 +923,28 @@ mod tests {
     }
 
     #[gpui::test]
+    fn a_pointer_resting_over_the_view_moves_it_once(cx: &mut TestAppContext) {
+        let (engine, _host, cx) = fixture(cx);
+        let _ = opened(&engine);
+        let resting = point(px(LEFT + 15.), px(TOP + 20.));
+        // Windows repeats WM_MOUSEMOVE for a cursor that has not moved.
+        for _ in 0..3 {
+            cx.simulate_mouse_move(resting, None, Modifiers::default());
+        }
+        cx.simulate_mouse_move(point(px(5.), px(5.)), None, Modifiers::default());
+        cx.simulate_mouse_move(resting, None, Modifiers::default());
+        let m = web::Modifiers::default();
+        assert_eq!(
+            inputs(&engine),
+            [
+                Input::Move { x: 15., y: 20., modifiers: m },
+                Input::Leave,
+                Input::Move { x: 15., y: 20., modifiers: m },
+            ]
+        );
+    }
+
+    #[gpui::test]
     fn clicks_carry_view_coordinates_and_count(cx: &mut TestAppContext) {
         let (engine, _host, cx) = fixture(cx);
         cx.simulate_click(point(px(LEFT + 40.), px(TOP + 2.)), Modifiers::default());
