@@ -8486,7 +8486,7 @@ impl CockpitView {
         {
             // Native text, dialogs, and the Inbox keep their own keyboard focus.
         } else if self.popup_up() {
-            // A popup holds the keyboard at the root (`tend_popup_focus`).
+            // A popup puts the keyboard where it says (`tend_popup_focus`).
         } else if let Some(focus) = self.sheets.read(cx).up().map(|sheet| sheet.focus(cx)) {
             // The pump must not steal focus from a sheet's fields or controls.
             if !focus.contains_focused(window, cx) && !self.connection_holds_focus(window, cx) {
