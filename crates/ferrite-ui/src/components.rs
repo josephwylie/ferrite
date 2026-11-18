@@ -2916,6 +2916,77 @@ mod tests {
         assert!(cx.debug_bounds("tooltip").is_some(), "its tooltip says why");
     }
 
+    /// A tooltip says what its control does now. One asked for at the hover
+    /// and still waiting when the control is pressed is called off: shown
+    /// after the press it would say what the press already did (`Stage` on
+    /// a file just staged). The next move of the pointer asks again.
+    #[gpui::test]
+    fn a_tooltip_asked_for_before_a_press_never_shows_after_it(cx: &mut gpui::TestAppContext) {
+        use std::{cell::RefCell, rc::Rc};
+
+        use gpui::{Modifiers, MouseButton};
+
+        struct File {
+            staged: bool,
+            built: Rc<RefCell<Vec<&'static str>>>,
+        }
+        impl gpui::Render for File {
+            fn render(&mut self, _: &mut Window, cx: &mut gpui::Context<Self>) -> impl IntoElement {
+                let words = if self.staged { "Unstage" } else { "Stage" };
+                let built = self.built.clone();
+                div().p(px(10.)).child(
+                    div()
+                        .id("stage")
+                        .debug_selector(|| "stage".into())
+                        .size(px(theme::ICON_BUTTON))
+                        .tooltip(move |window, cx| {
+                            built.borrow_mut().push(words);
+                            crate::menu::tooltip(words)(window, cx)
+                        })
+                        .on_click(cx.listener(|file, _, _, cx| {
+                            file.staged = !file.staged;
+                            cx.notify();
+                        })),
+                )
+            }
+        }
+
+        cx.update(theme::init_components);
+        let built = Rc::new(RefCell::new(Vec::new()));
+        let (_, cx) = cx.add_window_view({
+            let built = built.clone();
+            move |_, _| File { staged: false, built }
+        });
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+        let at = cx.debug_bounds("stage").expect("the button").center();
+        let step = gpui::point(px(1.), px(0.));
+        let wait = |cx: &mut gpui::VisualTestContext| {
+            cx.executor().advance_clock(Duration::from_secs(1));
+            cx.run_until_parked();
+        };
+
+        // A quick press: the pointer arrives and presses before the tooltip is up.
+        cx.simulate_mouse_move(at, None, Modifiers::none());
+        cx.simulate_mouse_move(at + step, None, Modifiers::none());
+        cx.simulate_click(at + step, Modifiers::none());
+        wait(cx);
+        assert!(!built.borrow().contains(&"Stage"), "built {:?}", built.borrow());
+
+        // The pointer slips while the button is held, as a hand's does.
+        built.borrow_mut().clear();
+        cx.simulate_mouse_down(at, MouseButton::Left, Modifiers::none());
+        cx.simulate_mouse_move(at + step, MouseButton::Left, Modifiers::none());
+        cx.simulate_mouse_up(at + step, MouseButton::Left, Modifiers::none());
+        wait(cx);
+        assert!(!built.borrow().contains(&"Unstage"), "built {:?}", built.borrow());
+
+        cx.simulate_mouse_move(at, None, Modifiers::none());
+        cx.simulate_mouse_move(at + step, None, Modifiers::none());
+        wait(cx);
+        assert_eq!(built.borrow().last(), Some(&"Stage"), "the next move asks again");
+        assert!(cx.debug_bounds("tooltip").is_some(), "and its tooltip is up");
+    }
+
     /// An icon button given its caller's focus handle is focused by it: a
     /// view that moves the keyboard between its own stops presses the
     /// button from Enter.

@@ -3672,6 +3672,24 @@ pub(crate) fn clear_active_tooltip_if_not_hoverable(
     }
 }
 
+/// Ferrite's patch: a press also calls off a tooltip still waiting to show.
+/// It was asked for before the press and is built from what the element
+/// said then, so shown after it would describe what the press already did.
+pub(crate) fn clear_active_tooltip_on_press(
+    active_tooltip: &Rc<RefCell<Option<ActiveTooltip>>>,
+    window: &mut Window,
+) {
+    let waiting = matches!(
+        active_tooltip.borrow().as_ref(),
+        Some(ActiveTooltip::WaitingForShow { .. })
+    );
+    if waiting {
+        active_tooltip.borrow_mut().take();
+    } else {
+        clear_active_tooltip_if_not_hoverable(active_tooltip, window);
+    }
+}
+
 pub(crate) fn set_tooltip_on_window(
     active_tooltip: &Rc<RefCell<Option<ActiveTooltip>>>,
     window: &mut Window,
@@ -3724,7 +3742,18 @@ pub(crate) fn register_tooltip_mouse_handlers(
         let active_tooltip = active_tooltip.clone();
         move |_: &MouseDownEvent, _phase, window: &mut Window, _cx| {
             if !tooltip_id.is_some_and(|tooltip_id| tooltip_id.is_hovered(window)) {
-                clear_active_tooltip_if_not_hoverable(&active_tooltip, window);
+                clear_active_tooltip_on_press(&active_tooltip, window);
+            }
+        }
+    });
+
+    // Ferrite's patch: the release too, for a pointer that moved while the
+    // button was held and asked again.
+    window.on_mouse_event({
+        let active_tooltip = active_tooltip.clone();
+        move |_: &MouseUpEvent, _phase, window: &mut Window, _cx| {
+            if !tooltip_id.is_some_and(|tooltip_id| tooltip_id.is_hovered(window)) {
+                clear_active_tooltip_on_press(&active_tooltip, window);
             }
         }
     });
