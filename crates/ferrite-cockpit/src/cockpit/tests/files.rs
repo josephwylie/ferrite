@@ -391,8 +391,8 @@ fn the_filter_lists_matches_and_a_row_menu_copies_paths(cx: &mut TestAppContext)
         view.update(cx, |view, cx| view.run_files_verb(thread, verb, cx));
         assert_eq!(cx.read_from_clipboard().and_then(|item| item.text()), Some(expect));
     }
-    view.read_with(cx, |view, _| {
-        let sub = view.context_submenu_rows_for_test(MenuTarget::File(thread), Submenu::Files(FilesSub::Copy));
+    view.read_with(cx, |view, cx| {
+        let sub = view.context_submenu_rows_for_test(MenuTarget::File(thread), Submenu::Files(FilesSub::Copy), cx);
         assert_eq!(sub.len(), 3, "Absolute path, Relative path, Filename");
     });
     view.update(cx, |view, cx| view.run_files_verb(thread, FilesVerb::Attach, cx));
