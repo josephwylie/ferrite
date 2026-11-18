@@ -156,9 +156,10 @@ _Avoid_: modal.
 
 **Popup**
 A menu or small card that hangs from a point or a control over the window,
-with no veil: the context menu, the permission mode menu, and the plan,
-checks and session controls cards. One is up at a time. While it is up it
-holds the keyboard; Escape or a press outside closes it.
+with no veil: the context menu, the permission mode menu, the plan,
+checks and session controls cards, and the Composer's model picker, band
+menus and attach menu. One is up at a time. While it is up its keys are
+its own; Escape or a press outside closes it.
 _Avoid_: float, overlay.
 
 **Composer**

@@ -5,7 +5,7 @@ date: 2026-11-18
 
 # One popup at a time, in one slot
 
-Ferrite has five popups: the context menu (which is also the Factory's
+Ferrite had five popups: the context menu (which is also the Factory's
 pickers, the nav's menus and Snooze), the permission mode menu, the plan
 card, the checks card and the session controls card. They kept their open
 state in eight fields on the Cockpit's root. Nothing closed them in one
@@ -24,40 +24,60 @@ the plan card came back on a Thread focused again later.
   the slot, and two popups up at once cannot be written down.
 - **A closed enum.** `Popup` has one variant per kind, holding what that
   kind draws from: the context menu's rows and cursor, the mode menu's
-  Session and preview, a card's Thread.
+  Session and preview, a card's Thread, the model picker's and band
+  menu's rows and cursor, the attach menu's Pane.
 - **One open path.** `show_popup` replaces whatever is up, with no exit
   for the one replaced. It ends a rename in progress and closes the
-  Composer's popover, apart from the model picker that a mode menu opened
-  from its footer hangs from.
+  Composer's text menu.
 - **One close path.** `close_popup` closes the popup up and reports whether
   one was. Escape, a press outside, a pick, a sheet opening or closing and
   a popup with nothing left to draw all reach it.
-- **A popup holds the keyboard.** While one is up the root holds focus and
-  its key context carries `Popup`, so the Cockpit's own keys stand down and
-  no field under it hears a key. Focus goes back to what had it once the
-  popup closes. The root takes Escape and closes the popup. The arrows,
-  Enter and the one-letter keys stay the context menu's. `interrupt` closes
-  a popup before it does anything else, so no path stops a turn while one
-  is up.
+- **Each popup says where the keyboard sits.** `Popup::keys` answers
+  `Root`, its own field (the model picker's search line, the attach
+  menu's list), or the Composer under it (a band menu, so tab still walks
+  the band). The slot moves focus there while the popup is up and back to
+  what had it once it closes; the focus pump has no case for any popup.
+  While the root or a popup's own field holds the keys, the root's key
+  context carries `Popup`, so the Cockpit's own keys stand down. Escape
+  closes the popup. The arrows, Enter and the one-letter keys stay the
+  popup's own. `interrupt` closes a popup before it does anything else, so
+  no path stops a turn while one is up.
 - **One outside press.** Every popup's surface closes it on a press
   outside, in the capture phase, so no handler under the press can keep it
-  up. A press on the mode menu's own chip is left to the chip, which shuts
-  it, and a press on a context menu's submenu is the menu's.
+  up. A press on the control that toggles a popup (the mode chip, the
+  model chip, a band chip) is left to the control, which shuts it, and a
+  press on a context menu's submenu or the picker's nested mode menu is
+  the popup's. The attach menu is the kit's choice menu and takes its own
+  outside press.
 - **One rule for a popup with nothing to draw.** The root's render closes
   a popup that no longer stands: a Thread's popup whose Thread is not
   focused or is under a sheet, a Session's whose Session has gone, the
-  checks card with no checks, the plan card with no plan, a mode menu
-  whose model picker shut. A page's dialog taking the keyboard closes any
-  popup.
+  checks card with no checks, the plan card with no plan, a Composer's
+  popup whose Pane is no longer the one shown, a band menu whose draft
+  has started. A page's dialog taking the keyboard closes any popup.
 - **Sheets and popups.** A sheet opening or closing closes the popup up. A
   context menu opened from inside a sheet still opens over it: the first
   Escape closes the menu, the second the sheet.
 - **One draw.** The popup up is drawn in one place, `deferred` at
   `FLOAT_PRIORITY`, over the sheets.
-- **Out of the slot.** The Composer's popover and the model picker, the
-  attach menu, the palette and shortcuts, the Thread details card, the
-  lightbox and the transcript's own menus keep their own state. Where they
-  closed a popup, they now call `close_popup`.
+- **Out of the slot.** The Composer's text menus (`/` and `@`), which
+  follow what is typed, the palette and shortcuts, the Thread details
+  card, the lightbox and the transcript's own menus keep their own state.
+  Where they closed a popup, they now call `close_popup`.
+
+## The Composer's popups
+
+The model picker, a draft's band menus and the attach (`+`) menu joined
+the slot as `Popup::ModelPicker`, `Popup::Band` and `Popup::Attach`. The
+permission mode menu opened from the picker's footer is no longer a
+popup of its own: it nests inside the picker, so the first Escape closes
+it and the second the picker, and it cannot outlive what it hangs from.
+The Composer's `popover` field keeps only the text menus, and the bounds
+of the controls popups hang from moved into the slot. Five faults the
+old shape hid are pinned in `cockpit/tests/popups.rs`: a sheet opening
+left the attach menu up, Escape could not close it, Escape on it denied
+a waiting Decision, its arrows and Enter did nothing, and a context menu
+opened over it left both up.
 
 ## Precedent
 
