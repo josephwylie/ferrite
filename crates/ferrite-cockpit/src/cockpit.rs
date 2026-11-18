@@ -2383,7 +2383,7 @@ impl CockpitView {
         self.fetch_attachment_previews(cx);
         self.note_work(&frame);
         self.prune_background_stops();
-        self.close_background_dialog_of_closed_thread(cx);
+        self.close_sheet_with_nothing_to_draw(cx);
         self.pump_browsers(cx);
         if let Some(card) = self.project_card(cx) {
             card.update(cx, |card, cx| card.poll_remote_path(cx));
@@ -3686,12 +3686,6 @@ impl CockpitView {
             return;
         }
         self.show_settings(cx);
-        self.popover = None;
-        if self.cli_versions.is_none() {
-            self.probe_cli_versions(cx);
-        }
-        self.ask_server_defaults();
-        cx.notify();
     }
 
     /// One beat of the updater: ask the registry when due, then install
@@ -6506,12 +6500,13 @@ impl CockpitView {
         .flatten();
         let identity = self.panes[index].identity;
         let group = model_picker::chip_trigger(identity);
+        let picker_up = self.model_picker_open(identity);
         let face = pane::model_effort_chip(pane::ModelChip {
             mark: ferrite_ui::provider::mark(provider),
             model: model_label,
             effort: effort.map(|effort| pane::sentence_case(&effort).into()),
             loading: false,
-            open: self.model_picker_open(identity),
+            open: picker_up,
             group: group.clone(),
         });
         let control = pane::draft_picker(
@@ -6520,7 +6515,7 @@ impl CockpitView {
             face,
             cx,
         )
-        .tip("Model and effort");
+        .tip_unless_open(picker_up, "Model and effort");
         Some(self.model_chip_control(index, control, cx))
     }
 
@@ -6773,7 +6768,7 @@ impl CockpitView {
             width: Some(ferrite_ui::theme::ATTACH_MENU_W),
             hang_left: true,
             id: SharedString::from(format!("attach-menu-{index}")),
-            trigger: pane::attach_button(cx),
+            trigger: pane::attach_button(self.attach_menu == Some(identity), cx),
             choices,
             open: self.attach_menu == Some(identity),
             return_focus: self.panes[index].composer.focus_handle(cx),
@@ -8335,7 +8330,6 @@ impl CockpitView {
             .collect();
         // The open Task's Worker, drawn in its panel, streams whole too.
         self.leave_destination_if_moved();
-        self.close_sheet_with_nothing_to_draw(cx);
         let drawn: Vec<ThreadId> = match self.factory_worker_drawn() {
             Some(worker) => vec![worker],
             None => drawn,
@@ -9554,9 +9548,16 @@ impl CockpitView {
     }
 
     /// A Pane's own card: off its Composer's right edge opening up, its
-    /// head's opening down, inside the Pane.
+    /// head's opening down, inside the Pane. A head card hangs under the
+    /// Thread details card while that is drawn, since it sits in the same
+    /// corner.
     fn pane_card_corner(&self, identity: PaneIdentity, up: bool) -> Option<Point<Pixels>> {
-        let geometry = self.panes[self.index_of(identity)?].geometry.get();
+        let pane = &self.panes[self.index_of(identity)?];
+        if let Some(details) = pane.details.drawn.get().filter(|_| !up) {
+            let limit_right = f32::from(details.right());
+            return Some(ferrite_ui::components::FloatPlace { floor: 0., limit_right }.card_corner(details, false));
+        }
+        let geometry = pane.geometry.get();
         let card = geometry.card?;
         let limit_right = f32::from(card.right()) - ferrite_ui::theme::PANE_PAD_X;
         let (floor, trigger) = if up {
@@ -9681,9 +9682,10 @@ impl CockpitView {
         let mode = open.permission_mode().unwrap_or("default").to_string();
         let label = pane::permission_mode_label(&mode, &modes);
         let key = thread.get() as usize;
+        let menu_up = self.mode_menu().is_some_and(|menu| menu.thread == thread && !menu.from_picker);
         let trigger = pane::toolbar_chip(("mode-picker", key), cx)
             .debug_selector(move || format!("mode-picker-{key}"))
-            .tip("Permission mode")
+            .tip_unless_open(menu_up, "Permission mode")
             .child(pane::mode_chip(label, &mode));
         let wrap = |chip: AnyElement| {
             div()
@@ -10213,17 +10215,18 @@ impl CockpitView {
         let effort = self.thread_effort(&open);
         let key = thread.get() as usize;
         let identity = PaneIdentity::Thread(thread);
+        let picker_up = self.model_picker_open(identity);
         let face = pane::model_effort_chip(pane::ModelChip {
             mark: ferrite_ui::provider::mark(provider),
             model: label,
             effort: effort.map(|effort| pane::sentence_case(&effort).into()),
             loading: open.starting(),
-            open: self.model_picker_open(identity),
+            open: picker_up,
             group: model_picker::chip_trigger(identity),
         });
         let control = pane::toolbar_chip(("model-picker", key), cx)
             .debug_selector(move || format!("model-picker-{key}"))
-            .tip(hold.unwrap_or("Model and effort"))
+            .tip_unless_open(picker_up, hold.unwrap_or("Model and effort"))
             .child(face);
         Some(self.model_chip_control(index, control, cx))
     }

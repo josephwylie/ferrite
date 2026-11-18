@@ -13,7 +13,7 @@ use gpui::component::{Disableable, Selectable, Sizable};
 
 use ferrite_ui::components::{self, MenuItem};
 use ferrite_ui::controls;
-use ferrite_ui::frame::settings::{Control, Group, Page, PageKey, Row, CLI_DEFAULT};
+use ferrite_ui::frame::settings::{Control, GivesWay, Group, Page, PageKey, Row, CLI_DEFAULT};
 use ferrite_ui::frame::SettingsSheet;
 use ferrite_ui::icons::{self, icon};
 use ferrite_ui::pointer::Pointer;
@@ -458,7 +458,7 @@ fn setting_row(row: &Row, window: &mut Window, cx: &mut App) -> AnyElement {
         _ => {}
     }
     let hinted = !row.hint.is_empty();
-    let fact = row.is_fact();
+    let gives_way = row.gives_way();
     div()
         .flex()
         .items_start()
@@ -475,12 +475,14 @@ fn setting_row(row: &Row, window: &mut Window, cx: &mut App) -> AnyElement {
                 .flex()
                 .flex_col()
                 .min_w_0()
-                .map(|text| {
-                    if fact {
-                        text.flex_shrink_0().w(px(SETTINGS_FACT_KEY_W))
-                    } else {
-                        text.flex_1()
-                    }
+                .debug_selector({
+                    let title = row.title.clone();
+                    move || format!("settings-label-{title}")
+                })
+                .map(|text| match gives_way {
+                    GivesWay::FactValue => text.flex_shrink_0().w(px(SETTINGS_FACT_KEY_W)),
+                    GivesWay::ActionValue => text.flex_shrink_0(),
+                    GivesWay::Label => text.flex_1(),
                 })
                 .child(
                     components::text_ui()
@@ -499,12 +501,9 @@ fn setting_row(row: &Row, window: &mut Window, cx: &mut App) -> AnyElement {
                 .items_center()
                 .justify_end()
                 .min_h(px(LH_UI))
-                .map(|control| {
-                    if fact {
-                        control.flex_1().min_w_0()
-                    } else {
-                        control.flex_shrink_0()
-                    }
+                .map(|control| match gives_way {
+                    GivesWay::Label => control.flex_shrink_0(),
+                    GivesWay::FactValue | GivesWay::ActionValue => control.flex_1().min_w_0(),
                 })
                 .child(control(row, window, cx)),
         )
@@ -750,7 +749,7 @@ fn control(row: &Row, window: &mut Window, cx: &mut App) -> AnyElement {
                     act(window, cx);
                 })
                 .into_any_element(),
-            None => fact_value(&title, value).into_any_element(),
+            None => fact_value(&title, value).truncate().into_any_element(),
         },
         // A path fact, copied whole on a click. The copy mark sits after it
         // in structure ink, brightening under the pointer, and turns to a
@@ -1212,6 +1211,54 @@ mod tests {
             assert_eq!(on.style().background, Some(paint::FLOAT_SEL.into()));
             assert_eq!(off.style().background, None);
         });
+    }
+
+    /// A CLI with nothing to update reads as its version and path. A path
+    /// too long for the row is cut, and the label and its hint keep the
+    /// width they have beside a short one.
+    #[gpui::test]
+    fn a_long_value_is_cut_and_its_label_keeps_its_width(cx: &mut gpui::TestAppContext) {
+        const ROW_W: f32 = 480.;
+        struct Host;
+        impl Render for Host {
+            fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+                let cli = |title: &'static str, id: &'static str, value: &'static str| {
+                    Row::new(
+                        title,
+                        "Not checked for updates yet",
+                        Vec::new(),
+                        Control::Action {
+                            id,
+                            value: value.into(),
+                            button: None,
+                            act: Rc::new(|_, _| {}),
+                        },
+                    )
+                };
+                let short = cli("Short", "short", "0.1.0");
+                let long = cli(
+                    "Long",
+                    "long",
+                    "0.169.1 \u{b7} /home/someone/.nvm/versions/node/v25.9.0/lib/node_modules/bin/codex",
+                );
+                div()
+                    .w(px(ROW_W))
+                    .child(setting_row(&short, window, cx))
+                    .child(setting_row(&long, window, cx))
+            }
+        }
+        cx.update(ferrite_pane::pane::init_components);
+        let (_, cx) = cx.add_window_view(|_, _| Host);
+        cx.run_until_parked();
+        let bounds = |cx: &mut gpui::VisualTestContext, selector: &'static str| {
+            cx.debug_bounds(selector).unwrap_or_else(|| panic!("{selector} is drawn"))
+        };
+        let short_label = bounds(cx, "settings-label-Short");
+        let long_label = bounds(cx, "settings-label-Long");
+        let value = bounds(cx, "settings-fact-Long");
+        assert_eq!(long_label.size, short_label.size, "the label and its hint are whole");
+        assert!(value.left() >= long_label.right(), "the value starts after the label");
+        assert!(value.right() <= px(ROW_W), "the value ends inside the row");
     }
 
     /// A choice from a list shows its current value; its menu lists every

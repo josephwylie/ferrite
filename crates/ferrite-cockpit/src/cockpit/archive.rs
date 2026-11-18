@@ -163,8 +163,8 @@ impl CockpitView {
             .unwrap_or_default()
     }
 
-    /// Replace what the Archive is searched for (tests, and a fresh
-    /// search).
+    /// Replace what the Archive is searched for.
+    #[cfg(test)]
     pub(crate) fn set_archive_search(&mut self, text: &str, cx: &mut Context<Self>) {
         let Some(search) = self
             .factory()

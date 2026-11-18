@@ -1434,7 +1434,7 @@ impl CockpitView {
                                 .text_color(rgb(INK_STRONG))
                         })
                     })
-                    .tooltip(ferrite_ui::menu::tooltip("Permission mode"))
+                    .tip_unless_open(lit, "Permission mode")
                     .on_mouse_down(
                         MouseButton::Left,
                         cx.listener(move |view, _: &MouseDownEvent, _, cx| {

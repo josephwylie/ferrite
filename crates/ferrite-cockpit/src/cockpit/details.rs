@@ -191,10 +191,11 @@ impl CockpitView {
             pane.details.set_open(false);
         }
         let standing = if inline {
-            if !self.details_inline_open(index) {
-                return None;
+            if self.details_inline_open(index) {
+                Standing::Open
+            } else {
+                Standing::Hidden
             }
-            Standing::Open
         } else {
             pane.details.standing(
                 motion::DIALOG_OUT,
@@ -203,6 +204,7 @@ impl CockpitView {
             )
         };
         if standing == Standing::Hidden {
+            pane.details.drawn.set(None);
             return None;
         }
         let top = if find_open {
@@ -308,6 +310,11 @@ impl CockpitView {
                 }),
             )
             .child(body);
+        let drawn = pane.details.drawn.clone();
+        // The measure is inside the card's 1px edge.
+        let card = ferrite_ui::components::on_bounds(card, move |bounds, _, _| {
+            drawn.set(Some(bounds.dilate(px(1.))))
+        });
         let card = match standing {
             Standing::Leaving(left) => {
                 motion::float_out(left, motion::DIALOG_OUT, card, DETAILS_ORIGIN).into_any_element()

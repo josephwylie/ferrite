@@ -65,6 +65,15 @@ impl BackgroundDialogView {
         for (work, call) in &work {
             sections = sections.child(Self::work_section(work, call.as_ref(), waiting, cx));
         }
+        if work.is_empty() {
+            sections = sections.child(
+                div()
+                    .debug_selector(|| "background-dialog-empty".into())
+                    .text_size(px(FS_BADGE))
+                    .text_color(rgb(INK_SUBTLE))
+                    .child("No background work"),
+            );
+        }
         let stop = stop.map(|control| {
             div()
                 .flex()
@@ -235,16 +244,5 @@ impl CockpitView {
         let view = cx.new(|cx| BackgroundDialogView::new(cockpit, thread, cx));
         cx.subscribe(&view, Self::on_background_dialog_event).detach();
         self.show_sheet(sheets::Sheet::BackgroundDialog(view), cx);
-    }
-
-    /// A dialog whose Thread is no longer open has nothing to show: it
-    /// closes rather than hold the keyboard with no card drawn.
-    pub(super) fn close_background_dialog_of_closed_thread(&mut self, cx: &mut Context<Self>) {
-        let gone = self
-            .background_dialog(cx)
-            .is_some_and(|dialog| self.cockpit.thread(dialog.read(cx).thread).is_none());
-        if gone {
-            self.hide_sheet(cx);
-        }
     }
 }

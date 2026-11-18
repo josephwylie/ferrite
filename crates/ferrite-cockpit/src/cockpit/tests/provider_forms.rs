@@ -562,7 +562,7 @@ fn project_completion_stays_visible_while_a_compact_form_scrolls(cx: &mut TestAp
         tick(cx);
         created = Some(view.read_with(cx, |view, app| {
             assert!(
-                !view.project_editor_open(app),
+                view.project_card(app).is_none(),
                 "the visible footer completes the form"
             );
             assert_eq!(view.cockpit.registry().projects().len(), before + 1);

@@ -161,14 +161,14 @@ fn a_pending_new_tab_can_be_left_by_its_page_tab_or_escape(cx: &mut TestAppConte
     assert!(cx.debug_bounds("browser-tabs").is_none());
 }
 
-type Window<'a> = (
+pub(super) type Window<'a> = (
     std::rc::Rc<ferrite_pane::visual::web::fake::FakeEngine>,
     Entity<CockpitView>,
     ThreadId,
     &'a mut gpui::VisualTestContext,
 );
 
-fn browser_window<'a>(cx: &'a mut TestAppContext, name: &str) -> Window<'a> {
+pub(super) fn browser_window<'a>(cx: &'a mut TestAppContext, name: &str) -> Window<'a> {
     use ferrite_pane::visual::{engine::Visuals, web::fake::FakeEngine};
     let (core, thread, _) = browser_core(name);
     bind_production_keys(cx);

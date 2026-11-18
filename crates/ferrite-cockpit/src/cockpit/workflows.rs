@@ -176,6 +176,7 @@ pub(crate) struct StepDrag {
 
 impl StepDrag {
     /// A drag of `step`, as a press on its row starts one.
+    #[cfg(test)]
     pub(crate) fn of(step: &Step) -> Self {
         Self {
             step: step.id.clone(),
