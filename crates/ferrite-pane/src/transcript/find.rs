@@ -108,13 +108,6 @@ impl TranscriptView {
         self.find.is_some()
     }
 
-    /// Whether the bar's line holds the keyboard.
-    pub fn find_holds_focus(&self, window: &Window, cx: &gpui::App) -> bool {
-        self.find
-            .as_ref()
-            .is_some_and(|find| find.bar.holds_focus(window, cx))
-    }
-
     /// Search again: the line changed, or the texts under it did. A new
     /// query is brought into view; the same query keeps its place.
     pub(super) fn refind(&mut self, cx: &mut Context<Self>) {

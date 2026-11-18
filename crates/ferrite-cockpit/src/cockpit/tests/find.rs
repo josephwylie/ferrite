@@ -148,6 +148,26 @@ fn a_press_on_the_bar_takes_the_keys_back_from_the_composer(cx: &mut TestAppCont
 }
 
 #[gpui::test]
+fn a_sheet_opening_over_the_bar_takes_the_keyboard(cx: &mut TestAppContext) {
+    let (core, fake) = cockpit("find-sheet", 1);
+    bind_production_keys(cx);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    super::hold_nav_open(&view, cx);
+    cx.simulate_resize(gpui::size(px(1000.), px(700.)));
+    say(&fake, "Step one is a mark.\n\n");
+    tick(cx);
+    open(cx);
+    cx.simulate_keystrokes("cmd-,");
+    tick(cx);
+    let sheet_has_keys = cx.update(|window, cx| {
+        let view = view.read(cx);
+        let focus = view.sheets.read(cx).up().expect("Settings is up").focus(cx);
+        focus.contains_focused(window, cx)
+    });
+    assert!(sheet_has_keys);
+}
+
+#[gpui::test]
 fn find_steps_both_ways_and_wraps(cx: &mut TestAppContext) {
     let (core, fake) = cockpit("find-steps", 1);
     bind_production_keys(cx);

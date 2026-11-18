@@ -8556,18 +8556,6 @@ impl CockpitView {
             (self.preview_shown(self.focused()) && pane.preview.text_focused(window, cx))
                 || pane.review.inner_focused(window, cx)
         });
-        // The find bar's line and the Reply card's keep the keyboard while
-        // the operator types.
-        let find_focused = self.panes.get(self.focused()).is_some_and(|pane| {
-            pane.preview_tab
-                .find
-                .as_ref()
-                .is_some_and(|find| find.holds_focus(window, cx))
-                || pane.transcript().is_some_and(|view| {
-                    let view = view.read(cx);
-                    view.find_holds_focus(window, cx)
-                })
-        });
         // The list keeps the keyboard it was handed until the operator
         // takes it elsewhere.
         let nav_list_focused = self.nav_view.read(cx).holds_keys(window);
@@ -8592,9 +8580,6 @@ impl CockpitView {
             || self.details_hold_focus(window, cx)
             || native_text_focused
             || reader_text_focused
-            || find_focused
-            || self.files_find_holds_focus(window, cx)
-            || self.side_chat_holds_focus(window, cx)
             || self.terminal_holds_focus(window, cx)
             || pane_control_focused
         {

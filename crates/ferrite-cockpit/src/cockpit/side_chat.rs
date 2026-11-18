@@ -444,8 +444,8 @@ impl CockpitView {
         }
     }
 
-    /// Whether the shown side chat's field holds the keyboard: the pump
-    /// leaves it there rather than handing it to the Pane's Composer.
+    /// Whether the shown side chat's field holds the keyboard, so ⌘W
+    /// closes its tab (`close_panel_in_focus`).
     pub(super) fn side_chat_holds_focus(&self, window: &Window, cx: &gpui::App) -> bool {
         self.focused_thread()
             .and_then(|owner| self.side_chats.field(owner))
