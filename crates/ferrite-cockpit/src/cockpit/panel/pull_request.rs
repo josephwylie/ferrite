@@ -25,6 +25,7 @@
 use super::pr_action::{ActionState, Stage};
 use super::pr_read::{Answer, PrFailure, PrRead, PrSource, PrTarget, stamp_age};
 use super::*;
+use crate::cockpit::menu_button::{Door, Edge};
 use crate::cockpit::surfaces::PrTab;
 use ferrite_core::protocol::{
     WireCheckStatus, WirePr, WirePrCommentKind, WirePrState, WirePrUnread,
@@ -793,18 +794,16 @@ impl CockpitView {
         };
         let more_semantics = Semantics::button("More pull request actions");
         let more_handle = self.panel_control(PanelControl::PrMore, more_semantics.clone(), cx);
-        let more = controls::focusable(
-            ferrite_pane::preview::head_door("pr-more", "pr-more".into(), icons::ELLIPSIS),
-            &more_handle,
-            &more_semantics,
-        )
-        .relative()
-        .child(self.measured(PanelControl::PrMore))
-        .tooltip(ferrite_ui::menu::tooltip("More"))
-        .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
-            cx.stop_propagation();
-            view.open_panel_menu(PanelControl::PrMore, MenuTarget::PrMore(target), cx);
-        }));
+        let more = self.doors().button(
+            controls::focusable(
+                ferrite_pane::preview::head_door("pr-more", "pr-more".into(), icons::ELLIPSIS),
+                &more_handle,
+                &more_semantics,
+            ),
+            pr_more_door(target),
+            "More",
+            cx,
+        );
         div()
             .debug_selector(|| "pr-header".into())
             .bg(rgb(ferrite_ui::theme::TX_GROUND))
@@ -1722,4 +1721,9 @@ mod tests {
         assert!(merged.contains(&PrAction::Revert) && merged.contains(&PrAction::DeleteBranch));
         assert!(!merged.contains(&PrAction::Close));
     }
+}
+
+/// The PR header's `⋯` menu, hung from its right edge.
+pub(super) fn pr_more_door(target: PrTarget) -> Door {
+    Door::new(MenuTarget::PrMore(target), Edge::Right)
 }
