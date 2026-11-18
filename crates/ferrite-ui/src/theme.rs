@@ -383,6 +383,9 @@ pub mod paint {
     /// An icon button's hover face. With no label and no edge its ground is
     /// all that says it is a button, so it steps further than `HOVER`.
     pub const ICON_HOVER: Paint = Paint(super::NAV_CARD_HOVER);
+    /// The ground of a control whose mode is running (an annotation, its
+    /// selected tool): `SEND_LIT` at a tenth.
+    pub const LIT_WASH: Paint = Paint((super::SEND_LIT << 8) | 26);
     /// The send circle.
     pub const SEND: Paint = Paint::solid(super::SEND);
     /// A float's ground, its edge (and the rules inside it), a row under
@@ -950,12 +953,6 @@ pub const VIEW_TITLE_MIN_W: f32 = 40.0;
 pub const HEAD_CHEVRON: f32 = 14.0;
 pub const HEAD_CHEVRON_GAP: f32 = 4.0;
 pub const HEAD_ENV_GROUND: u32 = 0x8cb9f41f;
-/// The history arrows (Claude's `‹ ›`, claude/answer-done.png x 126 and
-/// 153), at `HISTORY_X` in the head row: `ICON_BUTTON` doors edge to edge, a 28pt pitch, the glyph
-/// `ICON_BUTTON_GLYPH`. At an end the arrow is disabled in `INK_SUBTLE`:
-/// Claude's disabled arrow is 0.6 of its live one (#7a777a by #ccc9cb), as
-/// `INK_SUBTLE` is of the doors' `INK_STRONG`.
-pub const HISTORY_ARROW_DISABLED_INK: u32 = INK_SUBTLE;
 /// The title-bar tools at the row's right end (Claude's panel, terminal,
 /// diff, preview, files, `⋯`): `ICON_BUTTON` doors 4 apart, Claude's 32pt
 /// pitch (claude/answer-done.png x 1738–1898), the panel toggle the last.
@@ -971,6 +968,9 @@ pub const TRAFFIC_X: f32 = 13.0;
 pub const TRAFFIC_Y: f32 = (WIN_CHROME_H - 14.0) / 2.0;
 /// The traffic-light group's width: three 14px buttons 6 apart.
 pub const TRAFFIC_W: f32 = 3.0 * 14.0 + 2.0 * 6.0;
+/// The history arrows (Claude's `‹ ›`, claude/answer-done.png x 126 and
+/// 153), at `HISTORY_X` in the head row: `ICON_BUTTON` doors edge to edge,
+/// a 28pt pitch, the glyph `ICON_BUTTON_GLYPH`.
 pub const HISTORY_X: f32 = TRAFFIC_X + TRAFFIC_W + SPACE_2;
 /// The Pane board: 8px gap on both axes, 10px padding on all four sides.
 /// (The prototype's own render reserves 58px at the bottom for its
@@ -1033,8 +1033,6 @@ pub const SURFACE_TAB_DRAG: f32 = 6.0;
 /// `SURFACE_TAB_SCROLL_MIN`.
 pub const SURFACE_TAB_SCROLL_MIN: f32 = 120.0;
 pub const SURFACE_TAB_SCROLL_SHARE: f32 = 0.75;
-/// A chevron with nothing more that way keeps its slot, dimmed.
-pub const SURFACE_TAB_CHEVRON_SPENT_OPACITY: f32 = 0.35;
 /// The head's `+` (T3's `icon-xs` ghost, `Plus size-3.5`).
 pub const SURFACE_PLUS: f32 = 24.0;
 pub const SURFACE_PLUS_GLYPH: f32 = 14.0;
@@ -1183,6 +1181,8 @@ pub const FOCUS_RING_W: f32 = 1.0;
 pub const ICON_BUTTON: f32 = 28.0;
 /// 16px — an icon button's glyph, centred in its door (Claude's 16).
 pub const ICON_BUTTON_GLYPH: f32 = 16.0;
+/// A disabled icon button's glyph, faded to this of its rest ink.
+pub const ICON_DISABLED_OPACITY: f32 = 0.35;
 /// 12px — the chevron beside a picker or a disclosure.
 pub const ICON_CHEVRON: f32 = 12.0;
 /// 28px — a text button in pane and nav chrome, decisions and footers, with

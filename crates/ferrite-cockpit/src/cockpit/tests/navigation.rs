@@ -103,6 +103,37 @@ fn the_arrows_lead_the_head_and_step_on_a_click(cx: &mut TestAppContext) {
     assert!(cx.debug_bounds("view-title").is_none());
 }
 
+/// An arrow at its end takes no press, and its tooltip still shows, so
+/// its chord is learnt there too.
+#[gpui::test]
+fn an_arrow_at_its_end_takes_no_press(cx: &mut TestAppContext) {
+    let (core, _fake) = cockpit("history-spent-arrow", 2);
+    let threads = core.threads();
+    bind_production_keys(cx);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    hold_nav_open(&view, cx);
+    tick(cx);
+    let first = shown(&view, cx).unwrap();
+    let second = *threads.iter().find(|thread| **thread != first).unwrap();
+    view.update(cx, |view, cx| view.focus_thread(second, cx));
+    tick(cx);
+    assert_eq!(ends(&view, cx), (true, false));
+
+    let forward = cx.debug_bounds("history-forward").expect("the forward arrow");
+    cx.simulate_click(forward.center(), gpui::Modifiers::none());
+    tick(cx);
+    assert_eq!(shown(&view, cx), Some(second), "the spent arrow steps nowhere");
+    cx.simulate_mouse_move(forward.center(), None, gpui::Modifiers::none());
+    cx.simulate_mouse_move(
+        forward.center() + gpui::point(px(1.), px(0.)),
+        None,
+        gpui::Modifiers::none(),
+    );
+    cx.executor().advance_clock(Duration::from_secs(1));
+    cx.run_until_parked();
+    assert!(cx.debug_bounds("tooltip").is_some(), "its tooltip shows at the end too");
+}
+
 /// A parked Thread is somewhere to go back to: the step revives it.
 #[gpui::test]
 fn back_revives_a_parked_thread(cx: &mut TestAppContext) {

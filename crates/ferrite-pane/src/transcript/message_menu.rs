@@ -280,7 +280,7 @@ impl TranscriptView {
             }
             shell = shell.child(row);
         }
-        Some(super::hang_menu("answer-menu-in", open.at, shell))
+        Some(super::hang_menu("answer-menu-in", open.at, gpui::Anchor::TopLeft, shell))
     }
 
     /// The answer row `row`'s menu: its `last` block and `markdown`.

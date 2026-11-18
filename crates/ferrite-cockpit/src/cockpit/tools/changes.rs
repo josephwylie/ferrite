@@ -25,6 +25,7 @@ use std::hash::{DefaultHasher, Hash, Hasher};
 
 use ferrite_core::changes::Scope as ReadScope;
 use crate::cockpit::menu_button::{Door, Edge};
+use ferrite_ui::components::IconState;
 use ferrite_ui::icons;
 use ferrite_ui::theme::{self, paint};
 
@@ -948,19 +949,15 @@ impl CockpitView {
         use theme::*;
         let all_folded = matches!(&changes.load, Load::Read(files)
             if !files.is_empty() && files.iter().all(|file| changes.folded.contains(&file.path)));
-        // `on` is a toggle's state; a plain verb has none.
         let tool =
-            |key: &'static str, glyph: &'static str, tip: &'static str, on: Option<bool>, verb: Verb| {
-                use ferrite_ui::components::{icon_button, icon_toggle, IconSize, Tip as _};
-                match on {
-                    Some(on) => icon_toggle(key, glyph, IconSize::Compact, tip, on, cx),
-                    None => icon_button(key, glyph, IconSize::Compact, tip, cx),
-                }
-                .tip(tip)
-                .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
-                    cx.stop_propagation();
-                    view.run_changes_verb(diff, verb, cx);
-                }))
+            |key: &'static str, glyph: &'static str, tip: &'static str, state: IconState, verb: Verb| {
+                use ferrite_ui::components::{icon_button_as, IconSize, Tip as _};
+                icon_button_as(key, glyph, IconSize::Compact, tip, state, cx)
+                    .tip(tip)
+                    .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
+                        cx.stop_propagation();
+                        view.run_changes_verb(diff, verb, cx);
+                    }))
             };
         let (fold_tip, fold_verb) = if all_folded {
             ("Expand all files", Verb::ExpandAll)
@@ -976,35 +973,35 @@ impl CockpitView {
                 "changes-refresh",
                 icons::REFRESH,
                 "Refresh",
-                None,
+                IconState::Plain,
                 Verb::Refresh,
             ))
             .child(tool(
                 "changes-fold-all",
                 icons::COLLAPSE_ALL,
                 fold_tip,
-                None,
+                IconState::Plain,
                 fold_verb,
             ))
             .child(tool(
                 "changes-wrap",
                 icons::TEXT_WRAP,
                 "Word wrap",
-                Some(changes.wrap),
+                IconState::Toggle(changes.wrap),
                 Verb::ToggleWrap,
             ))
             .child(tool(
                 "changes-whitespace",
                 icons::PILCROW,
                 "Hide whitespace changes",
-                Some(changes.hide_whitespace),
+                IconState::Toggle(changes.hide_whitespace),
                 Verb::ToggleWhitespace,
             ))
             .child(tool(
                 "changes-hide-tests",
                 icons::FLASK_OFF,
                 "Hide test files",
-                Some(changes.hide_tests),
+                IconState::Toggle(changes.hide_tests),
                 Verb::ToggleTests,
             ));
         let base = match &changes.scope {
@@ -1178,21 +1175,9 @@ impl CockpitView {
                     .child(SharedString::from(format!("\u{2212}{}", file.removed)))
             }));
         // A door of this file's head, its key naming the file's row.
-        let door = |key: String, glyph: &'static str, tip: &'static str, ink: u32| {
-            let id = SharedString::from(key);
-            let selector = id.to_string();
-            div()
-                .id(id.clone())
-                .debug_selector(move || selector.clone())
-                .flex()
-                .flex_shrink_0()
-                .items_center()
-                .justify_center()
-                .size(px(ICON_BUTTON))
-                .rounded(px(R_CONTROL))
-                .hover_control(id)
-                .child(icons::icon(glyph, ICON_BUTTON_GLYPH, ink))
-                .tooltip(ferrite_ui::menu::tooltip(tip))
+        let door = |key: String, glyph: &'static str, tip: &'static str, state: IconState| {
+            use ferrite_ui::components::{icon_button_as, IconSize, Tip as _};
+            icon_button_as(key, glyph, IconSize::Standard, tip, state, cx).tip(tip)
         };
         let head = div()
             .id(SharedString::from(format!("changes-file-{at}")))
@@ -1243,7 +1228,7 @@ impl CockpitView {
                             icons::PLUS
                         },
                         if file.staged { "Unstage" } else { "Stage" },
-                        if file.staged { GREEN } else { INK_SUBTLE },
+                        if file.staged { IconState::Done } else { IconState::Plain },
                     )
                     .on_click(cx.listener(
                         move |view, _: &ClickEvent, _, cx| {
@@ -1266,7 +1251,7 @@ impl CockpitView {
                     } else {
                         "Mark as reviewed"
                     },
-                    if reviewed { GREEN } else { INK_SUBTLE },
+                    if reviewed { IconState::Done } else { IconState::Plain },
                 )
                 .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
                     cx.stop_propagation();
@@ -1279,7 +1264,7 @@ impl CockpitView {
                         format!("changes-open-{at}"),
                         icons::EXTERNAL,
                         "Open file",
-                        INK_SUBTLE,
+                        IconState::Plain,
                     )
                     .on_click(cx.listener(
                         move |view, _: &ClickEvent, _, cx| {

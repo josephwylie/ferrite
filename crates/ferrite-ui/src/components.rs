@@ -1490,14 +1490,77 @@ impl IconSize {
     }
 }
 
-/// The one icon-only button: `glyph` centred in a `size` square, in
-/// `NAV_ICON_INK` rising to `INK_STRONG` with the hover blend, on nothing at
-/// rest, `paint::ICON_HOVER` under the pointer and `paint::PRESS` pressed
-/// (`faded_button`). A tab stop with the focus ring; Enter and Space press it.
-/// A press on it never drags the slot or tab it sits on.
-/// `label` is its name to assistive technology; its id is its
-/// `debug_selector`. The caller adds a tooltip (`Tip`) and the press
-/// (`on_click`), or makes it a menu's button (`MenuButton`).
+/// What an icon button says about itself. The theme owns each state's ink
+/// and ground (`IconFace::of`): a caller names a state, never a colour, and
+/// one value cannot be two states at once.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum IconState {
+    /// Quiet ink rising to `INK_STRONG` under the pointer.
+    Plain,
+    /// It turns something on and off (the Panel, the details) and says
+    /// whether it is pressed: on, it rests on `paint::SELECTED` and steps to
+    /// `SELECTION_HOVER` under the pointer.
+    Toggle(bool),
+    /// What it marks is done (a staged file, a reviewed one): `GREEN`.
+    Done,
+    /// Its next press destroys something (the side chat's trash): `RED`.
+    Armed,
+    /// A mode it started is running (an annotation): `SEND_LIT` on
+    /// `paint::LIT_WASH`.
+    Lit,
+    /// It cannot act now: its glyph at `ICON_DISABLED_OPACITY`, no hover
+    /// ground, no press and no keyboard stop. Given why, its tooltip is
+    /// `label · why`, and the caller adds none of its own.
+    Disabled(Option<SharedString>),
+}
+
+impl IconState {
+    /// `Plain` while `live`, else disabled with no reason to give.
+    pub fn live(live: bool) -> Self {
+        if live { IconState::Plain } else { IconState::Disabled(None) }
+    }
+}
+
+/// The grounds and inks a state draws, at rest and under the pointer.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct IconFace {
+    rest: Hsla,
+    hover: Hsla,
+    ink: Hsla,
+    hover_ink: Hsla,
+}
+
+impl IconFace {
+    fn of(state: &IconState) -> Self {
+        let clear: Hsla = rgba(theme::TRANSPARENT).into();
+        let quiet: Hsla = rgba(theme::NAV_ICON_INK).into();
+        let still = |rest: Hsla, hover: Hsla, ink: Hsla| IconFace { rest, hover, ink, hover_ink: ink };
+        match state {
+            IconState::Plain | IconState::Toggle(false) => IconFace {
+                rest: clear,
+                hover: theme::paint::ICON_HOVER.into(),
+                ink: quiet,
+                hover_ink: rgb(theme::INK_STRONG).into(),
+            },
+            IconState::Toggle(true) => IconFace {
+                rest: theme::paint::SELECTED.into(),
+                hover: theme::paint::SELECTION_HOVER.into(),
+                ink: quiet,
+                hover_ink: rgb(theme::INK_STRONG).into(),
+            },
+            IconState::Done => still(clear, theme::paint::ICON_HOVER.into(), rgb(theme::GREEN).into()),
+            IconState::Armed => still(clear, theme::paint::ICON_HOVER.into(), rgb(theme::RED).into()),
+            IconState::Lit => still(
+                theme::paint::LIT_WASH.into(),
+                theme::paint::LIT_WASH.into(),
+                rgb(theme::SEND_LIT).into(),
+            ),
+            IconState::Disabled(_) => still(clear, clear, quiet.opacity(theme::ICON_DISABLED_OPACITY)),
+        }
+    }
+}
+
+/// The one icon-only button, [`icon_button_as`] at `IconState::Plain`.
 pub fn icon_button(
     id: impl Into<SharedString>,
     glyph: &'static str,
@@ -1505,60 +1568,66 @@ pub fn icon_button(
     label: impl Into<SharedString>,
     cx: &App,
 ) -> Button {
-    icon_face(id.into(), glyph, size, label.into(), None, cx)
+    icon_button_as(id, glyph, size, label, IconState::Plain, cx)
 }
 
-/// [`icon_button`] that turns something on and off (the Panel, the
-/// details): on, it rests on `paint::SELECTED` and steps to
-/// `SELECTION_HOVER` under the pointer, and says it is pressed.
-pub fn icon_toggle(
+/// The one icon-only button: `glyph` centred in a `size` square, drawn as
+/// `state` says, its ground blending to its hover face under the pointer
+/// and to `paint::PRESS` pressed (`faded_button`). Live, it is a tab stop
+/// with the focus ring that Enter and Space press. A press on it never
+/// drags the slot or tab it sits on. `label` is its name to assistive
+/// technology; its id is its `debug_selector`. The caller adds a tooltip
+/// (`Tip`) and the press (`on_click`), or makes it a menu's button
+/// (`MenuButton`).
+pub fn icon_button_as(
     id: impl Into<SharedString>,
     glyph: &'static str,
     size: IconSize,
     label: impl Into<SharedString>,
-    on: bool,
+    state: IconState,
     cx: &App,
 ) -> Button {
-    icon_face(id.into(), glyph, size, label.into(), Some(on), cx)
-}
-
-fn icon_face(
-    id: SharedString,
-    glyph: &'static str,
-    size: IconSize,
-    label: SharedString,
-    toggled: Option<bool>,
-    cx: &App,
-) -> Button {
+    use gpui::component::Disableable;
+    let (id, label) = (id.into(), label.into());
     let (edge, glyph_size, radius) = size.metrics();
-    let (rest, hover) = if toggled == Some(true) {
-        (theme::paint::SELECTED, theme::paint::SELECTION_HOVER)
-    } else {
-        (theme::Paint(theme::TRANSPARENT), theme::paint::ICON_HOVER)
-    };
+    let face = IconFace::of(&state);
     let t = motion::hover_t(&crate::pointer::hover_key(&ElementId::from(id.clone())));
-    let ink = motion::mix(rgba(theme::NAV_ICON_INK).into(), rgb(theme::INK_STRONG).into(), t);
+    let ink = motion::mix(face.ink, face.hover_ink, t);
     let selector = id.clone();
-    faded_button(
-        id,
-        rest.into(),
-        hover.into(),
-        theme::paint::PRESS.into(),
-        rgb(theme::INK_STRONG).into(),
-        cx,
-    )
-    .tab_stop(true)
-    .debug_selector(move || selector.to_string())
-    .accessibility_label(label)
-    .when_some(toggled, Button::toggled)
-    // The kit lets the press go on to the parent, which would pick up the
-    // slot or tab the button sits on as a drag.
-    .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
-    .flex_shrink_0()
-    .size(px(edge))
-    .p_0()
-    .rounded(px(radius))
-    .child(icons::icon(glyph, glyph_size, theme::INK_STRONG).text_color(ink))
+    let button = match &state {
+        // No blend and no squish: nothing about it answers the pointer.
+        IconState::Disabled(why) => button(id)
+            .disabled(true)
+            .cursor_default()
+            .when_some(why.as_ref(), |button, why| button.tip(format!("{label} \u{b7} {why}"))),
+        _ => faded_button(
+            id,
+            face.rest,
+            face.hover,
+            theme::paint::PRESS.into(),
+            rgb(theme::INK_STRONG).into(),
+            cx,
+        )
+        .tab_stop(true),
+    };
+    button
+        .debug_selector(move || selector.to_string())
+        .accessibility_label(label)
+        .when_some(
+            match state {
+                IconState::Toggle(on) => Some(on),
+                _ => None,
+            },
+            Button::toggled,
+        )
+        // The kit lets the press go on to the parent, which would pick up the
+        // slot or tab the button sits on as a drag.
+        .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
+        .flex_shrink_0()
+        .size(px(edge))
+        .p_0()
+        .rounded(px(radius))
+        .child(icons::icon(glyph, glyph_size, theme::INK_STRONG).text_color(ink))
 }
 
 // ------------------------------------------------------------------ menus
@@ -2742,6 +2811,109 @@ mod tests {
         }
         assert_eq!(presses.get(), 3, "Enter and Space each press it once");
         assert_eq!(keyed.get(), 2);
+    }
+
+    /// Each state draws the theme's ground and ink, at rest and under the
+    /// pointer: only a toggle that is on and a running mode have a ground of
+    /// their own, only the plain and toggle inks rise, and a disabled glyph
+    /// is the rest ink faded with no hover face.
+    #[test]
+    fn each_icon_state_draws_the_themes_ink_and_ground() {
+        let clear: Hsla = rgba(theme::TRANSPARENT).into();
+        let quiet: Hsla = rgba(theme::NAV_ICON_INK).into();
+        let strong: Hsla = rgb(theme::INK_STRONG).into();
+        let hover: Hsla = theme::paint::ICON_HOVER.into();
+        let face = |rest, hover, ink, hover_ink| IconFace { rest, hover, ink, hover_ink };
+        let cases = [
+            (IconState::Plain, face(clear, hover, quiet, strong)),
+            (IconState::Toggle(false), face(clear, hover, quiet, strong)),
+            (
+                IconState::Toggle(true),
+                face(theme::paint::SELECTED.into(), theme::paint::SELECTION_HOVER.into(), quiet, strong),
+            ),
+            (IconState::Done, face(clear, hover, rgb(theme::GREEN).into(), rgb(theme::GREEN).into())),
+            (IconState::Armed, face(clear, hover, rgb(theme::RED).into(), rgb(theme::RED).into())),
+            (
+                IconState::Lit,
+                face(
+                    theme::paint::LIT_WASH.into(),
+                    theme::paint::LIT_WASH.into(),
+                    rgb(theme::SEND_LIT).into(),
+                    rgb(theme::SEND_LIT).into(),
+                ),
+            ),
+            (
+                IconState::Disabled(Some("why".into())),
+                face(
+                    clear,
+                    clear,
+                    quiet.opacity(theme::ICON_DISABLED_OPACITY),
+                    quiet.opacity(theme::ICON_DISABLED_OPACITY),
+                ),
+            ),
+        ];
+        for (state, want) in cases {
+            assert_eq!(IconFace::of(&state), want, "{state:?}");
+        }
+    }
+
+    /// A disabled icon button takes no press from the pointer or the
+    /// keyboard, lets none through to what it sits on, is no Tab stop, and
+    /// still shows the tooltip that says why.
+    #[gpui::test]
+    fn a_disabled_icon_button_takes_no_press_and_no_focus(cx: &mut gpui::TestAppContext) {
+        use std::{cell::Cell, rc::Rc};
+
+        use gpui::Modifiers;
+
+        struct Bar(Rc<Cell<usize>>, Rc<Cell<usize>>);
+        impl gpui::Render for Bar {
+            fn render(&mut self, _: &mut Window, cx: &mut gpui::Context<Self>) -> impl IntoElement {
+                let (presses, beneath) = (self.0.clone(), self.1.clone());
+                div()
+                    .id("beneath")
+                    .tab_group()
+                    .p(px(10.))
+                    .on_click(move |_, _, _| beneath.set(beneath.get() + 1))
+                    .child(
+                        icon_button_as(
+                            "icon-under-test",
+                            icons::BRANCH,
+                            IconSize::Standard,
+                            "Fork",
+                            IconState::Disabled(Some("Nothing to fork".into())),
+                            cx,
+                        )
+                        .on_click(move |_, _, _| presses.set(presses.get() + 1)),
+                    )
+            }
+        }
+
+        cx.update(theme::init_components);
+        let (presses, beneath) = (Rc::new(Cell::new(0)), Rc::new(Cell::new(0)));
+        let (_, cx) = cx.add_window_view({
+            let (presses, beneath) = (presses.clone(), beneath.clone());
+            move |_, _| Bar(presses, beneath)
+        });
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+        let button = cx.debug_bounds("icon-under-test").expect("the button, under its id");
+        assert_eq!(button.size, gpui::size(px(theme::ICON_BUTTON), px(theme::ICON_BUTTON)));
+        cx.simulate_click(button.center(), Modifiers::default());
+        assert_eq!(presses.get(), 0, "a press does nothing");
+        assert_eq!(beneath.get(), 0, "nor reaches what it sits on");
+
+        cx.update(|window, cx| {
+            window.focus_next(cx);
+            assert!(window.focused(cx).is_none(), "Tab does not stop on it");
+        });
+        cx.simulate_keystrokes("enter space");
+        assert_eq!(presses.get(), 0, "no key presses it");
+
+        cx.simulate_mouse_move(button.center(), None, Modifiers::none());
+        cx.simulate_mouse_move(button.center() + gpui::point(px(1.), px(0.)), None, Modifiers::none());
+        cx.executor().advance_clock(Duration::from_secs(1));
+        cx.run_until_parked();
+        assert!(cx.debug_bounds("tooltip").is_some(), "its tooltip says why");
     }
 
     /// An icon button given its caller's focus handle is focused by it: a

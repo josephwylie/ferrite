@@ -1131,6 +1131,7 @@ impl CockpitView {
                     }
                     cx.notify();
                 }),
+                cx,
             )
         };
         super::surface_bar()

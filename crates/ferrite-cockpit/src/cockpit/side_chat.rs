@@ -674,6 +674,7 @@ impl CockpitView {
     /// T3's side chat head, under the tab strip: the title, Bring back and
     /// Trash. The tab's × closes it, so the head has none.
     fn side_chat_head(&self, owner: ThreadId, tab: &Tab, cx: &mut Context<Self>) -> Div {
+        use ferrite_ui::components::{icon_button_as, IconSize, IconState, Tip as _};
         use ferrite_ui::theme::*;
         let id = tab.id;
         let blocked = self.bring_back_blocked(owner, id);
@@ -700,26 +701,23 @@ impl CockpitView {
                 cx.stop_propagation();
                 view.bring_back(owner, id, window, cx);
             }));
-        let trash = div()
-            .id("side-chat-trash")
-            .debug_selector(|| "side-chat-trash".into())
-            .flex()
-            .flex_shrink_0()
-            .items_center()
-            .justify_center()
-            .size(px(SURFACE_PLUS))
-            .rounded(px(R_CONTROL))
-            .hover_control("side-chat-trash")
-            .child(icon(icons::TRASH, SURFACE_PLUS_GLYPH, if armed { RED } else { INK_SUBTLE }))
-            .tooltip(ferrite_ui::menu::tooltip(if armed {
-                "Delete side chat? Press again"
-            } else {
-                "Delete side chat"
-            }))
-            .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
-                cx.stop_propagation();
-                view.trash_side_chat(owner, id, cx);
-            }));
+        let trash = icon_button_as(
+            "side-chat-trash",
+            icons::TRASH,
+            IconSize::Compact,
+            "Delete side chat",
+            if armed { IconState::Armed } else { IconState::Plain },
+            cx,
+        )
+        .tip(if armed {
+            "Delete side chat? Press again"
+        } else {
+            "Delete side chat"
+        })
+        .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
+            cx.stop_propagation();
+            view.trash_side_chat(owner, id, cx);
+        }));
         tools::surface_bar()
             .debug_selector(|| "side-chat-head".into())
             .pl(px(SPACE_3))

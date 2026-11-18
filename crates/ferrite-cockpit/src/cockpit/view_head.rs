@@ -21,7 +21,7 @@
 
 use super::*;
 use super::menu_button::{Door, Doors, Edge};
-use ferrite_ui::components::{bound_chord, icon_button, icon_toggle, IconSize, Tip};
+use ferrite_ui::components::{bound_chord, icon_button, icon_button_as, IconSize, IconState, Tip};
 use ferrite_ui::{icons, theme};
 
 impl CockpitView {
@@ -243,12 +243,12 @@ impl CockpitView {
         if !self.panel_toggle_shown() {
             return None;
         }
-        let panel = icon_toggle(
+        let panel = icon_button_as(
             "panel-toggle",
             icons::PANEL_RIGHT,
             IconSize::Standard,
             "Toggle panel",
-            self.panel_pane().is_some(),
+            IconState::Toggle(self.panel_pane().is_some()),
             cx,
         )
         .occlude()
@@ -508,9 +508,8 @@ impl CockpitView {
 }
 
 /// One history arrow: an icon button pressing `step` while there is
-/// somewhere to go, else its glyph in `HISTORY_ARROW_DISABLED_INK` with no
-/// hover and no press. The tooltip shows either way, so the chord is learnt
-/// at the ends too.
+/// somewhere to go, disabled at its end. The tooltip shows either way, so
+/// the chord is learnt at the ends too.
 fn history_arrow(
     key: &'static str,
     glyph: &'static str,
@@ -520,26 +519,9 @@ fn history_arrow(
     step: impl Fn(&ClickEvent, &mut Window, &mut gpui::App) + 'static,
     cx: &gpui::App,
 ) -> AnyElement {
-    if enabled {
-        return icon_button(key, glyph, IconSize::Standard, label, cx)
-            .tip_with_key(label, bound_chord(action))
-            .on_click(step)
-            .into_any_element();
-    }
-    div()
-        .id(key)
-        .debug_selector(move || key.into())
-        .flex()
-        .flex_shrink_0()
-        .items_center()
-        .justify_center()
-        .size(px(theme::ICON_BUTTON))
-        .child(ferrite_ui::icons::icon(
-            glyph,
-            theme::ICON_BUTTON_GLYPH,
-            theme::HISTORY_ARROW_DISABLED_INK,
-        ))
-        .tooltip(ferrite_ui::menu::action_tooltip(label, action))
+    icon_button_as(key, glyph, IconSize::Standard, label, IconState::live(enabled), cx)
+        .tip_with_key(label, bound_chord(action))
+        .on_click(step)
         .into_any_element()
 }
 

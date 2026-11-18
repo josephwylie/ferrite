@@ -216,7 +216,7 @@ fn control(
     cx: &App,
 ) -> gpui::component::button::Button {
     let rest = if selected {
-        theme::Paint((theme::SEND_LIT << 8) | 26)
+        theme::paint::LIT_WASH
     } else {
         theme::Paint(theme::TRANSPARENT)
     };

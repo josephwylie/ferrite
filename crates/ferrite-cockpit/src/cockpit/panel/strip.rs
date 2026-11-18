@@ -364,6 +364,7 @@ impl CockpitView {
                     view.panel.tabs_scroll.ease(side, cx);
                     cx.notify();
                 }),
+                cx,
             )
         };
         // The title bar's tools keep the row's right end.
