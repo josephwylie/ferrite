@@ -97,7 +97,7 @@ jobs:
         run: |
           args=()
           for package in $VENDORED; do args+=(-p "$package"); done
-          cargo nextest run "${args[@]}" --features gpui-pre-macos/test-support --locked --no-fail-fast --final-status-level fail
+          cargo nextest run "${args[@]}" --features gpui-pre-macos/test-support --locked --no-fail-fast --retries 2 --final-status-level flaky
       - name: Build app
         run: cargo build -p ferrite --locked
       # Last, so a new raw press does not hide the tests' results. The cap

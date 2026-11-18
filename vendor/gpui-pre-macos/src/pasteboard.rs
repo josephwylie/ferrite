@@ -475,7 +475,7 @@ mod tests {
         }
 
         let item = pasteboard.read().expect("should read clipboard item");
-        assert_eq!(item.entries.len(), 2);
+        assert_eq!(item.entries.len(), 2, "read {:?}", item.entries);
 
         // Test both ExternalPaths and String entries exist
         match &item.entries[0] {
