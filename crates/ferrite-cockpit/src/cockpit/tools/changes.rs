@@ -25,6 +25,7 @@ use std::hash::{DefaultHasher, Hash, Hasher};
 
 use ferrite_core::changes::Scope as ReadScope;
 use crate::cockpit::menu_button::{Door, Edge};
+use ferrite_ui::components::IconState;
 use ferrite_ui::icons;
 use ferrite_ui::theme::{self, paint};
 
@@ -948,19 +949,15 @@ impl CockpitView {
         use theme::*;
         let all_folded = matches!(&changes.load, Load::Read(files)
             if !files.is_empty() && files.iter().all(|file| changes.folded.contains(&file.path)));
-        // `on` is a toggle's state; a plain verb has none.
         let tool =
-            |key: &'static str, glyph: &'static str, tip: &'static str, on: Option<bool>, verb: Verb| {
-                use ferrite_ui::components::{icon_button, icon_toggle, IconSize, Tip as _};
-                match on {
-                    Some(on) => icon_toggle(key, glyph, IconSize::Compact, tip, on, cx),
-                    None => icon_button(key, glyph, IconSize::Compact, tip, cx),
-                }
-                .tip(tip)
-                .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
-                    cx.stop_propagation();
-                    view.run_changes_verb(diff, verb, cx);
-                }))
+            |key: &'static str, glyph: &'static str, tip: &'static str, state: IconState, verb: Verb| {
+                use ferrite_ui::components::{icon_button_as, IconSize, Tip as _};
+                icon_button_as(key, glyph, IconSize::Compact, tip, state, cx)
+                    .tip(tip)
+                    .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
+                        cx.stop_propagation();
+                        view.run_changes_verb(diff, verb, cx);
+                    }))
             };
         let (fold_tip, fold_verb) = if all_folded {
             ("Expand all files", Verb::ExpandAll)
@@ -976,35 +973,35 @@ impl CockpitView {
                 "changes-refresh",
                 icons::REFRESH,
                 "Refresh",
-                None,
+                IconState::Plain,
                 Verb::Refresh,
             ))
             .child(tool(
                 "changes-fold-all",
                 icons::COLLAPSE_ALL,
                 fold_tip,
-                None,
+                IconState::Plain,
                 fold_verb,
             ))
             .child(tool(
                 "changes-wrap",
                 icons::TEXT_WRAP,
                 "Word wrap",
-                Some(changes.wrap),
+                IconState::Toggle(changes.wrap),
                 Verb::ToggleWrap,
             ))
             .child(tool(
                 "changes-whitespace",
                 icons::PILCROW,
                 "Hide whitespace changes",
-                Some(changes.hide_whitespace),
+                IconState::Toggle(changes.hide_whitespace),
                 Verb::ToggleWhitespace,
             ))
             .child(tool(
                 "changes-hide-tests",
                 icons::FLASK_OFF,
                 "Hide test files",
-                Some(changes.hide_tests),
+                IconState::Toggle(changes.hide_tests),
                 Verb::ToggleTests,
             ));
         let base = match &changes.scope {

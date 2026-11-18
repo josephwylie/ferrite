@@ -21,7 +21,7 @@
 
 use super::*;
 use super::menu_button::{Door, Doors, Edge};
-use ferrite_ui::components::{bound_chord, icon_button, icon_toggle, IconSize, Tip};
+use ferrite_ui::components::{bound_chord, icon_button, icon_button_as, IconSize, IconState, Tip};
 use ferrite_ui::{icons, theme};
 
 impl CockpitView {
@@ -243,12 +243,12 @@ impl CockpitView {
         if !self.panel_toggle_shown() {
             return None;
         }
-        let panel = icon_toggle(
+        let panel = icon_button_as(
             "panel-toggle",
             icons::PANEL_RIGHT,
             IconSize::Standard,
             "Toggle panel",
-            self.panel_pane().is_some(),
+            IconState::Toggle(self.panel_pane().is_some()),
             cx,
         )
         .occlude()

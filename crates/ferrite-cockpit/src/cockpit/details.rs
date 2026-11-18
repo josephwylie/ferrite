@@ -344,14 +344,14 @@ impl CockpitView {
     }
 
     pub(super) fn details_toggle(&self, cx: &mut Context<Self>) -> gpui::component::button::Button {
-        use ferrite_ui::components::{bound_chord, icon_toggle, IconSize, Tip};
+        use ferrite_ui::components::{bound_chord, icon_button_as, IconSize, IconState, Tip};
         let card = self.focused_details().map(|(_, index)| index);
-        let door = icon_toggle(
+        let door = icon_button_as(
             "details-toggle",
             ferrite_ui::icons::DETAILS,
             IconSize::Standard,
             "Toggle thread details",
-            self.details_open(),
+            IconState::Toggle(self.details_open()),
             cx,
         )
         .occlude()

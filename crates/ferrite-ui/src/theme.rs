@@ -383,6 +383,9 @@ pub mod paint {
     /// An icon button's hover face. With no label and no edge its ground is
     /// all that says it is a button, so it steps further than `HOVER`.
     pub const ICON_HOVER: Paint = Paint(super::NAV_CARD_HOVER);
+    /// The ground of a control whose mode is running (an annotation, its
+    /// selected tool): `SEND_LIT` at a tenth.
+    pub const LIT_WASH: Paint = Paint((super::SEND_LIT << 8) | 26);
     /// The send circle.
     pub const SEND: Paint = Paint::solid(super::SEND);
     /// A float's ground, its edge (and the rules inside it), a row under
@@ -1183,6 +1186,8 @@ pub const FOCUS_RING_W: f32 = 1.0;
 pub const ICON_BUTTON: f32 = 28.0;
 /// 16px — an icon button's glyph, centred in its door (Claude's 16).
 pub const ICON_BUTTON_GLYPH: f32 = 16.0;
+/// A disabled icon button's glyph, faded to this of its rest ink.
+pub const ICON_DISABLED_OPACITY: f32 = 0.35;
 /// 12px — the chevron beside a picker or a disclosure.
 pub const ICON_CHEVRON: f32 = 12.0;
 /// 28px — a text button in pane and nav chrome, decisions and footers, with
