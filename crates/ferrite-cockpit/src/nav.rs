@@ -578,37 +578,6 @@ pub fn head(arrows: impl IntoElement) -> Div {
         .child(arrows)
 }
 
-pub fn icon_button(
-    key: impl Into<SharedString>,
-    glyph: &'static str,
-    glyph_size: f32,
-    size: f32,
-    radius: f32,
-) -> Stateful<Div> {
-    let blend: SharedString = key.into();
-    let t = motion::hover_t(&blend);
-    let selector = blend.clone();
-    div()
-        .id(blend.clone())
-        .debug_selector(move || selector.to_string())
-        .flex()
-        .flex_shrink_0()
-        .items_center()
-        .justify_center()
-        .size(px(size))
-        .cursor_pointer()
-        .rounded(px(radius))
-        .when(t > 0.0, |door| {
-            door.bg(motion::mix(
-                rgba(TRANSPARENT).into(),
-                rgba(NAV_CARD_HOVER).into(),
-                t,
-            ))
-        })
-        .on_hover(motion::hover_snap(blend))
-        .child(icon_ink(glyph, glyph_size, t))
-}
-
 fn icon_ink(glyph: &'static str, size: f32, t: f32) -> gpui::Svg {
     icon(glyph, size, INK_STRONG).text_color(motion::mix(
         rgba(NAV_ICON_INK).into(),
