@@ -238,6 +238,25 @@ fn the_background_work_dialog_closes_with_its_thread(cx: &mut TestAppContext) {
     assert!(!dialog_up(&view, cx));
 }
 
+/// A Project removed from under its card closes the card: nothing is left
+/// to edit.
+#[gpui::test]
+fn the_project_card_closes_with_its_project(cx: &mut TestAppContext) {
+    let (mut core, _fake) = cockpit("sheets-project-card-removed", 1);
+    let project = core
+        .register_project(&repo_in(&scratch("sheets-project-card-removed-repo")))
+        .unwrap();
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(1000.), px(700.)));
+    tick(cx);
+    view.update(cx, |view, cx| view.open_project_editor(project, cx));
+    tick(cx);
+    assert_eq!(up(&view, cx), (false, true), "the card is up");
+    view.update(cx, |view, _| view.cockpit.remove_project(project).unwrap());
+    tick(cx);
+    assert_eq!(up(&view, cx), (false, false), "the card closes with its Project");
+}
+
 /// A window on a Project's Factory board, its Factory live in memory.
 pub(super) fn factory_window<'a>(
     cx: &'a mut TestAppContext,

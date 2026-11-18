@@ -2383,7 +2383,7 @@ impl CockpitView {
         self.fetch_attachment_previews(cx);
         self.note_work(&frame);
         self.prune_background_stops();
-        self.close_background_dialog_of_closed_thread(cx);
+        self.close_sheet_with_nothing_to_draw(cx);
         self.pump_browsers(cx);
         if let Some(card) = self.project_card(cx) {
             card.update(cx, |card, cx| card.poll_remote_path(cx));
@@ -8335,7 +8335,6 @@ impl CockpitView {
             .collect();
         // The open Task's Worker, drawn in its panel, streams whole too.
         self.leave_destination_if_moved();
-        self.close_sheet_with_nothing_to_draw(cx);
         let drawn: Vec<ThreadId> = match self.factory_worker_drawn() {
             Some(worker) => vec![worker],
             None => drawn,

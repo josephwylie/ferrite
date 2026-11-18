@@ -231,11 +231,19 @@ impl CockpitView {
         }
     }
 
-    /// A Factory's sheet closes once it has nothing to draw (its Factory
-    /// no longer shows, or its Task left the board) rather than hold the
-    /// keyboard with no card drawn.
+    /// The sheet up closes once what it shows is gone, rather than hold
+    /// the keyboard with no card drawn. Run each pump, so a change from
+    /// the Server or another window counts as much as one made here.
     pub(super) fn close_sheet_with_nothing_to_draw(&mut self, cx: &mut Context<Self>) {
         let gone = match self.sheets.read(cx).up() {
+            None | Some(Sheet::Settings(_)) => false,
+            Some(Sheet::ProjectEditor(card)) => card
+                .read(cx)
+                .target
+                .is_some_and(|project| self.cockpit.registry().project(project).is_none()),
+            Some(Sheet::BackgroundDialog(dialog)) => {
+                self.cockpit.thread(dialog.read(cx).thread).is_none()
+            }
             Some(Sheet::NewTask(sheet)) => {
                 self.factory().map(|view| view.project) != Some(sheet.read(cx).project)
             }
@@ -243,7 +251,6 @@ impl CockpitView {
                 let sheet = sheet.read(cx);
                 self.direct_inputs(sheet.project, &sheet.task).is_none()
             }
-            _ => false,
         };
         if gone {
             self.hide_sheet(cx);
