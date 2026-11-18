@@ -87,24 +87,28 @@ gpui::actions!(
 /// The nav's tooltips (T3's `ui/tooltip.tsx`): `menu::nav_tooltip`'s face,
 /// open after `NAV_TOOLTIP_DELAY_MS`, the next within
 /// `NAV_TOOLTIP_HANDOFF_MS` at once.
-pub(crate) trait NavTooltip: gpui::StatefulInteractiveElement + Sized {
-    fn nav_tooltip(self, text: impl Into<SharedString>) -> Self {
-        self.tooltip(ferrite_ui::menu::nav_tooltip(text)).nav_timing()
+pub(crate) trait NavTooltip: gpui::InteractiveElement + Sized {
+    fn nav_tooltip(mut self, text: impl Into<SharedString>) -> Self {
+        self.interactivity().tooltip(ferrite_ui::menu::nav_tooltip(text));
+        self.nav_timing()
     }
 
     /// `nav_tooltip` naming a bound action's key.
-    fn nav_action_tooltip(self, label: impl Into<SharedString>, action: &str) -> Self {
-        self.tooltip(ferrite_ui::menu::nav_action_tooltip(label, action))
-            .nav_timing()
+    fn nav_action_tooltip(mut self, label: impl Into<SharedString>, action: &str) -> Self {
+        self.interactivity()
+            .tooltip(ferrite_ui::menu::nav_action_tooltip(label, action));
+        self.nav_timing()
     }
 
-    fn nav_timing(self) -> Self {
-        self.tooltip_show_delay(std::time::Duration::from_millis(NAV_TOOLTIP_DELAY_MS))
-            .tooltip_handoff(std::time::Duration::from_millis(NAV_TOOLTIP_HANDOFF_MS))
+    fn nav_timing(mut self) -> Self {
+        let tip = self.interactivity();
+        tip.tooltip_show_delay(std::time::Duration::from_millis(NAV_TOOLTIP_DELAY_MS));
+        tip.tooltip_handoff(std::time::Duration::from_millis(NAV_TOOLTIP_HANDOFF_MS));
+        self
     }
 }
 
-impl<E: gpui::StatefulInteractiveElement> NavTooltip for E {}
+impl<E: gpui::InteractiveElement> NavTooltip for E {}
 
 /// A row the nav's keyboard can stand on (`cockpit/nav_keys.rs`): a
 /// shelf's header, or a Thread's card or slim row, wherever it is listed.
@@ -572,37 +576,6 @@ pub fn head(arrows: impl IntoElement) -> Div {
         .gap(px(SPACE_1))
         .child(div().debug_selector(|| "nav-brand".into()).text_size(px(FS_NAV_TITLE)).font_weight(W_LABEL).child("Ferrite"))
         .child(arrows)
-}
-
-pub fn icon_button(
-    key: impl Into<SharedString>,
-    glyph: &'static str,
-    glyph_size: f32,
-    size: f32,
-    radius: f32,
-) -> Stateful<Div> {
-    let blend: SharedString = key.into();
-    let t = motion::hover_t(&blend);
-    let selector = blend.clone();
-    div()
-        .id(blend.clone())
-        .debug_selector(move || selector.to_string())
-        .flex()
-        .flex_shrink_0()
-        .items_center()
-        .justify_center()
-        .size(px(size))
-        .cursor_pointer()
-        .rounded(px(radius))
-        .when(t > 0.0, |door| {
-            door.bg(motion::mix(
-                rgba(TRANSPARENT).into(),
-                rgba(NAV_CARD_HOVER).into(),
-                t,
-            ))
-        })
-        .on_hover(motion::hover_snap(blend))
-        .child(icon_ink(glyph, glyph_size, t))
 }
 
 fn icon_ink(glyph: &'static str, size: f32, t: f32) -> gpui::Svg {

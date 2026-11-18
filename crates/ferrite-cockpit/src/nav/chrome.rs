@@ -5,17 +5,19 @@
 //! notice, the update door and free disk), and a card's hover detail.
 
 use gpui::prelude::*;
+use gpui::component::button::Button;
 use gpui::{
-    anchored, deferred, div, point, px, rgb, rgba, AnyElement, Div, FontWeight, SharedString,
+    anchored, deferred, div, point, px, rgb, rgba, AnyElement, App, Div, FontWeight, SharedString,
     Stateful,
 };
 
 use ferrite_ui::icons::{self, icon};
 use ferrite_ui::project_badge::project_badge;
 use ferrite_ui::theme::*;
-use ferrite_ui::{components, motion};
+use ferrite_ui::components::{self, icon_button, IconSize};
+use ferrite_ui::motion;
 
-use super::{icon_button, NavTooltip, ThreadRow};
+use super::{NavTooltip, ThreadRow};
 
 // --------------------------------------------------------- the search row
 
@@ -89,26 +91,16 @@ pub fn search_field(
         .children(clear)
 }
 
-/// The field's clear button: a 12px close glyph, ghost, muted.
-pub fn search_clear() -> Stateful<Div> {
-    icon_button(
-        "nav-search-clear",
-        icons::CLOSE,
-        NAV_SEARCH_CLEAR_GLYPH,
-        NAV_SEARCH_CLEAR_GLYPH + 2.0 * NAV_SEARCH_ROW_GAP,
-        R_CONTROL,
-    )
-    .nav_tooltip("Clear search")
-}
-
-/// A head button: 28px, radius 6, a 16px glyph.
-pub fn head_button(key: &'static str, glyph: &'static str) -> Stateful<Div> {
-    icon_button(key, glyph, ICON_BUTTON_GLYPH, NAV_HEAD_BUTTON, R_CONTROL)
+/// The field's clear button: a 12px close glyph.
+pub fn search_clear(cx: &App) -> Button {
+    icon_button("nav-search-clear", icons::CLOSE, IconSize::Inline, "Clear search", cx)
+        .nav_tooltip("Clear search")
 }
 
 /// The Filter button: the scoped Project's badge, else the filter glyph.
-pub fn filter_button(project: Option<&str>) -> Stateful<Div> {
-    let button = head_button("nav-filter", icons::LIST_FILTER).nav_tooltip("Filter by project");
+pub fn filter_button(project: Option<&str>, cx: &App) -> Button {
+    let button = icon_button("nav-filter", icons::LIST_FILTER, IconSize::Standard, "Filter by project", cx)
+        .nav_tooltip("Filter by project");
     match project {
         None => button,
         Some(name) => {
@@ -131,8 +123,8 @@ pub fn filter_button(project: Option<&str>) -> Stateful<Div> {
 /// The Factory button: the factory glyph, with an attention dot at its
 /// corner while a Task needs the operator. Its tooltip stands down while
 /// its menu is `open`, which hangs where the tooltip would.
-pub fn factory_button(needs_you: bool, open: bool) -> Stateful<Div> {
-    let button = head_button("nav-factory", icons::FACTORY);
+pub fn factory_button(needs_you: bool, open: bool, cx: &App) -> Button {
+    let button = icon_button("nav-factory", icons::FACTORY, IconSize::Standard, "Factory", cx);
     let button = if open {
         button
     } else {
@@ -235,11 +227,6 @@ pub fn foot(buttons: Vec<AnyElement>, notice: Option<AnyElement>, end: Vec<AnyEl
                 .children(notice),
         )
         .children(end)
-}
-
-/// A foot button: 32px, radius 8, a 16px glyph.
-pub fn foot_button(key: &'static str, glyph: &'static str) -> Stateful<Div> {
-    icon_button(key, glyph, ICON_BUTTON_GLYPH, NAV_FOOT_BUTTON, NAV_FOOT_BUTTON_R)
 }
 
 /// The undo notice (T3's `SidebarThreadUndoNotice`): `Parked, Undo ⌘Z` at

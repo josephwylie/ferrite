@@ -7,6 +7,9 @@
 use super::nav_view::{MenuAt, NavEvent, NavInputs, NavView};
 use super::*;
 use crate::nav::{chrome, NavTooltip};
+use ferrite_ui::components::{icon_button, IconSize, MenuPress};
+use ferrite_ui::icons;
+use gpui::component::button::Button;
 use ferrite_pane::composer::{Composer, Edited, Role};
 use ferrite_ui::theme::{MOTION_UNDO_NOTICE_MS, NAV_UNDO_SHOWN_MS};
 
@@ -122,14 +125,11 @@ impl NavView {
         let empty = !self.searching(cx);
         let focused = self.search_focused(window, cx);
         let clear = (!self.search.read(cx).text().is_empty()).then(|| {
-            chrome::search_clear()
-                .on_mouse_down(
-                    MouseButton::Left,
-                    cx.listener(|nav, _: &MouseDownEvent, _, cx| {
-                        cx.stop_propagation();
-                        nav.clear_search(cx);
-                    }),
-                )
+            chrome::search_clear(cx)
+                .on_click(cx.listener(|nav, _: &ClickEvent, _, cx| {
+                    cx.stop_propagation();
+                    nav.clear_search(cx);
+                }))
                 .into_any_element()
         });
         let line = self.search.clone();
@@ -148,35 +148,29 @@ impl NavView {
                 nav.clear_search(cx);
                 window.blur(cx);
             }));
-        let filter = chrome::filter_button(inputs.filtered.as_deref());
+        let filter = chrome::filter_button(inputs.filtered.as_deref(), cx);
         let filter = self.menu_button(filter, MenuTarget::NavFilter, gpui::Anchor::TopRight, cx);
         let factory = inputs.factory.map(|needs_you| {
             let open = inputs.menu == Some(MenuTarget::NavFactory);
             self.menu_button(
-                chrome::factory_button(needs_you, open),
+                chrome::factory_button(needs_you, open, cx),
                 MenuTarget::NavFactory,
                 gpui::Anchor::TopLeft,
                 cx,
             )
         });
-        let add = chrome::head_button("nav-add-project", ferrite_ui::icons::FOLDER_PLUS)
+        let add = icon_button("nav-add-project", icons::FOLDER_PLUS, IconSize::Standard, "Add project", cx)
             .nav_tooltip("Add project")
-            .on_mouse_down(
-                MouseButton::Left,
-                cx.listener(|_, _: &MouseDownEvent, _, cx| {
-                    cx.stop_propagation();
-                    cx.emit(NavEvent::AddProject);
-                }),
-            );
-        let new = chrome::head_button("nav-new-thread", ferrite_ui::icons::SQUARE_PEN)
+            .on_click(cx.listener(|_, _: &ClickEvent, _, cx| {
+                cx.stop_propagation();
+                cx.emit(NavEvent::AddProject);
+            }));
+        let new = icon_button("nav-new-thread", icons::SQUARE_PEN, IconSize::Standard, "New thread", cx)
             .nav_action_tooltip("New thread", "cockpit::NewThread")
-            .on_mouse_down(
-                MouseButton::Left,
-                cx.listener(|_, _: &MouseDownEvent, window, cx| {
-                    cx.stop_propagation();
-                    window.dispatch_action(Box::new(NewThread), cx);
-                }),
-            );
+            .on_click(cx.listener(|_, _: &ClickEvent, window, cx| {
+                cx.stop_propagation();
+                window.dispatch_action(Box::new(NewThread), cx);
+            }));
         chrome::search_row(
             field,
             factory
@@ -190,7 +184,7 @@ impl NavView {
     /// `corner` on the button's matching edge.
     fn menu_button(
         &self,
-        button: Stateful<Div>,
+        button: Button,
         target: MenuTarget,
         corner: gpui::Anchor,
         cx: &mut Context<Self>,
@@ -203,17 +197,14 @@ impl NavView {
                     .absolute()
                     .size_full()
             })
-            .on_mouse_down(
-                MouseButton::Left,
-                cx.listener(move |_, event: &MouseDownEvent, _, cx| {
-                    cx.stop_propagation();
-                    let at = match drawn.get() {
-                        Some(button) => MenuAt::Below(button, corner),
-                        None => MenuAt::Point(event.position),
-                    };
-                    cx.emit(NavEvent::Menu(target, at));
-                }),
-            )
+            .on_menu_press(cx.listener(move |_, at: &Point<Pixels>, _, cx| {
+                cx.stop_propagation();
+                let at = match drawn.get() {
+                    Some(button) => MenuAt::Below(button, corner),
+                    None => MenuAt::Point(*at),
+                };
+                cx.emit(NavEvent::Menu(target, at));
+            }))
             .into_any_element()
     }
 
@@ -299,13 +290,19 @@ impl NavView {
     /// Panel, else the destination), Usage (the shown Provider's plan), the
     /// undo notice, free disk and the update door.
     pub(super) fn foot(&self, inputs: &NavInputs, window: &Window, cx: &mut Context<Self>) -> Div {
-        let settings = chrome::foot_button("nav-settings", ferrite_ui::icons::GEAR)
+        let settings = icon_button("nav-settings", icons::GEAR, IconSize::Large, "Settings", cx)
             .nav_action_tooltip("Settings", "cockpit::OpenSettings")
             .on_click(cx.listener(|_, _: &ClickEvent, _, cx| {
                 cx.stop_propagation();
                 cx.emit(NavEvent::Settings);
             }));
-        let pulls = chrome::foot_button("nav-pull-requests", ferrite_ui::icons::GIT_PULL_REQUEST)
+        let pulls = icon_button(
+            "nav-pull-requests",
+            icons::GIT_PULL_REQUEST,
+            IconSize::Large,
+            "Pull requests",
+            cx,
+        )
             .nav_tooltip("Pull requests")
             .on_click(cx.listener(|_, _: &ClickEvent, _, cx| {
                 cx.stop_propagation();
@@ -313,7 +310,9 @@ impl NavView {
             }));
         let usage = ferrite_pane::pane::plan_usage_popover(
             "nav-usage",
-            chrome::foot_button("nav-usage", ferrite_ui::icons::CHART_NO_AXES_COLUMN)
+            // The popover opens it from the pointer only, so Tab passes it.
+            icon_button("nav-usage", icons::CHART_NO_AXES_COLUMN, IconSize::Large, "Usage", cx)
+                .tab_stop(false)
                 .nav_tooltip("Usage"),
             inputs.limits.clone(),
         );
@@ -378,7 +377,7 @@ impl NavView {
 /// The update door, at the foot's right while a release is downloaded or
 /// waiting: its press restarts onto it, as Settings' button does.
 fn update_door(tip: SharedString, cx: &mut Context<NavView>) -> AnyElement {
-    chrome::foot_button("nav-update", ferrite_ui::icons::ARROW_UP)
+    icon_button("nav-update", icons::ARROW_UP, IconSize::Large, tip.clone(), cx)
         .nav_tooltip(tip)
         .on_click(cx.listener(|_, _: &ClickEvent, _, cx| {
             cx.stop_propagation();

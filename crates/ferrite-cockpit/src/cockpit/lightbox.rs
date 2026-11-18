@@ -93,6 +93,7 @@ impl CockpitView {
                     "lightbox-zoom",
                     icons::ZOOM_IN,
                     "Zoom \u{b7} click the image",
+                    cx,
                 )
                 .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
                     cx.stop_propagation();
@@ -104,7 +105,7 @@ impl CockpitView {
             )
             .child({
                 let path = path.clone();
-                door("lightbox-save", icons::DOWNLOAD, "Save a copy\u{2026}").on_click(
+                door("lightbox-save", icons::DOWNLOAD, "Save a copy\u{2026}", cx).on_click(
                     move |_, window, cx| {
                         cx.stop_propagation();
                         save_copy(path.clone(), &name, window, cx);
@@ -113,7 +114,7 @@ impl CockpitView {
             })
             .child({
                 let path = path.clone();
-                door("lightbox-original", icons::EXTERNAL, "Open in its app").on_click(
+                door("lightbox-original", icons::EXTERNAL, "Open in its app", cx).on_click(
                     move |_, window, cx| {
                         cx.stop_propagation();
                         ferrite_pane::preview::open_original(&path, window, cx);
@@ -121,7 +122,7 @@ impl CockpitView {
                 )
             })
             .child(
-                door("lightbox-close", icons::CLOSE, "Close").on_click(cx.listener(
+                door("lightbox-close", icons::CLOSE, "Close", cx).on_click(cx.listener(
                     move |view, _: &ClickEvent, _, cx| {
                         cx.stop_propagation();
                         view.close_lightbox(index, cx);
@@ -293,19 +294,13 @@ fn count_text(at: usize, count: usize) -> SharedString {
     format!("{} of {count}", at + 1).into()
 }
 
-/// One of the bar's doors: an `ICON_BUTTON` square in `INK_STRONG` on the
-/// dim, lit under the pointer. A press on it never reaches the dim.
-fn door(key: &'static str, glyph: &'static str, tip: &'static str) -> Stateful<Div> {
-    crate::nav::icon_button(
-        key,
-        glyph,
-        theme::ICON_BUTTON_GLYPH,
-        theme::ICON_BUTTON,
-        theme::R_CONTROL,
-    )
-    .occlude()
-    .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-    .tooltip(ferrite_ui::menu::tooltip(tip))
+/// One of the bar's doors: the shared icon button on the dim. It occludes,
+/// so a press on it never reaches the dim.
+fn door(key: &'static str, glyph: &'static str, tip: &'static str, cx: &gpui::App) -> gpui::component::button::Button {
+    use ferrite_ui::components::{icon_button, IconSize, Tip};
+    icon_button(key, glyph, IconSize::Standard, tip, cx)
+        .occlude()
+        .tip(tip)
 }
 
 /// Save a copy of `path` where the operator chooses (the system's save
