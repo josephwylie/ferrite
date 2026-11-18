@@ -38,7 +38,7 @@ use super::*;
 use ferrite_pane::page::Shown;
 pub(crate) use ferrite_pane::preview::BROWSER_PATH;
 use ferrite_pane::preview::{
-    head_door, head_suffix, head_title, reading_head, Body, Document, Text, Unshown,
+    head_suffix, head_title, reading_head, Body, Document, Text, Unshown,
 };
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -586,12 +586,14 @@ impl CockpitView {
                                     .door(ICON_BUTTON, ICON_BUTTON_GLYPH, R_CONTROL),
                             )
                             .into_any_element(),
-                        head_door(
+                        ferrite_ui::components::icon_button(
                             "open-original-image",
-                            "preview-original".into(),
                             ferrite_ui::icons::EXTERNAL,
+                            ferrite_ui::components::IconSize::Standard,
+                            "Open in its app",
+                            cx,
                         )
-                        .tooltip(ferrite_ui::menu::tooltip("Open in its app"))
+                        .tip("Open in its app")
                         .on_click(move |_, window, cx| {
                             cx.stop_propagation();
                             ferrite_pane::preview::open_original(&original, window, cx);

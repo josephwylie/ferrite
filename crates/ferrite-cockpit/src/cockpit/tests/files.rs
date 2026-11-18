@@ -1140,3 +1140,26 @@ fn remote_files_inline_transcript_chip_uses_remote_bytes_despite_local_collision
         "local collision must not open"
     );
 }
+
+/// The Files bar's doors press by the pointer: the tree's door hides the
+/// tree and shows it again, and `⋯` opens the Files settings.
+#[gpui::test]
+fn the_files_bars_doors_press_by_the_pointer(cx: &mut TestAppContext) {
+    let (view, thread, _checkout, cx) = files_window("files-doors", cx);
+    view.update(cx, |view, cx| view.run_opener(thread, Opener::Files, cx));
+    tick(cx);
+    for shown in [false, true] {
+        let toggle = cx.debug_bounds("files-tree-toggle").expect("the tree's door");
+        cx.simulate_click(toggle.center(), gpui::Modifiers::none());
+        tick(cx);
+        assert_eq!(cx.debug_bounds("files-tree-column").is_some(), shown);
+    }
+    let more = cx.debug_bounds("files-more").expect("the bar's more door");
+    cx.simulate_click(more.center(), gpui::Modifiers::none());
+    tick(cx);
+    let names = view.read_with(cx, |view, _| {
+        let rows = &view.context_menu().expect("the more menu opened").rows;
+        rows.iter().flatten().map(|(item, _)| item.label.to_string()).collect::<Vec<_>>()
+    });
+    assert_eq!(names, ["Show file tree", "Preview tabs", "Auto save", "Word wrap", "Tab size"]);
+}

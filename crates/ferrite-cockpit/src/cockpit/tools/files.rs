@@ -35,7 +35,8 @@ use ferrite_core::file_operations::Reply as FileReply;
 use remote_files::RemoteFiles;
 
 use ferrite_pane::composer::{Composer, Role};
-use ferrite_pane::preview::{head_door, open_original, reading_markup, Body as DocBody};
+use ferrite_pane::preview::{open_original, reading_markup, Body as DocBody};
+use ferrite_ui::components::MenuPress as _;
 use ferrite_ui::icons::{self, icon};
 use ferrite_ui::theme::{self};
 
@@ -1124,10 +1125,11 @@ impl CockpitView {
                 )
         }).collect::<Vec<_>>();
         let door = |key: &'static str, glyph: &'static str, tip: &'static str, chord: Option<&'static str>| {
-            let door = head_door(key, key.into(), glyph);
+            use ferrite_ui::components::{icon_button, IconSize, Tip as _};
+            let door = icon_button(key, glyph, IconSize::Standard, tip, cx);
             match chord {
-                Some(action) => door.tooltip(ferrite_ui::menu::action_tooltip(tip, action)),
-                None => door.tooltip(ferrite_ui::menu::tooltip(tip)),
+                Some(action) => door.tip_with_key(tip, ferrite_ui::components::bound_chord(action)),
+                None => door.tip(tip),
             }
         };
         let chevron = |side: Side| {
@@ -1208,10 +1210,10 @@ impl CockpitView {
                     })),
             )
             .child(
-                door("files-more", icons::ELLIPSIS, "More", None).on_click(cx.listener(
-                    move |view, event: &ClickEvent, _, cx| {
+                door("files-more", icons::ELLIPSIS, "More", None).on_menu_press(cx.listener(
+                    move |view, at: &gpui::Point<Pixels>, _, cx| {
                         cx.stop_propagation();
-                        view.open_context_menu(MenuTarget::FilesMore(thread), event.position(), cx);
+                        view.open_context_menu(MenuTarget::FilesMore(thread), *at, cx);
                     },
                 )),
             )

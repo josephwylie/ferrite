@@ -1447,6 +1447,7 @@ impl IconSize {
 /// `NAV_ICON_INK` rising to `INK_STRONG` with the hover blend, on nothing at
 /// rest, `paint::ICON_HOVER` under the pointer and `paint::PRESS` pressed
 /// (`faded_button`). A tab stop with the focus ring; Enter and Space press it.
+/// A press on it never drags the slot or tab it sits on.
 /// `label` is its name to assistive technology; its id is its
 /// `debug_selector`. The caller adds a tooltip (`Tip`) and the press
 /// (`on_click`).
@@ -1503,6 +1504,9 @@ fn icon_face(
     .debug_selector(move || selector.to_string())
     .accessibility_label(label)
     .when_some(toggled, Button::toggled)
+    // The kit lets the press go on to the parent, which would pick up the
+    // slot or tab the button sits on as a drag.
+    .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
     .flex_shrink_0()
     .size(px(edge))
     .p_0()
@@ -2691,6 +2695,50 @@ mod tests {
         }
         assert_eq!(presses.get(), 3, "Enter and Space each press it once");
         assert_eq!(keyed.get(), 2);
+    }
+
+    /// An icon button on something that drags (a slot's head, a tab) is
+    /// pressed, never dragged: a press that starts on it and moves off picks
+    /// nothing up, where the same press beside it picks the parent up.
+    #[gpui::test]
+    fn a_press_on_an_icon_button_never_drags_what_it_sits_on(cx: &mut gpui::TestAppContext) {
+        use gpui::{Modifiers, MouseButton};
+
+        struct Grip;
+        impl gpui::Render for Grip {
+            fn render(&mut self, _: &mut Window, _: &mut gpui::Context<Self>) -> impl IntoElement {
+                gpui::Empty
+            }
+        }
+        struct Head;
+        impl gpui::Render for Head {
+            fn render(&mut self, _: &mut Window, cx: &mut gpui::Context<Self>) -> impl IntoElement {
+                div()
+                    .id("head")
+                    .debug_selector(|| "head".into())
+                    .flex()
+                    .w(px(200.))
+                    .p(px(10.))
+                    .on_drag(Grip, |_, _, _, cx| cx.new(|_| Grip))
+                    .child(div().w(px(100.)))
+                    .child(icon_button("door", icons::CLOSE, IconSize::Standard, "Close", cx))
+            }
+        }
+
+        cx.update(theme::init_components);
+        let (_, cx) = cx.add_window_view(|_, _| Head);
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+        let dragging = |cx: &mut gpui::VisualTestContext| cx.update(|_, cx| cx.has_active_drag());
+        let door = cx.debug_bounds("door").expect("the button").center();
+        cx.simulate_mouse_down(door, MouseButton::Left, Modifiers::none());
+        cx.simulate_mouse_move(door + gpui::point(px(0.), px(40.)), MouseButton::Left, Modifiers::none());
+        assert!(!dragging(cx), "a press on the button is not a drag");
+        cx.simulate_mouse_up(door, MouseButton::Left, Modifiers::none());
+
+        let beside = gpui::point(cx.debug_bounds("head").unwrap().left() + px(20.), door.y);
+        cx.simulate_mouse_down(beside, MouseButton::Left, Modifiers::none());
+        cx.simulate_mouse_move(beside + gpui::point(px(0.), px(40.)), MouseButton::Left, Modifiers::none());
+        assert!(dragging(cx), "the same press beside it picks the head up");
     }
 
     /// A menu's icon button opens it as the pointer goes down, once for the

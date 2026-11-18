@@ -1305,7 +1305,11 @@ impl CockpitView {
         thread: Option<ThreadId>,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        use ferrite_ui::{components::Tip as _, icons, theme::*};
+        use ferrite_ui::{
+            components::{icon_button, IconSize, Tip as _},
+            icons,
+            theme::*,
+        };
         use gpui::component::Disableable as _;
         let Some(thread) = thread else {
             return div()
@@ -1370,12 +1374,14 @@ impl CockpitView {
                     this.browser_action(thread, Action::Select { tab: id }, cx)
                 }))
                 .child(
-                    ferrite_pane::preview::head_door(
-                        "browser-close-tab",
-                        format!("close-tab-{}", id.0),
+                    icon_button(
+                        format!("browser-close-tab-{}", id.0),
                         icons::CLOSE,
+                        IconSize::Standard,
+                        "Close tab",
+                        cx,
                     )
-                    .tooltip(ferrite_ui::menu::tooltip("Close tab"))
+                    .tip("Close tab")
                     .on_click(cx.listener(move |this, _, _, cx| {
                         cx.stop_propagation();
                         this.browser_action(thread, Action::Close { tab: id }, cx);
@@ -1415,9 +1421,9 @@ impl CockpitView {
         ] {
             let document = active.map(|tab| tab.document());
             toolbar = toolbar.child(
-                ferrite_pane::preview::head_door(id, id.into(), glyph)
+                icon_button(id, glyph, IconSize::Standard, label, cx)
                     .opacity(if enabled { 1. } else { 0.35 })
-                    .tooltip(ferrite_ui::menu::tooltip(label))
+                    .tip(label)
                     .on_click(cx.listener(move |this, _, _, cx| {
                         if !enabled {
                             return;
@@ -1512,17 +1518,13 @@ impl CockpitView {
                     })),
             )
             .child(
-                ferrite_pane::preview::head_door("browser-go", "browser-go".into(), icons::FORWARD)
-                    .tooltip(ferrite_ui::menu::tooltip("Go to address"))
+                icon_button("browser-go", icons::FORWARD, IconSize::Standard, "Go to address", cx)
+                    .tip("Go to address")
                     .on_click(cx.listener(move |this, _, _, cx| this.browser_go(thread, cx))),
             )
             .child(
-                ferrite_pane::preview::head_door(
-                    "browser-new-tab",
-                    "browser-new-tab".into(),
-                    icons::PLUS,
-                )
-                .tooltip(ferrite_ui::menu::tooltip("New tab"))
+                icon_button("browser-new-tab", icons::PLUS, IconSize::Standard, "New tab", cx)
+                .tip("New tab")
                 .on_click(cx.listener(move |this, _, window, cx| {
                     this.cancel_browser_capture(thread, cx);
                     if let Some(browser) = this.browsers.threads.get_mut(&thread) {
@@ -1537,25 +1539,23 @@ impl CockpitView {
                 })),
             )
             .child(
-                ferrite_pane::preview::head_door(
+                icon_button(
                     "browser-open-external",
-                    "browser-open-external".into(),
                     icons::EXTERNAL,
+                    IconSize::Standard,
+                    "Open in system browser",
+                    cx,
                 )
                 .opacity(if active.is_some() { 1. } else { 0.35 })
-                .tooltip(ferrite_ui::menu::tooltip("Open in system browser"))
+                .tip("Open in system browser")
                 .on_click(cx.listener(move |this, _, _, cx| {
                     this.run_browser_page_verb(thread, PageVerb::OpenExternal, cx)
                 })),
             )
             .child(
-                ferrite_pane::preview::head_door(
-                    "browser-close-page",
-                    "browser-close-page".into(),
-                    icons::CLOSE,
-                )
+                icon_button("browser-close-page", icons::CLOSE, IconSize::Standard, "Close tab", cx)
                 .opacity(if active.is_some() { 1. } else { 0.35 })
-                .tooltip(ferrite_ui::menu::tooltip("Close tab"))
+                .tip("Close tab")
                 .on_click(cx.listener(move |this, _, _, cx| {
                     let tab = this
                         .browsers
@@ -1639,12 +1639,14 @@ impl CockpitView {
                                         .child("New tab"),
                                 )
                                 .child(
-                                    ferrite_pane::preview::head_door(
+                                    icon_button(
                                         "browser-cancel-new-tab",
-                                        "browser-cancel-new-tab".into(),
                                         icons::CLOSE,
+                                        IconSize::Standard,
+                                        "Cancel new tab",
+                                        cx,
                                     )
-                                    .tooltip(ferrite_ui::menu::tooltip("Cancel new tab"))
+                                    .tip("Cancel new tab")
                                     .on_click(cx.listener(move |this, _, _, cx| {
                                         this.cancel_address(thread, cx);
                                     })),
