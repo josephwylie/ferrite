@@ -1036,8 +1036,6 @@ pub const SURFACE_TAB_DRAG: f32 = 6.0;
 /// `SURFACE_TAB_SCROLL_MIN`.
 pub const SURFACE_TAB_SCROLL_MIN: f32 = 120.0;
 pub const SURFACE_TAB_SCROLL_SHARE: f32 = 0.75;
-/// A chevron with nothing more that way keeps its slot, dimmed.
-pub const SURFACE_TAB_CHEVRON_SPENT_OPACITY: f32 = 0.35;
 /// The head's `+` (T3's `icon-xs` ghost, `Plus size-3.5`).
 pub const SURFACE_PLUS: f32 = 24.0;
 pub const SURFACE_PLUS_GLYPH: f32 = 14.0;

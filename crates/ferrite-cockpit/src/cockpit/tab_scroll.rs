@@ -9,12 +9,13 @@
 use std::cell::Cell;
 use std::ops::Deref;
 
+use gpui::component::button::Button;
 use gpui::prelude::*;
-use gpui::{div, px, Div, ScrollHandle, ScrollWheelEvent, SharedString, Stateful, Window};
+use gpui::{px, ScrollHandle, ScrollWheelEvent, Window};
 
-use ferrite_ui::icons::{self, icon};
+use ferrite_ui::components::{icon_button_as, IconSize, IconState};
+use ferrite_ui::icons;
 use ferrite_ui::motion::{self, Tween};
-use ferrite_ui::pointer::Pointer;
 use ferrite_ui::theme::*;
 
 /// How far a chevron scrolls a row showing `visible` of its tabs.
@@ -218,39 +219,30 @@ impl TabScroll {
     }
 }
 
-/// The chevron slot at `side`'s end, named `<prefix>-left` or
-/// `<prefix>-right` and calling `press` while the row has more that way,
-/// dimmed and unnamed while it has not. Either way a press on it never
-/// reaches the title bar beneath. `None` while the row does not overflow.
+/// The chevron at `side`'s end, named `<prefix>-left` or `<prefix>-right`
+/// and calling `press` while the row has more that way, disabled and named
+/// `…-spent` while it has not. Either way a press on it never reaches the
+/// title bar beneath. `None` while the row does not overflow.
 pub(crate) fn chevron(
     prefix: &str,
     side: Side,
     scroll: &TabScroll,
     press: impl Fn(&gpui::ClickEvent, &mut Window, &mut gpui::App) + 'static,
-) -> Option<Stateful<Div>> {
+    cx: &gpui::App,
+) -> Option<Button> {
     if !scroll.overflowing() {
         return None;
     }
-    let key = SharedString::from(format!("{prefix}-{}", side.name()));
-    let slot = div()
-        .id(key.clone())
-        .flex()
-        .flex_shrink_0()
-        .items_center()
-        .justify_center()
-        .size(px(SURFACE_PLUS))
-        .rounded(px(R_CONTROL))
-        .occlude()
-        .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
-        .child(icon(side.glyph(), ICON_CHEVRON, INK_SUBTLE));
-    Some(if scroll.more(side) {
-        slot.debug_selector({
-            let key = key.clone();
-            move || key.to_string()
-        })
-        .hover_raised(key)
-        .on_click(press)
+    let (id, state) = if scroll.more(side) {
+        (format!("{prefix}-{}", side.name()), IconState::Plain)
     } else {
-        slot.opacity(SURFACE_TAB_CHEVRON_SPENT_OPACITY)
-    })
+        (format!("{prefix}-{}-spent", side.name()), IconState::Disabled(None))
+    };
+    let label = format!("Scroll tabs {}", side.name());
+    let chevron = icon_button_as(id, side.glyph(), IconSize::Compact, label, state, cx)
+        // The keyboard reaches a hidden tab by moving to it, which reveals it.
+        .tab_stop(false)
+        .occlude()
+        .on_click(press);
+    Some(chevron)
 }
