@@ -17,6 +17,10 @@ fn window<'a>(
     (view, thread, cx)
 }
 
+/// How long a real shell gets to answer. A loaded Windows runner has taken
+/// longer than 10 seconds to start one.
+const SHELL_LOST_AFTER: std::time::Duration = std::time::Duration::from_secs(60);
+
 fn opened(view: &Entity<CockpitView>, cx: &mut gpui::VisualTestContext) {
     let thread = view.read_with(cx, |view, _| view.panes[0].thread().unwrap());
     view.update(cx, |view, cx| view.new_terminal_surface(thread, cx));
@@ -53,7 +57,7 @@ fn a_local_shell_with_a_failed_exit_still_closes_its_tab(cx: &mut TestAppContext
     let (view, thread, cx) = window("terminal-local-exit", cx);
     opened(&view, cx);
     run(&view, thread, b"exit 7\r", cx);
-    let until = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    let until = std::time::Instant::now() + SHELL_LOST_AFTER;
     while !numbers(&view, thread, cx).is_empty() {
         assert!(std::time::Instant::now() < until, "the local shell's tab never closed");
         std::thread::sleep(std::time::Duration::from_millis(20));
@@ -163,7 +167,7 @@ fn a_selection_offers_attach_and_attaches_as_a_reply_tile(cx: &mut TestAppContex
     opened(&view, cx);
     run(&view, thread, b"echo attach-me\r", cx);
     let shell = view.read_with(cx, |view, _| view.terminal_view(thread)).unwrap();
-    let until = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    let until = std::time::Instant::now() + SHELL_LOST_AFTER;
     loop {
         tick(cx);
         shell.update(cx, |shell, cx| shell.select_all(cx));
@@ -253,7 +257,7 @@ fn typed_reaches(
     needle: &str,
     cx: &mut gpui::VisualTestContext,
 ) -> bool {
-    let until = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    let until = std::time::Instant::now() + SHELL_LOST_AFTER;
     while std::time::Instant::now() < until {
         tick(cx);
         shell.update(cx, |shell, cx| shell.select_all(cx));
