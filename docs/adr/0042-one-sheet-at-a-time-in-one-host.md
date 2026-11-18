@@ -37,9 +37,15 @@ openers. Two of the five have no Escape.
   being edited). Escape, a press on the veil and a sheet's own close
   button all reach it. Escape is one step of the root's `interrupt` chain,
   wherever focus is. An editor open inside Settings closes before it.
-- **Settings and the Project card are the first two.** The Background
-  work dialog, the New task sheet and the Rework/Direct sheet move in
-  later, one per change.
+- **Settings and the Project card are the first two.**
+- **The Background work dialog is the third.** `BackgroundDialogView`
+  (`cockpit/background_dialog_view.rs`) owns which Thread it shows and its
+  focus. It draws that Thread's running work and where its stops stand,
+  and emits `BackgroundDialogEvent`: stop, open an agent's thread, close.
+  The stopping stays the root's, because the background line under the
+  transcript stops the same work. A dialog whose Thread is no longer open
+  closes. The New task sheet and the Rework/Direct sheet move in later,
+  one per change.
 
 ## Precedent
 
