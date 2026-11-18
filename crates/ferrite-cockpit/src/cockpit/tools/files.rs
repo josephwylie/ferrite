@@ -345,25 +345,6 @@ impl CockpitView {
         self.tools.files.get_mut(&thread)
     }
 
-    /// Whether the find bar over the Panel's shown file holds the keyboard.
-    pub(in crate::cockpit) fn files_find_holds_focus(&self, window: &Window, cx: &gpui::App) -> bool {
-        let Some(thread) = self.panel_thread() else {
-            return false;
-        };
-        self.active_surface(thread) == Some(SurfaceId::Files)
-            && self.files_ref(thread).is_some_and(|files| {
-                files.active.is_some_and(|active| {
-                    let tab = &files.tabs[active];
-                    match &tab.reading {
-                        Reading::Rendered(Rendered { find: Some(find), .. }) => find.holds_focus(window, cx),
-                        _ => tab
-                            .shown_editor()
-                            .is_some_and(|editor| editor.read(cx).find_holds_focus(window, cx)),
-                    }
-                })
-            })
-    }
-
     /// The editors of `thread`'s open Files tabs.
     pub(in crate::cockpit) fn files_editors(&self, thread: ThreadId) -> Vec<Entity<Editor>> {
         let tabs = self.files_ref(thread).map(|files| files.tabs.as_slice()).unwrap_or_default();

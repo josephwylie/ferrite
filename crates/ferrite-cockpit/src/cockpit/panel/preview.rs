@@ -122,11 +122,6 @@ impl PreviewFind {
         self.reveal = ferrite_pane::find::REVEAL_FRAMES;
         self.start_in_view = start_in_view;
     }
-
-    /// Whether the bar's line holds the keyboard.
-    pub(crate) fn holds_focus(&self, window: &Window, cx: &gpui::App) -> bool {
-        self.bar.holds_focus(window, cx)
-    }
 }
 
 #[cfg(test)]

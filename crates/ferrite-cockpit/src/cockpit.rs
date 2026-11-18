@@ -22,6 +22,7 @@ mod details;
 mod direct_view;
 pub(crate) mod direction;
 mod drafts;
+mod fields;
 pub(crate) mod empty_board;
 pub(crate) mod environment;
 pub(crate) mod factory;
@@ -369,6 +370,7 @@ pub struct CockpitView {
     /// the cockpit's own actions are never reached — at wall range, where no
     /// Pane holds a Composer, this handle is what keeps the keyboard alive.
     focus: FocusHandle,
+    field_watch: fields::FieldWatch,
     perf: Option<Perf>,
     /// When the watchdog last swept, on the executor's clock (the wall
     /// clock in the app, the fake one under test, so a loaded test machine
@@ -1396,6 +1398,7 @@ impl CockpitView {
             browsers: Default::default(),
             panes: Vec::new(),
             focus: cx.focus_handle(),
+            field_watch: Default::default(),
             perf: std::env::var("FERRITE_PERF").is_ok().then(|| Perf {
                 frames: 0,
                 since: std::time::Instant::now(),
@@ -8166,6 +8169,7 @@ impl Render for CockpitView {
                     cx.notify();
                 }
             }));
+            self.watch_lost_focus(window, cx);
         }
         self.hear_nav(window, cx);
         self.tend_history();
@@ -8548,18 +8552,6 @@ impl CockpitView {
             (self.preview_shown(self.focused()) && pane.preview.text_focused(window, cx))
                 || pane.review.inner_focused(window, cx)
         });
-        // The find bar's line and the Reply card's keep the keyboard while
-        // the operator types.
-        let find_focused = self.panes.get(self.focused()).is_some_and(|pane| {
-            pane.preview_tab
-                .find
-                .as_ref()
-                .is_some_and(|find| find.holds_focus(window, cx))
-                || pane.transcript().is_some_and(|view| {
-                    let view = view.read(cx);
-                    view.find_holds_focus(window, cx)
-                })
-        });
         // The list keeps the keyboard it was handed until the operator
         // takes it elsewhere.
         let nav_list_focused = self.nav_view.read(cx).holds_keys(window);
@@ -8570,6 +8562,7 @@ impl CockpitView {
         // pressed, or a Files editor or filter being typed in.
         let panel_keys_held =
             self.panel_keys.contains_focused(window, cx) || self.panel_control_focused(window);
+        let field_holds_keyboard = self.field_holds_keyboard(&wanted, window, cx);
         let dialog_took_focus = self.browsers.focus_shown_dialogs(window, cx);
         // Here, before focus is handed out: a page's dialog is modal and
         // keeps the keys, and a popup left up would take them back.
@@ -8583,9 +8576,6 @@ impl CockpitView {
             || self.details_hold_focus(window, cx)
             || native_text_focused
             || reader_text_focused
-            || find_focused
-            || self.files_find_holds_focus(window, cx)
-            || self.side_chat_holds_focus(window, cx)
             || self.terminal_holds_focus(window, cx)
             || pane_control_focused
         {
@@ -8597,6 +8587,7 @@ impl CockpitView {
             if !focus.contains_focused(window, cx) && !self.connection_holds_focus(window, cx) {
                 window.focus(&focus, cx);
             }
+        } else if field_holds_keyboard {
         } else if !self
             .popover
             .as_ref()

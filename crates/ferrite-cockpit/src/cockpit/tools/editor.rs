@@ -235,14 +235,8 @@ impl Editor {
 
     /// Whether the bar, or the file under it, holds the keyboard.
     pub(crate) fn holds_keyboard(&self, window: &Window, cx: &App) -> bool {
-        self.focus.contains_focused(window, cx) || self.find_holds_focus(window, cx)
-    }
-
-    /// Whether the bar's line holds the keyboard.
-    pub(crate) fn find_holds_focus(&self, window: &Window, cx: &App) -> bool {
-        self.find
-            .as_ref()
-            .is_some_and(|find| find.holds_focus(window, cx))
+        self.focus.contains_focused(window, cx)
+            || self.find.as_ref().is_some_and(|find| find.holds_focus(window, cx))
     }
 
     /// Write the file now, unless the disk changed since it was read.

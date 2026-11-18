@@ -178,6 +178,23 @@ fn side_chat_tabs_are_separate_conversations(cx: &mut TestAppContext) {
     assert!(side_tabs(&view, owner, cx).is_empty());
 }
 
+#[gpui::test]
+fn a_press_on_the_side_chat_field_takes_the_keys_back_from_the_composer(cx: &mut TestAppContext) {
+    let (view, fake, cx) = answered("side-chat-pressed", cx);
+    open_chat(&view, cx, None);
+    let composer = cx.debug_bounds("composer-block").expect("the Composer");
+    cx.simulate_click(composer.center(), gpui::Modifiers::none());
+    tick(cx);
+    let field = cx.debug_bounds("side-chat-placeholder").expect("the side chat field");
+    cx.simulate_click(field.center(), gpui::Modifiers::none());
+    tick(cx);
+    cx.simulate_input("what is alpha?");
+    assert_eq!(composer_text(&view, cx), "");
+    cx.simulate_keystrokes("enter");
+    tick(cx);
+    assert_eq!(fake.sent.borrow().last().map(String::as_str), Some("what is alpha?"));
+}
+
 /// A question typed in a tab goes to its fork alone — never the Thread —
 /// and the tab then shows the fork's own words, not the history it
 /// inherited.
