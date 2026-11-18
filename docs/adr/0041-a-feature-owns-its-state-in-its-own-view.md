@@ -76,8 +76,12 @@ that happened to touch it, and nothing in the code said whose a field was.
   view: each tab's field, title and fork once it lands, the tab each
   Panel last showed, the forks still on their way, the field's wait for
   the keyboard, and a Trash waiting for its second press. One view, not
-  one per Thread: the forks land in the order they were asked, whichever
-  Thread asked, so one queue has to see them all. The Panel draws it as
+  one per Thread: a landed fork names the Thread it was made from
+  (`fork_of` on the window's focus ask), and the view holds the one tab
+  each Thread's fork is on its way to, kept after the tab closes so the
+  fork is retired when it lands. A Server from before the `fork_of`
+  capability names none, and then the one Thread waiting takes the
+  fork; with two waiting, neither does. The Panel draws it as
   the body of whichever side chat it shows, and the view reads which
   that is with its inputs, so the root no longer tends it every frame.
   It emits `SideChatEvent`: a question for a fork, Bring back, Trash.

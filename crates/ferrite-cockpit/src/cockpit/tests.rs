@@ -132,6 +132,7 @@ struct Scripted {
     interrupts: Rc<RefCell<usize>>,
     stopped: Rc<RefCell<Vec<ferrite_core::activity::AgentKey>>>,
     forks: Rc<RefCell<Vec<ferrite_core::providers::ForkRequest>>>,
+    fail_fork: Rc<RefCell<bool>>,
     fail_send: Rc<RefCell<bool>>,
     sent: Rc<RefCell<Vec<String>>>,
     answered: Rc<RefCell<Vec<(String, DecisionAnswer)>>>,
@@ -250,6 +251,9 @@ impl Session for Scripted {
         request: ferrite_core::providers::ForkRequest,
     ) -> std::io::Result<ferrite_core::providers::ForkAck> {
         self.forks.borrow_mut().push(request);
+        if *self.fail_fork.borrow() {
+            return Err(std::io::Error::other("Claude has not named its session yet"));
+        }
         let (answer, ack) = mpsc::sync_channel(1);
         answer
             .send(Ok(ferrite_core::providers::Forked::Fresh))
@@ -268,6 +272,9 @@ struct Fake {
     stopped: Rc<RefCell<Vec<ferrite_core::activity::AgentKey>>>,
     /// Every fork a Session was asked for.
     forks: Rc<RefCell<Vec<ferrite_core::providers::ForkRequest>>>,
+    /// Set, a Session's fork fails as Claude's does before it has named
+    /// its session.
+    fail_fork: Rc<RefCell<bool>>,
     model_discovery: Rc<RefCell<Option<Receiver<(Provider, Vec<ferrite_core::ModelInfo>)>>>>,
     session_discovery:
         Rc<RefCell<Option<Receiver<std::io::Result<Vec<ferrite_core::import::Candidate>>>>>>,
@@ -371,6 +378,7 @@ impl Spawner for Fake {
             interrupts: self.interrupts.clone(),
             stopped: self.stopped.clone(),
             forks: self.forks.clone(),
+            fail_fork: self.fail_fork.clone(),
             fail_send: self.fail_send.clone(),
             sent: self.sent.clone(),
             answered: self.answered.clone(),

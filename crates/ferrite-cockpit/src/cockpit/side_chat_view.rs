@@ -35,7 +35,7 @@
 //! `SideChatEvent`. The fork is a Thread of the engine, so asking for it,
 //! binding it and retiring it stay the Cockpit's.
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::HashMap;
 
 use gpui::WeakEntity;
 
@@ -95,9 +95,11 @@ struct Chat {
 pub(crate) struct SideChatView {
     cockpit: WeakEntity<CockpitView>,
     chats: HashMap<ThreadId, Chat>,
-    /// Forks asked and not yet landed — the owner's Thread and the tab
-    /// waiting — oldest first, the order the agent answers in.
-    asked: VecDeque<(ThreadId, u64)>,
+    /// The tab waiting on each Thread's fork, kept when the tab closes so
+    /// the fork is retired when it lands. One per Thread: the engine makes
+    /// one fork of a Thread at a time, so a newer ask replaces one that
+    /// failed and never landed.
+    asked: HashMap<ThreadId, u64>,
     next_tab: u64,
     /// The field wants the keyboard (a chat opened, a tab changed): the
     /// next frame that shows it hands it over.
@@ -187,16 +189,36 @@ impl CockpitView {
         self.upsert_surface(owner, SurfaceId::SideChat(id), cx);
     }
 
-    /// A Thread the agent made for a fork the side chat asked: its tab
-    /// takes it, and the window stays where it was. False when no tab was
-    /// waiting — an ordinary fork, for the window to land on.
-    pub(super) fn bind_side_thread(&mut self, thread: ThreadId, cx: &mut Context<Self>) -> bool {
+    /// Whose side chat a focus that names no `fork_of` is for. Only a
+    /// Server from before `Capability::ForkOf` sends a fork's focus that
+    /// way, and then the one Thread waiting on a fork takes it: with two
+    /// waiting it could be either's. Delete once no such Server runs.
+    pub(super) fn unnamed_fork_owner(&self, thread: ThreadId, cx: &gpui::App) -> Option<ThreadId> {
+        if self.cockpit.names_fork_owners() {
+            return None;
+        }
+        self.side_chat
+            .read(cx)
+            .only_waiting()
+            .filter(|owner| *owner != thread)
+    }
+
+    /// A Thread the agent made from `owner`, for a fork its side chat
+    /// asked: its tab takes it, and the window stays where it was. False
+    /// when no tab of `owner` was waiting — an ordinary fork, for the
+    /// window to land on.
+    pub(super) fn bind_side_thread(
+        &mut self,
+        owner: ThreadId,
+        thread: ThreadId,
+        cx: &mut Context<Self>,
+    ) -> bool {
         let inherited = self
             .cockpit
             .thread(thread)
             .map_or(0, |open| open.transcript().blocks().len());
         let fork = Fork { thread, inherited };
-        let Some(taken) = self.side_chat.update(cx, |chat, cx| chat.bind(fork, cx)) else {
+        let Some(taken) = self.side_chat.update(cx, |chat, cx| chat.bind(owner, fork, cx)) else {
             return false;
         };
         // The fork joined the roster as any open Thread does: it leaves it.
@@ -399,7 +421,7 @@ impl SideChatView {
         Self {
             cockpit,
             chats: HashMap::new(),
-            asked: VecDeque::new(),
+            asked: HashMap::new(),
             next_tab: 0,
             focus_wanted: false,
             trash_armed: None,
@@ -474,7 +496,7 @@ impl SideChatView {
     ) -> u64 {
         let id = self.push_tab(owner, passage, asked.clone().err(), cx);
         if asked.is_ok() {
-            self.asked.push_back((owner, id));
+            self.asked.insert(owner, id);
         }
         id
     }
@@ -524,10 +546,10 @@ impl SideChatView {
         id
     }
 
-    /// The oldest fork asked has landed: its tab takes it. None when no
+    /// `owner`'s fork has landed: the tab that asked takes it. None when no
     /// tab asked for one; false when its tab closed while the agent worked.
-    fn bind(&mut self, fork: Fork, cx: &mut Context<Self>) -> Option<bool> {
-        let (_, id) = self.asked.pop_front()?;
+    fn bind(&mut self, owner: ThreadId, fork: Fork, cx: &mut Context<Self>) -> Option<bool> {
+        let id = self.asked.remove(&owner)?;
         if self.tab_mut(id).is_none() {
             return Some(false);
         }
@@ -542,6 +564,22 @@ impl SideChatView {
         Some(true)
     }
 
+    /// The Thread whose fork a side chat waits on, when it is the only one.
+    fn only_waiting(&self) -> Option<ThreadId> {
+        let mut waiting = self.asked.keys();
+        match (waiting.next(), waiting.next()) {
+            (Some(owner), None) => Some(*owner),
+            _ => None,
+        }
+    }
+
+    /// An ordinary fork of `owner` was asked, so one its side chat asked
+    /// before has settled (the engine makes one at a time): what lands
+    /// next is the window's, not that tab's.
+    pub(super) fn forget_fork(&mut self, owner: ThreadId) {
+        self.asked.remove(&owner);
+    }
+
     /// Tab `id` of `owner` goes. Its fork, if it had one, is the Cockpit's
     /// to retire.
     fn close(&mut self, owner: ThreadId, id: u64, cx: &mut Context<Self>) -> Option<ThreadId> {
@@ -549,7 +587,6 @@ impl SideChatView {
         let index = chat.tabs.iter().position(|tab| tab.id == id)?;
         let tab = chat.tabs.remove(index);
         chat.active = chat.active.min(chat.tabs.len().saturating_sub(1));
-        self.asked.retain(|(_, id)| *id != tab.id);
         if chat.tabs.is_empty() {
             self.chats.remove(&owner);
         }
@@ -569,8 +606,6 @@ impl SideChatView {
             .into_iter()
             .map(|tab| (tab.id, tab.conversation.map(|c| c.fork.thread)))
             .collect();
-        self.asked
-            .retain(|(_, id)| !closed.iter().any(|(closed, _)| closed == id));
         cx.notify();
         closed
     }

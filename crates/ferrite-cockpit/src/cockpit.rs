@@ -3822,8 +3822,9 @@ impl CockpitView {
         use gpui::component::WindowExt as _;
         match asked {
             // A fork the side chat asked for goes to its tab, not the board.
-            Asked::Focus(thread) => {
-                if !self.bind_side_thread(thread, cx) {
+            Asked::Focus { thread, fork_of } => {
+                let fork_of = fork_of.or_else(|| self.unnamed_fork_owner(thread, cx));
+                if !fork_of.is_some_and(|owner| self.bind_side_thread(owner, thread, cx)) {
                     self.land_on_thread(thread, cx);
                 }
             }

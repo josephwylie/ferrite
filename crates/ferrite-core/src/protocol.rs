@@ -117,6 +117,10 @@ pub enum Capability {
     /// This client is a `ferrite --headless` window: the API's `window.*`
     /// actions are for it (ADR 0038).
     Driven,
+    /// This Server's `focus` for a fork that has opened names the Thread
+    /// it was made from in `fork_of`; a Server without it sends that
+    /// `focus` with no `fork_of`.
+    ForkOf,
     #[serde(other)]
     Unknown,
 }
@@ -1335,9 +1339,13 @@ pub enum ServerMessage {
         action: crate::drive::Action,
     },
     /// An API caller asked the windows to land on this Thread
-    /// (`thread.focus`, ADR 0027).
+    /// (`thread.focus`, ADR 0027), or a fork has opened: `fork_of` names
+    /// the Thread it was made from, so the window that asked for it as a
+    /// side chat takes it there instead.
     Focus {
         thread: ThreadId,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        fork_of: Option<ThreadId>,
     },
     /// An API caller's toast (`notification.show`, ADR 0027).
     Notification {
@@ -2441,7 +2449,7 @@ pub fn welcome(
         generation: GENERATION,
         server,
         boot_id,
-        capabilities: vec![Capability::BrowserDispatch],
+        capabilities: vec![Capability::BrowserDispatch, Capability::ForkOf],
         error: (generation != GENERATION).then(|| WireError {
             code: ErrorCode::UnsupportedGeneration,
             message: format!("this server speaks generation {GENERATION}, not {generation}"),

@@ -111,7 +111,10 @@ impl Server {
     /// nothing for a window to show: nothing moves.
     pub(super) fn focus_project(&mut self, project: ProjectId) -> Option<ThreadId> {
         let thread = *self.threads_of(project).first()?;
-        self.say(ServerMessage::Focus { thread });
+        self.say(ServerMessage::Focus {
+            thread,
+            fork_of: None,
+        });
         Some(thread)
     }
 

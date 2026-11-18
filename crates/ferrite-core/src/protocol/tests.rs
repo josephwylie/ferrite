@@ -2342,6 +2342,28 @@ fn samples() -> Vec<(&'static str, Sample)> {
             "focus",
             Sample::Server(ServerMessage::Focus {
                 thread: ThreadId::new(7),
+                fork_of: None,
+            }),
+        ),
+        (
+            "focus_fork_of",
+            Sample::Server(ServerMessage::Focus {
+                thread: ThreadId::new(8),
+                fork_of: Some(ThreadId::new(7)),
+            }),
+        ),
+        (
+            "welcome_fork_of",
+            Sample::Server(ServerMessage::Welcome {
+                generation: 1,
+                server: ServerInfo {
+                    version: "0.9.0".into(),
+                    executable: "/Applications/Ferrite.app/Contents/MacOS/ferrite".into(),
+                },
+                boot_id: "b-1".into(),
+                capabilities: vec![Capability::BrowserDispatch, Capability::ForkOf],
+                error: None,
+                uptime_ms: Some(61_000),
             }),
         ),
         (

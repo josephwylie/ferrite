@@ -102,6 +102,7 @@ impl Server {
                 if result.is_ok() {
                     self.say(ServerMessage::Focus {
                         thread: params.thread,
+                        fork_of: None,
                     });
                 }
                 result
@@ -438,7 +439,10 @@ impl Server {
             self.execute(Op::Rename { thread, title })?;
         }
         if params.focus {
-            self.say(ServerMessage::Focus { thread });
+            self.say(ServerMessage::Focus {
+                thread,
+                fork_of: None,
+            });
         }
         Ok(thread)
     }

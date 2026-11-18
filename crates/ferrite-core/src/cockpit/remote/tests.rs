@@ -28,6 +28,27 @@ fn server_answering(
     drop_at: usize,
     reply: fn(&Op) -> Option<Result<Done, WireError>>,
 ) -> Receiver<Op> {
+    server_welcoming(store, drop_at, reply, |_| {
+        Some(protocol::welcome(1, server_info(), "b-1".into(), 0))
+    })
+}
+
+fn server_info() -> ServerInfo {
+    ServerInfo {
+        version: "0.9.0".into(),
+        executable: "/bin/ferrite".into(),
+    }
+}
+
+/// [`server_answering`], welcoming its `n`th connection (from 1) with
+/// what `welcome` makes of `n`, or with today's welcome when it makes
+/// nothing.
+fn server_welcoming(
+    store: &std::path::Path,
+    drop_at: usize,
+    reply: fn(&Op) -> Option<Result<Done, WireError>>,
+    welcome: fn(usize) -> Option<ServerMessage>,
+) -> Receiver<Op> {
     std::fs::create_dir_all(store).unwrap();
     let listener = link::listen(&link::address(store)).unwrap();
     let (took, taken) = mpsc::channel();
@@ -48,6 +69,7 @@ fn server_answering(
         });
         let mut connections = BTreeMap::new();
         let mut commands = 0;
+        let mut welcomed = 0;
         for heard in hear {
             match heard {
                 Heard::Joined(id, connection) => {
@@ -55,13 +77,11 @@ fn server_answering(
                 }
                 Heard::Message(id, ClientMessage::Hello { .. }) => {
                     let connection = &connections[&id];
-                    let info = ServerInfo {
-                        version: "0.9.0".into(),
-                        executable: "/bin/ferrite".into(),
-                    };
-                    connection
-                        .send(protocol::welcome(1, info, "b-1".into(), 0))
-                        .unwrap();
+                    welcomed += 1;
+                    let welcome = welcome(welcomed).unwrap_or_else(|| {
+                        protocol::welcome(1, server_info(), "b-1".into(), 0)
+                    });
+                    connection.send(welcome).unwrap();
                     connection
                         .send(ServerMessage::Snapshot(Snapshot {
                             boot_id: "b-1".into(),
@@ -145,6 +165,7 @@ fn unrelated_messages_do_not_extend_a_commands_reply_deadline() {
         while Instant::now() < until {
             send.send(ServerMessage::Focus {
                 thread: ThreadId::new(99),
+                fork_of: None,
             })
             .unwrap();
             std::thread::sleep(Duration::from_millis(10));
@@ -166,7 +187,7 @@ fn unrelated_messages_do_not_extend_a_commands_reply_deadline() {
     );
     assert!(remote.poll().iter().any(|arrival| matches!(
         arrival,
-        Arrival::Message(ServerMessage::Focus { thread }) if *thread == ThreadId::new(99)
+        Arrival::Message(ServerMessage::Focus { thread, .. }) if *thread == ThreadId::new(99)
     )));
     assert!(matches!(taken.try_recv(), Ok(Op::SettingsChanged)));
     assert!(taken.try_recv().is_err(), "a timed out command was resent");
@@ -256,6 +277,41 @@ fn an_answer_in_flight_across_a_disconnect_is_not_resent() {
         taken.recv_timeout(Duration::from_millis(300)).is_err(),
         "the answer was sent again"
     );
+    let _ = std::fs::remove_dir_all(&store);
+}
+
+/// A Server from before `Capability::ForkOf` is not taken to name a
+/// fork's owner, and a reconnect to one that does (restarted into a
+/// newer build) is.
+#[test]
+fn whether_the_server_names_fork_owners_is_learned_on_every_attach() {
+    let store = scratch("fork-of");
+    let taken = server_welcoming(&store, 1, |_| None, |n| {
+        (n == 1).then(|| ServerMessage::Welcome {
+            generation: 1,
+            server: server_info(),
+            boot_id: "b-1".into(),
+            capabilities: vec![protocol::Capability::BrowserDispatch],
+            error: None,
+            uptime_ms: Some(0),
+        })
+    });
+    let mut remote = remote(&store);
+    assert!(matches!(remote.state(), ServerState::Attached { .. }));
+    assert!(!remote.names_fork_owners(), "an older Server does not say it");
+
+    let _ = remote.execute(Op::Interrupt {
+        thread: ThreadId::new(1),
+    });
+    assert!(taken.recv_timeout(Duration::from_secs(5)).is_ok());
+    assert!(!remote.names_fork_owners(), "nor does a window with no Server");
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !matches!(remote.state(), ServerState::Attached { .. }) {
+        assert!(Instant::now() < deadline, "never attached again");
+        remote.poll();
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert!(remote.names_fork_owners(), "the newer Server says it");
     let _ = std::fs::remove_dir_all(&store);
 }
 

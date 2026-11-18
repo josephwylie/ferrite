@@ -215,6 +215,7 @@ fn focusing_a_coordinator_by_id_opens_its_projects_coordinator_tab(cx: &mut Test
         view.cockpit
             .fixture_task_alert(ferrite_core::protocol::ServerMessage::Focus {
                 thread: coordinator,
+                fork_of: None,
             });
         cx.notify();
     });
