@@ -429,6 +429,7 @@ pub struct CockpitView {
     /// the prompt or hands it back.
     held_sends: sends::HeldSends,
     tools: tools::Tools,
+    terminals: Entity<tools::TerminalsView>,
     agent_drills: agent_pane::AgentDrills,
     native_copy: Option<String>,
     nav_collapsed: bool,
@@ -1368,6 +1369,8 @@ impl CockpitView {
         let prs = cx.new(|cx| prs_view::PrsView::new(cockpit_weak.clone(), cx));
         cx.subscribe(&prs, Self::on_prs_event).detach();
         let side_chat = cx.new(|_| side_chat_view::SideChatView::new(cockpit_weak.clone()));
+        let terminals = cx.new(|_| tools::TerminalsView::new(cockpit_weak.clone()));
+        cx.subscribe(&terminals, Self::on_terminals_event).detach();
         let mut view = Self {
             cockpit,
             browsers: Default::default(),
@@ -1392,6 +1395,7 @@ impl CockpitView {
             side_chat,
             held_sends: Default::default(),
             tools: Default::default(),
+            terminals,
             agent_drills: Default::default(),
             native_copy: None,
             nav_filter: None,
@@ -8293,7 +8297,6 @@ impl CockpitView {
         // compares scalar keys first, so Composer edits repaint Cockpit chrome
         // without cloning or notifying any retained transcript entity.
         self.sync_visible_transcripts(cx);
-        self.tend_terminal(window, cx);
         self.tend_agent_drills(cx);
 
         // The `/`/`@` menu belongs to the focused Pane's Composer (#23):

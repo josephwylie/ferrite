@@ -84,6 +84,21 @@ that happened to touch it, and nothing in the code said whose a field was.
   The fork is a Thread of the engine, so asking for it, binding it when
   it lands and retiring it with its tab stay the root's, as does which
   Surface the Panel shows.
+- **The Terminal is the seventh.** `TerminalsView`
+  (`cockpit/tools/terminal.rs`) owns every Thread's shells in one view:
+  each tab's number and its shell or why it would not start, what the
+  `⋯` menu set, the shown shell's wait for the keyboard, and whether a
+  right-click found a selection. One view, not one per Thread: what the
+  `⋯` menu sets is the window's, not a Thread's. Each shell is
+  already an entity of its own, `ferrite-terminal`'s, which the view
+  hears. The Panel draws it as the body of whichever shell it shows, and
+  the view reads which that is with its inputs, so the root no longer
+  tends the shell's keyboard every frame. It emits `TerminalsEvent`:
+  Attach, a menu or the `⋯` Menu button, an address opened, Try again, a
+  shell ended. A shell starts in the Thread's folder, on the window's
+  machine, so the root hands the view both to start it with, and again
+  for Try again. Which Surface the Panel shows, its tabs and the
+  context menu stay the root's; the menu's rows it reads from the view.
 
 ## Precedent
 

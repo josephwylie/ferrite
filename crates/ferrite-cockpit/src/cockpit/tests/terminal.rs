@@ -1,4 +1,4 @@
-//! The Terminal Surface (`cockpit/tools/terminal.rs`): a shell per Panel
+//! The Terminal Surface (`cockpit/tools/terminal.rs`, `TerminalsView`): a shell per Panel
 //! tab in the Thread's folder, its menus, and `Attach as context`.
 use super::*;
 use crate::cockpit::surfaces::SurfaceId;
@@ -28,12 +28,24 @@ fn opened(view: &Entity<CockpitView>, cx: &mut gpui::VisualTestContext) {
 }
 
 fn numbers(view: &Entity<CockpitView>, thread: ThreadId, cx: &mut gpui::VisualTestContext) -> Vec<u64> {
-    view.read_with(cx, |view, _| view.terminal_numbers(thread))
+    view.read_with(cx, |view, cx| view.terminals.read(cx).numbers(thread))
+}
+
+/// The shell the Thread's Panel shows.
+fn shown_shell(
+    view: &Entity<CockpitView>,
+    thread: ThreadId,
+    cx: &mut gpui::VisualTestContext,
+) -> Option<Entity<ferrite_terminal::TerminalView>> {
+    view.read_with(cx, |view, cx| match view.active_surface(thread)? {
+        SurfaceId::Terminal(number) => view.terminals.read(cx).shell(thread, number),
+        _ => None,
+    })
 }
 
 /// Run `command` in the shown shell and wait for `needle` to be on screen.
 fn run(view: &Entity<CockpitView>, thread: ThreadId, command: &'static [u8], cx: &mut gpui::VisualTestContext) {
-    let shell = view.read_with(cx, |view, _| view.terminal_view(thread)).unwrap();
+    let shell = shown_shell(&view, thread, cx).unwrap();
     shell.update(cx, |shell, _| shell.write(command));
 }
 
@@ -72,7 +84,7 @@ fn a_local_shell_with_a_failed_exit_still_closes_its_tab(cx: &mut TestAppContext
 fn cmd_w_in_the_shell_closes_its_tab_not_the_thread(cx: &mut TestAppContext) {
     let (view, thread, cx) = window("terminal-cmd-w", cx);
     opened(&view, cx);
-    let shell = view.read_with(cx, |view, _| view.terminal_view(thread)).unwrap();
+    let shell = shown_shell(&view, thread, cx).unwrap();
     cx.update(|window, cx| window.focus(&shell.focus_handle(cx), cx));
     tick(cx);
     assert!(
@@ -161,12 +173,100 @@ fn the_more_menu_holds_claudes_four_rows(cx: &mut TestAppContext) {
     );
 }
 
+/// What the `⋯` menu sets is the window's: the menu shows it the next time
+/// it opens, whichever shell it opens over.
+#[gpui::test]
+fn a_more_menu_choice_shows_when_the_menu_opens_again(cx: &mut TestAppContext) {
+    let (view, thread, cx) = window("terminal-more-choice", cx);
+    opened(&view, cx);
+    let verbs = [
+        crate::cockpit::tools::TerminalVerb::ToggleBlink,
+        crate::cockpit::tools::TerminalVerb::ToggleCopyOnSelect,
+        crate::cockpit::tools::TerminalVerb::Cursor(ferrite_terminal::Cursor::Bar),
+        crate::cockpit::tools::TerminalVerb::Scrollback(1_000),
+    ];
+    cx.update(|window, cx| {
+        view.update(cx, |view, cx| {
+            for verb in verbs {
+                view.run_menu_verb(MenuTarget::TerminalMore(thread), MenuVerb::Terminal(verb), window, cx);
+            }
+        })
+    });
+    opened(&view, cx);
+    view.update(cx, |view, cx| {
+        view.open_context_menu(MenuTarget::TerminalMore(thread), gpui::point(px(1700.), px(60.)), cx)
+    });
+    let rows = view.read_with(cx, |view, _| {
+        view.context_menu()
+            .unwrap()
+            .rows
+            .iter()
+            .flatten()
+            .map(|(item, _)| (item.label.to_string(), item.checked, item.detail.as_ref().map(|d| d.to_string())))
+            .collect::<Vec<_>>()
+    });
+    assert_eq!(
+        rows,
+        [
+            ("Cursor style".into(), false, Some("Bar".into())),
+            ("Blink cursor".into(), false, None),
+            ("Copy on select".into(), true, None),
+            ("Scrollback".into(), false, Some("1,000 lines".into())),
+        ]
+    );
+}
+
+/// ⌘J back to a shell already open hands it the keyboard again.
+#[gpui::test]
+fn cmd_j_back_to_an_open_shell_gives_it_the_keyboard(cx: &mut TestAppContext) {
+    let (view, thread, cx) = window("terminal-cmd-j-focus", cx);
+    opened(&view, cx);
+    let shell = shown_shell(&view, thread, cx).unwrap();
+    view.update(cx, |view, cx| view.activate_surface(thread, &SurfaceId::Overview, cx));
+    let composer = view.read_with(cx, |view, cx| view.panes[0].composer.read(cx).focus_handle(cx));
+    cx.update(|window, cx| window.focus(&composer, cx));
+    tick(cx);
+    let shell_focused = |cx: &mut gpui::VisualTestContext| {
+        cx.update(|window, cx| shell.focus_handle(cx).is_focused(window))
+    };
+    assert!(!shell_focused(cx), "the Composer has the keyboard");
+    cx.simulate_keystrokes("cmd-j");
+    tick(cx);
+    tick(cx);
+    assert_eq!(panel_tabs(&view, thread, cx).1, Some(SurfaceId::Terminal(1)));
+    assert!(shell_focused(cx), "the shell took the keyboard");
+}
+
+/// A shell added from the `+` menu while another holds the keyboard has it
+/// before the next key: what is typed after the menu's `t` goes to the new
+/// shell, none of it to the Composer.
+#[gpui::test]
+fn a_shell_added_from_the_plus_menu_takes_the_next_key(cx: &mut TestAppContext) {
+    let (view, thread, cx) = window("terminal-plus-focus", cx);
+    cx.simulate_keystrokes("cmd-j");
+    tick(cx);
+    tick(cx);
+    let plus = cx.debug_bounds("panel-plus").expect("the +");
+    cx.simulate_click(plus.center(), gpui::Modifiers::none());
+    tick(cx);
+    cx.simulate_keystrokes("t");
+    assert_eq!(panel_tabs(&view, thread, cx).1, Some(SurfaceId::Terminal(2)), "t adds a shell");
+    cx.simulate_keystrokes("x");
+    let typed = view.read_with(cx, |view, cx| view.panes[0].composer.read(cx).text().to_string());
+    assert_eq!(typed, "", "the Composer did not take the letter");
+    let shell = shown_shell(&view, thread, cx).unwrap();
+    assert!(
+        cx.update(|window, cx| shell.focus_handle(cx).is_focused(window)),
+        "the new shell has the keyboard"
+    );
+}
+
 #[gpui::test]
 fn a_selection_offers_attach_and_attaches_as_a_reply_tile(cx: &mut TestAppContext) {
     let (view, thread, cx) = window("terminal-attach", cx);
     opened(&view, cx);
     run(&view, thread, b"echo attach-me\r", cx);
-    let shell = view.read_with(cx, |view, _| view.terminal_view(thread)).unwrap();
+    let shell = shown_shell(&view, thread, cx).unwrap();
     let until = std::time::Instant::now() + SHELL_LOST_AFTER;
     loop {
         tick(cx);
@@ -284,7 +384,7 @@ fn typed_reaches_in(
 fn keys_typed_after_the_door_opens_reach_the_shell(cx: &mut TestAppContext) {
     let (view, thread, cx) = window("terminal-keys", cx);
     opened(&view, cx);
-    let shell = view.read_with(cx, |view, _| view.terminal_view(thread)).unwrap();
+    let shell = shown_shell(&view, thread, cx).unwrap();
     tick(cx);
     // The `x` is deleted by Backspace; Enter runs the line.
     cx.simulate_keystrokes("e c h o space k e y 4 x backspace 2 enter");
@@ -309,7 +409,7 @@ fn keys_typed_after_the_door_opens_reach_the_shell(cx: &mut TestAppContext) {
 fn a_click_in_the_shell_takes_the_keyboard_back_from_the_composer(cx: &mut TestAppContext) {
     let (view, thread, cx) = window("terminal-click-focus", cx);
     opened(&view, cx);
-    let shell = view.read_with(cx, |view, _| view.terminal_view(thread)).unwrap();
+    let shell = shown_shell(&view, thread, cx).unwrap();
     // The Composer takes the keyboard.
     let composer = view.read_with(cx, |view, cx| view.panes[0].composer.read(cx).focus_handle(cx));
     cx.update(|window, cx| window.focus(&composer, cx));
@@ -335,7 +435,7 @@ fn a_panel_sliding_shut_gives_the_shell_no_keys(cx: &mut TestAppContext) {
     ferrite_ui::motion::testing::drive();
     let (view, thread, cx) = window("terminal-closing", cx);
     opened(&view, cx);
-    let shell = view.read_with(cx, |view, _| view.terminal_view(thread)).unwrap();
+    let shell = shown_shell(&view, thread, cx).unwrap();
     tick(cx);
     cx.simulate_keystrokes("e c h o space b e f o r e 1 enter");
     assert!(typed_reaches(&shell, "\nbefore1", cx), "the shell has the keyboard");
@@ -460,7 +560,7 @@ fn cmd_click_opens_what_the_shell_printed(cx: &mut TestAppContext) {
     #[cfg(windows)]
     let print = b"Clear-Host; 'http://localhost:5173/app', 'https://example.com/docs', 'src/main.rs:3'\r";
     run(&view, thread, print, cx);
-    let shell = view.read_with(cx, |view, _| view.terminal_view(thread)).unwrap();
+    let shell = shown_shell(&view, thread, cx).unwrap();
     assert!(typed_reaches(&shell, "docs\nsrc/main.rs:3", cx), "the shell printed the three");
     let at = cell(cx, 0, 12);
     cx.simulate_click(at, gpui::Modifiers::none());

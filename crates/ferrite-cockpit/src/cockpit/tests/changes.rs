@@ -129,8 +129,8 @@ fn the_menus_hold_what_the_spec_names_and_a_scope_rereads(cx: &mut TestAppContex
             ("Compare against".into(), false),
         ]
     );
-    let branches = view.read_with(cx, |view, _| {
-        view.context_submenu_rows_for_test(MenuTarget::ChangesScope(Diff::Changes(thread)), Submenu::Changes(ChangesSub))
+    let branches = view.read_with(cx, |view, cx| {
+        view.context_submenu_rows_for_test(MenuTarget::ChangesScope(Diff::Changes(thread)), Submenu::Changes(ChangesSub), cx)
     });
     assert!(!branches.is_empty(), "the checkout's branches");
     view.update(cx, |view, cx| view.run_changes_verb(Diff::Changes(thread), ChangesVerb::All, cx));

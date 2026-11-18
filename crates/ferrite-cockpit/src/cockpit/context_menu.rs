@@ -430,8 +430,8 @@ impl CockpitView {
             }
             MenuTarget::BrowserPage(thread) => rows = self.browser_page_rows(thread),
             MenuTarget::Details(_) => rows = self.details_menu_rows(),
-            MenuTarget::Terminal(_) => rows = self.terminal_context_rows(),
-            MenuTarget::TerminalMore(_) => rows = self.terminal_more_rows(),
+            MenuTarget::Terminal(_) => rows = self.terminals.read(cx).context_rows(),
+            MenuTarget::TerminalMore(_) => rows = self.terminals.read(cx).more_rows(),
             MenuTarget::SurfaceMenu(thread) => rows = self.surface_menu_rows(thread),
             MenuTarget::SurfaceTab { thread, at } => rows = self.surface_tab_rows(thread, at),
             MenuTarget::PrMore(target) => rows = self.pr_menu_rows(target),
@@ -579,7 +579,12 @@ impl CockpitView {
     }
 
     /// A submenu's rows (`Submenu`).
-    fn submenu_rows(&self, target: MenuTarget, kind: Submenu) -> Vec<(menu::Item, MenuVerb)> {
+    fn submenu_rows(
+        &self,
+        target: MenuTarget,
+        kind: Submenu,
+        cx: &gpui::App,
+    ) -> Vec<(menu::Item, MenuVerb)> {
         match (kind, target) {
             (Submenu::OpenIn, _) => vec![
                 (menu::Item::new("Finder"), MenuVerb::Reveal),
@@ -595,7 +600,7 @@ impl CockpitView {
                 self.changes_branch_rows(diff)
             }
             (Submenu::Changes(_), _) => Vec::new(),
-            (Submenu::Terminal(sub), _) => self.terminal_sub_rows(sub),
+            (Submenu::Terminal(sub), _) => self.terminals.read(cx).sub_rows(sub),
         }
     }
 
@@ -604,8 +609,9 @@ impl CockpitView {
         &self,
         target: MenuTarget,
         kind: Submenu,
+        cx: &gpui::App,
     ) -> Vec<(menu::Item, MenuVerb)> {
-        self.submenu_rows(target, kind)
+        self.submenu_rows(target, kind, cx)
     }
 
     /// Open row `parent`'s submenu beside it (a second press on the parent
@@ -614,7 +620,7 @@ impl CockpitView {
         let Some(target) = self.context_menu().map(|open| open.target) else {
             return;
         };
-        let rows = self.submenu_rows(target, kind);
+        let rows = self.submenu_rows(target, kind, cx);
         if let Some(open) = self.context_menu_mut() {
             if open.sub.as_ref().is_some_and(|(at, _)| *at == parent) {
                 return;

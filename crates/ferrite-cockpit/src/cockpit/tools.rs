@@ -4,7 +4,8 @@
 //! Thread's tools stay as they were left when focus moves away and back.
 //! Their chords, ⇧⌘F, ⇧⌘D and ⌘J, open their Surface through the Panel's
 //! one door (`upsert_surface`); pressed again they bring the same tab
-//! forward.
+//! forward. The Terminal keeps its shells in a view of its own
+//! (`TerminalsView`, ADR 0041); the others' state is still `Tools`, here.
 
 use std::collections::{HashMap, HashSet};
 
@@ -24,12 +25,6 @@ use super::*;
 pub(crate) struct Tools {
     files: HashMap<ThreadId, files::Files>,
     changes: HashMap<changes::Diff, changes::Changes>,
-    terminals: HashMap<ThreadId, terminal::Terminals>,
-    terminal_prefs: terminal::Prefs,
-    /// The shown shell is to take the keyboard (`tend_terminal`).
-    terminal_focus_wanted: bool,
-    /// Whether the shell's right-click found a selection.
-    terminal_selected: bool,
     /// Threads whose agent worked since the last sweep, so their checkout
     /// may have changed (`follow_workspace`).
     worked: HashSet<ThreadId>,
@@ -46,7 +41,7 @@ pub(crate) use save::SaveState;
 pub(crate) use files::{Sub as FilesSub, Verb as FilesVerb};
 #[cfg(test)]
 pub(crate) use tree::Status as FileStatus;
-pub(crate) use terminal::{Sub as TerminalSub, Verb as TerminalVerb};
+pub(crate) use terminal::{Sub as TerminalSub, TerminalsView, Verb as TerminalVerb};
 pub(crate) use working_set::WorkingSets;
 
 impl CockpitView {
@@ -93,7 +88,7 @@ impl CockpitView {
         match open {
             Some(id) => {
                 self.upsert_surface(thread, id, cx);
-                self.tools.terminal_focus_wanted = true;
+                self.terminals.update(cx, |terminals, _| terminals.want_focus());
             }
             None => self.new_terminal_surface(thread, cx),
         }
