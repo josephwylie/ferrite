@@ -405,6 +405,38 @@ fn the_side_chat_tab_shown_takes_the_keys(cx: &mut TestAppContext) {
     });
 }
 
+/// A side chat opened from the `+` menu has the keyboard before the next
+/// key: what is typed after the menu's `s` goes to its field, none of it to
+/// the Composer.
+#[gpui::test]
+fn a_side_chat_opened_from_the_plus_menu_takes_the_next_key(cx: &mut TestAppContext) {
+    let (view, _fake, cx) = answered("side-chat-plus-keys", cx);
+    let owner = owner(&view, cx);
+    view.update(cx, |view, cx| view.open_surface_menu(cx));
+    tick(cx);
+    cx.simulate_keystrokes("s");
+    assert_eq!(side_tabs(&view, owner, cx).len(), 1, "s opens a side chat");
+    cx.simulate_keystrokes("x");
+    assert_eq!(composer_text(&view, cx), "", "the Composer did not take the letter");
+    view.read_with(cx, |view, cx| {
+        assert_eq!(draft(view, owner, cx).as_deref(), Some("x"), "the side chat's field did");
+    });
+
+    // A second one, while the first holds the keyboard.
+    view.update(cx, |view, cx| view.open_surface_menu(cx));
+    tick(cx);
+    cx.simulate_keystrokes("s");
+    assert_eq!(side_tabs(&view, owner, cx).len(), 2, "s opens another");
+    cx.simulate_keystrokes("y");
+    assert_eq!(composer_text(&view, cx), "", "the Composer did not take the second letter");
+    view.read_with(cx, |view, cx| {
+        let first = field_of(view, owner, 0, cx).unwrap();
+        let second = field_of(view, owner, 1, cx).unwrap();
+        assert_eq!(first.read(cx).text(), "x", "the first field kept its own");
+        assert_eq!(second.read(cx).text(), "y", "the new field took the letter");
+    });
+}
+
 /// ⌘W in the field ends its side chat, not the Thread, and the fork goes.
 #[gpui::test]
 fn cmd_w_in_the_side_chat_field_ends_its_tab(cx: &mut TestAppContext) {
