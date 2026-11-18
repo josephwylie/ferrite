@@ -90,6 +90,13 @@ impl Control {
                     match listener.accept() {
                         Ok((stream, _)) => {
                             if active.load(Ordering::Relaxed) >= 8 {
+                                eprintln!("ferrite browser controller: refused a peer, eight are connected");
+                                continue;
+                            }
+                            // An accepted socket inherits the listener's non-blocking mode on
+                            // macOS and Windows, and `serve`'s timeouts only hold on a blocking one.
+                            if let Err(error) = stream.set_nonblocking(false) {
+                                eprintln!("ferrite browser controller: dropped a peer, {error}");
                                 continue;
                             }
                             active.fetch_add(1, Ordering::Relaxed);
@@ -211,6 +218,10 @@ impl Control {
         // the page. Disconnect; never continue using partially delivered state.
         let overflowed = self.overflow.swap(false, Ordering::Relaxed);
         if overflowed {
+            eprintln!(
+                "ferrite browser controller: closed {} peers, a message to the window was lost",
+                self.connections.len()
+            );
             for connection in self.connections.values() {
                 connection.output.stop.store(true, Ordering::Relaxed);
             }
@@ -614,7 +625,13 @@ fn serve(
         },
         Some(config),
     );
-    let Ok(mut socket) = socket else { return };
+    let mut socket = match socket {
+        Ok(socket) => socket,
+        Err(error) => {
+            eprintln!("ferrite browser controller: peer {id} failed its upgrade, {error}");
+            return;
+        }
+    };
     let _ = socket
         .get_mut()
         .set_read_timeout(Some(Duration::from_millis(10)));
@@ -627,6 +644,7 @@ fn serve(
         bytes: queued_bytes.clone(),
     };
     if send.try_send(Incoming::Open(id, output)).is_err() {
+        eprintln!("ferrite browser controller: dropped peer {id}, the window is behind");
         return;
     }
     while !stop.load(Ordering::Relaxed) && !peer_stop.load(Ordering::Relaxed) {
@@ -637,7 +655,8 @@ fn serve(
                 break;
             };
             queued_bytes.fetch_sub(value.len(), Ordering::Relaxed);
-            if socket.send(Message::Text(value)).is_err() {
+            if let Err(error) = socket.send(Message::Text(value)) {
+                eprintln!("ferrite browser controller: closed peer {id}, send failed, {error}");
                 peer_stop.store(true, Ordering::Relaxed);
                 let _ = send.try_send(Incoming::Closed(id));
                 return;
@@ -646,9 +665,11 @@ fn serve(
         match socket.read() {
             Ok(Message::Text(text)) => {
                 let Ok(value) = serde_json::from_str(&text) else {
+                    eprintln!("ferrite browser controller: closed peer {id}, its message is not JSON");
                     break;
                 };
                 if send.try_send(Incoming::Command(id, value)).is_err() {
+                    eprintln!("ferrite browser controller: closed peer {id}, the window is behind");
                     break;
                 }
             }
@@ -659,7 +680,11 @@ fn serve(
                     e.kind(),
                     std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
                 ) => {}
-            Err(_) => break,
+            Err(Error::ConnectionClosed | Error::AlreadyClosed) => break,
+            Err(error) => {
+                eprintln!("ferrite browser controller: closed peer {id}, read failed, {error}");
+                break;
+            }
         }
     }
     peer_stop.store(true, Ordering::Relaxed);
