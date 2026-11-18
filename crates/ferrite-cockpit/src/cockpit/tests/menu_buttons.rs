@@ -245,3 +245,22 @@ fn the_panels_plus_owns_its_menu(cx: &mut TestAppContext) {
     };
     no_faults(faults(&view, door, |_| {}, cx));
 }
+
+#[gpui::test]
+fn the_prs_more_owns_its_menu(cx: &mut TestAppContext) {
+    use crate::cockpit::panel::pr_read::PrTarget;
+    let (view, thread, _fake, cx) =
+        super::pr::with_pr("menu-button-pr-more", ferrite_core::protocol::WirePrState::Open, cx);
+    view.update(cx, |view, cx| view.open_pr_surface(thread, cx));
+    tick(cx);
+    let target = MenuTarget::PrMore(PrTarget::thread(thread, 48));
+    let door = Door {
+        button: "pr-more".into(),
+        target,
+        rows: view.read_with(cx, |view, cx| {
+            view.context_rows(target, cx).into_iter().flatten().map(|(item, _)| item.label.to_string()).collect()
+        }),
+        edge: Edge::Right,
+    };
+    no_faults(faults(&view, door, |_| {}, cx));
+}

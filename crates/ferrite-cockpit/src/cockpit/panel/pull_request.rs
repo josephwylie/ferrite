@@ -27,6 +27,7 @@ use super::pr_read::{Answer, PrFailure, PrRead, PrSource, PrTarget, stamp_age};
 use super::*;
 use crate::cockpit::menu_button::{Door, Edge};
 use crate::cockpit::surfaces::PrTab;
+use ferrite_ui::components::IconSize;
 use ferrite_core::protocol::{
     WireCheckStatus, WirePr, WirePrCommentKind, WirePrState, WirePrUnread,
 };
@@ -795,10 +796,13 @@ impl CockpitView {
         let more_semantics = Semantics::button("More pull request actions");
         let more_handle = self.panel_control(PanelControl::PrMore, more_semantics.clone(), cx);
         let more = self.doors().button(
-            controls::focusable(
-                ferrite_pane::preview::head_door("pr-more", "pr-more".into(), icons::ELLIPSIS),
+            controls::icon_stop(
+                "pr-more",
+                icons::ELLIPSIS,
+                IconSize::Standard,
                 &more_handle,
                 &more_semantics,
+                cx,
             ),
             pr_more_door(target),
             "More",

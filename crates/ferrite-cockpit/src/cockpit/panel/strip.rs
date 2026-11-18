@@ -21,6 +21,7 @@
 use super::*;
 use crate::cockpit::menu_button::{Door, Edge};
 use crate::cockpit::tab_scroll::{self, Side};
+use ferrite_ui::components::{IconSize, Tip as _};
 use ferrite_ui::icons::{self, icon};
 
 /// One row of the `+` menu and of "Open a surface", in T3's order.
@@ -344,21 +345,13 @@ impl CockpitView {
         };
         let semantics = Semantics::button(name);
         let handle = self.panel_control(PanelControl::Maximize, semantics.clone(), cx);
-        let maximize = controls::focusable(
-            ferrite_pane::preview::head_door(id, id.into(), glyph),
-            &handle,
-            &semantics,
-        )
-        .occlude()
-        .tooltip(ferrite_ui::menu::tooltip(if maximized {
-            "Restore panel size"
-        } else {
-            "Maximize panel"
-        }))
-        .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
-            cx.stop_propagation();
-            view.toggle_panel_maximized(thread, cx);
-        }));
+        let maximize = controls::icon_stop(id, glyph, IconSize::Standard, &handle, &semantics, cx)
+            .occlude()
+            .tip(name)
+            .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
+                cx.stop_propagation();
+                view.toggle_panel_maximized(thread, cx);
+            }));
         let scroll = &self.panel.tabs_scroll;
         scroll.settle(cx);
         let chevron = |side: Side| {

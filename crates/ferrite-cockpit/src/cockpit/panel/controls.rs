@@ -19,8 +19,10 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
 
+use ferrite_ui::components::{icon_button, IconSize};
+use gpui::component::button::Button;
 use gpui::prelude::*;
-use gpui::{FocusHandle, Role, SharedString, Window};
+use gpui::{App, FocusHandle, Role, SharedString, Window};
 
 use super::*;
 use crate::cockpit::surfaces::PrTab;
@@ -73,18 +75,36 @@ pub(in crate::cockpit) fn focusable<E: StatefulInteractiveElement>(
     handle: &FocusHandle,
     semantics: &Semantics,
 ) -> E {
-    let element = element
-        .track_focus(handle)
-        .tab_stop(true)
-        .key_context(ferrite_ui::keymap::PANEL_CONTROL)
-        .focus_visible(ferrite_ui::components::control_focus)
-        .capture_any_mouse_down(|_, window, _| window.prevent_default())
+    let element = stop(element, handle)
         .role(semantics.role)
         .aria_label(semantics.name.clone());
     match semantics.selected {
         Some(selected) => element.aria_selected(selected),
         None => element,
     }
+}
+
+/// A stop that is the shared icon button, named as `semantics` say; the
+/// button gives itself its role and name.
+pub(in crate::cockpit) fn icon_stop(
+    id: &'static str,
+    glyph: &'static str,
+    size: IconSize,
+    handle: &FocusHandle,
+    semantics: &Semantics,
+    cx: &App,
+) -> Button {
+    debug_assert_eq!(semantics.role, Role::Button);
+    stop(icon_button(id, glyph, size, semantics.name.clone(), cx), handle)
+}
+
+fn stop<E: InteractiveElement>(element: E, handle: &FocusHandle) -> E {
+    element
+        .track_focus(handle)
+        .tab_stop(true)
+        .key_context(ferrite_ui::keymap::PANEL_CONTROL)
+        .focus_visible(ferrite_ui::components::control_focus)
+        .capture_any_mouse_down(|_, window, _| window.prevent_default())
 }
 
 /// The stops drawn this frame and the keyboard's memory of them.
