@@ -401,6 +401,35 @@ fn the_plus_stays_in_view_past_overflowing_tabs(cx: &mut TestAppContext) {
     );
 }
 
+/// A chevron with nothing more its way keeps its slot but takes no press:
+/// at the strip's start the left one scrolls nothing, and once the strip
+/// has moved the same spot scrolls it back.
+#[gpui::test]
+fn a_spent_chevron_takes_no_press(cx: &mut TestAppContext) {
+    let (view, thread, cx) = solo("surfaces-spent-chevron", cx);
+    for at in 0..12 {
+        upsert(&view, thread, SurfaceId::File(format!("/tmp/spent-tab-{at}.rs").into()), cx);
+    }
+    view.update(cx, |view, cx| view.activate_surface(thread, &SurfaceId::Overview, cx));
+    tick(cx);
+    tick(cx);
+    let scrolled = |cx: &mut gpui::VisualTestContext| {
+        view.read_with(cx, |view, _| -f32::from(view.panel.tabs_scroll.offset().x))
+    };
+    let head = cx.debug_bounds("panel-head").expect("the Panel's head");
+    let left = gpui::point(head.left() + px(SURFACE_HEAD_PAD_L + 10.), head.center().y);
+    cx.simulate_click(left, gpui::Modifiers::none());
+    tick(cx);
+    assert_eq!(scrolled(cx), 0., "nothing to the left: the press scrolls nothing");
+    let right = cx.debug_bounds("panel-tabs-right").expect("more to the right");
+    cx.simulate_click(right.center(), gpui::Modifiers::none());
+    tick(cx);
+    assert!(scrolled(cx) > 0.);
+    cx.simulate_click(left, gpui::Modifiers::none());
+    tick(cx);
+    assert_eq!(scrolled(cx), 0., "live, the same spot scrolls it back");
+}
+
 /// With motion on, a chevron eases the strip to where it sends it (T3's
 /// smooth `scrollBy`) rather than jumping.
 #[gpui::test]
