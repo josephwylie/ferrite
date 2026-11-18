@@ -51,7 +51,7 @@ mod new_task_view;
 mod project_editor_view;
 mod settings_view;
 mod sheets;
-mod side_chat;
+mod side_chat_view;
 mod snooze;
 pub(crate) mod starts;
 mod surfaces;
@@ -424,7 +424,7 @@ pub struct CockpitView {
     /// Stable text-run identities; selection itself belongs to GPUI.
     selection: TranscriptText,
     /// Each Thread's side chat, the right pane's other body.
-    side_chats: side_chat::SideChats,
+    side_chats: side_chat_view::SideChats,
     /// Drafts sent while a Session was starting, kept whole until it takes
     /// the prompt or hands it back.
     held_sends: sends::HeldSends,
