@@ -953,12 +953,6 @@ pub const VIEW_TITLE_MIN_W: f32 = 40.0;
 pub const HEAD_CHEVRON: f32 = 14.0;
 pub const HEAD_CHEVRON_GAP: f32 = 4.0;
 pub const HEAD_ENV_GROUND: u32 = 0x8cb9f41f;
-/// The history arrows (Claude's `‹ ›`, claude/answer-done.png x 126 and
-/// 153), at `HISTORY_X` in the head row: `ICON_BUTTON` doors edge to edge, a 28pt pitch, the glyph
-/// `ICON_BUTTON_GLYPH`. At an end the arrow is disabled in `INK_SUBTLE`:
-/// Claude's disabled arrow is 0.6 of its live one (#7a777a by #ccc9cb), as
-/// `INK_SUBTLE` is of the doors' `INK_STRONG`.
-pub const HISTORY_ARROW_DISABLED_INK: u32 = INK_SUBTLE;
 /// The title-bar tools at the row's right end (Claude's panel, terminal,
 /// diff, preview, files, `⋯`): `ICON_BUTTON` doors 4 apart, Claude's 32pt
 /// pitch (claude/answer-done.png x 1738–1898), the panel toggle the last.
@@ -974,6 +968,9 @@ pub const TRAFFIC_X: f32 = 13.0;
 pub const TRAFFIC_Y: f32 = (WIN_CHROME_H - 14.0) / 2.0;
 /// The traffic-light group's width: three 14px buttons 6 apart.
 pub const TRAFFIC_W: f32 = 3.0 * 14.0 + 2.0 * 6.0;
+/// The history arrows (Claude's `‹ ›`, claude/answer-done.png x 126 and
+/// 153), at `HISTORY_X` in the head row: `ICON_BUTTON` doors edge to edge,
+/// a 28pt pitch, the glyph `ICON_BUTTON_GLYPH`.
 pub const HISTORY_X: f32 = TRAFFIC_X + TRAFFIC_W + SPACE_2;
 /// The Pane board: 8px gap on both axes, 10px padding on all four sides.
 /// (The prototype's own render reserves 58px at the bottom for its

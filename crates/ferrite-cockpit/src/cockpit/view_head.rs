@@ -508,9 +508,8 @@ impl CockpitView {
 }
 
 /// One history arrow: an icon button pressing `step` while there is
-/// somewhere to go, else its glyph in `HISTORY_ARROW_DISABLED_INK` with no
-/// hover and no press. The tooltip shows either way, so the chord is learnt
-/// at the ends too.
+/// somewhere to go, disabled at its end. The tooltip shows either way, so
+/// the chord is learnt at the ends too.
 fn history_arrow(
     key: &'static str,
     glyph: &'static str,
@@ -520,26 +519,14 @@ fn history_arrow(
     step: impl Fn(&ClickEvent, &mut Window, &mut gpui::App) + 'static,
     cx: &gpui::App,
 ) -> AnyElement {
-    if enabled {
-        return icon_button(key, glyph, IconSize::Standard, label, cx)
-            .tip_with_key(label, bound_chord(action))
-            .on_click(step)
-            .into_any_element();
-    }
-    div()
-        .id(key)
-        .debug_selector(move || key.into())
-        .flex()
-        .flex_shrink_0()
-        .items_center()
-        .justify_center()
-        .size(px(theme::ICON_BUTTON))
-        .child(ferrite_ui::icons::icon(
-            glyph,
-            theme::ICON_BUTTON_GLYPH,
-            theme::HISTORY_ARROW_DISABLED_INK,
-        ))
-        .tooltip(ferrite_ui::menu::action_tooltip(label, action))
+    let state = if enabled {
+        IconState::Plain
+    } else {
+        IconState::Disabled(None)
+    };
+    icon_button_as(key, glyph, IconSize::Standard, label, state, cx)
+        .tip_with_key(label, bound_chord(action))
+        .on_click(step)
         .into_any_element()
 }
 
