@@ -122,7 +122,6 @@ pub(super) fn click(window:&mut Window,cx:&mut App,selector:&str)->bool {
 }
 fn drag(window:&mut Window,cx:&mut App,from:gpui::Point<gpui::Pixels>,to:gpui::Point<gpui::Pixels>) {
     let modifiers=Modifiers::default();
-    super::trace_input("driver-drag",(from,to));
     window.dispatch_event(PlatformInput::MouseMove(MouseMoveEvent{position:from,pressed_button:None,modifiers}),cx);
     window.dispatch_event(PlatformInput::MouseDown(MouseDownEvent{position:from,button:MouseButton::Left,modifiers,click_count:1,first_mouse:false}),cx);
     for step in 1..=8 {
@@ -144,13 +143,14 @@ fn press(window:&mut Window,cx:&mut App,key:gpui::Keystroke) {
     // The page counts a key held until its release as operator input.
     window.dispatch_event(PlatformInput::KeyUp(gpui::KeyUpEvent{keystroke:key}),cx);
 }
-pub(super) fn history(view:&Entity<CockpitView>,window:&mut Window,cx:&mut App,output:&Path,stage:&mut u8)->Result<bool,String> {
+pub(super) fn history(view:&Entity<CockpitView>,window:&mut Window,cx:&mut App,output:&Path,stage:&mut u8,frames:u64)->Result<bool,String> {
     let expected:Vec<Annotation>=serde_json::from_slice(&std::fs::read(std::env::var_os("FERRITE_BROWSER_WINDOW_EXPECTED_ANNOTATIONS").ok_or("missing original annotation evidence")?).map_err(|e|e.to_string())?).map_err(|e|e.to_string())?;
     let original:serde_json::Value=serde_json::from_slice(&std::fs::read(output.parent().ok_or("missing original output directory")?.join("window-result.json")).map_err(|e|e.to_string())?).map_err(|e|e.to_string())?;
     let owning_thread:ferrite_core::ThreadId=serde_json::from_value(original["scenario_thread"].clone()).map_err(|e|e.to_string())?;
     // History follows the drawn Thread; a fresh Codex Thread is not the
-    // imported Thread initially focused by the restarted window.
-    view.update(cx,|view,cx|view.focus_thread(owning_thread,cx));
+    // imported Thread initially focused by the restarted window. Once only:
+    // focus_thread also leaves whatever destination is open.
+    if *stage==0 { view.update(cx,|view,cx|view.focus_thread(owning_thread,cx)); }
     let restored=std::iter::once(&owning_thread).find_map(|thread| {
         let mirror=view.read(cx).cockpit.thread(*thread)?;
         let annotations:Vec<_>=mirror.transcript().blocks().iter().filter_map(|block| {
@@ -164,7 +164,6 @@ pub(super) fn history(view:&Entity<CockpitView>,window:&mut Window,cx:&mut App,o
         let directory=annotation.original().ok_or("missing retained screenshot")?.parent().and_then(Path::parent).ok_or("missing retained image directory")?;
         ferrite_core::browser_annotations::read_retained(directory,annotation.original_hash().ok_or("missing retained screenshot hash")?).map_err(|e|e.to_string())?;
     }
-    view.update(cx,|view,cx|view.focus_thread(thread,cx));
     window.draw(cx).clear(cx);
     if *stage==0 {
         let state=view.update(cx,|view,_|view.cockpit.browser_attach(thread)).map_err(|e|e.to_string())?;
@@ -173,8 +172,9 @@ pub(super) fn history(view:&Entity<CockpitView>,window:&mut Window,cx:&mut App,o
         if click(window,cx,"review-browser-annotation-0") { *stage=1; }
         return Ok(false);
     }
-    if window.debug_bounds("browser-annotation-review").is_none() { return Ok(false); }
     let image=window.render_to_image().map_err(|e|e.to_string())?;
+    if frames%20==0 { image.save(output.join("window-current.png")).map_err(|e|e.to_string())?; }
+    if window.debug_bounds("browser-annotation-review").is_none() { return Ok(false); }
     if image.pixels().filter(|pixel|pixel.0[..3]==[23,173,91]).count()<200 { return Ok(false); }
     image.save(output.join("annotation-history-review.png")).map_err(|e|e.to_string())?;
     Ok(true)

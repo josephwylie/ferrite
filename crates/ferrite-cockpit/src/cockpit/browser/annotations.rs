@@ -147,8 +147,6 @@ impl CockpitView {
         window.focus(&focus, cx);
         manual.borrow_mut().protect_local();
         manual.borrow_mut().capture_pause(true);
-        #[cfg(feature = "browser-smoke")]
-        crate::cockpit::browser_smoke::trace_input("annotation-start", document);
         let protected = self
             .cockpit
             .browser_input(thread, owner, document)

@@ -589,10 +589,7 @@ impl CockpitView {
                         }
                         continue;
                     }
-                    let answer = self.cockpit.browser_input(thread, owner, document);
-                    #[cfg(feature = "browser-smoke")]
-                    super::browser_smoke::trace_input("page-input", (sequence, &input, &answer));
-                    match answer {
+                    match self.cockpit.browser_input(thread, owner, document) {
                         Ok(revision) => {
                             page.manual
                                 .borrow_mut()
@@ -796,8 +793,6 @@ impl CockpitView {
                     scale: 1.,
                 },
                 Rc::new(move |input| {
-                    #[cfg(feature = "browser-smoke")]
-                    super::browser_smoke::trace_input("page", &input);
                     if matches!(input, Input::Leave) {
                         // Lifecycle Leave cancels, never begins, intervention.
                         let settled = input_manual.borrow_mut().finish();
