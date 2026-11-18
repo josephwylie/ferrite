@@ -224,6 +224,21 @@ fn the_filter_narrows_the_files_listed(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
+fn a_press_on_the_filter_keeps_the_keys_typed_there(cx: &mut TestAppContext) {
+    let (view, thread, cx) = window("changes-filter-typed", cx);
+    opened(&view, thread, cx);
+    let filter = cx.debug_bounds("changes-filter").expect("the filter is drawn");
+    cx.simulate_click(filter.center(), gpui::Modifiers::none());
+    tick(cx);
+    cx.simulate_input("b.rs");
+    tick(cx);
+    let field = view.read_with(cx, |view, _| view.changes_filter(Diff::Changes(thread)).unwrap());
+    let composer = view.read_with(cx, |view, _| view.panes[0].composer.clone());
+    assert_eq!(composer.read_with(cx, |composer, _| composer.text().to_string()), "");
+    assert_eq!(field.read_with(cx, |field, _| field.text().to_string()), "b.rs");
+}
+
+#[gpui::test]
 fn the_stage_button_moves_a_file_into_and_out_of_the_index(cx: &mut TestAppContext) {
     let (view, thread, cx) = window("changes-stage", cx);
     let repo = std::env::temp_dir().join(format!("ferrite-view-{}-changes-stage", std::process::id())).join("repo");
