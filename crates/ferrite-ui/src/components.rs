@@ -147,6 +147,35 @@ impl Tip for Button {
     }
 }
 
+/// A button that opens a menu opens it as the pointer goes down, as a
+/// macOS pull-down does, and from Enter or Space when it has focus. `open`
+/// gets where: the pointer, or the button's bottom-left corner.
+pub trait MenuPress: Sized {
+    fn on_menu_press(
+        self,
+        open: impl Fn(&gpui::Point<gpui::Pixels>, &mut Window, &mut App) + 'static,
+    ) -> Self;
+}
+
+impl MenuPress for Button {
+    fn on_menu_press(
+        mut self,
+        open: impl Fn(&gpui::Point<gpui::Pixels>, &mut Window, &mut App) + 'static,
+    ) -> Self {
+        let open = std::rc::Rc::new(open);
+        let keyed = open.clone();
+        self.interactivity()
+            .on_mouse_down(gpui::MouseButton::Left, move |event, window, cx| {
+                open(&event.position, window, cx)
+            });
+        self.on_click(move |event, window, cx| {
+            if let gpui::ClickEvent::Keyboard(_) = event {
+                keyed(&event.position(), window, cx);
+            }
+        })
+    }
+}
+
 /// A form action: nothing at rest, `paint::HOVER` under the pointer
 /// (blended), `paint::PRESS` pressed.
 pub fn form_button(id: impl Into<ElementId>, cx: &App) -> Button {
@@ -2662,5 +2691,53 @@ mod tests {
         }
         assert_eq!(presses.get(), 3, "Enter and Space each press it once");
         assert_eq!(keyed.get(), 2);
+    }
+
+    /// A menu's icon button opens it as the pointer goes down, once for the
+    /// whole press, and from Enter at its bottom-left corner.
+    #[gpui::test]
+    fn a_menu_button_opens_on_the_press_down_and_from_enter(cx: &mut gpui::TestAppContext) {
+        use std::{cell::RefCell, rc::Rc};
+
+        use gpui::{Modifiers, MouseButton, Pixels, Point};
+
+        type Opened = Rc<RefCell<Vec<Point<Pixels>>>>;
+        struct Bar(Opened);
+        impl gpui::Render for Bar {
+            fn render(&mut self, _: &mut Window, cx: &mut gpui::Context<Self>) -> impl IntoElement {
+                let opened = self.0.clone();
+                div().tab_group().p(px(10.)).child(
+                    icon_button("menu-under-test", icons::FACTORY, IconSize::Standard, "Factory", cx)
+                        .on_menu_press(move |at, _, _| opened.borrow_mut().push(*at)),
+                )
+            }
+        }
+
+        cx.update(theme::init_components);
+        let opened: Opened = Rc::default();
+        let (_, cx) = cx.add_window_view({
+            let opened = opened.clone();
+            move |_, _| Bar(opened)
+        });
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+        let button = cx.debug_bounds("menu-under-test").expect("the button");
+        cx.simulate_mouse_down(button.center(), MouseButton::Left, Modifiers::none());
+        assert_eq!(*opened.borrow(), vec![button.center()], "open on the press down");
+        cx.simulate_mouse_up(button.center(), MouseButton::Left, Modifiers::none());
+        assert_eq!(opened.borrow().len(), 1, "the release opens nothing more");
+
+        cx.update(|window, cx| {
+            window.focus_next(cx);
+            window.draw(cx).clear(cx);
+        });
+        let enter = gpui::Keystroke::parse("enter").unwrap();
+        cx.simulate_event(gpui::KeyDownEvent {
+            keystroke: enter.clone(),
+            is_held: false,
+            prefer_character_input: false,
+        });
+        cx.simulate_event(gpui::KeyUpEvent { keystroke: enter });
+        assert_eq!(opened.borrow().len(), 2, "Enter opens it");
+        assert_eq!(opened.borrow()[1], button.bottom_left());
     }
 }
