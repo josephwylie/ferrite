@@ -1175,21 +1175,9 @@ impl CockpitView {
                     .child(SharedString::from(format!("\u{2212}{}", file.removed)))
             }));
         // A door of this file's head, its key naming the file's row.
-        let door = |key: String, glyph: &'static str, tip: &'static str, ink: u32| {
-            let id = SharedString::from(key);
-            let selector = id.to_string();
-            div()
-                .id(id.clone())
-                .debug_selector(move || selector.clone())
-                .flex()
-                .flex_shrink_0()
-                .items_center()
-                .justify_center()
-                .size(px(ICON_BUTTON))
-                .rounded(px(R_CONTROL))
-                .hover_control(id)
-                .child(icons::icon(glyph, ICON_BUTTON_GLYPH, ink))
-                .tooltip(ferrite_ui::menu::tooltip(tip))
+        let door = |key: String, glyph: &'static str, tip: &'static str, state: IconState| {
+            use ferrite_ui::components::{icon_button_as, IconSize, Tip as _};
+            icon_button_as(key, glyph, IconSize::Standard, tip, state, cx).tip(tip)
         };
         let head = div()
             .id(SharedString::from(format!("changes-file-{at}")))
@@ -1240,7 +1228,7 @@ impl CockpitView {
                             icons::PLUS
                         },
                         if file.staged { "Unstage" } else { "Stage" },
-                        if file.staged { GREEN } else { INK_SUBTLE },
+                        if file.staged { IconState::Done } else { IconState::Plain },
                     )
                     .on_click(cx.listener(
                         move |view, _: &ClickEvent, _, cx| {
@@ -1263,7 +1251,7 @@ impl CockpitView {
                     } else {
                         "Mark as reviewed"
                     },
-                    if reviewed { GREEN } else { INK_SUBTLE },
+                    if reviewed { IconState::Done } else { IconState::Plain },
                 )
                 .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
                     cx.stop_propagation();
@@ -1276,7 +1264,7 @@ impl CockpitView {
                         format!("changes-open-{at}"),
                         icons::EXTERNAL,
                         "Open file",
-                        INK_SUBTLE,
+                        IconState::Plain,
                     )
                     .on_click(cx.listener(
                         move |view, _: &ClickEvent, _, cx| {
