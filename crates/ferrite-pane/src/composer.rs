@@ -694,7 +694,8 @@ impl Composer {
     }
 
     /// Replace everything the Composer holds with `content`, as it was
-    /// saved.
+    /// saved. Undo starts from it: a saved draft is not an edit to take
+    /// back.
     pub fn load(&mut self, content: DraftContent, cx: &mut Context<Self>) {
         self.review = CommentStore::new();
         for note in content.review.clone() {
@@ -707,6 +708,7 @@ impl Composer {
             .map(SharedString::from)
             .collect();
         self.put(content, cx);
+        self.line.forget_edits();
     }
 
     /// Replace the line, files, replies and annotations with those of
@@ -2750,6 +2752,31 @@ mod tests {
                 "field text must never become attachments"
             );
         });
+    }
+
+    /// A saved draft loaded into a Composer is where its edits start:
+    /// cmd-z right after leaves it whole, and takes back what is typed
+    /// next without going past the draft.
+    #[gpui::test]
+    fn a_loaded_draft_is_not_an_edit_undo_takes_back(cx: &mut TestAppContext) {
+        let (host, cx) = host(cx);
+        let composer = composer(&host, cx);
+        composer.update(cx, |composer, cx| {
+            composer.load(
+                DraftContent {
+                    text: "fix the tests".into(),
+                    ..DraftContent::default()
+                },
+                cx,
+            )
+        });
+        cx.dispatch_action(Undo);
+        composer.read_with(cx, |composer, _| assert_eq!(composer.text(), "fix the tests"));
+        cx.simulate_input("!");
+        composer.read_with(cx, |composer, _| assert_eq!(composer.text(), "fix the tests!"));
+        cx.dispatch_action(Undo);
+        cx.dispatch_action(Undo);
+        composer.read_with(cx, |composer, _| assert_eq!(composer.text(), "fix the tests"));
     }
 
     #[gpui::test]

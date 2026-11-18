@@ -136,10 +136,16 @@ impl Line {
     pub fn take(&mut self) -> String {
         self.place(0);
         self.atoms.clear();
+        self.forget_edits();
+        std::mem::take(&mut self.content)
+    }
+
+    /// Start undo here: what the line holds now is not an edit to take
+    /// back.
+    pub fn forget_edits(&mut self) {
         self.undo.clear();
         self.redo.clear();
         self.typing = false;
-        std::mem::take(&mut self.content)
     }
 
     /// A hard line break at the caret — what shift-enter types. It is
