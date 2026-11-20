@@ -530,7 +530,7 @@ impl CockpitView {
                 }
             })
             .map(|tab| controls::focusable(tab, &handle, &semantics))
-            .child(self.measured(control))
+            .child(self.panel.focus.measured(control))
             .child(close)
             .child(
                 div()
@@ -586,7 +586,7 @@ impl CockpitView {
         let plus =
             controls::icon_stop("panel-plus", icons::PLUS, IconSize::Compact, &handle, &semantics, cx)
                 .occlude()
-                .child(self.measured(PanelControl::Plus));
+                .child(self.panel.focus.measured(PanelControl::Plus));
         self.doors()
             .button(plus, plus_door(thread), "Open a surface", cx)
             .into_any_element()

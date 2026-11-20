@@ -217,6 +217,20 @@ impl PanelFocus {
         self.drawn.borrow().len()
     }
 
+    /// An element's size as `control`'s, to hang its menu from: laid over
+    /// the stop, which stands `relative`.
+    pub(in crate::cockpit) fn measured(self: &Rc<Self>, control: PanelControl) -> impl IntoElement {
+        let focus = self.clone();
+        gpui::canvas(
+            move |at, _, _| {
+                focus.bounds.borrow_mut().insert(control.clone(), at);
+            },
+            |_, _, _, _| {},
+        )
+        .absolute()
+        .size_full()
+    }
+
     /// A deleted Thread's stop is no longer remembered.
     pub(crate) fn retain_threads(&self, keep: impl Fn(ThreadId) -> bool) {
         self.remembered.borrow_mut().retain(|thread, _| keep(*thread));
@@ -570,17 +584,4 @@ impl CockpitView {
         self.open_context_menu_at(target, at, gpui::Anchor::TopLeft, None, cx);
     }
 
-    /// An element's size as `control`'s, to hang its menu from: laid over
-    /// the stop, which stands `relative`.
-    pub(super) fn measured(&self, control: PanelControl) -> impl IntoElement {
-        let focus = self.panel.focus.clone();
-        gpui::canvas(
-            move |at, _, _| {
-                focus.bounds.borrow_mut().insert(control.clone(), at);
-            },
-            |_, _, _, _| {},
-        )
-        .absolute()
-        .size_full()
-    }
 }

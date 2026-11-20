@@ -785,7 +785,7 @@ impl CockpitView {
                     .hover(|link| link.underline())
                     .tooltip(ferrite_ui::menu::tooltip("Open on GitHub"))
                     .map(|link| controls::focusable(link, &number_handle, &number_semantics))
-                    .child(self.measured(PanelControl::PrNumber))
+                    .child(self.panel.focus.measured(PanelControl::PrNumber))
                     .child(SharedString::from(format!("#{number}")))
                     .child(icon(icons::EXTERNAL, PR_LINK_GLYPH, INK_SUBTLE))
                     .on_click(move |_: &ClickEvent, _, cx| {
