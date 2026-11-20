@@ -41,7 +41,7 @@ mod sections;
 mod strip;
 pub(in crate::cockpit) mod controls;
 
-use super::surfaces::{Close, CloseSelection, Restart, SurfaceAction, SurfaceId, Surfaces, ThreadSurfaces};
+use super::surfaces::{Close, CloseSelection, PrTab, Restart, SurfaceAction, SurfaceId, Surfaces, ThreadSurfaces};
 use ferrite_ui::icons::{self, icon};
 use super::*;
 
@@ -475,13 +475,18 @@ impl CockpitView {
     }
 
     /// Once per frame, before anything measures the board: tend the
-    /// previews (`tend_previews`), disarm a Merge no longer in view, give
-    /// the shown Surface what it needs to draw.
+    /// previews (`tend_previews`), disarm a Merge no longer in view, read
+    /// the diff of the PRs' open PR once Code shows, give the shown
+    /// Surface what it needs to draw.
     pub(super) fn tend_panel(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.tend_previews(window, cx);
         self.tend_prose_find(window);
         let shown = self.shown_pr();
         self.pull_request.update(cx, |reader, _| reader.disarm_unless(shown));
+        let board = self.prs.read(cx).open();
+        if let Some((target, PrTab::Code)) = board {
+            self.ensure_diff(tools::Diff::PullRequest(target), cx);
+        }
         self.panel.window_w = f32::from(window.viewport_size().width);
         self.tend_tab_pick(window, cx);
         if let Some(thread) = self

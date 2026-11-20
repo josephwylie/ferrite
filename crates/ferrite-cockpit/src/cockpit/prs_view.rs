@@ -919,12 +919,18 @@ impl PrsView {
     }
 }
 
+impl PrsView {
+    /// The PR whose detail shows, and the view of it chosen.
+    pub(super) fn open(&self) -> Option<(PrTarget, PrTab)> {
+        self.project
+            .zip(self.detail.then_some(self.selected).flatten())
+            .map(|(project, number)| (PrTarget::project(project, number), self.tab))
+    }
+}
+
 impl Render for PrsView {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let open = self
-            .project
-            .zip(self.detail.then_some(self.selected).flatten())
-            .map(|(project, number)| (PrTarget::project(project, number), self.tab));
+        let open = self.open();
         match self
             .cockpit
             .update(cx, |cockpit, cx| cockpit.prs_inputs(open, cx))

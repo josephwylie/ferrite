@@ -134,7 +134,10 @@ that happened to touch it, and nothing in the code said whose a field was.
   from another checkout or machine; a stage's answer asks for the read
   after it. Which diff a Surface shows and making it as it opens stay the
   root's, as does the context menu; the menu's rows it reads from the
-  view.
+  view. A Thread's diffs, its pull requests' included, go with the
+  Thread, as a closed tab keeps its state. The root reads the diff of
+  the PRs' open PR as soon as Code shows, so a PR opened on Code never
+  draws an empty view. A Project's pull request diffs are not freed yet.
 
 ## Precedent
 
