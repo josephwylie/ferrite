@@ -86,8 +86,8 @@ fn title(
     thread: ThreadId,
     cx: &mut gpui::VisualTestContext,
 ) -> Option<String> {
-    view.read_with(cx, |view, _| {
-        view.pr_snapshot(thread).map(|pr| pr.title.clone())
+    view.read_with(cx, |view, cx| {
+        view.pr_snapshot(thread, cx).map(|pr| pr.title.clone())
     })
 }
 
@@ -338,8 +338,8 @@ fn refresh_pr_status_rereads_the_open_tab(cx: &mut TestAppContext) {
         .answer(read_of(changed));
     tick(cx);
 
-    let (checks, comments) = view.read_with(cx, |view, _| {
-        let pr = view.pr_snapshot(thread).unwrap();
+    let (checks, comments) = view.read_with(cx, |view, cx| {
+        let pr = view.pr_snapshot(thread, cx).unwrap();
         (pr.checks[0].status, pr.comments.len())
     });
     assert_eq!(checks, ferrite_core::protocol::WireCheckStatus::Success);
@@ -356,5 +356,5 @@ fn a_wrong_number_never_replaces_the_requested_pr(cx: &mut TestAppContext) {
     until(cx, |cx| cx.debug_bounds("pr-failed").is_some());
     assert!(tab_open(&view, thread, 48, cx));
     assert!(cx.debug_bounds("pr-body").is_none());
-    assert!(view.read_with(cx, |view, _| view.pr_snapshot(thread).is_none()));
+    assert!(view.read_with(cx, |view, cx| view.pr_snapshot(thread, cx).is_none()));
 }

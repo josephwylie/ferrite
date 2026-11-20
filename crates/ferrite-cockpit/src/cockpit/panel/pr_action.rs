@@ -24,8 +24,9 @@ use ferrite_core::protocol::{WireMerge, WirePr, WirePrState};
 use gpui::{ClipboardItem, Context};
 
 use super::pr_read::{PrRead, PrSource, PrTarget};
-use super::pull_request::PrAction;
+use super::pull_request::{PrAction, PrEvent, PullRequestView};
 use crate::cockpit::{CockpitView, Handoff};
+use ferrite_core::cockpit::ThreadView;
 use ferrite_core::transcript::Body;
 
 /// The queue entry an action waits as.
@@ -118,15 +119,9 @@ impl PrActions {
         );
     }
 
-    /// Forget the targets of Threads that are gone.
-    pub(crate) fn retain_threads(
-        &mut self,
-        known: &std::collections::HashSet<ferrite_core::ThreadId>,
-    ) {
-        self.0.retain(|target, _| match target.source {
-            PrSource::Thread(thread) => known.contains(&thread),
-            PrSource::Project(_) => true,
-        });
+    /// Keep only the targets `keep` holds to.
+    pub(crate) fn retain(&mut self, keep: impl Fn(&PrTarget) -> bool) {
+        self.0.retain(|target, _| keep(target));
     }
 
     /// A finished action's line goes when its PR's view changes.
@@ -240,6 +235,27 @@ impl PrAction {
     }
 }
 
+/// The id the newest queued prompt of this text goes by (the queue lists
+/// newest first).
+fn queued_as(open: Option<&ThreadView>, prompt: &str) -> Option<String> {
+    open?
+        .queue()
+        .iter()
+        .find(|item| item.text.trim() == prompt.trim())
+        .map(|item| item.id.clone())
+}
+
+/// How many prompts of this text the Thread's transcript holds.
+fn prompts_of(open: Option<&ThreadView>, prompt: &str) -> usize {
+    open.map_or(0, |open| {
+        open.transcript()
+            .blocks()
+            .iter()
+            .filter(|block| matches!(&block.body, Body::Prompt(text) if text.trim() == prompt.trim()))
+            .count()
+    })
+}
+
 impl CockpitView {
     /// A row of the `⋯`, the primary action or a view's button, on
     /// `target`'s PR: copy, add it to the current composer, or ask the Thread's
@@ -253,7 +269,7 @@ impl CockpitView {
         let PrSource::Thread(thread) = target.source else {
             return;
         };
-        let Some(pr) = self.panel.pr_reads.snapshot(target).cloned() else {
+        let Some(pr) = self.pull_request.read(cx).snapshot(target).cloned() else {
             return;
         };
         match action {
@@ -279,142 +295,227 @@ impl CockpitView {
                 cx.notify();
             }
             _ => {
-                if self.panel.pr_actions.pending(target) {
+                if !self
+                    .pull_request
+                    .update(cx, |reader, cx| reader.may_hand_off(target, action, &pr, cx))
+                {
                     return;
                 }
-                if let Some(why) = action.blocked_by(&pr) {
-                    self.panel.pr_actions.fail(target, action, why);
-                    cx.notify();
-                    return;
-                }
-                let (Some(prompt), Some(index)) = (action.prompt(&pr), self.pane_for(thread))
-                else {
-                    self.panel
-                        .pr_actions
-                        .fail(target, action, "Its Thread is not open.".into());
-                    cx.notify();
-                    return;
-                };
-                match self.send_again(index, thread, prompt.clone(), cx) {
-                    Ok(handoff) => {
-                        let stage = match handoff {
-                            Handoff::Sent => Stage::Running,
-                            Handoff::Queued => Stage::Queued(Queued {
-                                item: self.queued_as(thread, &prompt).unwrap_or_default(),
-                                prompts_before: self.prompts_of(thread, &prompt),
-                            }),
-                        };
-                        self.panel.pr_actions.begin(target, action, prompt, stage);
+                let handed = match (action.prompt(&pr), self.pane_for(thread)) {
+                    (Some(prompt), Some(index)) => {
+                        match self.send_again(index, thread, prompt.clone(), cx) {
+                            Ok(Handoff::Sent) => Ok((prompt, Stage::Running)),
+                            Ok(Handoff::Queued) => {
+                                let open = self.cockpit.thread(thread);
+                                let queued = Queued {
+                                    item: queued_as(open.as_ref(), &prompt).unwrap_or_default(),
+                                    prompts_before: prompts_of(open.as_ref(), &prompt),
+                                };
+                                Ok((prompt, Stage::Queued(queued)))
+                            }
+                            Err(error) => Err(error),
+                        }
                     }
-                    Err(error) => self.panel.pr_actions.fail(target, action, error),
-                }
+                    _ => Err("Its Thread is not open.".into()),
+                };
+                self.pull_request
+                    .update(cx, |reader, cx| reader.handed(target, action, handed, cx));
             }
         }
         cx.notify();
     }
 
-    /// Give up waiting on, or hide the outcome of, `target`'s action.
-    pub(in crate::cockpit) fn dismiss_pr_action(
-        &mut self,
-        target: PrTarget,
-        cx: &mut Context<Self>,
-    ) {
-        self.panel.pr_actions.clear(target);
-        cx.notify();
-    }
-
-    /// The id the newest queued prompt of this text goes by (the queue lists
-    /// newest first).
-    fn queued_as(&self, thread: ferrite_core::ThreadId, prompt: &str) -> Option<String> {
-        let open = self.cockpit.thread(thread)?;
-        open.queue()
-            .iter()
-            .find(|item| item.text.trim() == prompt.trim())
-            .map(|item| item.id.clone())
-    }
-
-    /// How many prompts of this text `thread`'s transcript holds.
-    fn prompts_of(&self, thread: ferrite_core::ThreadId, prompt: &str) -> usize {
-        self.cockpit.thread(thread).map_or(0, |open| {
-            open.transcript()
-                .blocks()
-                .iter()
-                .filter(|block| matches!(&block.body, Body::Prompt(text) if text.trim() == prompt.trim()))
-                .count()
-        })
-    }
-
-    /// `thread` streamed: its pending actions move on. A prompt that left
-    /// the queue for a turn is running, one taken back never ran; a turn
-    /// that `settled` is read back.
+    /// `thread` streamed: its pending actions move on, and a turn that
+    /// `settled` has its PR read back.
     pub(in crate::cockpit) fn advance_pr_actions(
         &mut self,
         thread: ferrite_core::ThreadId,
         settled: bool,
         cx: &mut Context<Self>,
     ) {
-        for (target, stage, prompt, action) in self.panel.pr_actions.pending_of(thread) {
+        let open = self.cockpit.thread(thread);
+        let checking = self
+            .pull_request
+            .update(cx, |reader, cx| reader.advance(thread, open.as_ref(), settled, cx));
+        if checking.is_empty() {
+            return;
+        }
+        for (target, _) in &checking {
+            self.read_pr_snapshot(*target, true, cx);
+        }
+        self.pull_request
+            .update(cx, |reader, cx| reader.unread_are_done(&checking, cx));
+    }
+
+    /// A fixture world's merge of `thread`'s PR #`number`, caught mid-flight.
+    #[cfg(feature = "visual-reference")]
+    pub(crate) fn fixture_pr_merge_running(
+        &mut self,
+        thread: ferrite_core::ThreadId,
+        number: u64,
+        cx: &mut Context<Self>,
+    ) {
+        let target = PrTarget::thread(thread, number);
+        self.pull_request.update(cx, |reader, _| {
+            reader
+                .actions
+                .begin(target, PrAction::MergeNow, "merge".into(), Stage::Running)
+        });
+    }
+
+    /// As [`Self::fixture_pr_merge_running`], after the PR stayed open.
+    #[cfg(feature = "visual-reference")]
+    pub(crate) fn fixture_pr_merge_failed(
+        &mut self,
+        thread: ferrite_core::ThreadId,
+        number: u64,
+        cx: &mut Context<Self>,
+    ) {
+        let target = PrTarget::thread(thread, number);
+        let error = format!(
+            "#{number} is not merged after the agent finished. Its reply in the Thread says why."
+        );
+        self.pull_request
+            .update(cx, |reader, _| reader.actions.fail(target, PrAction::MergeNow, error));
+    }
+
+    /// As [`Self::fixture_pr_merge_running`], after the PR showed merged.
+    #[cfg(feature = "visual-reference")]
+    pub(crate) fn fixture_pr_merge_done(
+        &mut self,
+        thread: ferrite_core::ThreadId,
+        number: u64,
+        cx: &mut Context<Self>,
+    ) {
+        let target = PrTarget::thread(thread, number);
+        let done = ActionState::Done {
+            action: PrAction::MergeNow,
+        };
+        self.pull_request
+            .update(cx, |reader, _| reader.actions.0.insert(target, done));
+    }
+}
+
+impl PullRequestView {
+    /// Whether `action` may be handed to the Thread's agent now: not with
+    /// one in flight on the PR, nor when the forge's reading rules it out,
+    /// which fails it with why.
+    fn may_hand_off(
+        &mut self,
+        target: PrTarget,
+        action: PrAction,
+        pr: &WirePr,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        if self.actions.pending(target) {
+            return false;
+        }
+        if let Some(why) = action.blocked_by(pr) {
+            self.actions.fail(target, action, why);
+            cx.notify();
+            return false;
+        }
+        true
+    }
+
+    /// What became of handing `action` over: the prompt the agent was
+    /// given and where it stands, or why it could not be.
+    fn handed(
+        &mut self,
+        target: PrTarget,
+        action: PrAction,
+        handed: Result<(String, Stage), String>,
+        cx: &mut Context<Self>,
+    ) {
+        match handed {
+            Ok((prompt, stage)) => {
+                self.actions.begin(target, action, prompt, stage);
+            }
+            Err(error) => self.actions.fail(target, action, error),
+        }
+        cx.notify();
+    }
+
+    /// Give up waiting on, or hide the outcome of, `target`'s action.
+    pub(super) fn dismiss(&mut self, target: PrTarget, cx: &mut Context<Self>) {
+        self.actions.clear(target);
+        cx.notify();
+    }
+
+    /// `thread` streamed, its queue and transcript now `open`'s: its
+    /// pending actions move on. A prompt that left the queue for a turn is
+    /// running, one taken back never ran; a turn that `settled` is checked,
+    /// and its PR is to be read back (the targets returned).
+    fn advance(
+        &mut self,
+        thread: ferrite_core::ThreadId,
+        open: Option<&ThreadView>,
+        settled: bool,
+        cx: &mut Context<Self>,
+    ) -> Vec<(PrTarget, PrAction)> {
+        let mut checking = Vec::new();
+        for (target, stage, prompt, action) in self.actions.pending_of(thread) {
             if let Stage::Queued(queued) = &stage {
-                let listed = self
-                    .cockpit
-                    .thread(thread)
-                    .is_some_and(|open| open.queue().iter().any(|item| item.id == queued.item));
+                let listed =
+                    open.is_some_and(|open| open.queue().iter().any(|item| item.id == queued.item));
                 // Sent now takes a prompt back and queues it again under
                 // an id of its own.
-                let resent = self.queued_as(thread, &prompt).filter(|_| !listed);
+                let resent = queued_as(open, &prompt).filter(|_| !listed);
                 if let Some(item) = resent {
                     let queued = Queued {
                         item,
                         ..queued.clone()
                     };
-                    self.panel
-                        .pr_actions
-                        .set_stage(target, Stage::Queued(queued));
+                    self.actions.set_stage(target, Stage::Queued(queued));
                     continue;
                 }
                 if listed {
                     continue;
                 }
-                if self.prompts_of(thread, &prompt) <= queued.prompts_before {
-                    self.panel.pr_actions.clear(target);
+                if prompts_of(open, &prompt) <= queued.prompts_before {
+                    self.actions.clear(target);
                     cx.notify();
                     continue;
                 }
                 // A turn that settled this frame ran before the pickup.
-                self.panel.pr_actions.set_stage(target, Stage::Running);
+                self.actions.set_stage(target, Stage::Running);
                 cx.notify();
                 continue;
             }
             if stage == Stage::Running && settled {
-                self.panel.pr_actions.set_stage(target, Stage::Checking);
-                self.read_pr_snapshot(target, true, cx);
-                if !self.panel.pr_reads.get(target).is_some_and(PrRead::reading) {
-                    self.panel
-                        .pr_actions
-                        .0
-                        .insert(target, ActionState::Done { action });
-                }
+                self.actions.set_stage(target, Stage::Checking);
+                checking.push((target, action));
                 cx.notify();
             }
         }
+        checking
+    }
+
+    /// The reads `checking` asked for: an action whose PR could not be
+    /// read again at all is done.
+    fn unread_are_done(&mut self, checking: &[(PrTarget, PrAction)], cx: &mut Context<Self>) {
+        for &(target, action) in checking {
+            if !self.reads.get(target).is_some_and(PrRead::reading) {
+                self.actions.0.insert(target, ActionState::Done { action });
+            }
+        }
+        cx.notify();
     }
 
     /// Retry of `target`'s failed action: the hand-off again, or only the
     /// read of the PR.
-    pub(in crate::cockpit) fn retry_pr_action(&mut self, target: PrTarget, cx: &mut Context<Self>) {
-        let Some(ActionState::Failed { action, retry, .. }) =
-            self.panel.pr_actions.get(target).cloned()
+    pub(super) fn retry(&mut self, target: PrTarget, cx: &mut Context<Self>) {
+        let Some(ActionState::Failed { action, retry, .. }) = self.actions.get(target).cloned()
         else {
             return;
         };
         match retry {
-            Retry::Action => self.run_pr_action(target, action, cx),
+            Retry::Action => cx.emit(PrEvent::Run(target, action)),
             Retry::Read => {
-                self.panel.pr_actions.clear(target);
-                self.panel
-                    .pr_actions
+                self.actions.clear(target);
+                self.actions
                     .begin(target, action, String::new(), Stage::Checking);
-                self.read_pr_snapshot(target, true, cx);
+                cx.emit(PrEvent::Read(target));
                 cx.notify();
             }
         }
@@ -422,22 +523,18 @@ impl CockpitView {
 
     /// The forge answered the read `target`'s finished action waited on:
     /// what the PR shows settles it.
-    pub(in crate::cockpit) fn pr_action_checked(
-        &mut self,
-        target: PrTarget,
-        cx: &mut Context<Self>,
-    ) {
+    pub(super) fn action_checked(&mut self, target: PrTarget, cx: &mut Context<Self>) {
         let Some(ActionState::Pending {
             action,
             stage: Stage::Checking,
             ..
-        }) = self.panel.pr_actions.get(target).cloned()
+        }) = self.actions.get(target).cloned()
         else {
             return;
         };
-        let Some(read) = self.panel.pr_reads.get(target) else {
+        let Some(read) = self.reads.get(target) else {
             // The PR moved to another number: nothing here to judge.
-            self.panel.pr_actions.clear(target);
+            self.actions.clear(target);
             cx.notify();
             return;
         };
@@ -448,51 +545,13 @@ impl CockpitView {
                 let error = format!(
                     "The PR could not be read to see whether it worked ({note}). Its reply in the Thread says what the agent did."
                 );
-                self.panel
-                    .pr_actions
-                    .fail_with(target, action, error, Retry::Read);
+                self.actions.fail_with(target, action, error, Retry::Read);
             }
-            (None, Some(Err(error))) => self.panel.pr_actions.fail(target, action, error),
+            (None, Some(Err(error))) => self.actions.fail(target, action, error),
             (None, _) => {
-                self.panel
-                    .pr_actions
-                    .0
-                    .insert(target, ActionState::Done { action });
+                self.actions.0.insert(target, ActionState::Done { action });
             }
         }
         cx.notify();
-    }
-
-    /// A fixture world's merge of `thread`'s PR #`number`, caught mid-flight.
-    #[cfg(feature = "visual-reference")]
-    pub(crate) fn fixture_pr_merge_running(&mut self, thread: ferrite_core::ThreadId, number: u64) {
-        let target = PrTarget::thread(thread, number);
-        self.panel
-            .pr_actions
-            .begin(target, PrAction::MergeNow, "merge".into(), Stage::Running);
-    }
-
-    /// As [`Self::fixture_pr_merge_running`], after the PR stayed open.
-    #[cfg(feature = "visual-reference")]
-    pub(crate) fn fixture_pr_merge_failed(&mut self, thread: ferrite_core::ThreadId, number: u64) {
-        let target = PrTarget::thread(thread, number);
-        let error = format!(
-            "#{number} is not merged after the agent finished. Its reply in the Thread says why."
-        );
-        self.panel
-            .pr_actions
-            .fail(target, PrAction::MergeNow, error);
-    }
-
-    /// As [`Self::fixture_pr_merge_running`], after the PR showed merged.
-    #[cfg(feature = "visual-reference")]
-    pub(crate) fn fixture_pr_merge_done(&mut self, thread: ferrite_core::ThreadId, number: u64) {
-        let target = PrTarget::thread(thread, number);
-        self.panel.pr_actions.0.insert(
-            target,
-            ActionState::Done {
-                action: PrAction::MergeNow,
-            },
-        );
     }
 }

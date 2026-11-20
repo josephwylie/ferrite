@@ -434,7 +434,9 @@ impl CockpitView {
             MenuTarget::TerminalMore(_) => rows = self.terminals.read(cx).more_rows(),
             MenuTarget::SurfaceMenu(thread) => rows = self.surface_menu_rows(thread),
             MenuTarget::SurfaceTab { thread, at } => rows = self.surface_tab_rows(thread, at),
-            MenuTarget::PrMore(target) => rows = self.pr_menu_rows(target),
+            MenuTarget::PrMore(target) => {
+                rows = self.pull_request.read(cx).menu_rows(target, self.branch_pr(target))
+            }
             MenuTarget::PrLink(thread) => rows = self.pr_link_rows(thread),
             MenuTarget::Factory => {
                 rows = self

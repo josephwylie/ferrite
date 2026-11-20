@@ -443,8 +443,8 @@ fn a_pr_opened_again_is_read_again_and_follows_the_forge(cx: &mut TestAppContext
     let (world, cx) = world("prs-detail-refresh", 0, two_rows(), false, cx);
     let target = PrTarget::project(world.project, 7);
     let state = |cx: &mut gpui::VisualTestContext| {
-        world.view.read_with(cx, |view, _| {
-            view.panel.pr_reads.snapshot(target).map(|pr| pr.state)
+        world.view.read_with(cx, |view, cx| {
+            view.pull_request.read(cx).snapshot(target).map(|pr| pr.state)
         })
     };
     click(cx, "nav-pull-requests");
@@ -558,8 +558,8 @@ fn the_footer_keeps_a_threads_own_pr_and_the_palette_opens_the_list(cx: &mut Tes
     world.view.update(cx, |view, cx| {
         view.pr_landed(thread, Some(pr_with_checks()), cx)
     });
-    world.view.update(cx, |view, _| {
-        view.fixture_pr_snapshot(thread, super::pr::snapshot(WirePrState::Open))
+    world.view.update(cx, |view, cx| {
+        view.fixture_pr_snapshot(thread, super::pr::snapshot(WirePrState::Open), cx)
     });
     tick(cx);
     click(cx, "nav-pull-requests");
@@ -591,13 +591,13 @@ fn a_transcript_pr_keeps_the_conversation_and_loads_the_requested_number(cx: &mu
         view.open_named_pr(thread, 7, format!("{base}/pull/7"), cx);
     });
     lands(cx, "pr-body");
-    world.view.read_with(cx, |view, _| {
+    world.view.read_with(cx, |view, cx| {
         assert!(!view.destination_shown(), "the conversation stays visible");
         assert_eq!(
             view.active_surface(thread),
             Some(super::super::surfaces::SurfaceId::PullRequest(7))
         );
-        assert_eq!(view.pr_snapshot(thread).map(|pr| pr.number), Some(7));
+        assert_eq!(view.pr_snapshot(thread, cx).map(|pr| pr.number), Some(7));
     });
     assert!(
         !shows(cx, "pr-primary"),
@@ -622,9 +622,9 @@ fn a_bare_pr_reference_uses_the_contextual_panel(cx: &mut TestAppContext) {
         view.open_named_pr(thread, 7, format!("{base}/issues/7"), cx);
     });
     lands(cx, "pr-body");
-    world.view.read_with(cx, |view, _| {
+    world.view.read_with(cx, |view, cx| {
         assert!(!view.destination_shown());
-        assert_eq!(view.pr_snapshot(thread).map(|pr| pr.number), Some(7));
+        assert_eq!(view.pr_snapshot(thread, cx).map(|pr| pr.number), Some(7));
     });
 }
 

@@ -713,12 +713,12 @@ fn panel_pr(label: &'static str, staged: PrStaged) -> (Scene, Setup) {
             }),
         );
         let number = pr.number;
-        view.fixture_pr_snapshot(thread, pr);
+        view.fixture_pr_snapshot(thread, pr, cx);
         match staged {
             PrStaged::Ready => {}
-            PrStaged::Merging => view.fixture_pr_merge_running(thread, number),
-            PrStaged::MergeFailed => view.fixture_pr_merge_failed(thread, number),
-            PrStaged::Merged => view.fixture_pr_merge_done(thread, number),
+            PrStaged::Merging => view.fixture_pr_merge_running(thread, number, cx),
+            PrStaged::MergeFailed => view.fixture_pr_merge_failed(thread, number, cx),
+            PrStaged::Merged => view.fixture_pr_merge_done(thread, number, cx),
         }
         view.open_pr_surface(thread, cx);
     });

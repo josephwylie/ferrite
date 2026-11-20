@@ -19,8 +19,8 @@
 //!   scroll, its mark, its filter and its scope.
 //! - **Detail:** the PR as a Thread's PR tab shows it (`pr_content`), read
 //!   by number in the Project's repository (`PrTarget::project`), with no
-//!   actions: they belong to a Thread's own PR. The Panel's reader has no
-//!   view of its own yet, so the Cockpit draws that body and hands it over
+//!   actions: they belong to a Thread's own PR. The PR reader
+//!   (`PullRequestView`) draws that body, and the Cockpit hands it over
 //!   with the inputs.
 //! - **Freshness:** the view, a scope or filter chosen, and a detail opened
 //!   each read again, over the content the last read left.
@@ -85,7 +85,7 @@ pub(crate) struct PrsDetail {
     url: Option<String>,
     /// The state the last read gave it; the list's row stands in before.
     tone: Option<PrTone>,
-    /// The PR tab's body, drawn by the Cockpit with its own listeners.
+    /// The PR tab's body, drawn by the reader (`PullRequestView`).
     content: Div,
 }
 
@@ -245,13 +245,16 @@ impl CockpitView {
             .map(|project| (project.id, SharedString::from(project.title.clone())))
             .collect();
         let detail = open.map(|(target, tab)| {
-            let snapshot = self.panel.pr_reads.snapshot(target);
-            PrsDetail {
-                number: target.number,
-                url: snapshot.map(|pr| pr.url.clone()),
-                tone: snapshot.map(PrTone::of_snapshot),
-                content: self.pr_content(target, tab, cx),
-            }
+            let shown = self.pr_shown(target, tab, cx);
+            self.pull_request.update(cx, |reader, cx| {
+                let snapshot = reader.snapshot(target);
+                PrsDetail {
+                    number: target.number,
+                    url: snapshot.map(|pr| pr.url.clone()),
+                    tone: snapshot.map(PrTone::of_snapshot),
+                    content: reader.pr_content(shown, cx),
+                }
+            })
         });
         PrsInputs { projects, detail }
     }
@@ -278,11 +281,6 @@ impl PrsView {
             .and_then(|project| self.lists.get(&(project, self.filter)))
             .and_then(|read| read.list.as_ref())
             .map_or(&[], |list| list.rows.as_slice())
-    }
-
-    /// The PR view the detail shows.
-    pub(super) fn tab(&self) -> PrTab {
-        self.tab
     }
 
     pub(super) fn set_tab(&mut self, tab: PrTab, cx: &mut Context<Self>) {

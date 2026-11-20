@@ -197,6 +197,11 @@ impl PrReads {
     pub(crate) fn forget(&mut self, target: PrTarget) {
         self.reads.remove(&target);
     }
+
+    /// Keep only the targets `keep` holds to.
+    pub(crate) fn retain(&mut self, keep: impl Fn(&PrTarget) -> bool) {
+        self.reads.retain(|target, _| keep(target));
+    }
 }
 
 #[cfg(test)]

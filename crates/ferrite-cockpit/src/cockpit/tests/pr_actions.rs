@@ -41,7 +41,7 @@ fn on_pr<'a>(
         view.cockpit.fixture_forge(path.clone(), PrView::NoPr);
         view.cockpit.fixture_hold_pr_reads(path);
         view.pr_landed(thread, Some(pr_with_checks()), cx);
-        view.fixture_pr_snapshot(thread, pr);
+        view.fixture_pr_snapshot(thread, pr, cx);
         view.open_pr_surface(thread, cx);
     });
     tick(cx);
@@ -71,9 +71,10 @@ fn reads(view: &Entity<CockpitView>, cx: &mut gpui::VisualTestContext) -> Vec<He
 
 /// The words of the notice strip, as it draws them.
 fn said(view: &Entity<CockpitView>, cx: &mut gpui::VisualTestContext) -> Option<String> {
-    view.read_with(cx, |view, _| {
+    view.read_with(cx, |view, cx| {
         let thread = view.panes[0].thread()?;
-        let (words, ..) = view.pr_action_words(PrTarget::thread(thread, 48))?;
+        let reader = view.pull_request.read(cx);
+        let (words, ..) = reader.pr_action_words(PrTarget::thread(thread, 48))?;
         Some(words)
     })
 }
