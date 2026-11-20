@@ -393,7 +393,7 @@ impl CockpitView {
         self.browser_chrome.update(cx, |chrome, _| chrome.retain_threads(keep));
         self.browser_dialog.update(cx, |dialog, _| dialog.retain_threads(keep));
         self.facts.retain_threads(keep);
-        self.decisions.retain_threads(keep);
+        self.decisions.update(cx, |decisions, _| decisions.retain_threads(keep));
         self.published.retain(|thread, _| keep(*thread));
     }
 
@@ -410,7 +410,7 @@ impl CockpitView {
             + self.browser_chrome.read(cx).held_for_test(thread)
             + self.browser_dialog.read(cx).held_for_test(thread)
             + usize::from(self.facts.get(thread).is_some())
-            + self.decisions.rules().iter().filter(|rule| rule.thread == thread).count()
+            + self.decisions.read(cx).rules().iter().filter(|rule| rule.thread == thread).count()
             + usize::from(self.published.contains_key(&thread))
     }
 

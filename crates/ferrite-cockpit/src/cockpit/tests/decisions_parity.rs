@@ -223,9 +223,9 @@ fn option_two_without_a_standing_answer_keeps_a_thread_rule(cx: &mut TestAppCont
         answered(&fake)
     );
     let thread = view.read_with(cx, |view, _| view.panes[0].thread().unwrap());
-    view.read_with(cx, |view, _| {
+    view.read_with(cx, |view, cx| {
         assert_eq!(
-            view.decisions.rules(),
+            view.decisions.read(cx).rules(),
             [ferrite_pane::decision::ThreadRule {
                 thread,
                 tool: "Bash".into(),
@@ -256,9 +256,12 @@ fn a_deleted_threads_rules_go_with_it(cx: &mut TestAppContext) {
     cx.dispatch_action(PickOption2);
     tick(cx);
     let thread = view.read_with(cx, |view, _| view.panes[0].thread().unwrap());
-    assert_eq!(view.read_with(cx, |view, _| view.decisions.rules().len()), 1, "a rule was made");
+    let rules = |view: &gpui::Entity<CockpitView>, cx: &mut gpui::VisualTestContext| {
+        view.read_with(cx, |view, cx| view.decisions.read(cx).rules().len())
+    };
+    assert_eq!(rules(&view, cx), 1, "a rule was made");
     press_nav_verb(&view, thread, MenuVerb::Delete, cx);
-    assert!(view.read_with(cx, |view, _| view.decisions.rules().is_empty()), "it went with its Thread");
+    assert_eq!(rules(&view, cx), 0, "it went with its Thread");
 }
 
 /// D-4: `3` denies with the steer message, and the keyboard lands in the

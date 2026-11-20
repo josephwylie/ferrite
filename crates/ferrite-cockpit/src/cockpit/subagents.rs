@@ -3,6 +3,7 @@ use super::*;
 use ferrite_core::activity::{
     AgentInfo, AgentStatus, DecisionHandle, PendingDecision, Subject, TranscriptCoverage,
 };
+use super::decisions::DecisionEvent;
 use ferrite_pane::decision;
 use ferrite_ui::components::{self, Tip as _};
 use ferrite_ui::theme;
@@ -662,13 +663,13 @@ impl CockpitView {
     /// transcript's foot; the transcript's own cards scroll with its rows.
     pub(super) fn decision_cards(&self, index: usize, overlay: bool, short: bool) -> Option<Cards> {
         let subject = self.panes.get(index)?.selected.clone();
-        self.decision_cards_of(index, &subject, overlay, short)
+        self.decision_inputs(index, &subject, overlay, short)
     }
 
     /// The cards of `subject`'s requests, answered through Pane `index`'s
     /// forms: the Pane that holds the Thread, so a compact view of an agent
     /// and the Pane showing it fill in one form.
-    pub(super) fn decision_cards_of(
+    pub(super) fn decision_inputs(
         &self,
         index: usize,
         subject: &Subject,
@@ -740,7 +741,7 @@ impl CockpitView {
             });
         Some(Cards {
             switch,
-            owner: self.decisions.owner(),
+            owner: self.decisions.downgrade(),
             asked,
             thread,
             provider,
@@ -782,7 +783,7 @@ impl CockpitView {
         cards.render(window, cx)
     }
 
-    fn send_form(
+    pub(super) fn send_form(
         &mut self,
         thread: ThreadId,
         handle: &DecisionHandle,
@@ -839,7 +840,7 @@ impl CockpitView {
         self.respond_exact(thread, handle, DecisionAnswer::Form { values }, cx);
     }
 
-    fn clear_request_error(&mut self, thread: ThreadId, handle: &DecisionHandle) {
+    pub(super) fn clear_request_error(&mut self, thread: ThreadId, handle: &DecisionHandle) {
         if let Some(index) = self.pane_for(thread) {
             if self.panes[index]
                 .request_error
@@ -1100,10 +1101,11 @@ impl CockpitView {
 /// What a Pane's Decision cards are drawn from: a snapshot of the cockpit
 /// taken when they are asked for, so the transcript — a cached view — draws
 /// them without reading the cockpit (a read would re-render the transcript
-/// on every cockpit change). Every press goes back through `owner`.
+/// on every cockpit change). Every press goes back through `owner`, as a
+/// `DecisionEvent` the window hears.
 #[derive(Clone)]
 pub(super) struct Cards {
-    pub(super) owner: gpui::WeakEntity<CockpitView>,
+    pub(super) owner: gpui::WeakEntity<decisions::DecisionsView>,
     /// The diff each approval's gated call names, by the call's id.
     pub(super) asked: Vec<(String, ferrite_core::transcript::Diff)>,
     pub(super) thread: ThreadId,
@@ -1135,9 +1137,19 @@ pub(super) struct Cards {
     pub(super) requests: Vec<(PendingDecision, bool)>,
 }
 
-/// Ask the cockpit to draw again (a pick that lives in the Pane's forms).
-fn refresh(owner: &gpui::WeakEntity<CockpitView>, cx: &mut gpui::App) {
+/// Ask the cockpit to draw again (a pick that lives in the Pane's forms):
+/// the window redraws with the Decisions' view.
+fn refresh(owner: &gpui::WeakEntity<decisions::DecisionsView>, cx: &mut gpui::App) {
     let _ = owner.update(cx, |_, cx| cx.notify());
+}
+
+/// Tell the window what a press asks.
+fn ask(
+    owner: &gpui::WeakEntity<decisions::DecisionsView>,
+    event: DecisionEvent,
+    cx: &mut gpui::App,
+) {
+    let _ = owner.update(cx, |_, cx| cx.emit(event));
 }
 
 impl Cards {
@@ -1189,15 +1201,13 @@ impl Cards {
         hasher.finish()
     }
 
-    /// A press that acts on the cockpit.
+    /// A press that asks the window for `event`.
     fn act<E: 'static>(
         &self,
-        f: impl Fn(&mut CockpitView, &mut Window, &mut Context<CockpitView>) + 'static,
+        event: impl Fn() -> DecisionEvent + 'static,
     ) -> impl Fn(&E, &mut Window, &mut gpui::App) + 'static {
         let owner = self.owner.clone();
-        move |_, window, cx| {
-            let _ = owner.update(cx, |view, cx| f(view, window, cx));
-        }
+        move |_, _, cx| ask(&owner, event(), cx)
     }
 
     /// The cards, stacked: in the transcript a blank row apart, in the
@@ -1413,9 +1423,11 @@ impl Cards {
         }
         let answer = |choice: decision::ApprovalChoice| {
             let pick = request.clone();
-            self.act(move |view: &mut CockpitView, window, cx| {
-                let note = view.take_decision_note(thread, &pick.handle, cx);
-                view.answer_approval_request(thread, &pick, choice, note, Some(window), cx);
+            self.act(move || DecisionEvent::Approve {
+                thread,
+                request: pick.clone(),
+                choice,
+                switch: None,
             })
         };
         let stacked = self.narrow;
@@ -1501,23 +1513,11 @@ impl Cards {
                     )
                     .debug_selector(move || format!("request-switch-{}-{serial}", thread.get()))
                     .on_click({
-                        let act = self.act(move |view: &mut CockpitView, window, cx| {
-                            let note = view.take_decision_note(thread, &pick.handle, cx);
-                            view.answer_approval_request(
-                                thread,
-                                &pick,
-                                decision::ApprovalChoice::Allow,
-                                note,
-                                Some(window),
-                                cx,
-                            );
-                            view.run_session_control(
-                                thread,
-                                generation,
-                                ferrite_core::SessionControl::SetPermissionMode {
-                                    mode: mode.clone(),
-                                },
-                            );
+                        let act = self.act(move || DecisionEvent::Approve {
+                            thread,
+                            request: pick.clone(),
+                            choice: decision::ApprovalChoice::Allow,
+                            switch: Some((mode.clone(), generation)),
                         });
                         move |event, window, cx| {
                             forms.set_menu(&closing, false);
@@ -1580,22 +1580,25 @@ impl Cards {
                 if keys.key == "enter" && plain {
                     cx.stop_propagation();
                     window.prevent_default();
-                    let _ = owner.update(cx, |view, cx| {
-                        view.send_decision_note(thread, &enter, window, cx)
-                    });
+                    let handle = enter.clone();
+                    ask(&owner, DecisionEvent::SendNote { thread, handle }, cx);
                 }
             })
-            .on_action(self.act::<Submit>(move |view, window, cx| {
-                view.send_decision_note(thread, &send, window, cx)
+            .on_action(self.act::<Submit>(move || DecisionEvent::SendNote {
+                thread,
+                handle: send.clone(),
             }))
-            .on_action(self.act::<decision::Confirm>(move |view, window, cx| {
-                view.send_decision_note(thread, &confirm, window, cx)
+            .on_action(self.act::<decision::Confirm>(move || DecisionEvent::SendNote {
+                thread,
+                handle: confirm.clone(),
             }))
-            .on_action(self.act::<Interrupt>(move |view, window, cx| {
-                view.close_decision_note(thread, &close, window, cx);
+            .on_action(self.act::<Interrupt>(move || DecisionEvent::CloseNote {
+                thread,
+                handle: close.clone(),
             }))
-            .on_action(self.act::<decision::Dismiss>(move |view, window, cx| {
-                view.close_decision_note(thread, &dismiss, window, cx);
+            .on_action(self.act::<decision::Dismiss>(move || DecisionEvent::CloseNote {
+                thread,
+                handle: dismiss.clone(),
             }));
         macro_rules! letter {
             ($action:ty, $text:expr) => {{
@@ -1847,8 +1850,10 @@ impl Cards {
                 decision::skip_button("form-cancel", "Cancel", cx)
                     .disabled(!request.decision.policy.deny || sending)
                     .debug_selector(|| "form-cancel".into())
-                    .on_click(self.act(move |view, _, cx| {
-                        view.respond_exact(thread, &cancel_handle, DecisionAnswer::Cancel, cx)
+                    .on_click(self.act(move || DecisionEvent::Respond {
+                        thread,
+                        handle: cancel_handle.clone(),
+                        answer: DecisionAnswer::Cancel,
                     }))
                     .into_any_element(),
                 decision::send_button(
@@ -1859,11 +1864,11 @@ impl Cards {
                     cx,
                 )
                 .debug_selector(move || selector.clone())
-                .on_click(
-                    self.act(move |view, _, cx| {
-                        view.send_form(thread, &submit_handle, &fields, cx)
-                    }),
-                )
+                .on_click(self.act(move || DecisionEvent::SendForm {
+                    thread,
+                    handle: submit_handle.clone(),
+                    fields: fields.clone(),
+                }))
                 .into_any_element(),
             ]))
             .into_any_element(),
@@ -1896,8 +1901,10 @@ impl Cards {
             cx,
         )
         .disabled(!request.decision.policy.deny || sending)
-        .on_click(self.act(move |view, _, cx| {
-            view.respond_exact(thread, &cancel_handle, DecisionAnswer::Cancel, cx)
+        .on_click(self.act(move || DecisionEvent::Respond {
+            thread,
+            handle: cancel_handle.clone(),
+            answer: DecisionAnswer::Cancel,
         }))
         .into_any_element();
         let actions = match &request.decision.kind {
@@ -1923,15 +1930,12 @@ impl Cards {
                         false,
                         cx,
                     )
-                    .on_click(self.act(move |view, _, cx| {
-                        view.respond_exact(
-                            thread,
-                            &complete_handle,
-                            DecisionAnswer::Allow {
-                                input: serde_json::Value::Null,
-                            },
-                            cx,
-                        )
+                    .on_click(self.act(move || DecisionEvent::Respond {
+                        thread,
+                        handle: complete_handle.clone(),
+                        answer: DecisionAnswer::Allow {
+                            input: serde_json::Value::Null,
+                        },
                     }))
                     .into_any_element(),
                 ]
@@ -2075,14 +2079,17 @@ impl Cards {
                         },
                     )
                     .debug_selector(move || format!("question-choice-{qi}-{oi}"))
-                    .on_click(self.act(move |view, _, cx| {
-                        if let Some(form) = pick_forms.0.borrow_mut().get_mut(&pick_handle) {
-                            pick_option(&mut form.answers[qi].picks, oi, multi);
+                    .on_click({
+                        let owner = self.owner.clone();
+                        move |_, _, cx| {
+                            if let Some(form) = pick_forms.0.borrow_mut().get_mut(&pick_handle) {
+                                pick_option(&mut form.answers[qi].picks, oi, multi);
+                            }
+                            pick_forms.set_cursor(&pick_handle, Some(oi));
+                            let handle = pick_handle.clone();
+                            ask(&owner, DecisionEvent::Picked { thread, handle }, cx);
                         }
-                        pick_forms.set_cursor(&pick_handle, Some(oi));
-                        view.clear_request_error(thread, &pick_handle);
-                        cx.notify();
-                    })),
+                    }),
                 );
             }
             section = section.child(rows);
@@ -2212,15 +2219,12 @@ impl Cards {
             decision::section(decision::footer([
                 decision::skip_button("question-skip", "Skip", cx)
                     .disabled(sending)
-                    .on_click(self.act(move |view, _, cx| {
-                        view.respond_exact(
-                            thread,
-                            &skip_handle,
-                            DecisionAnswer::Deny {
-                                message: decision::QUESTION_SKIPPED.into(),
-                            },
-                            cx,
-                        )
+                    .on_click(self.act(move || DecisionEvent::Respond {
+                        thread,
+                        handle: skip_handle.clone(),
+                        answer: DecisionAnswer::Deny {
+                            message: decision::QUESTION_SKIPPED.into(),
+                        },
                     }))
                     .into_any_element(),
                 decision::send_button(
@@ -2231,8 +2235,9 @@ impl Cards {
                     cx,
                 )
                 .debug_selector(move || selector.clone())
-                .on_click(self.act(move |view, _, cx| {
-                    view.send_question_form(thread, &submit_handle, false, cx);
+                .on_click(self.act(move || DecisionEvent::SendQuestions {
+                    thread,
+                    handle: submit_handle.clone(),
                 }))
                 .into_any_element(),
             ]))
