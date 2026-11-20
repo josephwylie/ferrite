@@ -9026,6 +9026,9 @@ impl CockpitView {
                 },
             ));
         };
+        // One Pane is drawn at a time: this names the Thread the window
+        // shows, for a driver to read.
+        let cell = cell.debug_selector(move || format!("view-thread-{}", thread.get()));
         // Over a link, the roster can list a Thread a frame before its
         // facts land: the cell stays an empty shell until they do.
         let Some(open) = self.cockpit.thread(thread) else {
