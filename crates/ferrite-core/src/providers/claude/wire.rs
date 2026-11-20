@@ -7,24 +7,26 @@
 //! `Value` and anything unrecognised — new event types, changed field types,
 //! outright junk — is silently nothing rather than an error.
 
-/// Stream-json accepts native image and PDF blocks. Keep every path in the text
-/// too: unreadable, oversized and other formats remain available to Claude's
-/// tools. The reads are bounded, including across one prompt.
-///
-/// Skill notes go first: a text block after the prompt stops the CLI
-/// dispatching its leading `/name` (probed, 2.1.304).
+/// The user message content for one prompt. `Skills::content` owns the
+/// block order.
 pub(super) fn input_content(
     text: &str,
     skills: &super::skill_mentions::Skills,
     cwd: Option<&std::path::Path>,
 ) -> Vec<serde_json::Value> {
+    skills.content(text, media(text, cwd))
+}
+
+/// Stream-json accepts native image and PDF blocks. Keep every path in the text
+/// too: unreadable, oversized and other formats remain available to Claude's
+/// tools. The reads are bounded, including across one prompt.
+fn media(text: &str, cwd: Option<&std::path::Path>) -> Vec<serde_json::Value> {
     use crate::attachment::{
         INLINE_TOTAL as INLINE_ATTACHMENT_LIMIT, NATIVE_LIMIT as ATTACHMENT_LIMIT,
     };
     use base64::Engine;
     use std::io::Read;
-    let mut content = skills.notes(text);
-    content.push(serde_json::json!({"type": "text", "text": crate::replies::inert(text)}));
+    let mut media = Vec::new();
     let mut inline_bytes = 0;
     for path in crate::prompt_files::paths(&crate::replies::authored(text), cwd) {
         let Some((block, media_type)) = crate::prompt_files::image_type(&path)
@@ -56,13 +58,13 @@ pub(super) fn input_content(
             continue;
         }
         inline_bytes += bytes.len() as u64;
-        content.push(serde_json::json!({
+        media.push(serde_json::json!({
             "type": block,
             "source": {"type": "base64", "media_type": media_type,
                 "data": base64::engine::general_purpose::STANDARD.encode(bytes)},
         }));
     }
-    content
+    media
 }
 
 use serde_json::Value;
@@ -1608,14 +1610,14 @@ mod tests {
         let text = crate::prompt_files::compose("inspect", &[image.clone(), file]);
         let blocks = input_content(&text, &Default::default(), None);
         assert_eq!(blocks.len(), 2);
-        assert_eq!(blocks[0]["text"], text);
-        assert_eq!(blocks[1]["source"]["media_type"], "image/png");
+        assert_eq!(blocks[0]["source"]["media_type"], "image/png");
         assert_eq!(
             base64::engine::general_purpose::STANDARD
-                .decode(blocks[1]["source"]["data"].as_str().unwrap())
+                .decode(blocks[0]["source"]["data"].as_str().unwrap())
                 .unwrap(),
             b"image bytes"
         );
+        assert_eq!(blocks[1]["text"], text);
         std::fs::remove_file(image).unwrap();
         assert_eq!(
             input_content(&text, &Default::default(), None).len(),
@@ -1647,7 +1649,7 @@ mod tests {
         let trailer = crate::prompt_files::compose(&prompt, &[dir.join("pic.png")]);
         let blocks = input_content(&trailer, &Default::default(), Some(&dir));
         assert_eq!(blocks.len(), 2, "an explicit attachment still rides");
-        assert_eq!(blocks[1]["type"], "image");
+        assert_eq!(blocks[0]["type"], "image");
 
         let bare = crate::prompt_files::compose(
             &compose(&[Reply::new("see @pic.png", "")], ""),
@@ -1655,7 +1657,7 @@ mod tests {
         );
         let blocks = input_content(&bare, &Default::default(), Some(&dir));
         assert_eq!(blocks.len(), 2, "a quote and an attachment, no typed words");
-        assert_eq!(blocks[1]["type"], "document");
+        assert_eq!(blocks[0]["type"], "document");
 
         let own = compose(&[Reply::new("see @pic.png", "")], "and @doc.pdf");
         assert_eq!(
@@ -1714,7 +1716,7 @@ mod tests {
         use base64::Engine as _;
         let blocks = input_content(&text, &Default::default(), None);
         assert_eq!(blocks.len(), 2);
-        assert_eq!(blocks[0]["text"], text);
+        assert_eq!(blocks[1]["text"], text);
         let (_, _, restored) = browser_annotations::split(text.clone());
         assert_eq!(
             restored.len(),
@@ -1731,10 +1733,10 @@ mod tests {
             [annotation.original().unwrap().to_path_buf()],
             "page text must never become a filesystem image reference"
         );
-        assert_eq!(blocks[1]["type"], "image");
+        assert_eq!(blocks[0]["type"], "image");
         assert_eq!(
             base64::engine::general_purpose::STANDARD
-                .decode(blocks[1]["source"]["data"].as_str().unwrap())
+                .decode(blocks[0]["source"]["data"].as_str().unwrap())
                 .unwrap(),
             png
         );

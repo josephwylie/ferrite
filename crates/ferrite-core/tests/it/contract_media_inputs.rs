@@ -34,7 +34,7 @@ fn attachments_use_native_pdf_and_audio_only_where_supported() {
                 b"%PDF-1.7\nfixture"
             );
             assert!(blocks.iter().all(|b| b["type"] != "audio"));
-            assert!(blocks[0]["text"]
+            assert!(blocks.last().unwrap()["text"]
                 .as_str()
                 .unwrap()
                 .contains("recording.MP3"));

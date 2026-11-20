@@ -969,6 +969,40 @@ done"#,
     );
 }
 
+/// A prompt led by one skill of several notes every one of them after the
+/// prompt, so the CLI expands none and the Skill tool loads them all.
+#[test]
+fn a_leading_skill_among_others_is_noted_after_the_prompt() {
+    let log = log_path("skill-mention-leading.log");
+    let program = stub(
+        "claude-skill-mention-leading",
+        &format!(
+            r#"{VERSION_CASE}
+echo '{{"type":"control_response","response":{{"subtype":"success","request_id":"req_1","response":{{"commands":[{{"name":"grill","description":""}},{{"name":"review","description":""}}]}}}}}}'
+while IFS= read -r line; do
+  case "$line" in *'"type":"user"'*) printf '%s\n' "$line" > '{}'; exec cat > /dev/null;; esac
+done"#,
+            log.display()
+        ),
+    );
+    let mut session = ClaudeSession::spawn(config(program)).unwrap();
+    session.send("/grill then /review").unwrap();
+    let sent: Value = serde_json::from_str(&read_lines(&log, 1)[0]).unwrap();
+    drop(session);
+
+    let content = sent["message"]["content"].as_array().unwrap();
+    assert_eq!(content.len(), 3);
+    assert_eq!(
+        content[0],
+        serde_json::json!({"type":"text","text":"/grill then /review"})
+    );
+    for (note, name) in content[1..].iter().zip(["grill", "review"]) {
+        assert!(note["text"].as_str().unwrap().starts_with(&format!(
+            "The user's message contains /{name}, which is the name of a skill."
+        )));
+    }
+}
+
 /// Ferrite must not smuggle in a model or a permission posture the operator
 /// did not choose: with no override the CLI keeps its own configuration.
 #[test]
