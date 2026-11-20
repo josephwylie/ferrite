@@ -213,6 +213,26 @@ that happened to touch it, and nothing in the code said whose a field was.
   scope the operator picks, when the Surface opens or Refresh is pressed.
   A gone Thread's folds, hunks and scroll go with it.
 
+## What does not get a view
+
+A feature earns a view by state the root kept and listeners that wrote
+it. Code whose state already has an owner off the root, and whose root
+code is the root's own work, does not: it keeps a plain struct beside
+what it hangs from, and the root builds what it draws in one method.
+The Thread details card is the example. What it keeps is each Pane's
+`DetailsCard` (`ferrite-pane`, `details.rs`): whether it is open and its
+exit, which only its own methods write, its focus and scroll, its density
+measurements, and where its canvas, card and opener were laid out. Whether
+it stands beside the transcript is the Thread's saved Surfaces
+(`details_inline_open`). Its rows the root builds in `details_content`
+into plain values that draw themselves (`cockpit/details/content.rs`).
+What stays on the root is the root's: moving the keyboard between the card
+and the Composer, fitting the card to the Pane's width as the columns
+move, and closing a card whose Pane lost the focus. A view would move
+state that already has an owner and add events for calls the root makes
+anyway. Its `Show in thread details` menu is a context menu in the popup
+slot (ADR 0043).
+
 ## Precedent
 
 Zed builds its workspace this way: each panel is an entity that owns its
