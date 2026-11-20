@@ -517,11 +517,11 @@ fn unfolding_a_panel_file_reads_its_hunks_off_the_ui_thread(cx: &mut TestAppCont
             .clone()
     });
     assert!(
-        view.read_with(cx, |view, _| view.panel_hunks(thread, &path).is_none()),
+        view.read_with(cx, |view, cx| view.panel_hunks(thread, &path, cx).is_none()),
         "the read is out on the background executor, not done in the click"
     );
     until(cx, |cx| cx.debug_bounds("panel-hunk-0-3").is_some());
-    let lines = view.read_with(cx, |view, _| match view.panel_hunks(thread, &path) {
+    let lines = view.read_with(cx, |view, cx| match view.panel_hunks(thread, &path, cx) {
         Some(Shown::Hunks(hunks)) => hunks
             .iter()
             .flatten()

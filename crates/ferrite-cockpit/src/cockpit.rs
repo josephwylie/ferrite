@@ -458,8 +458,8 @@ pub struct CockpitView {
     /// Cockpit for the rest through `NavEvent`.
     nav_view: Entity<nav_view::NavView>,
     /// The Cockpit hearing the views it answers with the window (the nav,
-    /// the side chat, Files), from its first frame.
-    view_events: Option<[gpui::Subscription; 3]>,
+    /// the side chat, Files, the Overview), from its first frame.
+    view_events: Option<[gpui::Subscription; 4]>,
     /// The window's activation, followed into the Cockpit
     /// (`Cockpit::set_window_active`) once the first frame has a window.
     activation: Option<gpui::Subscription>,
@@ -557,6 +557,9 @@ pub struct CockpitView {
     sheets: Entity<sheets::Sheets>,
     /// Every Thread's background work: the stops sent, the cards turned.
     background: Entity<background_work::BackgroundView>,
+    /// Every Thread's Overview: the Changes section's folds and hunks, the
+    /// sections' scroll.
+    overview: Entity<panel::overview::OverviewView>,
     /// Whether the window is maximized, read once per frame in `render`.
     /// The nav's band is drawn without a `Window` in hand, and the two
     /// halves of the titlebar have to agree: a maximized window has no top
@@ -1388,6 +1391,10 @@ impl CockpitView {
         // The root draws it into its own frame (the line, the Overview, the
         // Surface), so each change redraws the window.
         cx.observe(&background, |_, _, cx| cx.notify()).detach();
+        let overview = cx.new(|_| panel::overview::OverviewView::default());
+        // The root draws it into its own frame, so each change redraws the
+        // window.
+        cx.observe(&overview, |_, _, cx| cx.notify()).detach();
         let agent_drills = cx.new(|_| agent_pane::AgentDrillsView::new(cockpit_weak.clone()));
         cx.subscribe(&agent_drills, Self::on_agent_drill_event).detach();
         let mut view = Self {
@@ -1467,6 +1474,7 @@ impl CockpitView {
             prefs,
             sheets,
             background,
+            overview,
             maximized: false,
             cli_versions: None,
             cli_probing: false,
@@ -8107,14 +8115,15 @@ fn effort_detail(effort: &str) -> &'static str {
 }
 
 impl CockpitView {
-    /// The nav's, the side chat's and Files' events, heard from the
-    /// Cockpit's first frame: answering some needs the window.
+    /// The nav's, the side chat's, Files' and the Overview's events, heard
+    /// from the Cockpit's first frame: answering some needs the window.
     fn hear_views(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.view_events.is_none() {
             self.view_events = Some([
                 cx.subscribe_in(&self.nav_view, window, Self::on_nav_event),
                 cx.subscribe_in(&self.side_chat, window, Self::on_side_chat_event),
                 cx.subscribe_in(&self.files, window, Self::on_files_event),
+                cx.subscribe_in(&self.overview, window, Self::on_overview_event),
             ]);
         }
     }

@@ -9,21 +9,19 @@
 //! hunks fold under its head (`hunks`); `Review changes`; and the pull
 //! request's row once there is one. With neither, no section at all.
 
+use super::overview::{OverviewEvent, OverviewInputs, OverviewView};
 use super::*;
 use ferrite_core::docview::FileChange;
 use ferrite_core::workspace::{CheckState, PrState, PullRequest};
 
-impl CockpitView {
+impl OverviewView {
     /// The Changes section (see the module doc): none with no edits and no
     /// pull request.
-    pub(super) fn changes_section(&self, thread: ThreadId, cx: &mut Context<Self>) -> Option<Div> {
+    pub(super) fn changes_section(&self, inputs: &OverviewInputs, cx: &mut Context<Self>) -> Option<Div> {
         use ferrite_ui::theme::*;
-        let files = self
-            .facts
-            .get(thread)
-            .map(|facts| facts.changed_files.as_slice())
-            .unwrap_or_default();
-        let pr = self.facts.pr(thread);
+        let thread = inputs.thread;
+        let files = inputs.files;
+        let pr = inputs.pr;
         if files.is_empty() && pr.is_none() {
             return None;
         }
@@ -35,10 +33,10 @@ impl CockpitView {
         if !files.is_empty() {
             let create_pr = pr.is_none();
             section = section.child(self.changes_summary(thread, files, create_pr, cx));
-            let cwd = self.thread_path(thread);
+            let cwd = inputs.folder.as_deref();
             for (index, file) in files.iter().enumerate() {
                 section =
-                    section.child(self.panel_file_block(thread, index, file, cwd.as_deref(), cx));
+                    section.child(self.panel_file_block(thread, index, file, cwd, cx));
             }
             section = section.child(review_changes(cx));
         }
@@ -63,7 +61,7 @@ impl CockpitView {
         let count = files.len();
         let noun = if count == 1 { "file" } else { "files" };
         let section_key = SharedString::from(format!("panel-changes-section-{}", thread.get()));
-        let all = self.panel_files_unfolded(thread, files.iter().map(|file| file.path.as_str()));
+        let all = self.files_unfolded(thread, files.iter().map(|file| file.path.as_str()));
         let paths: Vec<String> = files.iter().map(|file| file.path.clone()).collect();
         div()
             .id("panel-changes-section")
@@ -90,7 +88,7 @@ impl CockpitView {
                 "Expand all"
             }))
             .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
-                view.toggle_panel_files(thread, paths.clone(), cx);
+                view.toggle_files(thread, paths.clone(), cx);
             }))
             .child(
                 div()
@@ -112,25 +110,8 @@ impl CockpitView {
             )
             .child(diffstat(added, removed))
             .when(create_pr, |line| {
-                line.child(create_pr_button(cx).ml(px(SPACE_3)))
+                line.child(create_pr_button(thread, cx).ml(px(SPACE_3)))
             })
-    }
-
-    /// `Create PR`: ask the Thread's agent to commit what is left, push its
-    /// branch and open the pull request (`create_pr_prompt`), queued behind
-    /// a running turn, as Claude's button does. The PR's row takes the
-    /// button's place once the forge reports it.
-    pub(in crate::cockpit) fn create_pr(&mut self, thread: ThreadId, cx: &mut Context<Self>) {
-        let Some(index) = self.pane_for(thread) else {
-            return;
-        };
-        let branch = self.thread_branch(thread);
-        let base = self
-            .facts
-            .get(thread)
-            .and_then(|facts| facts.default_branch.clone());
-        let prompt = create_pr_prompt(branch.as_deref(), base.as_deref());
-        self.send_again(index, thread, prompt, cx).ok();
     }
 
     /// One changed file's block (r8): its head (48, `RAISED`) — the name,
@@ -174,7 +155,7 @@ impl CockpitView {
             None => name.clone(),
         };
         let actions = file_actions(index, shown_path, path.clone(), dir.is_some(), cx);
-        let unfolded = self.panel_file_unfolded(thread, file, cx);
+        let unfolded = self.file_unfolded(thread, file, cx);
         let group = SharedString::from(format!("panel-file-head-{index}"));
         let slot = div()
             .debug_selector(move || format!("panel-file-fold-{index}"))
@@ -207,7 +188,7 @@ impl CockpitView {
             .bg(paint::RAISED)
             .cursor_pointer()
             .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
-                view.toggle_panel_file(thread, fold_path.clone(), cx);
+                view.toggle_file(thread, fold_path.clone(), cx);
             }))
             .child(
                 div()
@@ -225,9 +206,9 @@ impl CockpitView {
                             .font_weight(W_LABEL)
                             .text_color(rgb(INK_STRONG))
                             .child(SharedString::from(name))
-                            .on_click(cx.listener(move |view, _: &ClickEvent, window, cx| {
+                            .on_click(cx.listener(move |_, _: &ClickEvent, _, cx| {
                                 cx.stop_propagation();
-                                view.open_preview(path.clone(), None, window, cx);
+                                cx.emit(OverviewEvent::Preview(path.clone()));
                             })),
                     )
                     .child(div().flex_1())
@@ -252,13 +233,13 @@ impl CockpitView {
             .rounded(px(R_CARD))
             .overflow_hidden()
             .child(head)
-            .children(self.panel_hunks_element(thread, index, &file.path, unfolded))
+            .children(self.hunks_element(thread, index, &file.path, unfolded))
     }
 }
 
 /// The `Create PR` button at the end of the summary line
 /// (`PANEL_LINE_BUTTON_H`): a press stops at it, so the line does not fold.
-fn create_pr_button(cx: &mut Context<CockpitView>) -> gpui::Stateful<Div> {
+fn create_pr_button(thread: ThreadId, cx: &mut Context<OverviewView>) -> gpui::Stateful<Div> {
     use ferrite_ui::theme::*;
     let id = gpui::ElementId::from("panel-create-pr");
     let key = ferrite_ui::pointer::hover_key(&id);
@@ -278,14 +259,9 @@ fn create_pr_button(cx: &mut Context<CockpitView>) -> gpui::Stateful<Div> {
         .hover_control(key)
         .press_control()
         .child("Create PR")
-        .on_click(cx.listener(|view, _: &ClickEvent, _, cx| {
+        .on_click(cx.listener(move |_, _: &ClickEvent, _, cx| {
             cx.stop_propagation();
-            if let Some(thread) = view
-                .panel_pane()
-                .and_then(|index| view.panes[index].thread())
-            {
-                view.create_pr(thread, cx);
-            }
+            cx.emit(OverviewEvent::CreatePr(thread));
         }))
 }
 
@@ -293,7 +269,7 @@ fn create_pr_button(cx: &mut Context<CockpitView>) -> gpui::Stateful<Div> {
 /// the pull request with `gh pr create` (on `base` when origin has it) and
 /// report its URL — or, when one already exists, push to it and report
 /// that one.
-fn create_pr_prompt(branch: Option<&str>, base: Option<&str>) -> String {
+pub(super) fn create_pr_prompt(branch: Option<&str>, base: Option<&str>) -> String {
     let mut prompt = String::from(
         "Create a pull request for the changes in this session.\n\n\
          1. Check for uncommitted changes. If any exist, stage and commit them with a \
@@ -320,7 +296,7 @@ fn create_pr_prompt(branch: Option<&str>, base: Option<&str>) -> String {
 }
 
 /// `Review changes`: the Review beside the Pane on the uncommitted work.
-fn review_changes(cx: &mut Context<CockpitView>) -> gpui::Stateful<Div> {
+fn review_changes(cx: &mut Context<OverviewView>) -> gpui::Stateful<Div> {
     use ferrite_ui::theme::*;
     let review_id = gpui::ElementId::from("panel-review-changes");
     let review_key = ferrite_ui::pointer::hover_key(&review_id);
@@ -341,13 +317,7 @@ fn review_changes(cx: &mut Context<CockpitView>) -> gpui::Stateful<Div> {
         .hover_control(review_key)
         .press_control()
         .child("Review changes")
-        .on_click(cx.listener(|view, _: &ClickEvent, window, cx| {
-            view.open_beside(
-                beside::Beside::Review(ferrite_reviewr::model::Scope::Uncommitted),
-                window,
-                cx,
-            );
-        }))
+        .on_click(cx.listener(|_, _: &ClickEvent, _, cx| cx.emit(OverviewEvent::Review)))
 }
 
 /// The pull request's row: its glyph and `#N` on the content edge, its
@@ -357,7 +327,7 @@ fn review_changes(cx: &mut Context<CockpitView>) -> gpui::Stateful<Div> {
 fn pr_row(
     thread: ThreadId,
     pr: &PullRequest,
-    cx: &mut Context<CockpitView>,
+    cx: &mut Context<OverviewView>,
 ) -> gpui::Stateful<Div> {
     use ferrite_ui::theme::*;
     let glyph = match pr.state {
@@ -392,9 +362,7 @@ fn pr_row(
             .text_color(rgb(ink))
             .child(word)
     }))
-    .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
-        view.open_pr_surface(thread, cx);
-    }))
+    .on_click(cx.listener(move |_, _: &ClickEvent, _, cx| cx.emit(OverviewEvent::OpenPr(thread))))
 }
 
 /// A file block's head row (`PANEL_ROW_H`): its icon slot on the card's
@@ -435,7 +403,7 @@ fn file_actions(
     shown_path: String,
     path: std::path::PathBuf,
     two_lines: bool,
-    cx: &mut Context<CockpitView>,
+    cx: &mut Context<OverviewView>,
 ) -> Div {
     use ferrite_ui::theme::*;
     let door = |id: &'static str, glyph: &'static str, tooltip: &'static str| {
