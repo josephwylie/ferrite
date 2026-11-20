@@ -324,6 +324,31 @@ impl CockpitView {
                 self.browser_action(thread, Action::Open { url }, cx);
             }
         }
+        self.apply_browser_messages(cx);
+        self.drain_browser_events(cx);
+        for (thread, seen) in std::mem::take(&mut self.browsers.reveal) {
+            match self.pane_for(thread) {
+                Some(index) => {
+                    if self.reveal_surface(thread, super::surfaces::SurfaceId::Browser, seen) {
+                        self.panes[index].preview.show_browser();
+                    }
+                }
+                None => {
+                    self.browsers.reveal.insert(thread, seen);
+                }
+            }
+        }
+        self.serve_page_requests(cx);
+        self.realize_browser_pages(cx);
+        self.tend_browser_pages(cx);
+        self.browser_controls
+            .pump(&self.browsers, &mut self.cockpit, cx);
+    }
+
+    /// The Server's word since the last frame: a control a provider asks
+    /// for, and each Browser's tabs and owner as they now stand, with the
+    /// navigation it asked of a page.
+    fn apply_browser_messages(&mut self, cx: &mut Context<Self>) {
         for message in self.cockpit.take_browser_messages() {
             let message = match message {
                 ferrite_core::protocol::ServerMessage::BrowserRequest {
@@ -441,6 +466,11 @@ impl CockpitView {
             }
             cx.notify();
         }
+    }
+
+    /// What the pages said since the last frame (`Event`): a restored tab
+    /// to select, the operator's input, a page's state for the Server.
+    fn drain_browser_events(&mut self, cx: &mut Context<Self>) {
         let mut events = std::mem::take(&mut *self.browsers.events.borrow_mut())
             .into_iter()
             .peekable();
@@ -610,21 +640,12 @@ impl CockpitView {
                 }
             }
         }
-        for (thread, seen) in std::mem::take(&mut self.browsers.reveal) {
-            match self.pane_for(thread) {
-                Some(index) => {
-                    if self.reveal_surface(thread, super::surfaces::SurfaceId::Browser, seen) {
-                        self.panes[index].preview.show_browser();
-                    }
-                }
-                None => {
-                    self.browsers.reveal.insert(thread, seen);
-                }
-            }
-        }
-        self.serve_page_requests(cx);
-        // Only the selected live tab is realized. Restored metadata does not
-        // start Chromium until an explicit selection or open marks it live.
+    }
+
+    /// Only the selected live tab is realized. Restored metadata does not
+    /// start Chromium until an explicit selection or open marks it live.
+    /// The chrome's address field follows each active page as it goes.
+    fn realize_browser_pages(&mut self, cx: &mut Context<Self>) {
         let events = self.browsers.events.clone();
         for (thread, browser) in &mut self.browsers.threads {
             let Some(owner) = browser
@@ -788,9 +809,6 @@ impl CockpitView {
                 }
             }
         }
-        self.tend_browser_pages(cx);
-        self.browser_controls
-            .pump(&self.browsers, &mut self.cockpit, cx);
     }
 
     /// What websites asked of the window since the last frame: pages to open,
