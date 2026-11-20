@@ -131,6 +131,12 @@ impl Hunks {
         self.reads.get(key)?.shown.as_ref()
     }
 
+    /// Every Thread `keep` refuses takes its folds and reads with it.
+    pub(super) fn retain_threads(&mut self, keep: impl Fn(ThreadId) -> bool) {
+        self.unfolded.retain(|(thread, _)| keep(*thread));
+        self.reads.retain(|(thread, _), _| keep(*thread));
+    }
+
     #[cfg(test)]
     pub(super) fn held_for_test(&self, thread: ThreadId) -> usize {
         self.unfolded.iter().chain(self.reads.keys()).filter(|(of, _)| *of == thread).count()

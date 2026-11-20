@@ -84,6 +84,18 @@ impl Diff {
         }
     }
 
+    /// The Thread whose diff this is: its own, or a pull request read in
+    /// its checkout. `None` for a Project's pull request.
+    pub(super) fn thread(self) -> Option<ThreadId> {
+        match self {
+            Diff::Changes(thread) => Some(thread),
+            Diff::PullRequest(target) => match target.source {
+                crate::cockpit::panel::pr_read::PrSource::Thread(thread) => Some(thread),
+                crate::cockpit::panel::pr_read::PrSource::Project(_) => None,
+            },
+        }
+    }
+
     fn scope(self) -> Scope {
         match self {
             Diff::Changes(_) => Scope::Uncommitted,
