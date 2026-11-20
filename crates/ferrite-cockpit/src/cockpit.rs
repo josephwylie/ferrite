@@ -324,9 +324,6 @@ fn tuning_hold(open: &ThreadView) -> Option<&'static str> {
 pub(crate) struct CockpitPane {
     view: PaneView,
     pub(crate) request_forms: subagents::RequestForms,
-    /// What the Panel keeps of this Pane's preview (`panel/preview.rs`): its
-    /// scroll, its find bar, whether its tab is the one shown.
-    pub(crate) preview_tab: panel::preview::PreviewTab,
     /// The Review beside this Pane on the board (`beside.rs`).
     pub(crate) review: beside::ReviewSlot,
 }
@@ -336,7 +333,6 @@ impl CockpitPane {
         Self {
             view,
             request_forms: Default::default(),
-            preview_tab: Default::default(),
             review: beside::ReviewSlot::new(cx),
         }
     }
@@ -463,7 +459,7 @@ pub struct CockpitView {
     /// The Cockpit hearing the views it answers with the window (the nav,
     /// the side chat, Files, the Overview, the toasts), from its first
     /// frame.
-    view_events: Option<[gpui::Subscription; 5]>,
+    view_events: Option<[gpui::Subscription; 6]>,
     /// The window's activation, followed into the Cockpit
     /// (`Cockpit::set_window_active`) once the first frame has a window.
     activation: Option<gpui::Subscription>,
@@ -562,6 +558,10 @@ pub struct CockpitView {
     /// Every Thread's Overview: the Changes section's folds and hunks, the
     /// sections' scroll.
     overview: Entity<panel::overview::OverviewView>,
+    /// What the File Surface keeps of every Pane's preview: each File
+    /// tab's document as last read, the scrolls, the find bar, the last
+    /// press.
+    file_surface: Entity<panel::preview::FileSurfaceView>,
     /// Whether the window is maximized, read once per frame in `render`.
     /// The nav's band is drawn without a `Window` in hand, and the two
     /// halves of the titlebar have to agree: a maximized window has no top
@@ -627,9 +627,6 @@ pub struct CockpitView {
     /// The empty board's selected row, and the list's own focus.
     empty_cursor: usize,
     empty_focus: FocusHandle,
-    /// The Pane whose preview took the last press: ⌘F finds there. A
-    /// press hands the keyboard back to the Pane, so focus cannot say it.
-    preview_pressed: Option<PaneIdentity>,
     /// Each Thread's reader slot (its Review) sliding open or shut
     /// (`beside.rs`).
     reader_slides: beside::ReaderSlides,
@@ -1383,6 +1380,10 @@ impl CockpitView {
         // The root draws it into its own frame, so each change redraws the
         // window.
         cx.observe(&overview, |_, _, cx| cx.notify()).detach();
+        let file_surface = cx.new(|_| panel::preview::FileSurfaceView::default());
+        // The root draws its card into its own frame, so each change
+        // redraws the window.
+        cx.observe(&file_surface, |_, _, cx| cx.notify()).detach();
         let agent_drills = cx.new(|_| agent_pane::AgentDrillsView::new(cockpit_weak.clone()));
         cx.subscribe(&agent_drills, Self::on_agent_drill_event).detach();
         let toasts = cx.new(|_| toasts::ToastsView::new(cockpit_weak.clone()));
@@ -1463,6 +1464,7 @@ impl CockpitView {
             sheets,
             background,
             overview,
+            file_surface,
             maximized: false,
             cli_versions: None,
             cli_probing: false,
@@ -1490,7 +1492,6 @@ impl CockpitView {
             task_toasts: Default::default(),
             empty_cursor: 0,
             empty_focus: cx.focus_handle(),
-            preview_pressed: None,
             reader_slides: Default::default(),
             columns: columns::Columns::new(),
             launch_provider,
@@ -1581,6 +1582,9 @@ impl CockpitView {
         let wanted = self.cockpit.roster().panes().to_vec();
         let before = self.panes.len();
         self.panes.retain(|pane| wanted.contains(&pane.identity));
+        // What the File Surface kept of a Pane's preview goes with it.
+        self.file_surface
+            .update(cx, |files, _| files.retain_panes(|pane| wanted.contains(&pane)));
         let mut opened = false;
         for identity in &wanted {
             if self.index_of(*identity).is_some() {
@@ -2050,13 +2054,9 @@ impl CockpitView {
         let index = self.focused();
         let pane = self.panes.get(index)?;
         if pane.preview.focused(window, cx) && self.preview_shown(index) {
-            let tab = &pane.preview_tab;
-            let list = tab.scroll.0.borrow().base_handle.clone();
-            return Some(Reader::Document(if tab.markdown_scroll.max_offset().y > px(0.) {
-                tab.markdown_scroll.clone()
-            } else {
-                list
-            }));
+            if let Some(scroll) = self.file_surface.read(cx).reader_scroll(pane.identity) {
+                return Some(Reader::Document(scroll));
+            }
         }
         let thread = pane.thread()?;
         let on_panel = self.panel_control_focused(window) || self.panel_keys_held(window, cx);
@@ -4647,9 +4647,15 @@ impl CockpitView {
         let Some(pane) = self.panes.get(index) else {
             return;
         };
+        let (owner, preview) = (pane.identity, pane.preview.clone());
         let reading =
-            self.preview_pressed == Some(pane.identity) || pane.preview.focused(window, cx);
-        if reading && self.preview_shown(index) && self.open_preview_find(index, window, cx) {
+            self.file_surface.read(cx).pressed() == Some(owner) || preview.focused(window, cx);
+        if reading
+            && self.preview_shown(index)
+            && self
+                .file_surface
+                .update(cx, |files, cx| files.open_find(owner, &preview, window, cx))
+        {
             return;
         }
         if let Some(transcript) = self.panes.get(index).and_then(|pane| pane.transcript()) {
@@ -5564,7 +5570,7 @@ impl CockpitView {
                     self.panes[index].composer.update(cx, |composer, cx| {
                         composer.take(cx);
                     });
-                    self.panes[index].adopt_thread(adopted.thread);
+                    self.adopt_thread(index, adopted.thread, cx);
                 }
                 if let Some(error) = &adopted.blank_kept {
                     ferrite_core::log!("the blank thread stayed open: {error}");
@@ -6329,7 +6335,7 @@ impl CockpitView {
                         composer.take(cx);
                     }
                 });
-                self.panes[index].adopt_thread(done.thread);
+                self.adopt_thread(index, done.thread, cx);
                 self.promote_draft(id, done.thread, cx);
                 self.sync_panes(cx);
                 self.thread_opened(done.thread, cx);
@@ -8116,6 +8122,7 @@ impl CockpitView {
                 cx.subscribe_in(&self.files, window, Self::on_files_event),
                 cx.subscribe_in(&self.overview, window, Self::on_overview_event),
                 cx.subscribe_in(&self.toasts, window, Self::on_toast_event),
+                cx.subscribe_in(&self.file_surface, window, Self::on_file_surface_event),
             ]);
         }
     }
@@ -8777,9 +8784,9 @@ impl CockpitView {
             .map(|root| self.register_palette_actions(root, cx))
             .map(|root| self.register_model_picker_actions(root, cx))
             // Every press forgets the preview; one in a preview marks it
-            // again as it bubbles (`panel_preview`).
-            .capture_any_mouse_down(cx.listener(|view, _: &MouseDownEvent, _, _| {
-                view.preview_pressed = None;
+            // again as it bubbles (`FileSurfaceView::card`).
+            .capture_any_mouse_down(cx.listener(|view, _: &MouseDownEvent, _, cx| {
+                view.file_surface.update(cx, |files, _| files.forget_press());
             }))
             // The root covers the window, so a release anywhere ends the
             // drag; the selection it made stays until the next press. Moves

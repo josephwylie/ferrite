@@ -500,9 +500,9 @@ fn reader_state(
     view: &Entity<CockpitView>,
     cx: &mut gpui::VisualTestContext,
 ) -> Option<(Option<SharedString>, Option<gpui::Bounds<gpui::Pixels>>)> {
-    view.read_with(cx, |view, _| {
-        view.panes[0]
-            .preview_tab
+    view.read_with(cx, |view, cx| {
+        view
+            .preview_tab(0, cx)
             .find
             .as_ref()
             .map(|find| find.state())
@@ -540,9 +540,9 @@ fn find_in_a_code_reader_centres_its_line(cx: &mut TestAppContext) {
     cx.simulate_input("needle");
     tick(cx);
     assert_eq!(reader_state(&view, cx).unwrap().0.as_deref(), Some("1/1"));
-    let scrolled = view.read_with(cx, |view, _| {
-        view.panes[0]
-            .preview_tab
+    let scrolled = view.read_with(cx, |view, cx| {
+        view
+            .preview_tab(0, cx)
             .scroll
             .0
             .borrow()
@@ -602,8 +602,8 @@ fn find_in_a_markdown_reader_scrolls_to_the_occurrence(cx: &mut TestAppContext) 
     let (count, painted) = reader_state(&view, cx).unwrap();
     assert_eq!(count.as_deref(), Some("1/1"));
     let painted = painted.expect("the occurrence painted");
-    let shown = view.read_with(cx, |view, _| {
-        view.panes[0].preview_tab.markdown_scroll.bounds()
+    let shown = view.read_with(cx, |view, cx| {
+        view.preview_tab(0, cx).markdown_scroll.bounds()
     });
     assert!(
         painted.top() >= shown.top() && painted.bottom() <= shown.bottom(),
@@ -637,8 +637,8 @@ fn reader_shows(
     painted: gpui::Bounds<gpui::Pixels>,
     cx: &mut gpui::VisualTestContext,
 ) -> bool {
-    let shown = view.read_with(cx, |view, _| {
-        view.panes[0].preview_tab.markdown_scroll.bounds()
+    let shown = view.read_with(cx, |view, cx| {
+        view.preview_tab(0, cx).markdown_scroll.bounds()
     });
     painted.top() >= shown.top() && painted.bottom() <= shown.bottom()
 }

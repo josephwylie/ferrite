@@ -63,9 +63,6 @@ pub(crate) struct Panel {
     /// The window's width as of the last frame, what the floors and the
     /// maximized width are reckoned from.
     window_w: f32,
-    /// The first frame has been tended: a preview open by then is simply
-    /// there (`tend_previews`).
-    tended: bool,
     /// The tab the last frame showed and when the operator moved to the
     /// one now shown: its body fades in from that instant
     /// (`ferrite_ui::motion::swap_since`), the outgoing one having gone
@@ -125,7 +122,6 @@ impl Panel {
             working_sets,
             tabs_scroll: Default::default(),
             window_w: 0.,
-            tended: false,
             shown: None,
             picked: None,
             resizing: None,
@@ -338,8 +334,8 @@ impl CockpitView {
                     cx.notify();
                 }
             }
-            SurfaceId::File(path) => self.close_preview_of(thread, path),
-            SurfaceId::Browser => self.close_preview_of(thread, std::path::Path::new(preview::BROWSER_PATH)),
+            SurfaceId::File(path) => self.close_preview_of(thread, path, cx),
+            SurfaceId::Browser => self.close_preview_of(thread, std::path::Path::new(preview::BROWSER_PATH), cx),
             SurfaceId::Overview
             | SurfaceId::Changes
             | SurfaceId::Files

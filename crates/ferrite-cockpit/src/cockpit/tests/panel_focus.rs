@@ -761,8 +761,8 @@ fn command_arrows_go_to_the_ends_of_the_preview(cx: &mut TestAppContext) {
     tick(cx);
     super::find::read_beside(&view, file, cx);
     let offset = |view: &Entity<CockpitView>, cx: &mut gpui::VisualTestContext| {
-        view.read_with(cx, |view, _| {
-            view.panes[0].preview_tab.markdown_scroll.offset().y
+        view.read_with(cx, |view, cx| {
+            view.preview_tab(0, cx).markdown_scroll.offset().y
         })
     };
     for _ in 0..8 {

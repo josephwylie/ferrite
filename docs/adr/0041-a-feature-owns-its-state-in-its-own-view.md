@@ -158,8 +158,8 @@ that happened to touch it, and nothing in the code said whose a field was.
   the saved tabs. It saves them (`WorkingSets`, files.json) and tells the
   view each frame to settle a rendered file's find. A remote read or
   write still asks the root's Cockpit, after the frame, through the weak
-  handle `RemoteFiles` holds. A Pane's file preview stays the root's and
-  hands a checkout's text file to `open_in_files`.
+  handle `RemoteFiles` holds. A Pane's file preview hands a checkout's
+  text file to `open_in_files` (`redirect_previews_to_files`).
 - **Background work is the eleventh.** `BackgroundView`
   (`cockpit/background_work.rs`) owns every Thread's background work as
   the window keeps it: each stop sent, by Thread, Session generation and
@@ -238,6 +238,28 @@ that happened to touch it, and nothing in the code said whose a field was.
   and its exit, which it shares with the shortcuts sheet, and where the
   sessions are looked for. The root's pump asks the picker for the
   listing's answer and fills it.
+- **The File Surface is the sixteenth.** `FileSurfaceView`
+  (`cockpit/panel/preview.rs`) owns what the Panel's File Surface keeps
+  of every Pane's preview, by Pane: each File tab's document as last read,
+  the open last seen and the fade it brings, the numbered lines' and
+  rendered document's scrolls, the find bar, a Browser annotation's
+  capture still being read, and the Pane whose preview took the last
+  press, which ⌘F finds in. One view for the window, by Pane, not by
+  Thread: a draft has a preview too, and its first send hands what it
+  kept to the Thread's Pane (`adopt`). It has no render of its own: the
+  root has it draw the card, as the File and Browser Surfaces' body and a
+  draft's Panel alone, reading the Pane's preview, the Thread's checkout
+  and the live browser's body through `file_surface_inputs`. It emits
+  `FileSurfaceEvent`: escape closes the card, a press gives its Pane the
+  keyboard, a page's title opens its menu. The document is the Pane's
+  (`Preview`, `ferrite-pane`), which every entry point opens through. Each
+  frame the root's `tend_previews` opens a remote file in Files, reads a
+  capture through the Server and has the view tend each preview, then
+  opens the Surface of each document that opened and has each preview
+  follow the File tab its Panel shows, since which Surface shows is the
+  root's. What a Pane's preview kept goes with its Pane (`sync_panes`),
+  as it did when it hung from the Pane; a gone Thread's Pane goes there
+  too. The lightbox gets no view (below).
 
 ## What does not get a view
 
@@ -258,6 +280,16 @@ move, and closing a card whose Pane lost the focus. A view would move
 state that already has an owner and add events for calls the root makes
 anyway. Its `Show in thread details` menu is a context menu in the popup
 slot (ADR 0043).
+
+The image lightbox is the second. What it keeps is each Pane's preview's
+`Lightbox` (`ferrite-pane`, `preview.rs`): the image viewer, the gallery
+and the image shown in it, where it grew from and whether its zoom menu
+is open, which only the preview's own methods write (`open`,
+`step_image`, `set_zoom_menu`, `close_lightbox`); the viewer is an entity
+of its own, which keeps the zoom and the pan. The root draws it over the
+window in `lightbox_element` (`cockpit/lightbox.rs`) for the focused Pane,
+and what stays on the root is the root's: handing the keyboard back to
+the Pane as it closes, and ⌘W closing it before anything else.
 
 ## Precedent
 
