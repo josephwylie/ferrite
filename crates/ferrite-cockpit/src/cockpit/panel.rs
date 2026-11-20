@@ -98,6 +98,10 @@ pub(crate) struct Panel {
     pr_armed: Option<pr_read::PrTarget>,
     /// The keyboard stops of the head and a pull request's header.
     pub(crate) focus: PanelFocus,
+    /// A view a test draws at the foot of the Panel, as a Surface's own
+    /// view would be drawn.
+    #[cfg(test)]
+    pub(crate) test_child: Option<gpui::AnyView>,
     /// Threads this window deleted, for the next frame to forget. Deleting
     /// the last one leaves `known_threads` empty, which by itself reads as a
     /// Server not yet heard from.
@@ -154,6 +158,8 @@ impl Panel {
             pr_actions: Default::default(),
             pr_armed: None,
             focus: Default::default(),
+            #[cfg(test)]
+            test_child: None,
             deleted: Vec::new(),
         }
     }
@@ -691,6 +697,8 @@ impl CockpitView {
                     .child(self.panel_preview(owner, cx)),
             ),
         };
+        #[cfg(test)]
+        let column = column.children(self.panel.test_child.clone());
         let edge = owner.thread().map(|thread| {
             div()
                 .id("panel-edge")

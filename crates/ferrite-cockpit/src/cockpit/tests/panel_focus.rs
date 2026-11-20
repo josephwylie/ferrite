@@ -672,3 +672,73 @@ fn command_arrows_go_to_the_ends_of_the_preview(cx: &mut TestAppContext) {
     press("cmd-up", cx);
     assert_eq!(offset(&view, cx), px(0.), "⌘↑ goes back to the start");
 }
+
+/// A view of its own drawn in the Panel, which registers one stop as it
+/// renders: after the root's render has returned, as a Surface moved into
+/// its own view will.
+struct ChildStop {
+    root: gpui::WeakEntity<CockpitView>,
+}
+
+impl Render for ChildStop {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let semantics = Semantics::button("A child's stop");
+        let handle = self
+            .root
+            .update(cx, |root, cx| {
+                root.panel_control(PanelControl::PrPrimary, semantics.clone(), cx)
+            })
+            .unwrap();
+        crate::cockpit::panel::controls::focusable(
+            div().id("child-stop").child("child"),
+            &handle,
+            &semantics,
+        )
+    }
+}
+
+#[gpui::test]
+fn a_stop_a_child_view_draws_keeps_its_place_in_the_row(cx: &mut TestAppContext) {
+    let (view, _thread, cx) = with_tabs("focus-child", cx);
+    let root = view.downgrade();
+    let child = cx.new(|_| ChildStop { root });
+    view.update(cx, |view, cx| {
+        view.panel.test_child = Some(child.into());
+        cx.notify();
+    });
+    tick(cx);
+    let handle = |cx: &mut gpui::VisualTestContext| {
+        view.read_with(cx, |view, _| view.panel.focus.handle(&PanelControl::PrPrimary))
+    };
+    let first = handle(cx).expect("the child's stop has a handle");
+    view.update(cx, |_, cx| cx.notify());
+    tick(cx);
+    assert_eq!(
+        handle(cx),
+        Some(first),
+        "a redraw keeps the child's stop's handle"
+    );
+
+    press("f6", cx);
+    press("end", cx);
+    assert_eq!(
+        focused_control(&view, cx),
+        Some(PanelControl::PrPrimary),
+        "the child's stop is the row's last"
+    );
+    view.update(cx, |_, cx| cx.notify());
+    tick(cx);
+    assert_eq!(
+        focused_control(&view, cx),
+        Some(PanelControl::PrPrimary),
+        "and keeps the keyboard across a redraw"
+    );
+    press("left", cx);
+    assert_eq!(focused_control(&view, cx), Some(PanelControl::Maximize));
+    press("right", cx);
+    assert_eq!(
+        focused_control(&view, cx),
+        Some(PanelControl::PrPrimary),
+        "the arrows step back onto it"
+    );
+}
