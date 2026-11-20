@@ -374,6 +374,54 @@ fn a_thread_switch_by_key_leaves_the_keyboard_to_the_new_composer(cx: &mut TestA
     assert!(shown_composer_focused(cx));
 }
 
+/// The keyboard on Thread 1's `+`, a Focus the Server asks for
+/// (`ferrite thread focus 2`) shows Thread 2 with the keyboard in its
+/// Composer, as ⌘2 does: Thread 2 never had its Panel entered, so F6
+/// arrives at its shown tab.
+#[gpui::test]
+fn a_focus_the_server_asks_for_leaves_the_keyboard_to_the_new_composer(cx: &mut TestAppContext) {
+    bind_production_keys(cx);
+    let (core, _fake) = cockpit("focus-asked-switch", 2);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    hold_nav_open(&view, cx);
+    cx.simulate_resize(gpui::size(px(1900.), px(900.)));
+    let second = view.update(cx, |view, cx| {
+        let order = view.thread_order(cx);
+        view.focus_thread(order[0], cx);
+        order[1]
+    });
+    tick(cx);
+    press("f6", cx);
+    press("end left", cx);
+    assert_eq!(focused_control(&view, cx), Some(PanelControl::Plus));
+
+    view.update(cx, |view, _| {
+        view.cockpit
+            .fixture_task_alert(ferrite_core::protocol::ServerMessage::Focus {
+                thread: second,
+                fork_of: None,
+            });
+    });
+    tick(cx);
+    let (shown, composer_focused) = cx.update(|window, cx| {
+        let view = view.read(cx);
+        let pane = &view.panes[view.focused()];
+        (
+            pane.thread(),
+            pane.composer.read(cx).focus_target(window, cx).is_focused(window),
+        )
+    });
+    assert_eq!(shown, Some(second));
+    assert_eq!(focused_control(&view, cx), None, "no stop holds the keyboard");
+    assert!(composer_focused, "the shown Thread's Composer has the keyboard");
+    press("f6", cx);
+    assert_eq!(
+        focused_control(&view, cx),
+        Some(PanelControl::Tab(SurfaceId::Overview)),
+        "F6 arrives at the shown tab of a Panel never entered"
+    );
+}
+
 #[gpui::test]
 fn a_hidden_panel_keeps_no_focus(cx: &mut TestAppContext) {
     let (view, _thread, cx) = with_tabs("focus-hidden", cx);
