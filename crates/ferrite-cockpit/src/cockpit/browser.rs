@@ -9,6 +9,8 @@ pub(super) use dialog::BrowserDialogView;
 use controls::{ControlRequest, PendingControls};
 mod manual;
 mod page_menu;
+mod review;
+pub(super) use review::BrowserReviewView;
 
 pub(super) use page_menu::PageVerb;
 
@@ -1241,7 +1243,7 @@ impl CockpitView {
         };
         let (Some(browser), Some(inputs)) = (
             self.browsers.threads.get(&thread),
-            self.browser_chrome_inputs(thread),
+            self.browser_chrome_inputs(thread, cx),
         ) else {
             return div()
                 .p(px(16.))
@@ -1272,7 +1274,7 @@ impl CockpitView {
             .map(|page| page.web.clone());
         let retry = failure.is_some().then(|| active.map(|tab| tab.document())).flatten();
         let notice = match failure {
-            _ if browser.annotation.is_some() => None,
+            _ if browser.annotation.is_some() || self.browser_review.read(cx).open(thread) => None,
             Some(error) if retry.is_some() => Some(format!("{error}\nEdit the address or retry.")),
             Some(error) => Some(format!("{error}\nEdit the address.")),
             None if body.is_none() => Some("Enter a website address above to browse.".to_owned()),
