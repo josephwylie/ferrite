@@ -26,7 +26,7 @@ Preconditions:
 
 - Baseline run; `fv doctor` all `ok`; no Threads open.
 
-- **Start from the composer (keyboard).** On a fresh run the Pane shows `What should we build in verify?`. Run `fv click --selector composer-block`, `fv type "Reply with exactly the word MANGO. Use no tools."`, `fv shot composer-typed` (text in the box, send arrow lit), then `fv key enter`. `fv cli -- thread list` shows Thread `1` `working`; `fv cli -- agent wait 1 --timeout-ms 90000` settles `done`; `fv shot composer-sent` shows the bubble and `MANGO`, sidebar row `New thread`.
+- **Start from the composer (keyboard).** On a fresh run the Pane shows `What should we build in verify?`. Run `fv click --selector composer-block`, `fv type "Reply with exactly the word MANGO. Use no tools."`, `fv shot composer-typed` (text in the box, send arrow lit; on Linux `fv text composer-block` reads the draft), then `fv key enter`. `fv cli -- thread list` shows Thread `1` `working`; `fv cli -- agent wait 1 --timeout-ms 90000` settles `done`; `fv shot composer-sent` shows the bubble and `MANGO`, sidebar row `New thread`.
 - **Start (scripting).** Run `fv cli -- thread start --cwd /tmp/fv-$FV_RUN/repo --title "Probe" --focus --ready --timeout-ms 60000 --args=--model --args=haiku`. Exit 0, `thread: 1`, `attention: idle`, `focused: true`. `fv shot thread-started`: sidebar under `verify` lists `Probe`; Pane header reads `Probe` and `main`.
 - **Model really pinned.** `. /tmp/fv-$FV_RUN/run.env; pgrep -P $SERVER_PID -fl claude` (Linux: `-af`) shows `--model haiku`; the Pane footer chip reads `Haiku …`.
 - **Prompt from the keyboard.** With the Thread focused, `fv click --selector composer-block`, `fv type "…"`, `fv key enter`; settle with `fv cli -- agent wait <id>`.

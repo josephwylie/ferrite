@@ -2500,8 +2500,15 @@ impl Interactivity {
                         .insert(debug_selector.clone(), bounds);
                     window
                         .next_frame
-                        .debug_bounds_log
-                        .push((debug_selector.clone(), bounds));
+                        .debug_paint_log
+                        .push(crate::window::DebugPainted::Selector(
+                            debug_selector.clone(),
+                            bounds,
+                        ));
+                    window
+                        .next_frame
+                        .dispatch_tree
+                        .set_debug_selector(debug_selector.clone());
                 }
 
                 self.paint_hover_group_handler(window, cx);

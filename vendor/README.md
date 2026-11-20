@@ -376,6 +376,17 @@ browser does, so the same CSS geometry lands on the same device pixels:
   which upstream exposes only through `VisualTestContext`: the live
   reference capture drives a headless window that is no test context's and
   clicks what it finds there.
+- **Debug text and focus on a window** (`window.rs`, `text_system/line.rs`,
+  `key_dispatch.rs`, `elements/div.rs`, test support only). The frame keeps
+  one paint-order log of its `debug_selector`s and of every line a
+  `ShapedLine` or `WrappedLine` paints (its text and its box clipped to the
+  content mask; a line fully clipped or under zero opacity is left out), and
+  a reused paint range carries both. `Window::debug_text` reads the lines
+  painted, from the element on, inside the last element of a selector.
+  A dispatch node keeps its element's `debug_selector`, so
+  `Window::focused_debug_selector` names the nearest one on the focused
+  element's dispatch path. Without test support nothing is recorded: the
+  only trace is `paint_line`'s unused text argument.
 - **A spring reads the executor's clock** (`elements/animation.rs`). A
   spring element stepped by `Instant::now()`, so its tests' fake clock did
   not move it: it moved by the real time between two frames, and under

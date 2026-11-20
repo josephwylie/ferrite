@@ -31,8 +31,9 @@ window.
   as on screen; a shot draws its frame first.
 - **One driver.** `ferrite_cockpit::headless::Driver` holds the input,
   capture and clock primitives: keys, typing, clicks at a `debug_selector`
-  or a point, bounds, and shots. The live reference and `--headless` both
-  use it.
+  or a point, bounds, shots, and the readbacks a checker with no shot
+  needs: the text an element shows and what holds the keyboard. The live
+  reference and `--headless` both use it.
 - **Behind a feature.** The primitives exist only under `gpui/test-support`,
   so they sit behind a `headless` cargo feature that release builds never
   turn on. `visual-reference` builds on it. It is not the other way round,

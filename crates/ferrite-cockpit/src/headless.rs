@@ -9,7 +9,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use ferrite_core::drive::{
-    Action, Answer, Click, Drag, Find, Keys, Press, Resize, Shot, Target, Text,
+    Action, Answer, Click, Drag, Find, Focused, Keys, Press, Resize, Shot, Target, Text,
 };
 use ferrite_core::settings::Settings;
 use ferrite_ui::keymap::{self, Binding};
@@ -167,6 +167,11 @@ fn act(driver: &mut Driver, action: Action) -> Result<Answer, String> {
                 height: bounds.size.height.into(),
             })
         }
+        Action::Read(Find { selector }) => {
+            let lines = driver.text(&selector).ok_or_else(|| not_drawn(&selector))?;
+            Ok(Answer::Read { lines })
+        }
+        Action::Focus => Ok(Answer::Focused(driver.focus())),
         Action::Attach(files) => {
             if files.paths.is_empty() || files.paths.iter().any(|path| !path.is_absolute()) {
                 return Err("attachments require absolute local file paths".into());
@@ -410,6 +415,35 @@ impl Driver {
             .update_window(self.window, |_, window, _| window.debug_bounds(selector))
             .ok()
             .flatten()
+    }
+
+    /// The lines of text the last frame showed inside the element of this
+    /// `debug_selector`, in paint order; `None` when it drew no such
+    /// element.
+    pub fn text(&mut self, selector: &str) -> Option<Vec<String>> {
+        self.cx
+            .update_window(self.window, |_, window, _| window.debug_text(selector))
+            .ok()
+            .flatten()
+            .map(|lines| lines.into_iter().map(String::from).collect())
+    }
+
+    /// What holds the keyboard in the last frame: the key contexts a key
+    /// goes through, the nearest selector on that path, and what the
+    /// Cockpit names the place.
+    pub fn focus(&mut self) -> Focused {
+        let view = self.current_view();
+        self.cx
+            .update_window(self.window, |_, window, cx| Focused {
+                contexts: window
+                    .context_stack()
+                    .iter()
+                    .map(|context| format!("{context:?}"))
+                    .collect(),
+                selector: window.focused_debug_selector(),
+                label: view.read(cx).keyboard_label(window).map(String::from),
+            })
+            .expect("the off-screen window stands")
     }
 
     pub fn mouse(&mut self, event: PlatformInput) {

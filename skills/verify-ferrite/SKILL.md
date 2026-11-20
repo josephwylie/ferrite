@@ -36,12 +36,13 @@ among them.
 | | macOS | Linux |
 | --- | --- | --- |
 | launch, doctor, stop, `cli` | yes | yes |
-| `key`, `type`, `click`, `find`, `resize`, `drag` (headless) | yes | yes |
+| `key`, `type`, `click`, `find`, `text`, `focus`, `resize`, `drag` (headless) | yes | yes |
 | `shot` | yes, 2880x1800 | fails: `screenshots need macOS for now` |
 | `launch --window` (the visible window) | yes | refused |
 
 Linux has no off-screen renderer yet, so a Linux proof of window state is `fv find`
-bounds plus a CLI read-back (`agent read`, `thread get`), never a picture.
+bounds, `fv text` and `fv focus` read-backs, and a CLI read-back (`agent read`,
+`thread get`), never a picture.
 
 ## Launch
 
@@ -91,6 +92,8 @@ $FV type "Reply with MANGO"  # into whatever holds the keyboard
 $FV click --selector composer-block            # centre of what that element drew
 $FV click --x 848 --y 811 [--double|--right]   # a point, in window points (1440x900)
 $FV find approval-prompt     # where an element was drawn: {x,y,width,height}
+$FV text composer-block      # the lines of text it shows: {"lines":[…]}
+$FV focus                    # what holds the keyboard: {contexts,selector,label}
 $FV resize 700 900           # answers the size the window now has
 $FV drag --from-selector panel-edge --to-x 1000 --to-y 400   # left button, moved in steps
 $FV shot <name>              # PNG into the evidence dir (macOS)
@@ -104,6 +107,15 @@ exits 2.
   `approval-prompt`, `decision-actions`, `settings-search`, `settings-card`.
   `find` answers `nothing drawn as …` when the last frame has no such element. Points
   are a fallback and move when the layout does.
+- `text` answers each line of text painted inside that element's bounds in the last
+  frame, in paint order, with anything drawn over it and none scrolled or clipped
+  away. Two elements that draw one selector are told apart by what they show. The
+  Terminal reads as its painted rows; the Browser's page, images and icons are not text.
+- `focus` answers `contexts`, the key contexts a key goes through (innermost last:
+  `Composer`, `PanelControl`, …), `selector`, the nearest `debug_selector` around the
+  focused element, and `label`, the Panel stop by the name its row gives it
+  (`Overview`, `Files`), else `null`. Read it before blaming a key: `unhandled` from
+  `key` means the keyboard is elsewhere, and `focus` says where.
 - **Shots are 2880x1800 at scale 2.** Divide pixel positions by 2 for `--x/--y`.
 - `key` presses each key and lets it go, as a keyboard does, so `enter` or `space` on
   a focused control (a Panel tab, `+`, a pull request's segment) clicks it from the
@@ -144,8 +156,8 @@ visuals and the browser (CEF is off headless), system notifications and IME inpu
 Dropping files from another app has no helper in either mode; report it as unverified.
 
 - `key`, `type` and `click --x --y` post events to the window's pid
-  (`scripts/fv_input.py`, logged to `input.log`). `find`, `resize`, `drag` and
-  `--selector` are headless only.
+  (`scripts/fv_input.py`, logged to `input.log`). `find`, `text`, `focus`, `resize`,
+  `drag` and `--selector` are headless only.
 - It needs Accessibility for the app that runs `fv` (Ferrite itself for a Ferrite
   agent). Releases are unsigned, so an update can leave the switch on but stale. The fix
   is `tccutil reset Accessibility <bundle id>` (the `CFBundleIdentifier` in Ferrite.app's

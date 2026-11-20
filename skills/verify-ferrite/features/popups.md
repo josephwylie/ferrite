@@ -33,8 +33,9 @@ Preconditions:
 - **Selectors.** `mode-menu`, `mode-segments`, `mode-segment-N`, `mode-preview`,
   `plan-card`. Take a mode segment's point from `fv find mode-segments`: a guessed point
   misses.
-- **Holds the keyboard.** With a popup up, `fv type hello`, then shoot: nothing landed in
-  the Composer. After `escape`, type again: it lands.
+- **Holds the keyboard.** With a popup up, `fv focus` has `Popup` in its root context;
+  `fv type hello`, and `fv text composer-block` has no `hello` (a shot on macOS). After
+  `escape`, `Popup` is gone from `fv focus`; type again: it lands.
 - **Escape keeps the turn.** Start a turn of 60 s or more, open the mode menu, `escape`
   once: `fv find mode-menu` says `nothing drawn` and `fv cli -- thread get <id>` still
   says `working`. Do not press `escape` twice: the second one stops the turn.

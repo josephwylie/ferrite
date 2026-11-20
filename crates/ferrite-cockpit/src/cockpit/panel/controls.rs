@@ -243,14 +243,18 @@ impl PanelFocus {
 
     /// The stop in `window`'s focus, if one is.
     pub(crate) fn focused(&self, window: &Window) -> Option<PanelControl> {
+        self.focused_stop(window).map(|(control, _)| control)
+    }
+
+    /// The stop in `window`'s focus and what it says of itself.
+    fn focused_stop(&self, window: &Window) -> Option<(PanelControl, Semantics)> {
         let handles = self.handles.borrow();
         self.drawn
             .borrow()
             .iter()
-            .map(|(control, _)| control)
-            .find(|control| {
+            .find(|(control, _)| {
                 handles
-                    .get(*control)
+                    .get(control)
                     .is_some_and(|handle| handle.is_focused(window))
             })
             .cloned()
@@ -260,6 +264,14 @@ impl PanelFocus {
 impl CockpitView {
     pub(crate) fn panel_control_focused(&self, window: &Window) -> bool {
         self.panel_pane().is_some() && self.panel.focus.focused(window).is_some()
+    }
+
+    /// What the Cockpit calls the place that holds the keyboard, for a
+    /// headless driver to say: the Panel stop by its name in the row.
+    pub(crate) fn keyboard_label(&self, window: &Window) -> Option<SharedString> {
+        self.panel_pane()?;
+        let (_, semantics) = self.panel.focus.focused_stop(window)?;
+        Some(semantics.name)
     }
 
     /// The stop F6 arrives at: the one last in focus while it is drawn,
