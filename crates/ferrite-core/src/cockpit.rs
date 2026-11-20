@@ -2364,6 +2364,11 @@ impl Cockpit {
         std::mem::take(&mut self.asked)
     }
 
+    /// Whether API callers asked anything of the windows since the last take.
+    pub fn has_asked(&self) -> bool {
+        !self.asked.is_empty()
+    }
+
     /// Every Factory's Tasks, as the Server last said them (ADR 0037).
     pub fn factory(&self) -> &crate::factory::Board {
         &self.shared.factory
