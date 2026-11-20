@@ -339,3 +339,25 @@ fn deferred_preview_for_a_closed_pane_is_dropped(cx: &mut TestAppContext) {
                 .is_none_or(|thread| view.files.read(cx).active_path(thread).is_none())));
     });
 }
+
+/// A script's `ferrite thread focus` reaches the window as the Server's
+/// Focus: the window lands on that Thread on its next pump, with nothing
+/// else moving to redraw it.
+#[gpui::test]
+fn a_focus_the_server_asks_for_shows_at_once(cx: &mut TestAppContext) {
+    let (core, _fake) = cockpit("asked-focus", 2);
+    let threads = core.threads();
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    tick(cx);
+    let first = shown(&view, cx).expect("a Thread shows");
+    let second = *threads.iter().find(|thread| **thread != first).unwrap();
+    view.update(cx, |view, _| {
+        view.cockpit
+            .fixture_task_alert(ferrite_core::protocol::ServerMessage::Focus {
+                thread: second,
+                fork_of: None,
+            });
+    });
+    tick(cx);
+    assert_eq!(shown(&view, cx), Some(second));
+}

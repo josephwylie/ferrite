@@ -2380,6 +2380,9 @@ impl CockpitView {
         }
         self.poll_machine_repo(cx);
         let server_moved = self.server_moved();
+        // A Focus or a toast an API caller asked for is presented by the
+        // render, so it needs one even when nothing else moved.
+        let asked = self.cockpit.has_asked();
         // The Server says when its parked Threads' rows moved.
         let parked_moved = self.cockpit.take_parked_changed();
         if parked_moved {
@@ -2525,6 +2528,7 @@ impl CockpitView {
             && !models_changed
             && !commands_changed
             && !server_moved
+            && !asked
             && !parked_moved
             && !panes_changed
         {
@@ -2584,6 +2588,7 @@ impl CockpitView {
         let precise = restarted.is_empty()
             && !swept_change
             && !server_moved
+            && !asked
             && !parked_moved
             && !panes_changed
             && !startup_changed
