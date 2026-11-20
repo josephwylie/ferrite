@@ -4,10 +4,10 @@
 //! draws that Thread's running work from what the Cockpit gives it
 //! (`BackgroundDialogInputs`), asked for each frame, so the Cockpit's own
 //! notify still redraws it; and what the operator asks of it it says as a
-//! `BackgroundDialogEvent`. The stopping is the Cockpit's
-//! (`background_work.rs`), shared with the line under the transcript.
+//! `BackgroundDialogEvent`. Its `Stop` stands where `BackgroundView`
+//! (`background_work.rs`) says, shared with the line under the transcript.
 
-use super::background_work::{running_work, stop_elements, StopControl, Work};
+use super::background_work::{stop_elements, BackgroundInputs, StopControl, Work};
 use super::panel::background::output_block;
 use super::*;
 use ferrite_core::transcript::ToolBlock;
@@ -59,7 +59,7 @@ impl BackgroundDialogView {
         let thread = self.thread;
         let BackgroundDialogInputs { waiting, work, stop } = self
             .cockpit
-            .read_with(cx, |cockpit, _| cockpit.background_dialog_inputs(thread))
+            .read_with(cx, |cockpit, cx| cockpit.background_dialog_inputs(thread, cx))
             .ok()??;
         let mut sections = div().flex().flex_col().gap(px(BACKGROUND_DIALOG_SECTION_GAP));
         for (work, call) in &work {
@@ -195,23 +195,19 @@ impl CockpitView {
     /// Everything the dialog on `thread` draws from, none once that Thread
     /// is not open. It never reads the dialog: the dialog calls it while its
     /// own update is running.
-    fn background_dialog_inputs(&self, thread: ThreadId) -> Option<BackgroundDialogInputs> {
-        let open = self.cockpit.thread(thread)?;
-        let running = running_work(&open);
-        let stop = self.stop_control(&open, thread, &running);
+    fn background_dialog_inputs(&self, thread: ThreadId, cx: &App) -> Option<BackgroundDialogInputs> {
+        let inputs = self.background_inputs(thread, true)?;
+        let stop = self.background.read(cx).stop_control(&inputs, &inputs.running);
+        let BackgroundInputs { busy, running, calls, .. } = inputs;
         let work = running
             .into_iter()
             .map(|work| {
-                let call = work
-                    .call
-                    .as_deref()
-                    .and_then(|call| open.transcript().tool(call))
-                    .cloned();
+                let call = work.call.as_ref().and_then(|call| calls.get(call)).cloned();
                 (work, call)
             })
             .collect();
         Some(BackgroundDialogInputs {
-            waiting: !open.busy(),
+            waiting: !busy,
             work,
             stop,
         })
@@ -225,7 +221,9 @@ impl CockpitView {
     ) {
         let thread = dialog.read(cx).thread;
         match event.clone() {
-            BackgroundDialogEvent::Stop => self.stop_background_work(thread, running_work, cx),
+            BackgroundDialogEvent::Stop => {
+                self.stop_background_work(thread, |inputs| inputs.running.clone(), cx)
+            }
             BackgroundDialogEvent::OpenThread(call) => self.open_background_agent(thread, &call, cx),
             BackgroundDialogEvent::Closed => {
                 self.hide_sheet(cx);

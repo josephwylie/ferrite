@@ -82,9 +82,6 @@ pub(crate) struct Panel {
     tab_press: Option<TabPress>,
     /// "Open a surface"'s highlighted row (`Opener::ALL`'s index).
     pub(crate) empty_highlight: usize,
-    /// The background cards turned from how they start (running open,
-    /// finished closed), by call.
-    pub(crate) background_turned: std::collections::HashSet<String>,
     /// The Panel's row of stops, shared with each view that draws one.
     pub(crate) focus: std::rc::Rc<PanelFocus>,
     /// A view a test draws at the foot of the Panel, as a Surface's own
@@ -140,7 +137,6 @@ impl Panel {
             resizing: None,
             tab_press: None,
             empty_highlight: 0,
-            background_turned: Default::default(),
             focus: Default::default(),
             #[cfg(test)]
             test_child: None,
@@ -397,6 +393,7 @@ impl CockpitView {
         self.panel.scrolls.retain(|thread, _| keep(*thread));
         self.panel.focus.retain_threads(keep);
         self.pull_request.update(cx, |reader, _| reader.retain_threads(keep));
+        self.background.update(cx, |background, _| background.retain_threads(keep));
         self.browsers.retain_threads(keep);
         self.facts.retain_threads(keep);
         self.decisions.retain_threads(keep);
@@ -410,6 +407,7 @@ impl CockpitView {
             + self.panel.hunks.held_for_test(thread)
             + self.panel.focus.held_for_test(thread)
             + self.pull_request.read(cx).held_for_test(thread)
+            + self.background.read(cx).held_for_test(thread)
             + self.browsers.held_for_test(thread)
             + usize::from(self.facts.get(thread).is_some())
             + self.decisions.rules().iter().filter(|rule| rule.thread == thread).count()
@@ -826,7 +824,13 @@ impl CockpitView {
                     .pl(px(PANEL_PAD_L))
                     .pr(px(PANEL_PAD_R))
                     .pb(px(PANEL_PAD_B))
-                    .child(panel_body(self.background_pane(thread, cx).into_any_element(), &scroll))
+                    .child(panel_body(
+                        self.background_inputs(thread, true)
+                            .map(|inputs| self.background.update(cx, |background, cx| background.pane(&inputs, cx)))
+                            .unwrap_or_else(div)
+                            .into_any_element(),
+                        &scroll,
+                    ))
                     .into_any_element()
             }
             Some(SurfaceId::File(_) | SurfaceId::Browser) => padded(self.panel_preview(owner, cx)),

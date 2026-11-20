@@ -6,14 +6,28 @@
 //! work itself lives in the rail's Background tasks section and the
 //! Background Surface (`panel::background`); the line and its dialog read
 //! the same calls (`Transcript::background_calls`).
+//!
+//! Its state is its own view's (ADR 0041), `BackgroundView`: the stops
+//! sent and where each stands, and the cards turned from how they start.
+//! It has no render of its own: the root draws it wherever it shows (the
+//! line, the Overview's section, the Surface) and the dialog reads its
+//! `Stop` from it, each with `BackgroundInputs`, which the root reads off
+//! the Thread. What the operator asks of it it says as a
+//! `BackgroundEvent`. Sending a stop is a Server call, so the root sends
+//! it and tells the view; the view keeps the count of sends and the timer
+//! that offers `Retry`.
 
+use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
+
+use gpui::{App, WeakEntity};
 
 use super::panel::background::label;
 use super::*;
 
 use ferrite_core::activity::AgentKey;
 use ferrite_core::transcript::tools::{policy, ToolKind};
+use ferrite_core::transcript::ToolBlock;
 use ferrite_pane::pane::{BackgroundTask, WorkKind};
 use ferrite_pane::transcript::TranscriptTail;
 
@@ -49,6 +63,7 @@ pub(super) enum StopState {
 /// (`call` is the call that launched it, which holds its output); a
 /// subagent is an agent launched into the background, or any still
 /// working after Main's turn.
+#[derive(Clone)]
 pub(super) struct Work {
     pub(super) task: BackgroundTask,
     pub(super) stop: Option<StopTarget>,
@@ -69,7 +84,7 @@ impl Work {
 /// Every piece of background work the Thread knows of, whichever view asks:
 /// the provider's tasks, the agents still working and the calls that
 /// launched work into the background that nothing else accounts for.
-pub(super) fn running_work(open: &ferrite_core::cockpit::ThreadView<'_>) -> Vec<Work> {
+fn running_work(open: &ferrite_core::cockpit::ThreadView<'_>) -> Vec<Work> {
     use ferrite_core::activity::AgentStatus;
     use ferrite_core::progress::TaskStatus;
     let transcript = open.transcript();
@@ -152,24 +167,65 @@ pub(super) fn running_work(open: &ferrite_core::cockpit::ThreadView<'_>) -> Vec<
     work
 }
 
-/// What the line under Main's transcript counts: while Main's turn runs its
-/// agents are rows of the transcript, so only commands are waited on.
-pub(super) fn line_work(open: &ferrite_core::cockpit::ThreadView<'_>) -> Vec<Work> {
-    let mut work = running_work(open);
-    if open.busy() {
-        work.retain(|work| work.task.kind == WorkKind::Command);
-    }
-    work
+/// A sent stop: by Thread and Session generation (a provider reuses task
+/// ids), and what it ends.
+type Stop = (ThreadId, u64, StopTarget);
+
+/// A call whose background work has ended.
+pub(super) struct Finished {
+    pub(super) call: String,
+    pub(super) title: SharedString,
+    /// How long it ran, where the activity timed it.
+    pub(super) took: Option<String>,
 }
 
-/// What `Stop` can end among `work`: a command only where the Session can
-/// stop tasks, a subagent only once its status is known to be running.
-pub(super) fn stop_targets(open: &ferrite_core::cockpit::ThreadView<'_>, work: &[Work]) -> Vec<StopTarget> {
-    let tasks = open.supports_control(ferrite_core::ControlKind::StopTask);
-    work.iter()
-        .filter_map(|work| work.stop.clone())
-        .filter(|target| tasks || matches!(target, StopTarget::Agent(_)))
-        .collect()
+/// What the background work draws of one Thread, as the window has it this
+/// frame.
+pub(crate) struct BackgroundInputs {
+    pub(super) thread: ThreadId,
+    pub(super) generation: u64,
+    /// Main's turn runs.
+    pub(super) busy: bool,
+    /// The Session can stop a command.
+    stops_tasks: bool,
+    pub(super) running: Vec<Work>,
+    /// What the provider said to the stops of each running command: how
+    /// many times it refused, and the last reason.
+    refusals: HashMap<String, (u32, String)>,
+    /// Oldest first.
+    pub(super) finished: Vec<Finished>,
+    /// The blocks of the calls above, by call, where they were asked for.
+    pub(super) calls: HashMap<String, ToolBlock>,
+}
+
+impl BackgroundInputs {
+    /// What the line under Main's transcript counts: while Main's turn runs
+    /// its agents are rows of the transcript, so only commands are waited
+    /// on.
+    pub(super) fn line_work(&self) -> Vec<Work> {
+        let mut work = self.running.clone();
+        if self.busy {
+            work.retain(|work| work.task.kind == WorkKind::Command);
+        }
+        work
+    }
+
+    /// What `Stop` can end among `work`: a command only where the Session
+    /// can stop tasks, a subagent only once its status is known to be
+    /// running.
+    pub(super) fn targets(&self, work: &[Work]) -> Vec<StopTarget> {
+        work.iter()
+            .filter_map(|work| work.stop.clone())
+            .filter(|target| self.stops_tasks || matches!(target, StopTarget::Agent(_)))
+            .collect()
+    }
+
+    fn refusal(&self, target: &StopTarget) -> Option<(u32, &str)> {
+        match target {
+            StopTarget::Command(id) => self.refusals.get(id).map(|(count, why)| (*count, why.as_str())),
+            StopTarget::Agent(_) => None,
+        }
+    }
 }
 
 /// What `Stop` ends, and what it leaves running: a bare `Stop` is only for
@@ -271,52 +327,57 @@ pub(super) fn stop_elements(
     elements
 }
 
-fn refusal_of<'a>(
-    open: &'a ferrite_core::cockpit::ThreadView<'_>,
-    target: &StopTarget,
-) -> Option<(u32, &'a str)> {
-    match target {
-        StopTarget::Command(id) => open.transcript().stop_refusal(id),
-        StopTarget::Agent(_) => None,
-    }
+/// What the background work asks of the window.
+#[derive(Clone)]
+pub(crate) enum BackgroundEvent {
+    /// `Details` on the line: the `Background work` dialog on the Thread.
+    Details(ThreadId),
+    /// A row of the Overview's section: the Background Surface.
+    Open(ThreadId),
+    /// `Open` on the line or on an agent's card: the agent the call
+    /// started, in the Panel.
+    OpenAgent { thread: ThreadId, call: String },
+    /// The line's `Stop`, or `Retry`: every piece of work it lists that the
+    /// Session can stop.
+    StopLine(ThreadId),
+    /// A stop square: `target` of the Thread's Session `generation`.
+    Stop { thread: ThreadId, generation: u64, target: StopTarget },
 }
 
-impl CockpitView {
-    /// The background work line's title for Pane `index`, as it draws.
-    #[cfg(test)]
-    pub(super) fn background_work_title(&self, index: usize) -> Option<String> {
-        let open = self.cockpit.thread(self.panes.get(index)?.thread()?)?;
-        let tasks: Vec<BackgroundTask> =
-            line_work(&open).into_iter().map(|work| work.task).collect();
-        pane::present_background_work(&tasks, !open.busy()).map(|presented| presented.title)
-    }
+/// Every Thread's background work as the window keeps it: the stops sent
+/// and the cards turned.
+pub(crate) struct BackgroundView {
+    /// The work a `Stop` was pressed for: the line reads `Stopping...`
+    /// until it ends, or `Retry` once one refused.
+    stops: HashMap<Stop, StopState>,
+    /// How many stops `stops` has taken, to tell one send's timer from
+    /// another's.
+    sends: u64,
+    /// The Background Surface's cards turned from how they start (running
+    /// open, finished closed), by call.
+    turned: HashMap<ThreadId, HashSet<String>>,
+}
 
-    /// Why the line says the stop of task `id` of Pane `index` failed.
-    #[cfg(test)]
-    pub(super) fn background_stop_reason(&self, index: usize, id: &str) -> Option<String> {
-        let thread = self.panes.get(index)?.thread()?;
-        let open = self.cockpit.thread(thread)?;
-        let target = StopTarget::Command(id.into());
-        match self.stop_state(&open, thread, open.generation(), &target)? {
-            StopState::Refused(why) => Some(why),
-            _ => None,
+impl EventEmitter<BackgroundEvent> for BackgroundView {}
+
+impl BackgroundView {
+    pub(super) fn new() -> Self {
+        Self {
+            stops: HashMap::new(),
+            sends: 0,
+            turned: HashMap::new(),
         }
     }
 
     /// The line under Main's transcript, none while nothing runs in the
     /// background.
-    pub(super) fn background_work_tail(&self, index: usize) -> Option<TranscriptTail> {
-        let pane = self.panes.get(index)?;
-        if !pane.is_main() {
-            return None;
-        }
-        let thread = pane.thread()?;
-        let open = self.cockpit.thread(thread)?;
-        let work = line_work(&open);
-        let waiting = !open.busy();
+    pub(super) fn line(&self, this: WeakEntity<Self>, inputs: &BackgroundInputs) -> Option<TranscriptTail> {
+        let thread = inputs.thread;
+        let work = inputs.line_work();
+        let waiting = !inputs.busy;
         let tasks: Vec<BackgroundTask> = work.iter().map(|work| work.task.clone()).collect();
         let presented = pane::present_background_work(&tasks, waiting)?;
-        let stop = self.stop_control(&open, thread, &work);
+        let stop = self.stop_control(inputs, &work);
         let single = match work.as_slice() {
             [only] => Some((
                 only.task.launched,
@@ -339,10 +400,16 @@ impl CockpitView {
                 .hash(&mut hasher);
             hasher.finish()
         };
-        let owner = self.decisions.owner();
         Some(TranscriptTail {
             key,
             render: std::rc::Rc::new(move |_: &mut Window, _: &mut gpui::App| {
+                let emit = |event: BackgroundEvent| {
+                    let this = this.clone();
+                    move |_: &ClickEvent, _: &mut Window, cx: &mut gpui::App| {
+                        let event = event.clone();
+                        let _ = this.update(cx, |_, cx| cx.emit(event));
+                    }
+                };
                 let mut actions: Vec<AnyElement> = Vec::new();
                 if let Some((Some(launched), _)) = &single {
                     actions.push(
@@ -351,42 +418,238 @@ impl CockpitView {
                             .into_any_element(),
                     );
                 }
-                let details = owner.clone();
                 actions.push(
                     pane::inline_button(("background-details", thread.get() as usize), "Details")
                         .debug_selector(|| "background-details".into())
-                        .on_click(move |_, _, cx| {
-                            let _ = details.update(cx, |view, cx| {
-                                view.open_background_dialog(thread, cx)
-                            });
-                        })
+                        .on_click(emit(BackgroundEvent::Details(thread)))
                         .into_any_element(),
                 );
                 if let Some((_, Some(call))) = single.clone() {
-                    let opener = owner.clone();
                     actions.push(
                         pane::inline_button(("background-open", thread.get() as usize), "Open")
                             .text_color(rgb(ferrite_ui::theme::INK_SUBTLE))
-                            .on_click(move |_, _, cx| {
-                                let call = call.clone();
-                                let _ = opener.update(cx, |view, cx| {
-                                    view.open_background_agent(thread, &call, cx)
-                                });
-                            })
+                            .on_click(emit(BackgroundEvent::OpenAgent { thread, call }))
                             .into_any_element(),
                     );
                 }
                 if let Some(control) = &stop {
-                    let stopper = owner.clone();
-                    actions.extend(stop_elements(control, thread, "background", move |_, _, cx| {
-                        let _ = stopper.update(cx, |view, cx| {
-                            view.stop_background_work(thread, line_work, cx)
-                        });
-                    }));
+                    actions.extend(stop_elements(
+                        control,
+                        thread,
+                        "background",
+                        emit(BackgroundEvent::StopLine(thread)),
+                    ));
                 }
                 pane::background_work_line(key, presented.clone(), actions).into_any_element()
             }),
         })
+    }
+
+    /// The `Stop` of `work`: what it says, and where the stops it sent stand.
+    pub(super) fn stop_control(&self, inputs: &BackgroundInputs, work: &[Work]) -> Option<StopControl> {
+        let targets = inputs.targets(work);
+        if targets.is_empty() {
+            return None;
+        }
+        let stops: Vec<Option<StopState>> = targets
+            .iter()
+            .map(|target| self.stop_state(inputs, target))
+            .collect();
+        Some(StopControl {
+            scope: stop_scope(work, &targets),
+            stopping: stops.iter().all(|stop| matches!(stop, Some(StopState::Stopping { .. }))),
+            refused: stops.iter().find_map(|stop| match stop {
+                Some(StopState::Refused(why)) => Some(why.clone()),
+                _ => None,
+            }),
+        })
+    }
+
+    /// Where the stop of `target` stands: what was sent, read with what the
+    /// provider has since said of it.
+    fn stop_state(&self, inputs: &BackgroundInputs, target: &StopTarget) -> Option<StopState> {
+        let sent = self
+            .stops
+            .get(&(inputs.thread, inputs.generation, target.clone()))?;
+        match (sent, inputs.refusal(target)) {
+            (
+                StopState::Stopping { answered, .. } | StopState::Unsettled { answered },
+                Some((count, why)),
+            ) if count > *answered => Some(StopState::Refused(why.to_owned())),
+            (StopState::Unsettled { .. }, _) => Some(StopState::Refused(STOP_NOT_SETTLED.into())),
+            _ => Some(sent.clone()),
+        }
+    }
+
+    /// `stop` was sent, when the provider had refused its task `refused`
+    /// times: it reads `Stopping...` until it is answered or the timer
+    /// offers `Retry`.
+    fn sent(&mut self, stop: Stop, refused: u32, cx: &mut Context<Self>) {
+        let answered = match self.stops.get(&stop) {
+            Some(StopState::Unsettled { answered }) if refused <= *answered => answered + 1,
+            _ => refused,
+        };
+        self.sends += 1;
+        let nonce = self.sends;
+        self.stops.insert(stop.clone(), StopState::Stopping { nonce, answered });
+        self.offer_retry_unless_settled(stop, nonce, cx);
+        cx.notify();
+    }
+
+    /// The send of `stop` failed, with the reason.
+    fn refused(&mut self, stop: Stop, why: String, cx: &mut Context<Self>) {
+        self.stops.insert(stop, StopState::Refused(why));
+        cx.notify();
+    }
+
+    /// A provider that never answers a stop leaves the work running: after
+    /// `STOP_SETTLES_WITHIN` the line says so and offers `Retry`.
+    fn offer_retry_unless_settled(&self, stop: Stop, nonce: u64, cx: &mut Context<Self>) {
+        cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(STOP_SETTLES_WITHIN).await;
+            this.update(cx, |view, cx| {
+                if let Some(state) = view.stops.get_mut(&stop) {
+                    if let StopState::Stopping { nonce: sent, answered } = *state {
+                        if sent == nonce {
+                            *state = StopState::Unsettled { answered };
+                            cx.notify();
+                        }
+                    }
+                }
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// Forget the stops of work that has ended, or of a Session that has:
+    /// `running` is each Thread's Session generation and what `Stop` can
+    /// end in it, none for a Thread not open.
+    fn prune(&mut self, running: impl Fn(ThreadId) -> Option<(u64, Vec<StopTarget>)>) {
+        if self.stops.is_empty() {
+            return;
+        }
+        let mut seen: HashMap<ThreadId, Option<(u64, Vec<StopTarget>)>> = HashMap::new();
+        self.stops.retain(|(thread, generation, target), _| {
+            seen.entry(*thread)
+                .or_insert_with(|| running(*thread))
+                .as_ref()
+                .is_some_and(|(current, targets)| current == generation && targets.contains(target))
+        });
+    }
+
+    /// A card's head pressed: it turns from how it starts, or back.
+    pub(super) fn turn(&mut self, thread: ThreadId, call: String, cx: &mut Context<Self>) {
+        let turned = self.turned.entry(thread).or_default();
+        if !turned.remove(&call) {
+            turned.insert(call);
+        }
+        cx.notify();
+    }
+
+    /// Whether `thread`'s card on `call` is turned from how it starts.
+    pub(super) fn is_turned(&self, thread: ThreadId, call: &str) -> bool {
+        self.turned.get(&thread).is_some_and(|turned| turned.contains(call))
+    }
+
+    /// Everything of a Thread `keep` refuses goes.
+    pub(super) fn retain_threads(&mut self, keep: impl Fn(ThreadId) -> bool) {
+        self.stops.retain(|(thread, _, _), _| keep(*thread));
+        self.turned.retain(|thread, _| keep(*thread));
+    }
+}
+
+#[cfg(test)]
+impl BackgroundView {
+    /// How many stops are remembered.
+    pub(super) fn stops_held(&self) -> usize {
+        self.stops.len()
+    }
+
+    /// How much of `thread`'s background work is held.
+    pub(super) fn held_for_test(&self, thread: ThreadId) -> usize {
+        self.stops.keys().filter(|(held, _, _)| *held == thread).count()
+            + self.turned.get(&thread).map_or(0, HashSet::len)
+    }
+}
+
+impl CockpitView {
+    /// What the background work draws of `thread`, none once it is not
+    /// open. `outputs`: with the blocks of its calls, for their output.
+    pub(super) fn background_inputs(&self, thread: ThreadId, outputs: bool) -> Option<BackgroundInputs> {
+        let open = self.cockpit.thread(thread)?;
+        let transcript = open.transcript();
+        let running = running_work(&open);
+        let refusals = running
+            .iter()
+            .filter_map(|work| match &work.stop {
+                Some(StopTarget::Command(id)) => transcript
+                    .stop_refusal(id)
+                    .map(|(count, why)| (id.clone(), (count, why.to_owned()))),
+                _ => None,
+            })
+            .collect();
+        let timings = open.activity().main().timings();
+        let ended: Vec<&ToolBlock> = transcript
+            .background_calls()
+            .filter(|call| !call.in_background())
+            .collect();
+        let finished = ended
+            .iter()
+            .map(|call| Finished {
+                call: call.call.clone(),
+                title: label(call),
+                took: timings
+                    .get(&call.call)
+                    .map(|timing| ferrite_core::progress::settled_duration_label(timing.elapsed())),
+            })
+            .collect();
+        let calls = if outputs {
+            running
+                .iter()
+                .filter_map(|work| work.call.as_deref())
+                .filter_map(|call| Some((call.to_owned(), transcript.tool(call)?.clone())))
+                .chain(ended.iter().map(|call| (call.call.clone(), (*call).clone())))
+                .collect()
+        } else {
+            HashMap::new()
+        };
+        Some(BackgroundInputs {
+            thread,
+            generation: open.generation(),
+            busy: open.busy(),
+            stops_tasks: open.supports_control(ferrite_core::ControlKind::StopTask),
+            running,
+            refusals,
+            finished,
+            calls,
+        })
+    }
+
+    /// The background work line's title for Pane `index`, as it draws.
+    #[cfg(test)]
+    pub(super) fn background_work_title(&self, index: usize) -> Option<String> {
+        let inputs = self.background_inputs(self.panes.get(index)?.thread()?, false)?;
+        let tasks: Vec<BackgroundTask> =
+            inputs.line_work().into_iter().map(|work| work.task).collect();
+        pane::present_background_work(&tasks, !inputs.busy).map(|presented| presented.title)
+    }
+
+    /// Why the line says the stop of task `id` of Pane `index` failed.
+    #[cfg(test)]
+    pub(super) fn background_stop_reason(&self, index: usize, id: &str, cx: &App) -> Option<String> {
+        let inputs = self.background_inputs(self.panes.get(index)?.thread()?, false)?;
+        match self.background.read(cx).stop_state(&inputs, &StopTarget::Command(id.into()))? {
+            StopState::Refused(why) => Some(why),
+            _ => None,
+        }
+    }
+
+    /// The line under Pane `index`'s transcript, if it is a Main's.
+    pub(super) fn background_work_tail(&self, index: usize, cx: &App) -> Option<TranscriptTail> {
+        let pane = self.panes.get(index).filter(|pane| pane.is_main())?;
+        let inputs = self.background_inputs(pane.thread()?, false)?;
+        self.background.read(cx).line(self.background.downgrade(), &inputs)
     }
 
     /// Lay the line out again when its clock next changes width (`9s` to
@@ -402,8 +665,8 @@ impl CockpitView {
             .get(index)
             .filter(|pane| pane.is_main())
             .and_then(|pane| pane.thread())
-            .and_then(|thread| self.cockpit.thread(thread))
-            .and_then(|open| lone_launch(&line_work(&open)))
+            .and_then(|thread| self.background_inputs(thread, false))
+            .and_then(|inputs| lone_launch(&inputs.line_work()))
         else {
             return;
         };
@@ -420,52 +683,22 @@ impl CockpitView {
         ferrite_ui::motion::wake_at(cx.entity_id(), at, cx);
     }
 
-    /// The `Stop` of `work`: what it says, and where the stops it sent stand.
-    pub(super) fn stop_control(
-        &self,
-        open: &ferrite_core::cockpit::ThreadView<'_>,
-        thread: ThreadId,
-        work: &[Work],
-    ) -> Option<StopControl> {
-        let targets = stop_targets(open, work);
-        if targets.is_empty() {
-            return None;
-        }
-        let generation = open.generation();
-        let stops: Vec<Option<StopState>> = targets
-            .iter()
-            .map(|target| self.stop_state(open, thread, generation, target))
-            .collect();
-        Some(StopControl {
-            scope: stop_scope(work, &targets),
-            stopping: stops.iter().all(|stop| matches!(stop, Some(StopState::Stopping { .. }))),
-            refused: stops.iter().find_map(|stop| match stop {
-                Some(StopState::Refused(why)) => Some(why.clone()),
-                _ => None,
-            }),
-        })
-    }
-
-    /// Where the stop of `target` stands: what the cockpit sent, read with
-    /// what the provider has since said of it.
-    fn stop_state(
-        &self,
-        open: &ferrite_core::cockpit::ThreadView<'_>,
-        thread: ThreadId,
-        generation: u64,
-        target: &StopTarget,
-    ) -> Option<StopState> {
-        let sent = self
-            .background_stops
-            .get(&(thread, generation, target.clone()))?;
-        let refusal = refusal_of(open, target);
-        match (sent, refusal) {
-            (
-                StopState::Stopping { answered, .. } | StopState::Unsettled { answered },
-                Some((count, why)),
-            ) if count > *answered => Some(StopState::Refused(why.to_owned())),
-            (StopState::Unsettled { .. }, _) => Some(StopState::Refused(STOP_NOT_SETTLED.into())),
-            _ => Some(sent.clone()),
+    pub(super) fn on_background_event(
+        &mut self,
+        _: Entity<BackgroundView>,
+        event: &BackgroundEvent,
+        cx: &mut Context<Self>,
+    ) {
+        match event.clone() {
+            BackgroundEvent::Details(thread) => self.open_background_dialog(thread, cx),
+            BackgroundEvent::Open(thread) => self.open_background(thread, cx),
+            BackgroundEvent::OpenAgent { thread, call } => self.open_background_agent(thread, &call, cx),
+            BackgroundEvent::StopLine(thread) => {
+                self.stop_background_work(thread, BackgroundInputs::line_work, cx)
+            }
+            BackgroundEvent::Stop { thread, generation, target } => {
+                self.send_stop(thread, generation, target, cx)
+            }
         }
     }
 
@@ -474,15 +707,14 @@ impl CockpitView {
     pub(super) fn stop_background_work(
         &mut self,
         thread: ThreadId,
-        work_of: fn(&ferrite_core::cockpit::ThreadView<'_>) -> Vec<Work>,
+        work_of: fn(&BackgroundInputs) -> Vec<Work>,
         cx: &mut Context<Self>,
     ) {
-        let Some(open) = self.cockpit.thread(thread) else {
+        let Some(inputs) = self.background_inputs(thread, false) else {
             return;
         };
-        let generation = open.generation();
-        for target in stop_targets(&open, &work_of(&open)) {
-            self.send_stop(thread, generation, target, cx);
+        for target in inputs.targets(&work_of(&inputs)) {
+            self.send_stop(thread, inputs.generation, target, cx);
         }
         cx.notify();
     }
@@ -490,34 +722,20 @@ impl CockpitView {
     /// Stop `target` of `thread`'s Session `generation`, if that very
     /// Session still runs it: a press that lands as the work is handed back
     /// stops nothing else.
-    pub(super) fn send_stop(
-        &mut self,
-        thread: ThreadId,
-        generation: u64,
-        target: StopTarget,
-        cx: &mut Context<Self>,
-    ) {
-        let Some(open) = self
-            .cockpit
-            .thread(thread)
-            .filter(|open| open.generation() == generation)
+    fn send_stop(&mut self, thread: ThreadId, generation: u64, target: StopTarget, cx: &mut Context<Self>) {
+        let Some(inputs) = self
+            .background_inputs(thread, false)
+            .filter(|inputs| inputs.generation == generation)
         else {
             return;
         };
-        if !stop_targets(&open, &running_work(&open)).contains(&target) {
+        if !inputs.targets(&inputs.running).contains(&target) {
             return;
         }
         let stop = (thread, generation, target.clone());
-        let count = refusal_of(&open, &target).map_or(0, |(count, _)| count);
-        let answered = match self.background_stops.get(&stop) {
-            Some(StopState::Unsettled { answered }) if count <= *answered => answered + 1,
-            _ => count,
-        };
-        self.background_stop_sends += 1;
-        let nonce = self.background_stop_sends;
-        self.background_stops
-            .insert(stop.clone(), StopState::Stopping { nonce, answered });
-        self.offer_retry_unless_settled(stop.clone(), nonce, cx);
+        let refused = inputs.refusal(&target).map_or(0, |(count, _)| count);
+        self.background
+            .update(cx, |background, cx| background.sent(stop.clone(), refused, cx));
         match target {
             StopTarget::Command(id) => {
                 self.run_session_control(
@@ -528,7 +746,9 @@ impl CockpitView {
                 if let Some((_, _, why)) = self.session_control_error.as_ref().filter(
                     |(shown, shown_generation, _)| *shown == thread && *shown_generation == generation,
                 ) {
-                    self.background_stops.insert(stop, StopState::Refused(why.clone()));
+                    let why = why.clone();
+                    self.background
+                        .update(cx, |background, cx| background.refused(stop, why, cx));
                 }
             }
             StopTarget::Agent(key) => {
@@ -538,49 +758,13 @@ impl CockpitView {
         cx.notify();
     }
 
-    /// A provider that never answers a stop leaves the work running: after
-    /// `STOP_SETTLES_WITHIN` the line says so and offers `Retry`.
-    fn offer_retry_unless_settled(
-        &self,
-        stop: (ThreadId, u64, StopTarget),
-        nonce: u64,
-        cx: &mut Context<Self>,
-    ) {
-        cx.spawn(async move |this, cx| {
-            cx.background_executor().timer(STOP_SETTLES_WITHIN).await;
-            this.update(cx, |view, cx| {
-                if let Some(state) = view.background_stops.get_mut(&stop) {
-                    if let StopState::Stopping { nonce: sent, answered } = *state {
-                        if sent == nonce {
-                            *state = StopState::Unsettled { answered };
-                            cx.notify();
-                        }
-                    }
-                }
-            })
-            .ok();
-        })
-        .detach();
-    }
-
     /// Forget the stops of work that has ended, or of a Session that has.
-    pub(super) fn prune_background_stops(&mut self) {
-        if self.background_stops.is_empty() {
-            return;
-        }
-        let mut running: std::collections::HashMap<(ThreadId, u64), Vec<StopTarget>> =
-            Default::default();
-        for (thread, _, _) in self.background_stops.keys() {
-            if let Some(open) = self.cockpit.thread(*thread) {
-                running
-                    .entry((*thread, open.generation()))
-                    .or_insert_with(|| stop_targets(&open, &running_work(&open)));
-            }
-        }
-        self.background_stops.retain(|(thread, generation, target), _| {
-            running
-                .get(&(*thread, *generation))
-                .is_some_and(|targets| targets.contains(target))
+    pub(super) fn prune_background_stops(&mut self, cx: &mut Context<Self>) {
+        self.background.update(cx, |background, _| {
+            background.prune(|thread| {
+                let inputs = self.background_inputs(thread, false)?;
+                Some((inputs.generation, inputs.targets(&inputs.running)))
+            })
         });
     }
 
