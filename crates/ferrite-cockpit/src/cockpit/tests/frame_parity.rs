@@ -55,6 +55,33 @@ fn the_empty_board_walks_its_rows(cx: &mut TestAppContext) {
     assert!(cx.debug_bounds("empty-board").is_none());
 }
 
+/// F-13: a press answers as the keys do. A recent Thread's row brings it
+/// back on the board, and a way to start does what its row says.
+#[gpui::test]
+fn the_empty_board_answers_a_press(cx: &mut TestAppContext) {
+    let (core, _fake) = cockpit("frame-empty-board-press", 1);
+    bind_production_keys(cx);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(1440.), px(900.)));
+    tick(cx);
+    let thread = view.read_with(cx, |view, _| view.cockpit.threads()[0]);
+    cx.simulate_keystrokes("cmd-w");
+    tick(cx);
+    let recent = bounds(cx, format!("empty-board-recent-{}", thread.get()));
+    cx.simulate_click(recent.center(), gpui::Modifiers::none());
+    tick(cx);
+    assert!(cx.debug_bounds("empty-board").is_none());
+    assert!(view.read_with(cx, |view, _| view.pane_for(thread).is_some()));
+
+    cx.simulate_keystrokes("cmd-w");
+    tick(cx);
+    let start = bounds(cx, "empty-board-command-0".to_string());
+    cx.simulate_click(start.center(), gpui::Modifiers::none());
+    tick(cx);
+    assert!(cx.debug_bounds("empty-board").is_none(), "New thread left the empty board");
+    assert!(view.read_with(cx, |view, _| view.pane_for(thread).is_none()));
+}
+
 /// The nav's foot is Claude's account row alone: no view switcher over it
 /// and no bar under the board.
 #[gpui::test]
