@@ -461,9 +461,8 @@ pub struct CockpitView {
     /// scroll, keyboard, search, picks and undo notice, and asks the
     /// Cockpit for the rest through `NavEvent`.
     nav_view: Entity<nav_view::NavView>,
-    /// The Cockpit hearing the views it answers with the window (the nav,
-    /// each view with an event enum of its own, ADR 0041), from its first
-    /// frame.
+    /// The Cockpit hearing each view that has an event enum of its own
+    /// (ADR 0041), from its first frame.
     view_events: Option<Vec<gpui::Subscription>>,
     /// The window's activation, followed into the Cockpit
     /// (`Cockpit::set_window_active`) once the first frame has a window.

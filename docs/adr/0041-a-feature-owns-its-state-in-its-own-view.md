@@ -303,6 +303,33 @@ that happened to touch it, and nothing in the code said whose a field was.
   (below). What remains on `Browsers` for slices of their own:
   annotations and their review, the provider's control and capture queue,
   and last the pages and the engine's lifetime.
+- **A retained annotation's review is the nineteenth, and the Browser's
+  third slice.** `BrowserReviewView` (`cockpit/browser/review.rs`) owns
+  what each Thread's Browser keeps while a retained annotation is edited:
+  its capture's image being read, with the keyboard's place and the time
+  it started, then the editor that adds notes and drawings to it. One view
+  for the window, by Thread, with no render of its own: the root draws the
+  editor in the page's place (`annotation_browser_body`). It needs nothing
+  of the root's to draw, so it has no inputs method. Its editor's Cancel
+  is its own. It emits `BrowserReviewEvent::Add` with the annotation the
+  notes and drawings make, or why it could not be made; the root hands it
+  to the Thread's Composer and closes the review. Reading the capture is a
+  Server call, so the root's pump takes each Pane's request to edit one,
+  asks the Server and hands the view the answer to wait on (`load`), then
+  has it tend each read (`tend`), which opens the editor or gives back why
+  the read failed or ran past its time for the Browser's notice. One
+  annotation is open at a time: the root refuses a live one while a review
+  is open and a review while a live one is, and the annotate button closes
+  either. A gone Thread's review goes in `forget_gone_threads`. The live
+  annotation stays on the root's `Browser` (`annotation`): its Server
+  lease and pause protection, the in-page editor's events, the capture
+  through the engine's queue, the encode and the hand-off to the Composer,
+  whose Send calls the root's `submit`; the pump writes nearly all of it,
+  and what listeners write (begin, cancel, close, an action deferred until
+  the page is restored) is Server and engine calls the root makes anyway.
+  What remains on `Browsers` for slices of their own: the live
+  annotation, the provider's control and capture queue, and last the pages
+  and the engine's lifetime.
 - **The Decisions are the twentieth, in part.** `DecisionsView`
   (`cockpit/decisions.rs`) owns the thread rules option 2 made where the
   provider offered no standing answer, and is what a Decision card drawn
