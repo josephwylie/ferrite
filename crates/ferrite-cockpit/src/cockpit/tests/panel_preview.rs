@@ -87,9 +87,9 @@ fn a_file_at_a_line_opens_wide_and_closes_back_to_the_sections(cx: &mut TestAppC
     assert!(cx.debug_bounds("panel-preview").is_some(), "and shown");
     let wide = panel_w(cx).expect("shown");
     assert!(wide > least_w() + 100., "wide: {wide}");
-    let scrolled = view.read_with(cx, |view, _| {
-        view.panes[0]
-            .preview_tab
+    let scrolled = view.read_with(cx, |view, cx| {
+        view
+            .preview_tab(0, cx)
             .scroll
             .0
             .borrow()

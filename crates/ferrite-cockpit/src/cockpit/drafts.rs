@@ -172,6 +172,15 @@ impl CockpitView {
         }
     }
 
+    /// Draft Pane `index` became `thread`'s: it keeps what the File
+    /// Surface kept of its preview.
+    pub(super) fn adopt_thread(&mut self, index: usize, thread: ThreadId, cx: &mut Context<Self>) {
+        let draft = self.panes[index].identity;
+        self.panes[index].adopt_thread(thread);
+        self.file_surface
+            .update(cx, |files, _| files.adopt(draft, PaneIdentity::Thread(thread)));
+    }
+
     /// The first send made a Thread of draft `id`: whatever its Composer
     /// still holds goes to the Thread's draft, and the new Pane's is gone.
     pub(super) fn promote_draft(&mut self, id: DraftId, thread: ThreadId, cx: &mut Context<Self>) {

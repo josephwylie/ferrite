@@ -298,7 +298,7 @@ impl CockpitView {
             SurfaceId::Files => "Files".into(),
             SurfaceId::Background => "Background".into(),
             SurfaceId::Browser => "Browser".into(),
-            SurfaceId::File(path) => self.file_surface_title(thread, path),
+            SurfaceId::File(path) => self.file_surface_title(thread, path, cx),
             SurfaceId::Terminal(number) => format!("Terminal {number}").into(),
             SurfaceId::SideChat(tab) => self.side_chat.read(cx).title(thread, *tab),
             SurfaceId::Agent(key) => self.agent_title(thread, key),
