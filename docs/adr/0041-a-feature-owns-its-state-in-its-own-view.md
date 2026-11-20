@@ -212,6 +212,19 @@ that happened to touch it, and nothing in the code said whose a field was.
   again when the agent edits the file, while the Changes read in the
   scope the operator picks, when the Surface opens or Refresh is pressed.
   A gone Thread's folds, hunks and scroll go with it.
+- **The toasts are the fourteenth.** `ToastsView` (`cockpit/toasts.rs`)
+  owns the Inbox's alerts (`NeedsYou`): what it heard of each machine,
+  what waits out its delay, the toasts standing and the system
+  notifications posted, and the toast fading out. Its render is the toast
+  float, reading the newest toast's row, whether the nav is folded and
+  the widths it hangs beside through `toast_inputs`. It emits
+  `ToastEvent`: a quick answer, or what a toast opens, each taking the
+  toast down at once. Hearing the machines and ringing stay the root
+  pump's (`ring_alerts`), which updates the view and then plays the chime
+  and posts the system notifications, as does taking a toast down when
+  the list opens what it was about. The window carries the view's alerts
+  to the next machine's root (`with_needs_you`). The kit's own toasts
+  stay the root's (`toast_margins`).
 
 ## What does not get a view
 
