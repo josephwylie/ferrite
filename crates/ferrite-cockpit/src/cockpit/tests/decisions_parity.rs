@@ -423,6 +423,74 @@ fn esc_closes_the_note_then_denies(cx: &mut TestAppContext) {
     );
 }
 
+/// esc on the split button's open menu closes it and answers nothing; a
+/// second esc denies.
+#[gpui::test]
+fn esc_closes_the_allow_menu_then_denies(cx: &mut TestAppContext) {
+    let (view, fake, cx) = waiting("parity-menu-esc", cx, bash("menu-esc", "cargo test"));
+    let (thread, serial) = view.read_with(cx, |view, _| {
+        let request = view.shown_request(0).unwrap();
+        (view.panes[0].thread().unwrap(), request.handle.serial)
+    });
+    let always = format!("request-always-{}-{serial}", thread.get()).leak();
+    let more = bounds(cx, format!("request-more-{}-{serial}", thread.get()));
+    cx.simulate_click(more.center(), gpui::Modifiers::none());
+    tick(cx);
+    assert!(cx.debug_bounds(always).is_some(), "the menu is open");
+    cx.simulate_keystrokes("escape");
+    tick(cx);
+    assert!(cx.debug_bounds(always).is_none(), "esc closed the menu");
+    assert!(answered(&fake).is_empty(), "closing the menu answers nothing");
+    assert!(view.read_with(cx, |view, _| view.shown_request(0).is_some()));
+    cx.simulate_keystrokes("escape");
+    tick(cx);
+    assert!(
+        matches!(
+            answered(&fake).as_slice(),
+            [(_, DecisionAnswer::Deny { .. })]
+        ),
+        "{:?}",
+        answered(&fake)
+    );
+}
+
+/// With the note and the menu both open, esc closes the menu first, then
+/// the note, and only then denies.
+#[gpui::test]
+fn esc_closes_the_menu_before_the_note(cx: &mut TestAppContext) {
+    let (view, fake, cx) = waiting("parity-menu-note", cx, bash("menu-note", "cargo test"));
+    let (thread, serial) = view.read_with(cx, |view, _| {
+        let request = view.shown_request(0).unwrap();
+        (view.panes[0].thread().unwrap(), request.handle.serial)
+    });
+    let always = format!("request-always-{}-{serial}", thread.get()).leak();
+    cx.dispatch_action(ferrite_pane::decision::Amend);
+    tick(cx);
+    let more = bounds(cx, format!("request-more-{}-{serial}", thread.get()));
+    cx.simulate_click(more.center(), gpui::Modifiers::none());
+    tick(cx);
+    assert!(cx.debug_bounds(always).is_some(), "the menu is open");
+    assert!(cx.debug_bounds("decision-note").is_some(), "the note is open");
+    cx.simulate_keystrokes("escape");
+    tick(cx);
+    assert!(cx.debug_bounds(always).is_none(), "esc closed the menu");
+    assert!(cx.debug_bounds("decision-note").is_some(), "the note stays");
+    cx.simulate_keystrokes("escape");
+    tick(cx);
+    assert!(cx.debug_bounds("decision-note").is_none(), "esc closed the note");
+    assert!(answered(&fake).is_empty(), "{:?}", answered(&fake));
+    cx.simulate_keystrokes("escape");
+    tick(cx);
+    assert!(
+        matches!(
+            answered(&fake).as_slice(),
+            [(_, DecisionAnswer::Deny { .. })]
+        ),
+        "{:?}",
+        answered(&fake)
+    );
+}
+
 /// D-8: a question's cursor walks its options and ⏎ answers the one under
 /// it.
 #[gpui::test]
