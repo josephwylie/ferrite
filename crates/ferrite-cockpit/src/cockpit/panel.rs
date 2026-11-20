@@ -31,6 +31,7 @@
 
 pub(in crate::cockpit) mod background;
 mod changes;
+pub(in crate::cockpit) mod overview;
 mod persistence;
 pub(crate) mod hunks;
 pub(crate) mod preview;
@@ -57,13 +58,8 @@ pub(crate) struct Panel {
     pub(crate) surfaces: Surfaces,
     persistence: persistence::Persistence,
     pub(crate) working_sets: super::tools::WorkingSets,
-    /// Each Thread's sections' scroll, so a Thread's Overview comes back
-    /// where it was left.
-    scrolls: std::collections::HashMap<ThreadId, ScrollHandle>,
     /// The head row's tabs' own horizontal scroll.
     pub(crate) tabs_scroll: super::tab_scroll::TabScroll,
-    /// The Changes section's unfolded files and their hunks.
-    hunks: hunks::Hunks,
     /// The window's width as of the last frame, what the floors and the
     /// maximized width are reckoned from.
     window_w: f32,
@@ -127,9 +123,7 @@ impl Panel {
             surfaces,
             persistence,
             working_sets,
-            scrolls: Default::default(),
             tabs_scroll: Default::default(),
-            hunks: Default::default(),
             window_w: 0.,
             tended: false,
             shown: None,
@@ -394,8 +388,7 @@ impl CockpitView {
             }
         }
         self.forget_tools(keep, cx);
-        self.panel.hunks.retain_threads(keep);
-        self.panel.scrolls.retain(|thread, _| keep(*thread));
+        self.overview.update(cx, |overview, _| overview.retain_threads(keep));
         self.panel.focus.retain_threads(keep);
         self.pull_request.update(cx, |reader, _| reader.retain_threads(keep));
         self.background.update(cx, |background, _| background.retain_threads(keep));
@@ -410,7 +403,7 @@ impl CockpitView {
     #[cfg(test)]
     pub(crate) fn held_for_test(&self, thread: ThreadId, cx: &gpui::App) -> usize {
         self.tools_held_for_test(thread, cx)
-            + self.panel.hunks.held_for_test(thread)
+            + self.overview.read(cx).held_for_test(thread)
             + self.panel.focus.held_for_test(thread)
             + self.pull_request.read(cx).held_for_test(thread)
             + self.background.read(cx).held_for_test(thread)
@@ -501,7 +494,6 @@ impl CockpitView {
             .panel_pane()
             .and_then(|index| self.panes[index].thread())
         {
-            self.panel.scrolls.entry(thread).or_default();
             let active = self.active_surface(thread);
             match active {
                 Some(SurfaceId::Files) => {
@@ -809,7 +801,7 @@ impl CockpitView {
         let body = match active {
             None => self.surface_empty(thread, cx),
             Some(SurfaceId::Overview) => {
-                let scroll = self.panel.scrolls.get(&thread).cloned().unwrap_or_default();
+                let scroll = self.overview.update(cx, |overview, _| overview.scroll(thread));
                 div()
                     .flex()
                     .flex_col()
@@ -818,11 +810,11 @@ impl CockpitView {
                     .pl(px(PANEL_PAD_L))
                     .pr(px(PANEL_PAD_R))
                     .pb(px(PANEL_PAD_B))
-                    .child(panel_body(self.panel_sections(thread, window, cx), &scroll))
+                    .child(panel_body(self.overview_sections(thread, window, cx), &scroll))
                     .into_any_element()
             }
             Some(SurfaceId::Background) => {
-                let scroll = self.panel.scrolls.get(&thread).cloned().unwrap_or_default();
+                let scroll = self.overview.update(cx, |overview, _| overview.scroll(thread));
                 div()
                     .flex()
                     .flex_col()

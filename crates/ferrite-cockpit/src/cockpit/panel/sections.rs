@@ -17,35 +17,25 @@
 //! - **Background tasks**, last: the work it left running, live, and how
 //!   much finished (`background`); left out until it launched any.
 
+use super::overview::{OverviewInputs, OverviewView};
 use super::*;
 use ferrite_core::{McpServer, McpStatus};
 use ferrite_ui::motion::{fold_body, settled, FOLD};
 
-impl CockpitView {
+impl OverviewView {
     /// The sections (see the module doc).
-    pub(in crate::cockpit) fn panel_sections(
-        &self,
-        thread: ThreadId,
+    pub(super) fn sections(
+        &mut self,
+        inputs: OverviewInputs,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         use ferrite_ui::theme::*;
-        let Some(open) = self.cockpit.thread(thread) else {
-            return div().into_any_element();
-        };
-        let transcript = open.transcript();
         // A section with nothing to say is not drawn (Claude's): Changes
         // waits for an edit or a pull request, Context for the provider's
         // reading, Connectors for a server.
-        let mut sections = vec![self.environment_section(thread)];
-        if let Some(usage) = transcript.usage() {
-            let error = self
-                .session_control_error
-                .as_ref()
-                .filter(|(shown, generation, _)| {
-                    *shown == thread && *generation == open.generation()
-                })
-                .map(|(_, _, error)| error.clone());
+        let mut sections = vec![environment_section(&inputs)];
+        if let Some(usage) = inputs.usage {
             sections.push(
                 div()
                     .flex()
@@ -53,28 +43,23 @@ impl CockpitView {
                     .child(panel_section_head("panel-context-head", "Context"))
                     .child(
                         div().debug_selector(|| "panel-context".into()).child(
-                            pane::context_usage(
-                                usage,
-                                transcript.context_details(),
-                                transcript.usage_details(),
-                            )
-                            .into_any_element(),
+                            pane::context_usage(usage, inputs.context_details, inputs.usage_details)
+                                .into_any_element(),
                         ),
                     )
                     .children(
-                        error.map(|error| pane::card_error(error).id("session-control-error")),
+                        inputs
+                            .session_error
+                            .clone()
+                            .map(|error| pane::card_error(error).id("session-control-error")),
                     ),
             );
         }
-        let servers = transcript.mcp_servers();
-        if !servers.is_empty() {
-            sections.push(connectors(servers, window, cx));
+        if !inputs.servers.is_empty() {
+            sections.push(connectors(inputs.servers, window, cx));
         }
-        sections.extend(self.changes_section(thread, cx));
-        sections.extend(
-            self.background_inputs(thread, false)
-                .and_then(|inputs| self.background.update(cx, |background, cx| background.section(&inputs, cx))),
-        );
+        sections.extend(self.changes_section(&inputs, cx));
+        sections.extend(inputs.background);
 
         div()
             .debug_selector(|| "panel-sections".into())
@@ -85,53 +70,37 @@ impl CockpitView {
             .children(sections)
             .into_any_element()
     }
+}
 
-    /// Environment: the machine, the folder, the branch.
-    fn environment_section(&self, thread: ThreadId) -> Div {
-        let machine = self.cockpit.machine().map_or_else(
-            || "This computer".to_string(),
-            |bridge| bridge.name().to_string(),
+/// Environment: the machine, the folder, the branch.
+fn environment_section(inputs: &OverviewInputs) -> Div {
+    let mut section = div()
+        .flex()
+        .flex_col()
+        .child(panel_section_head("panel-environment-head", "Environment"))
+        .child(detail_row(
+            "panel-environment-machine",
+            icons::LAPTOP,
+            inputs.machine.clone(),
+            None,
+        ));
+    if let Some(cwd) = inputs.folder.clone() {
+        let (name, place) = folder_words(&cwd);
+        section = section.child(
+            detail_row("panel-environment-folder", icons::FOLDER, name, place)
+                .cursor_pointer()
+                .tooltip(ferrite_ui::menu::tooltip("Show in its folder"))
+                .on_click(move |_, window, cx| {
+                    ferrite_pane::preview::open_original(&cwd, window, cx);
+                }),
         );
-        let mut section = div()
-            .flex()
-            .flex_col()
-            .child(panel_section_head("panel-environment-head", "Environment"))
-            .child(detail_row(
-                "panel-environment-machine",
-                icons::LAPTOP,
-                machine,
-                None,
-            ));
-        if let Some(cwd) = self.thread_path(thread) {
-            let (name, place) = folder_words(&cwd);
-            section = section.child(
-                detail_row("panel-environment-folder", icons::FOLDER, name, place)
-                    .cursor_pointer()
-                    .tooltip(ferrite_ui::menu::tooltip("Show in its folder"))
-                    .on_click(move |_, window, cx| {
-                        ferrite_pane::preview::open_original(&cwd, window, cx);
-                    }),
-            );
-        }
-        if let (Some(facts), Some(branch)) = (self.facts.get(thread), self.thread_branch(thread)) {
-            let meta = branch_meta(&branch, facts);
-            let row = detail_row("panel-branch", icons::BRANCH, branch, meta);
-            section = section.child(div().child(row));
-        }
-        section
     }
-
-    /// The branch `thread`'s checkout is on: as git last said, else as the
-    /// Thread was bound.
-    pub(in crate::cockpit) fn thread_branch(&self, thread: ThreadId) -> Option<SharedString> {
-        let facts = self.facts.get(thread)?;
-        facts
-            .status
-            .as_ref()
-            .and_then(|status| status.branch.clone())
-            .map(SharedString::from)
-            .or_else(|| facts.branch.clone())
+    if let (Some(facts), Some(branch)) = (inputs.facts, inputs.branch.clone()) {
+        let meta = branch_meta(&branch, facts);
+        let row = detail_row("panel-branch", icons::BRANCH, branch, meta);
+        section = section.child(div().child(row));
     }
+    section
 }
 
 /// A folder as Claude's Environment names it: its own name, then dim where

@@ -1,17 +1,19 @@
 //! A changed file's hunks under its block in the panel's Changes section
 //! (SPEC §5.6, phase 7b). Folded by default; the block's head unfolds them.
 //!
-//! An unfolded file reads the checkout's Uncommitted diff through the
-//! Review core — `Cockpit::review_diff`, the read `Review changes` opens
-//! with — off the UI thread, and keeps the file's hunks per Thread and
-//! path. They are read again when the file's diffstat moves (the agent
-//! edited it again); until the new read lands the old hunks stay drawn.
+//! An unfolded file asks the window to read the checkout's Uncommitted
+//! diff through the Review core — `Cockpit::review_diff`, the read
+//! `Review changes` opens with — and the Overview's view builds its hunks
+//! off the UI thread and keeps them per Thread and path. They are read
+//! again when the file's diffstat moves (the agent edited it again); until
+//! the new read lands the old hunks stay drawn.
 //! A folded file reads nothing.
 //!
 //! The panel draws what changed with one line of context either side, on
 //! `BLOCK` in the panel's diff face: a sign column, the add and delete
 //! washes, no line numbers and no syntax colour.
 
+use super::overview::{OverviewEvent, OverviewView};
 use super::*;
 use ferrite_core::docview::FileChange;
 use ferrite_reviewr::diff::Row;
@@ -143,82 +145,65 @@ impl Hunks {
     }
 }
 
-impl CockpitView {
+impl OverviewView {
     /// Fold or unfold `path`'s hunks under its block. The read, if one is
     /// due, is asked by the next frame that draws the block.
-    pub(crate) fn toggle_panel_file(
-        &mut self,
-        thread: ThreadId,
-        path: String,
-        cx: &mut Context<Self>,
-    ) {
-        self.panel.hunks.toggle((thread, path));
+    pub(in crate::cockpit) fn toggle_file(&mut self, thread: ThreadId, path: String, cx: &mut Context<Self>) {
+        self.hunks.toggle((thread, path));
         cx.notify();
     }
 
     /// Whether every one of `paths` is unfolded (the section line's fold).
-    pub(super) fn panel_files_unfolded<'a>(
-        &self,
-        thread: ThreadId,
-        mut paths: impl Iterator<Item = &'a str>,
-    ) -> bool {
-        paths.all(|path| self.panel.hunks.unfolded(&(thread, path.to_string())))
+    pub(super) fn files_unfolded<'a>(&self, thread: ThreadId, mut paths: impl Iterator<Item = &'a str>) -> bool {
+        paths.all(|path| self.hunks.unfolded(&(thread, path.to_string())))
     }
 
     /// The section line's fold: unfold every one of `paths` unless all
     /// are, then fold them all.
-    pub(crate) fn toggle_panel_files(
-        &mut self,
-        thread: ThreadId,
-        paths: Vec<String>,
-        cx: &mut Context<Self>,
-    ) {
-        let unfold = !self.panel_files_unfolded(thread, paths.iter().map(String::as_str));
-        self.panel
-            .hunks
+    pub(super) fn toggle_files(&mut self, thread: ThreadId, paths: Vec<String>, cx: &mut Context<Self>) {
+        let unfold = !self.files_unfolded(thread, paths.iter().map(String::as_str));
+        self.hunks
             .set_all(paths.into_iter().map(|path| (thread, path)), unfold);
         cx.notify();
     }
 
     /// Whether `path`'s block is unfolded; when it is and its hunks are
-    /// stale (or unread), ask for them after this frame.
-    pub(super) fn panel_file_unfolded(
-        &self,
-        thread: ThreadId,
-        file: &FileChange,
-        cx: &mut Context<Self>,
-    ) -> bool {
+    /// stale (or unread), ask the window for them.
+    pub(super) fn file_unfolded(&self, thread: ThreadId, file: &FileChange, cx: &mut Context<Self>) -> bool {
         let key = (thread, file.path.clone());
         let stat = (file.added, file.removed);
-        if self.panel.hunks.wants_read(&key, stat) {
-            let view = cx.entity().downgrade();
-            cx.defer(move |cx| {
-                view.update(cx, |view, cx| view.read_panel_hunks(key, stat, cx))
-                    .ok();
+        if self.hunks.wants_read(&key, stat) {
+            cx.emit(OverviewEvent::ReadHunks {
+                thread,
+                path: file.path.clone(),
+                stat,
             });
         }
-        self.panel.hunks.unfolded(&(thread, file.path.clone()))
+        self.hunks.unfolded(&key)
     }
 
-    /// Read the checkout's uncommitted diff for one file, where the
-    /// checkout is (the Server's, on a machine), and build its hunks off
-    /// the UI thread.
-    fn read_panel_hunks(&mut self, key: FileKey, stat: Stat, cx: &mut Context<Self>) {
-        if !self.panel.hunks.wants_read(&key, stat) {
-            return;
-        }
-        let Some(workspace) = self.thread_path(key.0) else {
-            return;
-        };
-        let path = std::path::Path::new(&key.1);
-        let relative = ferrite_pane::file_links::inside_checkout(path, &workspace)
-            .unwrap_or(path)
+    /// Whether `path`'s block wants its hunks read at `stat`.
+    pub(in crate::cockpit) fn wants_read(&self, thread: ThreadId, path: &str, stat: Stat) -> bool {
+        self.hunks.wants_read(&(thread, path.to_string()), stat)
+    }
+
+    /// Wait on the window's `answer`, the checkout's uncommitted diff, and
+    /// build `path`'s hunks off the UI thread.
+    pub(in crate::cockpit) fn wait_hunks(
+        &mut self,
+        thread: ThreadId,
+        path: String,
+        stat: Stat,
+        workspace: &std::path::Path,
+        answer: std::io::Result<std::sync::mpsc::Receiver<std::io::Result<Vec<FileSides>>>>,
+        cx: &mut Context<Self>,
+    ) {
+        let relative = ferrite_pane::file_links::inside_checkout(std::path::Path::new(&path), workspace)
+            .unwrap_or(std::path::Path::new(&path))
             .to_string_lossy()
             .into_owned();
-        self.panel.hunks.asking(key.clone(), stat);
-        let answer = self
-            .cockpit
-            .review_diff(&workspace, ferrite_reviewr::ferrite::Read::Uncommitted);
+        let key = (thread, path);
+        self.hunks.asking(key.clone(), stat);
         cx.spawn(async move |view, cx| {
             let read = beside::answered(answer, cx).await;
             let shown = cx
@@ -231,7 +216,7 @@ impl CockpitView {
                 })
                 .await;
             view.update(cx, |view, cx| {
-                if view.panel.hunks.landed(&key, stat, shown) {
+                if view.hunks.landed(&key, stat, shown) {
                     cx.notify();
                 }
             })
@@ -240,10 +225,9 @@ impl CockpitView {
         .detach();
     }
 
-    /// What `path`'s block shows under its head, once read.
     #[cfg(test)]
-    pub(crate) fn panel_hunks(&self, thread: ThreadId, path: &str) -> Option<&Shown> {
-        self.panel.hunks.shown(&(thread, path.to_string()))
+    pub(in crate::cockpit) fn hunks_for_test(&self, thread: ThreadId, path: &str) -> Option<&Shown> {
+        self.hunks.shown(&(thread, path.to_string()))
     }
 
     /// The unfolded block's hunk area, once its read has landed; nothing
@@ -251,15 +235,9 @@ impl CockpitView {
     /// the frame it arrives and goes in the frame the block folds, as every
     /// fold does (motion-measured.md, "Tool group expand / collapse":
     /// snap everything).
-    pub(super) fn panel_hunks_element(
-        &self,
-        thread: ThreadId,
-        index: usize,
-        path: &str,
-        unfolded: bool,
-    ) -> Option<Div> {
+    pub(super) fn hunks_element(&self, thread: ThreadId, index: usize, path: &str, unfolded: bool) -> Option<Div> {
         unfolded
-            .then(|| self.panel.hunks.shown(&(thread, path.to_string())))
+            .then(|| self.hunks.shown(&(thread, path.to_string())))
             .flatten()
             .map(|shown| hunks_element(index, shown, Layout::Abbreviated))
     }

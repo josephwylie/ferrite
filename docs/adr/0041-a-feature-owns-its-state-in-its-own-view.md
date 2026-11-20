@@ -194,6 +194,24 @@ that happened to touch it, and nothing in the code said whose a field was.
   root's, as it opens and each frame for a tab a Panel shows that no
   drill holds (one restored or reopened); a tab's close frees its agent,
   as does a gone Thread.
+- **The Overview is the thirteenth.** `OverviewView`
+  (`cockpit/panel/overview.rs`) owns what the Panel's Overview keeps for
+  every Thread: the Changes section's unfolded files, the hunks each read
+  with the diffstat it was read at, and the sections' scroll, which the
+  Background Surface scrolls with too. One view for the window, with no
+  render of its own: the root has it draw the Overview's body, reading the
+  machine, the folder and branch, the Thread's facts and pull request, its
+  context reading and MCP servers through `overview_inputs`, with the
+  Background section drawn by the background work's view. It emits
+  `OverviewEvent`: a file's hunks to read, `Create PR`, a file's name,
+  `Review changes`, the pull request's row. Reading the diff is a Server
+  call, so the root asks it and hands the answer to the view, which drops
+  one read at an older diffstat; sending `Create PR`'s prompt and asking
+  the Session for a fresh context reading stay the root's too. Its hunks
+  are not the Changes' diff: they are always the uncommitted diff, read
+  again when the agent edits the file, while the Changes read in the
+  scope the operator picks, when the Surface opens or Refresh is pressed.
+  A gone Thread's folds, hunks and scroll go with it.
 
 ## Precedent
 
