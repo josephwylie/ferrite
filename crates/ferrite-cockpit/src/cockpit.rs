@@ -457,9 +457,9 @@ pub struct CockpitView {
     /// Cockpit for the rest through `NavEvent`.
     nav_view: Entity<nav_view::NavView>,
     /// The Cockpit hearing the views it answers with the window (the nav,
-    /// the side chat, Files, the Overview, the toasts), from its first
-    /// frame.
-    view_events: Option<[gpui::Subscription; 6]>,
+    /// the side chat, Files, the Overview, the toasts, the File Surface,
+    /// the Decisions), from its first frame.
+    view_events: Option<[gpui::Subscription; 7]>,
     /// The window's activation, followed into the Cockpit
     /// (`Cockpit::set_window_active`) once the first frame has a window.
     activation: Option<gpui::Subscription>,
@@ -611,9 +611,9 @@ pub struct CockpitView {
     /// Transcript events are detached subscriptions, registered once per
     /// retained Subject entity rather than once per render.
     transcript_entities: std::collections::HashSet<gpui::EntityId>,
-    /// WP-F: the Decision cards' way back to this view, and the thread
-    /// rules option 2 made (`cockpit::decisions`).
-    decisions: decisions::DecisionState,
+    /// WP-F: the thread rules option 2 made, and what the Decision cards
+    /// press through (`cockpit::decisions`).
+    decisions: Entity<decisions::DecisionsView>,
     // ---- the frame's (F-12 … F-15)
     /// Measuring at every reader's slide's destination, so a threshold
     /// never flaps mid-slide.
@@ -1387,6 +1387,10 @@ impl CockpitView {
         let agent_drills = cx.new(|_| agent_pane::AgentDrillsView::new(cockpit_weak.clone()));
         cx.subscribe(&agent_drills, Self::on_agent_drill_event).detach();
         let toasts = cx.new(|_| toasts::ToastsView::new(cockpit_weak.clone()));
+        let decisions = cx.new(|_| decisions::DecisionsView::default());
+        // A card's pick lives in its Pane's forms, and the root draws the
+        // cards into its transcripts, so each change redraws the window.
+        cx.observe(&decisions, |_, _, cx| cx.notify()).detach();
         let mut view = Self {
             cockpit,
             browsers: Default::default(),
@@ -1485,7 +1489,7 @@ impl CockpitView {
             pr_asked: Vec::new(),
             floats: palette::Floats::new(),
             transcript_entities: Default::default(),
-            decisions: decisions::DecisionState::new(cx.weak_entity()),
+            decisions,
             nav_measure_rest: std::cell::Cell::new(false),
             destination: None,
             prs,
@@ -8123,6 +8127,7 @@ impl CockpitView {
                 cx.subscribe_in(&self.overview, window, Self::on_overview_event),
                 cx.subscribe_in(&self.toasts, window, Self::on_toast_event),
                 cx.subscribe_in(&self.file_surface, window, Self::on_file_surface_event),
+                cx.subscribe_in(&self.decisions, window, Self::on_decision_event),
             ]);
         }
     }

@@ -119,9 +119,13 @@ impl CockpitView {
     /// card is built for the tail (`CockpitView::decision_tail`, the
     /// Decision card's owner), else the failure strip, else the
     /// background-work line.
-    pub(super) fn transcript_tail(&self, index: usize, cx: &App) -> Option<TranscriptTail> {
+    pub(super) fn transcript_tail(
+        &self,
+        index: usize,
+        cx: &Context<Self>,
+    ) -> Option<TranscriptTail> {
         self.decision_tail(index, cx)
-            .or_else(|| self.failure_tail(index))
+            .or_else(|| self.failure_tail(index, cx.weak_entity()))
             .or_else(|| self.background_work_tail(index, cx))
     }
 
@@ -129,7 +133,7 @@ impl CockpitView {
     /// Thread's last turn failed: why (`failure_words`), and `Retry`, which
     /// re-sends the failed turn's prompt (`retry_failed_turn`) — none for a
     /// closed Session, which has nothing to send to.
-    fn failure_tail(&self, index: usize) -> Option<TranscriptTail> {
+    fn failure_tail(&self, index: usize, owner: gpui::WeakEntity<Self>) -> Option<TranscriptTail> {
         use ferrite_core::transcript::Status;
         let pane = self.panes.get(index)?;
         if !pane.is_main() {
@@ -151,7 +155,6 @@ impl CockpitView {
             ("failure", thread, words.as_ref(), closed).hash(&mut hasher);
             hasher.finish()
         };
-        let owner = self.decisions.owner();
         Some(TranscriptTail {
             key,
             render: std::rc::Rc::new(move |_: &mut Window, cx: &mut App| {
