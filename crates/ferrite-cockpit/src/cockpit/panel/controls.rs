@@ -14,6 +14,10 @@
 //! re-registers the stops it draws, so a closed tab or a hidden view is no
 //! longer a stop and cannot hold the keyboard; the last stop focused is
 //! kept for each Thread so F6 comes back to it while it is still drawn.
+//! A stop's handle is its control's, the same in every Thread's Panel, so
+//! a Thread switch never leaves the keyboard on one: a press on a nav row
+//! and a key that shows another Thread alike hand it to the new Thread's
+//! Composer, and only a move in a Thread's own Panel is kept for it.
 //!
 //! A stop is registered on the shared `PanelFocus` by whichever view draws
 //! it, the root or a child view rendered after it. So the row is finished
@@ -320,6 +324,25 @@ impl CockpitView {
         };
         self.focus_panel_control(&entry, window, cx);
         true
+    }
+
+    /// A `switch` that may show another Thread, by a key or the head's back
+    /// and forward, hands the keyboard on as a press on a nav row does: a
+    /// Panel stop that held it lets go, as the press's blur makes it, and
+    /// render's focus rule gives it to the new Thread's Composer. Kept, the
+    /// stop's handle would hold the new Panel's same control.
+    pub(in crate::cockpit) fn switch_thread(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+        switch: impl FnOnce(&mut Self, &mut Window, &mut Context<Self>),
+    ) {
+        let shown = self.focused_thread();
+        let on_stop = self.panel_control_focused(window);
+        switch(self, window, cx);
+        if on_stop && self.focused_thread() != shown {
+            window.blur(cx);
+        }
     }
 
     /// The keyboard goes back to the conversation: render's focus rule

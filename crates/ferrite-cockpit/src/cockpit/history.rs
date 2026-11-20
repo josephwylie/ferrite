@@ -178,12 +178,14 @@ impl CockpitView {
             return;
         };
         let Place { thread, subject } = place;
-        if self.pane_for(thread).is_some() {
-            self.focus_thread(thread, cx);
-        } else {
-            self.revive_thread(thread, cx);
-        }
-        self.show_subject(thread, subject, window, cx);
+        self.switch_thread(window, cx, |view, window, cx| {
+            if view.pane_for(thread).is_some() {
+                view.focus_thread(thread, cx);
+            } else {
+                view.revive_thread(thread, cx);
+            }
+            view.show_subject(thread, subject, window, cx);
+        });
         cx.notify();
     }
 
