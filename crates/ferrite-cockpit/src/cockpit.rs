@@ -485,9 +485,7 @@ pub struct CockpitView {
     /// to the real homes and aimed at scratch directories by tests. Read
     /// once per picker open, never per frame.
     session_file_roots: Vec<(Provider, std::path::PathBuf)>,
-    discovery_request: u64,
     pending_files: Option<PendingFileSearch>,
-    pending_discovery: Option<PendingDiscovery>,
     /// The Project new drafts fall back to: the last one the operator was
     /// working in. The launch reads it from the store's most recently used
     /// Thread, and every explicit pick in the Composer's Project chip moves
@@ -1026,14 +1024,6 @@ struct PendingFileSearch {
     reply: std::sync::mpsc::Receiver<std::io::Result<Vec<ferrite_core::providers::FileSuggestion>>>,
     fallback: Option<std::sync::mpsc::Receiver<Vec<pane::MenuRow>>>,
 }
-/// The import picker's session listing, under way off the UI thread.
-struct PendingDiscovery {
-    /// The blank Pane a pick replaces, if any.
-    into: Option<PaneIdentity>,
-    request_id: u64,
-    started: std::time::Instant,
-    reply: std::sync::mpsc::Receiver<std::io::Result<Vec<ferrite_core::import::Candidate>>>,
-}
 
 static NEXT_FILE_SEARCH: AtomicU64 = AtomicU64::new(1);
 
@@ -1436,9 +1426,7 @@ impl CockpitView {
             draft_commands: None,
             suppress_recall_menu_once: false,
             session_file_roots: ferrite_core::import::default_roots(),
-            discovery_request: 0,
             pending_files: None,
-            pending_discovery: None,
             launch_project,
             checked_out: Default::default(),
             checking_out: Default::default(),

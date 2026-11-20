@@ -296,6 +296,23 @@ struct Shown {
     lit: Vec<Range<usize>>,
 }
 
+/// The import picker's session listing, under way off the UI thread. It
+/// lives on the picker that asked, so a picker closed or reopened since
+/// drops it.
+pub(crate) struct Listing {
+    /// The blank Pane a pick replaces, if any.
+    into: Option<PaneIdentity>,
+    started: std::time::Instant,
+    reply: std::sync::mpsc::Receiver<std::io::Result<Vec<ferrite_core::import::Candidate>>>,
+}
+
+/// The listing's answer: the Pane a pick replaces, and the sessions found
+/// or why there are none.
+pub(crate) type Listed = (
+    Option<PaneIdentity>,
+    Result<Vec<ferrite_core::import::Candidate>, String>,
+);
+
 /// The palette: its scope, its rows and the filter's survivors, the cursor
 /// over them, and the input line.
 pub(crate) struct Palette {
@@ -310,6 +327,8 @@ pub(crate) struct Palette {
     empty: SharedString,
     pub input: Entity<Composer>,
     scroll: ScrollHandle,
+    /// The import picker's listing, until it answers.
+    pub listing: Option<Listing>,
     _edited: Subscription,
 }
 
@@ -346,6 +365,7 @@ impl Palette {
             empty: NO_MATCHES.into(),
             input,
             scroll: ScrollHandle::new(),
+            listing: None,
             _edited: edited,
         };
         palette.refilter(cx);
@@ -358,6 +378,39 @@ impl Palette {
         self.rows = rows;
         self.empty = empty;
         self.refilter(cx);
+    }
+
+    /// Wait for the sessions listed off the UI thread, for a pick to take
+    /// the place of `into`.
+    pub(crate) fn listen(
+        &mut self,
+        into: Option<PaneIdentity>,
+        reply: std::sync::mpsc::Receiver<std::io::Result<Vec<ferrite_core::import::Candidate>>>,
+    ) {
+        self.listing = Some(Listing {
+            into,
+            started: std::time::Instant::now(),
+            reply,
+        });
+    }
+
+    /// The listing's answer once it lands, or once it has waited 15
+    /// seconds; nothing while it is still out.
+    pub(crate) fn listed(&mut self) -> Option<Listed> {
+        use std::sync::mpsc::TryRecvError;
+        let listing = self.listing.take()?;
+        let found = match listing.reply.try_recv() {
+            Ok(found) => found.map_err(|error| error.to_string()),
+            Err(TryRecvError::Empty)
+                if listing.started.elapsed() < std::time::Duration::from_secs(15) =>
+            {
+                self.listing = Some(listing);
+                return None;
+            }
+            Err(TryRecvError::Empty) => Err("the listing timed out".into()),
+            Err(error) => Err(error.to_string()),
+        };
+        Some((listing.into, found))
     }
 
     /// What the line holds now.

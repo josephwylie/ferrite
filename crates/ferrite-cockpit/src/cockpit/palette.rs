@@ -281,16 +281,12 @@ impl CockpitView {
         cx: &mut Context<Self>,
     ) {
         self.open_palette(PaletteScope::Sessions, "", window, cx);
-        self.discovery_request = self.discovery_request.wrapping_add(1);
         let roots = self.session_file_roots.clone();
         match self.cockpit.discover_sessions(roots, IMPORT_ROWS_MAX) {
             Some(reply) => {
-                self.pending_discovery = Some(PendingDiscovery {
-                    into,
-                    request_id: self.discovery_request,
-                    started: std::time::Instant::now(),
-                    reply,
-                });
+                if let Some(palette) = self.floats.palette.clone() {
+                    palette.update(cx, |palette, _| palette.listen(into, reply));
+                }
                 self.show_sessions(Vec::new(), "searching sessions\u{2026}".into(), cx);
             }
             // No listing thread to be had: the plain walk, here.
@@ -302,32 +298,21 @@ impl CockpitView {
         }
     }
 
-    /// The listing's answer, once it lands — and only into the picker that
-    /// asked for it: one closed or reopened since drops it.
+    /// The listing's answer, once it lands, into the picker that asked for
+    /// it: the listing lives on that picker, so one closed or reopened
+    /// since has dropped it.
     pub(super) fn poll_session_discovery(&mut self, cx: &mut Context<Self>) {
-        use std::sync::mpsc::TryRecvError;
-        let Some(pending) = self.pending_discovery.take() else {
+        let Some(palette) = self
+            .floats
+            .palette
+            .clone()
+            .filter(|palette| palette.read(cx).listing.is_some())
+        else {
             return;
         };
-        let current = self.discovery_request == pending.request_id
-            && self
-                .floats
-                .palette
-                .as_ref()
-                .is_some_and(|palette| palette.read(cx).scope == PaletteScope::Sessions);
-        if !current {
-            return;
+        if let Some((into, found)) = palette.update(cx, |palette, _| palette.listed()) {
+            self.list_sessions(into, found, cx);
         }
-        let found = match pending.reply.try_recv() {
-            Ok(found) => found.map_err(|error| error.to_string()),
-            Err(TryRecvError::Empty) if pending.started.elapsed() < Duration::from_secs(15) => {
-                self.pending_discovery = Some(pending);
-                return;
-            }
-            Err(TryRecvError::Empty) => Err("the listing timed out".into()),
-            Err(error) => Err(error.to_string()),
-        };
-        self.list_sessions(pending.into, found, cx);
     }
 
     /// Fill the import picker: a row per session, or what the empty list
