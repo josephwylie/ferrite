@@ -892,7 +892,8 @@ pub fn note(text: impl Into<SharedString>) -> Div {
 /// `INK_STRONG` on `SUNKEN` at `R_CONTROL`, padded `DECISION_WELL_PAD_X` /
 /// `_Y`. A shell command reads `$ gh issue close 212`: the `$ ` is
 /// `INK_SUBTLE` and outside the selectable text, so a copy gives the command
-/// alone. A long input scrolls inside it.
+/// alone. A long input scrolls inside it. A shell command is drawn as
+/// `approval-prompt`, the command beside the `$ `.
 pub fn well(prompt: bool, child: impl IntoElement) -> Div {
     div()
         .flex()
@@ -912,7 +913,6 @@ pub fn well(prompt: bool, child: impl IntoElement) -> Div {
         .when(prompt, |well| {
             well.child(
                 div()
-                    .debug_selector(|| "approval-prompt".into())
                     .flex_shrink_0()
                     .text_color(rgb(theme::INK_SUBTLE))
                     .child("$\u{a0}"),
@@ -920,6 +920,9 @@ pub fn well(prompt: bool, child: impl IntoElement) -> Div {
         })
         .child(
             div()
+                .when(prompt, |command| {
+                    command.debug_selector(|| "approval-prompt".into())
+                })
                 .flex()
                 .flex_col()
                 .flex_1()
