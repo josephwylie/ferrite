@@ -240,7 +240,14 @@ fn a_restored_review_waits_for_history_that_lands_after_the_first_frame(cx: &mut
         let _ = core.pump();
     });
     let tab = crate::cockpit::surfaces::SurfaceId::File(capture);
-    until(window, |cx| cx.debug_bounds("annotation-stage").is_some());
+    // Each look draws the frame the window asked for, as a real window
+    // does: the restored strip scrolling its tab into view asks for one,
+    // and the redraw the history needs joins it.
+    until(window, |cx| {
+        cx.update(|window, cx| window.simulate_next_frame(cx));
+        cx.run_until_parked();
+        cx.debug_bounds("annotation-stage").is_some()
+    });
     assert!(window.debug_bounds("lightbox").is_none());
     assert!(view.read_with(window, |view, _| view.active_surface(thread) == Some(tab)));
     std::fs::remove_dir_all(root).unwrap();

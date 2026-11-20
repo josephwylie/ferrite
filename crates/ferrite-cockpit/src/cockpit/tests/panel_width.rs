@@ -57,12 +57,23 @@ fn show(
     leap(cx, Duration::from_secs(1));
 }
 
-/// The operator's click on the Overview tab.
+/// The operator's click on the Overview tab, once the strip's left chevron
+/// has brought it back into view: showing a tool scrolls the strip to it,
+/// and in a strip that overflows that can take the first tab out of sight.
 fn back_to_overview(cx: &mut gpui::VisualTestContext) {
-    let tab = cx
-        .debug_bounds("panel-tab-Overview")
-        .expect("the Overview tab")
-        .center();
+    settles(cx);
+    let tab = loop {
+        let tab = cx.debug_bounds("panel-tab-Overview").expect("the Overview tab");
+        let strip = cx.debug_bounds("panel-tabs").expect("the strip");
+        if tab.left() >= strip.left() {
+            break tab.center();
+        }
+        let left = cx
+            .debug_bounds("panel-tabs-left")
+            .expect("a chevron toward the Overview tab out of view");
+        cx.simulate_click(left.center(), gpui::Modifiers::none());
+        settles(cx);
+    };
     cx.simulate_click(tab, gpui::Modifiers::none());
     leap(cx, Duration::from_secs(1));
 }
