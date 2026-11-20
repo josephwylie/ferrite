@@ -283,6 +283,26 @@ that happened to touch it, and nothing in the code said whose a field was.
   queue, and last the pages and the engine's lifetime. The Panel host, the
   popup slot, the sheet host and the focus pump stay the root's (ADRs
   0042–0044).
+- **A page's script dialog is the eighteenth, and the Browser's second
+  slice.** `BrowserDialogView` (`cockpit/browser/dialog.rs`) owns what each
+  Thread's Browser keeps of the dialog its page raised: the request the
+  card was set up for, the prompt's field, the card's focus, and whether
+  it has yet had the keyboard. One view for the window, by Thread, with no
+  render of its own: the root has it draw the card over the page
+  (`browser_body`), and its pump hands it the dialog the shown page has up
+  through `browser_dialog_inputs`, none while a new tab is being entered.
+  OK, Cancel, enter, escape and a press on the card's backdrop are its
+  own. It emits `BrowserDialogEvent::Answer`, which the root hands the
+  shown page's native handle. The focus pump stays the root's
+  (`focus_shown_dialogs`, `dialog_holds_focus`) and asks the view to take
+  the keyboard and whether it holds it; whether the card was drawn and is
+  on screen the pump alone writes, so those stay on the root's `Browser`.
+  The popup slot stays the root's too: a dialog that arrives under an open
+  menu closes it (ADR 0043). A gone Thread's dialog goes with its Browser
+  (`forget_gone_threads`). The page's right-click menu gets no view
+  (below). What remains on `Browsers` for slices of their own:
+  annotations and their review, the provider's control and capture queue,
+  and last the pages and the engine's lifetime.
 - **The Decisions are the twentieth, in part.** `DecisionsView`
   (`cockpit/decisions.rs`) owns the thread rules option 2 made where the
   provider offered no standing answer, and is what a Decision card drawn
@@ -332,6 +352,15 @@ of its own, which keeps the zoom and the pan. The root draws it over the
 window in `lightbox_element` (`cockpit/lightbox.rs`) for the focused Pane,
 and what stays on the root is the root's: handing the keyboard back to
 the Pane as it closes, and ⌘W closing it before anything else.
+
+A page's right-click menu is the third. What it keeps on the root's
+`Browser` is the right-click the page reported (`context`), which only
+the pump writes as it reads the engine (`serve_page_requests`), and where
+the pointer was (`pointer`), a cell the page area's mouse-down sets
+without reaching either view. The menu is a context menu in the popup
+slot (ADR 0043), whose rows and verbs the root builds and runs
+(`cockpit/browser/page_menu.rs`). No listener writes its state, so a view
+would add an event for a popup the root opens anyway.
 
 ## Precedent
 
