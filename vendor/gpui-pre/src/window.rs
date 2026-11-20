@@ -998,10 +998,12 @@ pub(crate) struct Frame {
     pub(crate) cursor_styles: Vec<CursorStyleRequest>,
     #[cfg(any(test, feature = "test-support"))]
     pub(crate) debug_bounds: FxHashMap<String, Bounds<Pixels>>,
-    /// Ferrite's patch: `debug_bounds` in the order prepaint recorded them,
-    /// so a cached view's reused subtree keeps its selectors.
+    /// Ferrite's patch: each `debug_selector` and each line of text in the
+    /// order the frame painted them, so a cached view's reused subtree keeps
+    /// its selectors and its text, and a headless driver can read what an
+    /// element shows.
     #[cfg(any(test, feature = "test-support"))]
-    pub(crate) debug_bounds_log: Vec<(String, Bounds<Pixels>)>,
+    pub(crate) debug_paint_log: Vec<DebugPainted>,
     #[cfg(any(feature = "inspector", debug_assertions))]
     pub(crate) next_inspector_instance_ids: FxHashMap<Rc<crate::InspectorElementPath>, usize>,
     #[cfg(any(feature = "inspector", debug_assertions))]
@@ -1060,10 +1062,10 @@ impl PaintIndex {
         Self {
             scene_index: shift_index(self.scene_index, from.scene_index, to.scene_index),
             #[cfg(any(test, feature = "test-support"))]
-            debug_bounds_index: shift_index(
-                self.debug_bounds_index,
-                from.debug_bounds_index,
-                to.debug_bounds_index,
+            debug_paint_index: shift_index(
+                self.debug_paint_index,
+                from.debug_paint_index,
+                to.debug_paint_index,
             ),
             mouse_listeners_index: shift_index(
                 self.mouse_listeners_index,
@@ -1097,11 +1099,21 @@ impl PaintIndex {
     }
 }
 
+/// Ferrite's patch: one entry of a frame's [`Frame::debug_paint_log`].
+#[cfg(any(test, feature = "test-support"))]
+#[derive(Clone, Debug)]
+pub(crate) enum DebugPainted {
+    /// An element with a `debug_selector`, where it was laid out.
+    Selector(String, Bounds<Pixels>),
+    /// A line of text, where it showed: its box clipped to the content mask.
+    Text(SharedString, Bounds<Pixels>),
+}
+
 #[derive(Clone, Default, Debug)]
 pub(crate) struct PaintIndex {
     scene_index: usize,
     #[cfg(any(test, feature = "test-support"))]
-    debug_bounds_index: usize,
+    debug_paint_index: usize,
     mouse_listeners_index: usize,
     input_handlers_index: usize,
     cursor_styles_index: usize,
@@ -1130,7 +1142,7 @@ impl Frame {
             #[cfg(any(test, feature = "test-support"))]
             debug_bounds: FxHashMap::default(),
             #[cfg(any(test, feature = "test-support"))]
-            debug_bounds_log: Vec::new(),
+            debug_paint_log: Vec::new(),
 
             #[cfg(any(feature = "inspector", debug_assertions))]
             next_inspector_instance_ids: FxHashMap::default(),
@@ -1159,7 +1171,7 @@ impl Frame {
         #[cfg(any(test, feature = "test-support"))]
         {
             self.debug_bounds.clear();
-            self.debug_bounds_log.clear();
+            self.debug_paint_log.clear();
         }
 
         #[cfg(any(feature = "inspector", debug_assertions))]
@@ -2684,6 +2696,56 @@ impl Window {
         self.rendered_frame.debug_bounds.get(selector).copied()
     }
 
+    /// Ferrite's patch: the lines of text the last drawn frame showed inside
+    /// the element of this `debug_selector` (the one [`Self::debug_bounds`]
+    /// names), in paint order: its own and whatever was painted over it.
+    /// `None` when the frame drew no such element.
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn debug_text(&self, selector: &str) -> Option<Vec<SharedString>> {
+        let log = &self.rendered_frame.debug_paint_log;
+        let (at, bounds) = log.iter().enumerate().rev().find_map(|(at, painted)| match painted {
+            DebugPainted::Selector(drawn, bounds) if drawn == selector => Some((at, *bounds)),
+            _ => None,
+        })?;
+        Some(
+            log[at..]
+                .iter()
+                .filter_map(|painted| match painted {
+                    DebugPainted::Text(text, line) if line.intersects(&bounds) => Some(text.clone()),
+                    _ => None,
+                })
+                .collect(),
+        )
+    }
+
+    /// Ferrite's patch: the `debug_selector` of the innermost element that
+    /// holds the keyboard's focus in the last drawn frame, itself or an
+    /// ancestor on its dispatch path.
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn focused_debug_selector(&self) -> Option<String> {
+        let focus = self.focus?;
+        let tree = &self.rendered_frame.dispatch_tree;
+        let node = tree.focusable_node_id(focus)?;
+        tree.dispatch_path(node)
+            .iter()
+            .rev()
+            .find_map(|node| tree.node(*node).debug_selector.clone())
+    }
+
+    /// Ferrite's patch: a line of text painted at `bounds`, kept where it
+    /// shows (inside the content mask, not fully transparent) for
+    /// [`Self::debug_text`].
+    #[cfg(any(test, feature = "test-support"))]
+    pub(crate) fn record_debug_text(&mut self, text: &SharedString, bounds: Bounds<Pixels>) {
+        let shown = bounds.intersect(&self.content_mask().bounds);
+        if shown.is_empty() || self.element_opacity() <= 0. {
+            return;
+        }
+        self.next_frame
+            .debug_paint_log
+            .push(DebugPainted::Text(text.clone(), shown));
+    }
+
     /// Spawn the future returned by the given closure on the application thread pool.
     /// The closure is provided a handle to the current window and an `AsyncWindowContext` for
     /// use within your future.
@@ -3841,7 +3903,7 @@ impl Window {
         PaintIndex {
             scene_index: self.next_frame.scene.len(),
             #[cfg(any(test, feature = "test-support"))]
-            debug_bounds_index: self.next_frame.debug_bounds_log.len(),
+            debug_paint_index: self.next_frame.debug_paint_log.len(),
             mouse_listeners_index: self.next_frame.mouse_listeners.len(),
             input_handlers_index: self.next_frame.input_handlers.len(),
             cursor_styles_index: self.next_frame.cursor_styles.len(),
@@ -3866,16 +3928,16 @@ impl Window {
             |state| state.move_paint(&range.start, &to),
         );
         #[cfg(any(test, feature = "test-support"))]
-        for (selector, bounds) in self.rendered_frame.debug_bounds_log
-            [range.start.debug_bounds_index..range.end.debug_bounds_index]
+        for painted in self.rendered_frame.debug_paint_log
+            [range.start.debug_paint_index..range.end.debug_paint_index]
             .iter()
         {
-            self.next_frame
-                .debug_bounds
-                .insert(selector.clone(), *bounds);
-            self.next_frame
-                .debug_bounds_log
-                .push((selector.clone(), *bounds));
+            if let DebugPainted::Selector(selector, bounds) = painted {
+                self.next_frame
+                    .debug_bounds
+                    .insert(selector.clone(), *bounds);
+            }
+            self.next_frame.debug_paint_log.push(painted.clone());
         }
         self.next_frame.cursor_styles.extend(
             self.rendered_frame.cursor_styles

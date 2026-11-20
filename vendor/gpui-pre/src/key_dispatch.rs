@@ -88,6 +88,10 @@ pub(crate) struct DispatchNode {
     pub focus_id: Option<FocusId>,
     view_id: Option<EntityId>,
     parent: Option<DispatchNodeId>,
+    /// Ferrite's patch: the `debug_selector` of the element this node is,
+    /// so a headless driver can name what holds the keyboard.
+    #[cfg(any(test, feature = "test-support"))]
+    pub debug_selector: Option<String>,
 }
 
 pub(crate) struct ReusedSubtree {
@@ -223,6 +227,11 @@ impl DispatchTree {
         self.focusable_node_ids.insert(focus_id, node_id);
     }
 
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn set_debug_selector(&mut self, selector: String) {
+        self.active_node().debug_selector = Some(selector);
+    }
+
     pub fn set_view_id(&mut self, view_id: EntityId) {
         if self.view_stack.last().copied() != Some(view_id) {
             let node_id = *self.node_stack.last().unwrap();
@@ -256,6 +265,10 @@ impl DispatchTree {
         }
 
         let target = self.active_node();
+        #[cfg(any(test, feature = "test-support"))]
+        {
+            target.debug_selector = source.debug_selector.take();
+        }
         target.key_listeners = mem::take(&mut source.key_listeners);
         target.action_listeners = mem::take(&mut source.action_listeners);
         target.modifiers_changed_listeners = mem::take(&mut source.modifiers_changed_listeners);

@@ -97,6 +97,7 @@ impl ShapedLine {
             align_width,
             &self.decoration_runs,
             &[],
+            Some(&self.text),
             window,
             cx,
         )?;
@@ -228,6 +229,7 @@ impl LineLayout {
             align_width,
             decoration_runs,
             &[],
+            None,
             window,
             cx,
         )
@@ -303,6 +305,7 @@ impl WrappedLine {
             align_width,
             &self.decoration_runs,
             &self.wrap_boundaries,
+            Some(&self.text),
             window,
             cx,
         )?;
@@ -372,6 +375,7 @@ fn paint_line(
     align_width: Option<Pixels>,
     decoration_runs: &[DecorationRun],
     wrap_boundaries: &[WrapBoundary],
+    text: Option<&SharedString>,
     window: &mut Window,
     cx: &mut App,
 ) -> Result<()> {
@@ -382,6 +386,14 @@ fn paint_line(
             line_height * (wrap_boundaries.len() as f32 + 1.),
         ),
     );
+    // Ferrite's patch: what a headless driver reads back (`Window::debug_text`).
+    #[cfg(any(test, feature = "test-support"))]
+    if let Some(text) = text {
+        let width = align_width.map_or(layout.width, |width| width.max(layout.width));
+        window.record_debug_text(text, Bounds::new(origin, size(width, line_bounds.size.height)));
+    }
+    #[cfg(not(any(test, feature = "test-support")))]
+    let _ = text;
     window.paint_layer(line_bounds, |window| {
         let padding_top = (line_height - layout.ascent - layout.descent) / 2.;
         let baseline_offset = point(px(0.), padding_top + layout.ascent);
