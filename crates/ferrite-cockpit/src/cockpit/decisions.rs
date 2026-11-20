@@ -30,6 +30,11 @@ impl DecisionState {
         self.owner.clone()
     }
 
+    /// A gone Thread's rules go with it.
+    pub(super) fn retain_threads(&mut self, keep: impl Fn(ThreadId) -> bool) {
+        self.rules.retain(|rule| keep(rule.thread));
+    }
+
     #[cfg(test)]
     pub(super) fn rules(&self) -> &[ThreadRule] {
         &self.rules

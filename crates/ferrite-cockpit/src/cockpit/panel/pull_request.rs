@@ -711,16 +711,18 @@ impl PullRequestView {
     }
 
     /// Forget what was read of, and done to, the PRs of Threads that are gone.
-    pub(in crate::cockpit) fn retain_threads(
-        &mut self,
-        known: &std::collections::HashSet<ThreadId>,
-    ) {
+    pub(in crate::cockpit) fn retain_threads(&mut self, keep: impl Fn(ThreadId) -> bool) {
         let kept = |target: &PrTarget| match target.source {
-            PrSource::Thread(thread) => known.contains(&thread),
+            PrSource::Thread(thread) => keep(thread),
             PrSource::Project(_) => true,
         };
         self.reads.retain(kept);
         self.actions.retain(kept);
+    }
+
+    #[cfg(test)]
+    pub(in crate::cockpit) fn held_for_test(&self, thread: ThreadId) -> usize {
+        self.reads.held_for_test(thread)
     }
 
     /// A view of `target`'s PR chosen; `pressed` when it is the one shown.

@@ -236,6 +236,11 @@ impl PanelFocus {
         self.remembered.borrow_mut().retain(|thread, _| keep(*thread));
     }
 
+    #[cfg(test)]
+    pub(crate) fn held_for_test(&self, thread: ThreadId) -> usize {
+        usize::from(self.remembered.borrow().contains_key(&thread))
+    }
+
     /// The stop in `window`'s focus, if one is.
     pub(crate) fn focused(&self, window: &Window) -> Option<PanelControl> {
         let handles = self.handles.borrow();

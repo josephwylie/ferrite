@@ -202,6 +202,11 @@ impl PrReads {
     pub(crate) fn retain(&mut self, keep: impl Fn(&PrTarget) -> bool) {
         self.reads.retain(|target, _| keep(target));
     }
+
+    #[cfg(test)]
+    pub(crate) fn held_for_test(&self, thread: ThreadId) -> usize {
+        self.reads.keys().filter(|target| target.source == PrSource::Thread(thread)).count()
+    }
 }
 
 #[cfg(test)]

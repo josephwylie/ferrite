@@ -125,6 +125,11 @@ impl Facts {
         self.threads.get(&thread)
     }
 
+    /// Every Thread `keep` refuses is no longer known.
+    pub fn retain_threads(&mut self, keep: impl Fn(ThreadId) -> bool) {
+        self.threads.retain(|thread, _| keep(*thread));
+    }
+
     /// The parked rows the nav draws, in order.
     pub fn parked(&self) -> &[ThreadId] {
         &self.parked

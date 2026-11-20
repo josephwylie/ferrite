@@ -249,6 +249,18 @@ fn option_two_without_a_standing_answer_keeps_a_thread_rule(cx: &mut TestAppCont
     assert_eq!(answered(&fake).len(), 2, "what it does not cover waits");
 }
 
+/// A deleted Thread's rules go with it.
+#[gpui::test]
+fn a_deleted_threads_rules_go_with_it(cx: &mut TestAppContext) {
+    let (view, _fake, cx) = waiting("parity-rule-deleted", cx, bash("first", "gh issue close 212"));
+    cx.dispatch_action(PickOption2);
+    tick(cx);
+    let thread = view.read_with(cx, |view, _| view.panes[0].thread().unwrap());
+    assert_eq!(view.read_with(cx, |view, _| view.decisions.rules().len()), 1, "a rule was made");
+    press_nav_verb(&view, thread, MenuVerb::Delete, cx);
+    assert!(view.read_with(cx, |view, _| view.decisions.rules().is_empty()), "it went with its Thread");
+}
+
 /// D-4: `3` denies with the steer message, and the keyboard lands in the
 /// Pane's Composer.
 #[gpui::test]
