@@ -555,10 +555,10 @@ impl CockpitView {
             PanelControl::Plus => return self.toggle_door(super::strip::plus_door(thread), cx),
             PanelControl::PrNumber => MenuTarget::PrLink(thread),
             PanelControl::PrMore => {
-                let Some(pr) = self.pr_snapshot(thread) else {
+                let Some(number) = self.pr_snapshot(thread, cx).map(|pr| pr.number) else {
                     return;
                 };
-                let target = super::pr_read::PrTarget::thread(thread, pr.number);
+                let target = super::pr_read::PrTarget::thread(thread, number);
                 return self.toggle_door(super::pull_request::pr_more_door(target), cx);
             }
             _ => return,

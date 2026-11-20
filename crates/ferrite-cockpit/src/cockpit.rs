@@ -430,6 +430,8 @@ pub struct CockpitView {
     held_sends: sends::HeldSends,
     tools: tools::Tools,
     terminals: Entity<tools::TerminalsView>,
+    /// The pull request reader: the Panel's PR Surface and the PRs' detail.
+    pull_request: Entity<panel::pull_request::PullRequestView>,
     agent_drills: agent_pane::AgentDrills,
     native_copy: Option<String>,
     nav_collapsed: bool,
@@ -1371,6 +1373,12 @@ impl CockpitView {
         let side_chat = cx.new(|_| side_chat_view::SideChatView::new(cockpit_weak.clone()));
         let terminals = cx.new(|_| tools::TerminalsView::new(cockpit_weak.clone()));
         cx.subscribe(&terminals, Self::on_terminals_event).detach();
+        let pull_request =
+            cx.new(|_| panel::pull_request::PullRequestView::new(cockpit_weak.clone()));
+        cx.subscribe(&pull_request, Self::on_pr_event).detach();
+        // What the reader shows is drawn by the root's frame too (a tab's
+        // state, the PRs' header), so each change redraws the window.
+        cx.observe(&pull_request, |_, _, cx| cx.notify()).detach();
         let mut view = Self {
             cockpit,
             browsers: Default::default(),
@@ -1396,6 +1404,7 @@ impl CockpitView {
             held_sends: Default::default(),
             tools: Default::default(),
             terminals,
+            pull_request,
             agent_drills: Default::default(),
             native_copy: None,
             nav_filter: None,

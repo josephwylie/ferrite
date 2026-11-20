@@ -230,8 +230,8 @@ pub(super) fn with_pr<'a>(
     tick(cx);
     let thread = view.read_with(cx, |view, _| view.panes[0].thread().unwrap());
     land(&view, thread, Some(pr_with_checks()), cx);
-    view.update(cx, |view, _| {
-        view.fixture_pr_snapshot(thread, snapshot(state))
+    view.update(cx, |view, cx| {
+        view.fixture_pr_snapshot(thread, snapshot(state), cx)
     });
     tick(cx);
     (view, thread, fake, cx)
@@ -327,7 +327,7 @@ fn a_pr_view_fades_in_once_when_the_view_changes(cx: &mut TestAppContext) {
     view.update(cx, |view, cx| view.open_pr_surface(thread, cx));
     tick(cx);
     let picked = |view: &gpui::Entity<CockpitView>, cx: &mut gpui::VisualTestContext| {
-        view.read_with(cx, |view, _| view.panel.pr_picked)
+        view.read_with(cx, |view, cx| view.pull_request.read(cx).picked())
     };
     assert_eq!(picked(&view, cx), None, "opening the Surface plays nothing");
     click("pr-tab-Timeline", cx);
@@ -359,7 +359,7 @@ fn merge_asks_twice_and_a_merged_pr_shows_its_pill(cx: &mut TestAppContext) {
     assert!(sent.last().unwrap().contains("gh pr merge 48"));
 
     view.update(cx, |view, cx| {
-        view.fixture_pr_snapshot(thread, snapshot(WirePrState::Merged));
+        view.fixture_pr_snapshot(thread, snapshot(WirePrState::Merged), cx);
         cx.notify();
     });
     tick(cx);
@@ -495,8 +495,8 @@ fn a_restored_tab_for_another_pr_keeps_its_identity(cx: &mut TestAppContext) {
     cx.simulate_resize(gpui::size(px(1900.), px(900.)));
     tick(cx);
     land(&view, thread, Some(pr_with_checks()), cx);
-    view.update(cx, |view, _| {
-        view.fixture_pr_snapshot(thread, snapshot(WirePrState::Open))
+    view.update(cx, |view, cx| {
+        view.fixture_pr_snapshot(thread, snapshot(WirePrState::Open), cx)
     });
     tick(cx);
     let tabs = view.read_with(cx, |view, _| {
@@ -530,7 +530,7 @@ fn pr_header_metadata_stays_visible_across_tabs(cx: &mut TestAppContext) {
         pr.changed_files = Some(3);
         pr.additions = Some(12);
         pr.deletions = Some(2);
-        view.fixture_pr_snapshot(thread, pr);
+        view.fixture_pr_snapshot(thread, pr, cx);
     });
     tick(cx);
     for tab in [

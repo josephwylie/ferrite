@@ -68,9 +68,9 @@ that happened to touch it, and nothing in the code said whose a field was.
   `PrsEvent`: the root asks the forge for a list and hands the answer to the
   view to wait on, reads an opened PR, gives the board back, or opens the
   Project card. Whether the PRs stand in the board's place stays the root's
-  `destination`, shared with the Factory. The Panel's PR reader has no view
-  of its own yet, so the root draws an open PR's body with its own listeners
-  and hands it over with the inputs, as Settings takes other features' rows.
+  `destination`, shared with the Factory. An open PR's body is the PR
+  reader's (the eighth, below), which the root has it draw and hands over
+  with the inputs.
 - **The Side chat is the sixth.** `SideChatView`
   (`cockpit/side_chat_view.rs`) owns every Thread's side chats in one
   view: each tab's field, title and fork once it lands, the tab each
@@ -103,6 +103,21 @@ that happened to touch it, and nothing in the code said whose a field was.
   machine, so the root hands the view both to start it with, and again
   for Try again. Which Surface the Panel shows, its tabs and the
   context menu stay the root's; the menu's rows it reads from the view.
+- **The PR reader is the eighth.** `PullRequestView`
+  (`cockpit/panel/pull_request.rs`) owns every PR it has read, a Thread's
+  tab's or a Project's, with the request still out for each; what each
+  action on a PR became, from its hand-off to the PR read back; the Merge
+  waiting for its second press; when a view was last chosen; and the
+  cache its prose renders through. One view for the window: the Panel's
+  PR Surface is its render, reading `pr_inputs`, and the PRs' detail is
+  drawn by it as the root hands the open PR over, since the two can stand
+  in one frame while the Panel slides shut. It emits `PrEvent`: read a PR
+  again, a view chosen, Code's diff, a hand-off, the `⋯`. The forge and
+  the Thread's agent are the root's, so it asks them and hands the
+  answers to the view, and every frame it disarms a Merge whose Surface
+  is no longer shown, the Surface drawn or not. Which view of a PR is
+  chosen stays where it is kept (the Surface's, the PRs'), and Code's
+  body stays Changes', which the root draws into the inputs.
 
 ## Precedent
 

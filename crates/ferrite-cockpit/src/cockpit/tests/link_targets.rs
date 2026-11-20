@@ -35,7 +35,7 @@ fn two_prs<'a>(
         let mut snapshot = super::pr::snapshot(ferrite_core::protocol::WirePrState::Open);
         snapshot.number = 202;
         snapshot.url = REPO_B.into();
-        view.fixture_pr_snapshot(b_thread, snapshot);
+        view.fixture_pr_snapshot(b_thread, snapshot, cx);
         view.focus_thread(a, cx);
     });
     tick(cx);

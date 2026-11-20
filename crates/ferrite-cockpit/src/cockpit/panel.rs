@@ -76,9 +76,6 @@ pub(crate) struct Panel {
     /// at once.
     shown: Option<(ThreadId, Option<SurfaceId>)>,
     picked: Option<std::time::Instant>,
-    /// When the operator last chose another view of a pull request
-    /// (Summary, Guide, Timeline, Code): its body fades in from then.
-    pub(in crate::cockpit) pr_picked: Option<std::time::Instant>,
     /// The Thread whose Panel's left edge is being dragged.
     resizing: Option<ThreadId>,
     /// The tab pressed, until the button goes up.
@@ -88,14 +85,6 @@ pub(crate) struct Panel {
     /// The background cards turned from how they start (running open,
     /// finished closed), by call.
     pub(crate) background_turned: std::collections::HashSet<String>,
-    /// Each Thread's pull request, read whole for its Surface.
-    pub(in crate::cockpit) pr_reads: pr_read::PrReads,
-    /// What a PR's prose (its body, guide and comments) renders through.
-    pub(crate) pr_rich: ferrite_pane::rich::TextCache,
-    /// What each PR's action in flight has become.
-    pub(in crate::cockpit) pr_actions: pr_action::PrActions,
-    /// The PR whose Merge waits for its second press.
-    pr_armed: Option<pr_read::PrTarget>,
     /// The Panel's row of stops, shared with each view that draws one.
     pub(crate) focus: std::rc::Rc<PanelFocus>,
     /// A view a test draws at the foot of the Panel, as a Surface's own
@@ -148,15 +137,10 @@ impl Panel {
             tended: false,
             shown: None,
             picked: None,
-            pr_picked: None,
             resizing: None,
             tab_press: None,
             empty_highlight: 0,
             background_turned: Default::default(),
-            pr_reads: Default::default(),
-            pr_rich: Default::default(),
-            pr_actions: Default::default(),
-            pr_armed: None,
             focus: Default::default(),
             #[cfg(test)]
             test_child: None,
@@ -421,7 +405,8 @@ impl CockpitView {
         self.panel.scrolls.retain(|thread, _| keep(*thread));
         if heard {
             self.panel.focus.retain_threads(|thread| known.contains(&thread));
-            self.panel.pr_actions.retain_threads(&known);
+            self.pull_request
+                .update(cx, |reader, _| reader.retain_threads(&known));
         }
     }
 
@@ -495,7 +480,8 @@ impl CockpitView {
     pub(super) fn tend_panel(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.tend_previews(window, cx);
         self.tend_prose_find(window);
-        self.disarm_unseen_merge();
+        let shown = self.shown_pr();
+        self.pull_request.update(cx, |reader, _| reader.disarm_unless(shown));
         self.panel.window_w = f32::from(window.viewport_size().width);
         self.tend_tab_pick(window, cx);
         if let Some(thread) = self
@@ -841,7 +827,7 @@ impl CockpitView {
             Some(SurfaceId::Terminal(_)) => filled(self.terminals.clone().into_any_element()),
             Some(SurfaceId::SideChat(_)) => filled(self.side_chat.clone().into_any_element()),
             Some(SurfaceId::Agent(key)) => filled(self.agent_drill_body(thread, &key, cx)),
-            Some(SurfaceId::PullRequest(number)) => filled(self.pr_surface(thread, number, cx)),
+            Some(SurfaceId::PullRequest(_)) => filled(self.pull_request.clone().into_any_element()),
         };
         let body = if takes_keys { keyed(body) } else { body };
         ferrite_ui::motion::swap_since(
