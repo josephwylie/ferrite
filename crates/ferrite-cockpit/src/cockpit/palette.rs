@@ -2,14 +2,19 @@
 //! (⌘K), the shortcuts sheet (`?`), the status line's mode cycle (⇧⇥),
 //! the notifications list's keys and the palette's veil.
 //!
-//! Every float key is an action bound in its float's context (`keymap`)
-//! and handled here, at the cockpit's root (`register_palette_actions`):
-//! the floats are views that only draw what the cockpit hands them.
+//! The palette is a view of its own (ADR 0041, `crate::palette`): it
+//! keeps its line, its rows, its tab and its cursor, and answers its own
+//! keys. Here the cockpit builds its rows as it opens (`palette_inputs`)
+//! and hears what it chose (`PaletteEvent`), running the row, since a row
+//! can touch anything in the window. The shortcuts sheet's keys and ⌘K,
+//! ⌘⇧P, ⌘⇧D and ⇧⇥ are handled here, at the cockpit's root
+//! (`register_palette_actions`).
 
 use super::*;
 use crate::float::{self, FloatPlace};
 use crate::palette::{
-    Act, Command, Palette, PaletteScope, Row as PaletteRow, Section as PaletteSection,
+    Act, Command, Palette, PaletteEvent, PaletteScope, Row as PaletteRow,
+    Section as PaletteSection,
 };
 use crate::shortcuts::Shortcuts;
 
@@ -127,14 +132,6 @@ impl CockpitView {
                 view.review_branch(window, cx)
             }),
         )
-        .on_action(cx.listener(|view, _: &palette::SelectNext, _, cx| view.palette_step(1, cx)))
-        .on_action(
-            cx.listener(|view, _: &palette::SelectPrevious, _, cx| view.palette_step(-1, cx)),
-        )
-        .on_action(
-            cx.listener(|view, _: &palette::Confirm, window, cx| view.palette_confirm(window, cx)),
-        )
-        .on_action(cx.listener(|view, _: &palette::Dismiss, _, cx| view.close_palette(cx)))
         .on_action(
             cx.listener(|view, _: &shortcuts::Toggle, window, cx| {
                 view.toggle_shortcuts(window, cx)
@@ -192,19 +189,10 @@ impl CockpitView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let rows = match scope {
-            PaletteScope::All => {
-                let mut rows = self.palette_thread_rows(cx);
-                rows.extend(self.palette_project_rows(cx));
-                rows.extend(self.palette_factory_rows());
-                rows.extend(self.palette_command_rows(window, cx));
-                rows
-            }
-            // Listed off the UI thread: `open_import_palette`.
-            PaletteScope::Sessions => Vec::new(),
-        };
+        let rows = self.palette_inputs(scope, window, cx);
         self.clear_for_float(cx);
         let palette = cx.new(|cx| Palette::new(scope, rows, query, cx));
+        cx.subscribe_in(&palette, window, Self::on_palette_event).detach();
         let focus = palette.read(cx).input.focus_handle(cx);
         self.floats.palette = Some(palette);
         window.focus(&focus, cx);
@@ -219,23 +207,44 @@ impl CockpitView {
         }
     }
 
-    fn palette_step(&mut self, delta: isize, cx: &mut Context<Self>) {
-        if let Some(palette) = self.floats.palette.clone() {
-            palette.update(cx, |palette, cx| palette.step(delta, cx));
+    /// What the palette lists as it opens, in the order it draws them:
+    /// every Thread, the Projects and their Factories, then every command
+    /// (`All`). The import picker opens empty and fills when its listing
+    /// answers (`open_import_palette`).
+    fn palette_inputs(
+        &self,
+        scope: PaletteScope,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) -> Vec<PaletteRow> {
+        match scope {
+            PaletteScope::All => {
+                let mut rows = self.palette_thread_rows(cx);
+                rows.extend(self.palette_project_rows(cx));
+                rows.extend(self.palette_factory_rows());
+                rows.extend(self.palette_command_rows(window, cx));
+                rows
+            }
+            PaletteScope::Sessions => Vec::new(),
         }
     }
 
-    /// ⏎ runs the cursor's row and closes.
-    fn palette_confirm(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(palette) = self.floats.palette.clone() else {
-            return;
-        };
-        let Some(row) = palette.read(cx).selected().cloned() else {
-            return;
-        };
-        self.floats.palette = None;
-        self.run_palette_act(row.act, window, cx);
-        cx.notify();
+    /// What the palette chose: ⏎ shuts it and runs the row; esc shuts it.
+    fn on_palette_event(
+        &mut self,
+        _: &Entity<Palette>,
+        event: &PaletteEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        match event {
+            PaletteEvent::Run(act) => {
+                self.floats.palette = None;
+                self.run_palette_act(act.clone(), window, cx);
+                cx.notify();
+            }
+            PaletteEvent::Dismiss => self.close_palette(cx),
+        }
     }
 
     /// Run one palette row.
@@ -272,16 +281,12 @@ impl CockpitView {
         cx: &mut Context<Self>,
     ) {
         self.open_palette(PaletteScope::Sessions, "", window, cx);
-        self.discovery_request = self.discovery_request.wrapping_add(1);
         let roots = self.session_file_roots.clone();
         match self.cockpit.discover_sessions(roots, IMPORT_ROWS_MAX) {
             Some(reply) => {
-                self.pending_discovery = Some(PendingDiscovery {
-                    into,
-                    request_id: self.discovery_request,
-                    started: std::time::Instant::now(),
-                    reply,
-                });
+                if let Some(palette) = self.floats.palette.clone() {
+                    palette.update(cx, |palette, _| palette.listen(into, reply));
+                }
                 self.show_sessions(Vec::new(), "searching sessions\u{2026}".into(), cx);
             }
             // No listing thread to be had: the plain walk, here.
@@ -293,32 +298,21 @@ impl CockpitView {
         }
     }
 
-    /// The listing's answer, once it lands — and only into the picker that
-    /// asked for it: one closed or reopened since drops it.
+    /// The listing's answer, once it lands, into the picker that asked for
+    /// it: the listing lives on that picker, so one closed or reopened
+    /// since has dropped it.
     pub(super) fn poll_session_discovery(&mut self, cx: &mut Context<Self>) {
-        use std::sync::mpsc::TryRecvError;
-        let Some(pending) = self.pending_discovery.take() else {
+        let Some(palette) = self
+            .floats
+            .palette
+            .clone()
+            .filter(|palette| palette.read(cx).listing.is_some())
+        else {
             return;
         };
-        let current = self.discovery_request == pending.request_id
-            && self
-                .floats
-                .palette
-                .as_ref()
-                .is_some_and(|palette| palette.read(cx).scope == PaletteScope::Sessions);
-        if !current {
-            return;
+        if let Some((into, found)) = palette.update(cx, |palette, _| palette.listed()) {
+            self.list_sessions(into, found, cx);
         }
-        let found = match pending.reply.try_recv() {
-            Ok(found) => found.map_err(|error| error.to_string()),
-            Err(TryRecvError::Empty) if pending.started.elapsed() < Duration::from_secs(15) => {
-                self.pending_discovery = Some(pending);
-                return;
-            }
-            Err(TryRecvError::Empty) => Err("the listing timed out".into()),
-            Err(error) => Err(error.to_string()),
-        };
-        self.list_sessions(pending.into, found, cx);
     }
 
     /// Fill the import picker: a row per session, or what the empty list

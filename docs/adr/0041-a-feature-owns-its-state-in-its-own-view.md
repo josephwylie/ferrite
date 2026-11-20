@@ -225,6 +225,19 @@ that happened to touch it, and nothing in the code said whose a field was.
   the list opens what it was about. The window carries the view's alerts
   to the next machine's root (`with_needs_you`). The kit's own toasts
   stay the root's (`toast_margins`).
+- **The command palette is the fifteenth.** `Palette` (`palette.rs`) was
+  a view already, keeping its line, its rows, its type tab, its cursor
+  and its scroll; now it answers its own keys too (↑ ↓ ⇥, ⏎, esc), and
+  as the import picker it keeps the session listing it waits on, so a
+  picker closed or reopened since drops the answer with itself. The root
+  makes one each time it opens, with its rows from `palette_inputs`, and
+  hears it from then on, as it hears the Project card. It emits
+  `PaletteEvent`: run a row, or dismiss. Running a row stays the root's
+  (`run_palette_act`, `run_command`), since a command can touch anything
+  in the window, as do ⌘K and the palette's two keyed commands, its veil
+  and its exit, which it shares with the shortcuts sheet, and where the
+  sessions are looked for. The root's pump asks the picker for the
+  listing's answer and fills it.
 
 ## What does not get a view
 

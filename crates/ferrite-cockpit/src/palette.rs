@@ -13,10 +13,12 @@
 //! (`Close esc`, `Change type ← →`) and the cursor row's
 //! working directory or the result count. At rest — `All`, nothing typed
 //! — it lists `Recents` (the Threads used last) and a few `Actions` that
-//! start work; a query or a tab reaches every row. The cockpit builds the rows
-//! (`cockpit::palette`) and runs them: every key the palette answers is a
-//! `palette::*` action bound in its `Palette` context, handled at the
-//! cockpit's root.
+//! start work; a query or a tab reaches every row. Its keys are
+//! `palette::*` actions bound in its `Palette` context, which it answers
+//! on its own element (ADR 0041). The cockpit builds the rows as it opens
+//! (`cockpit::palette`, `palette_inputs`) and runs the one chosen: the
+//! palette says what was chosen, or that it was dismissed, as a
+//! `PaletteEvent`.
 //!
 //! **Status filters.** A line of one letter is a filter, not a search: `b`
 //! `w` `i` `d` keep only the rows whose state is blocked, working, idle or
@@ -32,8 +34,8 @@ use ferrite_core::workspace::registry::ProjectId;
 use ferrite_core::ThreadId;
 use gpui::prelude::*;
 use gpui::{
-    div, px, rgb, Context, Entity, IntoElement, ScrollHandle, SharedString, StyledText,
-    Subscription, Window,
+    div, px, rgb, Context, Entity, EventEmitter, IntoElement, ScrollHandle, SharedString,
+    StyledText, Subscription, Window,
 };
 
 use crate::cockpit::Attention;
@@ -279,12 +281,37 @@ impl Row {
     }
 }
 
+/// What the palette asks of the window.
+pub(crate) enum PaletteEvent {
+    /// ⏎ or a press on a row: run it. The window shuts the palette first.
+    Run(Act),
+    /// Esc: shut the palette and touch nothing else.
+    Dismiss,
+}
+
 /// A surviving row: its index into the rows, and the name's lit ranges.
 #[derive(Clone, Debug, PartialEq)]
 struct Shown {
     row: usize,
     lit: Vec<Range<usize>>,
 }
+
+/// The import picker's session listing, under way off the UI thread. It
+/// lives on the picker that asked, so a picker closed or reopened since
+/// drops it.
+pub(crate) struct Listing {
+    /// The blank Pane a pick replaces, if any.
+    into: Option<PaneIdentity>,
+    started: std::time::Instant,
+    reply: std::sync::mpsc::Receiver<std::io::Result<Vec<ferrite_core::import::Candidate>>>,
+}
+
+/// The listing's answer: the Pane a pick replaces, and the sessions found
+/// or why there are none.
+pub(crate) type Listed = (
+    Option<PaneIdentity>,
+    Result<Vec<ferrite_core::import::Candidate>, String>,
+);
 
 /// The palette: its scope, its rows and the filter's survivors, the cursor
 /// over them, and the input line.
@@ -300,8 +327,12 @@ pub(crate) struct Palette {
     empty: SharedString,
     pub input: Entity<Composer>,
     scroll: ScrollHandle,
+    /// The import picker's listing, until it answers.
+    pub listing: Option<Listing>,
     _edited: Subscription,
 }
+
+impl EventEmitter<PaletteEvent> for Palette {}
 
 impl Palette {
     /// A palette over `rows` (already in the order it draws them), its line
@@ -334,6 +365,7 @@ impl Palette {
             empty: NO_MATCHES.into(),
             input,
             scroll: ScrollHandle::new(),
+            listing: None,
             _edited: edited,
         };
         palette.refilter(cx);
@@ -346,6 +378,39 @@ impl Palette {
         self.rows = rows;
         self.empty = empty;
         self.refilter(cx);
+    }
+
+    /// Wait for the sessions listed off the UI thread, for a pick to take
+    /// the place of `into`.
+    pub(crate) fn listen(
+        &mut self,
+        into: Option<PaneIdentity>,
+        reply: std::sync::mpsc::Receiver<std::io::Result<Vec<ferrite_core::import::Candidate>>>,
+    ) {
+        self.listing = Some(Listing {
+            into,
+            started: std::time::Instant::now(),
+            reply,
+        });
+    }
+
+    /// The listing's answer once it lands, or once it has waited 15
+    /// seconds; nothing while it is still out.
+    pub(crate) fn listed(&mut self) -> Option<Listed> {
+        use std::sync::mpsc::TryRecvError;
+        let listing = self.listing.take()?;
+        let found = match listing.reply.try_recv() {
+            Ok(found) => found.map_err(|error| error.to_string()),
+            Err(TryRecvError::Empty)
+                if listing.started.elapsed() < std::time::Duration::from_secs(15) =>
+            {
+                self.listing = Some(listing);
+                return None;
+            }
+            Err(TryRecvError::Empty) => Err("the listing timed out".into()),
+            Err(error) => Err(error.to_string()),
+        };
+        Some((listing.into, found))
     }
 
     /// What the line holds now.
@@ -415,6 +480,13 @@ impl Palette {
         self.cursor = (self.cursor as isize + delta).rem_euclid(count) as usize;
         self.scroll.scroll_to_item(self.element_index(self.cursor));
         cx.notify();
+    }
+
+    /// ⏎: the window runs the cursor's row. Nothing surviving, nothing runs.
+    fn confirm(&mut self, cx: &mut Context<Self>) {
+        if let Some(row) = self.selected() {
+            cx.emit(PaletteEvent::Run(row.act.clone()));
+        }
     }
 
     /// Put the cursor on survivor `at` (a click).
@@ -613,10 +685,10 @@ impl Render for Palette {
             }
             list = list.child(
                 row_element(at, row, &shown.lit, at == self.cursor).on_click(cx.listener(
-                    move |palette, _: &gpui::ClickEvent, window, cx| {
+                    move |palette, _: &gpui::ClickEvent, _, cx| {
                         cx.stop_propagation();
                         palette.set_cursor(at, cx);
-                        window.dispatch_action(Box::new(Confirm), cx);
+                        palette.confirm(cx);
                     },
                 )),
             );
@@ -659,6 +731,10 @@ impl Render for Palette {
                 .on_action(cx.listener(|palette, _: &PreviousType, window, cx| {
                     palette.step_tab(-1, window, cx)
                 }))
+                .on_action(cx.listener(|palette, _: &SelectNext, _, cx| palette.step(1, cx)))
+                .on_action(cx.listener(|palette, _: &SelectPrevious, _, cx| palette.step(-1, cx)))
+                .on_action(cx.listener(|palette, _: &Confirm, _, cx| palette.confirm(cx)))
+                .on_action(cx.listener(|_, _: &Dismiss, _, cx| cx.emit(PaletteEvent::Dismiss)))
                 .child(input)
                 .children(tab_row)
                 .child(list)
