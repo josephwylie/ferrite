@@ -677,18 +677,15 @@ fn command_arrows_go_to_the_ends_of_the_preview(cx: &mut TestAppContext) {
 /// renders: after the root's render has returned, as a Surface moved into
 /// its own view will.
 struct ChildStop {
-    root: gpui::WeakEntity<CockpitView>,
+    focus: std::rc::Rc<crate::cockpit::panel::PanelFocus>,
 }
 
 impl Render for ChildStop {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let semantics = Semantics::button("A child's stop");
         let handle = self
-            .root
-            .update(cx, |root, cx| {
-                root.panel_control(PanelControl::PrPrimary, semantics.clone(), cx)
-            })
-            .unwrap();
+            .focus
+            .register(PanelControl::PrPrimary, semantics.clone(), cx);
         crate::cockpit::panel::controls::focusable(
             div().id("child-stop").child("child"),
             &handle,
@@ -700,8 +697,8 @@ impl Render for ChildStop {
 #[gpui::test]
 fn a_stop_a_child_view_draws_keeps_its_place_in_the_row(cx: &mut TestAppContext) {
     let (view, _thread, cx) = with_tabs("focus-child", cx);
-    let root = view.downgrade();
-    let child = cx.new(|_| ChildStop { root });
+    let focus = view.read_with(cx, |view, _| view.panel.focus.clone());
+    let child = cx.new(|_| ChildStop { focus });
     view.update(cx, |view, cx| {
         view.panel.test_child = Some(child.into());
         cx.notify();

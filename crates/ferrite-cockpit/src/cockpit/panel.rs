@@ -96,8 +96,8 @@ pub(crate) struct Panel {
     pub(in crate::cockpit) pr_actions: pr_action::PrActions,
     /// The PR whose Merge waits for its second press.
     pr_armed: Option<pr_read::PrTarget>,
-    /// The keyboard stops of the head and a pull request's header.
-    pub(crate) focus: PanelFocus,
+    /// The Panel's row of stops, shared with each view that draws one.
+    pub(crate) focus: std::rc::Rc<PanelFocus>,
     /// A view a test draws at the foot of the Panel, as a Surface's own
     /// view would be drawn.
     #[cfg(test)]
@@ -664,9 +664,12 @@ impl CockpitView {
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
         use ferrite_ui::theme::*;
-        self.begin_panel_controls();
-        let index = self.panel_drawn_pane()?;
-        let owner = self.panes[index].identity;
+        let index = self.panel_drawn_pane();
+        let owner = index.map(|index| self.panes[index].identity);
+        self.panel
+            .focus
+            .begin(owner.and_then(|owner| owner.thread()), window, cx);
+        let (index, owner) = (index?, owner?);
         let sliding_out = self.panel_pane().is_none();
         let column = div()
             .size_full()
@@ -682,7 +685,6 @@ impl CockpitView {
                 let active = self.active_surface(thread);
                 let head = self.surface_head(thread, cx);
                 let body = self.surface_body(owner, thread, active, window, cx);
-                self.end_panel_controls(thread, window);
                 column.child(head).child(body)
             }
             // A draft's preview, alone: no Thread, no tabs.
