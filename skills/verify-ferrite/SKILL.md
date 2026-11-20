@@ -116,6 +116,11 @@ exits 2.
   focused element, and `label`, the Panel stop by the name its row gives it
   (`Overview`, `Files`), else `null`. Read it before blaming a key: `unhandled` from
   `key` means the keyboard is elsewhere, and `focus` says where.
+- **Which Thread the window shows** is `fv find view-thread-<id>`: bounds while Thread
+  `<id>` is the shown one, `nothing drawn as …` otherwise. One Pane is drawn at a time,
+  so at most one `view-thread-*` answers (none on a draft or the empty board). `focused`
+  in `thread get` is not this: it means the operator is looking, needs the window to
+  have the system's focus, and is `false` in every headless run.
 - **Shots are 2880x1800 at scale 2.** Divide pixel positions by 2 for `--x/--y`.
 - `key` presses each key and lets it go, as a keyboard does, so `enter` or `space` on
   a focused control (a Panel tab, `+`, a pull request's segment) clicks it from the
