@@ -1,6 +1,8 @@
 //! Window realization of the Server's Thread-owned browser tabs.
 //! Native pages belong here, independently of whichever Preview is visible.
 mod annotations;
+mod chrome;
+pub(super) use chrome::BrowserChromeView;
 mod controls;
 use controls::{ControlRequest, PendingControls};
 mod manual;
@@ -29,14 +31,6 @@ gpui::actions!(
     browser,
     [Go, CancelAnnotation, CancelAddress, AcceptDialog, DismissDialog]
 );
-
-/// What the address field acts on when submitted. A new tab acts on no
-/// existing page, so while one is pending no page's controls apply.
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum Entry {
-    Page,
-    NewTab,
-}
 
 #[derive(Default)]
 pub(super) struct Browsers {
@@ -87,12 +81,7 @@ pub(super) struct Browser {
     state: State,
     owner: Option<Owner>,
     pages: BTreeMap<TabId, Page>,
-    pub(super) address: Entity<Composer>,
-    /// The page address the field last took from the service. An edit is any
-    /// text that differs from it, and survives the page's own navigation.
-    address_shown: Option<(TabId, String)>,
     error: Option<String>,
-    entry: Entry,
     /// The field and focus of the page's script dialog, and the dialog they
     /// were last set up for.
     prompt: Entity<Composer>,
@@ -233,6 +222,8 @@ enum Event {
 
 impl CockpitView {
     pub(super) fn ensure_browser(&mut self, thread: ThreadId, cx: &mut Context<Self>) {
+        self.browser_chrome
+            .update(cx, |chrome, cx| chrome.make(thread, cx));
         self.browsers
             .threads
             .entry(thread)
@@ -240,15 +231,7 @@ impl CockpitView {
                 state: State::default(),
                 owner: None,
                 pages: BTreeMap::new(),
-                address: cx.new(|cx| {
-                    let mut field = Composer::new(cx);
-                    field.set_role(Role::Field(Some("BrowserAddress")), cx);
-                    field.set_visible_row_limit(1, cx);
-                    field
-                }),
-                address_shown: None,
                 error: None,
-                entry: Entry::Page,
                 prompt: cx.new(|cx| {
                     let mut field = Composer::new(cx);
                     field.set_role(Role::Field(Some("BrowserPrompt")), cx);
@@ -351,17 +334,13 @@ impl CockpitView {
                 if echoed {
                     self.browsers.sent.entry(thread).or_default().push_back(seen);
                 }
+                let page = state.active.is_some();
                 let browser = self.browsers.threads.get_mut(&thread).unwrap();
                 browser.state = state;
                 browser.error = None;
-                browser.entry = Entry::Page;
-                if browser.state.active.is_none() {
-                    browser.address_shown = None;
-                    browser
-                        .address
-                        .update(cx, |field, cx| field.set(String::new(), cx));
-                }
                 browser.sync_documents(cx, false);
+                self.browser_chrome
+                    .update(cx, |chrome, cx| chrome.landed(thread, page, cx));
             }
             Err(error) => {
                 self.browsers.threads.get_mut(&thread).unwrap().error = Some(error.to_string())
@@ -754,18 +733,8 @@ impl CockpitView {
             else {
                 continue;
             };
-            let shown = (tab.id, tab.url.clone());
-            if browser.entry == Entry::Page && browser.address_shown.as_ref() != Some(&shown) {
-                let edited = browser.address_shown.as_ref().is_some_and(|(id, url)| {
-                    *id == tab.id && browser.address.read(cx).text() != url
-                });
-                if !edited {
-                    browser
-                        .address
-                        .update(cx, |field, cx| field.set(tab.url.clone(), cx));
-                }
-                browser.address_shown = Some(shown);
-            }
+            self.browser_chrome
+                .update(cx, |chrome, cx| chrome.follow(*thread, tab.id, &tab.url, cx));
             if !tab.live
                 || browser.pages.contains_key(&tab.id)
                 || browser.failed.get(&tab.id) == Some(&tab.document())
@@ -923,7 +892,8 @@ impl CockpitView {
         let mut windows = Vec::new();
         let mut menus = Vec::new();
         for (thread, browser) in &mut self.browsers.threads {
-            let shown = browser.shown_tab().map(|tab| tab.id);
+            let new_tab = self.browser_chrome.read(cx).new_tab(*thread);
+            let shown = browser.shown_tab(new_tab).map(|tab| tab.id);
             for (id, page) in &browser.pages {
                 windows.extend(
                     page.native
@@ -960,9 +930,12 @@ impl CockpitView {
             }
         }
         for (thread, url) in windows {
-            let entry = self.browsers.threads[&thread].entry;
+            let new_tab = self.browser_chrome.read(cx).new_tab(thread);
             self.browser_action(thread, Action::Open { url }, cx);
-            self.browsers.threads.get_mut(&thread).unwrap().entry = entry;
+            if new_tab {
+                self.browser_chrome
+                    .update(cx, |chrome, _| chrome.resume_new_tab(thread));
+            }
         }
         for (thread, at) in menus {
             self.open_context_menu(MenuTarget::BrowserPage(thread), at, cx);
@@ -1300,309 +1273,46 @@ impl CockpitView {
         }
     }
 
-    fn browser_go(&mut self, thread: ThreadId, cx: &mut Context<Self>) {
-        let Some(browser) = self.browsers.threads.get(&thread) else {
-            return;
-        };
-        let url = browser.address.read(cx).text().trim().to_owned();
-        let document = browser.shown_tab().map(|tab| tab.document());
-        self.browser_action(
-            thread,
-            match document {
-                Some(document) => Action::Navigate { document, url },
-                None => Action::Open { url },
-            },
-            cx,
-        );
-    }
-
     pub(super) fn browser_body(
         &self,
         thread: Option<ThreadId>,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        use ferrite_ui::{
-            components::{icon_button, icon_button_as, IconSize, IconState, Tip as _},
-            icons,
-            theme::*,
-        };
+        use ferrite_ui::theme::*;
         let Some(thread) = thread else {
             return div()
                 .p(px(16.))
                 .child("Send a prompt to create a Thread before opening its browser.")
                 .into_any_element();
         };
-        let Some(browser) = self.browsers.threads.get(&thread) else {
+        let (Some(browser), Some(inputs)) = (
+            self.browsers.threads.get(&thread),
+            self.browser_chrome_inputs(thread),
+        ) else {
             return div()
                 .p(px(16.))
                 .child("Enter a website address to browse here.")
                 .into_any_element();
         };
-        let active = browser
+        if let Some(tab) = browser
             .state
             .tabs
             .iter()
-            .find(|tab| Some(tab.id) == browser.state.active);
-        if let Some(tab) = active.filter(|tab| !tab.live) {
+            .find(|tab| Some(tab.id) == browser.state.active && !tab.live)
+        {
             self.browsers
                 .events
                 .borrow_mut()
                 .push(Event::Restore(thread, tab.id));
         }
-        let tabs = browser.state.tabs.iter().map(|tab| {
-            let id = tab.id;
-            let title = url::Url::parse(&tab.url)
-                .ok()
-                .and_then(|url| url.host_str().map(str::to_owned))
-                .unwrap_or_else(|| tab.url.clone());
-            div()
-                .id(("browser-tab", id.0))
-                .debug_selector(move || format!("browser-tab-{}", id.0))
-                .flex()
-                .items_center()
-                .min_w_0()
-                .flex_shrink_0()
-                .max_w(px(190.))
-                .rounded(px(R_CONTROL))
-                .text_size(px(FS_LABEL))
-                .font_weight(W_LABEL)
-                .px(px(8.))
-                .py(px(4.))
-                .map(|tab| {
-                    let key = format!("browser-tab-{}", id.0);
-                    if Some(id) == browser.state.active && browser.entry == Entry::Page {
-                        tab.hover_carried(key).text_color(rgb(INK_STRONG))
-                    } else {
-                        tab.hover_raised(key)
-                            .press_raised()
-                            .text_color(rgb(INK_SUBTLE))
-                    }
-                })
-                .child(
-                    div()
-                        .min_w_0()
-                        .overflow_hidden()
-                        .text_ellipsis()
-                        .child(title),
-                )
-                .on_click(cx.listener(move |this, _, _, cx| {
-                    this.browser_action(thread, Action::Select { tab: id }, cx)
-                }))
-                .child(
-                    icon_button(
-                        format!("browser-close-tab-{}", id.0),
-                        icons::CLOSE,
-                        IconSize::Standard,
-                        "Close tab",
-                        cx,
-                    )
-                    .tip("Close tab")
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        cx.stop_propagation();
-                        this.browser_action(thread, Action::Close { tab: id }, cx);
-                    })),
-                )
-        })
-        .collect::<Vec<_>>();
-        let active = browser.shown_tab();
-        let mut toolbar = div()
-            .flex()
-            .items_center()
-            .gap(px(4.))
-            .h(px(40.))
-            .px(px(8.));
-        for (id, glyph, label, enabled, kind) in [
-            (
-                "browser-back",
-                icons::BACK,
-                "Back",
-                active.is_some_and(|tab| tab.can_back),
-                0,
-            ),
-            (
-                "browser-forward",
-                icons::FORWARD,
-                "Forward",
-                active.is_some_and(|tab| tab.can_forward),
-                1,
-            ),
-            (
-                "browser-reload",
-                icons::REFRESH,
-                "Reload",
-                active.is_some(),
-                2,
-            ),
-        ] {
-            let document = active.map(|tab| tab.document());
-            toolbar = toolbar.child(
-                icon_button_as(id, glyph, IconSize::Standard, label, IconState::live(enabled), cx)
-                    .tip(label)
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        let Some(document) = document else { return };
-                        this.browser_action(
-                            thread,
-                            match kind {
-                                0 => Action::Back { document },
-                                1 => Action::Forward { document },
-                                _ => Action::Reload { document },
-                            },
-                            cx,
-                        );
-                    })),
-            );
-        }
+        let chrome = self
+            .browser_chrome
+            .update(cx, |chrome, cx| chrome.bar(thread, inputs, cx));
+        let active = browser.shown_tab(self.browser_chrome.read(cx).new_tab(thread));
         let failure = browser
             .error
             .as_ref()
             .or_else(|| active.and_then(|tab| tab.error.as_ref()));
-        let loading = active.is_some_and(|tab| tab.loading);
-        let annotatable = !loading && active.is_some_and(|tab| browser.pages.contains_key(&tab.id));
-        let annotating = browser.annotation.is_some();
-        let address_empty = browser.address.read(cx).text().is_empty();
-        let annotate_why = if annotatable || annotating {
-            None
-        } else if loading {
-            Some("Available when the page finishes loading")
-        } else {
-            Some("Open a page to annotate it")
-        };
-        let annotate = match annotate_why {
-            Some(why) => IconState::Disabled(Some(why.into())),
-            None if annotating => IconState::Lit,
-            None => IconState::Plain,
-        };
-        toolbar = toolbar
-            .child(
-                div()
-                    .debug_selector(|| "browser-address".into())
-                    .relative()
-                    .flex()
-                    .items_center()
-                    .flex_1()
-                    .min_w_0()
-                    .h(px(ICON_BUTTON))
-                    .px(px(SPACE_2))
-                    .rounded(px(R_CONTROL))
-                    .border_1()
-                    .border_color(paint::FIELD_RING)
-                    .bg(paint::FIELD)
-                    .child(div().flex_1().min_w_0().child(browser.address.clone()))
-                    .when(address_empty, |field| {
-                        field.child(
-                            div()
-                                .absolute()
-                                .left(px(SPACE_2))
-                                .text_color(rgb(PLACEHOLDER_INK))
-                                .child("Search or enter address"),
-                        )
-                    })
-                    .on_action(cx.listener(move |this, _: &Go, _, cx| this.browser_go(thread, cx)))
-                    .on_action(cx.listener(move |this, _: &CancelAddress, _, cx| {
-                        if !this.cancel_address(thread, cx) {
-                            cx.propagate();
-                        }
-                    })),
-            )
-            .child(
-                icon_button_as(
-                    "browser-annotate",
-                    icons::SQUARE_PEN,
-                    IconSize::Standard,
-                    "Annotate preview",
-                    annotate,
-                    cx,
-                )
-                .when(annotate_why.is_none(), |button| {
-                    button.tip(if annotating {
-                        "Cancel annotation (Esc)"
-                    } else {
-                        "Annotate preview"
-                    })
-                })
-                .on_click(cx.listener(move |this, _, window, cx| {
-                    if annotating {
-                        this.close_browser_annotation(thread, cx);
-                    } else {
-                        this.begin_browser_annotation(thread, window, cx);
-                    }
-                })),
-            )
-            .child(
-                icon_button("browser-go", icons::FORWARD, IconSize::Standard, "Go to address", cx)
-                    .tip("Go to address")
-                    .on_click(cx.listener(move |this, _, _, cx| this.browser_go(thread, cx))),
-            )
-            .child(
-                icon_button("browser-new-tab", icons::PLUS, IconSize::Standard, "New tab", cx)
-                .tip("New tab")
-                .on_click(cx.listener(move |this, _, window, cx| {
-                    this.cancel_browser_capture(thread, cx);
-                    if let Some(browser) = this.browsers.threads.get_mut(&thread) {
-                        browser.entry = Entry::NewTab;
-                        browser
-                            .address
-                            .update(cx, |field, cx| field.set(String::new(), cx));
-                        let focus = browser.address.read(cx).focus_target(window, cx);
-                        window.focus(&focus, cx);
-                        cx.notify();
-                    }
-                })),
-            )
-            .child(
-                icon_button_as(
-                    "browser-open-external",
-                    icons::EXTERNAL,
-                    IconSize::Standard,
-                    "Open in system browser",
-                    IconState::live(active.is_some()),
-                    cx,
-                )
-                .tip("Open in system browser")
-                .on_click(cx.listener(move |this, _, _, cx| {
-                    this.run_browser_page_verb(thread, PageVerb::OpenExternal, cx)
-                })),
-            )
-            .child(
-                icon_button_as(
-                    "browser-close-page",
-                    icons::CLOSE,
-                    IconSize::Standard,
-                    "Close tab",
-                    IconState::live(active.is_some()),
-                    cx,
-                )
-                .tip("Close tab")
-                .on_click(cx.listener(move |this, _, _, cx| {
-                    let tab = this
-                        .browsers
-                        .threads
-                        .get(&thread)
-                        .and_then(|browser| browser.shown_tab())
-                        .map(|tab| tab.id);
-                    if let Some(tab) = tab {
-                        this.browser_action(thread, Action::Close { tab }, cx);
-                    }
-                })),
-            );
-        // The progress line sits on the toolbar's lower edge and the failure
-        // or empty notice covers the page region, so neither moves a control.
-        let toolbar = div()
-            .relative()
-            .flex_shrink_0()
-            .child(toolbar)
-            .when(loading, |bar| {
-                bar.child(
-                    div()
-                        .debug_selector(|| "browser-progress".into())
-                        .absolute()
-                        .bottom_0()
-                        .left_0()
-                        .right_0()
-                        .h(px(2.))
-                        .bg(rgb(LINK_INK)),
-                )
-            });
         let body = active
             .and_then(|tab| browser.pages.get(&tab.id))
             .map(|page| page.web.clone());
@@ -1630,49 +1340,8 @@ impl CockpitView {
             .flex_1()
             .min_h_0()
             .overflow_hidden()
-            .when(
-                browser.state.tabs.len() > 1
-                    || (browser.entry == Entry::NewTab && !browser.state.tabs.is_empty()),
-                |chrome| {
-                chrome.child(
-                    div()
-                        .id("browser-tabs")
-                        .debug_selector(|| "browser-tabs".into())
-                        .flex()
-                        .flex_shrink_0()
-                        .items_center()
-                        .overflow_x_scroll()
-                        .children(tabs)
-                        .when(browser.entry == Entry::NewTab, |strip| {
-                            strip
-                                .child(
-                                    div()
-                                        .flex_shrink_0()
-                                        .px(px(8.))
-                                        .py(px(4.))
-                                        .text_size(px(FS_LABEL))
-                                        .font_weight(W_LABEL)
-                                        .text_color(rgb(INK_STRONG))
-                                        .child("New tab"),
-                                )
-                                .child(
-                                    icon_button(
-                                        "browser-cancel-new-tab",
-                                        icons::CLOSE,
-                                        IconSize::Standard,
-                                        "Cancel new tab",
-                                        cx,
-                                    )
-                                    .tip("Cancel new tab")
-                                    .on_click(cx.listener(move |this, _, _, cx| {
-                                        this.cancel_address(thread, cx);
-                                    })),
-                                )
-                        }),
-                    )
-                },
-            )
-            .child(toolbar)
+            .children(chrome.strip)
+            .child(chrome.toolbar)
             .child(
                 div()
                     .relative()
@@ -1719,30 +1388,13 @@ impl CockpitView {
 }
 
 impl CockpitView {
-    /// Leave a pending new tab, or put back what an edit replaced. False when
-    /// the address held nothing to cancel.
-    fn cancel_address(&mut self, thread: ThreadId, cx: &mut Context<Self>) -> bool {
-        let Some(browser) = self.browsers.threads.get_mut(&thread) else {
-            return false;
-        };
-        let edited = browser.shown_tab().is_some_and(|tab| {
-            browser.address.read(cx).text() != tab.url
-        });
-        if browser.entry == Entry::Page && !edited {
-            return false;
-        }
-        browser.entry = Entry::Page;
-        browser.address_shown = None;
-        cx.notify();
-        true
-    }
-
     fn answer_browser_dialog(&mut self, thread: ThreadId, accept: bool, cx: &mut Context<Self>) {
+        let new_tab = self.browser_chrome.read(cx).new_tab(thread);
         let Some(browser) = self.browsers.threads.get_mut(&thread) else {
             return;
         };
         browser.dialog_unfocused = false;
-        let (Some(tab), Some(request)) = (browser.shown_tab().map(|tab| tab.id), browser.dialog_synced.take())
+        let (Some(tab), Some(request)) = (browser.shown_tab(new_tab).map(|tab| tab.id), browser.dialog_synced.take())
         else {
             return;
         };
@@ -1875,13 +1527,14 @@ impl Browser {
         }
     }
 
-    /// The page the controls act on: none while a new tab is being entered.
-    fn shown_tab(&self) -> Option<&Tab> {
+    /// The page the controls act on: none while a new tab is being entered
+    /// (the chrome's `new_tab`).
+    fn shown_tab(&self, new_tab: bool) -> Option<&Tab> {
         self.state
             .tabs
             .iter()
             .find(|tab| Some(tab.id) == self.state.active)
-            .filter(|_| self.entry == Entry::Page)
+            .filter(|_| !new_tab)
     }
 
     fn sync_documents(&self, cx: &mut Context<CockpitView>, resample: bool) {
