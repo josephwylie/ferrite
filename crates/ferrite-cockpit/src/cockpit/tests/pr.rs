@@ -518,6 +518,46 @@ fn a_restored_tab_for_another_pr_keeps_its_identity(cx: &mut TestAppContext) {
     );
 }
 
+/// A PR tab left on Code comes back after a restart reading its published
+/// diff, with no pointer near the Code segment.
+#[gpui::test]
+fn a_thread_pr_restored_on_code_reads_its_diff(cx: &mut TestAppContext) {
+    use crate::cockpit::panel::pr_read::PrTarget;
+    use crate::cockpit::surfaces::{PrTab, SurfaceAction, SurfaceId, Surfaces};
+    use crate::cockpit::tools::Diff;
+    use ferrite_core::protocol::WirePrState;
+    let (mut core, _fake, checkout) = bound_cockpit("pr-restored-code", Provider::Claude);
+    let thread = core.threads()[0];
+    let files = ferrite_core::protocol::sides_of_unified("diff --git a/published.rs b/published.rs\n--- a/published.rs\n+++ b/published.rs\n@@ -1 +1 @@\n-old\n+published\n");
+    core.fixture_forge_diff(checkout, 48, files);
+    let dir = scratch("pr-restored-code-prefs");
+    std::fs::create_dir_all(&dir).unwrap();
+    let mut surfaces = Surfaces::default();
+    surfaces.apply(thread, true, SurfaceAction::Open(SurfaceId::PullRequest(48)));
+    surfaces.apply(thread, true, SurfaceAction::SelectPrTab { number: 48, tab: PrTab::Code });
+    surfaces.save(&dir).unwrap();
+    let prefs = Preferences {
+        dir,
+        ..Preferences::ephemeral()
+    };
+    let (view, cx) = add_cockpit_window(cx, |_, cx| {
+        CockpitView::new_with_settings(core, Provider::Claude, prefs, cx)
+    });
+    cx.simulate_resize(gpui::size(px(1900.), px(900.)));
+    tick(cx);
+    land(&view, thread, Some(pr_with_checks()), cx);
+    view.update(cx, |view, cx| {
+        view.fixture_pr_snapshot(thread, snapshot(WirePrState::Open), cx)
+    });
+    for _ in 0..5 {
+        tick(cx);
+    }
+    let read = view.read_with(cx, |view, cx| {
+        view.changes.read(cx).files_read(Diff::PullRequest(PrTarget::thread(thread, 48)))
+    });
+    assert_eq!(read, Some(1), "the restored Code view reads its diff");
+}
+
 #[gpui::test]
 fn pr_header_metadata_stays_visible_across_tabs(cx: &mut TestAppContext) {
     use ferrite_core::protocol::WirePrState;

@@ -482,7 +482,7 @@ impl CockpitView {
     /// Once per frame, before anything measures the board: tend the
     /// previews (`tend_previews`), disarm a Merge no longer in view, read
     /// the diff of the PRs' open PR once Code shows, give the shown
-    /// Surface what it needs to draw.
+    /// Surface what it needs to draw (a PR tab on Code, its diff).
     pub(super) fn tend_panel(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.tend_previews(window, cx);
         if let Some(thread) = self.panel_thread() {
@@ -509,7 +509,12 @@ impl CockpitView {
                 }
                 Some(SurfaceId::Changes) => self.ensure_diff(tools::Diff::Changes(thread), cx),
                 Some(SurfaceId::PullRequest(number)) => {
-                    self.read_pr_snapshot(pr_read::PrTarget::thread(thread, number), false, cx)
+                    let target = pr_read::PrTarget::thread(thread, number);
+                    self.read_pr_snapshot(target, false, cx);
+                    let tab = self.panel.surfaces.get(thread).map(|state| state.pr_tab(number));
+                    if tab == Some(PrTab::Code) {
+                        self.ensure_diff(tools::Diff::PullRequest(target), cx);
+                    }
                 }
                 _ => {}
             }
