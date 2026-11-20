@@ -872,7 +872,7 @@ fn an_opened_agent_is_a_panel_tab(cx: &mut TestAppContext) {
     cx.simulate_click(close.center(), gpui::Modifiers::none());
     tick(cx);
     let thread = view.read_with(cx, |view, _| view.panes[0].thread().unwrap());
-    assert!(view.read_with(cx, |view, _| !view.agent_drills.is_open(thread)));
+    assert!(view.read_with(cx, |view, cx| !view.agent_drills.read(cx).is_open(thread)));
     assert!(cx.debug_bounds("agent-drill").is_none());
 }
 
@@ -1187,9 +1187,9 @@ fn an_opened_agents_head_stops_it_and_offers_the_side_panel(cx: &mut TestAppCont
 
     click(cx, "subagent-panel-1");
     let thread = view.read_with(cx, |view, _| view.panes[0].thread().unwrap());
-    view.read_with(cx, |view, _| {
+    view.read_with(cx, |view, cx| {
         assert_eq!(
-            view.agent_drills.subject(thread),
+            view.agent_drills.read(cx).subject(thread),
             Some(&Subject::Subagent(key("Cedar")))
         );
         assert_eq!(view.panes[0].selected, Subject::Subagent(key("Cedar")));
@@ -1261,6 +1261,52 @@ fn the_side_panel_inspector_shows_and_answers_its_agents_decision(cx: &mut TestA
     cx.run_until_parked();
     assert_eq!(fake.answered.borrow().len(), 1);
     assert_eq!(fake.answered.borrow()[0].0, "Atlas");
+}
+
+/// An agent held behind another tab is current again as its tab comes
+/// back: a request it made while hidden is drawn at once.
+#[gpui::test]
+fn a_hidden_inspector_shows_what_its_agent_did_meanwhile(cx: &mut TestAppContext) {
+    let (core, fake) = cockpit("subagents-inspector-hidden", 1);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(1600.), px(800.)));
+    child(&fake, "Atlas", AgentStatus::Working);
+    tick(cx);
+    let thread = view.read_with(cx, |view, _| view.panes[0].thread().unwrap());
+    let open = |view: &Entity<CockpitView>, cx: &mut gpui::VisualTestContext| {
+        view.update(cx, |view, cx| {
+            view.open_agent_drill(thread, Subject::Subagent(key("Atlas")), cx)
+        });
+        tick(cx);
+    };
+    open(&view, cx);
+    assert!(debug_bounds(cx, "agent-drill".into()).is_some());
+    view.update(cx, |view, cx| {
+        view.upsert_surface(thread, crate::cockpit::surfaces::SurfaceId::Overview, cx)
+    });
+    tick(cx);
+    assert!(debug_bounds(cx, "agent-drill".into()).is_none(), "the Overview shows");
+
+    let SessionEvent::DecisionRequested { decision } = decision("Atlas") else {
+        unreachable!()
+    };
+    emit(
+        &fake,
+        ActivityEvent::Decision {
+            subject: Some(Subject::Subagent(key("Atlas"))),
+            decision,
+        },
+    );
+    tick(cx);
+    let serial = view.read_with(cx, |view, _| {
+        view.cockpit.thread(thread).unwrap().pending_decisions()[0].handle.serial
+    });
+    open(&view, cx);
+    assert!(debug_bounds(cx, "agent-drill".into()).is_some());
+    assert!(
+        debug_bounds(cx, format!("request-allow-1-{serial}")).is_some(),
+        "the agent's request is drawn as its tab comes back"
+    );
 }
 
 /// With the agent shown in its Pane too, the Pane alone draws its card:

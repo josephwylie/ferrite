@@ -6,13 +6,24 @@
 //! it (`select_subject`, `open_agent_from`), and the head's `Side panel`
 //! button holds it here instead. Both read the Thread's one Subject: its
 //! saved history, its ancestry and coverage line, its stop.
+//!
+//! Every Thread's open agents live in one view of their own (ADR 0041),
+//! `AgentDrillsView`, which the Panel draws as the body of whichever agent
+//! it shows. Its transcript is told what the agent holds as it draws, so
+//! an agent not shown is left alone. The coverage line it reads with
+//! `agent_drill_history`, as the Pane's head says it too; what it asks of
+//! the window (its tab closed) it says as an `AgentDrillEvent`. Asking for
+//! the agent's saved history is a Server call, so it stays the Cockpit's.
 
 use std::collections::HashMap;
+
+use gpui::WeakEntity;
 
 use super::surfaces::SurfaceId;
 use super::*;
 
 use ferrite_core::activity::Subject;
+use ferrite_pane::transcript::{TranscriptEvent, TranscriptView};
 
 /// One agent held open in a Thread's Panel.
 struct Drill {
@@ -26,26 +37,26 @@ struct Drill {
 
 /// Every Thread's open agents, by the Thread and the agent's stored key
 /// (`SurfaceId::Agent`'s).
-#[derive(Default)]
-pub(crate) struct AgentDrills {
+pub(crate) struct AgentDrillsView {
+    cockpit: WeakEntity<CockpitView>,
     drills: HashMap<(ThreadId, String), Drill>,
 }
 
-impl AgentDrills {
-    #[cfg(test)]
-    pub(crate) fn is_open(&self, owner: ThreadId) -> bool {
-        self.drills.keys().any(|(thread, _)| *thread == owner)
-    }
-
-    /// An agent `owner`'s Panel holds, what the tests read.
-    #[cfg(test)]
-    pub(crate) fn subject(&self, owner: ThreadId) -> Option<&Subject> {
-        self.drills
-            .iter()
-            .find(|((thread, _), _)| *thread == owner)
-            .map(|(_, drill)| &drill.subject)
-    }
+/// An agent to hold open: its Subject as the Thread knows it, the revision
+/// its Pane opens on, and why its saved history could not load.
+pub(crate) struct Held {
+    subject: Subject,
+    generation: u64,
+    history_error: Option<String>,
 }
+
+/// What an agent's Surface asks of the window.
+pub(crate) enum AgentDrillEvent {
+    /// `Close tab` on an agent the Thread no longer knows.
+    Close { owner: ThreadId, key: String },
+}
+
+impl EventEmitter<AgentDrillEvent> for AgentDrillsView {}
 
 /// The key an agent's Surface is known by; Main has none (it is the
 /// Pane's own).
@@ -77,6 +88,8 @@ impl CockpitView {
         }
     }
 
+    /// Hold `subject` open in `thread`'s Panel, its saved history asked
+    /// for, unless it is held already: the key its Surface is known by.
     fn hold_agent_drill(
         &mut self,
         thread: ThreadId,
@@ -87,30 +100,23 @@ impl CockpitView {
         let subject = open.activity().canonical_subject(subject);
         let generation = open.activity().subject(&subject)?.revision();
         let key = agent_key(&subject)?;
-        if !self
-            .agent_drills
-            .drills
-            .contains_key(&(thread, key.clone()))
-        {
-            let mut pane = PaneView::new(thread, cx);
-            pane.select_subject(subject.clone(), generation, cx);
-            if let Some(entity) = pane.transcript() {
-                cx.subscribe(&entity, Self::agent_transcript_event).detach();
-            }
+        if !self.agent_drills.read(cx).holds(thread, &key) {
             let history_error = self.load_subject_history(thread, &subject);
-            self.agent_drills.drills.insert(
-                (thread, key.clone()),
-                Drill {
-                    subject,
-                    history_error,
-                    pane,
-                },
-            );
+            let held = Held {
+                subject,
+                generation,
+                history_error,
+            };
+            self.agent_drills
+                .update(cx, |drills, cx| drills.hold(thread, key.clone(), held, cx));
         }
         Some(key)
     }
 
-    fn restore_shown_agent_drills(&mut self, cx: &mut Context<Self>) {
+    /// Every frame: an agent's Surface a Panel shows but no drill holds (a
+    /// tab restored or reopened) is held again, its history asked for.
+    pub(super) fn restore_shown_agent_drills(&mut self, cx: &mut Context<Self>) {
+        let drills = self.agent_drills.read(cx);
         let wanted: Vec<(ThreadId, String)> = self
             .panes
             .iter()
@@ -119,12 +125,7 @@ impl CockpitView {
                 SurfaceId::Agent(key) => Some((thread, key)),
                 _ => None,
             })
-            .filter(|(thread, key)| {
-                !self
-                    .agent_drills
-                    .drills
-                    .contains_key(&(*thread, key.clone()))
-            })
+            .filter(|(thread, key)| !drills.holds(*thread, key))
             .collect();
         for (thread, key) in wanted {
             let subject = Subject::Subagent(ferrite_core::activity::AgentKey::from_stored(key));
@@ -138,47 +139,55 @@ impl CockpitView {
         thread: ThreadId,
         subject: &Subject,
         error: Option<String>,
+        cx: &mut Context<Self>,
     ) {
         if let Some(index) = self.pane_for(thread).filter(|&index| self.panes[index].selected == *subject) {
             self.panes[index].history_error = error.clone();
         }
         if let Some(key) = agent_key(subject) {
-            if let Some(drill) = self.agent_drills.drills.get_mut(&(thread, key)) {
-                drill.history_error = error;
-            }
+            self.agent_drills
+                .update(cx, |drills, _| drills.hold_history_error(thread, key, error));
         }
     }
 
-    /// Its tab closed: the agent goes from the Panel.
-    pub(super) fn close_agent_drill(&mut self, thread: ThreadId, key: &str, cx: &mut Context<Self>) {
-        if self
-            .agent_drills
-            .drills
-            .remove(&(thread, key.to_owned()))
-            .is_some()
-        {
-            cx.notify();
-        }
-    }
-
-    /// The agent's transcript asks for something: a tool row folds or
-    /// unfolds there. The rest (a path's reader) is the Pane's.
-    fn agent_transcript_event(
+    pub(super) fn on_agent_drill_event(
         &mut self,
-        entity: Entity<ferrite_pane::transcript::TranscriptView>,
-        event: &ferrite_pane::transcript::TranscriptEvent,
+        _: Entity<AgentDrillsView>,
+        event: &AgentDrillEvent,
         cx: &mut Context<Self>,
     ) {
-        let ferrite_pane::transcript::TranscriptEvent::ToggleDisclosure(call) = event else {
-            return;
-        };
-        for drill in self.agent_drills.drills.values_mut() {
-            if drill.pane.transcript().as_ref() == Some(&entity) {
-                drill.pane.clear_tool_target();
-                drill.pane.toggle_tool(call);
+        match event {
+            AgentDrillEvent::Close { owner, key } => {
+                self.close_surface(*owner, &SurfaceId::Agent(key.clone()), cx)
             }
         }
-        cx.notify();
+    }
+
+    /// The shown agent's Surface, as the Panel draws it: which agent of
+    /// which Thread, read off the drawn Panel.
+    fn shown_agent_drill(&self) -> Option<(ThreadId, String)> {
+        let owner = self.panes[self.panel_drawn_pane()?].thread()?;
+        match self.active_surface(owner)? {
+            SurfaceId::Agent(key) => Some((owner, key)),
+            _ => None,
+        }
+    }
+
+    /// The shown agent's transcript is told what it holds, with its model
+    /// and the Decisions it waits on; the line its Surface heads with is
+    /// what its transcript covers, or why its history could not load.
+    fn agent_drill_history(
+        &self,
+        owner: ThreadId,
+        subject: &Subject,
+        pane: &PaneView,
+        history_error: Option<&str>,
+        cx: &mut Context<Self>,
+    ) -> Option<AnyElement> {
+        let note = self.agent_model_note(owner, subject);
+        let decisions = self.compact_decision_tail(owner, subject);
+        self.sync_compact_transcript(owner, subject, pane, 0, note, decisions, cx);
+        self.subject_history_line(owner, subject, history_error, cx)
     }
 
     /// `Model Haiku 5.5` for an agent's transcript, when it names its
@@ -190,21 +199,6 @@ impl CockpitView {
         (!name.is_empty()).then(|| format!("Model {name}").into())
     }
 
-    /// Every frame: keep each open agent's transcript told what it holds.
-    pub(super) fn tend_agent_drills(&mut self, cx: &mut Context<Self>) {
-        self.restore_shown_agent_drills(cx);
-        let keys: Vec<(ThreadId, String)> = self.agent_drills.drills.keys().cloned().collect();
-        for key in keys {
-            let Some(drill) = self.agent_drills.drills.get(&key) else {
-                continue;
-            };
-            let note = self.agent_model_note(key.0, &drill.subject);
-            let decisions = self.compact_decision_tail(key.0, &drill.subject);
-            self.sync_compact_transcript(key.0, &drill.subject, &drill.pane, 0, note, decisions, cx);
-        }
-    }
-
-    /// The agent's task, for its tab: its description, else its name.
     /// Whether agent `key` is working.
     pub(super) fn agent_running(&self, owner: ThreadId, key: &str) -> bool {
         let subject = Subject::Subagent(ferrite_core::activity::AgentKey::from_stored(key.to_owned()));
@@ -216,6 +210,7 @@ impl CockpitView {
         })
     }
 
+    /// The agent's task, for its tab: its description, else its name.
     pub(super) fn agent_title(&self, owner: ThreadId, key: &str) -> SharedString {
         let subject = Subject::Subagent(ferrite_core::activity::AgentKey::from_stored(key.to_owned()));
         self.cockpit
@@ -236,86 +231,6 @@ impl CockpitView {
             })
             .unwrap_or_else(|| "Subagent".into())
             .into()
-    }
-
-    // ------------------------------------------------------------ drawing
-
-    /// Agent `key`'s Surface: its transcript.
-    pub(super) fn agent_drill_body(
-        &self,
-        owner: ThreadId,
-        key: &str,
-        cx: &mut Context<Self>,
-    ) -> AnyElement {
-        use ferrite_ui::theme::*;
-        let Some(drill) = self.agent_drills.drills.get(&(owner, key.to_owned())) else {
-            return self.agent_unavailable(owner, key, cx);
-        };
-        div()
-            .debug_selector(|| "agent-drill".into())
-            .size_full()
-            .flex()
-            .flex_col()
-            .font_family(FONT_UI)
-            .text_size(px(FS_UI))
-            .line_height(px(LH_UI))
-            .text_color(rgb(INK_STRONG))
-            .children(
-                self.subject_history_line(owner, &drill.subject, drill.history_error.as_deref(), cx)
-                    .map(|line| {
-                        div()
-                            .debug_selector(|| "agent-drill-history".into())
-                            .flex_shrink_0()
-                            .px(px(SPACE_3))
-                            .py(px(SPACE_1))
-                            .text_color(rgb(INK_SUBTLE))
-                            .child(line)
-                    }),
-            )
-            .child(
-                div()
-                    .relative()
-                    .flex_1()
-                    .min_h_0()
-                    .children(drill.pane.transcript()),
-            )
-            .into_any_element()
-    }
-
-    fn agent_unavailable(&self, owner: ThreadId, key: &str, cx: &mut Context<Self>) -> AnyElement {
-        use ferrite_ui::theme::*;
-        let surface = SurfaceId::Agent(key.to_owned());
-        div()
-            .debug_selector(|| "agent-unavailable".into())
-            .size_full()
-            .flex()
-            .flex_col()
-            .items_center()
-            .justify_center()
-            .gap(px(SPACE_2))
-            .px(px(SPACE_4))
-            .font_family(FONT_UI)
-            .text_size(px(FS_UI))
-            .text_color(rgb(INK_SUBTLE))
-            .child("This agent is no longer available")
-            .child(
-                div()
-                    .text_size(px(FS_META))
-                    .line_height(px(LH_META))
-                    .text_center()
-                    .child("Its saved history is not in this thread."),
-            )
-            .child(
-                ferrite_ui::components::form_button("agent-unavailable-close", cx)
-                    .debug_selector(|| "agent-unavailable-close".into())
-                    .h(px(ROW))
-                    .px(px(CH))
-                    .child(ferrite_ui::components::form_label("Close tab", INK_SUBTLE))
-                    .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
-                        view.close_surface(owner, &surface, cx);
-                    })),
-            )
-            .into_any_element()
     }
 
     /// Tell `pane`'s transcript what `subject` of `thread` holds after its
@@ -417,5 +332,182 @@ impl CockpitView {
                 cx,
             );
         });
+    }
+}
+
+impl AgentDrillsView {
+    pub(super) fn new(cockpit: WeakEntity<CockpitView>) -> Self {
+        Self {
+            cockpit,
+            drills: HashMap::new(),
+        }
+    }
+
+    fn holds(&self, owner: ThreadId, key: &str) -> bool {
+        self.drills.contains_key(&(owner, key.to_owned()))
+    }
+
+    /// Agent `key` of `owner`, held open: its own Pane's pieces, on the
+    /// Subject `held` names.
+    fn hold(&mut self, owner: ThreadId, key: String, held: Held, cx: &mut Context<Self>) {
+        let mut pane = PaneView::new(owner, cx);
+        pane.select_subject(held.subject.clone(), held.generation, cx);
+        if let Some(entity) = pane.transcript() {
+            cx.subscribe(&entity, Self::on_transcript_event).detach();
+        }
+        self.drills.insert(
+            (owner, key),
+            Drill {
+                subject: held.subject,
+                history_error: held.history_error,
+                pane,
+            },
+        );
+    }
+
+    fn hold_history_error(&mut self, owner: ThreadId, key: String, error: Option<String>) {
+        if let Some(drill) = self.drills.get_mut(&(owner, key)) {
+            drill.history_error = error;
+        }
+    }
+
+    /// Its tab closed: the agent goes from the Panel. Whether it was held.
+    pub(super) fn close(&mut self, owner: ThreadId, key: &str) -> bool {
+        self.drills.remove(&(owner, key.to_owned())).is_some()
+    }
+
+    /// Only the agents of Threads `keep` keeps stay held.
+    pub(super) fn retain_threads(&mut self, keep: impl Fn(ThreadId) -> bool) {
+        self.drills.retain(|(thread, _), _| keep(*thread));
+    }
+
+    /// The agent's transcript asks for something: a tool row folds or
+    /// unfolds there. The rest (a path's reader) is the Pane's.
+    fn on_transcript_event(
+        &mut self,
+        entity: Entity<TranscriptView>,
+        event: &TranscriptEvent,
+        cx: &mut Context<Self>,
+    ) {
+        let TranscriptEvent::ToggleDisclosure(call) = event else {
+            return;
+        };
+        for drill in self.drills.values_mut() {
+            if drill.pane.transcript().as_ref() == Some(&entity) {
+                drill.pane.clear_tool_target();
+                drill.pane.toggle_tool(call);
+            }
+        }
+        cx.notify();
+    }
+
+    // ------------------------------------------------------------ drawing
+
+    /// Agent `drill`'s Surface: its coverage line over its transcript.
+    fn body(drill: &Drill, history: Option<AnyElement>) -> AnyElement {
+        use ferrite_ui::theme::*;
+        div()
+            .debug_selector(|| "agent-drill".into())
+            .size_full()
+            .flex()
+            .flex_col()
+            .font_family(FONT_UI)
+            .text_size(px(FS_UI))
+            .line_height(px(LH_UI))
+            .text_color(rgb(INK_STRONG))
+            .children(history.map(|line| {
+                div()
+                    .debug_selector(|| "agent-drill-history".into())
+                    .flex_shrink_0()
+                    .px(px(SPACE_3))
+                    .py(px(SPACE_1))
+                    .text_color(rgb(INK_SUBTLE))
+                    .child(line)
+            }))
+            .child(
+                div()
+                    .relative()
+                    .flex_1()
+                    .min_h_0()
+                    .children(drill.pane.transcript()),
+            )
+            .into_any_element()
+    }
+
+    fn unavailable(owner: ThreadId, key: String, cx: &mut Context<Self>) -> AnyElement {
+        use ferrite_ui::theme::*;
+        div()
+            .debug_selector(|| "agent-unavailable".into())
+            .size_full()
+            .flex()
+            .flex_col()
+            .items_center()
+            .justify_center()
+            .gap(px(SPACE_2))
+            .px(px(SPACE_4))
+            .font_family(FONT_UI)
+            .text_size(px(FS_UI))
+            .text_color(rgb(INK_SUBTLE))
+            .child("This agent is no longer available")
+            .child(
+                div()
+                    .text_size(px(FS_META))
+                    .line_height(px(LH_META))
+                    .text_center()
+                    .child("Its saved history is not in this thread."),
+            )
+            .child(
+                ferrite_ui::components::form_button("agent-unavailable-close", cx)
+                    .debug_selector(|| "agent-unavailable-close".into())
+                    .h(px(ROW))
+                    .px(px(CH))
+                    .child(ferrite_ui::components::form_label("Close tab", INK_SUBTLE))
+                    .on_click(cx.listener(move |_, _: &ClickEvent, _, cx| {
+                        cx.emit(AgentDrillEvent::Close {
+                            owner,
+                            key: key.clone(),
+                        });
+                    })),
+            )
+            .into_any_element()
+    }
+
+    /// Whether `owner` holds an agent open, what the tests read.
+    #[cfg(test)]
+    pub(crate) fn is_open(&self, owner: ThreadId) -> bool {
+        self.drills.keys().any(|(thread, _)| *thread == owner)
+    }
+
+    /// An agent `owner`'s Panel holds, what the tests read.
+    #[cfg(test)]
+    pub(crate) fn subject(&self, owner: ThreadId) -> Option<&Subject> {
+        self.drills
+            .iter()
+            .find(|((thread, _), _)| *thread == owner)
+            .map(|(_, drill)| &drill.subject)
+    }
+
+    /// How many agents `owner`'s Panel holds open.
+    #[cfg(test)]
+    pub(crate) fn held_for_test(&self, owner: ThreadId) -> usize {
+        self.drills.keys().filter(|(thread, _)| *thread == owner).count()
+    }
+}
+
+impl Render for AgentDrillsView {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let Some(cockpit) = self.cockpit.upgrade() else {
+            return div().into_any_element();
+        };
+        let Some((owner, key)) = cockpit.read(cx).shown_agent_drill() else {
+            return div().into_any_element();
+        };
+        let Some(drill) = self.drills.get(&(owner, key.clone())) else {
+            return Self::unavailable(owner, key, cx);
+        };
+        let history = cockpit.update(cx, |cockpit, cx| {
+            cockpit.agent_drill_history(owner, &drill.subject, &drill.pane, drill.history_error.as_deref(), cx)
+        });
+        Self::body(drill, history)
     }
 }

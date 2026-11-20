@@ -436,7 +436,7 @@ pub struct CockpitView {
     changes: Entity<tools::ChangesView>,
     /// The pull request reader: the Panel's PR Surface and the PRs' detail.
     pull_request: Entity<panel::pull_request::PullRequestView>,
-    agent_drills: agent_pane::AgentDrills,
+    agent_drills: Entity<agent_pane::AgentDrillsView>,
     native_copy: Option<String>,
     nav_collapsed: bool,
     nav_auto_fold: std::cell::Cell<bool>,
@@ -1388,6 +1388,8 @@ impl CockpitView {
         // The root draws it into its own frame (the line, the Overview, the
         // Surface), so each change redraws the window.
         cx.observe(&background, |_, _, cx| cx.notify()).detach();
+        let agent_drills = cx.new(|_| agent_pane::AgentDrillsView::new(cockpit_weak.clone()));
+        cx.subscribe(&agent_drills, Self::on_agent_drill_event).detach();
         let mut view = Self {
             cockpit,
             browsers: Default::default(),
@@ -1416,7 +1418,7 @@ impl CockpitView {
             terminals,
             changes,
             pull_request,
-            agent_drills: Default::default(),
+            agent_drills,
             native_copy: None,
             nav_filter: None,
             nav_view: cx.new(|cx| nav_view::NavView::new(cockpit_weak, cx)),
@@ -8320,7 +8322,7 @@ impl CockpitView {
         // compares scalar keys first, so Composer edits repaint Cockpit chrome
         // without cloning or notifying any retained transcript entity.
         self.sync_visible_transcripts(cx);
-        self.tend_agent_drills(cx);
+        self.restore_shown_agent_drills(cx);
 
         // The `/`/`@` menu belongs to the focused Pane's Composer (#23):
         // leaving that Pane closes it here.

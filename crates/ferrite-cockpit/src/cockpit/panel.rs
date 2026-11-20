@@ -339,7 +339,11 @@ impl CockpitView {
                 self.terminals.update(cx, |terminals, cx| terminals.end(thread, *number, cx))
             }
             SurfaceId::SideChat(tab) => self.close_side_tab(thread, *tab, cx),
-            SurfaceId::Agent(key) => self.close_agent_drill(thread, key, cx),
+            SurfaceId::Agent(key) => {
+                if self.agent_drills.update(cx, |drills, _| drills.close(thread, key)) {
+                    cx.notify();
+                }
+            }
             SurfaceId::File(path) => self.close_preview_of(thread, path),
             SurfaceId::Browser => self.close_preview_of(thread, std::path::Path::new(preview::BROWSER_PATH)),
             SurfaceId::Overview
@@ -368,7 +372,8 @@ impl CockpitView {
     /// A Thread deleted, here or by the Server, takes its Panel with it,
     /// releases what each tab held, as a closed tab does, and frees all
     /// else the window keeps by Thread: its Files, diffs and folds, its
-    /// browser, its PR reads, its remembered stop, its facts and rules.
+    /// browser, its PR reads, its remembered stop, its background stops,
+    /// its open agents, its facts and rules.
     fn forget_gone_threads(&mut self, cx: &mut Context<Self>) {
         let deleted = std::mem::take(&mut self.panel.deleted);
         let known = self.cockpit.known_threads();
@@ -394,6 +399,7 @@ impl CockpitView {
         self.panel.focus.retain_threads(keep);
         self.pull_request.update(cx, |reader, _| reader.retain_threads(keep));
         self.background.update(cx, |background, _| background.retain_threads(keep));
+        self.agent_drills.update(cx, |drills, _| drills.retain_threads(keep));
         self.browsers.retain_threads(keep);
         self.facts.retain_threads(keep);
         self.decisions.retain_threads(keep);
@@ -408,6 +414,7 @@ impl CockpitView {
             + self.panel.focus.held_for_test(thread)
             + self.pull_request.read(cx).held_for_test(thread)
             + self.background.read(cx).held_for_test(thread)
+            + self.agent_drills.read(cx).held_for_test(thread)
             + self.browsers.held_for_test(thread)
             + usize::from(self.facts.get(thread).is_some())
             + self.decisions.rules().iter().filter(|rule| rule.thread == thread).count()
@@ -838,7 +845,7 @@ impl CockpitView {
             Some(SurfaceId::Changes) => filled(self.changes_pane(tools::Diff::Changes(thread), cx).into_any_element()),
             Some(SurfaceId::Terminal(_)) => filled(self.terminals.clone().into_any_element()),
             Some(SurfaceId::SideChat(_)) => filled(self.side_chat.clone().into_any_element()),
-            Some(SurfaceId::Agent(key)) => filled(self.agent_drill_body(thread, &key, cx)),
+            Some(SurfaceId::Agent(_)) => filled(self.agent_drills.clone().into_any_element()),
             Some(SurfaceId::PullRequest(_)) => filled(self.pull_request.clone().into_any_element()),
         };
         let body = if takes_keys { keyed(body) } else { body };

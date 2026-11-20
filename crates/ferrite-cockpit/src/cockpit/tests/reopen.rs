@@ -102,9 +102,10 @@ fn a_closed_agent_tab_reopens_the_same_agent_with_its_transcript(cx: &mut TestAp
         "the agent's view is back"
     );
     assert!(cx.debug_bounds("agent-unavailable").is_none());
-    view.read_with(cx, |view, _| {
+    view.read_with(cx, |view, cx| {
         let subject = view
             .agent_drills
+            .read(cx)
             .subject(thread)
             .expect("the same agent is held again");
         assert_eq!(*subject, Subject::Subagent(agent_key("Quillon")));
