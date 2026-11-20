@@ -1122,7 +1122,7 @@ pub const CHECK_MARK_RING: f32 = 11.0;
 pub const CHECK_SKIP_DASH: f32 = 5.0;
 
 /// A toast's widest, less where the board is narrower
-/// (`cockpit::toast_float`).
+/// (`cockpit::toasts::ToastsView`).
 pub const TOAST_W: f32 = 320.0;
 /// The gap the kit fans a stack out by under the pointer. The stack holds
 /// one toast (`max_items`), so this is only ever the kit's own spacing.

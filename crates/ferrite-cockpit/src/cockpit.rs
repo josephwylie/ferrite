@@ -56,6 +56,7 @@ mod snooze;
 pub(crate) mod starts;
 mod surfaces;
 mod tab_scroll;
+mod toasts;
 pub(crate) mod subagents;
 pub(crate) mod tools;
 mod transcript_glue;
@@ -437,6 +438,8 @@ pub struct CockpitView {
     /// The pull request reader: the Panel's PR Surface and the PRs' detail.
     pull_request: Entity<panel::pull_request::PullRequestView>,
     agent_drills: Entity<agent_pane::AgentDrillsView>,
+    /// The Inbox's alerts and the toast float that shows them.
+    pub(crate) toasts: Entity<toasts::ToastsView>,
     native_copy: Option<String>,
     nav_collapsed: bool,
     nav_auto_fold: std::cell::Cell<bool>,
@@ -458,8 +461,9 @@ pub struct CockpitView {
     /// Cockpit for the rest through `NavEvent`.
     nav_view: Entity<nav_view::NavView>,
     /// The Cockpit hearing the views it answers with the window (the nav,
-    /// the side chat, Files, the Overview), from its first frame.
-    view_events: Option<[gpui::Subscription; 4]>,
+    /// the side chat, Files, the Overview, the toasts), from its first
+    /// frame.
+    view_events: Option<[gpui::Subscription; 5]>,
     /// The window's activation, followed into the Cockpit
     /// (`Cockpit::set_window_active`) once the first frame has a window.
     activation: Option<gpui::Subscription>,
@@ -588,12 +592,6 @@ pub struct CockpitView {
     /// What the last nav act has to say (a failed Park, a refused
     /// rename).
     nav_notice: nav_list::Notice,
-    /// The Inbox: whether its list is down, its cursor, and which Notices
-    /// and requests stand as toasts. The Notices themselves are core's.
-    pub(crate) needs_you: NeedsYou,
-    /// What the toast float drew last: the toast standing and the one
-    /// fading out (`toast_float`).
-    toast_stage: std::cell::RefCell<crate::notifications::ToastStage>,
     /// What to open once the Cockpit is attached: what the window came
     /// to this machine for (ADR 0026), and until when it waits.
     landing: Option<(Landing, std::time::Instant)>,
@@ -1397,6 +1395,7 @@ impl CockpitView {
         cx.observe(&overview, |_, _, cx| cx.notify()).detach();
         let agent_drills = cx.new(|_| agent_pane::AgentDrillsView::new(cockpit_weak.clone()));
         cx.subscribe(&agent_drills, Self::on_agent_drill_event).detach();
+        let toasts = cx.new(|_| toasts::ToastsView::new(cockpit_weak.clone()));
         let mut view = Self {
             cockpit,
             browsers: Default::default(),
@@ -1426,6 +1425,7 @@ impl CockpitView {
             changes,
             pull_request,
             agent_drills,
+            toasts,
             native_copy: None,
             nav_filter: None,
             nav_view: cx.new(|cx| nav_view::NavView::new(cockpit_weak, cx)),
@@ -1486,8 +1486,6 @@ impl CockpitView {
             user_commands: Default::default(),
             leave_asked: false,
             nav_notice: Default::default(),
-            needs_you: NeedsYou::new(),
-            toast_stage: Default::default(),
             landing: None,
             #[cfg(test)]
             chimed: Vec::new(),
@@ -1555,8 +1553,8 @@ impl CockpitView {
     }
 
     /// The Needs-you state of the Cockpit the window left (`NeedsYou::moved`).
-    pub fn with_needs_you(mut self, needs_you: NeedsYou) -> Self {
-        self.needs_you = needs_you;
+    pub fn with_needs_you(self, needs_you: NeedsYou, cx: &mut Context<Self>) -> Self {
+        self.toasts.update(cx, |toasts, _| toasts.needs_you = needs_you);
         self
     }
 
@@ -8115,8 +8113,9 @@ fn effort_detail(effort: &str) -> &'static str {
 }
 
 impl CockpitView {
-    /// The nav's, the side chat's, Files' and the Overview's events, heard
-    /// from the Cockpit's first frame: answering some needs the window.
+    /// The nav's, the side chat's, Files', the Overview's and the toasts'
+    /// events, heard from the Cockpit's first frame: answering some needs
+    /// the window.
     fn hear_views(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.view_events.is_none() {
             self.view_events = Some([
@@ -8124,6 +8123,7 @@ impl CockpitView {
                 cx.subscribe_in(&self.side_chat, window, Self::on_side_chat_event),
                 cx.subscribe_in(&self.files, window, Self::on_files_event),
                 cx.subscribe_in(&self.overview, window, Self::on_overview_event),
+                cx.subscribe_in(&self.toasts, window, Self::on_toast_event),
             ]);
         }
     }
@@ -8306,6 +8306,7 @@ impl CockpitView {
         self.present_allowance_warnings(window, cx);
         self.present_asked(window, cx);
         self.retire_task_toasts(window, cx);
+        self.toast_margins(cx);
         self.maximized = window.is_maximized();
         // What this frame draws is what the window streams whole;
         // everything else reads its digest (ADR 0032).
@@ -8916,7 +8917,7 @@ impl CockpitView {
             .children(self.title_tools_element(cx))
             .children(self.popup_element(window, cx))
             .child(self.sheets.clone())
-            .children(self.toast_float(window, cx))
+            .child(self.toasts.clone())
             .children(self.sheet_floats(window, cx))
             .children(self.lightbox_element(cx))
             .children(gpui::component::Root::render_dialog_layer(window, cx))
@@ -10245,8 +10246,7 @@ impl CockpitView {
         match verb {
             Verb::OpenThread(thread) => self.land_on_thread(thread, cx),
             Verb::Open(id) => {
-                self.needs_you
-                    .drop_toast(&crate::notifications::RowTarget::Notice(id));
+                self.drop_toast(&crate::notifications::RowTarget::Notice(id), cx);
                 if self.cockpit.open_notice(id).is_some() {
                     self.sync_panes(cx);
                 }
@@ -10256,8 +10256,7 @@ impl CockpitView {
                 self.cockpit.dismiss_notice(id);
             }
             Verb::OpenDecision(id) => {
-                self.needs_you
-                    .drop_toast(&crate::notifications::RowTarget::Decision(id.clone()));
+                self.drop_toast(&crate::notifications::RowTarget::Decision(id.clone()), cx);
                 let subject = self
                     .cockpit
                     .notifications()
@@ -10324,25 +10323,9 @@ impl CockpitView {
                 ferrite_pane::decision::ApprovalChoice::DenyAndSteer
             }
         };
-        self.needs_you
-            .drop_toast(&crate::notifications::RowTarget::Decision(id.clone()));
+        self.drop_toast(&crate::notifications::RowTarget::Decision(id.clone()), cx);
         self.answer_approval(id.thread, choice, None, window, cx);
         cx.notify();
-    }
-
-    /// The Inbox's verbs, as a closure the surfaces can hold.
-    fn notice_handle(&self, cx: &mut Context<Self>) -> Handle {
-        let view = cx.entity().downgrade();
-        std::rc::Rc::new(move |verb, window, cx| {
-            let _ = view.update(cx, |view, cx| {
-                // An answered toast goes at once (`ToastStage::dismiss`).
-                view.toast_stage.borrow_mut().dismiss();
-                match verb {
-                    Verb::Answer(id, answer) => view.answer_from_toast(id, answer, window, cx),
-                    verb => view.notice_verb(verb, cx),
-                }
-            });
-        })
     }
 
     /// One completion Notice in the list's words (R7): `✗ failed` with the
@@ -10408,93 +10391,100 @@ impl CockpitView {
     fn ring_alerts(&mut self, cx: &mut Context<Self>) {
         let now = cx.background_executor().now();
         let entity = self.machines.clone();
-        let machines = entity.as_ref().map(|machines| machines.read(cx));
-        let notifications = self.cockpit.notifications();
-        // Until its Server answers, a Cockpit's Notices are none, not news:
-        // hearing them would forget the requests heard of it, and judging
-        // its alerts by them would drop the ones the window brought along.
-        let here = self.attached().then_some(notifications);
-        if let Some(here) = here {
-            let operators = |thread: ThreadId| self.cockpit.operators(thread);
-            let (fresh, requests) = news(here, self.needs_you.presented(None), &operators);
-            self.needs_you.hear(None, fresh, requests, now);
-        }
-        for away in machines.iter().flat_map(|machines| machines.off_screen()) {
-            let operators = |thread: ThreadId| away.status.operators(thread);
-            let (fresh, requests) = news(
-                away.notifications,
-                self.needs_you.presented(Some(&away.key)),
-                &operators,
-            );
-            self.needs_you.hear(Some(away.key), fresh, requests, now);
-        }
-        let live = |alert: &crate::notifications::Alert| machines::wanted(alert, here, machines);
-        // A system notification the operator has since read, or whose
-        // request resolved, is taken back out of the notification centre.
-        let stale: Vec<String> = self
-            .needs_you
-            .posted
-            .iter()
-            .filter(|(_, alert)| live(alert) == Some(false))
-            .map(|(tag, _)| tag.clone())
-            .collect();
-        let (mut redraw, mut sound, mut posts) = (false, None, Vec::new());
-        if self.needs_you.busy() {
-            let present = self.cockpit.window_active();
-            let on_board: std::collections::HashSet<ThreadId> = self
-                .visible_indices()
-                .into_iter()
-                .filter_map(|index| self.panes[index].thread())
-                .collect();
-            let in_view = |alert: &crate::notifications::Alert| {
-                present && alert.away.is_none() && on_board.contains(&alert.thread)
-            };
-            let ring = self.needs_you.ring(now, &live, &in_view);
-            redraw = ring.redraw;
-            // Alerts that ring together chime once, needs-you over done.
-            let settings = &self.prefs.settings;
-            sound = ring
-                .rang
-                .iter()
-                .filter(|alert| {
-                    self.alert_provider(alert, machines)
-                        .is_some_and(|provider| settings.sounds_for(provider))
-                })
-                .map(|alert| {
-                    if alert.needs_you() {
-                        Sound::NeedsYou
-                    } else {
-                        Sound::Done
-                    }
-                })
-                .max_by_key(|sound| *sound == Sound::NeedsYou);
-            if settings.system_notifications {
-                let now = ferrite_core::clock::system_time();
-                let focused = self.focused_thread();
-                posts = ring
-                    .rang
-                    .into_iter()
-                    .filter(|alert| {
-                        let focused = alert.away.is_none() && focused == Some(alert.thread);
-                        crate::system_notifications::wanted(focused, present)
-                    })
-                    .filter_map(|alert| Some((self.system_posting(&alert, machines, now)?, alert)))
-                    .collect();
+        let (stale, sound, posts) = self.toasts.update(cx, |toasts, cx| {
+            let needs_you = &mut toasts.needs_you;
+            let machines = entity.as_ref().map(|machines| machines.read(cx));
+            let notifications = self.cockpit.notifications();
+            // Until its Server answers, a Cockpit's Notices are none, not news:
+            // hearing them would forget the requests heard of it, and judging
+            // its alerts by them would drop the ones the window brought along.
+            let here = self.attached().then_some(notifications);
+            if let Some(here) = here {
+                let operators = |thread: ThreadId| self.cockpit.operators(thread);
+                let (fresh, requests) = news(here, needs_you.presented(None), &operators);
+                needs_you.hear(None, fresh, requests, now);
             }
-        }
+            for away in machines.iter().flat_map(|machines| machines.off_screen()) {
+                let operators = |thread: ThreadId| away.status.operators(thread);
+                let (fresh, requests) = news(
+                    away.notifications,
+                    needs_you.presented(Some(&away.key)),
+                    &operators,
+                );
+                needs_you.hear(Some(away.key), fresh, requests, now);
+            }
+            let live = |alert: &crate::notifications::Alert| machines::wanted(alert, here, machines);
+            // A system notification the operator has since read, or whose
+            // request resolved, is taken back out of the notification centre.
+            let stale: Vec<String> = needs_you
+                .posted
+                .iter()
+                .filter(|(_, alert)| live(alert) == Some(false))
+                .map(|(tag, _)| tag.clone())
+                .collect();
+            let (mut redraw, mut sound, mut posts) = (false, None, Vec::new());
+            if needs_you.busy() {
+                let present = self.cockpit.window_active();
+                let on_board: std::collections::HashSet<ThreadId> = self
+                    .visible_indices()
+                    .into_iter()
+                    .filter_map(|index| self.panes[index].thread())
+                    .collect();
+                let in_view = |alert: &crate::notifications::Alert| {
+                    present && alert.away.is_none() && on_board.contains(&alert.thread)
+                };
+                let ring = needs_you.ring(now, &live, &in_view);
+                redraw = ring.redraw;
+                // Alerts that ring together chime once, needs-you over done.
+                let settings = &self.prefs.settings;
+                sound = ring
+                    .rang
+                    .iter()
+                    .filter(|alert| {
+                        self.alert_provider(alert, machines)
+                            .is_some_and(|provider| settings.sounds_for(provider))
+                    })
+                    .map(|alert| {
+                        if alert.needs_you() {
+                            Sound::NeedsYou
+                        } else {
+                            Sound::Done
+                        }
+                    })
+                    .max_by_key(|sound| *sound == Sound::NeedsYou);
+                if settings.system_notifications {
+                    let now = ferrite_core::clock::system_time();
+                    let focused = self.focused_thread();
+                    posts = ring
+                        .rang
+                        .into_iter()
+                        .filter(|alert| {
+                            let focused = alert.away.is_none() && focused == Some(alert.thread);
+                            crate::system_notifications::wanted(focused, present)
+                        })
+                        .filter_map(|alert| Some((self.system_posting(&alert, machines, now)?, alert)))
+                        .collect();
+                }
+            }
+            for tag in &stale {
+                needs_you.posted.remove(tag);
+            }
+            for (posting, alert) in &posts {
+                needs_you.posted.insert(posting.tag.clone(), alert.clone());
+            }
+            if redraw {
+                cx.notify();
+            }
+            (stale, sound, posts)
+        });
         for tag in stale {
-            self.needs_you.posted.remove(&tag);
             crate::system_notifications::withdraw(&tag, cx);
         }
         if let Some(sound) = sound {
             self.chime(sound);
         }
-        for (posting, alert) in posts {
-            self.needs_you.posted.insert(posting.tag.clone(), alert);
+        for (posting, _) in posts {
             crate::system_notifications::post(posting, cx);
-        }
-        if redraw {
-            cx.notify();
         }
     }
 
@@ -10572,7 +10562,8 @@ impl CockpitView {
         }
         // Its entry stays: read now, the next pump takes it out of the
         // notification centre with the rest.
-        if let Some(alert) = self.needs_you.posted.get(tag).cloned() {
+        let posted = self.toasts.read(cx).needs_you.posted.get(tag).cloned();
+        if let Some(alert) = posted {
             self.notice_verb(alert.open_verb(), cx);
         }
     }

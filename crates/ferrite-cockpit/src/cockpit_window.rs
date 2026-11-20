@@ -126,14 +126,17 @@ impl CockpitWindow {
         let arrived = machines.read(cx).selected_key();
         let needs_you = self
             .cockpit
-            .update(cx, |view, _| std::mem::take(&mut view.needs_you))
+            .update(cx, |view, cx| {
+                view.toasts
+                    .update(cx, |toasts, _| std::mem::take(&mut toasts.needs_you))
+            })
             .moved(left.as_ref(), arrived.as_ref());
         let panel = self.cockpit.update(cx, |view, cx| view.successor_panel(cx));
         let until = cx.background_executor().now() + LANDING_WAIT;
         let view = cx.new(|cx| {
             CockpitView::new_with_panel(core, provider, prefs, panel, cx)
                 .with_machines(machines)
-                .with_needs_you(needs_you)
+                .with_needs_you(needs_you, cx)
                 .with_landing(open, until)
         });
         view.update(cx, |view, cx| view.set_parts(self.overlay.is_some(), cx));

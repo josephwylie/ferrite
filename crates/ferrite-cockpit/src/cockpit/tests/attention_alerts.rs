@@ -131,13 +131,13 @@ fn a_finished_thread_needs_you_until_it_is_seen(cx: &mut TestAppContext) {
         })
         .unwrap();
     tick(cx);
-    view.read_with(cx, |view, _| {
+    view.read_with(cx, |view, cx| {
         let notifications = view.cockpit.notifications();
         assert_eq!(notifications.unread(), 1);
         assert!(notifications.attention(threads[1]), "off the screen");
         assert!(!notifications.attention(threads[0]));
         assert!(
-            view.needs_you.toasts().is_empty(),
+            view.toasts.read(cx).needs_you.toasts().is_empty(),
             "with the nav open, a finish toasts nothing"
         );
     });
@@ -258,9 +258,9 @@ fn a_finish_on_the_focused_pane_is_read_at_once_and_never_toasts(cx: &mut TestAp
         assert_eq!(notifications.notices().count(), 1);
         assert_eq!(notifications.unread(), 0);
     });
-    view.read_with(cx, |view, _| {
+    view.read_with(cx, |view, cx| {
         assert!(
-            view.needs_you.toasts().is_empty(),
+            view.toasts.read(cx).needs_you.toasts().is_empty(),
             "no toast for the Pane in view"
         );
     });
@@ -305,7 +305,7 @@ fn contract_request_attention_toasts_once_and_cancellation_removes_it(cx: &mut T
     let (core, fake) = cockpit("request-toast-contract", 2);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     let toasts = |cx: &mut gpui::VisualTestContext| {
-        view.read_with(cx, |view, _| view.needs_you.toasts().len())
+        view.read_with(cx, |view, cx| view.toasts.read(cx).needs_you.toasts().len())
     };
     let request = |name: &str| SessionEvent::DecisionRequested {
         decision: ferrite_core::Decision {
@@ -352,9 +352,9 @@ fn contract_request_attention_toasts_once_and_cancellation_removes_it(cx: &mut T
     }
     tick(cx);
     ring(cx);
-    view.read_with(cx, |view, _| {
+    view.read_with(cx, |view, cx| {
         assert_eq!(view.cockpit.notifications().unread(), 2);
-        assert_eq!(view.needs_you.toasts().len(), 1, "one toast per Thread");
+        assert_eq!(view.toasts.read(cx).needs_you.toasts().len(), 1, "one toast per Thread");
     });
     for name in ["AskUserQuestion", "Bash"] {
         fake.streams.borrow()[off].send(cancelled(name)).unwrap();
@@ -389,14 +389,14 @@ fn a_request_toast_expires(cx: &mut TestAppContext) {
     tick(cx);
     ring(cx);
     assert_eq!(
-        view.read_with(cx, |view, _| view.needs_you.toasts().len()),
+        view.read_with(cx, |view, cx| view.toasts.read(cx).needs_you.toasts().len()),
         1
     );
     cx.executor()
         .advance_clock(crate::notifications::NEEDS_YOU_TOAST);
     tick(cx);
-    view.read_with(cx, |view, _| {
-        assert!(view.needs_you.toasts().is_empty(), "it went on its own");
+    view.read_with(cx, |view, cx| {
+        assert!(view.toasts.read(cx).needs_you.toasts().is_empty(), "it went on its own");
         assert_eq!(
             view.cockpit.notifications().unread(),
             1,
@@ -423,9 +423,9 @@ fn a_request_off_the_board_posts_while_the_window_is_frontmost(cx: &mut TestAppC
     fake.streams.borrow()[off].send(decision("waits")).unwrap();
     tick(cx);
     ring(cx);
-    view.read_with(cx, |view, _| {
+    view.read_with(cx, |view, cx| {
         assert!(view.cockpit.window_active());
-        assert_eq!(view.needs_you.toasts().len(), 1);
+        assert_eq!(view.toasts.read(cx).needs_you.toasts().len(), 1);
     });
     assert_eq!(
         cx.delivered_system_notifications()
@@ -512,11 +512,11 @@ fn clicking_a_request_s_system_notification_opens_it(cx: &mut TestAppContext) {
         action_id: None,
     });
     tick(cx);
-    view.read_with(cx, |view, _| {
+    view.read_with(cx, |view, cx| {
         assert_eq!(view.focused(), 1, "the click landed on its Thread");
         let request = view.cockpit.notifications().decisions().next().unwrap();
         assert!(request.read);
-        assert!(view.needs_you.toasts().is_empty());
+        assert!(view.toasts.read(cx).needs_you.toasts().is_empty());
     });
     assert!(
         tags(cx).is_empty(),
@@ -609,8 +609,8 @@ fn settings_silence_sounds_and_system_notifications(cx: &mut TestAppContext) {
         .unwrap();
     tick(cx);
     ring(cx);
-    view.read_with(cx, |view, _| {
-        assert_eq!(view.needs_you.toasts().len(), 1);
+    view.read_with(cx, |view, cx| {
+        assert_eq!(view.toasts.read(cx).needs_you.toasts().len(), 1);
         assert!(view.chimed.is_empty(), "Claude is muted");
     });
     assert!(cx.delivered_system_notifications().is_empty());
@@ -834,7 +834,7 @@ fn inbox_followup_returns_to_work_and_repeated_finishes_stay_one_row(cx: &mut Te
     });
     tick(cx);
     assert!(
-        view.read_with(cx, |view, _| view.needs_you.toasts().is_empty()),
+        view.read_with(cx, |view, cx| view.toasts.read(cx).needs_you.toasts().is_empty()),
         "watched results never alert"
     );
 }
@@ -1061,7 +1061,7 @@ fn snooze_expiry_returns_threads_without_an_alert(cx: &mut TestAppContext) {
     tick(cx);
     view.read_with(cx, |view, cx| {
         assert_eq!(view.needs_you_rows(cx).len(), 1);
-        assert!(view.needs_you.toasts().is_empty());
+        assert!(view.toasts.read(cx).needs_you.toasts().is_empty());
     });
 }
 

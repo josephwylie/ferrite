@@ -895,8 +895,8 @@ fn a_decision_off_screen_rings_once_and_its_click_goes_to_its_machine(cx: &mut T
         cx,
     );
     ring(cx);
-    first.read_with(cx, |view, _| {
-        assert!(view.needs_you.toasts().is_empty(), "held when first heard");
+    first.read_with(cx, |view, cx| {
+        assert!(view.toasts.read(cx).needs_you.toasts().is_empty(), "held when first heard");
         assert!(view.chimed.is_empty());
     });
 
@@ -915,8 +915,8 @@ fn a_decision_off_screen_rings_once_and_its_click_goes_to_its_machine(cx: &mut T
         cx,
     );
     tick(cx);
-    first.read_with(cx, |view, _| {
-        assert!(view.needs_you.toasts().is_empty(), "it waits its second")
+    first.read_with(cx, |view, cx| {
+        assert!(view.toasts.read(cx).needs_you.toasts().is_empty(), "it waits its second")
     });
     ring(cx);
     ring(cx);
@@ -929,7 +929,7 @@ fn a_decision_off_screen_rings_once_and_its_click_goes_to_its_machine(cx: &mut T
     };
     first.read_with(cx, |view, cx| {
         assert_eq!(view.chimed, [Sound::NeedsYou], "once");
-        let toasts = view.needs_you.toasts();
+        let toasts = view.toasts.read(cx).needs_you.toasts();
         assert_eq!(toasts.len(), 1);
         assert_eq!(toasts[0].alert, alert);
         let rows = view.needs_you_rows(cx);
@@ -1005,15 +1005,20 @@ fn a_decision_off_screen_rings_once_and_its_click_goes_to_its_machine(cx: &mut T
             crate::notifications::RowTarget::Decision(id) => (id, false),
             _ => unreachable!(),
         });
-        view.needs_you.hear(None, [], held, now);
-        let ring = view.needs_you.ring(
-            now + crate::notifications::ALERT_DELAY,
-            &|_| Some(true),
-            &|_| false,
-        );
-        assert!(ring.rang.is_empty(), "nothing rings twice");
+        view.toasts.update(cx, |toasts, _| {
+            let needs_you = &mut toasts.needs_you;
+            needs_you.hear(None, [], held, now);
+            let ring = needs_you.ring(
+                now + crate::notifications::ALERT_DELAY,
+                &|_| Some(true),
+                &|_| false,
+            );
+            assert!(ring.rang.is_empty(), "nothing rings twice");
+        });
         assert_eq!(
-            view.needs_you
+            view.toasts
+                .read(cx)
+                .needs_you
                 .toasts()
                 .iter()
                 .map(|toast| &toast.alert.away)
@@ -1126,8 +1131,8 @@ fn a_toast_press_goes_to_its_machine(cx: &mut TestAppContext) {
     );
     ring(cx);
     ring(cx);
-    first.read_with(cx, |view, _| {
-        assert_eq!(view.needs_you.toasts().len(), 1, "it toasts");
+    first.read_with(cx, |view, cx| {
+        assert_eq!(view.toasts.read(cx).needs_you.toasts().len(), 1, "it toasts");
         assert!(view.chimed.is_empty(), "Claude is muted");
     });
 
