@@ -634,6 +634,30 @@ pass that through events and still need the root for the Server, the
 Surfaces and the Panes. A gone Thread's Browser goes in
 `forget_gone_threads`.
 
+The Review beside a Pane is the seventh. What the Review keeps is its
+`ReviewView`'s (`review.rs`), an entity already: the scope, the files read
+or why they could not be, a file opened whole, the pull request, the
+commits listed and the bases, the search, the pick, the unchanged runs it
+opened, the comment field, its scroll and its focus. It asks the root for
+each read by its own events (`ScopePicked`, `CommitPicked`, `Searched`,
+`FileOpened`, `PrAsked`, `FilesAsked`, `BasesAsked`, `BasePicked`,
+`MenuAsked`), heard from the moment the root makes it (`open_review`).
+What the root keeps is each Pane's `ReviewSlot` (`cockpit/beside.rs`), a
+plain struct beside the Pane (`CockpitPane`): the open review and its
+head's title, the one sliding shut, and the slot's focus, which only its
+own methods write (`show`, `close`, `let_go`). It goes with its Pane
+(`sync_panes`), a gone Thread's too. Each Thread's slide (`ReaderSlides`)
+only the pump writes (`tend_reader_slides`, and `land_reader_slides` as a
+seam is grabbed), and it is board layout: the reader leaf `board_tree`
+splices beside the Pane, its share and its reveal. What else stays on the
+root is the root's: reading each scope where the checkout is, opening the
+Review from the command, the palette and the Overview's `Review changes`
+(`open_beside`), handing the keyboard back to the Pane as it closes (its
+×, escape, ⌘W), and the slot's context menu (ADR 0043). A view would move
+a struct that already has an owner and add events (close, a press) for
+calls the root makes anyway. Its diff is its own read, not the Changes'
+or the Overview's.
+
 ## Precedent
 
 Zed builds its workspace this way: each panel is an entity that owns its
