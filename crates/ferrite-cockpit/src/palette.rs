@@ -13,10 +13,12 @@
 //! (`Close esc`, `Change type ← →`) and the cursor row's
 //! working directory or the result count. At rest — `All`, nothing typed
 //! — it lists `Recents` (the Threads used last) and a few `Actions` that
-//! start work; a query or a tab reaches every row. The cockpit builds the rows
-//! (`cockpit::palette`) and runs them: every key the palette answers is a
-//! `palette::*` action bound in its `Palette` context, handled at the
-//! cockpit's root.
+//! start work; a query or a tab reaches every row. Its keys are
+//! `palette::*` actions bound in its `Palette` context, which it answers
+//! on its own element (ADR 0041). The cockpit builds the rows as it opens
+//! (`cockpit::palette`, `palette_inputs`) and runs the one chosen: the
+//! palette says what was chosen, or that it was dismissed, as a
+//! `PaletteEvent`.
 //!
 //! **Status filters.** A line of one letter is a filter, not a search: `b`
 //! `w` `i` `d` keep only the rows whose state is blocked, working, idle or
@@ -32,8 +34,8 @@ use ferrite_core::workspace::registry::ProjectId;
 use ferrite_core::ThreadId;
 use gpui::prelude::*;
 use gpui::{
-    div, px, rgb, Context, Entity, IntoElement, ScrollHandle, SharedString, StyledText,
-    Subscription, Window,
+    div, px, rgb, Context, Entity, EventEmitter, IntoElement, ScrollHandle, SharedString,
+    StyledText, Subscription, Window,
 };
 
 use crate::cockpit::Attention;
@@ -279,6 +281,14 @@ impl Row {
     }
 }
 
+/// What the palette asks of the window.
+pub(crate) enum PaletteEvent {
+    /// ⏎ or a press on a row: run it. The window shuts the palette first.
+    Run(Act),
+    /// Esc: shut the palette and touch nothing else.
+    Dismiss,
+}
+
 /// A surviving row: its index into the rows, and the name's lit ranges.
 #[derive(Clone, Debug, PartialEq)]
 struct Shown {
@@ -302,6 +312,8 @@ pub(crate) struct Palette {
     scroll: ScrollHandle,
     _edited: Subscription,
 }
+
+impl EventEmitter<PaletteEvent> for Palette {}
 
 impl Palette {
     /// A palette over `rows` (already in the order it draws them), its line
@@ -415,6 +427,13 @@ impl Palette {
         self.cursor = (self.cursor as isize + delta).rem_euclid(count) as usize;
         self.scroll.scroll_to_item(self.element_index(self.cursor));
         cx.notify();
+    }
+
+    /// ⏎: the window runs the cursor's row. Nothing surviving, nothing runs.
+    fn confirm(&mut self, cx: &mut Context<Self>) {
+        if let Some(row) = self.selected() {
+            cx.emit(PaletteEvent::Run(row.act.clone()));
+        }
     }
 
     /// Put the cursor on survivor `at` (a click).
@@ -613,10 +632,10 @@ impl Render for Palette {
             }
             list = list.child(
                 row_element(at, row, &shown.lit, at == self.cursor).on_click(cx.listener(
-                    move |palette, _: &gpui::ClickEvent, window, cx| {
+                    move |palette, _: &gpui::ClickEvent, _, cx| {
                         cx.stop_propagation();
                         palette.set_cursor(at, cx);
-                        window.dispatch_action(Box::new(Confirm), cx);
+                        palette.confirm(cx);
                     },
                 )),
             );
@@ -659,6 +678,10 @@ impl Render for Palette {
                 .on_action(cx.listener(|palette, _: &PreviousType, window, cx| {
                     palette.step_tab(-1, window, cx)
                 }))
+                .on_action(cx.listener(|palette, _: &SelectNext, _, cx| palette.step(1, cx)))
+                .on_action(cx.listener(|palette, _: &SelectPrevious, _, cx| palette.step(-1, cx)))
+                .on_action(cx.listener(|palette, _: &Confirm, _, cx| palette.confirm(cx)))
+                .on_action(cx.listener(|_, _: &Dismiss, _, cx| cx.emit(PaletteEvent::Dismiss)))
                 .child(input)
                 .children(tab_row)
                 .child(list)
