@@ -21,6 +21,8 @@ mod delivery;
 mod details;
 mod direction;
 mod drafts;
+#[cfg(feature = "headless")]
+mod driven_readbacks;
 mod factory;
 mod factory_fit;
 mod files;

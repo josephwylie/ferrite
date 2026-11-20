@@ -236,6 +236,8 @@ fn the_operations_are_the_ones_declared_and_never_renamed() {
             "window.attach",
             "window.resize",
             "window.drag",
+            "window.text",
+            "window.focus",
         ]
     );
 }
@@ -612,6 +614,10 @@ fn samples() -> Vec<Request> {
             from: drive::Target::Selector("panel-edge".into()),
             to: drive::Target::Point { x: 900, y: 400 },
         })),
+        request(Method::WindowText(drive::Find {
+            selector: "composer-block".into(),
+        })),
+        request(Method::WindowFocus(Empty {})),
     ]
 }
 

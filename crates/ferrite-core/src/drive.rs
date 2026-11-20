@@ -20,6 +20,10 @@ pub enum Action {
     Attach(Attach),
     Resize(Resize),
     Drag(Drag),
+    /// The text the last frame showed inside an element.
+    Read(Find),
+    /// What holds the keyboard.
+    Focus,
 }
 
 /// Keystrokes pressed in order, as gpui writes them: `cmd-,`, `escape`,
@@ -221,7 +225,8 @@ impl From<Drag> for DragParams {
     }
 }
 
-/// Where the last frame drew an element.
+/// An element the last frame drew, by its `debug_selector`: where
+/// (`window.find`), or what it shows (`window.text`).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct Find {
     /// The element's `debug_selector`.
@@ -260,4 +265,21 @@ pub enum Answer {
     Resized { width: f32, height: f32 },
     /// Where the button went down and where it came up.
     Dragged { from_x: f32, from_y: f32, to_x: f32, to_y: f32 },
+    /// Each line of text painted inside the element's bounds, in paint
+    /// order: its own and anything drawn over it, clipped lines left out.
+    Read { lines: Vec<String> },
+    Focused(Focused),
+}
+
+/// What holds the keyboard.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Focused {
+    /// The key contexts a key is dispatched through, innermost last.
+    pub contexts: Vec<String>,
+    /// The nearest `debug_selector` on that path: the focused element's
+    /// own, or the closest element around it that has one.
+    pub selector: Option<String>,
+    /// What the window calls the place: a Panel stop by the name its row
+    /// gives it.
+    pub label: Option<String>,
 }

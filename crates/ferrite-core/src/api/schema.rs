@@ -245,6 +245,10 @@ operations! {
         "Resize the headless window, in logical pixels, never under the app window's least size.";
     WindowDrag(drive::Drag) => "window.drag", [], Operator,
         "Drag in the headless window with the left button: from a selector or a point, to a selector or a point.";
+    WindowText(drive::Find) => "window.text", ["selector"], Operator,
+        "The text the headless window last showed inside an element, by its debug selector, line by line.";
+    WindowFocus(Empty) => "window.focus", [], Operator,
+        "What holds the headless window's keyboard: its key contexts, nearest debug selector and name.";
 }
 
 /// Who may call an operation (#224). A call that names no Thread is the

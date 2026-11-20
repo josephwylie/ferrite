@@ -2334,6 +2334,44 @@ fn samples() -> Vec<(&'static str, Sample)> {
             }),
         ),
         (
+            "drive_read",
+            Sample::Server(ServerMessage::Drive {
+                request: 8,
+                action: crate::drive::Action::Read(crate::drive::Find {
+                    selector: "composer-block".into(),
+                }),
+            }),
+        ),
+        (
+            "driven_read",
+            Sample::Client(ClientMessage::Driven {
+                request: 8,
+                ok: Some(crate::drive::Answer::Read {
+                    lines: vec!["Reply with MANGO".into()],
+                }),
+                error: None,
+            }),
+        ),
+        (
+            "drive_focus",
+            Sample::Server(ServerMessage::Drive {
+                request: 9,
+                action: crate::drive::Action::Focus,
+            }),
+        ),
+        (
+            "driven_focused",
+            Sample::Client(ClientMessage::Driven {
+                request: 9,
+                ok: Some(crate::drive::Answer::Focused(crate::drive::Focused {
+                    contexts: vec!["Workspace".into(), "PanelControl".into()],
+                    selector: Some("panel-tab-files".into()),
+                    label: Some("Files".into()),
+                })),
+                error: None,
+            }),
+        ),
+        (
             "restarting",
             Sample::Server(ServerMessage::Restarting { when: When::Idle }),
         ),
