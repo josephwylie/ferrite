@@ -225,6 +225,37 @@ fn twenty_tabs<'a>(
     (view, thread, checkout, cx)
 }
 
+/// F6 comes back to the file tab it left, by the file: a tab closed before
+/// it moves it along the row, and the keyboard follows the file.
+#[gpui::test]
+fn f6_returns_to_the_file_tab_it_left_after_one_before_it_closes(cx: &mut TestAppContext) {
+    let (view, thread, checkout, cx) = files_window("files-f6-file", cx);
+    for name in ["a.rs", "b.rs", "c.rs"] {
+        let file = checkout.join(name);
+        std::fs::write(&file, "x\n").unwrap();
+        open(&view, thread, &file, true, cx);
+    }
+    let keyboard = |cx: &mut gpui::VisualTestContext| {
+        cx.update(|window, cx| view.read(cx).keyboard_label(window).map(|name| name.to_string()))
+    };
+    let b = view.read_with(cx, |view, _| {
+        let drawn = view.panel.focus.drawn();
+        let (control, _) = drawn.iter().find(|(_, semantics)| semantics.name == "b.rs").unwrap();
+        view.panel.focus.handle(control).unwrap()
+    });
+    cx.update(|window, cx| window.focus(&b, cx));
+    tick(cx);
+    assert_eq!(keyboard(cx).as_deref(), Some("b.rs"));
+    super::panel_focus::press("escape", cx);
+    assert_eq!(keyboard(cx), None, "back in the conversation");
+
+    view.update(cx, |view, cx| view.files.update(cx, |files, cx| files.close_tab(thread, 0, cx)));
+    tick(cx);
+    assert_eq!(tab_names(&view, thread, cx).len(), 2, "a.rs closed");
+    super::panel_focus::press("f6", cx);
+    assert_eq!(keyboard(cx).as_deref(), Some("b.rs"), "the file it left, not its place");
+}
+
 #[gpui::test]
 fn twenty_tabs_at_a_narrow_width_are_all_reachable(cx: &mut TestAppContext) {
     use crate::cockpit::panel::PanelControl;
@@ -247,7 +278,7 @@ fn twenty_tabs_at_a_narrow_width_are_all_reachable(cx: &mut TestAppContext) {
     assert_eq!(view.read_with(cx, |view, cx| view.files.read(cx).active_path(thread)), Some(checkout.join("file-number-0.rs")));
 
     let first = |view: &Entity<CockpitView>, cx: &mut gpui::VisualTestContext| {
-        let handle = view.read_with(cx, |view, _| view.panel.focus.handle(&PanelControl::FileTab(0)).unwrap());
+        let handle = view.read_with(cx, |view, _| view.panel.focus.handle(&PanelControl::FileTab(checkout.join("file-number-0.rs"))).unwrap());
         cx.update(|window, cx| window.focus(&handle, cx));
     };
     first(&view, cx);
@@ -255,7 +286,7 @@ fn twenty_tabs_at_a_narrow_width_are_all_reachable(cx: &mut TestAppContext) {
         super::panel_focus::press("right", cx);
     }
     let focused = cx.update(|window, cx| view.read(cx).panel.focus.focused(window));
-    assert_eq!(focused, Some(PanelControl::FileTab(19)));
+    assert_eq!(focused, Some(PanelControl::FileTab(checkout.join("file-number-19.rs"))));
     assert_eq!(inside_the_row("files-tab-19", cx), Some(true), "the arrow keys never park focus off screen");
 
     first(&view, cx);
@@ -265,7 +296,11 @@ fn twenty_tabs_at_a_narrow_width_are_all_reachable(cx: &mut TestAppContext) {
     super::panel_focus::press("backspace", cx);
     assert_eq!(tab_names(&view, thread, cx).len(), 19, "the key closed it");
     let focused = cx.update(|window, cx| view.read(cx).panel.focus.focused(window));
-    assert_eq!(focused, Some(PanelControl::FileTab(2)), "the keyboard moved to the neighbour");
+    assert_eq!(
+        focused,
+        Some(PanelControl::FileTab(checkout.join("file-number-3.rs"))),
+        "the keyboard moved to the neighbour"
+    );
     for _ in 0..19 {
         super::panel_focus::press("backspace", cx);
     }

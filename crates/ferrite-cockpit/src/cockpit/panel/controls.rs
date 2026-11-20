@@ -26,6 +26,7 @@
 
 use std::cell::RefCell;
 use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
 use ferrite_ui::components::{icon_button, IconSize};
@@ -39,8 +40,9 @@ use crate::cockpit::surfaces::PrTab;
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub(crate) enum PanelControl {
     Tab(SurfaceId),
-    /// A file open in the Files tool, by its place in that tool's tabs.
-    FileTab(usize),
+    /// A file open in the Files tool, by its path: the stop stays the
+    /// file's as tabs before it close or the preview tab gives way.
+    FileTab(PathBuf),
     Plus,
     Maximize,
     PrNumber,
@@ -299,8 +301,12 @@ impl CockpitView {
         cx: &mut Context<Self>,
     ) {
         if let Some(handle) = self.panel.focus.handle(control) {
-            if let (PanelControl::FileTab(at), Some(thread)) = (control, self.panel_thread()) {
-                self.files.update(cx, |files, _| files.reveal_tab(thread, *at));
+            if let (PanelControl::FileTab(path), Some(thread)) = (control, self.panel_thread()) {
+                self.files.update(cx, |files, _| {
+                    if let Some(at) = files.tab_index(thread, path) {
+                        files.reveal_tab(thread, at);
+                    }
+                });
             }
             window.focus(&handle, cx);
             if matches!(control, PanelControl::Tab(_)) {
@@ -495,9 +501,8 @@ impl CockpitView {
         }
         let on_control = self.panel_control_focused(window);
         let focused = self.panel.focus.focused(window);
-        if let Some(PanelControl::FileTab(at)) = focused {
-            self.files.update(cx, |files, cx| files.close_tab(thread, at, cx));
-            self.focus_after_file_close(thread, at, window, cx);
+        if let Some(PanelControl::FileTab(path)) = focused {
+            self.close_file_tab(thread, &path, window, cx);
             return true;
         }
         let closing = match focused {
@@ -526,20 +531,19 @@ impl CockpitView {
         self.focus_panel_control(&next, window, cx);
     }
 
-    /// A file tab has closed: the keyboard goes to the file that took its
-    /// place, else back to the Panel's own tab.
-    fn focus_after_file_close(
-        &mut self,
-        thread: ThreadId,
-        closed: usize,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let left = self.files.read(cx).tab_count(thread);
-        let next = match left {
-            0 => PanelControl::Tab(SurfaceId::Files),
-            left => PanelControl::FileTab(closed.min(left - 1)),
+    /// Close `path`'s file tab: the keyboard goes to the file that takes
+    /// its place, else back to the Panel's own tab.
+    fn close_file_tab(&mut self, thread: ThreadId, path: &Path, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(at) = self.files.read(cx).tab_index(thread, path) else {
+            return;
         };
+        self.files.update(cx, |files, cx| files.close_tab(thread, at, cx));
+        let files = self.files.read(cx);
+        let next = files
+            .tab_count(thread)
+            .checked_sub(1)
+            .and_then(|last| files.tab_path(thread, at.min(last)))
+            .map_or(PanelControl::Tab(SurfaceId::Files), PanelControl::FileTab);
         self.focus_panel_control(&next, window, cx);
     }
 
@@ -559,10 +563,7 @@ impl CockpitView {
                 self.close_surface(thread, &id, cx);
                 self.focus_after_close(thread, window, cx);
             }
-            Some(PanelControl::FileTab(at)) => {
-                self.files.update(cx, |files, cx| files.close_tab(thread, at, cx));
-                self.focus_after_file_close(thread, at, window, cx);
-            }
+            Some(PanelControl::FileTab(path)) => self.close_file_tab(thread, &path, window, cx),
             _ => {}
         }
     }
