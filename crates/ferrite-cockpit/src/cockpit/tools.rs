@@ -4,11 +4,11 @@
 //! Thread's tools stay as they were left when focus moves away and back.
 //! Their chords, ⇧⌘F, ⇧⌘D and ⌘J, open their Surface through the Panel's
 //! one door (`upsert_surface`); pressed again they bring the same tab
-//! forward. The Terminal keeps its shells and Changes its diffs in views
-//! of their own (`TerminalsView`, `ChangesView`, ADR 0041); Files' state
-//! is still `Tools`, here.
+//! forward. The Terminal keeps its shells, Changes its diffs and Files
+//! its trees and editors in views of their own (`TerminalsView`,
+//! `ChangesView`, `FilesView`, ADR 0041).
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 
 mod changes;
 mod editor;
@@ -21,14 +21,9 @@ mod working_set;
 use super::surfaces::SurfaceId;
 use super::*;
 
-/// Every Thread's tools.
+/// What the window notes for its tools.
 #[derive(Default)]
 pub(crate) struct Tools {
-    files: HashMap<ThreadId, files::Files>,
-    /// Files whose Thread is gone, kept while a buffer holds an edit the
-    /// disk does not have: auto save still writes it, and leaving still
-    /// names it.
-    orphaned: Vec<files::Files>,
     /// Threads whose agent worked since the last sweep, so their checkout
     /// may have changed (`follow_workspace`).
     worked: HashSet<ThreadId>,
@@ -42,7 +37,7 @@ pub(crate) use changes::{ChangesView, Diff, Sub as ChangesSub, Verb as ChangesVe
 pub(crate) use editor::Editor;
 #[cfg(test)]
 pub(crate) use save::SaveState;
-pub(crate) use files::{Sub as FilesSub, Verb as FilesVerb};
+pub(crate) use files::{FilesView, Sub as FilesSub, Verb as FilesVerb};
 #[cfg(test)]
 pub(crate) use tree::Status as FileStatus;
 pub(crate) use terminal::{Sub as TerminalSub, TerminalsView, Verb as TerminalVerb};
@@ -62,9 +57,7 @@ impl CockpitView {
             if self.changes.read(cx).holds(Diff::Changes(thread)) {
                 self.read_diff(Diff::Changes(thread), true, cx);
             }
-            for editor in self.files_editors(thread) {
-                editor.update(cx, |editor, cx| editor.follow_disk(cx));
-            }
+            self.files.update(cx, |files, cx| files.follow_disk(thread, cx));
         }
     }
 
@@ -115,7 +108,10 @@ impl CockpitView {
     }
 
     pub(super) fn toggle_file_tree_action(&mut self, _: &ToggleFileTree, _: &mut Window, cx: &mut Context<Self>) {
-        self.toggle_file_tree(cx);
+        if let Some(thread) = self.focused_thread() {
+            self.files
+                .update(cx, |files, cx| files.run_verb(thread, FilesVerb::ToggleTree, cx));
+        }
     }
 
     pub(super) fn go_to_file_action(&mut self, _: &GoToFile, window: &mut Window, cx: &mut Context<Self>) {
@@ -127,11 +123,7 @@ impl CockpitView {
     /// Every Thread `keep` refuses takes its tools with it: its Files and
     /// each diff read for it.
     pub(super) fn forget_tools(&mut self, keep: impl Fn(ThreadId) -> bool, cx: &mut gpui::App) {
-        let gone: Vec<ThreadId> = self.tools.files.keys().copied().filter(|&thread| !keep(thread)).collect();
-        for thread in gone {
-            self.tools.orphaned.extend(self.tools.files.remove(&thread));
-        }
-        self.tools.orphaned.retain(|files| files.holds_edits(cx));
+        self.files.update(cx, |files, cx| files.forget(&keep, cx));
         self.changes.update(cx, |changes, _| changes.forget(&keep));
         self.tools.worked.retain(|thread| keep(*thread));
     }
@@ -142,7 +134,7 @@ impl CockpitView {
     /// How many of `thread`'s tools are held: its Files, and each diff read
     /// for it.
     pub(super) fn tools_held_for_test(&self, thread: ThreadId, cx: &gpui::App) -> usize {
-        usize::from(self.tools.files.contains_key(&thread)) + self.changes.read(cx).held(thread)
+        usize::from(self.files.read(cx).holds(thread)) + self.changes.read(cx).held(thread)
     }
 }
 

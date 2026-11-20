@@ -72,7 +72,7 @@ impl CockpitView {
                 format!("{what}. Leaving stops them; their Threads reopen next launch.")
             })
         };
-        let files = self.unsaved_files_at_leaving(cx).map(|count| match count {
+        let files = self.files.read(cx).unsaved_at_leaving(cx).map(|count| match count {
             1 => "1 file has unsaved changes. Leaving discards them.".to_string(),
             count => format!("{count} files have unsaved changes. Leaving discards them."),
         });

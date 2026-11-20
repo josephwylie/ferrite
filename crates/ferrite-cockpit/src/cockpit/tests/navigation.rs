@@ -296,10 +296,10 @@ fn deferred_preview_follows_its_pane_after_reflow(cx: &mut TestAppContext) {
     });
     tick(cx);
 
-    view.read_with(cx, |view, _| {
+    view.read_with(cx, |view, cx| {
         assert_eq!(view.cockpit.roster().focused(), Some(source));
         let thread = source.thread().unwrap();
-        assert_eq!(view.files_active_path(thread), Some(path));
+        assert_eq!(view.files.read(cx).active_path(thread), Some(path));
         assert_eq!(
             view.active_surface(thread),
             Some(super::super::surfaces::SurfaceId::Files)
@@ -311,7 +311,7 @@ fn deferred_preview_follows_its_pane_after_reflow(cx: &mut TestAppContext) {
             .all(|pane| !pane.preview.is_open()
                 && pane
                     .thread()
-                    .is_none_or(|thread| view.files_active_path(thread).is_none())));
+                    .is_none_or(|thread| view.files.read(cx).active_path(thread).is_none())));
     });
 }
 
@@ -331,11 +331,11 @@ fn deferred_preview_for_a_closed_pane_is_dropped(cx: &mut TestAppContext) {
     });
     tick(cx);
 
-    view.read_with(cx, |view, _| {
+    view.read_with(cx, |view, cx| {
         assert_eq!(view.cockpit.roster().focused(), Some(focused));
         assert!(view.panes.iter().all(|pane| !pane.preview.is_open()
             && pane
                 .thread()
-                .is_none_or(|thread| view.files_active_path(thread).is_none())));
+                .is_none_or(|thread| view.files.read(cx).active_path(thread).is_none())));
     });
 }

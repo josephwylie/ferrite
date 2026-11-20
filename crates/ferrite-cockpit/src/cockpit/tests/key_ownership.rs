@@ -264,7 +264,7 @@ fn files_keeps_the_keys_typed_into_its_editor_and_filter(cx: &mut TestAppContext
         fake.streams.borrow()[0].send(SessionEvent::TextDelta { text: "…".into() }).unwrap();
         tick(cx);
     }
-    assert_eq!(view.read_with(cx, |view, cx| view.files_filter_text_for_test(thread, cx)), "lib");
+    assert_eq!(view.read_with(cx, |view, cx| view.files.read(cx).filter_text_for_test(thread, cx)), "lib");
     composer_unchanged(&view, &fake, cx);
 }
 

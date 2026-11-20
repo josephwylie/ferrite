@@ -292,7 +292,7 @@ fn retained_transcript_relative_file_links_use_the_thread_workspace_and_copy_tex
     cx.simulate_click(card.center(), gpui::Modifiers::none());
     assert_eq!(cx.opened_url(), None);
     assert_eq!(
-        view.read_with(cx, |view, _| view.files_active_path(view.panes[0].thread().unwrap())),
+        view.read_with(cx, |view, cx| view.files.read(cx).active_path(view.panes[0].thread().unwrap())),
         Some(file.clone()),
         "the file card opens the Thread-workspace file in the preview"
     );
@@ -2386,7 +2386,7 @@ fn a_read_rows_path_opens_in_files_and_its_verb_unfolds_the_row(cx: &mut TestApp
         gpui::Modifiers::none(),
     );
     tick(cx);
-    assert_eq!(view.read_with(cx, |view, _| view.files_active_path(thread)), None);
+    assert_eq!(view.read_with(cx, |view, cx| view.files.read(cx).active_path(thread)), None);
 
     cx.simulate_click(
         gpui::point(path.left() + px(6.), path.center().y),
@@ -2394,7 +2394,7 @@ fn a_read_rows_path_opens_in_files_and_its_verb_unfolds_the_row(cx: &mut TestApp
     );
     tick(cx);
     assert_eq!(
-        view.read_with(cx, |view, _| view.files_active_path(thread)),
+        view.read_with(cx, |view, cx| view.files.read(cx).active_path(thread)),
         Some(file),
         "the path opened in Files"
     );

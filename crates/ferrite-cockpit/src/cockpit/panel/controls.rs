@@ -279,7 +279,7 @@ impl CockpitView {
     ) {
         if let Some(handle) = self.panel.focus.handle(control) {
             if let (PanelControl::FileTab(at), Some(thread)) = (control, self.panel_thread()) {
-                self.reveal_files_tab(thread, *at);
+                self.files.update(cx, |files, _| files.reveal_tab(thread, *at));
             }
             window.focus(&handle, cx);
             if matches!(control, PanelControl::Tab(_)) {
@@ -456,7 +456,7 @@ impl CockpitView {
         let on_control = self.panel_control_focused(window);
         let focused = self.panel.focus.focused(window);
         if let Some(PanelControl::FileTab(at)) = focused {
-            self.close_tab(thread, at, cx);
+            self.files.update(cx, |files, cx| files.close_tab(thread, at, cx));
             self.focus_after_file_close(thread, at, window, cx);
             return true;
         }
@@ -495,7 +495,7 @@ impl CockpitView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let left = self.files_tab_count(thread);
+        let left = self.files.read(cx).tab_count(thread);
         let next = match left {
             0 => PanelControl::Tab(SurfaceId::Files),
             left => PanelControl::FileTab(closed.min(left - 1)),
@@ -520,7 +520,7 @@ impl CockpitView {
                 self.focus_after_close(thread, window, cx);
             }
             Some(PanelControl::FileTab(at)) => {
-                self.close_tab(thread, at, cx);
+                self.files.update(cx, |files, cx| files.close_tab(thread, at, cx));
                 self.focus_after_file_close(thread, at, window, cx);
             }
             _ => {}

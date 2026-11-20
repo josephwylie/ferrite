@@ -128,7 +128,7 @@ impl CockpitWindow {
             .cockpit
             .update(cx, |view, _| std::mem::take(&mut view.needs_you))
             .moved(left.as_ref(), arrived.as_ref());
-        let panel = self.cockpit.update(cx, |view, _| view.successor_panel());
+        let panel = self.cockpit.update(cx, |view, cx| view.successor_panel(cx));
         let until = cx.background_executor().now() + LANDING_WAIT;
         let view = cx.new(|cx| {
             CockpitView::new_with_panel(core, provider, prefs, panel, cx)

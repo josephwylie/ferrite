@@ -558,7 +558,7 @@ fn switching_machines_transfers_unsaved_panel_state_and_retires_the_previous_wri
         let thread = view.panes[0].thread().unwrap();
         view.open_in_files(thread, checkout.join("src/lib.rs"), None, true, cx);
         view.pump(cx);
-        view.flush_panel_persistence();
+        view.flush_panel_persistence(cx);
         view.apply_surface(thread, SurfaceAction::Open(SurfaceId::Browser));
         view.apply_surface(thread, SurfaceAction::Open(SurfaceId::Changes));
         cx.emit(GoToMachine { index: Some(1), open: None });
@@ -573,11 +573,11 @@ fn switching_machines_transfers_unsaved_panel_state_and_retires_the_previous_wri
         assert!(!state.tabs.contains(&SurfaceId::Browser), "live resources end with their owner");
     });
     std::fs::remove_file(&dir).unwrap();
-    successor.update(cx, |view, _| view.flush_panel_persistence());
+    successor.update(cx, |view, cx| view.flush_panel_persistence(cx));
     first.update(cx, |view, cx| {
         view.apply_surface(thread, SurfaceAction::Open(SurfaceId::Overview));
         view.pump(cx);
-        view.flush_panel_persistence();
+        view.flush_panel_persistence(cx);
     });
     assert_eq!(Surfaces::load(&dir, |_, _| true).unwrap().get(thread).unwrap().active, Some(SurfaceId::Changes));
     let files: serde_json::Value = serde_json::from_slice(&std::fs::read(dir.join("files.json")).unwrap()).unwrap();
@@ -2149,7 +2149,7 @@ fn machine_with_edited_remote_file<'a>(
         view.open_in_files(thread, checkout.join("edited.rs"), None, true, cx);
     });
     tick(cx);
-    let editor = view.read_with(cx, |view, _| view.files_editor_of(thread).unwrap());
+    let editor = view.read_with(cx, |view, cx| view.files.read(cx).shown_editor(thread).unwrap());
     editor.update(cx, |editor, cx| editor.type_text("edited ", cx));
     (root, view, editor, cx)
 }

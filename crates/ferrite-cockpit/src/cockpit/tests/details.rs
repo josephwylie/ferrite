@@ -339,7 +339,7 @@ fn inline_visibility_outlives_pane_recreation(cx: &mut TestAppContext) {
     tick(cx);
     assert!(cx.debug_bounds("details-card").is_none());
     view.update(cx, |view, cx| {
-        view.flush_panel_persistence();
+        view.flush_panel_persistence(cx);
         view.panes[0].details = ferrite_pane::details::DetailsCard::new(cx);
         assert!(!view.panel.surfaces.get(thread).unwrap().details_inline_open);
         let restored =

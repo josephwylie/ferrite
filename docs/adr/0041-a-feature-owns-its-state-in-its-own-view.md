@@ -138,6 +138,28 @@ that happened to touch it, and nothing in the code said whose a field was.
   Thread, as a closed tab keeps its state. The root reads the diff of
   the PRs' open PR as soon as Code shows, so a PR opened on Code never
   draws an empty view. A Project's pull request diffs are not freed yet.
+- **Files is the tenth.** `FilesView` (`cockpit/tools/files.rs`) owns
+  every Thread's Files: the tree with the folders it listed, git's colours
+  and on a machine its last listing, the filter field, the open tabs with
+  their editors, readings and find bars, the editor settings the `⋯` menu
+  sets, the row a right-click is on, and the number of each read still
+  out. It keeps a gone Thread's Files while a buffer holds an edit the
+  disk does not have, so auto save still writes it, a quit flushes it and
+  leaving names it. One view for the window, like the Terminal's. The
+  Panel draws it as the Files Surface's body, and the file tabs are stops
+  it registers on the Panel's row. It reads the Thread, whether the tree
+  fits beside the editor, the `⋯` Menu button and the diffs read (for
+  `Show changes`) through `files_inputs`. It emits `FilesEvent`: a file
+  opened from the tree, `Show changes`, Attach, ⌘P, a menu, the `⋯`.
+  A file opened from the tree goes through the root's `open_in_files`,
+  the one way into a tab, since opening shows the Surface; a local image
+  goes to the Pane's lightbox instead. The root makes a Thread's Files
+  as its Surface opens, since that needs the checkout, the machine and
+  the saved tabs. It saves them (`WorkingSets`, files.json) and tells the
+  view each frame to settle a rendered file's find. A remote read or
+  write still asks the root's Cockpit, after the frame, through the weak
+  handle `RemoteFiles` holds. A Pane's file preview stays the root's and
+  hands a checkout's text file to `open_in_files`.
 
 ## Precedent
 
