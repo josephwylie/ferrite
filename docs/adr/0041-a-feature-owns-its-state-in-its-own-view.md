@@ -329,7 +329,8 @@ that happened to touch it, and nothing in the code said whose a field was.
   the page is restored) is Server and engine calls the root makes anyway.
   What remains on `Browsers` for slices of their own: the live
   annotation, the provider's control and capture queue, and last the pages
-  and the engine's lifetime.
+  and the engine's lifetime. Neither of the first two earned a view, and
+  the pages stay the root's (below, What does not get a view).
 - **The Decisions are the twentieth.** `DecisionsView`
   (`cockpit/decisions.rs`) owns the thread rules option 2 made where the
   provider offered no standing answer, and each Pane's `RequestForms`, by
@@ -396,6 +397,48 @@ without reaching either view. The menu is a context menu in the popup
 slot (ADR 0043), whose rows and verbs the root builds and runs
 (`cockpit/browser/page_menu.rs`). No listener writes its state, so a view
 would add an event for a popup the root opens anyway.
+
+The provider's control of the Browser's pages is the fourth. `Controls`
+(`cockpit/browser/controls.rs`) keeps the controls the Server asked for and
+the one running, the live annotation's captures waiting and the one
+running, and the engine's control worker the two share. The root holds it
+beside `Browsers`. Only the pump writes it: the root hands it each Server
+request (`push`), the live annotation asks it for a capture (`capture`),
+and each frame the pump has it start and finish them (`pump`), handing in
+the pages, the Server and the App it reaches the engine through. No root
+code reads its fields, except the quit, which shuts the worker down. A
+gone Thread's requests are answered as failed in their turn, as before,
+since its pages are gone.
+
+A Browser's live annotation is the fifth. `LiveAnnotation`
+(`cockpit/browser/live_annotation.rs`) stays on each Thread's `Browser`
+(`annotation`), so it goes with the Thread's Browser. It keeps the
+Server's lease and pause protection from Attach through capture and
+retention, the in-page editor's events, the capture, the encode and the
+annotation the Server retains. Each frame the pump has it step (`tend`),
+handing in the Browser as it stands, the Server, the capture queue,
+whether the Thread's Composer could send and whether the Thread has one.
+The step says what is left to the root: the annotation for the Composer,
+which may then send it, or the action taken on the page while it was open.
+What listeners ask (`begin`, `cancel`, `close`, `defer`) are its own
+methods, which the root calls with the Server and the page it reads. A
+view would give it events for calls the root makes on it anyway. Whether
+the Composer could send, handing an annotation to it and its Send stay
+the root's (`cockpit/browser/annotations.rs`).
+
+The pages and the engine's lifetime are the sixth, and stay the root's
+`Browsers` (`cockpit/browser.rs`): each Thread's tabs as the Server last
+said (`state`), which owner it said they are for (`owner`), the live pages
+realized in the engine (`pages`), the tabs the engine refused (`failed`),
+the pages that pause together (`native_peers`), the notice (`error`), the
+Browsers to reveal (`reveal`), the revisions sent for an echo (`sent`) and
+what the pages said since the last frame (`events`). The pump writes
+nearly all of it as it reads the Server and the engine. The rest comes
+from `browser_action`, which a press reaches through the chrome's events
+and which is a Server call that ends in revealing a Surface. A view would
+pass that through events and still need the root for the Server, the
+Surfaces and the Panes. A gone Thread's Browser goes in
+`forget_gone_threads`.
 
 ## Precedent
 
