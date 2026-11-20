@@ -375,6 +375,7 @@ impl CockpitView {
             return;
         }
         let known = self
+            .cockpit
             .known_threads()
             .into_iter()
             .map(ThreadId::get)

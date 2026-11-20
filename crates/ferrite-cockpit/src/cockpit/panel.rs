@@ -369,21 +369,12 @@ impl CockpitView {
         cx.notify();
     }
 
-    pub(super) fn known_threads(&self) -> std::collections::HashSet<ThreadId> {
-        let mut known: std::collections::HashSet<ThreadId> =
-            self.cockpit.threads().into_iter().collect();
-        if let Ok(parked) = self.cockpit.parked() {
-            known.extend(parked);
-        }
-        known
-    }
-
     /// A Thread deleted, here or by the Server, takes its Panel with it,
     /// releases what each tab held, as a closed tab does, and frees its
     /// Files, its diffs and its Changes section's folds.
     fn forget_gone_threads(&mut self, cx: &mut Context<Self>) {
         let deleted = std::mem::take(&mut self.panel.deleted);
-        let known = self.known_threads();
+        let known = self.cockpit.known_threads();
         // A Server not yet heard from knows no Thread: absence alone is no
         // deletion then.
         let heard = !known.is_empty();

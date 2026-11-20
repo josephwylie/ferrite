@@ -535,7 +535,7 @@ fn deleting_a_thread_frees_its_files_and_changes(cx: &mut TestAppContext) {
     let (view, thread, cx) = solo("tools-thread-deleted", cx);
     assert!(hold_tools(&view, thread, cx) >= 4, "Files, two diffs and an unfolded file");
     press_nav_verb(&view, thread, MenuVerb::Delete, cx);
-    assert!(!view.read_with(cx, |view, _| view.known_threads().contains(&thread)), "the Thread is gone");
+    assert!(!view.read_with(cx, |view, _| view.cockpit.known_threads().contains(&thread)), "the Thread is gone");
     assert_eq!(view.read_with(cx, |view, cx| view.held_for_test(thread, cx)), 0, "and all it held");
 }
 
@@ -546,4 +546,32 @@ fn a_parked_thread_keeps_its_files_and_changes(cx: &mut TestAppContext) {
     press_nav_verb(&view, thread, MenuVerb::Park, cx);
     assert!(view.read_with(cx, |view, _| view.cockpit.thread(thread).is_none()), "the Thread is parked");
     assert_eq!(view.read_with(cx, |view, cx| view.held_for_test(thread, cx)), held, "it keeps them");
+}
+
+/// A Worker (ADR 0037) parked is parked, not gone, though no list of the
+/// operator's shows it.
+#[gpui::test]
+fn a_parked_worker_keeps_its_panel_files_and_changes(cx: &mut TestAppContext) {
+    let (mut core, _fake, checkout) = bound_cockpit("tools-worker-parked", Provider::Claude);
+    let worker = core
+        .fixture_open_owned(
+            Provider::Claude,
+            WorkspaceChoice::Main { checkout },
+            ferrite_core::ThreadOwner::Task("t-1".into()),
+        )
+        .unwrap();
+    bind_production_keys(cx);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(1900.), px(900.)));
+    tick(cx);
+    let held = hold_tools(&view, worker, cx);
+    let (tabs, _) = panel_tabs(&view, worker, cx);
+    view.update(cx, |view, cx| view.close_pane(PaneIdentity::Thread(worker), cx));
+    tick(cx);
+    view.read_with(cx, |view, _| {
+        assert!(view.cockpit.thread(worker).is_none(), "the Worker is parked");
+        assert!(view.cockpit.owner(worker).is_some(), "and still its Task's");
+    });
+    assert_eq!(panel_tabs(&view, worker, cx).0, tabs, "its Panel keeps its tabs");
+    assert_eq!(view.read_with(cx, |view, cx| view.held_for_test(worker, cx)), held, "and its tools");
 }

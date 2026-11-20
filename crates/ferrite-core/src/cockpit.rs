@@ -2012,6 +2012,12 @@ impl Cockpit {
             .collect())
     }
 
+    /// Every Thread the Server has, open or parked, owned ones included: a
+    /// Thread in none of them is gone.
+    pub fn known_threads(&self) -> std::collections::HashSet<ThreadId> {
+        self.threads().into_iter().chain(self.parked.thread_ids()).collect()
+    }
+
     /// Whose `thread` is when not the operator's (ADR 0037), open or
     /// parked: a Worker's Task, a Coordinator's Factory.
     pub fn owner(&self, thread: ThreadId) -> Option<crate::ThreadOwner> {
