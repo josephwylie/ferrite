@@ -276,7 +276,7 @@ impl CockpitView {
                 }
                 self.ensure_files(thread, cx);
             }
-            SurfaceId::Changes => self.ensure_changes(thread, cx),
+            SurfaceId::Changes => self.ensure_diff(tools::Diff::Changes(thread), cx),
             SurfaceId::Overview => self.refresh_context(thread),
             SurfaceId::PullRequest(number) => {
                 self.read_pr_snapshot(pr_read::PrTarget::thread(thread, *number), true, cx)
@@ -412,8 +412,8 @@ impl CockpitView {
 
     /// How much of `thread`'s state the Panel and its tools hold.
     #[cfg(test)]
-    pub(crate) fn held_for_test(&self, thread: ThreadId) -> usize {
-        self.tools_held_for_test(thread) + self.panel.hunks.held_for_test(thread)
+    pub(crate) fn held_for_test(&self, thread: ThreadId, cx: &gpui::App) -> usize {
+        self.tools_held_for_test(thread, cx) + self.panel.hunks.held_for_test(thread)
     }
 
     pub(crate) fn successor_panel(&mut self) -> Panel {
@@ -494,7 +494,7 @@ impl CockpitView {
                 Some(SurfaceId::Files) => {
                     self.ensure_files(thread, cx);
                 }
-                Some(SurfaceId::Changes) => self.ensure_changes(thread, cx),
+                Some(SurfaceId::Changes) => self.ensure_diff(tools::Diff::Changes(thread), cx),
                 Some(SurfaceId::PullRequest(number)) => {
                     self.read_pr_snapshot(pr_read::PrTarget::thread(thread, number), false, cx)
                 }

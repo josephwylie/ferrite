@@ -274,7 +274,7 @@ fn a_project_pr_reads_published_code_without_a_thread(cx: &mut TestAppContext) {
     until(cx, |cx| {
         world
             .view
-            .read_with(cx, |view, _| view.changes_read(Diff::PullRequest(target)))
+            .read_with(cx, |view, cx| view.changes.read(cx).files_read(Diff::PullRequest(target)))
             == Some(1)
     });
     assert!(!shows(cx, "changes-stage-0"));

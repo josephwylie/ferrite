@@ -430,6 +430,8 @@ pub struct CockpitView {
     held_sends: sends::HeldSends,
     tools: tools::Tools,
     terminals: Entity<tools::TerminalsView>,
+    /// Every diff read: a Thread's Changes and each pull request's Code.
+    changes: Entity<tools::ChangesView>,
     /// The pull request reader: the Panel's PR Surface and the PRs' detail.
     pull_request: Entity<panel::pull_request::PullRequestView>,
     agent_drills: agent_pane::AgentDrills,
@@ -1373,6 +1375,11 @@ impl CockpitView {
         let side_chat = cx.new(|_| side_chat_view::SideChatView::new(cockpit_weak.clone()));
         let terminals = cx.new(|_| tools::TerminalsView::new(cockpit_weak.clone()));
         cx.subscribe(&terminals, Self::on_terminals_event).detach();
+        let changes = cx.new(|_| tools::ChangesView::new(cockpit_weak.clone()));
+        cx.subscribe(&changes, Self::on_changes_event).detach();
+        // The root draws the diffs into its own frame (`changes_pane`), so
+        // each change redraws the window.
+        cx.observe(&changes, |_, _, cx| cx.notify()).detach();
         let pull_request =
             cx.new(|_| panel::pull_request::PullRequestView::new(cockpit_weak.clone()));
         cx.subscribe(&pull_request, Self::on_pr_event).detach();
@@ -1404,6 +1411,7 @@ impl CockpitView {
             held_sends: Default::default(),
             tools: Default::default(),
             terminals,
+            changes,
             pull_request,
             agent_drills: Default::default(),
             native_copy: None,

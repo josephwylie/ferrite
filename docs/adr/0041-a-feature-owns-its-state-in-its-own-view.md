@@ -118,6 +118,23 @@ that happened to touch it, and nothing in the code said whose a field was.
   is no longer shown, the Surface drawn or not. Which view of a PR is
   chosen stays where it is kept (the Surface's, the PRs'), and Code's
   body stays Changes', which the root draws into the inputs.
+- **Changes is the ninth.** `ChangesView` (`cockpit/tools/changes.rs`)
+  owns every diff the window has read, a Thread's Changes and each pull
+  request's Code: its scope, the files read and the read still out, the
+  folds and reviewed marks, the wrap, whitespace and test-file toggles,
+  the filter field, the list's scroll, and the last stage git refused.
+  One view for the window, with no render of its own: the root draws a
+  diff wherever it shows (`changes_pane`), as the Panel's Changes Surface,
+  a PR's Code in the Panel or the PRs' detail, since two of them can
+  stand in one frame while the Panel slides shut. The branch names and
+  the `⋯` Menu button come with `ChangesInputs`. It emits `ChangesEvent`:
+  read a diff again, stage a file, open one in Files, a menu, the `⋯`.
+  Git and the forge are the root's, so it asks them and hands each answer
+  to the view, which numbers every read and stage and drops an answer
+  from another checkout or machine; a stage's answer asks for the read
+  after it. Which diff a Surface shows and making it as it opens stay the
+  root's, as does the context menu; the menu's rows it reads from the
+  view.
 
 ## Precedent
 

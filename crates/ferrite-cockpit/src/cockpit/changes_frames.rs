@@ -126,7 +126,7 @@ fn case(name: &str) -> String {
         let started = Instant::now();
         loop {
             driver.tick(5);
-            if let Some(files) = driver.read(|view, _| view.changes_read(Diff::Changes(thread))) {
+            if let Some(files) = driver.read(|view, cx| view.changes.read(cx).files_read(Diff::Changes(thread))) {
                 listed = files;
                 break;
             }
@@ -156,10 +156,10 @@ fn case(name: &str) -> String {
     };
     let diff = Diff::Changes(thread);
     let (wrap, fold, expand) = if open {
-        let wrap = timed(&mut driver, &|view, cx| view.run_changes_verb(diff, super::tools::ChangesVerb::ToggleWrap, cx));
-        timed(&mut driver, &|view, cx| view.run_changes_verb(diff, super::tools::ChangesVerb::ToggleWrap, cx));
-        let fold = timed(&mut driver, &|view, cx| view.run_changes_verb(diff, super::tools::ChangesVerb::CollapseAll, cx));
-        let expand = timed(&mut driver, &|view, cx| view.run_changes_verb(diff, super::tools::ChangesVerb::ExpandAll, cx));
+        let wrap = timed(&mut driver, &|view, cx| view.changes.update(cx, |changes, cx| changes.run_verb(diff, super::tools::ChangesVerb::ToggleWrap, cx)));
+        timed(&mut driver, &|view, cx| view.changes.update(cx, |changes, cx| changes.run_verb(diff, super::tools::ChangesVerb::ToggleWrap, cx)));
+        let fold = timed(&mut driver, &|view, cx| view.changes.update(cx, |changes, cx| changes.run_verb(diff, super::tools::ChangesVerb::CollapseAll, cx)));
+        let expand = timed(&mut driver, &|view, cx| view.changes.update(cx, |changes, cx| changes.run_verb(diff, super::tools::ChangesVerb::ExpandAll, cx)));
         (wrap, fold, expand)
     } else {
         (0., 0., 0.)

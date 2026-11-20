@@ -581,7 +581,7 @@ impl CockpitView {
             PrEvent::Read(target) => self.read_pr_snapshot(target, true, cx),
             PrEvent::SelectTab(target, tab) => {
                 if tab == PrTab::Code {
-                    self.ensure_pr_changes(target, cx);
+                    self.ensure_diff(tools::Diff::PullRequest(target), cx);
                 }
                 match target.source {
                     PrSource::Thread(thread) => {
@@ -592,7 +592,7 @@ impl CockpitView {
                 }
                 cx.notify();
             }
-            PrEvent::EnsureCode(target) => self.ensure_pr_changes(target, cx),
+            PrEvent::EnsureCode(target) => self.ensure_diff(tools::Diff::PullRequest(target), cx),
             PrEvent::Run(target, action) => self.run_pr_action(target, action, cx),
             PrEvent::Door(door) => self.toggle_door(door, cx),
         }

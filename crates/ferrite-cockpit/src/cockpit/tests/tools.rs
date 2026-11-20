@@ -523,11 +523,11 @@ fn hold_tools(view: &Entity<CockpitView>, thread: ThreadId, cx: &mut gpui::Visua
         let file = view.thread_path(thread).unwrap().join("src/lib.rs");
         view.open_in_files(thread, file, None, true, cx);
         view.upsert_surface(thread, SurfaceId::Changes, cx);
-        view.ensure_pr_changes(crate::cockpit::panel::pr_read::PrTarget::thread(thread, 1), cx);
+        view.ensure_diff(crate::cockpit::tools::Diff::PullRequest(crate::cockpit::panel::pr_read::PrTarget::thread(thread, 1)), cx);
         view.toggle_panel_file(thread, "src/lib.rs".to_string(), cx);
     });
     tick(cx);
-    view.read_with(cx, |view, _| view.held_for_test(thread))
+    view.read_with(cx, |view, cx| view.held_for_test(thread, cx))
 }
 
 #[gpui::test]
@@ -536,7 +536,7 @@ fn deleting_a_thread_frees_its_files_and_changes(cx: &mut TestAppContext) {
     assert!(hold_tools(&view, thread, cx) >= 4, "Files, two diffs and an unfolded file");
     press_nav_verb(&view, thread, MenuVerb::Delete, cx);
     assert!(!view.read_with(cx, |view, _| view.known_threads().contains(&thread)), "the Thread is gone");
-    assert_eq!(view.read_with(cx, |view, _| view.held_for_test(thread)), 0, "and all it held");
+    assert_eq!(view.read_with(cx, |view, cx| view.held_for_test(thread, cx)), 0, "and all it held");
 }
 
 #[gpui::test]
@@ -545,5 +545,5 @@ fn a_parked_thread_keeps_its_files_and_changes(cx: &mut TestAppContext) {
     let held = hold_tools(&view, thread, cx);
     press_nav_verb(&view, thread, MenuVerb::Park, cx);
     assert!(view.read_with(cx, |view, _| view.cockpit.thread(thread).is_none()), "the Thread is parked");
-    assert_eq!(view.read_with(cx, |view, _| view.held_for_test(thread)), held, "it keeps them");
+    assert_eq!(view.read_with(cx, |view, cx| view.held_for_test(thread, cx)), held, "it keeps them");
 }
