@@ -14,9 +14,9 @@ use ferrite_core::drive::{
 use ferrite_core::settings::Settings;
 use ferrite_ui::keymap::{self, Binding};
 use gpui::{
-    AnyWindowHandle, App, AppContext as _, Context, Entity, HeadlessAppContext, Keystroke,
-    Modifiers, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, PlatformInput, Point,
-    Styled as _, Window,
+    AnyWindowHandle, App, AppContext as _, Context, Entity, HeadlessAppContext, KeyUpEvent,
+    Keystroke, Modifiers, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent,
+    PlatformInput, Point, Styled as _, Window,
 };
 
 use crate::cockpit::{CockpitView, Preferences};
@@ -360,13 +360,7 @@ impl Driver {
             .collect::<Result<Vec<_>, _>>()?;
         let mut handled = Vec::new();
         for keystroke in parsed {
-            handled.push(
-                self.cx
-                    .update_window(self.window, |_, window, cx| {
-                        window.dispatch_keystroke(keystroke, cx)
-                    })
-                    .expect("the off-screen window stands"),
-            );
+            handled.push(self.press(keystroke));
             self.tick(60);
         }
         Ok(handled)
@@ -382,15 +376,32 @@ impl Driver {
             })
             .collect::<Result<Vec<_>, _>>()?;
         for key in keys {
-            self.cx
-                .update_window(self.window, |_, window, cx| {
-                    window.dispatch_keystroke(key, cx)
-                })
-                .expect("the off-screen window stands");
+            self.press(key);
             self.cx.run_until_parked();
         }
         self.tick(60);
         Ok(())
+    }
+
+    /// One key pressed and let go, as a keyboard sends it: the down (and
+    /// the text it types when nothing binds it), its work run, then the
+    /// up, which is where a focused control clicks from ⏎ or space. True
+    /// when either was taken.
+    fn press(&mut self, keystroke: Keystroke) -> bool {
+        let down = self
+            .cx
+            .update_window(self.window, |_, window, cx| {
+                window.dispatch_keystroke(keystroke.clone(), cx)
+            })
+            .expect("the off-screen window stands");
+        self.cx.run_until_parked();
+        let up = self
+            .cx
+            .update_window(self.window, |_, window, cx| {
+                window.dispatch_event(PlatformInput::KeyUp(KeyUpEvent { keystroke }), cx)
+            })
+            .expect("the off-screen window stands");
+        down || !up.propagate
     }
 
     /// Where the last frame drew the element of this `debug_selector`.

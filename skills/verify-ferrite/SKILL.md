@@ -105,7 +105,10 @@ exits 2.
   `find` answers `nothing drawn as …` when the last frame has no such element. Points
   are a fallback and move when the layout does.
 - **Shots are 2880x1800 at scale 2.** Divide pixel positions by 2 for `--x/--y`.
-- `key` reports `unhandled` keys nothing took: the focus is not where you think.
+- `key` presses each key and lets it go, as a keyboard does, so `enter` or `space` on
+  a focused control (a Panel tab, `+`, a pull request's segment) clicks it from the
+  release. It reports `unhandled` keys nothing took, the press or the release: the
+  focus is not where you think.
   The keymap is the platform's: on Linux `ctrl` stands where macOS has `cmd`
   (`ctrl-,` opens Settings; `cmd-,` comes back unhandled).
 - `resize` never goes under the app window's least size; the answer says the size it
