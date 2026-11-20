@@ -121,8 +121,9 @@ impl CockpitView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        let new_tab = self.browser_chrome.read(cx).new_tab(thread);
         let selected = self.browsers.threads.get(&thread).and_then(|browser| {
-            if browser.annotation.is_some() || browser.entry == Entry::NewTab {
+            if browser.annotation.is_some() || new_tab {
                 return None;
             }
             let owner = browser.owner?;

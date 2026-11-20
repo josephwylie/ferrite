@@ -260,6 +260,29 @@ that happened to touch it, and nothing in the code said whose a field was.
   root's. What a Pane's preview kept goes with its Pane (`sync_panes`),
   as it did when it hung from the Pane; a gone Thread's Pane goes there
   too. The lightbox gets no view (below).
+- **The Browser's chrome is the seventeenth, and the Browser's first
+  slice.** `BrowserChromeView` (`cockpit/browser/chrome.rs`) owns what each
+  Thread's Browser keeps above its page: the address field, the page
+  address it last took from the Server, which tells an edit from it, and
+  whether a new tab is being entered, while no page's controls apply. One
+  view for the window, by Thread, with no render of its own: the root has
+  it draw the tab strip and the toolbar above the page (`browser_body`),
+  reading the Thread's tabs, the active one, whether a live page stands for
+  it and whether an annotation is open through `browser_chrome_inputs`. Go,
+  escape in the field, New tab and Cancel new tab are its own. It emits
+  `BrowserChromeEvent`: an action on the pages (a tab, Back, Forward,
+  Reload, Go, a tab's close), the annotate button, and New tab, which stops
+  a capture under way. An action is a Server call, so the root's
+  `browser_action` sends it and tells the view it landed, and the root's
+  pump has the field follow the active page's address. The page's dialog,
+  its menu and an annotation read the new tab through the view. A gone
+  Thread's chrome goes with its Browser (`forget_gone_threads`). The rest
+  of the Browser stays on the root's `Browsers` and moves in slices of its
+  own: what a page asks of the window (its right-click menu and its script
+  dialog), annotations and their review, the provider's control and capture
+  queue, and last the pages and the engine's lifetime. The Panel host, the
+  popup slot, the sheet host and the focus pump stay the root's (ADRs
+  0042–0044).
 - **The Decisions are the twentieth, in part.** `DecisionsView`
   (`cockpit/decisions.rs`) owns the thread rules option 2 made where the
   provider offered no standing answer, and is what a Decision card drawn

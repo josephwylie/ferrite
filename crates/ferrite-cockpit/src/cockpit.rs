@@ -354,6 +354,9 @@ impl std::ops::DerefMut for CockpitPane {
 pub struct CockpitView {
     pub(crate) cockpit: Cockpit,
     browsers: browser::Browsers,
+    /// Each Thread's Browser chrome: its address field and whether a new
+    /// tab is being entered.
+    browser_chrome: Entity<browser::BrowserChromeView>,
     /// One view per Pane of the Cockpit's roster, in its order — the
     /// keyboard, the scrollback and the caches the window owns for each.
     /// `sync_panes` is the one door: after every act on the roster the
@@ -458,8 +461,8 @@ pub struct CockpitView {
     nav_view: Entity<nav_view::NavView>,
     /// The Cockpit hearing the views it answers with the window (the nav,
     /// the side chat, Files, the Overview, the toasts, the File Surface,
-    /// the Decisions), from its first frame.
-    view_events: Option<[gpui::Subscription; 7]>,
+    /// the Decisions, the Browser's chrome), from its first frame.
+    view_events: Option<[gpui::Subscription; 8]>,
     /// The window's activation, followed into the Cockpit
     /// (`Cockpit::set_window_active`) once the first frame has a window.
     activation: Option<gpui::Subscription>,
@@ -1391,9 +1394,14 @@ impl CockpitView {
         // A card's pick lives in its Pane's forms, and the root draws the
         // cards into its transcripts, so each change redraws the window.
         cx.observe(&decisions, |_, _, cx| cx.notify()).detach();
+        let browser_chrome = cx.new(|_| browser::BrowserChromeView::default());
+        // The root draws the chrome into the Browser's body, so each change
+        // redraws the window.
+        cx.observe(&browser_chrome, |_, _, cx| cx.notify()).detach();
         let mut view = Self {
             cockpit,
             browsers: Default::default(),
+            browser_chrome,
             panes: Vec::new(),
             focus: cx.focus_handle(),
             field_watch: Default::default(),
@@ -8128,6 +8136,7 @@ impl CockpitView {
                 cx.subscribe_in(&self.toasts, window, Self::on_toast_event),
                 cx.subscribe_in(&self.file_surface, window, Self::on_file_surface_event),
                 cx.subscribe_in(&self.decisions, window, Self::on_decision_event),
+                cx.subscribe_in(&self.browser_chrome, window, Self::on_browser_chrome_event),
             ]);
         }
     }
