@@ -68,3 +68,4 @@ exactly four H2s in order: `Sub-features`, `How to get to it (user POV)`,
 - [Toasts](./toasts.md): `notification show` puts a toast in every window.
 - [Sheets](./sheets.md): the five full-window dialogs, one at a time, and a cheap Factory Task.
 - [Popups](./popups.md): the five menus and cards in one slot, the keyboard and Escape.
+- [Files](./files.md): file tabs, moved along, shown and closed with the keyboard.
