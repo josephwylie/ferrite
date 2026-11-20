@@ -661,6 +661,29 @@ fn tick(cx: &mut gpui::VisualTestContext) {
     cx.run_until_parked();
 }
 
+/// Run `verb` off `thread`'s nav row menu, pressing twice when the first
+/// press only arms it.
+fn press_nav_verb(
+    view: &Entity<CockpitView>,
+    thread: ThreadId,
+    verb: MenuVerb,
+    cx: &mut gpui::VisualTestContext,
+) {
+    view.update_in(cx, |view, window, cx| {
+        let row = view
+            .context_rows(MenuTarget::Thread(thread), cx)
+            .iter()
+            .position(|row| matches!(row, Some((_, listed)) if *listed == verb))
+            .expect("the nav row's menu has the verb");
+        view.open_context_menu(MenuTarget::Thread(thread), gpui::point(px(600.), px(300.)), cx);
+        view.press_menu_row(row, window, cx);
+        if view.context_menu().is_some() {
+            view.press_menu_row(row, window, cx);
+        }
+    });
+    leap(cx, std::time::Duration::from_secs(1));
+}
+
 /// Connections, with Settings put up for it if it is not.
 fn connections_view(
     view: &Entity<CockpitView>,
