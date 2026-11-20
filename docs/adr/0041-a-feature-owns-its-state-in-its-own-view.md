@@ -260,6 +260,25 @@ that happened to touch it, and nothing in the code said whose a field was.
   root's. What a Pane's preview kept goes with its Pane (`sync_panes`),
   as it did when it hung from the Pane; a gone Thread's Pane goes there
   too. The lightbox gets no view (below).
+- **The Decisions are the twentieth, in part.** `DecisionsView`
+  (`cockpit/decisions.rs`) owns the thread rules option 2 made where the
+  provider offered no standing answer, and is what a Decision card drawn
+  inside a cached transcript presses through. One view for the window,
+  with no render of its own: the root draws the cards into each Pane's
+  transcript and the compact transcripts from a snapshot it takes in
+  `decision_inputs` (`Cards`). A card's press says what it asks as a
+  `DecisionEvent`: an approval's option (with `Allow and switch to …`'s
+  mode), an answer as it stands (Cancel, Skip, Complete), a question's or
+  a form's Send, a picked option, ⏎ or esc in the amend note. Answering
+  is a Server call, so the root takes the note, tells the Server and,
+  for option 2, hands the view the rule to keep; each frame it answers
+  the approvals a rule covers. The open Decision is core's, and its reply
+  error the Pane's. A gone Thread's rules go with it. What is left on
+  the root: each Pane's `RequestForms` (the cursor, the amend note, the
+  split button's menu, a question's or form's answers), still kept
+  beside the Pane and written by the cards' own presses and by the
+  root's Decision keys (↑ ↓ ⏎ esc ⇥, `1`–`4`), which answer on the
+  root's element; both move to the view in a later change.
 
 ## What does not get a view
 
