@@ -178,6 +178,22 @@ that happened to touch it, and nothing in the code said whose a field was.
   offers `Retry`. Each frame the root's pump has the view forget the
   stops of work that ended. A gone Thread's stops and turned cards go
   with it.
+- **The agent Surface is the twelfth.** `AgentDrillsView`
+  (`cockpit/agent_pane.rs`) owns every agent held open in a Panel, by its
+  Thread and the agent's key: the Subject it opens on, why its saved
+  history could not load, and the Pane's pieces its transcript is drawn
+  with, whose tool rows it folds. One view for the window, like the side
+  chat's. The Panel draws it as the body of whichever agent it shows, and
+  the view reads which that is through the root as it draws; there the
+  root tells that agent's transcript what it holds and builds the line it
+  heads with (`agent_drill_history`), which the Pane's head says too and
+  whose `Retry` is the root's. So the root no longer tends every agent
+  held every frame, only the one shown. It emits `AgentDrillEvent`:
+  `Close tab` on an agent the Thread no longer knows. Asking for the
+  agent's saved history is a Server call, so holding an agent stays the
+  root's, as it opens and each frame for a tab a Panel shows that no
+  drill holds (one restored or reopened); a tab's close frees its agent,
+  as does a gone Thread.
 
 ## Precedent
 

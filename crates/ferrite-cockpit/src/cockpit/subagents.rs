@@ -999,7 +999,7 @@ impl CockpitView {
             .retry_subject_history(thread, subject)
             .err()
             .map(|error| error.to_string());
-        self.hold_history_error(thread, subject, error);
+        self.hold_history_error(thread, subject, error, cx);
         cx.notify();
     }
 
