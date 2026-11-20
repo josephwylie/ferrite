@@ -56,6 +56,7 @@ mod snooze;
 pub(crate) mod starts;
 mod surfaces;
 mod tab_scroll;
+mod toasts;
 pub(crate) mod subagents;
 pub(crate) mod tools;
 mod transcript_glue;
