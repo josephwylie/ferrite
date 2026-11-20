@@ -323,7 +323,6 @@ fn tuning_hold(open: &ThreadView) -> Option<&'static str> {
 /// Pane a Thread's — keeps it as it was.
 pub(crate) struct CockpitPane {
     view: PaneView,
-    pub(crate) request_forms: subagents::RequestForms,
     /// The Review beside this Pane on the board (`beside.rs`).
     pub(crate) review: beside::ReviewSlot,
 }
@@ -332,7 +331,6 @@ impl CockpitPane {
     fn new(view: PaneView, cx: &mut gpui::App) -> Self {
         Self {
             view,
-            request_forms: Default::default(),
             review: beside::ReviewSlot::new(cx),
         }
     }
@@ -1594,9 +1592,12 @@ impl CockpitView {
         let wanted = self.cockpit.roster().panes().to_vec();
         let before = self.panes.len();
         self.panes.retain(|pane| wanted.contains(&pane.identity));
-        // What the File Surface kept of a Pane's preview goes with it.
+        // What the File Surface kept of a Pane's preview goes with it, as
+        // do its Decision forms.
         self.file_surface
             .update(cx, |files, _| files.retain_panes(|pane| wanted.contains(&pane)));
+        self.decisions
+            .update(cx, |decisions, _| decisions.retain_panes(|pane| wanted.contains(&pane)));
         let mut opened = false;
         for identity in &wanted {
             if self.index_of(*identity).is_some() {
@@ -1606,6 +1607,8 @@ impl CockpitView {
                 continue;
             };
             let pane = CockpitPane::new(PaneView::new(thread, cx), cx);
+            self.decisions
+                .update(cx, |decisions, _| decisions.open_pane(*identity));
             pane.preview.set_remote_files(self.on_machine());
             self.aim_attachments(&pane.composer, cx);
             cx.subscribe(&pane.composer, Self::composer_edited).detach();
@@ -2572,7 +2575,7 @@ impl CockpitView {
                 if update.activity_changed || content_changed || !update.evicted.is_empty() {
                     self.prune_tool_disclosures(update.thread);
                 }
-                self.prune_request_forms(index);
+                self.prune_request_forms(index, cx);
                 self.panes[index].history_error = self
                     .cockpit
                     .subject_history_error(update.thread, &self.panes[index].selected)
@@ -5810,6 +5813,8 @@ impl CockpitView {
         };
         let draft = self.cockpit.open_draft();
         let pane = CockpitPane::new(PaneView::new_draft(draft, binding, cx), cx);
+        self.decisions
+            .update(cx, |decisions, _| decisions.open_pane(pane.identity));
         pane.preview.set_remote_files(self.on_machine());
         self.aim_attachments(&pane.composer, cx);
         cx.subscribe(&pane.composer, Self::composer_edited).detach();
@@ -9268,7 +9273,9 @@ impl CockpitView {
             .panes
             .get(index)
             .is_some_and(|pane| pane.is_main() && !pane.composer.read(cx).is_empty());
-        if !typing && self.pick_request_row(index, option, window, cx) {
+        if !typing
+            && self.decision_key_taken(index, decisions::DecisionKey::Pick(option), window, cx)
+        {
             return;
         }
         if let Some(pane) = self.panes.get(index) {

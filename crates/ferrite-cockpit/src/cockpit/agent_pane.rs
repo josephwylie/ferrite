@@ -185,7 +185,7 @@ impl CockpitView {
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
         let note = self.agent_model_note(owner, subject);
-        let decisions = self.compact_decision_tail(owner, subject);
+        let decisions = self.compact_decision_tail(owner, subject, cx);
         self.sync_compact_transcript(owner, subject, pane, 0, note, decisions, cx);
         self.subject_history_line(owner, subject, history_error, cx)
     }

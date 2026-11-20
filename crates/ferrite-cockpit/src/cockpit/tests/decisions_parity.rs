@@ -48,9 +48,12 @@ fn waiting<'a>(
 }
 
 fn cursor(view: &gpui::Entity<CockpitView>, cx: &mut gpui::VisualTestContext) -> Option<usize> {
-    view.read_with(cx, |view, _| {
+    view.read_with(cx, |view, cx| {
         let request = view.shown_request(0).expect("a Decision waits");
-        view.panes[0].request_forms.cursor(&request.handle)
+        view.decisions
+            .read(cx)
+            .forms(view.panes[0].identity)?
+            .cursor(&request.handle)
     })
 }
 
@@ -337,9 +340,10 @@ fn the_amend_note_rides_a_denial(cx: &mut TestAppContext) {
     assert!(cx.debug_bounds("decision-note").is_some(), "the note opens");
     let focused = view.update_in(cx, |view, window, cx| {
         let request = view.shown_request(0).unwrap();
-        view.panes[0]
-            .request_forms
-            .note(&request.handle)
+        view.decisions
+            .read(cx)
+            .forms(view.panes[0].identity)
+            .and_then(|forms| forms.note(&request.handle))
             .expect("a note")
             .focus_handle(cx)
             .is_focused(window)
@@ -559,8 +563,8 @@ fn the_split_offers_the_providers_auto_mode(cx: &mut TestAppContext) {
         .send(ask(bash("switch", "ls")))
         .unwrap();
     tick(cx);
-    let switch = view.read_with(cx, |view, _| {
-        view.decision_cards(0, false, false)
+    let switch = view.read_with(cx, |view, cx| {
+        view.decision_cards(0, false, false, cx)
             .and_then(|cards| cards.switch)
             .map(|(mode, label, _)| (mode, label.to_string()))
     });
