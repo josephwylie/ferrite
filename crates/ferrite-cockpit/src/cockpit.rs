@@ -4630,12 +4630,12 @@ impl CockpitView {
         cx.notify();
     }
 
-    fn next_thread(&mut self, _: &NextThread, _window: &mut Window, cx: &mut Context<Self>) {
-        self.step_thread(1, cx);
+    fn next_thread(&mut self, _: &NextThread, window: &mut Window, cx: &mut Context<Self>) {
+        self.step_thread(1, window, cx);
     }
 
-    fn previous_thread(&mut self, _: &PreviousThread, _window: &mut Window, cx: &mut Context<Self>) {
-        self.step_thread(-1, cx);
+    fn previous_thread(&mut self, _: &PreviousThread, window: &mut Window, cx: &mut Context<Self>) {
+        self.step_thread(-1, window, cx);
     }
 
     /// ⌘F: find in the focused Pane's transcript — or in its preview, when
@@ -7478,19 +7478,21 @@ impl CockpitView {
     /// Reopen the Thread parked most recently — the one the operator just
     /// closed, which is the one they want back (#17); the core walks the
     /// park order, then creation order.
-    fn reopen_thread(&mut self, _: &ReopenThread, _window: &mut Window, cx: &mut Context<Self>) {
-        if let Some((thread, result)) = self.cockpit.reopen_last() {
-            let outcome = nav_undo::Outcome {
-                thread,
-                result: result.map_err(|e| e.to_string()),
-            };
-            if outcome.result.is_ok() {
-                self.widen_scope_to(thread, cx);
-                self.sync_panes(cx);
+    fn reopen_thread(&mut self, _: &ReopenThread, window: &mut Window, cx: &mut Context<Self>) {
+        self.switch_thread(window, cx, |view, _, cx| {
+            if let Some((thread, result)) = view.cockpit.reopen_last() {
+                let outcome = nav_undo::Outcome {
+                    thread,
+                    result: result.map_err(|e| e.to_string()),
+                };
+                if outcome.result.is_ok() {
+                    view.widen_scope_to(thread, cx);
+                    view.sync_panes(cx);
+                }
+                view.report_failures("reopen", &[outcome]);
+                cx.notify();
             }
-            self.report_failures("reopen", &[outcome]);
-            cx.notify();
-        }
+        });
     }
 
     /// Close the focused Pane — cmd-w. The core decides what that means
@@ -8733,7 +8735,7 @@ impl CockpitView {
             .on_action(cx.listener(Self::go_back))
             .on_action(cx.listener(Self::go_forward))
             .on_action(
-                cx.listener(|view, _: &FocusThread1, _, cx| view.go_to_thread(1, cx)),
+                cx.listener(|view, _: &FocusThread1, window, cx| view.go_to_thread(1, window, cx)),
             )
             .on_action(cx.listener(Self::toggle_terminal))
             .on_action(cx.listener(Self::toggle_changes))
@@ -8741,28 +8743,28 @@ impl CockpitView {
             .on_action(cx.listener(Self::toggle_file_tree_action))
             .on_action(cx.listener(Self::go_to_file_action))
             .on_action(
-                cx.listener(|view, _: &FocusThread2, _, cx| view.go_to_thread(2, cx)),
+                cx.listener(|view, _: &FocusThread2, window, cx| view.go_to_thread(2, window, cx)),
             )
             .on_action(
-                cx.listener(|view, _: &FocusThread3, _, cx| view.go_to_thread(3, cx)),
+                cx.listener(|view, _: &FocusThread3, window, cx| view.go_to_thread(3, window, cx)),
             )
             .on_action(
-                cx.listener(|view, _: &FocusThread4, _, cx| view.go_to_thread(4, cx)),
+                cx.listener(|view, _: &FocusThread4, window, cx| view.go_to_thread(4, window, cx)),
             )
             .on_action(
-                cx.listener(|view, _: &FocusThread5, _, cx| view.go_to_thread(5, cx)),
+                cx.listener(|view, _: &FocusThread5, window, cx| view.go_to_thread(5, window, cx)),
             )
             .on_action(
-                cx.listener(|view, _: &FocusThread6, _, cx| view.go_to_thread(6, cx)),
+                cx.listener(|view, _: &FocusThread6, window, cx| view.go_to_thread(6, window, cx)),
             )
             .on_action(
-                cx.listener(|view, _: &FocusThread7, _, cx| view.go_to_thread(7, cx)),
+                cx.listener(|view, _: &FocusThread7, window, cx| view.go_to_thread(7, window, cx)),
             )
             .on_action(
-                cx.listener(|view, _: &FocusThread8, _, cx| view.go_to_thread(8, cx)),
+                cx.listener(|view, _: &FocusThread8, window, cx| view.go_to_thread(8, window, cx)),
             )
             .on_action(
-                cx.listener(|view, _: &FocusThread9, _, cx| view.go_to_thread(9, cx)),
+                cx.listener(|view, _: &FocusThread9, window, cx| view.go_to_thread(9, window, cx)),
             )
             .on_action(cx.listener(Self::toggle_notifications))
             .on_action(cx.listener(|view, _: &nav::Focus, window, cx| view.focus_nav(window, cx)))

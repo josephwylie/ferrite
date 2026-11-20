@@ -401,7 +401,7 @@ impl CockpitView {
     /// ⌘} (`delta` 1) and ⌘{ (-1): show the next or the previous Thread in
     /// the sidebar's order, wrapping at its ends. Off the list (a draft, the
     /// empty board), ⌘} starts at the first and ⌘{ at the last.
-    pub(super) fn step_thread(&mut self, delta: isize, cx: &mut Context<Self>) {
+    pub(super) fn step_thread(&mut self, delta: isize, window: &mut Window, cx: &mut Context<Self>) {
         let order = self.thread_order(cx);
         let len = order.len() as isize;
         if len == 0 {
@@ -415,17 +415,18 @@ impl CockpitView {
             None if delta > 0 => 0,
             None => len - 1,
         };
-        self.focus_thread(order[next as usize], cx);
+        let thread = order[next as usize];
+        self.switch_thread(window, cx, |view, _, cx| view.focus_thread(thread, cx));
     }
 
     /// ⌘1…⌘9: show the sidebar's `ordinal`th Thread (`thread_order`). A
     /// digit past the list does nothing.
-    pub(super) fn go_to_thread(&mut self, ordinal: usize, cx: &mut Context<Self>) {
+    pub(super) fn go_to_thread(&mut self, ordinal: usize, window: &mut Window, cx: &mut Context<Self>) {
         let thread = ordinal
             .checked_sub(1)
             .and_then(|at| self.thread_order(cx).get(at).copied());
         if let Some(thread) = thread {
-            self.focus_thread(thread, cx);
+            self.switch_thread(window, cx, |view, _, cx| view.focus_thread(thread, cx));
         }
     }
 

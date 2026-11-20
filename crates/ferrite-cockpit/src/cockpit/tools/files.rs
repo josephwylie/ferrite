@@ -902,6 +902,16 @@ impl FilesView {
         self.files_ref(thread).map_or(0, |files| files.tabs.len())
     }
 
+    /// Where `path`'s tab stands in the tabs row.
+    pub(in crate::cockpit) fn tab_index(&self, thread: ThreadId, path: &Path) -> Option<usize> {
+        self.files_ref(thread)?.tabs.iter().position(|tab| tab.path == path)
+    }
+
+    /// The file whose tab stands at `at`.
+    pub(in crate::cockpit) fn tab_path(&self, thread: ThreadId, at: usize) -> Option<PathBuf> {
+        Some(self.files_ref(thread)?.tabs.get(at)?.path.clone())
+    }
+
     /// Bring file tab `at` into view in the tabs row.
     pub(in crate::cockpit) fn reveal_tab(&mut self, thread: ThreadId, at: usize) {
         if let Some(files) = self.files_of(thread) {
@@ -1262,7 +1272,7 @@ impl FilesView {
                 .map_or_else(String::new, |name| name.to_string_lossy().into_owned());
             let id = SharedString::from(format!("files-tab-{at}"));
             let semantics = Semantics::tab(name.clone(), active);
-            let handle = inputs.focus.register(PanelControl::FileTab(at), semantics.clone(), cx);
+            let handle = inputs.focus.register(PanelControl::FileTab(tab.path.clone()), semantics.clone(), cx);
             focusable(div().id(id.clone()), &handle, &semantics)
                 .debug_selector(move || id.to_string())
                 .flex()

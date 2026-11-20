@@ -316,6 +316,64 @@ fn a_menu_from_a_control_gives_the_keyboard_back_when_it_closes(cx: &mut TestApp
     );
 }
 
+/// The keyboard on Thread 1's `+`, ⌘2 shows Thread 2 with the keyboard in
+/// its Composer, as a press on its nav row does. Thread 2 never had its
+/// Panel entered, so F6 arrives at its shown tab; Thread 1 still returns
+/// to its `+`, and ⌘[ hands the keyboard on as ⌘2 does.
+#[gpui::test]
+fn a_thread_switch_by_key_leaves_the_keyboard_to_the_new_composer(cx: &mut TestAppContext) {
+    bind_production_keys(cx);
+    let (core, _fake) = cockpit("focus-thread-switch", 2);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    hold_nav_open(&view, cx);
+    cx.simulate_resize(gpui::size(px(1900.), px(900.)));
+    view.update(cx, |view, cx| {
+        let first = view.thread_order(cx)[0];
+        view.focus_thread(first, cx);
+    });
+    tick(cx);
+    let shown_composer_focused = |cx: &mut gpui::VisualTestContext| {
+        cx.update(|window, cx| {
+            let view = view.read(cx);
+            view.panes[view.focused()]
+                .composer
+                .read(cx)
+                .focus_target(window, cx)
+                .is_focused(window)
+        })
+    };
+
+    press("f6", cx);
+    press("end left", cx);
+    assert_eq!(focused_control(&view, cx), Some(PanelControl::Plus));
+
+    press("cmd-2", cx);
+    assert_eq!(focused_control(&view, cx), None, "no stop holds the keyboard");
+    assert!(
+        shown_composer_focused(cx),
+        "the shown Thread's Composer has the keyboard"
+    );
+    press("f6", cx);
+    assert_eq!(
+        focused_control(&view, cx),
+        Some(PanelControl::Tab(SurfaceId::Overview)),
+        "F6 arrives at the shown tab of a Panel never entered"
+    );
+
+    press("escape", cx);
+    press("cmd-1", cx);
+    press("f6", cx);
+    assert_eq!(
+        focused_control(&view, cx),
+        Some(PanelControl::Plus),
+        "Thread 1 still returns to its own stop"
+    );
+
+    press("cmd-[", cx);
+    assert_eq!(focused_control(&view, cx), None, "going back hands it on too");
+    assert!(shown_composer_focused(cx));
+}
+
 #[gpui::test]
 fn a_hidden_panel_keeps_no_focus(cx: &mut TestAppContext) {
     let (view, _thread, cx) = with_tabs("focus-hidden", cx);
