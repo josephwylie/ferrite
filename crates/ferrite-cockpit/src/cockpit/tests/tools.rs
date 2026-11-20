@@ -21,17 +21,6 @@ fn solo<'a>(
     (view, thread, cx)
 }
 
-/// A second of frames, each drawn as the window asks for it: what a strip
-/// still scrolling a tab into view needs to come to rest.
-fn settles(cx: &mut gpui::VisualTestContext) {
-    for _ in 0..60 {
-        cx.executor().advance_clock(std::time::Duration::from_millis(16));
-        cx.run_until_parked();
-        cx.update(|window, cx| window.simulate_next_frame(cx));
-        cx.run_until_parked();
-    }
-}
-
 fn upsert(view: &Entity<CockpitView>, thread: ThreadId, id: SurfaceId, cx: &mut gpui::VisualTestContext) {
     view.update(cx, |view, cx| view.upsert_surface(thread, id, cx));
     tick(cx);

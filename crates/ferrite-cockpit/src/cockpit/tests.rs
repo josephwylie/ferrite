@@ -663,6 +663,17 @@ fn tick(cx: &mut gpui::VisualTestContext) {
     cx.run_until_parked();
 }
 
+/// A second of frames, each drawn as the window asks for it: what a strip
+/// still scrolling a tab into view needs to come to rest.
+fn settles(cx: &mut gpui::VisualTestContext) {
+    for _ in 0..60 {
+        cx.executor().advance_clock(Duration::from_millis(16));
+        cx.run_until_parked();
+        cx.update(|window, cx| window.simulate_next_frame(cx));
+        cx.run_until_parked();
+    }
+}
+
 /// Run `verb` off `thread`'s nav row menu, pressing twice when the first
 /// press only arms it.
 fn press_nav_verb(

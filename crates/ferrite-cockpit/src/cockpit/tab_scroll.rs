@@ -62,16 +62,17 @@ pub(crate) struct TabScroll {
     /// Whether the chevron slots are in the layout, settled once a frame.
     slotted: Cell<bool>,
     /// The tab `reveal` asked for, until a frame draws the row where it
-    /// was aimed. An aim reads the row as the frame before drew it, so a
-    /// row that moves or narrows (the chevron slots coming in, the Panel
-    /// riding to another width) is aimed again from the frame that moved it.
+    /// was aimed. An aim lands in the next frame's layout, but a row can
+    /// move or narrow after it (the chevron slots come in a frame later,
+    /// the Panel rides to another width), so it is aimed again from each
+    /// frame that moved it.
     revealing: Cell<Option<Reveal>>,
 }
 
 #[derive(Clone, Copy)]
 struct Reveal {
     ix: usize,
-    /// The row as the latest aim read it.
+    /// The row as drawn when the latest aim was made.
     aimed: gpui::Bounds<gpui::Pixels>,
     stage: Stage,
 }
@@ -218,7 +219,7 @@ impl TabScroll {
         self.aim(ix, Stage::Asked);
     }
 
-    /// Scroll child `ix` into the row as the last frame drew the row.
+    /// Scroll child `ix` into view as the next frame lays the row out.
     fn aim(&self, ix: usize, stage: Stage) {
         self.revealing.set(Some(Reveal {
             ix,

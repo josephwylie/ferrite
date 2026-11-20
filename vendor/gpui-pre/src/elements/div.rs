@@ -1984,6 +1984,10 @@ impl Element for Div {
         };
 
         if let Some(scroll_handle) = self.interactivity.tracked_scroll_handle.as_ref() {
+            // Aim at the viewport this frame lays out, not the one the last
+            // frame drew: a viewport that moved or narrowed since would land
+            // the item short, or scroll it past where it shows.
+            scroll_handle.0.borrow_mut().bounds = bounds;
             scroll_handle.scroll_to_active_item();
         }
 
