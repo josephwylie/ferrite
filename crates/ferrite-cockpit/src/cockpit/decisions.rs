@@ -1,7 +1,6 @@
 //! The Decision's answer paths and keys (WP-F). One door answers an
 //! approval whatever surface asked — the transcript's Decision row or a
-//! toast — and one door answers a question's
-//! option.
+//! toast.
 //!
 //! `DecisionsView` (ADR 0041) keeps Ferrite's own thread rules and each
 //! Pane's `RequestForms` (the cursor, the amend note, the split button's
@@ -643,25 +642,6 @@ impl CockpitView {
             .cloned()
     }
 
-    /// The question `thread` waits on, chosen the same way.
-    fn pending_question(&self, thread: ThreadId) -> Option<PendingDecision> {
-        let pending = self.cockpit.thread(thread)?.pending_decisions();
-        let question = |request: &&PendingDecision| pane::questions_of(&request.decision).is_some();
-        let pane = self.pane_for(thread).map(|index| &self.panes[index]);
-        pending
-            .iter()
-            .filter(question)
-            .find(|request| pane.is_some_and(|pane| shown_on(pane, request)))
-            .or_else(|| {
-                pending
-                    .iter()
-                    .filter(question)
-                    .find(|request| matches!(request.subject, Some(Subject::Main) | None))
-            })
-            .or_else(|| pending.iter().find(question))
-            .cloned()
-    }
-
     /// Answer `thread`'s approval with one of its three options — the one
     /// door the Decision row, the wall and a toast share. `note` rides the
     /// answer: a denial's message, or the Thread's next prompt after an
@@ -767,44 +747,6 @@ impl CockpitView {
         self.focus_pane(index);
         let focus = self.panes[index].composer.read(cx).focus_handle(cx);
         window.focus(&focus, cx);
-    }
-
-    /// Answer `thread`'s question with option `option` (0-based): a lone
-    /// single-select question sends it and answers true; anything more
-    /// needs its form, and false tells the caller to open the Pane.
-    pub(crate) fn answer_question_option(
-        &mut self,
-        thread: ThreadId,
-        option: usize,
-        _window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> bool {
-        let Some(request) = self.pending_question(thread) else {
-            return false;
-        };
-        if request.submitting {
-            return false;
-        }
-        let Some(questions) = pane::questions_of(&request.decision) else {
-            return false;
-        };
-        match questions {
-            [question] if !question.multi_select && option < question.options.len() => {
-                self.respond_exact(
-                    thread,
-                    &request.handle,
-                    DecisionAnswer::Questions {
-                        answers: vec![ferrite_core::questions::Answer {
-                            picks: vec![option],
-                            other: None,
-                        }],
-                    },
-                    cx,
-                );
-                true
-            }
-            _ => false,
-        }
     }
 
     /// Ferrite's thread rules at work: a new approval in a Thread a rule
