@@ -369,21 +369,13 @@ impl CockpitView {
         cx.notify();
     }
 
-    pub(super) fn known_threads(&self) -> std::collections::HashSet<ThreadId> {
-        let mut known: std::collections::HashSet<ThreadId> =
-            self.cockpit.threads().into_iter().collect();
-        if let Ok(parked) = self.cockpit.parked() {
-            known.extend(parked);
-        }
-        known
-    }
-
     /// A Thread deleted, here or by the Server, takes its Panel with it,
-    /// releases what each tab held, as a closed tab does, and frees its
-    /// Files, its diffs and its Changes section's folds.
+    /// releases what each tab held, as a closed tab does, and frees all
+    /// else the window keeps by Thread: its Files, diffs and folds, its
+    /// browser, its PR reads, its remembered stop, its facts and rules.
     fn forget_gone_threads(&mut self, cx: &mut Context<Self>) {
         let deleted = std::mem::take(&mut self.panel.deleted);
-        let known = self.known_threads();
+        let known = self.cockpit.known_threads();
         // A Server not yet heard from knows no Thread: absence alone is no
         // deletion then.
         let heard = !known.is_empty();
@@ -403,17 +395,25 @@ impl CockpitView {
         self.forget_tools(keep, cx);
         self.panel.hunks.retain_threads(keep);
         self.panel.scrolls.retain(|thread, _| keep(*thread));
-        if heard {
-            self.panel.focus.retain_threads(|thread| known.contains(&thread));
-            self.pull_request
-                .update(cx, |reader, _| reader.retain_threads(&known));
-        }
+        self.panel.focus.retain_threads(keep);
+        self.pull_request.update(cx, |reader, _| reader.retain_threads(keep));
+        self.browsers.retain_threads(keep);
+        self.facts.retain_threads(keep);
+        self.decisions.retain_threads(keep);
+        self.published.retain(|thread, _| keep(*thread));
     }
 
-    /// How much of `thread`'s state the Panel and its tools hold.
+    /// How much of `thread`'s state the window holds.
     #[cfg(test)]
     pub(crate) fn held_for_test(&self, thread: ThreadId, cx: &gpui::App) -> usize {
-        self.tools_held_for_test(thread, cx) + self.panel.hunks.held_for_test(thread)
+        self.tools_held_for_test(thread, cx)
+            + self.panel.hunks.held_for_test(thread)
+            + self.panel.focus.held_for_test(thread)
+            + self.pull_request.read(cx).held_for_test(thread)
+            + self.browsers.held_for_test(thread)
+            + usize::from(self.facts.get(thread).is_some())
+            + self.decisions.rules().iter().filter(|rule| rule.thread == thread).count()
+            + usize::from(self.published.contains_key(&thread))
     }
 
     pub(crate) fn successor_panel(&mut self, cx: &gpui::App) -> Panel {

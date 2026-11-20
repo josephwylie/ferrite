@@ -517,7 +517,8 @@ fn an_agents_reveal_does_not_undo_a_hide_or_a_maximize(cx: &mut TestAppContext) 
 }
 
 /// What `thread`'s Files, Changes, a pull request's diff and the Overview's
-/// Changes section hold for it.
+/// Changes section hold for it, with its browser, its PR read and, when its
+/// Panel is the one shown, the stop F6 put the keyboard on.
 fn hold_tools(view: &Entity<CockpitView>, thread: ThreadId, cx: &mut gpui::VisualTestContext) -> usize {
     view.update(cx, |view, cx| {
         let file = view.thread_path(thread).unwrap().join("src/lib.rs");
@@ -525,17 +526,24 @@ fn hold_tools(view: &Entity<CockpitView>, thread: ThreadId, cx: &mut gpui::Visua
         view.upsert_surface(thread, SurfaceId::Changes, cx);
         view.ensure_diff(crate::cockpit::tools::Diff::PullRequest(crate::cockpit::panel::pr_read::PrTarget::thread(thread, 1)), cx);
         view.toggle_panel_file(thread, "src/lib.rs".to_string(), cx);
+        view.ensure_browser(thread, cx);
+        view.fixture_pr_snapshot(thread, super::pr::snapshot(ferrite_core::protocol::WirePrState::Open), cx);
     });
     tick(cx);
+    super::panel_focus::press("f6", cx);
     view.read_with(cx, |view, cx| view.held_for_test(thread, cx))
 }
 
 #[gpui::test]
 fn deleting_a_thread_frees_its_files_and_changes(cx: &mut TestAppContext) {
     let (view, thread, cx) = solo("tools-thread-deleted", cx);
-    assert!(hold_tools(&view, thread, cx) >= 4, "Files, two diffs and an unfolded file");
+    assert!(
+        hold_tools(&view, thread, cx) >= 9,
+        "Files, two diffs, an unfolded file, a browser, a PR read, a remembered stop, facts and a PR count"
+    );
     press_nav_verb(&view, thread, MenuVerb::Delete, cx);
-    assert!(!view.read_with(cx, |view, _| view.known_threads().contains(&thread)), "the Thread is gone");
+    assert!(view.read_with(cx, |view, _| view.cockpit.known_threads().is_empty()), "it was the last");
+    assert!(!view.read_with(cx, |view, _| view.cockpit.known_threads().contains(&thread)), "the Thread is gone");
     assert_eq!(view.read_with(cx, |view, cx| view.held_for_test(thread, cx)), 0, "and all it held");
 }
 
@@ -546,4 +554,32 @@ fn a_parked_thread_keeps_its_files_and_changes(cx: &mut TestAppContext) {
     press_nav_verb(&view, thread, MenuVerb::Park, cx);
     assert!(view.read_with(cx, |view, _| view.cockpit.thread(thread).is_none()), "the Thread is parked");
     assert_eq!(view.read_with(cx, |view, cx| view.held_for_test(thread, cx)), held, "it keeps them");
+}
+
+/// A Worker (ADR 0037) parked is parked, not gone, though no list of the
+/// operator's shows it.
+#[gpui::test]
+fn a_parked_worker_keeps_its_panel_files_and_changes(cx: &mut TestAppContext) {
+    let (mut core, _fake, checkout) = bound_cockpit("tools-worker-parked", Provider::Claude);
+    let worker = core
+        .fixture_open_owned(
+            Provider::Claude,
+            WorkspaceChoice::Main { checkout },
+            ferrite_core::ThreadOwner::Task("t-1".into()),
+        )
+        .unwrap();
+    bind_production_keys(cx);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(1900.), px(900.)));
+    tick(cx);
+    let held = hold_tools(&view, worker, cx);
+    let (tabs, _) = panel_tabs(&view, worker, cx);
+    view.update(cx, |view, cx| view.close_pane(PaneIdentity::Thread(worker), cx));
+    tick(cx);
+    view.read_with(cx, |view, _| {
+        assert!(view.cockpit.thread(worker).is_none(), "the Worker is parked");
+        assert!(view.cockpit.owner(worker).is_some(), "and still its Task's");
+    });
+    assert_eq!(panel_tabs(&view, worker, cx).0, tabs, "its Panel keeps its tabs");
+    assert_eq!(view.read_with(cx, |view, cx| view.held_for_test(worker, cx)), held, "and its tools");
 }

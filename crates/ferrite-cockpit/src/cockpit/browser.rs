@@ -122,6 +122,22 @@ struct Page {
     manual: Rc<RefCell<manual::Manual>>,
 }
 impl Browsers {
+    /// Every Thread `keep` refuses takes its browser with it: its pages
+    /// close here, as when the Server detaches; the Server deleted its side
+    /// with the Thread.
+    pub(super) fn retain_threads(&mut self, keep: impl Fn(ThreadId) -> bool) {
+        self.threads.retain(|thread, _| keep(*thread));
+        self.reveal.retain(|thread, _| keep(*thread));
+        self.sent.retain(|thread, _| keep(*thread));
+    }
+
+    #[cfg(test)]
+    pub(super) fn held_for_test(&self, thread: ThreadId) -> usize {
+        usize::from(self.threads.contains_key(&thread))
+            + usize::from(self.reveal.contains_key(&thread))
+            + usize::from(self.sent.contains_key(&thread))
+    }
+
     /// A dialog is modal to its page: it takes the keyboard when its Browser
     /// is on screen, and lets the operator leave for anything outside it.
     pub(super) fn focus_shown_dialogs(&mut self, window: &mut Window, cx: &mut gpui::App) -> bool {

@@ -70,7 +70,7 @@ fn deleting_a_thread_ends_the_shells_its_panel_held(cx: &mut TestAppContext) {
     opened(&view, cx);
     assert_eq!(numbers(&view, thread, cx), [1]);
     press_nav_verb(&view, thread, MenuVerb::Delete, cx);
-    assert!(!view.read_with(cx, |view, _| view.known_threads().contains(&thread)), "the Thread is gone");
+    assert!(!view.read_with(cx, |view, _| view.cockpit.known_threads().contains(&thread)), "the Thread is gone");
     assert!(numbers(&view, thread, cx).is_empty(), "its shell ended with it");
 }
 
@@ -82,6 +82,32 @@ fn a_parked_thread_keeps_its_shells(cx: &mut TestAppContext) {
     assert!(view.read_with(cx, |view, _| view.cockpit.thread(thread).is_none()), "the Thread is parked");
     assert_eq!(numbers(&view, thread, cx), [1], "its shell runs on");
     assert!(panel_tabs(&view, thread, cx).0.contains(&SurfaceId::Terminal(1)), "and keeps its tab");
+}
+
+/// A parked Worker (ADR 0037), off every list of the operator's, is no
+/// more gone than any parked Thread.
+#[gpui::test]
+fn a_parked_worker_keeps_its_shells(cx: &mut TestAppContext) {
+    let (mut core, _fake, checkout) = bound_cockpit("terminal-worker-parked", Provider::Claude);
+    let worker = core
+        .fixture_open_owned(
+            Provider::Claude,
+            WorkspaceChoice::Main { checkout },
+            ferrite_core::ThreadOwner::Task("t-1".into()),
+        )
+        .unwrap();
+    bind_production_keys(cx);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(1900.), px(900.)));
+    tick(cx);
+    view.update(cx, |view, cx| view.new_terminal_surface(worker, cx));
+    tick(cx);
+    assert_eq!(numbers(&view, worker, cx), [1]);
+    view.update(cx, |view, cx| view.close_pane(PaneIdentity::Thread(worker), cx));
+    tick(cx);
+    assert!(view.read_with(cx, |view, _| view.cockpit.thread(worker).is_none()), "the Worker is parked");
+    assert_eq!(numbers(&view, worker, cx), [1], "its shell runs on");
+    assert!(panel_tabs(&view, worker, cx).0.contains(&SurfaceId::Terminal(1)), "and keeps its tab");
 }
 
 #[gpui::test]
