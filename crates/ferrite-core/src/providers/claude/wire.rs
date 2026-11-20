@@ -1608,14 +1608,14 @@ mod tests {
         let text = crate::prompt_files::compose("inspect", &[image.clone(), file]);
         let blocks = input_content(&text, &Default::default(), None);
         assert_eq!(blocks.len(), 2);
-        assert_eq!(blocks[0]["text"], text);
-        assert_eq!(blocks[1]["source"]["media_type"], "image/png");
+        assert_eq!(blocks[0]["source"]["media_type"], "image/png");
         assert_eq!(
             base64::engine::general_purpose::STANDARD
-                .decode(blocks[1]["source"]["data"].as_str().unwrap())
+                .decode(blocks[0]["source"]["data"].as_str().unwrap())
                 .unwrap(),
             b"image bytes"
         );
+        assert_eq!(blocks[1]["text"], text);
         std::fs::remove_file(image).unwrap();
         assert_eq!(
             input_content(&text, &Default::default(), None).len(),
@@ -1647,7 +1647,7 @@ mod tests {
         let trailer = crate::prompt_files::compose(&prompt, &[dir.join("pic.png")]);
         let blocks = input_content(&trailer, &Default::default(), Some(&dir));
         assert_eq!(blocks.len(), 2, "an explicit attachment still rides");
-        assert_eq!(blocks[1]["type"], "image");
+        assert_eq!(blocks[0]["type"], "image");
 
         let bare = crate::prompt_files::compose(
             &compose(&[Reply::new("see @pic.png", "")], ""),
@@ -1655,7 +1655,7 @@ mod tests {
         );
         let blocks = input_content(&bare, &Default::default(), Some(&dir));
         assert_eq!(blocks.len(), 2, "a quote and an attachment, no typed words");
-        assert_eq!(blocks[1]["type"], "document");
+        assert_eq!(blocks[0]["type"], "document");
 
         let own = compose(&[Reply::new("see @pic.png", "")], "and @doc.pdf");
         assert_eq!(
@@ -1714,7 +1714,7 @@ mod tests {
         use base64::Engine as _;
         let blocks = input_content(&text, &Default::default(), None);
         assert_eq!(blocks.len(), 2);
-        assert_eq!(blocks[0]["text"], text);
+        assert_eq!(blocks[1]["text"], text);
         let (_, _, restored) = browser_annotations::split(text.clone());
         assert_eq!(
             restored.len(),
@@ -1731,10 +1731,10 @@ mod tests {
             [annotation.original().unwrap().to_path_buf()],
             "page text must never become a filesystem image reference"
         );
-        assert_eq!(blocks[1]["type"], "image");
+        assert_eq!(blocks[0]["type"], "image");
         assert_eq!(
             base64::engine::general_purpose::STANDARD
-                .decode(blocks[1]["source"]["data"].as_str().unwrap())
+                .decode(blocks[0]["source"]["data"].as_str().unwrap())
                 .unwrap(),
             png
         );
