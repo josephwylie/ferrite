@@ -739,3 +739,36 @@ fn a_stop_a_child_view_draws_keeps_its_place_in_the_row(cx: &mut TestAppContext)
         "the arrows step back onto it"
     );
 }
+
+/// The headless driver (ADR 0038) presses a key the way a keyboard does,
+/// down then up: ⏎ on a tab shows it from the release and counts as
+/// taken, and a key nothing takes is still reported untaken.
+#[cfg(feature = "headless")]
+#[test]
+fn a_driven_enter_presses_the_focused_tab() {
+    let (core, _fake, _checkout) = bound_cockpit("driven-enter", Provider::Claude);
+    let cx = crate::headless::app(ferrite_ui::keymap::bindings(ferrite_ui::keymap::PLATFORM));
+    let mut driver = crate::headless::Driver::open(cx, |cx| CockpitView::new(core, cx));
+    let thread = driver.update(|view, _, cx| {
+        let thread = view.panes[0].thread().unwrap();
+        view.prefs.settings.panel_shown = true;
+        view.upsert_surface(thread, SurfaceId::Files, cx);
+        thread
+    });
+    driver.tick(16);
+    let shown = |driver: &mut crate::headless::Driver| {
+        driver.read(|view, _| view.active_surface(thread))
+    };
+
+    assert_eq!(driver.keys(&["f6", "home"]), Ok(vec![true, true]));
+    assert_eq!(
+        driver.update(|view, window, _| view.panel.focus.focused(window)),
+        Some(PanelControl::Tab(SurfaceId::Overview))
+    );
+    assert_eq!(driver.keys(&["f19"]), Ok(vec![false]), "nothing takes f19");
+    assert_eq!(shown(&mut driver), Some(SurfaceId::Files));
+
+    assert_eq!(driver.keys(&["enter"]), Ok(vec![true]), "⏎ is taken");
+    assert_eq!(shown(&mut driver), Some(SurfaceId::Overview), "⏎ shows the tab");
+    driver.close();
+}
