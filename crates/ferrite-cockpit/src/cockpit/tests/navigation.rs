@@ -361,3 +361,40 @@ fn a_focus_the_server_asks_for_shows_at_once(cx: &mut TestAppContext) {
     tick(cx);
     assert_eq!(shown(&view, cx), Some(second));
 }
+
+/// The shown Thread's Pane is drawn as `view-thread-<id>`, and no other
+/// Thread's is: a driver reads which Thread the window shows from what it
+/// drew, after a key or a Focus the Server asked for.
+#[gpui::test]
+fn the_shown_thread_is_drawn_by_its_id_and_no_other(cx: &mut TestAppContext) {
+    bind_production_keys(cx);
+    let (core, _fake) = cockpit("shown-selector", 2);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    let order = view.update(cx, |view, cx| {
+        let order = view.thread_order(cx);
+        view.focus_thread(order[0], cx);
+        order
+    });
+    tick(cx);
+    let drawn = |cx: &mut gpui::VisualTestContext| {
+        order
+            .iter()
+            .map(|thread| debug_bounds(cx, format!("view-thread-{}", thread.get())).is_some())
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(drawn(cx), [true, false]);
+
+    view.update(cx, |view, _| {
+        view.cockpit
+            .fixture_task_alert(ferrite_core::protocol::ServerMessage::Focus {
+                thread: order[1],
+                fork_of: None,
+            });
+    });
+    tick(cx);
+    assert_eq!(drawn(cx), [false, true], "a Focus the Server asked for");
+
+    cx.simulate_keystrokes("cmd-1");
+    tick(cx);
+    assert_eq!(drawn(cx), [true, false], "a key");
+}

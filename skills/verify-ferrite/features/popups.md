@@ -63,5 +63,5 @@ Preconditions:
   with and without a popup. It was there before ADR 0043.
 - The Thread details card sits at the Pane's top right in every shot. It is not a popup.
 - A fresh Thread's footer reads the default model until its first turn.
-- `thread start --focus --ready` can answer `focused: false` although the window did
-  switch.
+- `thread start --focus --ready` answers `focused: false` headless although the window
+  did switch; `fv find view-thread-<id>` says which Thread it shows.
