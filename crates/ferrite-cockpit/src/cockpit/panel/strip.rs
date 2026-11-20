@@ -344,7 +344,7 @@ impl CockpitView {
             "Maximize panel"
         };
         let semantics = Semantics::button(name);
-        let handle = self.panel_control(PanelControl::Maximize, semantics.clone(), cx);
+        let handle = self.panel.focus.register(PanelControl::Maximize, semantics.clone(), cx);
         let maximize = controls::icon_stop(id, glyph, IconSize::Standard, &handle, &semantics, cx)
             .occlude()
             .tip(name)
@@ -499,7 +499,7 @@ impl CockpitView {
         let held = id.clone();
         let control = PanelControl::Tab(id.clone());
         let semantics = Semantics::tab(self.surface_title(thread, id, cx), active);
-        let handle = self.panel_control(control.clone(), semantics.clone(), cx);
+        let handle = self.panel.focus.register(control.clone(), semantics.clone(), cx);
         div()
             .id(element)
             .debug_selector(move || selector.clone())
@@ -582,7 +582,7 @@ impl CockpitView {
     /// The `+` after the last tab: the opener menu under it.
     fn surface_plus(&self, thread: ThreadId, cx: &mut Context<Self>) -> AnyElement {
         let semantics = Semantics::button("Open a surface");
-        let handle = self.panel_control(PanelControl::Plus, semantics.clone(), cx);
+        let handle = self.panel.focus.register(PanelControl::Plus, semantics.clone(), cx);
         let plus =
             controls::icon_stop("panel-plus", icons::PLUS, IconSize::Compact, &handle, &semantics, cx)
                 .occlude()

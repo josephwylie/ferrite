@@ -1078,7 +1078,7 @@ impl CockpitView {
                 .map_or_else(String::new, |name| name.to_string_lossy().into_owned());
             let id = SharedString::from(format!("files-tab-{at}"));
             let semantics = Semantics::tab(name.clone(), active);
-            let handle = self.panel_control(PanelControl::FileTab(at), semantics.clone(), cx);
+            let handle = self.panel.focus.register(PanelControl::FileTab(at), semantics.clone(), cx);
             focusable(div().id(id.clone()), &handle, &semantics)
                 .debug_selector(move || id.to_string())
                 .flex()

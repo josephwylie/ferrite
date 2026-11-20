@@ -747,7 +747,7 @@ impl CockpitView {
             .and_then(|url| repo_of(&url));
         let number_semantics = Semantics::button(format!("Pull request #{number}, open on GitHub"));
         let number_handle =
-            self.panel_control(PanelControl::PrNumber, number_semantics.clone(), cx);
+            self.panel.focus.register(PanelControl::PrNumber, number_semantics.clone(), cx);
         let url = self
             .panel
             .pr_reads
@@ -800,7 +800,7 @@ impl CockpitView {
             self.pr_primary(target, tone, cx)
         };
         let more_semantics = Semantics::button("More pull request actions");
-        let more_handle = self.panel_control(PanelControl::PrMore, more_semantics.clone(), cx);
+        let more_handle = self.panel.focus.register(PanelControl::PrMore, more_semantics.clone(), cx);
         let more = self.doors().button(
             controls::icon_stop(
                 "pr-more",
@@ -857,7 +857,7 @@ impl CockpitView {
                 .is_some_and(|pr| action.blocked_by(pr).is_some());
         let key = ferrite_ui::pointer::hover_key(&gpui::ElementId::from("pr-primary"));
         let semantics = Semantics::button(label);
-        let handle = self.panel_control(PanelControl::PrPrimary, semantics.clone(), cx);
+        let handle = self.panel.focus.register(PanelControl::PrPrimary, semantics.clone(), cx);
         div()
             .id("pr-primary")
             .debug_selector(|| "pr-primary".into())
@@ -994,7 +994,7 @@ impl CockpitView {
             let key = ferrite_ui::pointer::hover_key(&gpui::ElementId::from(id.clone()));
             let pressed = tab == shown;
             let semantics = Semantics::tab(tab.label(), pressed);
-            let handle = self.panel_control(PanelControl::PrView(tab), semantics.clone(), cx);
+            let handle = self.panel.focus.register(PanelControl::PrView(tab), semantics.clone(), cx);
             let segment = div()
                 .id(id)
                 .debug_selector(move || selector.clone())

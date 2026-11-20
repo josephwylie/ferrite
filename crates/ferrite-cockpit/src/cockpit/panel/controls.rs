@@ -14,6 +14,11 @@
 //! re-registers the stops it draws, so a closed tab or a hidden view is no
 //! longer a stop and cannot hold the keyboard; the last stop focused is
 //! kept for each Thread so F6 comes back to it while it is still drawn.
+//!
+//! A stop is registered on the shared `PanelFocus` by whichever view draws
+//! it, the root or a child view rendered after it. So the row is finished
+//! only once the whole frame is drawn, and every reader sees the row of the
+//! last finished frame, never one half drawn.
 
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -107,22 +112,87 @@ fn stop<E: InteractiveElement>(element: E, handle: &FocusHandle) -> E {
         .capture_any_mouse_down(|_, window, _| window.prevent_default())
 }
 
-/// The stops drawn this frame and the keyboard's memory of them.
+/// The Panel's row of stops and the keyboard's memory of them, shared by
+/// every view that draws a stop.
 #[derive(Default)]
 pub(crate) struct PanelFocus {
     handles: RefCell<HashMap<PanelControl, FocusHandle>>,
+    /// The stops the last finished frame drew, in order.
     drawn: RefCell<Vec<(PanelControl, Semantics)>>,
+    /// The frame drawing the Panel now, until it is finished.
+    drawing: RefCell<Option<Drawing>>,
     remembered: RefCell<HashMap<ThreadId, PanelControl>>,
     /// Where the stops that open a menu were last drawn, for it to hang
     /// from.
-    bounds: Rc<RefCell<HashMap<PanelControl, gpui::Bounds<gpui::Pixels>>>>,
+    bounds: RefCell<HashMap<PanelControl, gpui::Bounds<gpui::Pixels>>>,
+}
+
+/// A frame's stops as its views draw them, and the Thread whose Panel it
+/// draws: none for a draft's preview or no Panel.
+struct Drawing {
+    thread: Option<ThreadId>,
+    stops: Vec<(PanelControl, Semantics)>,
 }
 
 impl PanelFocus {
-    /// The stops now drawn, in order, with what each says of itself.
+    /// The stops the last finished frame drew, in order, with what each
+    /// says of itself.
     #[cfg(test)]
     pub(crate) fn drawn(&self) -> Vec<(PanelControl, Semantics)> {
         self.drawn.borrow().clone()
+    }
+
+    /// The root starts drawing the Panel of `thread`, or none. The row is
+    /// finished once the frame is, after every child view has rendered.
+    pub(super) fn begin(self: &Rc<Self>, thread: Option<ThreadId>, window: &Window, cx: &mut App) {
+        let drawing = Drawing {
+            thread,
+            stops: Vec::new(),
+        };
+        // A window drawn twice before its effects run finishes once, with
+        // the later draw's row.
+        if self.drawing.replace(Some(drawing)).is_none() {
+            let focus = self.clone();
+            window.defer(cx, move |window, _| focus.finish(window));
+        }
+    }
+
+    /// Draw a stop: its handle, made if new, and its place in the row.
+    pub(in crate::cockpit) fn register(
+        &self,
+        control: PanelControl,
+        semantics: Semantics,
+        cx: &mut App,
+    ) -> FocusHandle {
+        match self.drawing.borrow_mut().as_mut() {
+            Some(drawing) => drawing.stops.push((control.clone(), semantics)),
+            None => debug_assert!(false, "a stop is drawn outside the Panel's frame"),
+        }
+        self.handles
+            .borrow_mut()
+            .entry(control)
+            .or_insert_with(|| cx.focus_handle())
+            .clone()
+    }
+
+    /// The frame is drawn: its stops are the row, a stop no longer drawn
+    /// lets go of its handle, and the stop in focus is remembered for the
+    /// Thread.
+    fn finish(&self, window: &Window) {
+        let Some(Drawing { thread, stops }) = self.drawing.take() else {
+            return;
+        };
+        let Some(thread) = thread else {
+            *self.drawn.borrow_mut() = stops;
+            return;
+        };
+        let drawn = |control: &PanelControl| stops.iter().any(|(shown, _)| shown == control);
+        self.handles.borrow_mut().retain(|control, _| drawn(control));
+        self.bounds.borrow_mut().retain(|control, _| drawn(control));
+        *self.drawn.borrow_mut() = stops;
+        if let Some(control) = self.focused(window) {
+            self.remembered.borrow_mut().insert(thread, control);
+        }
     }
 
     pub(crate) fn handle(&self, control: &PanelControl) -> Option<FocusHandle> {
@@ -169,46 +239,6 @@ impl PanelFocus {
 }
 
 impl CockpitView {
-    pub(super) fn begin_panel_controls(&self) {
-        self.panel.focus.drawn.borrow_mut().clear();
-    }
-
-    /// Draw a stop: its handle, made if new, and its place in the row.
-    pub(in crate::cockpit) fn panel_control(
-        &self,
-        control: PanelControl,
-        semantics: Semantics,
-        cx: &mut Context<Self>,
-    ) -> FocusHandle {
-        let focus = &self.panel.focus;
-        focus.drawn.borrow_mut().push((control.clone(), semantics));
-        focus
-            .handles
-            .borrow_mut()
-            .entry(control)
-            .or_insert_with(|| cx.focus_handle())
-            .clone()
-    }
-
-    /// The frame's stops are all drawn: a stop no longer drawn lets go of
-    /// its handle, and the stop in focus is remembered for `thread`.
-    pub(super) fn end_panel_controls(&self, thread: ThreadId, window: &Window) {
-        let focus = &self.panel.focus;
-        let drawn = focus.drawn.borrow();
-        focus
-            .handles
-            .borrow_mut()
-            .retain(|control, _| drawn.iter().any(|(shown, _)| shown == control));
-        focus
-            .bounds
-            .borrow_mut()
-            .retain(|control, _| drawn.iter().any(|(shown, _)| shown == control));
-        drop(drawn);
-        if let Some(control) = focus.focused(window) {
-            focus.remembered.borrow_mut().insert(thread, control);
-        }
-    }
-
     pub(crate) fn panel_control_focused(&self, window: &Window) -> bool {
         self.panel_pane().is_some() && self.panel.focus.focused(window).is_some()
     }
@@ -543,10 +573,10 @@ impl CockpitView {
     /// An element's size as `control`'s, to hang its menu from: laid over
     /// the stop, which stands `relative`.
     pub(super) fn measured(&self, control: PanelControl) -> impl IntoElement {
-        let bounds = self.panel.focus.bounds.clone();
+        let focus = self.panel.focus.clone();
         gpui::canvas(
             move |at, _, _| {
-                bounds.borrow_mut().insert(control.clone(), at);
+                focus.bounds.borrow_mut().insert(control.clone(), at);
             },
             |_, _, _, _| {},
         )
