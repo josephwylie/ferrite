@@ -453,13 +453,11 @@ impl CockpitView {
                             });
                             if aligned {
                                 session.submission = submission;
-                                let answer = self.capture_browser_page(
+                                let answer = self.browser_controls.capture(
                                     thread,
                                     guard.owner,
                                     guard.document,
-                                    guard.lease,
                                     None,
-                                    cx,
                                 );
                                 session.phase = Phase::Capturing {
                                     answer,
