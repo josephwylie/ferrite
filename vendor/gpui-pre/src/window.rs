@@ -1103,8 +1103,9 @@ impl PaintIndex {
 #[cfg(any(test, feature = "test-support"))]
 #[derive(Clone, Debug)]
 pub(crate) enum DebugPainted {
-    /// An element with a `debug_selector`, where it was laid out.
-    Selector(String, Bounds<Pixels>),
+    /// An element with a `debug_selector`: where it was laid out, and the
+    /// part of that the content mask let show.
+    Selector(String, Bounds<Pixels>, Bounds<Pixels>),
     /// A line of text, where it showed: its box clipped to the content mask.
     Text(SharedString, Bounds<Pixels>),
 }
@@ -2696,6 +2697,18 @@ impl Window {
         self.rendered_frame.debug_bounds.get(selector).copied()
     }
 
+    /// Ferrite's patch: the part of [`Self::debug_bounds`] the last drawn
+    /// frame showed, clipped by the content masks around it (a scrolled
+    /// row's edge), where a headless driver's click lands on the element
+    /// itself. Empty when it is clipped away whole.
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn debug_shown_bounds(&self, selector: &str) -> Option<Bounds<Pixels>> {
+        self.rendered_frame.debug_paint_log.iter().rev().find_map(|painted| match painted {
+            DebugPainted::Selector(drawn, _, shown) if drawn == selector => Some(*shown),
+            _ => None,
+        })
+    }
+
     /// Ferrite's patch: the lines of text the last drawn frame showed inside
     /// the element of this `debug_selector` (the one [`Self::debug_bounds`]
     /// names), in paint order: its own and whatever was painted over it.
@@ -2704,7 +2717,7 @@ impl Window {
     pub fn debug_text(&self, selector: &str) -> Option<Vec<SharedString>> {
         let log = &self.rendered_frame.debug_paint_log;
         let (at, bounds) = log.iter().enumerate().rev().find_map(|(at, painted)| match painted {
-            DebugPainted::Selector(drawn, bounds) if drawn == selector => Some((at, *bounds)),
+            DebugPainted::Selector(drawn, bounds, _) if drawn == selector => Some((at, *bounds)),
             _ => None,
         })?;
         Some(
@@ -3932,7 +3945,7 @@ impl Window {
             [range.start.debug_paint_index..range.end.debug_paint_index]
             .iter()
         {
-            if let DebugPainted::Selector(selector, bounds) = painted {
+            if let DebugPainted::Selector(selector, bounds, _) = painted {
                 self.next_frame
                     .debug_bounds
                     .insert(selector.clone(), *bounds);

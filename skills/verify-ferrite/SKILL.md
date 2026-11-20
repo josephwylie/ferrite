@@ -107,6 +107,10 @@ exits 2.
   `approval-prompt`, `decision-actions`, `settings-search`, `settings-card`.
   `find` answers `nothing drawn as …` when the last frame has no such element. Points
   are a fallback and move when the layout does.
+- A click or drag by selector is refused while the element's centre is scrolled or
+  clipped out of sight, such as a Panel tab half out of its strip with its middle under
+  the strip's chevron. A press there would land on whatever shows in its place. Bring
+  it into view first (`panel-tabs-right`), or click a point on the part that shows.
 - `text` answers each line of text painted inside that element's bounds in the last
   frame, in paint order, with anything drawn over it and none scrolled or clipped
   away. Two elements that draw one selector are told apart by what they show. The

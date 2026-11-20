@@ -36,6 +36,59 @@ fn text_reads_what_an_element_shows_and_refuses_one_not_drawn() {
     driver.close();
 }
 
+/// A File tab half scrolled out of the Panel's strip, its middle under the
+/// strip's right chevron: a click by selector is refused, not pressed on
+/// the chevron in its place, and a pointer on the tab's title where it
+/// shows picks it with the first press.
+#[test]
+fn a_half_hidden_tab_is_refused_by_selector_and_picked_where_it_shows() {
+    use ferrite_ui::theme::{SURFACE_TAB_CLOSE, SURFACE_TAB_GAP, SURFACE_TAB_PAD_L};
+    let mut driver = driver("driven-half-hidden-tab");
+    let dir = scratch("driven-half-hidden-tab-file");
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = dir.join("outside.txt");
+    std::fs::write(&file, "outside the checkout\n").unwrap();
+    driver.update(|view, window, cx| view.open_preview(file.clone(), None, window, cx));
+    for _ in 0..30 {
+        driver.tick(16);
+    }
+    assert!(driver.click("panel-tab-Overview", MouseButton::Left, 1, Modifiers::default()).is_some());
+    for _ in 0..60 {
+        driver.tick(16);
+    }
+    let shown = |driver: &mut Driver| {
+        driver.read(|view, _| {
+            let thread = view.panes[0].thread().unwrap();
+            view.active_surface(thread)
+        })
+    };
+    let strip = driver.bounds("panel-tabs").expect("the strip is drawn");
+    let tab = driver.bounds("panel-tab-File-outside.txt").expect("its tab stays");
+    let title = tab.left() + px(SURFACE_TAB_PAD_L + SURFACE_TAB_CLOSE + SURFACE_TAB_GAP);
+    assert!(
+        title < strip.right() && tab.center().x > strip.right(),
+        "the premise: the tab {tab:?} shows its title's start, not its middle, in {strip:?}"
+    );
+
+    let refused = driver.aim("panel-tab-File-outside.txt").unwrap_err();
+    assert!(refused.contains("out of sight"), "{refused}");
+    assert_eq!(
+        driver.click("panel-tab-File-outside.txt", MouseButton::Left, 1, Modifiers::default()),
+        None
+    );
+    assert_eq!(
+        driver.bounds("panel-tab-File-outside.txt"),
+        Some(tab),
+        "nothing was pressed: the strip did not scroll"
+    );
+    assert_eq!(shown(&mut driver), Some(SurfaceId::Overview));
+
+    let at = gpui::point((title + strip.right()) / 2., tab.center().y);
+    driver.click_at(at, MouseButton::Left, 1, Modifiers::default());
+    assert_eq!(shown(&mut driver), Some(SurfaceId::File(file)), "the first press picks the tab");
+    driver.close();
+}
+
 #[test]
 fn focus_names_the_composer_then_the_panel_stop_f6_and_an_arrow_reach() {
     let mut driver = driver("driven-focus");
