@@ -2508,6 +2508,7 @@ impl Interactivity {
                         .push(crate::window::DebugPainted::Selector(
                             debug_selector.clone(),
                             bounds,
+                            bounds.intersect(&window.content_mask().bounds),
                         ));
                     window
                         .next_frame

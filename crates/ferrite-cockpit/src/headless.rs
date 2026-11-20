@@ -112,13 +112,11 @@ pub fn run(http: Arc<dyn gpui::http_client::HttpClient>) {
     }
 }
 
-/// The point a target names: a selector's centre as the last frame drew it.
+/// The point a target names: a selector's centre as the last frame drew
+/// it, refused while out of sight ([`Driver::aim`]).
 fn place(driver: &mut Driver, target: Target) -> Result<Point<gpui::Pixels>, String> {
     match target {
-        Target::Selector(selector) => driver
-            .bounds(&selector)
-            .map(|bounds| bounds.center())
-            .ok_or_else(|| format!("nothing drawn as `{selector}`")),
+        Target::Selector(selector) => driver.aim(&selector),
         Target::Point { x, y } => Ok(gpui::point(gpui::px(x as f32), gpui::px(y as f32))),
     }
 }
@@ -417,6 +415,29 @@ impl Driver {
             .flatten()
     }
 
+    /// The centre of what `selector` drew in the last frame, where a
+    /// pointer presses it. Refused when that centre is scrolled or clipped
+    /// out of sight (a tab half out of its row, its middle under the row's
+    /// chevron): a press there would land on whatever shows in its place.
+    pub fn aim(&mut self, selector: &str) -> Result<Point<gpui::Pixels>, String> {
+        let (drawn, shown) = self
+            .cx
+            .update_window(self.window, |_, window, _| {
+                Some((window.debug_bounds(selector)?, window.debug_shown_bounds(selector)?))
+            })
+            .ok()
+            .flatten()
+            .ok_or_else(|| format!("nothing drawn as `{selector}`"))?;
+        let centre = drawn.center();
+        if !shown.contains(&centre) {
+            return Err(format!(
+                "`{selector}` is drawn with its centre scrolled or clipped out of sight; \
+                 bring it into view first"
+            ));
+        }
+        Ok(centre)
+    }
+
     /// The lines of text the last frame showed inside the element of this
     /// `debug_selector`, in paint order; `None` when it drew no such
     /// element.
@@ -455,9 +476,10 @@ impl Driver {
         self.tick(30);
     }
 
-    /// `clicks` presses of `button` at the centre of what `selector` drew,
-    /// the pointer moved there first so hover state is honest. Where it
-    /// clicked; `None` when the last frame drew no such element.
+    /// `clicks` presses of `button` at the centre of what `selector` drew
+    /// ([`Self::aim`]), the pointer moved there first so hover state is
+    /// honest. Where it clicked; `None` when the last frame drew no such
+    /// element or its centre is out of sight.
     pub fn click(
         &mut self,
         selector: &str,
@@ -465,7 +487,7 @@ impl Driver {
         clicks: usize,
         modifiers: Modifiers,
     ) -> Option<Point<gpui::Pixels>> {
-        let at = self.bounds(selector)?.center();
+        let at = self.aim(selector).ok()?;
         self.click_at(at, button, clicks, modifiers);
         Some(at)
     }
