@@ -1163,3 +1163,28 @@ fn the_files_bars_doors_press_by_the_pointer(cx: &mut TestAppContext) {
     });
     assert_eq!(names, ["Show file tree", "Preview tabs", "Auto save", "Word wrap", "Tab size"]);
 }
+
+/// A deleted Thread's edit still reaches the disk, as auto save promised,
+/// and its Files go once it has.
+#[gpui::test]
+fn a_deleted_threads_edit_reaches_the_disk_and_its_files_go(cx: &mut TestAppContext) {
+    let (view, thread, file, editor, cx) = open_editor("files-thread-deleted", cx);
+    editor.update(cx, |editor, cx| editor.type_text("// kept\n", cx));
+    press_nav_verb(&view, thread, MenuVerb::Delete, cx);
+    pause_and_settle(cx);
+    assert!(std::fs::read_to_string(&file).unwrap().starts_with("// kept\n"), "the edit is on disk");
+    tick(cx);
+    assert_eq!(view.read_with(cx, |view, _| view.held_for_test(thread)), 0, "its Files went");
+}
+
+/// A deleted Thread's edit the disk refused is still counted when leaving,
+/// so the warning before a quit names it.
+#[gpui::test]
+fn a_deleted_threads_refused_edit_is_still_named_when_leaving(cx: &mut TestAppContext) {
+    let (view, thread, _file, editor, cx) = open_editor("files-thread-deleted-refused", cx);
+    editor.update(cx, |editor, _| editor.refuse_writes());
+    editor.update(cx, |editor, cx| editor.type_text("// lost\n", cx));
+    press_nav_verb(&view, thread, MenuVerb::Delete, cx);
+    pause_and_settle(cx);
+    assert_eq!(view.read_with(cx, |view, cx| view.unsaved_files_at_leaving(cx)), Some(1));
+}

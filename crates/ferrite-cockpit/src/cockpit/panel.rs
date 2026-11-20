@@ -394,8 +394,9 @@ impl CockpitView {
         known
     }
 
-    /// A Thread deleted, here or by the Server, takes its Panel with it and
-    /// releases what each tab held, as a closed tab does.
+    /// A Thread deleted, here or by the Server, takes its Panel with it,
+    /// releases what each tab held, as a closed tab does, and frees its
+    /// Files, its diffs and its Changes section's folds.
     fn forget_gone_threads(&mut self, cx: &mut Context<Self>) {
         let deleted = std::mem::take(&mut self.panel.deleted);
         let known = self.known_threads();
@@ -415,10 +416,19 @@ impl CockpitView {
                 }
             }
         }
+        self.forget_tools(keep, cx);
+        self.panel.hunks.retain_threads(keep);
+        self.panel.scrolls.retain(|thread, _| keep(*thread));
         if heard {
             self.panel.focus.retain_threads(|thread| known.contains(&thread));
             self.panel.pr_actions.retain_threads(&known);
         }
+    }
+
+    /// How much of `thread`'s state the Panel and its tools hold.
+    #[cfg(test)]
+    pub(crate) fn held_for_test(&self, thread: ThreadId) -> usize {
+        self.tools_held_for_test(thread) + self.panel.hunks.held_for_test(thread)
     }
 
     pub(crate) fn successor_panel(&mut self) -> Panel {

@@ -200,6 +200,14 @@ impl Files {
         self.active.map(|at| self.tabs[at].path.as_path())
     }
 
+    /// Whether a buffer holds text the disk does not have yet.
+    pub(super) fn holds_edits(&self, cx: &gpui::App) -> bool {
+        self.tabs.iter().any(|tab| match &tab.body {
+            TabBody::Code(editor) => editor.read(cx).is_dirty(),
+            TabBody::Unshown(_) => false,
+        })
+    }
+
     fn working_set(&self) -> WorkingSet {
         WorkingSet {
             files: self
@@ -781,6 +789,7 @@ impl CockpitView {
             .tools
             .files
             .values()
+            .chain(&self.tools.orphaned)
             .flat_map(|files| files.tabs.iter())
             .filter_map(|tab| match &tab.body {
                 TabBody::Code(editor) => Some(editor.clone()),
@@ -798,6 +807,7 @@ impl CockpitView {
             .tools
             .files
             .values()
+            .chain(&self.tools.orphaned)
             .flat_map(|files| files.tabs.iter())
             .filter(|tab| match &tab.body {
                 TabBody::Code(editor) => editor.read(cx).lost_by_leaving(),

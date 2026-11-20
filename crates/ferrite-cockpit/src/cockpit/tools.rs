@@ -24,6 +24,10 @@ use super::*;
 #[derive(Default)]
 pub(crate) struct Tools {
     files: HashMap<ThreadId, files::Files>,
+    /// Files whose Thread is gone, kept while a buffer holds an edit the
+    /// disk does not have: auto save still writes it, and leaving still
+    /// names it.
+    orphaned: Vec<files::Files>,
     changes: HashMap<changes::Diff, changes::Changes>,
     /// Threads whose agent worked since the last sweep, so their checkout
     /// may have changed (`follow_workspace`).
@@ -118,6 +122,28 @@ impl CockpitView {
         if let Some(thread) = self.focused_thread() {
             self.go_to_file(thread, window, cx);
         }
+    }
+
+    /// Every Thread `keep` refuses takes its tools with it: its Files and
+    /// each diff read for it.
+    pub(super) fn forget_tools(&mut self, keep: impl Fn(ThreadId) -> bool, cx: &gpui::App) {
+        let gone: Vec<ThreadId> = self.tools.files.keys().copied().filter(|&thread| !keep(thread)).collect();
+        for thread in gone {
+            self.tools.orphaned.extend(self.tools.files.remove(&thread));
+        }
+        self.tools.orphaned.retain(|files| files.holds_edits(cx));
+        self.tools.changes.retain(|diff, _| diff.thread().is_none_or(&keep));
+        self.tools.worked.retain(|thread| keep(*thread));
+    }
+}
+
+#[cfg(test)]
+impl CockpitView {
+    /// How many of `thread`'s tools are held: its Files, and each diff read
+    /// for it.
+    pub(super) fn tools_held_for_test(&self, thread: ThreadId) -> usize {
+        usize::from(self.tools.files.contains_key(&thread))
+            + self.tools.changes.keys().filter(|diff| diff.thread() == Some(thread)).count()
     }
 }
 
