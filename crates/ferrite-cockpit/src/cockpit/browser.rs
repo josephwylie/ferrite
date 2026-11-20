@@ -5,6 +5,8 @@ mod chrome;
 pub(super) use chrome::BrowserChromeView;
 mod controls;
 mod dialog;
+mod live_annotation;
+use live_annotation::LiveAnnotation;
 pub(super) use dialog::BrowserDialogView;
 use controls::ControlRequest;
 pub(super) use controls::Controls;
@@ -69,7 +71,7 @@ pub(super) struct Browser {
     context: Option<PageContext>,
     pointer: Rc<Cell<gpui::Point<gpui::Pixels>>>,
     failed: BTreeMap<TabId, Document>,
-    annotation: Option<annotations::Session>,
+    annotation: Option<LiveAnnotation>,
     native_peers: Rc<RefCell<manual::Peers>>,
 }
 struct Page {

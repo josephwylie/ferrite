@@ -1,60 +1,16 @@
-//! A live guest session holds protection through Attach, capture, and retention.
-//! A retained capture is edited in its review (`review.rs`), with no live page.
+//! The root's side of a Browser's annotations: beginning, closing and
+//! stepping each Thread's live annotation (`live_annotation.rs`) with what
+//! it needs of the window, handing what it retains to the Composer, and
+//! opening a retained one's review (`review.rs`), with no live page.
 use super::*;
-use ferrite_core::browser::{Lease, Protection};
-use ferrite_core::browser_annotations::{
-    Annotation, Capture, LiveFeedback, LiveScreenshot, Selection, Viewport,
-};
-use ferrite_pane::visual::browser_control::CapturedPage;
-use ferrite_pane::visual::live_annotation::{self, Event as LiveEvent, Submission};
-use std::sync::mpsc::{Receiver, TryRecvError};
-use std::time::{Duration, Instant};
-
-pub(super) struct Session {
-    guard: Option<Guard>,
-    phase: Phase,
-    focus: gpui::FocusHandle,
-    started: Instant,
-    window: Option<gpui::AnyWindowHandle>,
-    submission: Submission,
-    action: Option<Action>,
-    restore_failed: bool,
-    recovering: bool,
-    /// The guest editor has installed its listeners and takes page input.
-    ready: bool,
-}
-struct Guard {
-    owner: Owner,
-    document: Document,
-    generation: u64,
-    lease: Lease,
-    revision: u64,
-    manual: Rc<RefCell<manual::Manual>>,
-    restored: bool,
-}
-type EncodedCapture = (Capture, Option<ferrite_core::protocol::WirePng>);
-enum Phase {
-    Live,
-    Capturing {
-        answer: Receiver<Result<CapturedPage, String>>,
-        expected: Viewport,
-        feedback: LiveFeedback,
-    },
-    Encoding {
-        answer: Receiver<std::io::Result<EncodedCapture>>,
-        ready: Option<EncodedCapture>,
-    },
-    Retaining(Receiver<std::io::Result<Annotation>>),
-    PendingAttachment(Annotation),
-    Closing,
-}
+use super::live_annotation::Next;
 
 impl CockpitView {
     #[cfg(feature = "visual-reference")]
     pub(in crate::cockpit) fn fixture_annotation_editor(
         &mut self,
         thread: ThreadId,
-        annotation: Annotation,
+        annotation: ferrite_core::browser_annotations::Annotation,
         image: std::path::PathBuf,
         cx: &mut Context<Self>,
     ) {
@@ -82,8 +38,8 @@ impl CockpitView {
         &self,
         thread: ThreadId,
     ) -> Option<bool> {
-        let session = self.browsers.threads.get(&thread)?.annotation.as_ref()?;
-        Some(session.ready && matches!(session.phase, Phase::Live))
+        let annotation = self.browsers.threads.get(&thread)?.annotation.as_ref()?;
+        Some(annotation.ready())
     }
 
     pub(in crate::cockpit) fn browser_annotation_focus(
@@ -92,8 +48,8 @@ impl CockpitView {
         cx: &gpui::App,
     ) -> Option<gpui::FocusHandle> {
         self.browser_review.read(cx).focus(thread, cx).or_else(|| {
-            let session = self.browsers.threads.get(&thread)?.annotation.as_ref()?;
-            Some(session.focus.clone())
+            let annotation = self.browsers.threads.get(&thread)?.annotation.as_ref()?;
+            Some(annotation.focus().clone())
         })
     }
 
@@ -105,90 +61,32 @@ impl CockpitView {
     ) {
         let new_tab = self.browser_chrome.read(cx).new_tab(thread);
         let reviewing = self.browser_review.read(cx).open(thread);
-        let selected = self.browsers.threads.get(&thread).and_then(|browser| {
+        let target = self.browsers.threads.get(&thread).and_then(|browser| {
             if browser.annotation.is_some() || reviewing || new_tab {
                 return None;
             }
-            let owner = browser.owner?;
-            let page = browser.pages.get(&browser.state.active?)?;
-            let state = page.native.state();
-            if !page.web.read(cx).browser_visible() || state.loading {
-                return None;
-            }
-            Some((
-                owner,
-                page.document.get(),
-                state.document_generation,
-                page.manual.clone(),
-                page.native.clone(),
-                gpui::Focusable::focus_handle(page.web.read(cx), cx),
-            ))
+            LiveAnnotation::target(browser, cx)
         });
-        let Some((owner, document, generation, manual, native, focus)) = selected else {
+        let Some(target) = target else {
             return;
         };
-        self.finish_browser_interaction(thread, owner, document.tab);
-        window.focus(&focus, cx);
-        manual.borrow_mut().protect_local();
-        manual.borrow_mut().capture_pause(true);
-        let protected = self
-            .cockpit
-            .browser_input(thread, owner, document)
-            .and_then(|revision| {
-                manual.borrow_mut().revision = revision;
-                match self
-                    .cockpit
-                    .browser_protect(thread, owner, document, Protection::Annotation)
-                {
-                    Ok(lease) => Ok((revision, lease)),
-                    Err(error) => {
-                        let _ = self
-                            .cockpit
-                            .browser_settled(thread, owner, document, revision);
-                        Err(error)
-                    }
-                }
-            });
-        match protected {
-            Ok((revision, lease)) => {
-                let mut session = Session {
-                    guard: Some(Guard {
-                        owner,
-                        document,
-                        generation,
-                        lease,
-                        revision,
-                        manual,
-                        restored: false,
-                    }),
-                    phase: Phase::Live,
-                    focus,
-                    started: Instant::now(),
-                    window: Some(window.window_handle()),
-                    submission: Submission::Attach,
-                    action: None,
-                    restore_failed: false,
-                    recovering: false,
-                    ready: false,
-                };
-                if let Err(error) =
-                    native.start_annotation(generation, self.annotation_send_enabled(thread, cx))
-                {
-                    session.guard.as_mut().unwrap().restored = true;
-                    self.release_browser_capture(thread, &mut session);
-                    self.browsers.threads.get_mut(&thread).unwrap().error = Some(error);
-                } else {
-                    let browser = self.browsers.threads.get_mut(&thread).unwrap();
-                    browser.error = None;
-                    browser.annotation = Some(session);
-                }
+        self.finish_browser_interaction(thread, target.owner, target.document.tab);
+        window.focus(&target.focus, cx);
+        let send_enabled = self.annotation_send_enabled(thread, cx);
+        let begun = LiveAnnotation::begin(
+            thread,
+            target,
+            window.window_handle(),
+            send_enabled,
+            &mut self.cockpit,
+        );
+        let browser = self.browsers.threads.get_mut(&thread).unwrap();
+        match begun {
+            Ok(annotation) => {
+                browser.error = None;
+                browser.annotation = Some(annotation);
             }
-            Err(error) => {
-                manual.borrow_mut().capture_pause(false);
-                manual.borrow_mut().release_local();
-                manual.borrow().restore_pause();
-                self.browsers.threads.get_mut(&thread).unwrap().error = Some(error.to_string());
-            }
+            Err(error) => browser.error = Some(error),
         }
         cx.notify();
     }
@@ -232,74 +130,28 @@ impl CockpitView {
         });
     }
 
-    fn release_browser_capture(&mut self, thread: ThreadId, session: &mut Session) {
-        if let Some(guard) = session.guard.take() {
-            let _ =
-                self.cockpit
-                    .browser_settled(thread, guard.owner, guard.document, guard.revision);
-            let _ = self
-                .cockpit
-                .browser_release(thread, guard.owner, guard.lease);
-            guard.manual.borrow_mut().capture_pause(false);
-            guard.manual.borrow_mut().release_local();
-            guard.manual.borrow().restore_pause();
-        }
-    }
-
-    fn finish_annotation_guest(session: &mut Session) {
-        if let Some(guard) = &session.guard {
-            if let Some(native) = &guard.manual.borrow().native {
-                native.finish_annotation(guard.generation);
-            }
-        }
-    }
-
+    /// An action on `thread`'s pages while its live annotation holds one
+    /// waits for the annotation to close (`LiveAnnotation::defer`).
     pub(super) fn defer_annotation_action(
         &mut self,
         thread: ThreadId,
         action: Action,
         cx: &mut Context<Self>,
     ) -> bool {
-        let Some(session) = self
+        let deferred = self
             .browsers
             .threads
             .get_mut(&thread)
             .and_then(|browser| browser.annotation.as_mut())
-        else {
-            return false;
-        };
-        let Some(guard) = &session.guard else {
-            return false;
-        };
-        if session.restore_failed {
-            let recovery = match &action {
-                Action::Reload { document } => *document == guard.document,
-                Action::Close { tab } => *tab == guard.document.tab,
-                _ => false,
-            };
-            if recovery && !session.recovering {
-                if let Some(native) = &guard.manual.borrow().native {
-                    if native.state().document_generation == guard.generation
-                        && native.reload().is_ok()
-                    {
-                        session.recovering = true;
-                        session.action = matches!(action, Action::Close { .. }).then_some(action);
-                    }
-                }
-            }
-        } else {
-            if session.action.is_none() {
-                session.action = Some(action);
-            }
-            Self::finish_annotation_guest(session);
+            .is_some_and(|annotation| annotation.defer(action));
+        if deferred {
+            cx.notify();
         }
-        session.phase = Phase::Closing;
-        cx.notify();
-        true
+        deferred
     }
 
     pub(super) fn cancel_browser_capture(&mut self, thread: ThreadId, cx: &mut Context<Self>) {
-        let Some(session) = self
+        let Some(annotation) = self
             .browsers
             .threads
             .get_mut(&thread)
@@ -307,29 +159,20 @@ impl CockpitView {
         else {
             return;
         };
-        if session.guard.is_some() {
-            Self::finish_annotation_guest(session);
-            session.phase = Phase::Closing;
-        }
+        annotation.cancel();
         cx.notify();
     }
 
     pub(super) fn close_browser_annotation(&mut self, thread: ThreadId, cx: &mut Context<Self>) {
         self.browser_review
             .update(cx, |review, cx| review.close(thread, cx));
-        let Some(mut session) = self
-            .browsers
-            .threads
-            .get_mut(&thread)
-            .and_then(|browser| browser.annotation.take())
-        else {
+        let Some(browser) = self.browsers.threads.get_mut(&thread) else {
             return;
         };
-        if session.guard.is_some() {
-            Self::finish_annotation_guest(&mut session);
-            session.phase = Phase::Closing;
-            self.browsers.threads.get_mut(&thread).unwrap().annotation = Some(session);
-        }
+        let Some(annotation) = browser.annotation.take() else {
+            return;
+        };
+        browser.annotation = annotation.close();
         cx.notify();
     }
 
@@ -380,7 +223,7 @@ impl CockpitView {
         }
         let threads: Vec<_> = self.browsers.threads.keys().copied().collect();
         for thread in threads {
-            let Some(mut session) = self
+            let Some(annotation) = self
                 .browsers
                 .threads
                 .get_mut(&thread)
@@ -388,271 +231,38 @@ impl CockpitView {
             else {
                 continue;
             };
-            let valid = session.guard.as_ref().is_none_or(|guard| {
-                self.browsers.threads.get(&thread).is_some_and(|browser| {
-                    browser.owner == Some(guard.owner)
-                        && browser.pages.get(&guard.document.tab).is_some_and(|page| {
-                            page.document.get() == guard.document
-                                && page.native.state().document_generation == guard.generation
-                        })
-                })
-            });
-            let mut error = None;
-            let mut handed_off = false;
-            if !valid && !matches!(session.phase, Phase::Retaining(_)) {
-                if !session.recovering {
-                    error =
-                        Some("The page changed during annotation. Select it again.".to_string());
-                }
-                if let Some(guard) = session.guard.as_mut() {
-                    guard.restored |= guard.manual.borrow().native.as_ref().is_none_or(|native| {
-                        native.state().document_generation != guard.generation
-                    });
-                }
+            let send_enabled = self.annotation_send_enabled(thread, cx);
+            let composer = self.pane_for(thread).is_some();
+            let step = annotation.tend(
+                thread,
+                &self.browsers.threads[&thread],
+                &mut self.cockpit,
+                &mut self.browser_controls,
+                send_enabled,
+                composer,
+            );
+            let browser = self.browsers.threads.get_mut(&thread).unwrap();
+            if let Some(error) = step.error {
+                browser.error = Some(error);
             }
-            let native = session
-                .guard
-                .as_ref()
-                .and_then(|guard| guard.manual.borrow().native.clone());
-            if let Some(native) = native {
-                native.set_annotation_send_enabled(self.annotation_send_enabled(thread, cx));
-                for _ in 0..4 {
-                    let Some(event) = native.take_annotation_event() else {
-                        break;
-                    };
-                    match event {
-                        LiveEvent::Ready => {
-                            session.ready = true;
-                            cx.notify();
+            match step.next {
+                Next::Open(annotation) => browser.annotation = Some(annotation),
+                Next::Attach(annotation, send) => {
+                    if let Some(index) = self.pane_for(thread) {
+                        let id = annotation.id().to_owned();
+                        self.panes[index].composer.update(cx, |composer, cx| {
+                            composer.add_browser_annotation(annotation, cx)
+                        });
+                        if let Some(window) = send {
+                            self.send_attached_annotation(thread, id, window, cx);
                         }
-                        LiveEvent::Closed => {
-                            if let Some(guard) = session.guard.as_mut() {
-                                guard.restored = true;
-                            }
-                        }
-                        LiveEvent::Cancelled => {
-                            Self::finish_annotation_guest(&mut session);
-                            session.phase = Phase::Closing;
-                        }
-                        LiveEvent::Failed(message) => error = Some(message),
-                        LiveEvent::RestoreFailed(message) => {
-                            session.restore_failed = true;
-                            error = Some(message);
-                        }
-                        LiveEvent::Attach {
-                            feedback,
-                            viewport,
-                            submission,
-                        } if matches!(session.phase, Phase::Live) && valid => {
-                            let guard = session.guard.as_ref().unwrap();
-                            let aligned = native.browser_viewport().is_some_and(|actual| {
-                                (f64::from(actual.width) - viewport.width_css).abs() < 0.5
-                                    && (f64::from(actual.height) - viewport.height_css).abs() < 0.5
-                                    && (f64::from(actual.scale) - viewport.device_scale).abs()
-                                        < 0.0001
-                            });
-                            if aligned {
-                                session.submission = submission;
-                                let answer = self.browser_controls.capture(
-                                    thread,
-                                    guard.owner,
-                                    guard.document,
-                                    None,
-                                );
-                                session.phase = Phase::Capturing {
-                                    answer,
-                                    expected: viewport,
-                                    feedback,
-                                };
-                                session.started = Instant::now();
-                            } else {
-                                error = Some("The page size changed. Select it again.".into());
-                            }
-                        }
-                        LiveEvent::Attach { .. } => {}
                     }
                 }
+                Next::Closed(Some(action)) => self.browser_action(thread, action, cx),
+                Next::Closed(None) => {}
             }
-            if !matches!(
-                session.phase,
-                Phase::Live | Phase::Closing | Phase::PendingAttachment(_)
-            ) && session.started.elapsed() > Duration::from_secs(45)
-            {
-                error = Some("The annotation capture timed out. Select it again.".into());
-            }
-            if error.is_none() {
-                match &mut session.phase {
-                    Phase::Capturing {
-                        answer,
-                        expected,
-                        feedback,
-                    } => {
-                        let result = match answer.try_recv() {
-                            Ok(result) => Some(result),
-                            Err(TryRecvError::Disconnected) => {
-                                Some(Err("The screenshot capture was interrupted".into()))
-                            }
-                            Err(TryRecvError::Empty) => None,
-                        };
-                        if let Some(result) = result {
-                            let guard = session.guard.as_ref().unwrap();
-                            let mut capture = Capture {
-                                document: guard.document,
-                                native_generation: guard.generation,
-                                url: feedback.page_url.clone(),
-                                viewport: expected.clone(),
-                                selection: Selection::Live {
-                                    feedback: feedback.clone(),
-                                },
-                            };
-                            let aligned = result.as_ref().is_ok_and(|page| {
-                                page.document == guard.document
-                                    && page.native_generation == guard.generation
-                                    && page.url == capture.url
-                                    && (page.viewport.width_css - expected.width_css).abs() < 0.5
-                                    && (page.viewport.height_css - expected.height_css).abs() < 0.5
-                                    && (page.viewport.device_scale - expected.device_scale).abs()
-                                        < 0.0001
-                            });
-                            if result.is_ok() && !aligned {
-                                error = Some(
-                                    "The captured document or page size changed. Select it again."
-                                        .into(),
-                                );
-                            } else {
-                                let (ready, answer) = std::sync::mpsc::channel();
-                                let spawned = std::thread::Builder::new()
-                                    .name("ferrite-live-annotation-encode".into())
-                                    .spawn(move || {
-                                        let Selection::Live { feedback } = &mut capture.selection
-                                        else {
-                                            unreachable!()
-                                        };
-                                        let cropped = result.and_then(|page| {
-                                            live_annotation::crop(
-                                                &page.png,
-                                                &capture.viewport,
-                                                &feedback.bounds,
-                                            )
-                                        });
-                                        let encoded = match cropped {
-                                            Ok((png, crop)) => {
-                                                feedback.screenshot =
-                                                    LiveScreenshot::Captured { crop };
-                                                ferrite_core::browser_annotations::wire_png(&png)
-                                                    .map(Some)
-                                            }
-                                            Err(reason) => {
-                                                feedback.screenshot =
-                                                    LiveScreenshot::Unavailable { reason };
-                                                Ok(None)
-                                            }
-                                        }
-                                        .map(|png| (capture, png));
-                                        let _ = ready.send(encoded);
-                                    });
-                                match spawned {
-                                    Ok(_) => {
-                                        session.phase = Phase::Encoding {
-                                            answer,
-                                            ready: None,
-                                        };
-                                        Self::finish_annotation_guest(&mut session);
-                                    }
-                                    Err(failure) => error = Some(failure.to_string()),
-                                }
-                            }
-                        }
-                    }
-                    Phase::Encoding { answer, ready } => {
-                        if ready.is_none() {
-                            match answer.try_recv() {
-                                Ok(Ok(encoded)) => *ready = Some(encoded),
-                                Ok(Err(failure)) => error = Some(failure.to_string()),
-                                Err(TryRecvError::Disconnected) => {
-                                    error = Some("The annotation encoding was interrupted.".into())
-                                }
-                                Err(TryRecvError::Empty) => {}
-                            }
-                        }
-                        if session.guard.as_ref().is_some_and(|guard| guard.restored) {
-                            if let Some((capture, png)) = ready.take() {
-                                let guard = session.guard.as_ref().unwrap();
-                                match self.cockpit.browser_capture(
-                                    thread,
-                                    guard.owner,
-                                    guard.lease,
-                                    capture,
-                                    png,
-                                ) {
-                                    Ok(answer) => session.phase = Phase::Retaining(answer),
-                                    Err(failure) => error = Some(failure.to_string()),
-                                }
-                            }
-                        }
-                    }
-                    Phase::Retaining(answer) => match answer.try_recv() {
-                        Ok(Ok(retained)) => {
-                            self.release_browser_capture(thread, &mut session);
-                            if let Some(index) = self.pane_for(thread) {
-                                let id = retained.id().to_owned();
-                                self.panes[index].composer.update(cx, |composer, cx| {
-                                    composer.add_browser_annotation(retained, cx)
-                                });
-                                if session.submission == Submission::Send {
-                                    if let Some(window) = session.window {
-                                        self.send_attached_annotation(thread, id, window, cx);
-                                    }
-                                }
-                                handed_off = true;
-                            } else {
-                                session.submission = Submission::Attach;
-                                session.phase = Phase::PendingAttachment(retained);
-                            }
-                            cx.notify();
-                        }
-                        Ok(Err(failure)) => error = Some(failure.to_string()),
-                        Err(TryRecvError::Disconnected) => {
-                            error = Some("The Server did not retain this annotation.".into())
-                        }
-                        Err(TryRecvError::Empty) => {}
-                    },
-                    Phase::PendingAttachment(retained) => {
-                        if let Some(index) = self.pane_for(thread) {
-                            let annotation = retained.clone();
-                            self.panes[index].composer.update(cx, |composer, cx| {
-                                composer.add_browser_annotation(annotation, cx)
-                            });
-                            handed_off = true;
-                            cx.notify();
-                        }
-                    }
-                    _ => {}
-                }
-            }
-            if let Some(error) = error {
-                self.browsers.threads.get_mut(&thread).unwrap().error = Some(error);
-                Self::finish_annotation_guest(&mut session);
-                session.phase = Phase::Closing;
+            if step.changed {
                 cx.notify();
-            }
-            if matches!(session.phase, Phase::Closing)
-                && session.guard.as_ref().is_none_or(|guard| guard.restored)
-            {
-                let action = session.action.take().filter(|action| session.guard.as_ref().is_some_and(|guard| {
-                    self.browsers.threads.get(&thread).is_some_and(|browser| browser.owner == Some(guard.owner)
-                        && browser.pages.get(&guard.document.tab).is_some_and(|page|
-                            page.document.get() == guard.document || (session.recovering && matches!(action, Action::Close { tab } if *tab == guard.document.tab))))
-                }));
-                self.release_browser_capture(thread, &mut session);
-                handed_off = true;
-                if let Some(action) = action {
-                    self.browser_action(thread, action, cx);
-                }
-                cx.notify();
-            }
-            if !handed_off {
-                self.browsers.threads.get_mut(&thread).unwrap().annotation = Some(session);
             }
         }
     }
