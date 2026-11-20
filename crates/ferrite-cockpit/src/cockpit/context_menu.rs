@@ -428,7 +428,7 @@ impl CockpitView {
             MenuTarget::ChangesBase(diff) => {
                 rows = self.changes.read(cx).branch_rows(diff).into_iter().map(Some).collect()
             }
-            MenuTarget::BrowserPage(thread) => rows = self.browser_page_rows(thread),
+            MenuTarget::BrowserPage(thread) => rows = self.browser_page_rows(thread, cx),
             MenuTarget::Details(_) => rows = self.details_menu_rows(),
             MenuTarget::Terminal(_) => rows = self.terminals.read(cx).context_rows(),
             MenuTarget::TerminalMore(_) => rows = self.terminals.read(cx).more_rows(),
