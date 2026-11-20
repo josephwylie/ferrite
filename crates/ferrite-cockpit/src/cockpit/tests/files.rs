@@ -449,7 +449,7 @@ fn a_changed_files_tab_offers_show_changes(cx: &mut TestAppContext) {
     view.update(cx, |view, cx| view.run_opener(thread, Opener::Changes, cx));
     for _ in 0..400 {
         tick(cx);
-        if view.read_with(cx, |view, _| view.changes_read(Diff::Changes(thread)).is_some()) {
+        if view.read_with(cx, |view, cx| view.changes.read(cx).files_read(Diff::Changes(thread)).is_some()) {
             break;
         }
         std::thread::sleep(std::time::Duration::from_millis(5));
@@ -1174,7 +1174,7 @@ fn a_deleted_threads_edit_reaches_the_disk_and_its_files_go(cx: &mut TestAppCont
     pause_and_settle(cx);
     assert!(std::fs::read_to_string(&file).unwrap().starts_with("// kept\n"), "the edit is on disk");
     tick(cx);
-    assert_eq!(view.read_with(cx, |view, _| view.held_for_test(thread)), 0, "its Files went");
+    assert_eq!(view.read_with(cx, |view, cx| view.held_for_test(thread, cx)), 0, "its Files went");
 }
 
 /// A deleted Thread's edit the disk refused is still counted when leaving,

@@ -574,7 +574,7 @@ fn a_prs_code_view_reads_the_published_diff(cx: &mut TestAppContext) {
     tick(cx);
     click("pr-tab-Code", cx);
     let scope = |diff: Diff, cx: &mut gpui::VisualTestContext| {
-        view.read_with(cx, |view, _| view.changes_scope_label(diff))
+        view.read_with(cx, |view, cx| view.changes.read(cx).scope_label(diff))
     };
     assert_eq!(
         scope(
@@ -594,8 +594,8 @@ fn a_prs_code_view_reads_the_published_diff(cx: &mut TestAppContext) {
         "no scope to pick in Code"
     );
     until(cx, |cx| {
-        view.read_with(cx, |view, _| {
-            view.changes_read(Diff::PullRequest(crate::cockpit::panel::pr_read::PrTarget::thread(
+        view.read_with(cx, |view, cx| {
+            view.changes.read(cx).files_read(Diff::PullRequest(crate::cockpit::panel::pr_read::PrTarget::thread(
                 thread, 48,
             ))) == Some(1)
         })

@@ -423,10 +423,10 @@ impl CockpitView {
             }
             MenuTarget::File(_) => rows = self.files_row_rows(),
             MenuTarget::FilesMore(thread) => rows = self.files_more_rows(thread),
-            MenuTarget::ChangesScope(diff) => rows = self.changes_scope_rows(diff),
-            MenuTarget::ChangesMore(diff) => rows = self.changes_more_rows(diff),
+            MenuTarget::ChangesScope(diff) => rows = self.changes.read(cx).scope_rows(diff),
+            MenuTarget::ChangesMore(diff) => rows = self.changes.read(cx).more_rows(diff),
             MenuTarget::ChangesBase(diff) => {
-                rows = self.changes_branch_rows(diff).into_iter().map(Some).collect()
+                rows = self.changes.read(cx).branch_rows(diff).into_iter().map(Some).collect()
             }
             MenuTarget::BrowserPage(thread) => rows = self.browser_page_rows(thread),
             MenuTarget::Details(_) => rows = self.details_menu_rows(),
@@ -599,7 +599,7 @@ impl CockpitView {
             }
             (Submenu::Files(_), _) => Vec::new(),
             (Submenu::Changes(_), MenuTarget::ChangesScope(diff)) => {
-                self.changes_branch_rows(diff)
+                self.changes.read(cx).branch_rows(diff)
             }
             (Submenu::Changes(_), _) => Vec::new(),
             (Submenu::Terminal(sub), _) => self.terminals.read(cx).sub_rows(sub),
@@ -903,7 +903,9 @@ impl CockpitView {
                 | MenuTarget::ChangesMore(diff)
                 | MenuTarget::ChangesBase(diff),
                 MenuVerb::Changes(verb),
-            ) => self.run_changes_verb(diff, verb, cx),
+            ) => self
+                .changes
+                .update(cx, |changes, cx| changes.run_verb(diff, verb, cx)),
             (MenuTarget::BrowserPage(thread), MenuVerb::Browser(verb)) => {
                 self.run_browser_page_verb(thread, verb, cx)
             }

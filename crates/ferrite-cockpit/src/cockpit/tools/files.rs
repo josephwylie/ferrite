@@ -1254,7 +1254,7 @@ impl CockpitView {
         };
         let relative = tab.path.strip_prefix(files.tree.root()).unwrap_or(&tab.path);
         let relative_path = relative.to_string_lossy().into_owned();
-        let changed = self.changes_list(thread, &relative_path);
+        let changed = self.changes.read(cx).lists(thread, &relative_path);
         let text_action = |key: &'static str, label: &'static str| {
             div()
                 .id(key)

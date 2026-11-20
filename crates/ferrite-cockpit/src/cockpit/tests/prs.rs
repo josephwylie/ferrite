@@ -274,7 +274,7 @@ fn a_project_pr_reads_published_code_without_a_thread(cx: &mut TestAppContext) {
     until(cx, |cx| {
         world
             .view
-            .read_with(cx, |view, _| view.changes_read(Diff::PullRequest(target)))
+            .read_with(cx, |view, cx| view.changes.read(cx).files_read(Diff::PullRequest(target)))
             == Some(1)
     });
     assert!(!shows(cx, "changes-stage-0"));
@@ -283,6 +283,34 @@ fn a_project_pr_reads_published_code_without_a_thread(cx: &mut TestAppContext) {
     click(cx, "pr-tab-Timeline");
     assert!(shows(cx, "pr-snippet-0"));
     assert!(shows(cx, "pr-reply-0-0"));
+}
+
+/// A PR opened with Code already chosen reads its diff with no hover on
+/// the Code segment, and the PR left keeps its own.
+#[gpui::test]
+fn a_project_pr_opened_on_code_reads_its_diff(cx: &mut TestAppContext) {
+    use crate::cockpit::panel::pr_read::PrTarget;
+    use crate::cockpit::tools::Diff;
+    let (world, cx) = world("prs-code-reads", 0, two_rows(), false, cx);
+    world.view.update(cx, |view, _| {
+        let files = ferrite_core::protocol::sides_of_unified("diff --git a/remote.rs b/remote.rs\n--- a/remote.rs\n+++ b/remote.rs\n@@ -1 +1 @@\n-old\n+remote\n");
+        view.cockpit.fixture_forge_diff(world.path.clone(), 7, files);
+        view.cockpit.fixture_forge_diff(world.path.clone(), 3, Vec::new());
+    });
+    let read = |number: u64, cx: &mut gpui::VisualTestContext| {
+        let diff = Diff::PullRequest(PrTarget::project(world.project, number));
+        world.view.read_with(cx, |view, cx| view.changes.read(cx).files_read(diff))
+    };
+    click(cx, "nav-pull-requests");
+    lands(cx, "prs-row-7");
+    click(cx, "prs-row-7");
+    lands(cx, "pr-body");
+    click(cx, "pr-tab-Code");
+    until(cx, |cx| read(7, cx) == Some(1));
+    click(cx, "prs-back");
+    click(cx, "prs-row-3");
+    until(cx, |cx| read(3, cx) == Some(0));
+    assert_eq!(read(7, cx), Some(1), "the PR left keeps what it read");
 }
 
 /// A review shows its verdict whether or not it has words, and a failed
