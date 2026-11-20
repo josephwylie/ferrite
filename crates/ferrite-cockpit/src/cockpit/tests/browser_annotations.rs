@@ -143,8 +143,8 @@ fn restarted<'a>(
     let chip = window.debug_bounds("review-browser-annotation-0").unwrap();
     window.simulate_click(chip.center(), gpui::Modifiers::none());
     until(window, |cx| cx.debug_bounds("annotation-stage").is_some());
-    let thread = view.update(window, |view, _| {
-        view.flush_panel_persistence();
+    let thread = view.update(window, |view, cx| {
+        view.flush_panel_persistence(cx);
         let thread = view.panes[0].thread().unwrap();
         if quit {
             view.cockpit.park(thread).unwrap();
@@ -212,11 +212,11 @@ fn a_restored_image_tab_nothing_claims_goes_without_the_lightbox(cx: &mut TestAp
     tick(window);
     assert_eq!(composer_text(&view, window), "still mine", "the keyboard is the Pane's");
     let tab = crate::cockpit::surfaces::SurfaceId::File(capture);
-    view.update(window, |view, _| {
+    view.update(window, |view, cx| {
         assert!(!view.panel.surfaces.get(thread).unwrap().tabs.contains(&tab));
         view.apply_surface(thread, crate::cockpit::surfaces::SurfaceAction::Reopen);
         assert!(!view.panel.surfaces.get(thread).unwrap().tabs.contains(&tab), "nor on Reopen");
-        view.flush_panel_persistence();
+        view.flush_panel_persistence(cx);
     });
     let saved = crate::cockpit::surfaces::Surfaces::load(&settings, |_, _| true).unwrap();
     assert!(!saved.get(thread).unwrap().tabs.contains(&tab), "nor at the next launch");

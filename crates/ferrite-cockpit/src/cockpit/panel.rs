@@ -272,7 +272,7 @@ impl CockpitView {
         match &id {
             SurfaceId::Files => {
                 if self.active_surface(thread) != Some(SurfaceId::Files) {
-                    self.refresh_file_tree(thread, cx);
+                    self.files.update(cx, |files, cx| files.refresh(thread, cx));
                 }
                 self.ensure_files(thread, cx);
             }
@@ -302,7 +302,7 @@ impl CockpitView {
     /// A tab pressed: its Surface shows.
     pub(super) fn activate_surface(&mut self, thread: ThreadId, id: &SurfaceId, cx: &mut Context<Self>) {
         if *id == SurfaceId::Files {
-            self.refresh_file_tree(thread, cx);
+            self.files.update(cx, |files, cx| files.refresh(thread, cx));
         }
         self.apply_surface(thread, SurfaceAction::Activate(id.clone()));
         cx.notify();
@@ -416,14 +416,14 @@ impl CockpitView {
         self.tools_held_for_test(thread, cx) + self.panel.hunks.held_for_test(thread)
     }
 
-    pub(crate) fn successor_panel(&mut self) -> Panel {
-        self.sync_working_sets();
+    pub(crate) fn successor_panel(&mut self, cx: &gpui::App) -> Panel {
+        self.sync_working_sets(cx);
         self.panel.successor()
     }
 
     pub(super) fn pump_panel_persistence(&mut self, cx: &mut Context<Self>) {
         self.forget_gone_threads(cx);
-        self.sync_working_sets();
+        self.sync_working_sets(cx);
         self.panel.persistence.pump(
             &self.prefs.dir,
             &self.panel.surfaces,
@@ -432,8 +432,8 @@ impl CockpitView {
         );
     }
 
-    pub(super) fn flush_panel_persistence(&mut self) {
-        self.sync_working_sets();
+    pub(super) fn flush_panel_persistence(&mut self, cx: &gpui::App) {
+        self.sync_working_sets(cx);
         if let Err(error) = self.panel.persistence.flush(
             &self.prefs.dir,
             &self.panel.surfaces,
@@ -480,7 +480,10 @@ impl CockpitView {
     /// Surface what it needs to draw.
     pub(super) fn tend_panel(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.tend_previews(window, cx);
-        self.tend_prose_find(window);
+        if let Some(thread) = self.panel_thread() {
+            self.files
+                .update(cx, |files, _| files.tend_prose_find(thread, window));
+        }
         let shown = self.shown_pr();
         self.pull_request.update(cx, |reader, _| reader.disarm_unless(shown));
         let board = self.prs.read(cx).open();
@@ -827,7 +830,7 @@ impl CockpitView {
                     .into_any_element()
             }
             Some(SurfaceId::File(_) | SurfaceId::Browser) => padded(self.panel_preview(owner, cx)),
-            Some(SurfaceId::Files) => self.files_pane(thread, cx).into_any_element(),
+            Some(SurfaceId::Files) => self.files.clone().into_any_element(),
             Some(SurfaceId::Changes) => filled(self.changes_pane(tools::Diff::Changes(thread), cx).into_any_element()),
             Some(SurfaceId::Terminal(_)) => filled(self.terminals.clone().into_any_element()),
             Some(SurfaceId::SideChat(_)) => filled(self.side_chat.clone().into_any_element()),

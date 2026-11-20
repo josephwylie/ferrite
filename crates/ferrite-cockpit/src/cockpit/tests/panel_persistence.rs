@@ -25,7 +25,7 @@ fn rendering_panels_does_not_write_tabs_or_working_sets(cx: &mut TestAppContext)
     });
     assert!(!dir.join("panel.json").exists());
     assert!(!dir.join("files.json").exists());
-    view.update(cx, |view, _| view.flush_panel_persistence());
+    view.update(cx, |view, cx| view.flush_panel_persistence(cx));
     assert!(dir.join("panel.json").exists(), "the edit needs a save");
     assert!(
         dir.join("files.json").exists(),
@@ -79,11 +79,11 @@ fn close_reopen_and_files_preferences_restore_with_the_saved_panel(cx: &mut Test
     let thread = view.update(cx, |view, cx| {
         let thread = view.panes[0].thread().unwrap();
         view.open_in_files(thread, file.clone(), None, true, cx);
-        view.run_files_verb(thread, FilesVerb::TogglePreviewTabs, cx);
+        view.files.update(cx, |files, cx| files.run_verb(thread, FilesVerb::TogglePreviewTabs, cx));
         view.close_surfaces(thread, CloseSelection::One(SurfaceId::Files), cx);
         view.apply_surface(thread, SurfaceAction::Reopen);
         view.apply_surface(thread, SurfaceAction::ToggleDetails);
-        view.flush_panel_persistence();
+        view.flush_panel_persistence(cx);
         thread
     });
     let (core, _fake, _checkout) = bound_cockpit("panel-restore-second", Provider::Claude);
@@ -96,7 +96,7 @@ fn close_reopen_and_files_preferences_restore_with_the_saved_panel(cx: &mut Test
         assert!(!view.panel.surfaces.get(thread).unwrap().details_inline_open);
         view.ensure_files(thread, cx);
         assert_eq!(
-            view.files_tab_names(thread),
+            view.files.read(cx).tab_names(thread),
             [("lib.rs".to_string(), false)]
         );
         view.open_context_menu(
@@ -130,12 +130,12 @@ fn a_deleted_threads_working_set_is_saved_away_once(cx: &mut TestAppContext) {
     let thread = view.update(cx, |view, cx| {
         let thread = view.cockpit.threads().into_iter().find(|&thread| thread != other).unwrap();
         view.open_in_files(thread, checkout.join("src/lib.rs"), None, true, cx);
-        view.flush_panel_persistence();
+        view.flush_panel_persistence(cx);
         view.delete_thread(thread).unwrap();
         view.pump(cx);
         view.open_in_files(other, checkout.join("README.md"), None, true, cx);
         view.pump(cx);
-        view.flush_panel_persistence();
+        view.flush_panel_persistence(cx);
         thread
     });
     let files: serde_json::Value =
@@ -145,7 +145,7 @@ fn a_deleted_threads_working_set_is_saved_away_once(cx: &mut TestAppContext) {
     view.update(cx, |view, cx| {
         for _ in 0..3 {
             view.pump(cx);
-            view.flush_panel_persistence();
+            view.flush_panel_persistence(cx);
         }
     });
     assert!(!dir.join("files.json").exists(), "nothing changed, so nothing is written");

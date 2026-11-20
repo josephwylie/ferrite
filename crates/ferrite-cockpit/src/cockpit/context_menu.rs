@@ -421,8 +421,8 @@ impl CockpitView {
                     ))
                 }));
             }
-            MenuTarget::File(_) => rows = self.files_row_rows(),
-            MenuTarget::FilesMore(thread) => rows = self.files_more_rows(thread),
+            MenuTarget::File(_) => rows = tools::FilesView::row_rows(self.on_machine()),
+            MenuTarget::FilesMore(thread) => rows = self.files.read(cx).more_rows(thread),
             MenuTarget::ChangesScope(diff) => rows = self.changes.read(cx).scope_rows(diff),
             MenuTarget::ChangesMore(diff) => rows = self.changes.read(cx).more_rows(diff),
             MenuTarget::ChangesBase(diff) => {
@@ -595,7 +595,7 @@ impl CockpitView {
             (Submenu::Snooze, MenuTarget::Thread(_) | MenuTarget::Pane(_)) => self.snooze_rows(),
             (Submenu::Snooze, _) => Vec::new(),
             (Submenu::Files(sub), MenuTarget::File(thread) | MenuTarget::FilesMore(thread)) => {
-                self.files_sub_rows(thread, sub)
+                self.files.read(cx).sub_rows(thread, sub)
             }
             (Submenu::Files(_), _) => Vec::new(),
             (Submenu::Changes(_), MenuTarget::ChangesScope(diff)) => {
@@ -896,7 +896,7 @@ impl CockpitView {
                 }
             }
             (MenuTarget::File(thread) | MenuTarget::FilesMore(thread), MenuVerb::Files(verb)) => {
-                self.run_files_verb(thread, verb, cx)
+                self.files.update(cx, |files, cx| files.run_verb(thread, verb, cx))
             }
             (
                 MenuTarget::ChangesScope(diff)
@@ -993,7 +993,7 @@ impl CockpitView {
                 }
             }
             (_, MenuVerb::Reveal) => {
-                if let Some(path) = self.target_path(target) {
+                if let Some(path) = self.target_path(target, cx) {
                     cx.reveal_path(&path);
                 }
             }
@@ -1005,7 +1005,7 @@ impl CockpitView {
                 cx.write_to_clipboard(ClipboardItem::new_string(thread_link(thread)));
             }
             (_, MenuVerb::OpenTerminal) => {
-                if let Some(path) = self.target_path(target) {
+                if let Some(path) = self.target_path(target, cx) {
                     if let Err(error) = terminal_at(&path).spawn() {
                         ferrite_core::log!(
                             "a Terminal did not open at {}: {error}",
@@ -1017,7 +1017,7 @@ impl CockpitView {
             (MenuTarget::Thread(thread), MenuVerb::RefreshPr) => self.check_pr(thread, true, cx),
             (MenuTarget::Thread(thread), MenuVerb::OpenPr) => self.open_pr(thread, cx),
             (_, MenuVerb::CopyPath) => {
-                if let Some(path) = self.target_path(target) {
+                if let Some(path) = self.target_path(target, cx) {
                     cx.write_to_clipboard(ClipboardItem::new_string(
                         path.to_string_lossy().to_string(),
                     ));

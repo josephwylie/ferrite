@@ -257,7 +257,7 @@ fn a_tap_on_a_file_card_opens_it_while_other_text_is_highlighted(cx: &mut TestAp
         .expect("the file link is a card");
     tap(cx, card.center() + gpui::point(px(1.), px(0.)));
     assert_eq!(
-        view.read_with(cx, |view, _| view.files_active_path(view.panes[0].thread().unwrap())),
+        view.read_with(cx, |view, cx| view.files.read(cx).active_path(view.panes[0].thread().unwrap())),
         Some(file),
         "the card opened its reader"
     );
@@ -484,7 +484,7 @@ fn a_tap_on_a_file_chip_with_a_line_opens_the_reader_at_that_line(cx: &mut TestA
         .expect("the file link is a card");
     tap(cx, card.center() + gpui::point(px(1.), px(0.)));
     let thread = view.read_with(cx, |view, _| view.panes[0].thread().unwrap());
-    let editor = view.read_with(cx, |view, _| view.files_editor_of(thread).expect("a code file"));
+    let editor = view.read_with(cx, |view, cx| view.files.read(cx).shown_editor(thread).expect("a code file"));
     editor.update(cx, |editor, cx| {
         editor.type_text("X", cx);
         editor.save(cx);
