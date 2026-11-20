@@ -1,0 +1,464 @@
+#!/usr/bin/env python3
+"""fv: launch, inspect, drive and tear down an isolated Ferrite for verification.
+
+`fv launch` builds the checkout this script belongs to and starts its Server
+and window on /tmp/fv-<run>/; every other command acts on the run FV_RUN
+names. See ../SKILL.md.
+"""
+
+import json
+import os
+import re
+import shlex
+import shutil
+import signal
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+HERE = Path(__file__).resolve().parent
+CHECKOUT = HERE.parent.parent.parent
+BINARY = CHECKOUT / "target" / "debug" / "ferrite"
+BUILD = ["cargo", "build", "--locked", "-p", "ferrite", "--features", "headless"]
+MAC = sys.platform == "darwin"
+TEMP = Path("/tmp").resolve()
+OPERATOR_ENV = ("FERRITE_SOCKET", "FERRITE_THREAD_ID", "FERRITE_BIN")
+RUN_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,40}")
+SHOT_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,80}")
+NO_RENDERER = ("no HeadlessRenderer", "render_to_image not available")
+READY_SELECTOR = "nav-search"
+HEADLESS_ONLY = ("find", "resize", "drag")
+
+SETTINGS = {
+    "default_provider": "claude",
+    "claude_model": "haiku",
+    "claude_effort": "low",
+    "claude_permission_mode": "default",
+    "codex_approval_policy": "on-request",
+    "codex_sandbox": "read-only",
+    "start_at_login": False,
+    "check_for_updates": False,
+    "auto_update_clis": False,
+    "system_notifications": False,
+    "sounds": False,
+    "auto_title": False,
+    "placeholder_suggestions": False,
+}
+
+
+class Refused(Exception):
+    pass
+
+
+class Run:
+    def __init__(self, run_id, mode="headless"):
+        if not RUN_ID.fullmatch(run_id or ""):
+            raise Refused(f"a run id matches {RUN_ID.pattern}, not {run_id!r}")
+        self.id = run_id
+        self.mode = mode
+        self.root = TEMP / f"fv-{run_id}"
+        self.store = self.root / "threads"
+        self.repo = self.root / "repo"
+        self.state = self.root / "run.env"
+        self.evidence = CHECKOUT / "target" / "verify-ferrite" / run_id
+        real = self.store.resolve()
+        if real.parent.parent != TEMP or real.parent.name != f"fv-{run_id}":
+            raise Refused(f"the Store {real} is not this run's, under {TEMP}")
+
+    @classmethod
+    def current(cls):
+        run_id = os.environ.get("FV_RUN")
+        if not run_id:
+            raise Refused("FV_RUN is not set (fv launch prints it)")
+        run = cls(run_id)
+        if not run.state.is_file():
+            raise Refused(f"no run {run_id} at {run.root}")
+        saved = run.saved()
+        if saved.get("CHECKOUT") != str(CHECKOUT):
+            raise Refused(f"run {run_id} was launched from {saved.get('CHECKOUT')}; use that checkout's fv")
+        run.mode = saved.get("MODE", "headless")
+        return run
+
+    def env(self):
+        env = {k: v for k, v in os.environ.items() if k not in OPERATOR_ENV}
+        env["FERRITE_STORE"] = str(self.store)
+        return env
+
+    def saved(self):
+        pairs = (shlex.split(line)[0].split("=", 1) for line in self.state.read_text().splitlines() if line)
+        return dict(pairs)
+
+    def pid(self, role):
+        value = self.saved().get(f"{role.upper()}_PID")
+        return int(value) if value else None
+
+    def remember(self, key, value):
+        with open(self.state, "a") as out:
+            out.write(f"{key}={shlex.quote(str(value))}\n")
+
+    def record(self, argv, done, shown="ferrite"):
+        self.evidence.mkdir(parents=True, exist_ok=True)
+        number = len(list(self.evidence.glob("cli-*.txt"))) + 1
+        while True:
+            path = self.evidence / f"cli-{number:03d}.txt"
+            try:
+                with open(path, "x") as out:
+                    out.write(f"$ {shown} {shlex.join(map(str, argv[1:]))}\n")
+                    out.write(f"--- stdout\n{done.stdout}")
+                    out.write(f"--- stderr\n{done.stderr}")
+                    out.write(f"--- exit {done.returncode}\n")
+                return
+            except FileExistsError:
+                number += 1
+
+    def ferrite(self, *args, echo=True, keep=True):
+        argv = [str(BINARY), *map(str, args)]
+        done = subprocess.run(argv, env=self.env(), cwd=self.repo, capture_output=True, text=True)
+        if keep:
+            self.record(argv, done)
+        if echo:
+            sys.stdout.write(done.stdout)
+            sys.stderr.write(done.stderr)
+        return done
+
+    def role_args(self, role):
+        if role == "server":
+            return ["server"]
+        return ["--headless"] if self.mode == "headless" else []
+
+
+def process(pid):
+    """A live pid's command words and environment, or None."""
+    try:
+        if MAC:
+            ps = lambda *o: subprocess.run(["ps", *o, "-p", str(pid)], capture_output=True, text=True, check=True).stdout
+            words = ps("-o", "command=").split()
+            env = dict(w.split("=", 1) for w in ps("eww").split() if "=" in w)
+            return words, env
+        exe = os.readlink(f"/proc/{pid}/exe").removesuffix(" (deleted)")
+        argv = Path(f"/proc/{pid}/cmdline").read_bytes().split(b"\0")[:-1]
+        pairs = Path(f"/proc/{pid}/environ").read_bytes().split(b"\0")
+        env = dict(p.decode(errors="replace").split("=", 1) for p in pairs if b"=" in p)
+        return [exe, *(a.decode(errors="replace") for a in argv[1:])], env
+    except (OSError, subprocess.CalledProcessError, ValueError):
+        return None
+
+
+def disowned(run, role, pid):
+    """Why pid is not this run's own `role` process, or None when it is."""
+    facts = process(pid) if pid else None
+    if facts is None:
+        return f"pid {pid} is not running"
+    words, env = facts
+    if not words or Path(words[0]).resolve() != BINARY.resolve():
+        return f"pid {pid} runs {words[0] if words else '?'}, not {BINARY}"
+    if words[1:] != run.role_args(role):
+        return f"pid {pid} is `{' '.join(words)}`, not `ferrite {' '.join(run.role_args(role))}`"
+    if env.get("FERRITE_STORE") != str(run.store):
+        return f"pid {pid} is on Store {env.get('FERRITE_STORE')}, not {run.store}"
+    return None
+
+
+def listens_on(pid, socket):
+    if MAC:
+        names = subprocess.run(["lsof", "-a", "-U", "-p", str(pid), "-Fn"], capture_output=True, text=True).stdout
+        return f"n{socket}" in names.splitlines()
+    inodes = set()
+    for fd in Path(f"/proc/{pid}/fd").iterdir():
+        try:
+            target = os.readlink(fd)
+        except OSError:
+            continue
+        if target.startswith("socket:["):
+            inodes.add(target[8:-1])
+    for line in Path("/proc/net/unix").read_text().splitlines()[1:]:
+        fields = line.split()
+        if len(fields) >= 8 and fields[7] == str(socket) and fields[6] in inodes:
+            return True
+    return False
+
+
+def wait_until(what, ready, alive, seconds):
+    deadline = time.monotonic() + seconds
+    while time.monotonic() < deadline:
+        if not alive():
+            raise Refused(f"{what} exited before it answered")
+        if ready():
+            return
+        time.sleep(0.25)
+    raise Refused(f"{what} did not answer within {seconds}s")
+
+
+def headless_answers(run, keep):
+    """macOS proves the window with a shot; elsewhere shots fail, so a find."""
+    if MAC:
+        return run.ferrite("window", "shot", run.root / "ready.png", echo=False, keep=keep).returncode == 0
+    done = run.ferrite("window", "find", READY_SELECTOR, echo=False, keep=keep)
+    return done.returncode == 0 or "nothing drawn" in done.stderr
+
+
+# --- the visible macOS window (--window): Quartz for shots, fv_input.py for input
+
+def quartz():
+    import Quartz
+    return Quartz
+
+
+def window_id(pid):
+    q = quartz()
+    for w in q.CGWindowListCopyWindowInfo(q.kCGWindowListOptionAll, q.kCGNullWindowID):
+        if w.get("kCGWindowOwnerPID") == pid and w.get("kCGWindowName") == "ferrite" and w.get("kCGWindowIsOnscreen"):
+            return w["kCGWindowNumber"]
+    return None
+
+
+def covered_by(pid):
+    """Another app's window above ours and overlapping it: GPUI then stops drawing."""
+    q = quartz()
+    box = lambda w: (w["kCGWindowBounds"]["X"], w["kCGWindowBounds"]["Y"],
+                     w["kCGWindowBounds"]["X"] + w["kCGWindowBounds"]["Width"],
+                     w["kCGWindowBounds"]["Y"] + w["kCGWindowBounds"]["Height"])
+    above = []
+    for w in q.CGWindowListCopyWindowInfo(q.kCGWindowListOptionOnScreenOnly, q.kCGNullWindowID):
+        if w.get("kCGWindowOwnerPID") == pid and w.get("kCGWindowName") == "ferrite":
+            x0, y0, x1, y1 = box(w)
+            for a in above:
+                ax0, ay0, ax1, ay1 = box(a)
+                if ax0 < x1 and x0 < ax1 and ay0 < y1 and y0 < ay1:
+                    return a.get("kCGWindowOwnerName")
+            return None
+        if w.get("kCGWindowLayer") == 0 and w.get("kCGWindowOwnerPID") != pid:
+            above.append(w)
+    return None
+
+
+def accessibility():
+    asked = subprocess.run(["osascript", "-e", 'tell application "System Events" to get UI elements enabled'],
+                           capture_output=True, text=True)
+    return asked.stdout.strip() == "true"
+
+
+def needs_mac(what):
+    if not MAC:
+        raise Refused(f"{what} needs macOS (Quartz, osascript); on {sys.platform} use the headless window")
+
+
+# ---
+
+def start(run, role, log):
+    out = open(run.root / log, "w")
+    env = {**run.env(), "TERM": "dumb"}
+    child = subprocess.Popen([str(BINARY), *run.role_args(role)], env=env, cwd=run.repo,
+                             stdin=subprocess.DEVNULL, stdout=out, stderr=out, start_new_session=True)
+    run.remember(f"{role.upper()}_PID", child.pid)
+    return child
+
+
+def launch(args):
+    mode = "headless"
+    if args[:1] == ["--window"]:
+        needs_mac("fv launch --window")
+        mode, args = "window", args[1:]
+    run = Run(args[0] if args else time.strftime("%H%M%S") + str(os.getpid()), mode)
+    if run.root.exists() or run.evidence.exists():
+        raise Refused(f"run {run.id} exists; pick another run id")
+    run.evidence.mkdir(parents=True)
+    built = subprocess.run(BUILD, cwd=CHECKOUT, env=run.env(), capture_output=True, text=True)
+    run.record(BUILD, built, shown="cargo")
+    if built.returncode != 0:
+        sys.stderr.write(built.stderr[-4000:])
+        raise Refused(f"the build failed; see {run.evidence}")
+
+    run.store.mkdir(parents=True)
+    (run.root / "settings.json").write_text(json.dumps(SETTINGS, indent=2) + "\n")
+    run.repo.mkdir()
+    (run.repo / "README.md").write_text("verify\n")
+    git = ["git", "-C", str(run.repo), "-c", "user.name=fv", "-c", "user.email=fv@localhost"]
+    for step in (["init", "-q", "-b", "main"], ["add", "README.md"], ["commit", "-q", "-m", "seed"]):
+        subprocess.run([*git, *step], check=True, capture_output=True)
+    run.remember("MODE", mode)
+    run.remember("CHECKOUT", CHECKOUT)
+    try:
+        server, window = settle(run)
+    except Refused as refusal:
+        raise Refused(f"{refusal}; logs in {run.root}; clean up with FV_RUN={run.id} fv stop")
+    print(f"export FV_RUN={run.id}")
+    print(f"mode={mode} root={run.root} evidence={run.evidence} server={server} window={window}")
+
+
+def settle(run):
+    server = start(run, "server", "server.out")
+    wait_until("the Server", lambda: run.ferrite("thread", "list", echo=False, keep=False).returncode == 0,
+               lambda: server.poll() is None, 60)
+    run.ferrite("thread", "list", echo=False)
+    seed = run.ferrite("project", "open", "--cwd", run.repo, "--label", "verify", "--focus", echo=False)
+    if seed.returncode != 0:
+        raise Refused(f"could not register the Project: {seed.stderr.strip()}")
+    (run.evidence / "seed-project.json").write_text(seed.stdout)
+    window = start(run, "window", "window.out")
+    if run.mode == "headless":
+        wait_until("the headless window", lambda: headless_answers(run, keep=False), lambda: window.poll() is None, 120)
+        headless_answers(run, keep=True)
+    else:
+        wait_until("the window", lambda: window_id(window.pid) is not None, lambda: window.poll() is None, 60)
+    return server.pid, window.pid
+
+
+def doctor(_args):
+    run = Run.current()
+    lines = []
+    check = lambda good, text: lines.append(f"{'ok  ' if good else 'FAIL'} {text}")
+    server, window = run.pid("server"), run.pid("window")
+    for role, pid in (("server", server), ("window", window)):
+        why = disowned(run, role, pid)
+        check(why is None, f"{role} pid {pid} is ours ({run.mode}){': ' + why if why else ''}")
+    socket = run.store / "api.sock"
+    check(disowned(run, "server", server) is None and listens_on(server, socket), f"server owns {socket}")
+    threads = run.ferrite("thread", "list", echo=False)
+    check(threads.returncode == 0, f"API answers on our Store{': ' + threads.stderr.strip() if threads.returncode else ''}")
+    if run.mode == "headless":
+        check(headless_answers(run, keep=True), f"headless window answers (window {'shot' if MAC else 'find'})")
+    else:
+        check(window_id(window) is not None, "window is on screen")
+        cover = covered_by(window)
+        check(cover is None, f"window not covered by another app (shots repaint){': ' + cover if cover else ''}")
+        check(subprocess.run(["python3", "-I", "-c", "import Quartz"]).returncode == 0, "python3 has Quartz (shots, input)")
+        check(accessibility(), "Accessibility granted (key/type/click)")
+    print("\n".join(lines))
+    version = subprocess.run([str(BINARY), "--version"], env=run.env(), capture_output=True, text=True).stdout.strip()
+    commit = subprocess.run(["git", "-C", str(CHECKOUT), "describe", "--always", "--dirty"],
+                            capture_output=True, text=True).stdout.strip()
+    print(f"info version: {version or 'unknown'}  checkout: {CHECKOUT} @ {commit}")
+    if threads.returncode == 0:
+        listed = json.loads(threads.stdout).get("result", {}).get("threads", [])
+        print(f"info threads: {len(listed)} open")
+        for t in listed:
+            print(f"info   {t.get('thread')} {t.get('attention')} {t.get('title') or ''}")
+    return 0 if all(line.startswith("ok") for line in lines) else 1
+
+
+def cli(args):
+    if args[:1] == ["--"]:
+        args = args[1:]
+    return Run.current().ferrite(*args).returncode
+
+
+def drive(verb):
+    def act(args):
+        run = Run.current()
+        words = [" ".join(args)] if verb == "type" else args
+        if run.mode == "headless":
+            separate = ["--"] if verb in ("key", "type", "find") else []
+            return run.ferrite("window", verb, *separate, *words).returncode
+        if verb in HEADLESS_ONLY:
+            raise Refused(f"{verb} needs the headless window (fv launch without --window)")
+        pid = run.pid("window")
+        why = disowned(run, "window", pid)
+        if why:
+            raise Refused(f"the window is not this run's: {why}")
+        with open(run.evidence / "input.log", "a") as log:
+            log.write(f"{time.strftime('%H:%M:%S')} fv {verb} {shlex.join(args)}\n")
+        return subprocess.run(["python3", "-I", str(HERE / "fv_input.py"), str(pid), verb, *words]).returncode
+    return act
+
+
+def shot(args):
+    if len(args) != 1 or not SHOT_NAME.fullmatch(args[0]):
+        raise Refused("usage: fv shot <name>, a plain file name")
+    run = Run.current()
+    path = run.evidence / f"{args[0].removesuffix('.png')}.png"
+    if run.mode == "window":
+        pid = run.pid("window")
+        number = window_id(pid)
+        if number is None:
+            raise Refused(f"no on-screen window for pid {pid}")
+        cover = covered_by(pid)
+        if cover:
+            raise Refused(f"window is covered by {cover}, so it has stopped repainting; a shot would be stale")
+        subprocess.run(["screencapture", "-x", "-o", f"-l{number}", str(path)], check=True)
+        print(path)
+        return 0
+    done = run.ferrite("window", "shot", path, echo=False)
+    if done.returncode != 0 and any(marker in done.stderr for marker in NO_RENDERER):
+        print(f"fv shot: screenshots need macOS for now; {sys.platform} has no off-screen renderer", file=sys.stderr)
+        return 1
+    sys.stderr.write(done.stderr)
+    if done.returncode == 0:
+        print(path)
+    return done.returncode
+
+
+def stop(_args):
+    run = Run.current()
+    failed = False
+    for role in ("window", "server"):
+        pid = run.pid(role)
+        why = disowned(run, role, pid)
+        if why:
+            print(f"skip {role}: {why}")
+            continue
+        os.kill(pid, signal.SIGTERM)
+        deadline = time.monotonic() + 15
+        while process(pid) is not None and time.monotonic() < deadline:
+            time.sleep(0.2)
+        gone = process(pid) is None
+        failed |= not gone
+        print(f"{'ok  ' if gone else 'FAIL'} {role} pid {pid} {'stopped' if gone else 'did not exit; inspect it before killing harder'}")
+    logs = run.evidence / "logs"
+    if (run.root / "logs").is_dir():
+        shutil.copytree(run.root / "logs", logs, dirs_exist_ok=True)
+    logs.mkdir(parents=True, exist_ok=True)
+    for name in ("server.out", "window.out", "settings.json", "run.env"):
+        if (run.root / name).exists():
+            shutil.copy2(run.root / name, logs / name)
+    if not MAC:
+        for entry in Path("/proc").iterdir():
+            if entry.name.isdigit() and int(entry.name) != os.getpid():
+                facts = process(int(entry.name))
+                if facts and facts[1].get("FERRITE_STORE") == str(run.store):
+                    failed = True
+                    print(f"FAIL pid {entry.name} still runs on this Store: {' '.join(facts[0])}")
+    if failed:
+        print(f"FAIL kept {run.root}: a process of this run still runs")
+        return 1
+    shutil.rmtree(run.root)
+    print(f"stopped {run.id}; evidence kept in {run.evidence}")
+    return 0
+
+
+COMMANDS = {
+    "launch": launch,
+    "doctor": doctor,
+    "cli": cli,
+    **{verb: drive(verb) for verb in ("key", "type", "click", "find", "resize", "drag")},
+    "shot": shot,
+    "stop": stop,
+}
+
+USAGE = """usage: fv launch [--window] [run-id]     --window: the visible window, macOS only
+       fv doctor | fv stop
+       fv cli -- <ferrite args>
+       fv key <keys>...                 gpui syntax: cmd-, escape cmd-shift-n enter
+       fv type <text>
+       fv click --selector <s> | --x <n> --y <n>  [--double|--right]
+       fv find <selector>               headless only
+       fv resize <width> <height>       headless only; window points
+       fv drag --from-selector <s> | --from-x <n> --from-y <n>
+               --to-selector <s> | --to-x <n> --to-y <n>   headless only
+       fv shot <name>                   macOS only for now"""
+
+
+def main(argv):
+    if not argv or argv[0] not in COMMANDS:
+        print(USAGE, file=sys.stderr)
+        return 2
+    try:
+        return COMMANDS[argv[0]](argv[1:]) or 0
+    except Refused as refusal:
+        print(f"fv {argv[0]}: {refusal}", file=sys.stderr)
+        return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))
