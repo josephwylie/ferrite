@@ -4,6 +4,8 @@ mod annotations;
 mod chrome;
 pub(super) use chrome::BrowserChromeView;
 mod controls;
+mod dialog;
+pub(super) use dialog::BrowserDialogView;
 use controls::{ControlRequest, PendingControls};
 mod manual;
 mod page_menu;
@@ -82,20 +84,15 @@ pub(super) struct Browser {
     owner: Option<Owner>,
     pages: BTreeMap<TabId, Page>,
     error: Option<String>,
-    /// The field and focus of the page's script dialog, and the dialog they
-    /// were last set up for.
-    prompt: Entity<Composer>,
-    dialog_focus: FocusHandle,
-    dialog_synced: Option<DialogRequest>,
-    /// The dialog has not yet had the keyboard: it takes it the first frame
-    /// its own Browser is on screen, never while another Thread's is.
-    dialog_unfocused: bool,
-    /// Its dialog's card was in the last frame drawn, so it can take focus.
+    /// The focus pump's: its dialog's card (`BrowserDialogView`) was in the
+    /// last frame drawn, so it can take focus.
     dialog_drawn: Cell<bool>,
     /// `dialog_drawn` as of the last frame: only a dialog on screen holds
     /// the keyboard.
     dialog_on_screen: bool,
-    /// The right-click the page reported, and where the pointer was.
+    /// The right-click the page reported, and where the pointer was. The
+    /// menu is the popup slot's, so these stay the root's (ADR 0041, What
+    /// does not get a view).
     context: Option<PageContext>,
     pointer: Rc<Cell<gpui::Point<gpui::Pixels>>>,
     failed: BTreeMap<TabId, Document>,
@@ -125,30 +122,6 @@ impl Browsers {
         usize::from(self.threads.contains_key(&thread))
             + usize::from(self.reveal.contains_key(&thread))
             + usize::from(self.sent.contains_key(&thread))
-    }
-
-    /// A dialog is modal to its page: it takes the keyboard when its Browser
-    /// is on screen, and lets the operator leave for anything outside it.
-    pub(super) fn focus_shown_dialogs(&mut self, window: &mut Window, cx: &mut gpui::App) -> bool {
-        let mut took = false;
-        for browser in self.threads.values_mut() {
-            let drawn = browser.dialog_drawn.replace(false);
-            browser.dialog_on_screen = drawn;
-            if drawn && browser.dialog_unfocused && browser.dialog_synced.is_some() {
-                browser.dialog_unfocused = false;
-                browser.focus_dialog(window, cx);
-                took = true;
-            }
-        }
-        took
-    }
-
-    pub(super) fn dialog_holds_focus(&self, window: &Window, cx: &gpui::App) -> bool {
-        self.threads.values().any(|browser| {
-            browser.dialog_on_screen
-                && browser.dialog_synced.is_some()
-                && browser.dialog_focus.contains_focused(window, cx)
-        })
     }
 
     /// Rechecked at queue dispatch and after native attachment becomes Ready.
@@ -224,6 +197,8 @@ impl CockpitView {
     pub(super) fn ensure_browser(&mut self, thread: ThreadId, cx: &mut Context<Self>) {
         self.browser_chrome
             .update(cx, |chrome, cx| chrome.make(thread, cx));
+        self.browser_dialog
+            .update(cx, |dialog, cx| dialog.make(thread, cx));
         self.browsers
             .threads
             .entry(thread)
@@ -232,15 +207,6 @@ impl CockpitView {
                 owner: None,
                 pages: BTreeMap::new(),
                 error: None,
-                prompt: cx.new(|cx| {
-                    let mut field = Composer::new(cx);
-                    field.set_role(Role::Field(Some("BrowserPrompt")), cx);
-                    field.set_visible_row_limit(1, cx);
-                    field
-                }),
-                dialog_focus: cx.focus_handle(),
-                dialog_synced: None,
-                dialog_unfocused: false,
                 dialog_drawn: Cell::new(false),
                 dialog_on_screen: false,
                 context: None,
@@ -910,24 +876,12 @@ impl CockpitView {
                     browser.context = Some(context);
                 }
             }
-            // A shown tab without a page (closed, not loaded yet, the
-            // Server gone) has no dialog.
-            let dialog = shown
-                .and_then(|id| browser.pages.get(&id))
-                .and_then(|page| page.native.state().dialog);
-            if dialog != browser.dialog_synced {
-                if let Some(DialogRequest {
-                    kind: DialogKind::Prompt { default },
-                    ..
-                }) = &dialog
-                {
-                    let default = default.clone();
-                    browser.prompt.update(cx, |field, cx| field.set(default, cx));
-                }
-                browser.dialog_unfocused = dialog.is_some();
-                browser.dialog_synced = dialog;
-                cx.notify();
-            }
+        }
+        let threads: Vec<_> = self.browsers.threads.keys().copied().collect();
+        for thread in threads {
+            let asked = self.browser_dialog_inputs(thread, cx);
+            self.browser_dialog
+                .update(cx, |dialog, cx| dialog.sync(thread, asked, cx));
         }
         for (thread, url) in windows {
             let new_tab = self.browser_chrome.read(cx).new_tab(thread);
@@ -1324,14 +1278,10 @@ impl CockpitView {
             None if body.is_none() => Some("Enter a website address above to browse.".to_owned()),
             None => None,
         };
-        let dialog = active
-            .and(browser.dialog_synced.clone())
-            .map(|request| self.browser_dialog(thread, request, cx));
+        let dialog = self
+            .browser_dialog
+            .update(cx, |dialog, cx| dialog.card(thread, active.is_some(), cx));
         browser.dialog_drawn.set(dialog.is_some());
-        if dialog.is_some() && browser.dialog_unfocused {
-            let view = cx.entity();
-            cx.defer(move |cx| view.update(cx, |_, cx| cx.notify()));
-        }
         let pointer = browser.pointer.clone();
         div()
             .debug_selector(|| "browser-preview".into())
@@ -1387,146 +1337,7 @@ impl CockpitView {
     }
 }
 
-impl CockpitView {
-    fn answer_browser_dialog(&mut self, thread: ThreadId, accept: bool, cx: &mut Context<Self>) {
-        let new_tab = self.browser_chrome.read(cx).new_tab(thread);
-        let Some(browser) = self.browsers.threads.get_mut(&thread) else {
-            return;
-        };
-        browser.dialog_unfocused = false;
-        let (Some(tab), Some(request)) = (browser.shown_tab(new_tab).map(|tab| tab.id), browser.dialog_synced.take())
-        else {
-            return;
-        };
-        let answer = match request.kind {
-            DialogKind::Alert => DialogAnswer::Accept(String::new()),
-            DialogKind::Confirm if accept => DialogAnswer::Accept(String::new()),
-            DialogKind::Prompt { .. } if accept => {
-                DialogAnswer::Accept(browser.prompt.read(cx).text().to_owned())
-            }
-            _ => DialogAnswer::Cancel,
-        };
-        if let Some(page) = browser.pages.get(&tab) {
-            page.native.answer_dialog(answer);
-        }
-        cx.notify();
-    }
-
-    fn browser_dialog(
-        &self,
-        thread: ThreadId,
-        request: DialogRequest,
-        cx: &mut Context<Self>,
-    ) -> AnyElement {
-        use ferrite_ui::theme::*;
-        let Some(browser) = self.browsers.threads.get(&thread) else {
-            return div().into_any_element();
-        };
-        let choice = |id: &'static str, label: &'static str, accept: bool, cx: &mut Context<Self>| {
-            ferrite_ui::components::button(id)
-                .debug_selector(move || id.into())
-                .tab_stop(true)
-                .child(label)
-                .on_click(cx.listener(move |this, _, _, cx| {
-                    this.answer_browser_dialog(thread, accept, cx)
-                }))
-        };
-        let prompt = matches!(request.kind, DialogKind::Prompt { .. });
-        div()
-            .debug_selector(|| "browser-dialog".into())
-            .absolute()
-            .top_0()
-            .left_0()
-            .size_full()
-            .flex()
-            .items_start()
-            .justify_center()
-            .p(px(SPACE_4))
-            .bg(paint::CARD)
-            .occlude()
-            .on_mouse_down(
-                gpui::MouseButton::Left,
-                cx.listener(move |this, _, window, cx| {
-                    if let Some(browser) = this.browsers.threads.get(&thread) {
-                        if !browser.dialog_focus.contains_focused(window, cx) {
-                            browser.focus_dialog(window, cx);
-                        }
-                    }
-                }),
-            )
-            .child(
-                div()
-                    .id("browser-dialog-card")
-                    .key_context("BrowserDialog")
-                    .track_focus(&browser.dialog_focus)
-                    .flex()
-                    .flex_col()
-                    .gap(px(SPACE_2))
-                    .w_full()
-                    .max_w(px(420.))
-                    .p(px(SPACE_3))
-                    .rounded(px(R_CONTROL))
-                    .border_1()
-                    .border_color(paint::LINE)
-                    .on_action(cx.listener(move |this, _: &AcceptDialog, _, cx| {
-                        this.answer_browser_dialog(thread, true, cx)
-                    }))
-                    .on_action(cx.listener(move |this, _: &DismissDialog, _, cx| {
-                        this.answer_browser_dialog(thread, false, cx)
-                    }))
-                    .child(
-                        div()
-                            .text_color(rgb(INK_STRONG))
-                            .font_weight(W_LABEL)
-                            .child(format!("{} says", request.origin)),
-                    )
-                    .child(div().text_color(rgb(INK_SUBTLE)).child(request.message))
-                    .when(prompt, |card| {
-                        card.child(
-                            div()
-                                .h(px(ICON_BUTTON))
-                                .px(px(SPACE_2))
-                                .flex()
-                                .items_center()
-                                .rounded(px(R_CONTROL))
-                                .border_1()
-                                .border_color(paint::FIELD_RING)
-                                .bg(paint::FIELD)
-                                .child(div().flex_1().min_w_0().child(browser.prompt.clone())),
-                        )
-                    })
-                    .child(
-                        div()
-                            .flex()
-                            .justify_end()
-                            .gap(px(SPACE_2))
-                            .when(!matches!(request.kind, DialogKind::Alert), |row| {
-                                row.child(choice("browser-dialog-cancel", "Cancel", false, cx))
-                            })
-                            .child(choice("browser-dialog-ok", "OK", true, cx)),
-                    ),
-            )
-            .into_any_element()
-    }
-}
-
 impl Browser {
-    fn focus_dialog(&self, window: &mut Window, cx: &mut gpui::App) {
-        let prompt = matches!(
-            self.dialog_synced.as_ref().map(|request| &request.kind),
-            Some(DialogKind::Prompt { .. })
-        );
-        if prompt {
-            self.prompt.update(cx, |line, cx| {
-                line.select_all(&ferrite_pane::composer::SelectAll, window, cx)
-            });
-            let target = self.prompt.read(cx).focus_target(window, cx);
-            window.focus(&target, cx);
-        } else {
-            window.focus(&self.dialog_focus, cx);
-        }
-    }
-
     /// The page the controls act on: none while a new tab is being entered
     /// (the chrome's `new_tab`).
     fn shown_tab(&self, new_tab: bool) -> Option<&Tab> {

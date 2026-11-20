@@ -414,7 +414,7 @@ fn a_dialog_that_arrives_under_an_open_menu_closes_it_and_takes_the_keys(cx: &mu
     tick(cx);
     let (open, held) = cx.update(|window, cx| {
         let view = view.read(cx);
-        (view.context_menu().is_some(), view.browsers.dialog_holds_focus(window, cx))
+        (view.context_menu().is_some(), view.dialog_holds_focus(window, cx))
     });
     assert!(!open && held, "the dialog closed the menu and holds the keys");
 }
@@ -430,7 +430,7 @@ fn a_dialog_is_modal_to_its_page_and_two_dialogs_each_wait_for_their_thread(
     engine.raise_dialog_at("http://localhost:5173/start", alert("First"));
     until(cx, |cx| cx.debug_bounds("browser-dialog").is_some());
     tick(cx);
-    let held = cx.update(|window, cx| view.read(cx).browsers.dialog_holds_focus(window, cx));
+    let held = cx.update(|window, cx| view.read(cx).dialog_holds_focus(window, cx));
     assert!(held, "a dialog takes the keyboard when it appears");
     type_in_composer(&view, "left the page", cx);
     tick(cx);
@@ -442,7 +442,7 @@ fn a_dialog_is_modal_to_its_page_and_two_dialogs_each_wait_for_their_thread(
     cx.simulate_click(card.center(), gpui::Modifiers::none());
     tick(cx);
     let held = cx.update(|window, cx| {
-        view.read(cx).browsers.dialog_holds_focus(window, cx)
+        view.read(cx).dialog_holds_focus(window, cx)
     });
     assert!(held, "a click into the page area hands the dialog the keyboard");
     cx.simulate_keystrokes("enter");
@@ -529,7 +529,7 @@ fn retry_reloads_a_failed_page(
 }
 
 fn dialog_holds(view: &Entity<CockpitView>, cx: &mut gpui::VisualTestContext) -> bool {
-    cx.update(|window, cx| view.read(cx).browsers.dialog_holds_focus(window, cx))
+    cx.update(|window, cx| view.read(cx).dialog_holds_focus(window, cx))
 }
 
 #[gpui::test]

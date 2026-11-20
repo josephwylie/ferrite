@@ -355,6 +355,7 @@ pub struct CockpitView {
     /// Each Thread's Browser chrome: its address field and whether a new
     /// tab is being entered.
     browser_chrome: Entity<browser::BrowserChromeView>,
+    browser_dialog: Entity<browser::BrowserDialogView>,
     /// One view per Pane of the Cockpit's roster, in its order — the
     /// keyboard, the scrollback and the caches the window owns for each.
     /// `sync_panes` is the one door: after every act on the roster the
@@ -459,8 +460,8 @@ pub struct CockpitView {
     nav_view: Entity<nav_view::NavView>,
     /// The Cockpit hearing the views it answers with the window (the nav,
     /// the side chat, Files, the Overview, the toasts, the File Surface,
-    /// the Decisions, the Browser's chrome), from its first frame.
-    view_events: Option<[gpui::Subscription; 8]>,
+    /// the Decisions, the Browser's chrome and dialog), from its first frame.
+    view_events: Option<[gpui::Subscription; 9]>,
     /// The window's activation, followed into the Cockpit
     /// (`Cockpit::set_window_active`) once the first frame has a window.
     activation: Option<gpui::Subscription>,
@@ -1396,10 +1397,14 @@ impl CockpitView {
         // The root draws the chrome into the Browser's body, so each change
         // redraws the window.
         cx.observe(&browser_chrome, |_, _, cx| cx.notify()).detach();
+        let browser_dialog = cx.new(|_| browser::BrowserDialogView::default());
+        // So is a page's dialog, over the page.
+        cx.observe(&browser_dialog, |_, _, cx| cx.notify()).detach();
         let mut view = Self {
             cockpit,
             browsers: Default::default(),
             browser_chrome,
+            browser_dialog,
             panes: Vec::new(),
             focus: cx.focus_handle(),
             field_watch: Default::default(),
@@ -8142,6 +8147,7 @@ impl CockpitView {
                 cx.subscribe_in(&self.file_surface, window, Self::on_file_surface_event),
                 cx.subscribe_in(&self.decisions, window, Self::on_decision_event),
                 cx.subscribe_in(&self.browser_chrome, window, Self::on_browser_chrome_event),
+                cx.subscribe_in(&self.browser_dialog, window, Self::on_browser_dialog_event),
             ]);
         }
     }
@@ -8549,13 +8555,13 @@ impl CockpitView {
         let panel_keys_held =
             self.panel_keys.contains_focused(window, cx) || self.panel_control_focused(window);
         let field_holds_keyboard = self.field_holds_keyboard(&wanted, window, cx);
-        let dialog_took_focus = self.browsers.focus_shown_dialogs(window, cx);
+        let dialog_took_focus = self.focus_shown_dialogs(window, cx);
         // Here, before focus is handed out: a page's dialog is modal and
         // keeps the keys, and a popup left up would take them back.
         self.close_popup_with_nothing_to_draw(dialog_took_focus, cx);
         if window.has_active_dialog(cx)
             || dialog_took_focus
-            || self.browsers.dialog_holds_focus(window, cx)
+            || self.dialog_holds_focus(window, cx)
             || self.floats_hold_focus()
             || nav_list_focused
             || panel_keys_held
