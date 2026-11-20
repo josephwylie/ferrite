@@ -2,7 +2,13 @@
 //! approval whatever surface asked — the transcript's Decision row or a
 //! toast — and one door answers a question's
 //! option. The per-Decision cursor and amend note live in each Pane's
-//! `RequestForms`; Ferrite's own thread rules live here.
+//! `RequestForms`.
+//!
+//! `DecisionsView` (ADR 0041) keeps Ferrite's own thread rules, and is what
+//! a card drawn inside a cached transcript presses through: each answer it
+//! asks for it says as a `DecisionEvent`, which the root hears and tells
+//! the Server. The cards draw from a snapshot the root takes
+//! (`decision_inputs`).
 
 use super::subagents::shown_on;
 use super::*;
@@ -10,24 +16,82 @@ use ferrite_core::activity::{DecisionHandle, PendingDecision, Subject};
 use ferrite_pane::decision::{self, ApprovalChoice, ThreadRule};
 use gpui::App;
 
-/// The cockpit's Decision state: a handle back to the view (what a card
-/// drawn inside the cached transcript presses through) and the thread rules
-/// option 2 made where the provider offered no standing answer.
-pub(crate) struct DecisionState {
-    owner: gpui::WeakEntity<CockpitView>,
+/// What a Decision card's press asks of the window.
+pub(crate) enum DecisionEvent {
+    /// An approval's option, with the note if one is open; `switch` then
+    /// moves the Session to that permission mode, read on that Session
+    /// generation (`Allow and switch to …`).
+    Approve {
+        thread: ThreadId,
+        request: PendingDecision,
+        choice: ApprovalChoice,
+        switch: Option<(String, u64)>,
+    },
+    /// This answer, as it stands: a Cancel, a Skip, a Complete.
+    Respond {
+        thread: ThreadId,
+        handle: DecisionHandle,
+        answer: DecisionAnswer,
+    },
+    /// A question's Send.
+    SendQuestions {
+        thread: ThreadId,
+        handle: DecisionHandle,
+    },
+    /// An MCP form's Send.
+    SendForm {
+        thread: ThreadId,
+        handle: DecisionHandle,
+        fields: Vec<ferrite_core::FormField>,
+    },
+    /// A question's option was picked: its error goes.
+    Picked {
+        thread: ThreadId,
+        handle: DecisionHandle,
+    },
+    /// ⏎ in the amend note.
+    SendNote {
+        thread: ThreadId,
+        handle: DecisionHandle,
+    },
+    /// esc in the amend note.
+    CloseNote {
+        thread: ThreadId,
+        handle: DecisionHandle,
+    },
+}
+
+/// The thread rules option 2 made where the provider offered no standing
+/// answer, and the cards' way back to the window.
+#[derive(Default)]
+pub(crate) struct DecisionsView {
     rules: Vec<ThreadRule>,
 }
 
-impl DecisionState {
-    pub(super) fn new(owner: gpui::WeakEntity<CockpitView>) -> Self {
-        Self {
-            owner,
-            rules: Vec::new(),
+impl EventEmitter<DecisionEvent> for DecisionsView {}
+
+impl DecisionsView {
+    /// Keep `rule`: what its pattern covers in its Thread is allowed from
+    /// now on.
+    fn keep(&mut self, rule: ThreadRule) {
+        if !self.rules.contains(&rule) {
+            self.rules.push(rule);
         }
     }
 
-    pub(super) fn owner(&self) -> gpui::WeakEntity<CockpitView> {
-        self.owner.clone()
+    fn covers_any(&self, thread: ThreadId) -> bool {
+        self.rules.iter().any(|rule| rule.thread == thread)
+    }
+
+    fn covers(
+        &self,
+        thread: ThreadId,
+        decision: &ferrite_core::Decision,
+        workspace: Option<&std::path::Path>,
+    ) -> bool {
+        self.rules
+            .iter()
+            .any(|rule| rule.covers(thread, decision, workspace))
     }
 
     /// A gone Thread's rules go with it.
@@ -38,6 +102,58 @@ impl DecisionState {
     #[cfg(test)]
     pub(super) fn rules(&self) -> &[ThreadRule] {
         &self.rules
+    }
+}
+
+impl CockpitView {
+    pub(super) fn on_decision_event(
+        &mut self,
+        _: &Entity<DecisionsView>,
+        event: &DecisionEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        match event {
+            DecisionEvent::Approve {
+                thread,
+                request,
+                choice,
+                switch,
+            } => {
+                let note = self.take_decision_note(*thread, &request.handle, cx);
+                self.answer_approval_request(*thread, request, *choice, note, Some(window), cx);
+                if let Some((mode, generation)) = switch {
+                    self.run_session_control(
+                        *thread,
+                        *generation,
+                        ferrite_core::SessionControl::SetPermissionMode { mode: mode.clone() },
+                    );
+                }
+            }
+            DecisionEvent::Respond {
+                thread,
+                handle,
+                answer,
+            } => self.respond_exact(*thread, handle, answer.clone(), cx),
+            DecisionEvent::SendQuestions { thread, handle } => {
+                self.send_question_form(*thread, handle, false, cx);
+            }
+            DecisionEvent::SendForm {
+                thread,
+                handle,
+                fields,
+            } => self.send_form(*thread, handle, fields, cx),
+            DecisionEvent::Picked { thread, handle } => {
+                self.clear_request_error(*thread, handle);
+                cx.notify();
+            }
+            DecisionEvent::SendNote { thread, handle } => {
+                self.send_decision_note(*thread, handle, window, cx)
+            }
+            DecisionEvent::CloseNote { thread, handle } => {
+                self.close_decision_note(*thread, handle, window, cx);
+            }
+        }
     }
 }
 
@@ -80,7 +196,7 @@ impl CockpitView {
         if self.panes[index].selected == *subject {
             return None;
         }
-        let mut cards = self.decision_cards_of(index, subject, false, false)?;
+        let mut cards = self.decision_inputs(index, subject, false, false)?;
         cards.narrow = true;
         cards.inset = ferrite_ui::theme::tx_inset_at(0., false);
         Some(card_tail(cards))
@@ -245,9 +361,7 @@ impl CockpitView {
         };
         self.respond_exact(thread, &request.handle, response, cx);
         if let Some(rule) = rule {
-            if !self.decisions.rules.contains(&rule) {
-                self.decisions.rules.push(rule);
-            }
+            self.decisions.update(cx, |decisions, _| decisions.keep(rule));
         }
         match choice {
             ApprovalChoice::DenyAndSteer => {
@@ -325,17 +439,13 @@ impl CockpitView {
         frame: &[ferrite_core::cockpit::PaneUpdate],
         cx: &mut Context<Self>,
     ) {
-        if self.decisions.rules.is_empty() {
+        if self.decisions.read(cx).rules.is_empty() {
             return;
         }
         for update in frame {
             let thread = update.thread;
-            if !self
-                .decisions
-                .rules
-                .iter()
-                .any(|rule| rule.thread == thread)
-            {
+            let rules = self.decisions.read(cx);
+            if !rules.covers_any(thread) {
                 continue;
             }
             let workspace = self.thread_workspace(thread);
@@ -350,9 +460,7 @@ impl CockpitView {
                                 && request.reply_error.is_none()
                                 && request.decision.policy.allow
                                 && !request.decision.policy.interaction_required
-                                && self.decisions.rules.iter().any(|rule| {
-                                    rule.covers(thread, &request.decision, workspace.as_deref())
-                                })
+                                && rules.covers(thread, &request.decision, workspace.as_deref())
                         })
                         .cloned()
                         .collect()
