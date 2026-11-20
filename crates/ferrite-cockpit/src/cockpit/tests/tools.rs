@@ -517,8 +517,9 @@ fn an_agents_reveal_does_not_undo_a_hide_or_a_maximize(cx: &mut TestAppContext) 
 }
 
 /// What `thread`'s Files, Changes, a pull request's diff and the Overview's
-/// Changes section hold for it, with its browser, its PR read and, when its
-/// Panel is the one shown, the stop F6 put the keyboard on.
+/// Changes section hold for it, with its browser, its PR read, a turned
+/// background card and, when its Panel is the one shown, the stop F6 put
+/// the keyboard on.
 fn hold_tools(view: &Entity<CockpitView>, thread: ThreadId, cx: &mut gpui::VisualTestContext) -> usize {
     view.update(cx, |view, cx| {
         let file = view.thread_path(thread).unwrap().join("src/lib.rs");
@@ -528,6 +529,7 @@ fn hold_tools(view: &Entity<CockpitView>, thread: ThreadId, cx: &mut gpui::Visua
         view.toggle_panel_file(thread, "src/lib.rs".to_string(), cx);
         view.ensure_browser(thread, cx);
         view.fixture_pr_snapshot(thread, super::pr::snapshot(ferrite_core::protocol::WirePrState::Open), cx);
+        view.background.update(cx, |background, cx| background.turn(thread, "call-1".into(), cx));
     });
     tick(cx);
     super::panel_focus::press("f6", cx);
@@ -538,8 +540,8 @@ fn hold_tools(view: &Entity<CockpitView>, thread: ThreadId, cx: &mut gpui::Visua
 fn deleting_a_thread_frees_its_files_and_changes(cx: &mut TestAppContext) {
     let (view, thread, cx) = solo("tools-thread-deleted", cx);
     assert!(
-        hold_tools(&view, thread, cx) >= 9,
-        "Files, two diffs, an unfolded file, a browser, a PR read, a remembered stop, facts and a PR count"
+        hold_tools(&view, thread, cx) >= 10,
+        "Files, two diffs, an unfolded file, a browser, a PR read, a remembered stop, facts, a PR count and a turned background card"
     );
     press_nav_verb(&view, thread, MenuVerb::Delete, cx);
     assert!(view.read_with(cx, |view, _| view.cockpit.known_threads().is_empty()), "it was the last");

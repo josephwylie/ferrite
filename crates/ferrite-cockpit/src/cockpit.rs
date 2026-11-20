@@ -555,14 +555,8 @@ pub struct CockpitView {
     /// The sheet that is up, Settings, the Project card or the
     /// `Background work` dialog (ADR 0042).
     sheets: Entity<sheets::Sheets>,
-    /// The work `Stop` on the background-work line was pressed for, by
-    /// Thread and Session generation (a provider reuses task ids): the line
-    /// reads `Stopping...` until it ends, or `Retry` once one refused.
-    background_stops:
-        std::collections::HashMap<(ThreadId, u64, background_work::StopTarget), background_work::StopState>,
-    /// How many stops `background_stops` has taken, to tell one send's
-    /// timer from another's.
-    background_stop_sends: u64,
+    /// Every Thread's background work: the stops sent, the cards turned.
+    background: Entity<background_work::BackgroundView>,
     /// Whether the window is maximized, read once per frame in `render`.
     /// The nav's band is drawn without a `Window` in hand, and the two
     /// halves of the titlebar have to agree: a maximized window has no top
@@ -1389,6 +1383,11 @@ impl CockpitView {
         // What the reader shows is drawn by the root's frame too (a tab's
         // state, the PRs' header), so each change redraws the window.
         cx.observe(&pull_request, |_, _, cx| cx.notify()).detach();
+        let background = cx.new(|_| background_work::BackgroundView::new());
+        cx.subscribe(&background, Self::on_background_event).detach();
+        // The root draws it into its own frame (the line, the Overview, the
+        // Surface), so each change redraws the window.
+        cx.observe(&background, |_, _, cx| cx.notify()).detach();
         let mut view = Self {
             cockpit,
             browsers: Default::default(),
@@ -1465,8 +1464,7 @@ impl CockpitView {
             cited_sources,
             prefs,
             sheets,
-            background_stops: Default::default(),
-            background_stop_sends: 0,
+            background,
             maximized: false,
             cli_versions: None,
             cli_probing: false,
@@ -2372,7 +2370,7 @@ impl CockpitView {
         let frame = self.cockpit.pump();
         self.fetch_attachment_previews(cx);
         self.note_work(&frame);
-        self.prune_background_stops();
+        self.prune_background_stops(cx);
         self.close_sheet_with_nothing_to_draw(cx);
         self.pump_browsers(cx);
         if let Some(card) = self.project_card(cx) {

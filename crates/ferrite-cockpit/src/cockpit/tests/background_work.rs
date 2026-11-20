@@ -214,7 +214,7 @@ fn press_stop(cx: &mut gpui::VisualTestContext) {
 }
 
 fn reason(view: &gpui::Entity<CockpitView>, cx: &mut gpui::VisualTestContext) -> Option<String> {
-    view.read_with(cx, |view, _| view.background_stop_reason(0, "task:1"))
+    view.read_with(cx, |view, cx| view.background_stop_reason(0, "task:1", cx))
 }
 
 /// A provider's refusal is the reason the line gives, even when the wait
@@ -286,10 +286,10 @@ fn a_finished_tasks_stop_is_forgotten(cx: &mut TestAppContext) {
     running(&fake, &[("task:1", "cargo test")]);
     tick(cx);
     press_stop(cx);
-    assert_eq!(view.read_with(cx, |view, _| view.background_stops.len()), 1);
+    assert_eq!(view.read_with(cx, |view, cx| view.background.read(cx).stops_held()), 1);
     running(&fake, &[]);
     tick(cx);
-    assert_eq!(view.read_with(cx, |view, _| view.background_stops.len()), 0);
+    assert_eq!(view.read_with(cx, |view, cx| view.background.read(cx).stops_held()), 0);
     running(&fake, &[("task:1", "cargo test")]);
     tick(cx);
     assert!(debug_bounds(cx, "background-stop-says-Stop".into()).is_some(), "the line is plain Stop again");

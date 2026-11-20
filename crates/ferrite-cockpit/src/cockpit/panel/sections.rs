@@ -71,7 +71,10 @@ impl CockpitView {
             sections.push(connectors(servers, window, cx));
         }
         sections.extend(self.changes_section(thread, cx));
-        sections.extend(self.background_section(thread, cx));
+        sections.extend(
+            self.background_inputs(thread, false)
+                .and_then(|inputs| self.background.update(cx, |background, cx| background.section(&inputs, cx))),
+        );
 
         div()
             .debug_selector(|| "panel-sections".into())

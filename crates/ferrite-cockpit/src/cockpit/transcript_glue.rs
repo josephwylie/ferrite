@@ -122,7 +122,7 @@ impl CockpitView {
     pub(super) fn transcript_tail(&self, index: usize, cx: &App) -> Option<TranscriptTail> {
         self.decision_tail(index, cx)
             .or_else(|| self.failure_tail(index))
-            .or_else(|| self.background_work_tail(index))
+            .or_else(|| self.background_work_tail(index, cx))
     }
 
     /// The failure strip (SPEC §5.9 item 4) under Main's transcript when the

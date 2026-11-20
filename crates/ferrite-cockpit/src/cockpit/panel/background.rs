@@ -16,7 +16,7 @@
 //! own row (`pane::background_link`, `View live output ▸`).
 
 use super::*;
-use crate::cockpit::background_work::{running_work, stop_targets, StopTarget, Work};
+use crate::cockpit::background_work::{BackgroundEvent, BackgroundInputs, BackgroundView, StopTarget, Work};
 use crate::cockpit::surfaces::SurfaceId;
 use ferrite_pane::pane::WorkKind;
 use ferrite_core::transcript::{ToolBlock, ToolState};
@@ -26,24 +26,26 @@ use ferrite_core::transcript::tools::{policy, ToolKind};
 const TAIL_LINES: usize = 12;
 
 impl CockpitView {
-    /// The rail's `Background tasks` section; none until the Thread has
+    /// Open `thread`'s Background Surface.
+    pub(crate) fn open_background(&mut self, thread: ThreadId, cx: &mut Context<Self>) {
+        self.upsert_surface(thread, SurfaceId::Background, cx);
+    }
+}
+
+impl BackgroundView {
+    /// The Overview's `Background tasks` section; none until the Thread has
     /// launched background work.
-    pub(super) fn background_section(&self, thread: ThreadId, cx: &mut Context<Self>) -> Option<Div> {
-        let open = self.cockpit.thread(thread)?;
-        let running = running_work(&open);
-        let finished = open
-            .transcript()
-            .background_calls()
-            .filter(|call| !call.in_background())
-            .count();
-        if running.is_empty() && finished == 0 {
+    pub(in crate::cockpit) fn section(&self, inputs: &BackgroundInputs, cx: &mut Context<Self>) -> Option<Div> {
+        let thread = inputs.thread;
+        let finished = inputs.finished.len();
+        if inputs.running.is_empty() && finished == 0 {
             return None;
         }
         let mut section = div()
             .flex()
             .flex_col()
             .child(panel_section_head("panel-background-head", "Background tasks"));
-        for (index, work) in running.iter().enumerate() {
+        for (index, work) in inputs.running.iter().enumerate() {
             let launched = work.task.launched;
             let row = sections::detail_row(
                 SharedString::from(format!("panel-background-{index}")),
@@ -52,8 +54,8 @@ impl CockpitView {
                 None,
             )
             .cursor_pointer()
-            .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
-                view.open_background(thread, cx);
+            .on_click(cx.listener(move |_, _: &ClickEvent, _, cx| {
+                cx.emit(BackgroundEvent::Open(thread));
             }))
             .children(launched.map(|launched| {
                 div()
@@ -62,7 +64,7 @@ impl CockpitView {
                     .text_size(px(ferrite_ui::theme::FS_META))
                     .child(ferrite_pane::pane::background_clock(launched))
             }))
-            .children(self.stop_square(thread, work, cx));
+            .children(stop_square(inputs, work, cx));
             section = section.child(row);
         }
         if finished > 0 {
@@ -74,44 +76,26 @@ impl CockpitView {
                     None,
                 )
                 .cursor_pointer()
-                .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
-                    view.open_background(thread, cx);
+                .on_click(cx.listener(move |_, _: &ClickEvent, _, cx| {
+                    cx.emit(BackgroundEvent::Open(thread));
                 })),
             );
         }
         Some(section)
     }
 
-    /// Open `thread`'s Background Surface.
-    pub(crate) fn open_background(&mut self, thread: ThreadId, cx: &mut Context<Self>) {
-        self.upsert_surface(thread, SurfaceId::Background, cx);
-    }
-
     /// The Background Surface's body: Running and Finished.
-    pub(super) fn background_pane(&self, thread: ThreadId, cx: &mut Context<Self>) -> Div {
+    pub(in crate::cockpit) fn pane(&self, inputs: &BackgroundInputs, cx: &mut Context<Self>) -> Div {
         use ferrite_ui::theme::*;
-        let Some(open) = self.cockpit.thread(thread) else {
-            return div();
-        };
-        let timings = open.activity().main().timings();
-        let running = running_work(&open);
-        let finished: Vec<&ToolBlock> = open
-            .transcript()
-            .background_calls()
-            .filter(|call| !call.in_background())
-            .collect();
         let mut body = div()
             .debug_selector(|| "background-pane".into())
             .flex()
             .flex_col()
             .gap(px(SPACE_2));
-        if !running.is_empty() {
-            body = body.child(group_label(format!("Running {}", running.len())));
-            for (index, work) in running.iter().enumerate() {
-                let call = work
-                    .call
-                    .as_deref()
-                    .and_then(|call| open.transcript().tool(call));
+        if !inputs.running.is_empty() {
+            body = body.child(group_label(format!("Running {}", inputs.running.len())));
+            for (index, work) in inputs.running.iter().enumerate() {
+                let call = work.call.as_ref().and_then(|call| inputs.calls.get(call));
                 let tail = div()
                     .flex()
                     .items_center()
@@ -119,11 +103,12 @@ impl CockpitView {
                     .children(work.task.launched.map(|launched| {
                         ferrite_pane::pane::background_clock(launched).text_size(px(FS_META))
                     }))
-                    .children(self.open_agent_button(thread, work, cx))
-                    .children(self.stop_square(thread, work, cx));
+                    .children(open_agent_button(inputs.thread, work, cx))
+                    .children(stop_square(inputs, work, cx));
                 let id = SharedString::from(format!("background-running-{index}"));
                 let output = call.map(|call| output_block(call, false, true));
                 body = body.child(self.card(
+                    inputs.thread,
                     id,
                     work.handle(),
                     work_title(work),
@@ -134,22 +119,23 @@ impl CockpitView {
                 ));
             }
         }
-        if !finished.is_empty() {
-            body = body.child(group_label(format!("Finished {}", finished.len())));
-            for (index, call) in finished.iter().rev().enumerate() {
-                let took = timings
-                    .get(&call.call)
-                    .map(|timing| ferrite_core::progress::settled_duration_label(timing.elapsed()));
+        if !inputs.finished.is_empty() {
+            body = body.child(group_label(format!("Finished {}", inputs.finished.len())));
+            for (index, finished) in inputs.finished.iter().rev().enumerate() {
                 let tail = div()
                     .text_size(px(FS_META))
                     .text_color(rgb(INK_SUBTLE))
-                    .children(took);
+                    .children(finished.took.clone());
                 let id = SharedString::from(format!("background-finished-{index}"));
-                let output = Some(output_block(call, true, true));
+                let output = inputs
+                    .calls
+                    .get(&finished.call)
+                    .map(|call| output_block(call, true, true));
                 body = body.child(self.card(
+                    inputs.thread,
                     id,
-                    call.call.clone(),
-                    label(call),
+                    finished.call.clone(),
+                    finished.title.clone(),
                     output,
                     false,
                     tail,
@@ -163,8 +149,10 @@ impl CockpitView {
     /// One piece of work's card: its disclosure, title and `tail` (clock and
     /// stop, or how long it took), open on its output. Running work opens
     /// by default, finished work is closed; a press on the head turns it.
+    #[allow(clippy::too_many_arguments)]
     fn card(
         &self,
+        thread: ThreadId,
         id: SharedString,
         key: String,
         title: SharedString,
@@ -174,7 +162,7 @@ impl CockpitView {
         cx: &mut Context<Self>,
     ) -> Stateful<Div> {
         use ferrite_ui::theme::*;
-        let open = running != self.panel.background_turned.contains(&key);
+        let open = running != self.is_turned(thread, &key);
         let target = key;
         let head_id = format!("{id}-head");
         let head = div()
@@ -186,11 +174,7 @@ impl CockpitView {
             .h(px(PANEL_SECTION_H))
             .cursor_pointer()
             .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
-                let turned = &mut view.panel.background_turned;
-                if !turned.remove(&target) {
-                    turned.insert(target.clone());
-                }
-                cx.notify();
+                view.turn(thread, target.clone(), cx);
             }))
             .child(ferrite_ui::components::chevron_at(
                 if open { 1. } else { 0. },
@@ -218,58 +202,55 @@ impl CockpitView {
             .child(head)
             .children(output.filter(|_| open).map(|output| output.pl(px(SPACE_4))))
     }
+}
 
-    /// `Open` on an agent's card: the agent in the Panel.
-    fn open_agent_button(
-        &self,
-        thread: ThreadId,
-        work: &Work,
-        cx: &mut Context<Self>,
-    ) -> Option<AnyElement> {
-        let call = work.call.clone().filter(|_| work.task.kind == WorkKind::Subagent)?;
-        Some(
-            ferrite_pane::pane::inline_button(
-                SharedString::from(format!("background-tab-open-{call}")),
-                "Open",
-            )
-            .debug_selector({
-                let call = call.clone();
-                move || format!("background-tab-open-{call}")
-            })
-            .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
-                cx.stop_propagation();
-                view.open_background_agent(thread, &call, cx);
-            }))
-            .into_any_element(),
+/// `Open` on an agent's card: the agent in the Panel.
+fn open_agent_button(
+    thread: ThreadId,
+    work: &Work,
+    cx: &mut Context<BackgroundView>,
+) -> Option<AnyElement> {
+    let call = work.call.clone().filter(|_| work.task.kind == WorkKind::Subagent)?;
+    Some(
+        ferrite_pane::pane::inline_button(
+            SharedString::from(format!("background-tab-open-{call}")),
+            "Open",
         )
-    }
+        .debug_selector({
+            let call = call.clone();
+            move || format!("background-tab-open-{call}")
+        })
+        .on_click(cx.listener(move |_, _: &ClickEvent, _, cx| {
+            cx.stop_propagation();
+            cx.emit(BackgroundEvent::OpenAgent { thread, call: call.clone() });
+        }))
+        .into_any_element(),
+    )
+}
 
-    /// The white square that stops a piece of work, where the Session can.
-    fn stop_square(
-        &self,
-        thread: ThreadId,
-        work: &Work,
-        cx: &mut Context<Self>,
-    ) -> Option<AnyElement> {
-        let open = self.cockpit.thread(thread)?;
-        let target: StopTarget = stop_targets(&open, std::slice::from_ref(work)).pop()?;
-        let generation = open.generation();
-        Some(
-            ferrite_ui::components::icon_button(
-                SharedString::from(format!("background-stop-{}", work.handle())),
-                icons::STOP,
-                ferrite_ui::components::IconSize::Standard,
-                "Stop",
-                cx,
-            )
-            .tip("Stop")
-            .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
-                cx.stop_propagation();
-                view.send_stop(thread, generation, target.clone(), cx);
-            }))
-            .into_any_element(),
+/// The white square that stops a piece of work, where the Session can.
+fn stop_square(
+    inputs: &BackgroundInputs,
+    work: &Work,
+    cx: &mut Context<BackgroundView>,
+) -> Option<AnyElement> {
+    let target: StopTarget = inputs.targets(std::slice::from_ref(work)).pop()?;
+    let (thread, generation) = (inputs.thread, inputs.generation);
+    Some(
+        ferrite_ui::components::icon_button(
+            SharedString::from(format!("background-stop-{}", work.handle())),
+            icons::STOP,
+            ferrite_ui::components::IconSize::Standard,
+            "Stop",
+            cx,
         )
-    }
+        .tip("Stop")
+        .on_click(cx.listener(move |_, _: &ClickEvent, _, cx| {
+            cx.stop_propagation();
+            cx.emit(BackgroundEvent::Stop { thread, generation, target: target.clone() });
+        }))
+        .into_any_element(),
+    )
 }
 
 fn work_title(work: &Work) -> SharedString {
