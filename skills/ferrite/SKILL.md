@@ -401,6 +401,8 @@ it never covers or interrupts the user's. The `window` commands drive it:
 "$F" window type "hello"
 "$F" window attach /tmp/screenshot.png
 "$F" window find settings-close
+"$F" window text composer-block
+"$F" window focus
 "$F" window click --selector settings-close
 "$F" window shot /tmp/settings.png
 "$F" window resize 700 900
@@ -411,6 +413,12 @@ it never covers or interrupts the user's. The `window` commands drive it:
 nothing took). `window click` takes an element's debug selector (its
 `window find` bounds are where it was last drawn) or `--x` and `--y` in
 the window's 1440x900 logical pixels, with `--double` or `--right`.
+`window text` answers the lines of text the last frame showed inside that
+element, in paint order (`{"answer":"read","lines":[…]}`), or the same
+`nothing drawn as …` refusal as `window find`. `window focus` answers what
+holds the keyboard: `contexts`, the key contexts a key goes through
+(innermost last), `selector`, the nearest debug selector around the focused
+element, and `label`, the Panel stop's name as its row gives it, or `null`.
 `window shot` writes a PNG (2880x1800) the window drew; look at it.
 `window resize` sets the window's size in logical pixels mid-run, as a
 drag of its corner would, and answers the size it has now: never under

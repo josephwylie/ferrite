@@ -28,7 +28,7 @@ RUN_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,40}")
 SHOT_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,80}")
 NO_RENDERER = ("no HeadlessRenderer", "render_to_image not available")
 READY_SELECTOR = "nav-search"
-HEADLESS_ONLY = ("find", "resize", "drag")
+HEADLESS_ONLY = ("find", "text", "focus", "resize", "drag")
 
 SETTINGS = {
     "default_provider": "claude",
@@ -349,7 +349,7 @@ def drive(verb):
         run = Run.current()
         words = [" ".join(args)] if verb == "type" else args
         if run.mode == "headless":
-            separate = ["--"] if verb in ("key", "type", "find") else []
+            separate = ["--"] if verb in ("key", "type", "find", "text") else []
             return run.ferrite("window", verb, *separate, *words).returncode
         if verb in HEADLESS_ONLY:
             raise Refused(f"{verb} needs the headless window (fv launch without --window)")
@@ -431,7 +431,7 @@ COMMANDS = {
     "launch": launch,
     "doctor": doctor,
     "cli": cli,
-    **{verb: drive(verb) for verb in ("key", "type", "click", "find", "resize", "drag")},
+    **{verb: drive(verb) for verb in ("key", "type", "click", "find", "text", "focus", "resize", "drag")},
     "shot": shot,
     "stop": stop,
 }
@@ -443,6 +443,8 @@ USAGE = """usage: fv launch [--window] [run-id]     --window: the visible window
        fv type <text>
        fv click --selector <s> | --x <n> --y <n>  [--double|--right]
        fv find <selector>               headless only
+       fv text <selector>               headless only; the lines it shows
+       fv focus                         headless only; what holds the keyboard
        fv resize <width> <height>       headless only; window points
        fv drag --from-selector <s> | --from-x <n> --from-y <n>
                --to-selector <s> | --to-x <n> --to-y <n>   headless only

@@ -78,7 +78,7 @@ Preconditions:
   `python3 -c 'import time; time.sleep(60)'` for a long turn. The default permission
   mode asks first: answer with `fv cli -- decision answer`.
 - Nav rows have no selector of their own (`nav-card` is the whole card); use a point on
-  the row and confirm with a shot.
+  the row, and read the rows back with `fv text nav-list` (or a shot).
 - Starting a Task starts a real Worker. Start one, with instructions that finish at once.
 - The CLI has no command that removes a Project (`project close` parks its Threads), so
   the Project card closing with its Project is proved by the tests only.
