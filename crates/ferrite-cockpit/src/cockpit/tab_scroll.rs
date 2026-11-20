@@ -61,21 +61,30 @@ pub(crate) struct TabScroll {
     tween: Cell<Option<Tween>>,
     /// Whether the chevron slots are in the layout, settled once a frame.
     slotted: Cell<bool>,
-    /// The tab `reveal` asked for, until the frame after the one that drew
-    /// it aims at it again: slots the first frame brought in may have pushed
-    /// it part way out.
+    /// The tab `reveal` asked for, until a frame draws the row where it
+    /// was aimed. An aim reads the row as the frame before drew it, so a
+    /// row that moves or narrows (the chevron slots coming in, the Panel
+    /// riding to another width) is aimed again from the frame that moved it.
     revealing: Cell<Option<Reveal>>,
 }
 
 #[derive(Clone, Copy)]
-enum Reveal {
-    /// No frame has drawn the row since `reveal`.
-    Asked(usize),
-    /// A frame drew it; the next must aim again.
-    Drawn(usize),
+struct Reveal {
+    ix: usize,
+    /// The row as the latest aim read it.
+    aimed: gpui::Bounds<gpui::Pixels>,
+    stage: Stage,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Stage {
+    /// No frame has drawn the row since the aim.
+    Asked,
+    /// A frame drew it; the next checks it landed.
+    Drawn,
     /// That next frame is asked for. A row hidden before it comes stays
     /// here, asking for nothing, until it is drawn again.
-    Due(usize),
+    Due,
 }
 
 impl Deref for TabScroll {
@@ -109,9 +118,14 @@ impl TabScroll {
         let slots = if self.slotted.get() { 2. * SURFACE_PLUS } else { 0. };
         self.slotted.set(self.most() > slots + 0.5);
         match self.revealing.take() {
-            Some(Reveal::Asked(ix)) => self.revealing.set(Some(Reveal::Drawn(ix))),
-            Some(Reveal::Drawn(ix) | Reveal::Due(ix)) => self.handle.scroll_to_item(ix),
-            None => {}
+            Some(reveal) if reveal.stage == Stage::Asked => {
+                self.revealing.set(Some(Reveal { stage: Stage::Drawn, ..reveal }));
+            }
+            // The last frame drew the row other than the aim read it.
+            Some(reveal) if self.handle.bounds() != reveal.aimed => {
+                self.aim(reveal.ix, Stage::Drawn);
+            }
+            _ => {}
         }
         let Some(tween) = self.tween.get() else {
             return;
@@ -124,13 +138,13 @@ impl TabScroll {
         }
     }
 
-    /// Whether the row is mid-ease or owes a reveal its second frame: the
-    /// frame must be drawn again. Read once a frame, it asks for that second
-    /// frame once.
+    /// Whether the row is mid-ease or owes a reveal the frame that checks
+    /// its aim: the frame must be drawn again. Read once a frame, it asks
+    /// for each such frame once.
     pub(crate) fn running(&self, cx: &gpui::App) -> bool {
         let due = match self.revealing.get() {
-            Some(Reveal::Drawn(ix)) => {
-                self.revealing.set(Some(Reveal::Due(ix)));
+            Some(reveal) if reveal.stage == Stage::Drawn => {
+                self.revealing.set(Some(Reveal { stage: Stage::Due, ..reveal }));
                 true
             }
             _ => false,
@@ -201,7 +215,16 @@ impl TabScroll {
     /// Bring child `ix` of the row into view when it is next drawn.
     pub(crate) fn reveal(&self, ix: usize) {
         self.tween.set(None);
-        self.revealing.set(Some(Reveal::Asked(ix)));
+        self.aim(ix, Stage::Asked);
+    }
+
+    /// Scroll child `ix` into the row as the last frame drew the row.
+    fn aim(&self, ix: usize, stage: Stage) {
+        self.revealing.set(Some(Reveal {
+            ix,
+            aimed: self.handle.bounds(),
+            stage,
+        }));
         self.handle.scroll_to_item(ix);
     }
 
