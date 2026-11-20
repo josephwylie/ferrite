@@ -134,10 +134,18 @@ fn another_tab_keeps_the_preview_for_later(cx: &mut TestAppContext) {
     tick(cx);
     assert_eq!(panel_w(cx), Some(least_w()));
     assert!(cx.debug_bounds("panel-preview").is_none());
+    // Overview shows whole from the frame that narrows the Panel.
+    let strip = cx.debug_bounds("panel-tabs").unwrap();
+    let overview = cx.debug_bounds("panel-tab-Overview").unwrap();
+    assert!(
+        overview.left() >= strip.left() && overview.right() <= strip.right(),
+        "Overview {overview:?} shows within the strip {strip:?}"
+    );
     // At this width the strip overflows: its chevron brings the tab in.
+    settles(cx);
     let right = cx.debug_bounds("panel-tabs-right").expect("more to the right");
     cx.simulate_click(right.center(), gpui::Modifiers::none());
-    tick(cx);
+    settles(cx);
     let tab = cx.debug_bounds("panel-tab-File-lines.rs").expect("its tab stays");
     cx.simulate_click(tab.center(), gpui::Modifiers::none());
     tick(cx);

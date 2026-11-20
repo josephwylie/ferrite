@@ -446,6 +446,7 @@ impl CockpitView {
     /// one starts none here, nor does the Panel opening or another
     /// Thread's coming up. Keys held for a body that is leaving, with none
     /// of the new tab's own to take them, go back to the conversation.
+    /// Whichever way a tab comes to show, the strip scrolls it into view.
     fn tend_tab_pick(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let shown = self
             .panel_pane()
@@ -453,6 +454,12 @@ impl CockpitView {
             .map(|thread| (thread, self.active_surface(thread)));
         if shown == self.panel.shown {
             return;
+        }
+        if let Some((thread, Some(id))) = &shown {
+            let state = self.panel.surfaces.get(*thread);
+            if let Some(at) = state.and_then(|state| state.tabs.iter().position(|tab| tab == id)) {
+                self.panel.tabs_scroll.reveal(at);
+            }
         }
         let previewed = |id: &Option<SurfaceId>| {
             matches!(id, Some(SurfaceId::File(_) | SurfaceId::Browser))
@@ -475,7 +482,7 @@ impl CockpitView {
     /// Once per frame, before anything measures the board: tend the
     /// previews (`tend_previews`), disarm a Merge no longer in view, read
     /// the diff of the PRs' open PR once Code shows, give the shown
-    /// Surface what it needs to draw.
+    /// Surface what it needs to draw (a PR tab on Code, its diff).
     pub(super) fn tend_panel(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.tend_previews(window, cx);
         if let Some(thread) = self.panel_thread() {
@@ -501,7 +508,12 @@ impl CockpitView {
                 }
                 Some(SurfaceId::Changes) => self.ensure_diff(tools::Diff::Changes(thread), cx),
                 Some(SurfaceId::PullRequest(number)) => {
-                    self.read_pr_snapshot(pr_read::PrTarget::thread(thread, number), false, cx)
+                    let target = pr_read::PrTarget::thread(thread, number);
+                    self.read_pr_snapshot(target, false, cx);
+                    let tab = self.panel.surfaces.get(thread).map(|state| state.pr_tab(number));
+                    if tab == Some(PrTab::Code) {
+                        self.ensure_diff(tools::Diff::PullRequest(target), cx);
+                    }
                 }
                 _ => {}
             }

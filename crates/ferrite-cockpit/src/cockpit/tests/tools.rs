@@ -340,8 +340,7 @@ fn overflowing_tabs_show_chevrons_that_scroll_the_strip(cx: &mut TestAppContext)
         upsert(&view, thread, SurfaceId::File(format!("/tmp/overflowing-tab-{at}.rs").into()), cx);
     }
     view.update(cx, |view, cx| view.activate_surface(thread, &SurfaceId::Overview, cx));
-    tick(cx);
-    tick(cx);
+    settles(cx);
     assert!(cx.debug_bounds("panel-tabs-left").is_none(), "nothing left of the first");
     let right = cx.debug_bounds("panel-tabs-right").expect("more to the right");
     let visible = view.read_with(cx, |view, _| f32::from(view.panel.tabs_scroll.bounds().size.width));
@@ -399,6 +398,41 @@ fn the_plus_stays_in_view_past_overflowing_tabs(cx: &mut TestAppContext) {
         px(ferrite_ui::theme::MENU_UNDER_GAP),
         "the menu {menu:?} hangs under the + {plus:?}"
     );
+}
+
+/// The shown tab is never left out of view in a strip that overflows:
+/// each Surface opened shows whole between the chevrons, the one whose
+/// opening brings the chevrons in too, and so does the first tab picked
+/// again once the Panel has ridden back to its width.
+#[gpui::test]
+fn the_shown_tab_scrolls_into_view(cx: &mut TestAppContext) {
+    ferrite_ui::motion::testing::drive();
+    let (view, thread, cx) = solo("surfaces-overflow-shown", cx);
+    fn shows(view: &Entity<CockpitView>, selector: &str, cx: &mut gpui::VisualTestContext) {
+        let strip = view.read_with(cx, |view, _| view.panel.tabs_scroll.bounds());
+        let tab = cx.update(|window, _| window.debug_bounds(selector)).unwrap();
+        assert!(
+            tab.left() >= strip.left() && tab.right() <= strip.right(),
+            "{selector} {tab:?} shows within the strip {strip:?}"
+        );
+    }
+    let mut opened = vec![
+        (SurfaceId::Background, "panel-tab-Background".to_string()),
+        (SurfaceId::Changes, "panel-tab-Changes".to_string()),
+    ];
+    opened.extend((0..6).map(|at| {
+        let id = SurfaceId::File(format!("/tmp/shown-tab-{at}.rs").into());
+        (id, format!("panel-tab-File-shown-tab-{at}.rs"))
+    }));
+    for (id, selector) in opened {
+        upsert(&view, thread, id, cx);
+        settles(cx);
+        shows(&view, &selector, cx);
+    }
+    assert!(cx.debug_bounds("panel-tabs-right-spent").is_some(), "the strip overflows");
+    view.update(cx, |view, cx| view.activate_surface(thread, &SurfaceId::Overview, cx));
+    settles(cx);
+    shows(&view, "panel-tab-Overview", cx);
 }
 
 /// A chevron with nothing more its way keeps its slot but takes no press:

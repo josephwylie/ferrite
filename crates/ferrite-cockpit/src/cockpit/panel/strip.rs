@@ -11,9 +11,10 @@
 //! `SURFACE_TAB_DRAG` and let go over another tab, it moves there; a
 //! shorter move is still a click. On overflow a chevron stands at each end
 //! with more to show, easing by `tab_scroll_step` (snapping under reduced
-//! motion); the wheel's turn scrolls them sideways. A Surface with work
-//! going on (a side chat answering, an agent working, background work)
-//! wears a pending dot at its icon's corner.
+//! motion); the wheel's turn scrolls them sideways; the shown tab is
+//! scrolled into view. A Surface with work going on (a side chat
+//! answering, an agent working, background work) wears a pending dot at
+//! its icon's corner.
 //!
 //! The `+` menu and "Open a surface" list the same openers (`Opener`), each
 //! with its letter; one that cannot run here is dimmed and says why.
@@ -317,18 +318,12 @@ impl CockpitView {
         };
         let active = self.active_surface(thread);
         let maximized = state.is_some_and(|state| state.maximized);
-        let strip =
-            div()
-                .debug_selector(|| "panel-tabs".into())
-                .flex()
-                .items_center()
-                .gap(px(SURFACE_HEAD_GAP))
-                // As wide as its tabs, so they overflow the scroll rather
-                // than squeeze.
-                .flex_shrink_0()
-                .children(tabs.iter().enumerate().map(|(at, id)| {
-                    self.surface_tab(thread, at, id, active.as_ref() == Some(id), cx)
-                }));
+        // The scroll's own children, so `reveal` finds each by its index.
+        let strip: Vec<AnyElement> = tabs
+            .iter()
+            .enumerate()
+            .map(|(at, id)| self.surface_tab(thread, at, id, active.as_ref() == Some(id), cx))
+            .collect();
         // Built before maximize: the keyboard's stops run in build order.
         let plus = self.surface_plus(thread, cx);
         // Each face its own id: a tooltip shown before the toggle belongs to
@@ -390,7 +385,10 @@ impl CockpitView {
                         // after it follows the last tab until they overflow.
                         div()
                             .id("panel-tab-scroll")
+                            .debug_selector(|| "panel-tabs".into())
                             .flex()
+                            .items_center()
+                            .gap(px(SURFACE_HEAD_GAP))
                             .min_w_0()
                             .overflow_x_scroll()
                             .track_scroll(&**scroll)
@@ -402,7 +400,7 @@ impl CockpitView {
                                     }
                                 },
                             ))
-                            .child(strip),
+                            .children(strip),
                     )
                     .children(chevron(Side::Right))
                     .child(
