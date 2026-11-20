@@ -130,6 +130,11 @@ impl Hunks {
     fn shown(&self, key: &FileKey) -> Option<&Shown> {
         self.reads.get(key)?.shown.as_ref()
     }
+
+    #[cfg(test)]
+    pub(super) fn held_for_test(&self, thread: ThreadId) -> usize {
+        self.unfolded.iter().chain(self.reads.keys()).filter(|(of, _)| *of == thread).count()
+    }
 }
 
 impl CockpitView {

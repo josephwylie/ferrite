@@ -515,3 +515,35 @@ fn an_agents_reveal_does_not_undo_a_hide_or_a_maximize(cx: &mut TestAppContext) 
     let revealed = view.update(cx, |view, _| view.reveal_surface(thread, SurfaceId::Browser, seen));
     assert!(!revealed, "a maximize is acting too");
 }
+
+/// What `thread`'s Files, Changes, a pull request's diff and the Overview's
+/// Changes section hold for it.
+fn hold_tools(view: &Entity<CockpitView>, thread: ThreadId, cx: &mut gpui::VisualTestContext) -> usize {
+    view.update(cx, |view, cx| {
+        let file = view.thread_path(thread).unwrap().join("src/lib.rs");
+        view.open_in_files(thread, file, None, true, cx);
+        view.upsert_surface(thread, SurfaceId::Changes, cx);
+        view.ensure_pr_changes(crate::cockpit::panel::pr_read::PrTarget::thread(thread, 1), cx);
+        view.toggle_panel_file(thread, "src/lib.rs".to_string(), cx);
+    });
+    tick(cx);
+    view.read_with(cx, |view, _| view.held_for_test(thread))
+}
+
+#[gpui::test]
+fn deleting_a_thread_frees_its_files_and_changes(cx: &mut TestAppContext) {
+    let (view, thread, cx) = solo("tools-thread-deleted", cx);
+    assert!(hold_tools(&view, thread, cx) >= 4, "Files, two diffs and an unfolded file");
+    press_nav_verb(&view, thread, MenuVerb::Delete, cx);
+    assert!(!view.read_with(cx, |view, _| view.known_threads().contains(&thread)), "the Thread is gone");
+    assert_eq!(view.read_with(cx, |view, _| view.held_for_test(thread)), 0, "and all it held");
+}
+
+#[gpui::test]
+fn a_parked_thread_keeps_its_files_and_changes(cx: &mut TestAppContext) {
+    let (view, thread, cx) = solo("tools-thread-parked", cx);
+    let held = hold_tools(&view, thread, cx);
+    press_nav_verb(&view, thread, MenuVerb::Park, cx);
+    assert!(view.read_with(cx, |view, _| view.cockpit.thread(thread).is_none()), "the Thread is parked");
+    assert_eq!(view.read_with(cx, |view, _| view.held_for_test(thread)), held, "it keeps them");
+}

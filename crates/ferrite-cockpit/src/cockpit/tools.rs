@@ -121,6 +121,20 @@ impl CockpitView {
     }
 }
 
+#[cfg(test)]
+impl CockpitView {
+    /// How many of `thread`'s tools are held: its Files, and each diff read
+    /// for it.
+    pub(super) fn tools_held_for_test(&self, thread: ThreadId) -> usize {
+        let of_thread = |diff: &Diff| match diff {
+            Diff::Changes(of) => *of == thread,
+            Diff::PullRequest(target) => target.source == panel::pr_read::PrSource::Thread(thread),
+        };
+        usize::from(self.tools.files.contains_key(&thread))
+            + self.tools.changes.keys().filter(|diff| of_thread(diff)).count()
+    }
+}
+
 /// A Surface's own row of tools under the Panel's head: `SURFACE_BAR_H`
 /// tall, a hairline under it.
 pub(super) fn surface_bar() -> Div {

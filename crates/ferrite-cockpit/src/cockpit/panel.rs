@@ -421,6 +421,12 @@ impl CockpitView {
         }
     }
 
+    /// How much of `thread`'s state the Panel and its tools hold.
+    #[cfg(test)]
+    pub(crate) fn held_for_test(&self, thread: ThreadId) -> usize {
+        self.tools_held_for_test(thread) + self.panel.hunks.held_for_test(thread)
+    }
+
     pub(crate) fn successor_panel(&mut self) -> Panel {
         self.sync_working_sets();
         self.panel.successor()

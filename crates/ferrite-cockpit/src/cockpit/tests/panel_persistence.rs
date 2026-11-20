@@ -115,3 +115,38 @@ fn close_reopen_and_files_preferences_restore_with_the_saved_panel(cx: &mut Test
         assert!(!preview_tabs.0.checked);
     });
 }
+
+/// A deleted Thread's working set leaves `files.json` with the next save,
+/// and once saved, pumps with nothing new write nothing.
+#[gpui::test]
+fn a_deleted_threads_working_set_is_saved_away_once(cx: &mut TestAppContext) {
+    let (mut core, _fake, checkout) = bound_cockpit("panel-deleted-save", Provider::Claude);
+    let other = core
+        .open(Provider::Claude, WorkspaceChoice::Main { checkout: checkout.clone() })
+        .unwrap();
+    let prefs = preferences("panel-deleted-save-settings");
+    let dir = prefs.dir.clone();
+    let view = cx.new(|cx| CockpitView::new_with_settings(core, Provider::Claude, prefs, cx));
+    let thread = view.update(cx, |view, cx| {
+        let thread = view.cockpit.threads().into_iter().find(|&thread| thread != other).unwrap();
+        view.open_in_files(thread, checkout.join("src/lib.rs"), None, true, cx);
+        view.flush_panel_persistence();
+        view.delete_thread(thread).unwrap();
+        view.pump(cx);
+        view.open_in_files(other, checkout.join("README.md"), None, true, cx);
+        view.pump(cx);
+        view.flush_panel_persistence();
+        thread
+    });
+    let files: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(dir.join("files.json")).unwrap()).unwrap();
+    assert!(files["threads"].get(thread.get().to_string()).is_none(), "its working set is gone");
+    std::fs::remove_file(dir.join("files.json")).unwrap();
+    view.update(cx, |view, cx| {
+        for _ in 0..3 {
+            view.pump(cx);
+            view.flush_panel_persistence();
+        }
+    });
+    assert!(!dir.join("files.json").exists(), "nothing changed, so nothing is written");
+}
