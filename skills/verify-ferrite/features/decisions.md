@@ -22,8 +22,9 @@ The agent continues with that answer.
 - On an empty Composer line: `1` allows, `2` takes option 2 (always allow), `3` denies;
   `up` / `down` move the cursor over those three, `enter` answers the one under it,
   `escape` denies, `tab` opens the amend note (a note sent with the answer; `enter`
-  sends, `escape` closes it). A question's options take the digits and the cursor the
-  same way. With text on the line the digits type.
+  sends, `escape` closes it). `escape` closes what is open first: the `▾` menu, then
+  the note; only an `escape` with neither open denies. A question's options take the
+  digits and the cursor the same way. With text on the line the digits type.
 - `y` / `n` / `a` (allow, deny, always allow) only on a Subagent's tab, which has no
   Composer.
 - `cmd-d` jumps to the next Decision; `cmd-i` lists Threads that need you.
