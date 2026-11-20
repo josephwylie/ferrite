@@ -3045,6 +3045,10 @@ impl Interactivity {
                                     for listener in &click_listeners {
                                         listener(&click_event, window, cx);
                                     }
+                                    // The press was this element's: the
+                                    // release is taken, as an action takes
+                                    // the keystroke it ran on.
+                                    cx.stop_propagation();
                                 } else {
                                     // Releasing any other key mid-press means
                                     // this isn't a clean activation, so cancel
@@ -5232,12 +5236,15 @@ mod tests {
         .unwrap();
     }
 
-    fn key_up(cx: &mut TestAppContext, window: AnyWindowHandle, key: &str) {
+    /// The release of `key`: true when something took it.
+    fn key_up(cx: &mut TestAppContext, window: AnyWindowHandle, key: &str) -> bool {
         let keystroke = Keystroke::parse(key).unwrap();
         cx.update_window(window, |_, window, cx| {
-            window.dispatch_event(KeyUpEvent { keystroke }.to_platform_input(), cx);
+            !window
+                .dispatch_event(KeyUpEvent { keystroke }.to_platform_input(), cx)
+                .propagate
         })
-        .unwrap();
+        .unwrap()
     }
 
     /// Pressing and releasing Enter on the same focused element fires a click.
@@ -5248,6 +5255,20 @@ mod tests {
         focus_and_draw(&mut cx, window, &focus_a);
         key_down(&mut cx, window, "enter");
         key_up(&mut cx, window, "enter");
+
+        assert_eq!(*clicks.borrow(), vec!["a"]);
+    }
+
+    /// The release that clicks is taken, so a caller can tell the press did
+    /// something; a release with no press before it is not.
+    #[test]
+    fn a_keyboard_click_takes_its_release() {
+        let (mut cx, window, clicks, focus_a, _focus_b) = setup_keyboard_activation_test();
+
+        focus_and_draw(&mut cx, window, &focus_a);
+        assert!(!key_up(&mut cx, window, "enter"), "no press, nothing taken");
+        key_down(&mut cx, window, "enter");
+        assert!(key_up(&mut cx, window, "enter"), "the clicking release is taken");
 
         assert_eq!(*clicks.borrow(), vec!["a"]);
     }
