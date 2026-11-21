@@ -565,6 +565,32 @@ that happened to touch it, and nothing in the code said whose a field was.
   notifications (`task_toasts`, which the window raises whether or not
   the Factory shows), and the Factory's rows in the nav and the palette.
   Nothing the Factory keeps is left on the root.
+- **The Composer menu is the twenty-eighth, and the Composer's first
+  view.** `ComposerMenuView` (`cockpit/composer_menu.rs`) owns the `/`,
+  `@` and `$` menu: the open menu and the line it stands on, the mute an
+  escape or a press elsewhere leaves until the text moves, the one edit a
+  recalled prompt makes without opening it, and the file search a
+  Thread's Session runs for `@`. What the caret opens it reads from the
+  line itself (`Wanted`); what that menu lists the root reads for it
+  through `composer_menu_inputs`, asking only for what it lists: the
+  focused Pane and its Composer, the Thread's commands or the draft's
+  listing (`DraftCommands`), or the Pane's root, the Session's file search
+  and whether the window is a machine's. The root still derives it, on an
+  edit and when a draft's listing or a search answer lands, since only
+  the root knows which Pane is focused. A command, a skill or a file the
+  view splices into the line; every other pick it says as
+  `ComposerMenuEvent::Pick` (a picker to open, `/import`, a Provider, an
+  effort, a band choice), which the root makes as it makes the band
+  menu's. Its keys (`MenuNext`, `MenuPrevious`, `MenuPick`,
+  `MenuDismiss`, and ⇥ on a `/` row) stay the root's actions, since the
+  keyboard is in the Composer, and the root hands them to the view, as it
+  does the Decision keys. What closes it from outside calls the view: a
+  sheet, a popup or the palette opening, the Pane going or losing the
+  focus, a drop on a Pane, and a press outside, which mutes it too. The
+  root draws it as the focused Pane's drawer, and only that Pane reads
+  it as it draws. The rows it is made of (`menu_rows.rs`) are shared with
+  the band menu and the model picker, which stay the root's popups (ADR
+  0043).
 
 ## What does not get a view
 
@@ -701,7 +727,8 @@ commands; the pump takes an answer that lands between keystrokes and
 derives the menu again; an edit with neither a `/` command nor a `$`
 skill at the caret, and a draft whose folder is gone, drop it (`forget`). A Thread's commands are
 its Session's, in core. A view would add events for asks the root makes
-anyway, and the menu that reads it is still the root's.
+anyway; the menu that reads it (`ComposerMenuView`) is handed what it
+lists.
 
 A draft's checkouts are the tenth, and the Composer's second slice.
 `Checkouts` (`cockpit/checkouts.rs`) keeps what a draft's workspace chip

@@ -18,17 +18,17 @@ fn draft_commands_arrive_before_first_send_and_follow_provider_changes(cx: &mut 
     tick(cx);
     cx.simulate_input("Please use /code");
     cx.run_until_parked();
-    view.read_with(cx, |view, _| {
+    view.read_with(cx, |view, cx| {
         assert_eq!(
-            view.popover.as_ref().unwrap().rows[0].name.as_ref(),
+            view.popover(cx).unwrap().rows[0].name.as_ref(),
             "Searching workspace skills..."
         );
     });
     tx.send(Ok(menu_commands())).unwrap();
     tick(cx);
-    view.read_with(cx, |view, _| {
+    view.read_with(cx, |view, cx| {
         assert_eq!(
-            view.popover.as_ref().unwrap().rows[0].name.as_ref(),
+            view.popover(cx).unwrap().rows[0].name.as_ref(),
             "code-review"
         );
         assert!(view.panes[0].draft().is_some());
@@ -56,7 +56,7 @@ fn draft_commands_arrive_before_first_send_and_follow_provider_changes(cx: &mut 
         );
         view.sync_menu(cx);
         assert_eq!(
-            view.popover.as_ref().unwrap().rows[0].name.as_ref(),
+            view.popover(cx).unwrap().rows[0].name.as_ref(),
             "Searching workspace skills..."
         );
     });
@@ -69,9 +69,9 @@ fn draft_commands_arrive_before_first_send_and_follow_provider_changes(cx: &mut 
         }]))
         .unwrap();
     tick(cx);
-    view.read_with(cx, |view, _| {
+    view.read_with(cx, |view, cx| {
         assert_eq!(
-            view.popover.as_ref().unwrap().rows[0].name.as_ref(),
+            view.popover(cx).unwrap().rows[0].name.as_ref(),
             "code-codex"
         );
     });
@@ -106,9 +106,8 @@ fn a_drafts_skill_menu_asks_for_its_commands_once(cx: &mut TestAppContext) {
     cx.simulate_resize(gpui::size(px(1000.), px(700.)));
     tick(cx);
     let rows = |cx: &mut gpui::VisualTestContext| -> Vec<String> {
-        view.read_with(cx, |view, _| {
-            view.popover
-                .as_ref()
+        view.read_with(cx, |view, cx| {
+            view.popover(cx)
                 .map(|open| open.rows.iter().map(|row| row.row.name.to_string()).collect())
                 .unwrap_or_default()
         })
@@ -172,8 +171,8 @@ fn draft_command_discovery_discards_old_workspace_replies_and_shows_failures(
     tx.send(Err(std::io::Error::other("provider unavailable")))
         .unwrap();
     tick(cx);
-    view.read_with(cx, |view, _| {
-        let row = &view.popover.as_ref().unwrap().rows[0];
+    view.read_with(cx, |view, cx| {
+        let row = &view.popover(cx).unwrap().rows[0];
         assert_eq!(row.name.as_ref(), "Could not load commands");
         assert_eq!(row.detail.as_ref(), "provider unavailable");
         assert!(row.consequence_is_inert());
@@ -538,8 +537,8 @@ fn the_first_prompt_fixes_the_provider_but_the_model_picker_stays_open(cx: &mut 
     // The `/model` row stays live and opens the same picker.
     cx.simulate_input("/");
     cx.run_until_parked();
-    view.read_with(cx, |view, _| {
-        let row = &view.popover.as_ref().expect("open").rows[0];
+    view.read_with(cx, |view, cx| {
+        let row = &view.popover(cx).expect("open").rows[0];
         assert_eq!(row.name.as_ref(), "model");
         assert!(!row.inert);
         assert_eq!(row.detail.as_ref(), "Switch model or hand over to the other provider");
@@ -899,8 +898,8 @@ fn ferrites_effort_row_replaces_the_providers_and_a_typed_level_is_honoured(
     tick(cx);
     cx.simulate_input("/eff");
     cx.run_until_parked();
-    view.read_with(cx, |view, _| {
-        let menu = view.popover.as_ref().expect("the / menu");
+    view.read_with(cx, |view, cx| {
+        let menu = view.popover(cx).expect("the / menu");
         let names: Vec<&str> = menu.rows.iter().map(|row| row.name.as_ref()).collect();
         assert_eq!(names, ["effort"], "one row, Ferrite's");
         assert!(matches!(

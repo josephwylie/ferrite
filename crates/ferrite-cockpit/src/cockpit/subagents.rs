@@ -493,7 +493,7 @@ impl CockpitView {
         self.retry_subject_history(index, cx);
         self.cockpit
             .set_visible_subject(thread, self.panes[index].selected.clone());
-        self.popover = None;
+        self.close_composer_menu(cx);
         cx.notify();
         Some(index)
     }

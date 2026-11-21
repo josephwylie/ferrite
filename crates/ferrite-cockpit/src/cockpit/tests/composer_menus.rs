@@ -139,9 +139,9 @@ fn recalling_a_slash_prompt_does_not_open_its_menu_until_a_real_edit(cx: &mut Te
     cx.simulate_keystrokes("up");
     tick(cx);
     assert_eq!(composer_text(&view, cx), "/");
-    view.read_with(cx, |view, _| {
+    view.read_with(cx, |view, cx| {
         assert!(
-            view.popover.is_none(),
+            view.popover(cx).is_none(),
             "recall itself must not derive a menu"
         )
     });
@@ -153,9 +153,9 @@ fn recalling_a_slash_prompt_does_not_open_its_menu_until_a_real_edit(cx: &mut Te
     cx.simulate_input("m");
     tick(cx);
     assert_eq!(composer_text(&view, cx), "/m");
-    view.read_with(cx, |view, _| {
+    view.read_with(cx, |view, cx| {
         assert!(
-            view.popover.is_some(),
+            view.popover(cx).is_some(),
             "the next real edit restores menu derivation"
         )
     });
@@ -177,13 +177,13 @@ fn menu_and_decision_states_disarm_history_before_their_arrows_dispatch(cx: &mut
             .update(cx, |composer, cx| composer.set("/".into(), cx));
     });
     tick(cx);
-    view.read_with(cx, |view, _| assert!(view.popover.is_some()));
+    view.read_with(cx, |view, cx| assert!(view.popover(cx).is_some()));
     view.read_with(cx, |view, cx| assert!(!view.history_available(0, cx)));
     cx.simulate_keystrokes("up");
     assert_eq!(composer_text(&view, cx), "/", "menu owns the arrow");
 
     view.update(cx, |view, cx| {
-        view.popover = None;
+        view.close_composer_menu(cx);
         view.panes[0]
             .composer
             .update(cx, |composer, cx| composer.set("draft".into(), cx));
@@ -393,17 +393,17 @@ fn typing_slash_opens_the_command_menu_and_enter_inserts_the_pick(cx: &mut TestA
         })
         .unwrap();
     tick(cx);
-    view.read_with(cx, |view, _| {
+    view.read_with(cx, |view, cx| {
         assert!(
-            view.popover.is_none(),
+            view.popover(cx).is_none(),
             "nothing opens until the operator types"
         );
     });
 
     cx.simulate_input("/");
     cx.run_until_parked();
-    view.read_with(cx, |view, _| {
-        let menu = view.popover.as_ref().expect("/ opens the menu");
+    view.read_with(cx, |view, cx| {
+        let menu = view.popover(cx).expect("/ opens the menu");
         // Everything the Session listed — plus, on this still-fresh
         // Thread, Ferrite's own model (#25), effort and import (#11)
         // entries on top.
@@ -413,23 +413,23 @@ fn typing_slash_opens_the_command_menu_and_enter_inserts_the_pick(cx: &mut TestA
 
     cx.simulate_input("co");
     cx.run_until_parked();
-    view.read_with(cx, |view, _| {
-        let menu = view.popover.as_ref().expect("still open while filtering");
+    view.read_with(cx, |view, cx| {
+        let menu = view.popover(cx).expect("still open while filtering");
         let names: Vec<&str> = menu.rows.iter().map(|row| row.name.as_ref()).collect();
         assert_eq!(names, ["code-review", "commit", "compact"]);
     });
 
     cx.simulate_keystrokes("down");
     cx.run_until_parked();
-    view.read_with(cx, |view, _| {
-        assert_eq!(view.popover.as_ref().expect("open").selected, 1);
+    view.read_with(cx, |view, cx| {
+        assert_eq!(view.popover(cx).expect("open").selected, 1);
     });
 
     cx.simulate_keystrokes("enter");
     cx.run_until_parked();
     assert_eq!(composer_text(&view, cx), "/commit ");
     view.read_with(cx, |view, cx| {
-        assert!(view.popover.is_none(), "the pick closed the menu");
+        assert!(view.popover(cx).is_none(), "the pick closed the menu");
         assert_eq!(
             view.panes[0].composer.read(cx).chips(),
             [SharedString::from("/commit")],
@@ -453,8 +453,8 @@ fn skill_picker_opens_after_prose_and_preserves_it_when_picking(cx: &mut TestApp
 
     cx.simulate_input("Please review this with /co");
     cx.run_until_parked();
-    view.read_with(cx, |view, _| {
-        let menu = view.popover.as_ref().expect("/co after prose opens skills");
+    view.read_with(cx, |view, cx| {
+        let menu = view.popover(cx).expect("/co after prose opens skills");
         assert_eq!(menu.rows[menu.selected].name.as_ref(), "code-review");
     });
     cx.simulate_keystrokes("enter");
@@ -463,7 +463,7 @@ fn skill_picker_opens_after_prose_and_preserves_it_when_picking(cx: &mut TestApp
         composer_text(&view, cx),
         "Please review this with /code-review "
     );
-    view.read_with(cx, |view, _| assert!(view.popover.is_none()));
+    view.read_with(cx, |view, cx| assert!(view.popover(cx).is_none()));
     assert!(
         fake.sent.borrow().is_empty(),
         "picking must not send a prompt"
@@ -488,7 +488,7 @@ fn skill_picker_tab_inserts_the_highlighted_skill(cx: &mut TestAppContext) {
     cx.simulate_keystrokes("down tab");
     cx.run_until_parked();
     assert_eq!(composer_text(&view, cx), "/commit ");
-    view.read_with(cx, |view, _| assert!(view.popover.is_none()));
+    view.read_with(cx, |view, cx| assert!(view.popover(cx).is_none()));
     assert!(fake.sent.borrow().is_empty(), "Tab must not send a prompt");
 }
 
@@ -510,13 +510,13 @@ fn skill_picker_tab_inserts_the_hovered_skill(cx: &mut TestAppContext) {
     let row = cx.debug_bounds("composer-menu-row-2").expect("compact row");
     cx.simulate_mouse_move(row.center(), None, gpui::Modifiers::none());
     cx.run_until_parked();
-    view.read_with(cx, |view, _| {
-        assert_eq!(view.popover.as_ref().unwrap().selected, 2)
+    view.read_with(cx, |view, cx| {
+        assert_eq!(view.popover(cx).unwrap().selected, 2)
     });
     cx.simulate_keystrokes("tab");
     cx.run_until_parked();
     assert_eq!(composer_text(&view, cx), "/compact ");
-    view.read_with(cx, |view, _| assert!(view.popover.is_none()));
+    view.read_with(cx, |view, cx| assert!(view.popover(cx).is_none()));
     assert!(fake.sent.borrow().is_empty());
 }
 
@@ -536,25 +536,25 @@ fn skill_picker_follows_the_caret_and_closes_on_whitespace(cx: &mut TestAppConte
     cx.simulate_input("🦀 Review /cod carefully");
     cx.simulate_keystrokes("alt-left left left");
     cx.run_until_parked();
-    view.read_with(cx, |view, _| assert!(view.popover.is_some()));
+    view.read_with(cx, |view, cx| assert!(view.popover(cx).is_some()));
     cx.simulate_keystrokes("tab");
     cx.run_until_parked();
     assert_eq!(composer_text(&view, cx), "🦀 Review /code-review carefully");
-    view.read_with(cx, |view, _| assert!(view.popover.is_none()));
+    view.read_with(cx, |view, cx| assert!(view.popover(cx).is_none()));
 
     cx.simulate_keystrokes("cmd-a");
     cx.simulate_input("Please /co");
     cx.run_until_parked();
-    view.read_with(cx, |view, _| assert!(view.popover.is_some()));
+    view.read_with(cx, |view, cx| assert!(view.popover(cx).is_some()));
     cx.simulate_input(" ");
     cx.run_until_parked();
-    view.read_with(cx, |view, _| assert!(view.popover.is_none()));
+    view.read_with(cx, |view, cx| assert!(view.popover(cx).is_none()));
     cx.simulate_input("more");
     cx.run_until_parked();
-    view.read_with(cx, |view, _| assert!(view.popover.is_none()));
+    view.read_with(cx, |view, cx| assert!(view.popover(cx).is_none()));
     cx.simulate_input(" /co");
     cx.run_until_parked();
-    view.read_with(cx, |view, _| assert!(view.popover.is_some()));
+    view.read_with(cx, |view, cx| assert!(view.popover(cx).is_some()));
     assert!(fake.sent.borrow().is_empty());
 }
 
@@ -576,28 +576,28 @@ fn escape_dismisses_the_menu_keeps_the_text_and_typing_reopens(cx: &mut TestAppC
 
     cx.simulate_input("/c");
     cx.run_until_parked();
-    view.read_with(cx, |view, _| assert!(view.popover.is_some()));
+    view.read_with(cx, |view, cx| assert!(view.popover(cx).is_some()));
 
     cx.simulate_keystrokes("escape");
     cx.run_until_parked();
-    view.read_with(cx, |view, _| {
-        assert!(view.popover.is_none(), "escape dismissed the popover");
+    view.read_with(cx, |view, cx| {
+        assert!(view.popover(cx).is_none(), "escape dismissed the popover");
     });
     assert_eq!(composer_text(&view, cx), "/c", "and kept the text");
 
     cx.simulate_keystrokes("escape");
     cx.run_until_parked();
-    view.read_with(cx, |view, _| {
+    view.read_with(cx, |view, cx| {
         assert!(
-            view.popover.is_none(),
+            view.popover(cx).is_none(),
             "a second escape is Interrupt, not a reopen"
         );
     });
 
     cx.simulate_input("o");
     cx.run_until_parked();
-    view.read_with(cx, |view, _| {
-        assert!(view.popover.is_some(), "typing again reopens the menu");
+    view.read_with(cx, |view, cx| {
+        assert!(view.popover(cx).is_some(), "typing again reopens the menu");
     });
 }
 
@@ -614,8 +614,8 @@ fn typing_at_completes_files_from_the_workspace_binding(cx: &mut TestAppContext)
     cx.simulate_input("read ");
     cx.simulate_input("@");
     cx.run_until_parked();
-    view.read_with(cx, |view, _| {
-        let menu = view.popover.as_ref().expect("@ opens the file menu");
+    view.read_with(cx, |view, cx| {
+        let menu = view.popover(cx).expect("@ opens the file menu");
         let names: Vec<&str> = menu.rows.iter().map(|row| row.name.as_ref()).collect();
         assert_eq!(
             names,
@@ -626,8 +626,8 @@ fn typing_at_completes_files_from_the_workspace_binding(cx: &mut TestAppContext)
 
     cx.simulate_input("src/li");
     cx.run_until_parked();
-    view.read_with(cx, |view, _| {
-        let menu = view.popover.as_ref().expect("open");
+    view.read_with(cx, |view, cx| {
+        let menu = view.popover(cx).expect("open");
         assert_eq!(menu.rows.len(), 1, "the fuzzy filter narrowed it");
         assert_eq!(menu.rows[0].insert.as_ref(), "src/lib.rs");
     });
@@ -636,7 +636,7 @@ fn typing_at_completes_files_from_the_workspace_binding(cx: &mut TestAppContext)
     cx.run_until_parked();
     assert_eq!(composer_text(&view, cx), "read @src/lib.rs ");
     view.read_with(cx, |view, cx| {
-        assert!(view.popover.is_none());
+        assert!(view.popover(cx).is_none());
         // The pill is provider-agnostic: a Claude pick paints it too —
         // the wire stays plain `@path` text the CLI itself reads.
         assert_eq!(
@@ -666,10 +666,9 @@ fn draft_mentions_are_scoped_to_the_selected_project(cx: &mut TestAppContext) {
 
     cx.simulate_input("@");
     cx.run_until_parked();
-    view.read_with(cx, |view, _| {
+    view.read_with(cx, |view, cx| {
         let names: Vec<&str> = view
-            .popover
-            .as_ref()
+            .popover(cx)
             .expect("draft @ menu")
             .rows
             .iter()
@@ -717,10 +716,9 @@ fn draft_mentions_follow_the_selected_workspace(cx: &mut TestAppContext) {
 
     cx.simulate_input("@");
     cx.run_until_parked();
-    view.read_with(cx, |view, _| {
+    view.read_with(cx, |view, cx| {
         let names: Vec<&str> = view
-            .popover
-            .as_ref()
+            .popover(cx)
             .unwrap()
             .rows
             .iter()
@@ -742,10 +740,9 @@ fn draft_mentions_follow_the_selected_workspace(cx: &mut TestAppContext) {
     });
     cx.simulate_input("@");
     cx.run_until_parked();
-    view.read_with(cx, |view, _| {
+    view.read_with(cx, |view, cx| {
         let names: Vec<&str> = view
-            .popover
-            .as_ref()
+            .popover(cx)
             .unwrap()
             .rows
             .iter()
@@ -821,7 +818,7 @@ fn a_stale_draft_workspace_neither_completes_nor_sends_from_main(cx: &mut TestAp
     tick(cx);
     cx.simulate_input("@main-only");
     cx.run_until_parked();
-    view.read_with(cx, |view, _| assert!(view.popover.is_none()));
+    view.read_with(cx, |view, cx| assert!(view.popover(cx).is_none()));
     cx.simulate_keystrokes("enter");
     view.read_with(cx, |view, _| {
         let draft = view.panes[view.focused()].draft().expect("still a draft");
@@ -860,8 +857,8 @@ fn a_thread_without_a_binding_opens_no_file_menu(cx: &mut TestAppContext) {
     cx.simulate_input("@");
     cx.run_until_parked();
 
-    view.read_with(cx, |view, _| {
-        assert!(view.popover.is_none(), "no binding, no popover");
+    view.read_with(cx, |view, cx| {
+        assert!(view.popover(cx).is_none(), "no binding, no popover");
     });
     assert_eq!(composer_text(&view, cx), "@", "typing was not eaten");
 }
@@ -926,7 +923,7 @@ fn a_press_on_the_transcript_dismisses_the_open_menu(cx: &mut TestAppContext) {
     tick(cx);
     cx.simulate_input("/");
     cx.run_until_parked();
-    view.read_with(cx, |view, _| assert!(view.popover.is_some()));
+    view.read_with(cx, |view, cx| assert!(view.popover(cx).is_some()));
 
     // The middle of the Pane's transcript — nowhere near the popover.
     cx.simulate_mouse_down(
@@ -936,8 +933,8 @@ fn a_press_on_the_transcript_dismisses_the_open_menu(cx: &mut TestAppContext) {
     );
     cx.run_until_parked();
 
-    view.read_with(cx, |view, _| {
-        assert!(view.popover.is_none(), "the press dismissed the popover");
+    view.read_with(cx, |view, cx| {
+        assert!(view.popover(cx).is_none(), "the press dismissed the popover");
     });
     assert_eq!(composer_text(&view, cx), "/", "the text survived the press");
 }
@@ -1078,8 +1075,8 @@ fn a_command_line_with_no_match_says_so_in_the_drawer(cx: &mut TestAppContext) {
     tick(cx);
     cx.simulate_input("/zzzq");
     tick(cx);
-    view.read_with(cx, |view, _| {
-        let open = view.popover.as_ref().expect("the drawer stays");
+    view.read_with(cx, |view, cx| {
+        let open = view.popover(cx).expect("the drawer stays");
         assert_eq!(open.rows[0].name.as_ref(), "No matching command.");
     });
     let drawer = cx.debug_bounds("composer-menu-drawer").expect("the drawer");
@@ -1094,5 +1091,5 @@ fn a_command_line_with_no_match_says_so_in_the_drawer(cx: &mut TestAppContext) {
     });
     cx.simulate_input("read notes/zzzq");
     tick(cx);
-    view.read_with(cx, |view, _| assert!(view.popover.is_none(), "prose opens nothing"));
+    view.read_with(cx, |view, cx| assert!(view.popover(cx).is_none(), "prose opens nothing"));
 }

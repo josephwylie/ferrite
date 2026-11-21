@@ -14,6 +14,7 @@ mod browser;
 mod browser_smoke;
 mod checkouts;
 mod columns;
+mod composer_menu;
 mod context_menu;
 pub(crate) mod coordinator;
 pub(crate) mod decisions;
@@ -458,26 +459,16 @@ pub struct CockpitView {
     /// The window's activation, followed into the Cockpit
     /// (`Cockpit::set_window_active`) once the first frame has a window.
     activation: Option<gpui::Subscription>,
-    /// The one popover in the Composer's slot, or None: the `/`/`@` menu
-    /// (#23), a picker (#11, #25) or a band chip (#29). Always on the
-    /// focused Pane's Composer; render self-heals it shut when the operator
-    /// leaves that Pane or its offer expires.
-    popover: Option<Popover>,
-    /// Escape (or a press elsewhere) dismissed the menu: stay shut until
-    /// the text moves again, or `sync_menu` would reopen it on the very
-    /// text the operator dismissed it over.
-    menu_muted: bool,
+    /// The Composer's `/`, `@` and `$` menu (`composer_menu`). Always on
+    /// the focused Pane's Composer; render shuts it when the operator
+    /// leaves that Pane.
+    composer_menu: Entity<composer_menu::ComposerMenuView>,
     /// What a draft's `/` and `$` menus list before it has a Session.
     draft_commands: draft_commands::DraftCommands,
-    /// A recalled slash/mention prompt is a programmatic edit: consume its
-    /// `Edited` event without deriving a menu. The next operator edit clears
-    /// the ordinary `menu_muted` latch and derives again.
-    suppress_recall_menu_once: bool,
     /// Where the vendors keep session files — discovery's roots, defaulted
     /// to the real homes and aimed at scratch directories by tests. Read
     /// once per picker open, never per frame.
     session_file_roots: Vec<(Provider, std::path::PathBuf)>,
-    pending_files: Option<PendingFileSearch>,
     /// The Project new drafts fall back to: the last one the operator was
     /// working in. The launch reads it from the store's most recently used
     /// Thread, and every explicit pick in the Composer's Project chip moves
@@ -907,21 +898,6 @@ struct Band {
     from_hero: bool,
 }
 
-struct PendingFileSearch {
-    pane: PaneIdentity,
-    thread: ThreadId,
-    generation: u64,
-    request_id: u64,
-    query: String,
-    token_start: usize,
-    root: std::path::PathBuf,
-    started: std::time::Instant,
-    reply: std::sync::mpsc::Receiver<std::io::Result<Vec<ferrite_core::providers::FileSuggestion>>>,
-    fallback: Option<std::sync::mpsc::Receiver<Vec<pane::MenuRow>>>,
-}
-
-static NEXT_FILE_SEARCH: AtomicU64 = AtomicU64::new(1);
-
 /// Allow only pixel rounding at the bottom of a native scroll container.
 #[cfg(test)]
 const TAIL_SLACK: Pixels = px(2.);
@@ -1144,6 +1120,10 @@ impl CockpitView {
             gpui::KeyBinding::new("escape", ferrite_pane::annotation_editor::Cancel, Some("AnnotationEditor")),
         ]);
         let cockpit_weak = cx.weak_entity();
+        let composer_menu = cx.new(|_| composer_menu::ComposerMenuView::default());
+        // Whether a Composer's key context is the menu's follows the menu.
+        cx.observe(&composer_menu, |view, _, cx| view.sync_composer_floats(cx))
+            .detach();
         let sheets = cx.new(|_| sheets::Sheets::default());
         cx.subscribe(&sheets, Self::on_sheets_event).detach();
         let prs = cx.new(|cx| prs_view::PrsView::new(cockpit_weak.clone(), cx));
@@ -1233,12 +1213,9 @@ impl CockpitView {
             nav_view: cx.new(|cx| nav_view::NavView::new(cockpit_weak, cx)),
             view_events: None,
             activation: None,
-            popover: None,
-            menu_muted: false,
+            composer_menu,
             draft_commands: Default::default(),
-            suppress_recall_menu_once: false,
             session_file_roots: ferrite_core::import::default_roots(),
-            pending_files: None,
             launch_project,
             checkouts: Default::default(),
             rename: Default::default(),
@@ -1671,13 +1648,13 @@ impl CockpitView {
     fn sync_composer_floats(&self, cx: &mut Context<Self>) {
         let focused_index = self.focused();
         let float_open = self.overlay_open(cx);
+        let menu_on = self
+            .composer_menu
+            .read(cx)
+            .pane()
+            .or_else(|| self.band_menu().map(|open| open.pane));
         for (index, pane) in self.panes.iter().enumerate() {
-            let open = self
-                .popover
-                .as_ref()
-                .map(|open| open.pane)
-                .or_else(|| self.band_menu().map(|open| open.pane))
-                == Some(pane.identity);
+            let open = menu_on == Some(pane.identity);
             let lit = index == focused_index;
             pane.composer.update(cx, |composer, cx| {
                 composer.set_menu_open(open, cx);
@@ -2037,17 +2014,13 @@ impl CockpitView {
         } else if band.is_some() && !composer.read(cx).is_empty() {
             self.close_popup(cx);
         }
-        let popover_on = self.popover.as_ref().map(|open| open.pane);
-        if self.suppress_recall_menu_once {
-            self.suppress_recall_menu_once = false;
-            self.popover = None;
-        } else {
-            self.menu_muted = false;
+        let popover_on = self.composer_menu.read(cx).pane();
+        if self.composer_menu.update(cx, |menu, cx| menu.edited(cx)) {
             self.sync_menu(cx);
         }
         // A keystroke redraws its own Pane (its line, its menu); only a
         // menu moving to another Pane redraws more.
-        let menu_moved = [popover_on, self.popover.as_ref().map(|open| open.pane)]
+        let menu_moved = [popover_on, self.composer_menu.read(cx).pane()]
             .into_iter()
             .flatten()
             .any(|pane| Some(pane) != edited);
@@ -2585,7 +2558,7 @@ impl CockpitView {
     /// press (the frame's titlebar).
     fn overlay_open(&self, cx: &gpui::App) -> bool {
         self.sheet_up(cx)
-            || self.popover.is_some()
+            || self.composer_menu.read(cx).is_open()
             || self.popup_up()
             || self.sheet_float_open()
     }
@@ -4012,7 +3985,7 @@ impl CockpitView {
         if self.sheet_up(cx)
             || self.rename.is_open()
             || self.nav_view.read(cx).snooze_line().is_some()
-            || self.popover.is_some()
+            || self.composer_menu.read(cx).is_open()
         {
             return false;
         }
@@ -4054,13 +4027,8 @@ impl CockpitView {
         {
             return;
         }
-        if let Some(at) = self
-            .popover
-            .as_ref()
-            .filter(|open| matches!(open.kind, Kind::Commands))
-            .map(|open| open.selected)
-        {
-            self.pick(at, window, cx);
+        if let Some(at) = self.composer_menu.read(cx).command_selected() {
+            self.composer_menu.update(cx, |menu, cx| menu.pick(at, cx));
             return;
         }
         if self.accept_suggestion(window, cx) {
@@ -4406,347 +4374,6 @@ impl CockpitView {
     /// an `@token` under the caret opens files, anything else closes. A
     /// picker or a band chip holds the slot while it is up and is left
     /// alone here.
-    fn sync_menu(&mut self, cx: &mut Context<Self>) {
-        // A band menu reads the line itself (`sync_band_rows`).
-        if self.band_menu().is_some() {
-            return;
-        }
-        self.popover = self.derive_menu(cx);
-    }
-
-    /// The `$` menu (T3's): the skills the Session serving the focused
-    /// Pane lists, through the fuzzy filter; while a draft's catalogue
-    /// loads, or when none matches, one inert line says so.
-    fn skill_menu(&mut self, filter: String, cx: &mut Context<Self>) -> Option<Popover> {
-        let pane = self.panes.get(self.focused())?;
-        let identity = pane.identity;
-        let (skills, loading): (Vec<ferrite_core::SessionCommand>, bool) = match pane.thread() {
-            Some(thread) => (self.cockpit.thread(thread)?.commands().to_vec(), false),
-            None => {
-                let draft = pane.draft()?;
-                let provider = draft.binding.provider().provider;
-                let cwd = draft
-                    .binding
-                    .resolve(self.cockpit.registry(), !self.on_machine())
-                    .ok()?
-                    .source_root()
-                    .to_path_buf();
-                let line = pane.composer.clone();
-                let menu = self.draft_commands(provider, cwd, &line, cx);
-                (menu.commands.clone(), menu.loading())
-            }
-        };
-        let skills: Vec<_> = skills.into_iter().filter(|command| command.is_skill()).collect();
-        let mut rows: Vec<Row> = command_rows(&skills, &filter)
-            .into_iter()
-            .map(|row| Row {
-                consequence: Consequence::Skill(row.insert.clone()),
-                row,
-                active: false,
-            })
-            .collect();
-        if rows.is_empty() {
-            rows.push(note_row(if loading {
-                "Searching workspace skills..."
-            } else {
-                "No skills found. Try / to browse provider commands."
-            }));
-        }
-        Some(Popover {
-            scroll: ScrollHandle::new(),
-            revealed: Default::default(),
-            pane: identity,
-            kind: Kind::Commands,
-            rows,
-            selected: 0,
-        })
-    }
-
-    fn derive_menu(&mut self, cx: &mut Context<Self>) -> Option<Popover> {
-        // Muted until the text moves again.
-        if self.menu_muted {
-            return None;
-        }
-        let pane = self.panes.get(self.focused())?;
-        let thread = pane.thread();
-        let (text, cursor) = {
-            let composer = pane.composer.read(cx);
-            (composer.text().to_string(), composer.cursor())
-        };
-        let mention = mention_token(&text, cursor);
-        if mention.is_none() {
-            if let Some((_, filter)) = skill_token(&text, cursor) {
-                return self.skill_menu(filter.to_string(), cx);
-            }
-        }
-        // A slash inside an active @path belongs to file completion.
-        if let Some((token_start, filter)) =
-            slash_token(&text, cursor).filter(|_| mention.is_none())
-        {
-            // Local actions consume the entire command line. Inside prose,
-            // offer provider skills only so a pick cannot discard the draft.
-            let standalone = token_start == 0 && cursor == text.len();
-            let Some(thread) = thread else {
-                let identity = pane.identity;
-                let draft = pane.draft()?;
-                let provider = draft.binding.provider().provider;
-                let cwd = match draft
-                    .binding
-                    .resolve(self.cockpit.registry(), !self.on_machine())
-                {
-                    Ok(workspace) => workspace.source_root().to_path_buf(),
-                    Err(_) => {
-                        // Import remains available when a workspace was removed.
-                        // Never reuse commands from the previous valid binding.
-                        self.draft_commands.forget();
-                        if !standalone {
-                            return None;
-                        }
-                        let row =
-                            local_row(filter, "import", "Resume a Claude or Codex session", false)?;
-                        return Some(Popover {
-                            scroll: ScrollHandle::new(),
-                            revealed: Default::default(),
-                            pane: identity,
-                            kind: Kind::Commands,
-                            rows: vec![Row {
-                                row,
-                                active: false,
-                                consequence: Consequence::OpenImportPicker,
-                            }],
-                            selected: 0,
-                        });
-                    }
-                };
-                let line = pane.composer.clone();
-                let menu = self.draft_commands(provider, cwd, &line, cx);
-                let mut rows: Vec<Row> = command_rows(&menu.commands, filter)
-                    .into_iter()
-                    .map(|row| Row {
-                        consequence: Consequence::Command(row.insert.clone()),
-                        row,
-                        active: false,
-                    })
-                    .collect();
-                if let Some(row) = standalone
-                    .then(|| local_row(filter, "import", "Resume a Claude or Codex session", false))
-                    .flatten()
-                {
-                    rows.retain(|existing| existing.row.name != row.name);
-                    rows.insert(
-                        0,
-                        Row {
-                            row,
-                            active: false,
-                            consequence: Consequence::OpenImportPicker,
-                        },
-                    );
-                }
-                let status = if menu.loading() {
-                    Some(("Searching workspace skills...", ""))
-                } else {
-                    menu.error().map(|error| ("Could not load commands", error))
-                };
-                if let Some((name, detail)) = status {
-                    rows.push(Row {
-                        row: pane::MenuRow {
-                            insert: "".into(),
-                            name: name.into(),
-                            detail: detail.to_string().into(),
-                            matched: Vec::new(),
-                            prose_detail: true,
-                            inert: true,
-                            tag: None,
-                        },
-                        active: false,
-                        consequence: Consequence::Inert,
-                    });
-                }
-                if rows.is_empty() {
-                    return standalone.then(|| note_popover(identity, NO_COMMAND));
-                }
-                return Some(Popover {
-                    scroll: ScrollHandle::new(),
-                    revealed: Default::default(),
-                    pane: identity,
-                    kind: Kind::Commands,
-                    rows,
-                    selected: 0,
-                });
-            };
-            let open = self.cockpit.thread(thread)?;
-            let mut rows: Vec<Row> = command_rows(open.commands(), filter)
-                .into_iter()
-                .map(|row| Row {
-                    consequence: Consequence::Command(row.insert.clone()),
-                    row,
-                    active: false,
-                })
-                .collect();
-            // Ferrite's local rows ride on top, through the same fuzzy
-            // filter and under the same cap as every row. #11: `import`
-            // always — in the Thread's place while it is blank, else
-            // alongside. #25: `provider` always — live before the first
-            // prompt, and kept visible but inert after it, so the door's
-            // absence never reads as a bug.
-            // A local row replaces a provider command of the same name
-            // (Claude lists its own `effort`): Ferrite's opens the picker,
-            // and the typed form (`/effort max`) still works — `submit`
-            // reads it.
-            let push_local = |rows: &mut Vec<Row>, row: Row| {
-                rows.retain(|existing| existing.row.name != row.row.name);
-                rows.insert(0, row);
-                rows.truncate(MENU_ROWS_MAX);
-            };
-            if standalone {
-                if let Some(row) =
-                    local_row(filter, "import", "Resume a Claude or Codex session", false)
-                {
-                    push_local(
-                        &mut rows,
-                        Row {
-                            row,
-                            active: false,
-                            consequence: Consequence::OpenImportPicker,
-                        },
-                    );
-                }
-            }
-            // The model can change at any time, and so can the provider:
-            // after the first prompt the other one starts a fresh
-            // conversation with the earlier one handed over as context,
-            // which the picker itself explains.
-            let detail = "Switch model or hand over to the other provider";
-            if let Some(row) = standalone
-                .then(|| local_row(filter, "effort", "Switch reasoning effort", false))
-                .flatten()
-            {
-                push_local(
-                    &mut rows,
-                    Row {
-                        row,
-                        active: false,
-                        consequence: Consequence::OpenEffortPicker,
-                    },
-                );
-            }
-            if let Some(row) = standalone
-                .then(|| local_row(filter, "model", detail, false))
-                .flatten()
-            {
-                push_local(
-                    &mut rows,
-                    Row {
-                        row,
-                        active: false,
-                        consequence: Consequence::OpenProviderPicker,
-                    },
-                );
-            }
-            // A command line with no match says so; a `/word` in prose
-            // that names nothing is prose, and opens nothing.
-            if rows.is_empty() {
-                return standalone.then(|| note_popover(pane.identity, NO_COMMAND));
-            }
-            return Some(Popover {
-                scroll: ScrollHandle::new(),
-                revealed: Default::default(),
-                pane: pane.identity,
-                kind: Kind::Commands,
-                rows,
-                selected: 0,
-            });
-        }
-        let (token_start, filter) = mention?;
-        // No binding → nothing to walk → no popover.
-        let root = self.pane_root(self.focused())?;
-        if let Some(thread) = thread {
-            if let Ok(receiver) = self.cockpit.search_files(thread, filter) {
-                let request_id = NEXT_FILE_SEARCH.fetch_add(1, Ordering::Relaxed);
-                let generation = self.cockpit.thread(thread)?.generation();
-                self.pending_files = Some(PendingFileSearch {
-                    pane: pane.identity,
-                    thread,
-                    generation,
-                    request_id,
-                    query: filter.to_string(),
-                    token_start,
-                    root: root.clone(),
-                    started: std::time::Instant::now(),
-                    reply: receiver,
-                    fallback: None,
-                });
-                return Some(Popover {
-                    scroll: ScrollHandle::new(),
-                    revealed: Default::default(),
-                    pane: pane.identity,
-                    kind: Kind::Files {
-                        files: std::rc::Rc::new(Vec::new()),
-                        token_start,
-                        query: filter.to_string(),
-                        request_id,
-                    },
-                    rows: vec![Row {
-                        row: pane::MenuRow {
-                            insert: SharedString::default(),
-                            name: "Searching workspace files...".into(),
-                            matched: Vec::new(),
-                            detail: SharedString::default(),
-                            prose_detail: true,
-                            inert: true,
-                            tag: None,
-                        },
-                        active: false,
-                        consequence: Consequence::Inert,
-                    }],
-                    selected: 0,
-                });
-            }
-        }
-        // A machine's files are its Sessions' to search (ADR 0026).
-        if self.on_machine() {
-            return None;
-        }
-        // The walk runs once per open menu; keystrokes only re-filter it.
-        let walked = match &self.popover {
-            Some(open) if open.pane == pane.identity => match &open.kind {
-                Kind::Files { files, .. } => Some(files.clone()),
-                _ => None,
-            },
-            _ => None,
-        };
-        let files = walked.unwrap_or_else(|| {
-            std::rc::Rc::new(ferrite_core::workspace::mention_files(
-                &root,
-                MENTION_FILE_CAP,
-            ))
-        });
-        let rows: Vec<Row> = mention_rows(&files, filter)
-            .into_iter()
-            .map(|row| Row {
-                consequence: Consequence::Mention(row.insert.clone()),
-                row,
-                active: false,
-            })
-            .collect();
-        if rows.is_empty() {
-            return Some(note_popover(pane.identity, NO_FILES));
-        }
-        Some(Popover {
-            scroll: ScrollHandle::new(),
-            revealed: Default::default(),
-            pane: pane.identity,
-            kind: Kind::Files {
-                files,
-                token_start,
-                query: filter.to_string(),
-                request_id: 0,
-            },
-            rows,
-            selected: 0,
-        })
-    }
-
     /// The menu keys serve whichever rows menu rides the Composer: the
     /// `/`/`@` menu or a band menu — one key context, no second table.
     fn menu_next(&mut self, _: &MenuNext, _window: &mut Window, cx: &mut Context<Self>) {
@@ -4791,9 +4418,7 @@ impl CockpitView {
         let Some(text) = self.cockpit.recall_prompt(thread, direction, &draft) else {
             return;
         };
-        self.popover = None;
-        self.menu_muted = true;
-        self.suppress_recall_menu_once = true;
+        self.composer_menu.update(cx, |menu, cx| menu.recalled(cx));
         let content = self.unsent.stepped_to(text);
         composer.update(cx, |composer, cx| composer.put(content, cx));
         cx.notify();
@@ -4812,7 +4437,7 @@ impl CockpitView {
         !self.panes[index].has_tool_target()
             && !self.rename.is_open()
             && self.nav_view.read(cx).snooze_line().is_none()
-            && self.popover.is_none()
+            && !self.composer_menu.read(cx).is_open()
             && ((self.panes[index].is_main() && queued_to_take_back(&open).is_some())
                 || (open.has_prompt_history()
                     && !open.busy()
@@ -4822,21 +4447,17 @@ impl CockpitView {
 
     /// Clamp-step the selection of the rows menu riding the Composer.
     fn step_popover(&mut self, delta: isize, cx: &mut Context<Self>) {
-        let stepped = match &mut self.popover {
-            Some(open) => open.step(delta),
-            None => self.band_menu_mut().is_some_and(|open| open.step(delta)),
-        };
-        if stepped {
+        if self.composer_menu.read(cx).is_open() {
+            self.composer_menu.update(cx, |menu, cx| menu.step(delta, cx));
+        } else if self.band_menu_mut().is_some_and(|open| open.step(delta)) {
             cx.notify();
         }
     }
 
     fn menu_pick(&mut self, _: &MenuPick, window: &mut Window, cx: &mut Context<Self>) {
-        let at = match &self.popover {
-            Some(open) => Some(open.selected),
-            None => self.band_menu().map(|open| open.selected),
-        };
-        if let Some(at) = at {
+        if let Some(at) = self.composer_menu.read(cx).popover().map(|open| open.selected) {
+            self.composer_menu.update(cx, |menu, cx| menu.pick(at, cx));
+        } else if let Some(at) = self.band_menu().map(|open| open.selected) {
             self.pick(at, window, cx);
         }
     }
@@ -4847,9 +4468,7 @@ impl CockpitView {
     /// picker takes no mute, since nothing reopens it; a band menu also
     /// returns the chip's tab focus to the prompt line.
     fn menu_dismiss(&mut self, _: &MenuDismiss, _window: &mut Window, cx: &mut Context<Self>) {
-        if self.popover.take().is_some() {
-            self.menu_muted = true;
-        } else if self.band_menu().is_some() {
+        if !self.composer_menu.update(cx, |menu, cx| menu.dismiss(cx)) && self.band_menu().is_some() {
             self.close_popup(cx);
             if let Some(draft) = self.focused_draft_mut() {
                 draft.band_focus = None;
@@ -4858,29 +4477,31 @@ impl CockpitView {
         cx.notify();
     }
 
-    /// The shared tail of ↵ and a row click: the row's own consequence,
-    /// dispatched. The menu closes either way — a door it opens (the
-    /// pickers) is a fresh popover in its place.
+    /// ↵ or a press on row `at` of a band menu: its choice, made. The
+    /// menu closes first.
     fn pick(&mut self, at: usize, window: &mut Window, cx: &mut Context<Self>) {
-        let (pane, consequence, token_start) = if let Some(open) = self.popover.take() {
-            let Some(row) = open.rows.get(at) else {
-                return;
-            };
-            let token_start = match open.kind {
-                Kind::Files { token_start, .. } => Some(token_start),
-                _ => None,
-            };
-            (open.pane, row.consequence.clone(), token_start)
-        } else if let Some(open) = self.band_menu() {
-            let Some(row) = open.rows.get(at) else {
-                return;
-            };
-            let picked = (open.pane, row.consequence.clone(), None);
-            self.close_popup(cx);
-            picked
-        } else {
+        let Some(open) = self.band_menu() else {
             return;
         };
+        let Some(row) = open.rows.get(at) else {
+            return;
+        };
+        let (pane, consequence) = (open.pane, row.consequence.clone());
+        self.close_popup(cx);
+        self.run_pick(pane, &consequence, window, cx);
+    }
+
+    /// What a pick of the band menu or the Composer menu leaves to the
+    /// root: a picker opened in the menu's place, a Provider, an effort or
+    /// a band choice. A command, a skill or a file the Composer menu put
+    /// in the line itself.
+    fn run_pick(
+        &mut self,
+        pane: PaneIdentity,
+        consequence: &Consequence,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let Some(composer) = self
             .index_of(pane)
             .map(|index| self.panes[index].composer.clone())
@@ -4894,50 +4515,11 @@ impl CockpitView {
                 composer.splice(whole, text, cx);
             });
         };
-        match &consequence {
-            Consequence::Command(name) => {
-                composer.update(cx, |composer, cx| {
-                    let cursor = composer.cursor();
-                    let text = composer.text();
-                    let Some((start, _)) = slash_token(text, cursor) else {
-                        return;
-                    };
-                    // Complete the whole token even when editing its middle.
-                    let mut end = cursor
-                        + text[cursor..]
-                            .find(char::is_whitespace)
-                            .unwrap_or(text.len() - cursor);
-                    // Reuse an existing separator instead of inserting two spaces.
-                    if text[end..].starts_with(' ') {
-                        end += 1;
-                    }
-                    // The pick is a chip, as a mention is; it sends as
-                    // the plain `/name` it reads.
-                    let token = format!("/{name}");
-                    composer.splice(start..end, &format!("{token} "), cx);
-                    composer.stage_chip(SharedString::from(token), cx);
-                });
-            }
-            Consequence::Skill(name) => {
-                composer.update(cx, |composer, cx| {
-                    let cursor = composer.cursor();
-                    let text = composer.text();
-                    let Some((start, _)) = skill_token(text, cursor) else {
-                        return;
-                    };
-                    let mut end = cursor
-                        + text[cursor..]
-                            .find(char::is_whitespace)
-                            .unwrap_or(text.len() - cursor);
-                    if text[end..].starts_with(' ') {
-                        end += 1;
-                    }
-                    let token = format!("${name}");
-                    composer.splice(start..end, &format!("{token} "), cx);
-                    composer.stage_chip(SharedString::from(token), cx);
-                });
-            }
-            Consequence::Inert => {}
+        match consequence {
+            Consequence::Command(_)
+            | Consequence::Skill(_)
+            | Consequence::Mention(_)
+            | Consequence::Inert => {}
             Consequence::OpenProviderPicker => {
                 if let Some(thread) = pane.thread() {
                     splice_line(cx, "");
@@ -4955,17 +4537,6 @@ impl CockpitView {
                     }
                 };
                 self.open_import_palette(into, window, cx);
-            }
-            Consequence::Mention(path) => {
-                let Some(start) = token_start else {
-                    return;
-                };
-                let token = format!("@{path}");
-                composer.update(cx, |composer, cx| {
-                    let cursor = composer.cursor();
-                    composer.splice(start..cursor, &format!("{token} "), cx);
-                    composer.stage_chip(SharedString::from(token), cx);
-                });
             }
             Consequence::Provision(choice) => {
                 if let Some(thread) = pane.thread() {
@@ -4991,73 +4562,7 @@ impl CockpitView {
     }
 
     fn poll_navigation(&mut self, cx: &mut Context<Self>) {
-        use std::sync::mpsc::TryRecvError;
-        if let Some(mut pending) = self.pending_files.take() {
-            let current = self.panes.get(self.focused()).is_some_and(|pane| pane.identity == pending.pane)
-                && self.cockpit.thread(pending.thread).is_some_and(|live| live.generation() == pending.generation)
-                && self.popover.as_ref().is_some_and(|open| open.pane == pending.pane && matches!(&open.kind, Kind::Files { request_id, query, token_start, .. } if *request_id == pending.request_id && query == &pending.query && *token_start == pending.token_start));
-            if current {
-                let rows = if let Some(fallback) = &pending.fallback {
-                    match fallback.try_recv() {
-                        Ok(rows) => Some(rows),
-                        Err(TryRecvError::Empty) => None,
-                        Err(TryRecvError::Disconnected) => Some(Vec::new()),
-                    }
-                } else {
-                    match pending.reply.try_recv() {
-                        Ok(Ok(files)) => Some(native_mention_rows(&files)),
-                        Err(TryRecvError::Empty)
-                            if pending.started.elapsed() < Duration::from_secs(5) =>
-                        {
-                            None
-                        }
-                        // A machine's files are walked by none of this
-                        // computer's threads (ADR 0026).
-                        _ if self.on_machine() => Some(Vec::new()),
-                        _ => {
-                            let root = pending.root.clone();
-                            let query = pending.query.clone();
-                            let (tx, rx) = std::sync::mpsc::channel();
-                            if std::thread::Builder::new()
-                                .name("ferrite-file-fallback".into())
-                                .spawn(move || {
-                                    let paths = ferrite_core::workspace::mention_files(
-                                        &root,
-                                        MENTION_FILE_CAP,
-                                    );
-                                    let _ = tx.send(mention_rows(&paths, &query));
-                                })
-                                .is_ok()
-                            {
-                                pending.fallback = Some(rx);
-                                None
-                            } else {
-                                Some(Vec::new())
-                            }
-                        }
-                    }
-                };
-                if let Some(rows) = rows {
-                    if let Some(open) = &mut self.popover {
-                        open.rows = rows
-                            .into_iter()
-                            .map(|row| Row {
-                                consequence: Consequence::Mention(row.insert.clone()),
-                                row,
-                                active: false,
-                            })
-                            .collect();
-                        if open.rows.is_empty() {
-                            open.rows = vec![note_row(NO_FILES)];
-                        }
-                        open.selected = 0;
-                    }
-                    cx.notify();
-                } else {
-                    self.pending_files = Some(pending);
-                }
-            }
-        }
+        self.poll_composer_menu(cx);
         self.poll_session_discovery(cx);
     }
 
@@ -6630,11 +6135,9 @@ impl CockpitView {
 
     /// The open popover for this Pane, which hangs it above the line.
     fn popover_element(&self, index: usize, cx: &mut Context<Self>) -> Option<AnyElement> {
-        let open = self
-            .popover
-            .as_ref()
-            .filter(|open| open.pane == self.panes[index].identity)?;
-        Some(self.menu_surface(open, Some(&open.kind), cx))
+        (index == self.focused()
+            && self.composer_menu.read(cx).pane() == Some(self.panes[index].identity))
+            .then(|| self.composer_menu.clone().into_any_element())
     }
 
     /// A draft's Project or Workspace menu, hung off its chip on the strip
@@ -6683,7 +6186,7 @@ impl CockpitView {
         let surface = div()
             .debug_selector(|| "composer-menu".into())
             .w(px(width))
-            .child(self.menu_surface(open, None, cx));
+            .child(menu_surface(open, None, |_, _, _| {}, Self::pick, cx));
         Some(
             anchored()
                 .anchor(anchor)
@@ -6692,154 +6195,6 @@ impl CockpitView {
                 .child(self.popup_face(face, "band-menu-in", surface, opens, cx))
                 .into_any_element(),
         )
-    }
-
-    /// A rows menu's surface — a `/`/`@` menu's (`text`) or a band menu's —
-    /// rows wired to their picks: assembled
-    /// here so its clicks land beside every other pointer wire (the root
-    /// selector's precedent). Every row is the one menu row: `/`, `@` and
-    /// import rows through `pane::menu_row` (slash descriptions in one
-    /// aligned column), band rows through `pane::picker_row` with the
-    /// strong check on the standing choice; an inert explanation
-    /// ("Searching workspace files...", a refusal) is a `menu_note`. The rows scroll
-    /// inside the popover's cap.
-    fn menu_surface<K>(
-        &self,
-        open: &Popover<K>,
-        text: Option<&Kind>,
-        cx: &mut Context<Self>,
-    ) -> AnyElement {
-        fn wire<E: InteractiveElement + IntoElement + 'static>(
-            drawn: E,
-            at: usize,
-            cx: &mut Context<CockpitView>,
-        ) -> AnyElement {
-            drawn
-                .debug_selector(move || format!("composer-menu-row-{at}"))
-                .on_mouse_move(cx.listener(move |view, _: &gpui::MouseMoveEvent, _, cx| {
-                    if let Some(open) = &mut view.popover {
-                        if matches!(open.kind, Kind::Commands)
-                            && open.selected != at
-                            && open.rows.get(at).is_some_and(|row| !row.inert)
-                        {
-                            open.selected = at;
-                            cx.notify();
-                        }
-                    }
-                }))
-                .on_mouse_down(
-                    MouseButton::Left,
-                    cx.listener(move |view, _: &MouseDownEvent, window, cx| {
-                        cx.stop_propagation();
-                        view.pick(at, window, cx);
-                    }),
-                )
-                .into_any_element()
-        }
-        // Slash commands align their descriptions in one column sized to
-        // the longest name shown, measured in the row's face (a match
-        // draws at `W_LABEL`), so no name is ever cut.
-        let label_w = matches!(text, Some(Kind::Commands)).then(|| {
-            let measure = nav::Measure::Text(cx, self.nav_expanded_width());
-            open.rows
-                .iter()
-                .map(|row| {
-                    measure.ui(
-                        &row.name,
-                        ferrite_ui::theme::FS_UI,
-                        ferrite_ui::theme::W_LABEL,
-                    )
-                })
-                .fold(0., f32::max)
-                .ceil()
-        });
-        if !open.revealed.replace(true) {
-            open.scroll.scroll_to_item(open.selected);
-        }
-        let mut rows = div()
-            .id("composer-menu-rows")
-            .debug_selector(|| "composer-menu-rows".into())
-            .flex()
-            .flex_col()
-            .min_h_0()
-            .overflow_y_scroll()
-            .track_scroll(&open.scroll);
-        for (at, row) in open.rows.iter().enumerate() {
-            let cursor = at == open.selected;
-            let explains = row.inert
-                && row.consequence_is_inert()
-                && row.detail.is_empty()
-                && row.matched.is_empty();
-            let drawn = match text {
-                _ if explains => wire(ferrite_ui::menu::note(row.name.clone()), at, cx),
-                Some(_) => wire(
-                    pane::menu_row(("composer-menu-row", at), &row.row, cursor, label_w),
-                    at,
-                    cx,
-                ),
-                None => wire(
-                    pane::picker_row(
-                        ("composer-menu-row", at),
-                        row.name.clone(),
-                        row.detail.clone(),
-                        cursor,
-                        row.active,
-                        row.inert,
-                    ),
-                    at,
-                    cx,
-                ),
-            };
-            rows = rows.child(drawn);
-        }
-        // A press on the popover's own dead space is not a press outside
-        // it: swallowed, so the root's dismissal never sees it. No key-hint
-        // footer: the keys act in place (Claude's and Codex's menus).
-        // Claude's slash picker explains the row under the cursor in a card
-        // at its side (claude/slash-picker.png), so a description cut by the
-        // popover's width is still read, by key as well as by pointer. The
-        // card stands level with the row, rows being one grid row each.
-        let explained = matches!(text, Some(Kind::Commands))
-            .then(|| open.rows.get(open.selected))
-            .flatten()
-            .filter(|row| !row.row.inert && !row.row.detail.is_empty())
-            .map(|row| row.row.detail.clone());
-        let row_top = open.selected as f32 * ferrite_ui::theme::FLOAT_ROW_H
-            + f32::from(open.scroll.offset().y);
-        let cap = if text.is_some() {
-            ferrite_ui::theme::SLASH_MENU_MAX_H
-        } else {
-            ferrite_ui::theme::MENU_MAX_H
-        };
-        let popover = pane::menu_popover(cap)
-            .on_mouse_down(
-                MouseButton::Left,
-                cx.listener(|_, _: &MouseDownEvent, _, cx| cx.stop_propagation()),
-            )
-            .child(rows);
-        div()
-            .relative()
-            .w_full()
-            .child(popover)
-            .children(explained.map(|detail| {
-                let card = ferrite_ui::menu::float()
-                    .debug_selector(|| "composer-menu-tip".into())
-                    .w(px(ferrite_ui::theme::TOOLTIP_MAX_W))
-                    .px(px(ferrite_ui::theme::TOOLTIP_PAD_X))
-                    .py(px(ferrite_ui::theme::TOOLTIP_PAD_Y))
-                    .text_size(px(ferrite_ui::theme::FS_META))
-                    .line_height(px(ferrite_ui::theme::LH_META))
-                    .text_color(rgb(ferrite_ui::theme::INK_STRONG))
-                    .child(detail);
-                // A drawer as wide as the box has no room on its right.
-                crate::float::beside(
-                    ferrite_ui::theme::SUBMENU_GAP,
-                    row_top.max(0.),
-                    ferrite_ui::theme::MENU_WINDOW_MARGIN,
-                    card.into_any_element(),
-                )
-            }))
-            .into_any_element()
     }
 
     /// The nav's per-frame state (ADR 0040), from caches and O(1) reads
@@ -7197,13 +6552,9 @@ impl CockpitView {
         if let Err(error) = result {
             ferrite_core::log!("pane {identity:?} did not close cleanly: {error}");
         }
-        // A popover on the closed Pane goes with it.
-        if self
-            .popover
-            .as_ref()
-            .is_some_and(|open| open.pane == identity)
-        {
-            self.popover = None;
+        // A menu on the closed Pane goes with it.
+        if self.composer_menu.read(cx).pane() == Some(identity) {
+            self.close_composer_menu(cx);
         }
         self.sync_panes(cx);
         if let (true, PaneIdentity::Draft(draft)) = (closed, identity) {
@@ -7509,6 +6860,7 @@ impl CockpitView {
                 cx.subscribe_in(&self.browser_dialog, window, Self::on_browser_dialog_event),
                 cx.subscribe_in(&self.browser_review, window, Self::on_browser_review_event),
                 cx.subscribe_in(&self.empty_board, window, Self::on_empty_board_event),
+                cx.subscribe_in(&self.composer_menu, window, Self::on_composer_menu_event),
             ]);
         }
     }
@@ -7726,12 +7078,14 @@ impl CockpitView {
 
         // The `/`/`@` menu belongs to the focused Pane's Composer (#23):
         // leaving that Pane closes it here.
-        if self.popover.as_ref().is_some_and(|open| {
-            self.panes
+        if let Some(on) = self.composer_menu.read(cx).pane() {
+            if self
+                .panes
                 .get(self.focused())
-                .is_none_or(|pane| pane.identity != open.pane)
-        }) {
-            self.popover = None;
+                .is_none_or(|pane| pane.identity != on)
+            {
+                self.close_composer_menu(cx);
+            }
         }
         let pane_rects = self.pane_rects(window);
         for (index, pane) in self.panes.iter().enumerate() {
@@ -8217,13 +7571,11 @@ impl CockpitView {
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(|view, _: &MouseDownEvent, _, cx| {
-                    let mut dismissed = false;
-                    if view.popover.take().is_some() {
-                        // The menu mutes until the text moves, or the very
-                        // next frame would reopen it over the same trigger.
-                        view.menu_muted = true;
-                        dismissed = true;
-                    }
+                    // The menu mutes until the text moves, or the very
+                    // next frame would reopen it over the same trigger.
+                    let dismissed = view
+                        .composer_menu
+                        .update(cx, |menu, cx| menu.dismiss(cx));
                     // A press outside the editor abandons the rename — the
                     // operator looked away, which is escape, not enter.
                     // It notifies itself, so it is not counted above.
@@ -8352,7 +7704,7 @@ impl CockpitView {
                         if let Some(draft) = view.panes[index].draft_mut() {
                             draft.band_focus = None;
                         }
-                        view.popover = None;
+                        view.close_composer_menu(cx);
                         cx.notify();
                     }
                 });
@@ -9529,7 +8881,7 @@ impl CockpitView {
             self.nav_view.update(cx, |nav, cx| nav.leave(window, cx));
             return;
         }
-        self.popover = None;
+        self.close_composer_menu(cx);
         self.close_popup(cx);
         self.floats.palette = None;
         self.floats.shortcuts = None;

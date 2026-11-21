@@ -406,3 +406,150 @@ impl<K> Popover<K> {
         true
     }
 }
+
+/// A rows menu's surface — a `/`/`@` menu's (`text`) or a band menu's —
+/// its rows wired to the `hover` and `pick` of the view that draws it, the
+/// Composer menu's or the root's. Every row is the one menu row: `/`, `@` and
+/// import rows through `pane::menu_row` (slash descriptions in one
+/// aligned column), band rows through `pane::picker_row` with the
+/// strong check on the standing choice; an inert explanation
+/// ("Searching workspace files...", a refusal) is a `menu_note`. The rows scroll
+/// inside the popover's cap.
+pub(super) fn menu_surface<K, V: 'static>(
+    open: &Popover<K>,
+    text: Option<&Kind>,
+    hover: fn(&mut V, usize, &mut Context<V>),
+    pick: fn(&mut V, usize, &mut Window, &mut Context<V>),
+    cx: &mut Context<V>,
+) -> AnyElement {
+    fn wire<E: InteractiveElement + IntoElement + 'static, V: 'static>(
+        drawn: E,
+        at: usize,
+        hover: fn(&mut V, usize, &mut Context<V>),
+        pick: fn(&mut V, usize, &mut Window, &mut Context<V>),
+        cx: &mut Context<V>,
+    ) -> AnyElement {
+        drawn
+            .debug_selector(move || format!("composer-menu-row-{at}"))
+            .on_mouse_move(cx.listener(move |view, _: &gpui::MouseMoveEvent, _, cx| {
+                hover(view, at, cx)
+            }))
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(move |view, _: &MouseDownEvent, window, cx| {
+                    cx.stop_propagation();
+                    pick(view, at, window, cx);
+                }),
+            )
+            .into_any_element()
+    }
+    // Slash commands align their descriptions in one column sized to
+    // the longest name shown, measured in the row's face (a match
+    // draws at `W_LABEL`), so no name is ever cut.
+    let label_w = matches!(text, Some(Kind::Commands)).then(|| {
+        // A label's advance reads no column width.
+        let measure = nav::Measure::Text(cx, 0.);
+        open.rows
+            .iter()
+            .map(|row| {
+                measure.ui(
+                    &row.name,
+                    ferrite_ui::theme::FS_UI,
+                    ferrite_ui::theme::W_LABEL,
+                )
+            })
+            .fold(0., f32::max)
+            .ceil()
+    });
+    if !open.revealed.replace(true) {
+        open.scroll.scroll_to_item(open.selected);
+    }
+    let mut rows = div()
+        .id("composer-menu-rows")
+        .debug_selector(|| "composer-menu-rows".into())
+        .flex()
+        .flex_col()
+        .min_h_0()
+        .overflow_y_scroll()
+        .track_scroll(&open.scroll);
+    for (at, row) in open.rows.iter().enumerate() {
+        let cursor = at == open.selected;
+        let explains = row.inert
+            && row.consequence_is_inert()
+            && row.detail.is_empty()
+            && row.matched.is_empty();
+        let drawn = match text {
+            _ if explains => wire(ferrite_ui::menu::note(row.name.clone()), at, hover, pick, cx),
+            Some(_) => wire(
+                pane::menu_row(("composer-menu-row", at), &row.row, cursor, label_w),
+                at,
+                hover,
+                pick,
+                cx,
+            ),
+            None => wire(
+                pane::picker_row(
+                    ("composer-menu-row", at),
+                    row.name.clone(),
+                    row.detail.clone(),
+                    cursor,
+                    row.active,
+                    row.inert,
+                ),
+                at,
+                hover,
+                pick,
+                cx,
+            ),
+        };
+        rows = rows.child(drawn);
+    }
+    // A press on the popover's own dead space is not a press outside
+    // it: swallowed, so the root's dismissal never sees it. No key-hint
+    // footer: the keys act in place (Claude's and Codex's menus).
+    // Claude's slash picker explains the row under the cursor in a card
+    // at its side (claude/slash-picker.png), so a description cut by the
+    // popover's width is still read, by key as well as by pointer. The
+    // card stands level with the row, rows being one grid row each.
+    let explained = matches!(text, Some(Kind::Commands))
+        .then(|| open.rows.get(open.selected))
+        .flatten()
+        .filter(|row| !row.row.inert && !row.row.detail.is_empty())
+        .map(|row| row.row.detail.clone());
+    let row_top = open.selected as f32 * ferrite_ui::theme::FLOAT_ROW_H
+        + f32::from(open.scroll.offset().y);
+    let cap = if text.is_some() {
+        ferrite_ui::theme::SLASH_MENU_MAX_H
+    } else {
+        ferrite_ui::theme::MENU_MAX_H
+    };
+    let popover = pane::menu_popover(cap)
+        .on_mouse_down(
+            MouseButton::Left,
+            cx.listener(|_, _: &MouseDownEvent, _, cx| cx.stop_propagation()),
+        )
+        .child(rows);
+    div()
+        .relative()
+        .w_full()
+        .child(popover)
+        .children(explained.map(|detail| {
+            let card = ferrite_ui::menu::float()
+                .debug_selector(|| "composer-menu-tip".into())
+                .w(px(ferrite_ui::theme::TOOLTIP_MAX_W))
+                .px(px(ferrite_ui::theme::TOOLTIP_PAD_X))
+                .py(px(ferrite_ui::theme::TOOLTIP_PAD_Y))
+                .text_size(px(ferrite_ui::theme::FS_META))
+                .line_height(px(ferrite_ui::theme::LH_META))
+                .text_color(rgb(ferrite_ui::theme::INK_STRONG))
+                .child(detail);
+            // A drawer as wide as the box has no room on its right.
+            crate::float::beside(
+                ferrite_ui::theme::SUBMENU_GAP,
+                row_top.max(0.),
+                ferrite_ui::theme::MENU_WINDOW_MARGIN,
+                card.into_any_element(),
+            )
+        }))
+        .into_any_element()
+}

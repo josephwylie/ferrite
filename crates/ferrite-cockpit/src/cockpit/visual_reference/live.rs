@@ -646,7 +646,7 @@ fn scenario(
     live.act(move |view, _, cx| view.open_provider_picker(claude, cx));
     live.shot("claude-picker");
     live.act(|view, _, cx| {
-        view.popover = None;
+        view.close_composer_menu(cx);
         cx.notify();
     });
     focus_thread(live, claude);
@@ -824,7 +824,7 @@ fn scenario(
     live.act(move |view, _, cx| view.open_provider_picker(codex, cx));
     live.shot("codex-picker");
     live.act(|view, _, cx| {
-        view.popover = None;
+        view.close_composer_menu(cx);
         cx.notify();
     });
 

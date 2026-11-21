@@ -532,9 +532,8 @@ fn dollar_opens_the_skills_and_the_pick_is_a_skill_token(cx: &mut TestAppContext
 
 /// The open Composer menu's row names, top first.
 fn menu_names(view: &gpui::Entity<CockpitView>, cx: &mut gpui::VisualTestContext) -> Vec<String> {
-    view.read_with(cx, |view, _| {
-        view.popover
-            .as_ref()
+    view.read_with(cx, |view, cx| {
+        view.popover(cx)
             .map(|open| open.rows.iter().map(|row| row.row.name.to_string()).collect())
             .unwrap_or_default()
     })
