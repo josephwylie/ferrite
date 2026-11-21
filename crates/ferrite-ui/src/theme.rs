@@ -1966,8 +1966,8 @@ pub const SHADOW_PILL: u32 = 0x0000001a;
 pub const TX_SEND_ANCHOR_OFFSET: f32 = 16.0;
 /// **Cite a selection** (T3's `AssistantSelectionToolbar`): a drag that
 /// selects a passage ends with a glass button at the pointer, `Cite` (the
-/// Quote icon `SELECTION_CITE_ICON` then its words, 12px medium), beside
-/// `Start a side chat`. `SELECTION_CITE_H` tall, fully rounded inside a 1px
+/// Quote icon `SELECTION_CITE_ICON` then its words, 12px medium).
+/// `SELECTION_CITE_H` tall, fully rounded inside a 1px
 /// `FLOAT_EDGE` ring, padded `SELECTION_CITE_PAD_X`, the float shadow, on
 /// `paint::FLOAT` (no backdrop blur in GPUI). It stands where the mouse went
 /// up, held `SELECTION_CITE_EDGE` inside the window; with the pointer more
@@ -1978,7 +1978,6 @@ pub const SELECTION_CITE_H: f32 = 24.0;
 pub const SELECTION_CITE_PAD_X: f32 = 7.0;
 pub const SELECTION_CITE_ICON: f32 = 14.0;
 pub const SELECTION_CITE_ICON_GAP: f32 = SPACE_1_5;
-pub const SELECTION_CITE_GAP: f32 = SPACE_1_5;
 pub const SELECTION_CITE_EDGE: f32 = 8.0;
 pub const SELECTION_CITE_NEAR: f32 = 8.0;
 pub const SELECTION_CITE_BELOW: f32 = 4.0;
