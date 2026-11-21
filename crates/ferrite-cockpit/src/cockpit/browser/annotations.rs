@@ -98,7 +98,7 @@ impl CockpitView {
                 self.panes[index].is_main() && self.panes[index].composer.read(cx).comment_valid(cx)
             })
             && !self.sheet_up(cx)
-            && self.snooze_editor.is_none()
+            && self.nav_view.read(cx).snooze_line().is_none()
             && self.rename.is_none()
     }
 

@@ -1,7 +1,11 @@
 //! Snooze controls use the Server-owned Thread reminder and the existing menu.
 use super::*;
+use super::nav_view::{NavEvent, NavView};
 use ferrite_core::snooze::{self, Preset};
+use gpui::App;
 
+/// The Custom… field (`NavView`): the Thread it snoozes, its line, and why
+/// the last ⏎ did not take.
 pub(super) struct Editor {
     pub thread: ThreadId,
     pub line: Entity<ferrite_pane::composer::Composer>,
@@ -37,20 +41,19 @@ impl CockpitView {
         }
         cx.notify();
     }
+}
 
-    pub(super) fn edit_snooze(
-        &mut self,
-        thread: ThreadId,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
+impl NavView {
+    /// Custom… on a Thread's Snooze menu: the field over the list, seeded
+    /// with an hour, takes the keyboard.
+    pub(super) fn edit_snooze(&mut self, thread: ThreadId, window: &mut Window, cx: &mut Context<Self>) {
         let line = cx.new(ferrite_pane::composer::Composer::new);
         line.update(cx, |line, cx| {
             line.set_role(ferrite_pane::composer::Role::Field(None), cx);
             line.set("1h".into(), cx);
         });
         window.focus(&line.focus_handle(cx), cx);
-        self.snooze_editor = Some(Editor {
+        self.snooze = Some(Editor {
             thread,
             line,
             error: None,
@@ -58,44 +61,62 @@ impl CockpitView {
         cx.notify();
     }
 
+    /// ⏎ (`save`) or esc in the field. A time it reads is asked of the
+    /// Cockpit (`NavEvent::Snooze`), and the field stands until the answer
+    /// (`snooze_answered`); one it cannot read stays, with why.
     pub(super) fn finish_snooze(&mut self, save: bool, cx: &mut Context<Self>) {
-        let Some(editor) = self.snooze_editor.take() else {
+        let Some(editor) = self.snooze.as_mut() else {
             return;
         };
-        if save {
-            match snooze::parse(
-                editor.line.read(cx).text(),
-                ferrite_core::clock::system_time(),
-            ) {
-                Ok(until) => match self.cockpit.snooze_thread(editor.thread, Some(until)) {
-                    Ok(()) => self.nav_notice.clear(),
-                    Err(error) => {
-                        self.snooze_editor = Some(Editor {
-                            error: Some(error.to_string().into()),
-                            ..editor
-                        })
-                    }
-                },
-                Err(error) => {
-                    self.snooze_editor = Some(Editor {
-                        error: Some(error.into()),
-                        ..editor
-                    })
+        if !save {
+            self.snooze = None;
+        } else {
+            match snooze::parse(editor.line.read(cx).text(), ferrite_core::clock::system_time()) {
+                Ok(until) => cx.emit(NavEvent::Snooze(editor.thread, until)),
+                Err(error) => editor.error = Some(error.into()),
+            }
+        }
+        cx.notify();
+    }
+
+    /// The Cockpit's answer to `NavEvent::Snooze`: done closes the field, a
+    /// refusal stays in it.
+    pub(super) fn snooze_answered(&mut self, refused: Option<SharedString>, cx: &mut Context<Self>) {
+        match refused {
+            None => self.snooze = None,
+            Some(error) => {
+                if let Some(editor) = self.snooze.as_mut() {
+                    editor.error = Some(error);
                 }
             }
         }
         cx.notify();
     }
+
+    /// The field goes, unsaved: the nav folding, the keys going to the
+    /// list, a row or a notice opened.
+    pub(super) fn close_snooze(&mut self, cx: &mut Context<Self>) {
+        if self.snooze.take().is_some() {
+            cx.notify();
+        }
+    }
+
+    /// The field's line, while it is open: the focus pump holds the
+    /// keyboard on it.
+    pub(crate) fn snooze_line(&self) -> Option<&Entity<ferrite_pane::composer::Composer>> {
+        self.snooze.as_ref().map(|editor| &editor.line)
+    }
+
+    /// The field as the nav draws it over its list, titled with the
+    /// Thread's name as the Cockpit has it now.
+    pub(super) fn snooze_field(&self, cx: &App) -> Option<Div> {
+        let editor = self.snooze.as_ref()?;
+        let title = self.cockpit.upgrade()?.read(cx).facts.name(editor.thread);
+        Some(field(editor, title))
+    }
 }
 
-/// The Snooze field as the nav draws it, over its list.
-pub(super) struct Field {
-    pub title: SharedString,
-    pub line: Entity<ferrite_pane::composer::Composer>,
-    pub error: Option<SharedString>,
-}
-
-pub(super) fn field(field: &Field) -> Div {
+fn field(field: &Editor, title: SharedString) -> Div {
     div()
         .flex()
         .flex_col()
@@ -105,7 +126,7 @@ pub(super) fn field(field: &Field) -> Div {
         .py(px(ferrite_ui::theme::SPACE_2))
         .child(
             ferrite_ui::components::text_meta()
-                .child(format!("Snooze {}", field.title))
+                .child(format!("Snooze {title}"))
                 .truncate(),
         )
         .child(field.line.clone())

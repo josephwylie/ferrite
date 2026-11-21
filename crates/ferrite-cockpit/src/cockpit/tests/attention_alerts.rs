@@ -1072,29 +1072,42 @@ fn custom_snooze_keeps_invalid_input_and_closes_when_leaving_inbox(cx: &mut Test
     bind_production_keys(cx);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     tick(cx);
-    cx.update(|window, cx| view.update(cx, |view, cx| view.edit_snooze(thread, window, cx)));
+    cx.update(|window, cx| {
+        view.update(cx, |view, cx| {
+            view.nav_view
+                .update(cx, |nav, cx| nav.edit_snooze(thread, window, cx))
+        })
+    });
     tick(cx);
     view.update(cx, |view, cx| {
-        view.snooze_editor
-            .as_ref()
+        view.nav_view
+            .read(cx)
+            .snooze_line()
             .unwrap()
-            .line
+            .clone()
             .update(cx, |line, cx| line.set("nonsense".into(), cx));
     });
     cx.simulate_keystrokes("enter");
     tick(cx);
-    assert!(view.read_with(cx, |view, _| view
-        .snooze_editor
+    assert!(view.read_with(cx, |view, cx| view
+        .nav_view
+        .read(cx)
+        .snooze
         .as_ref()
         .unwrap()
         .error
         .is_some()));
     cx.simulate_keystrokes("cmd-b");
     tick(cx);
-    assert!(view.read_with(cx, |view, _| view.snooze_editor.is_none()));
-    cx.update(|window, cx| view.update(cx, |view, cx| view.edit_snooze(thread, window, cx)));
+    assert!(view.read_with(cx, |view, cx| view.nav_view.read(cx).snooze.is_none()));
+    cx.update(|window, cx| {
+        view.update(cx, |view, cx| {
+            view.nav_view
+                .update(cx, |nav, cx| nav.edit_snooze(thread, window, cx))
+        })
+    });
     tick(cx);
     cx.simulate_keystrokes("cmd-i");
     tick(cx);
-    assert!(view.read_with(cx, |view, _| view.snooze_editor.is_none()));
+    assert!(view.read_with(cx, |view, cx| view.nav_view.read(cx).snooze.is_none()));
 }

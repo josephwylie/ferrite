@@ -361,7 +361,7 @@ impl CockpitView {
         if self.nav_folded() {
             self.toggle_nav_now(cx);
         }
-        self.snooze_editor = None;
+        self.nav_view.update(cx, |nav, cx| nav.close_snooze(cx));
         self.nav_view
             .update(cx, |nav, cx| nav.take_keys(start, window, cx));
     }

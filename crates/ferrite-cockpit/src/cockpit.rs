@@ -499,7 +499,6 @@ pub struct CockpitView {
     /// the title cell *is* the editor, so two at once would need two rows
     /// to be the row you are looking at.
     rename: Option<(RenameTarget, Entity<ferrite_pane::composer::Composer>)>,
-    snooze_editor: Option<snooze::Editor>,
     /// The one popup that is up: the context menu, the mode menu, or the
     /// plan, checks or session controls card (ADR 0043).
     popups: popups::Popups,
@@ -1457,7 +1456,6 @@ impl CockpitView {
             repo_listing: None,
             asking_repo: None,
             rename: None,
-            snooze_editor: None,
             popups: Default::default(),
             panel,
             panel_empty_focus: cx.focus_handle(),
@@ -4085,8 +4083,8 @@ impl CockpitView {
             }
             return;
         }
-        if self.snooze_editor.is_some() {
-            self.finish_snooze(true, cx);
+        if self.nav_view.read(cx).snooze_line().is_some() {
+            self.nav_view.update(cx, |nav, cx| nav.finish_snooze(true, cx));
             return;
         }
         if self.rename.is_some() {
@@ -4252,8 +4250,8 @@ impl CockpitView {
         if self.hide_sheet(cx) {
             return;
         }
-        if self.snooze_editor.is_some() {
-            self.finish_snooze(false, cx);
+        if self.nav_view.read(cx).snooze_line().is_some() {
+            self.nav_view.update(cx, |nav, cx| nav.finish_snooze(false, cx));
             return;
         }
         if self.rename.is_some() {
@@ -4331,7 +4329,7 @@ impl CockpitView {
     fn accept_suggestion(&mut self, window: &Window, cx: &mut Context<Self>) -> bool {
         if self.sheet_up(cx)
             || self.rename.is_some()
-            || self.snooze_editor.is_some()
+            || self.nav_view.read(cx).snooze_line().is_some()
             || self.popover.is_some()
         {
             return false;
@@ -4699,7 +4697,7 @@ impl CockpitView {
         if !self.nav_collapsed && self.nav_auto_fold.get() {
             self.nav_forced_open = !self.nav_forced_open;
             if self.nav_folded() {
-                self.snooze_editor = None;
+                self.nav_view.update(cx, |nav, cx| nav.close_snooze(cx));
             }
             cx.notify();
             return;
@@ -4714,7 +4712,7 @@ impl CockpitView {
         self.nav_collapsed = collapsed;
         if collapsed {
             self.cancel_nav_resize();
-            self.snooze_editor = None;
+            self.nav_view.update(cx, |nav, cx| nav.close_snooze(cx));
         }
         cx.notify();
     }
@@ -5117,7 +5115,7 @@ impl CockpitView {
 
     fn recall_history(&mut self, direction: HistoryDirection, cx: &mut Context<Self>) {
         let index = self.focused();
-        if !self.history_available(index) {
+        if !self.history_available(index, cx) {
             return;
         }
         let Some(thread) = self.panes[index].thread() else {
@@ -5149,7 +5147,7 @@ impl CockpitView {
         cx.notify();
     }
 
-    fn history_available(&self, index: usize) -> bool {
+    fn history_available(&self, index: usize, cx: &gpui::App) -> bool {
         if index != self.focused() {
             return false;
         }
@@ -5161,7 +5159,7 @@ impl CockpitView {
         };
         !self.panes[index].has_tool_target()
             && self.rename.is_none()
-            && self.snooze_editor.is_none()
+            && self.nav_view.read(cx).snooze_line().is_none()
             && self.popover.is_none()
             && ((self.panes[index].is_main() && queued_to_take_back(&open).is_some())
                 || (open.has_prompt_history()
@@ -7662,9 +7660,9 @@ impl CockpitView {
     /// to select, a tool row — took the keyboard away: pasted text or files
     /// go where the operator is about to type, and the keyboard follows.
     fn paste_into_composer(&mut self, _: &Paste, window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(editor) = self.snooze_editor.as_ref() {
+        if let Some(line) = self.nav_view.read(cx).snooze_line().cloned() {
             if let Some(item) = cx.read_from_clipboard() {
-                editor.line.update(cx, |line, cx| line.paste_item(item, cx));
+                line.update(cx, |line, cx| line.paste_item(item, cx));
             }
             return;
         }
@@ -8328,7 +8326,7 @@ impl CockpitView {
         self.tend_columns(cx);
         self.tend_details(window, cx);
         if self.nav_folded() {
-            self.snooze_editor = None;
+            self.nav_view.update(cx, |nav, cx| nav.close_snooze(cx));
         }
         self.present_cli_updates(window, cx);
         self.present_ferrite_update(window, cx);
@@ -8427,7 +8425,7 @@ impl CockpitView {
             }
         }
         let history_available: Vec<bool> = (0..self.panes.len())
-            .map(|index| self.history_available(index))
+            .map(|index| self.history_available(index, cx))
             .collect();
         for (pane, available) in self.panes.iter().zip(history_available) {
             pane.composer.update(cx, |composer, cx| {
@@ -8449,9 +8447,10 @@ impl CockpitView {
             .as_ref()
             .map(|(_, editor)| editor.focus_handle(cx))
             .or_else(|| {
-                self.snooze_editor
-                    .as_ref()
-                    .map(|editor| editor.line.focus_handle(cx))
+                self.nav_view
+                    .read(cx)
+                    .snooze_line()
+                    .map(|line| line.focus_handle(cx))
             })
             // The nav's search field keeps the keys it was handed.
             .or_else(|| {
@@ -10287,7 +10286,7 @@ impl CockpitView {
                 if self.cockpit.open_notice(id).is_some() {
                     self.sync_panes(cx);
                 }
-                self.snooze_editor = None;
+                self.nav_view.update(cx, |nav, cx| nav.close_snooze(cx));
             }
             Verb::Dismiss(id) => {
                 self.cockpit.dismiss_notice(id);
@@ -10321,7 +10320,7 @@ impl CockpitView {
                     self.land_on_thread(id.thread, cx);
                     self.select_subject_from_notice(id.thread, subject, cx);
                 }
-                self.snooze_editor = None;
+                self.nav_view.update(cx, |nav, cx| nav.close_snooze(cx));
             }
             Verb::DismissDecision(id) => {
                 self.cockpit.dismiss_decision_notice(&id);
@@ -10336,7 +10335,7 @@ impl CockpitView {
             }
             Verb::Answer(..) => {}
             Verb::GoTo(alert) => {
-                self.snooze_editor = None;
+                self.nav_view.update(cx, |nav, cx| nav.close_snooze(cx));
                 self.go_to_alert(alert, cx);
             }
         }

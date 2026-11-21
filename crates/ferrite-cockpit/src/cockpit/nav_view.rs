@@ -1,10 +1,11 @@
 //! The nav as a view of its own (ADR 0041). It owns what only the nav
 //! reads: its list's motion and folds, its scroll, its keyboard and
-//! cursor, its search, the cards picked or swept and the undo notice. It
-//! draws from what the Cockpit gives it (`NavInputs`), read through the
-//! Cockpit each render, so the Cockpit's own notify still redraws it; and
-//! what the operator asks of the window it says as a `NavEvent`, which the
-//! Cockpit answers once the nav's own update has ended.
+//! cursor, its search, the cards picked or swept, the undo notice and the
+//! Snooze field. It draws from what the Cockpit gives it (`NavInputs`),
+//! read through the Cockpit each render, so the Cockpit's own notify still
+//! redraws it; and what the operator asks of the window it says as a
+//! `NavEvent`, which the Cockpit answers once the nav's own update has
+//! ended.
 
 use super::nav_chrome::{NavUndo, UndoAct};
 use super::nav_pick::ParkSweep;
@@ -20,7 +21,7 @@ use gpui::{App, WeakEntity};
 use std::rc::Rc;
 
 pub(crate) struct NavView {
-    cockpit: WeakEntity<CockpitView>,
+    pub(super) cockpit: WeakEntity<CockpitView>,
     /// The list's motion (`nav::flip`), shared with its elements.
     pub(super) motion: nav_list::NavMotion,
     /// The next frame's list stands still rather than sliding: a shelf
@@ -70,6 +71,8 @@ pub(crate) struct NavView {
     pub(super) drawn: RefCell<Vec<ThreadId>>,
     /// The pointer is over the nav's column: its scrollbar shows.
     pub(super) hovered: bool,
+    /// A Thread's Custom… snooze field, over the list (`snooze`).
+    pub(super) snooze: Option<snooze::Editor>,
     /// The rows the nav last drew: a stream that leaves them as they are
     /// draws no nav (`rows_moved`).
     built: Option<nav::NavState>,
@@ -96,7 +99,6 @@ pub(crate) struct NavInputs {
     pub doors: menu_button::Doors,
     pub open: HashMap<ThreadId, OpenThread>,
     pub rename: Option<(ThreadId, Entity<Composer>)>,
-    pub snooze: Option<snooze::Field>,
     pub limits: RateLimits,
     pub free_disk: Option<u64>,
     /// The update door's tip, while a release waits.
@@ -154,9 +156,9 @@ pub(crate) enum NavEvent {
     Undo(UndoAct),
     FoldMachine(usize),
     GoToMachine(usize),
-    /// A press in the nav's search field or on a row lets the Snooze
-    /// field go.
-    DismissSnooze,
+    /// The Snooze field's ⏎ on a time it read: snooze the Thread until
+    /// then, and answer the field (`snooze_answered`).
+    Snooze(ThreadId, std::time::SystemTime),
     AddProject,
     Settings,
     PullRequests,
@@ -200,6 +202,7 @@ impl NavView {
             park_sweep: None,
             drawn: Default::default(),
             hovered: false,
+            snooze: None,
             built: None,
         }
     }
@@ -310,11 +313,6 @@ impl CockpitView {
                 Some((RenameTarget::Thread(thread), editor)) => Some((*thread, editor.clone())),
                 _ => None,
             },
-            snooze: self.snooze_editor.as_ref().map(|editor| snooze::Field {
-                title: self.facts.name(editor.thread),
-                line: editor.line.clone(),
-                error: editor.error.clone(),
-            }),
             limits: self.cockpit.account_limits(provider),
             free_disk: self.free_disk,
             update,
@@ -364,7 +362,18 @@ impl CockpitView {
                 index: Some(index),
                 open: None,
             }),
-            NavEvent::DismissSnooze => self.snooze_editor = None,
+            NavEvent::Snooze(thread, until) => {
+                let refused = match self.cockpit.snooze_thread(thread, Some(until)) {
+                    Ok(()) => {
+                        self.nav_notice.clear();
+                        None
+                    }
+                    Err(error) => Some(error.to_string().into()),
+                };
+                self.nav_view
+                    .update(cx, |nav, cx| nav.snooze_answered(refused, cx));
+                cx.notify();
+            }
             NavEvent::AddProject => self.open_project_creator(cx),
             NavEvent::Settings => self.toggle_settings(cx),
             NavEvent::PullRequests => self.open_prs_from_foot(window, cx),
