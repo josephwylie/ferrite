@@ -308,10 +308,9 @@ impl ClaudeSession {
             "--output-format",
             "stream-json",
             "--include-partial-messages",
-            // Newer models omit readable thinking unless explicitly requested.
-            // This chooses its display, leaving effort/thinking mode unchanged.
-            "--thinking-display",
-            "summarized",
+        ]);
+        command.args(thinking_args(config.effort.as_deref()));
+        command.args([
             "--forward-subagent-text",
             "--verbose",
             // Route tool permissions to Ferrite over the control protocol
@@ -1338,6 +1337,13 @@ fn check_version(program: &str) -> Result<(), ClaudeSpawnError> {
     Ok(())
 }
 
+/// What the CLI is told at spawn about thinking and effort.
+fn thinking_args(_effort: Option<&str>) -> Vec<String> {
+    // Newer models omit readable thinking unless explicitly requested.
+    // This chooses its display, leaving effort/thinking mode unchanged.
+    vec!["--thinking-display".into(), "summarized".into()]
+}
+
 /// `--version` prints `2.1.243 (Claude Code)`; only the leading semver is
 /// meaningful, and a pre-release suffix on any component is ignored.
 pub(crate) fn parse_version(reported: &str) -> Option<(String, [u64; 3])> {
@@ -1404,6 +1410,29 @@ pub mod title {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// T3 Code's spawn (`ClaudeAdapterV2.ts` at 0fd48228, through the
+    /// Agent SDK 0.3.321's argv), for every effort. The model changes
+    /// none of it: T3 asks every model for adaptive thinking, and CLI
+    /// 2.1.330 announces one ladder for every model that takes an effort.
+    #[test]
+    fn the_spawn_asks_for_thinking_and_effort_as_t3_code_does() {
+        const ON: &str = "--thinking=adaptive";
+        const SHOWN: &str = "--thinking-display=summarized";
+        const SETTINGS: &str = "--settings";
+        const SUMMARIES: &str = r#"{"showThinkingSummaries":true}"#;
+        let t3: [(Option<&str>, &[&str]); 6] = [
+            (None, &[ON, SHOWN, SETTINGS, SUMMARIES]),
+            (Some("low"), &[ON, SHOWN, "--effort=low", SETTINGS, SUMMARIES]),
+            (Some("medium"), &[ON, SHOWN, "--effort=medium", SETTINGS, SUMMARIES]),
+            (Some("high"), &[ON, SHOWN, "--effort=high", SETTINGS, SUMMARIES]),
+            (Some("xhigh"), &[ON, SHOWN, "--effort=xhigh", SETTINGS, SUMMARIES]),
+            (Some("max"), &[ON, SHOWN, "--effort=max", SETTINGS, SUMMARIES]),
+        ];
+        for (effort, args) in t3 {
+            assert_eq!(thinking_args(effort), args, "{effort:?}");
+        }
+    }
 
     #[test]
     fn the_displayed_window_matches_the_pins() {
