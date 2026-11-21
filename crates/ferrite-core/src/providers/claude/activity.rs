@@ -63,6 +63,9 @@ pub(super) struct Decoder {
     /// notification names the call, and settles it (`handback`).
     backgrounded: HashMap<String, (Subject, bool)>,
     main_stream_message: Option<String>,
+    /// Main's newest thought in the message streaming now, until a block
+    /// that is not a thought follows it (`say_update`).
+    main_thought: Option<MainThought>,
     /// Main's streaming `show_visual` inputs, drawn as they arrive.
     visual_drafts: super::drafts::Drafts,
     main_stream_blocks: HashMap<(String, u64), MainStreamBlock>,
@@ -753,6 +756,13 @@ impl Decoder {
             .then(|| value.get("tool_use_result"))
             .flatten();
         for (ordinal, block) in blocks.iter().enumerate() {
+            if child.is_none() && assistant && block["type"] != "thinking" {
+                if let Some(thought) = self.main_thought.take() {
+                    if block["type"] == "tool_use" && thought.is_update(value) {
+                        self.say_update(thought, value, events);
+                    }
+                }
+            }
             let kind = match string(block, "type") {
                 Some("text") => Some(MainStreamKind::Text),
                 Some("thinking") => Some(MainStreamKind::Thinking),
@@ -807,6 +817,22 @@ impl Decoder {
                         self.working(key, events);
                         self.content_message(key, value, id, event, events);
                     } else {
+                        if assistant && thinking {
+                            let message = value["message"]["id"].as_str().unwrap_or_default();
+                            let follows_thought = self
+                                .main_thought
+                                .take()
+                                .is_some_and(|previous| previous.message == message);
+                            self.main_thought = id
+                                .clone()
+                                .filter(|_| !text.trim().is_empty())
+                                .map(|id| MainThought {
+                                    message: message.to_owned(),
+                                    id,
+                                    text: text.to_owned(),
+                                    follows_thought,
+                                });
+                        }
                         self.main_content(value, id, event, events);
                     }
                 }
@@ -1116,6 +1142,19 @@ impl Decoder {
         if self.pending_retractions.contains(&key) {
             self.retract_content(subject, vec![id.into()], events);
         }
+    }
+
+    /// Says a thought that was the model's update (`MainThought::is_update`):
+    /// the thought leaves the transcript and its text stands in its place,
+    /// as T3 Code shows it.
+    fn say_update(&mut self, thought: MainThought, value: &Value, events: &mut Vec<SessionEvent>) {
+        self.retract_content(&Subject::Main, vec![thought.id.clone()], events);
+        self.main_content(
+            value,
+            Some(format!("{}:said", thought.id)),
+            ExecutionEvent::Text { text: thought.text },
+            events,
+        );
     }
 
     fn retract_content(&self, subject: &Subject, ids: Vec<String>, events: &mut Vec<SessionEvent>) {
@@ -1602,6 +1641,49 @@ fn delivery_id(value: &Value, part: &str) -> Option<String> {
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     value["message"].to_string().hash(&mut hasher);
     Some(format!("{kind}@{at}:{:x}:{part}", hasher.finish()))
+}
+
+/// A thought of main's, kept until the block after it shows what it was.
+struct MainThought {
+    /// The API message it is a block of.
+    message: String,
+    id: String,
+    text: String,
+    /// The block before it in its message was a thought too.
+    follows_thought: bool,
+}
+
+impl MainThought {
+    /// Claude 5.1 and later write the update they would say before a call
+    /// as a thinking block, at most one such block before each call: a
+    /// second thought in a row, directly before a call in the same message,
+    /// is that update (T3 Code's `claudeWritesUpdatesAsThinking`).
+    fn is_update(&self, call: &Value) -> bool {
+        self.follows_thought
+            && call["message"]["id"].as_str() == Some(self.message.as_str())
+            && call["message"]["model"]
+                .as_str()
+                .and_then(claude_version)
+                .is_some_and(|version| version >= (5, 1))
+    }
+}
+
+/// The version a Claude model id names: `claude-opus-5-5` is 5.5,
+/// `claude-sonnet-4-5-20250929` 4.5, `claude-opus-5-20261001` 5.0.
+fn claude_version(model: &str) -> Option<(u32, u32)> {
+    let digits = |text: &str| text.bytes().take_while(u8::is_ascii_digit).count();
+    model.match_indices("claude-").find_map(|(at, prefix)| {
+        let rest = &model[at + prefix.len()..];
+        let family = rest.bytes().take_while(u8::is_ascii_lowercase).count();
+        let rest = rest[family..].strip_prefix('-').filter(|_| family > 0)?;
+        let major = digits(rest);
+        let version = rest[..major].parse().ok()?;
+        let minor = rest[major..]
+            .strip_prefix('-')
+            .and_then(|rest| (1..=2).contains(&digits(rest)).then(|| &rest[..digits(rest)]))
+            .map_or(Some(0), |minor| minor.parse().ok())?;
+        Some((version, minor))
+    })
 }
 
 fn main_block_id(message: &str, index: u64) -> String {
