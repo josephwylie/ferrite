@@ -330,25 +330,33 @@ that happened to touch it, and nothing in the code said whose a field was.
   What remains on `Browsers` for slices of their own: the live
   annotation, the provider's control and capture queue, and last the pages
   and the engine's lifetime.
-- **The Decisions are the twentieth, in part.** `DecisionsView`
+- **The Decisions are the twentieth.** `DecisionsView`
   (`cockpit/decisions.rs`) owns the thread rules option 2 made where the
-  provider offered no standing answer, and is what a Decision card drawn
-  inside a cached transcript presses through. One view for the window,
-  with no render of its own: the root draws the cards into each Pane's
-  transcript and the compact transcripts from a snapshot it takes in
-  `decision_inputs` (`Cards`). A card's press says what it asks as a
-  `DecisionEvent`: an approval's option (with `Allow and switch to …`'s
-  mode), an answer as it stands (Cancel, Skip, Complete), a question's or
-  a form's Send, a picked option, ⏎ or esc in the amend note. Answering
-  is a Server call, so the root takes the note, tells the Server and,
-  for option 2, hands the view the rule to keep; each frame it answers
-  the approvals a rule covers. The open Decision is core's, and its reply
-  error the Pane's. A gone Thread's rules go with it. What is left on
-  the root: each Pane's `RequestForms` (the cursor, the amend note, the
-  split button's menu, a question's or form's answers), still kept
-  beside the Pane and written by the cards' own presses and by the
-  root's Decision keys (↑ ↓ ⏎ esc ⇥, `1`–`4`), which answer on the
-  root's element; both move to the view in a later change.
+  provider offered no standing answer, and each Pane's `RequestForms`, by
+  Pane: the cursor, the amend note, the split button's menu, a question's
+  or form's answers. One view for the window, by Pane, like the File
+  Surface's: the entry is made with its Pane, so a card always has one to
+  draw from, goes with it (`sync_panes`), and a draft's first send hands
+  it to the Thread's Pane (`adopt`). It has no render of its own: the root
+  draws the cards into each Pane's transcript and the compact transcripts
+  from a snapshot it takes in `decision_inputs` (`Cards`), and a card
+  drawn inside a cached transcript presses through the view. It answers
+  the Decision keys (↑ ↓ ⏎ esc ⇥, `1`–`4`): they stay actions on the
+  root's element, since the view has no element in the focus chain, and
+  each hands the view the request the Pane shows with what only the root
+  knows (which options can act, where the keyboard goes as the note
+  closes; `KeyTarget`). Whatever a card's press or a key asks of the
+  Server it says as a `DecisionEvent`: an approval's option (with `Allow
+  and switch to …`'s mode), an answer as it stands (Cancel, Skip,
+  Complete), a question's answers with the note taken with them, a
+  question's or a form's Send, a picked option, ⏎ or esc in the amend
+  note. Answering is a Server call, so the root asks the view for the
+  note, tells the Server and, for option 2, hands the view the rule to
+  keep; each frame it answers the approvals a rule covers. The chords
+  (⌘⏎, ⇧⌘⏎, ⌘.) and ↵ on an empty line stay the root's: they read none of
+  the view's state but a ready question's answers, and answer the Server,
+  ⌘⏎ from across the room too. The open Decision is core's, and its reply
+  error the Pane's. A gone Thread's rules go with it.
 
 ## What does not get a view
 
