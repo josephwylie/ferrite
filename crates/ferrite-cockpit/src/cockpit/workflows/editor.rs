@@ -1,6 +1,8 @@
 //! The Workflows editor's own state, in a view of its own (ADR 0041):
-//! each text field's Composer, made once for as long as the Factory is
-//! open, and the field that holds the keyboard. The Factory holds it.
+//! the Workflow and Step chosen, whether the inspector shows the approval
+//! or the start instead, the outline's focus and scroll, each text
+//! field's Composer, made once for as long as the Factory is open, and
+//! the field that holds the keyboard. The Factory holds it.
 //!
 //! It has no render of its own: the root draws the surface and has it
 //! draw each field (`input`). Which fields the surface shows the root
@@ -19,6 +21,19 @@ pub(crate) enum WorkflowsEvent {
 
 /// A Factory's Workflows editor.
 pub(crate) struct WorkflowsView {
+    /// The Workflow chosen; none, the Project's first.
+    pub(crate) selected: Option<WorkflowId>,
+    /// The Step chosen; none, the Workflow's first.
+    pub(crate) step: Option<StepId>,
+    /// The inspector shows the approval settings, not a Step.
+    pub(crate) approval: bool,
+    /// The inspector shows how Tasks start, not a Step (#225).
+    pub(crate) start_open: bool,
+    /// What holds the keyboard while no field does.
+    pub(crate) outline_focus: FocusHandle,
+    /// The outline's scroll: its first child is its head, then one per
+    /// Step's row (`outline`).
+    pub(crate) outline_scroll: gpui::ScrollHandle,
     /// Each text field's Composer, made once.
     fields: HashMap<Field, Entity<Composer>>,
     /// The field that holds the keyboard; none, the outline.
@@ -28,11 +43,45 @@ pub(crate) struct WorkflowsView {
 impl EventEmitter<WorkflowsEvent> for WorkflowsView {}
 
 impl WorkflowsView {
-    fn new() -> Self {
+    fn new(cx: &mut Context<Self>) -> Self {
         Self {
+            selected: None,
+            step: None,
+            approval: false,
+            start_open: false,
+            outline_focus: cx.focus_handle(),
+            outline_scroll: gpui::ScrollHandle::new(),
             fields: HashMap::new(),
             focused: None,
         }
+    }
+
+    /// Show `workflow`, on its first Step.
+    pub(super) fn select_workflow(&mut self, workflow: WorkflowId) {
+        self.selected = Some(workflow);
+        self.step = None;
+        self.focused = None;
+        self.start_open = false;
+    }
+
+    /// Show `step` in the inspector.
+    pub(super) fn select_step(&mut self, step: StepId) {
+        self.step = Some(step);
+        self.focused = None;
+        self.approval = false;
+        self.start_open = false;
+    }
+
+    /// Show the approval settings in the inspector.
+    pub(super) fn select_approval(&mut self) {
+        self.approval = true;
+        self.focused = None;
+    }
+
+    /// Show how Tasks start in the inspector.
+    pub(crate) fn open_start(&mut self) {
+        self.start_open = true;
+        self.focused = None;
     }
 
     /// `field`'s Composer, filled with `text` when it is first made; one
@@ -94,7 +143,7 @@ impl WorkflowsView {
 impl CockpitView {
     /// A Factory's Workflows editor, heard from its making.
     pub(in crate::cockpit) fn new_workflows(&mut self, cx: &mut Context<Self>) -> Entity<WorkflowsView> {
-        let editor = cx.new(|_| WorkflowsView::new());
+        let editor = cx.new(WorkflowsView::new);
         cx.subscribe(&editor, Self::on_workflows_event).detach();
         editor
     }

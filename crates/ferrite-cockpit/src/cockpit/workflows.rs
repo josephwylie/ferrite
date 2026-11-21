@@ -8,8 +8,8 @@
 //! drawn. A text field is a Composer this window keeps for as long as the
 //! Factory view is open, so what was typed survives a picker, a revealed
 //! field, a notice, a scroll and a switch of surface; the draft keeps it
-//! across a save and a reopen. The Composers and the field that holds the
-//! keyboard are the editor's own view's (`editor`).
+//! across a save and a reopen. What is chosen, the Composers and the field
+//! that holds the keyboard are the editor's own view's (`editor`).
 
 use std::collections::HashMap;
 
@@ -132,36 +132,12 @@ pub(crate) struct SkillsFound {
     error: Option<String>,
 }
 
-/// The Workflows surface's own state.
+/// What the Workflows surface keeps beside its editor's view.
+#[derive(Default)]
 pub(crate) struct Workflows {
-    pub(crate) selected: Option<WorkflowId>,
-    pub(crate) step: Option<StepId>,
-    pub(crate) outline_focus: FocusHandle,
-    /// The outline's scroll: its first child is its head, then one per
-    /// Step's row (`outline`).
-    pub(crate) outline_scroll: gpui::ScrollHandle,
     /// The skills search is revealed.
     pub(crate) skills_open: bool,
     pub(crate) skills: Vec<SkillsFound>,
-    /// The inspector shows the approval settings, not a Step.
-    pub(crate) approval: bool,
-    /// The inspector shows how Tasks start, not a Step (#225).
-    pub(crate) start_open: bool,
-}
-
-impl Workflows {
-    pub(crate) fn new(cx: &mut Context<CockpitView>) -> Self {
-        Self {
-            selected: None,
-            step: None,
-            outline_focus: cx.focus_handle(),
-            outline_scroll: gpui::ScrollHandle::new(),
-            skills_open: false,
-            skills: Vec::new(),
-            approval: false,
-            start_open: false,
-        }
-    }
 }
 
 /// A Step's row, dragged to a new place in the outline.
@@ -243,10 +219,11 @@ impl CockpitView {
     }
 
     /// The Workflow the surface shows: the one chosen, else the first.
-    pub(crate) fn shown_workflow(&self) -> Option<&Workflow> {
+    pub(crate) fn shown_workflow(&self, cx: &gpui::App) -> Option<&Workflow> {
         let view = self.factory()?;
         let board = self.cockpit.factory();
-        view.workflows
+        view.editor
+            .read(cx)
             .selected
             .as_deref()
             .and_then(|id| board.workflow(id))
@@ -255,9 +232,9 @@ impl CockpitView {
     }
 
     /// The Step the inspector shows: the one chosen, else the first.
-    pub(crate) fn shown_step(&self) -> Option<&Step> {
-        let workflow = self.shown_workflow()?;
-        let chosen = self.factory()?.workflows.step.as_deref();
+    pub(crate) fn shown_step(&self, cx: &gpui::App) -> Option<&Step> {
+        let workflow = self.shown_workflow(cx)?;
+        let chosen = self.factory()?.editor.read(cx).step.as_deref();
         chosen
             .and_then(|id| workflow.draft.step(id))
             .or_else(|| workflow.draft.steps.first())
@@ -302,21 +279,16 @@ impl CockpitView {
     pub(crate) fn select_workflow(&mut self, workflow: WorkflowId, cx: &mut Context<Self>) {
         if let Some(view) = self.factory_mut() {
             view.surface = Surface::Workflows;
-            view.workflows.selected = Some(workflow);
-            view.workflows.step = None;
-            view.workflows.start_open = false;
-            view.editor.update(cx, |editor, _| editor.focused = None);
+            view.editor
+                .update(cx, |editor, _| editor.select_workflow(workflow));
         }
         self.ensure_fields(cx);
         cx.notify();
     }
 
     pub(crate) fn select_step(&mut self, step: StepId, cx: &mut Context<Self>) {
-        if let Some(view) = self.factory_mut() {
-            view.workflows.step = Some(step);
-            view.workflows.approval = false;
-            view.workflows.start_open = false;
-            view.editor.update(cx, |editor, _| editor.focused = None);
+        if let Some(view) = self.factory() {
+            view.editor.update(cx, |editor, _| editor.select_step(step));
         }
         self.ensure_fields(cx);
         cx.notify();
@@ -324,9 +296,8 @@ impl CockpitView {
 
     /// Show the approval settings in the inspector.
     pub(crate) fn select_approval(&mut self, cx: &mut Context<Self>) {
-        if let Some(view) = self.factory_mut() {
-            view.workflows.approval = true;
-            view.editor.update(cx, |editor, _| editor.focused = None);
+        if let Some(view) = self.factory() {
+            view.editor.update(cx, |editor, _| editor.select_approval());
         }
         self.ensure_fields(cx);
         cx.notify();
@@ -334,19 +305,19 @@ impl CockpitView {
 
     /// Change the shown Workflow's approval settings.
     pub(crate) fn edit_approval(&mut self, change: ApprovalChange, cx: &mut Context<Self>) {
-        let Some(workflow) = self.shown_id() else {
+        let Some(workflow) = self.shown_id(cx) else {
             return;
         };
         self.workflow_ask(WorkflowAction::EditApproval { workflow, change }, cx);
     }
 
     /// The shown Workflow's id.
-    fn shown_id(&self) -> Option<WorkflowId> {
-        self.shown_workflow().map(|workflow| workflow.id.clone())
+    fn shown_id(&self, cx: &gpui::App) -> Option<WorkflowId> {
+        self.shown_workflow(cx).map(|workflow| workflow.id.clone())
     }
 
     pub(crate) fn add_step(&mut self, after: Option<StepId>, cx: &mut Context<Self>) {
-        let Some(workflow) = self.shown_id() else {
+        let Some(workflow) = self.shown_id(cx) else {
             return;
         };
         if let Some(Done::Step { step }) =
@@ -357,7 +328,7 @@ impl CockpitView {
     }
 
     pub(crate) fn edit_step(&mut self, step: StepId, change: StepChange, cx: &mut Context<Self>) {
-        let Some(workflow) = self.shown_id() else {
+        let Some(workflow) = self.shown_id(cx) else {
             return;
         };
         self.workflow_ask(
@@ -372,7 +343,7 @@ impl CockpitView {
 
     /// Move a Step to index `to` of the outline: a drop, or a key.
     pub(crate) fn move_step(&mut self, step: StepId, to: usize, cx: &mut Context<Self>) {
-        let Some(workflow) = self.shown_id() else {
+        let Some(workflow) = self.shown_id(cx) else {
             return;
         };
         self.workflow_ask(WorkflowAction::MoveStep { workflow, step, to }, cx);
@@ -385,21 +356,21 @@ impl CockpitView {
     }
 
     pub(crate) fn delete_step(&mut self, step: StepId, cx: &mut Context<Self>) {
-        let Some(workflow) = self.shown_id() else {
+        let Some(workflow) = self.shown_id(cx) else {
             return;
         };
         let at = self
-            .shown_workflow()
+            .shown_workflow(cx)
             .and_then(|shown| shown.draft.steps.iter().position(|each| each.id == step));
         self.workflow_ask(WorkflowAction::DeleteStep { workflow, step }, cx);
         // The selection lands on the row that took its place.
-        let next = self.shown_workflow().and_then(|shown| {
+        let next = self.shown_workflow(cx).and_then(|shown| {
             let steps = &shown.draft.steps;
             at.and_then(|at| steps.get(at.min(steps.len().saturating_sub(1))))
                 .map(|step| step.id.clone())
         });
-        if let Some(view) = self.factory_mut() {
-            view.workflows.step = next;
+        if let Some(view) = self.factory() {
+            view.editor.update(cx, |editor, _| editor.step = next);
         }
         self.ensure_fields(cx);
         cx.notify();
@@ -407,7 +378,7 @@ impl CockpitView {
 
     /// The outline's keys: ↑ ↓ choose a Step, ⌥↑ ⌥↓ move it.
     pub(crate) fn outline_key(&mut self, keystroke: &gpui::Keystroke, cx: &mut Context<Self>) {
-        let (Some(workflow), Some(step)) = (self.shown_workflow(), self.shown_step()) else {
+        let (Some(workflow), Some(step)) = (self.shown_workflow(cx), self.shown_step(cx)) else {
             return;
         };
         let steps: Vec<StepId> = workflow.draft.steps.iter().map(|s| s.id.clone()).collect();
@@ -435,7 +406,7 @@ impl CockpitView {
         }
         // The chosen row stays in view: the head is the outline's first child.
         if let Some(view) = self.factory() {
-            view.workflows.outline_scroll.scroll_to_item(to + 1);
+            view.editor.read(cx).outline_scroll.scroll_to_item(to + 1);
         }
     }
 
@@ -450,7 +421,7 @@ impl CockpitView {
             return;
         }
         let mut wanted: Vec<(Field, String)> = vec![(Field::SkillSearch, String::new())];
-        if let Some(workflow) = self.shown_workflow() {
+        if let Some(workflow) = self.shown_workflow(cx) {
             wanted.push((
                 Field::WorkflowName(workflow.id.clone()),
                 workflow.draft.name.clone(),
@@ -459,7 +430,7 @@ impl CockpitView {
                 Field::ApprovalInstructions(workflow.id.clone()),
                 workflow.draft.approval.instructions.clone(),
             ));
-            if let Some(step) = self.shown_step() {
+            if let Some(step) = self.shown_step(cx) {
                 wanted.push((
                     Field::StepName(workflow.id.clone(), step.id.clone()),
                     step.name.clone(),
@@ -470,13 +441,13 @@ impl CockpitView {
                 ));
             }
         }
-        wanted.extend(self.start_fields());
+        wanted.extend(self.start_fields(cx));
         view.editor.clone().update(cx, |editor, cx| {
             for (field, text) in wanted {
                 editor.ensure(field, &text, cx);
             }
         });
-        if let Some(provider) = self.shown_step().map(|step| step.agent.provider) {
+        if let Some(provider) = self.shown_step(cx).map(|step| step.agent.provider) {
             self.discover_skills(provider);
         }
     }
@@ -550,11 +521,11 @@ impl CockpitView {
         if view.surface != Surface::Workflows {
             return None;
         }
+        let editor = view.editor.read(cx);
         Some(
-            view.editor
-                .read(cx)
+            editor
                 .focus(cx)
-                .unwrap_or_else(|| view.workflows.outline_focus.clone()),
+                .unwrap_or_else(|| editor.outline_focus.clone()),
         )
     }
 }

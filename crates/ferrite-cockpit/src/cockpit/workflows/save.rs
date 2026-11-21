@@ -7,10 +7,10 @@ impl CockpitView {
     /// Save: refused with the problems listed, else the next version.
     /// Nothing starts.
     pub(crate) fn save_workflow(&mut self, cx: &mut Context<Self>) {
-        let Some(workflow) = self.shown_id() else {
+        let Some(workflow) = self.shown_id(cx) else {
             return;
         };
-        let problems = self.draft_problems();
+        let problems = self.draft_problems(cx);
         let note = if !problems.is_empty() {
             Some(SharedString::from("Fix the problems listed before saving."))
         } else {

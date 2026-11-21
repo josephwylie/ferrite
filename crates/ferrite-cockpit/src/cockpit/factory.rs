@@ -139,8 +139,8 @@ pub(crate) struct FactoryView {
     /// The Board or the Workflows.
     pub(crate) surface: super::workflows::Surface,
     pub(crate) workflows: super::workflows::Workflows,
-    /// The Workflows editor: its fields and the one that holds the
-    /// keyboard.
+    /// The Workflows editor: what is chosen, the outline's focus and
+    /// scroll, its fields and the one that holds the keyboard.
     pub(crate) editor: Entity<super::workflows::WorkflowsView>,
     /// The open Factory picker's rows.
     pub(crate) picks: Vec<(ferrite_ui::menu::Item, super::workflows::Pick)>,
@@ -186,7 +186,6 @@ impl CockpitView {
                 focus_at_open: at,
             }) if view.project == project => *at = focus_at_open,
             _ => {
-                let workflows = super::workflows::Workflows::new(cx);
                 let archive = self.new_archive(cx);
                 let direction = self.new_direction(cx);
                 let starts = self.new_starts(cx);
@@ -200,7 +199,7 @@ impl CockpitView {
                     columns: gpui::ScrollHandle::new(),
                     revealed: Default::default(),
                     surface: super::workflows::Surface::Board,
-                    workflows,
+                    workflows: Default::default(),
                     editor,
                     picks: Vec::new(),
                     direction,

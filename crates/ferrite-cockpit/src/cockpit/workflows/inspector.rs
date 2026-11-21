@@ -13,16 +13,16 @@ impl CockpitView {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         use ferrite_ui::theme::*;
-        if let Some(view) = self.factory().filter(|_| self.start_shown()) {
+        if let Some(view) = self.factory().filter(|_| self.start_shown(cx)) {
             return view.starts.clone().into_any_element();
         }
         if self
             .factory()
-            .is_some_and(|view| view.workflows.approval)
+            .is_some_and(|view| view.editor.read(cx).approval)
         {
             return self.approval_inspector(workflow, window, cx);
         }
-        let Some(step) = self.shown_step() else {
+        let Some(step) = self.shown_step(cx) else {
             return div()
                 .debug_selector(|| "inspector-none".into())
                 .flex_1()

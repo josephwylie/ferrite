@@ -238,8 +238,8 @@ fn a_step_routes_by_merge_result_with_a_route_per_result(cx: &mut TestAppContext
         )
     });
     tick(cx);
-    view.read_with(cx, |view, _| {
-        let draft = &view.shown_workflow().unwrap().draft;
+    view.read_with(cx, |view, cx| {
+        let draft = &view.shown_workflow(cx).unwrap().draft;
         let explorer = draft.step("s-2").unwrap();
         assert_eq!(
             explorer.outcome_routes.as_ref().unwrap().conflict,

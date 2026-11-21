@@ -74,8 +74,8 @@ fn starts_window<'a>(
 }
 
 fn start(view: &Entity<CockpitView>, cx: &mut gpui::VisualTestContext) -> Start {
-    view.read_with(cx, |view, _| {
-        view.shown_workflow().unwrap().draft.start.clone()
+    view.read_with(cx, |view, cx| {
+        view.shown_workflow(cx).unwrap().draft.start.clone()
     })
 }
 
@@ -206,7 +206,7 @@ fn each_source_shows_its_own_settings_and_keeps_what_was_typed(cx: &mut TestAppC
     assert_eq!(kept.schedule.instructions, "Triage the new issues", "kept");
     assert_eq!(kept.github.repository.as_deref(), Some("acme/app"), "kept");
     view.read_with(cx, |view, cx| {
-        let workflow = view.shown_workflow().unwrap().id.clone();
+        let workflow = view.shown_workflow(cx).unwrap().id.clone();
         assert_eq!(
             view.field_text(&Field::ScheduleInstructions(workflow), cx)
                 .as_deref(),
@@ -217,7 +217,7 @@ fn each_source_shows_its_own_settings_and_keeps_what_was_typed(cx: &mut TestAppC
     pick(cx, "start-kind", 4);
     assert!(shows(cx, "start-script-command"));
     assert!(shows(cx, "automation-off"));
-    let workflow = view.read_with(cx, |view, _| view.shown_workflow().unwrap().id.clone());
+    let workflow = view.read_with(cx, |view, cx| view.shown_workflow(cx).unwrap().id.clone());
     let command = crate::cockpit::starts::script_command("/Apps/Ferrite/ferrite", &workflow);
     assert_eq!(
         command,
@@ -253,7 +253,7 @@ fn issue(number: u64) -> GitHubItem {
 fn automatic_starts_are_a_switch_apart_from_saving(cx: &mut TestAppContext) {
     let (view, cx) = starts_window(cx, "starts-switch");
     view.update(cx, |view, cx| {
-        let step = view.shown_step().unwrap().id.clone();
+        let step = view.shown_step(cx).unwrap().id.clone();
         view.edit_step(
             step,
             StepChange {
@@ -276,8 +276,8 @@ fn automatic_starts_are_a_switch_apart_from_saving(cx: &mut TestAppContext) {
     assert!(shows(cx, "automation-off"));
     click(cx, "automation-turn");
     let switch = |view: &Entity<CockpitView>, cx: &mut gpui::VisualTestContext| {
-        view.read_with(cx, |view, _| {
-            view.shown_workflow().unwrap().automation.switch
+        view.read_with(cx, |view, cx| {
+            view.shown_workflow(cx).unwrap().automation.switch
         })
     };
     assert_eq!(switch(&view, cx), Switch::Off, "nothing saved to turn on");
@@ -292,7 +292,7 @@ fn automatic_starts_are_a_switch_apart_from_saving(cx: &mut TestAppContext) {
     click(cx, "automation-turn");
     assert!(shows(cx, "automation-on"), "resumed");
 
-    let workflow = view.read_with(cx, |view, _| view.shown_workflow().unwrap().id.clone());
+    let workflow = view.read_with(cx, |view, cx| view.shown_workflow(cx).unwrap().id.clone());
     view.update(cx, |view, cx| {
         view.cockpit.fixture_factory_command(Command::GitHubRead {
             workflow: workflow.clone(),
@@ -309,8 +309,8 @@ fn automatic_starts_are_a_switch_apart_from_saving(cx: &mut TestAppContext) {
     assert!(shows(cx, "backlog-new-only"), "new ones only, the default");
     click(cx, "backlog-new-only");
     assert!(!shows(cx, "automation-backlog"), "asked once");
-    view.read_with(cx, |view, _| {
-        let automation = &view.shown_workflow().unwrap().automation;
+    view.read_with(cx, |view, cx| {
+        let automation = &view.shown_workflow(cx).unwrap().automation;
         assert_eq!(automation.seen.len(), 2, "passed over");
         assert!(view.cockpit.factory().tasks.is_empty(), "nothing started");
     });

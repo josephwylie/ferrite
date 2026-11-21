@@ -1010,7 +1010,7 @@ impl CockpitView {
     /// What the start's inspector draws: the shown Workflow's start, while
     /// it is what the inspector shows.
     fn starts_inputs(&self, cx: &gpui::App) -> Option<StartsInputs> {
-        let workflow = self.shown_workflow().filter(|_| self.start_shown())?;
+        let workflow = self.shown_workflow(cx).filter(|_| self.start_shown(cx))?;
         let fields = self.factory()?.editor.read(cx);
         let automation = &workflow.automation;
         Some(StartsInputs {
@@ -1048,16 +1048,15 @@ impl CockpitView {
     }
 
     /// The start's settings are what the inspector shows.
-    pub(crate) fn start_shown(&self) -> bool {
+    pub(crate) fn start_shown(&self, cx: &gpui::App) -> bool {
         self.factory()
-            .is_some_and(|view| view.workflows.start_open)
+            .is_some_and(|view| view.editor.read(cx).start_open)
     }
 
     /// Show the shown Workflow's start in the inspector.
     pub(crate) fn open_start(&mut self, cx: &mut Context<Self>) {
-        if let Some(view) = self.factory_mut() {
-            view.workflows.start_open = true;
-            view.editor.update(cx, |editor, _| editor.focused = None);
+        if let Some(view) = self.factory() {
+            view.editor.update(cx, |editor, _| editor.open_start());
         }
         self.ensure_fields(cx);
         self.ask_github_lists(cx);
@@ -1066,7 +1065,7 @@ impl CockpitView {
 
     /// Change the shown draft's start, whole.
     pub(crate) fn edit_start(&mut self, change: impl FnOnce(&mut Start), cx: &mut Context<Self>) {
-        let Some(workflow) = self.shown_workflow() else {
+        let Some(workflow) = self.shown_workflow(cx) else {
             return;
         };
         let id = workflow.id.clone();
@@ -1112,7 +1111,7 @@ impl CockpitView {
 
     /// Turn the shown Workflow's automatic starts on, pause or resume.
     pub(crate) fn turn_automation(&mut self, turn: Turn, cx: &mut Context<Self>) {
-        let Some(workflow) = self.shown_workflow().map(|shown| shown.id.clone()) else {
+        let Some(workflow) = self.shown_workflow(cx).map(|shown| shown.id.clone()) else {
             return;
         };
         self.workflow_ask(WorkflowAction::Automation { workflow, turn }, cx);
@@ -1120,15 +1119,15 @@ impl CockpitView {
 
     /// The operator's word on what already matched.
     pub(crate) fn answer_backlog(&mut self, take: bool, cx: &mut Context<Self>) {
-        let Some(workflow) = self.shown_workflow().map(|shown| shown.id.clone()) else {
+        let Some(workflow) = self.shown_workflow(cx).map(|shown| shown.id.clone()) else {
             return;
         };
         self.workflow_ask(WorkflowAction::Backlog { workflow, take }, cx);
     }
 
     /// The start's text fields, as the draft holds them.
-    pub(crate) fn start_fields(&self) -> Vec<(Field, String)> {
-        let Some(workflow) = self.shown_workflow().filter(|_| self.start_shown()) else {
+    pub(crate) fn start_fields(&self, cx: &gpui::App) -> Vec<(Field, String)> {
+        let Some(workflow) = self.shown_workflow(cx).filter(|_| self.start_shown(cx)) else {
             return Vec::new();
         };
         let start = &workflow.draft.start;
@@ -1167,8 +1166,8 @@ impl CockpitView {
     /// Factory's starts wait for each answer.
     fn ask_github_lists(&mut self, cx: &mut Context<Self>) {
         let Some(start) = self
-            .shown_workflow()
-            .filter(|_| self.start_shown())
+            .shown_workflow(cx)
+            .filter(|_| self.start_shown(cx))
             .map(|workflow| workflow.draft.start.clone())
         else {
             return;
@@ -1208,7 +1207,7 @@ impl CockpitView {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         use ferrite_ui::theme::*;
-        let selected = self.start_shown();
+        let selected = self.start_shown(cx);
         let key = if selected {
             "outline-start-selected"
         } else {

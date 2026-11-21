@@ -84,7 +84,7 @@ impl CockpitView {
         cx: &mut Context<Self>,
     ) -> Div {
         use ferrite_ui::theme::*;
-        let Some(workflow) = self.shown_workflow() else {
+        let Some(workflow) = self.shown_workflow(cx) else {
             return div()
                 .debug_selector(|| "workflows-empty".into())
                 .flex_1()
@@ -155,7 +155,7 @@ impl CockpitView {
                         MouseButton::Left,
                         cx.listener(move |view, event: &MouseDownEvent, _, cx| {
                             cx.stop_propagation();
-                            let picks = view.workflow_picks();
+                            let picks = view.workflow_picks(cx);
                             view.open_picks(picks, &picker, event.position, cx);
                         }),
                     ),
@@ -184,7 +184,7 @@ impl CockpitView {
                 .disabled(!runnable)
                 .on_click(cx.listener(|view, _: &ClickEvent, _, cx| {
                     cx.stop_propagation();
-                    let workflow = view.shown_id();
+                    let workflow = view.shown_id(cx);
                     view.open_new_task(cx);
                     view.set_new_task_workflow(workflow, cx);
                 })),
@@ -308,17 +308,21 @@ impl CockpitView {
         let Some(view) = self.factory() else {
             return div().into_any_element();
         };
+        let editor = view.editor.read(cx);
+        let approval_shown = editor.approval;
+        let (outline_focus, outline_scroll) =
+            (editor.outline_focus.clone(), editor.outline_scroll.clone());
         // While the start or the approval settings show, no Step's row
         // is the chosen one.
         let shown = self
-            .shown_step()
+            .shown_step(cx)
             .map(|step| step.id.clone())
-            .filter(|_| !view.workflows.approval && !self.start_shown());
+            .filter(|_| !approval_shown && !self.start_shown(cx));
         let name_field = Field::WorkflowName(workflow.id.clone());
         let mut outline = div()
             .id("outline")
             .debug_selector(|| "outline".into())
-            .track_focus(&view.workflows.outline_focus)
+            .track_focus(&outline_focus)
             .flex()
             .flex_col()
             .flex_shrink_0()
@@ -329,7 +333,7 @@ impl CockpitView {
             .border_r_1()
             .border_color(paint::LINE)
             .overflow_y_scroll()
-            .track_scroll(&view.workflows.outline_scroll)
+            .track_scroll(&outline_scroll)
             .on_key_down(cx.listener(|view, event: &gpui::KeyDownEvent, _, cx| {
                 view.outline_key(&event.keystroke, cx)
             }))
@@ -374,7 +378,6 @@ impl CockpitView {
             ));
         }
         let approval_flagged = problems.iter().any(|problem| problem.approval);
-        let approval_shown = view.workflows.approval;
         let approval = &workflow.draft.approval;
         let decides = match approval.by {
             Approver::Human => "You approve".to_string(),
@@ -528,13 +531,13 @@ impl CockpitView {
                             cx.listener(move |view, event: &MouseDownEvent, _, cx| {
                                 cx.stop_propagation();
                                 let Some(step) = view
-                                    .shown_workflow()
+                                    .shown_workflow(cx)
                                     .and_then(|workflow| workflow.draft.step(&step_id))
                                     .cloned()
                                 else {
                                     return;
                                 };
-                                let picks = view.route_picks(&step, kind);
+                                let picks = view.route_picks(&step, kind, cx);
                                 view.open_picks(picks, &trigger, event.position, cx);
                             }),
                         ),
@@ -643,13 +646,13 @@ impl CockpitView {
                                         cx.listener(move |view, event: &MouseDownEvent, _, cx| {
                                             cx.stop_propagation();
                                             let Some(step) = view
-                                                .shown_workflow()
+                                                .shown_workflow(cx)
                                                 .and_then(|workflow| workflow.draft.step(&more_id))
                                                 .cloned()
                                             else {
                                                 return;
                                             };
-                                            let picks = view.row_picks(&step);
+                                            let picks = view.row_picks(&step, cx);
                                             view.open_picks(picks, &more, event.position, cx);
                                         }),
                                     ),

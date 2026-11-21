@@ -102,14 +102,14 @@ impl CockpitView {
     }
 
     /// The shown draft's problems.
-    pub(crate) fn draft_problems(&self) -> Vec<Problem> {
-        self.shown_workflow()
+    pub(crate) fn draft_problems(&self, cx: &gpui::App) -> Vec<Problem> {
+        self.shown_workflow(cx)
             .map(|workflow| workflow.draft.problems(&self.factory_catalog()))
             .unwrap_or_default()
     }
 
     pub(crate) fn add_skill(&mut self, name: String, cx: &mut Context<Self>) {
-        let Some(step) = self.shown_step() else {
+        let Some(step) = self.shown_step(cx) else {
             return;
         };
         if step.skills.contains(&name) {
@@ -129,7 +129,7 @@ impl CockpitView {
     }
 
     pub(crate) fn remove_skill(&mut self, name: &str, cx: &mut Context<Self>) {
-        let Some(step) = self.shown_step() else {
+        let Some(step) = self.shown_step(cx) else {
             return;
         };
         let skills: Vec<String> = step
