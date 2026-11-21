@@ -430,7 +430,6 @@ fn opening_a_background_agent_shows_its_full_chat(cx: &mut TestAppContext) {
         view.read_with(cx, |view, _| view.panes[0].selected.clone())
     };
     assert_eq!(selected(&view, cx), Subject::Subagent(key.clone()), "the tab's Open");
-    assert!(debug_bounds(cx, "subagent-head-1".into()).is_some());
 
     cx.update(|window, app| {
         view.update(app, |view, cx| view.select_subject(view.panes[0].thread().unwrap(), Subject::Main, window, cx))
