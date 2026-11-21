@@ -816,8 +816,8 @@ what was read, the plan as plain values (`PlanCard::of`, `render`) and the
 checks by a free function whose rows open a run's log through the root
 (`checks_card`), both in `cockpit/head_cards.rs`. A view would hold no
 state and add events for a press the root answers anyway. The Composer's
-footer (the toolbar, send and stop, the `+` menu, the mode chip and menu,
-the session controls card) follows in the same shape.
+footer (the toolbar, send and stop, the `+` menu, the mode chip and menu)
+follows in the same shape.
 
 A draft's band menu's rows are the fifteenth. The Project and Workspace
 chips open a popup in the slot (`Popup::Band`), which keeps the open menu,
@@ -829,6 +829,19 @@ yet), and the rows are built from what was read as plain values
 (`menu_rows::project_rows`, `workspace_rows`). A pick stays the root's
 (`pick_band`), as does building them again as the line changes or a
 listing lands (`sync_band_rows`, `sync_workspace_rows`).
+
+The Session controls card is the sixteenth. It is a popup that hangs over
+a Thread's Composer (`Popup::Session`), and the slot holds all it keeps:
+the Session it is for, a Thread and its generation. What it shows is the
+Session's: its permission modes, its MCP servers with the sign-in pages
+the provider handed over, its background tasks, which controls it takes,
+and why it refused the last one (`SessionControlError`). The root reads
+them and hangs the card (`session_controls_element`); the card is drawn
+from what was read as plain values (`SessionCard::of`, `render`,
+`cockpit/session_card.rs`), none once another Session runs. Each row's
+press sends its control through the root (`request_mode`,
+`run_session_control`), after checking that the Session still runs and
+still reports the server or task.
 
 ## Precedent
 
