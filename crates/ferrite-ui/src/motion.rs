@@ -107,7 +107,8 @@
 //! drawn at all), [`loop_phase`] returns 0 and declares nothing, a [`Tween`]
 //! reads its target, a hover snaps, a press does not squish and a label
 //! swaps its words at once. [`init`] sets the flag from the system setting
-//! at launch.
+//! at launch, and [`adopt_renderer`] holds it on when the window draws on
+//! the CPU.
 
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
@@ -116,7 +117,7 @@ use std::time::{Duration, Instant};
 
 use ferrite_core::cadence;
 use gpui::{
-    div, prelude::FluentBuilder, px, AnyElement, App, ElementId, EntityId, Global, Hsla,
+    div, prelude::FluentBuilder, px, AnyElement, App, ElementId, EntityId, Global, GpuSpecs, Hsla,
     InteractiveElement, IntoElement, ParentElement, Rgba, SharedString, Styled, Window,
 };
 
@@ -2362,20 +2363,55 @@ pub mod testing {
     }
 }
 
+/// What decides the reduced-motion flag, besides the system setting.
+#[derive(Clone, Copy, Default)]
+struct MotionSources {
+    /// `FERRITE_REDUCE_MOTION=1` (or `0`): wins over everything else.
+    forced: Option<bool>,
+    /// The window's adapter draws on the CPU ([`adopt_renderer`]).
+    software_renderer: bool,
+}
+
+impl Global for MotionSources {}
+
+/// Sets gpui's flag from every source: the one place it is decided.
+fn apply_motion_sources(cx: &mut App) {
+    let sources = cx.try_global::<MotionSources>().copied().unwrap_or_default();
+    let reduce = sources
+        .forced
+        .unwrap_or(cx.system_reduce_motion() || sources.software_renderer);
+    cx.set_reduce_motion(reduce);
+}
+
 /// Launch: adopt the system's Reduce Motion setting, and follow it while
 /// the app runs. gpui reads no platform setting itself, so without this
 /// the flag is never set. `FERRITE_REDUCE_MOTION=1` (or `0`) overrides it.
 pub fn init(cx: &mut App) {
-    if let Some(forced) = std::env::var("FERRITE_REDUCE_MOTION")
+    let forced = std::env::var("FERRITE_REDUCE_MOTION")
         .ok()
-        .map(|value| value.trim() == "1")
-    {
-        cx.set_reduce_motion(forced);
-        return;
-    }
-    cx.set_reduce_motion(cx.system_reduce_motion());
-    cx.on_system_reduce_motion_change(|cx| cx.set_reduce_motion(cx.system_reduce_motion()))
-        .detach();
+        .map(|value| value.trim() == "1");
+    cx.set_global(MotionSources {
+        forced,
+        ..Default::default()
+    });
+    apply_motion_sources(cx);
+    cx.on_system_reduce_motion_change(apply_motion_sources).detach();
+}
+
+/// The window opened on `specs`' adapter. One that draws on the CPU (a
+/// machine with no GPU: a VM, a CI runner) repaints the whole window on the
+/// processor for every frame a loop asks for, so motion holds still there as
+/// it does under the system's Reduce Motion. `FERRITE_REDUCE_MOTION=0` still
+/// turns it back on. macOS and the headless window report no adapter.
+pub fn adopt_renderer(specs: Option<GpuSpecs>, cx: &mut App) {
+    // Windows' render-only adapter on a machine without a GPU is WARP, but
+    // DXGI flags only the explicit WARP adapter as software.
+    let software = specs.is_some_and(|specs| {
+        specs.is_software_emulated || specs.device_name == "Microsoft Basic Render Driver"
+    });
+    let sources = cx.default_global::<MotionSources>();
+    sources.software_renderer = software;
+    apply_motion_sources(cx);
 }
 
 #[cfg(test)]
@@ -3194,5 +3230,51 @@ mod tests {
         cx.run_until_parked();
         assert_eq!(view.read_with(cx, |view, _| view.phase), 0.0);
         assert!(cx.update(|_, cx| pulse_parked(cx)), "nothing is scheduled");
+    }
+
+    fn adapter(device_name: &str, is_software_emulated: bool) -> Option<GpuSpecs> {
+        Some(GpuSpecs {
+            is_software_emulated,
+            device_name: device_name.into(),
+            driver_name: String::new(),
+            driver_info: String::new(),
+        })
+    }
+
+    /// A window drawn on the CPU holds its loops still though the system
+    /// asks for motion, and keeps them still when the system setting moves.
+    #[gpui::test]
+    fn a_software_renderer_holds_a_loop_at_its_start(cx: &mut TestAppContext) {
+        testing::drive();
+        cx.update(init);
+        cx.update(|cx| adopt_renderer(adapter("llvmpipe (LLVM 19.1.1, 256 bits)", true), cx));
+        assert!(cx.update(|cx| reduced_motion(cx)), "a software-emulated adapter");
+        cx.update(|cx| adopt_renderer(adapter("Microsoft Basic Render Driver", false), cx));
+        cx.simulate_system_reduce_motion(true);
+        cx.simulate_system_reduce_motion(false);
+        cx.run_until_parked();
+        let (view, cx) = cx.add_window_view(|_, _| Loop {
+            painting: true,
+            renders: 0,
+            phase: 0.5,
+        });
+        cx.run_until_parked();
+        assert_eq!(view.read_with(cx, |view, _| view.phase), 0.0);
+        assert!(cx.update(|_, cx| pulse_parked(cx)), "nothing is scheduled");
+    }
+
+    /// A GPU, or no adapter reported (macOS, headless), leaves motion to the
+    /// system setting.
+    #[gpui::test]
+    fn a_gpu_leaves_motion_to_the_system(cx: &mut TestAppContext) {
+        testing::drive();
+        cx.update(init);
+        for specs in [adapter("NVIDIA GeForce RTX 4070", false), None] {
+            cx.update(|cx| adopt_renderer(specs, cx));
+            assert!(!cx.update(|cx| reduced_motion(cx)));
+        }
+        cx.simulate_system_reduce_motion(true);
+        cx.run_until_parked();
+        assert!(cx.update(|cx| reduced_motion(cx)), "the system still decides");
     }
 }
