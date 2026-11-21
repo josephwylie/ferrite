@@ -40,6 +40,13 @@ const PRELUDE: &str = concat!(
     r#"echo '{"type":"control_response","response":{"subtype":"success","request_id":"req_1","response":{}}}'"#,
 );
 
+/// A started CLI after its own version answer: it answers the handshake
+/// and stays up, so a test about the version reaches a Session.
+const LIVE: &str = concat!(
+    r#"echo '{"type":"control_response","response":{"subtype":"success","request_id":"req_1","response":{}}}'"#,
+    "\nexec cat > /dev/null",
+);
+
 fn fixture(name: &str) -> PathBuf {
     // Cargo runs a crate's tests in the crate's own directory.
     std::path::absolute(format!("tests/fixtures/claude-{name}.jsonl")).unwrap()
@@ -178,7 +185,7 @@ fn a_cli_below_the_pin_is_refused_before_any_session() {
 fn a_cli_exactly_at_the_pin_is_accepted() {
     let program = stub(
         "claude-at-pin",
-        "case \"$1\" in --version) echo '2.1.224 (Claude Code)'; exit 0;; esac\nexit 0",
+        &format!("case \"$1\" in --version) echo '2.1.224 (Claude Code)'; exit 0;; esac\n{LIVE}"),
     );
     ClaudeSession::spawn(config(program)).expect("the pinned version must spawn");
 }
@@ -189,8 +196,7 @@ fn a_cli_exactly_at_the_pin_is_accepted() {
 fn a_cli_at_the_next_major_still_spawns() {
     let program = stub(
         "claude-future",
-        "case \"$1\" in --version) echo '3.0.0 (Claude Code)'; exit 0;; esac
-exit 0",
+        &format!("case \"$1\" in --version) echo '3.0.0 (Claude Code)'; exit 0;; esac\n{LIVE}"),
     );
     ClaudeSession::spawn(config(program)).expect("an untested major must still spawn");
 }
@@ -242,7 +248,7 @@ fn what_a_session_starts_runs_below_the_server() {
 fn the_last_release_below_the_next_major_is_accepted() {
     let program = stub(
         "claude-late-two",
-        "case \"$1\" in --version) echo '2.99.99 (Claude Code)'; exit 0;; esac\nexit 0",
+        &format!("case \"$1\" in --version) echo '2.99.99 (Claude Code)'; exit 0;; esac\n{LIVE}"),
     );
     ClaudeSession::spawn(config(program)).expect("2.x must keep spawning");
 }
