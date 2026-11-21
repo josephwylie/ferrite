@@ -357,6 +357,19 @@ that happened to touch it, and nothing in the code said whose a field was.
   the view's state but a ready question's answers, and answer the Server,
   ⌘⏎ from across the room too. The open Decision is core's, and its reply
   error the Pane's. A gone Thread's rules go with it.
+- **The empty board is the twenty-first.** `EmptyBoardView`
+  (`cockpit/empty_board.rs`) owns the home's selected row and its list's
+  focus; its keys (↑ ↓ ⏎ under `EmptyBoard`) answer on its own element,
+  as the PRs' do. The root holds it for the window's life, so the row
+  stays where it was left at the next visit. It reads the CLIs' versions,
+  the ways to start that would do something now and the Threads used last
+  through `empty_board_inputs`. It emits `EmptyBoardEvent`: a way to
+  start's action, which the root dispatches, or a recent Thread, which the
+  root focuses when a Pane shows it and brings back when none does.
+  Whether it shows (no Pane on the board), the probe of the CLIs' versions,
+  which Settings reads too, and the focus pump that hands it the keyboard
+  stay the root's. It keeps nothing by Thread or Pane, so a gone Thread or
+  a dropped Pane leaves it nothing to free.
 
 ## What does not get a view
 
