@@ -858,4 +858,29 @@ mod tests {
         assert!(panel.tabs.is_empty());
         assert_eq!(panel.active, None, "nothing left to show");
     }
+
+    /// A tab of a kind this build no longer has (the retired subagent
+    /// drill-in) is dropped on load; the file and its other tabs load, and
+    /// a shown one hands the Panel to its nearest neighbour.
+    #[test]
+    fn a_retired_tab_kind_is_dropped_and_every_other_tab_loads() {
+        let dir = scratch("retired");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join(FILE_NAME),
+            br#"{"version":1,"threads":[
+                {"thread":1,"open":true,"tabs":["overview",{"agent":"claude:s:toolu_a"},{"file":"a.rs"}],"active":{"agent":"claude:s:toolu_a"},"maximized":false,"width":420},
+                {"thread":2,"open":false,"tabs":["changes",{"pull_request":48}],"active":"changes","maximized":true,"width":300}
+            ]}"#,
+        )
+        .unwrap();
+        let loaded = Surfaces::load(&dir, |_, _| true).expect("the file loads");
+        let first = loaded.get(ThreadId::new(1)).unwrap();
+        assert_eq!(first.tabs, [SurfaceId::Overview, file("a.rs")]);
+        assert_eq!(first.active, Some(file("a.rs")), "the nearest tab left");
+        let second = loaded.get(ThreadId::new(2)).unwrap();
+        assert_eq!(second.tabs, [SurfaceId::Changes, SurfaceId::PullRequest(48)]);
+        assert_eq!(second.active, Some(SurfaceId::Changes));
+        assert!(second.maximized);
+    }
 }

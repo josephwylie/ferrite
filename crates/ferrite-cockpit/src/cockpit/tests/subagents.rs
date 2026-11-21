@@ -1165,10 +1165,10 @@ fn a_waiting_agent_opened_from_its_row_answers_its_own_request(cx: &mut TestAppC
     assert_eq!(fake.answered.borrow()[0].0, "Cedar");
 }
 
-/// `Stop` in an opened child's head stops that child alone; the inspector
-/// is its own, explicit action and holds the same Subject in the Panel.
+/// `Stop` in an opened child's head stops that child alone. The head has
+/// no way to hold the agent in the Panel: its full chat is its one view.
 #[gpui::test]
-fn an_opened_agents_head_stops_it_and_offers_the_side_panel(cx: &mut TestAppContext) {
+fn an_opened_agents_head_stops_it(cx: &mut TestAppContext) {
     let (core, fake) = cockpit("agent-route-head", 1);
     bind_production_keys(cx);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
@@ -1184,17 +1184,10 @@ fn an_opened_agents_head_stops_it_and_offers_the_side_panel(cx: &mut TestAppCont
     click(cx, "subagent-stop-1");
     assert_eq!(*fake.stopped.borrow(), [key("Cedar")]);
     assert_eq!(*fake.interrupts.borrow(), 0, "Main's turn runs on");
-
-    click(cx, "subagent-panel-1");
-    let thread = view.read_with(cx, |view, _| view.panes[0].thread().unwrap());
-    view.read_with(cx, |view, cx| {
-        assert_eq!(
-            view.agent_drills.read(cx).subject(thread),
-            Some(&Subject::Subagent(key("Cedar")))
-        );
+    view.read_with(cx, |view, _| {
         assert_eq!(view.panes[0].selected, Subject::Subagent(key("Cedar")));
     });
-    assert!(cx.debug_bounds("panel-tab-Agent").is_some(), "the inspector's tab");
+    assert!(cx.debug_bounds("subagent-panel-1").is_none(), "no Side panel button");
 }
 
 /// The generic thread card opens Main even while a child awaits a
