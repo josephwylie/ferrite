@@ -356,6 +356,7 @@ pub struct CockpitView {
     /// tab is being entered.
     browser_chrome: Entity<browser::BrowserChromeView>,
     browser_dialog: Entity<browser::BrowserDialogView>,
+    browser_review: Entity<browser::BrowserReviewView>,
     /// One view per Pane of the Cockpit's roster, in its order — the
     /// keyboard, the scrollback and the caches the window owns for each.
     /// `sync_panes` is the one door: after every act on the roster the
@@ -458,10 +459,9 @@ pub struct CockpitView {
     /// scroll, keyboard, search, picks and undo notice, and asks the
     /// Cockpit for the rest through `NavEvent`.
     nav_view: Entity<nav_view::NavView>,
-    /// The Cockpit hearing the views it answers with the window (the nav,
-    /// the side chat, Files, the Overview, the toasts, the File Surface,
-    /// the Decisions, the Browser's chrome and dialog), from its first frame.
-    view_events: Option<[gpui::Subscription; 9]>,
+    /// The Cockpit hearing each view that has an event enum of its own
+    /// (ADR 0041), from its first frame.
+    view_events: Option<Vec<gpui::Subscription>>,
     /// The window's activation, followed into the Cockpit
     /// (`Cockpit::set_window_active`) once the first frame has a window.
     activation: Option<gpui::Subscription>,
@@ -1400,11 +1400,15 @@ impl CockpitView {
         let browser_dialog = cx.new(|_| browser::BrowserDialogView::default());
         // So is a page's dialog, over the page.
         cx.observe(&browser_dialog, |_, _, cx| cx.notify()).detach();
+        let browser_review = cx.new(|_| browser::BrowserReviewView::default());
+        // And a retained annotation's review, in the page's place.
+        cx.observe(&browser_review, |_, _, cx| cx.notify()).detach();
         let mut view = Self {
             cockpit,
             browsers: Default::default(),
             browser_chrome,
             browser_dialog,
+            browser_review,
             panes: Vec::new(),
             focus: cx.focus_handle(),
             field_watch: Default::default(),
@@ -8138,7 +8142,7 @@ impl CockpitView {
     /// the window.
     fn hear_views(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.view_events.is_none() {
-            self.view_events = Some([
+            self.view_events = Some(vec![
                 cx.subscribe_in(&self.nav_view, window, Self::on_nav_event),
                 cx.subscribe_in(&self.side_chat, window, Self::on_side_chat_event),
                 cx.subscribe_in(&self.files, window, Self::on_files_event),
@@ -8148,6 +8152,7 @@ impl CockpitView {
                 cx.subscribe_in(&self.decisions, window, Self::on_decision_event),
                 cx.subscribe_in(&self.browser_chrome, window, Self::on_browser_chrome_event),
                 cx.subscribe_in(&self.browser_dialog, window, Self::on_browser_dialog_event),
+                cx.subscribe_in(&self.browser_review, window, Self::on_browser_review_event),
             ]);
         }
     }

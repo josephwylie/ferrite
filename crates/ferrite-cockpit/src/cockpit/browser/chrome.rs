@@ -492,9 +492,9 @@ impl BrowserChromeView {
 
 impl CockpitView {
     /// What the chrome draws of `thread`'s Browser: its tabs, the active
-    /// one, whether a live page stands for it, and whether an annotation is
-    /// open.
-    pub(super) fn browser_chrome_inputs(&self, thread: ThreadId) -> Option<BrowserChromeInputs> {
+    /// one, whether a live page stands for it, and whether an annotation or
+    /// its review is open.
+    pub(super) fn browser_chrome_inputs(&self, thread: ThreadId, cx: &gpui::App) -> Option<BrowserChromeInputs> {
         let browser = self.browsers.threads.get(&thread)?;
         Some(BrowserChromeInputs {
             tabs: browser.state.tabs.clone(),
@@ -503,7 +503,7 @@ impl CockpitView {
                 .state
                 .active
                 .is_some_and(|tab| browser.pages.contains_key(&tab)),
-            annotating: browser.annotation.is_some(),
+            annotating: browser.annotation.is_some() || self.browser_review.read(cx).open(thread),
         })
     }
 

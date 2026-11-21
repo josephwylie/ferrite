@@ -1,11 +1,10 @@
 //! A live guest session holds protection through Attach, capture, and retention.
-//! Historical captures remain editable without retaining a live DOM reference.
+//! A retained capture is edited in its review (`review.rs`), with no live page.
 use super::*;
 use ferrite_core::browser::{Lease, Protection};
 use ferrite_core::browser_annotations::{
     Annotation, Capture, LiveFeedback, LiveScreenshot, Selection, Viewport,
 };
-use ferrite_pane::annotation_editor::{AnnotationEditor, EditorEvent};
 use ferrite_pane::visual::browser_control::CapturedPage;
 use ferrite_pane::visual::live_annotation::{self, Event as LiveEvent, Submission};
 use std::sync::mpsc::{Receiver, TryRecvError};
@@ -48,11 +47,6 @@ enum Phase {
     Retaining(Receiver<std::io::Result<Annotation>>),
     PendingAttachment(Annotation),
     Closing,
-    Loading {
-        retained: Annotation,
-        image: Receiver<std::io::Result<std::path::PathBuf>>,
-    },
-    Editing(Entity<AnnotationEditor>),
 }
 
 impl CockpitView {
@@ -65,19 +59,8 @@ impl CockpitView {
         cx: &mut Context<Self>,
     ) {
         self.ensure_browser(thread, cx);
-        let editor = cx.new(|cx| AnnotationEditor::new(annotation, image, cx));
-        self.browsers.threads.get_mut(&thread).unwrap().annotation = Some(Session {
-            guard: None,
-            phase: Phase::Editing(editor),
-            focus: cx.focus_handle(),
-            started: Instant::now(),
-            window: None,
-            submission: Submission::Attach,
-            action: None,
-            restore_failed: false,
-            recovering: false,
-            ready: false,
-        });
+        self.browser_review
+            .update(cx, |review, cx| review.edit(thread, annotation, image, cx));
         self.upsert_surface(thread, super::super::surfaces::SurfaceId::Browser, cx);
     }
 
@@ -108,10 +91,9 @@ impl CockpitView {
         thread: ThreadId,
         cx: &gpui::App,
     ) -> Option<gpui::FocusHandle> {
-        let session = self.browsers.threads.get(&thread)?.annotation.as_ref()?;
-        Some(match &session.phase {
-            Phase::Editing(editor) => gpui::Focusable::focus_handle(editor.read(cx), cx),
-            _ => session.focus.clone(),
+        self.browser_review.read(cx).focus(thread, cx).or_else(|| {
+            let session = self.browsers.threads.get(&thread)?.annotation.as_ref()?;
+            Some(session.focus.clone())
         })
     }
 
@@ -122,8 +104,9 @@ impl CockpitView {
         cx: &mut Context<Self>,
     ) {
         let new_tab = self.browser_chrome.read(cx).new_tab(thread);
+        let reviewing = self.browser_review.read(cx).open(thread);
         let selected = self.browsers.threads.get(&thread).and_then(|browser| {
-            if browser.annotation.is_some() || new_tab {
+            if browser.annotation.is_some() || reviewing || new_tab {
                 return None;
             }
             let owner = browser.owner?;
@@ -332,6 +315,8 @@ impl CockpitView {
     }
 
     pub(super) fn close_browser_annotation(&mut self, thread: ThreadId, cx: &mut Context<Self>) {
+        self.browser_review
+            .update(cx, |review, cx| review.close(thread, cx));
         let Some(mut session) = self
             .browsers
             .threads
@@ -362,7 +347,9 @@ impl CockpitView {
             .collect();
         for (thread, retained) in edits {
             self.ensure_browser(thread, cx);
-            if self.browsers.threads[&thread].annotation.is_some() {
+            if self.browsers.threads[&thread].annotation.is_some()
+                || self.browser_review.read(cx).open(thread)
+            {
                 self.browsers.threads.get_mut(&thread).unwrap().error =
                     Some("Finish or cancel the current annotation before opening another.".into());
                 continue;
@@ -375,23 +362,19 @@ impl CockpitView {
                 .cockpit
                 .browser_annotation_image(thread, retained.clone())
             {
-                Ok(image) => {
-                    self.browsers.threads.get_mut(&thread).unwrap().annotation = Some(Session {
-                        guard: None,
-                        phase: Phase::Loading { retained, image },
-                        focus: cx.focus_handle(),
-                        started: Instant::now(),
-                        window: None,
-                        submission: Submission::Attach,
-                        action: None,
-                        restore_failed: false,
-                        recovering: false,
-                        ready: false,
-                    })
-                }
+                Ok(image) => self
+                    .browser_review
+                    .update(cx, |review, cx| review.load(thread, retained, image, cx)),
                 Err(error) => {
                     self.browsers.threads.get_mut(&thread).unwrap().error = Some(error.to_string())
                 }
+            }
+            cx.notify();
+        }
+        let failed = self.browser_review.update(cx, |review, cx| review.tend(cx));
+        for (thread, error) in failed {
+            if let Some(browser) = self.browsers.threads.get_mut(&thread) {
+                browser.error = Some(error);
             }
             cx.notify();
         }
@@ -494,7 +477,7 @@ impl CockpitView {
             }
             if !matches!(
                 session.phase,
-                Phase::Live | Phase::Editing(_) | Phase::Closing | Phase::PendingAttachment(_)
+                Phase::Live | Phase::Closing | Phase::PendingAttachment(_)
             ) && session.started.elapsed() > Duration::from_secs(45)
             {
                 error = Some("The annotation capture timed out. Select it again.".into());
@@ -646,53 +629,6 @@ impl CockpitView {
                             cx.notify();
                         }
                     }
-                    Phase::Loading { retained, image } => match image.try_recv() {
-                        Ok(Ok(image)) => {
-                            let receipt = retained.clone();
-                            let editor =
-                                cx.new(|cx| AnnotationEditor::new(receipt.clone(), image, cx));
-                            cx.subscribe(&editor, move |this, _, event, cx| {
-                                match event {
-                                    EditorEvent::Added { comment, drawings } => {
-                                        let Some(index) = this.pane_for(thread) else {
-                                            return;
-                                        };
-                                        match receipt
-                                            .with_feedback(comment.clone(), drawings.clone())
-                                        {
-                                            Ok(annotation) => this.panes[index].composer.update(
-                                                cx,
-                                                |composer, cx| {
-                                                    composer.add_browser_annotation(annotation, cx)
-                                                },
-                                            ),
-                                            Err(error) => {
-                                                this.browsers
-                                                    .threads
-                                                    .get_mut(&thread)
-                                                    .unwrap()
-                                                    .error = Some(error.to_string());
-                                                return;
-                                            }
-                                        }
-                                    }
-                                    EditorEvent::Cancelled => {}
-                                }
-                                this.close_browser_annotation(thread, cx);
-                            })
-                            .detach();
-                            session.phase = Phase::Editing(editor);
-                            cx.notify();
-                        }
-                        Ok(Err(failure)) => error = Some(failure.to_string()),
-                        Err(TryRecvError::Disconnected) => {
-                            error = Some(
-                                "The retained capture could not be loaded. Capture it again."
-                                    .into(),
-                            )
-                        }
-                        Err(TryRecvError::Empty) => {}
-                    },
                     _ => {}
                 }
             }
@@ -727,21 +663,13 @@ impl CockpitView {
         &self,
         thread: ThreadId,
         web: Option<Entity<WebView>>,
-        _cx: &mut Context<Self>,
+        cx: &mut Context<Self>,
     ) -> AnyElement {
-        if let Some(Session {
-            phase: Phase::Editing(editor),
-            ..
-        }) = self
-            .browsers
-            .threads
-            .get(&thread)
-            .and_then(|browser| browser.annotation.as_ref())
-        {
+        if let Some(editor) = self.browser_review.read(cx).editor(thread) {
             div()
                 .flex_1()
                 .min_h_0()
-                .child(editor.clone())
+                .child(editor)
                 .into_any_element()
         } else {
             div().flex_1().min_h_0().children(web).into_any_element()
