@@ -18,11 +18,14 @@ Read this index before driving the app, then use the matching feature file as th
 
 - Runs are headless (`fv launch`) unless a step says `--window`. Drive window features
   with `fv key`, `fv type`, `fv click --selector …`. Use `fv cli -- <ferrite args>` for
-  scripting features, for setup, and to read state back. On macOS every UI proof is
-  `fv shot <name>`; on Linux, which has no off-screen renderer yet, it is `fv find`,
-  `fv text` and `fv focus` on the element plus a CLI read-back, and the shot steps are
-  reported as not driven.
-- Keys are written for macOS. On Linux press `ctrl` where a step says `cmd`.
+  scripting features, for setup, and to read state back. On macOS and Windows every UI
+  proof is `fv shot <name>`; on Linux, which has no off-screen renderer yet, it is
+  `fv find`, `fv text` and `fv focus` on the element plus a CLI read-back, and the shot
+  steps are reported as not driven.
+- Keys are written for macOS. On Linux and Windows press `ctrl` where a step says `cmd`.
+- On Windows `fv` is `python3 skills/verify-ferrite/scripts/fv_windows.py` (same
+  commands, shots included), and the run is `%TEMP%\fv-<id>` rather than
+  `/tmp/fv-<id>`. `SKILL.md`, "Windows", has the rest.
 - Start Threads with `--focus --ready --args=--model --args=haiku` so the window shows
   them and the turn is cheap.
 - Thread ids count from `1` per run; read ids from answers, don't assume them after
@@ -47,7 +50,7 @@ Read this index before driving the app, then use the matching feature file as th
 
 - CLI proof is the `cli-NNN.txt` transcript: command, stdout, stderr, exit code.
 - UI proof is a headless screenshot with the Thread or toast visible, before and after
-  (macOS); on Linux, the `fv find`, `fv text` and `fv focus` answers and the CLI
+  (macOS and Windows); on Linux, the `fv find`, `fv text` and `fv focus` answers and the CLI
   read-back.
 - Side effects get a second, independent look (files in the repo, `git worktree list`,
   the spawned CLI's argv).

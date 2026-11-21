@@ -29,13 +29,13 @@ Preconditions:
 
 - **Start from the composer (keyboard).** On a fresh run the Pane shows `What should we build in verify?`. Run `fv click --selector composer-block`, `fv type "Reply with exactly the word MANGO. Use no tools."`, `fv shot composer-typed` (text in the box, send arrow lit; on Linux `fv text composer-block` reads the draft), then `fv key enter`. `fv cli -- thread list` shows Thread `1` `working`; `fv cli -- agent wait 1 --timeout-ms 90000` settles `done`; `fv shot composer-sent` shows the bubble and `MANGO`, sidebar row `New thread`.
 - **Start (scripting).** Run `fv cli -- thread start --cwd /tmp/fv-$FV_RUN/repo --title "Probe" --focus --ready --timeout-ms 60000 --args=--model --args=haiku`. Exit 0, `thread: 1`, `attention: idle`; `fv find view-thread-1` answers bounds (the window shows it). `fv shot thread-started`: sidebar under `verify` lists `Probe`; Pane header reads `Probe` and `main`.
-- **Model really pinned.** `. /tmp/fv-$FV_RUN/run.env; pgrep -P $SERVER_PID -fl claude` (Linux: `-af`) shows `--model haiku`; the Pane footer chip reads `Haiku …`.
+- **Model really pinned.** `. /tmp/fv-$FV_RUN/run.env; pgrep -P $SERVER_PID -fl claude` (Linux: `-af`; Windows: the `Get-CimInstance` line in `SKILL.md`, "Windows") shows `--model haiku`; the Pane footer chip reads `Haiku …` (Linux: `fv text view-thread-1` lists it).
 - **Prompt from the keyboard.** With the Thread focused, `fv click --selector composer-block`, `fv type "…"`, `fv key enter`; settle with `fv cli -- agent wait <id>`.
 - **Prompt (scripting).** Run `fv cli -- agent prompt 1 "Reply with exactly the word PINEAPPLE and nothing else. Use no tools." --wait --timeout-ms 90000`. Exit 0, `attention: done`, `provider_session` set.
 - **Read.** Run `fv cli -- agent read 1 --lines 20`. `text` holds the prompt line and `PINEAPPLE`. `fv shot thread-replied`: the bubble and `PINEAPPLE` are visible in the Pane.
-- **Rename.** Run `fv cli -- thread rename 1 "Renamed probe"`. Answer `title: "Renamed probe"`; `fv shot thread-renamed` shows the new title in the sidebar and header.
+- **Rename.** Run `fv cli -- thread rename 1 "Renamed probe"`. Answer `title: "Renamed probe"`; `fv shot thread-renamed` shows the new title in the sidebar and header (Linux: `fv text view-title` reads `Renamed probe`, and `fv text nav-list` lists it under `verify`).
 - **Park.** Run `fv cli -- thread close 1`, then `fv cli -- thread list`. List is `[]`; `fv shot thread-parked`: sidebar `Parked` shows `1` and `No open threads`; the Pane shows `What should we build in verify?`.
-- **Revive.** Run `fv cli -- thread revive 1 --args=--model --args=haiku --ready --timeout-ms 60000`. Same id `1`, `attention: idle`. `fv cli -- agent read 1` still holds the PINEAPPLE exchange.
+- **Revive.** Run `fv cli -- thread revive 1 --args=--model --args=haiku --ready --timeout-ms 60000`. Same id `1`, `attention: idle` (Windows answered `done`, the state of its last turn). `fv cli -- agent read 1` still holds the PINEAPPLE exchange.
 
 ## Gotchas
 
