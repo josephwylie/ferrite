@@ -49,6 +49,8 @@ pub(super) struct Content {
     /// The Thread's `Previous agents` fold
     /// (`ThreadSurfaces::previous_agents_open`).
     previous_open: bool,
+    /// Its `Show more` presses (`DetailsCard::previous_pages`).
+    previous_pages: usize,
 }
 
 pub(super) fn shown_at(item: ContextCardItem, density: Density) -> bool {
@@ -81,7 +83,7 @@ impl Content {
 
     pub(super) fn scrolling_height(&self, density: Density) -> f32 {
         let lineage = if self.lineage_shown(density) {
-            self.lineage.rows(self.previous_open)
+            self.lineage.rows(self.previous_open, self.previous_pages)
         } else {
             0
         };
@@ -108,7 +110,7 @@ impl Content {
             "{}:{width}:{:?}:{:?}",
             thread.get(),
             self.lineage_shown(density)
-                .then_some((&self.lineage, self.previous_open)),
+                .then_some((&self.lineage, self.previous_open, self.previous_pages)),
             self.rows
                 .iter()
                 .filter(|row| row.shown_at(density))
@@ -186,6 +188,7 @@ impl Content {
                     thread,
                     self.provider,
                     self.previous_open,
+                    self.previous_pages,
                     cx,
                 ));
                 continue;
@@ -294,6 +297,7 @@ impl CockpitView {
         &self,
         thread: ThreadId,
         subject: &ferrite_core::activity::Subject,
+        previous_pages: usize,
         cx: &gpui::App,
     ) -> Content {
         use super::super::surfaces::SurfaceId;
@@ -460,6 +464,7 @@ impl CockpitView {
                 .surfaces
                 .get(thread)
                 .is_some_and(|state| state.previous_agents_open),
+            previous_pages,
         }
     }
 }
@@ -509,6 +514,7 @@ mod tests {
             lineage: Lineage::default(),
             provider: Provider::Claude,
             previous_open: false,
+            previous_pages: 0,
         };
         let full = content.key(thread, 280., Density::Full);
         let compact = content.key(thread, 280., Density::Compact);

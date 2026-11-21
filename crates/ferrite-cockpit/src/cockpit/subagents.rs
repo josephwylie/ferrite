@@ -507,6 +507,7 @@ impl CockpitView {
         let subject = open.activity().canonical_subject(&subject);
         let generation = open.activity().subject(&subject)?.revision();
         self.panes[index].select_subject(subject, generation, cx);
+        self.panes[index].details.previous_pages.set(0);
         self.retry_subject_history(index, cx);
         self.cockpit
             .set_visible_subject(thread, self.panes[index].selected.clone());

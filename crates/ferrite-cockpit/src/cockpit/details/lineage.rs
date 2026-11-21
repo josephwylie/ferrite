@@ -121,18 +121,33 @@ pub(super) fn lineage(activity: ActivityView<'_>, subject: &Subject, main_title:
     lineage
 }
 
+/// `Previous agents` opens on its first six; each `Show more` adds twelve.
+const FIRST_PAGE: usize = 6;
+const PAGE: usize = 12;
+
 impl Lineage {
+    /// The finished agents shown after `pages` presses of `Show more`, and
+    /// how many the next press adds (none when all are shown).
+    pub(super) fn previous_page(&self, pages: usize) -> (&[Relative], usize) {
+        let shown = self.previous.len().min(FIRST_PAGE + PAGE * pages);
+        (
+            &self.previous[..shown],
+            (self.previous.len() - shown).min(PAGE),
+        )
+    }
+
     pub(super) fn is_empty(&self) -> bool {
         self.parent.is_none() && self.running.is_empty() && self.previous.is_empty()
     }
 
     /// How many rows it draws under its heading.
-    pub(super) fn rows(&self, previous_open: bool) -> usize {
+    pub(super) fn rows(&self, previous_open: bool, pages: usize) -> usize {
+        let (shown, more) = self.previous_page(pages);
         usize::from(self.parent.is_some())
             + self.running.len()
             + match self.previous.len() {
                 0 => 0,
-                count if previous_open => 1 + count,
+                _ if previous_open => 1 + shown.len() + usize::from(more > 0),
                 _ => 1,
             }
     }
@@ -140,13 +155,14 @@ impl Lineage {
     /// The section inside `block`: `Lineage · N running` (the heading,
     /// left out when only `Previous agents` is there to name itself), the
     /// parent, the running agents, then `Previous agents`, which folds
-    /// the finished ones.
+    /// the finished ones a page at a time.
     pub(super) fn render(
         &self,
         mut block: Div,
         thread: ThreadId,
         provider: Provider,
         previous_open: bool,
+        pages: usize,
         cx: &mut Context<CockpitView>,
     ) -> Div {
         use super::super::surfaces::{SurfaceAction, SurfaceId};
@@ -265,10 +281,39 @@ impl Lineage {
                     cx.notify();
                 })),
         );
-        if previous_open {
-            for previous in &self.previous {
-                block = block.child(agent(previous, cx));
-            }
+        if !previous_open {
+            return block;
+        }
+        let (shown, more) = self.previous_page(pages);
+        for previous in shown {
+            block = block.child(agent(previous, cx));
+        }
+        if more > 0 {
+            let selector = format!("details-lineage-show-more-{more}");
+            block = block.child(
+                div()
+                    .id("details-lineage-show-more")
+                    .debug_selector(move || selector.clone())
+                    .flex()
+                    .items_center()
+                    .gap(px(10.))
+                    .h(px(32.))
+                    .px(px(10.))
+                    .rounded(px(8.))
+                    .cursor_pointer()
+                    .text_color(rgb(INK_SUBTLE))
+                    .hover(|style| style.bg(rgba(0xffffff14)).text_color(rgba(0xffffffcc)))
+                    .child(icon(icons::PLUS, 16., INK_SUBTLE))
+                    .child(format!("Show {more} more"))
+                    .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
+                        cx.stop_propagation();
+                        if let Some(index) = view.pane_for(thread) {
+                            let pages = &view.panes[index].details.previous_pages;
+                            pages.set(pages.get() + 1);
+                            cx.notify();
+                        }
+                    })),
+            );
         }
         block
     }
