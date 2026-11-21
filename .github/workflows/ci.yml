@@ -97,8 +97,8 @@ jobs:
         run: |
           left=$(ls -d "$TMPDIR"/ferrite-* /tmp/ferrite-* 2>/dev/null | grep -vx /tmp/ferrite-tests || true)
           if [ -n "$left" ]; then echo "$left"; exit 1; fi
-      # Its own run: gpui-pre-macos's tests need its test-support feature,
-      # which must not reach the app's test builds above.
+      # Its own run: gpui-pre-macos's tests need its test-support feature
+      # named for them. The app's tests get it through the headless platform.
       - name: Test vendored framework crates
         if: ${{ needs.scope.outputs.vendored != '' }}
         env:

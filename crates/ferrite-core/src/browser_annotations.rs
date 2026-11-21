@@ -240,7 +240,8 @@ impl Annotation {
     }
 
     /// A window can cache the image for display without replacing the Server
-    /// path serialized to providers and history.
+    /// path serialized to providers and history. Caching first drops the
+    /// images written a week or more ago; opening a capture writes it again.
     pub fn cache_image(&self, png: &[u8]) -> io::Result<PathBuf> {
         if Some(png_size(png)?) != self.pixel_size()
             || Some(format!("{:x}", Sha256::digest(png))) != self.original_sha256
@@ -249,8 +250,10 @@ impl Annotation {
                 "The retained capture could not be verified; reopen it to try again",
             ));
         }
+        let cache = std::env::temp_dir().join("ferrite-browser-capture-cache");
+        crate::disk::remove_stale(&cache.join("browser-annotations"), CACHE_RETENTION);
         let image = retain(
-            &std::env::temp_dir().join("ferrite-browser-capture-cache"),
+            &cache,
             self.capture.clone(),
             png,
             String::new(),
@@ -411,6 +414,9 @@ pub fn retain_optional(
         drawings,
     })
 }
+
+/// How long a window keeps its display copy of a capture.
+const CACHE_RETENTION: std::time::Duration = std::time::Duration::from_secs(7 * 24 * 60 * 60);
 
 /// Fits inside the existing 64 MiB JSON-lines transport after base64 encoding.
 pub const MAX_CAPTURE_BYTES: usize = 32 * 1024 * 1024;

@@ -1,8 +1,10 @@
-//! Free space on a volume, for the bar's `N GB free` (SPEC §5.7, §8).
+//! Free space on a volume, for the bar's `N GB free` (SPEC §5.7, §8), and
+//! the removal of stale files from a folder Ferrite rewrites as it goes.
 //!
-//! A blocking operating-system query (`statvfs`, `GetDiskFreeSpaceExW`):
-//! callers run it off the UI thread. It answers the bytes an unprivileged
-//! writer may still use, which is what fills up under a Thread's checkout.
+//! The free space is a blocking operating-system query (`statvfs`,
+//! `GetDiskFreeSpaceExW`): callers run it off the UI thread. It answers the
+//! bytes an unprivileged writer may still use, which is what fills up under a
+//! Thread's checkout.
 
 use std::path::Path;
 
@@ -10,6 +12,25 @@ use std::path::Path;
 /// the system cannot say (the path is gone, the query failed).
 pub fn free_bytes(path: &Path) -> Option<u64> {
     imp::free_bytes(path)
+}
+
+/// Removes the files in `dir` last written at least `age` ago.
+pub fn remove_stale(dir: &Path, age: std::time::Duration) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    let now = std::time::SystemTime::now();
+    for entry in entries.flatten() {
+        let stale = entry
+            .metadata()
+            .and_then(|metadata| metadata.modified())
+            .ok()
+            .and_then(|modified| now.duration_since(modified).ok())
+            .is_some_and(|elapsed| elapsed >= age);
+        if stale {
+            let _ = std::fs::remove_file(entry.path());
+        }
+    }
 }
 
 /// The least free space across the volumes holding `paths`: the one that

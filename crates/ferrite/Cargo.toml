@@ -9,9 +9,11 @@ description = "Ferrite: native multi-provider agent cockpit (GPUI app)"
 # tests compile the app once and the binary has none of its own.
 [lib]
 doctest = false
-# CEF's Windows sandbox bootstrap loads the application as ferrite.dll.
-# Keep rlib for the ordinary executable and application tests.
-crate-type = ["rlib", "cdylib"]
+# CEF's Windows sandbox bootstrap loads the application as ferrite.dll. Only
+# the Windows CEF builds make it, with `cargo rustc --lib --crate-type
+# cdylib` after their `cargo build` (scripts/package-windows.ps1,
+# browser-window.yml, browser-feasibility.yml): as a crate type here, every
+# build on every platform linked the app a second time.
 
 [[bin]]
 name = "ferrite"
