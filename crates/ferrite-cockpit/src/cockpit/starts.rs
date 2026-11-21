@@ -972,7 +972,7 @@ impl Render for StartsView {
         let Some(inputs) = self
             .cockpit
             .upgrade()
-            .and_then(|cockpit| cockpit.read(cx).starts_inputs())
+            .and_then(|cockpit| cockpit.read(cx).starts_inputs(cx))
         else {
             return div().id("inspector");
         };
@@ -1009,9 +1009,9 @@ impl CockpitView {
 
     /// What the start's inspector draws: the shown Workflow's start, while
     /// it is what the inspector shows.
-    fn starts_inputs(&self) -> Option<StartsInputs> {
+    fn starts_inputs(&self, cx: &gpui::App) -> Option<StartsInputs> {
         let workflow = self.shown_workflow().filter(|_| self.start_shown())?;
-        let fields = &self.factory()?.workflows.fields;
+        let fields = self.factory()?.editor.read(cx);
         let automation = &workflow.automation;
         Some(StartsInputs {
             workflow: workflow.id.clone(),
@@ -1025,10 +1025,10 @@ impl CockpitView {
             error: automation.error.clone(),
             backlog: automation.backlog.len(),
             schedule_instructions: fields
-                .get(&Field::ScheduleInstructions(workflow.id.clone()))
+                .field(&Field::ScheduleInstructions(workflow.id.clone()))
                 .cloned(),
             extra_instructions: fields
-                .get(&Field::ExtraInstructions(workflow.id.clone()))
+                .field(&Field::ExtraInstructions(workflow.id.clone()))
                 .cloned(),
         })
     }
@@ -1057,7 +1057,7 @@ impl CockpitView {
     pub(crate) fn open_start(&mut self, cx: &mut Context<Self>) {
         if let Some(view) = self.factory_mut() {
             view.workflows.start_open = true;
-            view.workflows.focused = None;
+            view.editor.update(cx, |editor, _| editor.focused = None);
         }
         self.ensure_fields(cx);
         self.ask_github_lists(cx);

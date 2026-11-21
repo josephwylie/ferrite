@@ -336,8 +336,8 @@ impl CockpitView {
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(|view, _: &MouseDownEvent, _, cx| {
-                    if let Some(view) = view.factory_mut() {
-                        view.workflows.focused = None;
+                    if let Some(view) = view.factory() {
+                        view.editor.update(cx, |editor, _| editor.focused = None);
                     }
                     cx.notify();
                 }),
@@ -670,8 +670,7 @@ impl CockpitView {
             .into_any_element()
     }
 
-    /// One text field: its label over its Composer, ringed while it has
-    /// the keyboard.
+    /// One text field, drawn by the editor.
     pub(in crate::cockpit) fn text_input(
         &self,
         field: &Field,
@@ -679,18 +678,9 @@ impl CockpitView {
         window: &Window,
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
-        let composer = self.factory()?.workflows.fields.get(field)?.clone();
-        let focused = composer.read(cx).focus_handle(cx).is_focused(window);
-        let chosen = field.clone();
-        Some(field_input(
-            field,
-            label,
-            composer,
-            focused,
-            cx.listener(move |view, _: &MouseDownEvent, _, cx| {
-                view.focus_field(chosen.clone(), cx)
-            }),
-        ))
+        self.factory()?
+            .editor
+            .update(cx, |editor, cx| editor.input(field, label, window, cx))
     }
 }
 

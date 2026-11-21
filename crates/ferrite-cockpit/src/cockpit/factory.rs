@@ -139,6 +139,9 @@ pub(crate) struct FactoryView {
     /// The Board or the Workflows.
     pub(crate) surface: super::workflows::Surface,
     pub(crate) workflows: super::workflows::Workflows,
+    /// The Workflows editor: its fields and the one that holds the
+    /// keyboard.
+    pub(crate) editor: Entity<super::workflows::WorkflowsView>,
     /// The open Factory picker's rows.
     pub(crate) picks: Vec<(ferrite_ui::menu::Item, super::workflows::Pick)>,
     /// Answers, rework and redirects being written, and their sheets.
@@ -187,6 +190,7 @@ impl CockpitView {
                 let archive = self.new_archive(cx);
                 let direction = self.new_direction(cx);
                 let starts = self.new_starts(cx);
+                let editor = self.new_workflows(cx);
                 let view = FactoryView {
                     project,
                     open: None,
@@ -197,6 +201,7 @@ impl CockpitView {
                     revealed: Default::default(),
                     surface: super::workflows::Surface::Board,
                     workflows,
+                    editor,
                     picks: Vec::new(),
                     direction,
                     starts,

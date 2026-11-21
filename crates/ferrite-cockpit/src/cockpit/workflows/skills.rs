@@ -152,7 +152,8 @@ impl CockpitView {
     pub(crate) fn reveal_skills(&mut self, open: bool, cx: &mut Context<Self>) {
         if let Some(view) = self.factory_mut() {
             view.workflows.skills_open = open;
-            view.workflows.focused = open.then_some(Field::SkillSearch);
+            view.editor
+                .update(cx, |editor, _| editor.focused = open.then_some(Field::SkillSearch));
         }
         cx.notify();
     }

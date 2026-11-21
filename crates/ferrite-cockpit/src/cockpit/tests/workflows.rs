@@ -472,9 +472,9 @@ fn typed_text_survives_what_happens_around_it(cx: &mut TestAppContext) {
     });
     let instructions = Field::Instructions(workflow.clone(), step.clone());
     click(cx, "inspector-instructions");
-    view.read_with(cx, |view, _| {
+    view.read_with(cx, |view, cx| {
         assert_eq!(
-            view.factory().unwrap().workflows.focused,
+            view.factory().unwrap().editor.read(cx).focused,
             Some(instructions.clone())
         );
     });

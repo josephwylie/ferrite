@@ -8,7 +8,8 @@
 //! drawn. A text field is a Composer this window keeps for as long as the
 //! Factory view is open, so what was typed survives a picker, a revealed
 //! field, a notice, a scroll and a switch of surface; the draft keeps it
-//! across a save and a reopen.
+//! across a save and a reopen. The Composers and the field that holds the
+//! keyboard are the editor's own view's (`editor`).
 
 use std::collections::HashMap;
 
@@ -21,6 +22,8 @@ use ferrite_core::protocol::{Done, WorkflowAction};
 use ferrite_pane::composer::{Composer, Edited, Role};
 use gpui::component::Disableable as _;
 
+mod editor;
+pub(crate) use editor::WorkflowsView;
 mod inspector;
 mod outline;
 pub(crate) use outline::field_input;
@@ -133,8 +136,6 @@ pub(crate) struct SkillsFound {
 pub(crate) struct Workflows {
     pub(crate) selected: Option<WorkflowId>,
     pub(crate) step: Option<StepId>,
-    pub(crate) fields: HashMap<Field, Entity<Composer>>,
-    pub(crate) focused: Option<Field>,
     pub(crate) outline_focus: FocusHandle,
     /// The outline's scroll: its first child is its head, then one per
     /// Step's row (`outline`).
@@ -153,8 +154,6 @@ impl Workflows {
         Self {
             selected: None,
             step: None,
-            fields: HashMap::new(),
-            focused: None,
             outline_focus: cx.focus_handle(),
             outline_scroll: gpui::ScrollHandle::new(),
             skills_open: false,
@@ -228,7 +227,7 @@ impl CockpitView {
             return;
         };
         view.surface = surface;
-        view.workflows.focused = None;
+        view.editor.update(cx, |editor, _| editor.focused = None);
         self.ensure_fields(cx);
         if surface == Surface::Coordinator {
             self.ensure_coordinator_field(cx);
@@ -305,8 +304,8 @@ impl CockpitView {
             view.surface = Surface::Workflows;
             view.workflows.selected = Some(workflow);
             view.workflows.step = None;
-            view.workflows.focused = None;
             view.workflows.start_open = false;
+            view.editor.update(cx, |editor, _| editor.focused = None);
         }
         self.ensure_fields(cx);
         cx.notify();
@@ -315,9 +314,9 @@ impl CockpitView {
     pub(crate) fn select_step(&mut self, step: StepId, cx: &mut Context<Self>) {
         if let Some(view) = self.factory_mut() {
             view.workflows.step = Some(step);
-            view.workflows.focused = None;
             view.workflows.approval = false;
             view.workflows.start_open = false;
+            view.editor.update(cx, |editor, _| editor.focused = None);
         }
         self.ensure_fields(cx);
         cx.notify();
@@ -327,7 +326,7 @@ impl CockpitView {
     pub(crate) fn select_approval(&mut self, cx: &mut Context<Self>) {
         if let Some(view) = self.factory_mut() {
             view.workflows.approval = true;
-            view.workflows.focused = None;
+            view.editor.update(cx, |editor, _| editor.focused = None);
         }
         self.ensure_fields(cx);
         cx.notify();
@@ -472,29 +471,11 @@ impl CockpitView {
             }
         }
         wanted.extend(self.start_fields());
-        for (field, text) in wanted {
-            let made = self
-                .factory()
-                .is_some_and(|view| view.workflows.fields.contains_key(&field));
-            if made {
-                continue;
+        view.editor.clone().update(cx, |editor, cx| {
+            for (field, text) in wanted {
+                editor.ensure(field, &text, cx);
             }
-            let composer = cx.new(Composer::new);
-            composer.update(cx, |composer, cx| {
-                composer.set_role(Role::Field(None), cx);
-                if !text.is_empty() {
-                    composer.insert(&text, cx);
-                }
-            });
-            let key = field.clone();
-            cx.subscribe(&composer, move |view, _, _: &Edited, cx| {
-                view.field_edited(&key, cx)
-            })
-            .detach();
-            if let Some(view) = self.factory_mut() {
-                view.workflows.fields.insert(field, composer);
-            }
-        }
+        });
         if let Some(provider) = self.shown_step().map(|step| step.agent.provider) {
             self.discover_skills(provider);
         }
@@ -502,11 +483,7 @@ impl CockpitView {
 
     /// What was typed in a field goes to the draft at once.
     fn field_edited(&mut self, field: &Field, cx: &mut Context<Self>) {
-        let Some(text) = self
-            .factory()
-            .and_then(|view| view.workflows.fields.get(field))
-            .map(|composer| composer.read(cx).text().to_string())
-        else {
+        let Some(text) = self.field_text(field, cx) else {
             return;
         };
         let action = match field.clone() {
@@ -551,8 +528,8 @@ impl CockpitView {
 
     /// Give a text field the keyboard.
     pub(crate) fn focus_field(&mut self, field: Field, cx: &mut Context<Self>) {
-        if let Some(view) = self.factory_mut() {
-            view.workflows.focused = Some(field);
+        if let Some(view) = self.factory() {
+            view.editor.update(cx, |editor, _| editor.focused = Some(field));
         }
         cx.notify();
     }
@@ -560,9 +537,9 @@ impl CockpitView {
     /// The text a field holds now.
     pub(crate) fn field_text(&self, field: &Field, cx: &gpui::App) -> Option<String> {
         self.factory()?
-            .workflows
-            .fields
-            .get(field)
+            .editor
+            .read(cx)
+            .field(field)
             .map(|composer| composer.read(cx).text().to_string())
     }
 
@@ -573,14 +550,11 @@ impl CockpitView {
         if view.surface != Surface::Workflows {
             return None;
         }
-        let workflows = &view.workflows;
         Some(
-            workflows
-                .focused
-                .as_ref()
-                .and_then(|field| workflows.fields.get(field))
-                .map(|composer| composer.read(cx).focus_handle(cx))
-                .unwrap_or_else(|| workflows.outline_focus.clone()),
+            view.editor
+                .read(cx)
+                .focus(cx)
+                .unwrap_or_else(|| view.workflows.outline_focus.clone()),
         )
     }
 }
