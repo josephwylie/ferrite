@@ -333,9 +333,6 @@ pub enum TranscriptEvent {
     Fork {
         after: BlockId,
     },
-    /// A selection's `Start a side chat`: a new Thread from this point,
-    /// the passage quoted in its Composer.
-    SideChat(String),
     /// A background call's `View live output ▸`: the Background tasks
     /// pane.
     OpenBackground,

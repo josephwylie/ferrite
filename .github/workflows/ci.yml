@@ -90,6 +90,13 @@ jobs:
           # A test that passes on a retry is listed as flaky and does not
           # fail the job; one that fails three times does.
           cargo nextest run "${args[@]}" --locked --no-fail-fast --retries 2 --status-level all --final-status-level flaky
+      # A test program's temporary files live in /tmp/ferrite-tests/<pid>,
+      # removed as it exits (crates/ferrite-core/src/test_temp.rs). One here
+      # was written outside it: a test program without that file.
+      - name: Tests leave nothing in the temporary folder
+        run: |
+          left=$(ls -d "$TMPDIR"/ferrite-* /tmp/ferrite-* 2>/dev/null | grep -vx /tmp/ferrite-tests || true)
+          if [ -n "$left" ]; then echo "$left"; exit 1; fi
       # Its own run: gpui-pre-macos's tests need its test-support feature,
       # which must not reach the app's test builds above.
       - name: Test vendored framework crates

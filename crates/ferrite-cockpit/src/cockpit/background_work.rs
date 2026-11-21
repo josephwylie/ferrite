@@ -740,14 +740,14 @@ impl CockpitView {
         });
     }
 
-    /// `Open subagent` in the dialog, or a row of the Background Surface: the agent the
-    /// call started, in the Panel.
+    /// `Open subagent` in the dialog, or a row of the Background Surface: the
+    /// agent the call started, its full chat in the Pane.
     pub(super) fn open_background_agent(&mut self, thread: ThreadId, call: &str, cx: &mut Context<Self>) {
         if self.background_dialog(cx).is_some() {
             self.hide_sheet(cx);
         }
         if let Some(subject) = self.agent_of_call(thread, call) {
-            self.open_agent_drill(thread, subject, cx);
+            self.open_subagent(thread, subject, cx);
         }
         cx.notify();
     }

@@ -4,6 +4,9 @@
 //! is swappable at exactly this seam). Modules follow the spec: providers,
 //! transcript, store, cockpit — added as their tickets land.
 
+#[cfg(test)]
+mod test_temp;
+
 pub mod activity;
 pub mod api;
 pub mod attachment;

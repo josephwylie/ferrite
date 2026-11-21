@@ -33,6 +33,142 @@ pub(crate) fn live_words(tool: &ToolBlock) -> String {
     }
 }
 
+/// What the live row's thought line says of the newest thought (T3's
+/// `liveThoughtLine`): a bold heading alone on its first line, else its
+/// first sentence, its Markdown flattened to words.
+pub(crate) fn live_thought_line(markdown: &str) -> String {
+    if let Some(heading) = leading_heading(markdown) {
+        return flattened(heading);
+    }
+    let text = flattened(markdown);
+    match sentence_end(&text) {
+        Some(end) => text[..end].to_owned(),
+        None => text,
+    }
+}
+
+/// `**Heading**` alone on the text's first line.
+fn leading_heading(markdown: &str) -> Option<&str> {
+    let rest = markdown.trim_start().strip_prefix("**")?;
+    let (heading, after) = rest.split_once("**")?;
+    let after = after.trim_start_matches([' ', '\t']);
+    let after = after.strip_prefix('\r').unwrap_or(after);
+    let alone = after.is_empty() || after.starts_with('\n');
+    (alone && !heading.is_empty() && !heading.contains(['*', '\r', '\n'])).then_some(heading)
+}
+
+/// Markdown as plain words: links by their text, no list or heading marks,
+/// no code, bold, strike or emphasis marks, whitespace collapsed.
+fn flattened(markdown: &str) -> String {
+    let lines: Vec<_> = markdown.lines().map(without_line_mark).collect();
+    let text = unlinked(&lines.join("\n"))
+        .replace('`', "")
+        .replace("**", "")
+        .replace("~~", "");
+    unemphasized(&text)
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// A line without the heading, bullet or number that opens it.
+fn without_line_mark(line: &str) -> &str {
+    let text = line.trim_start_matches([' ', '\t']);
+    let marked = if let Some(rest) = text.strip_prefix(['-', '*', '+']) {
+        Some(rest)
+    } else {
+        let hashes = text.bytes().take_while(|&b| b == b'#').count();
+        let digits = text.bytes().take_while(u8::is_ascii_digit).count();
+        if (1..=6).contains(&hashes) {
+            Some(&text[hashes..])
+        } else {
+            (digits > 0).then(|| text[digits..].strip_prefix('.')).flatten()
+        }
+    };
+    match marked {
+        Some(rest) if rest.starts_with([' ', '\t']) => rest.trim_start_matches([' ', '\t']),
+        _ => line,
+    }
+}
+
+/// `[text](target)` and `![text](target)` as their text.
+fn unlinked(text: &str) -> String {
+    let mut out = String::new();
+    let mut rest = text;
+    while let Some(open) = rest.find('[') {
+        let link = rest[open + 1..].split_once("](").and_then(|(label, after)| {
+            let close = after.find(')')?;
+            (!label.contains(']')).then_some((label, &after[close + 1..]))
+        });
+        let Some((label, after)) = link else {
+            out.push_str(&rest[..=open]);
+            rest = &rest[open + 1..];
+            continue;
+        };
+        out.push_str(rest[..open].strip_suffix('!').unwrap_or(&rest[..open]));
+        out.push_str(label);
+        rest = after;
+    }
+    out.push_str(rest);
+    out
+}
+
+/// `*word*` and `_word_` without their marks, where they mark emphasis:
+/// not inside a word, and not across a line.
+fn unemphasized(text: &str) -> String {
+    let chars: Vec<char> = text.chars().collect();
+    let word = |c: Option<&char>| c.is_some_and(|c| c.is_alphanumeric() || *c == '_' || *c == '*');
+    let mut dropped = vec![false; chars.len()];
+    let mut at = 0;
+    while at < chars.len() {
+        let opens = matches!(chars[at], '*' | '_') && !(at > 0 && word(chars.get(at - 1)));
+        let close = opens
+            .then(|| {
+                let inner = chars[at + 1..].iter().position(|c| matches!(c, '*' | '_' | '\n'))?;
+                let close = at + 1 + inner;
+                (inner > 0 && chars[close] != '\n' && !word(chars.get(close + 1))).then_some(close)
+            })
+            .flatten();
+        match close {
+            Some(close) => {
+                dropped[at] = true;
+                dropped[close] = true;
+                at = close + 1;
+            }
+            None => at += 1,
+        }
+    }
+    chars
+        .iter()
+        .zip(dropped)
+        .filter_map(|(c, dropped)| (!dropped).then_some(*c))
+        .collect()
+}
+
+/// Where the first sentence ends: after `.`, `?` or `!` (and a closing
+/// quote or bracket) that a space follows, or after a full-width mark.
+fn sentence_end(text: &str) -> Option<usize> {
+    let mut chars = text.char_indices().peekable();
+    while let Some((at, c)) = chars.next() {
+        let (closers, needs_space): (&[char], bool) = match c {
+            '.' | '?' | '!' => (&['"', '\'', '”', '’', ')'], true),
+            '。' | '！' | '？' => (&['"', '\'', '”', '’', '）', '」', '』'], false),
+            _ => continue,
+        };
+        let mut end = at + c.len_utf8();
+        if let Some(&(next, closer)) = chars.peek() {
+            if closers.contains(&closer) {
+                end = next + closer.len_utf8();
+            }
+        }
+        let spaced = text[end..].starts_with(char::is_whitespace);
+        if !needs_space || spaced {
+            return Some(end);
+        }
+    }
+    None
+}
+
 /// A command line's program (T3's `commandProgramName`): its first word
 /// past any `NAME=value` settings, a path's last part (`/usr/bin/sed` →
 /// `sed`).
@@ -990,6 +1126,44 @@ mod tests {
                 command(t, "a");
             }),
             "Ran 1 command"
+        );
+    }
+
+    /// T3's `liveThoughtLine`: a bold heading alone on the thought's first
+    /// line, or else the first sentence, its Markdown flattened.
+    #[test]
+    fn the_live_thought_line_is_a_leading_heading_or_the_first_sentence() {
+        // A summarized Claude thought, as Opus 5.5 streamed it.
+        assert_eq!(
+            live_thought_line(
+                "I'm comparing 3/22 and 2/15 by cross-multiplying, which gives 45 against 44, so \
+                 3/22 is slightly larger. Over a common denominator of 330 the gap is 1/330. \
+                 Next I'll check it with decimals.\n\n"
+            ),
+            "I'm comparing 3/22 and 2/15 by cross-multiplying, which gives 45 against 44, so \
+             3/22 is slightly larger."
+        );
+        assert_eq!(
+            live_thought_line("**Checking fold call sites**\n\nI'll read rows.rs first."),
+            "Checking fold call sites"
+        );
+        assert_eq!(
+            live_thought_line("The `rows.rs` call is **not** the fault. It is the helper."),
+            "The rows.rs call is not the fault."
+        );
+        assert_eq!(
+            live_thought_line("- Read [the ADR](docs/adr/0038.md) and *then*\n  the doc"),
+            "Read the ADR and then the doc"
+        );
+        assert_eq!(
+            live_thought_line("3.5 is larger than 3"),
+            "3.5 is larger than 3"
+        );
+        assert_eq!(live_thought_line("先读文件。然后再改。"), "先读文件。");
+        let long = format!("{} end. Next.", "word ".repeat(60));
+        assert_eq!(
+            live_thought_line(&long),
+            format!("{} end.", "word ".repeat(60).trim_end())
         );
     }
 }

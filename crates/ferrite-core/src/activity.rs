@@ -2286,6 +2286,53 @@ impl<'a> ActivityView<'a> {
             .filter(|key| self.activity.agents[*key].working())
             .count()
     }
+    /// Whether work runs behind Main: a Subagent, or a background task (a
+    /// shell, a monitor) of Main's transcript. The Notice waits for it,
+    /// and the nav counts it as working.
+    pub fn background_work(self) -> bool {
+        self.working_descendants() > 0
+            || self.main().transcript().progress().working_background() > 0
+    }
+    /// What runs right now, as the inputs that say so: Main's turn, its
+    /// background tasks (shells, monitors) and each live Subagent's status.
+    /// A replay never reads anything as running and a `Connect` retires
+    /// what it did read, so a watcher fed the log is told these after.
+    pub fn now(self, at: Instant) -> Vec<ActivityInput> {
+        use transcript::Status;
+        let transcript = self.main().transcript();
+        let run = match transcript.status() {
+            Status::Streaming => Some(crate::RunState::Running),
+            Status::Blocked => Some(crate::RunState::RequiresAction),
+            Status::Idle | Status::Closed => None,
+        };
+        let tasks = transcript.progress().background();
+        let main = run
+            .map(|state| SessionEvent::RunState { state })
+            .into_iter()
+            .chain((!tasks.is_empty()).then(|| SessionEvent::Progress {
+                event: crate::progress::ProgressEvent::BackgroundSnapshot {
+                    tasks: tasks.to_vec(),
+                },
+            }))
+            .map(|event| ActivityInput::Main {
+                input: Input::Event(event),
+                at,
+            });
+        let agents = self
+            .activity
+            .agents
+            .iter()
+            .filter(|(_, agent)| agent.state.fresh)
+            .map(|(key, agent)| ActivityInput::Observe {
+                generation: self.activity.generation,
+                event: ActivityEvent::Status {
+                    key: key.clone(),
+                    state: agent.state.status,
+                },
+                at,
+            });
+        main.chain(agents).collect()
+    }
     /// Is an operator prompt out and unanswered — from the live prompt
     /// until the root turn end that answers it? True before the provider
     /// has streamed a byte, which `SubjectView::busy` is not.

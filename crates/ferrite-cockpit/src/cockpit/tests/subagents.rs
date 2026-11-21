@@ -45,8 +45,7 @@ fn emit(fake: &Fake, event: ActivityEvent) {
 }
 /// Give Pane 0 the subagent `name`'s own transcript (`select_subject`, as a
 /// notice's jump does), by the call that started it: the fixture's keys are
-/// made from the agents' names. A press on its `Ran agent` row opens it in
-/// the right pane instead (`agent_pane`).
+/// made from the agents' names.
 pub(super) fn click_child(
     view: &Entity<CockpitView>,
     cx: &mut gpui::VisualTestContext,
@@ -106,7 +105,6 @@ fn child_tabs_switch_transcripts_preserve_main_draft_and_survive_reorder(cx: &mu
             .unwrap();
         assert!(plain_text(subject.transcript().blocks()).contains("Atlas transcript"));
     });
-    assert!(cx.debug_bounds("subagent-head-1").is_some());
     assert!(
         cx.debug_bounds("composer-block").is_none(),
         "a subagent takes no prompts"
@@ -133,17 +131,11 @@ fn child_tabs_switch_transcripts_preserve_main_draft_and_survive_reorder(cx: &mu
     // The observational view cannot submit or consume the Main draft.
     cx.simulate_keystrokes("enter");
     assert!(fake.sent.borrow().is_empty());
-    let main = cx.debug_bounds("subagent-main-1").unwrap().center();
-    cx.simulate_click(main, gpui::Modifiers::none());
-    cx.run_until_parked();
+    click(cx, "history-back");
     view.read_with(cx, |view, cx| {
         assert!(view.panes[0].is_main());
         assert_eq!(view.panes[0].composer.read(cx).text(), "keep my draft");
     });
-    assert!(
-        cx.debug_bounds("subagent-head-1").is_none(),
-        "Main has no head"
-    );
 }
 
 #[gpui::test]
@@ -713,7 +705,6 @@ fn an_agent_row_runs_with_its_agent_and_opens_it(cx: &mut TestAppContext) {
     view.read_with(cx, |view, _| {
         assert_eq!(view.panes[0].selected, Subject::Subagent(key("Atlas")));
     });
-    assert!(cx.debug_bounds("subagent-head-1").is_some());
     assert!(cx.debug_bounds("panel-tab-Agent").is_none(), "no Panel tab opens for it");
     emit(
         &fake,
@@ -723,9 +714,7 @@ fn an_agent_row_runs_with_its_agent_and_opens_it(cx: &mut TestAppContext) {
         },
     );
     tick(cx);
-    let back = cx.debug_bounds("subagent-back-1").unwrap().center();
-    cx.simulate_click(back, gpui::Modifiers::none());
-    cx.run_until_parked();
+    click(cx, "history-back");
     assert!(view.read_with(cx, |view, _| view.panes[0].is_main()));
     assert!(cx.debug_bounds("agent-running").is_none(), "settled");
     assert!(cx.debug_bounds("agent-elapsed-live").is_none(), "its time holds");
@@ -890,68 +879,6 @@ fn the_keyboard_opens_and_stops_an_agents_row(cx: &mut TestAppContext) {
     );
 }
 
-/// An agent held open as the side inspector is an `Agent` tab of the Panel at its
-/// floor, the thread reflowing beside it; the Panel's maximize covers the
-/// content area; the tab's × closes it.
-#[gpui::test]
-fn an_opened_agent_is_a_panel_tab(cx: &mut TestAppContext) {
-    let (core, fake) = cockpit("subagents-drill", 1);
-    bind_production_keys(cx);
-    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
-    cx.simulate_resize(gpui::size(px(1600.), px(800.)));
-    agent_call(&fake, "Atlas");
-    child(&fake, "Atlas", AgentStatus::Idle);
-    tick(cx);
-    let before = cx.debug_bounds("board").expect("the board").size.width;
-    view.update(cx, |view, cx| {
-        let thread = view.panes[0].thread().unwrap();
-        view.open_agent_drill(thread, Subject::Subagent(key("Atlas")), cx)
-    });
-    tick(cx);
-    tick(cx);
-
-    let pane = cx.debug_bounds("panel").expect("the pane docks");
-    let floor = ferrite_ui::theme::SIDE_CHAT_W + ferrite_ui::theme::CAPTION_ALLOWANCE;
-    assert!(
-        (pane.size.width - px(floor)).abs() < px(1.),
-        "its token width: {pane:?}"
-    );
-    assert!((pane.right() - px(1600.)).abs() < px(1.), "at the right");
-    let board = cx.debug_bounds("board").unwrap();
-    assert!(
-        board.size.width < before && board.right() <= pane.left() + px(1.),
-        "the thread reflows beside it"
-    );
-    let tab = cx.debug_bounds("panel-tab-Agent").expect("its tab");
-    assert!(pane.contains(&tab.center()));
-    assert!(
-        cx.debug_bounds("panel-toggle").is_some(),
-        "the rail's door stands against the pane"
-    );
-
-    // The Panel's one maximize covers the content area, and restores.
-    let maximize = cx.debug_bounds("panel-maximize").unwrap();
-    cx.simulate_click(maximize.center(), gpui::Modifiers::none());
-    tick(cx);
-    let wide = cx.debug_bounds("panel").unwrap();
-    assert!(wide.size.width > pane.size.width * 2., "maximized: {wide:?}");
-    let maximize = cx.debug_bounds("panel-restore").unwrap();
-    cx.simulate_click(maximize.center(), gpui::Modifiers::none());
-    tick(cx);
-    assert!(
-        (cx.debug_bounds("panel").unwrap().size.width - pane.size.width).abs() < px(1.),
-        "restored"
-    );
-
-    // Its tab's × closes it.
-    let close = cx.debug_bounds("panel-tab-Agent-close").unwrap();
-    cx.simulate_click(close.center(), gpui::Modifiers::none());
-    tick(cx);
-    let thread = view.read_with(cx, |view, _| view.panes[0].thread().unwrap());
-    assert!(view.read_with(cx, |view, cx| !view.agent_drills.read(cx).is_open(thread)));
-    assert!(cx.debug_bounds("agent-drill").is_none());
-}
-
 /// A child of `parent`, whose own transcript holds the `Agent` call that
 /// started it.
 fn grandchild(fake: &Fake, parent: &str, name: &str, status: AgentStatus) {
@@ -992,8 +919,9 @@ fn selected(view: &Entity<CockpitView>, cx: &mut gpui::VisualTestContext) -> Sub
 }
 
 /// A press on an agent's row takes the whole Pane for that agent, at the
-/// Pane's width and with no Panel opened; its head's back button returns
-/// to Main with the draft, the open tool and the scroll where they were.
+/// Pane's width, with no Panel opened and no strip over its chat; the title
+/// bar's back arrow returns to Main with the draft, the open tool and the
+/// scroll where they were.
 #[gpui::test]
 fn an_agent_row_takes_the_pane_and_back_restores_the_parent(cx: &mut TestAppContext) {
     let (core, fake) = cockpit("agent-route-parent-state", 1);
@@ -1049,18 +977,21 @@ fn an_agent_row_takes_the_pane_and_back_restores_the_parent(cx: &mut TestAppCont
     cx.run_until_parked();
     assert_eq!(selected(&view, cx), Subject::Subagent(key("Atlas")));
     assert!(cx.debug_bounds("panel-tab-Agent").is_none(), "no Panel tab opens for it");
-    let head = bounds(cx, "subagent-head-1".into());
+    let width = view.read_with(cx, |view, cx| {
+        view.panes[0].transcript().unwrap().read(cx).scroll().bounds().size.width
+    });
     assert!(
-        head.size.width > main_width * 0.6,
-        "the child reads at the Pane's width: {head:?} in {main_width:?}"
+        width > main_width * 0.6,
+        "the child reads at the Pane's width: {width:?} in {main_width:?}"
     );
+    assert!(cx.debug_bounds("pane-subagent-1").is_none(), "no strip over its chat");
     assert!(cx.debug_bounds("composer-block").is_none(), "a child takes no prompts");
     assert_eq!(
         view.read_with(cx, |view, cx| view.panes[0].composer.read(cx).text().to_owned()),
         "keep my draft"
     );
 
-    click(cx, "subagent-back-1");
+    click(cx, "history-back");
     assert!(selected(&view, cx) == Subject::Main);
     view.read_with(cx, |view, cx| {
         let transcript = view.panes[0].transcript().unwrap();
@@ -1071,11 +1002,10 @@ fn an_agent_row_takes_the_pane_and_back_restores_the_parent(cx: &mut TestAppCont
     });
 }
 
-/// A nested child opens from its parent's row; its head names the whole
-/// ancestry, the back button goes to the immediate parent, and the root
-/// crumb goes to Main.
+/// A nested child opens from its parent's row; the back arrow goes to the
+/// parent it was opened from, and once more to Main.
 #[gpui::test]
-fn a_nested_agent_goes_back_to_its_parent_then_to_the_root(cx: &mut TestAppContext) {
+fn a_nested_agent_goes_back_to_its_parent_then_to_main(cx: &mut TestAppContext) {
     let (core, fake) = cockpit("agent-route-nested", 1);
     bind_production_keys(cx);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
@@ -1087,21 +1017,17 @@ fn a_nested_agent_goes_back_to_its_parent_then_to_the_root(cx: &mut TestAppConte
 
     click(cx, "agent-open-Atlas");
     assert_eq!(selected(&view, cx), Subject::Subagent(key("Atlas")));
-    assert!(cx.debug_bounds("subagent-ancestor-1-1").is_none(), "Main is its only ancestor");
     click(cx, "agent-open-Birch");
     assert_eq!(selected(&view, cx), Subject::Subagent(key("Birch")));
-    assert!(cx.debug_bounds("subagent-main-1").is_some(), "the root crumb");
-    assert!(cx.debug_bounds("subagent-ancestor-1-1").is_some(), "its parent's crumb");
 
-    click(cx, "subagent-back-1");
+    click(cx, "history-back");
     assert_eq!(selected(&view, cx), Subject::Subagent(key("Atlas")));
-    click(cx, "agent-open-Birch");
-    click(cx, "subagent-main-1");
-    assert!(selected(&view, cx) == Subject::Main, "the root crumb goes to Main");
+    click(cx, "history-back");
+    assert!(selected(&view, cx) == Subject::Main);
 }
 
-/// Escape on a nested child, with nothing to stop, goes where the back
-/// button does: its immediate parent, and from a top-level child, Main.
+/// Escape on a nested child, with nothing to stop, goes to its immediate
+/// parent, and from a top-level child, Main.
 #[gpui::test]
 fn escape_on_a_nested_agent_goes_to_its_parent(cx: &mut TestAppContext) {
     let (core, fake) = cockpit("agent-route-escape-nested", 1);
@@ -1125,7 +1051,7 @@ fn escape_on_a_nested_agent_goes_to_its_parent(cx: &mut TestAppContext) {
 }
 
 /// A fresh Session forgets its agents. The Pane that showed one goes back
-/// to Main instead of staying on a child with no head to leave by.
+/// to Main instead of staying on a child that is gone.
 #[gpui::test]
 fn a_pane_on_an_agent_a_fresh_session_forgot_returns_to_main(cx: &mut TestAppContext) {
     let (core, fake) = cockpit("agent-route-forgotten", 1);
@@ -1144,14 +1070,12 @@ fn a_pane_on_an_agent_a_fresh_session_forgot_returns_to_main(cx: &mut TestAppCon
         .unwrap();
     tick(cx);
     assert_eq!(selected(&view, cx), Subject::Main);
-    assert!(cx.debug_bounds("subagent-back-1").is_none(), "the child's head is gone");
 }
 
-/// A child whose history core released opens from its row with the
-/// loading state said aloud, and gets its saved transcript without the
-/// provider being asked for anything.
+/// A child whose history core released opens from its row and gets its
+/// saved transcript without the provider being asked for anything.
 #[gpui::test]
-fn an_evicted_agent_opens_from_its_row_and_says_it_is_loading(cx: &mut TestAppContext) {
+fn an_evicted_agent_opens_from_its_row_and_loads_its_history(cx: &mut TestAppContext) {
     let (core, fake) = cockpit("agent-route-evicted", 1);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     cx.simulate_resize(gpui::size(px(1280.), px(800.)));
@@ -1183,10 +1107,6 @@ fn an_evicted_agent_opens_from_its_row_and_says_it_is_loading(cx: &mut TestAppCo
 
     click(cx, "agent-open-Atlas");
     assert_eq!(selected(&view, cx), atlas);
-    assert!(
-        cx.debug_bounds("subagent-coverage-1").is_some(),
-        "an unretained child says what it shows"
-    );
     for _ in 0..8 {
         tick(cx);
     }
@@ -1241,38 +1161,6 @@ fn a_waiting_agent_opened_from_its_row_answers_its_own_request(cx: &mut TestAppC
     assert_eq!(fake.answered.borrow()[0].0, "Cedar");
 }
 
-/// `Stop` in an opened child's head stops that child alone; the inspector
-/// is its own, explicit action and holds the same Subject in the Panel.
-#[gpui::test]
-fn an_opened_agents_head_stops_it_and_offers_the_side_panel(cx: &mut TestAppContext) {
-    let (core, fake) = cockpit("agent-route-head", 1);
-    bind_production_keys(cx);
-    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
-    cx.simulate_resize(gpui::size(px(1600.), px(800.)));
-    for name in ["Atlas", "Cedar"] {
-        agent_call(&fake, name);
-        child(&fake, name, AgentStatus::Working);
-    }
-    tick(cx);
-
-    click(cx, "agent-card-Atlas");
-    click(cx, "agent-open-Cedar");
-    click(cx, "subagent-stop-1");
-    assert_eq!(*fake.stopped.borrow(), [key("Cedar")]);
-    assert_eq!(*fake.interrupts.borrow(), 0, "Main's turn runs on");
-
-    click(cx, "subagent-panel-1");
-    let thread = view.read_with(cx, |view, _| view.panes[0].thread().unwrap());
-    view.read_with(cx, |view, cx| {
-        assert_eq!(
-            view.agent_drills.read(cx).subject(thread),
-            Some(&Subject::Subagent(key("Cedar")))
-        );
-        assert_eq!(view.panes[0].selected, Subject::Subagent(key("Cedar")));
-    });
-    assert!(cx.debug_bounds("panel-tab-Agent").is_some(), "the inspector's tab");
-}
-
 /// The generic thread card opens Main even while a child awaits a
 /// request; only the request's own action follows it to the child.
 #[gpui::test]
@@ -1300,125 +1188,3 @@ fn the_thread_card_opens_main_not_the_pending_child(cx: &mut TestAppContext) {
     assert!(selected(&view, cx) == Subject::Main);
 }
 
-/// An agent held beside Main asks in its own transcript: the card is drawn
-/// there, and its Allow answers that agent's request.
-#[gpui::test]
-fn the_side_panel_inspector_shows_and_answers_its_agents_decision(cx: &mut TestAppContext) {
-    let (core, fake) = cockpit("subagents-inspector-decision", 1);
-    bind_production_keys(cx);
-    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
-    cx.simulate_resize(gpui::size(px(1600.), px(800.)));
-    child(&fake, "Atlas", AgentStatus::Waiting);
-    let SessionEvent::DecisionRequested { decision } = decision("Atlas") else {
-        unreachable!()
-    };
-    emit(
-        &fake,
-        ActivityEvent::Decision {
-            subject: Some(Subject::Subagent(key("Atlas"))),
-            decision,
-        },
-    );
-    tick(cx);
-    let thread = view.read_with(cx, |view, _| view.panes[0].thread().unwrap());
-    let serial = view.read_with(cx, |view, _| {
-        view.cockpit.thread(thread).unwrap().pending_decisions()[0].handle.serial
-    });
-    let allow = format!("request-allow-1-{serial}");
-    assert!(debug_bounds(cx, allow.clone()).is_none(), "Main does not ask it");
-    view.update(cx, |view, cx| {
-        view.open_agent_drill(thread, Subject::Subagent(key("Atlas")), cx)
-    });
-    tick(cx);
-    assert!(debug_bounds(cx, "agent-drill".into()).is_some());
-    assert!(debug_bounds(cx, allow.clone()).is_some(), "the inspector shows the card");
-    let at = bounds(cx, allow).center();
-    cx.simulate_click(at, gpui::Modifiers::none());
-    cx.run_until_parked();
-    assert_eq!(fake.answered.borrow().len(), 1);
-    assert_eq!(fake.answered.borrow()[0].0, "Atlas");
-}
-
-/// An agent held behind another tab is current again as its tab comes
-/// back: a request it made while hidden is drawn at once.
-#[gpui::test]
-fn a_hidden_inspector_shows_what_its_agent_did_meanwhile(cx: &mut TestAppContext) {
-    let (core, fake) = cockpit("subagents-inspector-hidden", 1);
-    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
-    cx.simulate_resize(gpui::size(px(1600.), px(800.)));
-    child(&fake, "Atlas", AgentStatus::Working);
-    tick(cx);
-    let thread = view.read_with(cx, |view, _| view.panes[0].thread().unwrap());
-    let open = |view: &Entity<CockpitView>, cx: &mut gpui::VisualTestContext| {
-        view.update(cx, |view, cx| {
-            view.open_agent_drill(thread, Subject::Subagent(key("Atlas")), cx)
-        });
-        tick(cx);
-    };
-    open(&view, cx);
-    assert!(debug_bounds(cx, "agent-drill".into()).is_some());
-    view.update(cx, |view, cx| {
-        view.upsert_surface(thread, crate::cockpit::surfaces::SurfaceId::Overview, cx)
-    });
-    tick(cx);
-    assert!(debug_bounds(cx, "agent-drill".into()).is_none(), "the Overview shows");
-
-    let SessionEvent::DecisionRequested { decision } = decision("Atlas") else {
-        unreachable!()
-    };
-    emit(
-        &fake,
-        ActivityEvent::Decision {
-            subject: Some(Subject::Subagent(key("Atlas"))),
-            decision,
-        },
-    );
-    tick(cx);
-    let serial = view.read_with(cx, |view, _| {
-        view.cockpit.thread(thread).unwrap().pending_decisions()[0].handle.serial
-    });
-    open(&view, cx);
-    assert!(debug_bounds(cx, "agent-drill".into()).is_some());
-    assert!(
-        debug_bounds(cx, format!("request-allow-1-{serial}")).is_some(),
-        "the agent's request is drawn as its tab comes back"
-    );
-}
-
-/// With the agent shown in its Pane too, the Pane alone draws its card:
-/// the inspector beside it draws none.
-#[gpui::test]
-fn an_agent_shown_in_its_pane_asks_there_not_in_the_inspector(cx: &mut TestAppContext) {
-    let (core, fake) = cockpit("subagents-inspector-decision-once", 1);
-    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
-    cx.simulate_resize(gpui::size(px(1600.), px(800.)));
-    child(&fake, "Atlas", AgentStatus::Waiting);
-    let SessionEvent::DecisionRequested { decision } = decision("Atlas") else {
-        unreachable!()
-    };
-    emit(
-        &fake,
-        ActivityEvent::Decision {
-            subject: Some(Subject::Subagent(key("Atlas"))),
-            decision,
-        },
-    );
-    tick(cx);
-    let thread = view.read_with(cx, |view, _| view.panes[0].thread().unwrap());
-    let serial = view.read_with(cx, |view, _| {
-        view.cockpit.thread(thread).unwrap().pending_decisions()[0].handle.serial
-    });
-    view.update(cx, |view, cx| {
-        view.open_agent_drill(thread, Subject::Subagent(key("Atlas")), cx)
-    });
-    tick(cx);
-    cx.update(|window, app| {
-        view.update(app, |view, cx| {
-            view.select_subject(thread, Subject::Subagent(key("Atlas")), window, cx)
-        })
-    });
-    tick(cx);
-    let drill = bounds(cx, "agent-drill".into());
-    let allow = bounds(cx, format!("request-allow-1-{serial}"));
-    assert!(!drill.intersects(&allow), "the Pane draws the card, the inspector does not");
-}

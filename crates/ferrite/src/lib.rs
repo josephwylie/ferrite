@@ -2,6 +2,10 @@
 // (`main.rs`) dispatches the headless commands and calls `launch`; the
 // Cockpit the window shows is `ferrite_cockpit`'s, in the frame
 // `ferrite_frame` draws (ADR 0035).
+#[cfg(test)]
+#[path = "../../ferrite-core/src/test_temp.rs"]
+mod test_temp;
+
 mod entry;
 mod github_images;
 mod menus;

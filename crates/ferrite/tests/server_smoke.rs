@@ -2,6 +2,9 @@
 //! its own, a window says hello and gets a snapshot, and `stop` ends it
 //! cleanly. A second Server for the same Store steps aside with success.
 
+#[path = "../../ferrite-core/src/test_temp.rs"]
+mod test_temp;
+
 use std::path::Path;
 use std::process::{Child, Command};
 use std::time::{Duration, Instant};

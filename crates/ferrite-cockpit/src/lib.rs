@@ -1,6 +1,10 @@
 // The Cockpit: the grid, the nav, the Roster glue and the window's
 // content. The app (`ferrite`) opens the window on it and owns the frame
 // around it (`ferrite_ui::frame`, ADR 0035).
+#[cfg(test)]
+#[path = "../../ferrite-core/src/test_temp.rs"]
+mod test_temp;
+
 mod cli_updates;
 pub mod cockpit;
 pub mod cockpit_window;

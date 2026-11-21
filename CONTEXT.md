@@ -78,9 +78,10 @@ board), dock (its columns are Surfaces now).
 
 **Surface**
 One tab in the Panel, one per thing it shows: the Overview, Changes,
-Files, a Preview, a Browser tab, a Terminal, a side chat, an agent,
-background work, a pull request. Opening one already open brings its tab
-forward. Each Thread keeps its own.
+Files, a Preview, a Browser tab, a Terminal, a side chat, background
+work, a pull request. Opening one already open brings its tab forward.
+Each Thread keeps its own. A Subagent is not one: it opens in the Pane,
+which switches its Subject to it.
 _Avoid_: section, pane (that is the board's), view.
 
 **Preview**
@@ -126,8 +127,9 @@ number. Told to the Session where the Provider takes one.
 **Effort**
 A Thread's reasoning depth, one rung of the ladder its model announces
 (Claude: low…max; Codex: low…ultra, per model). Chosen per Thread by the
-effort chip or `/effort`, defaulting to Settings. Changes apply to the next
-turn on the same Session; they never restart it or consume a pending Handover.
+effort chip or `/effort`, defaulting to Settings. A Claude Session starts at
+it (`--effort`, as T3 Code starts one). Changes apply to the next turn on the
+same Session; they never restart it or consume a pending Handover.
 
 **Handover**
 Switching a Thread to the other Provider after its first prompt: a fresh
@@ -230,7 +232,8 @@ beside Thread (no Thread opens beside another).
 
 **Notice**
 Ferrite's own record that a Thread's Main finished for good: its turn ended
-and no Subagent is still working, so the operator is wanted back. Unread
+and no Subagent or background task (a shell, a monitor) is still working,
+so the operator is wanted back. Unread
 until it is **seen** — its Thread on screen while the window has focus —
 or opened from the Inbox; shown there, by a toast, a chime, the
 Thread's done mark, and a system notification
@@ -250,8 +253,10 @@ _Avoid_: status (too broad), unread (that is the Notice's).
 **Inbox**
 The nav itself (ADR 0040): one list of thread cards, each carrying its
 Project's badge, for the open Threads awaiting the operator. Pending
-Decisions come first, oldest request first. Threads executing Main,
-Subagent, background or queued work sit on the Working shelf; Snoozed and
+Decisions come first, oldest request first, then the Thread that came
+back latest: a Thread done with its work returns at the top, and nothing
+else moves a card. Threads executing Main, Subagent, background or
+queued work sit on the Working shelf, the latest to start first; Snoozed and
 Parked Threads on their own shelves; the shelves fold to a head and count
 at the foot of the list. The rest stay in Inbox until sent back to work or
 Parked. Reading or dismissing a Notice changes presentation, never queue

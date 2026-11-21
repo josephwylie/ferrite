@@ -68,57 +68,6 @@ fn keycaps_and_menu_shortcuts_draw_the_command_glyph(cx: &mut TestAppContext) {
     );
 }
 
-/// A subagent opened from its row wears its own head over its transcript:
-/// one row at the card's top, closed by its rule; Main has none.
-#[gpui::test]
-fn an_opened_subagent_wears_one_head_row(cx: &mut TestAppContext) {
-    use ferrite_core::activity::{
-        ActivityEvent, AgentInfo, AgentKey, AgentStatus, Subject, TranscriptCoverage,
-    };
-    let (core, fake) = cockpit("subject-head", 1);
-    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
-    cx.simulate_resize(gpui::size(px(1280.), px(800.)));
-    let key = AgentKey::new(Provider::Claude, "ui-fixture", "Atlas");
-    let mut info = AgentInfo::new(key.clone());
-    info.name = Some("Atlas".into());
-    info.parent = Some(Subject::Main);
-    info.coverage = TranscriptCoverage::Live;
-    for event in [
-        ActivityEvent::Discovered(info),
-        ActivityEvent::Status {
-            key: key.clone(),
-            state: AgentStatus::Working,
-        },
-    ] {
-        fake.streams.borrow()[0]
-            .send(SessionEvent::Activity(event))
-            .unwrap();
-    }
-    tick(cx);
-    assert!(
-        cx.debug_bounds("pane-subagent-1").is_none(),
-        "Main has no head"
-    );
-    super::subagents::click_child(&view, cx, "Atlas");
-    tick(cx);
-    let strip = cx.debug_bounds("pane-subagent-1").expect("the head's row");
-    let pane = cx.update(|window, cx| view.read(cx).pane_rects(window)[0].1);
-    assert_eq!(
-        strip.size.height,
-        px(ferrite_ui::theme::SUBAGENT_HEAD_H + 1.)
-    );
-    assert!(
-        (strip.top() - px(pane.y)).abs() <= px(0.5),
-        "at the card's top"
-    );
-    assert!(cx.debug_bounds("subagent-name-1").is_some());
-    assert!(cx.debug_bounds("subagent-state-1").is_some());
-    assert!(
-        cx.debug_bounds("subagent-coverage-1").is_some(),
-        "a live transcript says so"
-    );
-}
-
 /// A long popover list scrolls with the keyboard: the draft's Project
 /// chip over two dozen Projects keeps every row the arrows land on inside
 /// its capped list, going down past the fold and back up.

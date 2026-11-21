@@ -1966,8 +1966,8 @@ pub const SHADOW_PILL: u32 = 0x0000001a;
 pub const TX_SEND_ANCHOR_OFFSET: f32 = 16.0;
 /// **Cite a selection** (T3's `AssistantSelectionToolbar`): a drag that
 /// selects a passage ends with a glass button at the pointer, `Cite` (the
-/// Quote icon `SELECTION_CITE_ICON` then its words, 12px medium), beside
-/// `Start a side chat`. `SELECTION_CITE_H` tall, fully rounded inside a 1px
+/// Quote icon `SELECTION_CITE_ICON` then its words, 12px medium).
+/// `SELECTION_CITE_H` tall, fully rounded inside a 1px
 /// `FLOAT_EDGE` ring, padded `SELECTION_CITE_PAD_X`, the float shadow, on
 /// `paint::FLOAT` (no backdrop blur in GPUI). It stands where the mouse went
 /// up, held `SELECTION_CITE_EDGE` inside the window; with the pointer more
@@ -1978,7 +1978,6 @@ pub const SELECTION_CITE_H: f32 = 24.0;
 pub const SELECTION_CITE_PAD_X: f32 = 7.0;
 pub const SELECTION_CITE_ICON: f32 = 14.0;
 pub const SELECTION_CITE_ICON_GAP: f32 = SPACE_1_5;
-pub const SELECTION_CITE_GAP: f32 = SPACE_1_5;
 pub const SELECTION_CITE_EDGE: f32 = 8.0;
 pub const SELECTION_CITE_NEAR: f32 = 8.0;
 pub const SELECTION_CITE_BELOW: f32 = 4.0;
@@ -3120,22 +3119,6 @@ pub const KEY_CAP_GAP: f32 = 3.0;
 pub const KEY_CAP_R: f32 = 4.0;
 pub const KEY_CAP_EDGE: u32 = 0x11121433;
 
-/// A subagent's head, over its transcript while the Pane shows one (no
-/// capture of Claude's drill-in exists: sized as the strip it replaced): one
-/// `SUBAGENT_HEAD_H` (38) row at the card's top — under the Group head in a
-/// board cell — padded `SUBAGENT_HEAD_PAD_X` (6), closed by a `LINE` the body
-/// clips at. `FS_LABEL` SF Pro: the back button (`ICON_BUTTON`), the `Main`
-/// crumb `SUBAGENT_CRUMB_H` (28) high at `R_CONTROL` in `INK_SUBTLE`, a
-/// `SUBAGENT_CRUMB_ICON` (13) `›` in `TEXT_FAINT`, then the agent's mark in a
-/// fixed `SUBAGENT_MARK_W` slot (a nav mark's icon box, the working
-/// mark's), its name in `INK_STRONG` and its state word in `INK_SUBTLE`,
-/// `SUBAGENT_NAME_GAP` (8) apart.
-pub const SUBAGENT_HEAD_H: f32 = 38.0;
-pub const SUBAGENT_HEAD_PAD_X: f32 = SPACE_1_5;
-pub const SUBAGENT_CRUMB_H: f32 = 28.0;
-pub const SUBAGENT_CRUMB_ICON: f32 = 14.0;
-pub const SUBAGENT_MARK_W: f32 = NAV_MARK_ICON;
-pub const SUBAGENT_NAME_GAP: f32 = SPACE_2;
 // (end WP-F) — append above this line only
 
 // ======================================== WP-G · nav

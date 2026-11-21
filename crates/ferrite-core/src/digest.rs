@@ -148,8 +148,7 @@ impl Digest {
             working: main.busy(),
             operator_turn: activity.main_operator_turn(),
             working_descendants,
-            background_work: working_descendants > 0
-                || transcript.progress().working_background() > 0,
+            background_work: activity.background_work(),
             // The Server's verdict, from its Thread (`Engine::publish_digests`).
             at_work: false,
             pending: pending
