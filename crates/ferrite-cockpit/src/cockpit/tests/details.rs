@@ -417,3 +417,77 @@ fn details_preferences_can_empty_and_restore_the_card(cx: &mut TestAppContext) {
             .visible(ContextCardItem::Context));
     });
 }
+
+/// Lineage folds under its heading, `Lineage ▸ N`, folded at first like
+/// the Panel's Connectors; the fold is the Thread's and holds across
+/// renders.
+#[gpui::test]
+fn the_lineage_heading_folds_its_agents(cx: &mut TestAppContext) {
+    use ferrite_core::activity::{ActivityEvent, AgentInfo, AgentKey, AgentStatus, Subject};
+    let (core, fake) = cockpit("details-lineage-fold", 1);
+    bind_production_keys(cx);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    hold_nav_open(&view, cx);
+    cx.simulate_resize(gpui::size(px(2400.), px(900.)));
+    let emit = |event| {
+        fake.streams.borrow()[0]
+            .send(SessionEvent::Activity(event))
+            .unwrap()
+    };
+    let key = |name: &str| AgentKey::new(Provider::Claude, "ui-fixture", name);
+    for (name, status) in [
+        ("Atlas", AgentStatus::Working),
+        ("Birch", AgentStatus::Idle),
+        ("Cedar", AgentStatus::Failed),
+    ] {
+        let mut info = AgentInfo::new(key(name));
+        info.name = Some(name.into());
+        info.parent = Some(Subject::Main);
+        emit(ActivityEvent::Discovered(info));
+        emit(ActivityEvent::Status {
+            key: key(name),
+            state: status,
+        });
+    }
+    tick(cx);
+    assert!(
+        cx.debug_bounds("details-lineage-count-3").is_some(),
+        "the heading counts the agents"
+    );
+    assert!(
+        cx.debug_bounds("details-item-lineage-0").is_none(),
+        "folded at first"
+    );
+
+    let head = cx
+        .debug_bounds("details-lineage-head")
+        .expect("the Lineage heading");
+    cx.simulate_click(head.center(), gpui::Modifiers::none());
+    tick(cx);
+    for row in [
+        "details-item-lineage-0",
+        "details-item-lineage-1",
+        "details-item-lineage-2",
+    ] {
+        assert!(
+            cx.debug_bounds(row).is_some(),
+            "a press on the heading opens {row}"
+        );
+    }
+
+    emit(ActivityEvent::Status {
+        key: key("Birch"),
+        state: AgentStatus::Working,
+    });
+    tick(cx);
+    assert!(
+        cx.debug_bounds("details-item-lineage-2").is_some(),
+        "the fold outlives a re-render"
+    );
+
+    let head = cx.debug_bounds("details-lineage-head").unwrap();
+    cx.simulate_click(head.center(), gpui::Modifiers::none());
+    tick(cx);
+    assert!(cx.debug_bounds("details-item-lineage-0").is_none());
+    assert!(cx.debug_bounds("details-lineage-count-3").is_some());
+}
