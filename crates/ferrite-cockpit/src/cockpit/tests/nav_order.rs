@@ -142,3 +142,54 @@ fn a_window_that_starts_watching_mid_shell_sees_the_thread_working(cx: &mut Test
         assert_eq!(ids(&view.nav_state().working), vec![threads[1]]);
     });
 }
+
+/// A window that starts watching a Thread while its background Subagent
+/// runs is told the Subagent runs: the Thread is working there too, and
+/// done at the top of the list once the Subagent ends.
+#[gpui::test]
+fn a_window_that_starts_watching_mid_subagent_sees_the_thread_working(cx: &mut TestAppContext) {
+    use ferrite_core::activity::{ActivityEvent, AgentInfo, AgentKey, AgentStatus, Subject};
+    let (core, fake) = cockpit("nav-watch-mid-subagent", 2);
+    let threads = core.threads();
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    tick(cx);
+    let key = AgentKey::new(Provider::Claude, "ui-fixture", "toolu_bg");
+    let mut info = AgentInfo::new(key.clone());
+    info.name = Some("sleep 170".into());
+    info.parent = Some(Subject::Main);
+    let events = [
+        streaming(),
+        SessionEvent::Activity(ActivityEvent::Discovered(info)),
+        SessionEvent::Activity(ActivityEvent::Status {
+            key: key.clone(),
+            state: AgentStatus::Working,
+        }),
+        turn_ended(),
+    ];
+    for event in events {
+        fake.streams.borrow()[1].send(event).unwrap();
+    }
+    tick(cx);
+    view.read_with(cx, |view, _| {
+        assert!(view.cockpit.thread(threads[1]).unwrap().background_work());
+        let state = view.nav_state();
+        assert_eq!(ids(&state.working), vec![threads[1]]);
+        assert_eq!(
+            state.working[0].status.attention(),
+            ferrite_core::Attention::Working,
+            "never done while its Subagent runs"
+        );
+    });
+    fake.streams.borrow()[1]
+        .send(SessionEvent::Activity(ActivityEvent::Status {
+            key,
+            state: AgentStatus::Idle,
+        }))
+        .unwrap();
+    tick(cx);
+    view.read_with(cx, |view, _| {
+        let state = view.nav_state();
+        assert!(state.working.is_empty());
+        assert_eq!(state.active[0].thread, threads[1], "done goes to the top");
+    });
+}

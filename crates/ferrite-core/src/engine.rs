@@ -4683,36 +4683,14 @@ impl Engine {
         if let Some(name) = transcript.plan() {
             live.push(WireInput::Live(Live::AccountPlan { name: name.into() }));
         }
-        // The turn as it stands: a replay never reads one as running, so a
-        // watch mid-turn is told it is, as its provider said it. Its
-        // background tasks too: the `Connect` above retires the replayed
-        // ones, and a shell that outlived its turn still runs.
-        use crate::transcript::Status;
-        let state = match transcript.status() {
-            Status::Streaming => Some(crate::RunState::Running),
-            Status::Blocked => Some(crate::RunState::RequiresAction),
-            Status::Idle | Status::Closed => None,
-        };
-        let tasks = transcript.progress().background();
-        let now = state
-            .map(|state| SessionEvent::RunState { state })
-            .into_iter()
-            .chain((!tasks.is_empty()).then(|| SessionEvent::Progress {
-                event: crate::progress::ProgressEvent::BackgroundSnapshot {
-                    tasks: tasks.to_vec(),
-                },
-            }));
-        for event in now {
-            if let protocol::Outgoing::Input(input) = protocol::outgoing(
-                &ActivityInput::Main {
-                    input: Input::Event(event),
-                    at: crate::clock::instant(),
-                },
-                None,
-            ) {
-                live.push(input);
+        // What runs now: the log never says, and the `Connect` above
+        // retires what it read.
+        live.extend(view.now(crate::clock::instant()).iter().filter_map(|input| {
+            match protocol::outgoing(input, None) {
+                protocol::Outgoing::Input(input) => Some(input),
+                _ => None,
             }
-        }
+        }));
         Some(History {
             thread,
             log,
