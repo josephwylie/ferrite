@@ -5129,149 +5129,26 @@ impl CockpitView {
         }
     }
 
-    /// The project chip's rows for `draft`.
+    /// The project chip's rows for `draft` (`menu_rows::project_rows`),
+    /// with the focused Composer's line for the type-a-path row.
     fn project_menu_rows(&self, draft: &pane::DraftBinding, cx: &Context<Self>) -> Vec<Row> {
-        let mut rows: Vec<Row> = self
-            .cockpit
-            .registry()
-            .projects()
-            .iter()
-            .map(|project| {
-                let detail = if project.additional_roots.is_empty() {
-                    project.root.display().to_string()
-                } else {
-                    let count = project.additional_roots.len();
-                    format!(
-                        "{} · +{count} director{}",
-                        project.root.display(),
-                        if count == 1 { "y" } else { "ies" }
-                    )
-                };
-                band_row(
-                    SharedString::from(project.title.clone()),
-                    SharedString::from(detail),
-                    draft.binding.project() == project.id,
-                    BandChoice::Project(project.id),
-                )
-            })
-            .collect();
-        // Explicit type-a-path grammar. Ordinary drafted prose is
-        // never reinterpreted or erased as registry input.
         let typed = self
             .panes
             .get(self.focused())
             .map(|pane| pane.composer.read(cx).text().trim().to_string())
             .unwrap_or_default();
-        if let Some(path) = typed
-            .strip_prefix("path ")
-            .map(str::trim)
-            .filter(|p| !p.is_empty())
-        {
-            rows.push(band_row(
-                SharedString::from(format!("add {path}")),
-                SharedString::from("register path"),
-                false,
-                // As typed: `~` is the home of the computer the
-                // Server runs on, which spells it out.
-                BandChoice::RegisterPath(path.into()),
-            ));
-        }
-        // The same verb the nav's dropdown ends on, opening the
-        // same card: one way to add a Project, wherever it is
-        // asked for.
-        rows.push(band_row(
-            SharedString::from("Add project…"),
-            SharedString::from("name it and choose its directories"),
-            false,
-            BandChoice::AddProject,
-        ));
-        rows
+        menu_rows::project_rows(self.cockpit.registry().projects(), draft, &typed)
     }
 
-    /// The workspace chip's rows for `draft`, scoped
-    /// to the chosen project alone: its checked-out branch, each of the
-    /// repo's other worktrees (as git lists them, hand-made ones included),
-    /// each other local branch, and the two ways to start a fresh branch —
-    /// no global list anywhere. The git half comes from `repo_listing`,
-    /// read once at open; until it lands the rows are the checkout and the
-    /// fresh starts.
+    /// The workspace chip's rows for `draft` (`menu_rows::workspace_rows`),
+    /// from what git last said of its Project's checkout.
     fn workspace_menu_rows(&self, draft: &pane::DraftBinding, cx: &Context<Self>) -> Vec<Row> {
-        // Where the repo already stands, then the fresh starts:
-        // the checkout as it is, each other worktree, each other
-        // branch, then a new branch — beside the operator, or off
-        // in an isolated worktree.
         let project = draft.binding.project();
-        let target = draft.binding.target();
-        let checked_out = self.checked_out_branch(project, cx);
-        let mut rows = vec![band_row(
-            SharedString::from("Current checkout"),
-            checked_out.clone(),
-            *target == DraftTarget::Main,
-            BandChoice::Target(DraftTarget::Main),
-        )];
-        let listing = self.checkouts.listing(project);
-        // A branch already on offer as the checkout or as a
-        // worktree is not offered again as a plain branch: git
-        // would refuse to switch the checkout onto it anyway.
-        let mut offered: Vec<&str> = vec![checked_out.as_ref()];
-        for worktree in listing
-            .map(|listing| listing.worktrees.as_slice())
-            .unwrap_or_default()
-        {
-            let directory = worktree
-                .path
-                .file_name()
-                .map(|name| name.to_string_lossy().into_owned())
-                .unwrap_or_else(|| worktree.path.display().to_string());
-            let (name, detail) = match &worktree.branch {
-                Some(branch) => (branch.clone(), directory),
-                None => (directory, "detached".to_string()),
-            };
-            if let Some(branch) = &worktree.branch {
-                offered.push(branch);
-            }
-            rows.push(band_row(
-                SharedString::from(format!("Previous worktree ({name})")),
-                SharedString::from(detail),
-                matches!(
-                    target,
-                    DraftTarget::Existing { path, .. } if *path == worktree.path
-                ),
-                BandChoice::Target(DraftTarget::Existing {
-                    branch: name,
-                    path: worktree.path.clone(),
-                }),
-            ));
-        }
-        for branch in listing
-            .map(|listing| listing.branches.as_slice())
-            .unwrap_or_default()
-        {
-            if offered.contains(&branch.as_str()) {
-                continue;
-            }
-            rows.push(band_row(
-                SharedString::from(branch.clone()),
-                SharedString::from("existing branch"),
-                matches!(target, DraftTarget::Branch { name } if name == branch),
-                BandChoice::Target(DraftTarget::Branch {
-                    name: branch.clone(),
-                }),
-            ));
-        }
-        rows.push(band_row(
-            SharedString::from("New branch"),
-            SharedString::from("in the project checkout"),
-            *draft.binding.target() == DraftTarget::NewBranch,
-            BandChoice::Target(DraftTarget::NewBranch),
-        ));
-        rows.push(band_row(
-            SharedString::from("New worktree"),
-            SharedString::from("in an isolated checkout"),
-            *draft.binding.target() == DraftTarget::New,
-            BandChoice::Target(DraftTarget::New),
-        ));
-        rows
+        menu_rows::workspace_rows(
+            draft,
+            self.checked_out_branch(project, cx),
+            self.checkouts.listing(project),
+        )
     }
 
     /// Re-derive the open project popover's rows from the Composer line —

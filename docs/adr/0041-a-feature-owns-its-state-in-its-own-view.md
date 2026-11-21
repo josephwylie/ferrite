@@ -817,8 +817,18 @@ checks by a free function whose rows open a run's log through the root
 (`checks_card`), both in `cockpit/head_cards.rs`. A view would hold no
 state and add events for a press the root answers anyway. The Composer's
 footer (the toolbar, send and stop, the `+` menu, the mode chip and menu,
-the session controls card) and the draft band menu's rows follow in the
-same shape.
+the session controls card) follows in the same shape.
+
+A draft's band menu's rows are the fifteenth. The Project and Workspace
+chips open a popup in the slot (`Popup::Band`), which keeps the open menu,
+its rows and its cursor (ADR 0043). What the rows list is the registry's
+Projects, the draft's binding, its line (a `path …` to register) and what
+`Checkouts` holds of the repo. The root reads them (`project_menu_rows`,
+`workspace_menu_rows`, the second asking git about a checkout not named
+yet), and the rows are built from what was read as plain values
+(`menu_rows::project_rows`, `workspace_rows`). A pick stays the root's
+(`pick_band`), as does building them again as the line changes or a
+listing lands (`sync_band_rows`, `sync_workspace_rows`).
 
 ## Precedent
 
