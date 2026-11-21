@@ -345,7 +345,9 @@ fn a_selection_offers_attach_and_attaches_as_a_reply_tile(cx: &mut TestAppContex
     loop {
         tick(cx);
         shell.update(cx, |shell, cx| shell.select_all(cx));
-        if shell.read_with(cx, |shell, _| shell.selection().is_some_and(|text| text.contains("\nattach-me"))) {
+        // Typed, then answered. Not "\nattach-me": a prompt and command that
+        // fill the row exactly run on into the answer's row.
+        if shell.read_with(cx, |shell, _| shell.selection().is_some_and(|text| text.matches("attach-me").count() > 1)) {
             break;
         }
         assert!(std::time::Instant::now() < until, "the shell never answered");
