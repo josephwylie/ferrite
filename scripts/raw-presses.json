@@ -2,7 +2,7 @@
   "crates/ferrite-cockpit/src/cockpit.rs": 8,
   "crates/ferrite-cockpit/src/cockpit/archive.rs": 3,
   "crates/ferrite-cockpit/src/cockpit/background_dialog_view.rs": 2,
-  "crates/ferrite-cockpit/src/cockpit/background_work.rs": 3,
+  "crates/ferrite-cockpit/src/cockpit/background_work.rs": 2,
   "crates/ferrite-cockpit/src/cockpit/beside.rs": 1,
   "crates/ferrite-cockpit/src/cockpit/browser/chrome.rs": 1,
   "crates/ferrite-cockpit/src/cockpit/browser/dialog.rs": 1,
@@ -67,7 +67,7 @@
   "crates/ferrite-pane/src/transcript.rs": 14,
   "crates/ferrite-pane/src/transcript/message_menu.rs": 2,
   "crates/ferrite-pane/src/transcript/outputs.rs": 9,
-  "crates/ferrite-pane/src/transcript/reply.rs": 2,
+  "crates/ferrite-pane/src/transcript/reply.rs": 1,
   "crates/ferrite-pane/src/visual/card.rs": 1,
   "crates/ferrite-terminal/src/view.rs": 1
 }

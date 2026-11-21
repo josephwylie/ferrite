@@ -184,8 +184,9 @@ that happened to touch it, and nothing in the code said whose a field was.
   and the `Background work` dialog reads its `Stop` from it. Each reads
   the Thread's running and finished work, the refusals of its stops and
   whether the Session can stop a command through `background_inputs`. It
-  emits `BackgroundEvent`: `Details`, a row of the section, the dialog's
-  `Open subagent`, the line's `Stop`, a stop square. A stop is a Server call, so
+  emits `BackgroundEvent`: `Details`, a row of the section, an agent
+  card's `Open`, the line's `Stop`, a stop square; the dialog's `Open
+  subagent` is its own `BackgroundDialogEvent::OpenThread`. A stop is a Server call, so
   the root checks the Session still runs the work, tells the view it was
   sent, sends it and tells the view of a refusal; the view's own timer
   offers `Retry`. Each frame the root's pump has the view forget the

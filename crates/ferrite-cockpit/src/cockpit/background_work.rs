@@ -319,8 +319,8 @@ pub(crate) enum BackgroundEvent {
     Details(ThreadId),
     /// A row of the Overview's section: the Background Surface.
     Open(ThreadId),
-    /// `Open subagent` in the dialog, or an agent's row in the Background
-    /// Surface: the agent the call started.
+    /// `Open` on an agent's card in the Background Surface: the agent the
+    /// call started.
     OpenAgent { thread: ThreadId, call: String },
     /// The line's `Stop`, or `Retry`: every piece of work it lists that the
     /// Session can stop.
@@ -740,8 +740,9 @@ impl CockpitView {
         });
     }
 
-    /// `Open subagent` in the dialog, or a row of the Background Surface: the
-    /// agent the call started, its full chat in the Pane.
+    /// `Open subagent` in the dialog, or `Open` on an agent's card in the
+    /// Background Surface: the agent the call started, its full chat in the
+    /// Pane.
     pub(super) fn open_background_agent(&mut self, thread: ThreadId, call: &str, cx: &mut Context<Self>) {
         if self.background_dialog(cx).is_some() {
             self.hide_sheet(cx);
