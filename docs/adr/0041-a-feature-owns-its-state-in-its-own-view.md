@@ -728,6 +728,16 @@ answer (`pr_landed`) stay the root's, and the reading is the Facts'
 (`ask_pr`, `pr_answered`). A view would add events for asks the root makes
 anyway.
 
+The titler's names on their way are the twelfth. `Titling`
+(`cockpit/titling.rs`) keeps the Threads the titler is naming from their
+first prompt, whose nav cards draw the title faded until the answer
+lands. Only the root asks, off the UI thread (`start_titling`), and only
+the answer writes it (`adopt_title`), which an operator's rename in the
+meantime outranks; the nav's row reads it as the root builds it
+(`naming`). Renaming is the store's (`rename_thread`). It is not the
+Facts': they are what the Server and git say of a Thread, and this is
+an ask of the window's own.
+
 ## Precedent
 
 Zed builds its workspace this way: each panel is an entity that owns its

@@ -61,6 +61,7 @@ mod snooze;
 pub(crate) mod starts;
 mod surfaces;
 mod tab_scroll;
+mod titling;
 mod toasts;
 pub(crate) mod subagents;
 pub(crate) mod tools;
@@ -503,9 +504,8 @@ pub struct CockpitView {
     /// aside: a visual-reference scene's (`usagepopover`), never the app's.
     usage_popover_held: bool,
     session_control_error: Option<(ThreadId, u64, String)>,
-    /// The Threads the titler is naming right now: their cards draw the
-    /// title at `NAV_CARD_RETITLING_OPACITY` until its answer lands.
-    titling: std::collections::HashSet<ThreadId>,
+    /// The Threads the titler is naming right now (`titling`).
+    titling: titling::Titling,
     /// Frames each open card has waited for its trigger's or Pane's
     /// geometry, by trigger key (`card_corner`); none once it has some.
     card_waits: std::cell::RefCell<std::collections::HashMap<String, u8>>,
@@ -1362,7 +1362,7 @@ impl CockpitView {
             history: Default::default(),
             usage_popover_held: false,
             session_control_error: None,
-            titling: std::collections::HashSet::new(),
+            titling: Default::default(),
             card_waits: Default::default(),
             nav_collapsed: prefs.settings.nav_collapsed,
             nav_auto_fold: std::cell::Cell::new(false),
@@ -7099,7 +7099,7 @@ impl CockpitView {
                 .filter(|_| working)
                 .and_then(|open| open.turn().started),
             pinned: self.prefs.settings.pinned_threads.contains(&thread),
-            retitling: self.titling.contains(&thread),
+            retitling: self.titling.naming(thread),
             // The nav wears its own picks (`NavView::card_picked`).
             picked: false,
         };
@@ -9128,71 +9128,6 @@ impl CockpitView {
         })
     }
 
-    /// Ask the titler for a name, off the UI thread, and adopt it when it
-    /// arrives — unless the operator has named the Thread meanwhile, or
-    /// turned auto-titles off. No titler configured (tests, the demo)
-    /// means the prompt-derived name stands.
-    fn start_titling(&mut self, thread: ThreadId, prompt: String, cx: &mut Context<Self>) {
-        if !self.prefs.settings.auto_title || !self.prefs.titler {
-            return;
-        }
-        let Some(provider) = self
-            .cockpit
-            .thread(thread)
-            .filter(|open| open.title().is_none())
-            .map(|open| open.provider())
-        else {
-            return;
-        };
-        // The Thread's own Provider writes its title, through the one form
-        // each adapter fills: Claude's `claude -p`, Codex's `codex exec` —
-        // the same copy of the CLI the Session runs.
-        let program = ferrite_core::providers::discover::program(provider);
-        let form = ferrite_core::titler::form_for(
-            provider,
-            &program,
-            &ferrite_core::titler::TitleRequest {
-                prompt,
-                reply: None,
-            },
-            &self.cockpit.model_catalog(provider),
-        );
-        let rx = ferrite_core::titler::spawn(form);
-        self.titling.insert(thread);
-        cx.spawn(async move |this, cx| {
-            let title = cx
-                .background_executor()
-                .spawn(async move { rx.recv().ok().flatten() })
-                .await;
-            this.update(cx, |view, cx| view.adopt_title(thread, title, cx))
-                .ok();
-        })
-        .detach();
-    }
-
-    /// The titler's answer lands only on a Thread still untitled: an
-    /// operator's rename in the meantime wins, and a parked Thread keeps
-    /// its prompt-derived name.
-    fn adopt_title(&mut self, thread: ThreadId, title: Option<String>, cx: &mut Context<Self>) {
-        if self.titling.remove(&thread) {
-            self.notify_part(parts::Part::Nav, cx);
-        }
-        let Some(title) = title else {
-            return;
-        };
-        if self
-            .cockpit
-            .thread(thread)
-            .is_none_or(|open| open.title().is_some())
-        {
-            return;
-        }
-        if self.cockpit.rename_thread(thread, &title).is_ok() {
-            self.facts.renamed(&self.cockpit, thread);
-            self.refresh_names();
-            cx.notify();
-        }
-    }
 
     /// The offer to go on in a fresh conversation, while the Thread's
     /// provider has none to resume. It says what the way on costs.
