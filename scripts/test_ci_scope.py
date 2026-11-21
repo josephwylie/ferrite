@@ -8,7 +8,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from ci_scope import Package, changed_paths, check_boundaries, main, select, workspace
+from ci_scope import Package, changed_paths, changes_cef_gate, check_boundaries, main, select, workspace
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -68,7 +68,34 @@ class SelectionTests(unittest.TestCase):
                 result = select(self.packages, [path])
                 self.assertEqual(result["packages"], self.ferrite)
                 self.assertEqual(result["vendored"], self.vendored)
-                self.assertTrue(result["browser"])
+
+    def test_packaged_browser_runs_for_what_only_it_sees_whole(self):
+        paths = ["crates/ferrite-cockpit/src/cockpit/browser/controls.rs", "crates/ferrite-cockpit/src/cockpit/browser_smoke.rs",
+                 "crates/ferrite-core/src/browser_annotations.rs", "crates/ferrite-pane/src/visual/engine.rs",
+                 "crates/ferrite-pane/src/annotation_editor.rs", "crates/ferrite/src/lib.rs", "crates/ferrite-ui/Cargo.toml",
+                 "Cargo.lock", "vendor/gpui-pre/src/window.rs", "scripts/install-app.sh", "scripts/probe-browser-window.py",
+                 "scripts/patches/agent-browser-0.41.2-ferrite.patch", ".github/workflows/browser-window.yml"]
+        for path in paths:
+            with self.subTest(path=path):
+                self.assertTrue(select(self.packages, [path])["browser"])
+
+    def test_other_changes_leave_the_packaged_browser_to_main(self):
+        # These still select the ferrite package, so ci.yml checks the CEF builds.
+        paths = ["crates/ferrite-cockpit/src/cockpit.rs", "crates/ferrite-cockpit/src/cockpit/decisions.rs",
+                 "crates/ferrite-core/src/server.rs", "crates/ferrite-ui/src/lib.rs", "scripts/raw-presses.json",
+                 ".github/workflows/ci.yml", ".config/nextest.toml", "skills/verify-ferrite/features/decisions.md"]
+        for path in paths:
+            with self.subTest(path=path):
+                result = select(self.packages, [path])
+                self.assertIn("ferrite", result["packages"])
+                self.assertFalse(result["browser"])
+
+    def test_full_ci_selects_windows_and_the_label_selects_the_packaged_browser(self):
+        path = ["crates/ferrite-ui/src/lib.rs"]
+        full = select(self.packages, path, full=True)
+        self.assertEqual(full["packages"], self.ferrite)
+        self.assertFalse(full["browser"])
+        self.assertTrue(select(self.packages, path, browser=True)["browser"])
 
     def test_vendored_crates_are_members_kept_out_of_package_runs(self):
         self.assertEqual(self.vendored, ["gpui-base", "gpui-component", "gpui-pre", "gpui-pre-macos", "taffy"])
@@ -105,7 +132,7 @@ class SelectionTests(unittest.TestCase):
                 result = select(self.packages, paths, full)
                 self.assertEqual(result["packages"], self.ferrite)
                 self.assertEqual(result["vendored"], self.vendored)
-                self.assertTrue(result["browser"])
+        self.assertTrue(select(self.packages, [])["browser"])
 
     def test_new_member_receives_a_decision_without_selector_changes(self):
         packages = dict(self.packages, helper=Package("crates/helper", frozenset()))
@@ -213,24 +240,45 @@ renamed = { package = "helper", path = "crates/helper" }
                 main()
         self.assertFalse(output.exists())
 
+    def git(self, *args):
+        return subprocess.run(["git", *args], cwd=self.root, check=True, capture_output=True, text=True).stdout.strip()
+
+    def commit(self, message):
+        if not (self.root / ".git").exists():
+            self.git("init", "-q")
+            self.git("config", "user.email", "ci-scope@example.invalid")
+            self.git("config", "user.name", "CI scope test")
+        self.git("add", ".")
+        self.git("-c", "commit.gpgsign=false", "commit", "-qm", message)
+        return self.git("rev-parse", "HEAD")
+
     def test_renamed_source_to_docs_keeps_deleted_source_in_diff(self):
-        def git(*args):
-            return subprocess.run(["git", *args], cwd=self.root, check=True, capture_output=True, text=True).stdout.strip()
-        git("init", "-q")
-        git("config", "user.email", "ci-scope@example.invalid")
-        git("config", "user.name", "CI scope test")
         source = self.root / "crates/ferrite-core/source.rs"
         source.write_text("fixture")
-        git("add", ".")
-        git("-c", "commit.gpgsign=false", "commit", "-qm", "base")
-        base = git("rev-parse", "HEAD")
+        base = self.commit("base")
         (self.root / "docs").mkdir()
         source.rename(self.root / "docs/source.md")
-        git("add", ".")
-        git("-c", "commit.gpgsign=false", "commit", "-qm", "rename")
+        self.commit("rename")
         paths = changed_paths(self.root, base, "HEAD")
         self.assertIn("crates/ferrite-core/source.rs", paths)
         self.assertTrue(select(workspace(self.root), paths)["code"])
+
+    def test_a_changed_cef_gate_selects_the_packaged_browser(self):
+        source = self.root / "crates/ferrite-cockpit/src/lib.rs"
+        source.parent.mkdir()
+        source.write_text('fn quit() {}\n#[cfg(feature = "cef")]\nfn shutdown() {}\n')
+        base = self.commit("base")
+        source.write_text('fn quit() { save(); }\n#[cfg(feature = "cef")]\nfn shutdown() {}\n')
+        edited = self.commit("edit beside the gate")
+        self.assertFalse(changes_cef_gate(self.root, base, edited))
+        source.write_text('fn quit() { save(); }\n#[cfg(feature = "cef")]\nfn shutdown() {}\n#[cfg(feature = "browser-smoke")]\nfn probe() {}\n')
+        self.commit("add gated code")
+        self.assertTrue(changes_cef_gate(self.root, edited, "HEAD"))
+        output = self.root / "outputs"
+        with patch.object(sys, "argv", ["ci_scope.py", "--root", str(self.root), "--base", edited, "--github-output", str(output)]), \
+                contextlib.redirect_stdout(io.StringIO()):
+            main()
+        self.assertIn("browser=true\n", output.read_text())
 
 
 if __name__ == "__main__":
