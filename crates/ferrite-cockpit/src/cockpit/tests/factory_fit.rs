@@ -778,8 +778,8 @@ fn the_workflow_menus_offer_what_applies_and_keep_the_selection_in_view(cx: &mut
     cx.simulate_keystrokes("escape");
     tick(cx);
 
-    let last = view.read_with(cx, |view, _| {
-        view.shown_workflow()
+    let last = view.read_with(cx, |view, cx| {
+        view.shown_workflow(cx)
             .unwrap()
             .draft
             .steps
@@ -876,8 +876,8 @@ fn the_process_menu_opens_over_the_sheet_and_its_pick_starts_the_task(cx: &mut T
         view.save_workflow(cx);
     });
     tick(cx);
-    let workflow = view.read_with(cx, |view, _| {
-        let shown = view.shown_workflow().unwrap();
+    let workflow = view.read_with(cx, |view, cx| {
+        let shown = view.shown_workflow(cx).unwrap();
         assert!(!shown.versions.is_empty(), "saved");
         shown.id.clone()
     });

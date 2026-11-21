@@ -1,28 +1,26 @@
-//! The inspector beside the outline: the chosen Step's settings, and the
-//! approval settings.
+//! The inspector beside the outline, which the editor's view draws: the
+//! chosen Step's settings with the skills search, the approval settings,
+//! or the start's, which the starts' own view draws. What a press asks it
+//! says as a `WorkflowsEvent`.
 
 use super::*;
 
-impl CockpitView {
+impl WorkflowsView {
     /// The inspector: the chosen Step's name, instructions, skills,
     /// Provider, model, Effort and "Start fresh every time".
     pub(super) fn inspector(
         &self,
-        workflow: &Workflow,
-        window: &mut Window,
+        inputs: &WorkflowsInputs,
+        window: &Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         use ferrite_ui::theme::*;
-        if self.start_shown() {
-            return self.start_inspector(workflow, window, cx);
+        match self.inspected {
+            Inspected::Start => return inputs.starts.clone().into_any_element(),
+            Inspected::Approval => return self.approval_inspector(inputs, window, cx),
+            Inspected::Step => {}
         }
-        if self
-            .factory()
-            .is_some_and(|view| view.workflows.approval)
-        {
-            return self.approval_inspector(workflow, window, cx);
-        }
-        let Some(step) = self.shown_step() else {
+        let Some(step) = inputs.step.as_deref().and_then(|id| inputs.draft.step(id)) else {
             return div()
                 .debug_selector(|| "inspector-none".into())
                 .flex_1()
@@ -31,10 +29,7 @@ impl CockpitView {
                 .child("Add an agent to begin.")
                 .into_any_element();
         };
-        let Some(view) = self.factory() else {
-            return div().into_any_element();
-        };
-        let catalog = self.factory_catalog();
+        let catalog = &inputs.catalog;
         let label = |text: &'static str| {
             div()
                 .text_size(px(FS_META))
@@ -88,9 +83,13 @@ impl CockpitView {
                 .child(trigger.probe())
                 .on_mouse_down(
                     MouseButton::Left,
-                    cx.listener(move |view, event: &MouseDownEvent, _, cx| {
+                    cx.listener(move |_, event: &MouseDownEvent, _, cx| {
                         cx.stop_propagation();
-                        view.open_picks((*picks).clone(), &trigger, event.position, cx);
+                        cx.emit(WorkflowsEvent::Picks {
+                            picks: (*picks).clone(),
+                            trigger: trigger.clone(),
+                            at: event.position,
+                        });
                     }),
                 )
         };
@@ -126,7 +125,7 @@ impl CockpitView {
 
         // Skills: the chosen ones as chips, an unavailable one flagged,
         // and the search that lists what is installed.
-        let installed = self.skills_for(provider);
+        let installed = inputs.installed.as_deref();
         let mut chips = div().flex().flex_wrap().gap(px(SPACE_1));
         for skill in &step.skills {
             let missing = installed.is_some_and(|list| !list.iter().any(|s| &s.name == skill));
@@ -162,9 +161,9 @@ impl CockpitView {
                             ))
                             .on_mouse_down(
                                 MouseButton::Left,
-                                cx.listener(move |view, _: &MouseDownEvent, _, cx| {
+                                cx.listener(move |_, _: &MouseDownEvent, _, cx| {
                                     cx.stop_propagation();
-                                    view.remove_skill(&remove, cx);
+                                    cx.emit(WorkflowsEvent::RemoveSkill(remove.clone()));
                                 }),
                             ),
                     ),
@@ -180,34 +179,22 @@ impl CockpitView {
                 .hover(|add| add.bg(paint::HOVER))
                 .text_size(px(FS_META))
                 .text_color(rgb(INK_SUBTLE))
-                .child(if view.workflows.skills_open {
+                .child(if self.skills_open {
                     "Done"
                 } else {
                     "+ Add skill"
                 })
-                .on_click(cx.listener(|view, _: &ClickEvent, _, cx| {
-                    let open = view
-                        .factory()
-                        .is_some_and(|view| view.workflows.skills_open);
-                    view.reveal_skills(!open, cx);
+                .on_click(cx.listener(|editor, _: &ClickEvent, _, cx| {
+                    editor.skills_open = !editor.skills_open;
+                    editor.focused = editor.skills_open.then_some(Field::SkillSearch);
+                    cx.emit(WorkflowsEvent::Focused);
                 })),
         );
-        let found = view
-            .workflows
-            .skills
-            .iter()
-            .find(|found| found.provider == provider);
-        let skills_note = match found {
-            Some(found) if found.pending.is_some() => "Looking for installed skills\u{2026}".into(),
-            Some(found) if found.error.is_some() => format!(
-                "Could not list skills: {}",
-                found.error.clone().unwrap_or_default()
-            ),
-            Some(found) => format!("{} installed for {provider}", found.skills.len()),
-            None => String::new(),
-        };
-        let search = view.workflows.skills_open.then(|| {
-            let filter = self.field_text(&Field::SkillSearch, cx).unwrap_or_default();
+        let search = self.skills_open.then(|| {
+            let filter = self
+                .field(&Field::SkillSearch)
+                .map(|composer| composer.read(cx).text().to_string())
+                .unwrap_or_default();
             let mut list = div()
                 .debug_selector(|| "skill-options".into())
                 .flex()
@@ -248,8 +235,8 @@ impl CockpitView {
                                 .text_color(rgb(INK_SUBTLE))
                                 .child(SharedString::from(skill.description.clone())),
                         )
-                        .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
-                            view.add_skill(name.clone(), cx)
+                        .on_click(cx.listener(move |_, _: &ClickEvent, _, cx| {
+                            cx.emit(WorkflowsEvent::AddSkill(name.clone()))
                         })),
                 );
             }
@@ -257,7 +244,7 @@ impl CockpitView {
                 .flex()
                 .flex_col()
                 .gap(px(SPACE_1))
-                .children(self.text_input(&Field::SkillSearch, "Search skills", window, cx))
+                .children(self.input(&Field::SkillSearch, "Search skills", window, cx))
                 .child(list)
         });
 
@@ -265,7 +252,7 @@ impl CockpitView {
         let fresh_id = step.id.clone();
         let by_merge = step.outcome_routes.is_some();
         let merge_id = step.id.clone();
-        let workflow_id = workflow.id.clone();
+        let workflow_id = inputs.workflow.clone();
         let name_field = Field::StepName(workflow_id.clone(), step.id.clone());
         let instructions_field = Field::Instructions(workflow_id, step.id.clone());
         let delete_id = step.id.clone();
@@ -281,8 +268,8 @@ impl CockpitView {
             .p(px(SPACE_4))
             .overflow_y_scroll()
             .child(label("Agent"))
-            .children(self.text_input(&name_field, "Name", window, cx))
-            .children(self.text_input(&instructions_field, "Instructions", window, cx))
+            .children(self.input(&name_field, "Name", window, cx))
+            .children(self.input(&instructions_field, "Instructions", window, cx))
             .child(
                 div()
                     .text_size(px(FS_META))
@@ -305,7 +292,7 @@ impl CockpitView {
                         div()
                             .text_size(px(FS_META))
                             .text_color(rgb(INK_SUBTLE))
-                            .child(SharedString::from(skills_note)),
+                            .child(SharedString::from(inputs.skills_note.clone())),
                     ),
             )
             .child(
@@ -323,7 +310,7 @@ impl CockpitView {
                                 "inspector-provider",
                                 provider.to_string(),
                                 false,
-                                self.provider_picks(step),
+                                provider_picks(step),
                                 cx,
                             )),
                     )
@@ -338,7 +325,7 @@ impl CockpitView {
                                 "inspector-model",
                                 model_text,
                                 model_flagged,
-                                self.model_picks(step),
+                                model_picks(step, inputs.models(provider)),
                                 cx,
                             )),
                     ),
@@ -348,7 +335,7 @@ impl CockpitView {
                 "inspector-effort",
                 effort_text,
                 effort_flagged,
-                self.effort_picks(step),
+                effort_picks(step, inputs.models(provider)),
                 cx,
             ))
             .child(
@@ -384,15 +371,14 @@ impl CockpitView {
                                     ),
                             ),
                     )
-                    .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
-                        view.edit_step(
-                            fresh_id.clone(),
-                            StepChange {
+                    .on_click(cx.listener(move |_, _: &ClickEvent, _, cx| {
+                        cx.emit(WorkflowsEvent::EditStep {
+                            step: fresh_id.clone(),
+                            change: StepChange {
                                 fresh: Some(!fresh),
                                 ..Default::default()
                             },
-                            cx,
-                        )
+                        })
                     })),
             )
             .child(
@@ -428,15 +414,14 @@ impl CockpitView {
                                     ),
                             ),
                     )
-                    .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
-                        view.edit_step(
-                            merge_id.clone(),
-                            StepChange {
+                    .on_click(cx.listener(move |_, _: &ClickEvent, _, cx| {
+                        cx.emit(WorkflowsEvent::EditStep {
+                            step: merge_id.clone(),
+                            change: StepChange {
                                 by_merge_result: Some(!by_merge),
                                 ..Default::default()
                             },
-                            cx,
-                        )
+                        })
                     })),
             )
             .child(
@@ -448,28 +433,48 @@ impl CockpitView {
                         cx,
                     )
                     .debug_selector(|| "inspector-delete".into())
-                    .on_click(cx.listener(
-                        move |view, _: &ClickEvent, _, cx| view.delete_step(delete_id.clone(), cx),
-                    )),
+                    .on_click(cx.listener(move |_, _: &ClickEvent, _, cx| {
+                        cx.emit(WorkflowsEvent::Delete(delete_id.clone()))
+                    })),
                 ),
             )
             .into_any_element()
     }
 }
 
-impl CockpitView {
+impl WorkflowsView {
     /// The approval settings (#222): who approves, the deciding agent and
     /// its instructions, what follows approval and where rework goes,
     /// their problems, and the read-only list of what ends in Completed.
-    pub(super) fn approval_inspector(
+    fn approval_inspector(
         &self,
-        workflow: &Workflow,
-        window: &mut Window,
+        inputs: &WorkflowsInputs,
+        window: &Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        use super::direction::{chooser, segmented};
+        use super::direction::{picker_button, segmented};
         use ferrite_ui::theme::*;
-        let draft = &workflow.draft;
+        let chooser = |selector: &'static str,
+                       text: String,
+                       flagged: bool,
+                       picks: Vec<(ferrite_ui::menu::Item, Pick)>,
+                       cx: &mut Context<Self>| {
+            let picks = std::rc::Rc::new(picks);
+            picker_button(
+                selector,
+                text,
+                flagged,
+                move |_, trigger, at, cx: &mut Context<Self>| {
+                    cx.emit(WorkflowsEvent::Picks {
+                        picks: (*picks).clone(),
+                        trigger,
+                        at,
+                    })
+                },
+                cx,
+            )
+        };
+        let draft = &inputs.draft;
         let approval = &draft.approval;
         let problems = draft.approval_problems();
         let flagged = |words: &str| {
@@ -514,7 +519,7 @@ impl CockpitView {
                 "approval-by",
                 approval.by,
                 &[(Approver::Human, "You"), (Approver::Agent, "An agent")],
-                |view, by, cx| view.apply_pick(Pick::Approver(by), cx),
+                |_, by, cx: &mut Context<Self>| cx.emit(WorkflowsEvent::Pick(Pick::Approver(by))),
                 cx,
             ));
         if approval.by == Approver::Agent {
@@ -543,8 +548,8 @@ impl CockpitView {
                     "If this agent's own route leads to approval, it decides in the same run. \
                      Otherwise it runs once more to decide.",
                 ))
-                .children(self.text_input(
-                    &Field::ApprovalInstructions(workflow.id.clone()),
+                .children(self.input(
+                    &Field::ApprovalInstructions(inputs.workflow.clone()),
                     "Decision instructions",
                     window,
                     cx,

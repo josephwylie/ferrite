@@ -138,13 +138,20 @@ pub(crate) struct FactoryView {
     revealed: std::cell::Cell<Option<(String, usize, usize)>>,
     /// The Board or the Workflows.
     pub(crate) surface: super::workflows::Surface,
-    pub(crate) workflows: super::workflows::Workflows,
+    /// The skills each Workflow Step's Provider has installed.
+    pub(crate) skills: super::workflows::Skills,
+    /// The Workflows editor: what is chosen, the outline's focus and
+    /// scroll, its fields and the one that holds the keyboard.
+    pub(crate) editor: Entity<super::workflows::WorkflowsView>,
     /// The open Factory picker's rows.
     pub(crate) picks: Vec<(ferrite_ui::menu::Item, super::workflows::Pick)>,
     /// Answers, rework and redirects being written, and their sheets.
     pub(crate) direction: Entity<super::direction::DirectionView>,
     /// The Coordinator surface's field before the Coordinator runs (#224).
     pub(crate) opening: Option<Entity<Composer>>,
+    /// How Tasks start (#225): what the GitHub login listed for its
+    /// pickers.
+    pub(crate) starts: Entity<super::starts::StartsView>,
     /// The Archive (#226): its search and the earlier Worker being read.
     pub(crate) archive: Entity<super::archive::ArchiveView>,
     /// Whether the Archive shows in the board's place.
@@ -180,9 +187,10 @@ impl CockpitView {
                 focus_at_open: at,
             }) if view.project == project => *at = focus_at_open,
             _ => {
-                let workflows = super::workflows::Workflows::new(cx);
                 let archive = self.new_archive(cx);
                 let direction = self.new_direction(cx);
+                let starts = self.new_starts(cx);
+                let editor = self.new_workflows(cx);
                 let view = FactoryView {
                     project,
                     open: None,
@@ -192,9 +200,11 @@ impl CockpitView {
                     columns: gpui::ScrollHandle::new(),
                     revealed: Default::default(),
                     surface: super::workflows::Surface::Board,
-                    workflows,
+                    skills: Default::default(),
+                    editor,
                     picks: Vec::new(),
                     direction,
+                    starts,
                     opening: None,
                     archive,
                     archive_shown: false,

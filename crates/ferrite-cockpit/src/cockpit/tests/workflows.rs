@@ -51,8 +51,8 @@ fn workflows_window<'a>(
 }
 
 fn names(view: &Entity<CockpitView>, cx: &mut gpui::VisualTestContext) -> Vec<String> {
-    view.read_with(cx, |view, _| {
-        view.shown_workflow()
+    view.read_with(cx, |view, cx| {
+        view.shown_workflow(cx)
             .unwrap()
             .draft
             .steps
@@ -63,7 +63,7 @@ fn names(view: &Entity<CockpitView>, cx: &mut gpui::VisualTestContext) -> Vec<St
 }
 
 fn selected(view: &Entity<CockpitView>, cx: &mut gpui::VisualTestContext) -> String {
-    view.read_with(cx, |view, _| view.shown_step().unwrap().name.clone())
+    view.read_with(cx, |view, cx| view.shown_step(cx).unwrap().name.clone())
 }
 
 /// AC: Workflows are made Blank or from the template from the Workflows
@@ -129,8 +129,8 @@ fn the_outline_is_shaped_by_mouse_and_keyboard(cx: &mut TestAppContext) {
             "Conflict resolver"
         ]
     );
-    view.read_with(cx, |view, _| {
-        let draft = &view.shown_workflow().unwrap().draft;
+    view.read_with(cx, |view, cx| {
+        let draft = &view.shown_workflow(cx).unwrap().draft;
         assert_eq!(
             draft.route_label("s-1", &Destination::Next),
             "Next agent \u{b7} Implementer",
@@ -141,7 +141,7 @@ fn the_outline_is_shaped_by_mouse_and_keyboard(cx: &mut TestAppContext) {
     // Drag: Reviewer let go on the first row takes its place.
     view.update(cx, |view, cx| {
         let reviewer = view
-            .shown_workflow()
+            .shown_workflow(cx)
             .unwrap()
             .draft
             .step("s-4")
@@ -177,7 +177,7 @@ fn the_outline_is_shaped_by_mouse_and_keyboard(cx: &mut TestAppContext) {
     // A second Workflow, Blank, renamed by typing.
     click(cx, "workflow-new");
     click(cx, "context-menu-row-0");
-    let blank = view.read_with(cx, |view, _| view.shown_workflow().unwrap().id.clone());
+    let blank = view.read_with(cx, |view, cx| view.shown_workflow(cx).unwrap().id.clone());
     view.update(cx, |view, cx| {
         view.focus_field(Field::WorkflowName(blank.clone()), cx)
     });
@@ -254,8 +254,8 @@ fn routes_problems_and_pickers(cx: &mut TestAppContext) {
     tick(cx);
     assert!(shows(cx, "outline-route-s-4-unable-flagged"));
     assert!(shows(cx, "workflow-problems"));
-    view.read_with(cx, |view, _| {
-        let draft = &view.shown_workflow().unwrap().draft;
+    view.read_with(cx, |view, cx| {
+        let draft = &view.shown_workflow(cx).unwrap().draft;
         let reviewer = draft.step("s-4").unwrap();
         assert_eq!(reviewer.on_unable, Destination::Step("s-3".into()));
         assert_eq!(
@@ -265,9 +265,9 @@ fn routes_problems_and_pickers(cx: &mut TestAppContext) {
     });
     view.update(cx, |view, cx| view.save_workflow(cx));
     tick(cx);
-    view.read_with(cx, |view, _| {
+    view.read_with(cx, |view, cx| {
         assert!(
-            view.shown_workflow().unwrap().versions.is_empty(),
+            view.shown_workflow(cx).unwrap().versions.is_empty(),
             "unsaved"
         );
         assert_eq!(
@@ -289,8 +289,8 @@ fn routes_problems_and_pickers(cx: &mut TestAppContext) {
     });
     click(cx, "context-menu-row-0");
     // The approval's rework recipient was the Implementer too (#222).
-    view.read_with(cx, |view, _| {
-        let draft = &view.shown_workflow().unwrap().draft;
+    view.read_with(cx, |view, cx| {
+        let draft = &view.shown_workflow(cx).unwrap().draft;
         assert_eq!(
             draft
                 .approval_problems()
@@ -317,11 +317,11 @@ fn routes_problems_and_pickers(cx: &mut TestAppContext) {
     assert!(shows(cx, "skill-chip-retired-skill-flagged"));
     assert!(shows(cx, "skill-chip-code-review"));
     assert!(shows(cx, "workflow-problems"));
-    view.read_with(cx, |view, _| {
-        let reviewer = view.shown_step().unwrap();
+    view.read_with(cx, |view, cx| {
+        let reviewer = view.shown_step(cx).unwrap();
         assert_eq!(reviewer.agent.model.as_deref(), Some("claude-gone"));
         let problems: Vec<String> = view
-            .draft_problems()
+            .draft_problems(cx)
             .into_iter()
             .map(|problem| problem.message)
             .collect();
@@ -347,8 +347,8 @@ fn routes_problems_and_pickers(cx: &mut TestAppContext) {
     assert!(shows(cx, "skill-option-triage"), "found by its description");
     assert!(!shows(cx, "skill-option-pr"));
     click(cx, "skill-option-triage");
-    view.read_with(cx, |view, _| {
-        assert_eq!(view.shown_step().unwrap().skills, ["code-review", "triage"]);
+    view.read_with(cx, |view, cx| {
+        assert_eq!(view.shown_step(cx).unwrap().skills, ["code-review", "triage"]);
     });
 
     // A route picked on a row: Reviewer finished → Coordinator, and the
@@ -390,9 +390,9 @@ fn routes_problems_and_pickers(cx: &mut TestAppContext) {
     });
     tick(cx);
     // The Reviewer would complete what was never merged.
-    view.read_with(cx, |view, _| {
+    view.read_with(cx, |view, cx| {
         let problems: Vec<String> = view
-            .draft_problems()
+            .draft_problems(cx)
             .into_iter()
             .map(|problem| problem.message)
             .collect();
@@ -426,8 +426,8 @@ fn routes_problems_and_pickers(cx: &mut TestAppContext) {
     tick(cx);
 
     click(cx, "workflow-save");
-    view.read_with(cx, |view, _| {
-        let workflow = view.shown_workflow().unwrap();
+    view.read_with(cx, |view, cx| {
+        let workflow = view.shown_workflow(cx).unwrap();
         assert_eq!(workflow.versions.len(), 1);
         assert!(!workflow.unsaved());
         assert_eq!(
@@ -464,17 +464,17 @@ fn typed_text_survives_what_happens_around_it(cx: &mut TestAppContext) {
         view.create_workflow(Template::Blank, cx);
     });
     tick(cx);
-    let (workflow, step) = view.read_with(cx, |view, _| {
+    let (workflow, step) = view.read_with(cx, |view, cx| {
         (
-            view.shown_workflow().unwrap().id.clone(),
-            view.shown_step().unwrap().id.clone(),
+            view.shown_workflow(cx).unwrap().id.clone(),
+            view.shown_step(cx).unwrap().id.clone(),
         )
     });
     let instructions = Field::Instructions(workflow.clone(), step.clone());
     click(cx, "inspector-instructions");
-    view.read_with(cx, |view, _| {
+    view.read_with(cx, |view, cx| {
         assert_eq!(
-            view.factory().unwrap().workflows.focused,
+            view.factory().unwrap().editor.read(cx).focused,
             Some(instructions.clone())
         );
     });
@@ -489,7 +489,7 @@ fn typed_text_survives_what_happens_around_it(cx: &mut TestAppContext) {
                 "{when}"
             );
             assert_eq!(
-                view.shown_step().unwrap().instructions,
+                view.shown_step(cx).unwrap().instructions,
                 typed,
                 "{when}: the draft"
             );
@@ -557,7 +557,92 @@ fn typed_text_survives_what_happens_around_it(cx: &mut TestAppContext) {
     });
     tick(cx);
     holds(&view, cx, "saved and reopened");
-    view.read_with(cx, |view, _| {
-        assert_eq!(view.shown_workflow().unwrap().versions.len(), 1);
+    view.read_with(cx, |view, cx| {
+        assert_eq!(view.shown_workflow(cx).unwrap().versions.len(), 1);
     });
+}
+
+/// The outline's rows the inspector shows: a Step's, the approval's or
+/// the start's, as they are drawn chosen.
+fn chosen_rows(cx: &mut gpui::VisualTestContext) -> Vec<&'static str> {
+    [
+        ("outline-row-s-1-selected", "step"),
+        ("outline-approval-selected", "approval"),
+        ("outline-start-selected", "start"),
+    ]
+    .into_iter()
+    .filter(|(selector, _)| {
+        shows(cx, selector) || shows(cx, &format!("{selector}-flagged"))
+    })
+    .map(|(_, row)| row)
+    .collect()
+}
+
+/// What the inspector shows: a Step's settings, the approval settings or
+/// the start.
+fn inspected(cx: &mut gpui::VisualTestContext) -> Vec<&'static str> {
+    [
+        ("inspector-name", "step"),
+        ("approval-settings", "approval"),
+        ("inspector-start", "start"),
+    ]
+    .into_iter()
+    .filter(|(selector, _)| shows(cx, selector))
+    .map(|(_, shown)| shown)
+    .collect()
+}
+
+/// Press an outline row, chosen or not.
+fn press_row(cx: &mut gpui::VisualTestContext, row: &str) {
+    let selector = ["-selected", "", "-selected-flagged", "-flagged"]
+        .into_iter()
+        .map(|state| format!("{row}{state}"))
+        .find(|selector| shows(cx, selector))
+        .unwrap_or_else(|| panic!("no {row} row"));
+    click(cx, &selector);
+}
+
+/// AC: the inspector shows one thing at a time, a Step, the approval or
+/// the start, and only that one's outline row is chosen, whichever was
+/// chosen before; choosing a Workflow lands on its first Step.
+#[gpui::test]
+fn the_inspector_shows_one_thing_and_its_row_alone_is_chosen(cx: &mut TestAppContext) {
+    let (view, cx, _fake, _) = workflows_window(cx, "workflows-inspected", |_| {});
+    cx.simulate_resize(gpui::size(px(1600.), px(1800.)));
+    tick(cx);
+    view.update(cx, |view, cx| {
+        view.factory_surface(Surface::Workflows, cx);
+        view.create_workflow(Template::Blank, cx);
+    });
+    tick(cx);
+    let first = view.read_with(cx, |view, cx| view.shown_workflow(cx).unwrap().id.clone());
+    assert_eq!((chosen_rows(cx), inspected(cx)), (vec!["step"], vec!["step"]));
+
+    press_row(cx, "outline-approval");
+    assert_eq!((chosen_rows(cx), inspected(cx)), (vec!["approval"], vec!["approval"]));
+    press_row(cx, "outline-start");
+    assert_eq!(
+        (chosen_rows(cx), inspected(cx)),
+        (vec!["start"], vec!["start"]),
+        "the start, from the approval"
+    );
+    press_row(cx, "outline-approval");
+    assert_eq!(
+        (chosen_rows(cx), inspected(cx)),
+        (vec!["approval"], vec!["approval"]),
+        "the approval, from the start"
+    );
+
+    // Another Workflow, then back: each lands on its first Step.
+    view.update(cx, |view, cx| view.apply_pick(Pick::Create(Template::Blank), cx));
+    tick(cx);
+    assert_eq!((chosen_rows(cx), inspected(cx)), (vec!["step"], vec!["step"]));
+    press_row(cx, "outline-approval");
+    view.update(cx, |view, cx| view.apply_pick(Pick::Select(first), cx));
+    tick(cx);
+    assert_eq!(
+        (chosen_rows(cx), inspected(cx)),
+        (vec!["step"], vec!["step"]),
+        "a Workflow chosen shows its first Step"
+    );
 }

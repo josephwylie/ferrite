@@ -105,8 +105,8 @@ impl CockpitView {
     }
 
     pub(crate) fn apply_pick(&mut self, pick: Pick, cx: &mut Context<Self>) {
-        let at = |view: &Self, step: &str| {
-            view.shown_workflow()
+        let at = |view: &Self, step: &str, cx: &gpui::App| {
+            view.shown_workflow(cx)
                 .and_then(|workflow| workflow.draft.steps.iter().position(|s| s.id == step))
         };
         match pick {
@@ -145,12 +145,12 @@ impl CockpitView {
                 cx,
             ),
             Pick::MoveUp(step) => {
-                if let Some(to) = at(self, &step).and_then(|at| at.checked_sub(1)) {
+                if let Some(to) = at(self, &step, cx).and_then(|at| at.checked_sub(1)) {
                     self.move_step(step, to, cx);
                 }
             }
             Pick::MoveDown(step) => {
-                if let Some(at) = at(self, &step) {
+                if let Some(at) = at(self, &step, cx) {
                     self.move_step(step, at + 1, cx);
                 }
             }
@@ -198,8 +198,9 @@ impl CockpitView {
         &self,
         step: &Step,
         kind: RouteKind,
+        cx: &gpui::App,
     ) -> Vec<(ferrite_ui::menu::Item, Pick)> {
-        let Some(workflow) = self.shown_workflow() else {
+        let Some(workflow) = self.shown_workflow(cx) else {
             return Vec::new();
         };
         let current = step.route(kind);
@@ -222,70 +223,11 @@ impl CockpitView {
             .collect()
     }
 
-    pub(super) fn provider_picks(&self, step: &Step) -> Vec<(ferrite_ui::menu::Item, Pick)> {
-        Provider::ALL
-            .into_iter()
-            .map(|provider| {
-                (
-                    ferrite_ui::menu::Item::new(provider.to_string())
-                        .checked(step.agent.provider == provider),
-                    Pick::Provider(step.id.clone(), provider),
-                )
-            })
-            .collect()
-    }
-
-    pub(super) fn model_picks(&self, step: &Step) -> Vec<(ferrite_ui::menu::Item, Pick)> {
-        model_choices(&self.cockpit.model_catalog(step.agent.provider))
-            .into_iter()
-            .map(|(label, value)| {
-                let chosen = model_chosen(step.agent.model.as_deref(), &value);
-                (
-                    ferrite_ui::menu::Item::new(label).checked(chosen),
-                    Pick::Model(step.id.clone(), value),
-                )
-            })
-            .collect()
-    }
-
-    pub(super) fn effort_picks(&self, step: &Step) -> Vec<(ferrite_ui::menu::Item, Pick)> {
-        let models = self.cockpit.model_catalog(step.agent.provider);
-        let mut efforts: Vec<String> = match &step.agent.model {
-            Some(value) => models
-                .iter()
-                .find(|model| &model.value == value)
-                .map(|model| model.efforts.clone())
-                .unwrap_or_default(),
-            None => Vec::new(),
-        };
-        if efforts.is_empty() {
-            for model in &models {
-                for effort in &model.efforts {
-                    if !efforts.contains(effort) {
-                        efforts.push(effort.clone());
-                    }
-                }
-            }
-        }
-        let mut picks = vec![(
-            ferrite_ui::menu::Item::new("Default").checked(step.agent.effort.is_none()),
-            Pick::Effort(step.id.clone(), String::new()),
-        )];
-        for effort in efforts {
-            let chosen = step.agent.effort.as_deref() == Some(effort.as_str());
-            picks.push((
-                ferrite_ui::menu::Item::new(effort.clone()).checked(chosen),
-                Pick::Effort(step.id.clone(), effort),
-            ));
-        }
-        picks
-    }
-
     /// A row's menu: a move only where the row can go.
-    pub(super) fn row_picks(&self, step: &Step) -> Vec<(ferrite_ui::menu::Item, Pick)> {
+    pub(super) fn row_picks(&self, step: &Step, cx: &gpui::App) -> Vec<(ferrite_ui::menu::Item, Pick)> {
         let id = step.id.clone();
         let steps = self
-            .shown_workflow()
+            .shown_workflow(cx)
             .map(|workflow| workflow.draft.steps.as_slice())
             .unwrap_or_default();
         let at = steps.iter().position(|each| each.id == step.id);
@@ -315,11 +257,11 @@ impl CockpitView {
         picks
     }
 
-    pub(super) fn workflow_picks(&self) -> Vec<(ferrite_ui::menu::Item, Pick)> {
+    pub(super) fn workflow_picks(&self, cx: &gpui::App) -> Vec<(ferrite_ui::menu::Item, Pick)> {
         let Some(project) = self.factory_project() else {
             return Vec::new();
         };
-        let shown = self.shown_id();
+        let shown = self.shown_id(cx);
         self.cockpit
             .factory()
             .workflows_of(project)
@@ -373,4 +315,72 @@ impl CockpitView {
         }
         picks
     }
+}
+
+/// A Step's Provider choices.
+pub(super) fn provider_picks(step: &Step) -> Vec<(ferrite_ui::menu::Item, Pick)> {
+    Provider::ALL
+        .into_iter()
+        .map(|provider| {
+            (
+                ferrite_ui::menu::Item::new(provider.to_string())
+                    .checked(step.agent.provider == provider),
+                Pick::Provider(step.id.clone(), provider),
+            )
+        })
+        .collect()
+}
+
+/// A Step's model choices, from its Provider's `models`.
+pub(super) fn model_picks(
+    step: &Step,
+    models: &[ferrite_core::ModelInfo],
+) -> Vec<(ferrite_ui::menu::Item, Pick)> {
+    model_choices(models)
+        .into_iter()
+        .map(|(label, value)| {
+            let chosen = model_chosen(step.agent.model.as_deref(), &value);
+            (
+                ferrite_ui::menu::Item::new(label).checked(chosen),
+                Pick::Model(step.id.clone(), value),
+            )
+        })
+        .collect()
+}
+
+/// A Step's Effort choices: its model's, else any of its Provider's
+/// `models`.
+pub(super) fn effort_picks(
+    step: &Step,
+    models: &[ferrite_core::ModelInfo],
+) -> Vec<(ferrite_ui::menu::Item, Pick)> {
+    let mut efforts: Vec<String> = match &step.agent.model {
+        Some(value) => models
+            .iter()
+            .find(|model| &model.value == value)
+            .map(|model| model.efforts.clone())
+            .unwrap_or_default(),
+        None => Vec::new(),
+    };
+    if efforts.is_empty() {
+        for model in models {
+            for effort in &model.efforts {
+                if !efforts.contains(effort) {
+                    efforts.push(effort.clone());
+                }
+            }
+        }
+    }
+    let mut picks = vec![(
+        ferrite_ui::menu::Item::new("Default").checked(step.agent.effort.is_none()),
+        Pick::Effort(step.id.clone(), String::new()),
+    )];
+    for effort in efforts {
+        let chosen = step.agent.effort.as_deref() == Some(effort.as_str());
+        picks.push((
+            ferrite_ui::menu::Item::new(effort.clone()).checked(chosen),
+            Pick::Effort(step.id.clone(), effort),
+        ));
+    }
+    picks
 }

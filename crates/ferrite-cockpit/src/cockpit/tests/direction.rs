@@ -660,8 +660,8 @@ fn approval_settings_choose_who_approves_and_list_what_completes(cx: &mut TestAp
     assert!(shows(cx, "approval-settings"));
     assert!(shows(cx, "approval-by-0-on"), "you approve by default");
     assert!(shows(cx, "completion-path-0"));
-    view.read_with(cx, |view, _| {
-        let draft = &view.shown_workflow().unwrap().draft;
+    view.read_with(cx, |view, cx| {
+        let draft = &view.shown_workflow(cx).unwrap().draft;
         assert_eq!(
             draft.completion_paths(),
             ["Merge agent reports merge confirmed"]
@@ -678,12 +678,12 @@ fn approval_settings_choose_who_approves_and_list_what_completes(cx: &mut TestAp
         view.apply_pick(Pick::Decider("s-4".into()), cx)
     });
     tick(cx);
-    let workflow = view.read_with(cx, |view, _| view.shown_workflow().unwrap().id.clone());
+    let workflow = view.read_with(cx, |view, cx| view.shown_workflow(cx).unwrap().id.clone());
     click(cx, "approval-instructions");
     cx.simulate_input("Approve when a test covers it");
     tick(cx);
     view.read_with(cx, |view, cx| {
-        let approval = &view.shown_workflow().unwrap().draft.approval;
+        let approval = &view.shown_workflow(cx).unwrap().draft.approval;
         assert_eq!(approval.step.as_deref(), Some("s-4"));
         assert_eq!(approval.instructions, "Approve when a test covers it");
         assert_eq!(
