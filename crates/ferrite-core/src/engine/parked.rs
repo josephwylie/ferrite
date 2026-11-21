@@ -7,7 +7,7 @@
 //! place.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::sync::mpsc::{channel, Receiver, TryRecvError};
+use std::sync::mpsc::{Receiver, TryRecvError};
 
 use crate::protocol::ParkedThread;
 use crate::store::Store;
@@ -134,7 +134,7 @@ impl ParkedListing {
 
     fn read(&mut self, store: &Store, threads: Vec<ThreadId>) {
         let store = store.clone();
-        let (rows, reading) = channel();
+        let (rows, reading) = crate::doorbell::channel();
         let wanted = threads.clone();
         let read = std::thread::Builder::new()
             .name("ferrite-parked-rows".into())

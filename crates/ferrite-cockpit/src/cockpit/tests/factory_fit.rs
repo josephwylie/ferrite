@@ -650,7 +650,7 @@ fn template_window<'a>(
     models: Vec<ferrite_core::ModelInfo>,
 ) -> (Entity<CockpitView>, &'a mut gpui::VisualTestContext) {
     let fake = Fake::default();
-    let (announce, announced) = std::sync::mpsc::channel();
+    let (announce, announced) = ferrite_core::doorbell::channel();
     *fake.model_discovery.borrow_mut() = Some(announced);
     let dir = scratch(name);
     let mut core = Cockpit::new(Store::open(&dir).unwrap(), Box::new(fake));

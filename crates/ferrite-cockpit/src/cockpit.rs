@@ -229,8 +229,9 @@ actions!(
     ]
 );
 
-/// How often the pump drains every Session. One timer for the whole cockpit,
-/// not one per Pane: 24 Panes must cost one frame, not 24. 8ms, because 16
+/// The pump's beat: the most often it runs, however fast things arrive
+/// (ADR 0041). One for the whole cockpit, not one per Pane: 24 Panes must
+/// cost one frame, not 24. 8ms, because 16
 /// capped the cockpit at 60fps on a 120Hz display — half the refresh rate,
 /// and the operator sees the difference in a scroll. Measured on the perf
 /// fixture (release, `--load --panes 4`): 16ms pins at exactly 60.0fps and
@@ -250,6 +251,24 @@ fn pump_interval() -> Duration {
 const MAIN_BRANCH: &str = "main";
 
 const PUMP_MS: u64 = 8;
+
+/// The longest the pump sleeps with nothing rung and nothing due: what has
+/// no bell (a timeout, a retry, what the window tells the Engine) waits at
+/// most this long (ADR 0041).
+const PUMP_FALLBACK: Duration = Duration::from_millis(250);
+
+/// Which rings wake the pump. gpui's test scheduler (the tests,
+/// `--headless`) refuses a wake from another thread, so there the pump
+/// hears its own thread's rings and looks for the rest each beat.
+fn pump_hears(executor: &gpui::BackgroundExecutor) -> ferrite_core::doorbell::Hears {
+    #[cfg(any(test, feature = "headless", feature = "browser-smoke"))]
+    if executor.dispatcher().as_test().is_some() {
+        return ferrite_core::doorbell::Hears::ThisThread;
+    }
+    #[cfg(not(any(test, feature = "headless", feature = "browser-smoke")))]
+    let _ = executor;
+    ferrite_core::doorbell::Hears::AnyThread
+}
 
 /// A Thread's system notification tag: a newer one for the same Thread
 /// replaces it in the notification centre. A Thread on another machine is
@@ -1085,10 +1104,39 @@ impl CockpitView {
         // This window says what it draws from its first frame on, so no
         // Thread streams to it before it is drawn (ADR 0032).
         cockpit.draws_transcripts([]);
-        cx.spawn(async move |this, cx| loop {
-            cx.background_executor().timer(pump_interval()).await;
-            if this.update(cx, |view, cx| view.pump(cx)).is_err() {
-                break;
+        // The pump runs a beat after its last run at the soonest, once the
+        // bell rings past what it had seen as that run began, or once its
+        // next due time comes (ADR 0041).
+        cx.spawn(async move |this, cx| {
+            let beat = pump_interval();
+            let hears = pump_hears(cx.background_executor());
+            let (mut seen, mut due) = (ferrite_core::doorbell::rung(), cx.background_executor().now());
+            loop {
+                cx.background_executor().timer(beat).await;
+                loop {
+                    let now = cx.background_executor().now();
+                    if ferrite_core::doorbell::rung() > seen || now >= due {
+                        break;
+                    }
+                    let wait = due - now;
+                    let wait = match hears {
+                        ferrite_core::doorbell::Hears::AnyThread => wait,
+                        ferrite_core::doorbell::Hears::ThisThread => wait.min(beat),
+                    };
+                    futures::future::select(
+                        std::pin::pin!(ferrite_core::doorbell::rung_past(seen, hears)),
+                        std::pin::pin!(cx.background_executor().timer(wait)),
+                    )
+                    .await;
+                }
+                seen = ferrite_core::doorbell::rung();
+                match this.update(cx, |view, cx| {
+                    let brought = view.pump(cx);
+                    cx.background_executor().now() + view.pump_due(brought, cx)
+                }) {
+                    Ok(next) => due = next,
+                    Err(_) => break,
+                }
             }
         })
         .detach();
@@ -1325,9 +1373,12 @@ impl CockpitView {
         // state changes and before GPUI draws cached transcript children.
         // The render path repeats this cheap key comparison for initial mount
         // and derived display state that did not notify the Cockpit.
+        // It also rings the pump's bell: what a window action left for the
+        // pump is read on its next beat.
         cx.observe_self(|view, cx| {
             view.sync_visible_transcripts(cx);
             view.sync_composer_floats(cx);
+            ferrite_core::doorbell::ring();
         })
         .detach();
         // Every Thread the launch opened is on the roster already, and
@@ -1393,6 +1444,22 @@ impl CockpitView {
             unreadable: self.prefs.unreadable.clone(),
             keys_refused: Vec::new(),
         }
+    }
+
+    /// `sync_panes` when the Panes are not the roster's, in its order:
+    /// whether they moved.
+    fn follow_roster(&mut self, cx: &mut Context<Self>) -> bool {
+        let moved = !self.panes.iter().map(|pane| pane.identity).eq(self
+            .cockpit
+            .read(cx)
+            .roster()
+            .panes()
+            .iter()
+            .copied());
+        if moved {
+            self.sync_panes(cx);
+        }
+        moved
     }
 
     /// Mirror the roster (#28): a view for every Pane the Cockpit shows, in
@@ -2108,7 +2175,8 @@ impl CockpitView {
 
     /// One frame for the whole cockpit. Only Panes the pump reports as
     /// changed are worth a repaint; a frame where nothing moved costs nothing.
-    fn pump(&mut self, cx: &mut Context<Self>) {
+    /// True when it brought something (what `Arrived` is emitted for).
+    fn pump(&mut self, cx: &mut Context<Self>) -> bool {
         #[cfg(test)]
         drawn::pumped();
         // What a stream can move beyond its own Pane and nav row, before it
@@ -2194,16 +2262,7 @@ impl CockpitView {
         // board and other windows do both). Keep this mirror in roster order
         // before using pane indices. Finish bootstraps first so a Draft keeps
         // its existing Composer when it becomes a Thread.
-        let panes_changed = !self.panes.iter().map(|pane| pane.identity).eq(self
-            .cockpit
-            .read(cx)
-            .roster()
-            .panes()
-            .iter()
-            .copied());
-        if panes_changed {
-            self.sync_panes(cx);
-        }
+        let panes_changed = self.follow_roster(cx);
         self.watch_prs(cx);
         let mut restarted = Vec::new();
         // What the sweep found moved: a fact or a Thread's age (everything
@@ -2285,11 +2344,12 @@ impl CockpitView {
         // Something arrived, or the Server said something no Pane shows
         // (another window's Snooze): what draws from the model looks again
         // once the pump is done (the nav, `NavView::look`).
-        if !idle || self.cockpit.update(cx, |cockpit, _| cockpit.take_arrived()) {
+        let brought = !idle || self.cockpit.update(cx, |cockpit, _| cockpit.take_arrived());
+        if brought {
             self.cockpit.update(cx, |_, cx| cx.emit(Arrived));
         }
         if idle {
-            return;
+            return brought;
         }
         let mut turn_ended = false;
         for update in &frame {
@@ -2365,7 +2425,7 @@ impl CockpitView {
         }
         if !precise {
             cx.notify();
-            return;
+            return true;
         }
         // Streaming: the Panes it reached and the nav redraw, and the frame
         // with them; every other Pane is reused. The transcripts take their
@@ -2383,6 +2443,27 @@ impl CockpitView {
             self.nav_view.update(cx, |_, cx| cx.notify());
         }
         self.notify_frame(cx);
+        true
+    }
+
+    /// How long until the pump is next due if nothing rings: a beat after
+    /// one that brought something (the rest of a full beat, a step that
+    /// answers the next one), or while a Browser page is live, since its
+    /// pages' events do not ring; else at the sweep, an alert's delay or a
+    /// toast's end, and at the latest `PUMP_FALLBACK`.
+    fn pump_due(&self, brought: bool, cx: &gpui::App) -> Duration {
+        if brought || self.browsers.live() {
+            return pump_interval();
+        }
+        let now = cx.background_executor().now();
+        let sweep = SWEEP_INTERVAL.saturating_sub(now.duration_since(self.swept));
+        let alert = self
+            .toasts
+            .read(cx)
+            .needs_you
+            .next_due(now)
+            .map_or(PUMP_FALLBACK, |due| due.saturating_duration_since(now));
+        PUMP_FALLBACK.min(sweep).min(alert)
     }
 
     /// What a stream can change that more than its own Pane and nav row
@@ -3530,7 +3611,15 @@ impl CockpitView {
     /// What an agent or a script asked of the windows through the API
     /// (ADR 0027), one at a time.
     fn present_asked(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        for asked in self.cockpit.update(cx, |cockpit, _| cockpit.take_asked()) {
+        let asked = self.cockpit.update(cx, |cockpit, _| cockpit.take_asked());
+        if asked.is_empty() {
+            return;
+        }
+        // An act's settle can take an ask before the pump has run: the
+        // Panes follow the roster first, so a Focus on a Thread just opened
+        // lands on its Pane instead of reopening a Thread that is open.
+        self.follow_roster(cx);
+        for asked in asked {
             self.present(asked, window, cx);
         }
     }

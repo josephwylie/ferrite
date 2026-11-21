@@ -1061,6 +1061,9 @@ fn snooze_expiry_returns_threads_without_an_alert(cx: &mut TestAppContext) {
     tick(cx);
     assert!(view.read_with(cx, |view, cx| view.needs_you_rows(cx).is_empty()));
     clock.advance(Duration::from_secs(3601));
+    // The in-process Engine wakes a snooze as the pump runs, which an idle
+    // window's fallback does (ADR 0041).
+    cx.executor().advance_clock(PUMP_FALLBACK);
     tick(cx);
     view.read_with(cx, |view, cx| {
         assert_eq!(view.needs_you_rows(cx).len(), 1);

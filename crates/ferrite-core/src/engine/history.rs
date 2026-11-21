@@ -34,7 +34,7 @@ impl Loader {
     pub(super) fn start(dir: PathBuf) -> io::Result<Self> {
         let store = Store::open(dir)?;
         let (requests, receive) = mpsc::sync_channel::<Request>(8);
-        let (send, results) = mpsc::sync_channel(8);
+        let (send, results) = crate::doorbell::sync_channel(8);
         std::thread::Builder::new()
             .name("ferrite-child-history".into())
             .spawn(move || {

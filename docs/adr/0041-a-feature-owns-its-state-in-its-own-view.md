@@ -974,7 +974,8 @@ model itself.
   takes the lent `model`, never the handle. Each runs in the Cockpit's
   tests: four on every beat or frame, the side chat's and the
   Overview's in their own.
-- **The pump keeps its beat.** It cannot wake only on arrival yet. The
+- **The pump keeps its beat** (until the amendment below, which has it
+  wake on arrival instead). It could not wake only on arrival yet. The
   in-process Engine (`--demo`, `--load`, tests) is pumped by it: it reads
   each Session's events by polling (`try_recv`, at most 256 a beat, so a
   full beat leaves the rest for the next), retries a failed log write and
@@ -986,6 +987,85 @@ model itself.
   minute turns. What it
   stops is the work: an idle beat emits nothing, so nothing that
   subscribes to the model runs.
+
+## Amendment (2026-11-21): the pump wakes on arrival
+
+An idle window still ran its pump 125 times a second, and each beat
+polled every queue the window reads. Now the pump runs when something
+arrives or when a clock it owns is due.
+
+- **One wake for the window: the doorbell.** The pump sleeps until the
+  bell rings past what it had seen as its last run began
+  (`doorbell::rung_past`), or until its next due time, whichever comes
+  first. A ring during a run is not lost: the count was read before it.
+  Wakes still come at most one a beat (`PUMP_MS`), so a stream of a
+  thousand messages a second costs the window what it cost before, and
+  an arrival at rest is read at once instead of on the next beat. gpui's
+  test scheduler, which the tests and `--headless` run on, refuses a
+  wake from another thread (it fails the test as nondeterministic), so
+  there the pump hears its own thread's rings (`Hears::ThisThread`) and
+  looks at the bell's count each beat for the rest: a beat that finds
+  nothing rung and nothing due runs no pump. On a platform's own
+  dispatcher any thread's ring wakes it, and it sleeps between.
+- **Who rings.** Every producer the pump reads. A `doorbell::channel` or
+  `doorbell::sync_channel` sender rings as it sends and as it hangs up:
+  the Server's socket reader, the attach, a start, a git read
+  (`read_here`), a Remote's answers (routed by the pump itself, so the
+  consumer the pump has already passed reads it on the next beat), the
+  in-process Engine's queues (a provider's events, the history loader,
+  the parked rows, a handover's read, the memory sampler, follow-up
+  suggestions, the model, session and command discoveries), the lexer, a
+  machine's status and its setup. A provider's reader also rings once
+  for each line it reads (`providers::read_line`), for the acks it hands
+  to the Engine on channels the Session's trait names (a rewind, a fork,
+  a tuning, a file search). The window rings for itself on its own
+  notify (`observe_self`), and core's `Cockpit` on each act, each call
+  into its in-process Engine, and each change to what the window tells
+  the Engine (a Composer holding unsent text or not, the window's
+  focus). A fixture world's Server message rings as a Server's does
+  (`receive_fixture`). A Pane's preview rings as it queues what the pump
+  opens: a link's page in the Browser, an annotation to edit, a remote
+  attachment's preview. What a window action leaves for the pump is read
+  on the next beat, as before.
+- **When the pump is next due.** A beat that brought something (what
+  `Arrived` is emitted for) is followed by another one beat later, so a
+  full beat's rest (256 events), a failed log write's retry (it moves
+  the Thread every beat) and a step that answers the next one finish as
+  they did. A window with a live Browser tab keeps the beat: its pages'
+  events, dialogs and controls, and the browser engine's start, come
+  from the browser's own callbacks and worker, which do not ring.
+  Otherwise the pump is next due at its sweep (every two seconds; free
+  disk and message times ride it), at an alert's delay or a toast's end
+  (`NeedsYou::next_due`), and at the latest after `PUMP_FALLBACK` (250
+  ms).
+- **What rides the fallback, and why no one waits on it.** Clock work
+  with no due time of its own: a landing's deadline, the Remote's
+  reattach backoff and restart timeout (seconds), the Composer's
+  five-second wait before it lists files itself, a finished Panel save,
+  the seconds an SSH verification prompt counts down (each up to 250 ms
+  late). The in-process Engine's own clock work (`--demo`, `--load`,
+  tests; a Server runs its Engine on its own loop): a snooze's end, and
+  the three-second grace after a turn's last child settles before its
+  finish is told. And the seen marks the pump reads without a notify.
+  Each is a timeout, a retry, or a fact another program reads, none an
+  answer to an operator's action; the countdown is a clock the operator
+  reads, and a quarter second on it goes unseen. A test that moves the
+  wall clock moves the window's clock by `PUMP_FALLBACK` too, for the
+  pump that reads it.
+- **An ask finds the Panes the roster has.** An act's settle can take
+  what the Server said before the pump runs, a Focus with it. The render
+  that presents the Focus has the Panes follow the roster first
+  (`follow_roster`, as the pump does), so a Thread the CLI just opened
+  is focused, not reopened. Seen once in a real run on the new pump:
+  "Couldn't reopen … the Thread is open".
+- **Tests drive the same pump.** A fake Session's stream is a
+  `doorbell::channel`, so a test that sends and moves the clock one beat
+  sees the pump run, as a real stream does. `tests/wakes.rs` counts the
+  beats of an idle window and the wait from an arrival to its draw. On
+  Linux, when this was written: an idle window's pump ran 18 times in
+  four seconds (500 before), an arrival at rest waited 0.4 ms on average
+  for its draw (4.5 ms before) and one in a stream 5.1 ms (as before),
+  never more than a beat.
 
 ## Precedent
 

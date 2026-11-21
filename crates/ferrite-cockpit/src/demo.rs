@@ -10,12 +10,13 @@
 
 use std::io;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::{self, Receiver, Sender};
+use std::sync::mpsc::Receiver;
 use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
 use ferrite_core::cockpit::{Cockpit, SpawnRequest, Spawner};
+use ferrite_core::doorbell::Sender;
 use ferrite_core::providers::{applied, Session, SettingAck};
 use ferrite_core::store::Provider;
 use ferrite_core::workspace::WorkspaceChoice;
@@ -136,7 +137,7 @@ impl Session for DemoSession {
 /// The load generator behind the 24-Pane perf run: one Session streaming
 /// words forever, at the tick rate the panes24 baseline was measured at.
 pub fn streaming() -> DemoSession {
-    let (tx, rx) = mpsc::channel();
+    let (tx, rx) = ferrite_core::doorbell::channel();
     let cancel = Arc::new(AtomicBool::new(false));
     let sender = tx.clone();
     thread::spawn(move || {
@@ -203,7 +204,7 @@ impl DemoSession {
     /// interactive script, the rest each land in one of the states the
     /// Wall board draws and stay there.
     pub fn seeded(variant: usize) -> Self {
-        let (tx, rx) = mpsc::channel();
+        let (tx, rx) = ferrite_core::doorbell::channel();
         let cancel = Arc::new(AtomicBool::new(false));
         // FERRITE_DEMO_VISUAL=1: the first Pane plays the visual reply at
         // once, so visuals can be checked in a real window without typing.
@@ -224,7 +225,7 @@ impl DemoSession {
     /// handshake does: the log drops that event, so the Composer's mode
     /// chip would otherwise never come back on revive.
     pub fn quiet() -> Self {
-        let (tx, rx) = mpsc::channel();
+        let (tx, rx) = ferrite_core::doorbell::channel();
         let cancel = Arc::new(AtomicBool::new(false));
         play(
             tx.clone(),
@@ -1271,7 +1272,7 @@ mod tests {
 
     #[test]
     fn a_cancelled_playback_ends_the_turn_interrupted() {
-        let (tx, rx) = mpsc::channel();
+        let (tx, rx) = ferrite_core::doorbell::channel();
         let cancel = Arc::new(AtomicBool::new(true));
 
         play(

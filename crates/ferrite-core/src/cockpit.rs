@@ -650,16 +650,20 @@ impl Cockpit {
     /// One act where the Engine runs, as a command: the Engine in this
     /// process answers it as the Server's does. Either way the window is up
     /// to date with what it changed when it returns.
+    /// Every act rings the window's bell: what it moved is the pump's to
+    /// read, as an arrival is (ADR 0041).
     fn act(&mut self, op: Op) -> Executed {
         let executed = self.link.execute(op);
         self.settle();
+        crate::doorbell::ring();
         executed
     }
 
     /// The Engine in this process: what only `--demo`, `--load` and the
     /// tests drive — fixtures, injected inputs, the launch-time revival a
-    /// Server does for itself.
+    /// Server does for itself. It rings the bell, as an act does.
     fn in_process(&mut self) -> &mut Engine {
+        crate::doorbell::ring();
         match &mut self.link {
             Link::InProcess(engine) => engine,
             Link::Server(_) => panic!("only an Engine in this process takes this act"),
@@ -725,6 +729,8 @@ impl Cockpit {
 
     /// A message a fixture world's Server would have sent.
     fn receive_fixture(&mut self, message: ServerMessage) {
+        // It rings as a Server's message does (ADR 0041).
+        crate::doorbell::ring();
         self.arrive(vec![remote::Arrival::Message(message)]);
     }
 
@@ -943,10 +949,14 @@ impl Cockpit {
     /// the window says so as it changes, and the API reports it as the
     /// Thread's `draft` (ADR 0030), so nothing types over the operator.
     pub fn set_composing(&mut self, thread: ThreadId, unsent: bool) {
-        if unsent {
-            self.composing.insert(thread);
+        let changed = if unsent {
+            self.composing.insert(thread)
         } else {
-            self.composing.remove(&thread);
+            self.composing.remove(&thread)
+        };
+        // The pump tells the Engine on its next beat (ADR 0041).
+        if changed {
+            crate::doorbell::ring();
         }
     }
 
@@ -1100,6 +1110,9 @@ impl Cockpit {
             return false;
         }
         self.window_active = active;
+        // The pump tells the Engine which Thread the operator is looking
+        // at on its next beat (ADR 0041).
+        crate::doorbell::ring();
         self.acknowledge_seen()
     }
 

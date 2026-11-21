@@ -5,7 +5,7 @@
 use std::ffi::OsStr;
 use std::io;
 use std::path::PathBuf;
-use std::sync::mpsc::{sync_channel, Receiver, SyncSender};
+use std::sync::mpsc::{sync_channel, Receiver};
 
 use crate::activity::AgentKey;
 use crate::{ControlKind, DecisionAnswer, PermissionModeChoice, SessionControl, SessionEvent};
@@ -30,7 +30,10 @@ mod job;
 /// Answers the bytes read; 0 at the end of the stream. A buffer a rare
 /// huge line (a large tool result) grew past `LINE_KEEP` is released to a
 /// working size first, so it is not held for the rest of the Session.
+/// Rings the window's bell first: what the last line handed on (an event,
+/// or an ack on a channel of the Session's own) is there to read.
 pub(crate) fn read_line(reader: &mut impl io::BufRead, line: &mut Vec<u8>) -> io::Result<usize> {
+    crate::doorbell::ring();
     line.clear();
     if line.capacity() > LINE_KEEP {
         line.shrink_to(LINE_START);
@@ -327,8 +330,9 @@ pub struct FileSuggestion {
     pub matched: Vec<usize>,
 }
 
-/// Where a file search is answered (`Session::search_files`).
-pub type FileSearchReply = SyncSender<io::Result<Vec<FileSuggestion>>>;
+/// Where a file search is answered (`Session::search_files`): the answer
+/// rings the window's bell (ADR 0041).
+pub type FileSearchReply = crate::doorbell::SyncSender<io::Result<Vec<FileSuggestion>>>;
 
 impl Session for ClaudeSession {
     fn search_files(&mut self, query: &str, reply: FileSearchReply) -> io::Result<()> {

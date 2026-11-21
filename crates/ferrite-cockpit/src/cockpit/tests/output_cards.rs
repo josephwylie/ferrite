@@ -8,7 +8,7 @@
 use super::*;
 
 /// A write call that made `path` from nothing.
-fn wrote(stream: &std::sync::mpsc::Sender<SessionEvent>, id: &str, path: &str, line: &str) {
+fn wrote(stream: &ferrite_core::doorbell::Sender<SessionEvent>, id: &str, path: &str, line: &str) {
     stream
         .send(SessionEvent::ToolStarted {
             id: id.into(),

@@ -172,6 +172,8 @@ fn the_head_states_the_announced_sandbox_not_the_default(cx: &mut TestAppContext
     };
     assert_eq!(context(&view, cx).as_deref(), Some("default"));
     *fake.sandbox.borrow_mut() = Some("workspace-write".into());
+    // A provider says its sandbox in a line it reads, which rings.
+    ferrite_core::doorbell::ring();
     tick(cx);
     assert_eq!(
         context(&view, cx).as_deref(),

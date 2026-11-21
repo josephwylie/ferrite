@@ -84,10 +84,11 @@ fn window<'a>(
 }
 
 /// One Project, one idle Thread, nothing arriving, for four seconds (two
-/// of the window's two-second sweeps): the pump runs on its beat, and the
+/// of the window's two-second sweeps): the pump sleeps, running at most
+/// five times a second (for its sweep and its fallback, ADR 0041), and the
 /// nav neither redraws nor works out its list again.
 #[gpui::test]
-fn an_idle_window_keeps_its_beat_and_redraws_nothing(cx: &mut TestAppContext) {
+fn an_idle_window_sleeps_and_redraws_nothing(cx: &mut TestAppContext) {
     let _clock = hold_wall_clock();
     let (_view, _fake, panes, cx) = window("wakes-idle", 1, cx);
     let before = counts(&panes);
@@ -100,7 +101,8 @@ fn an_idle_window_keeps_its_beat_and_redraws_nothing(cx: &mut TestAppContext) {
         "WAKES idle_4s beats={beats} pumps={} nav_lists={} nav={} toasts={} root={} pane={}",
         idle.pumps, idle.lists, idle.nav, idle.toasts, idle.root, idle.panes[0]
     );
-    assert!(idle.pumps >= beats, "the pump keeps its beat");
+    assert!(idle.pumps <= 4 * 5, "an idle pump runs at most five times a second");
+    assert!(idle.pumps >= 2, "its two sweeps still run");
     assert_eq!(idle.nav, 0, "an idle nav is not redrawn");
     assert_eq!(idle.toasts, 0, "an idle toast float is not redrawn");
     assert!(
@@ -178,6 +180,79 @@ fn a_streaming_thread_redraws_the_nav_only_when_its_rows_move(cx: &mut TestAppCo
     );
     assert!(moved > 0, "the stream moved the nav's rows");
     assert_eq!(bare_redraws, 0, "a notify that moves nothing it draws leaves the nav");
+}
+
+/// One millisecond of the clock, and the frame a display that draws every
+/// millisecond would draw: the resolution of an arrival's wait.
+fn millisecond(cx: &mut gpui::VisualTestContext) {
+    cx.executor().advance_clock(Duration::from_millis(1));
+    cx.run_until_parked();
+    cx.update(|window, cx| window.simulate_next_frame(cx));
+    cx.run_until_parked();
+}
+
+/// How many milliseconds of the clock pass from a delta's arrival until the
+/// frame that draws its Pane.
+fn drawn_after(
+    fake: &Fake,
+    pane: ferrite_core::roster::PaneIdentity,
+    cx: &mut gpui::VisualTestContext,
+) -> u64 {
+    let before = drawn::pane_renders(pane);
+    fake.streams.borrow()[0]
+        .send(SessionEvent::TextDelta { text: "working ".into() })
+        .unwrap();
+    cx.run_until_parked();
+    cx.update(|window, cx| window.simulate_next_frame(cx));
+    cx.run_until_parked();
+    let mut waited = 0;
+    while drawn::pane_renders(pane) == before {
+        assert!(waited < 1_000, "the delta was never drawn");
+        millisecond(cx);
+        waited += 1;
+    }
+    waited
+}
+
+/// An arrival waits for its draw no longer than one beat, at rest and in a
+/// stream: a delta after a quiet spell, at each millisecond into the beat,
+/// and then a stream of deltas, one every three milliseconds. Prints the
+/// mean and the worst wait on one `WAKES latency` line (1 ms resolution).
+/// Under reduced motion, so a working Pane draws for its deltas alone,
+/// not for its motion's frames.
+#[gpui::test]
+fn an_arrival_is_drawn_within_a_beat(cx: &mut TestAppContext) {
+    let _clock = hold_wall_clock();
+    let (_view, fake, panes, cx) = window("wakes-latency", 1, cx);
+    cx.update(|_, cx| cx.set_reduce_motion(true));
+    beat(cx);
+    let mut rest = Vec::new();
+    for offset in 0..2 * PUMP_MS {
+        cx.executor().advance_clock(Duration::from_millis(500));
+        cx.run_until_parked();
+        for _ in 0..offset {
+            millisecond(cx);
+        }
+        rest.push(drawn_after(&fake, panes[0], cx));
+    }
+    let mut stream = Vec::new();
+    for _ in 0..48 {
+        stream.push(drawn_after(&fake, panes[0], cx));
+        for _ in 0..3 {
+            millisecond(cx);
+        }
+    }
+    let mean = |waits: &[u64]| waits.iter().sum::<u64>() as f64 / waits.len() as f64;
+    let worst = |waits: &[u64]| waits.iter().copied().max().unwrap_or(0);
+    eprintln!(
+        "WAKES latency_ms rest_mean={:.2} rest_max={} stream_mean={:.2} stream_max={}",
+        mean(&rest),
+        worst(&rest),
+        mean(&stream),
+        worst(&stream)
+    );
+    assert!(worst(&rest) <= PUMP_MS, "an arrival at rest waits at most a beat");
+    assert!(worst(&stream) <= PUMP_MS, "an arrival in a stream waits at most a beat");
 }
 
 /// A Thread whose turn starts moves to the Working shelf, and back to the

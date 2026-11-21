@@ -542,10 +542,18 @@ fn tab_reaches_a_link_and_enter_opens_it(cx: &mut TestAppContext) {
     assert!(on(cx, "LinkStop"), "a render does not pull focus back to the composer");
 
     cx.simulate_keystrokes("enter");
-    cx.simulate_event(gpui::KeyUpEvent {
-        keystroke: gpui::Keystroke::parse("enter").unwrap(),
+    // The press queues the link for the pump and rings its bell, and the
+    // pump answers the ring as soon as the window is idle (ADR 0041): the
+    // queue is read as the key lifts, before the pump takes it.
+    let urls = cx.update(|window, cx| {
+        window.dispatch_event(
+            gpui::PlatformInput::KeyUp(gpui::KeyUpEvent {
+                keystroke: gpui::Keystroke::parse("enter").unwrap(),
+            }),
+            cx,
+        );
+        view.read(cx).panes[0].preview.take_browser_urls()
     });
-    let urls = view.read_with(cx, |view, _| view.panes[0].preview.take_browser_urls());
     assert_eq!(urls, ["https://example.com/docs"]);
     assert_eq!(cx.opened_url(), None, "the link opens inside Ferrite");
 }

@@ -9,12 +9,14 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender, TryRecvError};
+use std::sync::mpsc::{Receiver, RecvTimeoutError, TryRecvError};
 use std::time::{Duration, Instant};
 
 use base64::Engine as _;
 
 use crate::ThreadId;
+// A Remote's answers ring as the pump routes them (ADR 0041).
+use crate::doorbell::Sender;
 use crate::engine::{BootstrapResult, Bootstrapped};
 use crate::link;
 use crate::machine::{self, Bridge, Failure};
@@ -475,7 +477,7 @@ impl Remote {
                 query: query.to_string(),
             })
             .map_err(io::Error::from)?;
-        let (answer, answered) = mpsc::channel();
+        let (answer, answered) = crate::doorbell::channel();
         self.searches.insert(id, answer);
         Ok(answered)
     }
@@ -606,7 +608,7 @@ impl Remote {
         let id = self
             .send_command(Op::review_read(path, read))
             .map_err(io::Error::from)?;
-        let (answer, answered) = mpsc::channel();
+        let (answer, answered) = crate::doorbell::channel();
         self.reviews
             .insert(id, (path.to_path_buf(), read.clone(), answer));
         Ok(answered)
@@ -735,7 +737,7 @@ impl Remote {
             self.detach(&format!("the capture upload could not be queued: {error}"));
             return Err(error);
         }
-        let (answer, answered) = mpsc::channel();
+        let (answer, answered) = crate::doorbell::channel();
         self.answer(id, answer, |done| match done {
             Done::BrowserCapture { annotation } => Some(annotation),
             _ => None,
@@ -929,7 +931,7 @@ impl Remote {
         read: fn(Done) -> Option<T>,
     ) -> io::Result<Receiver<io::Result<T>>> {
         let id = self.send_command(op).map_err(io::Error::from)?;
-        let (answer, answered) = mpsc::channel();
+        let (answer, answered) = crate::doorbell::channel();
         self.answer(id, answer, read);
         Ok(answered)
     }

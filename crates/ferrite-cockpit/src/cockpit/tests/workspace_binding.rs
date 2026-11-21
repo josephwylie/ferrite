@@ -542,7 +542,7 @@ fn delayed_bootstrap_preserves_edited_composer_focus_and_another_drafts_picker(
             let sent = self.sent.clone();
             SessionLifecycle::background(move || {
                 gate.recv().unwrap();
-                let (_, events) = mpsc::channel();
+                let (_, events) = ferrite_core::doorbell::channel();
                 Ok(Box::new(Ready { events, sent }) as Box<dyn Session + Send>)
             })
         }
@@ -550,9 +550,9 @@ fn delayed_bootstrap_preserves_edited_composer_focus_and_another_drafts_picker(
     let base = scratch("delayed-bootstrap-edits");
     let repo = repo_in(&base);
     let sent = Arc::new(Mutex::new(Vec::new()));
-    let (first_tx, first_rx) = mpsc::channel();
-    let (cancel_tx, cancel_rx) = mpsc::channel();
-    let (escape_tx, escape_rx) = mpsc::channel();
+    let (first_tx, first_rx) = ferrite_core::doorbell::channel();
+    let (cancel_tx, cancel_rx) = ferrite_core::doorbell::channel();
+    let (escape_tx, escape_rx) = ferrite_core::doorbell::channel();
     let core = Cockpit::new(
         Store::open(base.join("threads")).unwrap(),
         Box::new(Delayed {

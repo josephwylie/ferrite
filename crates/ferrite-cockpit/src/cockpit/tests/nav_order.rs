@@ -55,6 +55,7 @@ fn a_thread_whose_shell_outlives_its_turn_works_until_the_shell_ends(cx: &mut Te
     send(turn_ended());
     tick(cx);
     clock.advance(Duration::from_secs(60));
+    cx.executor().advance_clock(PUMP_FALLBACK);
     tick(cx);
     view.read_with(cx, |view, cx| {
         let state = view.nav_state(cx);
@@ -77,6 +78,9 @@ fn a_thread_whose_shell_outlives_its_turn_works_until_the_shell_ends(cx: &mut Te
     send(shell(TaskStatus::Completed));
     tick(cx);
     clock.advance(Duration::from_secs(4));
+    // The in-process Engine reads the time as the pump runs, which an idle
+    // window's fallback does (ADR 0041).
+    cx.executor().advance_clock(PUMP_FALLBACK);
     tick(cx);
     view.read_with(cx, |view, cx| {
         let state = view.nav_state(cx);

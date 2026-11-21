@@ -240,7 +240,7 @@ pub struct PairAttempt {
 
 impl PairAttempt {
     pub fn start(fields: PairingFields, settings: PathBuf) -> io::Result<Self> {
-        let (send, events) = mpsc::channel();
+        let (send, events) = crate::doorbell::channel();
         let cancelled = Arc::new(AtomicBool::new(false));
         let stopped = cancelled.clone();
         let pending = Arc::new(Mutex::new(None));
@@ -276,7 +276,7 @@ impl PairAttempt {
     }
 
     pub fn reconnect(machine: Machine, settings: PathBuf) -> io::Result<Self> {
-        let (send, events) = mpsc::channel();
+        let (send, events) = crate::doorbell::channel();
         let cancelled = Arc::new(AtomicBool::new(false));
         let stopped = cancelled.clone();
         let worker_settings = settings.clone();
@@ -364,7 +364,7 @@ fn pair(
     fields: PairingFields,
     settings: &Path,
     cancelled: &AtomicBool,
-    send: &mpsc::Sender<Event>,
+    send: &crate::doorbell::Sender<Event>,
 ) -> io::Result<Machine> {
     let descriptor = descriptor(&fields.host)?;
     if fields
