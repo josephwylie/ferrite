@@ -281,37 +281,6 @@ fn system_tag(machine: &crate::machines::MachineKey, thread: ThreadId) -> String
     }
 }
 
-type FreshNotice = (ferrite_core::notifications::NoticeId, ThreadId, bool);
-type LiveRequest = (ferrite_core::notifications::DecisionNoticeId, bool);
-
-/// What a machine's Needs-you state may not have heard yet: its Notices born after
-/// `after` (id, Thread, read) and its live requests (id, read).
-fn news(
-    notifications: &ferrite_core::notifications::Notifications,
-    after: Option<ferrite_core::notifications::NoticeId>,
-    operators: &dyn Fn(ThreadId) -> bool,
-) -> (Vec<FreshNotice>, Vec<LiveRequest>) {
-    // An owned Thread's Notices and requests ring nothing: its owner
-    // (a Task, a Factory) tells the operator in its own way (ADR 0037).
-    // Its Notices still move the watermark, so they are never news later.
-    let fresh = notifications
-        .since(after)
-        .map(|notice| {
-            (
-                notice.id,
-                notice.thread,
-                notice.read || !operators(notice.thread),
-            )
-        })
-        .collect();
-    let requests = notifications
-        .decisions()
-        .filter(|notice| operators(notice.id.thread))
-        .map(|notice| (notice.id.clone(), notice.read))
-        .collect();
-    (fresh, requests)
-}
-
 /// How many frames a card waits for its geometry (`card_corner`).
 /// A Pane laid out for the first time has it by the next frame; a few more
 /// cover a layout that settles over two.
@@ -980,6 +949,7 @@ pub(crate) mod drawn {
         static NAV_RENDERS: Cell<usize> = const { Cell::new(0) };
         static TOAST_RENDERS: Cell<usize> = const { Cell::new(0) };
         static HEAD_RENDERS: Cell<usize> = const { Cell::new(0) };
+        static HEARINGS: Cell<usize> = const { Cell::new(0) };
         static NAV_ROWS: RefCell<HashMap<ThreadId, String>> = RefCell::new(HashMap::new());
         static PUMPS: Cell<usize> = const { Cell::new(0) };
         static LISTS: Cell<usize> = const { Cell::new(0) };
@@ -1028,6 +998,16 @@ pub(crate) mod drawn {
     /// thread.
     pub(crate) fn head_renders() -> usize {
         HEAD_RENDERS.with(Cell::get)
+    }
+
+    pub(crate) fn heard() {
+        HEARINGS.with(|heard| heard.set(heard.get() + 1));
+    }
+
+    /// How many times the toasts have read the Notices and the machines'
+    /// news on this thread.
+    pub(crate) fn hearings() -> usize {
+        HEARINGS.with(Cell::get)
     }
 
     /// How many times the toast float has been built on this thread.
@@ -2228,7 +2208,6 @@ impl CockpitView {
         self.poll_environment(cx);
         self.apply_thread_rules(&frame, cx);
         self.land(cx);
-        self.ring_alerts(cx);
         self.settle_held_sends(cx);
         for index in 0..self.panes.len() {
             if let Some(thread) = self.panes[index].thread() {
@@ -2460,21 +2439,16 @@ impl CockpitView {
     /// How long until the pump is next due if nothing rings: a beat after
     /// one that brought something (the rest of a full beat, a step that
     /// answers the next one), or while a Browser page is live, since its
-    /// pages' events do not ring; else at the sweep, an alert's delay or a
-    /// toast's end, and at the latest `PUMP_FALLBACK`.
+    /// pages' events do not ring; else at the sweep, and at the latest
+    /// `PUMP_FALLBACK`. An alert's delay and a toast's end are the toasts'
+    /// own clock (`ToastsView::tend`).
     fn pump_due(&self, brought: bool, cx: &gpui::App) -> Duration {
         if brought || self.browsers.live() {
             return pump_interval();
         }
         let now = cx.background_executor().now();
         let sweep = SWEEP_INTERVAL.saturating_sub(now.duration_since(self.swept));
-        let alert = self
-            .toasts
-            .read(cx)
-            .needs_you
-            .next_due(now)
-            .map_or(PUMP_FALLBACK, |due| due.saturating_duration_since(now));
-        PUMP_FALLBACK.min(sweep).min(alert)
+        PUMP_FALLBACK.min(sweep)
     }
 
     /// What a stream can change that more than its own Pane and nav row
@@ -8261,116 +8235,6 @@ impl CockpitView {
             detail,
             when: crate::facts::since_label(notice.at, now),
             read: notice.read,
-        }
-    }
-
-    /// Keep the Inbox up with the Notices and requests (FL-18, ADR 0017),
-    /// on every pump: hear what arrived here and on the machines off
-    /// screen (ADR 0026), and ring what waited out its delay and still
-    /// stands — a toast, a sound, and a system notification unless its
-    /// Thread's Pane is focused in the frontmost window (focus-notify's
-    /// rule, ADR 0005's update).
-    ///
-    /// The operator is looking at an event, and nothing rings for it — no
-    /// system notification either — while the window has focus and its
-    /// Thread is on the board. Nobody looks at a machine off screen.
-    fn ring_alerts(&mut self, cx: &mut Context<Self>) {
-        let now = cx.background_executor().now();
-        let entity = self.machines.clone();
-        let (stale, sound, posts) = self.toasts.update(cx, |toasts, cx| {
-            let needs_you = &mut toasts.needs_you;
-            let machines = entity.as_ref().map(|machines| machines.read(cx));
-            let notifications = self.cockpit.read(cx).notifications();
-            // Until its Server answers, a Cockpit's Notices are none, not news:
-            // hearing them would forget the requests heard of it, and judging
-            // its alerts by them would drop the ones the window brought along.
-            let here = self.attached(cx).then_some(notifications);
-            if let Some(here) = here {
-                let operators = |thread: ThreadId| self.cockpit.read(cx).operators(thread);
-                let (fresh, requests) = news(here, needs_you.presented(None), &operators);
-                needs_you.hear(None, fresh, requests, now);
-            }
-            for away in machines.iter().flat_map(|machines| machines.off_screen()) {
-                let operators = |thread: ThreadId| away.status.operators(thread);
-                let (fresh, requests) = news(
-                    away.notifications,
-                    needs_you.presented(Some(&away.key)),
-                    &operators,
-                );
-                needs_you.hear(Some(away.key), fresh, requests, now);
-            }
-            let live = |alert: &crate::notifications::Alert| machines::wanted(alert, here, machines);
-            // A system notification the operator has since read, or whose
-            // request resolved, is taken back out of the notification centre.
-            let stale: Vec<String> = needs_you
-                .posted
-                .iter()
-                .filter(|(_, alert)| live(alert) == Some(false))
-                .map(|(tag, _)| tag.clone())
-                .collect();
-            let (mut redraw, mut sound, mut posts) = (false, None, Vec::new());
-            if needs_you.busy() {
-                let present = self.cockpit.read(cx).window_active();
-                let on_board: std::collections::HashSet<ThreadId> = self
-                    .visible_indices(cx)
-                    .into_iter()
-                    .filter_map(|index| self.panes[index].thread())
-                    .collect();
-                let in_view = |alert: &crate::notifications::Alert| {
-                    present && alert.away.is_none() && on_board.contains(&alert.thread)
-                };
-                let ring = needs_you.ring(now, &live, &in_view);
-                redraw = ring.redraw;
-                // Alerts that ring together chime once, needs-you over done.
-                let settings = &self.prefs.settings;
-                sound = ring
-                    .rang
-                    .iter()
-                    .filter(|alert| {
-                        self.alert_provider(alert, machines, cx)
-                            .is_some_and(|provider| settings.sounds_for(provider))
-                    })
-                    .map(|alert| {
-                        if alert.needs_you() {
-                            Sound::NeedsYou
-                        } else {
-                            Sound::Done
-                        }
-                    })
-                    .max_by_key(|sound| *sound == Sound::NeedsYou);
-                if settings.system_notifications {
-                    let now = ferrite_core::clock::system_time();
-                    let focused = self.focused_thread(cx);
-                    posts = ring
-                        .rang
-                        .into_iter()
-                        .filter(|alert| {
-                            let focused = alert.away.is_none() && focused == Some(alert.thread);
-                            crate::system_notifications::wanted(focused, present)
-                        })
-                        .filter_map(|alert| Some((self.system_posting(&alert, machines, now, cx)?, alert)))
-                        .collect();
-                }
-            }
-            for tag in &stale {
-                needs_you.posted.remove(tag);
-            }
-            for (posting, alert) in &posts {
-                needs_you.posted.insert(posting.tag.clone(), alert.clone());
-            }
-            if redraw {
-                toasts.look_again(cx);
-            }
-            (stale, sound, posts)
-        });
-        for tag in stale {
-            crate::system_notifications::withdraw(&tag, cx);
-        }
-        if let Some(sound) = sound {
-            self.chime(sound);
-        }
-        for (posting, _) in posts {
-            crate::system_notifications::post(posting, cx);
         }
     }
 

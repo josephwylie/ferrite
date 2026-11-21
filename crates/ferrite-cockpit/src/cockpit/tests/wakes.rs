@@ -1,5 +1,6 @@
 //! What a window does while nothing arrives, and while one Thread streams:
-//! how often the pump runs, and which views it redraws. Each test prints
+//! how often the pump runs, which views it redraws, and how often the
+//! toasts read the Notices. Each test prints
 //! its counts on one `WAKES` line (`--no-capture`), so a change to the
 //! pump, the nav or the toast float can be measured before and after.
 use super::*;
@@ -14,6 +15,7 @@ struct Counts {
     toasts: usize,
     root: usize,
     head: usize,
+    heard: usize,
     panes: [usize; 2],
 }
 
@@ -26,6 +28,7 @@ fn counts(panes: &[ferrite_core::roster::PaneIdentity]) -> Counts {
         toasts: drawn::toast_renders(),
         root: crate::cockpit::RENDERS.with(std::cell::Cell::get),
         head: drawn::head_renders(),
+        heard: drawn::hearings(),
         panes: [pane(0), pane(1)],
     }
 }
@@ -40,6 +43,7 @@ impl std::ops::Sub for Counts {
             toasts: self.toasts - before.toasts,
             root: self.root - before.root,
             head: self.head - before.head,
+            heard: self.heard - before.heard,
             panes: [
                 self.panes[0] - before.panes[0],
                 self.panes[1] - before.panes[1],
@@ -101,13 +105,15 @@ fn an_idle_window_sleeps_and_redraws_nothing(cx: &mut TestAppContext) {
     }
     let idle = counts(&panes) - before;
     eprintln!(
-        "WAKES idle_4s beats={beats} pumps={} nav_lists={} nav={} toasts={} root={} head={} pane={}",
-        idle.pumps, idle.lists, idle.nav, idle.toasts, idle.root, idle.head, idle.panes[0]
+        "WAKES idle_4s beats={beats} pumps={} nav_lists={} nav={} toasts={} root={} head={} \
+         pane={} heard={}",
+        idle.pumps, idle.lists, idle.nav, idle.toasts, idle.root, idle.head, idle.panes[0], idle.heard
     );
     assert!(idle.pumps <= 4 * 5, "an idle pump runs at most five times a second");
     assert!(idle.pumps >= 2, "its two sweeps still run");
     assert_eq!(idle.nav, 0, "an idle nav is not redrawn");
     assert_eq!(idle.toasts, 0, "an idle toast float is not redrawn");
+    assert_eq!(idle.heard, 0, "an idle window reads no Notices");
     assert!(
         idle.lists <= idle.root,
         "the nav reads its list again only as the window notifies"
@@ -180,10 +186,10 @@ fn a_streaming_thread_redraws_the_nav_only_when_its_rows_move(cx: &mut TestAppCo
     eprintln!(
         "WAKES stream beats={beats} pumps={} nav_lists={} rows_moved={moved} nav={} \
          nav_for_bare_notifies={bare_redraws} toasts={} root={} head={} \
-         shown_pane={} hidden_pane={} bare3_root={} bare3_head={} bare3_shown_pane={} \
+         shown_pane={} hidden_pane={} heard={} bare3_root={} bare3_head={} bare3_shown_pane={} \
          bare3_hidden_pane={}",
         load.pumps, load.lists, load.nav, load.toasts, load.root, load.head, load.panes[0],
-        load.panes[1], bare.root, bare.head, bare.panes[0], bare.panes[1]
+        load.panes[1], load.heard, bare.root, bare.head, bare.panes[0], bare.panes[1]
     );
     assert!(moved > 0, "the stream moved the nav's rows");
     assert_eq!(bare_redraws, 0, "a notify that moves nothing it draws leaves the nav");
@@ -459,4 +465,77 @@ fn the_factory_door_counts_what_needs_you_as_the_board_arrives(cx: &mut TestAppC
         .map(|(item, _)| item.detail.clone())
         .collect();
     assert_eq!(counts, [Some("1".into())], "its Project's row counts the Task");
+}
+
+/// Two Threads with the nav folded; the one off the board finishes a turn
+/// and nothing else happens. Its done toast comes a second later and goes
+/// five seconds after that, each on its own clock: the window is idle
+/// otherwise, and the pump reads no Notices for it.
+#[gpui::test]
+fn a_done_toast_comes_and_goes_on_its_own_clock(cx: &mut TestAppContext) {
+    use crate::notifications::{ALERT_DELAY, DONE_TOAST};
+    let _clock = hold_wall_clock();
+    let (view, fake, panes, cx) = window("wakes-toast-clock", 2, cx);
+    view.update(cx, |view, cx| view.set_nav_collapsed(true, cx));
+    for _ in 0..1_000 / PUMP_MS {
+        beat(cx);
+    }
+    let (off, at) = view.read_with(cx, |view, cx| {
+        let threads = view.cockpit.read(cx).threads();
+        let at = threads
+            .iter()
+            .position(|thread| Some(*thread) != view.focused_thread(cx))
+            .unwrap();
+        (threads[at], at)
+    });
+    let toast: &'static str = format!("toast-{}", off.get()).leak();
+    fake.streams.borrow()[at]
+        .send(SessionEvent::TextDelta { text: "done ".into() })
+        .unwrap();
+    fake.streams.borrow()[at]
+        .send(SessionEvent::TurnEnded {
+            outcome: ferrite_core::TurnOutcome::Completed,
+            cost_usd: None,
+        })
+        .unwrap();
+    beat(cx);
+    let heard = cx.executor().now();
+    assert!(cx.debug_bounds(toast).is_none(), "it waits its second");
+    let mut came = None;
+    let mut went = None;
+    let before = counts(&panes);
+    let mut idle_from = None;
+    for _ in 0..(ALERT_DELAY + DONE_TOAST).as_millis() as u64 / PUMP_MS + 8 {
+        beat(cx);
+        let shown = cx.debug_bounds(toast).is_some();
+        if shown && came.is_none() {
+            came = Some(cx.executor().now() - heard);
+            idle_from = Some(counts(&panes));
+        }
+        if !shown && came.is_some() && went.is_none() {
+            went = Some(cx.executor().now() - heard);
+        }
+    }
+    let after = counts(&panes);
+    let standing = after - idle_from.expect("the toast came");
+    let whole = after - before;
+    let (came, went) = (came.unwrap(), went.expect("the toast went"));
+    eprintln!(
+        "WAKES toast_clock came_ms={} went_ms={} pumps={} heard={} root={} toasts={} \
+         standing_pumps={} standing_heard={}",
+        came.as_millis(),
+        went.as_millis(),
+        whole.pumps,
+        whole.heard,
+        whole.root,
+        whole.toasts,
+        standing.pumps,
+        standing.heard,
+    );
+    let beat = Duration::from_millis(PUMP_MS);
+    assert!(came >= ALERT_DELAY && came <= ALERT_DELAY + 2 * beat, "it comes after its delay");
+    assert!(
+        went >= came + DONE_TOAST && went <= came + DONE_TOAST + 2 * beat,
+        "it goes at its end"
+    );
 }
