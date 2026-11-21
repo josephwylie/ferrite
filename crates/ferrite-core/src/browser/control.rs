@@ -117,7 +117,7 @@ pub enum Outcome {
 #[serde(transparent)]
 pub struct Observation(String);
 impl Observation {
-    pub(crate) fn new(value: String) -> Self {
+    pub fn new(value: String) -> Self {
         Self(value)
     }
 }
@@ -130,7 +130,7 @@ pub struct Response {
     pub observation: Option<Observation>,
 }
 
-pub(crate) struct Request {
+pub struct Request {
     pub thread: ThreadId,
     pub operation: Operation,
     pub deadline: std::time::Instant,
@@ -176,13 +176,13 @@ impl ThreadClient {
     }
 }
 
-pub(crate) struct Requests(pub mpsc::Receiver<Request>);
+pub struct Requests(pub mpsc::Receiver<Request>);
 impl Default for Requests {
     fn default() -> Self {
         channel().1
     }
 }
-pub(crate) fn channel() -> (Client, Requests) {
+pub fn channel() -> (Client, Requests) {
     let (send, receive) = mpsc::channel();
     (Client(Arc::new(Mutex::new(send))), Requests(receive))
 }

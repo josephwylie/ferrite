@@ -4,7 +4,7 @@
 
 mod control;
 pub mod tools;
-pub(crate) use control::{channel, Requests};
+pub use control::{channel, Requests};
 pub use control::{
     Client, Control, Observation, Operation, Outcome, Response, ThreadClient, WaitState,
 };
@@ -406,7 +406,7 @@ impl Service {
         Ok(self.state(thread))
     }
 
-    pub(crate) fn persistence_error(&mut self, thread: ThreadId, error: &str) {
+    pub fn persistence_error(&mut self, thread: ThreadId, error: &str) {
         if let Some(state) = self.threads.get_mut(&thread) {
             if let Some(tab) = state
                 .tabs
@@ -488,7 +488,7 @@ impl Service {
         }
     }
 
-    pub(crate) fn command_finished_uncertain(
+    pub fn command_finished_uncertain(
         &mut self,
         thread: ThreadId,
         owner: Owner,
@@ -506,7 +506,7 @@ impl Service {
         }
     }
 
-    pub(crate) fn check_exclusive_command(
+    pub fn check_exclusive_command(
         &self,
         thread: ThreadId,
         owner: Owner,
@@ -532,7 +532,7 @@ impl Service {
     /// A trusted operator's explicit Close/Reload may abandon only this tab's
     /// commands after the window fences its native writer. Capture protection
     /// is never discarded by that recovery path.
-    pub(crate) fn retire_commands(
+    pub fn retire_commands(
         &mut self,
         thread: ThreadId,
         owner: Owner,

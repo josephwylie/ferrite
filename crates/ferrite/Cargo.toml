@@ -23,8 +23,10 @@ test = false
 [features]
 # `ferrite --headless` (ADR 0038): the window drawn off-screen and driven
 # through the Server's `window.*` API, for an agent checking the UI.
-# Excluded from release builds: it rests on gpui's test support.
-headless = ["ferrite-cockpit/headless"]
+# Excluded from release builds: it rests on gpui's test support. It builds
+# the Server as the Cockpit's tests do, fixture and all, so the two share one
+# build of it.
+headless = ["ferrite-cockpit/headless", "ferrite-server/test-support"]
 # Opt-in native framebuffer artifacts; excluded from normal application builds.
 # The captures are the Cockpit's (`cockpit::visual_reference`).
 visual-reference = ["headless", "ferrite-cockpit/visual-reference"]
@@ -40,6 +42,8 @@ browser-smoke = ["cef", "ferrite-cockpit/browser-smoke"]
 
 [dependencies]
 ferrite-core = { path = "../ferrite-core" }
+# The Server process `ferrite server` runs (ADR 0025).
+ferrite-server = { path = "../ferrite-server" }
 # The theme, icons, components, motion and menus the Cockpit and Pane share.
 ferrite-ui = { path = "../ferrite-ui" }
 # The Pane: the transcript, the Composer and the Draft.

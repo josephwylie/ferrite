@@ -432,7 +432,7 @@ pub fn wire_png(png: &[u8]) -> io::Result<crate::protocol::WirePng> {
     })
 }
 
-pub(crate) fn png_size(png: &[u8]) -> io::Result<(u32, u32)> {
+pub fn png_size(png: &[u8]) -> io::Result<(u32, u32)> {
     if png.len() > MAX_CAPTURE_BYTES {
         return Err(io::Error::other(
             "The browser capture is too large; use a smaller viewport and capture again",

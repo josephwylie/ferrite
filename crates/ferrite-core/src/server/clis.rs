@@ -9,8 +9,6 @@ use crate::protocol::{CliAction, CliBinary, CliReport, CliStatus, Done, WireErro
 use crate::providers::{discover, update};
 use crate::store::Provider;
 
-use super::{failed, ClientId, Server};
-
 /// What the Server's machine has installed.
 pub trait Clis: Send + Sync {
     /// The copy of `provider`'s CLI the machine runs, looked for afresh.
@@ -96,12 +94,9 @@ pub fn perform(clis: &dyn Clis, action: &CliAction) -> Result<Done, WireError> {
     }
 }
 
-impl Server {
-    /// Answer a `cli` command on a thread of its own: a probe starts a
-    /// process, a check reaches the network, an update runs an installer.
-    pub(super) fn cli(&mut self, client: ClientId, request: u64, action: &CliAction) {
-        let clis = std::sync::Arc::clone(&self.clis);
-        let action = action.clone();
-        self.read_off_pump(client, request, move || perform(&*clis, &action).map(Some));
+fn failed(error: impl ToString) -> WireError {
+    WireError {
+        code: crate::protocol::ErrorCode::Failed,
+        message: error.to_string(),
     }
 }

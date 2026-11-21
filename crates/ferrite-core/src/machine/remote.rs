@@ -1,6 +1,6 @@
 //! Authenticated link routes. Settings hold only the stable environment id.
 
-use std::io::{self, Read};
+use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{
     atomic::{AtomicBool, Ordering},
@@ -16,14 +16,15 @@ use crate::{
     link,
     protocol::{self, ClientMessage, Peer, ServerMessage},
 };
+use rand::RngCore;
 use serde::{Deserialize, Serialize};
 use url::Url;
 
-pub(crate) mod socket;
-pub(crate) mod terminal;
+pub mod socket;
+pub mod terminal;
 pub use terminal::dispatch as terminal_dispatch;
 
-pub(crate) const FRAME_LIMIT: usize = 256 * 1024;
+pub const FRAME_LIMIT: usize = 256 * 1024;
 pub(crate) const TIMEOUT: Duration = Duration::from_secs(20);
 
 #[derive(Clone)]
@@ -101,24 +102,24 @@ pub(crate) fn check_identity(id: &str) -> Result<(), String> {
 }
 
 #[derive(Clone, Serialize, Deserialize)]
-pub(crate) struct Profile {
+pub struct Profile {
     pub origin: String,
     pub server_id: String,
     pub credential: String,
 }
 
 #[derive(Serialize, Deserialize)]
-pub(crate) struct Descriptor {
+pub struct Descriptor {
     pub server_id: String,
     pub name: String,
 }
 #[derive(Serialize, Deserialize)]
-pub(crate) struct Exchange {
+pub struct Exchange {
     pub code: String,
     pub label: String,
 }
 #[derive(Serialize, Deserialize)]
-pub(crate) struct Granted {
+pub struct Granted {
     pub server_id: String,
     pub session_id: String,
     pub secret: String,
@@ -160,7 +161,7 @@ pub(crate) fn secret(profile: &Profile) -> io::Result<String> {
     credential(profile)?.get_password().map_err(|_| io::Error::other("The saved remote credential is unavailable. Unlock the system credential store or pair again."))
 }
 
-pub(crate) fn configure_tls() {
+pub fn configure_tls() {
     let _ = rustls::crypto::ring::default_provider().install_default();
 }
 
@@ -384,7 +385,7 @@ fn pair(
     let entry_ref = format!(
         "{}-{}",
         descriptor.server_id,
-        crate::server::remote::random_secret(16)
+        random_secret(16)
     );
     let profile = Profile {
         origin: fields.host,
@@ -411,7 +412,7 @@ fn pair(
             io::Error::other("Could not save the remote credential in the system credential store.")
         })?;
         cancelled_check(cancelled)?;
-        crate::server::remote::write_private_new(
+        write_private_new(
             &profile_path(settings, &target),
             &serde_json::to_vec(&profile)?,
         )?;
@@ -442,7 +443,7 @@ fn cancelled_check(cancelled: &AtomicBool) -> io::Result<()> {
     }
 }
 
-pub(crate) fn verify_connection(profile: &Profile, secret: &str) -> io::Result<()> {
+pub fn verify_connection(profile: &Profile, secret: &str) -> io::Result<()> {
     let Tunnel {
         from,
         mut to,
@@ -489,14 +490,90 @@ pub(crate) fn verify_connection(profile: &Profile, secret: &str) -> io::Result<(
     result
 }
 
+pub fn random_secret(bytes: usize) -> String {
+    let mut secret = vec![0; bytes];
+    rand::rngs::OsRng.fill_bytes(&mut secret);
+    secret.iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
+pub fn write_private(path: &Path, bytes: &[u8]) -> io::Result<()> {
+    persist_private(path, bytes, true)
+}
+
+pub fn write_private_new(path: &Path, bytes: &[u8]) -> io::Result<()> {
+    persist_private(path, bytes, false)
+}
+
+fn persist_private(path: &Path, bytes: &[u8], replace: bool) -> io::Result<()> {
+    let directory = path
+        .parent()
+        .ok_or_else(|| io::Error::other("Missing private directory."))?;
+    std::fs::create_dir_all(directory)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(directory, std::fs::Permissions::from_mode(0o700))?;
+    }
+    let temporary = directory.join(format!(".remote-{}", random_secret(8)));
+    let result = (|| {
+        let mut options = std::fs::OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        let mut file = options.open(&temporary)?;
+        file.write_all(bytes)?;
+        file.sync_all()?;
+        if replace {
+            std::fs::rename(&temporary, path)?;
+        } else {
+            std::fs::hard_link(&temporary, path)?;
+            std::fs::remove_file(&temporary)?;
+        }
+        #[cfg(unix)]
+        std::fs::File::open(directory)?.sync_all()?;
+        Ok(())
+    })();
+    if result.is_err() {
+        let _ = std::fs::remove_file(temporary);
+    }
+    result
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn profile_publication_does_not_replace_an_existing_environment() {
+        let directory = std::env::temp_dir().join(format!("ferrite-profile-{}", random_secret(8)));
+        let path = directory.join("link.json");
+        write_private_new(&path, b"first environment").unwrap();
+        assert_eq!(
+            write_private_new(&path, b"second environment")
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::AlreadyExists
+        );
+        assert_eq!(std::fs::read(&path).unwrap(), b"first environment");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(
+                std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+                0o600
+            );
+        }
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
     #[test]
     fn api_dial_for_a_link_requires_its_saved_profile_before_connecting() {
         let settings = std::env::temp_dir().join(format!(
             "ferrite-api-route-{}",
-            crate::server::remote::random_secret(8)
+            random_secret(8)
         ));
         let machine = Machine::new("ferrite-link:00112233445566778899aabbccddeeff");
         match super::super::api_dial(&machine, &settings)() {

@@ -18,14 +18,15 @@ credential.
 
 ### `ferrited`
 
-A second `[[bin]]` in `ferrite-core` (`src/bin/ferrited.rs`), as ADR 0025
+A second `[[bin]]` in `ferrite-core` (`src/bin/ferrited.rs`; in
+`ferrite-server` since ADR 0025's `ferrite-server` amendment), as ADR 0025
 foresaw: the Server without the window's libraries, so it builds and runs
 on a headless Linux box. `ferrited server` is `server::run`;
 `ferrited bridge` makes sure the machine's own Server runs
 (`agent::ensure_running`, which starts `ferrited server` detached) and
 then carries stdin to its socket and the socket to stdout until either
 ends. What fails is said on stderr, which ssh hands back. Install it with
-`cargo install --path crates/ferrite-core --bin ferrited`, then, on
+`cargo install --path crates/ferrite-server --bin ferrited`, then, on
 Linux, `ferrited service install`.
 
 A Server started detached gets a session of its own (`setsid`), so the

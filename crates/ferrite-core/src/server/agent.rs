@@ -57,7 +57,7 @@ fn operators_store(store: &Path) -> bool {
 }
 
 /// Start `executable server …` so it outlives this process.
-pub(super) fn start_detached(executable: &Path, args: &[&str]) -> io::Result<()> {
+pub fn start_detached(executable: &Path, args: &[&str]) -> io::Result<()> {
     let mut command = Command::new(executable);
     command
         .arg("server")

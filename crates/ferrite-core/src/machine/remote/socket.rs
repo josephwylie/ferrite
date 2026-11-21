@@ -5,10 +5,10 @@ use std::io::{self, Cursor, Read, Write};
 use tokio::sync::mpsc;
 use tokio_tungstenite::tungstenite::{client::IntoClientRequest, Message};
 
-pub(crate) type Socket =
+pub type Socket =
     tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
 
-pub(crate) async fn connect(profile: &Profile, secret: &str, path: &str) -> io::Result<Socket> {
+pub async fn connect(profile: &Profile, secret: &str, path: &str) -> io::Result<Socket> {
     super::configure_tls();
     let origin = profile
         .origin
@@ -42,13 +42,13 @@ pub(crate) async fn connect(profile: &Profile, secret: &str, path: &str) -> io::
     Ok(socket)
 }
 
-pub(crate) fn runtime() -> io::Result<tokio::runtime::Runtime> {
+pub fn runtime() -> io::Result<tokio::runtime::Runtime> {
     tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
 }
 
-pub(crate) fn tunnel(profile: &Profile, secret: &str, path: &str) -> io::Result<Tunnel> {
+pub fn tunnel(profile: &Profile, secret: &str, path: &str) -> io::Result<Tunnel> {
     let runtime = runtime()?;
     let mut socket = runtime.block_on(connect(profile, secret, path))?;
     let (input, mut incoming) = mpsc::channel::<Vec<u8>>(8);

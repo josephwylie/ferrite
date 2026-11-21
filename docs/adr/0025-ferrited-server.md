@@ -1,7 +1,8 @@
 # 0025 — Agents live in a headless Server; the window is its client
 
 Status: accepted 2026-10-15 (Herdr benchmark, Foundation #1). Amended
-2026-11-17 by the Groups amendment below.
+2026-11-17 by the Groups amendment below, and 2026-11-21 by the
+`ferrite-server` amendment.
 
 ## Context
 
@@ -551,3 +552,26 @@ Server answers `group`, `layout` and `revive_group` with `unsupported`,
 sends no `groups` in its snapshot and never sends `groups` or
 `dissolved`. A `bootstrap` naming a Group starts a Thread in none. A
 window ignores the `groups` and `dissolved` an older Server sends.
+
+## Amendment (2026-11-21): the Server process is a crate of its own
+
+`ferrite-core` held both sides of the wire, and every crate of the window
+(`ferrite-ui`, `ferrite-terminal`, `ferrite-pane`, `ferrite-frame`,
+`ferrite-cockpit`) depends on it, so an edit to the Server's own code
+rebuilt the whole window. The process is now `ferrite-server`:
+`ferrite_server::run`, its pump and calls, the bridges, the remote access's
+HTTPS ingress, `ferrited` (its `[[bin]]`, the same name and install path)
+and `fixture_machine` (its `test-support` feature). The `ferrite` app
+depends on it to dispatch `ferrite server`. No window crate does, outside
+its dev-dependencies, and `scripts/ci_scope.py` checks it.
+
+What both sides run stays in core. `ferrite_core::server` is the Server as
+the rest of Ferrite sees it: `store_dir` and `settings_dir`, `agent`
+(`ensure_running`, the LaunchAgent, the Run key, the systemd unit),
+`wants_restart`, and the `github` and `clis` seams, which a Server reads
+for its windows and an in-process window reads itself. The Engine stays in
+core too: `--demo`, `--load` and the window's tests run it in-process over
+`Link::InProcess`. Splitting core itself by side of the wire is later work.
+
+The Layout table's `server` row is this crate's; `Options` and `run` are
+`ferrite_server::Options` and `ferrite_server::run`.

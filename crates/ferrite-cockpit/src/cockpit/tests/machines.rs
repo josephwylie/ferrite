@@ -38,7 +38,7 @@ fn not_installed(machine: &Machine, settings_dir: &std::path::Path) -> Bridge {
 /// Every byte a window sent `box`'s Server through `serving`.
 static SENT_TO_BOX: std::sync::Mutex<Vec<u8>> = std::sync::Mutex::new(Vec::new());
 
-/// `box`'s Server runs in this process (`server::fixture_machine`), its
+/// `box`'s Server runs in this process (`ferrite_server::fixture_machine`), its
 /// Store in `box` under the settings directory; each tunnel reaches it as
 /// ssh would, keeping what the window sends in `SENT_TO_BOX`.
 fn serving(machine: &Machine, settings_dir: &std::path::Path) -> Bridge {
@@ -200,7 +200,7 @@ fn remote_files_and_terminal_open_through_their_keyboard_shortcuts(cx: &mut Test
     use crate::cockpit::surfaces::SurfaceId;
     let dir = settings_dir("tool-keys");
     let _ = std::fs::remove_dir_all(&dir);
-    let dial = ferrite_core::server::fixture_machine(
+    let dial = ferrite_server::fixture_machine(
         dir.join("box"), Box::new(OnBox(Default::default())),
     ).unwrap();
     let mut core = Cockpit::attach(Attach {
@@ -266,7 +266,7 @@ fn background_thread_changes_keep_the_visible_composer_live(cx: &mut TestAppCont
     use ferrite_core::cockpit::{Attach, Endpoint, ServerState};
     let dir = scratch("input-sync");
     let dial =
-        ferrite_core::server::fixture_machine(dir.join("box"), Box::new(OnBox(Default::default())))
+        ferrite_server::fixture_machine(dir.join("box"), Box::new(OnBox(Default::default())))
             .unwrap();
     let bridge = std::sync::Arc::new(Bridge::new(
         "box",
@@ -665,7 +665,7 @@ fn a_machines_parked_threads_show_in_the_nav_and_revive_on_click(cx: &mut TestAp
     use ferrite_core::cockpit::{Attach, Endpoint, ServerState};
     let dir = scratch("machine-parked");
     let dial =
-        ferrite_core::server::fixture_machine(dir.join("box"), Box::new(OnBox(Default::default())))
+        ferrite_server::fixture_machine(dir.join("box"), Box::new(OnBox(Default::default())))
             .unwrap();
     let mut core = Cockpit::attach(Attach {
             browser: false,
@@ -1269,7 +1269,7 @@ fn a_draft_on_a_machine_starts_a_thread_in_a_directory_typed_there(cx: &mut Test
     std::fs::write(folder.join("readme.txt"), "").unwrap();
     let started = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
     // `serving` dials it itself, to keep what the window sends.
-    let _ = ferrite_core::server::fixture_machine(
+    let _ = ferrite_server::fixture_machine(
         settings_dir("typed").join("box"),
         Box::new(OnBox(started.clone())),
     )
@@ -1443,7 +1443,7 @@ fn a_review_of_a_machines_thread_reads_its_checkout_there(cx: &mut TestAppContex
     git(&["add", "nav.rs"]);
     git(&["commit", "-q", "-m", "Tidy the nav"]);
     std::fs::write(repo.join("notes.md"), "fresh\n").unwrap();
-    let _ = ferrite_core::server::fixture_machine(
+    let _ = ferrite_server::fixture_machine(
         settings_dir("reviewed").join("box"),
         Box::new(OnBox(Default::default())),
     )
@@ -1532,7 +1532,7 @@ pub(super) fn browser_core(name: &str) -> (Cockpit, ThreadId, ferrite_core::brow
     use ferrite_core::browser::Action;
     use ferrite_core::cockpit::{Attach, Endpoint, ServerState};
     let dir = scratch(name);
-    let dial = ferrite_core::server::fixture_machine(dir.join("box"), Box::new(OnBox(Default::default()))).unwrap();
+    let dial = ferrite_server::fixture_machine(dir.join("box"), Box::new(OnBox(Default::default()))).unwrap();
     let bridge = std::sync::Arc::new(Bridge::new("box", dir.join("bridge.sock"), dial));
     let mut core = Cockpit::attach(Attach {
         store: dir.join("window"), server: Endpoint::Machine(bridge),
@@ -1713,7 +1713,7 @@ fn browser_live_annotation_keeps_focus_and_protection_until_guest_cleanup(cx: &m
     use ferrite_core::browser_annotations::{LiveFeedback, LiveScreenshot, Rect, RegionTarget, Selection, Viewport};
     // Short: the machine's socket under it must fit macOS's 104-byte SUN_LEN.
     let dir = scratch("annotation-host");
-    let dial = ferrite_core::server::fixture_machine(dir.join("box"), Box::new(OnBox(Default::default()))).unwrap();
+    let dial = ferrite_server::fixture_machine(dir.join("box"), Box::new(OnBox(Default::default()))).unwrap();
     let bridge = std::sync::Arc::new(Bridge::new("box", dir.join("bridge.sock"), dial));
     let mut core = Cockpit::attach(Attach {
         store: dir.join("window"), server: Endpoint::Machine(bridge),
@@ -1836,7 +1836,7 @@ fn settings_on_a_machine<'a>(
     let remote = dir.join("r");
     std::fs::create_dir_all(&remote).unwrap();
     there.save(&remote).unwrap();
-    let dial = ferrite_core::server::fixture_machine(
+    let dial = ferrite_server::fixture_machine(
         remote.join("threads"),
         Box::new(OnBox(Default::default())),
     )
