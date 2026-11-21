@@ -2320,6 +2320,7 @@ dependencies = [
  "ferrite-core",
  "ferrite-frame",
  "ferrite-pane",
+ "ferrite-server",
  "ferrite-ui",
  "gpui-kit",
  "gpui-pre-reqwest-client",
@@ -2337,6 +2338,7 @@ dependencies = [
  "ferrite-frame",
  "ferrite-pane",
  "ferrite-reviewr",
+ "ferrite-server",
  "ferrite-terminal",
  "ferrite-ui",
  "futures",
@@ -2354,8 +2356,6 @@ dependencies = [
 name = "ferrite-core"
 version = "0.4.0"
 dependencies = [
- "axum",
- "axum-server",
  "base64 0.22.1",
  "chrono",
  "ctor",
@@ -2366,7 +2366,6 @@ dependencies = [
  "iana-time-zone",
  "keyring",
  "libc",
- "portable-pty",
  "rand 0.8.7",
  "rustls",
  "schemars",
@@ -2375,7 +2374,6 @@ dependencies = [
  "sha2 0.10.9",
  "shlex 1.3.0",
  "similar",
- "subtle",
  "tokio",
  "tokio-tungstenite 0.28.0",
  "ureq",
@@ -2443,6 +2441,32 @@ dependencies = [
  "time",
  "two-face",
  "which",
+]
+
+[[package]]
+name = "ferrite-server"
+version = "0.4.0"
+dependencies = [
+ "axum",
+ "axum-server",
+ "base64 0.22.1",
+ "chrono",
+ "ctor",
+ "dunce",
+ "ferrite-core",
+ "ferrite-reviewr",
+ "futures-util",
+ "libc",
+ "portable-pty",
+ "rustls",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "subtle",
+ "tokio",
+ "tokio-tungstenite 0.28.0",
+ "ureq",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

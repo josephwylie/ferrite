@@ -251,7 +251,7 @@ impl Mirror {
 
 /// The open Threads' mirrors, fed from the Engine's messages.
 #[derive(Default)]
-pub(crate) struct Mirrors {
+pub struct Mirrors {
     threads: std::collections::BTreeMap<ThreadId, Mirror>,
     /// What changed for each Pane since the window last asked.
     updates: Vec<PaneUpdate>,
@@ -281,7 +281,7 @@ impl Mirrors {
     }
 
     /// Apply one message. `boot` is the Engine's clock zero on this side.
-    pub(crate) fn receive(&mut self, message: ServerMessage, boot: Instant) {
+    pub fn receive(&mut self, message: ServerMessage, boot: Instant) {
         let limits = self.limits;
         match message {
             ServerMessage::History { thread, .. }
@@ -473,7 +473,7 @@ impl Mirrors {
     /// The last input this window applied to a Thread: where a resume
     /// picks up. None for a Thread it does not hold: its history comes
     /// whole.
-    pub(crate) fn seq(&self, thread: ThreadId) -> Option<u64> {
+    pub fn seq(&self, thread: ThreadId) -> Option<u64> {
         self.threads
             .get(&thread)
             .filter(|mirror| mirror.watched && mirror.loaded)
@@ -570,7 +570,7 @@ impl Mirrors {
         self.threads.get(&thread)?.facts.as_ref()
     }
 
-    pub(crate) fn view(&self, thread: ThreadId) -> Option<ThreadView<'_>> {
+    pub fn view(&self, thread: ThreadId) -> Option<ThreadView<'_>> {
         let mirror = self.threads.get(&thread)?;
         Some(ThreadView {
             thread,
@@ -699,8 +699,8 @@ impl<'a> ThreadView<'a> {
     }
 
     /// The digest the Server sent, without the fallback.
-    #[cfg(test)]
-    pub(crate) fn sent_digest(&self) -> Option<&'a Digest> {
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn sent_digest(&self) -> Option<&'a Digest> {
         self.digest
     }
 

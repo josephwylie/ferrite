@@ -151,7 +151,7 @@ impl CockpitView {
                         format!("{name} has no ferrited"),
                         format!(
                             "{reason}. Install it there (cargo install --path \
-                             crates/ferrite-core --bin ferrited); Ferrite keeps trying."
+                             crates/ferrite-server --bin ferrited); Ferrite keeps trying."
                         ),
                     ),
                 };

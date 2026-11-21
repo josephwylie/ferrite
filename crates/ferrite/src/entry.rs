@@ -17,7 +17,7 @@ pub fn run() {
     // `ferrite server` is the headless Server the window attaches to (ADR
     // 0025): it never starts a window, Chromium or the self-update.
     if args.get(1).map(String::as_str) == Some("server") {
-        std::process::exit(ferrite_core::server::run(ferrite_core::server::Options {
+        std::process::exit(ferrite_server::run(ferrite_server::Options {
             store: store_dir(),
             settings_dir: settings_dir(),
             version: env!("CARGO_PKG_VERSION").into(),

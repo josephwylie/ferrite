@@ -476,7 +476,7 @@ const TUNE_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// How long a Thread at rest stays held: its Session on the Server, its
 /// transcript in a window (ADR 0032).
-pub(crate) const HELD_AT_REST: Duration = Duration::from_secs(5 * 60);
+pub const HELD_AT_REST: Duration = Duration::from_secs(5 * 60);
 
 struct PendingBootstrap {
     prompt: String,
@@ -1221,7 +1221,7 @@ pub struct Engine {
     #[cfg(any(test, feature = "test-support"))]
     pub(crate) refuse_park: std::collections::HashSet<ThreadId>,
     /// How many Thread states `publish` has built (`states_built`).
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     states_built: usize,
 }
 
@@ -1239,7 +1239,7 @@ fn boot_id() -> String {
 const QUIT_SYNC_DEADLINE: Duration = Duration::from_millis(500);
 
 impl Engine {
-    pub(crate) fn browser_store(&self) -> &Store {
+    pub fn browser_store(&self) -> &Store {
         &self.store
     }
 
@@ -1285,7 +1285,7 @@ impl Engine {
             turns: Default::default(),
             #[cfg(any(test, feature = "test-support"))]
             refuse_park: std::collections::HashSet::new(),
-            #[cfg(test)]
+            #[cfg(any(test, feature = "test-support"))]
             states_built: 0,
         })
     }
@@ -1526,7 +1526,7 @@ impl Engine {
     /// A Factory Step's Worker and a Coordinator open this way (ADR 0037).
     /// `make` says whether the branch switch or worktree the choice asks
     /// for is made before this answers or by the first start (ADR 0018).
-    pub(crate) fn open_choice(
+    pub fn open_choice(
         &mut self,
         choice: ProviderChoice,
         workspace: WorkspaceChoice,
@@ -1817,8 +1817,8 @@ impl Engine {
 
     // Legacy #24 fixtures exercise persisted `session_project_root` loading.
     // No production writer exists after the #29 lock.
-    #[cfg(test)]
-    pub(crate) fn set_session_project_root(
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn set_session_project_root(
         &mut self,
         thread: ThreadId,
         root: Option<PathBuf>,
@@ -4717,14 +4717,14 @@ impl Engine {
 
     /// How many Thread states have been built to publish: one per Thread
     /// that may have changed, never one per Thread open.
-    #[cfg(test)]
-    pub(crate) fn states_built(&self) -> usize {
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn states_built(&self) -> usize {
         self.states_built
     }
 
     /// How many bytes of Thread logs this Engine has read.
-    #[cfg(test)]
-    pub(crate) fn log_bytes_read(&self) -> u64 {
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn log_bytes_read(&self) -> u64 {
         self.store.bytes_read()
     }
 
@@ -4810,7 +4810,7 @@ impl Engine {
             .into_iter()
             .map(|id| self.thread_state(id))
             .collect();
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-support"))]
         {
             self.states_built += states.len();
         }
@@ -4975,7 +4975,7 @@ impl Engine {
     /// A let-go Thread's log, to read back off the pump thread for
     /// `agent.read`. `None` when the Thread is held, or not open: its
     /// Activity is read where it is.
-    pub(crate) fn read_back_later(&mut self, thread: ThreadId) -> Option<io::Result<ReadBack>> {
+    pub fn read_back_later(&mut self, thread: ThreadId) -> Option<io::Result<ReadBack>> {
         let state = self.threads.get_mut_if(&thread, |state| !state.held)?;
         let read = state.writer.checkpoint().and_then(|through| {
             let log = self.store.log_at(thread, &state.writer, through)?;
@@ -4994,7 +4994,7 @@ impl Engine {
     /// Hold what a read off the pump read back (`read_back_later`), as
     /// `hold` would have read it, so the next read reads none of the log.
     /// Dropped when the Thread was held meanwhile or its log has grown.
-    pub(crate) fn adopt(&mut self, read: ReadThread) {
+    pub fn adopt(&mut self, read: ReadThread) {
         let Some(state) = self.threads.get_mut_if(&read.thread, |state| !state.held) else {
             return;
         };
@@ -5796,7 +5796,7 @@ fn place_worktree(repo: &Path, path: &Path, branch: &str) -> Result<(), workspac
 /// a caller whose reply says whether it could be (`thread.start`, a Factory
 /// Worker), on the loop. Or by the first start, off the loop, for a first
 /// send, whose rollback reports a refusal (`take_bootstrap_results`).
-pub(crate) enum MakeCheckout {
+pub enum MakeCheckout {
     BeforeReply,
     InFirstStart,
 }

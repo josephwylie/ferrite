@@ -9,7 +9,6 @@ mod support;
 
 mod activity_memory;
 mod activity;
-mod api_bridge;
 mod background_handback;
 mod browser_annotations;
 mod browser_conversations;

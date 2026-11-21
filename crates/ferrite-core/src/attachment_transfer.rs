@@ -106,14 +106,14 @@ impl Drop for Pending {
     }
 }
 
-pub(crate) struct Session {
+pub struct Session {
     store: PathBuf,
     next: u64,
     pending: HashMap<u64, Pending>,
 }
 
 impl Session {
-    pub(crate) fn new(store: PathBuf) -> Self {
+    pub fn new(store: PathBuf) -> Self {
         Self {
             store,
             next: 0,
@@ -121,12 +121,12 @@ impl Session {
         }
     }
 
-    pub(crate) fn expire(&mut self) {
+    pub fn expire(&mut self) {
         self.pending
             .retain(|_, pending| pending.touched.elapsed() < EXPIRY);
     }
 
-    pub(crate) fn execute(&mut self, request: Request) -> io::Result<Reply> {
+    pub fn execute(&mut self, request: Request) -> io::Result<Reply> {
         self.expire();
         match request {
             Request::Begin { name, size } => {
@@ -356,9 +356,9 @@ fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
-pub(crate) type Exchange = Box<dyn FnMut(Request) -> io::Result<Reply>>;
+pub type Exchange = Box<dyn FnMut(Request) -> io::Result<Reply>>;
 
-pub(crate) fn upload(
+pub fn upload(
     path: PathBuf,
     connect: impl FnOnce() -> io::Result<Exchange> + Send + 'static,
 ) -> Upload {

@@ -18,6 +18,8 @@ import tomllib
 class Package:
     directory: str
     dependencies: frozenset[str]
+    # What its own build links: every edge but a dev-dependency.
+    runtime: frozenset[str] = frozenset()
 
 
 def workspace(root: Path) -> dict[str, Package]:
@@ -39,6 +41,7 @@ def workspace(root: Path) -> dict[str, Package]:
         if not re.fullmatch(r"[A-Za-z0-9_-]+", name) or name in packages:
             raise ValueError(f"Invalid or duplicate workspace package: {name}")
         dependencies = set()
+        runtime = set()
         for table in [data, *data.get("target", {}).values()]:
             for kind in ("dependencies", "dev-dependencies", "build-dependencies"):
                 for alias, value in table.get(kind, {}).items():
@@ -55,30 +58,50 @@ def workspace(root: Path) -> dict[str, Package]:
                                 "Add its directory to workspace.members and remove any workspace.exclude "
                                 "entry, or extend the selector to track it before using this dependency."
                             )
-                    dependencies.add(value.get("package", alias) if isinstance(value, dict) else alias)
-        packages[name] = Package(directory.relative_to(root).as_posix(), frozenset(dependencies))
+                    dependency = value.get("package", alias) if isinstance(value, dict) else alias
+                    dependencies.add(dependency)
+                    if kind != "dev-dependencies":
+                        runtime.add(dependency)
+        packages[name] = Package(directory.relative_to(root).as_posix(), frozenset(dependencies), frozenset(runtime))
     if not packages:
         raise ValueError("Workspace has no packages")
     return packages
+
+
+# The window's crates. Each builds without the Server process, so an edit to
+# the Server rebuilds no window code; their tests may still run a Server.
+WINDOW_CHAIN = ("ferrite-ui", "ferrite-terminal", "ferrite-pane", "ferrite-frame", "ferrite-cockpit")
 
 
 def check_boundaries(packages: dict[str, Package]) -> None:
     for source in ("ferrite-core", "ferrite-frame"):
         if source not in packages:
             raise ValueError(f"Required architectural boundary owner is missing: {source}")
-        pending = [(source,)]
-        visited = set()
-        while pending:
-            chain = pending.pop()
-            name = chain[-1]
-            forbidden = (name == "gpui" or name.startswith("gpui-")) if source == "ferrite-core" else name == "ferrite-cockpit"
-            if forbidden:
-                raise ValueError(f"Forbidden dependency: {' -> '.join(chain)}")
-            if name in visited:
-                continue
-            visited.add(name)
-            if name in packages:
-                pending.extend((*chain, dep) for dep in sorted(packages[name].dependencies))
+    # Core draws nothing (ADR 0001), and `ferrited` runs where no window's
+    # libraries are (ADR 0026).
+    for source in ("ferrite-core", "ferrite-server"):
+        if source in packages:
+            forbid(packages, source, lambda name: name == "gpui" or name.startswith("gpui-"), "dependencies")
+    forbid(packages, "ferrite-frame", lambda name: name == "ferrite-cockpit", "dependencies")
+    for source in WINDOW_CHAIN:
+        if source in packages:
+            forbid(packages, source, lambda name: name == "ferrite-server", "runtime")
+
+
+def forbid(packages: dict[str, Package], source: str, forbidden, edges: str) -> None:
+    """Fail when `source` reaches a `forbidden` package over `edges`."""
+    pending = [(source,)]
+    visited = set()
+    while pending:
+        chain = pending.pop()
+        name = chain[-1]
+        if forbidden(name):
+            raise ValueError(f"Forbidden dependency: {' -> '.join(chain)}")
+        if name in visited:
+            continue
+        visited.add(name)
+        if name in packages:
+            pending.extend((*chain, dep) for dep in sorted(getattr(packages[name], edges)))
 
 
 # These inputs affect packaging or dependency resolution outside workspace edges.

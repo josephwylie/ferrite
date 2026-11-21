@@ -1806,7 +1806,7 @@ struct Shared {
     #[cfg(test)]
     journal: std::sync::Mutex<Vec<(&'static str, u64)>>,
     /// Every byte read off a log, so tests can bound what a read costs.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     read_bytes: std::sync::atomic::AtomicU64,
     /// Syncs so far, barrier then full, so tests can see which one ran.
     #[cfg(test)]
@@ -1939,7 +1939,7 @@ impl Shared {
             worker: std::sync::OnceLock::new(),
             #[cfg(test)]
             journal: Default::default(),
-            #[cfg(test)]
+            #[cfg(any(test, feature = "test-support"))]
             read_bytes: Default::default(),
             #[cfg(test)]
             syncs: Default::default(),
@@ -2274,7 +2274,7 @@ fn read_from(
 /// tests can count what a peek or a revive actually pulls off the disk.
 struct LogRead {
     file: File,
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     shared: std::sync::Arc<Shared>,
 }
 
@@ -2283,7 +2283,7 @@ impl LogRead {
     fn try_clone(&self) -> io::Result<Self> {
         Ok(Self {
             file: self.file.try_clone()?,
-            #[cfg(test)]
+            #[cfg(any(test, feature = "test-support"))]
             shared: self.shared.clone(),
         })
     }
@@ -2292,7 +2292,7 @@ impl LogRead {
 impl Read for LogRead {
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
         let read = self.file.read(buf)?;
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-support"))]
         self.shared
             .read_bytes
             .fetch_add(read as u64, std::sync::atomic::Ordering::Relaxed);
@@ -2443,8 +2443,8 @@ impl Store {
     }
 
     /// Bytes read off logs so far, by this store and every handle sharing it.
-    #[cfg(test)]
-    pub(crate) fn bytes_read(&self) -> u64 {
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn bytes_read(&self) -> u64 {
         self.shared
             .read_bytes
             .load(std::sync::atomic::Ordering::Relaxed)
@@ -2689,7 +2689,7 @@ impl Store {
     fn read_log(&self, id: ThreadId) -> io::Result<LogRead> {
         Ok(LogRead {
             file: File::open(self.log_path(id))?,
-            #[cfg(test)]
+            #[cfg(any(test, feature = "test-support"))]
             shared: self.shared.clone(),
         })
     }
@@ -3278,8 +3278,8 @@ impl Store {
     /// is flushed before the rewrite reads the log and swapped onto the new
     /// file after. The swap happens only once the rename has succeeded: on
     /// any error the caller's writer is untouched and still valid.
-    #[cfg(test)]
-    pub(crate) fn set_session_project_root(
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn set_session_project_root(
         &self,
         id: ThreadId,
         root: Option<PathBuf>,

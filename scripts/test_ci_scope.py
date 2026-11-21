@@ -44,16 +44,20 @@ class SelectionTests(unittest.TestCase):
                          ["ferrite", "ferrite-cockpit", "ferrite-frame"])
 
     def test_core_selects_transitive_consumers(self):
-        result = select(self.packages, ["crates/ferrite-core/src/server/browser.rs"])
+        result = select(self.packages, ["crates/ferrite-core/src/browser.rs"])
         self.assertIn("ferrite-terminal", result["packages"])
         self.assertIn("ferrite-frame", result["packages"])
         self.assertNotIn("ferrite-focus-notify", result["packages"])
         self.assertNotIn("ferrite-reviewr", result["packages"])
         self.assertTrue(result["browser"])
 
+    def test_server_selects_the_app_and_the_tests_that_run_it(self):
+        self.assertEqual(select(self.packages, ["crates/ferrite-server/src/calls.rs"])["packages"],
+                         ["ferrite", "ferrite-cockpit", "ferrite-server"])
+
     def test_browser_inputs_missing_from_old_filter_select_browser(self):
         paths = ["Cargo.lock", "crates/ferrite-pane/Cargo.toml", "crates/ferrite-cockpit/Cargo.toml",
-                 "crates/ferrite-core/src/server/browser.rs", "vendor/gpui-base/src/lib.rs"]
+                 "crates/ferrite-server/src/browser.rs", "vendor/gpui-base/src/lib.rs"]
         for path in paths:
             with self.subTest(path=path):
                 self.assertTrue(select(self.packages, [path])["browser"])
@@ -82,7 +86,7 @@ class SelectionTests(unittest.TestCase):
     def test_other_changes_leave_the_packaged_browser_to_main(self):
         # These still select the ferrite package, so ci.yml checks the CEF builds.
         paths = ["crates/ferrite-cockpit/src/cockpit.rs", "crates/ferrite-cockpit/src/cockpit/decisions.rs",
-                 "crates/ferrite-core/src/server.rs", "crates/ferrite-ui/src/lib.rs", "scripts/raw-presses.json",
+                 "crates/ferrite-server/src/lib.rs", "crates/ferrite-ui/src/lib.rs", "scripts/raw-presses.json",
                  ".github/workflows/ci.yml", ".config/nextest.toml", "skills/verify-ferrite/features/decisions.md"]
         for path in paths:
             with self.subTest(path=path):
@@ -213,6 +217,23 @@ renamed = { package = "helper", path = "crates/helper" }
         self.write_package("ferrite-frame", '[dependencies]\nhelper = { path = "../helper" }\n')
         self.write_package("helper", '[dev-dependencies]\nwindow = { package = "ferrite-cockpit", path = "../ferrite-cockpit" }\n')
         with self.assertRaisesRegex(ValueError, "ferrite-frame -> helper -> ferrite-cockpit"):
+            check_boundaries(workspace(self.root))
+
+    def test_window_chain_takes_the_server_only_for_its_tests(self):
+        self.write_package("ferrite-server")
+        self.write_package("ferrite-cockpit", '[dev-dependencies]\nferrite-server = { path = "../ferrite-server" }\n')
+        check_boundaries(workspace(self.root))
+        for table in ["dependencies", "build-dependencies", "target.'cfg(windows)'.dependencies"]:
+            with self.subTest(table=table):
+                self.write_package("ferrite-pane", f'[{table}]\nhelper = {{ path = "../helper" }}\n')
+                self.write_package("helper", '[dependencies]\nserver = { package = "ferrite-server", path = "../ferrite-server", optional = true }\n')
+                with self.assertRaisesRegex(ValueError, "ferrite-pane -> helper -> ferrite-server"):
+                    check_boundaries(workspace(self.root))
+
+    def test_server_builds_without_gpui(self):
+        self.write_package("ferrite-server", '[dependencies]\nhelper = { path = "../helper" }\n')
+        self.write_package("helper", '[dependencies]\nui = { package = "gpui-base", version = "1" }\n')
+        with self.assertRaisesRegex(ValueError, "ferrite-server -> helper -> gpui-base"):
             check_boundaries(workspace(self.root))
 
     def test_cycles_terminate_and_preserve_reverse_closure(self):

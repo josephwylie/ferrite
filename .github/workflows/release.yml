@@ -220,7 +220,7 @@ jobs:
       - name: Build server
         run: |
           test "$(rustc -vV | sed -n 's/^host: //p')" = "$SERVER_TARGET"
-          cargo build -p ferrite-core --bin ferrited --release
+          cargo build -p ferrite-server --bin ferrited --release
       - name: Package server
         id: package
         run: |

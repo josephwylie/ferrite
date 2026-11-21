@@ -1,0 +1,56 @@
+[package]
+name = "ferrite-server"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Ferrite's Server: the headless process that owns every Session (ADR 0025). No window."
+
+[features]
+# What the window's tests drive a machine with: `fixture_machine`.
+test-support = ["ferrite-core/test-support"]
+
+[dependencies]
+ferrite-core = { path = "../ferrite-core" }
+# A Project's reviews and commits, read where its checkout is (ADR 0021).
+ferrite-reviewr = { path = "../ferrite-reviewr" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+base64 = "0.22"
+dunce = "1"
+# The remote access's HTTPS ingress, its terminals and its pairing codes
+# (`remote`, ADR 0026).
+axum = { version = "0.8", features = ["ws"] }
+axum-server = { version = "0.7", features = ["tls-rustls"] }
+tokio = { version = "1", features = ["rt-multi-thread", "net", "sync", "time", "io-util", "macros"] }
+futures-util = { version = "0.3", features = ["sink"] }
+portable-pty = "0.9"
+sha2 = "0.10"
+subtle = "2"
+
+# Stopping on a signal (`signals`), and waiting out the Server it replaces.
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+# A console's close and the session's end (`signals`), and waiting out the
+# Server it replaces.
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Gdi",
+    "Win32_System_Console",
+    "Win32_System_LibraryLoader",
+    "Win32_System_Threading",
+    "Win32_UI_WindowsAndMessaging",
+] }
+
+[dev-dependencies]
+# The test programs' own temporary folder (ferrite-core/src/test_temp.rs).
+ctor = "1"
+libc = "0.2"
+# The Engine's counters and hooks the tests read.
+ferrite-core = { path = "../ferrite-core", features = ["test-support"] }
+chrono = "0.4.45"
+# The remote access's tests reach it as a window does.
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+tokio-tungstenite = { version = "0.28", features = ["rustls-tls-native-roots"] }
+ureq = { version = "3", features = ["platform-verifier"] }

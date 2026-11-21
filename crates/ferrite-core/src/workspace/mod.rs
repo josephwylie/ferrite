@@ -1052,8 +1052,8 @@ pub fn remove_worktree(repo: &Path, path: &Path) -> Result<(), GitError> {
 
 /// Test-only: run one git command and unwrap — the shared plumbing the
 /// cockpit's binding tests drive their scratch repos with.
-#[cfg(test)]
-pub(crate) fn git_for_tests(repo: &Path, args: &[&str]) -> String {
+#[cfg(any(test, feature = "test-support"))]
+pub fn git_for_tests(repo: &Path, args: &[&str]) -> String {
     git(repo, args).unwrap()
 }
 

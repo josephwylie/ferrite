@@ -10,7 +10,7 @@ use tokio_tungstenite::tungstenite::Message;
 
 #[derive(Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
-pub(crate) enum Command {
+pub enum Command {
     Open {
         cwd: String,
         columns: u16,

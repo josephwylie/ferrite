@@ -38,7 +38,7 @@ pub use remote::{Attach, Endpoint, ServerRestart, ServerState};
 pub use status::{ServerStatus, StatusRow};
 
 mod factory_fixture;
-pub(crate) mod mirror;
+pub mod mirror;
 mod parked;
 mod remote;
 mod shared;

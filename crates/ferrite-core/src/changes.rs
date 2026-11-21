@@ -47,7 +47,7 @@ pub struct Snapshot {
     pub staged: HashSet<String>,
 }
 
-pub(crate) fn execute(request: Request) -> Result<Reply, String> {
+pub fn execute(request: Request) -> Result<Reply, String> {
     match request {
         Request::Read { root, scope } => {
             let root = root_path(&root)?;
