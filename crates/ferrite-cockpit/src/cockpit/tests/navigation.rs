@@ -434,7 +434,7 @@ fn a_double_click_on_the_view_title_renames_the_thread(cx: &mut TestAppContext) 
     click_at(cx, at, 2);
     view.read_with(cx, |view, _| {
         assert!(
-            matches!(&view.rename, Some((RenameTarget::ViewTitle(renaming), _)) if *renaming == thread),
+            matches!(view.rename.shown(), Some((RenameTarget::ViewTitle(renaming), _)) if renaming == thread),
             "the second press renames the Thread"
         );
         assert!(view.context_menu().is_none(), "and the menu is gone");
