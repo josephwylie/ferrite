@@ -98,7 +98,10 @@ class SelectionTests(unittest.TestCase):
         self.assertTrue(select(self.packages, path, browser=True)["browser"])
 
     def test_vendored_crates_are_members_kept_out_of_package_runs(self):
-        self.assertEqual(self.vendored, ["gpui-base", "gpui-component", "gpui-pre", "gpui-pre-macos", "taffy"])
+        self.assertEqual(
+            self.vendored,
+            ["gpui-base", "gpui-component", "gpui-pre", "gpui-pre-macos", "gpui-pre-platform", "gpui-pre-windows", "taffy"],
+        )
         self.assertFalse(set(self.vendored) & set(self.ferrite))
 
     def test_vendored_source_selects_every_package(self):

@@ -1,6 +1,6 @@
 ---
 name: verify-ferrite
-description: Launch an isolated Ferrite (the GPUI desktop app that runs Claude/Codex agents as Threads) from the current checkout, drive its real window headlessly (keys, clicks, typing, screenshots on macOS) and through its `ferrite` CLI, and keep transcripts and screenshots as proof. Never touches the operator's Ferrite, screen or focus. Use when you must show a Ferrite change working in the real app, such as Threads, prompts, Decisions, Projects, worktrees or toasts, not just in unit tests.
+description: Launch an isolated Ferrite (the GPUI desktop app that runs Claude/Codex agents as Threads) from the current checkout on macOS, Linux or Windows, drive its real window headlessly (keys, clicks, typing, screenshots on macOS) and through its `ferrite` CLI, and keep transcripts and screenshots as proof. Never touches the operator's Ferrite, screen or focus. Use when you must show a Ferrite change working in the real app, such as Threads, prompts, Decisions, Projects, worktrees or toasts, not just in unit tests.
 ---
 
 # Verify Ferrite
@@ -11,8 +11,9 @@ socket in its Store. The same binary is a CLI for that Server (`ferrite thread s
 `ferrite --headless` (ADR 0038) runs the production window off-screen, attached to a
 Server, and takes keys, clicks, typing and screenshots through `ferrite window …`.
 
-This tracked folder is the only copy of the skill, for macOS and Linux alike; a machine
-exposes it to Claude Code with a symlink from `.claude/skills/verify-ferrite` to it.
+This tracked folder is the only copy of the skill, for macOS, Linux and Windows; a machine
+exposes it to Claude Code with a symlink from `.claude/skills/verify-ferrite` to it (on
+Windows, a junction: `mklink /J .claude\skills\verify-ferrite skills\verify-ferrite`).
 
 One helper does everything. Use the copy in the checkout you are verifying: it builds
 and runs the checkout it sits in, so a worktree verifies its own code.
@@ -33,16 +34,59 @@ among them.
 
 ## Platforms
 
-| | macOS | Linux |
-| --- | --- | --- |
-| launch, doctor, stop, `cli` | yes | yes |
-| `key`, `type`, `click`, `find`, `text`, `focus`, `resize`, `drag` (headless) | yes | yes |
-| `shot` | yes, 2880x1800 | fails: `screenshots need macOS for now` |
-| `launch --window` (the visible window) | yes | refused |
+| | macOS | Linux | Windows (`fv_windows.py`) |
+| --- | --- | --- | --- |
+| launch, doctor, stop, `cli` | yes | yes | yes |
+| `key`, `type`, `click`, `find`, `text`, `focus`, `resize`, `drag` (headless) | yes | yes | yes |
+| `shot` | yes, 2880x1800 | fails: `screenshots need macOS for now` | yes, 2880x1800 |
+| `launch --window` (the visible window) | yes | refused | refused |
 
 Linux has no off-screen renderer yet, so a Linux proof of window state is `fv find`
 bounds, `fv text` and `fv focus` read-backs, and a CLI read-back (`agent read`,
 `thread get`), never a picture.
+
+## Windows
+
+Same commands, through a different helper. Run it from Git Bash at the checkout's root
+(`python`, not `python3`, in PowerShell):
+
+```sh
+FV="python3 skills/verify-ferrite/scripts/fv_windows.py"   # Python 3.12+, no packages
+```
+
+`fv_windows.py` loads `fv` unchanged and replaces what reads processes and sockets
+through ps, lsof or /proc:
+
+- **Paths.** The run lives at `%TEMP%\fv-<id>` (`C:\Users\<you>\AppData\Local\Temp\fv-<id>`),
+  not `/tmp`: `ferrite --headless` takes only a Store under the temp directory. Wherever a
+  recipe says `/tmp/fv-$FV_RUN`, use `$(cygpath -w "$TEMP")\fv-$FV_RUN` in Git Bash, and
+  give `--cwd` that Windows path. The binary is `target\debug\ferrite.exe`.
+- **Whose process.** Windows lends no process's argv or environment cheaply, so
+  `doctor` and `stop` trust a pid only while it runs `ferrite.exe` of this checkout and
+  has the creation time `launch` kept (`SERVER_STARTED`, `WINDOW_STARTED` in `run.env`).
+  A reused pid has another creation time.
+- **The API is a named pipe**, `\\.\pipe\ferrite-server-<user SID>-<hash of
+  <store>\api.sock>`. Doctor's `server owns …\api.sock` line asks the pipe for its
+  server's pid.
+- **Stop is TerminateProcess**: Windows has no SIGTERM to catch. The agent CLIs end with
+  the Server, since they sit in kill-on-close jobs it holds. `stop` checks every process
+  the run spawned is gone before it deletes the run, and clears the read-only bit git
+  puts on its objects so the delete can go through.
+- **Shots** are drawn as on macOS, off-screen at 2880x1800 and scale 2, by gpui's
+  DirectX renderer with no window (`DirectXHeadlessRenderer`, patched into
+  `vendor/gpui-pre-windows`). A shot with every surface and icon but no word means the
+  headless text fell back to no glyphs: `window.out` says why.
+- **Keys** are the Linux keymap: `ctrl` where a step says `cmd` (`ctrl-,` opens Settings).
+- **The spawned CLI's argv**, for checks like a pinned model, in PowerShell:
+  `Get-CimInstance Win32_Process -Filter "ParentProcessId=<SERVER_PID>" | Select-Object ProcessId, CommandLine`.
+- **`the Ferrite server did not start: Access is denied (os error 5)`** means a window was
+  started without the run's Server, from a shell inside a job that forbids breakaway (an
+  agent's shell, usually): the window tries to start a Server detached and Windows
+  refuses. `fv` starts the Server first, so a run never meets this. Never start Ferrite
+  outside `fv` to "fix" it.
+
+`fv_windows.py` uses `fv`'s names `BINARY`, `TEMP`, `disowned`, `listens_on`, `start`,
+`Run` and `COMMANDS`. After renaming any of them in `fv`, run a Windows launch and doctor.
 
 ## Launch
 
