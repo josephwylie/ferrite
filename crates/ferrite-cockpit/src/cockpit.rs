@@ -12,6 +12,7 @@ pub(crate) mod beside;
 mod browser;
 #[cfg(feature = "browser-smoke")]
 mod browser_smoke;
+mod checkouts;
 mod columns;
 mod context_menu;
 pub(crate) mod coordinator;
@@ -405,28 +406,9 @@ pub struct CockpitView {
     /// A moment that must not be skipped (a turn ended) asked for a
     /// refresh while one was under way: another follows it.
     branch_refresh_queued: bool,
-    /// The branch each Project's checkout is on, as git last answered —
-    /// what a draft's workspace chip names every frame. Never read from a
-    /// frame: a Project the chip has not named yet, every draft's Project
-    /// on each branch refresh, and the Project whose band popover opens
-    /// are all asked about off the UI thread (`look_up_checkouts`), and the
-    /// last answer stands until the new one lands. On a machine, its Server
-    /// answers each draft's Project once (`list_repo`).
-    checked_out: std::cell::RefCell<std::collections::HashMap<ProjectId, SharedString>>,
-    /// Projects whose checkout is being asked about: one lookup each at a
-    /// time, however many frames name it meanwhile.
-    checking_out: std::cell::RefCell<std::collections::HashSet<ProjectId>>,
-    /// What git lists for a draft's chosen repo — its other worktrees and
-    /// its local branches — read off the UI thread when the workspace
-    /// popover opens and kept by project: the rows show the last answer
-    /// at once and take the fresh one when it lands. Never read per frame.
-    repo_listing: Option<(ProjectId, RepoListing)>,
-    /// On a machine, the listing its Server is reading for the popover or
-    /// a draft's chip.
-    asking_repo: Option<(
-        ProjectId,
-        std::sync::mpsc::Receiver<std::io::Result<RepoListing>>,
-    )>,
+    /// What a draft's workspace chip and its menu read of its Project's
+    /// repo, as git or the machine's Server last answered.
+    checkouts: checkouts::Checkouts,
     /// Stable text-run identities; selection itself belongs to GPUI.
     selection: TranscriptText,
     /// Every Thread's side chat, a body of the Panel.
@@ -1376,10 +1358,7 @@ impl CockpitView {
             session_file_roots: ferrite_core::import::default_roots(),
             pending_files: None,
             launch_project,
-            checked_out: Default::default(),
-            checking_out: Default::default(),
-            repo_listing: None,
-            asking_repo: None,
+            checkouts: Default::default(),
             rename: Default::default(),
             popups: Default::default(),
             panel,
@@ -5796,7 +5775,7 @@ impl CockpitView {
                 .spawn(async move { ferrite_core::workspace::repo_listing(&root) })
                 .await;
             this.update(cx, |view, cx| {
-                view.repo_listing = Some((project, listing));
+                view.checkouts.set_listing(project, listing);
                 view.sync_workspace_rows(cx);
             })
             .ok();
@@ -5843,8 +5822,8 @@ impl CockpitView {
     /// lands — the name a Project git cannot answer for keeps, the branch
     /// a fresh clone would be sitting on.
     fn checked_out_branch(&self, project: ProjectId, cx: &Context<Self>) -> SharedString {
-        if let Some(branch) = self.checked_out.borrow().get(&project) {
-            return branch.clone();
+        if let Some(branch) = self.checkouts.branch(project) {
+            return branch;
         }
         self.look_up_checkouts([project], cx);
         SharedString::from(MAIN_BRANCH)
@@ -5858,10 +5837,9 @@ impl CockpitView {
         if self.on_machine() {
             return;
         }
-        let mut checking = self.checking_out.borrow_mut();
         let mut roots: Vec<(ProjectId, std::path::PathBuf)> = Vec::new();
         for project in projects {
-            if checking.contains(&project) || roots.iter().any(|(asked, _)| *asked == project) {
+            if self.checkouts.asking(project) || roots.iter().any(|(asked, _)| *asked == project) {
                 continue;
             }
             if let Some(found) = self.cockpit.registry().project(project) {
@@ -5871,7 +5849,7 @@ impl CockpitView {
         if roots.is_empty() {
             return;
         }
-        checking.extend(roots.iter().map(|(project, _)| *project));
+        self.checkouts.listen(roots.iter().map(|(project, _)| *project));
         cx.spawn(async move |this, cx| {
             let answers = cx
                 .background_executor()
@@ -5897,21 +5875,7 @@ impl CockpitView {
         answers: Vec<(ProjectId, Option<String>)>,
         cx: &mut Context<Self>,
     ) {
-        let mut changed = false;
-        {
-            let mut checking = self.checking_out.borrow_mut();
-            let mut known = self.checked_out.borrow_mut();
-            for (project, branch) in answers {
-                checking.remove(&project);
-                let branch =
-                    branch.map_or_else(|| SharedString::from(MAIN_BRANCH), SharedString::from);
-                if known.get(&project) != Some(&branch) {
-                    known.insert(project, branch);
-                    changed = true;
-                }
-            }
-        }
-        if changed {
+        if self.checkouts.listed(answers) {
             self.sync_workspace_rows(cx);
             cx.notify();
         }
@@ -5997,11 +5961,7 @@ impl CockpitView {
             *target == DraftTarget::Main,
             BandChoice::Target(DraftTarget::Main),
         )];
-        let listing = self
-            .repo_listing
-            .as_ref()
-            .filter(|(listed, _)| *listed == project)
-            .map(|(_, listing)| listing);
+        let listing = self.checkouts.listing(project);
         // A branch already on offer as the checkout or as a
         // worktree is not offered again as a plain branch: git
         // would refuse to switch the checkout onto it anyway.

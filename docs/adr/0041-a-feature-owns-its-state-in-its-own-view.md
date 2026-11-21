@@ -703,6 +703,20 @@ draft whose folder is gone, drop it (`forget`). A Thread's commands are
 its Session's, in core. A view would add events for asks the root makes
 anyway, and the menu that reads it is still the root's.
 
+A draft's checkouts are the tenth, and the Composer's second slice.
+`Checkouts` (`cockpit/checkouts.rs`) keeps what a draft's workspace chip
+and its menu read of the Project's repo: the branch each Project's
+checkout is on, the Projects being asked about, what the repo lists (its
+other worktrees and its local branches) and, on a machine, the listing
+its Server is reading. Only the root asks, off the UI thread
+(`look_up_checkouts`, `refresh_repo_listing`) or of the machine's Server
+(`ask_machine_repo`), and only the answers and the pump write it
+(`listed`, `set_listing`, `machine_listed`); the chip and the menu's rows
+read it as they draw. A view would add events for asks the root makes
+anyway. The Project and Workspace menus, their rows and their picks stay
+the root's, in the popup slot (ADR 0043). A Thread's checkout labels are
+the Facts' (`refresh_branches`).
+
 ## Precedent
 
 Zed builds its workspace this way: each panel is an entity that owns its
