@@ -561,3 +561,88 @@ fn typed_text_survives_what_happens_around_it(cx: &mut TestAppContext) {
         assert_eq!(view.shown_workflow(cx).unwrap().versions.len(), 1);
     });
 }
+
+/// The outline's rows the inspector shows: a Step's, the approval's or
+/// the start's, as they are drawn chosen.
+fn chosen_rows(cx: &mut gpui::VisualTestContext) -> Vec<&'static str> {
+    [
+        ("outline-row-s-1-selected", "step"),
+        ("outline-approval-selected", "approval"),
+        ("outline-start-selected", "start"),
+    ]
+    .into_iter()
+    .filter(|(selector, _)| {
+        shows(cx, selector) || shows(cx, &format!("{selector}-flagged"))
+    })
+    .map(|(_, row)| row)
+    .collect()
+}
+
+/// What the inspector shows: a Step's settings, the approval settings or
+/// the start.
+fn inspected(cx: &mut gpui::VisualTestContext) -> Vec<&'static str> {
+    [
+        ("inspector-name", "step"),
+        ("approval-settings", "approval"),
+        ("inspector-start", "start"),
+    ]
+    .into_iter()
+    .filter(|(selector, _)| shows(cx, selector))
+    .map(|(_, shown)| shown)
+    .collect()
+}
+
+/// Press an outline row, chosen or not.
+fn press_row(cx: &mut gpui::VisualTestContext, row: &str) {
+    let selector = ["-selected", "", "-selected-flagged", "-flagged"]
+        .into_iter()
+        .map(|state| format!("{row}{state}"))
+        .find(|selector| shows(cx, selector))
+        .unwrap_or_else(|| panic!("no {row} row"));
+    click(cx, &selector);
+}
+
+/// AC: the inspector shows one thing at a time, a Step, the approval or
+/// the start, and only that one's outline row is chosen, whichever was
+/// chosen before; choosing a Workflow lands on its first Step.
+#[gpui::test]
+fn the_inspector_shows_one_thing_and_its_row_alone_is_chosen(cx: &mut TestAppContext) {
+    let (view, cx, _fake, _) = workflows_window(cx, "workflows-inspected", |_| {});
+    cx.simulate_resize(gpui::size(px(1600.), px(1800.)));
+    tick(cx);
+    view.update(cx, |view, cx| {
+        view.factory_surface(Surface::Workflows, cx);
+        view.create_workflow(Template::Blank, cx);
+    });
+    tick(cx);
+    let first = view.read_with(cx, |view, cx| view.shown_workflow(cx).unwrap().id.clone());
+    assert_eq!((chosen_rows(cx), inspected(cx)), (vec!["step"], vec!["step"]));
+
+    press_row(cx, "outline-approval");
+    assert_eq!((chosen_rows(cx), inspected(cx)), (vec!["approval"], vec!["approval"]));
+    press_row(cx, "outline-start");
+    assert_eq!(
+        (chosen_rows(cx), inspected(cx)),
+        (vec!["start"], vec!["start"]),
+        "the start, from the approval"
+    );
+    press_row(cx, "outline-approval");
+    assert_eq!(
+        (chosen_rows(cx), inspected(cx)),
+        (vec!["approval"], vec!["approval"]),
+        "the approval, from the start"
+    );
+
+    // Another Workflow, then back: each lands on its first Step.
+    view.update(cx, |view, cx| view.apply_pick(Pick::Create(Template::Blank), cx));
+    tick(cx);
+    assert_eq!((chosen_rows(cx), inspected(cx)), (vec!["step"], vec!["step"]));
+    press_row(cx, "outline-approval");
+    view.update(cx, |view, cx| view.apply_pick(Pick::Select(first), cx));
+    tick(cx);
+    assert_eq!(
+        (chosen_rows(cx), inspected(cx)),
+        (vec!["step"], vec!["step"]),
+        "a Workflow chosen shows its first Step"
+    );
+}

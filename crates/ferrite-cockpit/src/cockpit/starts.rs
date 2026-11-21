@@ -12,7 +12,7 @@
 //! Factory holds it. Its render is the inspector showing the start,
 //! reading the shown Workflow's start through `starts_inputs`; what a
 //! press asks it says as a `StartsEvent`. Whether the start shows stays
-//! the Workflows surface's (`start_open`), and every edit, asking the login
+//! the Workflows editor's (`Inspected::Start`), and every edit, asking the login
 //! for a list and the automatic starts' switch stay the root's, since
 //! they are Server calls; the root's pump has the view take the answers.
 
@@ -21,7 +21,7 @@ use std::sync::mpsc::Receiver;
 
 use gpui::WeakEntity;
 
-use super::workflows::{Field, Pick};
+use super::workflows::{Field, Inspected, Pick};
 use super::*;
 use ferrite_core::factory::{
     self as core_factory, Missed, Overlap, Recurrence, Start, StartKind, Switch, Trigger, Turn,
@@ -1050,13 +1050,14 @@ impl CockpitView {
     /// The start's settings are what the inspector shows.
     pub(crate) fn start_shown(&self, cx: &gpui::App) -> bool {
         self.factory()
-            .is_some_and(|view| view.editor.read(cx).start_open)
+            .is_some_and(|view| view.editor.read(cx).inspected == Inspected::Start)
     }
 
     /// Show the shown Workflow's start in the inspector.
     pub(crate) fn open_start(&mut self, cx: &mut Context<Self>) {
         if let Some(view) = self.factory() {
-            view.editor.update(cx, |editor, _| editor.open_start());
+            view.editor
+                .update(cx, |editor, _| editor.inspect(Inspected::Start));
         }
         self.ensure_fields(cx);
         self.ask_github_lists(cx);

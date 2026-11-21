@@ -23,7 +23,7 @@ use ferrite_pane::composer::{Composer, Edited, Role};
 use gpui::component::Disableable as _;
 
 mod editor;
-pub(crate) use editor::WorkflowsView;
+pub(crate) use editor::{Inspected, WorkflowsView};
 mod inspector;
 mod outline;
 pub(crate) use outline::field_input;
@@ -290,7 +290,8 @@ impl CockpitView {
     /// Show the approval settings in the inspector.
     pub(crate) fn select_approval(&mut self, cx: &mut Context<Self>) {
         if let Some(view) = self.factory() {
-            view.editor.update(cx, |editor, _| editor.select_approval());
+            view.editor
+                .update(cx, |editor, _| editor.inspect(Inspected::Approval));
         }
         self.ensure_fields(cx);
         cx.notify();

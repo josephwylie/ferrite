@@ -13,14 +13,13 @@ impl CockpitView {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         use ferrite_ui::theme::*;
-        if let Some(view) = self.factory().filter(|_| self.start_shown(cx)) {
-            return view.starts.clone().into_any_element();
-        }
-        if self
-            .factory()
-            .is_some_and(|view| view.editor.read(cx).approval)
-        {
-            return self.approval_inspector(workflow, window, cx);
+        let Some(view) = self.factory() else {
+            return div().into_any_element();
+        };
+        match view.editor.read(cx).inspected {
+            Inspected::Start => return view.starts.clone().into_any_element(),
+            Inspected::Approval => return self.approval_inspector(workflow, window, cx),
+            Inspected::Step => {}
         }
         let Some(step) = self.shown_step(cx) else {
             return div()
@@ -30,9 +29,6 @@ impl CockpitView {
                 .text_color(rgb(INK_SUBTLE))
                 .child("Add an agent to begin.")
                 .into_any_element();
-        };
-        let Some(view) = self.factory() else {
-            return div().into_any_element();
         };
         let catalog = self.factory_catalog();
         let label = |text: &'static str| {

@@ -1,6 +1,6 @@
 //! The Workflows editor's own state, in a view of its own (ADR 0041):
-//! the Workflow and Step chosen, whether the inspector shows the approval
-//! or the start instead, the outline's focus and scroll, each text
+//! the Workflow and Step chosen, what the inspector shows, the outline's
+//! focus and scroll, each text
 //! field's Composer, made once for as long as the Factory is open, and
 //! the field that holds the keyboard. The Factory holds it.
 //!
@@ -19,16 +19,26 @@ pub(crate) enum WorkflowsEvent {
     Focused,
 }
 
+/// What the inspector shows beside the outline, whose row for it is the
+/// one chosen.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum Inspected {
+    /// The chosen Step's settings.
+    #[default]
+    Step,
+    /// The approval settings (#222).
+    Approval,
+    /// How Tasks start (#225).
+    Start,
+}
+
 /// A Factory's Workflows editor.
 pub(crate) struct WorkflowsView {
     /// The Workflow chosen; none, the Project's first.
     pub(crate) selected: Option<WorkflowId>,
     /// The Step chosen; none, the Workflow's first.
     pub(crate) step: Option<StepId>,
-    /// The inspector shows the approval settings, not a Step.
-    pub(crate) approval: bool,
-    /// The inspector shows how Tasks start, not a Step (#225).
-    pub(crate) start_open: bool,
+    pub(crate) inspected: Inspected,
     /// What holds the keyboard while no field does.
     pub(crate) outline_focus: FocusHandle,
     /// The outline's scroll: its first child is its head, then one per
@@ -47,8 +57,7 @@ impl WorkflowsView {
         Self {
             selected: None,
             step: None,
-            approval: false,
-            start_open: false,
+            inspected: Inspected::Step,
             outline_focus: cx.focus_handle(),
             outline_scroll: gpui::ScrollHandle::new(),
             fields: HashMap::new(),
@@ -60,27 +69,18 @@ impl WorkflowsView {
     pub(super) fn select_workflow(&mut self, workflow: WorkflowId) {
         self.selected = Some(workflow);
         self.step = None;
-        self.focused = None;
-        self.start_open = false;
+        self.inspect(Inspected::Step);
     }
 
     /// Show `step` in the inspector.
     pub(super) fn select_step(&mut self, step: StepId) {
         self.step = Some(step);
-        self.focused = None;
-        self.approval = false;
-        self.start_open = false;
+        self.inspect(Inspected::Step);
     }
 
-    /// Show the approval settings in the inspector.
-    pub(super) fn select_approval(&mut self) {
-        self.approval = true;
-        self.focused = None;
-    }
-
-    /// Show how Tasks start in the inspector.
-    pub(crate) fn open_start(&mut self) {
-        self.start_open = true;
+    /// Show `inspected` in the inspector; no field keeps the keyboard.
+    pub(crate) fn inspect(&mut self, inspected: Inspected) {
+        self.inspected = inspected;
         self.focused = None;
     }
 

@@ -309,7 +309,8 @@ impl CockpitView {
             return div().into_any_element();
         };
         let editor = view.editor.read(cx);
-        let approval_shown = editor.approval;
+        let inspected = editor.inspected;
+        let approval_shown = inspected == Inspected::Approval;
         let (outline_focus, outline_scroll) =
             (editor.outline_focus.clone(), editor.outline_scroll.clone());
         // While the start or the approval settings show, no Step's row
@@ -317,7 +318,7 @@ impl CockpitView {
         let shown = self
             .shown_step(cx)
             .map(|step| step.id.clone())
-            .filter(|_| !approval_shown && !self.start_shown(cx));
+            .filter(|_| inspected == Inspected::Step);
         let name_field = Field::WorkflowName(workflow.id.clone());
         let mut outline = div()
             .id("outline")
