@@ -5,7 +5,7 @@ use ferrite_core::activity::{
 };
 use super::decisions::DecisionEvent;
 use ferrite_pane::decision;
-use ferrite_ui::components::{self, Tip as _};
+use ferrite_ui::components::{self, MenuButton as _, Tip as _};
 use ferrite_ui::theme;
 use gpui::component::{
     checkbox::Checkbox,
@@ -15,7 +15,7 @@ use gpui::component::{
     Disableable,
 };
 use gpui::KeyDownEvent;
-use std::{cell::RefCell, collections::HashMap, rc::Rc};
+use std::{cell::{Cell, RefCell}, collections::HashMap, rc::Rc};
 
 /// A Pane's Decision state, shared with the cards it draws: each question
 /// or MCP form's answers, and each Decision's cursor and amend note.
@@ -1487,17 +1487,30 @@ impl Cards {
         let forms = self.forms.clone();
         let toggled = handle.clone();
         let owner = self.owner.clone();
+        // Where the `▾` was laid out: a press there is its own, which shuts
+        // the menu, not a press outside it.
+        let door: Rc<Cell<Option<gpui::Bounds<gpui::Pixels>>>> = Rc::default();
+        let submitting = request.submitting;
         let more = decision::more_button(
             SharedString::from(format!("request-more-{}-{serial}", thread.get())),
-            request.submitting,
+            submitting,
             cx,
         )
         .debug_selector(move || format!("request-more-{}-{serial}", thread.get()))
-        .on_click(move |_, _, cx| {
-            cx.stop_propagation();
-            forms.set_menu(&toggled, !forms.menu(&toggled));
-            refresh(&owner, cx);
-        });
+        .menu_button(
+            open,
+            |button| button,
+            {
+                let door = door.clone();
+                move |bounds, _, _| door.set(Some(bounds))
+            },
+            move |_, cx| {
+                if !submitting {
+                    forms.set_menu(&toggled, !forms.menu(&toggled));
+                    refresh(&owner, cx);
+                }
+            },
+        );
         let menu = open.then(|| {
             let mut rows = Vec::new();
             if enabled(decision::ApprovalChoice::AllowForThread) {
@@ -1555,7 +1568,18 @@ impl Cards {
                     .into_any_element(),
                 );
             }
-            decision::allow_menu(rows).into_any_element()
+            // A press outside closes it, as it closes every popup (ADR 0043).
+            let forms = self.forms.clone();
+            let closing = handle.clone();
+            let owner = self.owner.clone();
+            decision::allow_menu(rows)
+                .on_mouse_down_out(move |event, _, cx| {
+                    if !door.get().is_some_and(|door| door.contains(&event.position)) {
+                        forms.set_menu(&closing, false);
+                        refresh(&owner, cx);
+                    }
+                })
+                .into_any_element()
         });
         children.push(
             decision::section(decision::approval_actions(
