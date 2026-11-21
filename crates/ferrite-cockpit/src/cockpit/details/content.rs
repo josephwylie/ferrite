@@ -16,6 +16,8 @@ struct Row {
     item: ContextCardItem,
     label: String,
     meta: Option<String>,
+    /// The pull request's block, which this row draws instead of a label.
+    pr: Option<PrBlock>,
     glyph: &'static str,
     action: Option<Action>,
     fill: Option<f32>,
@@ -28,6 +30,7 @@ impl Row {
             item,
             label: label.into(),
             meta: None,
+            pr: None,
             glyph,
             action: None,
             fill: None,
@@ -39,7 +42,25 @@ impl Row {
         shown_at(self.item, density)
             && (self.item != ContextCardItem::GitActions || density == Density::Full)
     }
+
+    /// The row's height: a pull request block with its quiet line counts
+    /// its title at two lines.
+    fn height(&self) -> f32 {
+        match &self.pr {
+            Some(block) if block.mark.is_some() => {
+                PR_TITLE_TOP + PR_TITLE_LH * 2. + PR_TITLE_BOTTOM + PR_META_H + PR_GAP_BELOW
+            }
+            _ => 32.,
+        }
+    }
 }
+
+/// The pull request block's measures (T3's `leading-4.5`, `h-5`, `pb-1.5`).
+const PR_TITLE_TOP: f32 = 7.;
+const PR_TITLE_BOTTOM: f32 = 2.;
+const PR_TITLE_LH: f32 = 18.;
+const PR_META_H: f32 = 20.;
+const PR_GAP_BELOW: f32 = 6.;
 
 pub(super) struct Content {
     rows: Vec<Row>,
@@ -84,8 +105,8 @@ impl Content {
                         ))
                     ))
             })
-            .count() as f32
-            * 32.
+            .map(Row::height)
+            .sum()
     }
 
     pub(super) fn key(&self, thread: ThreadId, width: f32, density: Density) -> String {
@@ -175,30 +196,34 @@ impl Content {
                 let selector = format!("details-item-{}-{at}", row.item.id());
                 let action = row.action.clone();
                 let usage = matches!(row.item, ContextCardItem::Usage | ContextCardItem::Context);
-                let mut control = div()
+                let control = div()
                     .id(SharedString::from(selector.clone()))
                     .debug_selector(move || selector.clone())
-                    .flex()
-                    .items_center()
                     .min_w_0()
-                    .gap(px(10.))
-                    .h(px(if usage { 24. } else { 32. }))
                     .px(px(10.))
                     .rounded(px(8.))
-                    .text_color(rgba(0xffffffcc))
-                    .when(!usage, |control| {
-                        control.child(icon(row.glyph, 16., INK_SUBTLE))
-                    })
-                    .child(
-                        div()
-                            .min_w_0()
-                            .when(!usage, |label| label.flex_1())
-                            .truncate()
-                            .when(usage, |label| {
-                                label.text_color(rgb(INK_SUBTLE)).text_size(px(12.))
-                            })
-                            .child(row.label.clone()),
-                    );
+                    .text_color(rgba(0xffffffcc));
+                let mut control = match &row.pr {
+                    Some(block) => pr_view(control, block),
+                    None => control
+                        .flex()
+                        .items_center()
+                        .gap(px(10.))
+                        .h(px(if usage { 24. } else { 32. }))
+                        .when(!usage, |control| {
+                            control.child(icon(row.glyph, 16., INK_SUBTLE))
+                        })
+                        .child(
+                            div()
+                                .min_w_0()
+                                .when(!usage, |label| label.flex_1())
+                                .truncate()
+                                .when(usage, |label| {
+                                    label.text_color(rgb(INK_SUBTLE)).text_size(px(12.))
+                                })
+                                .child(row.label.clone()),
+                        ),
+                };
                 if let Some(fill) = row.fill {
                     control = control.child(
                         div()
@@ -313,20 +338,11 @@ impl CockpitView {
             rows.push(row);
         }
         if let Some(pr) = self.facts.pr(thread) {
-            let mut row = Row::new(
-                Item::Branch,
-                pr.title
-                    .clone()
-                    .unwrap_or_else(|| format!("Pull request #{}", pr.number)),
-                icons::GIT_PULL_REQUEST,
-            );
-            row.meta = Some(format!("#{}", pr.number));
-            row.tooltip = Some(format!(
-                "{:?}{}",
-                pr.state,
-                if pr.draft { " · Draft" } else { "" }
-            ));
+            let block = pr_block(pr);
+            let mut row = Row::new(Item::Branch, block.title.clone(), block.glyph);
+            row.tooltip = Some(block.tooltip.clone());
             row.action = Some(Action::Surface(SurfaceId::PullRequest(pr.number)));
+            row.pr = Some(block);
             rows.push(row);
         }
         if let Some(facts) = self.facts.get(thread) {
@@ -424,6 +440,229 @@ impl CockpitView {
     }
 }
 
+/// The card's pull request block, drawn as T3 Code draws it: the state's
+/// glyph and the title (two lines at most), and under it one quiet line,
+/// `#N` and then the mark. With no mark, one row: `#N: title`.
+#[derive(Clone, Debug, PartialEq)]
+struct PrBlock {
+    number: u64,
+    title: String,
+    glyph: &'static str,
+    ink: u32,
+    mark: Option<PrMark>,
+    /// T3's hover: the title in full and `#N`, the state, then the checks
+    /// in words while it is open.
+    tooltip: String,
+}
+
+/// Draws a [`PrBlock`] into its row's control: the glyph and the title
+/// over the quiet line, or with no mark one row, `#N: title`.
+fn pr_view(control: gpui::Stateful<Div>, block: &PrBlock) -> gpui::Stateful<Div> {
+    let glyph = icon(block.glyph, 16., block.ink);
+    let Some(mark) = &block.mark else {
+        return control
+            .flex()
+            .items_center()
+            .gap(px(10.))
+            .h(px(32.))
+            .child(glyph)
+            .child(
+                div()
+                    .min_w_0()
+                    .flex_1()
+                    .truncate()
+                    .child(format!("#{}: {}", block.number, block.title)),
+            );
+    };
+    let words = mark.words.clone().map(|words| {
+        div()
+            .min_w_0()
+            .truncate()
+            .when(mark.glyph.is_none(), |words| {
+                words.text_color(rgb(mark.ink))
+            })
+            .child(words)
+    });
+    control
+        .flex()
+        .flex_col()
+        .pb(px(PR_GAP_BELOW))
+        .child(
+            div()
+                .flex()
+                .items_start()
+                .gap(px(10.))
+                .pt(px(PR_TITLE_TOP))
+                .pb(px(PR_TITLE_BOTTOM))
+                .child(div().flex().items_center().h(px(PR_TITLE_LH)).child(glyph))
+                .child(
+                    div()
+                        .min_w_0()
+                        .flex_1()
+                        .line_height(px(PR_TITLE_LH))
+                        .line_clamp(2)
+                        .text_ellipsis()
+                        .child(block.title.clone()),
+                ),
+        )
+        .child(
+            div()
+                .flex()
+                .items_center()
+                .gap(px(4.))
+                .h(px(PR_META_H))
+                .pl(px(26.))
+                .text_size(px(12.))
+                .text_color(rgb(INK_SUBTLE))
+                .child(
+                    div()
+                        .flex_shrink_0()
+                        .mr(px(4.))
+                        .child(format!("#{}", block.number)),
+                )
+                .children(mark.glyph.map(|ring| icon(ring, 14., mark.ink)))
+                .children(words),
+        )
+}
+
+/// What the quiet line says after `#N`: the checks' ring and count, or a
+/// conflict in red. `ink` paints the ring, or the words when there is no
+/// ring; a count's words stay dim.
+#[derive(Clone, Debug, PartialEq)]
+struct PrMark {
+    glyph: Option<&'static str>,
+    ink: u32,
+    words: Option<String>,
+}
+
+/// The block a pull request draws as (see [`PrBlock`]), as T3 Code's
+/// `ThreadDetailsPrRow` decides it: conflicts replace the checks, a draft
+/// shows none, and a pull request with no checks has no quiet line.
+fn pr_block(pr: &ferrite_core::workspace::PullRequest) -> PrBlock {
+    use ferrite_core::workspace::PrState;
+    let title = pr
+        .title
+        .clone()
+        .unwrap_or_else(|| format!("Pull request #{}", pr.number));
+    let (glyph, ink) = match (pr.state, pr.draft) {
+        (PrState::Open, false) => (icons::GIT_PULL_REQUEST, GREEN),
+        (PrState::Open, true) => (icons::GIT_PULL_REQUEST_DRAFT, INK_SUBTLE),
+        (PrState::Closed, _) => (icons::GIT_PULL_REQUEST_CLOSED, RED),
+        (PrState::Merged, _) => (icons::GIT_MERGE, MAGENTA),
+    };
+    let open = pr.state == PrState::Open;
+    let checks = Checks::of(pr);
+    let mark = if open && pr.conflicting {
+        Some(PrMark {
+            glyph: None,
+            ink: RED,
+            words: Some("Conflicts".to_string()),
+        })
+    } else if pr.draft {
+        None
+    } else {
+        checks.mark()
+    };
+    let mut tooltip = format!("{title} #{}\n{}", pr.number, crate::pr::state_word(pr));
+    if let Some(words) = checks.words().filter(|_| open) {
+        tooltip = format!("{tooltip}\n{words}");
+    }
+    PrBlock {
+        number: pr.number,
+        title,
+        glyph,
+        ink,
+        mark,
+        tooltip,
+    }
+}
+
+/// A pull request's runs counted as T3 Code counts them: a run awaiting
+/// approval has not finished, and has not failed.
+#[derive(Clone, Copy, Default)]
+struct Checks {
+    total: u32,
+    passed: u32,
+    failed: u32,
+    running: u32,
+    awaiting: u32,
+}
+
+impl Checks {
+    fn of(pr: &ferrite_core::workspace::PullRequest) -> Self {
+        use ferrite_core::workspace::CheckState;
+        let mut checks = Self::default();
+        for run in &pr.runs {
+            checks.total += 1;
+            match run.state {
+                _ if run.detail == "action_required" => checks.awaiting += 1,
+                CheckState::Passing => checks.passed += 1,
+                CheckState::Failing => checks.failed += 1,
+                CheckState::Pending => checks.running += 1,
+                CheckState::Skipped => {}
+            }
+        }
+        checks
+    }
+
+    /// The ring and count: `5/6 checks` while any has not finished, else
+    /// `N failed`, else the ring alone. No ring with nothing passed,
+    /// failed or unfinished.
+    fn mark(self) -> Option<PrMark> {
+        let unfinished = self.running + self.awaiting;
+        let (glyph, ink) = if self.failed > 0 {
+            (icons::X_CIRCLE, RED)
+        } else if unfinished > 0 {
+            (icons::CIRCLE_DOT, YELLOW)
+        } else if self.passed > 0 {
+            (icons::CHECK_CIRCLE, GREEN)
+        } else {
+            return None;
+        };
+        let words = if unfinished > 0 {
+            Some(format!("{}/{} checks", self.total - unfinished, self.total))
+        } else if self.failed > 0 {
+            Some(format!("{} failed", self.failed))
+        } else {
+            None
+        };
+        Some(PrMark {
+            glyph: Some(glyph),
+            ink,
+            words,
+        })
+    }
+
+    /// The checks in words, for the hover; `None` with no runs.
+    fn words(self) -> Option<String> {
+        let total = self.total;
+        if total == 0 {
+            return None;
+        }
+        let mut parts = Vec::new();
+        if self.running > 0 {
+            parts.push(format!("{} of {total} running", self.running));
+        }
+        if self.awaiting > 0 {
+            parts.push(format!("{} of {total} awaiting action", self.awaiting));
+        }
+        if self.failed > 0 {
+            parts.push(if parts.is_empty() {
+                format!("{} of {total} failing", self.failed)
+            } else {
+                format!("{} failed", self.failed)
+            });
+        }
+        Some(if !parts.is_empty() {
+            parts.join(" · ")
+        } else if self.passed == total {
+            "All checks passed".to_string()
+        } else {
+            format!("{} of {total} passing", self.passed)
+        })
+    }
+}
+
 fn tokens(value: u64) -> String {
     if value >= 1_000_000 {
         format!("{:.1}M", value as f64 / 1_000_000.)
@@ -456,6 +695,159 @@ mod tests {
             visible(Density::Essential),
             [Scripts, Branch, GitActions, Changes, Usage, Context]
         );
+    }
+
+    /// The card draws the Thread's pull request as T3 Code does: one
+    /// block, the title over a quiet line of `#N` and the checks' ring and
+    /// count (`5/6 checks` while any run, `N failed` once they settle,
+    /// the ring alone when all passed). A draft shows no checks; a
+    /// conflict says so in red where T3 offers Resolve; with nothing for
+    /// that line, one row, `#N: title`.
+    #[test]
+    fn details_card_draws_the_pull_request_as_one_block() {
+        use CheckState::*;
+        use ferrite_core::workspace::{Check, CheckState, PrState, PullRequest};
+        let run = |(state, detail): (CheckState, &str)| Check {
+            name: "ci".into(),
+            workflow: None,
+            state,
+            detail: detail.into(),
+            url: None,
+        };
+        let pr = |runs: &[(CheckState, &str)]| PullRequest {
+            number: 418,
+            state: PrState::Open,
+            draft: false,
+            url: None,
+            title: Some("feat(details): the card".into()),
+            checks: None,
+            runs: runs.iter().copied().map(run).collect(),
+            conflicting: false,
+        };
+        let line = |block: &PrBlock| {
+            block
+                .mark
+                .as_ref()
+                .map(|mark| (mark.glyph, mark.ink, mark.words.clone()))
+        };
+        let words = |words: &str| Some(words.to_string());
+        let passed = (Passing, "success");
+        let running = (Pending, "in_progress");
+        let failed = (Failing, "failure");
+        let awaiting = (Failing, "action_required");
+        let skipped = (Skipped, "skipped");
+
+        let block = pr_block(&pr(&[passed, passed, passed, passed, passed, running]));
+        assert_eq!(
+            (block.number, block.title.as_str(), block.glyph, block.ink),
+            (
+                418,
+                "feat(details): the card",
+                icons::GIT_PULL_REQUEST,
+                GREEN
+            )
+        );
+        assert_eq!(
+            line(&block),
+            Some((Some(icons::CIRCLE_DOT), YELLOW, words("5/6 checks"))),
+            "checks running: the amber ring and the settled count"
+        );
+        assert_eq!(
+            block.tooltip,
+            "feat(details): the card #418\nOpen\n1 of 6 running"
+        );
+
+        let block = pr_block(&pr(&[passed, passed, passed, passed, failed, failed]));
+        assert_eq!(
+            line(&block),
+            Some((Some(icons::X_CIRCLE), RED, words("2 failed"))),
+            "some failed, the rest settled"
+        );
+        assert_eq!(
+            block.tooltip,
+            "feat(details): the card #418\nOpen\n2 of 6 failing"
+        );
+
+        let block = pr_block(&pr(&[passed, failed, running]));
+        assert_eq!(
+            line(&block),
+            Some((Some(icons::X_CIRCLE), RED, words("2/3 checks"))),
+            "a failure while another still runs: the red ring, still counting"
+        );
+        assert_eq!(
+            block.tooltip,
+            "feat(details): the card #418\nOpen\n1 of 3 running · 1 failed"
+        );
+
+        let block = pr_block(&pr(&[passed, passed, passed, passed, passed, awaiting]));
+        assert_eq!(
+            line(&block),
+            Some((Some(icons::CIRCLE_DOT), YELLOW, words("5/6 checks"))),
+            "a run awaiting approval has not finished"
+        );
+        assert_eq!(
+            block.tooltip,
+            "feat(details): the card #418\nOpen\n1 of 6 awaiting action"
+        );
+
+        let block = pr_block(&pr(&[passed, passed, skipped]));
+        assert_eq!(
+            line(&block),
+            Some((Some(icons::CHECK_CIRCLE), GREEN, None)),
+            "all passed: the green ring alone"
+        );
+        assert_eq!(
+            block.tooltip,
+            "feat(details): the card #418\nOpen\n2 of 3 passing"
+        );
+        let block = pr_block(&pr(&[passed, passed]));
+        assert_eq!(
+            block.tooltip,
+            "feat(details): the card #418\nOpen\nAll checks passed"
+        );
+
+        for runs in [&[][..], &[skipped][..]] {
+            let block = pr_block(&pr(runs));
+            assert_eq!(line(&block), None, "no checks to count: one row");
+        }
+
+        let mut draft = pr(&[passed, running]);
+        draft.draft = true;
+        let block = pr_block(&draft);
+        assert_eq!(
+            (block.glyph, block.ink),
+            (icons::GIT_PULL_REQUEST_DRAFT, INK_SUBTLE)
+        );
+        assert_eq!(line(&block), None, "a draft shows no checks");
+        assert_eq!(
+            block.tooltip,
+            "feat(details): the card #418\nDraft\n1 of 2 running"
+        );
+
+        let mut clash = pr(&[passed, running]);
+        clash.conflicting = true;
+        assert_eq!(
+            line(&pr_block(&clash)),
+            Some((None, RED, words("Conflicts"))),
+            "conflicts replace the checks"
+        );
+
+        let mut merged = pr(&[passed]);
+        merged.state = PrState::Merged;
+        let block = pr_block(&merged);
+        assert_eq!((block.glyph, block.ink), (icons::GIT_MERGE, MAGENTA));
+        assert_eq!(line(&block), Some((Some(icons::CHECK_CIRCLE), GREEN, None)));
+        assert_eq!(block.tooltip, "feat(details): the card #418\nMerged");
+
+        let mut closed = pr(&[]);
+        closed.state = PrState::Closed;
+        closed.title = None;
+        let block = pr_block(&closed);
+        assert_eq!(
+            (block.glyph, block.ink),
+            (icons::GIT_PULL_REQUEST_CLOSED, RED)
+        );
+        assert_eq!(block.title, "Pull request #418");
     }
 
     #[test]

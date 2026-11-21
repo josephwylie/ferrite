@@ -880,6 +880,7 @@ fn pr_with_checks() -> ferrite_core::workspace::PullRequest {
                 Some("https://codecov.io/x"),
             ),
         ],
+        conflicting: false,
     }
 }
 

@@ -559,6 +559,9 @@ pub struct PullRequest {
     /// what the checks card lists. Empty exactly when `checks`
     /// is `None` — the rollup *is* this list, folded.
     pub runs: Vec<Check>,
+    /// Whether it conflicts with its base branch; `false` while the
+    /// forge has not worked that out.
+    pub conflicting: bool,
 }
 
 impl PullRequest {
@@ -622,6 +625,7 @@ impl PullRequest {
             title: (!pr.title.is_empty()).then(|| pr.title.clone()),
             checks: (!runs.is_empty()).then(|| rollup_state(&runs)),
             runs,
+            conflicting: matches!(pr.merge, crate::protocol::WireMerge::Conflicting),
         }
     }
 }
@@ -739,7 +743,7 @@ pub fn pr_view(cwd: &Path) -> Option<String> {
             "pr",
             "view",
             "--json",
-            "number,state,isDraft,url,title,statusCheckRollup",
+            "number,state,isDraft,url,title,statusCheckRollup,mergeable",
         ],
     )
 }
@@ -807,6 +811,8 @@ pub fn parse_pr_json(body: &str) -> Option<PullRequest> {
         title,
         checks,
         runs,
+        conflicting: value.get("mergeable").and_then(serde_json::Value::as_str)
+            == Some("CONFLICTING"),
     })
 }
 
@@ -1071,6 +1077,7 @@ mod tests {
         );
         assert_eq!(pr.checks, Some(super::CheckState::Pending));
         assert_eq!(pr.runs[0].detail, "in_progress");
+        assert!(!pr.conflicting, "the snapshot says it merges cleanly");
         assert_eq!(super::PullRequest::of_view(&PrView::NoPr), None);
     }
 
@@ -1186,6 +1193,22 @@ mod tests {
         assert_eq!(check_state("brand_new_word"), CheckState::Pending);
         assert_eq!(check_state("cancelled"), CheckState::Failing);
         assert_eq!(check_state("queued"), CheckState::Pending);
+    }
+
+    /// The card says when a pull request conflicts with its base: `gh`'s
+    /// `mergeable` reads `CONFLICTING`. Any other word, or none, is no
+    /// conflict.
+    #[test]
+    fn a_pr_reading_knows_when_it_conflicts() {
+        let read = |mergeable: &str| {
+            let body = format!(r#"{{"number":9,"state":"OPEN","mergeable":"{mergeable}"}}"#);
+            parse_pr_json(&body).expect("a PR").conflicting
+        };
+        assert!(read("CONFLICTING"));
+        assert!(!read("MERGEABLE"));
+        assert!(!read("UNKNOWN"));
+        let bare = parse_pr_json(r#"{"number":9,"state":"OPEN"}"#).expect("a PR");
+        assert!(!bare.conflicting);
     }
 
     /// Not JSON at all, or JSON without a number: no PR, not a panic.
