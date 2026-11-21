@@ -25,6 +25,7 @@ that happened to touch it, and nothing in the code said whose a field was.
   keeps today's redraw rule: a root notify still redraws the feature
   (vendored gpui, `tracking_reads`). Root code that runs while the root is
   borrowed passes those values in instead of having the feature read them.
+  The nav reads its own instead, and hears the model (below).
 - **The nav is the first slice.** `NavView` (`cockpit/nav_view.rs`) owns
   the nav's own state: its motion, scroll and viewport, keyboard focus and
   cursor, hover, search, picks and Park sweep, and Undo. It emits
@@ -33,8 +34,8 @@ that happened to touch it, and nothing in the code said whose a field was.
   Project filter, its notice line. The other features follow one at a
   time, each in its own change. The Snooze field (a Thread's Custom…
   time, drawn over the list) moved in later: `NavView` keeps the Thread it
-  snoozes, its line and why the last ⏎ did not take, and reads the
-  Thread's name as it draws. The root opens it from the Snooze menu
+  snoozes, its line and why the last ⏎ did not take, and draws the
+  Thread's name from its row. The root opens it from the Snooze menu
   (`edit_snooze`). Its ⏎ and esc stay the root's Submit and Interrupt,
   which reach the root wherever the keyboard is, and hand them to the
   view while the field is open. A time it reads it says as
@@ -853,14 +854,106 @@ the root's is the root's: putting the toolbar together, the model chip and
 a draft's band chips, which open the model picker and the band menus, the
 plan usage ring, and hanging the cards and menus over the Composer.
 
-The nav's arrivals are the eighteenth. `Arrivals` (`nav.rs`) keeps when
-each open Thread came into the section it is listed in, which the list
-and the Working shelf order by, the latest first: a Thread whose work,
-its background work included, ends comes back at the top of the list.
-The root holds it beside the nav (`nav_arrivals`). Only the pump writes
-it (`note_arrivals`), after the Server's events, and redraws the nav
-when an arrival moved; `nav_state`, which the nav's inputs read, only
-reads it. A view would add events for what only the pump writes.
+The nav's arrivals were the eighteenth, and are the nav's now (below).
+`Arrivals` (`nav.rs`) keeps when each open Thread came into the section
+it is listed in, which the list and the Working shelf order by, the
+latest first: a Thread whose work, its background work included, ends
+comes back at the top of the list. `NavView` holds it, and only its
+`look` writes it, so its render only reads it.
+
+## Amendment (2026-11-21): a feature subscribes to the model
+
+The nav was handed its inputs by the root (`nav_inputs`) and read the
+root as it drew, so every root notify redrew it, and the pump worked out
+its list on every beat (125 a second) to note arrivals. It now reads the
+model itself.
+
+- **The model is an entity, and nobody notifies it.** The root holds
+  core's `Cockpit`, the window's mirror of the Server, as
+  `Entity<Cockpit>` and hands the handle to a feature as it makes it. The
+  root and its pump write it with `update`. In the vendored gpui
+  `update` only leases the entity and records it as read; only
+  `as_mut`'s guard and `cx.notify` notify, and no code here uses either
+  on the model. A notify would rebuild every cached part that read the
+  model as it drew (`tracking_reads`): every shown Pane does. So the
+  model says what moved as an event instead. The pump has it emit
+  `Arrived` once, on a beat that brought something (a Session's events,
+  a restart, a sweep that moved a fact or a clock, the Server's state, an
+  ask, parked Threads, the Panes, a start, the models or the commands) or
+  on which the Server said anything at all (`take_arrived`: another
+  window's Snooze moves no Pane). An idle window never emits it.
+- **A feature subscribes to the model's events and notifies itself; it
+  reads what it draws as it hears them, never as it draws.** `NavView`
+  subscribes to `Arrived` and observes the root. On either it looks
+  (`look`): it notes `Arrivals`, builds its
+  `NavInputs` from the model and what the window decides, and redraws
+  only when they differ from what it drew. Its render reads nothing but
+  what it kept, so a draw never writes, a root notify that moves nothing
+  it draws leaves it, and an idle nav neither redraws nor works out its
+  list. What the root learns without notifying itself it still tells the
+  nav: a PR or a title that landed, branch labels git moved and a width
+  changed by a drag (`notify_part(Part::Nav)`, which has the nav look
+  once the root's update ends), a width measured as the root draws
+  (`set_width`, since the nav draws in that same frame), and a working
+  row's clock on the sweep (a plain redraw, since the clock is the
+  time's, not the model's). A hover's fade is the nav's own motion: it
+  asks for its frames, and a root notify no longer redraws it.
+- **What the window decides stays the root's, and the nav reads it in
+  its look.** The Project filter, the notice line, the open context menu
+  and the menu buttons (the popup slot's), the rename field, the column
+  width, the machines, the free disk, the update door, the open shelves
+  and pins (the settings), the Facts (names, Projects, branches, PRs,
+  last use), the titler's names and which Threads have Panes here. Two
+  of them have more readers than the nav: the Facts (the palette, the
+  Panes, the empty board) and the pins. They are the next to give a home
+  of their own, not a `WindowState` grab bag: Facts beside the model,
+  as what the window has read of the Server and git.
+- **When a feature subscribes to the model, and when it takes inputs.**
+  A feature subscribes to the model when what it draws is mostly the Server's
+  (rows, states, counts) and moves on beats the root does not redraw
+  for. It takes inputs when what it draws is mostly what the window
+  decides, or when the root draws it inside its own render (a Pane's
+  body, the Panel's Surfaces): there the root's notify is its redraw
+  already.
+- **The next three, in order.** The toasts (`ToastsView`): the pump's
+  `ring_alerts` reads the model's notifications on every beat for them,
+  the clearest work a subscriber would end. The Inbox's needs-you count on
+  the PRs and Factory doors (`factory_nav_projects`, `factory_rows`): the
+  Factory menu already reads the nav's rows, so it can read the model
+  beside them. The Panes' heads: each reads its Thread's state from the
+  model, and today every root notify rebuilds every Pane; the transcript
+  bodies stay inputs.
+- **A feature does not ask the Server itself yet.** Core's asks block:
+  a remote one waits on the Server's socket for its reply, up to
+  `REPLY_WAIT`, queueing every other message it reads (`Remote::execute`).
+  What follows an ask is the root's too: the nav's Snooze is answered by
+  the root (`snooze_answered`) after it clears the notice; a revive
+  widens the Project filter and remakes the Panes. A feature that asked
+  would block its own listener and still need the root after. Once asks
+  answer through the model, a feature can ask and hear the answer as a
+  change it hears.
+- **The model is lent, not read, where a borrow of it must outlive a
+  context.** Six root functions hand what they borrow of the model to
+  another entity's update inside `self.cockpit.update(cx, |model, cx| …)`
+  (`sync_transcript`, `sync_compact_transcript`, the Composers' commands
+  in `render_cockpit`, `overview_sections`, `advance_pr_actions`,
+  `pump_browsers`). While it is lent, reading the model through its
+  handle panics (gpui's double lease, in every build), so code inside
+  takes the lent `model`, never the handle. Each runs in the Cockpit's
+  tests: four on every beat or frame, the side chat's and the
+  Overview's in their own.
+- **The pump keeps its beat.** It cannot wake only on arrival yet. The
+  in-process Engine (`--demo`, `--load`, tests) is pumped by it: it reads
+  each Session's events by polling (`try_recv`, at most 256 a beat, so a
+  full beat leaves the rest for the next), retries a failed log write and
+  steps its history and its startups. The doorbell that a Server message
+  and a start ring (`doorbell::channel`) does nothing outside tests, and
+  most of what the pump polls has no bell: 23 `try_recv`s in the Cockpit
+  crate and 40 in core. And some of its work is the clock's: the sweep
+  every two seconds, free disk once a minute, message times as the
+  minute turns. What it
+  stops is the work: an idle beat emits nothing, so nothing that
+  subscribes to the model runs.
 
 ## Precedent
 
