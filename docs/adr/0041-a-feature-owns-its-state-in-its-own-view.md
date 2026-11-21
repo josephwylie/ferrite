@@ -688,6 +688,21 @@ and the focus pump, which holds the keyboard on the field. A view would
 add events for calls the root makes on it anyway. A Project is renamed
 in the Project card, not here.
 
+A draft's command listing is the ninth, and the Composer's first slice.
+Before a draft has a Session, its `/` and `$` menus list what its
+Provider finds in its folder. `DraftCommands`
+(`cockpit/draft_commands.rs`) keeps that listing: the Provider and folder
+it is for, the discovery still out, and the commands it found or why it
+could not. Only the root writes it, in the shape of the import picker's
+listing (`listen`, `listed`): deriving a menu asks afresh when the draft's
+Provider or folder changed and takes an answer that came
+(`draft_commands`), which then tells the draft's line which tokens are
+commands; the pump takes an answer that lands between keystrokes and
+derives the menu again; an edit with no `/` command at the caret, and a
+draft whose folder is gone, drop it (`forget`). A Thread's commands are
+its Session's, in core. A view would add events for asks the root makes
+anyway, and the menu that reads it is still the root's.
+
 ## Precedent
 
 Zed builds its workspace this way: each panel is an entity that owns its

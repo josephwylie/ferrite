@@ -21,6 +21,7 @@ mod destination;
 mod details;
 mod direct_view;
 pub(crate) mod direction;
+mod draft_commands;
 mod drafts;
 mod fields;
 pub(crate) mod empty_board;
@@ -479,7 +480,8 @@ pub struct CockpitView {
     /// the text moves again, or `sync_menu` would reopen it on the very
     /// text the operator dismissed it over.
     menu_muted: bool,
-    draft_commands: Option<DraftCommands>,
+    /// What a draft's `/` and `$` menus list before it has a Session.
+    draft_commands: draft_commands::DraftCommands,
     /// A recalled slash/mention prompt is a programmatic edit: consume its
     /// `Edited` event without deriving a menu. The next operator edit clears
     /// the ordinary `menu_muted` latch and derives again.
@@ -1007,38 +1009,6 @@ impl std::ops::Deref for Row {
     }
 }
 
-/// One draft menu request. Its provider and cwd prevent late replies from
-/// leaking commands across project/workspace changes.
-struct DraftCommands {
-    provider: Provider,
-    cwd: std::path::PathBuf,
-    pending: Option<ferrite_core::providers::commands::Discovery>,
-    commands: Vec<ferrite_core::SessionCommand>,
-    error: Option<String>,
-}
-
-impl DraftCommands {
-    fn poll(&mut self) -> bool {
-        let Some(rx) = &self.pending else {
-            return false;
-        };
-        let result = match rx.try_recv() {
-            Ok(result) => result,
-            Err(std::sync::mpsc::TryRecvError::Empty) => return false,
-            Err(error) => Err(std::io::Error::other(error)),
-        };
-        self.pending = None;
-        match result {
-            Ok(commands) => {
-                self.commands = commands;
-                self.error = None;
-            }
-            Err(error) => self.error = Some(error.to_string()),
-        }
-        true
-    }
-}
-
 /// What picking a row does. A command or a file lands in the line; every
 /// other pick is Ferrite's own act, never a prompt.
 #[derive(Clone, PartialEq)]
@@ -1401,7 +1371,7 @@ impl CockpitView {
             activation: None,
             popover: None,
             menu_muted: false,
-            draft_commands: None,
+            draft_commands: Default::default(),
             suppress_recall_menu_once: false,
             session_file_roots: ferrite_core::import::default_roots(),
             pending_files: None,
@@ -2248,7 +2218,7 @@ impl CockpitView {
         }
         let state = composer.read(cx);
         if slash_token(state.text(), state.cursor()).is_none() {
-            self.draft_commands = None;
+            self.draft_commands.forget();
         }
         // The API reports it as the Thread's `draft` (ADR 0030), so no
         // agent types over the operator.
@@ -2336,10 +2306,7 @@ impl CockpitView {
         if let Some(connections) = self.connections(cx) {
             connections.update(cx, |connections, cx| connections.poll(cx));
         }
-        let commands_changed = self
-            .draft_commands
-            .as_mut()
-            .is_some_and(DraftCommands::poll);
+        let commands_changed = self.draft_commands.listed();
         if commands_changed {
             self.sync_menu(cx);
         }
@@ -4688,12 +4655,8 @@ impl CockpitView {
                     .source_root()
                     .to_path_buf();
                 let line = pane.composer.clone();
-                let menu = self.draft_commands(provider, cwd);
-                menu.poll();
-                if menu.pending.is_none() && menu.error.is_none() {
-                    line.update(cx, |composer, cx| composer.set_commands(&menu.commands, cx));
-                }
-                (menu.commands.clone(), menu.pending.is_some())
+                let menu = self.draft_commands(provider, cwd, &line, cx);
+                (menu.commands.clone(), menu.loading())
             }
         };
         let skills: Vec<_> = skills.into_iter().filter(|command| command.is_skill()).collect();
@@ -4720,26 +4683,6 @@ impl CockpitView {
             rows,
             selected: 0,
         })
-    }
-
-    /// The draft's command catalogue for `provider` in `cwd`, asked for
-    /// afresh when either changed.
-    fn draft_commands(&mut self, provider: Provider, cwd: std::path::PathBuf) -> &mut DraftCommands {
-        if self
-            .draft_commands
-            .as_ref()
-            .is_none_or(|menu| menu.provider != provider || menu.cwd != cwd)
-        {
-            let pending = self.cockpit.discover_commands(provider, &cwd);
-            self.draft_commands = Some(DraftCommands {
-                provider,
-                cwd,
-                pending,
-                commands: Vec::new(),
-                error: None,
-            });
-        }
-        self.draft_commands.as_mut().expect("initialized above")
     }
 
     fn derive_menu(&mut self, cx: &mut Context<Self>) -> Option<Popover> {
@@ -4778,7 +4721,7 @@ impl CockpitView {
                     Err(_) => {
                         // Import remains available when a workspace was removed.
                         // Never reuse commands from the previous valid binding.
-                        self.draft_commands = None;
+                        self.draft_commands.forget();
                         if !standalone {
                             return None;
                         }
@@ -4799,11 +4742,7 @@ impl CockpitView {
                     }
                 };
                 let line = pane.composer.clone();
-                let menu = self.draft_commands(provider, cwd);
-                menu.poll();
-                if menu.pending.is_none() && menu.error.is_none() {
-                    line.update(cx, |composer, cx| composer.set_commands(&menu.commands, cx));
-                }
+                let menu = self.draft_commands(provider, cwd, &line, cx);
                 let mut rows: Vec<Row> = command_rows(&menu.commands, filter)
                     .into_iter()
                     .map(|row| Row {
@@ -4826,12 +4765,10 @@ impl CockpitView {
                         },
                     );
                 }
-                let status = if menu.pending.is_some() {
+                let status = if menu.loading() {
                     Some(("Searching workspace skills...", ""))
                 } else {
-                    menu.error
-                        .as_deref()
-                        .map(|error| ("Could not load commands", error))
+                    menu.error().map(|error| ("Could not load commands", error))
                 };
                 if let Some((name, detail)) = status {
                     rows.push(Row {
