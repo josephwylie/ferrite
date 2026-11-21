@@ -320,8 +320,7 @@ fn an_answer_sent_lets_the_keyboard_go(cx: &mut TestAppContext) {
     tick(cx);
     let opening = view.read_with(cx, |view, cx| {
         view.factory()
-            .and_then(|view| view.opening.as_ref())
-            .map(|field| field.read(cx).text().to_string())
+            .map(|view| view.coordinator.read(cx).field.read(cx).text().to_string())
     });
     assert_eq!(opening.as_deref(), Some("plan the week"));
 }

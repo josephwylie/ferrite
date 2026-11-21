@@ -7,6 +7,12 @@
 //! conversation and a field whose Send starts it. Once it runs, its Pane
 //! is the one this window already holds, drawn here as the Task panel's
 //! Worker tab draws a Worker's. A proposal changes nothing until accepted.
+//!
+//! The opening field lives in a view of its own (ADR 0041),
+//! `CoordinatorView`, which the Factory holds. It has no render of its
+//! own: the root draws the surface and has it draw the empty conversation
+//! with what it reads of the window (`CoordinatorInputs`); Send it says as
+//! a `CoordinatorEvent`, since starting the Coordinator is a Server ask.
 
 use super::workflows::Pick;
 use super::*;
@@ -16,6 +22,113 @@ use ferrite_pane::composer::{Composer, Role};
 
 /// The proposals' column beside the conversation.
 const PROPOSALS_W: f32 = 380.;
+
+/// What the Coordinator surface asks of the window.
+pub(crate) enum CoordinatorEvent {
+    /// Send: the Coordinator starts on the opening field's words.
+    Send,
+}
+
+/// What the empty conversation draws from the window: the Coordinator as
+/// the board says it now.
+pub(crate) struct CoordinatorInputs {
+    /// It is being started, or has started.
+    starting: bool,
+    /// Why it could not start, last time.
+    error: Option<String>,
+}
+
+/// A Factory's Coordinator surface: the field whose Send starts the
+/// Coordinator, made once for as long as the Factory is open.
+pub(crate) struct CoordinatorView {
+    pub(super) field: Entity<Composer>,
+}
+
+impl EventEmitter<CoordinatorEvent> for CoordinatorView {}
+
+impl CoordinatorView {
+    fn new(cx: &mut Context<Self>) -> Self {
+        let field = cx.new(Composer::new);
+        field.update(cx, |field, cx| field.set_role(Role::Field(None), cx));
+        cx.observe(&field, |_, _, cx| cx.notify()).detach();
+        Self { field }
+    }
+
+    /// The opening field's focus, which holds the keyboard while the
+    /// surface shows and the Coordinator has no Pane.
+    fn focus(&self, cx: &gpui::App) -> FocusHandle {
+        self.field.read(cx).focus_handle(cx)
+    }
+
+    /// Before the Coordinator runs: an empty conversation and the field
+    /// whose Send starts it.
+    fn opening(&self, inputs: &CoordinatorInputs, window: &Window, cx: &mut Context<Self>) -> Div {
+        use ferrite_ui::theme::*;
+        let field = self.field.clone();
+        let focused = field.read(cx).focus_handle(cx).is_focused(window);
+        let send = crate::project_editor::primary_button("coordinator-send", "Send", false, cx)
+            .debug_selector(|| "coordinator-send".into())
+            .on_click(cx.listener(|_, _: &ClickEvent, _, cx| {
+                cx.stop_propagation();
+                cx.emit(CoordinatorEvent::Send)
+            }));
+        div()
+            .debug_selector(|| "coordinator-empty".into())
+            .flex_1()
+            .min_w_0()
+            .flex()
+            .flex_col()
+            .items_center()
+            .justify_center()
+            .gap(px(SPACE_3))
+            .p(px(SPACE_6))
+            .child(ferrite_ui::icons::icon(
+                ferrite_ui::icons::FERRITE_MONO,
+                SPACE_6,
+                INK_SUBTLE,
+            ))
+            .child(
+                div()
+                    .font_weight(W_LABEL)
+                    .text_color(rgb(INK_STRONG))
+                    .child("What should we work on?"),
+            )
+            .child(
+                div()
+                    .text_size(px(FS_META))
+                    .text_color(rgb(INK_SUBTLE))
+                    .child(if inputs.starting {
+                        "Starting the Coordinator\u{2026}"
+                    } else {
+                        "Talk it through, hand off a task, start a workflow, or describe a new one."
+                    }),
+            )
+            .children(inputs.error.clone().map(|error| {
+                div()
+                    .debug_selector(|| "coordinator-error".into())
+                    .text_size(px(FS_META))
+                    .text_color(rgb(BLOCKED))
+                    .child(SharedString::from(format!(
+                        "The Coordinator could not start: {error}"
+                    )))
+            }))
+            .child(
+                div()
+                    .id("coordinator-field")
+                    .debug_selector(|| "coordinator-field".into())
+                    .w_full()
+                    .max_w(px(560.))
+                    .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                    .child(crate::project_editor::text_field(
+                        "Ask, delegate, or change how work happens".into(),
+                        field,
+                        focused,
+                        "factory-field-focused",
+                    )),
+            )
+            .child(div().flex().child(send))
+    }
+}
 
 /// A choice on the Coordinator's settings.
 #[derive(Clone, Debug, PartialEq)]
@@ -27,6 +140,35 @@ pub(crate) enum CoordinatorPick {
 }
 
 impl CockpitView {
+    /// A Factory's Coordinator surface, heard from its making.
+    pub(super) fn new_coordinator(&mut self, cx: &mut Context<Self>) -> Entity<CoordinatorView> {
+        let coordinator = cx.new(CoordinatorView::new);
+        cx.subscribe(&coordinator, Self::on_coordinator_event).detach();
+        coordinator
+    }
+
+    /// What the empty conversation draws.
+    fn coordinator_inputs(&self) -> Option<CoordinatorInputs> {
+        let project = self.factory()?.project;
+        let coordinator = self.cockpit.factory().coordinator(project);
+        Some(CoordinatorInputs {
+            starting: coordinator.is_some_and(|c| c.starting || c.thread.is_some()),
+            error: coordinator.and_then(|c| c.error.clone()),
+        })
+    }
+
+    /// Send starts the Coordinator.
+    fn on_coordinator_event(
+        &mut self,
+        _: Entity<CoordinatorView>,
+        event: &CoordinatorEvent,
+        cx: &mut Context<Self>,
+    ) {
+        match event {
+            CoordinatorEvent::Send => self.speak_to_coordinator(cx),
+        }
+    }
+
     /// The shown Project's Coordinator's Thread, once started.
     pub(crate) fn coordinator_thread(&self) -> Option<ThreadId> {
         let project = self.factory()?.project;
@@ -72,22 +214,6 @@ impl CockpitView {
         })
     }
 
-    /// The opening field, made once.
-    pub(crate) fn ensure_coordinator_field(&mut self, cx: &mut Context<Self>) {
-        let Some(view) = self.factory() else {
-            return;
-        };
-        if view.opening.is_some() {
-            return;
-        }
-        let composer = cx.new(Composer::new);
-        composer.update(cx, |composer, cx| composer.set_role(Role::Field(None), cx));
-        cx.observe(&composer, |_, _, cx| cx.notify()).detach();
-        if let Some(view) = self.factory_mut() {
-            view.opening = Some(composer);
-        }
-    }
-
     /// The keyboard while the Coordinator surface shows: its Pane's
     /// Composer once it runs, else the opening field.
     pub(super) fn coordinator_focus(&self, window: &Window, cx: &gpui::App) -> Option<FocusHandle> {
@@ -98,7 +224,7 @@ impl CockpitView {
         if let Some(index) = self.coordinator_pane() {
             return Some(self.panes[index].composer.read(cx).focus_target(window, cx));
         }
-        Some(view.opening.as_ref()?.read(cx).focus_handle(cx))
+        Some(view.coordinator.read(cx).focus(cx))
     }
 
     /// A Coordinator command; its refusal in the view's note.
@@ -124,9 +250,7 @@ impl CockpitView {
             return;
         };
         let project = view.project;
-        let Some(field) = view.opening.clone() else {
-            return;
-        };
+        let field = view.coordinator.read(cx).field.clone();
         let text = field.read(cx).text().trim().to_string();
         if text.is_empty() {
             return;
@@ -248,7 +372,6 @@ impl CockpitView {
         };
         let project = view.project;
         let board = self.cockpit.factory();
-        let coordinator = board.coordinator(project);
         let agent = self.coordinator_agent();
 
         let settings = div()
@@ -337,7 +460,12 @@ impl CockpitView {
                 .flex_col()
                 .p(px(SPACE_2))
                 .child(self.pane_slot(index, window, cx)),
-            None => self.coordinator_opening(coordinator, window, cx),
+            None => match self.coordinator_inputs() {
+                Some(inputs) => view
+                    .coordinator
+                    .update(cx, |coordinator, cx| coordinator.opening(&inputs, window, cx)),
+                None => div(),
+            },
         };
 
         let mut proposals: Vec<&Proposal> = board.proposals_of(project).collect();
@@ -387,86 +515,6 @@ impl CockpitView {
                     .child(conversation)
                     .children(column),
             )
-    }
-
-    /// Before the Coordinator runs: an empty conversation and the field
-    /// whose Send starts it.
-    fn coordinator_opening(
-        &self,
-        coordinator: Option<&ferrite_core::factory::Coordinator>,
-        window: &Window,
-        cx: &mut Context<Self>,
-    ) -> Div {
-        use ferrite_ui::theme::*;
-        let starting = coordinator.is_some_and(|c| c.starting || c.thread.is_some());
-        let error = coordinator.and_then(|c| c.error.clone());
-        let field = self
-            .factory()
-            .and_then(|view| view.opening.clone());
-        let focused = field
-            .as_ref()
-            .is_some_and(|field| field.read(cx).focus_handle(cx).is_focused(window));
-        let send = crate::project_editor::primary_button("coordinator-send", "Send", false, cx)
-            .debug_selector(|| "coordinator-send".into())
-            .on_click(cx.listener(|view, _: &ClickEvent, _, cx| {
-                cx.stop_propagation();
-                view.speak_to_coordinator(cx)
-            }));
-        div()
-            .debug_selector(|| "coordinator-empty".into())
-            .flex_1()
-            .min_w_0()
-            .flex()
-            .flex_col()
-            .items_center()
-            .justify_center()
-            .gap(px(SPACE_3))
-            .p(px(SPACE_6))
-            .child(ferrite_ui::icons::icon(
-                ferrite_ui::icons::FERRITE_MONO,
-                SPACE_6,
-                INK_SUBTLE,
-            ))
-            .child(
-                div()
-                    .font_weight(W_LABEL)
-                    .text_color(rgb(INK_STRONG))
-                    .child("What should we work on?"),
-            )
-            .child(
-                div()
-                    .text_size(px(FS_META))
-                    .text_color(rgb(INK_SUBTLE))
-                    .child(if starting {
-                        "Starting the Coordinator\u{2026}"
-                    } else {
-                        "Talk it through, hand off a task, start a workflow, or describe a new one."
-                    }),
-            )
-            .children(error.map(|error| {
-                div()
-                    .debug_selector(|| "coordinator-error".into())
-                    .text_size(px(FS_META))
-                    .text_color(rgb(BLOCKED))
-                    .child(SharedString::from(format!(
-                        "The Coordinator could not start: {error}"
-                    )))
-            }))
-            .children(field.map(|field| {
-                div()
-                    .id("coordinator-field")
-                    .debug_selector(|| "coordinator-field".into())
-                    .w_full()
-                    .max_w(px(560.))
-                    .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                    .child(crate::project_editor::text_field(
-                        "Ask, delegate, or change how work happens".into(),
-                        field,
-                        focused,
-                        "factory-field-focused",
-                    ))
-            }))
-            .child(div().flex().child(send))
     }
 
     /// One proposal: what it is, exactly what accepting it does, and its

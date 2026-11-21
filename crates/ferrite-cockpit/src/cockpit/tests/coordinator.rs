@@ -107,7 +107,7 @@ fn the_coordinator_is_empty_until_the_operator_speaks(cx: &mut TestAppContext) {
         let coordinator = board.coordinator(project).unwrap();
         assert!(coordinator.starting, "the Factory starts it");
         assert!(board.tasks.is_empty(), "talking starts nothing");
-        let field = view.factory().unwrap().opening.clone().unwrap();
+        let field = view.factory().unwrap().coordinator.read(cx).field.clone();
         assert_eq!(field.read(cx).text(), "", "sent");
     });
 }

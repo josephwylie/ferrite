@@ -193,7 +193,6 @@ impl CockpitView {
         view.editor.update(cx, |editor, _| editor.focused = None);
         self.ensure_fields(cx);
         if surface == Surface::Coordinator {
-            self.ensure_coordinator_field(cx);
             // Its Pane takes the keyboard, as a Worker's on its tab.
             if let Some(index) = self
                 .coordinator_thread()

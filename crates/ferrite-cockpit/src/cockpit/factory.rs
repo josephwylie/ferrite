@@ -13,7 +13,6 @@ use super::destination::{Destination, Shows};
 use ferrite_core::factory::{self as core_factory, Status, Task, TaskId};
 use ferrite_core::protocol::{Done, TaskAction};
 use ferrite_core::workspace::registry::ProjectId;
-use ferrite_pane::composer::Composer;
 
 /// The Task panel's width beside the columns.
 const TASK_PANEL_W: f32 = 480.;
@@ -148,7 +147,7 @@ pub(crate) struct FactoryView {
     /// Answers, rework and redirects being written, and their sheets.
     pub(crate) direction: Entity<super::direction::DirectionView>,
     /// The Coordinator surface's field before the Coordinator runs (#224).
-    pub(crate) opening: Option<Entity<Composer>>,
+    pub(crate) coordinator: Entity<super::coordinator::CoordinatorView>,
     /// How Tasks start (#225): what the GitHub login listed for its
     /// pickers.
     pub(crate) starts: Entity<super::starts::StartsView>,
@@ -191,6 +190,7 @@ impl CockpitView {
                 let direction = self.new_direction(cx);
                 let starts = self.new_starts(cx);
                 let editor = self.new_workflows(cx);
+                let coordinator = self.new_coordinator(cx);
                 let view = FactoryView {
                     project,
                     open: None,
@@ -205,7 +205,7 @@ impl CockpitView {
                     picks: Vec::new(),
                     direction,
                     starts,
-                    opening: None,
+                    coordinator,
                     archive,
                     archive_shown: false,
                 };
