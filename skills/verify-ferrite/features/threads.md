@@ -17,7 +17,8 @@ history stays) and revives it later in place.
 
 - `cmd-t` / `cmd-n` or `New thread` in the sidebar, then type in the prompt box.
 - `cmd-w` parks, `cmd-o` brings back the last parked.
-- Double-click the Pane title to rename.
+- Double-click the Pane title to rename. A single click opens the Thread's menu under
+  the title's chevron, clear of the title, so the second click reaches it.
 - Scripting: `ferrite thread start|rename|close|revive`, `ferrite agent prompt|read|wait`.
 
 ## Driving it with fv

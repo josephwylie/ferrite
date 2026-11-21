@@ -452,8 +452,8 @@ impl CockpitView {
 
     /// The Thread's title at the view's weight, the breadcrumb's current
     /// item, at least `VIEW_TITLE_MIN_W`, its chevron shown only under the
-    /// pointer (T3's). A click opens the Thread's menu; a double-click
-    /// renames it in place.
+    /// pointer (T3's). A click opens the Thread's menu under the chevron;
+    /// a double-click renames it in place.
     fn view_title(&self, thread: ThreadId, cx: &mut Context<Self>) -> AnyElement {
         if let Some((RenameTarget::ViewTitle(editing), editor)) = self.rename.shown() {
             if editing == thread {
@@ -487,7 +487,10 @@ impl CockpitView {
                         view.close_popup(cx);
                         view.start_rename(RenameTarget::ViewTitle(thread), cx);
                     } else {
-                        view.open_context_menu(MenuTarget::Thread(thread), event.position, cx);
+                        // The chevron's menu, hung under it: at the pointer
+                        // it would lie over the title and take a
+                        // double-click's second press.
+                        view.toggle_door(title_door(thread), cx);
                     }
                 }),
             );
@@ -536,8 +539,13 @@ fn history_arrow(
 /// path…) under it, its left edge on the chevron's. It keeps its place,
 /// seen only while the title is under the pointer (`shown`) or its menu
 /// is up.
+/// The title's chevron, which opens the Thread's menu under itself.
+fn title_door(thread: ThreadId) -> Door {
+    Door::new(MenuTarget::Thread(thread), Edge::Left)
+}
+
 fn title_menu(doors: &Doors, thread: ThreadId, shown: bool, cx: &mut Context<CockpitView>) -> AnyElement {
-    let door = Door::new(MenuTarget::Thread(thread), Edge::Left);
+    let door = title_door(thread);
     let shown = shown || doors.is_up(door);
     let chevron = icon_button(
         "view-title-menu",
