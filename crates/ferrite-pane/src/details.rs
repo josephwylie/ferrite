@@ -85,6 +85,9 @@ pub struct DetailsCard {
     /// Where the opening control was last laid out: a press on it is the
     /// toggle's, not a press outside the card.
     opener: Rc<Cell<Option<Bounds<Pixels>>>>,
+    /// How many `Show more` presses the open card's `Previous agents`
+    /// has had: back to none when the card opens or its Subject changes.
+    previous_pages: Cell<usize>,
 }
 
 impl DetailsCard {
@@ -100,6 +103,7 @@ impl DetailsCard {
             top_inset: Cell::new(0.),
             fit_width: Cell::new(None),
             opener: Rc::default(),
+            previous_pages: Cell::new(0),
         }
     }
 
@@ -107,8 +111,25 @@ impl DetailsCard {
         self.open.get()
     }
 
+    /// Opening a shut card starts its `Previous agents` on the first page.
     pub fn set_open(&self, open: bool) {
+        if open && !self.open.get() {
+            self.reset_pages();
+        }
         self.open.set(open);
+    }
+
+    pub fn previous_pages(&self) -> usize {
+        self.previous_pages.get()
+    }
+
+    /// A `Show more` press on `Previous agents`.
+    pub fn show_more(&self) {
+        self.previous_pages.set(self.previous_pages.get() + 1);
+    }
+
+    pub fn reset_pages(&self) {
+        self.previous_pages.set(0);
     }
 
     /// This frame's standing, `exit` after it was closed. Reduced motion

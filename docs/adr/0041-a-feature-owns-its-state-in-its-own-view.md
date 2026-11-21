@@ -618,10 +618,12 @@ code is the root's own work, does not: it keeps a plain struct beside
 what it hangs from, and the root builds what it draws in one method.
 The Thread details card is the example. What it keeps is each Pane's
 `DetailsCard` (`ferrite-pane`, `details.rs`): whether it is open and its
-exit, which only its own methods write, its focus and scroll, its density
-measurements, and where its canvas, card and opener were laid out. Whether
-it stands beside the transcript is the Thread's saved Surfaces
-(`details_inline_open`). Its rows the root builds in `details_content`
+exit, and how many `Show more` presses its `Previous agents` has had
+(`previous_pages`, back to none as it opens), which only its own methods
+write, its focus and scroll, its density measurements, and where its
+canvas, card and opener were laid out. Whether it stands beside the
+transcript, and whether its `Previous agents` is unfolded, are the
+Thread's saved Surfaces (`details_inline_open`, `previous_agents_open`). Its rows the root builds in `details_content`
 into plain values that draw themselves (`cockpit/details/content.rs`).
 What stays on the root is the root's: moving the keyboard between the card
 and the Composer, fitting the card to the Pane's width as the columns

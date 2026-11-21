@@ -1,6 +1,8 @@
 //! Subject navigation and supervision. Provider execution stays in core.
 use super::*;
-use ferrite_core::activity::{DecisionHandle, PendingDecision, Subject};
+use ferrite_core::activity::{
+    ActivityView, AgentInfo, AgentStatus, DecisionHandle, PendingDecision, Subject,
+};
 use super::decisions::DecisionEvent;
 use ferrite_pane::decision;
 use ferrite_ui::components::MenuButton as _;
@@ -346,6 +348,57 @@ fn pick_option(picks: &mut Vec<usize>, option: usize, multi: bool) {
     }
 }
 
+/// The word Lineage says of an agent: its state in the shared lexicon
+/// (`theme::words`), or `done` for an idle or unclassified one.
+pub(super) fn state_word(status: AgentStatus, fresh: bool) -> &'static str {
+    use theme::words;
+    if !fresh {
+        return words::UNAVAILABLE;
+    }
+    match status {
+        AgentStatus::Working => words::WORKING,
+        AgentStatus::Waiting => words::NEEDS_YOU,
+        AgentStatus::Pending => words::STARTING,
+        AgentStatus::Paused => words::PAUSED,
+        AgentStatus::Interrupted | AgentStatus::Shutdown => words::INTERRUPTED,
+        AgentStatus::Failed | AgentStatus::NotFound => words::FAILED,
+        AgentStatus::NotLoaded => words::UNAVAILABLE,
+        AgentStatus::Idle | AgentStatus::Unknown => words::DONE,
+    }
+}
+
+/// The Subject that spawned `subject` by its agent's recorded parent: Main
+/// when none is recorded (or the record names the agent itself); none for
+/// Main itself.
+pub(super) fn parent_of(activity: ActivityView<'_>, subject: &Subject) -> Option<Subject> {
+    if *subject == Subject::Main {
+        return None;
+    }
+    let parent = activity
+        .children()
+        .into_iter()
+        .find(|agent| agent.subject() == *subject)
+        .and_then(|agent| agent.info().parent.clone())
+        .map(|parent| activity.canonical_subject(&parent))
+        .filter(|parent| parent != subject);
+    Some(parent.unwrap_or(Subject::Main))
+}
+
+pub(crate) fn agent_name(info: &AgentInfo) -> String {
+    info.name
+        .as_deref()
+        .filter(|s| !s.trim().is_empty())
+        .map(str::to_string)
+        .or_else(|| {
+            info.description
+                .as_deref()
+                .filter(|s| !s.trim().is_empty())
+                .map(str::to_string)
+        })
+        .or_else(|| info.kind.clone())
+        .unwrap_or_else(|| "Subagent".into())
+}
+
 impl CockpitView {
     /// The agent's Subject, from the call that started it.
     pub(super) fn agent_of_call(&self, thread: ThreadId, call: &str) -> Option<Subject> {
@@ -427,6 +480,7 @@ impl CockpitView {
         let subject = open.activity().canonical_subject(&subject);
         let generation = open.activity().subject(&subject)?.revision();
         self.panes[index].select_subject(subject, generation, cx);
+        self.panes[index].details.reset_pages();
         self.retry_subject_history(index, cx);
         self.cockpit
             .set_visible_subject(thread, self.panes[index].selected.clone());
@@ -445,13 +499,8 @@ impl CockpitView {
         let mut lineage = vec![Subject::Main];
         let mut at = subject.clone();
         let mut reversed = Vec::new();
-        while let Some(parent) = activity
-            .children()
-            .into_iter()
-            .find(|agent| agent.subject() == at)
-            .and_then(|agent| agent.info().parent.clone())
-            .map(|parent| activity.canonical_subject(&parent))
-            .filter(|parent| *parent != Subject::Main && *parent != at)
+        while let Some(parent) =
+            parent_of(activity, &at).filter(|parent| *parent != Subject::Main)
         {
             if reversed.contains(&parent) {
                 break;

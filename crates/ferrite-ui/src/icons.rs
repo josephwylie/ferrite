@@ -181,6 +181,7 @@ icons![
     // a worktree in the workspace menu.
     "box",
     "corner-up-right",
+    "corner-left-up",
     "star",
     "chevron-up",
     "quote",
@@ -400,6 +401,9 @@ pub const APP_WINDOW: &str = "icons/app-window.svg";
 pub const BOX: &str = "icons/box.svg";
 /// The send circle while a turn runs: what is typed steers it.
 pub const CORNER_UP_RIGHT: &str = "icons/corner-up-right.svg";
+/// The way back to a Subagent's parent (Lucide's `corner-left-up`, T3's
+/// Lineage parent row).
+pub const CORNER_LEFT_UP: &str = "icons/corner-left-up.svg";
 /// A favourite model.
 pub const STAR: &str = "icons/star.svg";
 pub const CHEVRON_UP: &str = "icons/chevron-up.svg";
