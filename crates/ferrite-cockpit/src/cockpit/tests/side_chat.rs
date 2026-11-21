@@ -29,10 +29,10 @@ fn answered<'a>(
     (view, fake, cx)
 }
 
-fn open_chat(view: &Entity<CockpitView>, cx: &mut gpui::VisualTestContext, passage: Option<&str>) {
+fn open_chat(view: &Entity<CockpitView>, cx: &mut gpui::VisualTestContext) {
     view.update(cx, |view, cx| {
         let owner = view.focused_thread().unwrap();
-        view.open_side_chat(owner, passage.map(str::to_string), cx);
+        view.open_side_chat(owner, cx);
     });
     tick(cx);
     tick(cx);
@@ -105,14 +105,13 @@ fn shown_pane<R>(
 
 /// Opened, a side chat is a Panel tab (ADR 0039) at least its token wide,
 /// the thread reflowing narrower beside it; an empty tab says `No messages
-/// yet`; the composer reads `Ask a quick question` — unless the chat
-/// opened over a selection, which it quotes. The fork is no Pane: nothing
-/// of the nav's or the board's.
+/// yet`; the composer reads `Ask a quick question`. The fork is no Pane:
+/// nothing of the nav's or the board's.
 #[gpui::test]
 fn a_side_chat_opens_as_a_panel_tab_with_an_empty_word(cx: &mut TestAppContext) {
     let (view, fake, cx) = answered("side-chat-open", cx);
     let before = cx.debug_bounds("board").expect("the board").size.width;
-    open_chat(&view, cx, None);
+    open_chat(&view, cx);
     assert_eq!(fake.forks.borrow().len(), 1, "the agent is asked for a fork");
 
     let panel = cx.debug_bounds("panel").expect("the Panel shows it");
@@ -151,32 +150,14 @@ fn a_side_chat_opens_as_a_panel_tab_with_an_empty_word(cx: &mut TestAppContext) 
     });
 }
 
-/// A selection's chat quotes it as `> text` ahead of the caret.
-#[gpui::test]
-fn a_side_chat_opened_over_a_selection_quotes_it(cx: &mut TestAppContext) {
-    let (view, _fake, cx) = answered("side-chat-quote", cx);
-    open_chat(&view, cx, Some("two\nlines"));
-    let owner = owner(&view, cx);
-    view.read_with(cx, |view, cx| {
-        assert_eq!(
-            draft(view, owner, cx).as_deref(),
-            Some("> two\n> lines\n\n")
-        );
-    });
-    assert!(
-        cx.debug_bounds("side-chat-placeholder").is_none(),
-        "a quoted field has no placeholder"
-    );
-}
-
 /// A second chat is a second tab, `Side chat 2`, its own fork; a tab
 /// switches the conversation shown; closing a tab takes it and its fork
 /// away, and the last leaves the Panel to its other Surfaces.
 #[gpui::test]
 fn side_chat_tabs_are_separate_conversations(cx: &mut TestAppContext) {
     let (view, fake, cx) = answered("side-chat-tabs", cx);
-    open_chat(&view, cx, None);
-    open_chat(&view, cx, None);
+    open_chat(&view, cx);
+    open_chat(&view, cx);
     let owner = owner(&view, cx);
     view.read_with(cx, |view, cx| {
         let (titles, active) = titles(view, owner, cx);
@@ -226,7 +207,7 @@ fn side_chat_tabs_are_separate_conversations(cx: &mut TestAppContext) {
 #[gpui::test]
 fn a_press_on_the_side_chat_field_takes_the_keys_back_from_the_composer(cx: &mut TestAppContext) {
     let (view, fake, cx) = answered("side-chat-pressed", cx);
-    open_chat(&view, cx, None);
+    open_chat(&view, cx);
     let composer = cx.debug_bounds("composer-block").expect("the Composer");
     cx.simulate_click(composer.center(), gpui::Modifiers::none());
     tick(cx);
@@ -245,7 +226,7 @@ fn a_press_on_the_side_chat_field_takes_the_keys_back_from_the_composer(cx: &mut
 #[gpui::test]
 fn a_press_anywhere_on_the_side_chat_card_takes_the_keys(cx: &mut TestAppContext) {
     let (view, fake, cx) = answered("side-chat-card-pressed", cx);
-    open_chat(&view, cx, None);
+    open_chat(&view, cx);
     let composer = cx.debug_bounds("composer-block").expect("the Composer");
     cx.simulate_click(composer.center(), gpui::Modifiers::none());
     tick(cx);
@@ -268,7 +249,7 @@ fn a_press_anywhere_on_the_side_chat_card_takes_the_keys(cx: &mut TestAppContext
 #[gpui::test]
 fn a_side_chat_question_goes_to_its_fork_and_shows_only_the_new_words(cx: &mut TestAppContext) {
     let (view, fake, cx) = answered("side-chat-ask", cx);
-    open_chat(&view, cx, None);
+    open_chat(&view, cx);
     let owner = owner(&view, cx);
     let fork = view
         .read_with(cx, |view, cx| shown_fork(view, owner, cx))
@@ -332,7 +313,7 @@ fn block_text(block: &ferrite_core::transcript::Block) -> String {
 #[gpui::test]
 fn the_side_chat_head_brings_back_and_trashes(cx: &mut TestAppContext) {
     let (view, fake, cx) = answered("side-chat-head", cx);
-    open_chat(&view, cx, None);
+    open_chat(&view, cx);
     let owner = owner(&view, cx);
     let id = side_tabs(&view, owner, cx)[0];
     let head = cx.debug_bounds("side-chat-head").expect("its head");
@@ -381,8 +362,8 @@ fn the_side_chat_head_brings_back_and_trashes(cx: &mut TestAppContext) {
 #[gpui::test]
 fn the_side_chat_tab_shown_takes_the_keys(cx: &mut TestAppContext) {
     let (view, _fake, cx) = answered("side-chat-tab-keys", cx);
-    open_chat(&view, cx, None);
-    open_chat(&view, cx, None);
+    open_chat(&view, cx);
+    open_chat(&view, cx);
     let owner = owner(&view, cx);
     let ids = side_tabs(&view, owner, cx);
     let first = debug_bounds(cx, format!("panel-tab-SideChat-{}", ids[0])).unwrap();
@@ -442,7 +423,7 @@ fn a_side_chat_opened_from_the_plus_menu_takes_the_next_key(cx: &mut TestAppCont
 #[gpui::test]
 fn deleting_a_thread_retires_its_side_chats_forks(cx: &mut TestAppContext) {
     let (view, _fake, cx) = answered("side-chat-owner-deleted", cx);
-    open_chat(&view, cx, None);
+    open_chat(&view, cx);
     let owner = owner(&view, cx);
     let fork = view
         .read_with(cx, |view, cx| shown_fork(view, owner, cx))
@@ -459,7 +440,7 @@ fn deleting_a_thread_retires_its_side_chats_forks(cx: &mut TestAppContext) {
 #[gpui::test]
 fn cmd_w_in_the_side_chat_field_ends_its_tab(cx: &mut TestAppContext) {
     let (view, _fake, cx) = answered("side-chat-cmd-w", cx);
-    open_chat(&view, cx, None);
+    open_chat(&view, cx);
     let owner = owner(&view, cx);
     assert_eq!(side_tabs(&view, owner, cx).len(), 1);
     cx.simulate_keystrokes("cmd-w");
@@ -475,7 +456,7 @@ fn cmd_w_in_the_side_chat_field_ends_its_tab(cx: &mut TestAppContext) {
 #[gpui::test]
 fn the_palette_lists_no_side_chat_fork(cx: &mut TestAppContext) {
     let (view, _fake, cx) = answered("side-chat-palette", cx);
-    open_chat(&view, cx, None);
+    open_chat(&view, cx);
     let owner = owner(&view, cx);
     let fork = view.read_with(cx, |view, cx| shown_fork(view, owner, cx)).unwrap();
     let rows = cx.update(|_, cx| view.read(cx).palette_thread_rows(cx));
@@ -488,7 +469,7 @@ fn the_palette_lists_no_side_chat_fork(cx: &mut TestAppContext) {
 #[gpui::test]
 fn a_tool_row_in_a_side_chat_unfolds_in_its_tab(cx: &mut TestAppContext) {
     let (view, fake, cx) = answered("side-chat-tool", cx);
-    open_chat(&view, cx, None);
+    open_chat(&view, cx);
     let owner = owner(&view, cx);
     cx.simulate_input("what is alpha?");
     cx.simulate_keystrokes("enter");
@@ -542,7 +523,7 @@ fn holds(view: &CockpitView, thread: ThreadId, text: &str) -> bool {
 fn a_fork_that_lands_after_its_tab_closed_is_retired(cx: &mut TestAppContext) {
     let (view, fake, cx) = answered("side-chat-closed-early", cx);
     let owner = owner(&view, cx);
-    view.update(cx, |view, cx| view.open_side_chat(owner, None, cx));
+    view.update(cx, |view, cx| view.open_side_chat(owner, cx));
     let id = side_tabs(&view, owner, cx)[0];
     assert!(view.read_with(cx, |view, cx| shown_fork(view, owner, cx)).is_none(), "not landed yet");
     let tab = crate::cockpit::surfaces::SurfaceId::SideChat(id);
@@ -583,8 +564,8 @@ fn each_fork_lands_in_the_tab_of_the_thread_it_forks(cx: &mut TestAppContext) {
         assert!(holds(view, first, "alpha") && holds(view, second, "beta"));
     });
     view.update(cx, |view, cx| {
-        view.open_side_chat(first, None, cx);
-        view.open_side_chat(second, None, cx);
+        view.open_side_chat(first, cx);
+        view.open_side_chat(second, cx);
     });
     let tab = crate::cockpit::surfaces::SurfaceId::SideChat(side_tabs(&view, first, cx)[0]);
     view.update(cx, |view, cx| view.close_surface(first, &tab, cx));
@@ -623,7 +604,7 @@ fn a_focus_asked_while_a_fork_is_on_its_way_lands_the_window(cx: &mut TestAppCon
                 thread: other,
                 fork_of: None,
             });
-        view.open_side_chat(owner, None, cx);
+        view.open_side_chat(owner, cx);
     });
     tick(cx);
     tick(cx);
@@ -644,7 +625,7 @@ fn a_server_from_before_fork_of_still_gives_the_waiting_tab_its_fork(cx: &mut Te
     let (view, fake, cx) = answered("side-chat-old-server", cx);
     let owner = owner(&view, cx);
     view.update(cx, |view, _| view.cockpit.fixture_server_before_fork_of());
-    open_chat(&view, cx, None);
+    open_chat(&view, cx);
     assert_eq!(fake.forks.borrow().len(), 1, "the fork was asked");
     view.read_with(cx, |view, cx| {
         assert_eq!(view.focused_thread(), Some(owner), "the window stays");
@@ -677,8 +658,8 @@ fn a_server_from_before_fork_of_guesses_no_owner_between_two(cx: &mut TestAppCon
         tick(cx);
     }
     view.update(cx, |view, cx| {
-        view.open_side_chat(first, None, cx);
-        view.open_side_chat(second, None, cx);
+        view.open_side_chat(first, cx);
+        view.open_side_chat(second, cx);
     });
     tick(cx);
     tick(cx);
@@ -700,9 +681,9 @@ fn a_failed_fork_leaves_the_next_forks_where_they_belong(cx: &mut TestAppContext
     let (view, fake, cx) = answered("side-chat-fork-failed", cx);
     let owner = owner(&view, cx);
     *fake.fail_fork.borrow_mut() = true;
-    open_chat(&view, cx, None);
+    open_chat(&view, cx);
     *fake.fail_fork.borrow_mut() = false;
-    open_chat(&view, cx, None);
+    open_chat(&view, cx);
     let tabs = side_tabs(&view, owner, cx);
     view.read_with(cx, |view, cx| {
         assert_eq!(view.side_chat.read(cx).fork(owner, tabs[0]), None, "the failed fork's tab waits");
@@ -710,7 +691,7 @@ fn a_failed_fork_leaves_the_next_forks_where_they_belong(cx: &mut TestAppContext
     });
 
     *fake.fail_fork.borrow_mut() = true;
-    open_chat(&view, cx, None);
+    open_chat(&view, cx);
     *fake.fail_fork.borrow_mut() = false;
     view.update(cx, |view, cx| view.fork_thread(owner, None, None, cx));
     tick(cx);
@@ -730,7 +711,7 @@ fn a_side_chat_the_agent_cannot_fork_still_opens_its_tab(cx: &mut TestAppContext
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     cx.simulate_resize(gpui::size(px(1600.), px(700.)));
     tick(cx);
-    open_chat(&view, cx, None);
+    open_chat(&view, cx);
     let owner = owner(&view, cx);
     assert!(fake.forks.borrow().is_empty(), "no fork is asked");
     assert_eq!(side_tabs(&view, owner, cx).len(), 1, "the tab is there");
