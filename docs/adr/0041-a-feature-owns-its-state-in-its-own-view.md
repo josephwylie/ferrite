@@ -505,6 +505,53 @@ that happened to touch it, and nothing in the code said whose a field was.
   Workflows editor, the New task sheet, a Task's sheets and the
   Coordinator, the New task sheet as last closed, opening and closing the
   Factory, and the board with its columns and the Task panel.
+- **The Factory's shell is the twenty-seventh, its last slice.**
+  `FactoryView` (`cockpit/factory.rs`) was a struct the root held and
+  drew; now it is a view the root holds in the board's place, made as the
+  Factory opens on a Project and heard from its making (`new_factory`),
+  so it goes when the Factory leaves the board's place, as before. Which
+  Project's Factory shows stays the root's `destination`
+  (`Shows::Factory(project, view)`), as whether the PRs show does. It
+  owns what the Factory keeps for every surface: which surface shows
+  (`surface`) and whether the Archive stands in the Board's place, the
+  open Task and its panel's tab, the last command's `note`, the New task
+  sheet as last closed (`kept`), the columns' scroll and the column it
+  last brought into view, the skills found, the open picker's rows
+  (`picks`) and the five leaf views. It has no render of its own: the
+  Coordinator's Pane and a Worker's are drawn only by the root
+  (`pane_slot`), so the root has it draw the board (`board`), reading
+  through `factory_inputs` the Project's title, each Task on the board as
+  its card says it (`TaskCard`), how many the Archive holds, the tabs'
+  counts, the board's width and the store's trouble, and hands in what
+  only it draws: the Coordinator's surface round its Pane, and for the
+  open Task's panel the Task as the board says it now with, on the Worker
+  tab, the Worker's Pane, an earlier Worker read or the Workers it had
+  (`TaskPanel`, `task_panel_inputs`). The view draws the head (the title
+  and count, the surface tabs, the note, Clear completed, the Archive's
+  button, New task), the trouble, and the surface shown: the Workflows
+  editor, the Archive's list, the Board's six columns of cards, each with
+  the Task panel (its status, Stop, Resume, Delete, Close, the tabs, the
+  Overview with the Task's say and pull request, Activity, Context).
+  Dismissing the note, opening the Archive, a card pressed again and
+  Close are its own. It emits `FactoryEvent`: a surface tab, which the
+  root shows (`factory_surface`, the Board's closing the Archive first),
+  Clear completed and Stop, Resume or Delete (`Command`), Server asks
+  sent through `task_command`, New task, whose sheet the sheet host
+  shows, a card (`OpenTask`), which `open_task` opens, and a panel's tab
+  (`Tab`), as `task_tab`, which hands the Worker's Pane the keyboard.
+  `picks` stays the Factory's: a picker's rows are `Pick`s, the
+  Factory's own type, filled by every picker it has (the Workflows
+  editor's, the New task sheet's, a Task's sheets', the Coordinator's),
+  read by the popup slot through `MenuTarget::Factory`, and gone with the
+  Factory, as they were; putting them on the slot would make every
+  target carry a Factory's rows. What stays the root's is the root's:
+  every Server ask and the `note` each answer leaves (`workflow_ask`,
+  `coordinator_ask`, `task_command`, `read_worker`, starting a Task),
+  opening the Factory and a Task, the sheet host, the popup slot, the
+  focus pump (`factory_focus`), the Panes, a Task's toasts and
+  notifications (`task_toasts`, which the window raises whether or not
+  the Factory shows), and the Factory's rows in the nav and the palette.
+  Nothing the Factory keeps is left on the root.
 
 ## What does not get a view
 
