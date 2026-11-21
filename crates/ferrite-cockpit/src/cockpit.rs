@@ -1850,11 +1850,6 @@ impl CockpitView {
                     self.copy_transcript(thread, cx);
                 }
             }
-            ferrite_pane::transcript::TranscriptEvent::SideChat(passage) => {
-                if let Some(thread) = self.panes[index].thread() {
-                    self.open_side_chat(thread, Some(passage.clone()), cx);
-                }
-            }
             // A wrap-up's next step: its words go as the next prompt.
             ferrite_pane::transcript::TranscriptEvent::Send(words) => {
                 self.focus_pane(index);

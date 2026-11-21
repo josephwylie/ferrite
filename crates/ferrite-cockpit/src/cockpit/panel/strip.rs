@@ -167,7 +167,7 @@ impl CockpitView {
             Opener::Files => self.upsert_surface(thread, SurfaceId::Files, cx),
             Opener::Changes => self.upsert_surface(thread, SurfaceId::Changes, cx),
             Opener::PullRequest => self.open_pr_surface(thread, cx),
-            Opener::SideChat => self.open_side_chat(thread, None, cx),
+            Opener::SideChat => self.open_side_chat(thread, cx),
             Opener::Background => self.open_background(thread, cx),
             Opener::Overview => self.open_panel(thread, cx),
         }
