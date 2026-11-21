@@ -1,11 +1,9 @@
 //! Cite a selection, as T3 does (`AssistantSelectionToolbar`): a drag that
 //! selects a passage of the transcript (anyone's words, the operator's or
-//! the agent's) ends with a glass button at the pointer, `Cite`, beside
-//! `Start a side chat`. `Cite` quotes the passage into the Composer
-//! (`TranscriptEvent::Reply`, a Reply card in the Pane's tray); a side chat
-//! opens the right-docked pane about this passage
-//! (`TranscriptEvent::SideChat`). A passage too long to quote offers a
-//! disabled `Shorten selection` instead.
+//! the agent's) ends with a glass button at the pointer, `Cite`, which
+//! quotes the passage into the Composer (`TranscriptEvent::Reply`, a Reply
+//! card in the Pane's tray). A passage too long to quote offers a disabled
+//! `Shorten selection` instead.
 //!
 //! The button is placed where the mouse went up, inside the window by
 //! `SELECTION_CITE_EDGE`; where the pointer is not on the selection (a
@@ -372,9 +370,9 @@ impl TranscriptView {
         self.reply.is_some()
     }
 
-    /// The buttons, while their selection stands: at the pointer
-    /// (`cite_place`), fading once a scroll has begun, none before they
-    /// appear.
+    /// The button, while its selection stands: at the pointer
+    /// (`cite_place`), fading once a scroll has begun, none before it
+    /// appears.
     pub(super) fn reply_float(
         &mut self,
         window: &mut Window,
@@ -403,8 +401,7 @@ impl TranscriptView {
             }
             None => 1.,
         };
-        let side_chat_shown = self.input.presentation.rewind.is_some();
-        let size = cite_size(reply.passage.is_none(), side_chat_shown, window);
+        let size = cite_size(reply.passage.is_none(), window);
         let rects = gpui::base::TextSelection::painted_bounds(window, cx);
         let place = cite_place(
             self.scroll.list_state().viewport_bounds(),
@@ -425,7 +422,7 @@ impl TranscriptView {
         )));
         // On the press, not the click: the press clears the selection,
         // and with it this button, before a release could land on it.
-        let cite = match passage.clone() {
+        let cite = match passage {
             Some(passage) => glass_button(&namespace, "selection-reply-quote", "Cite", true)
                 .cursor_pointer()
                 .when(!fading, |button| {
@@ -450,53 +447,16 @@ impl TranscriptView {
             .opacity(0.5)
             .tooltip(ferrite_ui::menu::tooltip("Selection is too long to cite")),
         };
-        let side_chat = passage
-            .clone()
-            .zip(self.input.presentation.rewind.as_ref())
-            .map(|(passage, allowed)| {
-                let button = glass_button(
-                    &namespace,
-                    "selection-side-chat",
-                    "Start a side chat",
-                    false,
-                );
-                match allowed {
-                    Err(why) => button
-                        .opacity(0.4)
-                        .tooltip(ferrite_ui::menu::tooltip(format!(
-                            "Start a side chat \u{b7} {why}"
-                        ))),
-                    Ok(()) => button.when(!fading, |button| {
-                        let weak = weak.clone();
-                        button.cursor_pointer().on_mouse_down(
-                            MouseButton::Left,
-                            move |_: &MouseDownEvent, window: &mut Window, cx: &mut gpui::App| {
-                                cx.stop_propagation();
-                                gpui::base::TextSelection::clear(window, cx);
-                                let passage = passage.clone();
-                                let _ = weak.update(cx, |view, cx| {
-                                    view.reply = None;
-                                    cx.emit(TranscriptEvent::SideChat(passage));
-                                    cx.notify();
-                                });
-                            },
-                        )
-                    }),
-                }
-            });
         let row = gpui::div()
             .id(id)
             .debug_selector(|| "selection-reply".into())
             .flex()
-            .items_center()
-            .gap(px(theme::SELECTION_CITE_GAP))
             .opacity(opacity)
             .occlude()
             .on_mouse_down_out(move |_, _, cx| {
                 let _ = away.update(cx, |view, cx| view.dismiss_reply(cx));
             })
-            .child(cite)
-            .children(side_chat);
+            .child(cite);
         Some(
             gpui::deferred(
                 gpui::anchored()
@@ -560,36 +520,26 @@ fn cite_place(
     )
 }
 
-/// The buttons' size together: each `SELECTION_CITE_H` tall, its words
-/// shaped at `FS_BADGE`, the icon of the first, each side padded
-/// `SELECTION_CITE_PAD_X` inside a 1px ring.
-fn cite_size(too_long: bool, side_chat: bool, window: &mut Window) -> Size<Pixels> {
+/// The button's size: `SELECTION_CITE_H` tall, its words shaped at
+/// `FS_BADGE` after Cite's icon, each side padded `SELECTION_CITE_PAD_X`
+/// inside a 1px ring.
+fn cite_size(too_long: bool, window: &mut Window) -> Size<Pixels> {
     let mut face = window.text_style();
     face.font_family = theme::FONT_UI.into();
     face.font_weight = theme::W_LABEL;
-    let shaped = |text: &str| {
-        window
-            .text_system()
-            .shape_line(
-                text.to_owned().into(),
-                px(theme::FS_BADGE),
-                &[face.to_run(text.len())],
-                None,
-            )
-            .width()
-    };
-    let pad = px(2. * theme::SELECTION_CITE_PAD_X + 2.);
-    let first = if too_long {
-        "Shorten selection"
-    } else {
-        "Cite"
-    };
-    let mut width = shaped(first) + pad;
+    let words = if too_long { "Shorten selection" } else { "Cite" };
+    let mut width = window
+        .text_system()
+        .shape_line(
+            words.into(),
+            px(theme::FS_BADGE),
+            &[face.to_run(words.len())],
+            None,
+        )
+        .width()
+        + px(2. * theme::SELECTION_CITE_PAD_X + 2.);
     if !too_long {
         width += px(theme::SELECTION_CITE_ICON + theme::SELECTION_CITE_ICON_GAP);
-    }
-    if side_chat {
-        width += px(theme::SELECTION_CITE_GAP) + shaped("Start a side chat") + pad;
     }
     gpui::size(width.ceil(), px(theme::SELECTION_CITE_H))
 }
