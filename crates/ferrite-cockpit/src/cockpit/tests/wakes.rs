@@ -322,3 +322,59 @@ fn the_toast_float_redraws_only_as_its_toast_comes_and_goes(cx: &mut TestAppCont
     assert_eq!(bare_standing, 0, "a notify that moves nothing it draws leaves the float");
     assert!(went.toasts > 0, "the float drew it going");
 }
+
+/// A Factory board arrives from the Server with a Task that needs the
+/// operator: the nav's Factory door wears its dot on that beat, and the
+/// door's menu counts the Task beside its Project.
+#[gpui::test]
+fn the_factory_door_counts_what_needs_you_as_the_board_arrives(cx: &mut TestAppContext) {
+    use ferrite_core::factory::{Board, Status, Task};
+    let _clock = hold_wall_clock();
+    let (view, _fake, _panes, cx) = window("wakes-factory-door", 1, cx);
+    let project = view.read_with(cx, |view, cx| {
+        let model = view.cockpit.read(cx);
+        model.project_id(model.threads()[0]).unwrap()
+    });
+    assert!(cx.debug_bounds("nav-factory").is_some(), "the door");
+    assert!(cx.debug_bounds("nav-factory-attention").is_none(), "nothing needs you");
+    let idle = drawn::nav_renders();
+    for _ in 0..1_000 / PUMP_MS {
+        beat(cx);
+    }
+    assert_eq!(drawn::nav_renders(), idle, "an idle door is not redrawn");
+    let task: Task = serde_json::from_value(serde_json::json!({
+        "id": "t-1",
+        "project": project,
+        "title": "Task t-1",
+        "instructions": "Do the work",
+        "status": Status::NeedsHuman,
+        "agent": {"provider": "claude", "model": "claude-opus-4"},
+        "branch": "factory/t-1",
+        "worker": null,
+        "result": null,
+        "reason": "No access",
+        "activity": [],
+        "created_ms": 1,
+    }))
+    .unwrap();
+    view.update(cx, |view, cx| {
+        view.cockpit.update(cx, |model, _| {
+            model.fixture_factory(Board {
+                tasks: vec![task],
+                ..Default::default()
+            })
+        })
+    });
+    beat(cx);
+    assert!(
+        cx.debug_bounds("nav-factory-attention").is_some(),
+        "the door's dot, on the beat the board arrives"
+    );
+    let rows = view.read_with(cx, |view, cx| view.factory_rows(cx));
+    let counts: Vec<_> = rows
+        .iter()
+        .flatten()
+        .map(|(item, _)| item.detail.clone())
+        .collect();
+    assert_eq!(counts, [Some("1".into())], "its Project's row counts the Task");
+}

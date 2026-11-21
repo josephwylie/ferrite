@@ -1423,42 +1423,15 @@ impl CockpitView {
         true
     }
 
-    /// The Projects with a Factory entry over the nav's cards: each one an
-    /// operator's Thread or a Task is in or whose automatic starts are on,
-    /// the chosen one's alone while the list is filtered to a Project,
-    /// which shows it even when empty. Any other Project's Factory is the
-    /// palette's (`Factory: <Project>`).
-    pub(super) fn factory_nav_projects(&self, state: &nav::NavState, cx: &gpui::App) -> Vec<ProjectId> {
-        let board = self.cockpit.read(cx).factory();
-        let automatic = board
-            .workflows
-            .iter()
-            .filter(|workflow| workflow.automation.switch == ferrite_core::factory::Switch::On)
-            .map(|workflow| workflow.project);
-        let mut projects: Vec<ProjectId> = state
-            .open_rows()
-            .chain(&state.parked)
-            .filter_map(|row| self.facts.get(row.thread).and_then(|facts| facts.project))
-            .chain(board.tasks.iter().map(|task| task.project))
-            .chain(automatic)
-            .chain(self.nav_filter)
-            .filter(|project| self.nav_filter.is_none_or(|wanted| wanted == *project))
-            .collect();
-        projects.sort();
-        projects.dedup();
-        projects
-    }
-
     /// The Factory menu's rows: a Project's board each, checked while it
     /// shows, with how many of its Tasks need the operator.
     pub(super) fn factory_rows(&self, cx: &gpui::App) -> Vec<Option<(menu::Item, MenuVerb)>> {
-        let Some(nav) = self.nav_view.read(cx).inputs() else {
-            return Vec::new();
-        };
         let board = self.cockpit.read(cx).factory();
-        self.factory_nav_projects(&nav.state, cx)
-            .into_iter()
-            .map(|project| {
+        self.nav_view
+            .read(cx)
+            .factories()
+            .iter()
+            .map(|&project| {
                 let title = self
                     .cockpit
                     .read(cx)
