@@ -152,7 +152,7 @@ pub(super) fn history(view:&Entity<CockpitView>,window:&mut Window,cx:&mut App,o
     // focus_thread also leaves whatever destination is open.
     if *stage==0 { view.update(cx,|view,cx|view.focus_thread(owning_thread,cx)); }
     let restored=std::iter::once(&owning_thread).find_map(|thread| {
-        let mirror=view.read(cx).cockpit.thread(*thread)?;
+        let mirror=view.read(cx).cockpit.read(cx).thread(*thread)?;
         let annotations:Vec<_>=mirror.transcript().blocks().iter().filter_map(|block| {
             match &block.body { ferrite_core::transcript::Body::Prompt(words)=>Some(ferrite_core::browser_annotations::split(words.clone()).2), _=>None }
         }).flatten().collect();
