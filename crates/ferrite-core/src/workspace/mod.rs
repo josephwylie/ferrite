@@ -539,6 +539,38 @@ pub struct BranchStatus {
     /// Working-tree entries `git status --porcelain` lists — modified,
     /// staged and untracked alike. Zero is a clean tree.
     pub dirty: u32,
+    /// The lines the checkout's work moves against its base: the Changes
+    /// row's reading. `None` when git could not count them.
+    pub changes: Option<BranchDiff>,
+}
+
+/// What a checkout's work adds and removes, and what that is counted
+/// against: the same changeset the Panel's Changes Surface reads for the
+/// whole branch, so the two never disagree.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BranchDiff {
+    pub against: DiffBase,
+    pub added: u32,
+    pub removed: u32,
+}
+
+/// What a [`BranchDiff`] counts against.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DiffBase {
+    /// The base the branch was cut from, as the ref that was compared
+    /// (`origin/main`, or `main` with no remote): everything since the
+    /// merge base, committed or not, untracked files included.
+    Branch(String),
+    /// No base: a detached HEAD, or no base that resolves or shares
+    /// history. The uncommitted work against `HEAD` alone.
+    Uncommitted,
+}
+
+/// Count the checkout's work against its base, off the UI thread.
+/// `detached` is `git status`'s word: a detached HEAD has no branch to
+/// compare, only its uncommitted work.
+pub fn branch_diff(_cwd: &Path, _detached: bool) -> Option<BranchDiff> {
+    todo!()
 }
 
 /// The branch's pull request, as the forge reports it.
@@ -1675,6 +1707,89 @@ mod tests {
             default_branch(&repo),
             "main",
             "no origin: the local main is the default"
+        );
+    }
+
+    /// The Changes row's reading, from real git: a branch counts everything
+    /// since it left its base — commits, edits not yet committed and
+    /// untracked files — against the ref it compared (`origin/main` when a
+    /// remote has it, else the local `main`); a detached HEAD counts its
+    /// uncommitted work alone.
+    #[test]
+    fn branch_diff_counts_the_work_against_the_base_it_compared() {
+        let commit = |tree: &Path, message: &str| {
+            git(tree, &["add", "-A"]).unwrap();
+            git(
+                tree,
+                &[
+                    "-c",
+                    "user.email=test@example.invalid",
+                    "-c",
+                    "user.name=test",
+                    "commit",
+                    "-qm",
+                    message,
+                ],
+            )
+            .unwrap();
+        };
+        let diff = |against: DiffBase, added: u32, removed: u32| {
+            Some(BranchDiff {
+                against,
+                added,
+                removed,
+            })
+        };
+        let root = scratch("branch-diff");
+        let origin = init_repo(&root);
+        fs::write(origin.join("file.txt"), "one\ntwo\nthree\n").unwrap();
+        commit(&origin, "three lines");
+        let clone = root.join("clone");
+        git(
+            &root,
+            &["clone", "-q", &origin.to_string_lossy(), &clone.to_string_lossy()],
+        )
+        .unwrap();
+        git(&clone, &["config", "core.autocrlf", "false"]).unwrap();
+        git(&clone, &["checkout", "-q", "-b", "feat"]).unwrap();
+        let vs_origin = || DiffBase::Branch("origin/main".into());
+
+        assert_eq!(
+            branch_diff(&clone, false),
+            diff(vs_origin(), 0, 0),
+            "no changes: the base is still named"
+        );
+
+        fs::write(clone.join("added.txt"), "a\nb\n").unwrap();
+        commit(&clone, "insertions only");
+        assert_eq!(branch_diff(&clone, false), diff(vs_origin(), 2, 0));
+
+        fs::write(clone.join("file.txt"), "one\n").unwrap();
+        commit(&clone, "deletions only");
+        assert_eq!(branch_diff(&clone, false), diff(vs_origin(), 2, 2));
+
+        fs::write(clone.join("file.txt"), "one\nuncommitted\n").unwrap();
+        fs::write(clone.join("untracked.txt"), "u\n").unwrap();
+        assert_eq!(
+            branch_diff(&clone, false),
+            diff(vs_origin(), 4, 2),
+            "uncommitted edits and untracked files count with the branch"
+        );
+
+        git(&clone, &["checkout", "-q", "--detach"]).unwrap();
+        assert_eq!(
+            branch_diff(&clone, true),
+            diff(DiffBase::Uncommitted, 2, 0),
+            "detached: the uncommitted work against HEAD alone"
+        );
+
+        // No remote: the local default branch is the base.
+        git(&origin, &["checkout", "-q", "-b", "local"]).unwrap();
+        fs::write(origin.join("local.txt"), "l\n").unwrap();
+        commit(&origin, "local");
+        assert_eq!(
+            branch_diff(&origin, false),
+            diff(DiffBase::Branch("main".into()), 1, 0)
         );
     }
 

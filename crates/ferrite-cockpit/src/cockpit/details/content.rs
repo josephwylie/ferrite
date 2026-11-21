@@ -438,6 +438,21 @@ impl CockpitView {
     }
 }
 
+/// The Changes row, as T3 Code reads it: `Changes`, then what the work is
+/// counted against (`vs origin/main`, or `Uncommitted`), then `+N` and
+/// `-N`, each in its diff hue unless it is zero.
+#[derive(Clone, Debug, PartialEq)]
+struct ChangesTally {
+    against: String,
+    added: (String, u32),
+    removed: (String, u32),
+}
+
+/// The row a [`ferrite_core::workspace::BranchDiff`] reads as.
+fn changes_tally(_diff: &ferrite_core::workspace::BranchDiff) -> ChangesTally {
+    todo!()
+}
+
 /// The card's pull request block, drawn as T3 Code draws it: the state's
 /// glyph and the title (two lines at most), and under it one quiet line,
 /// `#N` and then the mark. With no mark, one row: `#N: title`.
@@ -674,6 +689,46 @@ fn tokens(value: u64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The Changes row reads as T3 Code's: the base it was counted
+    /// against, else `Uncommitted`, then the lines added in green and
+    /// removed in red, grouped by thousands, and quiet at zero.
+    #[test]
+    fn the_changes_row_names_its_base_and_counts_the_lines() {
+        use ferrite_core::workspace::{BranchDiff, DiffBase};
+        let tally = |against, added, removed| {
+            changes_tally(&BranchDiff {
+                against,
+                added,
+                removed,
+            })
+        };
+        assert_eq!(
+            tally(DiffBase::Branch("origin/main".into()), 309, 34),
+            ChangesTally {
+                against: "vs origin/main".into(),
+                added: ("+309".into(), DIFF_ADDED_SIGN),
+                removed: ("-34".into(), DIFF_REMOVED_SIGN),
+            }
+        );
+        assert_eq!(
+            tally(DiffBase::Branch("origin/main".into()), 0, 0),
+            ChangesTally {
+                against: "vs origin/main".into(),
+                added: ("+0".into(), INK_SUBTLE),
+                removed: ("-0".into(), INK_SUBTLE),
+            },
+            "nothing moved: both counts quiet"
+        );
+        assert_eq!(
+            tally(DiffBase::Uncommitted, 1234, 0),
+            ChangesTally {
+                against: "Uncommitted".into(),
+                added: ("+1,234".into(), DIFF_ADDED_SIGN),
+                removed: ("-0".into(), INK_SUBTLE),
+            }
+        );
+    }
 
     #[test]
     fn density_keeps_workspace_actions_and_usage_at_the_source_levels() {
