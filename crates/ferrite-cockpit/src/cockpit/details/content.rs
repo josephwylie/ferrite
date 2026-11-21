@@ -17,6 +17,8 @@ struct Row {
     meta: Option<String>,
     /// The pull request's block, which this row draws instead of a label.
     pr: Option<PrBlock>,
+    /// The Changes row's base and counts, drawn after its label.
+    changes: Option<ChangesTally>,
     glyph: &'static str,
     action: Option<Action>,
     fill: Option<f32>,
@@ -30,6 +32,7 @@ impl Row {
             label: label.into(),
             meta: None,
             pr: None,
+            changes: None,
             glyph,
             action: None,
             fill: None,
@@ -215,13 +218,17 @@ impl Content {
                         .child(
                             div()
                                 .min_w_0()
-                                .when(!usage, |label| label.flex_1())
+                                .when(!usage && row.changes.is_none(), |label| label.flex_1())
+                                .when(row.changes.is_some(), |label| label.flex_shrink_0())
                                 .truncate()
                                 .when(usage, |label| {
                                     label.text_color(rgb(INK_SUBTLE)).text_size(px(12.))
                                 })
                                 .child(row.label.clone()),
-                        ),
+                        )
+                        .when_some(row.changes.as_ref(), |control, tally| {
+                            control.child(changes_view(tally))
+                        }),
                 };
                 if let Some(fill) = row.fill {
                     control = control.child(
@@ -355,11 +362,12 @@ impl CockpitView {
                     rows.push(create);
                 }
                 let mut row = Row::new(Item::Changes, "Changes", icons::DIFF);
-                row.meta = facts.status.as_ref().map(|status| match status.dirty {
-                    0 => "No changes".to_string(),
-                    1 => "1 file".to_string(),
-                    count => format!("{count} files"),
-                });
+                row.changes = facts
+                    .status
+                    .as_ref()
+                    .and_then(|status| status.changes.as_ref())
+                    .map(changes_tally);
+                row.tooltip = row.changes.as_ref().map(|tally| tally.against.clone());
                 if self
                     .opener_unavailable(thread, panel::Opener::Changes)
                     .is_none()
@@ -449,8 +457,58 @@ struct ChangesTally {
 }
 
 /// The row a [`ferrite_core::workspace::BranchDiff`] reads as.
-fn changes_tally(_diff: &ferrite_core::workspace::BranchDiff) -> ChangesTally {
-    todo!()
+fn changes_tally(diff: &ferrite_core::workspace::BranchDiff) -> ChangesTally {
+    use ferrite_core::workspace::DiffBase;
+    let count = |sign: char, lines: u32, hue: u32| {
+        let digits = lines.to_string();
+        let mut words = String::from(sign);
+        for (at, digit) in digits.chars().enumerate() {
+            if at > 0 && (digits.len() - at) % 3 == 0 {
+                words.push(',');
+            }
+            words.push(digit);
+        }
+        (words, if lines == 0 { INK_SUBTLE } else { hue })
+    };
+    ChangesTally {
+        against: match &diff.against {
+            DiffBase::Branch(base) => format!("vs {base}"),
+            DiffBase::Uncommitted => "Uncommitted".to_string(),
+        },
+        added: count('+', diff.added, DIFF_ADDED_SIGN),
+        removed: count('-', diff.removed, DIFF_REMOVED_SIGN),
+    }
+}
+
+/// Draws a [`ChangesTally`] after the row's label: what it counts against,
+/// cut short when the card is narrow, then the counts at the row's end.
+fn changes_view(tally: &ChangesTally) -> Div {
+    let count = |(words, hue): &(String, u32)| div().text_color(rgb(*hue)).child(words.clone());
+    div()
+        .flex()
+        .flex_1()
+        .min_w_0()
+        .items_center()
+        .gap(px(8.))
+        .child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .truncate()
+                .text_size(px(12.))
+                .text_color(rgb(INK_SUBTLE))
+                .child(tally.against.clone()),
+        )
+        .child(
+            div()
+                .flex()
+                .flex_shrink_0()
+                .gap(px(8.))
+                .font_family(FONT_CODE)
+                .text_size(px(12.))
+                .child(count(&tally.added))
+                .child(count(&tally.removed)),
+        )
 }
 
 /// The card's pull request block, drawn as T3 Code draws it: the state's

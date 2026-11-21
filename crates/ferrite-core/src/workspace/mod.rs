@@ -569,8 +569,39 @@ pub enum DiffBase {
 /// Count the checkout's work against its base, off the UI thread.
 /// `detached` is `git status`'s word: a detached HEAD has no branch to
 /// compare, only its uncommitted work.
-pub fn branch_diff(_cwd: &Path, _detached: bool) -> Option<BranchDiff> {
-    todo!()
+pub fn branch_diff(cwd: &Path, detached: bool) -> Option<BranchDiff> {
+    use ferrite_reviewr::git::{self as review, ResolvedBase};
+    // The Changes Surface's own base chain: the operator's pick, else the
+    // default branch, origin's before the local one.
+    let base = (!detached)
+        .then(|| review::resolve_base(cwd, None).ok()?.status.winner)
+        .flatten()
+        .and_then(|base| Some((review::merge_base(cwd, base.oid())?, base)));
+    let (old, against) = match base {
+        Some((merge_base, base)) => {
+            let name = match base {
+                ResolvedBase::Branch { name, oid } => {
+                    let remote = format!("refs/remotes/origin/{name}^{{commit}}");
+                    match git(cwd, &["rev-parse", "--verify", "--quiet", &remote]) {
+                        Ok(tip) if tip.trim() == oid => format!("origin/{name}"),
+                        _ => name,
+                    }
+                }
+                ResolvedBase::Rev { spelling, .. } => spelling,
+            };
+            (merge_base, DiffBase::Branch(name))
+        }
+        None => (
+            review::diff_base(review::head_oid(cwd)),
+            DiffBase::Uncommitted,
+        ),
+    };
+    let files = review::changed_from(cwd, &old).ok()?;
+    Some(BranchDiff {
+        against,
+        added: files.iter().map(|file| file.additions).sum(),
+        removed: files.iter().map(|file| file.deletions).sum(),
+    })
 }
 
 /// The branch's pull request, as the forge reports it.
@@ -722,14 +753,17 @@ pub enum CheckState {
 
 /// Read the checkout's drift, off the UI thread. One `git status
 /// --porcelain=v2 --branch` answers branch, upstream, ahead/behind and dirt
-/// together. `None` where `cwd` is not a checkout at all.
+/// together; `branch_diff` then counts the work against its base. `None`
+/// where `cwd` is not a checkout at all.
 pub fn branch_status(cwd: &Path) -> Option<BranchStatus> {
     let listed = git(cwd, &["status", "--porcelain=v2", "--branch"]).ok()?;
     let mut status = BranchStatus::default();
+    let mut detached = false;
     for line in listed.lines() {
         if let Some(head) = line.strip_prefix("# branch.head ") {
             let head = head.trim();
-            if head != "(detached)" {
+            detached = head == "(detached)";
+            if !detached {
                 status.branch = Some(head.to_string());
             }
         } else if let Some(upstream) = line.strip_prefix("# branch.upstream ") {
@@ -749,6 +783,7 @@ pub fn branch_status(cwd: &Path) -> Option<BranchStatus> {
             .map(|head| head.trim().to_string())
             .filter(|head| !head.is_empty());
     }
+    status.changes = branch_diff(cwd, detached);
     Some(status)
 }
 
@@ -1747,10 +1782,16 @@ mod tests {
         let clone = root.join("clone");
         git(
             &root,
-            &["clone", "-q", &origin.to_string_lossy(), &clone.to_string_lossy()],
+            &[
+                "clone",
+                "-q",
+                "-c",
+                "core.autocrlf=false",
+                &origin.to_string_lossy(),
+                &clone.to_string_lossy(),
+            ],
         )
         .unwrap();
-        git(&clone, &["config", "core.autocrlf", "false"]).unwrap();
         git(&clone, &["checkout", "-q", "-b", "feat"]).unwrap();
         let vs_origin = || DiffBase::Branch("origin/main".into());
 
