@@ -2315,6 +2315,7 @@ dependencies = [
 name = "ferrite"
 version = "0.4.0"
 dependencies = [
+ "ctor",
  "ferrite-cockpit",
  "ferrite-core",
  "ferrite-frame",
@@ -2322,6 +2323,7 @@ dependencies = [
  "ferrite-ui",
  "gpui-kit",
  "gpui-pre-reqwest-client",
+ "libc",
  "winresource",
 ]
 
@@ -2329,6 +2331,7 @@ dependencies = [
 name = "ferrite-cockpit"
 version = "0.4.0"
 dependencies = [
+ "ctor",
  "ferrite-core",
  "ferrite-focus-notify",
  "ferrite-frame",
@@ -2341,6 +2344,7 @@ dependencies = [
  "gpui-kit",
  "gpui-pre-platform",
  "image",
+ "libc",
  "serde",
  "serde_json",
  "url",
@@ -2354,6 +2358,7 @@ dependencies = [
  "axum-server",
  "base64 0.22.1",
  "chrono",
+ "ctor",
  "dunce",
  "ferrite-reviewr",
  "futures-util",
@@ -2382,6 +2387,8 @@ dependencies = [
 name = "ferrite-focus-notify"
 version = "0.8.0"
 dependencies = [
+ "ctor",
+ "libc",
  "serde",
  "serde_json",
 ]
@@ -2402,6 +2409,7 @@ version = "0.4.0"
 dependencies = [
  "base64 0.22.1",
  "cef",
+ "ctor",
  "ferrite-core",
  "ferrite-reviewr",
  "ferrite-ui",
@@ -2410,6 +2418,7 @@ dependencies = [
  "gpui-base",
  "gpui-kit",
  "image",
+ "libc",
  "percent-encoding",
  "serde_json",
  "tungstenite 0.24.0",
@@ -2441,6 +2450,7 @@ name = "ferrite-terminal"
 version = "0.4.0"
 dependencies = [
  "alacritty_terminal",
+ "ctor",
  "ferrite-ui",
  "gpui-kit",
  "libc",
