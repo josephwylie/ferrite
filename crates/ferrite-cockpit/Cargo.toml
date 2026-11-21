@@ -54,6 +54,9 @@ futures = "0.3"
 image = { version = "0.25.1", default-features = false, features = ["png"] }
 
 [dev-dependencies]
+# The test programs' own temporary folder (ferrite-core/src/test_temp.rs).
+ctor = "1"
+libc = "0.2"
 # The smoke render needs a window; gpui's own test harness provides a headless
 # one, so the Cockpit's rendering is exercised without a display.
 gpui = { package = "gpui-kit", version = "=0.6.0", features = ["test-support"] }

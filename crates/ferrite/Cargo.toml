@@ -58,6 +58,9 @@ reqwest_client = { package = "gpui-pre-reqwest-client", version = "=0.3.3" }
 winresource = { version = "0.1", default-features = false }
 
 [dev-dependencies]
+# The test programs' own temporary folder (ferrite-core/src/test_temp.rs).
+ctor = "1"
+libc = "0.2"
 # The launch's tests run in gpui's headless harness.
 gpui = { package = "gpui-kit", version = "=0.6.0", features = ["test-support"] }
 # The type rules' render-code check (`ferrite_ui::face`).

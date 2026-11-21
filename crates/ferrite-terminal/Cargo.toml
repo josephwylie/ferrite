@@ -20,4 +20,7 @@ gpui = { package = "gpui-kit", version = "=0.6.0" }
 libc.workspace = true
 
 [dev-dependencies]
+# The test programs' own temporary folder (ferrite-core/src/test_temp.rs).
+ctor = "1"
+libc = "0.2"
 gpui = { package = "gpui-kit", version = "=0.6.0", features = ["test-support"] }

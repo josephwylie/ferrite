@@ -12,6 +12,10 @@
 //!
 //! There is no search and there are no splits.
 
+#[cfg(test)]
+#[path = "../../ferrite-core/src/test_temp.rs"]
+mod test_temp;
+
 mod keys;
 mod links;
 mod palette;
