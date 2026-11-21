@@ -104,7 +104,6 @@ fn surface_icon(id: &SurfaceId) -> &'static str {
         SurfaceId::Browser => icons::GLOBE,
         SurfaceId::Terminal(_) => icons::TERMINAL,
         SurfaceId::SideChat(_) => icons::MESSAGES_SQUARE,
-        SurfaceId::Agent(_) => icons::SUBAGENTS,
         SurfaceId::PullRequest(_) => icons::GIT_PULL_REQUEST,
     }
 }
@@ -123,7 +122,6 @@ pub(crate) fn surface_selector(id: &SurfaceId) -> String {
         ),
         SurfaceId::Terminal(number) => format!("panel-tab-Terminal-{number}"),
         SurfaceId::SideChat(tab) => format!("panel-tab-SideChat-{tab}"),
-        SurfaceId::Agent(_) => "panel-tab-Agent".into(),
         SurfaceId::PullRequest(number) => format!("panel-tab-PullRequest-{number}"),
     }
 }
@@ -273,12 +271,10 @@ impl CockpitView {
     }
 
     /// Whether a Surface has work going on that its tab should say (T3's
-    /// pending dot): a side chat answering, an agent working, background
-    /// work running.
+    /// pending dot): a side chat answering, background work running.
     pub(crate) fn surface_pending(&self, thread: ThreadId, id: &SurfaceId, cx: &gpui::App) -> bool {
         match id {
             SurfaceId::SideChat(tab) => self.side_chat_running(thread, *tab, cx),
-            SurfaceId::Agent(key) => self.agent_running(thread, key),
             SurfaceId::Background => self.cockpit.thread(thread).is_some_and(|open| {
                 open.transcript()
                     .background_calls()
@@ -290,7 +286,7 @@ impl CockpitView {
 
     /// A tab's title (T3's `surfaceTitle`): the singletons' names, a file's
     /// name (a command's own), the shell's `Terminal N`, the side chat's
-    /// title, the agent's task.
+    /// title.
     fn surface_title(&self, thread: ThreadId, id: &SurfaceId, cx: &gpui::App) -> SharedString {
         match id {
             SurfaceId::Overview => "Overview".into(),
@@ -301,7 +297,6 @@ impl CockpitView {
             SurfaceId::File(path) => self.file_surface_title(thread, path, cx),
             SurfaceId::Terminal(number) => format!("Terminal {number}").into(),
             SurfaceId::SideChat(tab) => self.side_chat.read(cx).title(thread, *tab),
-            SurfaceId::Agent(key) => self.agent_title(thread, key),
             SurfaceId::PullRequest(number) => format!("#{number}").into(),
         }
     }

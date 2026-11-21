@@ -3,7 +3,6 @@
 //! Rendering and keys only. What each Pane shows — the Blocks, the pending
 //! Decision, the held prompt — is folded in core and read from there.
 
-mod agent_pane;
 pub(crate) mod archive;
 mod attachments;
 mod background_dialog_view;
@@ -433,7 +432,6 @@ pub struct CockpitView {
     changes: Entity<tools::ChangesView>,
     /// The pull request reader: the Panel's PR Surface and the PRs' detail.
     pull_request: Entity<panel::pull_request::PullRequestView>,
-    agent_drills: Entity<agent_pane::AgentDrillsView>,
     /// The Inbox's alerts and the toast float that shows them.
     pub(crate) toasts: Entity<toasts::ToastsView>,
     native_copy: Option<String>,
@@ -1160,8 +1158,6 @@ impl CockpitView {
         // The root draws its card into its own frame, so each change
         // redraws the window.
         cx.observe(&file_surface, |_, _, cx| cx.notify()).detach();
-        let agent_drills = cx.new(|_| agent_pane::AgentDrillsView::new(cockpit_weak.clone()));
-        cx.subscribe(&agent_drills, Self::on_agent_drill_event).detach();
         let toasts = cx.new(|_| toasts::ToastsView::new(cockpit_weak.clone()));
         let decisions = cx.new(|_| decisions::DecisionsView::default());
         // A card's pick lives in its Pane's forms, and the root draws the
@@ -1209,7 +1205,6 @@ impl CockpitView {
             terminals,
             changes,
             pull_request,
-            agent_drills,
             toasts,
             native_copy: None,
             nav_filter: None,
@@ -6583,7 +6578,6 @@ impl CockpitView {
         // compares scalar keys first, so Composer edits repaint Cockpit chrome
         // without cloning or notifying any retained transcript entity.
         self.sync_visible_transcripts(cx);
-        self.restore_shown_agent_drills(cx);
 
         // The `/`/`@` menu belongs to the focused Pane's Composer (#23):
         // leaving that Pane closes it here.

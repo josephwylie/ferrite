@@ -588,26 +588,6 @@ impl CockpitView {
         Some(card_tail(self.decision_cards(index, false, false, cx)?))
     }
 
-    /// The Decision row(s) `subject`'s compact transcript draws after its
-    /// last row, answered through the Pane that holds `thread`. None while
-    /// that Pane shows `subject` itself: it draws the cards, and a second
-    /// copy would share their fields and focus.
-    pub(super) fn compact_decision_tail(
-        &self,
-        thread: ThreadId,
-        subject: &Subject,
-        cx: &App,
-    ) -> Option<ferrite_pane::transcript::TranscriptTail> {
-        let index = self.pane_for(thread)?;
-        if self.panes[index].selected == *subject {
-            return None;
-        }
-        let mut cards = self.decision_inputs(index, subject, false, false, cx)?;
-        cards.narrow = true;
-        cards.inset = ferrite_ui::theme::tx_inset_at(0., false);
-        Some(card_tail(cards))
-    }
-
     /// The head's provider and its context word: the sandbox its provider
     /// announced for this Thread, else its permission mode (the Session's,
     /// else the one it was spawned with). Settings' defaults are for the
