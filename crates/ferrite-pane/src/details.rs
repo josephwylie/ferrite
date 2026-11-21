@@ -85,6 +85,10 @@ pub struct DetailsCard {
     /// Where the opening control was last laid out: a press on it is the
     /// toggle's, not a press outside the card.
     opener: Rc<Cell<Option<Bounds<Pixels>>>>,
+    /// How many `Show more` presses the open card's `Previous agents`
+    /// has had: view state, back to none when the card opens or its
+    /// Subject changes.
+    pub previous_pages: Cell<usize>,
 }
 
 impl DetailsCard {
@@ -100,6 +104,7 @@ impl DetailsCard {
             top_inset: Cell::new(0.),
             fit_width: Cell::new(None),
             opener: Rc::default(),
+            previous_pages: Cell::new(0),
         }
     }
 

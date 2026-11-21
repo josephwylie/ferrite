@@ -417,3 +417,169 @@ fn details_preferences_can_empty_and_restore_the_card(cx: &mut TestAppContext) {
             .visible(ContextCardItem::Context));
     });
 }
+
+/// Lineage as T3 draws it: a quiet `Lineage · N running` heading, a row per
+/// running agent, and the finished ones folded under one counted
+/// `Previous agents` row; the fold is the Thread's, so a re-render keeps it,
+/// and the card grows and shrinks with it. A Subagent's card instead leads
+/// back to its parent: a press on that row returns the Pane to Main.
+#[gpui::test]
+fn lineage_lists_running_agents_and_folds_the_previous_ones(cx: &mut TestAppContext) {
+    use ferrite_core::activity::{ActivityEvent, AgentInfo, AgentKey, AgentStatus, Subject};
+    let (core, fake) = cockpit("details-lineage-fold", 1);
+    bind_production_keys(cx);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    hold_nav_open(&view, cx);
+    cx.simulate_resize(gpui::size(px(2400.), px(900.)));
+    let emit = |event| {
+        fake.streams.borrow()[0]
+            .send(SessionEvent::Activity(event))
+            .unwrap()
+    };
+    let key = |name: &str| AgentKey::new(Provider::Claude, "ui-fixture", name);
+    for (name, status) in [
+        ("Atlas", AgentStatus::Working),
+        ("Birch", AgentStatus::Idle),
+        ("Cedar", AgentStatus::Failed),
+    ] {
+        let mut info = AgentInfo::new(key(name));
+        info.name = Some(name.into());
+        info.parent = Some(Subject::Main);
+        emit(ActivityEvent::Discovered(info));
+        emit(ActivityEvent::Status {
+            key: key(name),
+            state: status,
+        });
+    }
+    tick(cx);
+    let height = |cx: &mut gpui::VisualTestContext| {
+        f32::from(cx.debug_bounds("details-card").unwrap().size.height)
+    };
+    assert!(
+        cx.debug_bounds("details-lineage-running-1").is_some(),
+        "the heading says how many run"
+    );
+    assert!(cx.debug_bounds("details-lineage-agent-Atlas").is_some());
+    assert!(
+        cx.debug_bounds("details-lineage-previous-count-2").is_some(),
+        "the finished agents fold under their count"
+    );
+    for row in ["details-lineage-agent-Birch", "details-lineage-agent-Cedar"] {
+        assert!(cx.debug_bounds(row).is_none(), "{row} is folded at first");
+    }
+    let folded = height(cx);
+
+    let previous = cx.debug_bounds("details-lineage-previous").unwrap();
+    cx.simulate_click(previous.center(), gpui::Modifiers::none());
+    tick(cx);
+    for row in ["details-lineage-agent-Birch", "details-lineage-agent-Cedar"] {
+        assert!(cx.debug_bounds(row).is_some(), "a press opens {row}");
+    }
+    assert!(height(cx) > folded, "the card grows with the fold");
+
+    emit(ActivityEvent::Status {
+        key: key("Atlas"),
+        state: AgentStatus::Waiting,
+    });
+    tick(cx);
+    assert!(
+        cx.debug_bounds("details-lineage-agent-Cedar").is_some(),
+        "the fold outlives a re-render"
+    );
+
+    let previous = cx.debug_bounds("details-lineage-previous").unwrap();
+    cx.simulate_click(previous.center(), gpui::Modifiers::none());
+    tick(cx);
+    assert!(cx.debug_bounds("details-lineage-agent-Birch").is_none());
+    assert_eq!(height(cx), folded, "and shrinks when it shuts");
+
+    let thread = view.read_with(cx, |view, _| view.panes[0].thread().unwrap());
+    cx.update(|window, app| {
+        view.update(app, |view, cx| {
+            view.select_subject(thread, Subject::Subagent(key("Atlas")), window, cx)
+        })
+    });
+    tick(cx);
+    assert!(
+        cx.debug_bounds("details-lineage-agent-Atlas").is_none(),
+        "a Subagent's card lists its own agents, not its siblings"
+    );
+    let parent = cx
+        .debug_bounds("details-lineage-parent")
+        .expect("a Subagent's card leads back to its parent");
+    cx.simulate_click(parent.center(), gpui::Modifiers::none());
+    tick(cx);
+    assert!(
+        view.read_with(cx, |view, _| view.panes[0].is_main()),
+        "the parent row returns the Pane to Main"
+    );
+    assert!(cx.debug_bounds("details-lineage-parent").is_none());
+}
+
+/// `Previous agents` pages as T3's does: six at first, then a
+/// `Show N more` row that adds twelve a press, N never more than are left.
+/// The card grows with each page, and a card opened afresh starts again at
+/// six.
+#[gpui::test]
+fn previous_agents_show_six_then_twelve_more_a_press(cx: &mut TestAppContext) {
+    use ferrite_core::activity::{ActivityEvent, AgentInfo, AgentKey, AgentStatus, Subject};
+    let (core, fake) = cockpit("details-lineage-pages", 1);
+    bind_production_keys(cx);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    hold_nav_open(&view, cx);
+    cx.simulate_resize(gpui::size(px(2400.), px(1400.)));
+    let emit = |event| {
+        fake.streams.borrow()[0]
+            .send(SessionEvent::Activity(event))
+            .unwrap()
+    };
+    for index in 0..20 {
+        let key = AgentKey::new(Provider::Claude, "ui-fixture", &format!("a{index}"));
+        let mut info = AgentInfo::new(key.clone());
+        info.name = Some(format!("Agent{index:02}"));
+        info.parent = Some(Subject::Main);
+        emit(ActivityEvent::Discovered(info));
+        emit(ActivityEvent::Status {
+            key,
+            state: AgentStatus::Idle,
+        });
+    }
+    tick(cx);
+    let previous = cx.debug_bounds("details-lineage-previous").unwrap();
+    cx.simulate_click(previous.center(), gpui::Modifiers::none());
+    tick(cx);
+    let height = |cx: &mut gpui::VisualTestContext| {
+        f32::from(cx.debug_bounds("details-card").unwrap().size.height)
+    };
+    let shown = |cx: &mut gpui::VisualTestContext| {
+        (0..20)
+            .filter(|index| {
+                let row: &'static str = format!("details-lineage-agent-Agent{index:02}").leak();
+                cx.debug_bounds(row).is_some()
+            })
+            .count()
+    };
+    assert_eq!(shown(cx), 6, "the first page is six");
+    let first = height(cx);
+    let more = cx
+        .debug_bounds("details-lineage-show-more-12")
+        .expect("a row offers the next twelve");
+    cx.simulate_click(more.center(), gpui::Modifiers::none());
+    tick(cx);
+    assert_eq!(shown(cx), 18, "a press shows twelve more");
+    assert!(height(cx) > first, "the card grows with the page");
+    let more = cx
+        .debug_bounds("details-lineage-show-more-2")
+        .expect("the row offers only what is left");
+    cx.simulate_click(more.center(), gpui::Modifiers::none());
+    tick(cx);
+    assert_eq!(shown(cx), 20);
+    assert!(cx.debug_bounds("details-lineage-show-more-2").is_none());
+
+    let toggle = cx.debug_bounds("details-toggle").unwrap();
+    for _ in 0..2 {
+        cx.simulate_click(toggle.center(), gpui::Modifiers::none());
+        tick(cx);
+    }
+    assert_eq!(shown(cx), 6, "a card opened afresh starts at six");
+}

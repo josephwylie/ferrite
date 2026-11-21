@@ -3,6 +3,7 @@
 //! expose the same card through its title bar control.
 
 mod content;
+mod lineage;
 
 use super::*;
 use ferrite_pane::details::{Density, Standing};
@@ -26,6 +27,7 @@ impl CockpitView {
         let Some((thread, pane)) = self.focused_details() else {
             return;
         };
+        self.panes[pane].details.previous_pages.set(0);
         if self.details_inline(pane) {
             self.apply_surface(thread, surfaces::SurfaceAction::ToggleDetails);
             cx.notify();
@@ -213,7 +215,8 @@ impl CockpitView {
             DETAILS_GAP
         };
         let available = (f32::from(canvas.size.height) - top - DETAILS_GAP).max(0.);
-        let content = self.details_content(thread, cx);
+        let content =
+            self.details_content(thread, &pane.selected, pane.details.previous_pages.get(), cx);
         let width = (f32::from(canvas.size.width) - 2. * DETAILS_GAP).clamp(0., DETAILS_W);
         let measured = pane.details.measurements.clone();
         measured.borrow_mut().prepare(

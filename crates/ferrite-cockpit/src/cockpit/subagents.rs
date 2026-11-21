@@ -1,7 +1,7 @@
 //! Subject navigation and supervision. Provider execution stays in core.
 use super::*;
 use ferrite_core::activity::{
-    AgentInfo, AgentStatus, DecisionHandle, PendingDecision, Subject, TranscriptCoverage,
+    ActivityView, AgentInfo, AgentStatus, DecisionHandle, PendingDecision, Subject, TranscriptCoverage,
 };
 use super::decisions::DecisionEvent;
 use ferrite_pane::decision;
@@ -368,7 +368,7 @@ fn status_label(status: AgentStatus, fresh: bool) -> Option<&'static str> {
 }
 
 /// The word a subagent's head says of it: its state word, or `done`.
-fn state_word(status: AgentStatus, fresh: bool) -> &'static str {
+pub(super) fn state_word(status: AgentStatus, fresh: bool) -> &'static str {
     status_label(status, fresh).unwrap_or(theme::words::DONE)
 }
 
@@ -384,6 +384,23 @@ fn agent_mark(status: AgentStatus, fresh: bool, waiting: bool) -> Option<AnyElem
         _ => return None,
     };
     Some(crate::nav::mark(face, false))
+}
+
+/// The Subject that spawned `subject` by its agent's recorded parent: Main
+/// when none is recorded (or the record names the agent itself); none for
+/// Main itself.
+pub(super) fn parent_of(activity: ActivityView<'_>, subject: &Subject) -> Option<Subject> {
+    if *subject == Subject::Main {
+        return None;
+    }
+    let parent = activity
+        .children()
+        .into_iter()
+        .find(|agent| agent.subject() == *subject)
+        .and_then(|agent| agent.info().parent.clone())
+        .map(|parent| activity.canonical_subject(&parent))
+        .filter(|parent| parent != subject);
+    Some(parent.unwrap_or(Subject::Main))
 }
 
 pub(crate) fn agent_name(info: &AgentInfo) -> String {
@@ -490,6 +507,7 @@ impl CockpitView {
         let subject = open.activity().canonical_subject(&subject);
         let generation = open.activity().subject(&subject)?.revision();
         self.panes[index].select_subject(subject, generation, cx);
+        self.panes[index].details.previous_pages.set(0);
         self.retry_subject_history(index, cx);
         self.cockpit
             .set_visible_subject(thread, self.panes[index].selected.clone());
@@ -508,13 +526,8 @@ impl CockpitView {
         let mut lineage = vec![Subject::Main];
         let mut at = subject.clone();
         let mut reversed = Vec::new();
-        while let Some(parent) = activity
-            .children()
-            .into_iter()
-            .find(|agent| agent.subject() == at)
-            .and_then(|agent| agent.info().parent.clone())
-            .map(|parent| activity.canonical_subject(&parent))
-            .filter(|parent| *parent != Subject::Main && *parent != at)
+        while let Some(parent) =
+            parent_of(activity, &at).filter(|parent| *parent != Subject::Main)
         {
             if reversed.contains(&parent) {
                 break;
