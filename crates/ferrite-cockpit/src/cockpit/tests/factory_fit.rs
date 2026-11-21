@@ -306,7 +306,7 @@ fn an_answer_sent_lets_the_keyboard_go(cx: &mut TestAppContext) {
     let answer_holds = |view: &Entity<CockpitView>, cx: &mut gpui::VisualTestContext| {
         cx.update(|window, cx| {
             let view = view.read(cx);
-            view.answer_box("t-1")
+            view.answer_box("t-1", cx)
                 .is_some_and(|answer| answer.read(cx).focus_handle(cx).is_focused(window))
         })
     };

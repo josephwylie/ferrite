@@ -38,7 +38,7 @@ impl CockpitView {
             let key = format!("factory-tab-{}", word.to_lowercase());
             // The Archive is the board's own view, under none of the tabs.
             let selected =
-                view.surface == surface && !(surface == Surface::Board && view.archive.shown);
+                view.surface == surface && !(surface == Surface::Board && view.archive_shown);
             tabs = tabs.child(
                 div()
                     .id(SharedString::from(key.clone()))
@@ -65,7 +65,7 @@ impl CockpitView {
                         if surface == Surface::Board
                             && view
                                 .factory()
-                                .is_some_and(|view| view.archive.shown)
+                                .is_some_and(|view| view.archive_shown)
                         {
                             view.close_archive(cx);
                         }

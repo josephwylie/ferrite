@@ -1863,7 +1863,7 @@ impl CockpitView {
         let workspace =
             ferrite_core::workspace::effective_cwd(open.session_project_root(), open.workspace())
                 .map(std::path::Path::to_path_buf);
-        let solo = self.on_plane(thread);
+        let solo = self.on_plane(thread, cx);
         // While the turn runs, its header under its prompt and its live
         // row at the tail (`pane::working_tail`), over a Decision that
         // waits.
@@ -1986,8 +1986,8 @@ impl CockpitView {
     /// Whether `thread`'s Pane is the window's plane, on its black ground,
     /// rather than drawn by the Factory, which draws a Worker or a
     /// Coordinator on its own ground.
-    fn on_plane(&self, thread: ThreadId) -> bool {
-        self.factory_worker_drawn() != Some(thread)
+    fn on_plane(&self, thread: ThreadId, cx: &gpui::App) -> bool {
+        self.factory_worker_drawn(cx) != Some(thread)
     }
 
     fn sync_visible_transcripts(&mut self, cx: &mut Context<Self>) {
@@ -1995,7 +1995,7 @@ impl CockpitView {
         // The Factory draws a Worker or its Coordinator the roster does not
         // show (its Task's Worker tab, the Coordinator surface).
         shown.extend(
-            self.factory_worker_drawn()
+            self.factory_worker_drawn(cx)
                 .and_then(|thread| self.pane_for(thread))
                 .filter(|index| !shown.contains(index)),
         );
@@ -8350,7 +8350,7 @@ impl CockpitView {
             .collect();
         // The open Task's Worker, drawn in its panel, streams whole too.
         self.leave_destination_if_moved();
-        let drawn: Vec<ThreadId> = match self.factory_worker_drawn() {
+        let drawn: Vec<ThreadId> = match self.factory_worker_drawn(cx) {
             Some(worker) => vec![worker],
             None => drawn,
         };
@@ -9098,7 +9098,7 @@ impl CockpitView {
                 && window.is_window_active()
                 && pane.composer.read(cx).focus_handle(cx).is_focused(window),
             drop_target: self.drop_target(index, cx),
-            plane: self.on_plane(thread),
+            plane: self.on_plane(thread, cx),
             decision_joined: false,
         };
         let attachments = Composer::attachments(&pane.composer, &pane.preview, cx);

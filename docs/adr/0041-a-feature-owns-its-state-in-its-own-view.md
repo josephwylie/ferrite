@@ -371,6 +371,47 @@ that happened to touch it, and nothing in the code said whose a field was.
   which Settings reads too, and the focus pump that hands it the keyboard
   stay the root's. It keeps nothing by Thread or Pane, so a gone Thread or
   a dropped Pane leaves it nothing to free.
+- **The Archive is the twenty-second, and the Factory's first slice.**
+  `ArchiveView` (`cockpit/archive.rs`) owns a Factory's Archive search
+  field and the earlier Worker being read, with whether this window
+  reopened it to park it again. The Factory (`FactoryView`) holds it,
+  made as the Factory opens on a Project, so it goes when the Factory
+  leaves the board's place, as before. Its render is the Archive's list
+  beside the Task panel, reading the archived Tasks that match its search
+  and the open Task through `archive_inputs`. It emits `ArchiveEvent`: a
+  row opens its Task, Board gives the board back. Whether the Archive
+  shows stays the Factory's (`archive_shown`), as whether the PRs show is
+  the root's `destination`: opening a Task, the outline and the board
+  head's button decide it. Reopening and parking an earlier Worker are
+  Server calls, so `read_worker` stays the root's and hands the view the
+  Worker it opened; the Task panel that draws its transcript and the
+  Workers a Task had, Clear completed and the store's trouble stay the
+  root's drawing. A gone Thread's Worker being read goes with it
+  (`forget_gone_threads`). The rest of the Factory moves leaves first, so
+  the shell's own move is small: Direction (the per-Task answer boxes,
+  whether the open one holds the keyboard, and the Rework and Direct this
+  task sheets as last closed), then Starts, the Workflows editor, the
+  Coordinator surface, and last the shell, `FactoryView` itself, with
+  the Task panel and the board.
+- **Direction is the twenty-third, the Factory's second slice.**
+  `DirectionView` (`cockpit/direction.rs`) owns what a Factory's Tasks
+  are being told: each Task's answer box, made once, whether the open
+  one holds the keyboard, and each Task's Rework and Direct this task
+  sheets as last closed (`KeptDirection`), which a sheet takes as it
+  opens and gives back as it goes. The Factory holds it, as it holds the
+  Archive's. Its render is the open Task's say in the Overview (its own
+  direction, the question and its answer box, a permission it waits on,
+  Ready to approve with its evidence, Direct this task), reading the Task
+  as the board says it now through `direction_inputs`; the root adds it
+  only when the Task has something to say (`says`), so an empty say adds
+  no gap. It emits `DirectionEvent`: a press on the answer box, which the
+  focus pump then hands the keyboard, Send answer, Approve, a sheet to
+  open, and Answer in the Worker tab. Sending is a Server call, so the
+  root sends and then clears the box or spends what the sheet kept; the
+  sheets themselves are `DirectView`s the sheet host shows. It keeps
+  nothing by Thread, so a gone Thread leaves it nothing to free. Left of
+  the Factory: Starts, the Workflows editor, the Coordinator surface and
+  the shell.
 
 ## What does not get a view
 

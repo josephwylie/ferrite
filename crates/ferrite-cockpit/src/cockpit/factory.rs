@@ -142,11 +142,13 @@ pub(crate) struct FactoryView {
     /// The open Factory picker's rows.
     pub(crate) picks: Vec<(ferrite_ui::menu::Item, super::workflows::Pick)>,
     /// Answers, rework and redirects being written, and their sheets.
-    pub(crate) direct: super::direction::Direct,
+    pub(crate) direction: Entity<super::direction::DirectionView>,
     /// The Coordinator surface's field before the Coordinator runs (#224).
     pub(crate) opening: Option<Entity<Composer>>,
-    /// The Archive, when it shows in the board's place (#226).
-    pub(crate) archive: super::archive::Archive,
+    /// The Archive (#226): its search and the earlier Worker being read.
+    pub(crate) archive: Entity<super::archive::ArchiveView>,
+    /// Whether the Archive shows in the board's place.
+    pub(crate) archive_shown: bool,
 }
 
 /// What identifies a Task's toast among the window's notifications.
@@ -179,6 +181,8 @@ impl CockpitView {
             }) if view.project == project => *at = focus_at_open,
             _ => {
                 let workflows = super::workflows::Workflows::new(cx);
+                let archive = self.new_archive(cx);
+                let direction = self.new_direction(cx);
                 let view = FactoryView {
                     project,
                     open: None,
@@ -190,9 +194,10 @@ impl CockpitView {
                     surface: super::workflows::Surface::Board,
                     workflows,
                     picks: Vec::new(),
-                    direct: Default::default(),
+                    direction,
                     opening: None,
-                    archive: Default::default(),
+                    archive,
+                    archive_shown: false,
                 };
                 self.destination = Some(Destination {
                     shows: Shows::Factory(view),
@@ -221,18 +226,19 @@ impl CockpitView {
         self.read_worker(None, cx);
         let archive_shown = self
             .factory()
-            .is_some_and(|view| view.archive.shown);
+            .is_some_and(|view| view.archive_shown);
         if archived && !archive_shown {
             self.open_archive(cx);
         }
         if let Some(view) = self.factory_mut() {
             view.surface = super::workflows::Surface::Board;
-            view.archive.shown = archived;
+            view.archive_shown = archived;
             view.open = Some(task.to_string());
             view.tab = TaskTab::Overview;
             view.note = None;
-            view.direct.answering = false;
             view.revealed.set(None);
+            view.direction
+                .update(cx, |direction, _| direction.answering = false);
         }
         self.ensure_answer(task, cx);
         cx.notify();
@@ -281,7 +287,7 @@ impl CockpitView {
         self.cockpit
             .factory()
             .task(view.open.as_deref()?)
-            .filter(|task| task.archived() == view.archive.shown)
+            .filter(|task| task.archived() == view.archive_shown)
     }
 
     /// The open Task's Worker's Pane in this window.
@@ -290,7 +296,7 @@ impl CockpitView {
     }
 
     /// The Worker drawn in the open panel's Worker tab, which streams whole.
-    pub(super) fn factory_worker_drawn(&self) -> Option<ThreadId> {
+    pub(super) fn factory_worker_drawn(&self, cx: &gpui::App) -> Option<ThreadId> {
         let view = self.factory()?;
         if let Some(coordinator) = self.coordinator_drawn() {
             return Some(coordinator);
@@ -299,7 +305,7 @@ impl CockpitView {
         if view.tab != TaskTab::Worker {
             return None;
         }
-        if let Some(reading) = self.worker_reading(task) {
+        if let Some(reading) = self.worker_reading(task, cx) {
             return Some(reading);
         }
         task.worker.filter(|_| self.pane_for_worker(task).is_some())
@@ -403,7 +409,7 @@ impl CockpitView {
         let board_shown = self.factory().is_some_and(|view| {
             view.project == project
                 && view.surface == super::workflows::Surface::Board
-                && !view.archive.shown
+                && !view.archive_shown
         });
         let toast = Notification::new()
             .id1::<TaskToast>(SharedString::from(task.clone()))
@@ -661,12 +667,12 @@ impl CockpitView {
             }))
             .when(
                 view.surface == super::workflows::Surface::Board
-                    && !view.archive.shown
+                    && !view.archive_shown
                     && tasks.iter().any(|task| task.status == Status::Completed),
                 |head| head.child(self.clear_button(cx)),
             )
             .when(
-                view.surface == super::workflows::Surface::Board && !view.archive.shown,
+                view.surface == super::workflows::Surface::Board && !view.archive_shown,
                 |head| head.child(self.archive_button(archived, cx)),
             )
             .child(
@@ -687,7 +693,7 @@ impl CockpitView {
             self.workflows_surface(window, cx)
         } else if view.surface == super::workflows::Surface::Coordinator {
             self.coordinator_surface(window, cx)
-        } else if view.archive.shown {
+        } else if view.archive_shown {
             self.archive_surface(window, cx)
         } else if tasks.is_empty() {
             div()
@@ -1120,7 +1126,7 @@ impl CockpitView {
                             .map(|reason| line("Why", reason).debug_selector(|| "task-why".into())),
                     )
                     .child(line("Status", task.status.word().to_string()))
-                    .children(self.task_say(task, window, cx))
+                    .children(self.direction().filter(|_| super::direction::says(task)))
                     .children(self.task_delivery(task, cx))
                     .into_any_element()
             }
