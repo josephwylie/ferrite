@@ -215,9 +215,11 @@ moves a row. Three readings broke it, and now read one fact,
 - **Work behind Main outranks an unseen finish.** `RowStatus::of` ranked
   `done` above background work; working is working, whatever finished
   before it.
-- **A window that starts watching a Thread is told its background tasks**,
-  as it is told a running turn: the watch's `Connect` retired the replayed
-  ones, so a window opened mid-shell read the Thread as at rest.
+- **A window that starts watching a Thread is told what runs now**
+  (`ActivityView::now`): the running turn, its background tasks and each
+  live Subagent's status. A replay reads nothing as running and the
+  watch's `Connect` retired what it read, so a window opened mid-shell or
+  mid-Subagent read the Thread as at rest.
 
 The list kept creation order, so a Thread back from Working landed at its
 old place, usually the bottom, and the shelf sorted by turn start, which a
