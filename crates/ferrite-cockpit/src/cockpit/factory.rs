@@ -142,7 +142,7 @@ pub(crate) struct FactoryView {
     /// The open Factory picker's rows.
     pub(crate) picks: Vec<(ferrite_ui::menu::Item, super::workflows::Pick)>,
     /// Answers, rework and redirects being written, and their sheets.
-    pub(crate) direct: super::direction::Direct,
+    pub(crate) direction: Entity<super::direction::DirectionView>,
     /// The Coordinator surface's field before the Coordinator runs (#224).
     pub(crate) opening: Option<Entity<Composer>>,
     /// The Archive (#226): its search and the earlier Worker being read.
@@ -182,6 +182,7 @@ impl CockpitView {
             _ => {
                 let workflows = super::workflows::Workflows::new(cx);
                 let archive = self.new_archive(cx);
+                let direction = self.new_direction(cx);
                 let view = FactoryView {
                     project,
                     open: None,
@@ -193,7 +194,7 @@ impl CockpitView {
                     surface: super::workflows::Surface::Board,
                     workflows,
                     picks: Vec::new(),
-                    direct: Default::default(),
+                    direction,
                     opening: None,
                     archive,
                     archive_shown: false,
@@ -235,8 +236,9 @@ impl CockpitView {
             view.open = Some(task.to_string());
             view.tab = TaskTab::Overview;
             view.note = None;
-            view.direct.answering = false;
             view.revealed.set(None);
+            view.direction
+                .update(cx, |direction, _| direction.answering = false);
         }
         self.ensure_answer(task, cx);
         cx.notify();
@@ -1124,7 +1126,7 @@ impl CockpitView {
                             .map(|reason| line("Why", reason).debug_selector(|| "task-why".into())),
                     )
                     .child(line("Status", task.status.word().to_string()))
-                    .children(self.task_say(task, window, cx))
+                    .children(self.direction().filter(|_| super::direction::says(task)))
                     .children(self.task_delivery(task, cx))
                     .into_any_element()
             }

@@ -392,6 +392,25 @@ that happened to touch it, and nothing in the code said whose a field was.
   task sheets as last closed), then Starts, the Workflows editor, the
   Coordinator surface, and last the shell, `FactoryView` itself, with
   the Task panel and the board.
+- **Direction is the twenty-third, the Factory's second slice.**
+  `DirectionView` (`cockpit/direction.rs`) owns what a Factory's Tasks
+  are being told: each Task's answer box, made once, whether the open
+  one holds the keyboard, and each Task's Rework and Direct this task
+  sheets as last closed (`KeptDirection`), which a sheet takes as it
+  opens and gives back as it goes. The Factory holds it, as it holds the
+  Archive's. Its render is the open Task's say in the Overview (its own
+  direction, the question and its answer box, a permission it waits on,
+  Ready to approve with its evidence, Direct this task), reading the Task
+  as the board says it now through `direction_inputs`; the root adds it
+  only when the Task has something to say (`says`), so an empty say adds
+  no gap. It emits `DirectionEvent`: a press on the answer box, which the
+  focus pump then hands the keyboard, Send answer, Approve, a sheet to
+  open, and Answer in the Worker tab. Sending is a Server call, so the
+  root sends and then clears the box or spends what the sheet kept; the
+  sheets themselves are `DirectView`s the sheet host shows. It keeps
+  nothing by Thread, so a gone Thread leaves it nothing to free. Left of
+  the Factory: Starts, the Workflows editor, the Coordinator surface and
+  the shell.
 
 ## What does not get a view
 

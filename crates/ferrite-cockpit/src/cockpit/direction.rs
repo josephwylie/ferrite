@@ -7,8 +7,18 @@
 //! What the operator types is kept per Task for as long as the Factory
 //! view is open, so it survives closing a sheet, the panel, a tab switch
 //! and a new board; it is cleared only once the Server took it.
+//!
+//! That state lives in a view of its own (ADR 0041), `DirectionView`: each
+//! Task's answer box, whether the open one holds the keyboard, and each
+//! Task's sheets as last closed. The Factory holds it. Its render is the
+//! open Task's say in its Overview, reading the Task through
+//! `direction_inputs`; what a press asks it says as a `DirectionEvent`.
+//! The sends are Server calls, so they stay the root's, as does opening a
+//! sheet, which the sheet host shows.
 
 use std::collections::HashMap;
+
+use gpui::WeakEntity;
 
 use super::direct_view::{Choice, KeptDirection};
 use super::*;
@@ -25,15 +35,355 @@ pub(crate) enum DirectSheet {
     Redirect,
 }
 
-/// The Factory view's say state.
-#[derive(Default)]
-pub(crate) struct Direct {
+/// A Factory's say state: what is being written to its Tasks.
+pub(crate) struct DirectionView {
+    cockpit: WeakEntity<CockpitView>,
     /// Each Task's answer box, made once.
-    pub(crate) answers: HashMap<TaskId, Entity<Composer>>,
+    answers: HashMap<TaskId, Entity<Composer>>,
     /// The open Task's answer box holds the keyboard.
-    pub(crate) answering: bool,
+    pub(super) answering: bool,
     /// Each Task's Rework and Direct this task sheets as last closed.
-    pub(crate) kept: HashMap<TaskId, KeptDirection>,
+    pub(super) kept: HashMap<TaskId, KeptDirection>,
+}
+
+/// What the open Task's say asks of the window.
+pub(crate) enum DirectionEvent {
+    /// A press on the answer box: it holds the keyboard now.
+    Answering,
+    /// Send answer.
+    SendAnswer,
+    /// Approve.
+    Approve,
+    /// Request rework, Send back with feedback, or Direct this task.
+    Open(DirectSheet),
+    /// Answer in the Worker tab.
+    WorkerTab,
+}
+
+impl EventEmitter<DirectionEvent> for DirectionView {}
+
+impl DirectionView {
+    pub(super) fn new(cockpit: WeakEntity<CockpitView>) -> Self {
+        Self {
+            cockpit,
+            answers: HashMap::new(),
+            answering: false,
+            kept: HashMap::new(),
+        }
+    }
+
+    /// `task`'s answer box, made once.
+    fn ensure(&mut self, task: &str, cx: &mut Context<Self>) {
+        if self.answers.contains_key(task) {
+            return;
+        }
+        let composer = cx.new(Composer::new);
+        composer.update(cx, |composer, cx| composer.set_role(Role::Field(None), cx));
+        cx.observe(&composer, |_, _, cx| cx.notify()).detach();
+        self.answers.insert(task.to_string(), composer);
+    }
+
+    pub(super) fn answer(&self, task: &str) -> Option<&Entity<Composer>> {
+        self.answers.get(task)
+    }
+
+    /// The Task's answer box: its label over its Composer. A press on it
+    /// gives it the keyboard.
+    fn answer_input(&self, task: &str, window: &Window, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let composer = self.answers.get(task)?.clone();
+        let focused = composer.read(cx).focus_handle(cx).is_focused(window);
+        let key = "task-answer";
+        Some(
+            div()
+                .id(key)
+                .debug_selector(move || key.to_string())
+                .capture_any_mouse_down(cx.listener(|direction, _: &MouseDownEvent, _, cx| {
+                    direction.answering = true;
+                    cx.emit(DirectionEvent::Answering);
+                }))
+                .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                .child(crate::project_editor::text_field(
+                    "Your answer".into(),
+                    composer,
+                    focused,
+                    "factory-field-focused",
+                ))
+                .into_any_element(),
+        )
+    }
+
+    /// The Overview's say for `task`: what it asks, what is approved,
+    /// this Task's own direction, and the buttons that act on it.
+    fn say(&self, task: &Task, window: &Window, cx: &mut Context<Self>) -> Vec<AnyElement> {
+        use ferrite_ui::theme::*;
+        let mut out = Vec::new();
+        let run = task.workflow.as_ref();
+
+        if let Some(direction) = &task.oversight.direction {
+            let name = |id: &str| {
+                run.and_then(|run| run.definition.step(id))
+                    .map_or_else(|| id.to_string(), |step| step.name.clone())
+            };
+            let mut said = format!("Sent to {}", name(&direction.to));
+            if !direction.skip.is_empty() {
+                let skipped: Vec<String> = direction.skip.iter().map(|id| name(id)).collect();
+                said.push_str(&format!(", skipping {}", skipped.join(", ")));
+            }
+            said.push_str(match direction.then {
+                ThenReturn::Me => ", then back to you",
+                ThenReturn::Routes => ", then the workflow's routes",
+            });
+            out.push(
+                section("task-direction", "This task only")
+                    .child(div().child(SharedString::from(said)))
+                    .into_any_element(),
+            );
+        }
+
+        if task.status == Status::NeedsHuman {
+            if let Some(question) = &task.oversight.question {
+                let send = crate::project_editor::primary_button(
+                    "task-answer-send",
+                    "Send answer",
+                    false,
+                    cx,
+                )
+                .debug_selector(|| "task-answer-send".into())
+                .on_click(cx.listener(|_, _: &ClickEvent, _, cx| {
+                    cx.stop_propagation();
+                    cx.emit(DirectionEvent::SendAnswer)
+                }));
+                out.push(
+                    section("task-question", "Needs you")
+                        .child(
+                            div()
+                                .flex()
+                                .items_center()
+                                .gap(px(SPACE_1))
+                                .text_color(rgb(ATTENTION))
+                                .font_weight(W_LABEL)
+                                .child(SharedString::from(format!("{} asks", question.asker))),
+                        )
+                        .child(
+                            div()
+                                .debug_selector(|| "task-question-text".into())
+                                .child(SharedString::from(question.text.clone())),
+                        )
+                        .children(self.answer_input(&task.id, window, cx))
+                        .child(meta(format!(
+                            "{} resumes with the question and your answer.",
+                            question.asker
+                        )))
+                        .child(div().flex().child(send))
+                        .into_any_element(),
+                );
+            } else if let Some(permission) = &task.oversight.permission {
+                out.push(
+                    section("task-permission", "Needs your permission")
+                        .child(div().child(SharedString::from(
+                            task.reason.clone().unwrap_or_else(|| permission.clone()),
+                        )))
+                        .child(meta(
+                            "The agent's own request. Answer it in the Worker tab; it never \
+                             goes to the Inbox.",
+                        ))
+                        .child(
+                            div().flex().child(
+                                ferrite_ui::components::secondary_button(
+                                    "task-permission-open",
+                                    None,
+                                    "Answer in the Worker tab",
+                                    cx,
+                                )
+                                .debug_selector(|| "task-permission-open".into())
+                                .on_click(cx.listener(
+                                    |_, _: &ClickEvent, _, cx| {
+                                        cx.emit(DirectionEvent::WorkerTab)
+                                    },
+                                )),
+                            ),
+                        )
+                        .into_any_element(),
+                );
+            }
+        }
+
+        if task.status == Status::Approval {
+            let mut ready = section("task-approval", "Ready to approve");
+            if let Some(result) = &task.result {
+                ready = ready.child(
+                    div()
+                        .debug_selector(|| "task-approval-result".into())
+                        .child(SharedString::from(result.clone())),
+                );
+            }
+            if let Some(reason) = &task.reason {
+                ready = ready.child(
+                    div()
+                        .text_color(rgb(ATTENTION))
+                        .child(SharedString::from(reason.clone())),
+                );
+            }
+            if let Some(run) = run {
+                ready = ready.child(meta(format!(
+                    "You approve this result of {} (version {}).",
+                    run.definition.name, run.version
+                )));
+                let after = match &run.definition.approval.after {
+                    Destination::Step(_) => format!(
+                        "After approval: {} runs next.",
+                        read(task, &run.definition.approval.after)
+                    ),
+                    _ => "After approval: the task completes.".to_string(),
+                };
+                ready = ready.child(meta(after).debug_selector(|| "task-approval-after".into()));
+                if run.definition.approval.by == Approver::Agent && task.oversight.to_me {
+                    ready = ready.child(meta(
+                        "Agent approval is set for this workflow; this task was returned to you.",
+                    ));
+                }
+            }
+            if let Some(approving) = super::delivery::approving_line(task) {
+                ready =
+                    ready.child(meta(approving).debug_selector(|| "task-approval-revision".into()));
+            }
+            if !task.delivery.evidence.is_empty() {
+                ready = ready
+                    .child(meta("Evidence"))
+                    .child(super::delivery::evidence_list(task));
+            } else if !task.results.is_empty() {
+                let mut evidence = div()
+                    .debug_selector(|| "task-evidence".into())
+                    .flex()
+                    .flex_col()
+                    .gap(px(SPACE_1));
+                for (at, result) in task.results.iter().enumerate() {
+                    let (word, text) = match &result.outcome {
+                        core_factory::Outcome::Finished { summary } => ("finished", summary),
+                        core_factory::Outcome::Unable { tried } => ("could not finish", tried),
+                        core_factory::Outcome::Approved { summary } => ("approved", summary),
+                        core_factory::Outcome::Rejected { reasons } => ("did not approve", reasons),
+                        core_factory::Outcome::Merge { summary, .. } => ("merge result", summary),
+                    };
+                    evidence = evidence.child(
+                        div()
+                            .debug_selector(move || format!("task-evidence-{at}"))
+                            .flex()
+                            .gap(px(SPACE_2))
+                            .child(
+                                div()
+                                    .flex_shrink_0()
+                                    .text_size(px(FS_META))
+                                    .text_color(rgb(INK_SUBTLE))
+                                    .child(SharedString::from(format!(
+                                        "Agent \u{b7} {} {word}",
+                                        result.name
+                                    ))),
+                            )
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .child(SharedString::from(text.clone())),
+                            ),
+                    );
+                }
+                ready = ready.child(meta("Evidence")).child(evidence);
+            }
+            let approve =
+                crate::project_editor::primary_button("task-approve", "Approve", false, cx)
+                    .debug_selector(|| "task-approve".into())
+                    .on_click(cx.listener(|_, _: &ClickEvent, _, cx| {
+                        cx.stop_propagation();
+                        cx.emit(DirectionEvent::Approve)
+                    }));
+            let rework = ferrite_ui::components::secondary_button(
+                "task-rework-open",
+                None,
+                "Request rework",
+                cx,
+            )
+            .debug_selector(|| "task-rework-open".into())
+            .on_click(cx.listener(|_, _: &ClickEvent, _, cx| {
+                cx.emit(DirectionEvent::Open(DirectSheet::Rework))
+            }));
+            out.push(
+                ready
+                    .child(div().flex().gap(px(SPACE_2)).child(approve).child(rework))
+                    .into_any_element(),
+            );
+        }
+
+        if run.is_some() {
+            let send_back = matches!(task.status, Status::Stopped)
+                || (task.status == Status::NeedsHuman && task.oversight.permission.is_none());
+            let mut direct = section("task-direct", "Direct this task").child(meta(
+                "Send it to any agent, skip agents, or have it come back to you. Only this task \
+                 changes.",
+            ));
+            let mut buttons = div().flex().gap(px(SPACE_2));
+            if task.status != Status::Completed {
+                buttons = buttons.child(
+                    ferrite_ui::components::secondary_button(
+                        "task-redirect-open",
+                        None,
+                        "Direct this task",
+                        cx,
+                    )
+                    .debug_selector(|| "task-redirect-open".into())
+                    .on_click(cx.listener(|_, _: &ClickEvent, _, cx| {
+                        cx.emit(DirectionEvent::Open(DirectSheet::Redirect))
+                    })),
+                );
+            }
+            if send_back {
+                buttons = buttons.child(
+                    ferrite_ui::components::ghost_button(
+                        "task-send-back",
+                        "Send back with feedback",
+                        cx,
+                    )
+                    .debug_selector(|| "task-send-back".into())
+                    .on_click(cx.listener(|_, _: &ClickEvent, _, cx| {
+                        cx.emit(DirectionEvent::Open(DirectSheet::Rework))
+                    })),
+                );
+            }
+            if task.status != Status::Completed {
+                direct = direct.child(buttons);
+                out.push(direct.into_any_element());
+            }
+        }
+        out
+    }
+}
+
+impl Render for DirectionView {
+    /// The open Task's say, its sections spaced as the Overview's lines.
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        use ferrite_ui::theme::*;
+        let task = self
+            .cockpit
+            .upgrade()
+            .and_then(|cockpit| cockpit.read(cx).direction_inputs());
+        let say = task.map(|task| self.say(&task, window, cx));
+        div()
+            .flex()
+            .flex_col()
+            .gap(px(SPACE_3))
+            .children(say.into_iter().flatten())
+    }
+}
+
+/// Whether the Overview has anything to say for `task`: its own
+/// direction, a question or a permission it waits on, a result to approve,
+/// or a Workflow's Task still to direct. `DirectionView::say` draws them.
+pub(super) fn says(task: &Task) -> bool {
+    task.oversight.direction.is_some()
+        || (task.status == Status::NeedsHuman
+            && (task.oversight.question.is_some() || task.oversight.permission.is_some()))
+        || task.status == Status::Approval
+        || (task.workflow.is_some() && task.status != Status::Completed)
 }
 
 /// What a press of one of the sheets' choosers sets.
@@ -157,29 +507,55 @@ pub(super) fn read(task: &Task, to: &Destination) -> String {
 }
 
 impl CockpitView {
-    /// The Task's answer box, made once.
-    pub(crate) fn ensure_answer(&mut self, task: &str, cx: &mut Context<Self>) {
-        if self
-            .factory()
-            .is_none_or(|view| view.direct.answers.contains_key(task))
-        {
-            return;
-        }
-        let composer = cx.new(Composer::new);
-        composer.update(cx, |composer, cx| composer.set_role(Role::Field(None), cx));
-        cx.observe(&composer, |_, _, cx| cx.notify()).detach();
-        if let Some(view) = self.factory_mut() {
-            view.direct.answers.insert(task.to_string(), composer);
+    /// A Factory's say state, heard from its making.
+    pub(super) fn new_direction(&mut self, cx: &mut Context<Self>) -> Entity<DirectionView> {
+        let me = cx.entity().downgrade();
+        let direction = cx.new(|_| DirectionView::new(me));
+        cx.subscribe(&direction, Self::on_direction_event).detach();
+        direction
+    }
+
+    /// What the say draws from the window: the open Task, as the board
+    /// says it now.
+    fn direction_inputs(&self) -> Option<Task> {
+        self.open_task_now().cloned()
+    }
+
+    /// The say's presses. One on the answer box has the focus pump hand it
+    /// the keyboard.
+    fn on_direction_event(
+        &mut self,
+        _: Entity<DirectionView>,
+        event: &DirectionEvent,
+        cx: &mut Context<Self>,
+    ) {
+        match event {
+            DirectionEvent::Answering => cx.notify(),
+            DirectionEvent::SendAnswer => self.send_answer(cx),
+            DirectionEvent::Approve => self.approve_task(cx),
+            DirectionEvent::Open(sheet) => self.open_direct_sheet(*sheet, cx),
+            DirectionEvent::WorkerTab => self.task_tab(super::factory::TaskTab::Worker, cx),
         }
     }
 
-    pub(crate) fn answer_box(&self, task: &str) -> Option<&Entity<Composer>> {
-        self.factory()?.direct.answers.get(task)
+    pub(super) fn direction(&self) -> Option<Entity<DirectionView>> {
+        self.factory().map(|view| view.direction.clone())
+    }
+
+    /// The Task's answer box, made once.
+    pub(crate) fn ensure_answer(&mut self, task: &str, cx: &mut Context<Self>) {
+        if let Some(direction) = self.direction() {
+            direction.update(cx, |direction, cx| direction.ensure(task, cx));
+        }
+    }
+
+    pub(crate) fn answer_box(&self, task: &str, cx: &gpui::App) -> Option<Entity<Composer>> {
+        self.factory()?.direction.read(cx).answer(task).cloned()
     }
 
     /// What a Task's answer box holds now.
     pub(crate) fn answer_text(&self, task: &str, cx: &gpui::App) -> String {
-        self.answer_box(task)
+        self.answer_box(task, cx)
             .map(|answer| answer.read(cx).text().to_string())
             .unwrap_or_default()
     }
@@ -188,19 +564,20 @@ impl CockpitView {
     /// Board's Overview. A sheet's field is the sheet host's.
     pub(super) fn direct_focus(&self, cx: &gpui::App) -> Option<FocusHandle> {
         let view = self.factory()?;
-        if !view.direct.answering
+        let direction = view.direction.read(cx);
+        if !direction.answering
             || view.surface != super::workflows::Surface::Board
             || view.tab != super::factory::TaskTab::Overview
         {
             return None;
         }
-        let answer = view.direct.answers.get(view.open.as_deref()?)?;
+        let answer = direction.answer(view.open.as_deref()?)?;
         Some(answer.read(cx).focus_handle(cx))
     }
 
     pub(crate) fn focus_answer(&mut self, cx: &mut Context<Self>) {
-        if let Some(view) = self.factory_mut() {
-            view.direct.answering = true;
+        if let Some(direction) = self.direction() {
+            direction.update(cx, |direction, _| direction.answering = true);
         }
         cx.notify();
     }
@@ -240,14 +617,14 @@ impl CockpitView {
             question: Some(question.id),
         };
         if self.direct_command(action, cx) {
-            if let Some(answer) = self.answer_box(&task.id).cloned() {
+            if let Some(answer) = self.answer_box(&task.id, cx) {
                 answer.update(cx, |answer, cx| {
                     answer.take(cx);
                 });
             }
             // Answered, the box lets the keyboard go.
-            if let Some(view) = self.factory_mut() {
-                view.direct.answering = false;
+            if let Some(direction) = self.direction() {
+                direction.update(cx, |direction, _| direction.answering = false);
             }
         }
     }
@@ -272,11 +649,12 @@ impl CockpitView {
     /// A send taken: the sheet closes and what it held is spent.
     fn direct_sent(&mut self, task: &str, sheet: DirectSheet, cx: &mut Context<Self>) {
         self.hide_sheet(cx);
-        if let Some(kept) = self
-            .factory_mut()
-            .and_then(|view| view.direct.kept.get_mut(task))
-        {
-            kept.spend(sheet);
+        if let Some(direction) = self.direction() {
+            direction.update(cx, |direction, _| {
+                if let Some(kept) = direction.kept.get_mut(task) {
+                    kept.spend(sheet);
+                }
+            });
         }
     }
 
@@ -331,286 +709,5 @@ impl CockpitView {
         if let Some(sheet) = self.direct_sheet(cx) {
             sheet.update(cx, |sheet, cx| sheet.pick(pick, cx));
         }
-    }
-
-    // ----------------------------------------------------------- drawing
-
-    /// The Task's answer box: its label over its Composer.
-    fn answer_input(
-        &self,
-        task: &str,
-        label: &'static str,
-        window: &Window,
-        cx: &mut Context<Self>,
-    ) -> Option<AnyElement> {
-        let composer = self.answer_box(task)?.clone();
-        let focused = composer.read(cx).focus_handle(cx).is_focused(window);
-        let key = "task-answer";
-        Some(
-            div()
-                .id(key)
-                .debug_selector(move || key.to_string())
-                .capture_any_mouse_down(
-                    cx.listener(move |view, _: &MouseDownEvent, _, cx| view.focus_answer(cx)),
-                )
-                .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                .child(crate::project_editor::text_field(
-                    label.into(),
-                    composer,
-                    focused,
-                    "factory-field-focused",
-                ))
-                .into_any_element(),
-        )
-    }
-
-    /// The Overview's say for `task`: what it asks, what is approved,
-    /// this Task's own direction, and the buttons that act on it.
-    pub(super) fn task_say(
-        &self,
-        task: &Task,
-        window: &Window,
-        cx: &mut Context<Self>,
-    ) -> Vec<AnyElement> {
-        use ferrite_ui::theme::*;
-        let mut out = Vec::new();
-        let run = task.workflow.as_ref();
-
-        if let Some(direction) = &task.oversight.direction {
-            let name = |id: &str| {
-                run.and_then(|run| run.definition.step(id))
-                    .map_or_else(|| id.to_string(), |step| step.name.clone())
-            };
-            let mut said = format!("Sent to {}", name(&direction.to));
-            if !direction.skip.is_empty() {
-                let skipped: Vec<String> = direction.skip.iter().map(|id| name(id)).collect();
-                said.push_str(&format!(", skipping {}", skipped.join(", ")));
-            }
-            said.push_str(match direction.then {
-                ThenReturn::Me => ", then back to you",
-                ThenReturn::Routes => ", then the workflow's routes",
-            });
-            out.push(
-                section("task-direction", "This task only")
-                    .child(div().child(SharedString::from(said)))
-                    .into_any_element(),
-            );
-        }
-
-        if task.status == Status::NeedsHuman {
-            if let Some(question) = &task.oversight.question {
-                let send = crate::project_editor::primary_button(
-                    "task-answer-send",
-                    "Send answer",
-                    false,
-                    cx,
-                )
-                .debug_selector(|| "task-answer-send".into())
-                .on_click(cx.listener(|view, _: &ClickEvent, _, cx| {
-                    cx.stop_propagation();
-                    view.send_answer(cx)
-                }));
-                out.push(
-                    section("task-question", "Needs you")
-                        .child(
-                            div()
-                                .flex()
-                                .items_center()
-                                .gap(px(SPACE_1))
-                                .text_color(rgb(ATTENTION))
-                                .font_weight(W_LABEL)
-                                .child(SharedString::from(format!("{} asks", question.asker))),
-                        )
-                        .child(
-                            div()
-                                .debug_selector(|| "task-question-text".into())
-                                .child(SharedString::from(question.text.clone())),
-                        )
-                        .children(self.answer_input(&task.id, "Your answer", window, cx))
-                        .child(meta(format!(
-                            "{} resumes with the question and your answer.",
-                            question.asker
-                        )))
-                        .child(div().flex().child(send))
-                        .into_any_element(),
-                );
-            } else if let Some(permission) = &task.oversight.permission {
-                out.push(
-                    section("task-permission", "Needs your permission")
-                        .child(div().child(SharedString::from(
-                            task.reason.clone().unwrap_or_else(|| permission.clone()),
-                        )))
-                        .child(meta(
-                            "The agent's own request. Answer it in the Worker tab; it never \
-                             goes to the Inbox.",
-                        ))
-                        .child(
-                            div().flex().child(
-                                ferrite_ui::components::secondary_button(
-                                    "task-permission-open",
-                                    None,
-                                    "Answer in the Worker tab",
-                                    cx,
-                                )
-                                .debug_selector(|| "task-permission-open".into())
-                                .on_click(cx.listener(
-                                    |view, _: &ClickEvent, _, cx| {
-                                        view.task_tab(super::factory::TaskTab::Worker, cx)
-                                    },
-                                )),
-                            ),
-                        )
-                        .into_any_element(),
-                );
-            }
-        }
-
-        if task.status == Status::Approval {
-            let mut ready = section("task-approval", "Ready to approve");
-            if let Some(result) = &task.result {
-                ready = ready.child(
-                    div()
-                        .debug_selector(|| "task-approval-result".into())
-                        .child(SharedString::from(result.clone())),
-                );
-            }
-            if let Some(reason) = &task.reason {
-                ready = ready.child(
-                    div()
-                        .text_color(rgb(ATTENTION))
-                        .child(SharedString::from(reason.clone())),
-                );
-            }
-            if let Some(run) = run {
-                ready = ready.child(meta(format!(
-                    "You approve this result of {} (version {}).",
-                    run.definition.name, run.version
-                )));
-                let after = match &run.definition.approval.after {
-                    Destination::Step(_) => format!(
-                        "After approval: {} runs next.",
-                        read(task, &run.definition.approval.after)
-                    ),
-                    _ => "After approval: the task completes.".to_string(),
-                };
-                ready = ready.child(meta(after).debug_selector(|| "task-approval-after".into()));
-                if run.definition.approval.by == Approver::Agent && task.oversight.to_me {
-                    ready = ready.child(meta(
-                        "Agent approval is set for this workflow; this task was returned to you.",
-                    ));
-                }
-            }
-            if let Some(approving) = super::delivery::approving_line(task) {
-                ready =
-                    ready.child(meta(approving).debug_selector(|| "task-approval-revision".into()));
-            }
-            if !task.delivery.evidence.is_empty() {
-                ready = ready
-                    .child(meta("Evidence"))
-                    .child(super::delivery::evidence_list(task));
-            } else if !task.results.is_empty() {
-                let mut evidence = div()
-                    .debug_selector(|| "task-evidence".into())
-                    .flex()
-                    .flex_col()
-                    .gap(px(SPACE_1));
-                for (at, result) in task.results.iter().enumerate() {
-                    let (word, text) = match &result.outcome {
-                        core_factory::Outcome::Finished { summary } => ("finished", summary),
-                        core_factory::Outcome::Unable { tried } => ("could not finish", tried),
-                        core_factory::Outcome::Approved { summary } => ("approved", summary),
-                        core_factory::Outcome::Rejected { reasons } => ("did not approve", reasons),
-                        core_factory::Outcome::Merge { summary, .. } => ("merge result", summary),
-                    };
-                    evidence = evidence.child(
-                        div()
-                            .debug_selector(move || format!("task-evidence-{at}"))
-                            .flex()
-                            .gap(px(SPACE_2))
-                            .child(
-                                div()
-                                    .flex_shrink_0()
-                                    .text_size(px(FS_META))
-                                    .text_color(rgb(INK_SUBTLE))
-                                    .child(SharedString::from(format!(
-                                        "Agent \u{b7} {} {word}",
-                                        result.name
-                                    ))),
-                            )
-                            .child(
-                                div()
-                                    .flex_1()
-                                    .min_w_0()
-                                    .child(SharedString::from(text.clone())),
-                            ),
-                    );
-                }
-                ready = ready.child(meta("Evidence")).child(evidence);
-            }
-            let approve =
-                crate::project_editor::primary_button("task-approve", "Approve", false, cx)
-                    .debug_selector(|| "task-approve".into())
-                    .on_click(cx.listener(|view, _: &ClickEvent, _, cx| {
-                        cx.stop_propagation();
-                        view.approve_task(cx)
-                    }));
-            let rework = ferrite_ui::components::secondary_button(
-                "task-rework-open",
-                None,
-                "Request rework",
-                cx,
-            )
-            .debug_selector(|| "task-rework-open".into())
-            .on_click(cx.listener(|view, _: &ClickEvent, _, cx| {
-                view.open_direct_sheet(DirectSheet::Rework, cx)
-            }));
-            out.push(
-                ready
-                    .child(div().flex().gap(px(SPACE_2)).child(approve).child(rework))
-                    .into_any_element(),
-            );
-        }
-
-        if run.is_some() {
-            let send_back = matches!(task.status, Status::Stopped)
-                || (task.status == Status::NeedsHuman && task.oversight.permission.is_none());
-            let mut direct = section("task-direct", "Direct this task").child(meta(
-                "Send it to any agent, skip agents, or have it come back to you. Only this task \
-                 changes.",
-            ));
-            let mut buttons = div().flex().gap(px(SPACE_2));
-            if task.status != Status::Completed {
-                buttons = buttons.child(
-                    ferrite_ui::components::secondary_button(
-                        "task-redirect-open",
-                        None,
-                        "Direct this task",
-                        cx,
-                    )
-                    .debug_selector(|| "task-redirect-open".into())
-                    .on_click(cx.listener(|view, _: &ClickEvent, _, cx| {
-                        view.open_direct_sheet(DirectSheet::Redirect, cx)
-                    })),
-                );
-            }
-            if send_back {
-                buttons = buttons.child(
-                    ferrite_ui::components::ghost_button(
-                        "task-send-back",
-                        "Send back with feedback",
-                        cx,
-                    )
-                    .debug_selector(|| "task-send-back".into())
-                    .on_click(cx.listener(|view, _: &ClickEvent, _, cx| {
-                        view.open_direct_sheet(DirectSheet::Rework, cx)
-                    })),
-                );
-            }
-            if task.status != Status::Completed {
-                direct = direct.child(buttons);
-                out.push(direct.into_any_element());
-            }
-        }
-        out
     }
 }

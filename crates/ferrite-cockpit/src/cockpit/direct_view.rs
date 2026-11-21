@@ -512,26 +512,37 @@ impl CockpitView {
         let Some(task) = self.open_task_now().map(|task| task.id.clone()) else {
             return;
         };
-        let Some(view) = self.factory_mut() else {
+        let Some(view) = self.factory() else {
             return;
         };
-        // The sheet's field takes the keyboard; the answer box does not
-        // have it back once the sheet closes.
-        view.direct.answering = false;
         let project = view.project;
-        let kept = view.direct.kept.entry(task.clone()).or_default();
+        let direction = view.direction.clone();
         let cockpit = cx.weak_entity();
-        let sheet = cx.new(|cx| DirectView::new(cockpit, project, task, sheet, kept, cx));
+        let sheet = direction.update(cx, |direction, cx| {
+            // The sheet's field takes the keyboard; the answer box does not
+            // have it back once the sheet closes.
+            direction.answering = false;
+            let kept = direction.kept.entry(task.clone()).or_default();
+            cx.new(|cx| DirectView::new(cockpit, project, task, sheet, kept, cx))
+        });
         cx.subscribe(&sheet, Self::on_direct_event).detach();
         self.show_sheet(sheets::Sheet::Direct(sheet), cx);
     }
 
     /// The sheet gone, closed or replaced: what it held stays on its
     /// Factory, if that still shows.
-    pub(super) fn direct_gone(&mut self, sheet: &Entity<DirectView>, cx: &App) {
-        let sheet = sheet.read(cx);
-        if let Some(view) = self.factory_mut().filter(|view| view.project == sheet.project) {
-            sheet.keep(view.direct.kept.entry(sheet.task.clone()).or_default(), cx);
-        }
+    pub(super) fn direct_gone(&mut self, sheet: &Entity<DirectView>, cx: &mut App) {
+        let project = sheet.read(cx).project;
+        let Some(direction) = self
+            .factory()
+            .filter(|view| view.project == project)
+            .map(|view| view.direction.clone())
+        else {
+            return;
+        };
+        direction.update(cx, |direction, cx| {
+            let sheet = sheet.read(cx);
+            sheet.keep(direction.kept.entry(sheet.task.clone()).or_default(), cx);
+        });
     }
 }
