@@ -3514,8 +3514,6 @@ dependencies = [
 [[package]]
 name = "gpui-pre-platform"
 version = "0.3.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "35131851444188e573d21d3e8020a51af16bf08b177e25b1120815edbd448c80"
 dependencies = [
  "console_error_panic_hook",
  "gpui-pre",
@@ -3720,8 +3718,6 @@ dependencies = [
 [[package]]
 name = "gpui-pre-windows"
 version = "0.3.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1a4b60579aa2cb4ef7b6f22133a7b9fe12458062961343bdcf36e259047bc7ad"
 dependencies = [
  "accesskit",
  "accesskit_windows",
@@ -3744,6 +3740,7 @@ dependencies = [
  "windows-core 0.62.2",
  "windows-numerics 0.3.1",
  "windows-registry 0.6.1",
+ "zed-scap",
 ]
 
 [[package]]

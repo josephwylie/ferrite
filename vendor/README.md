@@ -398,6 +398,32 @@ browser does, so the same CSS geometry lands on the same device pixels:
 Cargo applies both through the root `[patch.crates-io]`. Remove a patch when
 an upstream release offers equivalent behaviour.
 
+### Windows headless rendering
+
+`gpui-pre-windows/` and `gpui-pre-platform/` are the crates.io
+`gpui-pre-windows` and `gpui-pre-platform` **0.3.3** sources (the same
+zed@`5b055fa` snapshot), vendored so `ferrite --headless` takes screenshots
+on Windows as it does on macOS (ADR 0038, `skills/verify-ferrite`). Manifests
+unchanged; registry cache markers and lockfiles omitted.
+
+- **An off-screen DirectX renderer** (`gpui-pre-windows`,
+  `directx_renderer.rs`, test support only). `DirectXHeadlessRenderer` draws a
+  headless window's scenes with no window: the renderer's swap chain is
+  optional, and without one the render target is a plain texture
+  (`DirectXResources::offscreen`), never presented, read back by the existing
+  `render_to_image`. It is the `PlatformHeadlessRenderer` macOS has in
+  `MetalHeadlessRenderer`.
+- **Real text when headless** (`gpui-pre-windows`, `platform.rs`). A headless
+  `WindowsPlatform` shapes and rasterizes text with DirectWrite instead of
+  `NoopTextSystem`, as macOS keeps CoreText headless, so captures draw words
+  and lay them out by real metrics. It falls back to `NoopTextSystem` only
+  when no DirectX device can be made.
+- **The renderer handed out** (`gpui-pre-platform`, `gpui_platform.rs`).
+  `current_headless_renderer` answers the DirectX renderer on Windows with
+  test support, where it answered `None`.
+
+Remove these when upstream gpui offers a headless renderer on Windows.
+
 ## Taffy
 
 `taffy/` is the crates.io `taffy` **0.13.0** source from

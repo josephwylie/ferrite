@@ -16,6 +16,8 @@ members = [
     "vendor/gpui-component",
     "vendor/gpui-pre",
     "vendor/gpui-pre-macos",
+    "vendor/gpui-pre-platform",
+    "vendor/gpui-pre-windows",
     "vendor/taffy",
 ]
 default-members = ["crates/*"]
@@ -40,6 +42,8 @@ gpui-base = { path = "vendor/gpui-base" }
 gpui-component = { path = "vendor/gpui-component" }
 gpui-pre = { path = "vendor/gpui-pre" }
 gpui-pre-macos = { path = "vendor/gpui-pre-macos" }
+gpui-pre-platform = { path = "vendor/gpui-pre-platform" }
+gpui-pre-windows = { path = "vendor/gpui-pre-windows" }
 taffy = { path = "vendor/taffy" }
 
 [profile.release]
@@ -76,6 +80,14 @@ opt-level = 2
 debug = false
 
 [profile.dev.package.gpui-pre-macos]
+opt-level = 2
+debug = false
+
+[profile.dev.package.gpui-pre-platform]
+opt-level = 2
+debug = false
+
+[profile.dev.package.gpui-pre-windows]
 opt-level = 2
 debug = false
 
