@@ -46,6 +46,9 @@ mod status;
 
 pub struct Cockpit {
     link: Link,
+    /// The Server said something since the window last asked
+    /// (`take_arrived`).
+    arrived: bool,
     /// What a parked Thread says: the rows its Server published.
     parked: parked::Parked,
     /// This computer's logs, read-only, for what an open Thread's header
@@ -295,6 +298,7 @@ impl Cockpit {
             visible_subjects: std::collections::BTreeMap::new(),
             window_active: true,
             composing: std::collections::BTreeSet::new(),
+            arrived: false,
             forge: Default::default(),
             forge_fixture: HashMap::new(),
             forge_numbered: HashMap::new(),
@@ -725,6 +729,7 @@ impl Cockpit {
     }
 
     fn arrive(&mut self, arrived: Vec<remote::Arrival>) {
+        self.arrived |= !arrived.is_empty();
         let open_before = self.shared.open.clone();
         let attached = arrived
             .iter()
@@ -2342,6 +2347,13 @@ impl Cockpit {
 
     pub fn account_limits(&self, provider: Provider) -> crate::transcript::RateLimits {
         self.shared.account_limits(provider)
+    }
+
+    /// Whether the Server said anything since the last ask: a message, a
+    /// start's answer, an attach. What a window draws from the mirrors may
+    /// have moved even when no Pane's did.
+    pub fn take_arrived(&mut self) -> bool {
+        std::mem::take(&mut self.arrived)
     }
 
     /// Whether the parked Threads' rows moved since the last ask: the

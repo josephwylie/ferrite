@@ -362,9 +362,9 @@ impl std::ops::DerefMut for CockpitPane {
 }
 
 pub struct CockpitView {
-    /// The client's model. The pump notifies it on a beat that brought
-    /// something, and the views that build from what arrived observe it
-    /// (the nav).
+    /// The client's model. On a beat that brought something the pump has
+    /// it say `Arrived`, which the views that build from it hear (the
+    /// nav). Nothing notifies it.
     pub(crate) cockpit: Entity<Cockpit>,
     browsers: browser::Browsers,
     /// The provider's control of the Browsers' pages and the live
@@ -632,6 +632,17 @@ pub enum Landing {
 }
 
 impl EventEmitter<GoToMachine> for CockpitView {}
+
+/// What the model says on a pump beat that brought something: a Session's
+/// events, a restart, a sweep that moved a fact or a clock, the Server's
+/// state, an ask, parked Threads, the Panes, a start, the models or the
+/// commands. A feature that draws from the model subscribes and looks
+/// again (`NavView::look`). Nothing notifies the model: every view that
+/// reads it while drawing would be rebuilt (vendored gpui,
+/// `tracking_reads`).
+pub(crate) struct Arrived;
+
+impl EventEmitter<Arrived> for Cockpit {}
 
 /// What a card hangs from (`card_corner`): its Pane's Composer (opening
 /// up) or head (opening down).
@@ -2249,7 +2260,7 @@ impl CockpitView {
         // A restart writes a Notice even when no Session streamed this frame —
         // and a failed respawn will never stream again, so this notify is that
         // notice's only ride to the screen.
-        if frame.is_empty()
+        let idle = frame.is_empty()
             && restarted.is_empty()
             && !swept_change
             && swept_busy.is_empty()
@@ -2260,13 +2271,16 @@ impl CockpitView {
             && !server_moved
             && !asked
             && !parked_moved
-            && !panes_changed
-        {
+            && !panes_changed;
+        // Something arrived, or the Server said something no Pane shows
+        // (another window's Snooze): what draws from the model looks again
+        // once the pump is done (the nav, `NavView::look`).
+        if !idle || self.cockpit.update(cx, |cockpit, _| cockpit.take_arrived()) {
+            self.cockpit.update(cx, |_, cx| cx.emit(Arrived));
+        }
+        if idle {
             return;
         }
-        // Something arrived: what reads it looks again once the pump is
-        // done (the nav, `NavView::look`).
-        self.cockpit.update(cx, |_, cx| cx.notify());
         let mut turn_ended = false;
         for update in &frame {
             if let Some(index) = self.pane_for(update.thread) {
@@ -2348,14 +2362,15 @@ impl CockpitView {
         // new inputs first, as the Cockpit's own notify has them do
         // (`observe_self`), so they draw in this same frame.
         self.sync_visible_transcripts(cx);
-        // A working row's clock is drawn from the time: the sweep is its
-        // ride under reduced motion. Its rows the nav finds moved itself.
+        // A working row's clock is drawn from the time, not the model: the
+        // sweep is its ride under reduced motion, so the nav redraws for it
+        // as it is. Its rows the nav finds moved itself.
         let clocks = !swept_busy.is_empty();
         for thread in frame.iter().map(|update| update.thread).chain(swept_busy) {
             self.notify_thread_pane(thread, cx);
         }
         if clocks {
-            self.notify_part(parts::Part::Nav, cx);
+            self.nav_view.update(cx, |_, cx| cx.notify());
         }
         self.notify_frame(cx);
     }
@@ -2532,7 +2547,7 @@ impl CockpitView {
                     for thread in labels.iter().chain(&roots) {
                         view.notify_thread_pane(*thread, cx);
                     }
-                    view.nav_view.update(cx, |nav, cx| nav.look_soon(cx));
+                    view.notify_part(parts::Part::Nav, cx);
                     view.notify_frame(cx);
                 }
                 if moved || std::mem::take(&mut view.branch_refresh_queued) {

@@ -182,7 +182,7 @@ fn a_streaming_thread_redraws_the_nav_only_when_its_rows_move(cx: &mut TestAppCo
 /// for it.
 #[gpui::test]
 fn the_nav_moves_a_working_thread_on_the_beat_without_the_window(cx: &mut TestAppContext) {
-    let _clock = hold_wall_clock();
+    let clock = hold_wall_clock();
     let (view, fake, _panes, cx) = window("wakes-section", 2, cx);
     let threads = view.read_with(cx, |view, cx| view.cockpit.read(cx).threads());
     let notified = std::rc::Rc::new(std::cell::Cell::new(0));
@@ -227,6 +227,8 @@ fn the_nav_moves_a_working_thread_on_the_beat_without_the_window(cx: &mut TestAp
             },
         })
         .unwrap();
+    // Arrivals are ordered by the wall clock: done comes later than started.
+    clock.advance(Duration::from_secs(5));
     beat(cx);
     let after = rows(cx);
     assert!(after.working.is_empty(), "done");
@@ -237,4 +239,5 @@ fn the_nav_moves_a_working_thread_on_the_beat_without_the_window(cx: &mut TestAp
         drawn::nav_renders() - before.1
     );
     assert!(drawn::nav_renders() > before.1, "the nav drew the move");
+    assert_eq!(notified.get(), before.0, "the window was not notified for it");
 }

@@ -288,7 +288,9 @@ fn a_working_card_counts_its_run_and_recedes(cx: &mut TestAppContext) {
     assert!(rising < 1.0, "it fades, not snaps: {rising}");
     cx.executor().advance_clock(Duration::from_millis(200));
     cx.run_until_parked();
-    view.update(cx, |_, cx| cx.notify());
+    // The frame its fade asks for: a window notify that moves nothing the
+    // nav reads no longer redraws it.
+    cx.update(|window, cx| window.simulate_next_frame(cx));
     cx.run_until_parked();
     assert_eq!(
         nav::testing::drawn_card(threads[0]).unwrap().opacity,

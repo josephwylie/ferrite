@@ -2,8 +2,8 @@
 //! reads: its list's motion and folds, its scroll, its keyboard and
 //! cursor, its search, the cards picked or swept, the undo notice, the
 //! Snooze field, and when each Thread came into its section. It reads
-//! what it draws (`NavInputs`) itself, as the Cockpit or the client's
-//! model notifies (`look`), and its render draws only that, so it redraws
+//! what it draws (`NavInputs`) itself, as the Cockpit notifies or the
+//! client's model says something `Arrived` (`look`), and its render draws only that, so it redraws
 //! only when what it draws moved. What the operator asks of the window it
 //! says as a `NavEvent`, which the Cockpit answers once the nav's own
 //! update has ended.
@@ -82,8 +82,8 @@ pub(crate) struct NavView {
     /// When each listed Thread came into its section, which the list and
     /// the Working shelf order by. Only `look` writes it.
     arrivals: nav::Arrivals,
-    /// The Cockpit's notify and the model's, each of which has the nav look
-    /// again.
+    /// The Cockpit's notify and the model's `Arrived`, each of which has
+    /// the nav look again.
     watching: Vec<gpui::Subscription>,
 }
 
@@ -236,7 +236,7 @@ impl NavView {
         };
         self.watching = vec![
             cx.observe(&cockpit, |nav, _, cx| nav.look(cx)),
-            cx.observe(&self.model, |nav, _, cx| nav.look(cx)),
+            cx.subscribe(&self.model, |nav, _, _: &Arrived, cx| nav.look(cx)),
         ];
         self.look(cx);
     }
@@ -260,9 +260,11 @@ impl NavView {
         }
     }
 
-    /// `look`, once the update under way has ended: for the Cockpit's own
-    /// code, which runs while it is borrowed.
-    pub(super) fn look_soon(&mut self, cx: &mut Context<Self>) {
+    /// `look`, once the update under way has ended: what the Cockpit's
+    /// own code asks (`notify_part(Part::Nav)`) as it changes something
+    /// the nav draws without notifying itself (a PR or a title landed,
+    /// branch labels, the column's width).
+    pub(super) fn look_again(&mut self, cx: &mut Context<Self>) {
         let nav = cx.weak_entity();
         cx.defer(move |cx| {
             nav.update(cx, |nav, cx| nav.look(cx)).ok();

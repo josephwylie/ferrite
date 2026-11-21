@@ -141,16 +141,11 @@ impl CockpitView {
         );
         self.columns.nav_brand_width =
             HISTORY_X + f32::from(brand.width) + SPACE_1 + 2.0 * ICON_BUTTON + 12.0 + 1.0;
-        if previous != self.nav_expanded_width() {
-            self.nav_width_moved(cx);
-        }
-    }
-
-    /// The nav draws at the width the Cockpit measures: tell it, as the
-    /// Cockpit may be drawing.
-    fn nav_width_moved(&self, cx: &mut Context<Self>) {
         let width = self.nav_expanded_width();
-        self.nav_view.update(cx, |nav, cx| nav.set_width(width, cx));
+        if previous != width {
+            // The Cockpit is drawing: the nav takes the width as it is.
+            self.nav_view.update(cx, |nav, cx| nav.set_width(width, cx));
+        }
     }
 
     pub(super) fn cancel_nav_resize(&mut self) {
@@ -173,7 +168,7 @@ impl CockpitView {
     ) {
         if !dragging {
             if self.columns.nav_resize.take().is_some() {
-                self.nav_width_moved(cx);
+                self.notify_part(parts::Part::Nav, cx);
                 cx.notify();
             }
             return;
@@ -189,7 +184,7 @@ impl CockpitView {
         if drag.width != width {
             drag.width = width;
             self.nav_view.read(cx).snap.set(true);
-            self.nav_width_moved(cx);
+            self.notify_part(parts::Part::Nav, cx);
             cx.notify();
         }
     }
@@ -212,7 +207,7 @@ impl CockpitView {
                     if event.click_count == 2 {
                         view.cancel_nav_resize();
                         view.change_settings(|settings| settings.nav_width_px = None, cx);
-                        view.nav_width_moved(cx);
+                        view.notify_part(parts::Part::Nav, cx);
                     } else {
                         let width = view.nav_expanded_width();
                         view.columns.nav =

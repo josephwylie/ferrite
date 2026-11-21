@@ -515,7 +515,9 @@ fn a_slim_row_fades_its_age_into_revive(cx: &mut TestAppContext) {
     assert!(rising < 1.0, "it fades, not snaps: {rising}");
     cx.executor().advance_clock(Duration::from_millis(200));
     cx.run_until_parked();
-    view.update(cx, |_, cx| cx.notify());
+    // The frame its fade asks for: a window notify that moves nothing the
+    // nav reads no longer redraws it.
+    cx.update(|window, cx| window.simulate_next_frame(cx));
     cx.run_until_parked();
     assert_eq!(
         nav::testing::drawn_slim(threads[0]),
