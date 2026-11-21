@@ -11,8 +11,8 @@
 use std::time::{Duration, Instant};
 
 use ferrite_core::protocol::WireReviewState;
-use ferrite_core::workspace::{CheckState, MergeState, PrState, PullRequest, ReviewDecision};
-use ferrite_ui::theme::{BLOCKED, GREEN, INK_SUBTLE, RED};
+use ferrite_core::workspace::{PrState, PullRequest};
+use ferrite_ui::theme::{GREEN, INK_SUBTLE, RED};
 
 /// The least time between two automatic readings of one Thread's PR.
 pub const AUTO_EVERY: Duration = Duration::from_secs(30);
@@ -29,44 +29,13 @@ pub(crate) fn review_verdict(state: WireReviewState) -> Option<(&'static str, u3
 }
 
 /// Where a pull request stands, in one word: the Overview's PR row and
-/// the details card.
+/// the details card's tooltip.
 pub(crate) fn state_word(pr: &PullRequest) -> &'static str {
     match (pr.state, pr.draft) {
         (PrState::Merged, _) => "Merged",
         (PrState::Closed, _) => "Closed",
         (PrState::Open, true) => "Draft",
         (PrState::Open, false) => "Open",
-    }
-}
-
-/// A checks rollup in words, said after the PR's state, and the ink they
-/// take: red only when it needs the operator.
-pub(crate) fn checks_word(checks: CheckState) -> (&'static str, u32) {
-    match checks {
-        CheckState::Passing => ("checks passing", INK_SUBTLE),
-        CheckState::Failing => ("checks failing", BLOCKED),
-        CheckState::Pending => ("checks running", INK_SUBTLE),
-        CheckState::Skipped => ("checks skipped", INK_SUBTLE),
-    }
-}
-
-/// A PR's review decision in words, and its ink.
-pub(crate) fn review_word(review: ReviewDecision) -> (&'static str, u32) {
-    match review {
-        ReviewDecision::Approved => ("Approved", GREEN),
-        ReviewDecision::ChangesRequested => ("Changes requested", RED),
-        ReviewDecision::Required => ("Required", INK_SUBTLE),
-    }
-}
-
-/// Whether a PR can merge, in words, and their ink. A merge with checks
-/// still unsettled is ready: the checks say the rest.
-pub(crate) fn merge_word(merge: MergeState) -> (&'static str, u32) {
-    match merge {
-        MergeState::Clean | MergeState::Unstable => ("Ready", GREEN),
-        MergeState::Behind => ("Behind base", INK_SUBTLE),
-        MergeState::Blocked => ("Blocked", INK_SUBTLE),
-        MergeState::Conflicting => ("Conflicts", RED),
     }
 }
 
@@ -130,8 +99,7 @@ mod tests {
             title: None,
             checks,
             runs: Vec::new(),
-            review: None,
-            merge: None,
+            conflicting: false,
         }
     }
 

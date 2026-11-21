@@ -12,7 +12,7 @@
 use super::overview::{OverviewEvent, OverviewInputs, OverviewView};
 use super::*;
 use ferrite_core::docview::FileChange;
-use ferrite_core::workspace::{PrState, PullRequest};
+use ferrite_core::workspace::{CheckState, PrState, PullRequest};
 
 impl OverviewView {
     /// The Changes section (see the module doc): none with no edits and no
@@ -334,7 +334,12 @@ fn pr_row(
         PrState::Merged => icons::GIT_MERGE,
         PrState::Open | PrState::Closed => icons::GIT_PULL_REQUEST,
     };
-    let checks = pr.checks.map(crate::pr::checks_word);
+    let checks = pr.checks.map(|checks| match checks {
+        CheckState::Passing => ("checks passing", INK_SUBTLE),
+        CheckState::Failing => ("checks failing", BLOCKED),
+        CheckState::Pending => ("checks running", INK_SUBTLE),
+        CheckState::Skipped => ("checks skipped", INK_SUBTLE),
+    });
     super::sections::detail_row(
         "panel-pr",
         glyph,

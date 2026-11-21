@@ -710,8 +710,7 @@ fn panel_pr(label: &'static str, staged: PrStaged) -> (Scene, Setup) {
                 title: Some(pr.title.clone()),
                 checks: Some(CheckState::Passing),
                 runs: Vec::new(),
-                review: None,
-                merge: None,
+                conflicting: false,
             }),
         );
         let number = pr.number;
@@ -804,8 +803,7 @@ fn nav_states() -> (Scene, Setup) {
                 title: None,
                 checks,
                 runs: Vec::new(),
-                review: None,
-                merge: None,
+                conflicting: false,
             })
         };
         let facts = &mut view.facts;

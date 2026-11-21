@@ -559,62 +559,9 @@ pub struct PullRequest {
     /// what the checks card lists. Empty exactly when `checks`
     /// is `None` — the rollup *is* this list, folded.
     pub runs: Vec<Check>,
-    /// What its reviewers decided; `None` when the forge asks for no
-    /// review or did not say.
-    pub review: Option<ReviewDecision>,
-    /// Whether it can merge now; `None` while the forge has not worked it
-    /// out.
-    pub merge: Option<MergeState>,
-}
-
-/// A pull request's review decision (`gh`'s `reviewDecision`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ReviewDecision {
-    Approved,
-    ChangesRequested,
-    /// A review is required and none has approved it yet.
-    Required,
-}
-
-impl ReviewDecision {
-    /// `gh`'s word; an empty or unknown one is no decision.
-    fn of_gh(word: &str) -> Option<Self> {
-        match word {
-            "APPROVED" => Some(Self::Approved),
-            "CHANGES_REQUESTED" => Some(Self::ChangesRequested),
-            "REVIEW_REQUIRED" => Some(Self::Required),
-            _ => None,
-        }
-    }
-}
-
-/// Whether a pull request can merge now (`gh`'s `mergeStateStatus`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum MergeState {
-    /// Mergeable, its checks passing.
-    Clean,
-    /// Mergeable, but its checks are not all passing.
-    Unstable,
-    /// Its head is behind the base branch.
-    Behind,
-    /// A gate holds it: a required review or check, or it is a draft.
-    Blocked,
-    Conflicting,
-}
-
-impl MergeState {
-    /// `gh`'s word; `UNKNOWN` (GitHub has not worked it out yet) and any
-    /// word we do not know are no claim.
-    fn of_gh(word: &str) -> Option<Self> {
-        match word {
-            "CLEAN" | "HAS_HOOKS" => Some(Self::Clean),
-            "UNSTABLE" => Some(Self::Unstable),
-            "BEHIND" => Some(Self::Behind),
-            "BLOCKED" | "DRAFT" => Some(Self::Blocked),
-            "DIRTY" => Some(Self::Conflicting),
-            _ => None,
-        }
-    }
+    /// Whether it conflicts with its base branch; `false` while the
+    /// forge has not worked that out.
+    pub conflicting: bool,
 }
 
 impl PullRequest {
@@ -678,13 +625,7 @@ impl PullRequest {
             title: (!pr.title.is_empty()).then(|| pr.title.clone()),
             checks: (!runs.is_empty()).then(|| rollup_state(&runs)),
             runs,
-            review: None,
-            merge: match pr.merge {
-                crate::protocol::WireMerge::Clean => Some(MergeState::Clean),
-                crate::protocol::WireMerge::Conflicting => Some(MergeState::Conflicting),
-                crate::protocol::WireMerge::Blocked => Some(MergeState::Blocked),
-                crate::protocol::WireMerge::Unknown => None,
-            },
+            conflicting: matches!(pr.merge, crate::protocol::WireMerge::Conflicting),
         }
     }
 }
@@ -802,7 +743,7 @@ pub fn pr_view(cwd: &Path) -> Option<String> {
             "pr",
             "view",
             "--json",
-            "number,state,isDraft,url,title,statusCheckRollup,reviewDecision,mergeStateStatus",
+            "number,state,isDraft,url,title,statusCheckRollup,mergeable",
         ],
     )
 }
@@ -862,7 +803,6 @@ pub fn parse_pr_json(body: &str) -> Option<PullRequest> {
     // No runs is no rollup: the silence stays a silence rather than
     // becoming a pass.
     let checks = (!runs.is_empty()).then(|| rollup_state(&runs));
-    let word = |key: &str| value.get(key).and_then(serde_json::Value::as_str);
     Some(PullRequest {
         number,
         state,
@@ -871,8 +811,8 @@ pub fn parse_pr_json(body: &str) -> Option<PullRequest> {
         title,
         checks,
         runs,
-        review: word("reviewDecision").and_then(ReviewDecision::of_gh),
-        merge: word("mergeStateStatus").and_then(MergeState::of_gh),
+        conflicting: value.get("mergeable").and_then(serde_json::Value::as_str)
+            == Some("CONFLICTING"),
     })
 }
 
@@ -1137,11 +1077,7 @@ mod tests {
         );
         assert_eq!(pr.checks, Some(super::CheckState::Pending));
         assert_eq!(pr.runs[0].detail, "in_progress");
-        assert_eq!(
-            (pr.review, pr.merge),
-            (None, Some(super::MergeState::Clean)),
-            "the snapshot names its merge state but no review decision"
-        );
+        assert!(!pr.conflicting, "the snapshot says it merges cleanly");
         assert_eq!(super::PullRequest::of_view(&PrView::NoPr), None);
     }
 
@@ -1259,37 +1195,20 @@ mod tests {
         assert_eq!(check_state("queued"), CheckState::Pending);
     }
 
-    /// The card says where review and merging stand: `gh`'s two words are
-    /// read into their states here, and an empty or unknown word is no
-    /// claim at all.
+    /// The card says when a pull request conflicts with its base: `gh`'s
+    /// `mergeable` reads `CONFLICTING`. Any other word, or none, is no
+    /// conflict.
     #[test]
-    fn a_pr_reading_keeps_its_review_decision_and_merge_state() {
-        let read = |review: &str, merge: &str| {
-            let body = format!(
-                r#"{{"number":9,"state":"OPEN","reviewDecision":"{review}","mergeStateStatus":"{merge}"}}"#
-            );
-            let pr = parse_pr_json(&body).expect("a PR");
-            (pr.review, pr.merge)
+    fn a_pr_reading_knows_when_it_conflicts() {
+        let read = |mergeable: &str| {
+            let body = format!(r#"{{"number":9,"state":"OPEN","mergeable":"{mergeable}"}}"#);
+            parse_pr_json(&body).expect("a PR").conflicting
         };
-        assert_eq!(
-            read("APPROVED", "CLEAN"),
-            (Some(ReviewDecision::Approved), Some(MergeState::Clean))
-        );
-        assert_eq!(
-            read("CHANGES_REQUESTED", "DIRTY"),
-            (Some(ReviewDecision::ChangesRequested), Some(MergeState::Conflicting))
-        );
-        assert_eq!(
-            read("REVIEW_REQUIRED", "BLOCKED"),
-            (Some(ReviewDecision::Required), Some(MergeState::Blocked))
-        );
-        assert_eq!(read("", "BEHIND"), (None, Some(MergeState::Behind)));
-        assert_eq!(read("", "UNSTABLE"), (None, Some(MergeState::Unstable)));
-        assert_eq!(read("", "HAS_HOOKS"), (None, Some(MergeState::Clean)));
-        assert_eq!(read("", "DRAFT"), (None, Some(MergeState::Blocked)));
-        assert_eq!(read("SOMETHING_NEW", "UNKNOWN"), (None, None));
+        assert!(read("CONFLICTING"));
+        assert!(!read("MERGEABLE"));
+        assert!(!read("UNKNOWN"));
         let bare = parse_pr_json(r#"{"number":9,"state":"OPEN"}"#).expect("a PR");
-        assert_eq!((bare.review, bare.merge), (None, None));
+        assert!(!bare.conflicting);
     }
 
     /// Not JSON at all, or JSON without a number: no PR, not a panic.
