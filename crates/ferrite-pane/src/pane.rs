@@ -607,9 +607,6 @@ pub struct PaneWiring {
     /// The open `/` or `@` popover for this Pane's Composer, rows wired to
     /// their picks in the cockpit and hung above the input line here (#23).
     pub menu: Option<AnyElement>,
-    /// A subagent's head (`subagent_head`) while the Pane shows one; None
-    /// on Main, which has none.
-    pub subagent_head: Option<AnyElement>,
     pub activity_decisions: Option<AnyElement>,
     /// The Composer's controls, wired in the cockpit (SPEC §5.5).
     pub toolbar: Option<ComposerControls>,
@@ -743,7 +740,6 @@ pub fn render_pane(
         transcript: retained_transcript,
         attachments,
         menu,
-        subagent_head,
         activity_decisions,
         toolbar,
         start,
@@ -789,10 +785,8 @@ pub fn render_pane(
     };
 
     // A Pane has no head: the nav's row names the Thread (C2, ADR 0014),
-    // and the body starts at the Pane's own top edge. A subagent's
-    // transcript has its own head over it.
-    let mut pane = shell
-        .children(subagent_head.map(|head| subagent_strip(key, head)));
+    // and the body starts at the Pane's own top edge, a subagent's too.
+    let mut pane = shell;
     view.rich
         .file_context(workspace.map(WorkspaceBinding::cwd), &view.preview);
     // A child's tab has no Composer to carry the `Decision` key
@@ -1376,25 +1370,6 @@ pub fn retry_button(key: u64, cx: &gpui::App) -> gpui::component::button::Button
             .text_color(rgb(INK_STRONG))
             .child("Retry"),
     )
-}
-
-/// The row a subagent's head (`subagent_head`) stands in, over its
-/// transcript, at the card's top edge —
-/// one `SUBAGENT_HEAD_H` row padded `SUBAGENT_HEAD_PAD_X`, closed by a
-/// `LINE`.
-fn subagent_strip(key: u64, head: AnyElement) -> Div {
-    div()
-        .debug_selector(move || format!("pane-subagent-{key}"))
-        .flex()
-        .flex_shrink_0()
-        .items_center()
-        // The rule lies under the row's 38, as the mockup's border does.
-        .h(px(theme::SUBAGENT_HEAD_H + 1.))
-        .px(px(theme::SUBAGENT_HEAD_PAD_X))
-        .border_b_1()
-        .border_color(theme::paint::LINE)
-        .text_color(rgb(INK_SUBTLE))
-        .child(head)
 }
 
 /// A run's mark in the shared check vocabulary (`components::CheckMark`),
