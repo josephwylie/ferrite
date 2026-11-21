@@ -179,6 +179,35 @@ jobs:
         if: always() && !cancelled() && (steps.window-windows.outcome == 'success' || steps.window-mac.outcome == 'success')
         run: |
           python scripts/probe-browser-window.py ${{ runner.os == 'Windows' && 'target/debug/bundle/windows/Ferrite/ferrite.exe' || 'target/local/bundle/macos/Ferrite.app/Contents/MacOS/ferrite' }} --provider codex --work-orders --tasks 1 --output target/browser-window-evidence/work-orders/codex
+      # Diagnosis, not a gate: the same claude work order with every motion
+      # loop parked, plus the window's graphics adapter and loaded D3D
+      # modules. If the window's CPU falls from ~330% of one core and the
+      # work order speeds up, the loops' redraws on a software renderer are
+      # what starves the work order on Windows.
+      - name: Diagnose the Windows work order with motion parked
+        if: always() && !cancelled() && runner.os == 'Windows' && steps.window-windows.outcome == 'success'
+        continue-on-error: true
+        shell: pwsh
+        env:
+          FERRITE_REDUCE_MOTION: "1"
+        run: |
+          $out = 'target/browser-window-evidence/work-orders/claude-reduced-motion'
+          New-Item -ItemType Directory -Force $out | Out-Null
+          Get-CimInstance Win32_VideoController | Select-Object Name, AdapterCompatibility, DriverVersion | ConvertTo-Json | Set-Content "$out/video-controllers.json"
+          $probe = Start-Process python -NoNewWindow -PassThru -ArgumentList @('scripts/probe-browser-window.py', 'target/debug/bundle/windows/Ferrite/ferrite.exe', '--provider', 'claude', '--work-orders', '--tasks', '1', '--output', $out)
+          $null = $probe.Handle
+          $seen = $null
+          while (-not $probe.HasExited) {
+            Start-Sleep -Seconds 5
+            $window = Get-CimInstance Win32_Process -Filter "Name='ferrite.exe'" | Where-Object { $_.CommandLine -like '*--browser-window-smoke*' } | Select-Object -First 1
+            if (-not $window) { continue }
+            if (-not $seen) { $seen = Get-Date }
+            if ((Get-Date) - $seen -lt [TimeSpan]::FromSeconds(30)) { continue }
+            (Get-Process -Id $window.ProcessId).Modules | Where-Object { $_.ModuleName -match '^(d3d1|dxgi|nvwgf|amdx|igd)' } | Select-Object ModuleName, FileName | ConvertTo-Json | Set-Content "$out/window-graphics-modules.json"
+            break
+          }
+          $probe.WaitForExit()
+          exit $probe.ExitCode
       - name: Actual claude annotation capture, drawing, batch delivery and restarted history
         if: always() && !cancelled() && (steps.window-windows.outcome == 'success' || steps.window-mac.outcome == 'success')
         run: |

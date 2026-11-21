@@ -31,6 +31,7 @@ impl CockpitView {
             output.join("window-start.json"),
             serde_json::to_vec_pretty(&serde_json::json!({
                 "pid": std::process::id(), "scale": window.scale_factor(),
+                "gpu": window.gpu_specs(), "reduce_motion": cx.reduce_motion(),
                 "stage": "production CockpitView constructed in native Window",
             }))
             .unwrap(),
