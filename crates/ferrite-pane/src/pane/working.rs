@@ -401,8 +401,9 @@ pub(crate) fn turn_fold(
 /// program alone (`text::live_words`), or once it finished `Ran sed` — or,
 /// with no call there, `Thinking` (a phase that is not the model's own
 /// work, by name). Its width hugs its words, which shimmer on the Pane
-/// holding the keyboard. A thought in that work stands over it, its first
-/// heading or line, four lines at most, until the work is opened; pressed,
+/// holding the keyboard. A thought in that work stands over it, as its
+/// leading heading or first sentence (`text::live_thought_line`), four
+/// lines at most, until the work is opened; pressed,
 /// it opens the work's rows above it (`disclosure`).
 fn live_row(live: &Live, work: &[Block], disclosure: Option<LineDisclosure>) -> Div {
     let open = disclosure.as_ref().is_some_and(|disclosure| disclosure.open);
@@ -423,7 +424,7 @@ fn live_row(live: &Live, work: &[Block], disclosure: Option<LineDisclosure>) -> 
         .then(|| {
             work.iter().rev().find_map(|block| match &block.body {
                 Body::Thinking(text) if !text.trim().is_empty() => {
-                    Some(ferrite_core::progress::headline(text))
+                    Some(text::live_thought_line(text))
                 }
                 _ => None,
             })

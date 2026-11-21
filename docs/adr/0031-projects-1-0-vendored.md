@@ -555,8 +555,8 @@ arguments, with herdr's pane environment for the program it runs
 `-c notify=[…]` goes to its app-server as written
 (`providers::codex::launch` tests). That the CLIs then run them is
 theirs and is checked only by a live run: Claude's hooks in its
-stream-json print mode, where Ferrite also sets an effort through
-`apply_flag_settings`, the same flag layer `--settings` fills, and
+stream-json print mode, where the file replaces Ferrite's own inline
+`--settings` (thinking summaries, as T3 Code passes a file alone), and
 Codex's `notify` under the app-server rather than its terminal. Until a
 live run shows both, the keeper's tick and the hook's
 `agent_status_changed` (a Thread at `done` or `idle`) still find a
