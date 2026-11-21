@@ -234,6 +234,8 @@ MCP/integration tools can show a website favicon (32px source) or a themed logo 
 
 ## 12. Assistant message
 
+Claude 5.1 and later write the update they would say before a call as a thinking block, one at most before each call. T3 reads a second thought in a row, directly before a call in the same message, as that update: it replaces the reasoning item with an assistant message in the same place (`claudeWritesUpdatesAsThinking` and `emitAssistantTextArtifacts`, ClaudeAdapterV2.ts:2668-2674 and 11160-11175). Ferrite does the same in `providers/claude/activity.rs` (`MainThought::is_update`).
+
 `AssistantTimelineRow` (TimelineAssistantRows.tsx:27-82):
 - `relative min-w-0 px-1 py-0.5`, ChatMarkdown root: `text-sm leading-relaxed text-foreground/[calc(90%+boost/10)]`. That is **14px on 22.75px at 90% foreground**, with `overflow-wrap:anywhere`.
 - Markdown (index.css:1870-2140):
