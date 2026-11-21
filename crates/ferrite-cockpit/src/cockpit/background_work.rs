@@ -111,6 +111,7 @@ fn running_work(open: &ferrite_core::cockpit::ThreadView<'_>) -> Vec<Work> {
                     launched: call
                         .and_then(|call| call.background.as_ref())
                         .map(|background| background.launched),
+                    activity: None,
                 },
                 stop: Some(StopTarget::Command(task.id.clone())),
                 call: call.map(|call| call.call.clone()),
@@ -140,6 +141,9 @@ fn running_work(open: &ferrite_core::cockpit::ThreadView<'_>) -> Vec<Work> {
                     .map(|tool| label(tool).to_string())
                     .unwrap_or_default(),
                 launched: agent.transcript().turn_started(),
+                activity: Some(
+                    agent.transcript().progress().detail.split_whitespace().collect::<Vec<_>>().join(" "),
+                ),
             },
             stop: stoppable.then(|| StopTarget::Agent(agent.key().clone())),
             call,
@@ -159,6 +163,7 @@ fn running_work(open: &ferrite_core::cockpit::ThreadView<'_>) -> Vec<Work> {
                 kind: if agent { WorkKind::Subagent } else { WorkKind::Command },
                 label: label(call).to_string(),
                 launched: Some(background.launched),
+                activity: None,
             },
             stop: (!agent).then(|| StopTarget::Command(background.task.clone())),
             call: Some(call.call.clone()),
@@ -228,32 +233,15 @@ impl BackgroundInputs {
     }
 }
 
-/// What `Stop` ends, and what it leaves running: a bare `Stop` is only for
-/// a line it ends whole.
-#[derive(Hash)]
-struct StopScope {
-    label: &'static str,
-    remains: Option<String>,
-}
-
-fn stop_scope(work: &[Work], targets: &[StopTarget]) -> StopScope {
-    let ends_commands = targets.iter().any(|target| matches!(target, StopTarget::Command(_)));
-    let ends_agents = targets.len() - targets.iter().filter(|target| matches!(target, StopTarget::Command(_))).count();
+/// What a `Stop` (T3's, one word whatever it ends) leaves running: work the
+/// Session cannot stop, which the line names beside it.
+fn stop_leaves(work: &[Work], targets: &[StopTarget]) -> Option<String> {
     let left = |kind| {
         work.iter()
             .filter(|work| work.task.kind == kind && !work.stop.as_ref().is_some_and(|stop| targets.contains(stop)))
             .count()
     };
     let (commands, agents) = (left(WorkKind::Command), left(WorkKind::Subagent));
-    let whole = commands + agents == 0;
-    let label = match (ends_commands, ends_agents) {
-        (true, 0) if whole => "Stop",
-        (true, 0) => "Stop commands",
-        (false, 1) => "Stop agent",
-        (false, _) => "Stop agents",
-        (true, _) if whole => "Stop all",
-        (true, _) => "Stop commands and agents",
-    };
     let counted = |count: usize, noun: &str| {
         (count > 0).then(|| format!("{count} {noun}{}", if count == 1 { "" } else { "s" }))
     };
@@ -261,16 +249,13 @@ fn stop_scope(work: &[Work], targets: &[StopTarget]) -> StopScope {
         .into_iter()
         .flatten()
         .collect();
-    StopScope {
-        label,
-        remains: (!parts.is_empty()).then(|| format!("{} left running", parts.join(" and "))),
-    }
+    (!parts.is_empty()).then(|| format!("{} left running", parts.join(" and ")))
 }
 
 /// The line's and the dialog's `Stop`, as they draw.
 #[derive(Hash)]
 pub(super) struct StopControl {
-    scope: StopScope,
+    leaves: Option<String>,
     stopping: bool,
     refused: Option<String>,
 }
@@ -298,7 +283,7 @@ pub(super) fn stop_elements(
     } else if control.refused.is_some() {
         "Retry"
     } else {
-        control.scope.label
+        "Stop"
     };
     let button = pane::inline_button(SharedString::from(format!("{prefix}-stop-all-{}", thread.get())), label);
     let button = if control.stopping {
@@ -314,7 +299,7 @@ pub(super) fn stop_elements(
             .child(button)
             .into_any_element(),
     );
-    if let Some(remains) = &control.scope.remains {
+    if let Some(remains) = &control.leaves {
         let selector = format!("{prefix}-stop-remains-{remains}");
         elements.push(
             div()
@@ -334,8 +319,8 @@ pub(crate) enum BackgroundEvent {
     Details(ThreadId),
     /// A row of the Overview's section: the Background Surface.
     Open(ThreadId),
-    /// `Open` on the line or on an agent's card: the agent the call
-    /// started, in the Panel.
+    /// `Open subagent` in the dialog, or an agent's row in the Background
+    /// Surface: the agent the call started.
     OpenAgent { thread: ThreadId, call: String },
     /// The line's `Stop`, or `Retry`: every piece of work it lists that the
     /// Session can stop.
@@ -379,10 +364,7 @@ impl BackgroundView {
         let presented = pane::present_background_work(&tasks, waiting)?;
         let stop = self.stop_control(inputs, &work);
         let single = match work.as_slice() {
-            [only] => Some((
-                only.task.launched,
-                only.call.clone().filter(|_| only.task.kind == WorkKind::Subagent),
-            )),
+            [only] => only.task.launched,
             _ => None,
         };
         let clock_width = lone_launch(&work).map(|launched| clock_reading(launched).len());
@@ -411,9 +393,9 @@ impl BackgroundView {
                     }
                 };
                 let mut actions: Vec<AnyElement> = Vec::new();
-                if let Some((Some(launched), _)) = &single {
+                if let Some(launched) = single {
                     actions.push(
-                        pane::background_clock(*launched)
+                        pane::background_clock(launched)
                             .debug_selector(|| "background-line-clock".into())
                             .into_any_element(),
                     );
@@ -424,14 +406,6 @@ impl BackgroundView {
                         .on_click(emit(BackgroundEvent::Details(thread)))
                         .into_any_element(),
                 );
-                if let Some((_, Some(call))) = single.clone() {
-                    actions.push(
-                        pane::inline_button(("background-open", thread.get() as usize), "Open")
-                            .text_color(rgb(ferrite_ui::theme::INK_SUBTLE))
-                            .on_click(emit(BackgroundEvent::OpenAgent { thread, call }))
-                            .into_any_element(),
-                    );
-                }
                 if let Some(control) = &stop {
                     actions.extend(stop_elements(
                         control,
@@ -456,7 +430,7 @@ impl BackgroundView {
             .map(|target| self.stop_state(inputs, target))
             .collect();
         Some(StopControl {
-            scope: stop_scope(work, &targets),
+            leaves: stop_leaves(work, &targets),
             stopping: stops.iter().all(|stop| matches!(stop, Some(StopState::Stopping { .. }))),
             refused: stops.iter().find_map(|stop| match stop {
                 Some(StopState::Refused(why)) => Some(why.clone()),
@@ -766,7 +740,7 @@ impl CockpitView {
         });
     }
 
-    /// `Open` on the line, or `Open thread` in the dialog: the agent the
+    /// `Open subagent` in the dialog, or a row of the Background Surface: the agent the
     /// call started, in the Panel.
     pub(super) fn open_background_agent(&mut self, thread: ThreadId, call: &str, cx: &mut Context<Self>) {
         if self.background_dialog(cx).is_some() {

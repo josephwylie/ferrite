@@ -36,7 +36,7 @@ pub(crate) enum BackgroundDialogEvent {
     /// `Stop`, or `Retry` after a refusal: every piece of work listed that
     /// the Session can stop.
     Stop,
-    /// `Open thread` on an agent, by the call that launched it.
+    /// `Open subagent` on an agent, by the call that launched it.
     OpenThread(String),
     /// The close button closed it.
     Closed,
@@ -119,7 +119,7 @@ impl BackgroundDialogView {
     }
 
     /// One piece of work: its title and standing, the command in a box, its
-    /// output so far, and `Open thread` for an agent.
+    /// output so far, and `Open subagent` for an agent.
     fn work_section(work: &Work, call: Option<&ToolBlock>, waiting: bool, cx: &mut Context<Self>) -> Div {
         use ferrite_ui::theme::*;
         let agent = work.task.kind == WorkKind::Subagent;
@@ -147,7 +147,7 @@ impl BackgroundDialogView {
         let open_thread = work.call.clone().filter(|_| agent).map(|target| {
             ferrite_pane::pane::inline_button(
                 SharedString::from(format!("background-dialog-open-{target}")),
-                "Open thread",
+                "Open subagent",
             )
             .debug_selector({
                 let target = target.clone();

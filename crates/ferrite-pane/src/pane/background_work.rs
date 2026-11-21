@@ -37,6 +37,8 @@ pub struct BackgroundTask {
     pub label: String,
     /// When it started, where Ferrite knows (the clock counts from it).
     pub launched: Option<Instant>,
+    /// What it is doing now, where it says (a subagent's progress).
+    pub activity: Option<String>,
 }
 
 /// What the line says of `tasks`, before it is drawn.
@@ -45,7 +47,8 @@ pub struct Presentation {
     /// `Terminal` when every task is a command, else `CircleDashed`.
     pub icon: &'static str,
     pub title: String,
-    /// The labels, when several tasks share the title.
+    /// What the work is doing (T3's): a lone task's activity; of several,
+    /// the first with one as `label: activity`, else their labels.
     pub description: Option<String>,
 }
 
@@ -74,7 +77,7 @@ pub fn present(tasks: &[BackgroundTask], waiting: bool) -> Option<Presentation> 
         return Some(Presentation {
             icon,
             title,
-            description: None,
+            description: activity(only).map(str::to_owned),
         });
     }
     let mut counts: Vec<(WorkKind, usize)> = Vec::new();
@@ -98,11 +101,19 @@ pub fn present(tasks: &[BackgroundTask], waiting: bool) -> Option<Presentation> 
         .map(|task| task.label.trim())
         .filter(|label| !label.is_empty())
         .collect();
+    let busy = ordered
+        .iter()
+        .find_map(|task| activity(task).map(|doing| format!("{}: {doing}", task.label.trim())));
     Some(Presentation {
         icon,
         title: format!("{verb}{on} {joined}"),
-        description: (!labels.is_empty()).then(|| labels.join(", ")),
+        description: busy.or_else(|| (!labels.is_empty()).then(|| labels.join(", "))),
     })
+}
+
+/// What `task` says it is doing, on one line.
+fn activity(task: &BackgroundTask) -> Option<&str> {
+    task.activity.as_deref().map(str::trim).filter(|doing| !doing.is_empty())
 }
 
 /// The line: icon, title and description in 12px muted words that give way

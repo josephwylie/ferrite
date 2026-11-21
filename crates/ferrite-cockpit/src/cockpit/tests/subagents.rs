@@ -733,7 +733,7 @@ fn an_agent_row_runs_with_its_agent_and_opens_it(cx: &mut TestAppContext) {
 
 /// A subagent's row stands as T3's does: one waiting on the operator says
 /// `Waiting`, one stopped says `Stopped`, one done shows its last words as
-/// its result.
+/// its result and, where its parent waited on it, how long it ran.
 #[gpui::test]
 fn an_agents_face_reads_its_agents_state_as_t3s(cx: &mut TestAppContext) {
     use ferrite_pane::pane::AgentRun;
@@ -748,6 +748,14 @@ fn an_agents_face_reads_its_agents_state_as_t3s(cx: &mut TestAppContext) {
         agent_call(&fake, name);
         child(&fake, name, status);
     }
+    fake.streams.borrow()[0]
+        .send(SessionEvent::ToolCompleted {
+            id: "Cedar".into(),
+            output: "Cedar transcript".into(),
+            is_error: false,
+            result: ferrite_core::ToolResult::Opaque,
+        })
+        .unwrap();
     tick(cx);
     view.read_with(cx, |view, _| {
         let activity = view
@@ -764,6 +772,10 @@ fn an_agents_face_reads_its_agents_state_as_t3s(cx: &mut TestAppContext) {
         assert_eq!(read("Birch"), (AgentRun::Stopped, None, Some("Birch transcript".into())));
         assert_eq!(read("Cedar"), (AgentRun::Done, None, Some("Cedar transcript".into())));
         assert_eq!(read("Delta"), (AgentRun::Failed, None, Some("Delta transcript".into())));
+        assert!(
+            matches!(faces.get("Cedar").unwrap().clock, Some(ferrite_pane::pane::AgentClock::Took(_))),
+            "a settled agent its parent waited on reads how long the call took"
+        );
     });
 }
 
