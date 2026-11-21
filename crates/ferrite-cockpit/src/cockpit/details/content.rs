@@ -456,6 +456,76 @@ mod tests {
         );
     }
 
+    /// The card says where the Thread's pull request stands, under its
+    /// title: the state and its checks in the Overview's words, then the
+    /// review decision and whether it can merge.
+    #[test]
+    fn details_card_reads_the_pull_requests_checks_review_and_merge() {
+        use ferrite_core::workspace::{CheckState, MergeState, PrState, PullRequest, ReviewDecision};
+        let mut pr = PullRequest {
+            number: 48,
+            state: PrState::Open,
+            draft: false,
+            url: None,
+            title: Some("Thread cards".into()),
+            checks: Some(CheckState::Failing),
+            runs: Vec::new(),
+            review: Some(ReviewDecision::ChangesRequested),
+            merge: Some(MergeState::Conflicting),
+        };
+        let read = |pr: &PullRequest| {
+            pr_rows(pr)
+                .into_iter()
+                .map(|row| (row.label, row.meta))
+                .collect::<Vec<_>>()
+        };
+        let some = |word: &str| Some(word.to_string());
+        assert_eq!(
+            read(&pr),
+            [
+                ("Thread cards".into(), some("#48")),
+                ("Open".into(), some("checks failing")),
+                ("Review".into(), some("Changes requested")),
+                ("Merge".into(), some("Conflicts")),
+            ]
+        );
+        let rows = pr_rows(&pr);
+        assert_eq!(rows[1].ink, Some(BLOCKED), "failing checks need the operator");
+        assert!(
+            rows.iter().all(|row| matches!(
+                row.action,
+                Some(Action::Surface(super::super::super::surfaces::SurfaceId::PullRequest(48)))
+            )),
+            "every PR row opens the pull request"
+        );
+
+        pr.checks = None;
+        pr.review = None;
+        pr.merge = None;
+        assert_eq!(
+            read(&pr),
+            [
+                ("Thread cards".into(), some("#48")),
+                ("Open".into(), None),
+            ],
+            "silence claims nothing"
+        );
+
+        pr.state = PrState::Merged;
+        pr.checks = Some(CheckState::Passing);
+        pr.review = Some(ReviewDecision::Approved);
+        pr.merge = Some(MergeState::Clean);
+        assert_eq!(
+            read(&pr),
+            [
+                ("Thread cards".into(), some("#48")),
+                ("Merged".into(), some("checks passing")),
+                ("Review".into(), some("Approved")),
+            ],
+            "a merged pull request has nothing left to merge"
+        );
+    }
+
     #[test]
     fn actual_rendered_values_and_width_invalidate_density_measurements() {
         let thread = ThreadId::new(7);

@@ -1071,6 +1071,11 @@ mod tests {
         );
         assert_eq!(pr.checks, Some(super::CheckState::Pending));
         assert_eq!(pr.runs[0].detail, "in_progress");
+        assert_eq!(
+            (pr.review, pr.merge),
+            (None, Some(super::MergeState::Clean)),
+            "the snapshot names its merge state but no review decision"
+        );
         assert_eq!(super::PullRequest::of_view(&PrView::NoPr), None);
     }
 
@@ -1186,6 +1191,39 @@ mod tests {
         assert_eq!(check_state("brand_new_word"), CheckState::Pending);
         assert_eq!(check_state("cancelled"), CheckState::Failing);
         assert_eq!(check_state("queued"), CheckState::Pending);
+    }
+
+    /// The card says where review and merging stand: `gh`'s two words are
+    /// read into their states here, and an empty or unknown word is no
+    /// claim at all.
+    #[test]
+    fn a_pr_reading_keeps_its_review_decision_and_merge_state() {
+        let read = |review: &str, merge: &str| {
+            let body = format!(
+                r#"{{"number":9,"state":"OPEN","reviewDecision":"{review}","mergeStateStatus":"{merge}"}}"#
+            );
+            let pr = parse_pr_json(&body).expect("a PR");
+            (pr.review, pr.merge)
+        };
+        assert_eq!(
+            read("APPROVED", "CLEAN"),
+            (Some(ReviewDecision::Approved), Some(MergeState::Clean))
+        );
+        assert_eq!(
+            read("CHANGES_REQUESTED", "DIRTY"),
+            (Some(ReviewDecision::ChangesRequested), Some(MergeState::Conflicting))
+        );
+        assert_eq!(
+            read("REVIEW_REQUIRED", "BLOCKED"),
+            (Some(ReviewDecision::Required), Some(MergeState::Blocked))
+        );
+        assert_eq!(read("", "BEHIND"), (None, Some(MergeState::Behind)));
+        assert_eq!(read("", "UNSTABLE"), (None, Some(MergeState::Unstable)));
+        assert_eq!(read("", "HAS_HOOKS"), (None, Some(MergeState::Clean)));
+        assert_eq!(read("", "DRAFT"), (None, Some(MergeState::Blocked)));
+        assert_eq!(read("SOMETHING_NEW", "UNKNOWN"), (None, None));
+        let bare = parse_pr_json(r#"{"number":9,"state":"OPEN"}"#).expect("a PR");
+        assert_eq!((bare.review, bare.merge), (None, None));
     }
 
     /// Not JSON at all, or JSON without a number: no PR, not a panic.
