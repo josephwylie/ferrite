@@ -583,3 +583,42 @@ fn previous_agents_show_six_then_twelve_more_a_press(cx: &mut TestAppContext) {
     }
     assert_eq!(shown(cx), 6, "a card opened afresh starts at six");
 }
+
+/// A Lineage row gives the Pane that agent's full chat.
+#[gpui::test]
+fn a_lineage_row_opens_its_agent_in_the_pane(cx: &mut TestAppContext) {
+    use ferrite_core::activity::{
+        ActivityEvent, AgentInfo, AgentKey, AgentStatus, Subject, TranscriptCoverage,
+    };
+    let (core, fake, _checkout) = bound_cockpit("details-lineage-open", Provider::Claude);
+    bind_production_keys(cx);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    hold_nav_open(&view, cx);
+    cx.simulate_resize(gpui::size(px(2400.), px(900.)));
+    let key = AgentKey::new(Provider::Claude, "ui-fixture", "toolu_a");
+    let mut info = AgentInfo::new(key.clone());
+    info.name = Some("Atlas".into());
+    info.parent = Some(Subject::Main);
+    info.coverage = TranscriptCoverage::Live;
+    for event in [
+        ActivityEvent::Discovered(info),
+        ActivityEvent::Status {
+            key: key.clone(),
+            state: AgentStatus::Working,
+        },
+    ] {
+        fake.streams.borrow()[0]
+            .send(SessionEvent::Activity(event))
+            .unwrap();
+    }
+    tick(cx);
+    let thread = view.read_with(cx, |view, _| view.panes[0].thread().unwrap());
+    let tabs = panel_tabs(&view, thread, cx).0;
+    let row = cx.debug_bounds("details-lineage-agent-Atlas").expect("the agent's row");
+    cx.simulate_click(row.center(), gpui::Modifiers::none());
+    tick(cx);
+    view.read_with(cx, |view, _| {
+        assert_eq!(view.panes[0].selected, Subject::Subagent(key.clone()));
+    });
+    assert_eq!(panel_tabs(&view, thread, cx).0, tabs, "no Panel tab opens for it");
+}

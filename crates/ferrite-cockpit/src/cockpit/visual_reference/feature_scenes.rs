@@ -710,6 +710,7 @@ fn panel_pr(label: &'static str, staged: PrStaged) -> (Scene, Setup) {
                 title: Some(pr.title.clone()),
                 checks: Some(CheckState::Passing),
                 runs: Vec::new(),
+                conflicting: false,
             }),
         );
         let number = pr.number;
@@ -727,20 +728,13 @@ fn panel_pr(label: &'static str, staged: PrStaged) -> (Scene, Setup) {
 
 // ----------------------------------------------------------------- side chat
 
-/// `Start a side chat` over a selection (`claude/sidechat-open.png`): the
-/// right pane's empty first tab, the passage quoted in its composer.
+/// A side chat from the Panel's `+` menu (`claude/sidechat-open.png`): the
+/// right pane's empty first tab.
 fn side_chat() -> (Scene, Setup) {
     let scene = conversation("side-chat");
     let setup: Setup = Box::new(|view, _, cx| {
         if let Some(owner) = view.focused_thread() {
-            view.fixture_side_chat(
-                owner,
-                Some(
-                    "y-missing-dir failed as expected, and sleep 15 && echo done ran in the foreground this time."
-                        .into(),
-                ),
-                cx,
-            );
+            view.fixture_side_chat(owner, cx);
         }
     });
     (scene, setup)
@@ -802,6 +796,7 @@ fn nav_states() -> (Scene, Setup) {
                 title: None,
                 checks,
                 runs: Vec::new(),
+                conflicting: false,
             })
         };
         let facts = &mut view.facts;
@@ -1249,8 +1244,7 @@ fn long_prompt() -> (Scene, Setup) {
     (scene, Box::new(|_, _, _| {}))
 }
 
-/// The glass Cite button over a passage of the answer, beside Start a side
-/// chat.
+/// The glass Cite button over a passage of the answer.
 fn cite() -> (Scene, Setup) {
     let scene = conversation("cite");
     let setup: Setup = Box::new(|view, _, cx| {

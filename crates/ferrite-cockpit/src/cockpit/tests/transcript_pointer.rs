@@ -621,15 +621,12 @@ fn escape_dismisses_the_cite_button(cx: &mut TestAppContext) {
     });
 }
 
-/// `Start a side chat` stands beside Cite: it docks the side chat's pane
-/// beside the Thread — the passage quoted in its field — and asks the agent
-/// for a fork, which the pane takes: the window stays on the Thread. An
-/// agent that cannot fork offers Cite alone.
+/// A selection offers Cite alone, even where the agent could fork a side
+/// chat: side chats open from the Panel's `+` menu, not a selection.
 #[gpui::test]
-fn a_selections_side_chat_docks_a_pane_with_the_passage_quoted(cx: &mut TestAppContext) {
-    let (core, fake) = cockpit("selection-side-chat", 1);
+fn a_selection_offers_cite_alone(cx: &mut TestAppContext) {
+    let (core, fake) = cockpit("selection-cite-alone", 1);
     *fake.native_controls.borrow_mut() = true;
-    bind_production_keys(cx);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     cx.simulate_resize(gpui::size(px(1000.), px(700.)));
     fake.streams.borrow()[0]
@@ -645,43 +642,9 @@ fn a_selections_side_chat_docks_a_pane_with_the_passage_quoted(cx: &mut TestAppC
         .unwrap();
     tick(cx);
     drag(&view, cx, (0, 2), (0, 4));
-    let side = cx
-        .debug_bounds("selection-side-chat")
-        .expect("the selection offers a side chat");
-    let reply = cx.debug_bounds("selection-reply-quote").expect("and Cite");
-    assert!(reply.right() <= side.left(), "Cite first");
+    let cite = cx.debug_bounds("selection-reply-quote").expect("Cite is offered");
     let pill = cx.debug_bounds("selection-reply").unwrap();
-    assert!(pill.contains(&side.center()) && pill.contains(&reply.center()));
-    cx.simulate_click(side.center(), gpui::Modifiers::none());
-    tick(cx);
-    tick(cx);
-    assert_eq!(fake.forks.borrow().len(), 1);
-    assert_eq!(fake.forks.borrow()[0].before, None, "from this point");
-    view.read_with(cx, |view, cx| {
-        let owner = view.focused_thread().unwrap();
-        assert_eq!(view.cockpit.threads().len(), 2, "the fork is open");
-        assert_eq!(view.panes.len(), 1, "but no Pane holds it");
-        assert_eq!(view.focused_thread(), Some(owner), "the window stays");
-        assert_eq!(
-            super::side_chat::draft(view, owner, cx).as_deref(),
-            Some("> ph\n\n")
-        );
-        assert!(
-            super::side_chat::shown_fork(view, owner, cx).is_some(),
-            "the tab took the fork"
-        );
-    });
-    assert!(cx.debug_bounds("side-chat").is_some());
-
-    // Without a fork behind it, the button is Cite alone.
-    *fake.native_controls.borrow_mut() = false;
-    view.update(cx, |view, cx| {
-        let owner = view.focused_thread().unwrap();
-        view.close_side_chat(owner, cx);
-    });
-    tick(cx);
-    drag(&view, cx, (0, 2), (0, 4));
-    assert!(cx.debug_bounds("selection-reply-quote").is_some());
+    assert_eq!(pill, cite, "the pill is Cite alone");
     assert!(cx.debug_bounds("selection-side-chat").is_none());
 }
 

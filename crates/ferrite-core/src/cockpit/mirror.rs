@@ -797,10 +797,7 @@ impl<'a> ThreadView<'a> {
     pub fn background_work(&self) -> bool {
         match self.stand_in {
             Some(held) => held.digest.background_work,
-            None => {
-                self.activity.working_descendants() > 0
-                    || self.transcript().progress().working_background() > 0
-            }
+            None => self.activity.background_work(),
         }
     }
 

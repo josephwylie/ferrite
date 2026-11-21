@@ -11,6 +11,10 @@
 //! marked `allow(dead_code)` keep helpers only the Herdr paths used (event
 //! JSON, foreground delivery, terminal learning, focus-origin markers).
 
+#[cfg(test)]
+#[path = "../../ferrite-core/src/test_temp.rs"]
+mod test_temp;
+
 #[cfg(target_os = "macos")]
 #[allow(dead_code)]
 mod event;

@@ -161,9 +161,9 @@ pub struct NavState {
     /// Pinned cards (`Settings::pinned_threads`), in pin order.
     pub pinned: Vec<ThreadRow>,
     /// The Inbox: open Threads awaiting the operator, pending Decisions
-    /// first, oldest request first.
+    /// first, oldest request first, then the latest to arrive.
     pub active: Vec<ThreadRow>,
-    /// Working Threads, newest send first.
+    /// Working Threads, the latest to start work first.
     pub working: Vec<ThreadRow>,
     /// Snoozed Threads, the soonest to wake first.
     pub snoozed: Vec<ThreadRow>,
@@ -187,6 +187,50 @@ impl NavState {
             .chain(&self.active)
             .chain(&self.working)
             .chain(&self.snoozed)
+    }
+}
+
+/// The section an open Thread is listed in, for `Arrivals`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Section {
+    Pinned,
+    Active,
+    Working,
+    Snoozed,
+}
+
+/// When each open Thread came into the section it is listed in. The list
+/// and the Working shelf put the latest arrival first, so a Thread comes
+/// in at the top (truly done, it leaves Working for the top of the list)
+/// and nothing but changing section moves it. A Thread first seen where it
+/// is arrived at its last activity then, so a launch keeps the order the
+/// work happened in.
+#[derive(Default)]
+pub struct Arrivals {
+    /// `None` until a first-seen Thread's last activity is known.
+    at: HashMap<ThreadId, (Section, Option<SystemTime>)>,
+}
+
+impl Arrivals {
+    /// Note where each Thread is listed now, with its last activity: one
+    /// that moved arrived `now`. A Thread no longer listed is forgotten,
+    /// so one that comes back (revived, reopened) is first seen again.
+    pub fn note(&mut self, listed: &[(ThreadId, Section, Option<SystemTime>)], now: SystemTime) {
+        let mut at = HashMap::with_capacity(listed.len());
+        for (thread, section, last_activity) in listed {
+            let since = match self.at.get(thread) {
+                Some((was, since)) if was == section => since.or(*last_activity),
+                Some(_) => Some(now),
+                None => *last_activity,
+            };
+            at.insert(*thread, (*section, since));
+        }
+        self.at = at;
+    }
+
+    /// When `thread` came into its section.
+    pub fn since(&self, thread: ThreadId) -> Option<SystemTime> {
+        self.at.get(&thread).and_then(|(_, since)| *since)
     }
 }
 
@@ -1188,7 +1232,11 @@ mod tests {
     #[test]
     fn a_row_is_one_of_four_states_and_a_heading_rolls_its_rows_up() {
         use WallState::*;
-        assert_eq!(RowStatus::of(Done, true, true), RowStatus::Done);
+        assert_eq!(
+            RowStatus::of(Done, true, true),
+            RowStatus::Background,
+            "no finish is done while work runs behind Main"
+        );
         assert_eq!(RowStatus::of(Idle, true, false), RowStatus::Done);
         assert_eq!(RowStatus::of(Done, false, true), RowStatus::Background);
         assert_eq!(RowStatus::of(Done, false, false), RowStatus::Idle);

@@ -15,9 +15,9 @@ use ferrite_ui::theme::*;
 /// What a row's state says (C10), in priority order: a pending Decision
 /// names what it waits for (`approval` / `plan` / `question`); red tests
 /// `failing`/`failing N` and a failed turn or closed Session `failed`; a
-/// working Thread its live elapsed time (`1m04s`, never coarsened); a
-/// finish not yet seen `done`; work still running behind an idle Main
-/// `background`; otherwise the age, once it reaches a minute. Never `now`.
+/// working Thread its live elapsed time (`1m04s`, never coarsened); work
+/// still running behind an idle Main `background`; a finish not yet seen
+/// `done`; otherwise the age, once it reaches a minute. Never `now`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum NavTail {
     Waiting(&'static str),
@@ -34,7 +34,7 @@ impl NavTail {
     /// The word from the Pane's own reading of the Thread (`pane::thread_word`
     /// — the head's slot word, `done` only while unseen), so the nav and the
     /// Pane never disagree, and the row's own state for what only the row
-    /// says: background work.
+    /// says: background work, which a finish not yet seen does not hide.
     pub fn of(status: RowStatus, slot: Option<&crate::pane::HeadSlot>, age: SharedString) -> Self {
         use crate::pane::HeadSlot;
         match slot {
@@ -45,8 +45,8 @@ impl NavTail {
             Some(HeadSlot::Failed) => NavTail::Failed,
             Some(HeadSlot::Working(elapsed)) if elapsed.is_empty() => NavTail::None,
             Some(HeadSlot::Working(elapsed)) => NavTail::Working(elapsed.clone().into()),
-            Some(HeadSlot::Done) => NavTail::Done,
             _ if status == RowStatus::Background => NavTail::Background,
+            Some(HeadSlot::Done) => NavTail::Done,
             _ => NavTail::Age(age),
         }
     }
@@ -96,8 +96,8 @@ pub enum RowStatus {
 impl RowStatus {
     /// The row's state from the Pane's own reading, whether the Thread
     /// holds an unseen Notice, and whether work runs behind its idle Main.
-    /// A finish not yet seen outranks background work, as Done outranks
-    /// Working.
+    /// Work behind Main is working, as a turn is: no finish is done while
+    /// it runs.
     pub fn of(state: WallState, unread: bool, background: bool) -> Self {
         match state {
             WallState::Working => RowStatus::Working,
@@ -105,8 +105,8 @@ impl RowStatus {
             WallState::Decision => RowStatus::NeedsYou,
             WallState::Blocked => RowStatus::Failed,
             WallState::Parked => RowStatus::Parked,
-            WallState::Idle | WallState::Done if unread => RowStatus::Done,
             WallState::Idle | WallState::Done if background => RowStatus::Background,
+            WallState::Idle | WallState::Done if unread => RowStatus::Done,
             WallState::Idle | WallState::Done => RowStatus::Idle,
         }
     }

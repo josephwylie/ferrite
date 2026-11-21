@@ -165,7 +165,7 @@ impl Lineage {
         pages: usize,
         cx: &mut Context<CockpitView>,
     ) -> Div {
-        use super::super::surfaces::{SurfaceAction, SurfaceId};
+        use super::super::surfaces::SurfaceAction;
         if self.parent.is_some() || !self.running.is_empty() {
             let running = self.running.len();
             block = block.child(
@@ -190,11 +190,10 @@ impl Lineage {
         if let Some(parent) = &self.parent {
             let subject = parent.subject.clone();
             block = block.child(
-                row(
+                press(
                     "details-lineage-parent".into(),
-                    parent,
-                    icons::CORNER_LEFT_UP,
-                    INK_SUBTLE,
+                    row(parent, icons::CORNER_LEFT_UP, INK_SUBTLE),
+                    cx,
                 )
                 .on_click(cx.listener(move |view, _: &ClickEvent, window, cx| {
                     cx.stop_propagation();
@@ -203,21 +202,15 @@ impl Lineage {
             );
         }
         let agent = |agent: &Relative, cx: &mut Context<CockpitView>| {
-            let surface = match &agent.subject {
-                Subject::Subagent(key) => Some(SurfaceId::Agent(key.as_str().to_owned())),
-                Subject::Main => None,
-            };
-            row(
+            let subject = agent.subject.clone();
+            press(
                 format!("details-lineage-agent-{}", agent.title),
-                agent,
-                mark,
-                mark_ink,
+                row(agent, mark, mark_ink),
+                cx,
             )
             .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
                 cx.stop_propagation();
-                if let Some(surface) = &surface {
-                    view.upsert_surface(thread, surface.clone(), cx)
-                }
+                view.open_subagent(thread, subject.clone(), cx)
             }))
         };
         for running in &self.running {
@@ -232,21 +225,8 @@ impl Lineage {
             .iter()
             .filter(|agent| agent.state == Dot::Failed)
             .count();
-        block = block.child(
-            div()
-                .id("details-lineage-previous")
-                .debug_selector(|| "details-lineage-previous".into())
-                .flex()
-                .items_center()
-                .min_w_0()
-                .gap(px(10.))
-                .h(px(32.))
-                .px(px(10.))
-                .rounded(px(8.))
-                .cursor_pointer()
-                .hover(|style| style.bg(rgba(0xffffff14)))
-                .text_color(rgba(0xffffffcc))
-                .child(icon(icons::BOT, 16., INK_SUBTLE))
+        let previous = div()
+            .child(icon(icons::BOT, 16., INK_SUBTLE))
                 .child(div().flex_1().min_w_0().truncate().child("Previous agents"))
                 .when(failed > 0, |row| {
                     row.child(
@@ -274,12 +254,15 @@ impl Lineage {
                     previous_open,
                     NAV_HEADING_CARET,
                     INK_SUBTLE,
-                ))
-                .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
+                ));
+        block = block.child(
+            press("details-lineage-previous".into(), previous, cx).on_click(cx.listener(
+                move |view, _: &ClickEvent, _, cx| {
                     cx.stop_propagation();
                     view.apply_surface(thread, SurfaceAction::TogglePreviousAgents);
                     cx.notify();
-                })),
+                },
+            )),
         );
         if !previous_open {
             return block;
@@ -289,22 +272,12 @@ impl Lineage {
             block = block.child(agent(previous, cx));
         }
         if more > 0 {
-            let selector = format!("details-lineage-show-more-{more}");
+            let show_more = div()
+                .text_color(rgb(INK_SUBTLE))
+                .child(icon(icons::PLUS, 16., INK_SUBTLE))
+                .child(format!("Show {more} more"));
             block = block.child(
-                div()
-                    .id("details-lineage-show-more")
-                    .debug_selector(move || selector.clone())
-                    .flex()
-                    .items_center()
-                    .gap(px(10.))
-                    .h(px(32.))
-                    .px(px(10.))
-                    .rounded(px(8.))
-                    .cursor_pointer()
-                    .text_color(rgb(INK_SUBTLE))
-                    .hover(|style| style.bg(rgba(0xffffff14)).text_color(rgba(0xffffffcc)))
-                    .child(icon(icons::PLUS, 16., INK_SUBTLE))
-                    .child(format!("Show {more} more"))
+                press(format!("details-lineage-show-more-{more}"), show_more, cx)
                     .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
                         cx.stop_propagation();
                         if let Some(index) = view.pane_for(thread) {
@@ -319,20 +292,36 @@ impl Lineage {
     }
 }
 
-/// A row: `glyph` with its state dot, the title cut to fit, the meta.
-fn row(selector: String, relative: &Relative, glyph: &'static str, ink: u32) -> Stateful<Div> {
+/// A Lineage row's press: the shared faded button, clear at rest and the
+/// card's hover ground under the pointer, with `body` laid out in it.
+fn press(selector: String, body: Div, cx: &gpui::App) -> gpui::component::button::Button {
+    ferrite_ui::components::faded_button(
+        SharedString::from(selector.clone()),
+        rgba(0).into(),
+        rgba(0xffffff14).into(),
+        rgba(0xffffff1f).into(),
+        rgba(0xffffffcc).into(),
+        cx,
+    )
+    .debug_selector(move || selector.clone())
+    .w_full()
+    .h(px(32.))
+    .px(px(10.))
+    .rounded(px(8.))
+    .child(
+        body.flex()
+            .items_center()
+            .w_full()
+            .min_w_0()
+            .gap(px(10.))
+            .text_size(px(13.))
+            .font_weight(W_LABEL),
+    )
+}
+
+/// A row's body: `glyph` with its state dot, the title cut to fit, the meta.
+fn row(relative: &Relative, glyph: &'static str, ink: u32) -> Div {
     div()
-        .id(SharedString::from(selector.clone()))
-        .debug_selector(move || selector.clone())
-        .flex()
-        .items_center()
-        .min_w_0()
-        .gap(px(10.))
-        .h(px(32.))
-        .px(px(10.))
-        .rounded(px(8.))
-        .cursor_pointer()
-        .hover(|style| style.bg(rgba(0xffffff14)))
         .text_color(rgba(0xffffffcc))
         .child(
             div()

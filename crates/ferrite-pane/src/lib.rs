@@ -1,5 +1,9 @@
 // Ferrite's Pane: the visible cell for one Thread. Its transcript, its
 // Composer and the Draft, and what they draw with.
+#[cfg(test)]
+#[path = "../../ferrite-core/src/test_temp.rs"]
+mod test_temp;
+
 pub mod annotation_editor;
 mod attachments;
 pub mod composer;

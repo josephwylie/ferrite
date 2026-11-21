@@ -1,8 +1,8 @@
 //! The side chat (Claude's, `claude/sidechat-open.png`): quick questions
 //! about a Thread that leave it as it is. Each conversation is a Surface of
-//! the Thread's Panel (ADR 0039), one tab per fork: `Start a side chat` in
-//! the selection's pill, or the Panel's `+` menu (Side chat, S), opens one
-//! beside the Thread, which reflows narrower; the tab's × ends it.
+//! the Thread's Panel (ADR 0039), one tab per fork: the Panel's `+` menu
+//! (Side chat, S) opens one beside the Thread, which reflows narrower; the
+//! tab's × ends it.
 //!
 //! Its head (T3's `SideChatPane`, 36 tall) holds the title, Bring back and
 //! Trash. Bring back puts the side chat's latest run into the main
@@ -19,9 +19,8 @@
 //! Thread's history, which the tab does not show: only what follows it
 //! (`Fork::inherited` blocks in). The pane draws it with the
 //! transcript components the Pane's own use, compact, over a Field
-//! Composer of its own: the selection's passage quoted in it as `> text`
-//! when the chat was opened from a selection, `Ask a quick question`
-//! when it is empty, ↵ sending.
+//! Composer of its own: `Ask a quick question` when it is empty, ↵
+//! sending.
 //!
 //! The fork answers asynchronously (`SideChatView::asked`): the tab is
 //! there at once, `No messages yet`, and takes the fork's Thread when the
@@ -142,19 +141,99 @@ pub(crate) enum SideChatEvent {
 impl EventEmitter<SideChatEvent> for SideChatView {}
 
 impl CockpitView {
-    /// `Start a side chat` (the selection's pill, `passage` the selection):
-    /// open `owner`'s side chat, or add a tab to it, asking the agent for
-    /// the fork that holds the conversation.
-    pub(super) fn open_side_chat(
-        &mut self,
-        owner: ThreadId,
-        passage: Option<String>,
+    /// Tell `pane`'s transcript what `subject` of `thread` holds after its
+    /// first `skip` blocks. The compact, read-only twin of
+    /// `sync_transcript`, for the side chat's tabs: no subagents, rewinds,
+    /// Reply or Decisions, as they have no Pane's Composer to reply into.
+    pub(super) fn sync_compact_transcript(
+        &self,
+        thread: ThreadId,
+        subject: &Subject,
+        pane: &PaneView,
+        skip: usize,
         cx: &mut Context<Self>,
     ) {
+        let Some(open) = self.cockpit.thread(thread) else {
+            return;
+        };
+        let Some(subject_view) = open.activity().subject(subject) else {
+            return;
+        };
+        let namespace = pane.text_namespace();
+        let revision = subject_view.presentation_revision();
+        let status = pane::transcript_status(subject_view.status(), subject_view.fresh());
+        let reading_size = self.prefs.settings.reading_size;
+        let transcript = subject_view.transcript();
+        let working = pane::working_tail(pane::WorkingFacts {
+            transcript,
+            thread,
+            starting: open.starting(),
+            solo: false,
+            focused: true,
+            reduce_motion: cx.reduce_motion(),
+        });
+        let workspace =
+            ferrite_core::workspace::effective_cwd(open.session_project_root(), open.workspace())
+                .map(std::path::Path::to_path_buf);
+        let presentation = ferrite_pane::transcript::TranscriptPresentation {
+            thread,
+            selection_scope: pane.selection_scope,
+            disclosure_focus: pane.tool_focus(),
+            namespace,
+            content_revision: revision,
+            display_revision: pane.disclosure_revision(),
+            focused: true,
+            signal_status: Some(status),
+            reading_size,
+            working,
+            tail: None,
+            pending_call: None,
+            workspace,
+            solo: false,
+            thinking: self.prefs.settings.show_thinking,
+            agents: Default::default(),
+            rewind: None,
+            quotes: false,
+            reply_to: open.provider().to_string().into(),
+            skills: open.commands().into(),
+            cited: Default::default(),
+            note: None,
+            earlier: None,
+            queued: 0,
+        };
+        let Some(entity) = pane.transcript() else {
+            return;
+        };
+        let selection = self.selection.clone();
+        entity.update(cx, |view, cx| {
+            view.reconcile(
+                presentation,
+                || {
+                    let mut blocks =
+                        pane::rendered_window(transcript.blocks()).to_vec();
+                    let first = transcript.blocks().len() - blocks.len();
+                    blocks.drain(..skip.saturating_sub(first).min(blocks.len()));
+                    let disclosure = pane.transcript_disclosure_snapshot();
+                    ferrite_pane::transcript::TranscriptBody {
+                        blocks,
+                        preview: pane.preview.clone(),
+                        expanded: disclosure.0,
+                        target: disclosure.1,
+                    }
+                },
+                selection,
+                cx,
+            );
+        });
+    }
+
+    /// The Panel's `+` Side chat: open `owner`'s side chat, or add a tab to
+    /// it, asking the agent for the fork that holds the conversation.
+    pub(super) fn open_side_chat(&mut self, owner: ThreadId, cx: &mut Context<Self>) {
         let asked = self.ask_side_fork(owner);
         let id = self
             .side_chat
-            .update(cx, |chat, cx| chat.open(owner, passage, asked, cx));
+            .update(cx, |chat, cx| chat.open(owner, asked, cx));
         self.upsert_surface(owner, SurfaceId::SideChat(id), cx);
         cx.notify();
     }
@@ -177,15 +256,10 @@ impl CockpitView {
     /// A scene's side chat: the tab as the agent would leave it before the
     /// fork answers, with no agent asked.
     #[cfg(feature = "visual-reference")]
-    pub(crate) fn fixture_side_chat(
-        &mut self,
-        owner: ThreadId,
-        passage: Option<String>,
-        cx: &mut Context<Self>,
-    ) {
+    pub(crate) fn fixture_side_chat(&mut self, owner: ThreadId, cx: &mut Context<Self>) {
         let id = self
             .side_chat
-            .update(cx, |chat, cx| chat.push_tab(owner, passage, None, cx));
+            .update(cx, |chat, cx| chat.push_tab(owner, None, cx));
         self.upsert_surface(owner, SurfaceId::SideChat(id), cx);
     }
 
@@ -253,20 +327,6 @@ impl CockpitView {
         }
     }
 
-    /// Every side chat of `owner` goes, and their tabs (what the tests do
-    /// between cases).
-    #[cfg(test)]
-    pub(super) fn close_side_chat(&mut self, owner: ThreadId, cx: &mut Context<Self>) {
-        let closed = self.side_chat.update(cx, |chat, cx| chat.close_all(owner, cx));
-        for (id, fork) in closed {
-            self.forget_surface(owner, &SurfaceId::SideChat(id));
-            if let Some(fork) = fork {
-                self.retire(fork);
-            }
-        }
-        cx.notify();
-    }
-
     /// Whether the shown side chat's field holds the keyboard, so ⌘W
     /// closes its tab (`close_panel_in_focus`).
     pub(super) fn side_chat_holds_focus(&self, window: &Window, cx: &gpui::App) -> bool {
@@ -327,7 +387,7 @@ impl CockpitView {
         };
         let conversation = conversation(owner, tab);
         if let Some((fork, pane)) = conversation {
-            self.sync_compact_transcript(fork.thread, &Subject::Main, pane, fork.inherited, None, None, cx);
+            self.sync_compact_transcript(fork.thread, &Subject::Main, pane, fork.inherited, cx);
         }
         let fork = conversation.map(|(fork, _)| fork);
         let answered = fork.is_some_and(|fork| {
@@ -490,23 +550,21 @@ impl SideChatView {
     fn open(
         &mut self,
         owner: ThreadId,
-        passage: Option<String>,
         asked: Result<(), SharedString>,
         cx: &mut Context<Self>,
     ) -> u64 {
-        let id = self.push_tab(owner, passage, asked.clone().err(), cx);
+        let id = self.push_tab(owner, asked.clone().err(), cx);
         if asked.is_ok() {
             self.asked.insert(owner, id);
         }
         id
     }
 
-    /// A tab in `owner`'s side chat, shown, its field holding the passage
-    /// as a quote when there is one. `refused` is why it has no fork.
+    /// A tab in `owner`'s side chat, shown, its field empty. `refused` is
+    /// why it has no fork.
     fn push_tab(
         &mut self,
         owner: ThreadId,
-        passage: Option<String>,
         refused: Option<SharedString>,
         cx: &mut Context<Self>,
     ) -> u64 {
@@ -514,11 +572,6 @@ impl SideChatView {
             let mut line = Composer::new(cx);
             line.set_role(Role::Field(Some(KEY_CONTEXT)), cx);
             line.set_visible_row_limit(ferrite_pane::composer::MAX_ROWS, cx);
-            if let Some(passage) = passage {
-                // The caret lands under the quote.
-                let quote = ferrite_core::replies::compose(&[Reply::new(passage, "")], "");
-                line.insert(&format!("{quote}\n\n"), cx);
-            }
             line
         });
         let id = self.next_tab;
@@ -593,21 +646,6 @@ impl SideChatView {
         self.focus_wanted = true;
         cx.notify();
         tab.conversation.map(|conversation| conversation.fork.thread)
-    }
-
-    /// Every tab of `owner` goes: each one's id, and its fork if it had one.
-    #[cfg(test)]
-    fn close_all(&mut self, owner: ThreadId, cx: &mut Context<Self>) -> Vec<(u64, Option<ThreadId>)> {
-        let Some(chat) = self.chats.remove(&owner) else {
-            return Vec::new();
-        };
-        let closed: Vec<_> = chat
-            .tabs
-            .into_iter()
-            .map(|tab| (tab.id, tab.conversation.map(|c| c.fork.thread)))
-            .collect();
-        cx.notify();
-        closed
     }
 
     /// ⏎ in tab `id`'s field: its question, for the fork. Nothing before

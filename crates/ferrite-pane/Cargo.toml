@@ -59,6 +59,9 @@ cef = { version = "=154.5.0", default-features = false, features = ["sandbox"], 
 windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_Threading", "Win32_UI_Input_KeyboardAndMouse"] }
 
 [dev-dependencies]
+# The test programs' own temporary folder (ferrite-core/src/test_temp.rs).
+ctor = "1"
+libc = "0.2"
 gpui = { package = "gpui-kit", version = "=0.6.0", features = ["test-support"] }
 ferrite-core = { path = "../ferrite-core", features = ["test-support"] }
 ferrite-ui = { path = "../ferrite-ui", features = ["test-support"] }

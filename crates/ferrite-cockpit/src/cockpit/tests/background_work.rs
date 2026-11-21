@@ -413,6 +413,37 @@ fn an_agent_waited_on_is_in_the_line_the_dialog_and_the_tab(cx: &mut TestAppCont
     assert!(debug_bounds(cx, "background-dialog-open-toolu_a".into()).is_some(), "the dialog lists it");
 }
 
+/// `Open` on an agent in the Background tab, and `Open thread` in the
+/// dialog, give the Pane that agent's full chat.
+#[gpui::test]
+fn opening_a_background_agent_shows_its_full_chat(cx: &mut TestAppContext) {
+    use ferrite_core::activity::Subject;
+    let (core, fake) = cockpit("background-open-agent", 1);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    let key = working_agent(&fake, "toolu_a", "Read the docs");
+    tick(cx);
+    open_background_tab(&view, cx);
+    let open = bounds(cx, "background-tab-open-toolu_a".into());
+    cx.simulate_click(open.center(), gpui::Modifiers::none());
+    tick(cx);
+    let selected = |view: &Entity<CockpitView>, cx: &mut gpui::VisualTestContext| {
+        view.read_with(cx, |view, _| view.panes[0].selected.clone())
+    };
+    assert_eq!(selected(&view, cx), Subject::Subagent(key.clone()), "the tab's Open");
+
+    cx.update(|window, app| {
+        view.update(app, |view, cx| view.select_subject(view.panes[0].thread().unwrap(), Subject::Main, window, cx))
+    });
+    tick(cx);
+    let details = bounds(cx, "background-details".into());
+    cx.simulate_click(details.center(), gpui::Modifiers::none());
+    tick(cx);
+    let open = bounds(cx, "background-dialog-open-toolu_a".into());
+    cx.simulate_click(open.center(), gpui::Modifiers::none());
+    tick(cx);
+    assert_eq!(selected(&view, cx), Subject::Subagent(key), "the dialog's Open thread");
+}
+
 /// While Main's turn runs its agents are rows of the transcript, so the line
 /// stays away, but the Background tab keeps listing them.
 #[gpui::test]

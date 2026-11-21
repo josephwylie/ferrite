@@ -539,6 +539,69 @@ pub struct BranchStatus {
     /// Working-tree entries `git status --porcelain` lists — modified,
     /// staged and untracked alike. Zero is a clean tree.
     pub dirty: u32,
+    /// The lines the checkout's work moves against its base: the Changes
+    /// row's reading. `None` when git could not count them.
+    pub changes: Option<BranchDiff>,
+}
+
+/// What a checkout's work adds and removes, and what that is counted
+/// against: the same changeset the Panel's Changes Surface reads for the
+/// whole branch, so the two never disagree.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BranchDiff {
+    pub against: DiffBase,
+    pub added: u32,
+    pub removed: u32,
+}
+
+/// What a [`BranchDiff`] counts against.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DiffBase {
+    /// The base the branch was cut from, as the ref that was compared
+    /// (`origin/main`, or `main` with no remote): everything since the
+    /// merge base, committed or not, untracked files included.
+    Branch(String),
+    /// No base: a detached HEAD, or no base that resolves or shares
+    /// history. The uncommitted work against `HEAD` alone.
+    Uncommitted,
+}
+
+/// Count the checkout's work against its base, off the UI thread.
+/// `detached` is `git status`'s word: a detached HEAD has no branch to
+/// compare, only its uncommitted work.
+pub fn branch_diff(cwd: &Path, detached: bool) -> Option<BranchDiff> {
+    use ferrite_reviewr::git::{self as review, ResolvedBase};
+    // The Changes Surface's own base chain: the operator's pick, else the
+    // default branch, origin's before the local one.
+    let base = (!detached)
+        .then(|| review::resolve_base(cwd, None).ok()?.status.winner)
+        .flatten()
+        .and_then(|base| Some((review::merge_base(cwd, base.oid())?, base)));
+    let (old, against) = match base {
+        Some((merge_base, base)) => {
+            let name = match base {
+                ResolvedBase::Branch { name, oid } => {
+                    let remote = format!("refs/remotes/origin/{name}^{{commit}}");
+                    match git(cwd, &["rev-parse", "--verify", "--quiet", &remote]) {
+                        Ok(tip) if tip.trim() == oid => format!("origin/{name}"),
+                        _ => name,
+                    }
+                }
+                ResolvedBase::Rev { spelling, .. } => spelling,
+            };
+            (merge_base, DiffBase::Branch(name))
+        }
+        None => (
+            review::diff_base(review::head_oid(cwd)),
+            DiffBase::Uncommitted,
+        ),
+    };
+    let files = review::changed_from(cwd, &old).ok()?;
+    Some(BranchDiff {
+        against,
+        added: files.iter().map(|file| file.additions).sum(),
+        removed: files.iter().map(|file| file.deletions).sum(),
+    })
 }
 
 /// The branch's pull request, as the forge reports it.
@@ -559,6 +622,9 @@ pub struct PullRequest {
     /// what the checks card lists. Empty exactly when `checks`
     /// is `None` — the rollup *is* this list, folded.
     pub runs: Vec<Check>,
+    /// Whether it conflicts with its base branch; `false` while the
+    /// forge has not worked that out.
+    pub conflicting: bool,
 }
 
 impl PullRequest {
@@ -622,6 +688,7 @@ impl PullRequest {
             title: (!pr.title.is_empty()).then(|| pr.title.clone()),
             checks: (!runs.is_empty()).then(|| rollup_state(&runs)),
             runs,
+            conflicting: matches!(pr.merge, crate::protocol::WireMerge::Conflicting),
         }
     }
 }
@@ -686,14 +753,17 @@ pub enum CheckState {
 
 /// Read the checkout's drift, off the UI thread. One `git status
 /// --porcelain=v2 --branch` answers branch, upstream, ahead/behind and dirt
-/// together. `None` where `cwd` is not a checkout at all.
+/// together; `branch_diff` then counts the work against its base. `None`
+/// where `cwd` is not a checkout at all.
 pub fn branch_status(cwd: &Path) -> Option<BranchStatus> {
     let listed = git(cwd, &["status", "--porcelain=v2", "--branch"]).ok()?;
     let mut status = BranchStatus::default();
+    let mut detached = false;
     for line in listed.lines() {
         if let Some(head) = line.strip_prefix("# branch.head ") {
             let head = head.trim();
-            if head != "(detached)" {
+            detached = head == "(detached)";
+            if !detached {
                 status.branch = Some(head.to_string());
             }
         } else if let Some(upstream) = line.strip_prefix("# branch.upstream ") {
@@ -713,6 +783,7 @@ pub fn branch_status(cwd: &Path) -> Option<BranchStatus> {
             .map(|head| head.trim().to_string())
             .filter(|head| !head.is_empty());
     }
+    status.changes = branch_diff(cwd, detached);
     Some(status)
 }
 
@@ -739,7 +810,7 @@ pub fn pr_view(cwd: &Path) -> Option<String> {
             "pr",
             "view",
             "--json",
-            "number,state,isDraft,url,title,statusCheckRollup",
+            "number,state,isDraft,url,title,statusCheckRollup,mergeable",
         ],
     )
 }
@@ -807,6 +878,8 @@ pub fn parse_pr_json(body: &str) -> Option<PullRequest> {
         title,
         checks,
         runs,
+        conflicting: value.get("mergeable").and_then(serde_json::Value::as_str)
+            == Some("CONFLICTING"),
     })
 }
 
@@ -1071,6 +1144,7 @@ mod tests {
         );
         assert_eq!(pr.checks, Some(super::CheckState::Pending));
         assert_eq!(pr.runs[0].detail, "in_progress");
+        assert!(!pr.conflicting, "the snapshot says it merges cleanly");
         assert_eq!(super::PullRequest::of_view(&PrView::NoPr), None);
     }
 
@@ -1186,6 +1260,22 @@ mod tests {
         assert_eq!(check_state("brand_new_word"), CheckState::Pending);
         assert_eq!(check_state("cancelled"), CheckState::Failing);
         assert_eq!(check_state("queued"), CheckState::Pending);
+    }
+
+    /// The card says when a pull request conflicts with its base: `gh`'s
+    /// `mergeable` reads `CONFLICTING`. Any other word, or none, is no
+    /// conflict.
+    #[test]
+    fn a_pr_reading_knows_when_it_conflicts() {
+        let read = |mergeable: &str| {
+            let body = format!(r#"{{"number":9,"state":"OPEN","mergeable":"{mergeable}"}}"#);
+            parse_pr_json(&body).expect("a PR").conflicting
+        };
+        assert!(read("CONFLICTING"));
+        assert!(!read("MERGEABLE"));
+        assert!(!read("UNKNOWN"));
+        let bare = parse_pr_json(r#"{"number":9,"state":"OPEN"}"#).expect("a PR");
+        assert!(!bare.conflicting);
     }
 
     /// Not JSON at all, or JSON without a number: no PR, not a panic.
@@ -1652,6 +1742,95 @@ mod tests {
             default_branch(&repo),
             "main",
             "no origin: the local main is the default"
+        );
+    }
+
+    /// The Changes row's reading, from real git: a branch counts everything
+    /// since it left its base — commits, edits not yet committed and
+    /// untracked files — against the ref it compared (`origin/main` when a
+    /// remote has it, else the local `main`); a detached HEAD counts its
+    /// uncommitted work alone.
+    #[test]
+    fn branch_diff_counts_the_work_against_the_base_it_compared() {
+        let commit = |tree: &Path, message: &str| {
+            git(tree, &["add", "-A"]).unwrap();
+            git(
+                tree,
+                &[
+                    "-c",
+                    "user.email=test@example.invalid",
+                    "-c",
+                    "user.name=test",
+                    "commit",
+                    "-qm",
+                    message,
+                ],
+            )
+            .unwrap();
+        };
+        let diff = |against: DiffBase, added: u32, removed: u32| {
+            Some(BranchDiff {
+                against,
+                added,
+                removed,
+            })
+        };
+        let root = scratch("branch-diff");
+        let origin = init_repo(&root);
+        fs::write(origin.join("file.txt"), "one\ntwo\nthree\n").unwrap();
+        commit(&origin, "three lines");
+        let clone = root.join("clone");
+        git(
+            &root,
+            &[
+                "clone",
+                "-q",
+                "-c",
+                "core.autocrlf=false",
+                &origin.to_string_lossy(),
+                &clone.to_string_lossy(),
+            ],
+        )
+        .unwrap();
+        git(&clone, &["checkout", "-q", "-b", "feat"]).unwrap();
+        let vs_origin = || DiffBase::Branch("origin/main".into());
+
+        assert_eq!(
+            branch_diff(&clone, false),
+            diff(vs_origin(), 0, 0),
+            "no changes: the base is still named"
+        );
+
+        fs::write(clone.join("added.txt"), "a\nb\n").unwrap();
+        commit(&clone, "insertions only");
+        assert_eq!(branch_diff(&clone, false), diff(vs_origin(), 2, 0));
+
+        fs::write(clone.join("file.txt"), "one\n").unwrap();
+        commit(&clone, "deletions only");
+        assert_eq!(branch_diff(&clone, false), diff(vs_origin(), 2, 2));
+
+        fs::write(clone.join("file.txt"), "one\nuncommitted\n").unwrap();
+        fs::write(clone.join("untracked.txt"), "u\n").unwrap();
+        assert_eq!(
+            branch_diff(&clone, false),
+            diff(vs_origin(), 4, 2),
+            "uncommitted edits and untracked files count with the branch"
+        );
+
+        git(&clone, &["checkout", "-q", "--detach"]).unwrap();
+        assert_eq!(
+            branch_diff(&clone, true),
+            diff(DiffBase::Uncommitted, 2, 0),
+            "detached: the uncommitted work against HEAD alone"
+        );
+
+        // No remote: the local default branch is the base.
+        git(&origin, &["checkout", "-q", "-b", "local"]).unwrap();
+        fs::write(origin.join("local.txt"), "l\n").unwrap();
+        commit(&origin, "local");
+        assert_eq!(
+            branch_diff(&origin, false),
+            diff(DiffBase::Branch("main".into()), 1, 0)
         );
     }
 

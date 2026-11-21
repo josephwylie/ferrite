@@ -178,13 +178,15 @@ pub fn working_tail(facts: WorkingFacts) -> Option<WorkingTail> {
 }
 
 /// The words a header or live row wears: `TURN_FOLD_TEXT` on
-/// `TURN_FOLD_LINE`, `INK_SUBTLE`, tabular, on a `TURN_FOLD_ROW_H` line.
+/// `TURN_FOLD_LINE`, `INK_SUBTLE`, tabular, on a `TURN_FOLD_ROW_H` line,
+/// never wider than the column it stands in.
 fn row_words() -> Div {
     components::tabular(
         div()
             .flex()
             .items_center()
             .min_w_0()
+            .max_w_full()
             .min_h(px(theme::TURN_FOLD_ROW_H))
             .font_family(theme::FONT_UI)
             .text_size(px(theme::TURN_FOLD_TEXT))
@@ -399,8 +401,9 @@ pub(crate) fn turn_fold(
 /// program alone (`text::live_words`), or once it finished `Ran sed` — or,
 /// with no call there, `Thinking` (a phase that is not the model's own
 /// work, by name). Its width hugs its words, which shimmer on the Pane
-/// holding the keyboard. A thought in that work stands over it, its first
-/// heading or line, four lines at most, until the work is opened; pressed,
+/// holding the keyboard. A thought in that work stands over it, as its
+/// leading heading or first sentence (`text::live_thought_line`), four
+/// lines at most, until the work is opened; pressed,
 /// it opens the work's rows above it (`disclosure`).
 fn live_row(live: &Live, work: &[Block], disclosure: Option<LineDisclosure>) -> Div {
     let open = disclosure.as_ref().is_some_and(|disclosure| disclosure.open);
@@ -421,7 +424,7 @@ fn live_row(live: &Live, work: &[Block], disclosure: Option<LineDisclosure>) -> 
         .then(|| {
             work.iter().rev().find_map(|block| match &block.body {
                 Body::Thinking(text) if !text.trim().is_empty() => {
-                    Some(ferrite_core::progress::headline(text))
+                    Some(text::live_thought_line(text))
                 }
                 _ => None,
             })
@@ -440,7 +443,6 @@ fn live_row(live: &Live, work: &[Block], disclosure: Option<LineDisclosure>) -> 
     };
     let mut row = row_words()
         .debug_selector(move || selector.into())
-        .max_w_full()
         .child(working_mark(live.spinning))
         .child(face);
     if let Some(disclosure) = disclosure {

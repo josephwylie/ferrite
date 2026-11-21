@@ -3,7 +3,6 @@
 //! Rendering and keys only. What each Pane shows — the Blocks, the pending
 //! Decision, the held prompt — is folded in core and read from there.
 
-mod agent_pane;
 pub(crate) mod archive;
 mod attachments;
 mod background_dialog_view;
@@ -433,7 +432,6 @@ pub struct CockpitView {
     changes: Entity<tools::ChangesView>,
     /// The pull request reader: the Panel's PR Surface and the PRs' detail.
     pull_request: Entity<panel::pull_request::PullRequestView>,
-    agent_drills: Entity<agent_pane::AgentDrillsView>,
     /// The Inbox's alerts and the toast float that shows them.
     pub(crate) toasts: Entity<toasts::ToastsView>,
     native_copy: Option<String>,
@@ -452,6 +450,9 @@ pub struct CockpitView {
     /// to that Project's section — which Panes the Cockpit flies is never
     /// touched by it.
     nav_filter: Option<ProjectId>,
+    /// When each listed Thread came into its section, which the list and
+    /// the Working shelf order by (`nav_state`).
+    nav_arrivals: std::cell::RefCell<nav::Arrivals>,
     /// The nav, a view of its own (ADR 0041): it owns its list's motion,
     /// scroll, keyboard, search, picks and undo notice, and asks the
     /// Cockpit for the rest through `NavEvent`.
@@ -1160,8 +1161,6 @@ impl CockpitView {
         // The root draws its card into its own frame, so each change
         // redraws the window.
         cx.observe(&file_surface, |_, _, cx| cx.notify()).detach();
-        let agent_drills = cx.new(|_| agent_pane::AgentDrillsView::new(cockpit_weak.clone()));
-        cx.subscribe(&agent_drills, Self::on_agent_drill_event).detach();
         let toasts = cx.new(|_| toasts::ToastsView::new(cockpit_weak.clone()));
         let decisions = cx.new(|_| decisions::DecisionsView::default());
         // A card's pick lives in its Pane's forms, and the root draws the
@@ -1209,10 +1208,10 @@ impl CockpitView {
             terminals,
             changes,
             pull_request,
-            agent_drills,
             toasts,
             native_copy: None,
             nav_filter: None,
+            nav_arrivals: std::cell::RefCell::default(),
             nav_view: cx.new(|cx| nav_view::NavView::new(cockpit_weak, cx)),
             view_events: None,
             activation: None,
@@ -1848,11 +1847,6 @@ impl CockpitView {
             ferrite_pane::transcript::TranscriptEvent::CopyFullHistory => {
                 if let Some(thread) = self.panes[index].thread() {
                     self.copy_transcript(thread, cx);
-                }
-            }
-            ferrite_pane::transcript::TranscriptEvent::SideChat(passage) => {
-                if let Some(thread) = self.panes[index].thread() {
-                    self.open_side_chat(thread, Some(passage.clone()), cx);
                 }
             }
             // A wrap-up's next step: its words go as the next prompt.
@@ -5708,14 +5702,18 @@ impl CockpitView {
 
     /// The nav's per-frame state (ADR 0040), from caches and O(1) reads
     /// only; the Project filter narrows it and nothing else. Every open
-    /// Thread the filter admits is in one section, by priority: snoozed,
-    /// pinned, working, else active. Pinned keeps pin order; Active puts
-    /// pending Decisions first, then the needs-you queue's order (oldest
-    /// request first); Working the newest send first; Snoozed the soonest
-    /// to wake first; Parked the park order. Drafts are not rows (#29).
+    /// Thread is in one section, by priority: snoozed, pinned, working,
+    /// else active. A Thread works while its turn, its background work
+    /// or a prompt waiting its turn runs, unless a Decision waits. Pinned
+    /// keeps pin order; Active puts pending Decisions first, oldest
+    /// request first, then the latest arrival (`nav::Arrivals`), so a
+    /// Thread done with its work comes back at the top; Working the latest
+    /// arrival first; Snoozed the soonest to wake first; Parked the park
+    /// order. Drafts are not rows (#29).
     ///
     /// The one selection is the shown Thread. The empty board shows none.
     fn nav_state(&self) -> nav::NavState {
+        use nav::Section;
         let roster = self.cockpit.roster();
         let shown = (!self.empty_board_shown())
             .then(|| roster.focused_thread())
@@ -5728,26 +5726,61 @@ impl CockpitView {
             .panes
             .iter()
             .filter_map(|pane| pane.thread())
-            .filter(|thread| self.cockpit.thread(*thread).is_some() && self.admitted(*thread))
+            .filter(|thread| {
+                self.cockpit.thread(*thread).is_some() && self.cockpit.operators(*thread)
+            })
             .collect();
         threads.sort();
         threads.dedup();
         let pins = &self.prefs.settings.pinned_threads;
+        // Every listed Thread's section, the filter's or not: a Thread
+        // that moves while filtered out has still moved.
+        let listed: Vec<(ThreadId, Section, Option<std::time::SystemTime>)> = threads
+            .into_iter()
+            .map(|thread| {
+                let open = self.cockpit.thread(thread);
+                let section = if open.is_some_and(|open| open.snooze().is_some()) {
+                    Section::Snoozed
+                } else if pins.contains(&thread) {
+                    Section::Pinned
+                } else if open.is_some_and(|open| {
+                    open.pending_decisions().is_empty()
+                        && (open.needs_queue() || open.background_work() || !open.queue().is_empty())
+                }) {
+                    Section::Working
+                } else {
+                    Section::Active
+                };
+                (thread, section, self.facts.last_used(thread))
+            })
+            .collect();
+        let mut arrivals = self.nav_arrivals.borrow_mut();
+        arrivals.note(&listed, ferrite_core::clock::system_time());
+        // The latest arrival first; arrivals alike keep creation order.
+        let latest =
+            |row: &nav::ThreadRow| (std::cmp::Reverse(arrivals.since(row.thread)), row.thread);
         let mut state = nav::NavState::default();
         let mut pinned = Vec::new();
         let mut snoozed = Vec::new();
-        for thread in threads {
-            let open = self.cockpit.thread(thread);
-            let snooze = open.and_then(|open| open.snooze()).map(|snooze| snooze.until);
-            let working = open.is_some_and(|open| {
-                open.pending_decisions().is_empty()
-                    && (open.needs_queue() || open.background_work() || !open.queue().is_empty())
-            });
-            match (snooze, pins.iter().position(|pin| *pin == thread)) {
-                (Some(until), _) => snoozed.push((until, row(thread))),
-                (None, Some(at)) => pinned.push((at, row(thread))),
-                (None, None) if working => state.working.push(row(thread)),
-                (None, None) => state.active.push(row(thread)),
+        for (thread, section, _) in listed {
+            if !self.admitted(thread) {
+                continue;
+            }
+            match section {
+                Section::Snoozed => {
+                    let until = self
+                        .cockpit
+                        .thread(thread)
+                        .and_then(|open| open.snooze())
+                        .map(|snooze| snooze.until);
+                    snoozed.push((until, row(thread)));
+                }
+                Section::Pinned => {
+                    let at = pins.iter().position(|pin| *pin == thread);
+                    pinned.push((at, row(thread)));
+                }
+                Section::Working => state.working.push(row(thread)),
+                Section::Active => state.active.push(row(thread)),
             }
         }
         pinned.sort_by_key(|(at, _)| *at);
@@ -5757,18 +5790,14 @@ impl CockpitView {
         let queue = self.cockpit.needs_you();
         state.active.sort_by_key(|row| {
             (
-                self.cockpit
-                    .thread(row.thread)
-                    .is_none_or(|open| open.pending_decisions().is_empty()),
                 queue
                     .iter()
                     .position(|id| *id == row.thread)
                     .unwrap_or(usize::MAX),
+                latest(row),
             )
         });
-        state
-            .working
-            .sort_by_key(|row| std::cmp::Reverse(row.working_since));
+        state.working.sort_by_key(latest);
         state.parked = self.parked_threads().into_iter().map(row).collect();
         state
     }
@@ -6583,7 +6612,6 @@ impl CockpitView {
         // compares scalar keys first, so Composer edits repaint Cockpit chrome
         // without cloning or notifying any retained transcript entity.
         self.sync_visible_transcripts(cx);
-        self.restore_shown_agent_drills(cx);
 
         // The `/`/`@` menu belongs to the focused Pane's Composer (#23):
         // leaving that Pane closes it here.
@@ -7352,7 +7380,6 @@ impl CockpitView {
             transcript: retained_transcript,
             attachments,
             menu: self.popover_element(index, cx),
-            subagent_head: self.subagent_head(index, cx),
             activity_decisions,
             details: self.details_card(index, window, cx),
             details_lane_width: self.details_lane_width(index),

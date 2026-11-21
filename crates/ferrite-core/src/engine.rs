@@ -1019,8 +1019,7 @@ impl Thread {
     /// Whether work runs behind Main: its Subagents, or its transcript's
     /// background tasks.
     fn background_work(&self) -> bool {
-        self.activity.view().working_descendants() > 0
-            || self.transcript().progress().working_background() > 0
+        self.activity.view().background_work()
     }
 
     /// At rest: no turn, no starting or replacement Session, no change
@@ -4684,25 +4683,14 @@ impl Engine {
         if let Some(name) = transcript.plan() {
             live.push(WireInput::Live(Live::AccountPlan { name: name.into() }));
         }
-        // The turn as it stands: a replay never reads one as running, so a
-        // watch mid-turn is told it is, as its provider said it.
-        use crate::transcript::Status;
-        let state = match transcript.status() {
-            Status::Streaming => Some(crate::RunState::Running),
-            Status::Blocked => Some(crate::RunState::RequiresAction),
-            Status::Idle | Status::Closed => None,
-        };
-        if let Some(protocol::Outgoing::Input(input)) = state.map(|state| {
-            protocol::outgoing(
-                &ActivityInput::Main {
-                    input: Input::Event(SessionEvent::RunState { state }),
-                    at: crate::clock::instant(),
-                },
-                None,
-            )
-        }) {
-            live.push(input);
-        }
+        // What runs now: the log never says, and the `Connect` above
+        // retires what it read.
+        live.extend(view.now(crate::clock::instant()).iter().filter_map(|input| {
+            match protocol::outgoing(input, None) {
+                protocol::Outgoing::Input(input) => Some(input),
+                _ => None,
+            }
+        }));
         Some(History {
             thread,
             log,

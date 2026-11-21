@@ -75,4 +75,7 @@ windows-sys = { version = "0.61", features = [
 ] }
 
 [dev-dependencies]
+# The test programs' own temporary folder (ferrite-core/src/test_temp.rs).
+ctor = "1"
+libc = "0.2"
 serde_json = { workspace = true }
