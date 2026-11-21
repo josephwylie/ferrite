@@ -137,6 +137,19 @@ impl CockpitView {
         Self::mount_part(frame, self.nav_view.clone().into())
     }
 
+    /// The toast float: its view, cached as a part with parts on, so a
+    /// Cockpit redraw that moves nothing it draws leaves it. It takes no
+    /// room: its toasts hang over the window from where they are anchored.
+    pub(super) fn toast_float(&self) -> AnyElement {
+        if !self.parts.borrow().on {
+            return self.toasts.clone().into_any_element();
+        }
+        AnyView::from(self.toasts.clone())
+            .cached(StyleRefinement::default().absolute().top_0().left_0())
+            .tracking_reads()
+            .into_any_element()
+    }
+
     /// Forget the parts of Panes no longer open.
     pub(super) fn prune_parts(&self) {
         let mut parts = self.parts.borrow_mut();

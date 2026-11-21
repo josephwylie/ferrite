@@ -7,15 +7,18 @@
 //! standing and the system notifications posted (`NeedsYou`), and the
 //! toast on its way out (`ToastStage`). The root's pump hears the machines
 //! and rings it (`ring_alerts`), and plays its chimes and posts its system
-//! notifications. The float reads its row and its place through
-//! `toast_inputs`; what a toast's button asks it says as a `ToastEvent`.
-//! The kit's toasts stay the root's (`toast_margins`).
+//! notifications. The float reads its toast's row itself (`look`), as the
+//! client's model says something `Arrived`, the window or its machines
+//! notify, or a ring moves its toasts; the window hands it where it hangs
+//! as it lays out its columns (`place_toasts`). It redraws only when one
+//! of them moved. What a toast's button asks it says as a `ToastEvent`.
+//! The kit's toasts stay the root's.
 
 use gpui::WeakEntity;
 
 use super::*;
 use crate::float::{self, FloatPlace};
-use crate::notifications::{Alert, QuickAnswer, ToastStage};
+use crate::notifications::{QuickAnswer, ToastStage};
 use ferrite_core::notifications::DecisionNoticeId;
 
 /// What a toast's buttons ask of the window.
@@ -26,36 +29,118 @@ pub(crate) enum ToastEvent {
     Open(Verb),
 }
 
-/// What the float draws from the window.
-pub(crate) struct ToastInputs {
-    /// The newest standing toast in its row's words: none while the nav is
-    /// open, or once its record is gone.
+/// What the float draws, as it last read it.
+#[derive(Default, PartialEq)]
+struct ToastInputs {
+    /// The newest standing toast in its row's words: none once its record
+    /// is gone.
     row: Option<NoticeRow>,
+    place: Place,
+}
+
+/// Where the float hangs, as the window laid out its columns this frame.
+#[derive(Clone, Copy, Default, PartialEq)]
+pub(super) struct Place {
+    /// The nav is folded: only then does a toast show.
+    pub folded: bool,
     /// The nav's width.
-    nav_w: f32,
+    pub nav_w: f32,
     /// From the window's right edge to the board's: the panel's left while
     /// it shows.
-    board_right: f32,
+    pub board_right: f32,
 }
 
 /// The Inbox's alerts and the toast float that shows them.
 pub(crate) struct ToastsView {
     cockpit: WeakEntity<CockpitView>,
+    /// The client's model, whose `Arrived` has the float look again.
+    model: Entity<Cockpit>,
     /// What was heard, what waits, the toasts standing, what is posted.
+    /// Whoever changes its toasts has the float look again (`look_again`).
     pub(crate) needs_you: NeedsYou,
     /// What the float drew last: the toast standing and the one fading out.
     stage: ToastStage,
+    /// What the float draws, as it last read it (`look`, `place`). Its
+    /// render reads nothing else, so only a change here redraws it.
+    inputs: ToastInputs,
+    /// The Cockpit's notify, its machines' and the model's `Arrived`, each
+    /// of which has the float look again.
+    watching: Vec<gpui::Subscription>,
 }
 
 impl EventEmitter<ToastEvent> for ToastsView {}
 
 impl ToastsView {
-    pub(super) fn new(cockpit: WeakEntity<CockpitView>) -> Self {
+    pub(super) fn new(
+        cockpit: WeakEntity<CockpitView>,
+        model: Entity<Cockpit>,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        // The Cockpit is still being made, and its machines are handed to
+        // it after: the float first looks once it is.
+        let toasts = cx.weak_entity();
+        cx.defer(move |cx| {
+            toasts.update(cx, |toasts, cx| toasts.watch(cx)).ok();
+        });
         Self {
             cockpit,
+            model,
             needs_you: NeedsYou::new(),
             stage: ToastStage::default(),
+            inputs: ToastInputs::default(),
+            watching: Vec::new(),
         }
+    }
+
+    fn watch(&mut self, cx: &mut Context<Self>) {
+        let Some(cockpit) = self.cockpit.upgrade() else {
+            return;
+        };
+        let machines = cockpit.read(cx).machines();
+        self.watching = vec![
+            cx.observe(&cockpit, |toasts, _, cx| toasts.look(cx)),
+            cx.subscribe(&self.model, |toasts, _, _: &Arrived, cx| toasts.look(cx)),
+        ];
+        self.watching.extend(
+            machines.map(|machines| cx.observe(&machines, |toasts, _, cx| toasts.look(cx))),
+        );
+        self.look(cx);
+    }
+
+    /// Read the newest standing toast's row, and redraw when it moved. It
+    /// runs as the Cockpit, its machines or the model say something, never
+    /// in a draw.
+    fn look(&mut self, cx: &mut Context<Self>) {
+        let Some(cockpit) = self.cockpit.upgrade() else {
+            return;
+        };
+        let view = cockpit.read(cx);
+        let machines = view.machines.as_ref().map(|machines| machines.read(cx));
+        let row = self.needs_you.toasts().last().and_then(|toast| {
+            view.alert_row(&toast.alert, machines, ferrite_core::clock::system_time(), cx)
+        });
+        if self.inputs.row != row {
+            self.inputs.row = row;
+            cx.notify();
+        }
+    }
+
+    /// The window laid out its columns: where the float hangs this frame.
+    pub(super) fn place(&mut self, place: Place, cx: &mut Context<Self>) {
+        if self.inputs.place != place {
+            self.inputs.place = place;
+            cx.notify();
+        }
+    }
+
+    /// `look`, once the update under way has ended: what the Cockpit's own
+    /// code asks as it changes the toasts standing (a ring, a toast taken
+    /// down), while the Cockpit may still be borrowed.
+    pub(super) fn look_again(&mut self, cx: &mut Context<Self>) {
+        let toasts = cx.weak_entity();
+        cx.defer(move |cx| {
+            toasts.update(cx, |toasts, cx| toasts.look(cx)).ok();
+        });
     }
 
     /// A toast's buttons: an answered or opened toast goes at once
@@ -81,15 +166,14 @@ impl Render for ToastsView {
     /// in when it comes, over the face of the one before it while that
     /// fades away (`notifications::ToastStage`).
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let Some(cockpit) = self.cockpit.upgrade() else {
-            return div();
-        };
-        let standing = self.needs_you.toasts().last().map(|toast| &toast.alert);
-        let ToastInputs {
-            row: standing,
+        #[cfg(test)]
+        super::drawn::built_toasts();
+        let Place {
+            folded,
             nav_w,
             board_right,
-        } = cockpit.read(cx).toast_inputs(standing, cx);
+        } = self.inputs.place;
+        let standing = self.inputs.row.clone().filter(|_| folded);
         let leaving = self.stage.stage(
             standing.as_ref(),
             cx.background_executor().now(),
@@ -135,19 +219,6 @@ impl Render for ToastsView {
 }
 
 impl CockpitView {
-    /// What the toast float draws: the newest standing toast's row while
-    /// the nav is folded, and what it hangs beside.
-    pub(super) fn toast_inputs(&self, standing: Option<&Alert>, cx: &gpui::App) -> ToastInputs {
-        let machines = self.machines.as_ref().map(|machines| machines.read(cx));
-        ToastInputs {
-            row: standing
-                .filter(|_| self.nav_folded())
-                .and_then(|alert| self.alert_row(alert, machines, ferrite_core::clock::system_time(), cx)),
-            nav_w: self.nav_width(),
-            board_right: self.panel_column_w(cx) + self.task_panel_w(cx),
-        }
-    }
-
     /// A toast's button: its quick answer, or what it opens.
     pub(super) fn on_toast_event(
         &mut self,
@@ -164,15 +235,26 @@ impl CockpitView {
 
     /// Take one toast down (its button, or the list, acted on it).
     pub(super) fn drop_toast(&mut self, target: &RowTarget, cx: &mut Context<Self>) {
-        self.toasts.update(cx, |toasts, _| toasts.needs_you.drop_toast(target));
+        self.toasts.update(cx, |toasts, cx| {
+            toasts.needs_you.drop_toast(target);
+            toasts.look_again(cx);
+        });
     }
 
-    /// Keep the kit's toast stack (`theme.notification`) on the
-    /// transcript's column, as the toast float keeps: its right margin
-    /// follows the panel, written only when it moves.
-    pub(super) fn toast_margins(&self, cx: &mut gpui::App) {
-        let right =
-            px(self.panel_column_w(cx) + self.task_panel_w(cx) + ferrite_ui::theme::TOAST_BOX_RIGHT);
+    /// Hand the toast float where it hangs this frame, as the columns are
+    /// laid out, and keep the kit's toast stack (`theme.notification`) on
+    /// the transcript's column with it: its right margin follows the
+    /// panel, written only when it moves.
+    pub(super) fn place_toasts(&self, cx: &mut Context<Self>) {
+        let board_right = self.panel_column_w(cx) + self.task_panel_w(cx);
+        let place = Place {
+            folded: self.nav_folded(),
+            nav_w: self.nav_width(),
+            board_right,
+        };
+        // The Cockpit is drawing: the float takes its place as it is.
+        self.toasts.update(cx, |toasts, cx| toasts.place(place, cx));
+        let right = px(board_right + ferrite_ui::theme::TOAST_BOX_RIGHT);
         if gpui::component::Theme::global(cx)
             .notification
             .margins
