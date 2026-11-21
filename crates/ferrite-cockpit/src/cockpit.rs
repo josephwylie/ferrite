@@ -13,6 +13,7 @@ mod browser;
 #[cfg(feature = "browser-smoke")]
 mod browser_smoke;
 mod checkouts;
+mod composer_footer;
 mod columns;
 mod composer_menu;
 mod context_menu;
@@ -5471,28 +5472,6 @@ impl CockpitView {
         Some(self.model_chip_control(index, control, cx))
     }
 
-    /// A draft's permission word, where a Thread's mode chip stands: the mode
-    /// a new Thread starts in (Settings, `permission_mode_for`), read-only
-    /// until the Session exists to change it.
-    fn draft_mode_chip(&self, index: usize) -> Option<AnyElement> {
-        let draft = self.panes[index].draft()?;
-        let mode = self
-            .prefs
-            .settings
-            .permission_mode_for(draft.binding.provider().provider)
-            .to_string();
-        let label = pane::permission_mode_label(&mode, &[]);
-        Some(
-            div()
-                .id(("draft-mode", index))
-                .debug_selector(move || format!("draft-mode-{index}"))
-                .flex_shrink_0()
-                .tooltip(ferrite_ui::menu::tooltip("Permission mode"))
-                .child(pane::mode_chip(label, &mode))
-                .into_any_element(),
-        )
-    }
-
     /// The Solo Composer's controls (SPEC §5.5, Claude's): the `+` that
     /// attaches files and the send circle on the box's row; under the box,
     /// where the work runs at the left (a draft's Project and Workspace
@@ -5510,57 +5489,28 @@ impl CockpitView {
         if !pane.is_main() {
             return None;
         }
-        // The queue strip's acts, each row's own, aimed at its message by
-        // its id: send now sends it next (`send_queued_now`), edit is ↑'s
-        // act and remove ⌫'s — neither while Codex steers it.
-        let queue: Vec<Vec<AnyElement>> = pane.thread().map_or_else(Vec::new, |thread| {
-            let Some(open) = self.cockpit.thread(thread) else {
-                return Vec::new();
-            };
-            let running = turn_running(&open);
-            type Act = fn(&mut Cockpit, ThreadId, &str);
-            open.queue()
-                .iter()
-                .enumerate()
-                .map(|(at, item)| {
-                    let takes_back = pane::queued_takes_back(item);
-                    let acts: [(Option<gpui::component::button::Button>, Act); 3] = [
-                        (
-                            pane::queued_sends_now(item, running)
-                                .then(|| pane::queued_send_now(at, cx)),
-                            |cockpit, thread, id| cockpit.send_queued_now(thread, id),
-                        ),
-                        (
-                            takes_back.then(|| pane::queued_edit(at, cx)),
-                            |cockpit, thread, id| cockpit.edit_queued_item(thread, id),
-                        ),
-                        (
-                            takes_back.then(|| pane::queued_close(at, cx)),
-                            |cockpit, thread, id| cockpit.remove_queued_item(thread, id, false),
-                        ),
-                    ];
-                    acts.into_iter()
-                        .filter_map(|(button, act)| {
-                            let id = item.id.clone();
-                            let button = button?.on_click(cx.listener(
-                                move |view, _: &ClickEvent, window, cx| {
-                                    cx.stop_propagation();
-                                    view.focus_pane(index);
-                                    let focus =
-                                        view.panes[index].composer.read(cx).focus_handle(cx);
-                                    window.focus(&focus, cx);
-                                    act(&mut view.cockpit, thread, &id);
-                                    view.facts.acted(&view.cockpit, thread);
-                                    cx.notify();
-                                },
-                            ));
-                            Some(button.into_any_element())
-                        })
-                        .collect()
-                })
-                .collect()
+        let (running, line_empty) = self.running_and_empty(index, cx);
+        let open_thread = pane
+            .thread()
+            .and_then(|thread| Some((thread, self.cockpit.thread(thread)?)));
+        let queue = open_thread.as_ref().map_or_else(Vec::new, |(thread, open)| {
+            composer_footer::queue_acts(index, *thread, open.queue(), running, cx)
         });
-        let attach = self.attach_menu(index, cx);
+        let attach = composer_footer::AttachMenu::of(
+            index,
+            pane.identity,
+            self.attach_menu_focus(pane.identity),
+            pane.composer.focus_handle(cx),
+            match pane.geometry.get().composer {
+                Some(field) => ferrite_ui::components::FloatPlace {
+                    floor: f32::from(field.top()),
+                    limit_right: f32::from(field.right()),
+                },
+                None => self.bar_place(),
+            },
+            open_thread.as_ref().map(|(thread, open)| (*thread, open)),
+        )
+        .render(cx);
         let (env, mut words, mode, ring) = match pane.thread() {
             None => {
                 // A draft has no Session to ask: its mode is the one a new
@@ -5581,17 +5531,22 @@ impl CockpitView {
                     self.draft_model_chip(index, cx)
                         .into_iter()
                         .collect::<Vec<_>>(),
-                    self.draft_mode_chip(index),
+                    self.panes[index].draft().map(|draft| {
+                        composer_footer::draft_mode_word(
+                            index,
+                            self.prefs
+                                .settings
+                                .permission_mode_for(draft.binding.provider().provider),
+                        )
+                    }),
                     ring.map(IntoElement::into_any_element),
                 )
             }
             Some(thread) => {
-                let open = self.cockpit.thread(thread);
+                let open = open_thread.as_ref().map(|(_, open)| open);
                 // An empty Thread says where its work runs, as a draft
                 // does; its Project and checkout are settled, so as words.
-                let empty = open
-                    .as_ref()
-                    .is_some_and(|open| pane::offers_import(Some(open.transcript())));
+                let empty = open.is_some_and(|open| pane::offers_import(Some(open.transcript())));
                 let env = self.facts.get(thread).filter(|_| empty).map(|facts| {
                     [
                         (ferrite_ui::icons::FOLDER, facts.project_label.clone()),
@@ -5615,7 +5570,11 @@ impl CockpitView {
                 (
                     env,
                     self.model_chip(index, cx).into_iter().collect(),
-                    self.mode_chip(index, cx),
+                    open.and_then(|open| {
+                        let menu_up = self.mode_menu().is_some_and(|menu| menu.thread == thread);
+                        let chip = composer_footer::ModeChip::of(index, thread, open, menu_up)?;
+                        Some(chip.render(self.record_trigger(mode_menu::chip_trigger(thread)), cx))
+                    }),
                     ring.map(IntoElement::into_any_element),
                 )
             }
@@ -5625,8 +5584,8 @@ impl CockpitView {
         words.extend(mode);
         Some(pane::ComposerControls {
             attach: Some(attach),
-            stop: self.stop_button(index, cx),
-            send: self.send_button(index, cx),
+            stop: composer_footer::stop_button(index, running, line_empty, cx),
+            send: composer_footer::send_button(index, running, line_empty, cx),
             footer: Some(pane::composer_footer(model, words, ring).into_any_element()),
             env: env
                 .filter(|chips: &Vec<AnyElement>| !chips.is_empty())
@@ -5644,279 +5603,6 @@ impl CockpitView {
             .and_then(|thread| self.cockpit.thread(thread))
             .is_some_and(|open| turn_running(&open));
         (running, pane.composer.read(cx).is_empty())
-    }
-
-    /// The send circle: Enter's act, steering a running turn. The box's
-    /// stands only once there is something to send (an empty box shows
-    /// none).
-    fn send_button(&self, index: usize, cx: &mut Context<Self>) -> Option<AnyElement> {
-        let (running, empty) = self.running_and_empty(index, cx);
-        if !pane::primary_actions(running, empty).send {
-            return None;
-        }
-        let button = pane::send_button(running, empty, cx)
-            .on_click(cx.listener(move |view, _: &ClickEvent, window, cx| {
-                cx.stop_propagation();
-                view.focus_pane(index);
-                let focus = view.panes[index].composer.read(cx).focus_handle(cx);
-                window.focus(&focus, cx);
-                view.submit(&Submit, window, cx);
-            }))
-            .into_any_element();
-        Some(button)
-    }
-
-    /// Stop, while the turn runs: Esc's act, which keeps what is typed.
-    fn stop_button(&self, index: usize, cx: &mut Context<Self>) -> Option<AnyElement> {
-        let (running, empty) = self.running_and_empty(index, cx);
-        if !pane::primary_actions(running, empty).stop {
-            return None;
-        }
-        let button = pane::stop_button(cx)
-            .on_click(cx.listener(move |view, _: &ClickEvent, window, cx| {
-                cx.stop_propagation();
-                view.focus_pane(index);
-                let focus = view.panes[index].composer.read(cx).focus_handle(cx);
-                window.focus(&focus, cx);
-                if let Some(thread) = view.panes[index].thread() {
-                    view.cockpit.interrupt(thread);
-                    view.facts.acted(&view.cockpit, thread);
-                    cx.notify();
-                }
-            }))
-            .into_any_element();
-        Some(button)
-    }
-
-    /// The box's `+` and its menu (Claude's): add files or photos, add a
-    /// folder, or start a slash command — the `/` menu on the line; then,
-    /// for a Thread whose Session reports them, `Connectors ›` and
-    /// `Plugins ›` (`attach_submenus`).
-    fn attach_menu(&self, index: usize, cx: &mut Context<Self>) -> AnyElement {
-        let identity = self.panes[index].identity;
-        let choices = [
-            ("Add files or photos", ferrite_ui::icons::PAPERCLIP),
-            ("Add folder", ferrite_ui::icons::FOLDER),
-            ("Slash commands", ferrite_ui::icons::SQUARE_SLASH),
-        ]
-        .into_iter()
-        .enumerate()
-        .map(|(at, (label, mark))| ferrite_ui::components::Choice {
-            label: label.into(),
-            icon: Some((mark, ferrite_ui::theme::INK_STRONG)),
-            // The key that does it from anywhere (the menu's digits are
-            // the modes'; this one is a chord).
-            shortcut: (at == 0)
-                .then(|| ferrite_ui::components::bound_chord("cockpit::AttachFiles"))
-                .flatten()
-                .map(SharedString::from),
-            ..Default::default()
-        })
-        .collect();
-        let weak = cx.entity().downgrade();
-        let picker = weak.clone();
-        let open = self.attach_menu_focus(identity);
-        ferrite_ui::menu::ChoiceMenu {
-            submenus: self.attach_submenus(index, cx),
-            width: Some(ferrite_ui::theme::ATTACH_MENU_W),
-            hang_left: true,
-            id: SharedString::from(format!("attach-menu-{index}")),
-            trigger: pane::attach_button(open.is_some(), cx),
-            choices,
-            open,
-            return_focus: self.panes[index].composer.focus_handle(cx),
-            on_open: std::rc::Rc::new(move |open, _, cx| {
-                let _ = weak.update(cx, |view, cx| {
-                    if open {
-                        view.focus_pane(index);
-                        let focus = cx.focus_handle();
-                        view.show_popup(Popup::Attach { pane: identity, focus }, cx);
-                    } else if view.attach_menu_focus(identity).is_some() {
-                        view.close_popup(cx);
-                    }
-                });
-            }),
-            // The kit closes the menu after every pick.
-            on_pick: std::rc::Rc::new(move |at, _, cx| {
-                let _ = picker.update(cx, |view, cx| {
-                    match at {
-                        0 => view.attach_files(index, false, cx),
-                        1 => view.attach_files(index, true, cx),
-                        _ => view.panes[index]
-                            .composer
-                            .clone()
-                            .update(cx, |composer, cx| composer.insert("/", cx)),
-                    }
-                    cx.notify();
-                });
-            }),
-            // Over the box, as the `/` menu stands, hanging from the `+`'s
-            // left edge (Claude's), never out over the sidebar.
-            place: Some(match self.panes[index].geometry.get().composer {
-                Some(field) => ferrite_ui::components::FloatPlace {
-                    floor: f32::from(field.top()),
-                    limit_right: f32::from(field.right()),
-                },
-                None => self.bar_place(),
-            }),
-        }
-        .into_any_element()
-    }
-
-    /// The `+` menu's submenus, each only when the Pane's Thread has
-    /// something to put in it (Claude's rows, as far as Ferrite can back
-    /// them):
-    ///
-    /// - `Connectors ›`: the Session's MCP servers, a troubled one's state
-    ///   as its tag; a pick signs in to one that waits on it, reconnects a
-    ///   failed one, else opens the panel, where Connectors live — as
-    ///   `Manage connectors` does.
-    /// - `Plugins ›`: the plugins the Session's commands come from, as the
-    ///   provider says (`CommandSource::Plugin`), each opening its own
-    ///   commands; a pick starts `/plugin:command ` on the line as a chip.
-    ///
-    /// Claude's `+` menu reaches nothing else Ferrite could back: a
-    /// plugin the CLI loads with no commands has nothing to pick.
-    fn attach_submenus(
-        &self,
-        index: usize,
-        cx: &mut Context<Self>,
-    ) -> Vec<ferrite_ui::menu::Submenu> {
-        use ferrite_core::{ControlKind, McpStatus, SessionControl};
-        let Some(thread) = self.panes[index].thread() else {
-            return Vec::new();
-        };
-        let Some(open) = self.cockpit.thread(thread) else {
-            return Vec::new();
-        };
-        let generation = open.generation();
-        let mut submenus = Vec::new();
-        let servers = open.transcript().mcp_servers().to_vec();
-        if !servers.is_empty() {
-            // What a pick on each server does.
-            let acts: Vec<Option<SessionControl>> = servers
-                .iter()
-                .map(|server| match server.status {
-                    McpStatus::NeedsAuth if open.supports_control(ControlKind::LoginMcp) => {
-                        Some(SessionControl::LoginMcp {
-                            server: server.name.clone(),
-                        })
-                    }
-                    McpStatus::Failed if open.supports_control(ControlKind::ReconnectMcp) => {
-                        Some(SessionControl::ReconnectMcp {
-                            server: server.name.clone(),
-                        })
-                    }
-                    _ => None,
-                })
-                .collect();
-            let choices = servers
-                .iter()
-                .map(|server| ferrite_ui::components::Choice {
-                    label: server.name.clone().into(),
-                    badge: match server.status {
-                        McpStatus::Connected => None,
-                        McpStatus::Connecting => Some("connecting".into()),
-                        McpStatus::NeedsAuth => Some("needs sign-in".into()),
-                        McpStatus::Failed => Some("failed".into()),
-                        McpStatus::Disabled => Some("disabled".into()),
-                        McpStatus::Unknown => None,
-                    },
-                    why: server.error.clone().map(SharedString::from),
-                    ..Default::default()
-                })
-                .chain(std::iter::once(ferrite_ui::components::Choice {
-                    label: "Manage connectors".into(),
-                    ..Default::default()
-                }))
-                .collect();
-            let view = cx.entity().downgrade();
-            submenus.push(ferrite_ui::menu::Submenu {
-                icon: Some((ferrite_ui::icons::BLOCKS, ferrite_ui::theme::INK_STRONG)),
-                label: "Connectors".into(),
-                value: SharedString::default(),
-                choices,
-                submenus: Vec::new(),
-                width: ferrite_ui::theme::ATTACH_MENU_W,
-                on_pick: std::rc::Rc::new(move |at, _, cx| {
-                    let act = acts.get(at).cloned().flatten();
-                    let _ = view.update(cx, |view, cx| {
-                        match act {
-                            Some(act) => view.run_session_control(thread, generation, act),
-                            None => view.open_panel(thread, cx),
-                        }
-                        cx.notify();
-                    });
-                }),
-            });
-        }
-        let plugins = plugins(open.commands());
-        if !plugins.is_empty() {
-            let view = cx.entity().downgrade();
-            let submenus_per_plugin = plugins
-                .into_iter()
-                .map(|(plugin, commands)| {
-                    let names: Vec<String> = commands
-                        .iter()
-                        .map(|command| command.name.clone())
-                        .collect();
-                    let choices = commands
-                        .iter()
-                        .map(|command| ferrite_ui::components::Choice {
-                            // The command as the plugin names it: the
-                            // submenu already says whose it is.
-                            label: command
-                                .name
-                                .strip_prefix(&format!("{plugin}:"))
-                                .unwrap_or(&command.name)
-                                .to_string()
-                                .into(),
-                            why: (!command.description.is_empty())
-                                .then(|| command.description.clone().into()),
-                            ..Default::default()
-                        })
-                        .collect();
-                    let view = view.clone();
-                    ferrite_ui::menu::Submenu {
-                        icon: None,
-                        label: plugin.into(),
-                        value: SharedString::default(),
-                        choices,
-                        submenus: Vec::new(),
-                        width: ferrite_ui::theme::ATTACH_MENU_W,
-                        // A pick starts the command on the line, a chip
-                        // as the `/` menu's pick is.
-                        on_pick: std::rc::Rc::new(move |at, _, cx| {
-                            let Some(name) = names.get(at) else {
-                                return;
-                            };
-                            let token = format!("/{name}");
-                            let _ = view.update(cx, |view, cx| {
-                                view.panes[index]
-                                    .composer
-                                    .clone()
-                                    .update(cx, |composer, cx| {
-                                        composer.insert(&format!("{token} "), cx);
-                                        composer.stage_chip(SharedString::from(token), cx);
-                                    });
-                                cx.notify();
-                            });
-                        }),
-                    }
-                })
-                .collect();
-            submenus.push(ferrite_ui::menu::Submenu {
-                icon: Some((ferrite_ui::icons::PLUG, ferrite_ui::theme::INK_STRONG)),
-                label: "Plugins".into(),
-                value: SharedString::default(),
-                choices: Vec::new(),
-                submenus: submenus_per_plugin,
-                width: ferrite_ui::theme::ATTACH_MENU_W,
-                // Its rows are the plugins' submenus: nothing to pick here.
-                on_pick: std::rc::Rc::new(|_: usize, _: &mut Window, _: &mut gpui::App| {}),
-            });
-        }
-        submenus
     }
 
     /// The `+` menu's file or folder picker, its picks staged on this
@@ -8084,57 +7770,6 @@ impl CockpitView {
             }
         })
         .detach();
-    }
-
-    /// The Composer's permission mode chip (SPEC §5.5, §D.7): the mode's
-    /// label (`pane::permission_mode_label`), in `MODE_ATTENTION_INK` for
-    /// `Manual` (`theme::mode_is_manual`). Always shown once the
-    /// Thread has a list or a mode, so the mode can be changed, from the
-    /// cached answers when no Session runs (ADR 0032). It opens the
-    /// permission menu (`mode_menu.rs`); ⇧⇥ still cycles (`cycle_mode`). A
-    /// Session that cannot switch modes shows the chip without a menu.
-    fn mode_chip(&self, index: usize, cx: &mut Context<Self>) -> Option<AnyElement> {
-        let thread = self.panes[index].thread()?;
-        let open = self.cockpit.thread(thread)?;
-        let generation = open.generation();
-        let modes = open.permission_modes();
-        if modes.is_empty() && open.permission_mode().is_none() {
-            return None;
-        }
-        let mode = open.permission_mode().unwrap_or("default").to_string();
-        let label = pane::permission_mode_label(&mode, &modes);
-        let key = thread.get() as usize;
-        let menu_up = self.mode_menu().is_some_and(|menu| menu.thread == thread);
-        let trigger = pane::toolbar_chip(("mode-picker", key), cx)
-            .debug_selector(move || format!("mode-picker-{key}"))
-            .tip_unless_open(menu_up, "Permission mode")
-            .child(pane::mode_chip(label, &mode));
-        let wrap = |chip: AnyElement| {
-            div()
-                .debug_selector(move || format!("composer-mode-{key}"))
-                .flex_shrink_0()
-                .child(chip)
-                .into_any_element()
-        };
-        if modes.is_empty() || !open.supports_control(ferrite_core::ControlKind::SetPermissionMode)
-        {
-            return Some(wrap(trigger.into_any_element()));
-        }
-        let trigger = trigger.on_mouse_down(
-            MouseButton::Left,
-            cx.listener(move |view, _: &MouseDownEvent, _, cx| {
-                cx.stop_propagation();
-                view.focus_pane(index);
-                view.toggle_mode_menu(thread, generation, cx);
-            }),
-        );
-        Some(wrap(
-            ferrite_ui::components::on_bounds(
-                div().flex().child(trigger),
-                self.record_trigger(mode_menu::chip_trigger(thread)),
-            )
-            .into_any_element(),
-        ))
     }
 
     /// The Session controls card (`session_card::SessionCard`), hung over

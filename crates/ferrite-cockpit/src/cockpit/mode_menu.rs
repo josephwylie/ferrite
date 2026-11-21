@@ -4,7 +4,10 @@
 //! itself as a popup; the model picker's footer opens it inside the picker
 //! (`ModelPicker::mode`), over its permissions button.
 //! A pick sends the native `SetPermissionMode` (`request_mode`) and shuts
-//! it; ⇧⇥ still cycles the modes without it.
+//! it; ⇧⇥ still cycles the modes without it. It gets no view (ADR 0041,
+//! What does not get a view): the slot holds all it keeps (`Popup::Mode`),
+//! and it is drawn from what the root reads of the Session
+//! (`ModeSegments`).
 
 use super::*;
 use ferrite_ui::theme::*;
@@ -93,21 +96,48 @@ impl CockpitView {
         )
     }
 
+    /// The menu for `menu`'s Session, none once another one runs.
     fn mode_menu_surface(&self, menu: &ModeMenu, cx: &mut Context<Self>) -> Option<Stateful<Div>> {
-        let &ModeMenu {
-            thread,
-            generation,
-            ref preview,
-        } = menu;
-        let open = self.cockpit.thread(thread)?;
-        if open.generation() != generation {
+        Some(ModeSegments::of(menu, &self.cockpit.thread(menu.thread)?)?.render(cx))
+    }
+}
+
+/// The menu as it reads: the Session's modes in Claude's order (`Auto`
+/// first), the mode in force and the mode it names, the one under the
+/// pointer or else the one in force.
+struct ModeSegments {
+    thread: ThreadId,
+    generation: u64,
+    modes: Vec<ferrite_core::PermissionModeChoice>,
+    current: String,
+    shown: String,
+}
+
+impl ModeSegments {
+    fn of(menu: &ModeMenu, open: &ThreadView) -> Option<Self> {
+        if open.generation() != menu.generation {
             return None;
         }
         let mut modes = open.permission_modes();
-        // Claude's order: `Auto` first.
         modes.sort_by_key(|choice| choice.value != "auto");
         let current = open.permission_mode().unwrap_or("default").to_string();
-        let shown = preview.clone().unwrap_or_else(|| current.clone());
+        Some(Self {
+            thread: menu.thread,
+            generation: menu.generation,
+            shown: menu.preview.clone().unwrap_or_else(|| current.clone()),
+            modes,
+            current,
+        })
+    }
+
+    fn render(self, cx: &mut Context<CockpitView>) -> Stateful<Div> {
+        let Self {
+            thread,
+            generation,
+            modes,
+            current,
+            shown,
+        } = self;
         let last = modes.len().saturating_sub(1);
         let mut track = div()
             .debug_selector(|| "mode-segments".into())
@@ -205,6 +235,6 @@ impl CockpitView {
             )
             .child(track)
             .child(preview);
-        Some(menu)
+        menu
     }
 }

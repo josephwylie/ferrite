@@ -1,5 +1,5 @@
 {
-  "crates/ferrite-cockpit/src/cockpit.rs": 9,
+  "crates/ferrite-cockpit/src/cockpit.rs": 8,
   "crates/ferrite-cockpit/src/cockpit/archive.rs": 3,
   "crates/ferrite-cockpit/src/cockpit/background_dialog_view.rs": 2,
   "crates/ferrite-cockpit/src/cockpit/background_work.rs": 3,
@@ -7,6 +7,7 @@
   "crates/ferrite-cockpit/src/cockpit/browser/chrome.rs": 1,
   "crates/ferrite-cockpit/src/cockpit/browser/dialog.rs": 1,
   "crates/ferrite-cockpit/src/cockpit/columns.rs": 2,
+  "crates/ferrite-cockpit/src/cockpit/composer_footer.rs": 1,
   "crates/ferrite-cockpit/src/cockpit/context_menu.rs": 2,
   "crates/ferrite-cockpit/src/cockpit/coordinator.rs": 1,
   "crates/ferrite-cockpit/src/cockpit/delivery.rs": 1,

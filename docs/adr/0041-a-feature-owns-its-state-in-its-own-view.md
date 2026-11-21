@@ -816,8 +816,7 @@ what was read, the plan as plain values (`PlanCard::of`, `render`) and the
 checks by a free function whose rows open a run's log through the root
 (`checks_card`), both in `cockpit/head_cards.rs`. A view would hold no
 state and add events for a press the root answers anyway. The Composer's
-footer (the toolbar, send and stop, the `+` menu, the mode chip and menu)
-follows in the same shape.
+draw code follows in the same shape, below.
 
 A draft's band menu's rows are the fifteenth. The Project and Workspace
 chips open a popup in the slot (`Popup::Band`), which keeps the open menu,
@@ -842,6 +841,25 @@ from what was read as plain values (`SessionCard::of`, `render`,
 press sends its control through the root (`request_mode`,
 `run_session_control`), after checking that the Session still runs and
 still reports the server or task.
+
+The Composer's footer is the seventeenth. Its controls (the queue strip's
+acts, send and stop, the `+` and its menu, a Thread's permission mode chip
+or a draft's mode word) and the permission menu the chip opens keep
+nothing of their own on the root: the line is the Pane's Composer, and the
+`+` menu's focus and the permission menu with the mode under the pointer
+are the popup slot's (`Popup::Attach`, `Popup::Mode`). The root reads the
+Pane's Thread once as it builds the toolbar (`composer_toolbar`): whether
+its turn runs and its line is empty, its queue, its MCP servers and
+plugins, its permission modes and mode. The controls are drawn from what
+was read (`cockpit/composer_footer.rs`: `queue_acts`, `send_button`,
+`stop_button`, `AttachMenu::of`, `ModeChip::of`, `draft_mode_word`; and
+`ModeSegments` in `mode_menu.rs`). Every press acts through the root, as
+before: the submit, the interrupt, a queued message's act, opening the `+`
+menu and the file picker, a connector's control, a plugin's command on the
+line, the permission menu's toggle and a mode's `request_mode`. What stays
+the root's is the root's: putting the toolbar together, the model chip and
+a draft's band chips, which open the model picker and the band menus, the
+plan usage ring, and hanging the cards and menus over the Composer.
 
 ## Precedent
 
