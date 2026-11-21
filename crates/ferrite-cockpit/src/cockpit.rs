@@ -52,6 +52,8 @@ mod project_editor_view;
 mod settings_view;
 mod sheets;
 mod side_chat_view;
+mod rename;
+use rename::{rename_field, RenameTarget};
 mod snooze;
 pub(crate) mod starts;
 mod surfaces;
@@ -494,11 +496,8 @@ pub struct CockpitView {
     /// selects an already registered Project; it must never turn the app's
     /// process directory into user workspace state.
     launch_project: Option<ProjectId>,
-    /// The inline title rename in flight, if any: what is being renamed,
-    /// and the one-line Composer standing in for its title. At most one —
-    /// the title cell *is* the editor, so two at once would need two rows
-    /// to be the row you are looking at.
-    rename: Option<(RenameTarget, Entity<ferrite_pane::composer::Composer>)>,
+    /// The inline title rename, in a nav row or the view head.
+    rename: rename::Rename,
     /// The one popup that is up: the context menu, the mode menu, or the
     /// plan, checks or session controls card (ADR 0043).
     popups: popups::Popups,
@@ -670,17 +669,6 @@ enum CardFrom {
 enum Reader {
     Document(ScrollHandle),
     Code(Entity<tools::Editor>),
-}
-
-/// What an inline rename is aimed at: a Thread's own display name, at
-/// one of the sites that edit it.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum RenameTarget {
-    /// A Thread, renamed from its nav row.
-    Thread(ThreadId),
-    /// A Thread, renamed from the view head (`view_head`): the same title,
-    /// a different editor site, so the two never draw one editor twice.
-    ViewTitle(ThreadId),
 }
 
 /// What the window is handed at launch beyond the core: the operator's
@@ -924,39 +912,6 @@ fn version_label(version: &str, dev: bool) -> String {
     } else {
         version.to_string()
     }
-}
-
-/// A rename editor with its keys beside it while it edits: `↵ save · esc
-/// cancel` in mono `INK_SUBTLE`, the `·` in structure ink. The keys live
-/// here, where they act, rather than on the menu row that opened it.
-fn rename_field(editor: Entity<ferrite_pane::composer::Composer>, hint: bool) -> Div {
-    let text = "↵ save · esc cancel";
-    let at = text.find(" · ").unwrap_or(0);
-    let hint_text = ferrite_ui::components::text_meta()
-        .debug_selector(|| "rename-hint".into())
-        .flex_shrink_0()
-        .font_family(ferrite_ui::theme::FONT_CODE)
-        .child(gpui::StyledText::new(text).with_highlights(vec![(
-            at..at + " · ".len(),
-            gpui::HighlightStyle {
-                color: Some(rgb(ferrite_ui::theme::TEXT_FAINT).into()),
-                ..Default::default()
-            },
-        )]));
-    div()
-        .flex()
-        .items_center()
-        .gap(px(ferrite_ui::theme::SPACE_2))
-        .min_w_0()
-        .flex_1()
-        .child(
-            div()
-                .debug_selector(|| "rename-field".into())
-                .min_w_0()
-                .flex_1()
-                .child(editor),
-        )
-        .children(hint.then_some(hint_text))
 }
 
 /// The one popover the Composer's slot can hold — the `/` or `@` menu
@@ -1455,7 +1410,7 @@ impl CockpitView {
             checking_out: Default::default(),
             repo_listing: None,
             asking_repo: None,
-            rename: None,
+            rename: Default::default(),
             popups: Default::default(),
             panel,
             panel_empty_focus: cx.focus_handle(),
@@ -3177,54 +3132,37 @@ impl CockpitView {
             .collect()
     }
 
-    /// Open the inline editor on a title, seeded with the title as it
-    /// stands — a rename starts from what is there, not from an empty line.
-    /// A target that no longer resolves has no title to edit, and the
-    /// press is dropped rather than opening an editor over nothing.
+    /// Open the inline editor on a Thread's title. A Thread with no stored
+    /// title shows its generated one, so that is what the editor opens on:
+    /// the operator edits the name they can see.
     fn start_rename(&mut self, target: RenameTarget, cx: &mut Context<Self>) {
-        let title = match target {
-            // A Thread with no stored title shows its generated one, so
-            // that is what the editor opens on: the operator edits the name
-            // they can see.
-            RenameTarget::Thread(thread)
-            | RenameTarget::ViewTitle(thread) => Some(self.facts.name(thread).to_string()),
-        };
-        let Some(title) = title else {
-            return;
-        };
-        let editor = cx.new(ferrite_pane::composer::Composer::new);
-        editor.update(cx, |editor, cx| {
-            editor.set_role(ferrite_pane::composer::Role::Field(Some("NavRename")), cx);
-            editor.set(title, cx)
-        });
-        self.rename = Some((target, editor));
+        let (RenameTarget::Thread(thread) | RenameTarget::ViewTitle(thread)) = target;
+        let title = self.facts.name(thread).to_string();
+        self.rename.open(target, title, cx);
         cx.notify();
     }
 
-    /// Close the editor. `save` commits — except on a blank line, which is
-    /// not a rename to an empty title but a rename the operator abandoned.
-    /// A refusal from the store lands where every other nav notice does;
-    /// the editor still closes, so a row is never stuck in edit.
+    /// Close the editor; `save` commits the title it holds. A refusal from
+    /// the store lands where every other nav notice does; the editor still
+    /// closes, so a row is never stuck in edit.
     fn finish_rename(&mut self, save: bool, cx: &mut Context<Self>) {
-        let Some((target, editor)) = self.rename.take() else {
+        if !self.rename.is_open() {
             return;
+        }
+        let asked = if save {
+            self.rename.take(cx)
+        } else {
+            self.rename.close();
+            None
         };
-        if !save {
-            cx.notify();
-            return;
-        }
-        let title = editor.update(cx, |line, cx| line.take(cx));
-        if title.trim().is_empty() {
-            cx.notify();
-            return;
-        }
-        let (RenameTarget::Thread(thread) | RenameTarget::ViewTitle(thread)) = target;
-        match self.cockpit.rename_thread(thread, &title) {
-            Err(error) => self.nav_notice.problem(error.to_string()),
-            Ok(_) => {
-                self.facts.renamed(&self.cockpit, thread);
-                self.refresh_names();
-                self.nav_notice.clear();
+        if let Some((thread, title)) = asked {
+            match self.cockpit.rename_thread(thread, &title) {
+                Err(error) => self.nav_notice.problem(error.to_string()),
+                Ok(_) => {
+                    self.facts.renamed(&self.cockpit, thread);
+                    self.refresh_names();
+                    self.nav_notice.clear();
+                }
             }
         }
         cx.notify();
@@ -4087,7 +4025,7 @@ impl CockpitView {
             self.nav_view.update(cx, |nav, cx| nav.finish_snooze(true, cx));
             return;
         }
-        if self.rename.is_some() {
+        if self.rename.is_open() {
             self.finish_rename(true, cx);
             return;
         }
@@ -4254,7 +4192,7 @@ impl CockpitView {
             self.nav_view.update(cx, |nav, cx| nav.finish_snooze(false, cx));
             return;
         }
-        if self.rename.is_some() {
+        if self.rename.is_open() {
             self.finish_rename(false, cx);
             return;
         }
@@ -4328,7 +4266,7 @@ impl CockpitView {
     /// about whether there is something to accept.
     fn accept_suggestion(&mut self, window: &Window, cx: &mut Context<Self>) -> bool {
         if self.sheet_up(cx)
-            || self.rename.is_some()
+            || self.rename.is_open()
             || self.nav_view.read(cx).snooze_line().is_some()
             || self.popover.is_some()
         {
@@ -5158,7 +5096,7 @@ impl CockpitView {
             return false;
         };
         !self.panes[index].has_tool_target()
-            && self.rename.is_none()
+            && !self.rename.is_open()
             && self.nav_view.read(cx).snooze_line().is_none()
             && self.popover.is_none()
             && ((self.panes[index].is_main() && queued_to_take_back(&open).is_some())
@@ -7684,7 +7622,7 @@ impl CockpitView {
         let Some(pane) = self.panes.get(index) else {
             return;
         };
-        if self.rename.is_some() {
+        if self.rename.is_open() {
             return;
         }
         let composer = pane.composer.clone();
@@ -8164,7 +8102,7 @@ impl Render for CockpitView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         ferrite_ui::motion::hover_frame_start(cx);
         self.tend_reader_slides(cx);
-        if let Some((_, editor)) = &self.rename {
+        if let Some((_, editor)) = self.rename.shown() {
             let line = editor.read(cx).focus_handle(cx);
             if !line.is_focused(window) {
                 window.focus(&line, cx);
@@ -8444,7 +8382,7 @@ impl CockpitView {
         let lost = self.machine_lost();
         let wanted = self
             .rename
-            .as_ref()
+            .shown()
             .map(|(_, editor)| editor.focus_handle(cx))
             .or_else(|| {
                 self.nav_view
@@ -8509,9 +8447,9 @@ impl CockpitView {
             self.focus.clone()
         } else if let Some(focus) = self.factory_focus(window, cx) {
             focus
-        } else if self.rename.is_none() && self.prs_shown() {
+        } else if !self.rename.is_open() && self.prs_shown() {
             self.prs.read(cx).focus.clone()
-        } else if self.rename.is_none() && self.empty_board_shown() {
+        } else if !self.rename.is_open() && self.empty_board_shown() {
             self.empty_board.read(cx).focus.clone()
         } else {
             wanted
@@ -8873,7 +8811,7 @@ impl CockpitView {
                     // A press outside the editor abandons the rename — the
                     // operator looked away, which is escape, not enter.
                     // It notifies itself, so it is not counted above.
-                    if view.rename.is_some() {
+                    if view.rename.is_open() {
                         view.finish_rename(false, cx);
                     }
                     if dismissed {

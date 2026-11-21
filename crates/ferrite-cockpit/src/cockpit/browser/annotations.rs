@@ -99,7 +99,7 @@ impl CockpitView {
             })
             && !self.sheet_up(cx)
             && self.nav_view.read(cx).snooze_line().is_none()
-            && self.rename.is_none()
+            && !self.rename.is_open()
     }
 
     fn send_attached_annotation(

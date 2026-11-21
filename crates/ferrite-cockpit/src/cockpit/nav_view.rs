@@ -309,8 +309,8 @@ impl CockpitView {
             menu: self.context_menu().map(|menu| menu.target),
             doors: self.doors(),
             open,
-            rename: match &self.rename {
-                Some((RenameTarget::Thread(thread), editor)) => Some((*thread, editor.clone())),
+            rename: match self.rename.shown() {
+                Some((RenameTarget::Thread(thread), editor)) => Some((thread, editor.clone())),
                 _ => None,
             },
             limits: self.cockpit.account_limits(provider),

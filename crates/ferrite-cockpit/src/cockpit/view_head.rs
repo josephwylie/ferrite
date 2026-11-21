@@ -455,8 +455,8 @@ impl CockpitView {
     /// pointer (T3's). A click opens the Thread's menu; a double-click
     /// renames it in place.
     fn view_title(&self, thread: ThreadId, cx: &mut Context<Self>) -> AnyElement {
-        if let Some((RenameTarget::ViewTitle(editing), editor)) = &self.rename {
-            if *editing == thread {
+        if let Some((RenameTarget::ViewTitle(editing), editor)) = self.rename.shown() {
+            if editing == thread {
                 return rename_field(editor.clone(), true)
                     .occlude()
                     .on_mouse_down(
