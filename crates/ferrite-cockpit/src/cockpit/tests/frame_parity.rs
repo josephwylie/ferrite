@@ -44,11 +44,11 @@ fn the_empty_board_walks_its_rows(cx: &mut TestAppContext) {
     };
     step(Box::new(empty_board::Next), cx);
     step(Box::new(empty_board::Next), cx);
-    view.read_with(cx, |view, _| assert_eq!(view.empty_cursor, 2));
+    view.read_with(cx, |view, cx| assert_eq!(view.empty_board.read(cx).cursor, 2));
     step(Box::new(empty_board::Next), cx);
-    view.read_with(cx, |view, _| assert_eq!(view.empty_cursor, 0, "it wraps"));
+    view.read_with(cx, |view, cx| assert_eq!(view.empty_board.read(cx).cursor, 0, "it wraps"));
     step(Box::new(empty_board::Previous), cx);
-    view.read_with(cx, |view, _| assert_eq!(view.empty_cursor, 2, "both ways"));
+    view.read_with(cx, |view, cx| assert_eq!(view.empty_board.read(cx).cursor, 2, "both ways"));
     // Its first row, a new Thread, leaves the empty board.
     step(Box::new(empty_board::Next), cx);
     step(Box::new(empty_board::Run), cx);

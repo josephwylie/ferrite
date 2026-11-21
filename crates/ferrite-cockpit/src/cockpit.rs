@@ -626,9 +626,8 @@ pub struct CockpitView {
     prs: Entity<prs_view::PrsView>,
     /// The Tasks whose needs-you toast stands, and the state it announced.
     task_toasts: std::collections::HashMap<String, ferrite_core::factory::Status>,
-    /// The empty board's selected row, and the list's own focus.
-    empty_cursor: usize,
-    empty_focus: FocusHandle,
+    /// The empty board: its selected row and the list's own focus.
+    empty_board: Entity<empty_board::EmptyBoardView>,
     /// Each Thread's reader slot (its Review) sliding open or shut
     /// (`beside.rs`).
     reader_slides: beside::ReaderSlides,
@@ -1357,6 +1356,7 @@ impl CockpitView {
         let sheets = cx.new(|_| sheets::Sheets::default());
         cx.subscribe(&sheets, Self::on_sheets_event).detach();
         let prs = cx.new(|cx| prs_view::PrsView::new(cockpit_weak.clone(), cx));
+        let empty_board = cx.new(|cx| empty_board::EmptyBoardView::new(cockpit_weak.clone(), cx));
         cx.subscribe(&prs, Self::on_prs_event).detach();
         let side_chat = cx.new(|_| side_chat_view::SideChatView::new(cockpit_weak.clone()));
         let files = cx.new(|_| tools::FilesView::new(cockpit_weak.clone()));
@@ -1509,8 +1509,7 @@ impl CockpitView {
             destination: None,
             prs,
             task_toasts: Default::default(),
-            empty_cursor: 0,
-            empty_focus: cx.focus_handle(),
+            empty_board,
             reader_slides: Default::default(),
             columns: columns::Columns::new(),
             launch_provider,
@@ -8153,6 +8152,7 @@ impl CockpitView {
                 cx.subscribe_in(&self.browser_chrome, window, Self::on_browser_chrome_event),
                 cx.subscribe_in(&self.browser_dialog, window, Self::on_browser_dialog_event),
                 cx.subscribe_in(&self.browser_review, window, Self::on_browser_review_event),
+                cx.subscribe_in(&self.empty_board, window, Self::on_empty_board_event),
             ]);
         }
     }
@@ -8509,7 +8509,7 @@ impl CockpitView {
         } else if self.rename.is_none() && self.prs_shown() {
             self.prs.read(cx).focus.clone()
         } else if self.rename.is_none() && self.empty_board_shown() {
-            self.empty_focus.clone()
+            self.empty_board.read(cx).focus.clone()
         } else {
             wanted
         };
@@ -8638,7 +8638,7 @@ impl CockpitView {
         } else if visible.is_empty() {
             // Nothing open: the board says how to start instead of lying
             // blank.
-            frame().flex().child(self.empty_board(cx))
+            frame().flex().child(self.empty_board.clone())
         } else {
             // The shown Pane, the whole board. No tree lays out slots
             // here, so none of its sizes stands.
@@ -8903,7 +8903,6 @@ impl CockpitView {
                 view.typing_leaves_control(&event.keystroke, window, cx);
             }))
             .on_action(cx.listener(Self::open_settings))
-            .map(|root| self.register_board_actions(root, cx))
             .child(
                 div()
                     .relative()
