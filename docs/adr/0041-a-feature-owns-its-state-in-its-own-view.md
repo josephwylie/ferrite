@@ -717,6 +717,17 @@ anyway. The Project and Workspace menus, their rows and their picks stay
 the root's, in the popup slot (ADR 0043). A Thread's checkout labels are
 the Facts' (`refresh_branches`).
 
+The PR watch is the eleventh. `PrWatch` (`cockpit/pr_watch.rs`) keeps
+what the window remembers to ask `gh` for a Thread's PR on its own: the
+Thread the pump last saw focused, and each Thread's
+`Transcript::published` as last seen, so a commit or a push reads the PR
+again at once (HD27). Only the pump writes it (`watch_prs`), and a gone
+Thread's count goes in `forget_gone_threads`. The ask (`check_pr`), which
+the palette, the context menu and opening a Thread make too, and its
+answer (`pr_landed`) stay the root's, and the reading is the Facts'
+(`ask_pr`, `pr_answered`). A view would add events for asks the root makes
+anyway.
+
 ## Precedent
 
 Zed builds its workspace this way: each panel is an entity that owns its

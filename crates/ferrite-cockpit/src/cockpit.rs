@@ -46,6 +46,7 @@ mod palette;
 pub(crate) mod panel;
 mod parts;
 mod popups;
+mod pr_watch;
 mod prs_view;
 mod sends;
 mod server;
@@ -583,15 +584,8 @@ pub struct CockpitView {
     /// The chimes that would have played (`chime`).
     #[cfg(test)]
     pub(crate) chimed: Vec<Sound>,
-    /// The Thread the pump last saw focused: focusing another asks for its
-    /// PR (`check_pr`).
-    pr_focus: Option<ThreadId>,
-    /// Each Thread's `Transcript::published` as last seen: when it moves,
-    /// its PR is read again at once (`refresh_published`, HD27).
-    published: std::collections::HashMap<ThreadId, u64>,
-    /// The PR reads `check_pr` would have sent `gh`: (Thread, manual).
-    #[cfg(test)]
-    pub(crate) pr_asked: Vec<(ThreadId, bool)>,
+    /// When the pump asks for a Thread's PR on its own (`pr_watch`).
+    pr_watch: pr_watch::PrWatch,
     /// The palette, the shortcuts sheet and the notifications list's focus
     /// (`cockpit::palette`).
     floats: palette::Floats,
@@ -1404,10 +1398,7 @@ impl CockpitView {
             landing: None,
             #[cfg(test)]
             chimed: Vec::new(),
-            pr_focus: None,
-            published: std::collections::HashMap::new(),
-            #[cfg(test)]
-            pr_asked: Vec::new(),
+            pr_watch: Default::default(),
             floats: palette::Floats::new(),
             transcript_entities: Default::default(),
             decisions,
@@ -1565,84 +1556,6 @@ impl CockpitView {
         let lookups = self.facts.opened(&self.cockpit, thread);
         self.look_up(lookups, cx);
         self.check_pr(thread, false, cx);
-    }
-
-    /// Ask `gh` for the Thread's PR where its checkout is
-    /// (`Cockpit::pull_request`, on a machine its Server): at once when
-    /// `manual`, else at most once per `pr::AUTO_EVERY`. The row's symbol
-    /// turns until the answer lands. A manual ask reads the open PR tab
-    /// again too: its checks and conversation move without the reading.
-    pub(crate) fn check_pr(&mut self, thread: ThreadId, manual: bool, cx: &mut Context<Self>) {
-        if manual {
-            self.refresh_pr_tab(thread, cx);
-        }
-        let Some(path) = self.thread_path(thread) else {
-            return;
-        };
-        if !self
-            .facts
-            .ask_pr(thread, cx.background_executor().now(), manual)
-        {
-            return;
-        }
-        self.notify_part(parts::Part::Nav, cx);
-        #[cfg(test)]
-        self.pr_asked.push((thread, manual));
-        // Tests and captures never run `gh`: only a fixture world's forge
-        // answers them (`Cockpit::fixture_forge`); a test reads what was
-        // asked.
-        if cfg!(any(test, feature = "visual-reference")) && !self.cockpit.has_forge_fixture(&path) {
-            return;
-        }
-        let answer = self.cockpit.pull_request(&path);
-        cx.spawn(async move |this, cx| {
-            // A read that failed is `gh` with nothing to say: no label.
-            let reading = beside::answered(answer, cx).await.ok().flatten();
-            this.update(cx, |view, cx| view.pr_landed(thread, reading, cx))
-                .ok();
-        })
-        .detach();
-    }
-
-    /// A Thread whose work may have moved its git or forge state since the
-    /// last frame — a commit, a push, a PR, background work handed back
-    /// (`Transcript::published`): its PR is read again at once, so Changes
-    /// follows (HD27). First sight only notes the count: opening a Thread
-    /// asks already.
-    fn refresh_published(&mut self, cx: &mut Context<Self>) {
-        let moved: Vec<ThreadId> = self
-            .cockpit
-            .threads()
-            .into_iter()
-            .filter(|thread| {
-                let Some(count) = self
-                    .cockpit
-                    .thread(*thread)
-                    .map(|open| open.transcript().published())
-                else {
-                    return false;
-                };
-                self.published
-                    .insert(*thread, count)
-                    .is_some_and(|seen| seen != count)
-            })
-            .collect();
-        for thread in moved {
-            self.check_pr(thread, true, cx);
-        }
-    }
-
-    /// Adopt what `gh` said about the Thread's PR.
-    fn pr_landed(
-        &mut self,
-        thread: ThreadId,
-        reading: Option<ferrite_core::workspace::PullRequest>,
-        cx: &mut Context<Self>,
-    ) {
-        if self.facts.pr_answered(thread, reading) {
-            self.notify_part(parts::Part::Nav, cx);
-            self.pr_reading_changed(thread, cx);
-        }
     }
 
     /// Open the Thread's PR in its browser preview. An explicit open: the
@@ -2368,14 +2281,7 @@ impl CockpitView {
         if panes_changed {
             self.sync_panes(cx);
         }
-        self.refresh_published(cx);
-        let focused = self.focused_thread();
-        if focused != self.pr_focus {
-            self.pr_focus = focused;
-            if let Some(thread) = focused {
-                self.check_pr(thread, false, cx);
-            }
-        }
+        self.watch_prs(cx);
         let mut restarted = Vec::new();
         // What the sweep found moved: a fact or a Thread's age (everything
         // redraws), a working Thread (its Pane and the nav), the frame's

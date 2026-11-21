@@ -4,7 +4,7 @@ use super::*;
 use crate::palette::{Act, Command};
 
 fn asked(view: &Entity<CockpitView>, cx: &mut gpui::VisualTestContext) -> Vec<(ThreadId, bool)> {
-    view.update(cx, |view, _| std::mem::take(&mut view.pr_asked))
+    view.update(cx, |view, _| std::mem::take(&mut view.pr_watch.asked))
 }
 
 /// The number of the PR the Thread's last reading names.
