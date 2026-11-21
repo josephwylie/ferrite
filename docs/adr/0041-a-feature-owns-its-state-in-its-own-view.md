@@ -31,7 +31,20 @@ that happened to touch it, and nothing in the code said whose a field was.
   `NavEvent`. What the rest of the window also decides stays on the root:
   whether the nav is collapsed or forced open, its width measurements, the
   Project filter, its notice line. The other features follow one at a
-  time, each in its own change.
+  time, each in its own change. The Snooze field (a Thread's Custom…
+  time, drawn over the list) moved in later: `NavView` keeps the Thread it
+  snoozes, its line and why the last ⏎ did not take, and reads the
+  Thread's name as it draws. The root opens it from the Snooze menu
+  (`edit_snooze`). Its ⏎ and esc stay the root's Submit and Interrupt,
+  which reach the root wherever the keyboard is, and hand them to the
+  view while the field is open. A time it reads it says as
+  `NavEvent::Snooze`; snoozing is a Server ask, so the root asks and
+  answers the view (`snooze_answered`), which closes the field or keeps
+  the refusal in it. A press in the nav lets it go on the view's own; the
+  nav folding, the keys going to the list and a notice opened let it go
+  through the root (`close_snooze`). The focus pump, the paste and the
+  Composer's keys ask the view for its line. The inline title rename
+  gets no view (below).
 - **Settings is the second.** `SettingsView` (`cockpit/settings_view.rs`)
   owns whether the sheet is up, its exit, its page, its search field and
   its focus. It emits `SettingsEvent`. Rows of a feature that has no view
@@ -657,6 +670,23 @@ Review from the command, the palette and the Overview's `Review changes`
 a struct that already has an owner and add events (close, a press) for
 calls the root makes anyway. Its diff is its own read, not the Changes'
 or the Overview's.
+
+The inline title rename is the eighth. It is not the nav's alone: the
+same field stands in for a Thread's title in its nav row or in the view
+head over its Pane (`RenameTarget`), one at a time, so `NavView` would
+hold the Pane head's field. Nor does it earn a view of its own: every
+press that opens it is the root's (a menu's Rename, the view head's
+double-click, and F2 and a row's second click, which the nav says as
+`NavEvent::Rename`), as is every one that closes it (⏎ and esc as the
+root's Submit and Interrupt, a press anywhere else, a popup going up),
+and saving is the store's (`rename_thread`). So it is a plain struct on
+the root, `Rename` (`cockpit/rename.rs`), which only its own methods
+write (`open`, `close`, `take`, which drops a blank line); the nav reads
+its row's field through `NavInputs` and the view head reads its own. The
+root keeps the commit and where its refusal is said, the nav's notice,
+and the focus pump, which holds the keyboard on the field. A view would
+add events for calls the root makes on it anyway. A Project is renamed
+in the Project card, not here.
 
 ## Precedent
 
