@@ -1,7 +1,7 @@
 //! Subject navigation and supervision. Provider execution stays in core.
 use super::*;
 use ferrite_core::activity::{
-    AgentInfo, AgentStatus, DecisionHandle, PendingDecision, Subject, TranscriptCoverage,
+    ActivityView, AgentInfo, AgentStatus, DecisionHandle, PendingDecision, Subject, TranscriptCoverage,
 };
 use super::decisions::DecisionEvent;
 use ferrite_pane::decision;
@@ -386,6 +386,23 @@ fn agent_mark(status: AgentStatus, fresh: bool, waiting: bool) -> Option<AnyElem
     Some(crate::nav::mark(face, false))
 }
 
+/// The Subject that spawned `subject` by its agent's recorded parent: Main
+/// when none is recorded (or the record names the agent itself); none for
+/// Main itself.
+pub(super) fn parent_of(activity: ActivityView<'_>, subject: &Subject) -> Option<Subject> {
+    if *subject == Subject::Main {
+        return None;
+    }
+    let parent = activity
+        .children()
+        .into_iter()
+        .find(|agent| agent.subject() == *subject)
+        .and_then(|agent| agent.info().parent.clone())
+        .map(|parent| activity.canonical_subject(&parent))
+        .filter(|parent| parent != subject);
+    Some(parent.unwrap_or(Subject::Main))
+}
+
 pub(crate) fn agent_name(info: &AgentInfo) -> String {
     info.name
         .as_deref()
@@ -508,13 +525,8 @@ impl CockpitView {
         let mut lineage = vec![Subject::Main];
         let mut at = subject.clone();
         let mut reversed = Vec::new();
-        while let Some(parent) = activity
-            .children()
-            .into_iter()
-            .find(|agent| agent.subject() == at)
-            .and_then(|agent| agent.info().parent.clone())
-            .map(|parent| activity.canonical_subject(&parent))
-            .filter(|parent| *parent != Subject::Main && *parent != at)
+        while let Some(parent) =
+            parent_of(activity, &at).filter(|parent| *parent != Subject::Main)
         {
             if reversed.contains(&parent) {
                 break;

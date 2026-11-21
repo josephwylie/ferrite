@@ -58,7 +58,7 @@ pub(crate) use card::{card_hover, card_key};
 pub(crate) use card::status_label;
 pub use card::{
     card_age, ghost_card, park_button, pin_glyph, pr_chip, snooze_button, strip,
-    strip_w, thread_card,
+    strip_w, thread_card, working_for,
     CardDoors, NavPr,
 };
 

@@ -1,3 +1,4 @@
+use super::lineage::Lineage;
 use super::*;
 use ferrite_core::settings::ContextCardItem;
 use ferrite_pane::details::Density;
@@ -42,9 +43,12 @@ impl Row {
 
 pub(super) struct Content {
     rows: Vec<Row>,
-    /// The Thread's Lineage fold (`ThreadSurfaces::lineage_open`): shut,
-    /// its heading and count stand for its rows.
-    lineage_open: bool,
+    /// The shown Subject's Lineage, drawn in its own section.
+    lineage: Lineage,
+    provider: Provider,
+    /// The Thread's `Previous agents` fold
+    /// (`ThreadSurfaces::previous_agents_open`).
+    previous_open: bool,
 }
 
 pub(super) fn shown_at(item: ContextCardItem, density: Density) -> bool {
@@ -71,31 +75,40 @@ fn section(item: ContextCardItem) -> u8 {
 }
 
 impl Content {
+    fn lineage_shown(&self, density: Density) -> bool {
+        shown_at(ContextCardItem::Lineage, density) && !self.lineage.is_empty()
+    }
+
     pub(super) fn scrolling_height(&self, density: Density) -> f32 {
-        self.rows
+        let lineage = if self.lineage_shown(density) {
+            self.lineage.rows(self.previous_open)
+        } else {
+            0
+        };
+        (self
+            .rows
             .iter()
             .filter(|row| {
                 row.shown_at(density)
-                    && (self.lineage_open || row.item != ContextCardItem::Lineage)
-                    && (matches!(
-                        row.item,
-                        ContextCardItem::Lineage | ContextCardItem::SideChats
-                    ) || matches!(
-                        row.action,
-                        Some(Action::Surface(
-                            super::super::surfaces::SurfaceId::PullRequest(_)
+                    && (row.item == ContextCardItem::SideChats
+                        || matches!(
+                            row.action,
+                            Some(Action::Surface(
+                                super::super::surfaces::SurfaceId::PullRequest(_)
+                            ))
                         ))
-                    ))
             })
-            .count() as f32
+            .count()
+            + lineage) as f32
             * 32.
     }
 
     pub(super) fn key(&self, thread: ThreadId, width: f32, density: Density) -> String {
         format!(
-            "{}:{width}:{}:{:?}",
+            "{}:{width}:{:?}:{:?}",
             thread.get(),
-            self.lineage_open,
+            self.lineage_shown(density)
+                .then_some((&self.lineage, self.previous_open)),
             self.rows
                 .iter()
                 .filter(|row| row.shown_at(density))
@@ -119,7 +132,8 @@ impl Content {
             .flex_col()
             .text_size(px(13.))
             .font_weight(W_LABEL);
-        if rows.is_empty() {
+        let lineage = self.lineage_shown(density);
+        if rows.is_empty() && !lineage {
             return content.p(px(8.)).child(
                 div()
                     .id("details-choose-items")
@@ -149,7 +163,8 @@ impl Content {
                 .copied()
                 .filter(|row| section(row.item) == group)
                 .collect();
-            if group_rows.is_empty() {
+            let group_lineage = group == 4 && lineage;
+            if group_rows.is_empty() && !group_lineage {
                 continue;
             }
             let divided = group > 1 || (group == 1 && density == Density::Full);
@@ -160,12 +175,22 @@ impl Content {
                 .pt(px(8.))
                 .pb(px(10.))
                 .when(
-                    divided && rows.iter().any(|row| section(row.item) < group),
+                    divided
+                        && (rows.iter().any(|row| section(row.item) < group)
+                            || (lineage && group > 4)),
                     |block| block.border_t(px(1.)).border_color(rgba(0xffffff1a)),
                 );
-            if group == 4 {
-                block = block.child(self.lineage_head(thread, group_rows.len(), cx));
-            } else if group == 5 {
+            if group_lineage {
+                content = content.child(self.lineage.render(
+                    block,
+                    thread,
+                    self.provider,
+                    self.previous_open,
+                    cx,
+                ));
+                continue;
+            }
+            if group == 5 {
                 block = block.child(
                     div()
                         .flex()
@@ -176,10 +201,6 @@ impl Content {
                         .text_color(rgb(INK_SUBTLE))
                         .child("Side chats"),
                 );
-            }
-            if group == 4 && !self.lineage_open {
-                content = content.child(block);
-                continue;
             }
             for (at, row) in group_rows.iter().enumerate() {
                 let selector = format!("details-item-{}-{at}", row.item.id());
@@ -265,57 +286,16 @@ impl Content {
         }
         content
     }
-
-    /// Lineage's heading, `Lineage ▸` with its agents' count at the right
-    /// (the Panel's Connectors head): a press folds its rows open or shut.
-    fn lineage_head(
-        &self,
-        thread: ThreadId,
-        count: usize,
-        cx: &mut Context<CockpitView>,
-    ) -> Stateful<Div> {
-        div()
-            .id("details-lineage-head")
-            .debug_selector(|| "details-lineage-head".into())
-            .flex()
-            .items_center()
-            .gap(px(10.))
-            .h(px(32.))
-            .px(px(10.))
-            .rounded(px(8.))
-            .cursor_pointer()
-            .hover(|style| style.bg(rgba(0xffffff14)))
-            .text_size(px(11.))
-            .text_color(rgb(INK_SUBTLE))
-            .child(
-                div()
-                    .flex()
-                    .flex_1()
-                    .items_center()
-                    .gap(px(SPACE_1))
-                    .child("Lineage")
-                    .child(ferrite_ui::components::fold_chevron(
-                        "details-lineage-chevron",
-                        self.lineage_open,
-                        NAV_HEADING_CARET,
-                        INK_SUBTLE,
-                    )),
-            )
-            .child(
-                div()
-                    .debug_selector(move || format!("details-lineage-count-{count}"))
-                    .child(count.to_string()),
-            )
-            .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
-                cx.stop_propagation();
-                view.apply_surface(thread, super::super::surfaces::SurfaceAction::ToggleLineage);
-                cx.notify();
-            }))
-    }
 }
 
 impl CockpitView {
-    pub(super) fn details_content(&self, thread: ThreadId, cx: &gpui::App) -> Content {
+    /// The card's content for `thread` while its Pane shows `subject`.
+    pub(super) fn details_content(
+        &self,
+        thread: ThreadId,
+        subject: &ferrite_core::activity::Subject,
+        cx: &gpui::App,
+    ) -> Content {
         use super::super::surfaces::SurfaceId;
         use ContextCardItem as Item;
         let mut rows = Vec::new();
@@ -411,25 +391,18 @@ impl CockpitView {
                 rows.push(row);
             }
         }
+        let mut lineage = Lineage::default();
+        let mut provider = Provider::Claude;
         if let Some(open) = self.cockpit.thread(thread) {
-            for agent in open.activity().children() {
-                let mut row = Row::new(
-                    Item::Lineage,
-                    agent
-                        .info()
-                        .name
-                        .clone()
-                        .or_else(|| agent.info().description.clone())
-                        .unwrap_or_else(|| "Agent".to_string()),
-                    icons::SUBAGENTS,
-                );
-                row.meta = Some(
-                    super::super::subagents::state_word(agent.status(), agent.fresh()).to_string(),
-                );
-                row.action = Some(Action::Surface(SurfaceId::Agent(
-                    agent.key().as_str().to_string(),
-                )));
-                rows.push(row);
+            provider = open.provider();
+            if self
+                .prefs
+                .settings
+                .context_card_preferences
+                .visible(Item::Lineage)
+            {
+                lineage =
+                    super::lineage::lineage(open.activity(), subject, &self.facts.name(thread));
             }
             if let Some(surfaces) = self.panel.surfaces.get(thread) {
                 for surface in &surfaces.tabs {
@@ -480,11 +453,13 @@ impl CockpitView {
         });
         Content {
             rows,
-            lineage_open: self
+            lineage,
+            provider,
+            previous_open: self
                 .panel
                 .surfaces
                 .get(thread)
-                .is_some_and(|state| state.lineage_open),
+                .is_some_and(|state| state.previous_agents_open),
         }
     }
 }
@@ -531,7 +506,9 @@ mod tests {
                 Row::new(ContextCardItem::Environment, "Local", icons::LAPTOP),
                 Row::new(ContextCardItem::Context, "Context", icons::DETAILS),
             ],
-            lineage_open: false,
+            lineage: Lineage::default(),
+            provider: Provider::Claude,
+            previous_open: false,
         };
         let full = content.key(thread, 280., Density::Full);
         let compact = content.key(thread, 280., Density::Compact);

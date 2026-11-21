@@ -129,9 +129,9 @@ impl PrTab {
 pub(crate) struct ThreadSurfaces {
     pub(crate) open: bool,
     pub(crate) details_inline_open: bool,
-    /// Whether the details card's Lineage shows its agents or only its
-    /// heading and count; folded at first, as the Panel's Connectors are.
-    pub(crate) lineage_open: bool,
+    /// Whether the details card's `Previous agents` shows the finished
+    /// agents or only their count; folded at first, as T3's is.
+    pub(crate) previous_agents_open: bool,
     pub(crate) active: Option<SurfaceId>,
     pub(crate) tabs: Vec<SurfaceId>,
     pub(crate) maximized: bool,
@@ -153,7 +153,7 @@ impl ThreadSurfaces {
         Self {
             open,
             details_inline_open: true,
-            lineage_open: false,
+            previous_agents_open: false,
             active: Some(SurfaceId::Overview),
             tabs: vec![SurfaceId::Overview],
             maximized: false,
@@ -354,7 +354,7 @@ pub(crate) enum SurfaceAction {
     Resize(f32),
     Move { id: SurfaceId, index: usize },
     ToggleDetails,
-    ToggleLineage,
+    TogglePreviousAgents,
     SelectPrTab { number: u64, tab: PrTab },
 }
 
@@ -413,7 +413,7 @@ impl Surfaces {
             }
             SurfaceAction::Move { id, index } => state.move_to(&id, index),
             SurfaceAction::ToggleDetails => state.details_inline_open = !state.details_inline_open,
-            SurfaceAction::ToggleLineage => state.lineage_open = !state.lineage_open,
+            SurfaceAction::TogglePreviousAgents => state.previous_agents_open = !state.previous_agents_open,
             SurfaceAction::SelectPrTab { number, tab } => {
                 state.pr_tabs.insert(number, tab);
             }
@@ -458,7 +458,7 @@ struct PersistedThread {
     #[serde(default = "details_inline_default")]
     details_inline_open: bool,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    lineage_open: bool,
+    previous_agents_open: bool,
     tabs: Vec<SurfaceId>,
     active: Option<SurfaceId>,
     maximized: bool,
@@ -473,7 +473,7 @@ impl PersistedThread {
             thread: thread.get(),
             open: surfaces.open,
             details_inline_open: surfaces.details_inline_open,
-            lineage_open: surfaces.lineage_open,
+            previous_agents_open: surfaces.previous_agents_open,
             tabs: surfaces.tabs.clone(),
             active: surfaces.active.clone(),
             maximized: surfaces.maximized,
@@ -571,7 +571,7 @@ fn migrate(persisted: Persisted, resolves: impl Fn(ThreadId, &SurfaceId) -> bool
             ThreadSurfaces {
                 open: stored.open,
                 details_inline_open: stored.details_inline_open,
-                lineage_open: stored.lineage_open,
+                previous_agents_open: stored.previous_agents_open,
                 active,
                 tabs,
                 maximized: stored.maximized,
@@ -788,7 +788,7 @@ mod tests {
         panel.maximized = true;
         panel.width = 512.;
         panel.details_inline_open = false;
-        panel.lineage_open = true;
+        panel.previous_agents_open = true;
         surfaces.save(&dir).unwrap();
 
         let loaded = Surfaces::load(&dir, |_, _| true).unwrap();
@@ -808,7 +808,7 @@ mod tests {
         assert!(panel.maximized && panel.open);
         assert_eq!(panel.width, 512.);
         assert!(!panel.details_inline_open);
-        assert!(panel.lineage_open, "an opened Lineage stays open");
+        assert!(panel.previous_agents_open, "opened Previous agents stay open");
     }
 
     #[test]
