@@ -327,7 +327,12 @@ conflicts with its base (`gh`'s `mergeable`, read into
 Code does: the title over `#N` and the checks' ring and count (`5/6
 checks` while any run, `N failed` once they settle), or `Conflicts` in
 red in their place. An older Server's `gh pr view` does not ask for
-`mergeable`, and the card claims no conflict.
+`mergeable`, and the card claims no conflict. The card's Changes row is
+T3's too: `vs origin/main  +309 -34`, the branch's work since its merge
+base with the base the Changes Surface resolves (committed, uncommitted
+and untracked alike), or `Uncommitted` and the work against `HEAD` on a
+detached HEAD or with no base. It is read with the branch status
+(`workspace::branch_diff`), never from a frame.
 - **No Finder.** "Reveal in Finder" is not offered for a machine's
   Thread: its path is not on this computer. "Copy path" stays.
 
@@ -338,7 +343,7 @@ feature, which only the app's dev-dependencies turn on).
 ## Not done here
 
 - On a machine, a Thread's branch label and drift (its PR label is
-  read there), and its binding
+  read there), the details card's Changes counts, and its binding
   following the agent into a worktree it made: both need git on the
   machine read as the Thread works, not once per chip open as
   `list_repo` is.
