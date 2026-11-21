@@ -50,7 +50,7 @@ class Boundary:
         callback,expected_error,operation=self.handlers.pop(name)
         text='\n'.join(item.get('text','') for item in answer.get('content',answer.get('contentItems',[])))
         failed=answer.get('isError') is not False if self.provider=='claude' else answer.get('success') is not True
-        self.trace.append({'request':operation,'answer':answer,'error_expected':expected_error,'monotonic':time.monotonic()})
+        self.trace.append({'request':operation,'answer':answer,'error_expected':expected_error,'monotonic':time.monotonic(),'unix_ms':round(time.time()*1000)})
         (self.output/'boundary-trace.json').write_text(json.dumps(self.trace,indent=2),encoding='utf-8')
         try:
             if expected_error is None:

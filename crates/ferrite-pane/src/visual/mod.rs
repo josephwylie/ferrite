@@ -29,6 +29,8 @@ mod card;
 pub mod diagram;
 pub mod element;
 pub mod engine;
+#[cfg(feature = "browser-smoke")]
+pub mod hold_trace;
 pub mod renderer;
 pub mod samples;
 mod shelf;

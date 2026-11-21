@@ -262,9 +262,9 @@ impl Render for WebView {
             return element.into_any_element();
         }
         if self.browser_blur.is_none() {
-            self.browser_blur = Some(cx.on_blur(&self.inner.focus, window, |view, _, _| {
+            self.browser_blur = Some(cx.on_blur(&self.inner.focus, window, |view, window, _| {
+                view.inner.leave(Leaving::Blurred, Some(&*window));
                 view.inner.pressed.set(false);
-                view.inner.input(Input::Leave);
             }));
         }
         let down = self.inner.clone();
@@ -419,7 +419,7 @@ impl Inner {
     fn unpainted(&self) {
         self.painted.set(false);
         if self.hovered.replace(false) {
-            self.input(Input::Leave);
+            self.leave(Leaving::Unpainted, None);
         }
         if !self.near.get() {
             self.hide();
@@ -436,6 +436,23 @@ impl Inner {
         if let Some(view) = self.view.borrow().as_ref() {
             view.set_visible(false);
         }
+    }
+
+    /// Tell the page the pointer left it, for `why`; the boundaries trace
+    /// records which (`browser-smoke`).
+    fn leave(&self, why: Leaving, window: Option<&Window>) {
+        #[cfg(feature = "browser-smoke")]
+        if self.browser.borrow().is_some() {
+            crate::visual::hold_trace::record(serde_json::json!({
+                "kind": "leave",
+                "source": format!("{why:?}"),
+                "pressed": self.pressed.get(),
+                "window_active": window.map(Window::is_window_active),
+            }));
+        }
+        #[cfg(not(feature = "browser-smoke"))]
+        let _ = (why, window);
+        self.input(Input::Leave);
     }
 
     fn input(&self, input: Input) {
@@ -465,6 +482,19 @@ impl Inner {
             .get()
             .map_or(PLACEHOLDER_HEIGHT, |h| h as f32)
     }
+}
+
+/// Why the element tells the page the pointer left it ([`Inner::leave`]).
+#[derive(Clone, Copy, Debug)]
+enum Leaving {
+    /// The view lost the keyboard.
+    Blurred,
+    /// A frame was drawn without the element (its `Presence` dropped).
+    Unpainted,
+    /// The pointer moved off the element with no press held on it.
+    MovedOut,
+    /// The pointer left the window.
+    Exited,
 }
 
 /// Lives in the window's element state while the element is painted. Element
@@ -646,14 +676,14 @@ impl Element for WebViewElement {
                     modifiers: modifiers(event.modifiers),
                 });
             } else if inner.hovered.replace(false) {
-                inner.input(Input::Leave);
+                inner.leave(Leaving::MovedOut, Some(&*window));
             }
         });
 
         let inner = self.inner.clone();
-        window.on_mouse_event(move |_: &MouseExitEvent, phase, _, _| {
+        window.on_mouse_event(move |_: &MouseExitEvent, phase, window, _| {
             if phase == DispatchPhase::Bubble && inner.hovered.replace(false) {
-                inner.input(Input::Leave);
+                inner.leave(Leaving::Exited, Some(&*window));
             }
         });
 

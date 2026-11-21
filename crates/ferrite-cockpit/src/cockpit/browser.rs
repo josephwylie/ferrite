@@ -524,7 +524,7 @@ impl CockpitView {
                         || generation != Some(page.native.state().document_generation)
                         || !page.manual.borrow().valid(sequence)
                     {
-                        let settled = page.manual.borrow_mut().discard(sequence);
+                        let settled = page.manual.borrow_mut().discard(sequence, manual::Finish::Stale);
                         if let Some((document, revision)) = settled {
                             let _ = self
                                 .cockpit
@@ -540,7 +540,7 @@ impl CockpitView {
                             page.native.input(input);
                         }
                         Err(error) => {
-                            let settled = page.manual.borrow_mut().discard(sequence);
+                            let settled = page.manual.borrow_mut().discard(sequence, manual::Finish::Refused);
                             if let Some((document, revision)) = settled {
                                 let _ = self
                                     .cockpit
@@ -719,7 +719,7 @@ impl CockpitView {
                 Rc::new(move |input| {
                     if matches!(input, Input::Leave) {
                         // Lifecycle Leave cancels, never begins, intervention.
-                        let settled = input_manual.borrow_mut().finish();
+                        let settled = input_manual.borrow_mut().finish(manual::Finish::Leave);
                         if let Some((document, revision)) = settled {
                             input_events
                                 .borrow_mut()
@@ -865,7 +865,14 @@ impl CockpitView {
         }
     }
 
-    fn finish_browser_interaction(&mut self, thread: ThreadId, owner: Owner, tab: TabId, cx: &mut gpui::App) {
+    fn finish_browser_interaction(
+        &mut self,
+        thread: ThreadId,
+        owner: Owner,
+        tab: TabId,
+        reason: manual::Finish,
+        cx: &mut gpui::App,
+    ) {
         let Some(browser) = self
             .browsers
             .threads
@@ -877,7 +884,7 @@ impl CockpitView {
         let Some(page) = browser.pages.get(&tab) else {
             return;
         };
-        let settled = page.manual.borrow_mut().finish();
+        let settled = page.manual.borrow_mut().finish(reason);
         if let Some((document, revision)) = settled {
             let _ = self
                 .cockpit
@@ -893,17 +900,23 @@ impl CockpitView {
             };
             for (tab, page) in &browser.pages {
                 let manual = page.manual.borrow();
-                if manual.active
-                    && (manual.due()
-                        || !page.web.read(cx).browser_visible()
-                        || !self.cockpit.read(cx).window_active())
-                {
-                    settled.push((*thread, owner, *tab));
+                if !manual.active {
+                    continue;
                 }
+                let reason = if !self.cockpit.read(cx).window_active() {
+                    manual::Finish::WindowInactive
+                } else if !page.web.read(cx).browser_visible() {
+                    manual::Finish::Hidden
+                } else if manual.due() {
+                    manual::Finish::Quiet
+                } else {
+                    continue;
+                };
+                settled.push((*thread, owner, *tab, reason));
             }
         }
-        for (thread, owner, tab) in settled {
-            self.finish_browser_interaction(thread, owner, tab, cx);
+        for (thread, owner, tab, reason) in settled {
+            self.finish_browser_interaction(thread, owner, tab, reason, cx);
         }
         // Visibility comes from the actual host, including selected tabs in
         // Threads that are no longer on screen. Selection is not visibility.
@@ -1154,7 +1167,7 @@ impl Browser {
             if let Some(page) = self.pages.get(&tab.id) {
                 let changed = page.document.replace(tab.document()) != tab.document();
                 if changed {
-                    let _ = page.manual.borrow_mut().finish();
+                    let _ = page.manual.borrow_mut().finish(manual::Finish::Navigated);
                 }
                 page.manual.borrow_mut().server_protection(tab.protected);
                 if changed && resample {
