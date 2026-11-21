@@ -231,7 +231,8 @@ beside Thread (no Thread opens beside another).
 
 **Notice**
 Ferrite's own record that a Thread's Main finished for good: its turn ended
-and no Subagent is still working, so the operator is wanted back. Unread
+and no Subagent or background task (a shell, a monitor) is still working,
+so the operator is wanted back. Unread
 until it is **seen** — its Thread on screen while the window has focus —
 or opened from the Inbox; shown there, by a toast, a chime, the
 Thread's done mark, and a system notification
@@ -251,8 +252,10 @@ _Avoid_: status (too broad), unread (that is the Notice's).
 **Inbox**
 The nav itself (ADR 0040): one list of thread cards, each carrying its
 Project's badge, for the open Threads awaiting the operator. Pending
-Decisions come first, oldest request first. Threads executing Main,
-Subagent, background or queued work sit on the Working shelf; Snoozed and
+Decisions come first, oldest request first, then the Thread that came
+back latest: a Thread done with its work returns at the top, and nothing
+else moves a card. Threads executing Main, Subagent, background or
+queued work sit on the Working shelf, the latest to start first; Snoozed and
 Parked Threads on their own shelves; the shelves fold to a head and count
 at the foot of the list. The rest stay in Inbox until sent back to work or
 Parked. Reading or dismissing a Notice changes presentation, never queue

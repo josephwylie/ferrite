@@ -1019,8 +1019,7 @@ impl Thread {
     /// Whether work runs behind Main: its Subagents, or its transcript's
     /// background tasks.
     fn background_work(&self) -> bool {
-        self.activity.view().working_descendants() > 0
-            || self.transcript().progress().working_background() > 0
+        self.activity.view().background_work()
     }
 
     /// At rest: no turn, no starting or replacement Session, no change
@@ -4685,23 +4684,34 @@ impl Engine {
             live.push(WireInput::Live(Live::AccountPlan { name: name.into() }));
         }
         // The turn as it stands: a replay never reads one as running, so a
-        // watch mid-turn is told it is, as its provider said it.
+        // watch mid-turn is told it is, as its provider said it. Its
+        // background tasks too: the `Connect` above retires the replayed
+        // ones, and a shell that outlived its turn still runs.
         use crate::transcript::Status;
         let state = match transcript.status() {
             Status::Streaming => Some(crate::RunState::Running),
             Status::Blocked => Some(crate::RunState::RequiresAction),
             Status::Idle | Status::Closed => None,
         };
-        if let Some(protocol::Outgoing::Input(input)) = state.map(|state| {
-            protocol::outgoing(
+        let tasks = transcript.progress().background();
+        let now = state
+            .map(|state| SessionEvent::RunState { state })
+            .into_iter()
+            .chain((!tasks.is_empty()).then(|| SessionEvent::Progress {
+                event: crate::progress::ProgressEvent::BackgroundSnapshot {
+                    tasks: tasks.to_vec(),
+                },
+            }));
+        for event in now {
+            if let protocol::Outgoing::Input(input) = protocol::outgoing(
                 &ActivityInput::Main {
-                    input: Input::Event(SessionEvent::RunState { state }),
+                    input: Input::Event(event),
                     at: crate::clock::instant(),
                 },
                 None,
-            )
-        }) {
-            live.push(input);
+            ) {
+                live.push(input);
+            }
         }
         Some(History {
             thread,
