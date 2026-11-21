@@ -727,7 +727,9 @@ impl CockpitView {
             ("up" | "down", cursor) => {
                 let from = match cursor {
                     MenuCursor::Row(at) => Some(at),
-                    _ => None,
+                    // A picker's first arrow walks from its one checked
+                    // row, the choice already made, so ↓ ⏎ makes the next.
+                    _ => chosen_row(&open.rows),
                 };
                 let forward = keystroke.key == "down";
                 let len = open.rows.len();
@@ -1196,6 +1198,19 @@ impl CockpitView {
                 .child(self.popup_face(face, "context-menu-in", shell, opens, cx))
                 .into_any_element(),
         )
+    }
+}
+
+/// The row a picker's check marks, when exactly one is: the choice made.
+/// Several checked rows are toggles, not one choice.
+fn chosen_row(rows: &[Option<(menu::Item, MenuVerb)>]) -> Option<usize> {
+    let mut checked = rows
+        .iter()
+        .enumerate()
+        .filter(|(_, row)| row.as_ref().is_some_and(|(item, _)| item.checked));
+    match (checked.next(), checked.next()) {
+        (Some((at, _)), None) => Some(at),
+        _ => None,
     }
 }
 
