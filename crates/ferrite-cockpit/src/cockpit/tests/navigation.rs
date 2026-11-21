@@ -398,3 +398,45 @@ fn the_shown_thread_is_drawn_by_its_id_and_no_other(cx: &mut TestAppContext) {
     tick(cx);
     assert_eq!(drawn(cx), [true, false], "a key");
 }
+
+/// A press and its release at `at`, the `count`th of a multi-click.
+fn click_at(cx: &mut gpui::VisualTestContext, at: gpui::Point<Pixels>, count: usize) {
+    press(cx, at, count);
+    cx.simulate_event(gpui::MouseUpEvent {
+        button: MouseButton::Left,
+        position: at,
+        modifiers: gpui::Modifiers::none(),
+        click_count: count,
+    });
+    tick(cx);
+}
+
+/// A click on the view title opens the Thread's menu; a double-click
+/// renames the Thread in place: the first click's menu leaves the title
+/// clear, so the second press is the title's.
+#[gpui::test]
+fn a_double_click_on_the_view_title_renames_the_thread(cx: &mut TestAppContext) {
+    let (core, _fake) = cockpit("head-title-rename", 1);
+    let thread = core.threads()[0];
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(1200.), px(800.)));
+    tick(cx);
+    let at = cx.debug_bounds("view-title").expect("the title").center();
+
+    click_at(cx, at, 1);
+    view.read_with(cx, |view, _| {
+        assert!(
+            view.context_menu()
+                .is_some_and(|menu| menu.target == MenuTarget::Thread(thread)),
+            "a click opens the Thread's menu"
+        );
+    });
+    click_at(cx, at, 2);
+    view.read_with(cx, |view, _| {
+        assert!(
+            matches!(view.rename.shown(), Some((RenameTarget::ViewTitle(renaming), _)) if renaming == thread),
+            "the second press renames the Thread"
+        );
+        assert!(view.context_menu().is_none(), "and the menu is gone");
+    });
+}

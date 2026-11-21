@@ -24,6 +24,17 @@ gpui::actions!(ferrite, [Quit, Hide, HideOthers, ShowAll, Minimize, Zoom]);
 /// and the taskbar; its ctrl-h and ctrl-m mean nothing of the kind.
 const MAC_ONLY: [&str; 3] = ["ferrite::Hide", "ferrite::HideOthers", "ferrite::Minimize"];
 
+/// The Emacs line keys every macOS text field honours beside its cmd
+/// chords: ctrl-a / ctrl-e to the line's ends, ctrl-w kills the word
+/// before the caret. Bound only there: on Windows and Linux ctrl is the
+/// primary modifier, so ctrl-a selects all and ctrl-w closes, and an Emacs
+/// row in the Composer would shadow them.
+const MAC_EMACS: [(&str, &str); 3] = [
+    ("ctrl-a", "composer::Home"),
+    ("ctrl-e", "composer::End"),
+    ("ctrl-w", "composer::DeleteWordLeft"),
+];
+
 /// Which convention the primary modifier follows. Linux, when it arrives,
 /// sits on the ctrl side.
 // One variant is always the other target's: each build constructs only its
@@ -198,18 +209,9 @@ pub fn bindings(platform: Platform) -> Vec<Binding> {
         (with_primary("x"), "composer::Cut", Some("Composer")),
         (with_primary("z"), "composer::Undo", Some("Composer")),
         (with_primary("shift-z"), "composer::Redo", Some("Composer")),
-        // Emacs muscle memory every shell honours: ctrl-a / ctrl-e to the
-        // line's ends, ctrl-w kills the word before the caret.
         // A hard line break in the draft: the box grows a row and enter
         // still sends the whole thing.
         ("shift-enter".into(), "composer::Newline", Some("Composer")),
-        ("ctrl-a".into(), "composer::Home", Some("Composer")),
-        ("ctrl-e".into(), "composer::End", Some("Composer")),
-        (
-            "ctrl-w".into(),
-            "composer::DeleteWordLeft",
-            Some("Composer"),
-        ),
         // Copy the transcript selection a drag made; with nothing selected
         // the key does nothing (the Composer has no selection of its own).
         (with_primary("c"), "cockpit::CopySelection", None),
@@ -686,6 +688,9 @@ pub fn bindings(platform: Platform) -> Vec<Binding> {
             ("cmd-alt-h".into(), MAC_ONLY[1], None),
             ("cmd-m".into(), MAC_ONLY[2], None),
         ]);
+        table.extend(
+            MAC_EMACS.map(|(keys, action)| (keys.to_string(), action, Some("Composer"))),
+        );
     }
     table
 }
@@ -981,11 +986,33 @@ mod tests {
         let shape = |platform: Platform| -> Vec<(&'static str, Option<&'static str>)> {
             bindings(platform)
                 .into_iter()
-                .filter(|(_, action, _)| !MAC_ONLY.contains(action))
+                .filter(|(keys, action, _)| {
+                    !MAC_ONLY.contains(action) && !MAC_EMACS.contains(&(keys.as_str(), *action))
+                })
                 .map(|(_, action, context)| (action, context))
                 .collect()
         };
         assert_eq!(shape(Platform::Mac), shape(Platform::Windows));
+    }
+
+    /// In a text field ctrl-a, ctrl-e and ctrl-w are the Emacs line keys
+    /// on macOS only. Off it ctrl is the primary modifier: ctrl-a selects
+    /// all, and ctrl-w closes the Thread, as it does outside a text field.
+    #[test]
+    fn the_emacs_line_keys_are_macos_only() {
+        let in_composer = |platform: Platform, key: &str| -> Vec<&'static str> {
+            bindings(platform)
+                .into_iter()
+                .filter(|(keys, _, context)| keys == key && *context == Some("Composer"))
+                .map(|(_, action, _)| action)
+                .collect()
+        };
+        assert_eq!(in_composer(Platform::Mac, "ctrl-a"), ["composer::Home"]);
+        assert_eq!(in_composer(Platform::Mac, "ctrl-e"), ["composer::End"]);
+        assert_eq!(in_composer(Platform::Mac, "ctrl-w"), ["composer::DeleteWordLeft"]);
+        assert_eq!(in_composer(Platform::Windows, "ctrl-a"), ["composer::SelectAll"]);
+        assert!(in_composer(Platform::Windows, "ctrl-e").is_empty());
+        assert!(in_composer(Platform::Windows, "ctrl-w").is_empty());
     }
 
     #[test]

@@ -149,3 +149,41 @@ fn cmd_t_from_a_thread_brings_the_standing_draft_to_its_project(cx: &mut TestApp
         "pressed on the Thread, it follows"
     );
 }
+
+/// What the Composer holds after `hello`, ctrl-a and `x`, with
+/// `platform`'s whole key table bound as launch binds it.
+fn typed_over_ctrl_a(
+    platform: ferrite_ui::keymap::Platform,
+    name: &str,
+    cx: &mut TestAppContext,
+) -> String {
+    let (core, _fake) = cockpit(name, 1);
+    cx.update(|cx| {
+        ferrite_pane::pane::init_components(cx);
+        let bindings = ferrite_frame::keys::load(ferrite_ui::keymap::bindings(platform), cx);
+        cx.bind_keys(bindings);
+    });
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    tick(cx);
+    cx.simulate_input("hello");
+    cx.simulate_keystrokes("ctrl-a");
+    cx.simulate_input("x");
+    tick(cx);
+    composer_text(&view, cx)
+}
+
+/// Windows and Linux: ctrl-a in a text field selects all of it, so what
+/// is typed next replaces it.
+#[gpui::test]
+fn ctrl_a_selects_the_whole_line_off_macos(cx: &mut TestAppContext) {
+    let text = typed_over_ctrl_a(ferrite_ui::keymap::Platform::Windows, "ctrl-a-windows", cx);
+    assert_eq!(text, "x");
+}
+
+/// macOS: ctrl-a is the Emacs line start (⌘A selects all), so what is
+/// typed next goes in front.
+#[gpui::test]
+fn ctrl_a_goes_to_the_line_start_on_macos(cx: &mut TestAppContext) {
+    let text = typed_over_ctrl_a(ferrite_ui::keymap::Platform::Mac, "ctrl-a-mac", cx);
+    assert_eq!(text, "xhello");
+}

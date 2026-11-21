@@ -646,3 +646,49 @@ fn the_inspector_shows_one_thing_and_its_row_alone_is_chosen(cx: &mut TestAppCon
         "a Workflow chosen shows its first Step"
     );
 }
+
+/// The New task sheet's Process menu walks from the process chosen: ↓ ⏎
+/// picks the next one and ↑ ⏎ the one before, not the choice already
+/// made.
+#[gpui::test]
+fn the_process_menus_arrows_walk_from_the_chosen_process(cx: &mut TestAppContext) {
+    let (view, cx, _fake, _project) = workflows_window(cx, "workflows-process-keys", |_| {});
+    view.update(cx, |view, cx| {
+        view.factory_surface(Surface::Workflows, cx);
+        view.create_workflow(Template::Blank, cx);
+    });
+    tick(cx);
+    view.update(cx, |view, cx| {
+        let step = view.shown_step(cx).unwrap().id.clone();
+        let instructions = Some("Reply OK.".to_string());
+        let change = ferrite_core::factory::StepChange { instructions, ..Default::default() };
+        view.edit_step(step, change, cx);
+    });
+    tick(cx);
+    view.update(cx, |view, cx| view.save_workflow(cx));
+    tick(cx);
+    let workflow = view.read_with(cx, |view, cx| view.shown_workflow(cx).unwrap().id.clone());
+    view.update(cx, |view, cx| view.open_new_task(cx));
+    tick(cx);
+    assert_eq!(
+        view.read_with(cx, |view, cx| view.process_picks(cx).len()),
+        2,
+        "one-off and the saved Workflow"
+    );
+    let chosen = |view: &Entity<CockpitView>, cx: &mut gpui::VisualTestContext| {
+        view.read_with(cx, |view, cx| view.new_task(cx).unwrap().read(cx).workflow.clone())
+    };
+    assert_eq!(chosen(&view, cx), None, "one-off at first");
+
+    click(cx, "new-task-process");
+    assert!(shows(cx, "context-menu"), "the Process menu");
+    cx.simulate_keystrokes("down enter");
+    tick(cx);
+    assert!(!shows(cx, "context-menu"), "the pick closes the menu");
+    assert_eq!(chosen(&view, cx), Some(workflow), "↓ ⏎ picks the Workflow");
+
+    click(cx, "new-task-process");
+    cx.simulate_keystrokes("up enter");
+    tick(cx);
+    assert_eq!(chosen(&view, cx), None, "↑ ⏎ goes back to one-off");
+}

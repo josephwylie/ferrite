@@ -52,6 +52,10 @@ Preconditions:
 - **A menu over a sheet.** New task sheet, its Process chooser, `escape` twice: the first
   closes the chooser, the second the sheet. The chooser has no selector of its own:
   prove it with a shot.
+- **A chooser's arrows.** With a saved Workflow, the Process chooser opens on
+  `One-off` checked: `down enter` picks the Workflow (`fv text new-task-process` reads
+  its name and version) and `up enter` goes back to `One-off`. The first arrow walks
+  from the checked row.
 
 ## Gotchas
 
