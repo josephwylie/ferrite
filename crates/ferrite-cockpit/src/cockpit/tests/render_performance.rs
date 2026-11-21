@@ -1923,7 +1923,7 @@ fn a_hover_on_a_menu_row_rebuilds_no_pane(cx: &mut TestAppContext) {
     cockpit_renders_over(cx, 300);
     let panes = pane_builds(&threads);
     // A row with a shortcut: its key glyph sits on the row.
-    let primary = if cfg!(windows) { "control-key" } else { "command-key" };
+    let primary = ferrite_ui::components::key_selector(ferrite_ui::keymap::PLATFORM.primary());
     let row = cx
         .debug_bounds(primary)
         .expect("the Pane menu's shortcuts draw the glyph");
