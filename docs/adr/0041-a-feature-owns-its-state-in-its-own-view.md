@@ -25,7 +25,8 @@ that happened to touch it, and nothing in the code said whose a field was.
   keeps today's redraw rule: a root notify still redraws the feature
   (vendored gpui, `tracking_reads`). Root code that runs while the root is
   borrowed passes those values in instead of having the feature read them.
-  The nav reads its own instead, and hears the model (below).
+  The nav and the toast float read their own instead, and hear the
+  model (below).
 - **The nav is the first slice.** `NavView` (`cockpit/nav_view.rs`) owns
   the nav's own state: its motion, scroll and viewport, keyboard focus and
   cursor, hover, search, picks and Park sweep, and Undo. It emits
@@ -220,15 +221,15 @@ that happened to touch it, and nothing in the code said whose a field was.
   owns the Inbox's alerts (`NeedsYou`): what it heard of each machine,
   what waits out its delay, the toasts standing and the system
   notifications posted, and the toast fading out. Its render is the toast
-  float, reading the newest toast's row, whether the nav is folded and
-  the widths it hangs beside through `toast_inputs`. It emits
+  float, drawing the newest toast's row as it read it and where the
+  window placed it (the amendment below). It emits
   `ToastEvent`: a quick answer, or what a toast opens, each taking the
   toast down at once. Hearing the machines and ringing stay the root
   pump's (`ring_alerts`), which updates the view and then plays the chime
   and posts the system notifications, as does taking a toast down when
   the list opens what it was about. The window carries the view's alerts
   to the next machine's root (`with_needs_you`). The kit's own toasts
-  stay the root's (`toast_margins`).
+  stay the root's (`place_toasts` keeps their margin).
 - **The command palette is the fifteenth.** `Palette` (`palette.rs`) was
   a view already, keeping its line, its rows, its type tab, its cursor
   and its scroll; now it answers its own keys too (↑ ↓ ⇥, ⏎, esc), and
@@ -915,14 +916,45 @@ model itself.
   decides, or when the root draws it inside its own render (a Pane's
   body, the Panel's Surfaces): there the root's notify is its redraw
   already.
-- **The next three, in order.** The toasts (`ToastsView`): the pump's
-  `ring_alerts` reads the model's notifications on every beat for them,
-  the clearest work a subscriber would end. The Inbox's needs-you count on
-  the PRs and Factory doors (`factory_nav_projects`, `factory_rows`): the
-  Factory menu already reads the nav's rows, so it can read the model
-  beside them. The Panes' heads: each reads its Thread's state from the
-  model, and today every root notify rebuilds every Pane; the transcript
-  bodies stay inputs.
+- **The toast float is the second subscriber.** `ToastsView` holds the
+  model's handle, subscribes to `Arrived` and observes the root and the
+  window's machines. On any of them it looks: it reads the newest
+  standing toast's row (`alert_row`: the model's Notices and requests, the
+  Facts' names, a machine's status) and redraws only when the row moved.
+  It reads one thing more of the window: where it hangs. The root hands
+  it that as it lays out its columns (`place_toasts`): whether the nav is
+  folded, the nav's width on screen and the board's right edge (the Panel
+  and the Task panel). The root sets them while it draws, so the float
+  draws them in that same frame, as the nav takes its width. A ring that
+  changes the toasts standing, a toast taken down and a scene's toasts
+  cleared have it look once the root's update ends (`look_again`). The
+  root mounts it as a cached part, as it mounts the nav (`toast_float`),
+  so a root redraw draws it again only when it notified itself. The
+  hearing and the ring stay on the pump's beat (`ring_alerts`): an alert
+  rings a second after it is heard, and a toast goes 5 or 8 seconds after
+  it rang, with or without an arrival. Taking them off the beat needs the
+  pump to stop calling `ring_alerts` and the view to keep a timer for the
+  next alert due or toast ending. That change belongs to the pump.
+- **The Factory door already read the model.** Its dot (one of the
+  door's Projects has a Task that needs the operator) has been part of
+  `NavInputs` since the nav moved. The PRs door draws no count. What
+  still fed it from the root was the list of Projects the door offers
+  (`factory_nav_projects`), worked out once for the nav's look and again
+  for the door's menu. The nav's look now works it out (`factory_projects`)
+  and keeps it beside its inputs, uncompared, since the door draws only
+  the dot. The menu (`factory_rows`) reads it from the nav. The menu's
+  rows and counts are the popup slot's, read once as it opens (ADR 0043),
+  as before.
+- **The next three, in order.** The Panes' heads: each reads its Thread's
+  state from the model, and today every root notify rebuilds every shown
+  Pane, the most redraws left in the stream the wakes tests measure. The
+  transcript bodies stay inputs. Then the toasts' hearing, once the pump
+  wakes on arrival: the view hears `Arrived` and the machines, keeps its
+  own timer, and hands the chime and the system notifications back to
+  the root as a `ToastEvent`, so the pump stops reading the Notices on
+  every beat. Then the Facts beside the model (names, Projects, branches,
+  PRs): the nav, the toast's row, the palette and the Panes read them from
+  the root, so each subscriber still observes the root for them.
 - **A feature does not ask the Server itself yet.** Core's asks block:
   a remote one waits on the Server's socket for its reply, up to
   `REPLY_WAIT`, queueing every other message it reads (`Remote::execute`).
