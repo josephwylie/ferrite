@@ -988,6 +988,26 @@ mod tests {
         assert_eq!(shape(Platform::Mac), shape(Platform::Windows));
     }
 
+    /// In a text field ctrl-a, ctrl-e and ctrl-w are the Emacs line keys
+    /// on macOS only. Off it ctrl is the primary modifier: ctrl-a selects
+    /// all, and ctrl-w closes the Thread, as it does outside a text field.
+    #[test]
+    fn the_emacs_line_keys_are_macos_only() {
+        let in_composer = |platform: Platform, key: &str| -> Vec<&'static str> {
+            bindings(platform)
+                .into_iter()
+                .filter(|(keys, _, context)| keys == key && *context == Some("Composer"))
+                .map(|(_, action, _)| action)
+                .collect()
+        };
+        assert_eq!(in_composer(Platform::Mac, "ctrl-a"), ["composer::Home"]);
+        assert_eq!(in_composer(Platform::Mac, "ctrl-e"), ["composer::End"]);
+        assert_eq!(in_composer(Platform::Mac, "ctrl-w"), ["composer::DeleteWordLeft"]);
+        assert_eq!(in_composer(Platform::Windows, "ctrl-a"), ["composer::SelectAll"]);
+        assert!(in_composer(Platform::Windows, "ctrl-e").is_empty());
+        assert!(in_composer(Platform::Windows, "ctrl-w").is_empty());
+    }
+
     #[test]
     fn close_remains_and_the_group_and_fullscreen_shortcuts_are_absent() {
         let removed = [
