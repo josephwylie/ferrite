@@ -368,7 +368,7 @@ fn status_label(status: AgentStatus, fresh: bool) -> Option<&'static str> {
 }
 
 /// The word a subagent's head says of it: its state word, or `done`.
-fn state_word(status: AgentStatus, fresh: bool) -> &'static str {
+pub(super) fn state_word(status: AgentStatus, fresh: bool) -> &'static str {
     status_label(status, fresh).unwrap_or(theme::words::DONE)
 }
 
