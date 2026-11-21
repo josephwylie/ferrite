@@ -475,6 +475,36 @@ that happened to touch it, and nothing in the code said whose a field was.
   Coordinator, and the popup slot and the focus pump stay the root's, as
   do the Factory head's surface tabs, which the shell draws. Left of the
   Factory: the Coordinator surface, then the shell.
+- **The Coordinator surface is the twenty-sixth, the Factory's fifth
+  slice.** `CoordinatorView` (`cockpit/coordinator.rs`) owns the one
+  thing the window keeps of a Factory's Coordinator (#224): the opening
+  field whose Send starts it, made once as the Factory opens. The Factory
+  holds it, as it holds the Archive's. The rest is the Server's: the
+  Coordinator's Thread, whether it is starting and why it could not, the
+  Provider, model and effort chosen for it, and its proposals, all on
+  the board the Server publishes. It has no render of its own:
+  the Coordinator's conversation, once it runs, is its ordinary Pane,
+  which only the root can draw (`pane_slot`, with the parts' cache), so
+  the root draws the Pane and has the view draw the surface round it
+  (`coordinator_surface`): the choosers for what it runs on, the empty
+  conversation with the field and Send until it runs, and the proposals'
+  cards, reading through `coordinator_inputs` what it runs on and that
+  Provider's models, whether it is starting and why it could not, and
+  each proposal as its card says it, with the Task an accepted one
+  started while the board has it. It emits `CoordinatorEvent`: Send, a
+  chooser's rows, which the root opens, a proposal's accept and `Not
+  now`, and `Open task`, which gives the board back and opens the Task's
+  panel. Starting it, choosing what it runs on, accepting and dismissing
+  are Server asks (`coordinator_ask`), so they stay the root's, which
+  clears the field once the Server took its words; a refusal is said in
+  the Factory's `note`. The focus pump hands the keyboard to its Pane's
+  Composer once it runs, else the field. It keeps nothing by Thread.
+  Left of the Factory: the shell, `FactoryView` itself, with what it keeps
+  for every surface: which surface shows (`surface`) and its tabs, the
+  last command's `note`, the open picker's rows (`picks`), shared by the
+  Workflows editor, the New task sheet, a Task's sheets and the
+  Coordinator, the New task sheet as last closed, opening and closing the
+  Factory, and the board with its columns and the Task panel.
 
 ## What does not get a view
 
