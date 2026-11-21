@@ -12,5 +12,9 @@ case "$1" in
   *[!0]*) exit 0 ;;
 esac
 
-scripts/warm-worktree.sh ||
+case "$(uname -s)" in
+  MINGW* | MSYS*) warm=scripts/warm-worktree-windows.sh ;;
+  *) warm=scripts/warm-worktree.sh ;;
+esac
+"$warm" ||
   echo "warm-worktree failed; the first build here starts cold" >&2
