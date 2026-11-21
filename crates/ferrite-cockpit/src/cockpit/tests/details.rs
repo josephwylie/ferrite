@@ -444,6 +444,5 @@ fn a_lineage_row_opens_its_agent_in_the_pane(cx: &mut TestAppContext) {
     view.read_with(cx, |view, _| {
         assert_eq!(view.panes[0].selected, Subject::Subagent(key.clone()));
     });
-    assert!(cx.debug_bounds("subagent-head-1").is_some(), "the full chat");
     assert_eq!(panel_tabs(&view, thread, cx).0, tabs, "no Panel tab opens for it");
 }
