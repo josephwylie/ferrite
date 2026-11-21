@@ -873,8 +873,8 @@ fn f2_renames_the_cursors_card(cx: &mut TestAppContext) {
     tick(cx);
     assert!(
         view.read_with(cx, |view, _| matches!(
-            &view.rename,
-            Some((RenameTarget::Thread(editing), _)) if *editing == thread
+            view.rename.shown(),
+            Some((RenameTarget::Thread(editing), _)) if editing == thread
         )),
         "the card's title is the rename field"
     );

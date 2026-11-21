@@ -1087,9 +1087,9 @@ fn keyboard_cycles_tool_controls_and_enter_toggles_without_submitting(cx: &mut T
         ));
     });
     cx.simulate_keystrokes("tab");
-    view.read_with(cx, |view, _| {
+    view.read_with(cx, |view, cx| {
         assert!(view.panes[0].tool_targeted("toolu_9"));
-        assert!(!view.history_available(0));
+        assert!(!view.history_available(0, cx));
     });
     cx.simulate_keystrokes("enter");
     view.read_with(cx, |view, _| {

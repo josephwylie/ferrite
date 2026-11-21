@@ -240,7 +240,7 @@ impl CockpitView {
     /// A rename in progress ends and the Composer's `/`/`@` menu closes.
     pub(super) fn show_popup(&mut self, popup: Popup, cx: &mut Context<Self>) {
         self.popover = None;
-        if self.rename.is_some() {
+        if self.rename.is_open() {
             self.finish_rename(false, cx);
         }
         self.popups.shown = Some(Shown::Up(popup));

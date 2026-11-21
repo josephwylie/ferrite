@@ -136,8 +136,8 @@ impl NavView {
         let field = chrome::search_field(self.search.clone(), empty, focused, clear)
             .on_mouse_down(
                 MouseButton::Left,
-                cx.listener(move |_, _: &MouseDownEvent, window, cx| {
-                    cx.emit(NavEvent::DismissSnooze);
+                cx.listener(move |nav, _: &MouseDownEvent, window, cx| {
+                    nav.close_snooze(cx);
                     window.focus(&line.focus_handle(cx), cx);
                 }),
             )

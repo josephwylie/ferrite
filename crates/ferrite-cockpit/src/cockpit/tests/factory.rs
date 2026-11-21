@@ -484,3 +484,27 @@ fn focusing_a_worker_by_id_opens_its_tasks_worker_tab(cx: &mut TestAppContext) {
         assert_eq!(factory.tab, crate::cockpit::factory::TaskTab::Worker);
     });
 }
+
+/// New thread gives the board back from the Factory even when the draft it
+/// focuses is the one that already stood there, as in a store where no
+/// Thread was ever opened: the draft is what the operator asked to see.
+#[gpui::test]
+fn new_thread_leaves_the_factory_for_the_draft_that_stood(cx: &mut TestAppContext) {
+    let (core, _fake) = cockpit("factory-new-thread", 0);
+    bind_production_keys(cx);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    tick(cx);
+    let project = view.read_with(cx, |view, _| {
+        assert!(view.panes[view.focused()].draft().is_some(), "a draft stands");
+        view.launch_project.unwrap()
+    });
+    view.update(cx, |view, cx| view.open_factory(project, cx));
+    tick(cx);
+    assert!(view.read_with(cx, |view, _| view.factory().is_some()));
+    cx.dispatch_action(NewThread);
+    tick(cx);
+    view.read_with(cx, |view, _| {
+        assert!(!view.destination_shown(), "the board is back");
+        assert!(view.panes[view.focused()].draft().is_some(), "on the draft");
+    });
+}

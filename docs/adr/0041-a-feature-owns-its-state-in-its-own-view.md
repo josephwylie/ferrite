@@ -31,7 +31,20 @@ that happened to touch it, and nothing in the code said whose a field was.
   `NavEvent`. What the rest of the window also decides stays on the root:
   whether the nav is collapsed or forced open, its width measurements, the
   Project filter, its notice line. The other features follow one at a
-  time, each in its own change.
+  time, each in its own change. The Snooze field (a Thread's Custom…
+  time, drawn over the list) moved in later: `NavView` keeps the Thread it
+  snoozes, its line and why the last ⏎ did not take, and reads the
+  Thread's name as it draws. The root opens it from the Snooze menu
+  (`edit_snooze`). Its ⏎ and esc stay the root's Submit and Interrupt,
+  which reach the root wherever the keyboard is, and hand them to the
+  view while the field is open. A time it reads it says as
+  `NavEvent::Snooze`; snoozing is a Server ask, so the root asks and
+  answers the view (`snooze_answered`), which closes the field or keeps
+  the refusal in it. A press in the nav lets it go on the view's own; the
+  nav folding, the keys going to the list and a notice opened let it go
+  through the root (`close_snooze`). The focus pump, the paste and the
+  Composer's keys ask the view for its line. The inline title rename
+  gets no view (below).
 - **Settings is the second.** `SettingsView` (`cockpit/settings_view.rs`)
   owns whether the sheet is up, its exit, its page, its search field and
   its focus. It emits `SettingsEvent`. Rows of a feature that has no view
@@ -633,6 +646,47 @@ and which is a Server call that ends in revealing a Surface. A view would
 pass that through events and still need the root for the Server, the
 Surfaces and the Panes. A gone Thread's Browser goes in
 `forget_gone_threads`.
+
+The Review beside a Pane is the seventh. What the Review keeps is its
+`ReviewView`'s (`review.rs`), an entity already: the scope, the files read
+or why they could not be, a file opened whole, the pull request, the
+commits listed and the bases, the search, the pick, the unchanged runs it
+opened, the comment field, its scroll and its focus. It asks the root for
+each read by its own events (`ScopePicked`, `CommitPicked`, `Searched`,
+`FileOpened`, `PrAsked`, `FilesAsked`, `BasesAsked`, `BasePicked`,
+`MenuAsked`), heard from the moment the root makes it (`open_review`).
+What the root keeps is each Pane's `ReviewSlot` (`cockpit/beside.rs`), a
+plain struct beside the Pane (`CockpitPane`): the open review and its
+head's title, the one sliding shut, and the slot's focus, which only its
+own methods write (`show`, `close`, `let_go`). It goes with its Pane
+(`sync_panes`), a gone Thread's too. Each Thread's slide (`ReaderSlides`)
+only the pump writes (`tend_reader_slides`, and `land_reader_slides` as a
+seam is grabbed), and it is board layout: the reader leaf `board_tree`
+splices beside the Pane, its share and its reveal. What else stays on the
+root is the root's: reading each scope where the checkout is, opening the
+Review from the command, the palette and the Overview's `Review changes`
+(`open_beside`), handing the keyboard back to the Pane as it closes (its
+×, escape, ⌘W), and the slot's context menu (ADR 0043). A view would move
+a struct that already has an owner and add events (close, a press) for
+calls the root makes anyway. Its diff is its own read, not the Changes'
+or the Overview's.
+
+The inline title rename is the eighth. It is not the nav's alone: the
+same field stands in for a Thread's title in its nav row or in the view
+head over its Pane (`RenameTarget`), one at a time, so `NavView` would
+hold the Pane head's field. Nor does it earn a view of its own: every
+press that opens it is the root's (a menu's Rename, the view head's
+double-click, and F2 and a row's second click, which the nav says as
+`NavEvent::Rename`), as is every one that closes it (⏎ and esc as the
+root's Submit and Interrupt, a press anywhere else, a popup going up),
+and saving is the store's (`rename_thread`). So it is a plain struct on
+the root, `Rename` (`cockpit/rename.rs`), which only its own methods
+write (`open`, `close`, `take`, which drops a blank line); the nav reads
+its row's field through `NavInputs` and the view head reads its own. The
+root keeps the commit and where its refusal is said, the nav's notice,
+and the focus pump, which holds the keyboard on the field. A view would
+add events for calls the root makes on it anyway. A Project is renamed
+in the Project card, not here.
 
 ## Precedent
 

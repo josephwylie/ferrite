@@ -591,7 +591,7 @@ fn rename_on_a_slim_row_draws_the_editor(cx: &mut TestAppContext) {
             cx.debug_bounds("rename-field").is_some(),
             "{at}: the rename field is drawn in the row"
         );
-        let editor = view.read_with(cx, |view, _| view.rename.clone().unwrap().1);
+        let editor = view.read_with(cx, |view, _| view.rename.shown().unwrap().1.clone());
         editor.update(cx, |editor, cx| editor.set(format!("{at} renamed"), cx));
         cx.simulate_keystrokes("enter");
         tick(cx);

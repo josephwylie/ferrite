@@ -100,7 +100,7 @@ impl NavView {
         nav::content().w(px(inputs.width))
             .child(self.search_row(inputs, window, cx))
             // Over the list, outside its keys: the field's ⏎ and Esc are its own.
-            .children(inputs.snooze.as_ref().map(snooze::field))
+            .children(self.snooze_field(cx))
             .child(
                 div()
                     .relative()
@@ -384,7 +384,7 @@ impl NavView {
                 if nav.pick_card(thread, event.modifiers(), cx) {
                     return;
                 }
-                cx.emit(NavEvent::DismissSnooze);
+                nav.close_snooze(cx);
                 cx.emit(match &open {
                     Some(verb) => NavEvent::Notice(verb.clone()),
                     None => NavEvent::Open(thread),
@@ -603,9 +603,9 @@ impl NavView {
         let slim = list::slim_row(row, title, time, action, &nav::Measure::Text(cx, inputs.width))
             .children(self.cursor_reveal(NavItem::Thread(thread)))
             .children(self.shown_reveal(row))
-            .on_click(cx.listener(move |_, _: &ClickEvent, window, cx| {
+            .on_click(cx.listener(move |nav, _: &ClickEvent, window, cx| {
                 cx.stop_propagation();
-                cx.emit(NavEvent::DismissSnooze);
+                nav.close_snooze(cx);
                 cx.emit(NavEvent::Open(thread));
                 window.blur(cx);
             }))
