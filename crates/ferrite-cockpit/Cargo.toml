@@ -13,8 +13,17 @@ cef = ["ferrite-pane/cef"]
 # The Cockpit window drawn off-screen and driven by keys, clicks and shots
 # (`headless`, ADR 0038): gpui's test support carries its input and
 # capture, so release builds never have it. The app's `headless` feature
-# (`ferrite --headless`) and `visual-reference` turn this on.
-headless = ["gpui/test-support", "dep:gpui-reference-platform"]
+# (`ferrite --headless`) and `visual-reference` turn this on. It turns on
+# what the tests below turn on too, so a headless build and the tests share
+# one build of every crate (an edit to core compiles it once, not twice);
+# the app's `launch` keeps the motion kit moving as on screen.
+headless = [
+    "gpui/test-support",
+    "dep:gpui-reference-platform",
+    "ferrite-core/test-support",
+    "ferrite-ui/test-support",
+    "ferrite-pane/test-support",
+]
 # Opt-in native framebuffer artifacts (`cockpit::visual_reference`);
 # excluded from normal application builds. The app's own
 # `visual-reference` feature turns this on.
@@ -66,6 +75,9 @@ ferrite-ui = { path = "../ferrite-ui", features = ["test-support"] }
 ferrite-pane = { path = "../ferrite-pane", features = ["test-support"] }
 # The window's frame the app installs (ADR 0035): the tests draw it too.
 ferrite-frame = { path = "../ferrite-frame" }
+# The platform as `headless` builds it, so the tests and a headless build
+# share one build of the GPUI stack.
+gpui-reference-platform = { package = "gpui-pre-platform", version = "=0.3.3", features = ["test-support"] }
 
 [[example]]
 name = "changes_frames"

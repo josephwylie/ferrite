@@ -4,6 +4,7 @@
 
 use std::io::{Read, Write};
 use std::process::Stdio;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, Instant};
@@ -54,11 +55,10 @@ fn predict_using(provider: Provider, program: &str, system: &str, context: &str)
 /// Raw stdout on success. No provider interpretation or feature-specific
 /// cleaning belongs here. A timeout covers the child AND its pipe readers.
 pub(crate) fn run(form: &Form, input: Option<&str>, timeout: Duration) -> Option<String> {
-    let dir = std::env::temp_dir().join(format!("ferrite-oneshot-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).ok()?;
+    let scratch = Scratch::new().ok()?;
     let mut child = crate::spawn::agent(spawnable_program(&form.program))
         .args(&form.args)
-        .current_dir(dir)
+        .current_dir(&scratch.0)
         .stdin(if input.is_some() {
             Stdio::piped()
         } else {
@@ -110,6 +110,29 @@ pub(crate) fn run(form: &Form, input: Option<&str>, timeout: Duration) -> Option
     rx.recv_timeout(timeout.saturating_sub(started.elapsed()))
         .ok()?
         .ok()
+}
+
+/// A run's empty working folder, its own so concurrent runs never share
+/// one, and removed with whatever the CLI left in it when the run ends.
+struct Scratch(std::path::PathBuf);
+
+impl Scratch {
+    fn new() -> std::io::Result<Self> {
+        static NEXT: AtomicU64 = AtomicU64::new(0);
+        let dir = std::env::temp_dir().join(format!(
+            "ferrite-oneshot-{}-{}",
+            std::process::id(),
+            NEXT.fetch_add(1, Ordering::Relaxed)
+        ));
+        std::fs::create_dir_all(&dir)?;
+        Ok(Self(dir))
+    }
+}
+
+impl Drop for Scratch {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
 }
 
 #[cfg(test)]
@@ -183,6 +206,23 @@ mod tests {
                     None
                 );
             }
+        }
+
+        #[test]
+        fn a_run_leaves_no_folder_behind() {
+            let writes = stub("writes", "touch left-behind && pwd");
+            let dir = run(&writes, None, TIMEOUT).expect("the stub answers");
+            let dir = std::path::Path::new(dir.trim());
+            assert!(!dir.exists(), "{} outlived its run", dir.display());
+            let hangs = stub("hangs", "touch left-behind; exec sleep 2");
+            assert_eq!(run(&hangs, None, Duration::from_millis(100)), None);
+            let left: Vec<_> = std::fs::read_dir(std::env::temp_dir())
+                .unwrap()
+                .flatten()
+                .map(|entry| entry.file_name().to_string_lossy().into_owned())
+                .filter(|name| name.starts_with(&format!("ferrite-oneshot-{}-", std::process::id())))
+                .collect();
+            assert_eq!(left, Vec::<String>::new());
         }
 
         #[test]
