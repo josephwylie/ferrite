@@ -499,6 +499,7 @@ fn pr_view(control: gpui::Stateful<Div>, block: &PrBlock) -> gpui::Stateful<Div>
                         .flex_1()
                         .line_height(px(PR_TITLE_LH))
                         .line_clamp(2)
+                        .text_ellipsis()
                         .child(block.title.clone()),
                 ),
         )
