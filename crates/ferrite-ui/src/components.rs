@@ -1031,10 +1031,20 @@ pub fn chord_parts(stroke: &str) -> Vec<&str> {
 /// Geist Mono's own. Parts joined by `-` sit tight, as a menu shortcut or a
 /// tooltip reads (`cmd-F` → `⌘F`); strokes joined by spaces keep one code
 /// space apart. The run names its modifier for the tests
-/// (`command-key`, …).
+/// ([`key_selector`]).
 pub fn key_combo(keys: &str, ink: u32) -> Div {
+    let selector = key_selector(keys);
+    glyph(SharedString::from(chord_text(keys)), ink)
+        .font_family(theme::FONT_CODE)
+        .debug_selector(move || selector.into())
+}
+
+/// The name a [`key_combo`] of `keys` carries for the tests: the first of
+/// `cmd`, `alt`, `ctrl`, `shift` it holds (`command-key`, `option-key`,
+/// `control-key`, `shift-key`), else `key-combo`.
+pub fn key_selector(keys: &str) -> &'static str {
     let text = chord_text(keys);
-    let selector = if text.contains('\u{2318}') {
+    if text.contains('\u{2318}') {
         "command-key"
     } else if text.contains('\u{2325}') {
         "option-key"
@@ -1044,10 +1054,7 @@ pub fn key_combo(keys: &str, ink: u32) -> Div {
         "shift-key"
     } else {
         "key-combo"
-    };
-    glyph(SharedString::from(text), ink)
-        .font_family(theme::FONT_CODE)
-        .debug_selector(move || selector.into())
+    }
 }
 
 /// One key on its own cap (Claude's `Esc` in its search's footer, its
