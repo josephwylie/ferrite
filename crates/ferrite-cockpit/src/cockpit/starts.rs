@@ -6,17 +6,29 @@
 //! carrying the whole start, so what was typed for one source survives
 //! choosing another. Repositories and labels are listed from the
 //! operator's `gh` login where the Server runs, never typed.
+//!
+//! What the window keeps of it lives in a view of its own (ADR 0041),
+//! `StartsView`: the lists the login gave and the ones still out. The
+//! Factory holds it. Its render is the inspector showing the start,
+//! reading the shown Workflow's start through `starts_inputs`; what a
+//! press asks it says as a `StartsEvent`. Whether the start shows stays
+//! the Workflows surface's (`start_open`), and every edit, asking the login
+//! for a list and the automatic starts' switch stay the root's, since
+//! they are Server calls; the root's pump has the view take the answers.
 
 use std::collections::HashMap;
 use std::sync::mpsc::Receiver;
+
+use gpui::WeakEntity;
 
 use super::workflows::{Field, Pick};
 use super::*;
 use ferrite_core::factory::{
     self as core_factory, Missed, Overlap, Recurrence, Start, StartKind, Switch, Trigger, Turn,
-    Workflow,
+    WorkflowId,
 };
 use ferrite_core::protocol::{GitHubAsk, WorkflowAction};
+use ferrite_pane::composer::Composer;
 use gpui::component::Disableable as _;
 
 /// A start picker's row.
@@ -65,13 +77,6 @@ impl Listing {
     }
 }
 
-/// What the operator's GitHub login lists, asked once per window.
-#[derive(Default)]
-pub(crate) struct GitHubLists {
-    pub(crate) repositories: Listing,
-    pub(crate) labels: HashMap<String, Listing>,
-}
-
 /// The half-hour times a schedule offers.
 fn times() -> Vec<String> {
     (0..48)
@@ -90,24 +95,6 @@ pub(crate) fn script_command(executable: &str, workflow: &str) -> String {
     format!("\"{executable}\" task submit {workflow} \"<identity>\" \"<instructions>\"")
 }
 
-impl CockpitView {
-    /// Settings' stepper on how many Factory Tasks work at once.
-    pub(crate) fn step_factory_limit(&mut self, delta: i32, cx: &mut Context<Self>) {
-        let Some(now) = self.factory_limit() else {
-            return;
-        };
-        let next = if delta == 0 {
-            core_factory::DEFAULT_LIMIT
-        } else {
-            core_factory::clamp_limit(now.saturating_add_signed(delta as isize))
-        };
-        if next != now {
-            self.change_defaults(|defaults| defaults.factory_tasks_at_once = next, cx);
-            cx.notify();
-        }
-    }
-}
-
 /// This window's own `ferrite`, which is also its CLI.
 fn ferrite_executable() -> String {
     std::env::current_exe()
@@ -115,178 +102,95 @@ fn ferrite_executable() -> String {
         .unwrap_or_else(|_| "ferrite".into())
 }
 
-impl CockpitView {
-    /// The start's settings are what the inspector shows.
-    pub(crate) fn start_shown(&self) -> bool {
-        self.factory()
-            .is_some_and(|view| view.workflows.start_open)
+/// What the start's inspector draws from the window: the shown Workflow's
+/// start as the draft holds it, its automatic starts and the start's two
+/// fields.
+pub(crate) struct StartsInputs {
+    workflow: WorkflowId,
+    start: Start,
+    /// The latest saved version and the start it saved.
+    saved: Option<(u32, StartKind)>,
+    switch: Switch,
+    due_ms: Option<i64>,
+    waiting: bool,
+    error: Option<String>,
+    backlog: usize,
+    schedule_instructions: Option<Entity<Composer>>,
+    extra_instructions: Option<Entity<Composer>>,
+}
+
+/// What the start's inspector asks of the window.
+pub(crate) enum StartsEvent {
+    /// A picker's button: open its rows under it.
+    Picks {
+        picks: Vec<(ferrite_ui::menu::Item, Pick)>,
+        trigger: super::workflows::Trigger,
+        at: Point<Pixels>,
+    },
+    /// A segment chosen.
+    Pick(StartPick),
+    /// A press on one of the start's fields: it holds the keyboard now.
+    Field(Field),
+    /// The automatic starts' switch.
+    Turn(Turn),
+    /// The backlog's answer: take what already matched, or not.
+    Backlog(bool),
+}
+
+/// A Factory's starts: what the GitHub login listed for a GitHub start's
+/// pickers, and the lists still out.
+pub(crate) struct StartsView {
+    cockpit: WeakEntity<CockpitView>,
+    repositories: Listing,
+    labels: HashMap<String, Listing>,
+}
+
+impl EventEmitter<StartsEvent> for StartsView {}
+
+impl StartsView {
+    pub(super) fn new(cockpit: WeakEntity<CockpitView>) -> Self {
+        Self {
+            cockpit,
+            repositories: Listing::Unasked,
+            labels: HashMap::new(),
+        }
     }
 
-    /// Show the shown Workflow's start in the inspector.
-    pub(crate) fn open_start(&mut self, cx: &mut Context<Self>) {
-        if let Some(view) = self.factory_mut() {
-            view.workflows.start_open = true;
-            view.workflows.focused = None;
+    /// Whether `ask`'s list was never asked for.
+    pub(super) fn unasked(&self, ask: &GitHubAsk) -> bool {
+        let listing = match ask {
+            GitHubAsk::Repositories => Some(&self.repositories),
+            GitHubAsk::Labels { repository } => self.labels.get(repository),
+            GitHubAsk::Unknown => return false,
+        };
+        matches!(listing, None | Some(Listing::Unasked))
+    }
+
+    /// Wait for `ask`'s list, or keep why it could not be asked.
+    pub(super) fn listen(
+        &mut self,
+        ask: GitHubAsk,
+        asked: std::io::Result<Receiver<std::io::Result<Vec<String>>>>,
+        cx: &mut Context<Self>,
+    ) {
+        let listing = match asked {
+            Ok(pending) => Listing::Pending(pending),
+            Err(error) => Listing::Failed(error.to_string()),
+        };
+        match ask {
+            GitHubAsk::Repositories => self.repositories = listing,
+            GitHubAsk::Labels { repository } => {
+                self.labels.insert(repository, listing);
+            }
+            GitHubAsk::Unknown => {}
         }
-        self.ensure_fields(cx);
-        self.ask_github_lists();
         cx.notify();
     }
 
-    /// Change the shown draft's start, whole.
-    pub(crate) fn edit_start(&mut self, change: impl FnOnce(&mut Start), cx: &mut Context<Self>) {
-        let Some(workflow) = self.shown_workflow() else {
-            return;
-        };
-        let id = workflow.id.clone();
-        let mut start = workflow.draft.start.clone();
-        change(&mut start);
-        self.workflow_ask(
-            WorkflowAction::EditStart {
-                workflow: id,
-                start,
-            },
-            cx,
-        );
-        self.ask_github_lists();
-    }
-
-    pub(crate) fn apply_start_pick(&mut self, pick: StartPick, cx: &mut Context<Self>) {
-        self.edit_start(
-            |start| match pick {
-                StartPick::Kind(kind) => {
-                    start.kind = kind;
-                    if !Trigger::offered(kind).contains(&start.github.trigger) {
-                        start.github.trigger = Trigger::Labelled;
-                    }
-                }
-                StartPick::Recurrence(recurrence) => start.schedule.recurrence = recurrence,
-                StartPick::Weekday(day) => start.schedule.weekday = day,
-                StartPick::Interval(hours) => start.schedule.interval_hours = hours,
-                StartPick::Time(time) => start.schedule.time = Some(time),
-                StartPick::Repository(repository) => {
-                    if start.github.repository.as_deref() != Some(repository.as_str()) {
-                        start.github.label = None;
-                    }
-                    start.github.repository = Some(repository);
-                }
-                StartPick::Trigger(trigger) => start.github.trigger = trigger,
-                StartPick::Label(label) => start.github.label = Some(label),
-                StartPick::Missed(missed) => start.schedule.missed = missed,
-                StartPick::Overlap(overlap) => start.schedule.overlap = overlap,
-            },
-            cx,
-        );
-    }
-
-    /// Turn the shown Workflow's automatic starts on, pause or resume.
-    pub(crate) fn turn_automation(&mut self, turn: Turn, cx: &mut Context<Self>) {
-        let Some(workflow) = self.shown_workflow().map(|shown| shown.id.clone()) else {
-            return;
-        };
-        self.workflow_ask(WorkflowAction::Automation { workflow, turn }, cx);
-    }
-
-    /// The operator's word on what already matched.
-    pub(crate) fn answer_backlog(&mut self, take: bool, cx: &mut Context<Self>) {
-        let Some(workflow) = self.shown_workflow().map(|shown| shown.id.clone()) else {
-            return;
-        };
-        self.workflow_ask(WorkflowAction::Backlog { workflow, take }, cx);
-    }
-
-    /// The start's text fields, as the draft holds them.
-    pub(crate) fn start_fields(&self) -> Vec<(Field, String)> {
-        let Some(workflow) = self.shown_workflow().filter(|_| self.start_shown()) else {
-            return Vec::new();
-        };
-        let start = &workflow.draft.start;
-        vec![
-            (
-                Field::ScheduleInstructions(workflow.id.clone()),
-                start.schedule.instructions.clone(),
-            ),
-            (
-                Field::ExtraInstructions(workflow.id.clone()),
-                start.github.extra_instructions.clone(),
-            ),
-        ]
-    }
-
-    /// What was typed in one of the start's fields goes to the draft.
-    pub(crate) fn start_field_edited(
-        &mut self,
-        field: &Field,
-        text: String,
-        cx: &mut Context<Self>,
-    ) {
-        match field {
-            Field::ScheduleInstructions(_) => {
-                self.edit_start(|start| start.schedule.instructions = text, cx)
-            }
-            Field::ExtraInstructions(_) => {
-                self.edit_start(|start| start.github.extra_instructions = text, cx)
-            }
-            _ => {}
-        }
-    }
-
-    /// Ask the login for what a GitHub start's pickers need: the
-    /// repositories once, and the chosen repository's labels.
-    fn ask_github_lists(&mut self) {
-        let Some(start) = self
-            .shown_workflow()
-            .filter(|_| self.start_shown())
-            .map(|workflow| workflow.draft.start.clone())
-        else {
-            return;
-        };
-        if !start.kind.is_github() {
-            return;
-        }
-        let unasked = |listing: Option<&Listing>| matches!(listing, None | Some(Listing::Unasked));
-        let want_repositories = self
-            .factory()
-            .is_some_and(|view| unasked(Some(&view.workflows.github.repositories)));
-        if want_repositories {
-            let listing = match self.cockpit.github_names(GitHubAsk::Repositories) {
-                Ok(pending) => Listing::Pending(pending),
-                Err(error) => Listing::Failed(error.to_string()),
-            };
-            if let Some(view) = self.factory_mut() {
-                view.workflows.github.repositories = listing;
-            }
-        }
-        let Some(repository) = start.github.repository else {
-            return;
-        };
-        let want_labels = self
-            .factory()
-            .is_some_and(|view| unasked(view.workflows.github.labels.get(&repository)));
-        if want_labels {
-            let listing = match self.cockpit.github_names(GitHubAsk::Labels {
-                repository: repository.clone(),
-            }) {
-                Ok(pending) => Listing::Pending(pending),
-                Err(error) => Listing::Failed(error.to_string()),
-            };
-            if let Some(view) = self.factory_mut() {
-                view.workflows.github.labels.insert(repository, listing);
-            }
-        }
-    }
-
-    /// A list that answered.
-    pub(super) fn poll_start_lists(&mut self, cx: &mut Context<Self>) {
-        // The draft a window is told of may name a repository whose labels
-        // were never asked for.
-        self.ask_github_lists();
-        let Some(view) = self.factory_mut() else {
-            return;
-        };
-        let lists = &mut view.workflows.github;
+    /// Take each list that answered.
+    pub(super) fn listed(&mut self, cx: &mut Context<Self>) {
         let mut heard = false;
-        for listing in std::iter::once(&mut lists.repositories).chain(lists.labels.values_mut()) {
+        for listing in std::iter::once(&mut self.repositories).chain(self.labels.values_mut()) {
             let Listing::Pending(pending) = listing else {
                 continue;
             };
@@ -308,7 +212,7 @@ impl CockpitView {
 
     // ----------------------------------------------------------- pickers
 
-    fn kind_picks(&self, start: &Start) -> Vec<(ferrite_ui::menu::Item, Pick)> {
+    fn kind_picks(start: &Start) -> Vec<(ferrite_ui::menu::Item, Pick)> {
         StartKind::ALL
             .into_iter()
             .map(|kind| {
@@ -378,12 +282,7 @@ impl CockpitView {
     }
 
     fn repository_picks(&self, start: &Start) -> Vec<(ferrite_ui::menu::Item, Pick)> {
-        let Some(view) = self.factory() else {
-            return Vec::new();
-        };
-        view.workflows
-            .github
-            .repositories
+        self.repositories
             .names()
             .iter()
             .map(|name| {
@@ -397,13 +296,12 @@ impl CockpitView {
     }
 
     fn label_picks(&self, start: &Start) -> Vec<(ferrite_ui::menu::Item, Pick)> {
-        let Some(listing) = start.github.repository.as_ref().and_then(|repository| {
-            self.factory()?
-                .workflows
-                .github
-                .labels
-                .get(repository)
-        }) else {
+        let Some(listing) = start
+            .github
+            .repository
+            .as_ref()
+            .and_then(|repository| self.labels.get(repository))
+        else {
             return Vec::new();
         };
         listing
@@ -433,69 +331,6 @@ impl CockpitView {
     }
 
     // ----------------------------------------------------------- drawing
-
-    /// The outline's row for the start, above the agents.
-    pub(super) fn start_outline_row(
-        &self,
-        workflow: &Workflow,
-        cx: &mut Context<Self>,
-    ) -> AnyElement {
-        use ferrite_ui::theme::*;
-        let selected = self.start_shown();
-        let key = if selected {
-            "outline-start-selected"
-        } else {
-            "outline-start"
-        };
-        let mut said = workflow.draft.start.kind.label().to_string();
-        if workflow.draft.start.kind.automatic() {
-            said = format!(
-                "{said} \u{b7} automatic starts {}",
-                workflow.automation.switch.word().to_lowercase()
-            );
-        }
-        div()
-            .id("outline-start")
-            .debug_selector(move || key.into())
-            .flex()
-            .items_center()
-            .gap(px(SPACE_2))
-            .px(px(SPACE_2))
-            .py(px(SPACE_1_5))
-            .rounded(px(R_CONTROL))
-            .cursor_pointer()
-            .map(|row| {
-                if selected {
-                    row.bg(paint::SELECTED)
-                } else {
-                    row.hover(|row| row.bg(paint::HOVER))
-                }
-            })
-            .child(
-                div()
-                    .flex_shrink_0()
-                    .font_weight(W_LABEL)
-                    .text_color(rgb(INK_STRONG))
-                    .child("Tasks start"),
-            )
-            .child(
-                div()
-                    .flex_1()
-                    .min_w_0()
-                    .truncate()
-                    .text_size(px(FS_META))
-                    .text_color(rgb(INK_SUBTLE))
-                    .child(SharedString::from(said)),
-            )
-            .on_mouse_down(
-                MouseButton::Left,
-                cx.listener(|view, _: &MouseDownEvent, _, cx| {
-                    cx.stop_propagation();
-                    view.open_start(cx);
-                }),
-            )
-            .into_any_element()
-    }
 
     /// A picker's button: what it holds, opening its rows; disabled, it
     /// opens nothing.
@@ -528,9 +363,13 @@ impl CockpitView {
                     }
                 })
                 .when(!disabled, |chooser| {
-                    chooser.on_click(cx.listener(move |view, event: &ClickEvent, _, cx| {
+                    chooser.on_click(cx.listener(move |_, event: &ClickEvent, _, cx| {
                         cx.stop_propagation();
-                        view.open_picks((*picks).clone(), &trigger, event.position(), cx);
+                        cx.emit(StartsEvent::Picks {
+                            picks: (*picks).clone(),
+                            trigger: trigger.clone(),
+                            at: event.position(),
+                        });
                     }))
                 }),
         )
@@ -549,24 +388,47 @@ impl CockpitView {
             row = row.child(
                 ferrite_ui::controls::segment((selector, at), label, chosen, true, cx)
                     .debug_selector(move || key.clone())
-                    .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
-                        view.apply_start_pick(pick.clone(), cx)
+                    .on_click(cx.listener(move |_, _: &ClickEvent, _, cx| {
+                        cx.emit(StartsEvent::Pick(pick.clone()))
                     })),
             );
         }
         row
     }
 
+    /// One of the start's text fields; a press on it gives it the
+    /// keyboard.
+    fn field(
+        field: Field,
+        label: &'static str,
+        composer: Option<&Entity<Composer>>,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) -> Option<AnyElement> {
+        let composer = composer?.clone();
+        let focused = composer.read(cx).focus_handle(cx).is_focused(window);
+        let chosen = field.clone();
+        Some(super::workflows::field_input(
+            &field,
+            label,
+            composer,
+            focused,
+            cx.listener(move |_, _: &MouseDownEvent, _, cx| {
+                cx.emit(StartsEvent::Field(chosen.clone()))
+            }),
+        ))
+    }
+
     /// The inspector, showing the start: the picker, the chosen source's
     /// own settings and the automatic starts' switch.
-    pub(super) fn start_inspector(
+    fn inspector(
         &self,
-        workflow: &Workflow,
+        inputs: &StartsInputs,
         window: &mut Window,
         cx: &mut Context<Self>,
-    ) -> AnyElement {
+    ) -> Stateful<Div> {
         use ferrite_ui::theme::*;
-        let start = workflow.draft.start.clone();
+        let start = inputs.start.clone();
         let label = |text: SharedString| {
             div()
                 .text_size(px(FS_META))
@@ -600,7 +462,7 @@ impl CockpitView {
                 start.kind.label().into(),
                 false,
                 false,
-                self.kind_picks(&start),
+                Self::kind_picks(&start),
                 cx,
             ))
             .child(meta(
@@ -703,9 +565,10 @@ impl CockpitView {
                             schedule.describe()
                         ),
                     ))
-                    .children(self.text_input(
-                        &Field::ScheduleInstructions(workflow.id.clone()),
+                    .children(Self::field(
+                        Field::ScheduleInstructions(inputs.workflow.clone()),
                         "Task instructions for each run",
+                        inputs.schedule_instructions.as_ref(),
                         window,
                         cx,
                     ))
@@ -745,10 +608,10 @@ impl CockpitView {
                     ));
             }
             StartKind::GithubIssue | StartKind::GithubPr => {
-                body = body.child(self.github_settings(workflow, &start, window, cx));
+                body = body.child(self.github_settings(inputs, &start, window, cx));
             }
             StartKind::External => {
-                let command = script_command(&ferrite_executable(), &workflow.id);
+                let command = script_command(&ferrite_executable(), &inputs.workflow);
                 body = body
                     .child(label("Your script runs".into()))
                     .child(
@@ -773,8 +636,7 @@ impl CockpitView {
                     ));
             }
         }
-        body.child(self.automation_row(workflow, cx))
-            .into_any_element()
+        body.child(Self::automation_row(inputs, cx))
     }
 
     /// A GitHub start's settings: repository, trigger and label from the
@@ -782,16 +644,12 @@ impl CockpitView {
     /// receives, and its extra instructions.
     fn github_settings(
         &self,
-        workflow: &Workflow,
+        inputs: &StartsInputs,
         start: &Start,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Div {
         use ferrite_ui::theme::*;
-        let Some(view) = self.factory() else {
-            return div();
-        };
-        let lists = &view.workflows.github;
         let pr = start.kind == StartKind::GithubPr;
         let thing = if pr { "pull request" } else { "issue" };
         let github = &start.github;
@@ -811,7 +669,7 @@ impl CockpitView {
                 .text_color(rgb(INK_SUBTLE))
                 .child(SharedString::from(text))
         };
-        let repository_wait = lists.repositories.wait("repositories");
+        let repository_wait = self.repositories.wait("repositories");
         let mut settings = div()
             .flex()
             .flex_col()
@@ -864,7 +722,7 @@ impl CockpitView {
             let listing = github
                 .repository
                 .as_ref()
-                .and_then(|repository| lists.labels.get(repository));
+                .and_then(|repository| self.labels.get(repository));
             label_wait = match (&github.repository, listing) {
                 (None, _) => Some("Choose a repository first".to_string()),
                 (Some(_), None) => Some("Listing labels\u{2026}".to_string()),
@@ -937,9 +795,10 @@ impl CockpitView {
             ))
             .child(label("Each task receives".into()))
             .child(list)
-            .children(self.text_input(
-                &Field::ExtraInstructions(workflow.id.clone()),
+            .children(Self::field(
+                Field::ExtraInstructions(inputs.workflow.clone()),
                 "Extra instructions for every task (optional)",
+                inputs.extra_instructions.as_ref(),
                 window,
                 cx,
             ))
@@ -947,15 +806,12 @@ impl CockpitView {
 
     /// Automatic starts: the switch, the version it uses, the last
     /// check's failure, and the question over a backlog.
-    fn automation_row(&self, workflow: &Workflow, cx: &mut Context<Self>) -> Div {
+    fn automation_row(inputs: &StartsInputs, cx: &mut Context<Self>) -> Div {
         use ferrite_ui::theme::*;
-        let saved = workflow
-            .latest()
-            .map(|latest| (latest.version, latest.definition.start.kind));
-        let automation = &workflow.automation;
-        let switch = automation.switch;
+        let saved = inputs.saved;
+        let switch = inputs.switch;
         let can = saved.is_some_and(|(_, kind)| kind.automatic());
-        if !can && !workflow.draft.start.kind.automatic() {
+        if !can && !inputs.start.kind.automatic() {
             return div();
         }
         let hint = match saved {
@@ -964,10 +820,10 @@ impl CockpitView {
                     "{}. Uses version {version}. Saving a version does not turn this on.",
                     switch.word()
                 );
-                if let Some(due) = automation.due_ms.filter(|_| switch == Switch::On) {
+                if let Some(due) = inputs.due_ms.filter(|_| switch == Switch::On) {
                     hint.push_str(&format!(" Next run: {}.", core_factory::when_label(due)));
                 }
-                if automation.waiting {
+                if inputs.waiting {
                     hint.push_str(" A run waits for the last one to finish.");
                 }
                 hint
@@ -1024,14 +880,14 @@ impl CockpitView {
                         .debug_selector(|| "automation-turn".into())
                         .disabled(!can)
                         .on_click(cx.listener(
-                            move |view, _: &ClickEvent, _, cx| {
+                            move |_, _: &ClickEvent, _, cx| {
                                 cx.stop_propagation();
-                                view.turn_automation(turn, cx);
+                                cx.emit(StartsEvent::Turn(turn));
                             },
                         )),
                     ),
             );
-        if let Some(error) = &automation.error {
+        if let Some(error) = &inputs.error {
             row = row.child(
                 div()
                     .debug_selector(|| "automation-error".into())
@@ -1050,8 +906,8 @@ impl CockpitView {
                     ))),
             );
         }
-        if !automation.backlog.is_empty() {
-            let count = automation.backlog.len();
+        if inputs.backlog > 0 {
+            let count = inputs.backlog;
             let thing = match (saved.map(|(_, kind)| kind), count) {
                 (Some(StartKind::GithubPr), 1) => "pull request already matches",
                 (Some(StartKind::GithubPr), _) => "pull requests already match",
@@ -1083,9 +939,9 @@ impl CockpitView {
                                 )
                                 .debug_selector(|| "backlog-new-only".into())
                                 .on_click(cx.listener(
-                                    |view, _: &ClickEvent, _, cx| {
+                                    |_, _: &ClickEvent, _, cx| {
                                         cx.stop_propagation();
-                                        view.answer_backlog(false, cx);
+                                        cx.emit(StartsEvent::Backlog(false));
                                     },
                                 )),
                             )
@@ -1098,9 +954,9 @@ impl CockpitView {
                                 )
                                 .debug_selector(|| "backlog-take".into())
                                 .on_click(cx.listener(
-                                    |view, _: &ClickEvent, _, cx| {
+                                    |_, _: &ClickEvent, _, cx| {
                                         cx.stop_propagation();
-                                        view.answer_backlog(true, cx);
+                                        cx.emit(StartsEvent::Backlog(true));
                                     },
                                 )),
                             ),
@@ -1108,5 +964,303 @@ impl CockpitView {
             );
         }
         row
+    }
+}
+
+impl Render for StartsView {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let Some(inputs) = self
+            .cockpit
+            .upgrade()
+            .and_then(|cockpit| cockpit.read(cx).starts_inputs())
+        else {
+            return div().id("inspector");
+        };
+        self.inspector(&inputs, window, cx)
+    }
+}
+
+impl CockpitView {
+    /// Settings' stepper on how many Factory Tasks work at once.
+    pub(crate) fn step_factory_limit(&mut self, delta: i32, cx: &mut Context<Self>) {
+        let Some(now) = self.factory_limit() else {
+            return;
+        };
+        let next = if delta == 0 {
+            core_factory::DEFAULT_LIMIT
+        } else {
+            core_factory::clamp_limit(now.saturating_add_signed(delta as isize))
+        };
+        if next != now {
+            self.change_defaults(|defaults| defaults.factory_tasks_at_once = next, cx);
+            cx.notify();
+        }
+    }
+}
+
+impl CockpitView {
+    /// A Factory's starts, heard from their making.
+    pub(super) fn new_starts(&mut self, cx: &mut Context<Self>) -> Entity<StartsView> {
+        let me = cx.entity().downgrade();
+        let starts = cx.new(|_| StartsView::new(me));
+        cx.subscribe(&starts, Self::on_starts_event).detach();
+        starts
+    }
+
+    /// What the start's inspector draws: the shown Workflow's start, while
+    /// it is what the inspector shows.
+    fn starts_inputs(&self) -> Option<StartsInputs> {
+        let workflow = self.shown_workflow().filter(|_| self.start_shown())?;
+        let fields = &self.factory()?.workflows.fields;
+        let automation = &workflow.automation;
+        Some(StartsInputs {
+            workflow: workflow.id.clone(),
+            start: workflow.draft.start.clone(),
+            saved: workflow
+                .latest()
+                .map(|latest| (latest.version, latest.definition.start.kind)),
+            switch: automation.switch,
+            due_ms: automation.due_ms,
+            waiting: automation.waiting,
+            error: automation.error.clone(),
+            backlog: automation.backlog.len(),
+            schedule_instructions: fields
+                .get(&Field::ScheduleInstructions(workflow.id.clone()))
+                .cloned(),
+            extra_instructions: fields
+                .get(&Field::ExtraInstructions(workflow.id.clone()))
+                .cloned(),
+        })
+    }
+
+    /// The start's inspector: a picker opens its rows, a segment, a field
+    /// or a switch changes the draft or the automatic starts.
+    fn on_starts_event(&mut self, _: Entity<StartsView>, event: &StartsEvent, cx: &mut Context<Self>) {
+        match event {
+            StartsEvent::Picks { picks, trigger, at } => {
+                self.open_picks(picks.clone(), trigger, *at, cx)
+            }
+            StartsEvent::Pick(pick) => self.apply_start_pick(pick.clone(), cx),
+            StartsEvent::Field(field) => self.focus_field(field.clone(), cx),
+            StartsEvent::Turn(turn) => self.turn_automation(*turn, cx),
+            StartsEvent::Backlog(take) => self.answer_backlog(*take, cx),
+        }
+    }
+
+    /// The start's settings are what the inspector shows.
+    pub(crate) fn start_shown(&self) -> bool {
+        self.factory()
+            .is_some_and(|view| view.workflows.start_open)
+    }
+
+    /// Show the shown Workflow's start in the inspector.
+    pub(crate) fn open_start(&mut self, cx: &mut Context<Self>) {
+        if let Some(view) = self.factory_mut() {
+            view.workflows.start_open = true;
+            view.workflows.focused = None;
+        }
+        self.ensure_fields(cx);
+        self.ask_github_lists(cx);
+        cx.notify();
+    }
+
+    /// Change the shown draft's start, whole.
+    pub(crate) fn edit_start(&mut self, change: impl FnOnce(&mut Start), cx: &mut Context<Self>) {
+        let Some(workflow) = self.shown_workflow() else {
+            return;
+        };
+        let id = workflow.id.clone();
+        let mut start = workflow.draft.start.clone();
+        change(&mut start);
+        self.workflow_ask(
+            WorkflowAction::EditStart {
+                workflow: id,
+                start,
+            },
+            cx,
+        );
+        self.ask_github_lists(cx);
+    }
+
+    pub(crate) fn apply_start_pick(&mut self, pick: StartPick, cx: &mut Context<Self>) {
+        self.edit_start(
+            |start| match pick {
+                StartPick::Kind(kind) => {
+                    start.kind = kind;
+                    if !Trigger::offered(kind).contains(&start.github.trigger) {
+                        start.github.trigger = Trigger::Labelled;
+                    }
+                }
+                StartPick::Recurrence(recurrence) => start.schedule.recurrence = recurrence,
+                StartPick::Weekday(day) => start.schedule.weekday = day,
+                StartPick::Interval(hours) => start.schedule.interval_hours = hours,
+                StartPick::Time(time) => start.schedule.time = Some(time),
+                StartPick::Repository(repository) => {
+                    if start.github.repository.as_deref() != Some(repository.as_str()) {
+                        start.github.label = None;
+                    }
+                    start.github.repository = Some(repository);
+                }
+                StartPick::Trigger(trigger) => start.github.trigger = trigger,
+                StartPick::Label(label) => start.github.label = Some(label),
+                StartPick::Missed(missed) => start.schedule.missed = missed,
+                StartPick::Overlap(overlap) => start.schedule.overlap = overlap,
+            },
+            cx,
+        );
+    }
+
+    /// Turn the shown Workflow's automatic starts on, pause or resume.
+    pub(crate) fn turn_automation(&mut self, turn: Turn, cx: &mut Context<Self>) {
+        let Some(workflow) = self.shown_workflow().map(|shown| shown.id.clone()) else {
+            return;
+        };
+        self.workflow_ask(WorkflowAction::Automation { workflow, turn }, cx);
+    }
+
+    /// The operator's word on what already matched.
+    pub(crate) fn answer_backlog(&mut self, take: bool, cx: &mut Context<Self>) {
+        let Some(workflow) = self.shown_workflow().map(|shown| shown.id.clone()) else {
+            return;
+        };
+        self.workflow_ask(WorkflowAction::Backlog { workflow, take }, cx);
+    }
+
+    /// The start's text fields, as the draft holds them.
+    pub(crate) fn start_fields(&self) -> Vec<(Field, String)> {
+        let Some(workflow) = self.shown_workflow().filter(|_| self.start_shown()) else {
+            return Vec::new();
+        };
+        let start = &workflow.draft.start;
+        vec![
+            (
+                Field::ScheduleInstructions(workflow.id.clone()),
+                start.schedule.instructions.clone(),
+            ),
+            (
+                Field::ExtraInstructions(workflow.id.clone()),
+                start.github.extra_instructions.clone(),
+            ),
+        ]
+    }
+
+    /// What was typed in one of the start's fields goes to the draft.
+    pub(crate) fn start_field_edited(
+        &mut self,
+        field: &Field,
+        text: String,
+        cx: &mut Context<Self>,
+    ) {
+        match field {
+            Field::ScheduleInstructions(_) => {
+                self.edit_start(|start| start.schedule.instructions = text, cx)
+            }
+            Field::ExtraInstructions(_) => {
+                self.edit_start(|start| start.github.extra_instructions = text, cx)
+            }
+            _ => {}
+        }
+    }
+
+    /// Ask the login for what a GitHub start's pickers need: the
+    /// repositories once, and the chosen repository's labels. The
+    /// Factory's starts wait for each answer.
+    fn ask_github_lists(&mut self, cx: &mut Context<Self>) {
+        let Some(start) = self
+            .shown_workflow()
+            .filter(|_| self.start_shown())
+            .map(|workflow| workflow.draft.start.clone())
+        else {
+            return;
+        };
+        if !start.kind.is_github() {
+            return;
+        }
+        let Some(starts) = self.factory().map(|view| view.starts.clone()) else {
+            return;
+        };
+        let labels = start
+            .github
+            .repository
+            .map(|repository| GitHubAsk::Labels { repository });
+        for ask in std::iter::once(GitHubAsk::Repositories).chain(labels) {
+            if starts.read(cx).unasked(&ask) {
+                let asked = self.cockpit.github_names(ask.clone());
+                starts.update(cx, |starts, cx| starts.listen(ask, asked, cx));
+            }
+        }
+    }
+
+    /// A list that answered.
+    pub(super) fn poll_start_lists(&mut self, cx: &mut Context<Self>) {
+        // The draft a window is told of may name a repository whose labels
+        // were never asked for.
+        self.ask_github_lists(cx);
+        if let Some(starts) = self.factory().map(|view| view.starts.clone()) {
+            starts.update(cx, |starts, cx| starts.listed(cx));
+        }
+    }
+
+    /// The outline's row for the start, above the agents.
+    pub(super) fn start_outline_row(
+        &self,
+        workflow: &ferrite_core::factory::Workflow,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        use ferrite_ui::theme::*;
+        let selected = self.start_shown();
+        let key = if selected {
+            "outline-start-selected"
+        } else {
+            "outline-start"
+        };
+        let mut said = workflow.draft.start.kind.label().to_string();
+        if workflow.draft.start.kind.automatic() {
+            said = format!(
+                "{said} \u{b7} automatic starts {}",
+                workflow.automation.switch.word().to_lowercase()
+            );
+        }
+        div()
+            .id("outline-start")
+            .debug_selector(move || key.into())
+            .flex()
+            .items_center()
+            .gap(px(SPACE_2))
+            .px(px(SPACE_2))
+            .py(px(SPACE_1_5))
+            .rounded(px(R_CONTROL))
+            .cursor_pointer()
+            .map(|row| {
+                if selected {
+                    row.bg(paint::SELECTED)
+                } else {
+                    row.hover(|row| row.bg(paint::HOVER))
+                }
+            })
+            .child(
+                div()
+                    .flex_shrink_0()
+                    .font_weight(W_LABEL)
+                    .text_color(rgb(INK_STRONG))
+                    .child("Tasks start"),
+            )
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .truncate()
+                    .text_size(px(FS_META))
+                    .text_color(rgb(INK_SUBTLE))
+                    .child(SharedString::from(said)),
+            )
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|view, _: &MouseDownEvent, _, cx| {
+                    cx.stop_propagation();
+                    view.open_start(cx);
+                }),
+            )
+            .into_any_element()
     }
 }

@@ -145,6 +145,9 @@ pub(crate) struct FactoryView {
     pub(crate) direction: Entity<super::direction::DirectionView>,
     /// The Coordinator surface's field before the Coordinator runs (#224).
     pub(crate) opening: Option<Entity<Composer>>,
+    /// How Tasks start (#225): what the GitHub login listed for its
+    /// pickers.
+    pub(crate) starts: Entity<super::starts::StartsView>,
     /// The Archive (#226): its search and the earlier Worker being read.
     pub(crate) archive: Entity<super::archive::ArchiveView>,
     /// Whether the Archive shows in the board's place.
@@ -183,6 +186,7 @@ impl CockpitView {
                 let workflows = super::workflows::Workflows::new(cx);
                 let archive = self.new_archive(cx);
                 let direction = self.new_direction(cx);
+                let starts = self.new_starts(cx);
                 let view = FactoryView {
                     project,
                     open: None,
@@ -195,6 +199,7 @@ impl CockpitView {
                     workflows,
                     picks: Vec::new(),
                     direction,
+                    starts,
                     opening: None,
                     archive,
                     archive_shown: false,

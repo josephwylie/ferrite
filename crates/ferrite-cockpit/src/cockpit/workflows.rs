@@ -23,6 +23,7 @@ use gpui::component::Disableable as _;
 
 mod inspector;
 mod outline;
+pub(crate) use outline::field_input;
 mod pickers;
 pub(crate) use pickers::{model_choices, model_chosen, model_name, Trigger};
 mod save;
@@ -145,8 +146,6 @@ pub(crate) struct Workflows {
     pub(crate) approval: bool,
     /// The inspector shows how Tasks start, not a Step (#225).
     pub(crate) start_open: bool,
-    /// What the GitHub login lists for a GitHub start's pickers.
-    pub(crate) github: super::starts::GitHubLists,
 }
 
 impl Workflows {
@@ -162,7 +161,6 @@ impl Workflows {
             skills: Vec::new(),
             approval: false,
             start_open: false,
-            github: Default::default(),
         }
     }
 }

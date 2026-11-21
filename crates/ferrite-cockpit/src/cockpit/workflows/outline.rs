@@ -679,34 +679,40 @@ impl CockpitView {
         window: &Window,
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
-        let composer = self.factory()?.workflows.fields.get(field)?;
+        let composer = self.factory()?.workflows.fields.get(field)?.clone();
         let focused = composer.read(cx).focus_handle(cx).is_focused(window);
-        let key = field.key();
         let chosen = field.clone();
-        Some(
-            div()
-                .id(SharedString::from(key.clone()))
-                .debug_selector(move || key.clone())
-                .capture_any_mouse_down(cx.listener(move |view, _: &MouseDownEvent, _, cx| {
-                    view.focus_field(chosen.clone(), cx)
-                }))
-                .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                .child(if field.prose() {
-                    crate::project_editor::text_area(
-                        label.into(),
-                        composer.clone(),
-                        focused,
-                        "factory-field-focused",
-                    )
-                } else {
-                    crate::project_editor::text_field(
-                        label.into(),
-                        composer.clone(),
-                        focused,
-                        "factory-field-focused",
-                    )
-                })
-                .into_any_element(),
-        )
+        Some(field_input(
+            field,
+            label,
+            composer,
+            focused,
+            cx.listener(move |view, _: &MouseDownEvent, _, cx| {
+                view.focus_field(chosen.clone(), cx)
+            }),
+        ))
     }
+}
+
+/// A Workflows field drawn: its label over its Composer, ringed while it
+/// has the keyboard; a press on it calls `pressed` first.
+pub(crate) fn field_input(
+    field: &Field,
+    label: &'static str,
+    composer: Entity<Composer>,
+    focused: bool,
+    pressed: impl Fn(&MouseDownEvent, &mut Window, &mut gpui::App) + 'static,
+) -> AnyElement {
+    let key = field.key();
+    div()
+        .id(SharedString::from(key.clone()))
+        .debug_selector(move || key.clone())
+        .capture_any_mouse_down(pressed)
+        .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+        .child(if field.prose() {
+            crate::project_editor::text_area(label.into(), composer, focused, "factory-field-focused")
+        } else {
+            crate::project_editor::text_field(label.into(), composer, focused, "factory-field-focused")
+        })
+        .into_any_element()
 }

@@ -13,8 +13,8 @@ impl CockpitView {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         use ferrite_ui::theme::*;
-        if self.start_shown() {
-            return self.start_inspector(workflow, window, cx);
+        if let Some(view) = self.factory().filter(|_| self.start_shown()) {
+            return view.starts.clone().into_any_element();
         }
         if self
             .factory()

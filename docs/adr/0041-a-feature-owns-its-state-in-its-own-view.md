@@ -412,6 +412,28 @@ that happened to touch it, and nothing in the code said whose a field was.
   nothing by Thread, so a gone Thread leaves it nothing to free. Left of
   the Factory: Starts, the Workflows editor, the Coordinator surface and
   the shell.
+- **Starts is the twenty-fourth, the Factory's third slice.**
+  `StartsView` (`cockpit/starts.rs`) owns what a Factory keeps of how a
+  Workflow's Tasks start (#225): the repositories and each repository's
+  labels the GitHub login listed for a GitHub start's pickers, with the
+  lists still out and why one could not be read. The Factory holds it, as
+  it holds the Archive's, so the lists are asked again only when the
+  Factory opens anew. Its render is the inspector showing the start (the
+  source picker, the chosen source's settings, the automatic starts'
+  switch, a backlog's question and a failed check), reading the shown
+  Workflow's start, its automatic starts and the start's two fields
+  through `starts_inputs`. It emits `StartsEvent`: a picker's rows to
+  open, a segment chosen, a press on a field, the switch, the backlog's
+  answer. The start is the draft's and every change to it is a Server
+  ask, so `edit_start` and the switch stay the root's, as does asking the
+  login for a list: the root asks and hands the view the answer to wait
+  on, and the root's pump has the view take each answer, as the palette's
+  import listing does. Whether the start shows stays the Workflows
+  surface's (`start_open`), as does its outline row, which opens it; the
+  two fields are the Workflows editor's, which the view draws through the
+  one `field_input` the editor's own fields use. It keeps nothing by
+  Thread. Left of the Factory: the Workflows editor, the Coordinator
+  surface and the shell.
 
 ## What does not get a view
 
