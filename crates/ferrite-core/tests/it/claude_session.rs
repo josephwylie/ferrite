@@ -215,7 +215,9 @@ fn what_a_session_starts_runs_below_the_server() {
             report.display()
         ),
     );
-    ClaudeSession::spawn(config(program)).expect("the stub spawns");
+    // The stub exits without a handshake, so the start fails; what it
+    // reported on the way is the point.
+    let _ = ClaudeSession::spawn(config(program));
     let deadline = Instant::now() + Duration::from_secs(10);
     let reported = loop {
         if let Ok(reported) = fs::read_to_string(&report) {
@@ -679,7 +681,8 @@ fn a_resumed_session_answers_from_the_previous_process_history() {
         recorded[0],
         format!(
             "-p --input-format stream-json --output-format stream-json \
-             --include-partial-messages --thinking-display summarized --forward-subagent-text --verbose --permission-prompt-tool stdio --prompt-suggestions false \
+             --include-partial-messages --forward-subagent-text --verbose --permission-prompt-tool stdio \
+             --thinking=adaptive --thinking-display=summarized --settings {{\"showThinkingSummaries\":true}} --prompt-suggestions false \
              --resume {resumed} --allowedTools mcp__ferrite__wrap_up --allowedTools mcp__ferrite__update_plan"
         )
     );
@@ -739,19 +742,15 @@ fn an_abnormal_exit_explains_itself_with_stderr() {
     }
 }
 
-/// A CLI that refuses its arguments exits before the start's effort is
-/// set: the start fails with what it said, not the broken pipe it left.
+/// A CLI that refuses its arguments exits before its handshake: the start
+/// fails with what it said, not the broken pipe it left.
 #[test]
 fn a_cli_that_exits_at_start_explains_itself_with_stderr() {
     let program = stub(
         "claude-refuses",
         &format!("{VERSION_CASE}\necho 'Error: Session ID 4a76 is already in use.' >&2\nexit 1"),
     );
-    let refused = ClaudeSession::spawn(ClaudeConfig {
-        effort: Some("medium".into()),
-        ..config(program)
-    });
-    let Err(error) = refused else {
+    let Err(error) = ClaudeSession::spawn(config(program)) else {
         panic!("expected the start to fail")
     };
     let said = error.to_string();
@@ -760,53 +759,6 @@ fn a_cli_that_exits_at_start_explains_itself_with_stderr() {
         said.contains("Session ID 4a76 is already in use."),
         "{said}"
     );
-}
-
-/// A CLI slowed by a busy machine answers the start's effort late; past
-/// the wait for it, the start still succeeds rather than failing every
-/// turn the operator sends while the machine is loaded.
-#[test]
-fn a_late_effort_answer_still_starts_the_session() {
-    let program = stub(
-        "claude-slow-effort",
-        &format!(
-            r#"{PRELUDE}
-take
-take
-sleep 0.3
-echo '{{"type":"control_response","response":{{"subtype":"success","request_id":"req_2","response":{{}}}}}}'
-cat >/dev/null"#
-        ),
-    );
-    let started = ClaudeSession::spawn(ClaudeConfig {
-        effort: Some("medium".into()),
-        effort_ack_timeout: Duration::from_millis(100),
-        ..config(program)
-    });
-    assert!(started.is_ok(), "{:?}", started.err().map(|e| e.to_string()));
-}
-
-/// A CLI that refuses the start's effort fails the start with its reason.
-#[test]
-fn a_refused_effort_at_start_fails_with_the_reason() {
-    let program = stub(
-        "claude-refuses-effort",
-        &format!(
-            r#"{PRELUDE}
-take
-take
-echo '{{"type":"control_response","response":{{"subtype":"error","request_id":"req_2","error":"unsupported effort"}}}}'
-cat >/dev/null"#
-        ),
-    );
-    let refused = ClaudeSession::spawn(ClaudeConfig {
-        effort: Some("medium".into()),
-        ..config(program)
-    });
-    let Err(error) = refused else {
-        panic!("expected the start to fail")
-    };
-    assert!(error.to_string().contains("unsupported effort"), "{error}");
 }
 
 /// A rewind resumed at an entry names the turn it means to drop, so the
@@ -844,8 +796,7 @@ fn the_session_speaks_the_pinned_command_line_and_protocol() {
     let program = stub(
         "claude-echoes",
         &format!(
-            "{PRELUDE}\necho \"$@\" > '{}'\ntake\necho \"$line\" >> '{}'\ntake\necho \"$line\" >> '{}'\necho '{{\"type\":\"control_response\",\"response\":{{\"subtype\":\"success\",\"request_id\":\"req_2\",\"response\":{{}}}}}}'\ncat >> '{}'",
-            log.display(),
+            "{PRELUDE}\necho \"$@\" > '{}'\ntake\necho \"$line\" >> '{}'\ncat >> '{}'",
             log.display(),
             log.display(),
             log.display()
@@ -878,7 +829,7 @@ fn the_session_speaks_the_pinned_command_line_and_protocol() {
     // A live rename is a native control request on the same Session.
     ferrite_core::providers::Session::set_name(&mut session, "renamed").unwrap();
 
-    let recorded = read_lines(&log, 7);
+    let recorded = read_lines(&log, 6);
     drop(session);
     let sent: Vec<serde_json::Value> = recorded[1..]
         .iter()
@@ -891,11 +842,12 @@ fn the_session_speaks_the_pinned_command_line_and_protocol() {
     assert_eq!(
         recorded[0],
         "-p --input-format stream-json --output-format stream-json \
-         --include-partial-messages --thinking-display summarized --forward-subagent-text --verbose --permission-prompt-tool stdio --prompt-suggestions false \
+         --include-partial-messages --forward-subagent-text --verbose --permission-prompt-tool stdio \
+         --thinking=adaptive --thinking-display=summarized --effort=high --settings {\"showThinkingSummaries\":true} --prompt-suggestions false \
          --model haiku --permission-mode default --name CI flake --add-dir /extra/project \
          --allowedTools mcp__ferrite__wrap_up --allowedTools mcp__ferrite__update_plan --dangerously-skip-permissions"
     );
-    assert_eq!(sent.len(), 6);
+    assert_eq!(sent.len(), 5);
     // Feature detection comes first, before a word of the Thread. Declaring
     // per-task stops keeps an interrupt from killing background agents.
     assert_eq!(
@@ -906,32 +858,26 @@ fn the_session_speaks_the_pinned_command_line_and_protocol() {
             "request": {"subtype": "initialize", "perTaskStopAffordance": true, "agentProgressSummaries": true, "sdkMcpServers": ["ferrite"]},
         })
     );
+    // The effort rode argv, so the Thread's words come next.
     assert_eq!(
         sent[1],
-        serde_json::json!({
-            "type": "control_request", "request_id": "req_2",
-            "request": {"subtype": "apply_flag_settings", "settings": {"effortLevel": "high"}},
-        })
-    );
-    assert_eq!(
-        sent[2],
         serde_json::json!({
             "type": "user",
             "message": {"role": "user", "content": [{"type": "text", "text": "hi"}]},
         })
     );
     assert_eq!(
-        sent[3],
+        sent[2],
         serde_json::json!({
             "type": "control_request",
-            "request_id": "req_3",
+            "request_id": "req_2",
             "request": {"subtype": "interrupt"},
         })
     );
-    assert_eq!(sent[4]["request_id"], "req_4");
+    assert_eq!(sent[3]["request_id"], "req_3");
     assert_eq!(
-        sent[5],
-        serde_json::json!({"type":"control_request", "request_id":"req_5", "request":{"subtype":"rename_session","title":"renamed"}})
+        sent[4],
+        serde_json::json!({"type":"control_request", "request_id":"req_4", "request":{"subtype":"rename_session","title":"renamed"}})
     );
 }
 
@@ -1021,7 +967,8 @@ fn no_model_or_permission_mode_is_passed_when_the_config_names_none() {
     assert_eq!(
         recorded[0],
         "-p --input-format stream-json --output-format stream-json \
-         --include-partial-messages --thinking-display summarized --forward-subagent-text --verbose --permission-prompt-tool stdio --prompt-suggestions false \
+         --include-partial-messages --forward-subagent-text --verbose --permission-prompt-tool stdio \
+         --thinking=adaptive --thinking-display=summarized --settings {\"showThinkingSummaries\":true} --prompt-suggestions false \
          --allowedTools mcp__ferrite__wrap_up --allowedTools mcp__ferrite__update_plan"
     );
 }
@@ -1054,7 +1001,8 @@ fn a_threads_args_reach_the_cli_after_ferrites_flags() {
     assert_eq!(
         recorded[0],
         "-p --input-format stream-json --output-format stream-json \
-         --include-partial-messages --thinking-display summarized --forward-subagent-text --verbose --permission-prompt-tool stdio --prompt-suggestions false \
+         --include-partial-messages --forward-subagent-text --verbose --permission-prompt-tool stdio \
+         --thinking=adaptive --thinking-display=summarized --settings {\"showThinkingSummaries\":true} --prompt-suggestions false \
          --allowedTools mcp__ferrite__wrap_up --allowedTools mcp__ferrite__update_plan --settings /d/tasks/app/1/claude.json | /store/tool.sock /f/tool"
     );
 }

@@ -64,11 +64,6 @@ const STDERR_TAIL_LINES: usize = 20;
 /// capabilities, never a failed spawn.
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(5);
 
-/// How long spawn waits for the CLI to accept the Thread's effort. Generous:
-/// a busy machine slows the answer past a second, and waiting out the limit
-/// costs only a later first turn, never a failed start.
-const EFFORT_ACK_TIMEOUT: Duration = Duration::from_secs(30);
-
 /// The request id spawn uses for the handshake, before any operator traffic.
 const HANDSHAKE_REQUEST_ID: &str = "req_1";
 /// The request that builds the CLI's file index (`warm_file_index`).
@@ -85,8 +80,9 @@ pub struct ClaudeConfig {
     pub additional_directories: Vec<PathBuf>,
     /// Model override passed through to the CLI.
     pub model: Option<String>,
-    /// Reasoning effort (`"low"`, `"medium"`, `"high"`, `"xhigh"`, `"max"`)
-    /// applied through flag settings. `None` leaves the CLI's own default.
+    /// Reasoning effort (`"low"`, `"medium"`, `"high"`, `"xhigh"`, `"max"`),
+    /// passed as `--effort` (`thinking_args`). `None` leaves the CLI's own
+    /// default.
     pub effort: Option<String>,
     /// Native generation is configured at process start.
     pub prompt_suggestions: bool,
@@ -140,9 +136,6 @@ pub struct ClaudeConfig {
     /// How long spawn waits for the initialize answer: five seconds,
     /// shorter in a test.
     pub handshake_timeout: Duration,
-    /// How long spawn waits for the CLI to accept the Thread's effort:
-    /// thirty seconds, shorter in a test.
-    pub effort_ack_timeout: Duration,
 }
 
 impl Default for ClaudeConfig {
@@ -168,7 +161,6 @@ impl Default for ClaudeConfig {
             launcher: Vec::new(),
             args: Vec::new(),
             handshake_timeout: HANDSHAKE_TIMEOUT,
-            effort_ack_timeout: EFFORT_ACK_TIMEOUT,
         }
     }
 }
@@ -308,9 +300,6 @@ impl ClaudeSession {
             "--output-format",
             "stream-json",
             "--include-partial-messages",
-        ]);
-        command.args(thinking_args(config.effort.as_deref()));
-        command.args([
             "--forward-subagent-text",
             "--verbose",
             // Route tool permissions to Ferrite over the control protocol
@@ -321,6 +310,7 @@ impl ClaudeSession {
             "--permission-prompt-tool",
             "stdio",
         ]);
+        command.args(thinking_args(config.effort.as_deref()));
         command.args([
             "--prompt-suggestions",
             if config.prompt_suggestions {
@@ -491,33 +481,25 @@ impl ClaudeSession {
             "request_id": id,
             "request": initialize,
         }));
-        session.capabilities = capabilities
-            .recv_timeout(config.handshake_timeout)
-            .unwrap_or_default();
-        // Use the same override layer at startup and later: a CLI --effort
-        // flag would survive clearing effortLevel back to Default. Startup
-        // is off the UI thread, so it waits for the CLI to accept it. Only a
-        // refusal or an exit fails the start: the CLI reads its input in
-        // order, so effort it has yet to answer still lands before the first
-        // turn, and a CLI slow under load is not a dead one.
-        if config.effort.is_some() {
-            session
-                .set_effort(config.effort.as_deref())
-                .and_then(|ack| match ack.recv_timeout(config.effort_ack_timeout) {
-                    Ok(answer) => answer,
-                    Err(RecvTimeoutError::Timeout) => Ok(()),
-                    Err(RecvTimeoutError::Disconnected) => {
-                        Err(io::Error::other("the CLI closed before accepting the effort"))
-                    }
-                })
-                .map_err(|error| exited_at_start(&session.child, &stderr_tail, error))?;
-        }
+        // A CLI that closes its output before answering exited at start
+        // ("Session ID … is already in use"): the start fails with what it
+        // said. One that is only slow is not dead, and starts unknowing.
+        session.capabilities = match capabilities.recv_timeout(config.handshake_timeout) {
+            Ok(capabilities) => capabilities,
+            Err(RecvTimeoutError::Timeout) => ClaudeCapabilities::default(),
+            Err(RecvTimeoutError::Disconnected) => {
+                let error = io::Error::other("the CLI closed before its handshake");
+                return Err(exited_at_start(&session.child, &stderr_tail, error));
+            }
+        };
         Ok(session)
     }
 
-    /// The SDK's applyFlagSettings control, effective from the next turn.
-    /// It holds once the CLI accepts it, so a rejected setting cannot look
-    /// successful.
+    /// A later effort, as T3 Code changes one: the SDK's applyFlagSettings
+    /// control, effective from the next turn. It holds once the CLI accepts
+    /// it, so a rejected setting cannot look successful. `None` clears the
+    /// override, and the CLI goes back to the effort it starts at without
+    /// `--effort` (measured on 2.1.330; T3 restarts the process instead).
     pub fn set_effort(&mut self, effort: Option<&str>) -> io::Result<SettingAck> {
         self.set_setting(serde_json::json!({
             "subtype": "apply_flag_settings",
@@ -1337,11 +1319,23 @@ fn check_version(program: &str) -> Result<(), ClaudeSpawnError> {
     Ok(())
 }
 
-/// What the CLI is told at spawn about thinking and effort.
-fn thinking_args(_effort: Option<&str>) -> Vec<String> {
-    // Newer models omit readable thinking unless explicitly requested.
-    // This chooses its display, leaving effort/thinking mode unchanged.
-    vec!["--thinking-display".into(), "summarized".into()]
+/// What the CLI is told at spawn about thinking and effort, as T3 Code
+/// tells it (`ClaudeAdapterV2.ts` at 0fd48228, through the Agent SDK's
+/// argv): adaptive thinking with summaries, by flag and by setting, for
+/// every model, and the Thread's effort when it has one. A Thread's own
+/// `--settings` comes later and replaces these, as a settings file
+/// replaces them in T3.
+fn thinking_args(effort: Option<&str>) -> Vec<String> {
+    let mut args = vec![
+        "--thinking=adaptive".to_string(),
+        "--thinking-display=summarized".to_string(),
+    ];
+    args.extend(effort.map(|effort| format!("--effort={effort}")));
+    args.extend([
+        "--settings".to_string(),
+        r#"{"showThinkingSummaries":true}"#.to_string(),
+    ]);
+    args
 }
 
 /// `--version` prints `2.1.243 (Claude Code)`; only the leading semver is

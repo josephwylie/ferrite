@@ -126,8 +126,9 @@ number. Told to the Session where the Provider takes one.
 **Effort**
 A Thread's reasoning depth, one rung of the ladder its model announces
 (Claude: low…max; Codex: low…ultra, per model). Chosen per Thread by the
-effort chip or `/effort`, defaulting to Settings. Changes apply to the next
-turn on the same Session; they never restart it or consume a pending Handover.
+effort chip or `/effort`, defaulting to Settings. A Claude Session starts at
+it (`--effort`, as T3 Code starts one). Changes apply to the next turn on the
+same Session; they never restart it or consume a pending Handover.
 
 **Handover**
 Switching a Thread to the other Provider after its first prompt: a fresh
