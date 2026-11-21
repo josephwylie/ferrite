@@ -393,28 +393,6 @@ pub(crate) enum TaskPick {
     RedirectTo(StepId),
 }
 
-/// A Factory picker's button: the shared chooser face, full width, its
-/// rows opened in the window's picker under it. Flagged, it is selected
-/// as `{selector}-flagged`.
-pub(crate) fn chooser(
-    selector: &'static str,
-    text: String,
-    flagged: bool,
-    picks: Vec<(ferrite_ui::menu::Item, super::workflows::Pick)>,
-    cx: &mut Context<CockpitView>,
-) -> gpui::component::button::Button {
-    let picks = std::rc::Rc::new(picks);
-    picker_button(
-        selector,
-        text,
-        flagged,
-        move |view: &mut CockpitView, trigger, at, cx| {
-            view.open_picks((*picks).clone(), &trigger, at, cx)
-        },
-        cx,
-    )
-}
-
 /// The chooser face for any view, `press` given where its rows go.
 pub(crate) fn picker_button<V: 'static>(
     selector: &'static str,
