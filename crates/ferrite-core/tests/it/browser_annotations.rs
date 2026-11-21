@@ -262,3 +262,36 @@ fn legacy_receipt_image_fields_still_deserialize() {
     assert_eq!(restored.pixel_size(), Some((1, 1)));
     std::fs::remove_dir_all(root).unwrap();
 }
+
+// The window's display copy of a capture is a cache: a week after it was
+// written the next caching drops it, and opening that capture writes it again.
+#[test]
+fn a_cached_capture_goes_a_week_after_it_was_written() {
+    let root = std::env::temp_dir().join(format!("ferrite-capture-cache-{}", std::process::id()));
+    let png = include_bytes!("../fixtures/browser-original.png");
+    let mut capture = live_capture(browser_annotations::LiveScreenshot::Unavailable {
+        reason: "unused".into(),
+    });
+    capture.viewport.width_css = 1.;
+    capture.viewport.height_css = 1.;
+    capture.selection = Selection::Region {
+        x: 0.,
+        y: 0.,
+        width: 1.,
+        height: 1.,
+    };
+    let annotation =
+        browser_annotations::retain(&root, capture, png, "Cached".into(), vec![]).unwrap();
+    let cached = annotation.cache_image(png).unwrap();
+    let old = cached.with_file_name("0".repeat(64) + ".png");
+    std::fs::write(&old, png).unwrap();
+    let week_ago = std::time::SystemTime::now() - std::time::Duration::from_secs(7 * 24 * 60 * 60);
+    for stale in [&old, &cached] {
+        std::fs::File::options().write(true).open(stale).unwrap().set_modified(week_ago).unwrap();
+    }
+    assert_eq!(annotation.cache_image(png).unwrap(), cached);
+    assert!(!old.exists(), "a week-old cached capture outlived the next caching");
+    assert!(cached.is_file(), "opening the capture wrote it again");
+    assert!(annotation.cached_image().is_some());
+    std::fs::remove_dir_all(root).unwrap();
+}
