@@ -1025,6 +1025,7 @@ fn build(state: &str, label: &str) -> (Scene, Setup) {
                             run("fmt", CheckState::Passing, "success", true),
                             run("clippy", CheckState::Skipped, "skipped", false),
                         ],
+                        conflicting: false,
                     }),
                 );
                 view.show_popup(super::Popup::Checks(thread), cx);
@@ -1071,6 +1072,7 @@ fn build(state: &str, label: &str) -> (Scene, Setup) {
                             run("clippy", CheckState::Skipped, "skipped"),
                             run("release", CheckState::Failing, "cancelled"),
                         ],
+                        conflicting: false,
                     }),
                 );
                 view.show_popup(super::Popup::Checks(thread), cx);
@@ -2024,6 +2026,7 @@ fn fixture_pr(number: u64, state: PrState, draft: bool) -> ferrite_core::workspa
         title: Some("Thread cards in the nav".into()),
         checks: None,
         runs: Vec::new(),
+        conflicting: false,
     }
 }
 

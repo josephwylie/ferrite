@@ -334,12 +334,6 @@ fn pr_row(
         PrState::Merged => icons::GIT_MERGE,
         PrState::Open | PrState::Closed => icons::GIT_PULL_REQUEST,
     };
-    let state = match (pr.state, pr.draft) {
-        (PrState::Merged, _) => "Merged",
-        (PrState::Closed, _) => "Closed",
-        (PrState::Open, true) => "Draft",
-        (PrState::Open, false) => "Open",
-    };
     let checks = pr.checks.map(|checks| match checks {
         CheckState::Passing => ("checks passing", INK_SUBTLE),
         CheckState::Failing => ("checks failing", BLOCKED),
@@ -350,7 +344,7 @@ fn pr_row(
         "panel-pr",
         glyph,
         format!("#{}", pr.number),
-        Some(state.to_string()),
+        Some(crate::pr::state_word(pr).to_string()),
     )
     .mt(px(SPACE_2))
     .cursor_pointer()

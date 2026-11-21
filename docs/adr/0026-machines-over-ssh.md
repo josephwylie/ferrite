@@ -321,7 +321,13 @@ may bind (`cockpit::RefreshPrStatus`, `cockpit::OpenPrInBrowser`, ADR
 an error. This replaces the CI glyph the row drew from the branch status,
 whose PR was read by the window on the 60-second `PR_TTL` tick: the label's
 reading (`ThreadFacts::pr`) is the one the checks card reads too, and the
-branch status is git alone.
+branch status is git alone. The same reading carries whether the PR
+conflicts with its base (`gh`'s `mergeable`, read into
+`PullRequest::conflicting`). The Thread details card draws the PR as T3
+Code does: the title over `#N` and the checks' ring and count (`5/6
+checks` while any run, `N failed` once they settle), or `Conflicts` in
+red in their place. An older Server's `gh pr view` does not ask for
+`mergeable`, and the card claims no conflict.
 - **No Finder.** "Reveal in Finder" is not offered for a machine's
   Thread: its path is not on this computer. "Copy path" stays.
 

@@ -11,7 +11,7 @@
 use std::time::{Duration, Instant};
 
 use ferrite_core::protocol::WireReviewState;
-use ferrite_core::workspace::PullRequest;
+use ferrite_core::workspace::{PrState, PullRequest};
 use ferrite_ui::theme::{GREEN, INK_SUBTLE, RED};
 
 /// The least time between two automatic readings of one Thread's PR.
@@ -25,6 +25,17 @@ pub(crate) fn review_verdict(state: WireReviewState) -> Option<(&'static str, u3
         WireReviewState::ChangesRequested => Some(("Changes requested", RED)),
         WireReviewState::Commented => Some(("Commented", INK_SUBTLE)),
         WireReviewState::Unknown => None,
+    }
+}
+
+/// Where a pull request stands, in one word: the Overview's PR row and
+/// the details card's tooltip.
+pub(crate) fn state_word(pr: &PullRequest) -> &'static str {
+    match (pr.state, pr.draft) {
+        (PrState::Merged, _) => "Merged",
+        (PrState::Closed, _) => "Closed",
+        (PrState::Open, true) => "Draft",
+        (PrState::Open, false) => "Open",
     }
 }
 
@@ -88,6 +99,7 @@ mod tests {
             title: None,
             checks,
             runs: Vec::new(),
+            conflicting: false,
         }
     }
 
