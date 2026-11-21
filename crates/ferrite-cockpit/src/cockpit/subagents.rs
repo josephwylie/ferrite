@@ -423,6 +423,13 @@ fn coverage_words(
 }
 
 impl CockpitView {
+    /// The agent's Subject, from the call that started it.
+    pub(super) fn agent_of_call(&self, thread: ThreadId, call: &str) -> Option<Subject> {
+        self.cockpit.thread(thread)?.activity().invocations().find_map(
+            |(native, agent)| (native == call).then(|| agent.subject()),
+        )
+    }
+
     /// Show `subject`'s transcript in `thread`'s Pane: Main, or a subagent
     /// opened from its row (`open_agent_from`) and left by its head's
     /// crumbs, back button or escape. Every Subject switch the operator
@@ -457,10 +464,16 @@ impl CockpitView {
         let Some(thread) = self.panes.get(index).and_then(|pane| pane.thread()) else {
             return;
         };
-        let Some(subject) = self.agent_of_call(thread, &call) else {
-            return;
-        };
-        if self.take_subject(thread, subject, cx).is_some() {
+        if let Some(subject) = self.agent_of_call(thread, &call) {
+            self.open_subagent(thread, subject, cx);
+        }
+    }
+
+    /// Give `thread`'s Pane `subject`'s full chat and the focus, from
+    /// wherever the agent is named: its row, Background work, the details
+    /// card's Lineage. A subagent has no other view.
+    pub(super) fn open_subagent(&mut self, thread: ThreadId, subject: Subject, cx: &mut Context<Self>) {
+        if let Some(index) = self.take_subject(thread, subject, cx) {
             self.cockpit.focus_thread(thread);
             self.focus_pane(index);
         }
@@ -593,8 +606,8 @@ impl CockpitView {
     /// (Claude's drill-in): the back button, to its immediate parent, and
     /// the crumbs of its ancestry from `Main`, each of which goes there;
     /// the agent's mark, its name and its state word; at the far end what
-    /// its transcript covers (`subject_history_line`), `Stop` while it
-    /// runs, and `Side panel`, which holds it open beside Main instead.
+    /// its transcript covers (`subject_history_line`) and `Stop` while it
+    /// runs.
     /// Main has no head: its agents are its transcript's `Ran agent` rows.
     pub(super) fn subagent_head(&self, index: usize, cx: &mut Context<Self>) -> Option<AnyElement> {
         let pane = &self.panes[index];
@@ -720,7 +733,6 @@ impl CockpitView {
         }
         let history = self.subject_history_line(thread, &selected, pane.history_error.as_deref(), cx);
         let stop_key = agent.key().clone();
-        let panel_subject = selected.clone();
         Some(
             native_keys(
                 head.child(div().flex_1().min_w_0().pl(px(theme::SPACE_1)).child(current))
@@ -742,15 +754,7 @@ impl CockpitView {
                                 view.stop_subagent(thread, &stop_key);
                                 cx.notify();
                             }))
-                    }))
-                    .child(
-                        components::ghost_button(("subagent-panel", thread.get()), "Side panel", cx)
-                            .debug_selector(move || format!("subagent-panel-{}", thread.get()))
-                            .tab_stop(true)
-                            .on_click(cx.listener(move |view, _, _, cx| {
-                                view.open_agent_drill(thread, panel_subject.clone(), cx)
-                            })),
-                    ),
+                    })),
             )
             .into_any_element(),
         )
@@ -1023,15 +1027,17 @@ impl CockpitView {
             .cloned()
     }
 
-    /// `Retry`: ask again for `subject`'s saved history, wherever it is
-    /// held open, the Pane or the Panel.
+    /// `Retry`: ask again for `subject`'s saved history, which the Pane
+    /// shows.
     fn reload_subject_history(&mut self, thread: ThreadId, subject: &Subject, cx: &mut Context<Self>) {
         let error = self
             .cockpit
             .retry_subject_history(thread, subject)
             .err()
             .map(|error| error.to_string());
-        self.hold_history_error(thread, subject, error, cx);
+        if let Some(index) = self.pane_for(thread).filter(|&index| self.panes[index].selected == *subject) {
+            self.panes[index].history_error = error;
+        }
         cx.notify();
     }
 

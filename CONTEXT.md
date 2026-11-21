@@ -78,9 +78,10 @@ board), dock (its columns are Surfaces now).
 
 **Surface**
 One tab in the Panel, one per thing it shows: the Overview, Changes,
-Files, a Preview, a Browser tab, a Terminal, a side chat, an agent,
-background work, a pull request. Opening one already open brings its tab
-forward. Each Thread keeps its own.
+Files, a Preview, a Browser tab, a Terminal, a side chat, background
+work, a pull request. Opening one already open brings its tab forward.
+Each Thread keeps its own. A Subagent is not one: it opens in the Pane,
+which switches its Subject to it.
 _Avoid_: section, pane (that is the board's), view.
 
 **Preview**

@@ -7,6 +7,7 @@ use ferrite_ui::icons::{self, icon};
 enum Action {
     Reveal(std::path::PathBuf),
     Surface(super::super::surfaces::SurfaceId),
+    Subagent(ferrite_core::activity::Subject),
     CreatePr,
 }
 
@@ -244,6 +245,9 @@ impl Content {
                                 Action::Surface(surface) => {
                                     view.upsert_surface(thread, surface.clone(), cx)
                                 }
+                                Action::Subagent(subject) => {
+                                    view.open_subagent(thread, subject.clone(), cx)
+                                }
                                 Action::CreatePr => view.create_pr(thread, cx),
                             }
                         }));
@@ -366,9 +370,7 @@ impl CockpitView {
                     icons::SUBAGENTS,
                 );
                 row.meta = Some(format!("{:?}", agent.status()));
-                row.action = Some(Action::Surface(SurfaceId::Agent(
-                    agent.key().as_str().to_string(),
-                )));
+                row.action = Some(Action::Subagent(agent.subject()));
                 rows.push(row);
             }
             if let Some(surfaces) = self.panel.surfaces.get(thread) {

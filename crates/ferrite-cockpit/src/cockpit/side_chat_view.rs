@@ -142,6 +142,92 @@ pub(crate) enum SideChatEvent {
 impl EventEmitter<SideChatEvent> for SideChatView {}
 
 impl CockpitView {
+    /// Tell `pane`'s transcript what `subject` of `thread` holds after its
+    /// first `skip` blocks. The compact, read-only twin of
+    /// `sync_transcript`, for the side chat's tabs: no subagents, rewinds,
+    /// Reply or Decisions, as they have no Pane's Composer to reply into.
+    pub(super) fn sync_compact_transcript(
+        &self,
+        thread: ThreadId,
+        subject: &Subject,
+        pane: &PaneView,
+        skip: usize,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(open) = self.cockpit.thread(thread) else {
+            return;
+        };
+        let Some(subject_view) = open.activity().subject(subject) else {
+            return;
+        };
+        let namespace = pane.text_namespace();
+        let revision = subject_view.presentation_revision();
+        let status = pane::transcript_status(subject_view.status(), subject_view.fresh());
+        let reading_size = self.prefs.settings.reading_size;
+        let transcript = subject_view.transcript();
+        let working = pane::working_tail(pane::WorkingFacts {
+            transcript,
+            thread,
+            starting: open.starting(),
+            solo: false,
+            focused: true,
+            reduce_motion: cx.reduce_motion(),
+        });
+        let workspace =
+            ferrite_core::workspace::effective_cwd(open.session_project_root(), open.workspace())
+                .map(std::path::Path::to_path_buf);
+        let presentation = ferrite_pane::transcript::TranscriptPresentation {
+            thread,
+            selection_scope: pane.selection_scope,
+            disclosure_focus: pane.tool_focus(),
+            namespace,
+            content_revision: revision,
+            display_revision: pane.disclosure_revision(),
+            focused: true,
+            signal_status: Some(status),
+            reading_size,
+            working,
+            tail: None,
+            pending_call: None,
+            workspace,
+            solo: false,
+            thinking: self.prefs.settings.show_thinking,
+            agents: Default::default(),
+            rewind: None,
+            quotes: false,
+            reply_to: open.provider().to_string().into(),
+            skills: open.commands().into(),
+            cited: Default::default(),
+            note: None,
+            earlier: None,
+            queued: 0,
+        };
+        let Some(entity) = pane.transcript() else {
+            return;
+        };
+        let selection = self.selection.clone();
+        entity.update(cx, |view, cx| {
+            view.reconcile(
+                presentation,
+                || {
+                    let mut blocks =
+                        pane::rendered_window(transcript.blocks()).to_vec();
+                    let first = transcript.blocks().len() - blocks.len();
+                    blocks.drain(..skip.saturating_sub(first).min(blocks.len()));
+                    let disclosure = pane.transcript_disclosure_snapshot();
+                    ferrite_pane::transcript::TranscriptBody {
+                        blocks,
+                        preview: pane.preview.clone(),
+                        expanded: disclosure.0,
+                        target: disclosure.1,
+                    }
+                },
+                selection,
+                cx,
+            );
+        });
+    }
+
     /// `Start a side chat` (the selection's pill, `passage` the selection):
     /// open `owner`'s side chat, or add a tab to it, asking the agent for
     /// the fork that holds the conversation.
@@ -327,7 +413,7 @@ impl CockpitView {
         };
         let conversation = conversation(owner, tab);
         if let Some((fork, pane)) = conversation {
-            self.sync_compact_transcript(fork.thread, &Subject::Main, pane, fork.inherited, None, None, cx);
+            self.sync_compact_transcript(fork.thread, &Subject::Main, pane, fork.inherited, cx);
         }
         let fork = conversation.map(|(fork, _)| fork);
         let answered = fork.is_some_and(|fork| {
