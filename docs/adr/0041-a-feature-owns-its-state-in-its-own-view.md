@@ -698,8 +698,8 @@ listing (`listen`, `listed`): deriving a menu asks afresh when the draft's
 Provider or folder changed and takes an answer that came
 (`draft_commands`), which then tells the draft's line which tokens are
 commands; the pump takes an answer that lands between keystrokes and
-derives the menu again; an edit with no `/` command at the caret, and a
-draft whose folder is gone, drop it (`forget`). A Thread's commands are
+derives the menu again; an edit with neither a `/` command nor a `$`
+skill at the caret, and a draft whose folder is gone, drop it (`forget`). A Thread's commands are
 its Session's, in core. A view would add events for asks the root makes
 anyway, and the menu that reads it is still the root's.
 

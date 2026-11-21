@@ -2108,8 +2108,12 @@ impl CockpitView {
         {
             draft.error = None;
         }
+        // The `/` and `$` menus read one listing: only a line with neither
+        // at the caret lets it go.
         let state = composer.read(cx);
-        if slash_token(state.text(), state.cursor()).is_none() {
+        if slash_token(state.text(), state.cursor()).is_none()
+            && skill_token(state.text(), state.cursor()).is_none()
+        {
             self.draft_commands.forget();
         }
         // The API reports it as the Thread's `draft` (ADR 0030), so no

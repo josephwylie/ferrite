@@ -90,6 +90,51 @@ fn draft_commands_arrive_before_first_send_and_follow_provider_changes(cx: &mut 
     );
 }
 
+/// A draft's `$` menu reads the same listing as its `/` menu: typing on
+/// after `$` asks the Provider once, and the skills it found stay listed.
+#[gpui::test]
+fn a_drafts_skill_menu_asks_for_its_commands_once(cx: &mut TestAppContext) {
+    let fake = Fake::default();
+    let (tx, rx) = mpsc::channel();
+    *fake.command_discovery.borrow_mut() = Some(rx);
+    let core = Cockpit::new(
+        Store::open(scratch("draft-skills-once")).unwrap(),
+        Box::new(fake.clone()),
+    );
+    bind_production_keys(cx);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(1000.), px(700.)));
+    tick(cx);
+    let rows = |cx: &mut gpui::VisualTestContext| -> Vec<String> {
+        view.read_with(cx, |view, _| {
+            view.popover
+                .as_ref()
+                .map(|open| open.rows.iter().map(|row| row.row.name.to_string()).collect())
+                .unwrap_or_default()
+        })
+    };
+    cx.simulate_input("$");
+    cx.run_until_parked();
+    assert_eq!(rows(cx), ["Searching workspace skills..."]);
+    tx.send(Ok(vec![ferrite_core::SessionCommand {
+        name: "grill-me".into(),
+        description: "A relentless interview".into(),
+        path: None,
+        source: Some(ferrite_core::CommandSource::Skill),
+    }]))
+    .unwrap();
+    tick(cx);
+    assert_eq!(rows(cx), ["grill-me"]);
+    cx.simulate_input("gri");
+    tick(cx);
+    assert_eq!(
+        fake.command_requests.borrow().len(),
+        1,
+        "typing after `$` asks no more"
+    );
+    assert_eq!(rows(cx), ["grill-me"], "the skills stay listed");
+}
+
 #[gpui::test]
 fn draft_command_discovery_discards_old_workspace_replies_and_shows_failures(
     cx: &mut TestAppContext,
