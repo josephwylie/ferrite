@@ -124,20 +124,13 @@ pub(crate) enum Pick {
     Coordinator(super::coordinator::CoordinatorPick),
 }
 
-/// Skills found installed for one Provider in the Project.
-pub(crate) struct SkillsFound {
-    provider: Provider,
-    pending: Option<ferrite_core::providers::commands::Discovery>,
-    skills: Vec<ferrite_core::SessionCommand>,
-    error: Option<String>,
-}
-
 /// What the Workflows surface keeps beside its editor's view.
 #[derive(Default)]
 pub(crate) struct Workflows {
     /// The skills search is revealed.
     pub(crate) skills_open: bool,
-    pub(crate) skills: Vec<SkillsFound>,
+    /// The skills each Step's Provider has installed.
+    pub(crate) skills: skills::Skills,
 }
 
 /// A Step's row, dragged to a new place in the outline.

@@ -126,7 +126,7 @@ impl CockpitView {
 
         // Skills: the chosen ones as chips, an unavailable one flagged,
         // and the search that lists what is installed.
-        let installed = self.skills_for(provider);
+        let installed = view.workflows.skills.installed(provider);
         let mut chips = div().flex().flex_wrap().gap(px(SPACE_1));
         for skill in &step.skills {
             let missing = installed.is_some_and(|list| !list.iter().any(|s| &s.name == skill));
@@ -192,18 +192,10 @@ impl CockpitView {
                     view.reveal_skills(!open, cx);
                 })),
         );
-        let found = view
-            .workflows
-            .skills
-            .iter()
-            .find(|found| found.provider == provider);
-        let skills_note = match found {
-            Some(found) if found.pending.is_some() => "Looking for installed skills\u{2026}".into(),
-            Some(found) if found.error.is_some() => format!(
-                "Could not list skills: {}",
-                found.error.clone().unwrap_or_default()
-            ),
-            Some(found) => format!("{} installed for {provider}", found.skills.len()),
+        let skills_note = match view.workflows.skills.found(provider) {
+            Some(skills::Found::Looking(_)) => "Looking for installed skills\u{2026}".into(),
+            Some(skills::Found::Failed(error)) => format!("Could not list skills: {error}"),
+            Some(skills::Found::Listed(skills)) => format!("{} installed for {provider}", skills.len()),
             None => String::new(),
         };
         let search = view.workflows.skills_open.then(|| {
