@@ -72,6 +72,8 @@ jobs:
       - uses: mozilla-actions/sccache-action@v0.0.11
       - uses: Swatinem/rust-cache@v2
         with:
+          # Bumped so main saves a cache that holds the CEF builds' output.
+          prefix-key: v1-rust
           save-if: ${{ github.ref == 'refs/heads/main' }}
           cache-on-failure: true
       - name: Install nextest
@@ -106,7 +108,11 @@ jobs:
         run: cargo check -p ferrite --locked --features visual-reference
       # Nothing else on most PRs compiles the code behind these features: the
       # packaged browser run starts only for Browser changes (ci_scope.py).
-      # CEF downloads outside target/, so the build cache does not carry it.
+      # The CEF download is the slow part of the check, and Cargo.lock pins it.
+      - uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/cef
+          key: cef-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('**/Cargo.lock') }}
       - name: Check the CEF builds
         env:
           CEF_PATH: ${{ runner.temp }}/cef
@@ -157,6 +163,8 @@ jobs:
           version: v0.16.0
       - uses: Swatinem/rust-cache@v2
         with:
+          # Bumped so main saves a cache that holds the CEF builds' output.
+          prefix-key: v1-rust
           workspaces: ${{ env.DEV_DRIVE_WORKSPACE }}
           save-if: ${{ github.ref == 'refs/heads/main' }}
           cache-on-failure: true
@@ -177,6 +185,11 @@ jobs:
         working-directory: ${{ env.DEV_DRIVE_WORKSPACE }}
         run: cargo build -p ferrite --locked
       # The Windows half of the CEF code, as on macOS above.
+      # The CEF download is the slow part of the check, and Cargo.lock pins it.
+      - uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/cef
+          key: cef-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('**/Cargo.lock') }}
       - name: Check the CEF build
         working-directory: ${{ env.DEV_DRIVE_WORKSPACE }}
         env:
