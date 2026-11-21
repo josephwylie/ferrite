@@ -743,10 +743,8 @@ impl CockpitView {
                     generation,
                     ferrite_core::SessionControl::StopTask { id },
                 );
-                if let Some((_, _, why)) = self.session_control_error.as_ref().filter(
-                    |(shown, shown_generation, _)| *shown == thread && *shown_generation == generation,
-                ) {
-                    let why = why.clone();
+                if let Some(why) = self.session_control_error.of(thread, generation) {
+                    let why = why.to_string();
                     self.background
                         .update(cx, |background, cx| background.refused(stop, why, cx));
                 }

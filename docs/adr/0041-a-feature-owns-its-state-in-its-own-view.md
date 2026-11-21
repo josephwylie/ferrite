@@ -738,6 +738,18 @@ meantime outranks; the nav's row reads it as the root builds it
 Facts': they are what the Server and git say of a Thread, and this is
 an ask of the window's own.
 
+A refused Session control is the thirteenth. `SessionControlError`
+(`cockpit/session_control.rs`) keeps why the last control the operator
+asked of a running Session (a permission mode, a model, an effort, a
+stop) was refused, with the Thread and the Session's generation it was
+asked of, so a restarted Session says nothing of it. Only the send writes
+it (`run_session_control`), which the Session controls card, the
+palette, the Decisions, the Panel and the background work's stop all
+make; the card, the Overview and the stop read it for their own Session
+(`of`). The Session controls card stays the root's drawing, and the
+Session is core's. A view would add events for a call the root makes
+anyway.
+
 ## Precedent
 
 Zed builds its workspace this way: each panel is an entity that owns its

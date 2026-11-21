@@ -50,6 +50,7 @@ mod pr_watch;
 mod prs_view;
 mod sends;
 mod server;
+mod session_control;
 mod new_task_view;
 mod project_editor_view;
 mod settings_view;
@@ -503,7 +504,8 @@ pub struct CockpitView {
     /// Holds every footer's plan-usage popover open, its ring's own clicks
     /// aside: a visual-reference scene's (`usagepopover`), never the app's.
     usage_popover_held: bool,
-    session_control_error: Option<(ThreadId, u64, String)>,
+    /// Why the last Session control was refused (`session_control`).
+    session_control_error: session_control::SessionControlError,
     /// The Threads the titler is naming right now (`titling`).
     titling: titling::Titling,
     /// Frames each open card has waited for its trigger's or Pane's
@@ -1361,7 +1363,7 @@ impl CockpitView {
             panel_closing_focus: cx.focus_handle(),
             history: Default::default(),
             usage_popover_held: false,
-            session_control_error: None,
+            session_control_error: Default::default(),
             titling: Default::default(),
             card_waits: Default::default(),
             nav_collapsed: prefs.settings.nav_collapsed,
@@ -9268,26 +9270,6 @@ impl CockpitView {
         )
     }
 
-    fn run_session_control(
-        &mut self,
-        thread: ThreadId,
-        generation: u64,
-        action: ferrite_core::SessionControl,
-    ) {
-        let current = self
-            .cockpit
-            .thread(thread)
-            .is_some_and(|open| open.generation() == generation);
-        if !current {
-            return;
-        }
-        self.session_control_error = self
-            .cockpit
-            .control(thread, action)
-            .err()
-            .map(|error| (thread, generation, error.to_string()));
-    }
-
     /// A pick of permission mode `mode`. A mode that stops asking
     /// (`theme::mode_stops_asking`) is confirmed first, as Codex confirms
     /// Full access; any other goes at once.
@@ -9449,15 +9431,10 @@ impl CockpitView {
             .w(px(ferrite_ui::theme::SESSION_CARD_W))
             .max_h(px(ferrite_ui::theme::MENU_MAX_H))
             .overflow_y_scroll();
-        let error = self
-            .session_control_error
-            .as_ref()
-            .filter(|(shown, shown_generation, _)| {
-                *shown == thread && *shown_generation == generation
-            });
+        let error = self.session_control_error.of(thread, generation);
         let errored = error.is_some();
-        if let Some((_, _, error)) = error {
-            card = card.child(pane::card_error(error.clone()).id("session-control-error"));
+        if let Some(error) = error {
+            card = card.child(pane::card_error(error.to_string()).id("session-control-error"));
         }
         let modes = open.permission_modes();
         let modes_empty = modes.is_empty();
