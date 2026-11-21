@@ -301,10 +301,7 @@ impl CockpitView {
 
     /// Show the shown Project's Archive in the board's place.
     pub(crate) fn open_archive(&mut self, cx: &mut Context<Self>) {
-        self.update_factory(cx, |view, _| {
-            view.archive_shown = true;
-            view.open = None;
-        });
+        self.update_factory(cx, |view, _| view.open_archive());
         cx.notify();
     }
 
@@ -449,65 +446,6 @@ impl CockpitView {
             return;
         };
         self.task_command(TaskAction::Clear { project }, cx);
-    }
-
-    /// Clear, in the board's head while Completed holds a Task: where it
-    /// stays clickable however far the columns scroll.
-    pub(super) fn clear_button(&self, cx: &mut Context<Self>) -> AnyElement {
-        ferrite_ui::components::ghost_button("factory-clear", "Clear completed", cx)
-            .flex_shrink_0()
-            .debug_selector(|| "factory-clear".into())
-            .on_click(cx.listener(|view, _: &ClickEvent, _, cx| {
-                cx.stop_propagation();
-                view.clear_completed(cx);
-            }))
-            .into_any_element()
-    }
-
-    /// The board head's way to the Archive, with how many it holds.
-    pub(super) fn archive_button(&self, archived: usize, cx: &mut Context<Self>) -> AnyElement {
-        let label = match archived {
-            0 => "Archive".to_string(),
-            n => format!("Archive \u{b7} {n}"),
-        };
-        ferrite_ui::components::ghost_button("factory-archive", label, cx)
-            .debug_selector(|| "factory-archive".into())
-            .on_click(cx.listener(|view, _: &ClickEvent, _, cx| {
-                cx.stop_propagation();
-                view.open_archive(cx);
-            }))
-            .into_any_element()
-    }
-
-    /// Why the Factory's store could not be read, over the board.
-    pub(super) fn factory_trouble(&self) -> Option<AnyElement> {
-        use ferrite_ui::theme::*;
-        let project = self.factory_project()?;
-        let trouble = self.cockpit.factory().trouble_of(project)?.to_string();
-        Some(
-            div()
-                .debug_selector(|| "factory-trouble".into())
-                .flex()
-                .items_center()
-                .gap(px(SPACE_2))
-                .mx(px(SPACE_4))
-                .mb(px(SPACE_3))
-                .p(px(SPACE_3))
-                .rounded(px(R_CONTROL))
-                .border_1()
-                .border_color(paint::CARD_RING)
-                .bg(paint::RAISED)
-                .child(ferrite_ui::components::status_dot(BLOCKED))
-                .child(
-                    div()
-                        .flex_1()
-                        .min_w_0()
-                        .text_size(px(FS_META))
-                        .text_color(rgb(INK_STRONG))
-                        .child(SharedString::from(trouble)),
-                )
-                .into_any_element(),
-        )
     }
 
     /// The Archive: its list, the open Task's panel beside it.

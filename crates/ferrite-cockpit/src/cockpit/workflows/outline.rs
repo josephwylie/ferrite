@@ -1,87 +1,9 @@
 //! The Workflows surface, which the editor's view draws and whose presses
 //! it says as `WorkflowsEvent`s: its head with the Workflows' picker, the
 //! draft's problems, the outline of Steps with their routes, and the empty
-//! state. The Factory head's surface tabs stay the root's.
+//! state. The Factory head's surface tabs are the Factory view's.
 
 use super::*;
-
-impl CockpitView {
-    /// The Factory head's surface tabs: Board and Workflows.
-    pub(in crate::cockpit) fn factory_surface_tabs(&self, cx: &mut Context<Self>) -> Div {
-        use ferrite_ui::theme::*;
-        let (Some(project), Some(view)) = (self.factory_project(), self.factory()) else {
-            return div();
-        };
-        let (shown, archive_shown) = {
-            let view = view.read(cx);
-            (view.surface, view.archive_shown)
-        };
-        let board = self.cockpit.factory();
-        let counts = [
-            (
-                Surface::Coordinator,
-                "Coordinator",
-                board
-                    .proposals_of(project)
-                    .filter(|proposal| {
-                        proposal.status == ferrite_core::factory::ProposalStatus::Pending
-                    })
-                    .count(),
-            ),
-            (
-                Surface::Board,
-                "Board",
-                board.on_board(project).count(),
-            ),
-            (
-                Surface::Workflows,
-                "Workflows",
-                board.workflows_of(project).count(),
-            ),
-        ];
-        let mut tabs = div().flex().items_center().gap(px(SPACE_1));
-        for (surface, word, count) in counts {
-            let key = format!("factory-tab-{}", word.to_lowercase());
-            // The Archive is the board's own view, under none of the tabs.
-            let selected =
-                shown == surface && !(surface == Surface::Board && archive_shown);
-            tabs = tabs.child(
-                div()
-                    .id(SharedString::from(key.clone()))
-                    .debug_selector(move || key.clone())
-                    .flex()
-                    .items_center()
-                    .gap(px(SPACE_1))
-                    .px(px(SPACE_2))
-                    .h(px(CONTROL_H))
-                    .rounded(px(R_CONTROL))
-                    .cursor_pointer()
-                    .text_size(px(FS_LABEL))
-                    .font_weight(if selected { W_LABEL } else { W_BODY })
-                    .text_color(rgb(if selected { INK_STRONG } else { INK_SUBTLE }))
-                    .when(selected, |tab| tab.bg(paint::RAISED))
-                    .when(!selected, |tab| tab.hover(|tab| tab.bg(paint::HOVER)))
-                    .child(word)
-                    .child(
-                        div()
-                            .text_color(rgb(INK_SUBTLE))
-                            .child(SharedString::from(count.to_string())),
-                    )
-                    .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
-                        if surface == Surface::Board
-                            && view
-                                .factory()
-                                .is_some_and(|view| view.read(cx).archive_shown)
-                        {
-                            view.close_archive(cx);
-                        }
-                        view.factory_surface(surface, cx)
-                    })),
-            );
-        }
-        tabs
-    }
-}
 
 impl WorkflowsView {
     /// The Workflows surface: its head, the draft's problems, the outline

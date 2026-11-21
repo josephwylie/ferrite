@@ -161,6 +161,251 @@ pub(crate) struct FactoryView {
     pub(crate) archive_shown: bool,
 }
 
+/// What the Factory asks of the window.
+pub(crate) enum FactoryEvent {
+    /// A surface tab: that surface shows; the Board's gives the Archive
+    /// back.
+    Surface(super::workflows::Surface),
+    /// Clear completed: the Completed Tasks go to the Archive at once.
+    Clear,
+    /// New task: its sheet opens, as it was last closed.
+    NewTask,
+}
+
+/// What the Factory's head draws from the window: the Project and its
+/// Factory as the board says them now.
+pub(crate) struct FactoryInputs {
+    /// The Project's title.
+    title: String,
+    /// How many Tasks are on the board, and whether one is Completed.
+    tasks: usize,
+    completed: bool,
+    /// How many the Archive holds.
+    archived: usize,
+    /// The Coordinator's waiting proposals, and the Project's Workflows.
+    proposals: usize,
+    workflows: usize,
+    /// Why the Factory's store could not be read.
+    trouble: Option<String>,
+}
+
+impl EventEmitter<FactoryEvent> for FactoryView {}
+
+impl FactoryView {
+    /// Show the Archive in the board's place, no Task's panel open.
+    pub(super) fn open_archive(&mut self) {
+        self.archive_shown = true;
+        self.open = None;
+    }
+
+    /// The Factory board: its head, why its store could not be read, and
+    /// `body`, the surface shown, which the root draws.
+    fn board(&self, inputs: &FactoryInputs, body: AnyElement, cx: &mut Context<Self>) -> Div {
+        use ferrite_ui::theme::*;
+        div()
+            .debug_selector(|| "factory-board".into())
+            .flex_1()
+            .flex()
+            .flex_col()
+            .min_w_0()
+            .min_h_0()
+            .overflow_hidden()
+            .rounded(px(R_CARD))
+            .bg(paint::CARD)
+            .font_family(FONT_UI)
+            .text_size(px(FS_UI))
+            .line_height(px(LH_UI))
+            .text_color(rgb(INK_STRONG))
+            .child(self.head(inputs, cx))
+            .children(inputs.trouble.clone().map(trouble))
+            .child(body)
+    }
+
+    /// The head: the Project's title, its Tasks, the surface tabs, the
+    /// note, and the Board's own buttons.
+    fn head(&self, inputs: &FactoryInputs, cx: &mut Context<Self>) -> Div {
+        use ferrite_ui::theme::*;
+        let count = match inputs.tasks {
+            0 => "No tasks".to_string(),
+            1 => "1 task".to_string(),
+            n => format!("{n} tasks"),
+        };
+        let on_board = self.surface == super::workflows::Surface::Board && !self.archive_shown;
+        div()
+            .debug_selector(|| "factory-head".into())
+            .flex()
+            .flex_shrink_0()
+            .items_center()
+            .gap(px(SPACE_3))
+            .h(px(CONTROL_H + SPACE_4))
+            .px(px(SPACE_4))
+            // The title gives way first, so the head's buttons stay in a
+            // narrow board: text never shrinks below its width otherwise.
+            .child(
+                div()
+                    .debug_selector(|| "factory-title".into())
+                    .min_w_0()
+                    .truncate()
+                    .font_weight(W_LABEL)
+                    .text_color(rgb(INK_STRONG))
+                    .child(SharedString::from(format!("{} \u{b7} Factory", inputs.title))),
+            )
+            .child(
+                div()
+                    .debug_selector(|| "factory-count".into())
+                    .flex_shrink_0()
+                    .text_size(px(FS_META))
+                    .text_color(rgb(INK_SUBTLE))
+                    .child(SharedString::from(count)),
+            )
+            .child(self.surface_tabs(inputs, cx))
+            .child(div().flex_1())
+            .children(self.note.clone().map(|note| {
+                div()
+                    .id("factory-note")
+                    .debug_selector(|| "factory-note".into())
+                    .flex()
+                    .items_center()
+                    .gap(px(SPACE_1))
+                    .min_w_0()
+                    .text_size(px(FS_META))
+                    .text_color(rgb(INK_SUBTLE))
+                    .child(div().min_w_0().truncate().child(note))
+                    .child(
+                        div()
+                            .id("factory-note-dismiss")
+                            .debug_selector(|| "factory-note-dismiss".into())
+                            .flex_shrink_0()
+                            .cursor_pointer()
+                            .child(ferrite_ui::icons::icon(
+                                ferrite_ui::icons::CLOSE,
+                                ROW_ICON,
+                                INK_SUBTLE,
+                            ))
+                            .on_click(cx.listener(|view, _: &ClickEvent, _, cx| {
+                                view.note = None;
+                                cx.notify();
+                            })),
+                    )
+            }))
+            // Clear, while Completed holds a Task: in the head, where it
+            // stays clickable however far the columns scroll.
+            .when(on_board && inputs.completed, |head| {
+                head.child(
+                    ferrite_ui::components::ghost_button("factory-clear", "Clear completed", cx)
+                        .flex_shrink_0()
+                        .debug_selector(|| "factory-clear".into())
+                        .on_click(cx.listener(|_, _: &ClickEvent, _, cx| {
+                            cx.stop_propagation();
+                            cx.emit(FactoryEvent::Clear);
+                        })),
+                )
+            })
+            // The way to the Archive, with how many it holds.
+            .when(on_board, |head| {
+                let label = match inputs.archived {
+                    0 => "Archive".to_string(),
+                    n => format!("Archive \u{b7} {n}"),
+                };
+                head.child(
+                    ferrite_ui::components::ghost_button("factory-archive", label, cx)
+                        .debug_selector(|| "factory-archive".into())
+                        .on_click(cx.listener(|view, _: &ClickEvent, _, cx| {
+                            cx.stop_propagation();
+                            view.open_archive();
+                            cx.notify();
+                        })),
+                )
+            })
+            .child(
+                ferrite_ui::components::secondary_button(
+                    "factory-new-task",
+                    Some(ferrite_ui::icons::PLUS),
+                    "New task",
+                    cx,
+                )
+                .debug_selector(|| "factory-new-task".into())
+                .on_click(cx.listener(|_, _: &ClickEvent, _, cx| {
+                    cx.stop_propagation();
+                    cx.emit(FactoryEvent::NewTask);
+                })),
+            )
+    }
+
+    /// The surface tabs: Coordinator, Board and Workflows, each with its
+    /// count.
+    fn surface_tabs(&self, inputs: &FactoryInputs, cx: &mut Context<Self>) -> Div {
+        use super::workflows::Surface;
+        use ferrite_ui::theme::*;
+        let counts = [
+            (Surface::Coordinator, "Coordinator", inputs.proposals),
+            (Surface::Board, "Board", inputs.tasks),
+            (Surface::Workflows, "Workflows", inputs.workflows),
+        ];
+        let mut tabs = div().flex().items_center().gap(px(SPACE_1));
+        for (surface, word, count) in counts {
+            let key = format!("factory-tab-{}", word.to_lowercase());
+            // The Archive is the board's own view, under none of the tabs.
+            let selected =
+                self.surface == surface && !(surface == Surface::Board && self.archive_shown);
+            tabs = tabs.child(
+                div()
+                    .id(SharedString::from(key.clone()))
+                    .debug_selector(move || key.clone())
+                    .flex()
+                    .items_center()
+                    .gap(px(SPACE_1))
+                    .px(px(SPACE_2))
+                    .h(px(CONTROL_H))
+                    .rounded(px(R_CONTROL))
+                    .cursor_pointer()
+                    .text_size(px(FS_LABEL))
+                    .font_weight(if selected { W_LABEL } else { W_BODY })
+                    .text_color(rgb(if selected { INK_STRONG } else { INK_SUBTLE }))
+                    .when(selected, |tab| tab.bg(paint::RAISED))
+                    .when(!selected, |tab| tab.hover(|tab| tab.bg(paint::HOVER)))
+                    .child(word)
+                    .child(
+                        div()
+                            .text_color(rgb(INK_SUBTLE))
+                            .child(SharedString::from(count.to_string())),
+                    )
+                    .on_click(cx.listener(move |_, _: &ClickEvent, _, cx| {
+                        cx.emit(FactoryEvent::Surface(surface))
+                    })),
+            );
+        }
+        tabs
+    }
+}
+
+/// Why the Factory's store could not be read, over the board.
+fn trouble(trouble: String) -> AnyElement {
+    use ferrite_ui::theme::*;
+    div()
+        .debug_selector(|| "factory-trouble".into())
+        .flex()
+        .items_center()
+        .gap(px(SPACE_2))
+        .mx(px(SPACE_4))
+        .mb(px(SPACE_3))
+        .p(px(SPACE_3))
+        .rounded(px(R_CONTROL))
+        .border_1()
+        .border_color(paint::CARD_RING)
+        .bg(paint::RAISED)
+        .child(ferrite_ui::components::status_dot(BLOCKED))
+        .child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .text_size(px(FS_META))
+                .text_color(rgb(INK_STRONG))
+                .child(SharedString::from(trouble)),
+        )
+        .into_any_element()
+}
+
 /// What identifies a Task's toast among the window's notifications.
 struct TaskToast;
 
@@ -181,6 +426,55 @@ fn status_ink(status: Status) -> u32 {
 }
 
 impl CockpitView {
+    /// A Project's Factory, heard from its making, with its leaves.
+    fn new_factory(&mut self, cx: &mut Context<Self>) -> Entity<FactoryView> {
+        let archive = self.new_archive(cx);
+        let direction = self.new_direction(cx);
+        let starts = self.new_starts(cx);
+        let editor = self.new_workflows(cx);
+        let coordinator = self.new_coordinator(cx);
+        let view = cx.new(|_| FactoryView {
+            open: None,
+            tab: TaskTab::Overview,
+            note: None,
+            kept: None,
+            columns: gpui::ScrollHandle::new(),
+            revealed: Default::default(),
+            surface: super::workflows::Surface::Board,
+            skills: Default::default(),
+            editor,
+            picks: Vec::new(),
+            direction,
+            starts,
+            coordinator,
+            archive,
+            archive_shown: false,
+        });
+        cx.subscribe(&view, Self::on_factory_event).detach();
+        view
+    }
+
+    /// The head's presses: a surface tab, Clear completed, New task.
+    fn on_factory_event(
+        &mut self,
+        _: Entity<FactoryView>,
+        event: &FactoryEvent,
+        cx: &mut Context<Self>,
+    ) {
+        match event {
+            FactoryEvent::Surface(surface) => {
+                if *surface == super::workflows::Surface::Board
+                    && self.factory().is_some_and(|view| view.read(cx).archive_shown)
+                {
+                    self.close_archive(cx);
+                }
+                self.factory_surface(*surface, cx)
+            }
+            FactoryEvent::Clear => self.clear_completed(cx),
+            FactoryEvent::NewTask => self.open_new_task(cx),
+        }
+    }
+
     /// Show `project`'s Factory board in the board's place.
     pub(crate) fn open_factory(&mut self, project: ProjectId, cx: &mut Context<Self>) {
         let focus_at_open = self.cockpit.roster().focused();
@@ -190,28 +484,7 @@ impl CockpitView {
                 focus_at_open: at,
             }) if *shown == project => *at = focus_at_open,
             _ => {
-                let archive = self.new_archive(cx);
-                let direction = self.new_direction(cx);
-                let starts = self.new_starts(cx);
-                let editor = self.new_workflows(cx);
-                let coordinator = self.new_coordinator(cx);
-                let view = cx.new(|_| FactoryView {
-                    open: None,
-                    tab: TaskTab::Overview,
-                    note: None,
-                    kept: None,
-                    columns: gpui::ScrollHandle::new(),
-                    revealed: Default::default(),
-                    surface: super::workflows::Surface::Board,
-                    skills: Default::default(),
-                    editor,
-                    picks: Vec::new(),
-                    direction,
-                    starts,
-                    coordinator,
-                    archive,
-                    archive_shown: false,
-                });
+                let view = self.new_factory(cx);
                 self.destination = Some(Destination {
                     shows: Shows::Factory(project, view),
                     focus_at_open,
@@ -589,20 +862,47 @@ impl CockpitView {
             .collect()
     }
 
-    /// The Factory board: its head, its six columns, and the open Task's
-    /// panel beside them.
+    /// What the Factory's head draws: the Project and its Factory as the
+    /// board says them now.
+    fn factory_inputs(&self) -> Option<FactoryInputs> {
+        let project = self.factory_project()?;
+        let board = self.cockpit.factory();
+        let tasks: Vec<&Task> = board.on_board(project).collect();
+        Some(FactoryInputs {
+            title: self
+                .cockpit
+                .registry()
+                .project(project)
+                .map(|project| project.title.clone())
+                .unwrap_or_else(|| "Project".into()),
+            tasks: tasks.len(),
+            completed: tasks.iter().any(|task| task.status == Status::Completed),
+            archived: board.archive(project, "").count(),
+            proposals: board
+                .proposals_of(project)
+                .filter(|proposal| proposal.status == ferrite_core::factory::ProposalStatus::Pending)
+                .count(),
+            workflows: board.workflows_of(project).count(),
+            trouble: board.trouble_of(project).map(str::to_string),
+        })
+    }
+
+    /// The Factory board: the Factory's head over the surface shown, the
+    /// six columns with the open Task's panel beside them on the Board.
     pub(super) fn factory_board(&self, window: &mut Window, cx: &mut Context<Self>) -> Div {
         use ferrite_ui::theme::*;
         let (Some(project), Some(factory)) = (self.factory_project(), self.factory().cloned())
         else {
             return div();
         };
-        let (surface, archive_shown, note, open, editor, columns) = {
+        let Some(inputs) = self.factory_inputs() else {
+            return div();
+        };
+        let (surface, archive_shown, open, editor, columns) = {
             let view = factory.read(cx);
             (
                 view.surface,
                 view.archive_shown,
-                view.note.clone(),
                 view.open.clone(),
                 view.editor.clone(),
                 view.columns.clone(),
@@ -610,98 +910,6 @@ impl CockpitView {
         };
         let board = self.cockpit.factory();
         let tasks: Vec<&Task> = board.on_board(project).collect();
-        let archived = board.archive(project, "").count();
-        let title = self
-            .cockpit
-            .registry()
-            .project(project)
-            .map(|project| project.title.clone())
-            .unwrap_or_else(|| "Project".into());
-        let count = match tasks.len() {
-            0 => "No tasks".to_string(),
-            1 => "1 task".to_string(),
-            n => format!("{n} tasks"),
-        };
-        let head = div()
-            .debug_selector(|| "factory-head".into())
-            .flex()
-            .flex_shrink_0()
-            .items_center()
-            .gap(px(SPACE_3))
-            .h(px(CONTROL_H + SPACE_4))
-            .px(px(SPACE_4))
-            // The title gives way first, so the head's buttons stay in a
-            // narrow board: text never shrinks below its width otherwise.
-            .child(
-                div()
-                    .debug_selector(|| "factory-title".into())
-                    .min_w_0()
-                    .truncate()
-                    .font_weight(W_LABEL)
-                    .text_color(rgb(INK_STRONG))
-                    .child(SharedString::from(format!("{title} \u{b7} Factory"))),
-            )
-            .child(
-                div()
-                    .debug_selector(|| "factory-count".into())
-                    .flex_shrink_0()
-                    .text_size(px(FS_META))
-                    .text_color(rgb(INK_SUBTLE))
-                    .child(SharedString::from(count)),
-            )
-            .child(self.factory_surface_tabs(cx))
-            .child(div().flex_1())
-            .children(note.map(|note| {
-                div()
-                    .id("factory-note")
-                    .debug_selector(|| "factory-note".into())
-                    .flex()
-                    .items_center()
-                    .gap(px(SPACE_1))
-                    .min_w_0()
-                    .text_size(px(FS_META))
-                    .text_color(rgb(INK_SUBTLE))
-                    .child(div().min_w_0().truncate().child(note))
-                    .child(
-                        div()
-                            .id("factory-note-dismiss")
-                            .debug_selector(|| "factory-note-dismiss".into())
-                            .flex_shrink_0()
-                            .cursor_pointer()
-                            .child(ferrite_ui::icons::icon(
-                                ferrite_ui::icons::CLOSE,
-                                ROW_ICON,
-                                INK_SUBTLE,
-                            ))
-                            .on_click(cx.listener(|view, _: &ClickEvent, _, cx| {
-                                view.dismiss_factory_note(cx)
-                            })),
-                    )
-            }))
-            .when(
-                surface == super::workflows::Surface::Board
-                    && !archive_shown
-                    && tasks.iter().any(|task| task.status == Status::Completed),
-                |head| head.child(self.clear_button(cx)),
-            )
-            .when(
-                surface == super::workflows::Surface::Board && !archive_shown,
-                |head| head.child(self.archive_button(archived, cx)),
-            )
-            .child(
-                ferrite_ui::components::secondary_button(
-                    "factory-new-task",
-                    Some(ferrite_ui::icons::PLUS),
-                    "New task",
-                    cx,
-                )
-                .debug_selector(|| "factory-new-task".into())
-                .on_click(cx.listener(|view, _: &ClickEvent, _, cx| {
-                    cx.stop_propagation();
-                    view.open_new_task(cx);
-                })),
-            );
-
         let body = if surface == super::workflows::Surface::Workflows {
             editor.into_any_element()
         } else if surface == super::workflows::Surface::Coordinator {
@@ -837,23 +1045,7 @@ impl CockpitView {
                 .into_any_element()
         };
 
-        div()
-            .debug_selector(|| "factory-board".into())
-            .flex_1()
-            .flex()
-            .flex_col()
-            .min_w_0()
-            .min_h_0()
-            .overflow_hidden()
-            .rounded(px(R_CARD))
-            .bg(paint::CARD)
-            .font_family(FONT_UI)
-            .text_size(px(FS_UI))
-            .line_height(px(LH_UI))
-            .text_color(rgb(INK_STRONG))
-            .child(head)
-            .children(self.factory_trouble())
-            .child(body)
+        factory.update(cx, |factory, cx| factory.board(&inputs, body, cx))
     }
 
     /// One Task's card: its title, its Worker's Provider and model, and

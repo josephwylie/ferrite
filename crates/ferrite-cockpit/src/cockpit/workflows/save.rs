@@ -25,10 +25,4 @@ impl CockpitView {
         self.update_factory(cx, |view, _| view.note = note);
         cx.notify();
     }
-
-    /// Dismiss the view's notice.
-    pub(crate) fn dismiss_factory_note(&mut self, cx: &mut Context<Self>) {
-        self.update_factory(cx, |view, _| view.note = None);
-        cx.notify();
-    }
 }
