@@ -1635,8 +1635,8 @@ fn the_nav_list_at_rest_asks_for_no_frames(cx: &mut TestAppContext) {
             .unwrap();
     }
     tick(cx);
-    let listed = view.read_with(cx, |view, _| {
-        let state = view.nav_state();
+    let listed = view.read_with(cx, |view, cx| {
+        let state = view.nav_state(cx);
         state.active.len() + state.working.len()
     });
     // The untouched first Thread was opened today too.

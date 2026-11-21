@@ -49,7 +49,7 @@ fn owned_threads_are_out_of_the_lists_and_ring_nothing(cx: &mut TestAppContext) 
     assert_eq!(toasts(cx), 0, "a Worker's request rings nothing");
 
     let listed = |view: &CockpitView, thread: ThreadId, cx: &gpui::App| {
-        let state = view.nav_state();
+        let state = view.nav_state(cx);
         state
             .open_rows()
             .chain(&state.parked)

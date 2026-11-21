@@ -121,6 +121,14 @@ pub(super) struct Popups {
 #[derive(Clone, Default)]
 pub(super) struct Triggers(Rc<RefCell<HashMap<SharedString, gpui::Bounds<Pixels>>>>);
 
+/// One record is the same as itself: what it holds is laid out afresh
+/// each frame.
+impl PartialEq for Triggers {
+    fn eq(&self, other: &Self) -> bool {
+        Rc::ptr_eq(&self.0, &other.0)
+    }
+}
+
 impl Triggers {
     /// Records the laid-out bounds of a control a popup hangs from, under
     /// `key`.

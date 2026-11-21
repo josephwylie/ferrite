@@ -80,7 +80,7 @@ impl CockpitView {
         {
             return;
         }
-        self.notify_part(parts::Part::Nav, cx);
+        self.nav_view.update(cx, |nav, cx| nav.look_soon(cx));
         #[cfg(test)]
         self.pr_watch.asked.push((thread, manual));
         // Tests and captures never run `gh`: only a fixture world's forge
@@ -133,7 +133,7 @@ impl CockpitView {
         cx: &mut Context<Self>,
     ) {
         if self.facts.pr_answered(thread, reading) {
-            self.notify_part(parts::Part::Nav, cx);
+            self.nav_view.update(cx, |nav, cx| nav.look_soon(cx));
             self.pr_reading_changed(thread, cx);
         }
     }

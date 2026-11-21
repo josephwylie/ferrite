@@ -4,10 +4,12 @@
 //!
 //! A Pane's view (`PartView`) draws by calling back into the Cockpit
 //! (`render_part`), so every element and listener in it is the Cockpit's
-//! own, as before; the nav draws itself from what it reads of the Cockpit
-//! (`nav_inputs`). Each is mounted cached and tracking what it reads
-//! (vendored gpui, `ViewElement::tracking_reads`). That makes the Cockpit's
-//! own notify the conservative case: every part read the Cockpit, so a
+//! own, as before; the nav draws only what it last read of the Cockpit
+//! (`NavView::look`), which it reads again as the Cockpit or the pump's
+//! bell notifies, so it redraws only when that moved. Each is mounted
+//! cached and tracking what it reads (vendored gpui,
+//! `ViewElement::tracking_reads`). That makes the Cockpit's own notify the
+//! conservative case: every Pane's part read the Cockpit, so a
 //! change anywhere in its state rebuilds them all, exactly as when they
 //! were drawn inline. The
 //! hot paths are precise instead (`notify_part`, `notify_frame`): a stream
@@ -209,3 +211,7 @@ impl CockpitView {
 
 /// What `notify_frame` notifies: no state, read by the Cockpit's render.
 pub(crate) struct FrameTick;
+
+/// What the pump notifies on a beat that brought something: no state,
+/// observed by the views that build from what arrived (the nav).
+pub(crate) struct Arrived;

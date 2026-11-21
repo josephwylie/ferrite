@@ -222,8 +222,8 @@ fn an_empty_projects_factory_is_one_palette_search_away(cx: &mut TestAppContext)
     bind_production_keys(cx);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     wide(cx);
-    view.read_with(cx, |view, _| {
-        assert_eq!(view.factory_rows().len(), 1, "no row for every Project");
+    view.read_with(cx, |view, cx| {
+        assert_eq!(view.factory_rows(cx).len(), 1, "no row for every Project");
     });
     let title = view.read_with(cx, |view, _| {
         view.cockpit

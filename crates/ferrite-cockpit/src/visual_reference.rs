@@ -1326,7 +1326,11 @@ fn build(state: &str, label: &str) -> (Scene, Setup) {
                 view.set_shelf_open(crate::nav::Shelf::Parked, true, cx);
                 view.nav_view.read(cx).scroll.scroll_to_bottom();
                 let parked = view
-                    .nav_state()
+                    .nav_view
+                    .read(cx)
+                    .inputs()
+                    .expect("the nav has read its rows")
+                    .state
                     .parked
                     .iter()
                     .find(|row| row.name.as_ref() == "Codex resume handshake")
@@ -1347,7 +1351,8 @@ fn build(state: &str, label: &str) -> (Scene, Setup) {
             let setup: Setup = Box::new(|view, window, cx| {
                 branches(view, window, cx);
                 view.focus_nav(window, cx);
-                let items = view.nav_view.read(cx).items(&view.nav_inputs(cx));
+                let nav = view.nav_view.read(cx);
+                let items = nav.items(nav.inputs().expect("the nav has read its rows"));
                 view.nav_view
                     .update(cx, |nav, cx| nav.step(2, &items, window, cx));
             });

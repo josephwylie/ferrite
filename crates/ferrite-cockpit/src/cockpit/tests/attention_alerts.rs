@@ -82,8 +82,8 @@ fn the_list_scrolls_to_and_opens_its_last_card(cx: &mut TestAppContext) {
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     cx.simulate_resize(gpui::size(px(1440.), px(1080.)));
     tick(cx);
-    let active: Vec<ThreadId> = view.read_with(cx, |view, _| {
-        view.nav_state().active.iter().map(|row| row.thread).collect()
+    let active: Vec<ThreadId> = view.read_with(cx, |view, cx| {
+        view.nav_state(cx).active.iter().map(|row| row.thread).collect()
     });
     assert_eq!(active.len(), THREADS, "one card per Thread");
     let card = |thread: ThreadId| -> &'static str {
@@ -729,7 +729,7 @@ fn the_list_empty_over_working_then_a_decision_parks_from_the_keyboard(cx: &mut 
     tick(cx);
     view.read_with(cx, |view, cx| {
         assert!(view.needs_you_rows(cx).is_empty());
-        assert_eq!(view.nav_state().working.len(), 3);
+        assert_eq!(view.nav_state(cx).working.len(), 3);
     });
     assert!(cx.debug_bounds("nav-empty").is_some());
     assert!(cx.debug_bounds("nav-shelf-working").is_some());
@@ -755,7 +755,7 @@ fn the_list_empty_over_working_then_a_decision_parks_from_the_keyboard(cx: &mut 
     tick(cx);
     view.read_with(cx, |view, cx| {
         assert!(view.needs_you_rows(cx).is_empty());
-        assert_eq!(view.nav_state().working.len(), 2);
+        assert_eq!(view.nav_state(cx).working.len(), 2);
         assert_eq!(view.cockpit.parked().unwrap(), vec![threads[1]]);
     });
     assert!(cx.debug_bounds("nav-empty").is_some());
@@ -771,8 +771,8 @@ fn the_keyboard_parks_the_cursors_card_and_the_cursor_follows_it(cx: &mut TestAp
     bind_production_keys(cx);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     tick(cx);
-    let active: Vec<ThreadId> = view.read_with(cx, |view, _| {
-        view.nav_state().active.iter().map(|row| row.thread).collect()
+    let active: Vec<ThreadId> = view.read_with(cx, |view, cx| {
+        view.nav_state(cx).active.iter().map(|row| row.thread).collect()
     });
     assert_eq!(active.len(), 3);
     cx.simulate_keystrokes("cmd-i down cmd-w");
@@ -866,7 +866,7 @@ fn stopped_failures_and_interruptions_remain_inbox(cx: &mut TestAppContext) {
     tick(cx);
     view.read_with(cx, |view, cx| {
         assert_eq!(view.needs_you_rows(cx).len(), 2);
-        assert!(view.nav_state().working.is_empty());
+        assert!(view.nav_state(cx).working.is_empty());
     });
 }
 
@@ -991,7 +991,7 @@ fn snooze_hides_a_thread_until_woken_and_new_decisions_wake_it(cx: &mut TestAppC
             .needs_you_rows(cx)
             .iter()
             .any(|row| row.thread == threads[0]));
-        assert_eq!(view.nav_state().snoozed.len(), 1);
+        assert_eq!(view.nav_state(cx).snoozed.len(), 1);
     });
     fake.streams.borrow()[0]
         .send(decision("wake-snoozed-thread"))
@@ -1002,7 +1002,7 @@ fn snooze_hides_a_thread_until_woken_and_new_decisions_wake_it(cx: &mut TestAppC
             .needs_you_rows(cx)
             .iter()
             .any(|row| row.thread == threads[0]));
-        assert!(view.nav_state().snoozed.is_empty());
+        assert!(view.nav_state(cx).snoozed.is_empty());
     });
 }
 

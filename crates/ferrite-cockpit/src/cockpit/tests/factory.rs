@@ -268,7 +268,7 @@ fn a_task_alert_toasts_chimes_and_posts_but_not_to_the_inbox(cx: &mut TestAppCon
     };
     let before = toasts(cx);
     let inbox_len = |view: &CockpitView, cx: &gpui::App| {
-        let state = view.nav_state();
+        let state = view.nav_state(cx);
         view.inbox_rows(&state, cx).len()
     };
     let inbox_before = view.read_with(cx, |view, cx| inbox_len(view, cx));

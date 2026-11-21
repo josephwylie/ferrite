@@ -43,7 +43,7 @@ fn a_thread_whose_shell_outlives_its_turn_works_until_the_shell_ends(cx: &mut Te
     let threads = core.threads();
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     tick(cx);
-    let before = view.read_with(cx, |view, _| ids(&view.nav_state().active));
+    let before = view.read_with(cx, |view, cx| ids(&view.nav_state(cx).active));
     let last = *before.last().unwrap();
     let send = |event: SessionEvent| {
         let at = threads.iter().position(|thread| *thread == last).unwrap();
@@ -56,8 +56,8 @@ fn a_thread_whose_shell_outlives_its_turn_works_until_the_shell_ends(cx: &mut Te
     tick(cx);
     clock.advance(Duration::from_secs(60));
     tick(cx);
-    view.read_with(cx, |view, _| {
-        let state = view.nav_state();
+    view.read_with(cx, |view, cx| {
+        let state = view.nav_state(cx);
         assert_eq!(ids(&state.working), vec![last], "its shell still runs");
         assert_eq!(
             state.working[0].status.attention(),
@@ -77,8 +77,8 @@ fn a_thread_whose_shell_outlives_its_turn_works_until_the_shell_ends(cx: &mut Te
     tick(cx);
     clock.advance(Duration::from_secs(4));
     tick(cx);
-    view.read_with(cx, |view, _| {
-        let state = view.nav_state();
+    view.read_with(cx, |view, cx| {
+        let state = view.nav_state(cx);
         assert!(state.working.is_empty());
         let mut expected = vec![last];
         expected.extend(&before[..before.len() - 1]);
@@ -111,7 +111,7 @@ fn a_working_row_keeps_its_place_when_its_turn_hands_over_to_a_shell(cx: &mut Te
     send(1, streaming());
     tick(cx);
     let working = |cx: &mut gpui::VisualTestContext| {
-        view.read_with(cx, |view, _| ids(&view.nav_state().working))
+        view.read_with(cx, |view, cx| ids(&view.nav_state(cx).working))
     };
     assert_eq!(working(cx), vec![threads[1], threads[0]], "newest send first");
     send(1, shell(TaskStatus::Working));
@@ -137,9 +137,9 @@ fn a_window_that_starts_watching_mid_shell_sees_the_thread_working(cx: &mut Test
         fake.streams.borrow()[1].send(event).unwrap();
     }
     tick(cx);
-    view.read_with(cx, |view, _| {
+    view.read_with(cx, |view, cx| {
         assert!(view.cockpit.thread(threads[1]).unwrap().background_work());
-        assert_eq!(ids(&view.nav_state().working), vec![threads[1]]);
+        assert_eq!(ids(&view.nav_state(cx).working), vec![threads[1]]);
     });
 }
 
@@ -170,9 +170,9 @@ fn a_window_that_starts_watching_mid_subagent_sees_the_thread_working(cx: &mut T
         fake.streams.borrow()[1].send(event).unwrap();
     }
     tick(cx);
-    view.read_with(cx, |view, _| {
+    view.read_with(cx, |view, cx| {
         assert!(view.cockpit.thread(threads[1]).unwrap().background_work());
-        let state = view.nav_state();
+        let state = view.nav_state(cx);
         assert_eq!(ids(&state.working), vec![threads[1]]);
         assert_eq!(
             state.working[0].status.attention(),
@@ -187,8 +187,8 @@ fn a_window_that_starts_watching_mid_subagent_sees_the_thread_working(cx: &mut T
         }))
         .unwrap();
     tick(cx);
-    view.read_with(cx, |view, _| {
-        let state = view.nav_state();
+    view.read_with(cx, |view, cx| {
+        let state = view.nav_state(cx);
         assert!(state.working.is_empty());
         assert_eq!(state.active[0].thread, threads[1], "done goes to the top");
     });

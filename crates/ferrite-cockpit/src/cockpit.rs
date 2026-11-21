@@ -450,14 +450,12 @@ pub struct CockpitView {
     /// to that Project's section — which Panes the Cockpit flies is never
     /// touched by it.
     nav_filter: Option<ProjectId>,
-    /// When each listed Thread came into its section, which the list and
-    /// the Working shelf order by (`nav_state`). Only the pump writes it
-    /// (`note_arrivals`).
-    nav_arrivals: nav::Arrivals,
     /// The nav, a view of its own (ADR 0041): it owns its list's motion,
     /// scroll, keyboard, search, picks and undo notice, and asks the
     /// Cockpit for the rest through `NavEvent`.
     nav_view: Entity<nav_view::NavView>,
+    /// What the pump notifies on a beat that brought something.
+    arrived: Entity<parts::Arrived>,
     /// The Cockpit hearing each view that has an event enum of its own
     /// (ADR 0041), from its first frame.
     view_events: Option<Vec<gpui::Subscription>>,
@@ -1146,6 +1144,7 @@ impl CockpitView {
             gpui::KeyBinding::new("escape", ferrite_pane::annotation_editor::Cancel, Some("AnnotationEditor")),
         ]);
         let cockpit_weak = cx.weak_entity();
+        let arrived = cx.new(|_| parts::Arrived);
         let composer_menu = cx.new(|_| composer_menu::ComposerMenuView::default());
         // Whether a Composer's key context is the menu's follows the menu.
         cx.observe(&composer_menu, |view, _, cx| view.sync_composer_floats(cx))
@@ -1233,8 +1232,8 @@ impl CockpitView {
             toasts,
             native_copy: None,
             nav_filter: None,
-            nav_arrivals: nav::Arrivals::default(),
-            nav_view: cx.new(|cx| nav_view::NavView::new(cockpit_weak, cx)),
+            nav_view: cx.new(|cx| nav_view::NavView::new(cockpit_weak, arrived.clone(), cx)),
+            arrived,
             view_events: None,
             activation: None,
             composer_menu,
@@ -2168,9 +2167,6 @@ impl CockpitView {
             self.sync_panes(cx);
         }
         self.watch_prs(cx);
-        if self.note_arrivals() {
-            self.notify_part(parts::Part::Nav, cx);
-        }
         let mut restarted = Vec::new();
         // What the sweep found moved: a fact or a Thread's age (everything
         // redraws), a working Thread (its Pane and the nav), the frame's
@@ -2249,6 +2245,9 @@ impl CockpitView {
         {
             return;
         }
+        // Something arrived: what reads it looks again once the pump is
+        // done (the nav, `NavView::look`).
+        self.arrived.update(cx, |_, cx| cx.notify());
         let mut turn_ended = false;
         for update in &frame {
             if let Some(index) = self.pane_for(update.thread) {
@@ -2326,12 +2325,13 @@ impl CockpitView {
         // new inputs first, as the Cockpit's own notify has them do
         // (`observe_self`), so they draw in this same frame.
         self.sync_visible_transcripts(cx);
-        let rows = !swept_busy.is_empty()
-            || (!frame.is_empty() && self.nav_view.read(cx).rows_moved(&self.nav_state()));
+        // A working row's clock is drawn from the time: the sweep is its
+        // ride under reduced motion. Its rows the nav finds moved itself.
+        let clocks = !swept_busy.is_empty();
         for thread in frame.iter().map(|update| update.thread).chain(swept_busy) {
             self.notify_thread_pane(thread, cx);
         }
-        if rows {
+        if clocks {
             self.notify_part(parts::Part::Nav, cx);
         }
         self.notify_frame(cx);
@@ -2506,7 +2506,7 @@ impl CockpitView {
                     for thread in labels.iter().chain(&roots) {
                         view.notify_thread_pane(*thread, cx);
                     }
-                    view.notify_part(parts::Part::Nav, cx);
+                    view.nav_view.update(cx, |nav, cx| nav.look_soon(cx));
                     view.notify_frame(cx);
                 }
                 if moved || std::mem::take(&mut view.branch_refresh_queued) {
@@ -5727,125 +5727,14 @@ impl CockpitView {
         )
     }
 
-    /// The nav's per-frame state (ADR 0040), from caches and O(1) reads
-    /// only; the Project filter narrows it and nothing else. Every open
-    /// Thread is in one section, by priority: snoozed, pinned, working,
-    /// else active. A Thread works while its turn, its background work
-    /// or a prompt waiting its turn runs, unless a Decision waits. Pinned
-    /// keeps pin order; Active puts pending Decisions first, oldest
-    /// request first, then the latest arrival (`nav::Arrivals`), so a
-    /// Thread done with its work comes back at the top; Working the latest
-    /// arrival first; Snoozed the soonest to wake first; Parked the park
-    /// order. Drafts are not rows (#29).
-    ///
-    /// The one selection is the shown Thread. The empty board shows none.
-    fn nav_state(&self) -> nav::NavState {
-        use nav::Section;
-        let roster = self.cockpit.roster();
-        let shown = (!self.empty_board_shown())
-            .then(|| roster.focused_thread())
-            .flatten();
-        let row = |thread: ThreadId| nav::ThreadRow {
-            selected: shown == Some(thread),
-            ..self.thread_row(thread)
-        };
-        let pins = &self.prefs.settings.pinned_threads;
-        let listed = self.listed_threads();
-        let arrivals = &self.nav_arrivals;
-        // The latest arrival first; arrivals alike keep creation order.
-        let latest =
-            |row: &nav::ThreadRow| (std::cmp::Reverse(arrivals.since(row.thread)), row.thread);
-        let mut state = nav::NavState::default();
-        let mut pinned = Vec::new();
-        let mut snoozed = Vec::new();
-        for (thread, section, _) in listed {
-            if !self.admitted(thread) {
-                continue;
-            }
-            match section {
-                Section::Snoozed => {
-                    let until = self
-                        .cockpit
-                        .thread(thread)
-                        .and_then(|open| open.snooze())
-                        .map(|snooze| snooze.until);
-                    snoozed.push((until, row(thread)));
-                }
-                Section::Pinned => {
-                    let at = pins.iter().position(|pin| *pin == thread);
-                    pinned.push((at, row(thread)));
-                }
-                Section::Working => state.working.push(row(thread)),
-                Section::Active => state.active.push(row(thread)),
-            }
-        }
-        pinned.sort_by_key(|(at, _)| *at);
-        state.pinned = pinned.into_iter().map(|(_, row)| row).collect();
-        snoozed.sort_by_key(|(until, _)| *until);
-        state.snoozed = snoozed.into_iter().map(|(_, row)| row).collect();
-        let queue = self.cockpit.needs_you();
-        state.active.sort_by_key(|row| {
-            (
-                queue
-                    .iter()
-                    .position(|id| *id == row.thread)
-                    .unwrap_or(usize::MAX),
-                latest(row),
-            )
-        });
-        state.working.sort_by_key(latest);
-        state.parked = self.parked_threads().into_iter().map(row).collect();
-        state
-    }
-
-    /// Every open Thread the nav lists, the Project filter's or not, with
-    /// the section it is in and its last activity: what `nav::Arrivals`
-    /// notes.
-    fn listed_threads(&self) -> Vec<(ThreadId, nav::Section, Option<std::time::SystemTime>)> {
-        use nav::Section;
-        #[cfg(test)]
-        drawn::listed();
-        let mut threads: Vec<ThreadId> = self
-            .panes
-            .iter()
-            .filter_map(|pane| pane.thread())
-            .filter(|thread| {
-                self.cockpit.thread(*thread).is_some() && self.cockpit.operators(*thread)
-            })
-            .collect();
-        threads.sort();
-        threads.dedup();
-        let pins = &self.prefs.settings.pinned_threads;
-        // Every listed Thread's section, the filter's or not: a Thread
-        // that moves while filtered out has still moved.
-        threads
-            .into_iter()
-            .map(|thread| {
-                let open = self.cockpit.thread(thread);
-                let section = if open.is_some_and(|open| open.snooze().is_some()) {
-                    Section::Snoozed
-                } else if pins.contains(&thread) {
-                    Section::Pinned
-                } else if open.is_some_and(|open| {
-                    open.pending_decisions().is_empty()
-                        && (open.needs_queue() || open.background_work() || !open.queue().is_empty())
-                }) {
-                    Section::Working
-                } else {
-                    Section::Active
-                };
-                (thread, section, self.facts.last_used(thread))
-            })
-            .collect()
-    }
-
-    /// Note which Threads came into a section since the last frame
-    /// (`nav::Arrivals`). Only the pump writes it, so the nav's render
-    /// reads where each row is. True when an arrival moved, so the nav
-    /// redraws.
-    fn note_arrivals(&mut self) -> bool {
-        let listed = self.listed_threads();
-        self.nav_arrivals.note(&listed, ferrite_core::clock::system_time())
+    /// The nav's rows as it last read them: what it draws.
+    #[cfg(test)]
+    pub(super) fn nav_state(&self, cx: &gpui::App) -> nav::NavState {
+        self.nav_view
+            .read(cx)
+            .inputs()
+            .map(|inputs| inputs.state.clone())
+            .unwrap_or_default()
     }
 
     /// Does the Project filter admit this Thread? `All projects` admits
@@ -8451,7 +8340,7 @@ impl CockpitView {
     /// Requests precede other rows, retaining each machine's attention order.
     #[cfg(test)]
     pub(super) fn needs_you_rows(&self, cx: &gpui::App) -> Vec<NoticeRow> {
-        self.inbox_rows(&self.nav_state(), cx)
+        self.inbox_rows(&self.nav_state(cx), cx)
     }
 
     /// The Active section as the Inbox's rows: each local Thread's, then a

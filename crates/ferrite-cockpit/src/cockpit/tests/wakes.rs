@@ -80,7 +80,8 @@ fn window<'a>(
 }
 
 /// One Project, one idle Thread, nothing arriving, for four seconds (two
-/// of the window's two-second sweeps): the pump runs on its beat.
+/// of the window's two-second sweeps): the pump runs on its beat, and the
+/// nav neither redraws nor works out its list again.
 #[gpui::test]
 fn an_idle_window_keeps_its_beat_and_redraws_nothing(cx: &mut TestAppContext) {
     let _clock = hold_wall_clock();
@@ -96,11 +97,16 @@ fn an_idle_window_keeps_its_beat_and_redraws_nothing(cx: &mut TestAppContext) {
         idle.pumps, idle.lists, idle.nav, idle.root, idle.panes[0]
     );
     assert!(idle.pumps >= beats, "the pump keeps its beat");
+    assert_eq!(idle.nav, 0, "an idle nav is not redrawn");
+    assert!(
+        idle.lists <= idle.root,
+        "the nav reads its list again only as the window notifies"
+    );
 }
 
-/// Two Threads; the second streams a turn, a delta a beat, and ends it,
-/// while the window notifies three times for something the nav does not
-/// draw. The nav redraws only on beats where what it lists moved (and
+/// Two Threads; the window notifies three times for something the nav
+/// does not draw, then the second streams a turn, a delta a beat, and
+/// ends it. The nav redraws only on beats where what it lists moved (and
 /// for the slide that moves its rows).
 #[gpui::test]
 fn a_streaming_thread_redraws_the_nav_only_when_its_rows_move(cx: &mut TestAppContext) {
@@ -111,10 +117,19 @@ fn a_streaming_thread_redraws_the_nav_only_when_its_rows_move(cx: &mut TestAppCo
     let oracle = std::cell::Cell::new(0);
     let rows = |view: &Entity<CockpitView>, cx: &mut gpui::VisualTestContext| {
         let lists = drawn::lists();
-        let rows = view.read_with(cx, |view, _| view.nav_state());
+        let rows = view.read_with(cx, |view, cx| view.nav_state(cx));
         oracle.set(oracle.get() + drawn::lists() - lists);
         rows
     };
+    // Before it, at rest, the window notifies three times for something the
+    // nav does not draw, as the pump does when the Server's models move and
+    // as most window actions do: the nav is not redrawn for it.
+    let nav = drawn::nav_renders();
+    for _ in 0..3 {
+        view.update(cx, |_, cx| cx.notify());
+        beat(cx);
+    }
+    let bare_redraws = drawn::nav_renders() - nav;
     let before = counts(&panes);
     let mut last = rows(&view, cx);
     oracle.set(0);
@@ -130,19 +145,13 @@ fn a_streaming_thread_redraws_the_nav_only_when_its_rows_move(cx: &mut TestAppCo
         moved += usize::from(now != last);
         last = now;
     };
-    for at in 0..30 {
+    for _ in 0..30 {
         step(
             Some(SessionEvent::TextDelta {
                 text: "working ".into(),
             }),
             cx,
         );
-        // Every tenth beat the window notifies for something the nav does
-        // not draw, as the pump does when the Server's models move and as
-        // most window actions do.
-        if at % 10 == 9 {
-            view.update(cx, |_, cx| cx.notify());
-        }
     }
     step(
         Some(SessionEvent::TurnEnded {
@@ -157,9 +166,74 @@ fn a_streaming_thread_redraws_the_nav_only_when_its_rows_move(cx: &mut TestAppCo
     let mut load = counts(&panes) - before;
     load.lists -= oracle.get();
     eprintln!(
-        "WAKES stream beats={beats} pumps={} nav_lists={} rows_moved={moved} nav={} root={} \
+        "WAKES stream beats={beats} pumps={} nav_lists={} rows_moved={moved} nav={} \
+         nav_for_bare_notifies={bare_redraws} root={} \
          shown_pane={} hidden_pane={}",
         load.pumps, load.lists, load.nav, load.root, load.panes[0], load.panes[1]
     );
     assert!(moved > 0, "the stream moved the nav's rows");
+    assert_eq!(bare_redraws, 0, "a notify that moves nothing it draws leaves the nav");
+}
+
+/// A Thread whose turn starts moves to the Working shelf, and back to the
+/// top of the list when it ends, each on the beat it happens: the nav
+/// hears it from the pump's beat itself, and the window is not notified
+/// for it.
+#[gpui::test]
+fn the_nav_moves_a_working_thread_on_the_beat_without_the_window(cx: &mut TestAppContext) {
+    let _clock = hold_wall_clock();
+    let (view, fake, _panes, cx) = window("wakes-section", 2, cx);
+    let threads = view.read_with(cx, |view, _| view.cockpit.threads());
+    let notified = std::rc::Rc::new(std::cell::Cell::new(0));
+    let _watch = cx.update({
+        let notified = notified.clone();
+        |_, cx| cx.observe(&view, move |_, _| notified.set(notified.get() + 1))
+    });
+    let rows = |cx: &mut gpui::VisualTestContext| view.read_with(cx, |view, cx| view.nav_state(cx));
+    let ids = |rows: &[crate::nav::ThreadRow]| rows.iter().map(|row| row.thread).collect::<Vec<_>>();
+    // Its first event settles what the Session says of itself.
+    fake.streams.borrow()[1]
+        .send(SessionEvent::TextDelta { text: "working ".into() })
+        .unwrap();
+    beat(cx);
+    assert_eq!(ids(&rows(cx).working), vec![threads[1]], "working on the beat it starts");
+    let before = (notified.get(), drawn::nav_renders());
+    fake.streams.borrow()[1]
+        .send(SessionEvent::Progress {
+            event: ferrite_core::progress::ProgressEvent::Background {
+                id: "shell".into(),
+                label: "sleep 1".into(),
+                status: ferrite_core::progress::TaskStatus::Working,
+                detail: String::new(),
+            },
+        })
+        .unwrap();
+    fake.streams.borrow()[1]
+        .send(SessionEvent::TurnEnded {
+            outcome: ferrite_core::TurnOutcome::Completed,
+            cost_usd: None,
+        })
+        .unwrap();
+    beat(cx);
+    assert_eq!(ids(&rows(cx).working), vec![threads[1]], "its shell still works");
+    fake.streams.borrow()[1]
+        .send(SessionEvent::Progress {
+            event: ferrite_core::progress::ProgressEvent::Background {
+                id: "shell".into(),
+                label: "sleep 1".into(),
+                status: ferrite_core::progress::TaskStatus::Completed,
+                detail: String::new(),
+            },
+        })
+        .unwrap();
+    beat(cx);
+    let after = rows(cx);
+    assert!(after.working.is_empty(), "done");
+    assert_eq!(after.active.first().map(|row| row.thread), Some(threads[1]), "on top");
+    eprintln!(
+        "WAKES section window_notifies={} nav={}",
+        notified.get() - before.0,
+        drawn::nav_renders() - before.1
+    );
+    assert!(drawn::nav_renders() > before.1, "the nav drew the move");
 }

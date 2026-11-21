@@ -141,7 +141,7 @@ fn a_resorted_card_slides_and_a_parked_one_leaves_a_ghost(cx: &mut TestAppContex
     tick(cx);
     let first = travel(&view, cx).expect("it travels");
     assert_eq!(
-        view.read_with(cx, |view, _| view.nav_state().active[0].thread),
+        view.read_with(cx, |view, cx| view.nav_state(cx).active[0].thread),
         mover,
         "a request lifts it to the top"
     );
@@ -251,7 +251,7 @@ fn the_search_highlight_follows_its_thread_through_live_updates(cx: &mut TestApp
     tick(cx);
 
     let results = |view: &CockpitView, cx: &gpui::App| {
-        let state = view.nav_state();
+        let state = view.nav_state(cx);
         view.nav_view.read(cx).search_matches(&state, cx).iter().map(|row| row.thread).collect::<Vec<_>>()
     };
     let (order, lit) = view.read_with(cx, |view, cx| (results(view, cx), view.nav_view.read(cx).search_pick.get()));
@@ -352,7 +352,7 @@ fn the_keyboard_walks_the_list_and_follows_a_parked_thread(cx: &mut TestAppConte
             Some(nav::NavItem::Thread(thread)),
             "the cursor follows it"
         );
-        assert!(view.nav_state().parked.iter().any(|row| row.thread == thread));
+        assert!(view.nav_state(cx).parked.iter().any(|row| row.thread == thread));
     });
     for key in ["shift-f10", "menu"] {
         cx.simulate_keystrokes(key);

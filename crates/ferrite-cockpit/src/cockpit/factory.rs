@@ -1448,10 +1448,12 @@ impl CockpitView {
 
     /// The Factory menu's rows: a Project's board each, checked while it
     /// shows, with how many of its Tasks need the operator.
-    pub(super) fn factory_rows(&self) -> Vec<Option<(menu::Item, MenuVerb)>> {
-        let state = self.nav_state();
+    pub(super) fn factory_rows(&self, cx: &gpui::App) -> Vec<Option<(menu::Item, MenuVerb)>> {
+        let Some(nav) = self.nav_view.read(cx).inputs() else {
+            return Vec::new();
+        };
         let board = self.cockpit.factory();
-        self.factory_nav_projects(&state)
+        self.factory_nav_projects(&nav.state)
             .into_iter()
             .map(|project| {
                 let title = self

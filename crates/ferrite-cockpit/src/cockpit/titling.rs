@@ -67,7 +67,7 @@ impl CockpitView {
     /// its prompt-derived name.
     pub(super) fn adopt_title(&mut self, thread: ThreadId, title: Option<String>, cx: &mut Context<Self>) {
         if self.titling.0.remove(&thread) {
-            self.notify_part(parts::Part::Nav, cx);
+            self.nav_view.update(cx, |nav, cx| nav.look_soon(cx));
         }
         let Some(title) = title else {
             return;

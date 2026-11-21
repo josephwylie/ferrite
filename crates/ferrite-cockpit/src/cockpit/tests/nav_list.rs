@@ -318,8 +318,8 @@ fn two_decisions_head_the_list_and_no_toast(cx: &mut TestAppContext) {
     fake.streams.borrow()[0].send(decision("perm_1")).unwrap();
     tick(cx);
 
-    view.read_with(cx, |view, _| {
-        let state = view.nav_state();
+    view.read_with(cx, |view, cx| {
+        let state = view.nav_state(cx);
         let first: Vec<ThreadId> = state.active.iter().take(2).map(|row| row.thread).collect();
         assert_eq!(
             first,
@@ -607,8 +607,8 @@ fn a_working_thread_moves_to_the_working_shelf_and_back(cx: &mut TestAppContext)
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     tick(cx);
     let sections = |view: &gpui::Entity<CockpitView>, cx: &mut gpui::VisualTestContext| {
-        view.read_with(cx, |view, _| {
-            let state = view.nav_state();
+        view.read_with(cx, |view, cx| {
+            let state = view.nav_state(cx);
             let ids = |rows: &[nav::ThreadRow]| rows.iter().map(|row| row.thread).collect::<Vec<_>>();
             (ids(&state.active), ids(&state.working))
         })
@@ -943,7 +943,7 @@ fn a_pinned_thread_heads_the_list_until_unpinned(cx: &mut TestAppContext) {
     tick(cx);
     view.read_with(cx, |view, cx| {
         assert_eq!(view.prefs.settings.pinned_threads, vec![threads[2]]);
-        let state = view.nav_state();
+        let state = view.nav_state(cx);
         assert_eq!(
             state
                 .pinned
@@ -971,9 +971,9 @@ fn a_pinned_thread_heads_the_list_until_unpinned(cx: &mut TestAppContext) {
         view.run_menu_verb(MenuTarget::Thread(threads[2]), MenuVerb::Unpin, window, cx)
     });
     tick(cx);
-    view.read_with(cx, |view, _| {
+    view.read_with(cx, |view, cx| {
         assert!(view.prefs.settings.pinned_threads.is_empty());
-        assert!(view.nav_state().pinned.is_empty());
+        assert!(view.nav_state(cx).pinned.is_empty());
     });
 }
 

@@ -364,7 +364,7 @@ impl CockpitView {
             // The Parked shelf's header: the shelf, and the one bulk act it
             // exists for — clearing the parked history it holds.
             MenuTarget::NavFilter => rows.extend(self.filter_rows()),
-            MenuTarget::NavFactory => rows.extend(self.factory_rows()),
+            MenuTarget::NavFactory => rows.extend(self.factory_rows(cx)),
             MenuTarget::Parked => {
                 rows.push(Some((
                     menu::Item::new(if self.shelf_open(nav::Shelf::Parked) {

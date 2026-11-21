@@ -1,8 +1,7 @@
 //! Snooze controls use the Server-owned Thread reminder and the existing menu.
 use super::*;
-use super::nav_view::{NavEvent, NavView};
+use super::nav_view::{NavEvent, NavInputs, NavView};
 use ferrite_core::snooze::{self, Preset};
-use gpui::App;
 
 /// The Custom… field (`NavView`): the Thread it snoozes, its line, and why
 /// the last ⏎ did not take.
@@ -108,10 +107,15 @@ impl NavView {
     }
 
     /// The field as the nav draws it over its list, titled with the
-    /// Thread's name as the Cockpit has it now.
-    pub(super) fn snooze_field(&self, cx: &App) -> Option<Div> {
+    /// Thread's name as its row has it.
+    pub(super) fn snooze_field(&self, inputs: &NavInputs) -> Option<Div> {
         let editor = self.snooze.as_ref()?;
-        let title = self.cockpit.upgrade()?.read(cx).facts.name(editor.thread);
+        let title = inputs
+            .state
+            .open_rows()
+            .find(|row| row.thread == editor.thread)
+            .map(|row| row.name.clone())
+            .unwrap_or_default();
         Some(field(editor, title))
     }
 }

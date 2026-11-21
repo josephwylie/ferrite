@@ -225,7 +225,7 @@ impl NavView {
 
     /// ↑ / ↓ in the field: the highlight moves, stopping at the ends.
     pub(super) fn step_search(&mut self, by: isize, cx: &mut Context<Self>) {
-        let Some(inputs) = self.inputs(cx) else {
+        let Some(inputs) = self.inputs().cloned() else {
             return;
         };
         let matches = self.search_matches(&inputs.state, cx);
@@ -240,7 +240,7 @@ impl NavView {
 
     /// ⏎ in the field: the highlighted result opens.
     pub(super) fn open_search_cursor(&mut self, cx: &mut Context<Self>) {
-        let Some(inputs) = self.inputs(cx) else {
+        let Some(inputs) = self.inputs().cloned() else {
             return;
         };
         let matches = self.search_matches(&inputs.state, cx);
