@@ -197,8 +197,9 @@ impl DecisionsView {
         Some(self.forms.get(&pane)?.note(handle)?.focus_handle(cx))
     }
 
-    /// esc in the note: it closes and the keyboard goes `back` (a second
-    /// esc denies). True when a note was open.
+    /// esc in the note: the split button's open menu closes first, else
+    /// the note closes and the keyboard goes `back` (a second esc denies).
+    /// True when either was open.
     pub(super) fn close_note(
         &mut self,
         pane: PaneIdentity,
@@ -210,7 +211,7 @@ impl DecisionsView {
         let Some(forms) = self.forms.get(&pane).cloned() else {
             return false;
         };
-        close_note(&forms, handle, back, window, cx)
+        close_menu(&forms, handle, cx) || close_note(&forms, handle, back, window, cx)
     }
 
     /// `key` on `target`; false when nothing here takes it, so it goes on
@@ -326,8 +327,8 @@ fn confirm(
     true
 }
 
-/// esc: an open note closes; otherwise an approval is denied (option 3)
-/// and a question dismissed.
+/// esc: the split button's open menu closes, else an open note closes;
+/// otherwise an approval is denied (option 3) and a question dismissed.
 fn dismiss(
     forms: &RequestForms,
     target: &KeyTarget,
@@ -335,7 +336,10 @@ fn dismiss(
     cx: &mut Context<DecisionsView>,
 ) -> bool {
     let request = &target.request;
-    if close_note(forms, &request.handle, &target.back, window, cx) || request.submitting {
+    if close_menu(forms, &request.handle, cx)
+        || close_note(forms, &request.handle, &target.back, window, cx)
+        || request.submitting
+    {
         return true;
     }
     let respond = |answer| DecisionEvent::Respond {
@@ -453,6 +457,19 @@ fn pick_question(
             true
         }
     }
+}
+
+fn close_menu(
+    forms: &RequestForms,
+    handle: &DecisionHandle,
+    cx: &mut Context<DecisionsView>,
+) -> bool {
+    if !forms.menu(handle) {
+        return false;
+    }
+    forms.set_menu(handle, false);
+    cx.notify();
+    true
 }
 
 fn close_note(
