@@ -285,7 +285,7 @@ fn gated<'a>(
     Entity<CockpitView>,
     Fake,
     [ThreadId; 2],
-    mpsc::Sender<String>,
+    ferrite_core::doorbell::Sender<String>,
     &'a mut gpui::VisualTestContext,
 ) {
     let (mut core, fake) = cockpit(name, 2);
@@ -294,7 +294,7 @@ fn gated<'a>(
     *fake.fail.borrow_mut() = true;
     assert_eq!(core.sweep().len(), 1, "A's restart fails: no Session");
     *fake.fail.borrow_mut() = false;
-    let (gate, hold) = mpsc::channel();
+    let (gate, hold) = ferrite_core::doorbell::channel();
     *fake.start_gate.borrow_mut() = Some(hold);
     let (view, cx) = window(core, cx);
     view.update(cx, |view, cx| view.focus_thread(threads[0], cx));
@@ -329,7 +329,7 @@ fn composer_of(
 }
 
 /// Let the held start fail with `words`, and the Cockpit hear of it.
-fn fail_start(gate: &mpsc::Sender<String>, words: &str, cx: &mut gpui::VisualTestContext) {
+fn fail_start(gate: &ferrite_core::doorbell::Sender<String>, words: &str, cx: &mut gpui::VisualTestContext) {
     gate.send(words.into()).unwrap();
     for _ in 0..40 {
         std::thread::sleep(Duration::from_millis(5));

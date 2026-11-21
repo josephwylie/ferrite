@@ -3,8 +3,6 @@
 //! Claude supplies native suggestions through its live Session instead. Missing CLIs, failed runs and refused replies leave the
 //! generic idle line. No conversation is sent to a different Provider.
 
-use std::sync::mpsc::Sender;
-
 use crate::store::Provider;
 use crate::transcript::{Body, Span, Transcript};
 use crate::ThreadId;
@@ -54,7 +52,7 @@ pub struct Request {
 
 /// Fire one prediction. Returns immediately; the answer arrives on `replies`
 /// if it arrives at all.
-pub fn spawn(request: Request, replies: Sender<Suggestion>) {
+pub fn spawn(request: Request, replies: crate::doorbell::Sender<Suggestion>) {
     std::thread::spawn(move || {
         let Some(text) =
             crate::providers::oneshot::predict(request.provider, SYSTEM, &request.context)

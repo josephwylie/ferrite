@@ -217,13 +217,18 @@ impl Preview {
         self.state.lock().unwrap().remote_files
     }
 
+    /// Queue a remote attachment's preview for the window's pump, and ring
+    /// its bell when the preview is new (ADR 0041).
     pub fn request_attachment(&self, path: &Path) {
         let mut state = self.state.lock().unwrap();
-        if state.remote_files && ferrite_core::attachment_transfer::is_retained_path(path) {
+        if state.remote_files
+            && ferrite_core::attachment_transfer::is_retained_path(path)
+            && !state.attachments.contains_key(path)
+        {
             state
                 .attachments
-                .entry(path.to_path_buf())
-                .or_insert(AttachmentPreview::Queued);
+                .insert(path.to_path_buf(), AttachmentPreview::Queued);
+            ferrite_core::doorbell::ring();
         }
     }
 
@@ -347,6 +352,7 @@ impl Preview {
     /// page. The owning window resolves its immutable image asynchronously.
     pub fn edit_annotation(&self, annotation: ferrite_core::browser_annotations::Annotation) {
         self.state.lock().unwrap().annotation_edits.push(annotation);
+        ferrite_core::doorbell::ring();
         self.show_browser();
     }
 
@@ -503,7 +509,9 @@ impl Preview {
         if !url::Url::parse(url).is_ok_and(|url| matches!(url.scheme(), "http" | "https")) {
             return false;
         }
+        // The window's pump opens it: ring its bell (ADR 0041).
         self.state.lock().unwrap().browser_urls.push(url.to_owned());
+        ferrite_core::doorbell::ring();
         self.show_browser();
         window.refresh();
         true

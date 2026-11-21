@@ -492,6 +492,19 @@ impl NeedsYou {
         !self.pending.is_empty() || !self.toasts.is_empty()
     }
 
+    /// When `ring` next has work of the clock's own after `now`: a delay
+    /// up, the end of a wait on a machine not yet heard, a toast's time up.
+    pub fn next_due(&self, now: Instant) -> Option<Instant> {
+        let pending = self.pending.iter().map(|(alert, due)| {
+            if *due > now {
+                *due
+            } else {
+                *due + alert.stands()
+            }
+        });
+        pending.chain(self.toasts.iter().map(|toast| toast.until)).min()
+    }
+
     /// Take every toast down and forget what was waiting, keeping what was
     /// heard as heard: a scene's requests that stood before the window
     /// opened.

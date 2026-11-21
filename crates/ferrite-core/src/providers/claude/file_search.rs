@@ -1,21 +1,20 @@
 //! One latest-wins native file suggestion request for a Claude Session,
 //! and the one a Session makes as it starts to build the CLI's file index.
 use std::io;
-use std::sync::mpsc::SyncSender;
 
 use serde_json::Value;
 
-use crate::providers::FileSuggestion;
+use crate::providers::{FileSearchReply, FileSuggestion};
 
 #[derive(Default)]
 pub(super) struct Requests {
-    pending: Option<(String, SyncSender<io::Result<Vec<FileSuggestion>>>)>,
+    pending: Option<(String, FileSearchReply)>,
     /// The request that builds the index (`warm`), whose answer nobody reads.
     warming: Option<String>,
 }
 
 impl Requests {
-    pub fn begin(&mut self, id: String, reply: SyncSender<io::Result<Vec<FileSuggestion>>>) {
+    pub fn begin(&mut self, id: String, reply: FileSearchReply) {
         if let Some((_, sender)) = self.pending.replace((id, reply)) {
             let _ = sender.send(Err(io::Error::new(
                 io::ErrorKind::Interrupted,

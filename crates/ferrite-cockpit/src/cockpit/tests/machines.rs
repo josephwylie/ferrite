@@ -77,7 +77,7 @@ fn serving(machine: &Machine, settings_dir: &std::path::Path) -> Bridge {
 struct OnBox(std::sync::Arc<std::sync::Mutex<Vec<std::path::PathBuf>>>);
 
 struct Quiet {
-    _alive: mpsc::Sender<SessionEvent>,
+    _alive: ferrite_core::doorbell::Sender<SessionEvent>,
     events: mpsc::Receiver<SessionEvent>,
 }
 
@@ -90,7 +90,7 @@ impl ferrite_core::engine::Spawner for OnBox {
             .lock()
             .unwrap()
             .extend(request.cwd.map(std::path::Path::to_path_buf));
-        let (alive, events) = mpsc::channel();
+        let (alive, events) = ferrite_core::doorbell::channel();
         Ok(Box::new(Quiet {
             _alive: alive,
             events,
@@ -1193,7 +1193,10 @@ fn the_window_opens_what_it_came_for_once_attached(cx: &mut TestAppContext) {
                 thread: threads[off],
             }),
             until,
-        ))
+        ));
+        // A window gets its landing as it opens, and its first pump reads
+        // it: the notify rings for that pump (ADR 0041).
+        cx.notify();
     });
     tick(cx);
     view.read_with(cx, |view, cx| {
@@ -1231,6 +1234,9 @@ fn a_landing_revives_a_parked_thread_and_lapses_unattached(cx: &mut TestAppConte
     view.update(cx, |view, cx| {
         let until = cx.background_executor().now() + Duration::from_secs(10);
         view.landing = Some((gone(threads[1]), until));
+        // A window gets its landing as it opens, and its first pump reads
+        // it: the notify rings for that pump (ADR 0041).
+        cx.notify();
     });
     tick(cx);
     view.read_with(cx, |view, cx| {
@@ -1241,6 +1247,7 @@ fn a_landing_revives_a_parked_thread_and_lapses_unattached(cx: &mut TestAppConte
     view.update(cx, |view, cx| {
         let lapsed = cx.background_executor().now() - Duration::from_millis(1);
         view.landing = Some((gone(threads[0]), lapsed));
+        cx.notify();
     });
     tick(cx);
     view.read_with(cx, |view, cx| {

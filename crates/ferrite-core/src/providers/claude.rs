@@ -399,7 +399,7 @@ impl ClaudeSession {
         let stderr_tail = Arc::new(Mutex::new(StderrTail::default()));
         drain_stderr(stderr, Arc::clone(&stderr_tail));
 
-        let (sender, events) = sync_channel(EVENT_CHANNEL_CAPACITY);
+        let (sender, events) = crate::doorbell::sync_channel(EVENT_CHANNEL_CAPACITY);
         let child = Arc::new(Mutex::new(child));
         let setting_reply = Arc::new(Mutex::new(None));
         let control_replies = Arc::new(Mutex::new(HashMap::new()));
@@ -857,7 +857,7 @@ impl Drop for ClaudeSession {
 /// letting spawn read it directly would race the reader for lines.
 fn read_stdout(
     stdout: ChildStdout,
-    sender: SyncSender<SessionEvent>,
+    sender: crate::doorbell::SyncSender<SessionEvent>,
     child: Arc<Mutex<Child>>,
     stderr_tail: Arc<Mutex<StderrTail>>,
     setting_reply: SettingReply,

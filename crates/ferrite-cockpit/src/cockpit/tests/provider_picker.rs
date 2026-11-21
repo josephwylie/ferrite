@@ -6,7 +6,7 @@ use crate::cockpit::model_picker::{ModelPickerView, Picked, Tab};
 #[gpui::test]
 fn draft_commands_arrive_before_first_send_and_follow_provider_changes(cx: &mut TestAppContext) {
     let fake = Fake::default();
-    let (tx, rx) = mpsc::channel();
+    let (tx, rx) = ferrite_core::doorbell::channel();
     *fake.command_discovery.borrow_mut() = Some(rx);
     let core = Cockpit::new(
         Store::open(scratch("draft-commands")).unwrap(),
@@ -44,7 +44,7 @@ fn draft_commands_arrive_before_first_send_and_follow_provider_changes(cx: &mut 
         "typing reuses the in-flight request"
     );
 
-    let (next_tx, next_rx) = mpsc::channel();
+    let (next_tx, next_rx) = ferrite_core::doorbell::channel();
     *fake.command_discovery.borrow_mut() = Some(next_rx);
     view.update(cx, |view, cx| {
         view.panes[0].draft_mut().unwrap().binding.choose_provider(
@@ -95,7 +95,7 @@ fn draft_commands_arrive_before_first_send_and_follow_provider_changes(cx: &mut 
 #[gpui::test]
 fn a_drafts_skill_menu_asks_for_its_commands_once(cx: &mut TestAppContext) {
     let fake = Fake::default();
-    let (tx, rx) = mpsc::channel();
+    let (tx, rx) = ferrite_core::doorbell::channel();
     *fake.command_discovery.borrow_mut() = Some(rx);
     let core = Cockpit::new(
         Store::open(scratch("draft-skills-once")).unwrap(),
@@ -139,7 +139,7 @@ fn draft_command_discovery_discards_old_workspace_replies_and_shows_failures(
     cx: &mut TestAppContext,
 ) {
     let fake = Fake::default();
-    let (old_tx, old_rx) = mpsc::channel();
+    let (old_tx, old_rx) = ferrite_core::doorbell::channel();
     *fake.command_discovery.borrow_mut() = Some(old_rx);
     let core = Cockpit::new(
         Store::open(scratch("draft-command-scopes")).unwrap(),
@@ -154,7 +154,7 @@ fn draft_command_discovery_discards_old_workspace_replies_and_shows_failures(
 
     let elsewhere = scratch("draft-command-new-project");
     std::fs::create_dir_all(&elsewhere).unwrap();
-    let (tx, rx) = mpsc::channel();
+    let (tx, rx) = ferrite_core::doorbell::channel();
     *fake.command_discovery.borrow_mut() = Some(rx);
     view.update(cx, |view, cx| {
         view.aim_launch(&elsewhere, cx);
@@ -183,7 +183,7 @@ fn draft_command_discovery_discards_old_workspace_replies_and_shows_failures(
 #[gpui::test]
 fn discovery_updates_an_open_draft_picker_without_starting_a_session(cx: &mut TestAppContext) {
     let fake = Fake::default();
-    let (tx, rx) = mpsc::channel();
+    let (tx, rx) = ferrite_core::doorbell::channel();
     *fake.model_discovery.borrow_mut() = Some(rx);
     let core = Cockpit::new(
         Store::open(scratch("discovered-models")).unwrap(),

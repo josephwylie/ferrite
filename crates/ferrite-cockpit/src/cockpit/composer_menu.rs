@@ -392,7 +392,7 @@ impl ComposerMenuView {
                 _ => {
                     let root = pending.root.clone();
                     let query = pending.query.clone();
-                    let (tx, rx) = std::sync::mpsc::channel();
+                    let (tx, rx) = ferrite_core::doorbell::channel();
                     if std::thread::Builder::new()
                         .name("ferrite-file-fallback".into())
                         .spawn(move || {

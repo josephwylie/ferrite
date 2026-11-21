@@ -206,8 +206,8 @@ fn the_outline_is_shaped_by_mouse_and_keyboard(cx: &mut TestAppContext) {
 /// Provider has installed, searched by name or description.
 #[gpui::test]
 fn routes_problems_and_pickers(cx: &mut TestAppContext) {
-    let (skills, found) = mpsc::channel();
-    let (models, announced) = mpsc::channel();
+    let (skills, found) = ferrite_core::doorbell::channel();
+    let (models, announced) = ferrite_core::doorbell::channel();
     let (view, cx, fake, _) = workflows_window(cx, "workflows-routes", |fake| {
         *fake.command_discovery.borrow_mut() = Some(found);
         *fake.model_discovery.borrow_mut() = Some(announced);

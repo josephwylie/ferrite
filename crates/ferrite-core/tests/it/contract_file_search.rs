@@ -7,7 +7,7 @@ fn native_file_search_preserves_ranking_paths_and_directory_identity() {
     for provider in ["claude", "codex"] {
         let mut replay = Replay::new(provider, vec![]);
         replay.drain();
-        let (answer, reply) = std::sync::mpsc::sync_channel(1);
+        let (answer, reply) = ferrite_core::doorbell::sync_channel(1);
         replay.session.search_files("src", answer).unwrap();
         let rows = reply.recv_timeout(Duration::from_secs(3)).unwrap().unwrap();
         assert_eq!(rows[0].path, "src/zé.rs");
@@ -33,7 +33,7 @@ fn native_file_search_preserves_ranking_paths_and_directory_identity() {
             });
             assert_eq!(frame["request"]["query"], "src");
         }
-        let (answer, reply) = std::sync::mpsc::sync_channel(1);
+        let (answer, reply) = ferrite_core::doorbell::sync_channel(1);
         replay.session.search_files("next", answer).unwrap();
         reply.recv_timeout(Duration::from_secs(3)).unwrap().unwrap();
     }
@@ -46,7 +46,7 @@ fn native_file_search_preserves_ranking_paths_and_directory_identity() {
 fn a_claude_sessions_first_file_search_lists_files() {
     let mut replay = Replay::new("claude", vec![]);
     replay.drain();
-    let (answer, reply) = std::sync::mpsc::sync_channel(1);
+    let (answer, reply) = ferrite_core::doorbell::sync_channel(1);
     replay.session.search_files("src", answer).unwrap();
     let rows = reply.recv_timeout(Duration::from_secs(3)).unwrap().unwrap();
     let paths: Vec<_> = rows.iter().map(|row| row.path.as_str()).collect();

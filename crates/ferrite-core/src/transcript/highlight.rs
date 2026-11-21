@@ -7,7 +7,7 @@
 //! dependency, and with no chance of a slow parse stalling a frame.
 
 use std::path::Path;
-use std::sync::mpsc::{self, Receiver, Sender};
+use std::sync::mpsc::Receiver;
 
 use super::{Class, HighlightRequest, Highlighter, Input, Token};
 
@@ -169,12 +169,12 @@ pub fn language_for_path(path: &Path) -> Option<&'static str> {
 /// back into `Transcript::apply` — the same path a slow highlighter on its own
 /// thread would use, so the shipped one cannot be the odd case out.
 pub struct Lexer {
-    answers: Sender<Input>,
+    answers: crate::doorbell::Sender<Input>,
 }
 
 impl Lexer {
     pub fn new() -> (Self, Receiver<Input>) {
-        let (answers, requests) = mpsc::channel();
+        let (answers, requests) = crate::doorbell::channel();
         (Self { answers }, requests)
     }
 }

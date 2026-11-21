@@ -68,7 +68,7 @@ fn a_pending_decision_is_named_as_waiting(cx: &mut TestAppContext) {
 #[gpui::test]
 fn a_starting_session_is_not_working(cx: &mut TestAppContext) {
     use ferrite_core::session::SessionLifecycle;
-    struct Starting(Vec<mpsc::Sender<()>>);
+    struct Starting(Vec<ferrite_core::doorbell::Sender<()>>);
     impl Spawner for Starting {
         fn spawn(
             &mut self,
@@ -80,7 +80,7 @@ fn a_starting_session_is_not_working(cx: &mut TestAppContext) {
             &mut self,
             _: ferrite_core::cockpit::SpawnRequest,
         ) -> std::io::Result<SessionLifecycle> {
-            let (gate, held) = mpsc::channel::<()>();
+            let (gate, held) = ferrite_core::doorbell::channel::<()>();
             self.0.push(gate);
             SessionLifecycle::background(move || {
                 let _ = held.recv();

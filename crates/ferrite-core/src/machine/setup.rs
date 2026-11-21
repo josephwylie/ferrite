@@ -2,7 +2,7 @@ use std::io::{self, Read};
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::{self, Receiver, Sender};
+use std::sync::mpsc::{self, Receiver};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -93,7 +93,7 @@ impl Attempt {
         let child = OwnedChild::spawn(command)?;
         let cancelled = Arc::new(AtomicBool::new(false));
         let stopped = Arc::clone(&cancelled);
-        let (send, events) = mpsc::channel();
+        let (send, events) = crate::doorbell::channel();
         send.send(Event::Progress(Phase::Connecting)).ok();
         std::thread::Builder::new().name("ferrite-setup".into()).spawn(move || {
             let deadline = Instant::now() + timeout;
@@ -178,7 +178,7 @@ impl Drop for OwnedChild {
 
 fn prepare(
     mut child: OwnedChild,
-    events: &Sender<Event>,
+    events: &crate::doorbell::Sender<Event>,
     cancelled: &AtomicBool,
     deadline: Instant,
 ) -> io::Result<String> {
@@ -290,7 +290,7 @@ fn verify(output: impl Read) -> io::Result<String> {
     }
 }
 
-fn read_diagnostics(mut stderr: impl Read, events: &Sender<Event>, diagnostics: &Mutex<String>) {
+fn read_diagnostics(mut stderr: impl Read, events: &crate::doorbell::Sender<Event>, diagnostics: &Mutex<String>) {
     let mut buffer = [0; 1024];
     let mut line = Vec::new();
     while let Ok(count) = stderr.read(&mut buffer) {
@@ -311,7 +311,7 @@ fn read_diagnostics(mut stderr: impl Read, events: &Sender<Event>, diagnostics: 
     }
 }
 
-fn diagnostic(line: &str, events: &Sender<Event>, diagnostics: &Mutex<String>) {
+fn diagnostic(line: &str, events: &crate::doorbell::Sender<Event>, diagnostics: &Mutex<String>) {
     let phase = match line.trim() {
         "FERRITE_SETUP inspecting" => Some(Phase::Inspecting),
         "FERRITE_SETUP installing" => Some(Phase::Installing),

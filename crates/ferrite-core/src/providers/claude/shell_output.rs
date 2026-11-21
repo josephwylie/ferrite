@@ -22,7 +22,6 @@ use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::SyncSender;
 use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
@@ -53,7 +52,7 @@ pub(super) struct ShellOutputs {
 
 impl ShellOutputs {
     /// Read one stream-json line for what starts or ends a follow.
-    pub(super) fn observe(&mut self, value: &Value, sender: &SyncSender<SessionEvent>) {
+    pub(super) fn observe(&mut self, value: &Value, sender: &crate::doorbell::SyncSender<SessionEvent>) {
         match (value["type"].as_str(), value["subtype"].as_str()) {
             (Some("system"), Some("init")) => {
                 self.cwd = value["cwd"].as_str().map(str::to_owned);
@@ -92,7 +91,7 @@ impl ShellOutputs {
         }
     }
 
-    fn started(&mut self, value: &Value, sender: &SyncSender<SessionEvent>) {
+    fn started(&mut self, value: &Value, sender: &crate::doorbell::SyncSender<SessionEvent>) {
         let (Some(task), Some(tool)) = (value["task_id"].as_str(), value["tool_use_id"].as_str())
         else {
             return;
@@ -222,7 +221,7 @@ impl Locator {
 
 /// Follow one task's file on its own thread, sending what it gains as the
 /// tool call's output, until stopped, the file goes, or the Session closes.
-fn follow(locator: Locator, tool: String, stop: Arc<AtomicBool>, sender: SyncSender<SessionEvent>) {
+fn follow(locator: Locator, tool: String, stop: Arc<AtomicBool>, sender: crate::doorbell::SyncSender<SessionEvent>) {
     let _ = thread::Builder::new()
         .name("ferrite-claude-shell-output".into())
         .spawn(move || {
@@ -355,7 +354,7 @@ mod tests {
             .join("tasks");
         std::fs::create_dir_all(&tasks).unwrap();
         std::fs::write(tasks.join("b1.output"), "running 2 tests\ntest a ... ok\n").unwrap();
-        let (sender, events) = std::sync::mpsc::sync_channel(16);
+        let (sender, events) = crate::doorbell::sync_channel(16);
         let stop = Arc::new(AtomicBool::new(false));
         follow(
             Locator {
@@ -380,7 +379,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
 
         let mut outputs = ShellOutputs::default();
-        let (sender, events) = std::sync::mpsc::sync_channel(16);
+        let (sender, events) = crate::doorbell::sync_channel(16);
         outputs.observe(
             &serde_json::json!({"type":"system","subtype":"init","cwd":"/work/repo","session_id":"s"}),
             &sender,

@@ -1,6 +1,8 @@
 //! A window's link against a Server played by the test.
 
 use super::*;
+use std::sync::mpsc;
+
 use crate::engine::{SpawnRequest, Spawner};
 use crate::link::{Connection, Heard};
 use crate::protocol::{SharedRoster, WireChoice};

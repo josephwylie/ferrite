@@ -115,7 +115,7 @@ fn contract_native_files_keep_provider_order_and_ignore_old_queries(cx: &mut Tes
 #[gpui::test]
 fn contract_native_session_picker_shows_titles_without_spawning(cx: &mut TestAppContext) {
     let (core, fake) = cockpit("native-session-picker", 1);
-    let (tx, rx) = mpsc::channel();
+    let (tx, rx) = ferrite_core::doorbell::channel();
     *fake.session_discovery.borrow_mut() = Some(rx);
     bind_production_keys(cx);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
@@ -149,7 +149,7 @@ fn contract_native_session_picker_shows_titles_without_spawning(cx: &mut TestApp
 #[gpui::test]
 fn contract_native_discovery_dismissal_does_not_reopen_picker(cx: &mut TestAppContext) {
     let (core, fake) = cockpit("native-session-dismiss", 1);
-    let (tx, rx) = mpsc::channel();
+    let (tx, rx) = ferrite_core::doorbell::channel();
     *fake.session_discovery.borrow_mut() = Some(rx);
     bind_production_keys(cx);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));

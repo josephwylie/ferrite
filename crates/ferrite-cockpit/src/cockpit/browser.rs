@@ -83,6 +83,15 @@ struct Page {
     manual: Rc<RefCell<manual::Manual>>,
 }
 impl Browsers {
+    /// Whether any Browser has a live tab or a page open: the pump keeps
+    /// its beat for it, since a page's events, the engine's start and a
+    /// control's answer do not ring (ADR 0041).
+    pub(super) fn live(&self) -> bool {
+        self.threads.values().any(|browser| {
+            !browser.pages.is_empty() || browser.state.tabs.iter().any(|tab| tab.live)
+        })
+    }
+
     /// Every Thread `keep` refuses takes its browser with it: its pages
     /// close here, as when the Server detaches; the Server deleted its side
     /// with the Thread.

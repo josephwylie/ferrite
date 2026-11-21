@@ -229,7 +229,7 @@ impl Fake {
 }
 
 impl Spawner for Fake {
-    fn suggest(&mut self, request: crate::suggest::Request, _: Sender<Suggestion>) {
+    fn suggest(&mut self, request: crate::suggest::Request, _: crate::doorbell::Sender<Suggestion>) {
         self.suggestions.borrow_mut().push(request);
     }
     fn spawn(

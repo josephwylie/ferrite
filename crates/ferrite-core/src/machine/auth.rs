@@ -3,7 +3,7 @@ use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::mpsc::{self, Receiver, Sender, SyncSender};
+use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
@@ -107,7 +107,7 @@ impl Broker {
         let listener = link::listen(&address)?;
         let state = Arc::new(Mutex::new(State::default()));
         let shared = state.clone();
-        let (questions, receiver) = mpsc::sync_channel(1);
+        let (questions, receiver) = crate::doorbell::sync_channel(1);
         let worker = std::thread::Builder::new()
             .name("ferrite-askpass".into())
             .spawn(move || {
@@ -204,7 +204,7 @@ struct Request {
 
 fn ask(
     mut stream: link::Stream,
-    questions: &SyncSender<Question>,
+    questions: &crate::doorbell::SyncSender<Question>,
     state: &Mutex<State>,
     timeout: Duration,
 ) -> io::Result<()> {

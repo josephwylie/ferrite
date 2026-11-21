@@ -114,9 +114,11 @@ use std::cell::RefCell;
 
 use std::rc::Rc;
 
-use std::sync::mpsc::{self, Receiver, Sender};
+use std::sync::mpsc::{self, Receiver};
 
 use ferrite_core::cockpit::Spawner;
+
+use ferrite_core::doorbell::Sender;
 
 use ferrite_core::providers::Session;
 
@@ -154,7 +156,7 @@ struct Scripted {
 
 /// While `Some`, the provider answers each effort change when the test
 /// sends on its answer, not at once.
-type EffortAnswers = Rc<RefCell<Option<Vec<mpsc::SyncSender<std::io::Result<()>>>>>>;
+type EffortAnswers = Rc<RefCell<Option<Vec<ferrite_core::doorbell::SyncSender<std::io::Result<()>>>>>>;
 
 impl Session for Scripted {
     fn search_files(
@@ -224,7 +226,7 @@ impl Session for Scripted {
     ) -> std::io::Result<ferrite_core::providers::SettingAck> {
         match self.effort_answers.borrow_mut().as_mut() {
             Some(answers) => {
-                let (answer, ack) = mpsc::sync_channel(1);
+                let (answer, ack) = ferrite_core::doorbell::sync_channel(1);
                 answers.push(answer);
                 Ok(ack)
             }
@@ -258,7 +260,7 @@ impl Session for Scripted {
         if *self.fail_fork.borrow() {
             return Err(std::io::Error::other("Claude has not named its session yet"));
         }
-        let (answer, ack) = mpsc::sync_channel(1);
+        let (answer, ack) = ferrite_core::doorbell::sync_channel(1);
         answer
             .send(Ok(ferrite_core::providers::Forked::Fresh))
             .unwrap();
@@ -370,7 +372,7 @@ impl Spawner for Fake {
         if *self.fail.borrow() {
             return Err(std::io::Error::other("stub refused to spawn"));
         }
-        let (tx, rx) = mpsc::channel();
+        let (tx, rx) = ferrite_core::doorbell::channel();
         self.streams.borrow_mut().push(tx.clone());
         self.spawned.borrow_mut().push(ProviderChoice {
             provider: request.provider,

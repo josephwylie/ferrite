@@ -43,18 +43,18 @@ use std::{
     sync::mpsc,
 };
 
-type Feeds = Rc<RefCell<Vec<mpsc::Sender<SessionEvent>>>>;
+type Feeds = Rc<RefCell<Vec<ferrite_core::doorbell::Sender<SessionEvent>>>>;
 
 /// Hands every spawn a fresh channel; the scene keeps the sending half.
 struct Fixture(Feeds);
 struct FixtureSession {
     rx: mpsc::Receiver<SessionEvent>,
-    tx: mpsc::Sender<SessionEvent>,
+    tx: ferrite_core::doorbell::Sender<SessionEvent>,
     provider: Provider,
 }
 impl Spawner for Fixture {
     fn spawn(&mut self, request: SpawnRequest) -> io::Result<Box<dyn Session>> {
-        let (tx, rx) = mpsc::channel();
+        let (tx, rx) = ferrite_core::doorbell::channel();
         self.0.borrow_mut().push(tx.clone());
         Ok(Box::new(FixtureSession {
             rx,
@@ -127,7 +127,7 @@ impl Session for FixtureSession {
 }
 
 /// One Thread's provider side: what it says, in order.
-struct Feed(mpsc::Sender<SessionEvent>);
+struct Feed(ferrite_core::doorbell::Sender<SessionEvent>);
 impl Feed {
     fn ev(&self, event: SessionEvent) -> &Self {
         self.0.send(event).expect("fixture Session is listening");

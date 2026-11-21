@@ -12,8 +12,10 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::mpsc::{channel, Receiver, Sender};
+use std::sync::mpsc::Receiver;
 use std::time::{Duration, Instant};
+
+use crate::doorbell::Sender;
 
 pub use crate::activity::ToolTiming;
 use crate::activity::{
@@ -1276,7 +1278,7 @@ impl Engine {
             watched: None,
             sampler: None,
             limit: u64::MAX,
-            suggestions: channel(),
+            suggestions: crate::doorbell::channel(),
             suggestions_enabled: true,
             stale_sessions: BTreeSet::new(),
             windows: Default::default(),
@@ -2746,7 +2748,7 @@ impl Engine {
         query: &str,
     ) -> io::Result<Receiver<io::Result<Vec<crate::providers::FileSuggestion>>>> {
         let state = self.wake_for(thread)?;
-        let (reply, answer) = std::sync::mpsc::sync_channel(1);
+        let (reply, answer) = crate::doorbell::sync_channel(1);
         match state.ready_session() {
             Some(session) => session.search_files(query, reply)?,
             None => state.awaiting.search = Some((query.to_string(), reply)),

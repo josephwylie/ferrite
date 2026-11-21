@@ -254,7 +254,7 @@ fn picking_import_opens_the_session_picker_and_sends_the_provider_nothing(cx: &m
 #[gpui::test]
 fn the_import_picker_fills_when_the_listing_answers(cx: &mut TestAppContext) {
     let (core, fake) = cockpit("import-listing", 1);
-    let (tx, rx) = mpsc::channel();
+    let (tx, rx) = ferrite_core::doorbell::channel();
     *fake.session_discovery.borrow_mut() = Some(rx);
     bind_production_keys(cx);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
@@ -512,7 +512,7 @@ fn tab_on_a_session_row_does_nothing(cx: &mut TestAppContext) {
 #[gpui::test]
 fn a_late_listing_is_dropped_by_a_palette_reopened_elsewhere(cx: &mut TestAppContext) {
     let (core, fake) = cockpit("import-late", 1);
-    let (tx, rx) = mpsc::channel();
+    let (tx, rx) = ferrite_core::doorbell::channel();
     *fake.session_discovery.borrow_mut() = Some(rx);
     bind_production_keys(cx);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));

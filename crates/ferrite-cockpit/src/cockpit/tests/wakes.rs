@@ -84,10 +84,11 @@ fn window<'a>(
 }
 
 /// One Project, one idle Thread, nothing arriving, for four seconds (two
-/// of the window's two-second sweeps): the pump runs on its beat, and the
+/// of the window's two-second sweeps): the pump sleeps, running at most
+/// five times a second (for its sweep and its fallback, ADR 0041), and the
 /// nav neither redraws nor works out its list again.
 #[gpui::test]
-fn an_idle_window_keeps_its_beat_and_redraws_nothing(cx: &mut TestAppContext) {
+fn an_idle_window_sleeps_and_redraws_nothing(cx: &mut TestAppContext) {
     let _clock = hold_wall_clock();
     let (_view, _fake, panes, cx) = window("wakes-idle", 1, cx);
     let before = counts(&panes);
@@ -100,7 +101,8 @@ fn an_idle_window_keeps_its_beat_and_redraws_nothing(cx: &mut TestAppContext) {
         "WAKES idle_4s beats={beats} pumps={} nav_lists={} nav={} toasts={} root={} pane={}",
         idle.pumps, idle.lists, idle.nav, idle.toasts, idle.root, idle.panes[0]
     );
-    assert!(idle.pumps >= beats, "the pump keeps its beat");
+    assert!(idle.pumps <= 4 * 5, "an idle pump runs at most five times a second");
+    assert!(idle.pumps >= 2, "its two sweeps still run");
     assert_eq!(idle.nav, 0, "an idle nav is not redrawn");
     assert_eq!(idle.toasts, 0, "an idle toast float is not redrawn");
     assert!(

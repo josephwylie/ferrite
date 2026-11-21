@@ -126,10 +126,10 @@ impl Clock<'_> {
 
 // ---------------------------------------------------------------- sessions
 
-pub(crate) type Feeds = Rc<RefCell<Vec<mpsc::Sender<SessionEvent>>>>;
+pub(crate) type Feeds = Rc<RefCell<Vec<ferrite_core::doorbell::Sender<SessionEvent>>>>;
 
 /// The provider side of each Thread's latest Session, by Thread.
-type Sides = Rc<RefCell<HashMap<ThreadId, mpsc::Sender<SessionEvent>>>>;
+type Sides = Rc<RefCell<HashMap<ThreadId, ferrite_core::doorbell::Sender<SessionEvent>>>>;
 
 /// Every Session a world's spawner started: what a scene keeps alive, and
 /// each Thread's latest, which the timeline speaks for. A Session the
@@ -172,7 +172,7 @@ impl Sessions {
     }
 
     /// The provider side of `thread`'s latest Session.
-    pub(crate) fn feed(&self, thread: ThreadId) -> mpsc::Sender<SessionEvent> {
+    pub(crate) fn feed(&self, thread: ThreadId) -> ferrite_core::doorbell::Sender<SessionEvent> {
         self.sides
             .borrow()
             .get(&thread)
@@ -190,13 +190,13 @@ pub(crate) struct Spawn {
 /// A scripted provider: it says what the timeline feeds it and nothing else.
 struct Scripted {
     rx: mpsc::Receiver<SessionEvent>,
-    tx: mpsc::Sender<SessionEvent>,
+    tx: ferrite_core::doorbell::Sender<SessionEvent>,
     provider: Provider,
 }
 
 impl Spawner for Spawn {
     fn spawn(&mut self, request: SpawnRequest) -> io::Result<Box<dyn Session>> {
-        let (tx, rx) = mpsc::channel();
+        let (tx, rx) = ferrite_core::doorbell::channel();
         // The day's clock jumps hours between beats, and the engine ends a
         // Session that rests that long (ADR 0032): a scripted one holds
         // scheduled work, so it lives until the day is played.
@@ -709,7 +709,7 @@ pub(crate) fn play(
     core: &mut Cockpit,
     mut script: Script,
     clock: Clock,
-    feed: impl Fn(ThreadId) -> mpsc::Sender<SessionEvent>,
+    feed: impl Fn(ThreadId) -> ferrite_core::doorbell::Sender<SessionEvent>,
 ) -> HashMap<ThreadId, Secs> {
     script.beats.sort_by_key(|beat| beat.at);
     let mut last = HashMap::new();

@@ -1,15 +1,14 @@
 //! One latest-wins native fuzzy-file request for a Codex Session.
 use std::io;
-use std::sync::mpsc::SyncSender;
 
 use serde_json::Value;
 
-use crate::providers::FileSuggestion;
+use crate::providers::{FileSearchReply, FileSuggestion};
 
 #[derive(Default)]
 pub(super) struct Requests {
     token: String,
-    pending: Option<(u64, SyncSender<io::Result<Vec<FileSuggestion>>>)>,
+    pending: Option<(u64, FileSearchReply)>,
 }
 
 impl Requests {
@@ -21,7 +20,7 @@ impl Requests {
         &self.token
     }
 
-    pub fn begin(&mut self, id: u64, reply: SyncSender<io::Result<Vec<FileSuggestion>>>) {
+    pub fn begin(&mut self, id: u64, reply: FileSearchReply) {
         if let Some((_, sender)) = self.pending.replace((id, reply)) {
             let _ = sender.send(Err(io::Error::new(
                 io::ErrorKind::Interrupted,

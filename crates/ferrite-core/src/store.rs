@@ -3356,7 +3356,7 @@ impl Store {
         if size <= INLINE_EXCHANGE_READ {
             return ExchangeRead::Ready(Some(read()));
         }
-        let (send, receive) = std::sync::mpsc::channel();
+        let (send, receive) = crate::doorbell::channel();
         #[cfg(test)]
         let hold = self.exchange_reads.clone();
         let spawned = std::thread::Builder::new()

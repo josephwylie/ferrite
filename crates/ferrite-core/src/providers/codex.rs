@@ -353,7 +353,7 @@ impl CodexSession {
         let stderr_tail = Arc::new(Mutex::new(StderrTail::default()));
         drain_stderr(stderr, Arc::clone(&stderr_tail));
 
-        let (sender, events) = sync_channel(EVENT_CHANNEL_CAPACITY);
+        let (sender, events) = crate::doorbell::sync_channel(EVENT_CHANNEL_CAPACITY);
         let child = Arc::new(Mutex::new(child));
         let requests = Arc::new(Mutex::new(requests::Requests::default()));
         let controls = Arc::new(Mutex::new(controls::Controls::default()));
@@ -990,7 +990,7 @@ fn await_step(
 fn read_stdout(
     stdout: ChildStdout,
     stdin: Weak<Mutex<ChildStdin>>,
-    sender: SyncSender<SessionEvent>,
+    sender: crate::doorbell::SyncSender<SessionEvent>,
     child: Arc<Mutex<Child>>,
     stderr_tail: Arc<Mutex<StderrTail>>,
     requests: Arc<Mutex<requests::Requests>>,
@@ -1298,7 +1298,7 @@ fn read_stdout(
 fn publish_activity(
     update: activity::Update,
     router: &mut activity::Router,
-    sender: &SyncSender<SessionEvent>,
+    sender: &crate::doorbell::SyncSender<SessionEvent>,
     stdin: &Weak<Mutex<ChildStdin>>,
 ) -> bool {
     for event in update.events {

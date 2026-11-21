@@ -109,7 +109,7 @@ impl Spawner for Spawn {
         roots: Vec<(Provider, std::path::PathBuf)>,
         cap: usize,
     ) -> Option<Receiver<io::Result<Vec<crate::import::Candidate>>>> {
-        let (tx, rx) = mpsc::channel();
+        let (tx, rx) = crate::doorbell::channel();
         std::thread::Builder::new()
             .name("ferrite-session-discovery".into())
             .spawn(move || {
@@ -141,7 +141,7 @@ impl Spawner for Spawn {
     fn suggest(
         &mut self,
         request: crate::suggest::Request,
-        replies: std::sync::mpsc::Sender<crate::suggest::Suggestion>,
+        replies: crate::doorbell::Sender<crate::suggest::Suggestion>,
     ) {
         crate::suggest::spawn(request, replies);
     }
@@ -151,7 +151,7 @@ impl Spawner for Spawn {
         provider: Provider,
         cwd: &std::path::Path,
     ) -> Option<crate::providers::commands::Discovery> {
-        let (tx, rx) = mpsc::channel();
+        let (tx, rx) = crate::doorbell::channel();
         let failures = tx.clone();
         let cwd = cwd.to_path_buf();
         if let Err(error) = std::thread::Builder::new()
@@ -169,7 +169,7 @@ impl Spawner for Spawn {
     fn discover_models(
         &mut self,
     ) -> Option<std::sync::mpsc::Receiver<(Provider, Vec<crate::ModelInfo>)>> {
-        let (tx, rx) = std::sync::mpsc::channel();
+        let (tx, rx) = crate::doorbell::channel();
         // Claude announces its menu only at initialize, so without this a
         // new Claude model reached the pickers only once some Thread's
         // Session had started on the CLI that knows it.
@@ -507,7 +507,7 @@ impl Default for ProcessRss {
 impl ProcessRss {
     fn with_sampler(sample: impl Fn(u32) -> Option<u64> + Send + 'static) -> Self {
         let (request_tx, request_rx) = mpsc::channel();
-        let (sample_tx, sample_rx) = mpsc::channel();
+        let (sample_tx, sample_rx) = crate::doorbell::channel();
         std::thread::Builder::new()
             .name("ferrite-rss".into())
             .spawn(move || {

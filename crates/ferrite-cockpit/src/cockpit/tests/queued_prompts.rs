@@ -155,13 +155,17 @@ fn backspace_on_an_empty_line_unqueues_the_held_prompt(cx: &mut TestAppContext) 
     });
     cx.simulate_keystrokes("enter");
     tick(cx);
-    cx.simulate_keystrokes("enter");
-    view.update(cx, |view, cx| {
-        view.panes[0].composer.update(cx, |composer, cx| {
-            composer.set(
-                ferrite_core::prompt_files::compose("new draft", std::slice::from_ref(&new_png)),
-                cx,
-            )
+    // The edit lands before the pump that reads the receipt: the press
+    // rings for that pump, which runs once the window is idle (ADR 0041).
+    cx.update(|window, cx| {
+        window.dispatch_keystroke(gpui::Keystroke::parse("enter").unwrap(), cx);
+        view.update(cx, |view, cx| {
+            view.panes[0].composer.update(cx, |composer, cx| {
+                composer.set(
+                    ferrite_core::prompt_files::compose("new draft", std::slice::from_ref(&new_png)),
+                    cx,
+                )
+            });
         });
     });
     tick(cx);
