@@ -9,8 +9,12 @@ impl CockpitView {
     /// The Factory head's surface tabs: Board and Workflows.
     pub(in crate::cockpit) fn factory_surface_tabs(&self, cx: &mut Context<Self>) -> Div {
         use ferrite_ui::theme::*;
-        let Some(view) = self.factory() else {
+        let (Some(project), Some(view)) = (self.factory_project(), self.factory()) else {
             return div();
+        };
+        let (shown, archive_shown) = {
+            let view = view.read(cx);
+            (view.surface, view.archive_shown)
         };
         let board = self.cockpit.factory();
         let counts = [
@@ -18,7 +22,7 @@ impl CockpitView {
                 Surface::Coordinator,
                 "Coordinator",
                 board
-                    .proposals_of(view.project)
+                    .proposals_of(project)
                     .filter(|proposal| {
                         proposal.status == ferrite_core::factory::ProposalStatus::Pending
                     })
@@ -27,12 +31,12 @@ impl CockpitView {
             (
                 Surface::Board,
                 "Board",
-                board.on_board(view.project).count(),
+                board.on_board(project).count(),
             ),
             (
                 Surface::Workflows,
                 "Workflows",
-                board.workflows_of(view.project).count(),
+                board.workflows_of(project).count(),
             ),
         ];
         let mut tabs = div().flex().items_center().gap(px(SPACE_1));
@@ -40,7 +44,7 @@ impl CockpitView {
             let key = format!("factory-tab-{}", word.to_lowercase());
             // The Archive is the board's own view, under none of the tabs.
             let selected =
-                view.surface == surface && !(surface == Surface::Board && view.archive_shown);
+                shown == surface && !(surface == Surface::Board && archive_shown);
             tabs = tabs.child(
                 div()
                     .id(SharedString::from(key.clone()))
@@ -67,7 +71,7 @@ impl CockpitView {
                         if surface == Surface::Board
                             && view
                                 .factory()
-                                .is_some_and(|view| view.archive_shown)
+                                .is_some_and(|view| view.read(cx).archive_shown)
                         {
                             view.close_archive(cx);
                         }

@@ -195,7 +195,7 @@ impl WorkflowsView {
         let Some(inputs) = self
             .cockpit
             .upgrade()
-            .and_then(|cockpit| cockpit.read(cx).workflows_inputs(self))
+            .and_then(|cockpit| cockpit.read(cx).workflows_inputs(self, cx))
         else {
             return;
         };
@@ -294,7 +294,7 @@ impl Render for WorkflowsView {
         let inputs = self
             .cockpit
             .upgrade()
-            .and_then(|cockpit| cockpit.read(cx).workflows_inputs(self));
+            .and_then(|cockpit| cockpit.read(cx).workflows_inputs(self, cx));
         self.surface(inputs, window, cx)
     }
 }
@@ -310,12 +310,12 @@ impl CockpitView {
 
     /// What the editor draws, for what `editor` chose: none while the
     /// Project has no Workflow.
-    pub(in crate::cockpit) fn workflows_inputs(&self, editor: &WorkflowsView) -> Option<WorkflowsInputs> {
+    pub(in crate::cockpit) fn workflows_inputs(&self, editor: &WorkflowsView, cx: &gpui::App) -> Option<WorkflowsInputs> {
         let workflow = self.chosen_workflow(editor.selected.as_deref())?;
-        let view = self.factory()?;
+        let view = self.factory()?.read(cx);
         let step = editor.shown_step(&workflow.draft);
         let provider = step.map(|step| step.agent.provider);
-        let catalog = self.factory_catalog();
+        let catalog = self.factory_catalog(cx);
         Some(WorkflowsInputs {
             workflow: workflow.id.clone(),
             title: workflow_title(workflow),

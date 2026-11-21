@@ -467,7 +467,7 @@ impl CockpitView {
 
     /// What the surface draws.
     fn coordinator_inputs(&self) -> Option<CoordinatorInputs> {
-        let project = self.factory()?.project;
+        let project = self.factory_project()?;
         let board = self.cockpit.factory();
         let coordinator = board.coordinator(project);
         let agent = self.coordinator_agent();
@@ -507,10 +507,11 @@ impl CockpitView {
         let (Some(view), Some(inputs)) = (self.factory(), self.coordinator_inputs()) else {
             return div();
         };
+        let coordinator = view.read(cx).coordinator.clone();
         let pane = self
             .coordinator_pane()
             .map(|index| self.pane_slot(index, window, cx));
-        view.coordinator.update(cx, |coordinator, cx| {
+        coordinator.update(cx, |coordinator, cx| {
             coordinator.surface(&inputs, pane, window, cx)
         })
     }
@@ -539,7 +540,7 @@ impl CockpitView {
 
     /// The shown Project's Coordinator's Thread, once started.
     pub(crate) fn coordinator_thread(&self) -> Option<ThreadId> {
-        let project = self.factory()?.project;
+        let project = self.factory_project()?;
         self.cockpit.factory().coordinator(project)?.thread
     }
 
@@ -549,8 +550,8 @@ impl CockpitView {
     }
 
     /// The Coordinator drawn on its surface, which streams whole.
-    pub(super) fn coordinator_drawn(&self) -> Option<ThreadId> {
-        let view = self.factory()?;
+    pub(super) fn coordinator_drawn(&self, cx: &gpui::App) -> Option<ThreadId> {
+        let view = self.factory()?.read(cx);
         (view.surface == super::workflows::Surface::Coordinator)
             .then(|| self.coordinator_thread())
             .flatten()
@@ -560,10 +561,10 @@ impl CockpitView {
     /// What the Coordinator runs on: the Factory's choice, else the
     /// operator's defaults.
     pub(crate) fn coordinator_agent(&self) -> Agent {
-        let chosen = self.factory().and_then(|view| {
+        let chosen = self.factory_project().and_then(|project| {
             self.cockpit
                 .factory()
-                .coordinator(view.project)?
+                .coordinator(project)?
                 .agent
                 .clone()
         });
@@ -585,7 +586,7 @@ impl CockpitView {
     /// The keyboard while the Coordinator surface shows: its Pane's
     /// Composer once it runs, else the opening field.
     pub(super) fn coordinator_focus(&self, window: &Window, cx: &gpui::App) -> Option<FocusHandle> {
-        let view = self.factory()?;
+        let view = self.factory()?.read(cx);
         if view.surface != super::workflows::Surface::Coordinator {
             return None;
         }
@@ -605,20 +606,17 @@ impl CockpitView {
             Ok(done) => (done, None),
             Err(error) => (None, Some(SharedString::from(error.to_string()))),
         };
-        if let Some(view) = self.factory_mut() {
-            view.note = note;
-        }
+        self.update_factory(cx, |view, _| view.note = note);
         cx.notify();
         done
     }
 
     /// Send the opening field's words: the Coordinator starts on them.
     pub(crate) fn speak_to_coordinator(&mut self, cx: &mut Context<Self>) {
-        let Some(view) = self.factory() else {
+        let (Some(project), Some(view)) = (self.factory_project(), self.factory()) else {
             return;
         };
-        let project = view.project;
-        let field = view.coordinator.read(cx).field.clone();
+        let field = view.read(cx).coordinator.read(cx).field.clone();
         let text = field.read(cx).text().trim().to_string();
         if text.is_empty() {
             return;
@@ -632,7 +630,7 @@ impl CockpitView {
     }
 
     pub(crate) fn accept_proposal(&mut self, proposal: &str, cx: &mut Context<Self>) {
-        let skills = self.factory_catalog().skills;
+        let skills = self.factory_catalog(cx).skills;
         let action = CoordinatorAction::Accept {
             proposal: proposal.to_string(),
             skills,
@@ -648,7 +646,7 @@ impl CockpitView {
     }
 
     pub(crate) fn apply_coordinator_pick(&mut self, pick: CoordinatorPick, cx: &mut Context<Self>) {
-        let Some(project) = self.factory().map(|view| view.project) else {
+        let Some(project) = self.factory_project() else {
             return;
         };
         let mut agent = self.coordinator_agent();

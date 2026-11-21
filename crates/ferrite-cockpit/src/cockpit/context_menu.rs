@@ -440,7 +440,7 @@ impl CockpitView {
             MenuTarget::PrLink(thread) => rows = self.pr_link_rows(thread),
             MenuTarget::Factory => {
                 rows = self
-                    .factory_pick_rows()
+                    .factory_pick_rows(cx)
                     .into_iter()
                     .enumerate()
                     .map(|(index, item)| Some((item, MenuVerb::Factory(index))))

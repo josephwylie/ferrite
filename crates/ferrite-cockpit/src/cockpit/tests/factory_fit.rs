@@ -259,7 +259,7 @@ fn an_empty_projects_factory_is_one_palette_search_away(cx: &mut TestAppContext)
     tick(cx);
     view.read_with(cx, |view, _| {
         assert_eq!(
-            view.factory().map(|view| view.project),
+            view.factory_project(),
             Some(empty)
         );
     });
@@ -320,7 +320,7 @@ fn an_answer_sent_lets_the_keyboard_go(cx: &mut TestAppContext) {
     tick(cx);
     let opening = view.read_with(cx, |view, cx| {
         view.factory()
-            .map(|view| view.coordinator.read(cx).field.read(cx).text().to_string())
+            .map(|view| view.read(cx).coordinator.read(cx).field.read(cx).text().to_string())
     });
     assert_eq!(opening.as_deref(), Some("plan the week"));
 }
@@ -408,7 +408,7 @@ fn the_coordinators_pane_draws_without_a_click(cx: &mut TestAppContext) {
         view.open_factory(project, cx);
         // The surface already shows when the Coordinator's Pane arrives:
         // nothing moved the roster to it.
-        view.factory_mut().unwrap().surface = Surface::Coordinator;
+        view.update_factory(cx, |factory, _| factory.surface = Surface::Coordinator);
         cx.notify();
     });
     tick(cx);
@@ -633,9 +633,9 @@ fn focusing_a_worker_by_id_brings_its_panel_forward_from_workflows(cx: &mut Test
     tick(cx);
     assert!(shows(cx, "task-panel"), "the panel is on screen");
     assert!(shows(cx, "task-worker"));
-    view.read_with(cx, |view, _| {
+    view.read_with(cx, |view, cx| {
         assert_eq!(
-            view.factory().map(|view| view.surface),
+            view.factory().map(|view| view.read(cx).surface),
             Some(Surface::Board)
         );
     });
@@ -757,8 +757,8 @@ fn the_workflow_menus_offer_what_applies_and_keep_the_selection_in_view(cx: &mut
         ],
     );
     let labels = |view: &Entity<CockpitView>, cx: &mut gpui::VisualTestContext| {
-        view.read_with(cx, |view, _| {
-            view.factory_pick_rows()
+        view.read_with(cx, |view, cx| {
+            view.factory_pick_rows(cx)
                 .iter()
                 .map(|item| item.label.to_string())
                 .collect::<Vec<_>>()

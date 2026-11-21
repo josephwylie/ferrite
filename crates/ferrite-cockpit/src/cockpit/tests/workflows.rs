@@ -193,8 +193,8 @@ fn the_outline_is_shaped_by_mouse_and_keyboard(cx: &mut TestAppContext) {
         );
     });
     click(cx, "workflow-picker");
-    view.read_with(cx, |view, _| {
-        assert_eq!(view.factory_pick_rows().len(), 2, "both in the picker");
+    view.read_with(cx, |view, cx| {
+        assert_eq!(view.factory_pick_rows(cx).len(), 2, "both in the picker");
     });
     assert_eq!(fake.streams.borrow().len(), streams, "nothing started");
 }
@@ -271,16 +271,16 @@ fn routes_problems_and_pickers(cx: &mut TestAppContext) {
             "unsaved"
         );
         assert_eq!(
-            view.factory().unwrap().note.as_deref(),
+            view.factory().unwrap().read(cx).note.as_deref(),
             Some("Fix the problems listed before saving.")
         );
     });
 
     // Fix it on the row: its picker offers Needs human first.
     click(cx, "outline-route-s-4-unable-flagged");
-    view.read_with(cx, |view, _| {
+    view.read_with(cx, |view, cx| {
         let rows: Vec<String> = view
-            .factory_pick_rows()
+            .factory_pick_rows(cx)
             .iter()
             .map(|item| item.label.to_string())
             .collect();
@@ -431,7 +431,7 @@ fn routes_problems_and_pickers(cx: &mut TestAppContext) {
         assert_eq!(workflow.versions.len(), 1);
         assert!(!workflow.unsaved());
         assert_eq!(
-            view.factory().unwrap().note.as_deref(),
+            view.factory().unwrap().read(cx).note.as_deref(),
             Some("Saved version 1.")
         );
     });
@@ -474,7 +474,7 @@ fn typed_text_survives_what_happens_around_it(cx: &mut TestAppContext) {
     click(cx, "inspector-instructions");
     view.read_with(cx, |view, cx| {
         assert_eq!(
-            view.factory().unwrap().editor.read(cx).focused,
+            view.factory().unwrap().read(cx).editor.read(cx).focused,
             Some(instructions.clone())
         );
     });
@@ -507,7 +507,7 @@ fn typed_text_survives_what_happens_around_it(cx: &mut TestAppContext) {
     holds(&view, cx, "a field revealed");
 
     view.update(cx, |view, cx| {
-        view.factory_mut().unwrap().note = Some("A notice".into());
+        view.update_factory(cx, |factory, _| factory.note = Some("A notice".into()));
         cx.notify();
     });
     tick(cx);

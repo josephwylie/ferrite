@@ -148,7 +148,7 @@ fn the_answer_box_answers_the_question_and_keeps_what_was_typed(cx: &mut TestApp
     });
     tick(cx);
     view.update(cx, |view, cx| {
-        view.factory_mut().unwrap().open = None;
+        view.update_factory(cx, |factory, _| factory.open = None).unwrap();
         cx.notify();
     });
     tick(cx);
@@ -193,9 +193,9 @@ fn a_workers_permission_is_answered_from_the_task(cx: &mut TestAppContext) {
     assert!(!shows(cx, "task-why"), "the permission says why, once");
     assert!(!shows(cx, "task-question"));
     click(cx, "task-permission-open");
-    view.read_with(cx, |view, _| {
+    view.read_with(cx, |view, cx| {
         assert_eq!(
-            view.factory().unwrap().tab,
+            view.factory().unwrap().read(cx).tab,
             crate::cockpit::factory::TaskTab::Worker
         );
     });
@@ -467,7 +467,7 @@ fn a_refused_send_stays_on_its_sheet(cx: &mut TestAppContext) {
     assert!(shows(cx, "rework-sheet"), "the sheet stays up");
     assert!(!shows(cx, "rework-missing"));
     assert_eq!(typed(&view, cx), "Fix it");
-    assert!(view.read_with(cx, |view, _| view.factory().unwrap().note.is_some()));
+    assert!(view.read_with(cx, |view, cx| view.factory().unwrap().read(cx).note.is_some()));
 }
 
 /// A sheet stays up as its Task moves on, and goes once its Task leaves
@@ -480,7 +480,7 @@ fn a_sheet_follows_its_task_and_goes_with_it(cx: &mut TestAppContext) {
         Status::Approval,
         serde_json::json!({ "result": "Checks pass" }),
     );
-    let project = view.read_with(cx, |view, _| view.factory().unwrap().project);
+    let project = view.read_with(cx, |view, _| view.factory_project().unwrap());
     click(cx, "task-redirect-open");
     view.update(cx, |view, _| {
         view.cockpit.fixture_factory(Board {

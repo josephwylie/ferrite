@@ -30,7 +30,7 @@ impl CockpitView {
     pub(super) fn view_head(&self, cx: &mut Context<Self>) -> AnyElement {
         let mut parts = Vec::new();
         if self.factory().is_some() {
-            parts.extend(self.factory_head());
+            parts.extend(self.factory_head(cx));
         } else if self.prs_shown() {
             let prs = self.prs.read(cx);
             let project = prs
@@ -187,14 +187,15 @@ impl CockpitView {
 
     /// The Factory's breadcrumb: its Project, `Factory`, then the Task
     /// whose panel is on screen.
-    fn factory_head(&self) -> Vec<AnyElement> {
-        let Some(view) = self.factory() else {
+    fn factory_head(&self, cx: &gpui::App) -> Vec<AnyElement> {
+        let (Some(project), Some(view)) = (self.factory_project(), self.factory()) else {
             return Vec::new();
         };
+        let surface = view.read(cx).surface;
         let project = self
             .cockpit
             .registry()
-            .project(view.project)
+            .project(project)
             .map(|project| SharedString::from(project.title.clone()))
             .unwrap_or_else(|| "Project".into());
         let crumb = |text: SharedString, current: bool| {
@@ -210,8 +211,8 @@ impl CockpitView {
                 .child(text)
         };
         let task = self
-            .open_task_now()
-            .filter(|_| view.surface == super::workflows::Surface::Board);
+            .open_task_now(cx)
+            .filter(|_| surface == super::workflows::Surface::Board);
         let mut crumbs = vec![
             crumb(project, false).into_any_element(),
             separator(),

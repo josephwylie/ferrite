@@ -103,8 +103,8 @@ fn the_panel_shows_the_pr_its_revisions_and_which_was_approved(cx: &mut TestAppC
     assert!(shows(cx, "task-pr-state"));
     assert!(shows(cx, "task-evidence-0-tool-older"), "about revision 1");
     assert!(shows(cx, "task-evidence-1-conclusion"));
-    view.read_with(cx, |view, _| {
-        let task = view.open_task_now().unwrap();
+    view.read_with(cx, |view, cx| {
+        let task = view.open_task_now(cx).unwrap();
         assert_eq!(
             crate::cockpit::delivery::card_line(task).as_deref(),
             Some("acme/widgets#12 \u{b7} revision 2")
@@ -130,8 +130,8 @@ fn ready_to_approve_says_the_revision_approved(cx: &mut TestAppContext) {
         !shows(cx, "task-evidence-section"),
         "the approval section shows the evidence"
     );
-    view.read_with(cx, |view, _| {
-        let task = view.open_task_now().unwrap();
+    view.read_with(cx, |view, cx| {
+        let task = view.open_task_now(cx).unwrap();
         assert_eq!(
             crate::cockpit::delivery::approving_line(task).as_deref(),
             Some("You approve acme/widgets#12 at revision 2 (head 2222222).")
@@ -219,8 +219,8 @@ fn a_step_routes_by_merge_result_with_a_route_per_result(cx: &mut TestAppContext
     assert!(shows(cx, "outline-route-s-2-pending"));
 
     click(cx, "outline-route-s-2-conflict");
-    let rows: Vec<String> = view.read_with(cx, |view, _| {
-        view.factory_pick_rows()
+    let rows: Vec<String> = view.read_with(cx, |view, cx| {
+        view.factory_pick_rows(cx)
             .iter()
             .map(|item| item.label.to_string())
             .collect()

@@ -478,7 +478,7 @@ impl CockpitView {
     /// board or runs no Workflow. It never reads the sheet: the sheet calls
     /// it while its own update is running.
     pub(super) fn direct_inputs(&self, project: ProjectId, task: &str) -> Option<Task> {
-        if self.factory()?.project != project {
+        if self.factory_project()? != project {
             return None;
         }
         self.cockpit
@@ -509,14 +509,13 @@ impl CockpitView {
     /// A sheet on the open Task, in place of any other sheet, with what
     /// was typed and chosen in it before.
     pub(crate) fn open_direct_sheet(&mut self, sheet: DirectSheet, cx: &mut Context<Self>) {
-        let Some(task) = self.open_task_now().map(|task| task.id.clone()) else {
+        let Some(task) = self.open_task_now(cx).map(|task| task.id.clone()) else {
             return;
         };
-        let Some(view) = self.factory() else {
+        let (Some(project), Some(view)) = (self.factory_project(), self.factory()) else {
             return;
         };
-        let project = view.project;
-        let direction = view.direction.clone();
+        let direction = view.read(cx).direction.clone();
         let cockpit = cx.weak_entity();
         let sheet = direction.update(cx, |direction, cx| {
             // The sheet's field takes the keyboard; the answer box does not
@@ -535,8 +534,8 @@ impl CockpitView {
         let project = sheet.read(cx).project;
         let Some(direction) = self
             .factory()
-            .filter(|view| view.project == project)
-            .map(|view| view.direction.clone())
+            .filter(|_| self.factory_project() == Some(project))
+            .map(|view| view.read(cx).direction.clone())
         else {
             return;
         };

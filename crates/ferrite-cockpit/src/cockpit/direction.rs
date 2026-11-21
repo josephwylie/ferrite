@@ -365,7 +365,7 @@ impl Render for DirectionView {
         let task = self
             .cockpit
             .upgrade()
-            .and_then(|cockpit| cockpit.read(cx).direction_inputs());
+            .and_then(|cockpit| cockpit.read(cx).direction_inputs(cx));
         let say = task.map(|task| self.say(&task, window, cx));
         div()
             .flex()
@@ -495,8 +495,8 @@ impl CockpitView {
 
     /// What the say draws from the window: the open Task, as the board
     /// says it now.
-    fn direction_inputs(&self) -> Option<Task> {
-        self.open_task_now().cloned()
+    fn direction_inputs(&self, cx: &gpui::App) -> Option<Task> {
+        self.open_task_now(cx).cloned()
     }
 
     /// The say's presses. One on the answer box has the focus pump hand it
@@ -516,19 +516,19 @@ impl CockpitView {
         }
     }
 
-    pub(super) fn direction(&self) -> Option<Entity<DirectionView>> {
-        self.factory().map(|view| view.direction.clone())
+    pub(super) fn direction(&self, cx: &gpui::App) -> Option<Entity<DirectionView>> {
+        self.factory().map(|view| view.read(cx).direction.clone())
     }
 
     /// The Task's answer box, made once.
     pub(crate) fn ensure_answer(&mut self, task: &str, cx: &mut Context<Self>) {
-        if let Some(direction) = self.direction() {
+        if let Some(direction) = self.direction(cx) {
             direction.update(cx, |direction, cx| direction.ensure(task, cx));
         }
     }
 
     pub(crate) fn answer_box(&self, task: &str, cx: &gpui::App) -> Option<Entity<Composer>> {
-        self.factory()?.direction.read(cx).answer(task).cloned()
+        self.factory()?.read(cx).direction.read(cx).answer(task).cloned()
     }
 
     /// What a Task's answer box holds now.
@@ -541,7 +541,7 @@ impl CockpitView {
     /// The open Task's answer box, while it holds the keyboard on the
     /// Board's Overview. A sheet's field is the sheet host's.
     pub(super) fn direct_focus(&self, cx: &gpui::App) -> Option<FocusHandle> {
-        let view = self.factory()?;
+        let view = self.factory()?.read(cx);
         let direction = view.direction.read(cx);
         if !direction.answering
             || view.surface != super::workflows::Surface::Board
@@ -554,7 +554,7 @@ impl CockpitView {
     }
 
     pub(crate) fn focus_answer(&mut self, cx: &mut Context<Self>) {
-        if let Some(direction) = self.direction() {
+        if let Some(direction) = self.direction(cx) {
             direction.update(cx, |direction, _| direction.answering = true);
         }
         cx.notify();
@@ -566,16 +566,14 @@ impl CockpitView {
             Ok(_) => (true, None),
             Err(error) => (false, Some(SharedString::from(error.to_string()))),
         };
-        if let Some(view) = self.factory_mut() {
-            view.note = note;
-        }
+        self.update_factory(cx, |view, _| view.note = note);
         cx.notify();
         taken
     }
 
     /// Send the answer typed for the open Task's question.
     pub(crate) fn send_answer(&mut self, cx: &mut Context<Self>) {
-        let Some(task) = self.open_task_now().cloned() else {
+        let Some(task) = self.open_task_now(cx).cloned() else {
             return;
         };
         let Some(question) = task.oversight.question.as_ref() else {
@@ -583,9 +581,7 @@ impl CockpitView {
         };
         let text = self.answer_text(&task.id, cx);
         if text.trim().is_empty() {
-            if let Some(view) = self.factory_mut() {
-                view.note = Some("Write the answer first.".into());
-            }
+            self.update_factory(cx, |view, _| view.note = Some("Write the answer first.".into()));
             cx.notify();
             return;
         }
@@ -601,14 +597,14 @@ impl CockpitView {
                 });
             }
             // Answered, the box lets the keyboard go.
-            if let Some(direction) = self.direction() {
+            if let Some(direction) = self.direction(cx) {
                 direction.update(cx, |direction, _| direction.answering = false);
             }
         }
     }
 
     pub(crate) fn approve_task(&mut self, cx: &mut Context<Self>) {
-        let Some(task) = self.open_task_now().map(|task| task.id.clone()) else {
+        let Some(task) = self.open_task_now(cx).map(|task| task.id.clone()) else {
             return;
         };
         self.direct_command(TaskAction::Approve { task }, cx);
@@ -627,7 +623,7 @@ impl CockpitView {
     /// A send taken: the sheet closes and what it held is spent.
     fn direct_sent(&mut self, task: &str, sheet: DirectSheet, cx: &mut Context<Self>) {
         self.hide_sheet(cx);
-        if let Some(direction) = self.direction() {
+        if let Some(direction) = self.direction(cx) {
             direction.update(cx, |direction, _| {
                 if let Some(kept) = direction.kept.get_mut(task) {
                     kept.spend(sheet);
