@@ -434,6 +434,34 @@ that happened to touch it, and nothing in the code said whose a field was.
   one `field_input` the editor's own fields use. It keeps nothing by
   Thread. Left of the Factory: the Workflows editor, the Coordinator
   surface and the shell.
+- **The Workflows editor is the twenty-fifth, in part, the Factory's
+  fourth slice.** `WorkflowsView` (`cockpit/workflows/editor.rs`) owns
+  what the editor has chosen and what is being typed in it: the Workflow
+  and Step shown, whether the inspector shows the approval settings or
+  the start in a Step's place, the outline's focus and scroll, each text
+  field's Composer, made once for as long as the Factory is open (the
+  start's two included), and the field that holds the keyboard. The
+  Factory holds it, as it holds the Archive's. It has no render of its
+  own yet: the root draws the surface and has the view draw each field
+  (`input`), whose press gives that field the keyboard, and reads what is
+  shown through it (`shown_workflow`, `shown_step`, `start_shown`); the
+  focus pump hands the keyboard to the chosen field, else the outline. It
+  emits `WorkflowsEvent`: a field typed in, whose text the root sends to
+  the draft, and a field pressed. Every edit is a Server ask
+  (`workflow_ask`), so editing stays the root's, as does which fields the
+  surface shows (`ensure_fields`), since that reads the draft. The
+  outline's and inspector's presses still call the root, which updates
+  the view. The rest of the editor moves in slices of its own, in this
+  order: skills discovery (each Provider's installed skills, which the
+  root asks for and its pump takes, a plain struct in the listing's shape,
+  since no listener writes it); the outline drawn by the view, its rows,
+  routes, drag, keys and Add agent said as events; the inspector drawn by
+  it, a Step's settings with the skills search it reveals, and the
+  approval settings; and last the surface's head, its problems and the
+  empty state, when the view's render is the Workflows surface. The open
+  picker's rows stay the Factory's (`picks`), shared with the New task
+  sheet, a Task's sheets and the Coordinator. Left of the Factory after
+  the editor: the Coordinator surface, then the shell.
 
 ## What does not get a view
 
