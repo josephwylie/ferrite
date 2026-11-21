@@ -1,5 +1,5 @@
 ---
-status: accepted, amended 2026-11-17 (no wall tile)
+status: accepted, amended 2026-11-17 (no wall tile), 2026-11-21 (background work is working)
 date: 2026-10-15
 ---
 
@@ -200,3 +200,28 @@ its Inbox surface is hidden, including the sidebar rail.
 
 The wall tile is gone (ADR 0033's 2026-11-17 amendment). The Pane head
 and the nav row keep the `done` rule above.
+
+## Amendment (2026-11-21): background work is working; arrivals order the list
+
+The operator's rule: a Thread works while its turn or any background work
+(a shell, a monitor, a background Subagent) runs, and sits on the Working
+shelf; when it is truly done it goes to the top of the list; nothing else
+moves a row. Three readings broke it, and now read one fact,
+`ActivityView::background_work`:
+
+- **The Notice waits for background tasks**, as it waits for Subagents. A
+  turn that ended with a shell running was a finish, so the Thread read
+  `done` (and toasted) while its shell ran on.
+- **Work behind Main outranks an unseen finish.** `RowStatus::of` ranked
+  `done` above background work; working is working, whatever finished
+  before it.
+- **A window that starts watching a Thread is told its background tasks**,
+  as it is told a running turn: the watch's `Connect` retired the replayed
+  ones, so a window opened mid-shell read the Thread as at rest.
+
+The list kept creation order, so a Thread back from Working landed at its
+old place, usually the bottom, and the shelf sorted by turn start, which a
+turn handing over to a shell lost. Both now order by arrival
+(`nav::Arrivals`): when the Thread came into its section, the latest
+first; a Thread listed since before the window watched arrived at its last
+activity. Pending Decisions still lead the list, oldest request first.

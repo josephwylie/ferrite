@@ -7,8 +7,9 @@
 //! Cockpit hands it `now`), no window.
 //!
 //! The rule: a Notice is born when a live Main turn ends and no descendant
-//! is still working or awaiting permission. A Main that ended its turn
-//! while children run is **deferred** — a Claude Main with busy background agents
+//! or background task (a shell, a monitor) is still working or awaiting
+//! permission. A Main that ended its turn while either runs is
+//! **deferred** — a Claude Main with busy background agents
 //! will be resumed by their completions, and a Codex parent waiting on
 //! `wait` never ended its turn at all. The deferral resolves when Main is
 //! resumed (the Notice waits for that turn's end) or, if the provider
@@ -169,6 +170,7 @@ impl Notifications {
         // A child awaiting a Decision is unfinished even though it is
         // Waiting rather than Working. Retained history is never live work.
         let unfinished = !view.pending_decisions().is_empty()
+            || view.background_work()
             || view.children().iter().any(|child| {
                 child.fresh()
                     && matches!(

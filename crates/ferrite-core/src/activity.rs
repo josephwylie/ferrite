@@ -2286,6 +2286,13 @@ impl<'a> ActivityView<'a> {
             .filter(|key| self.activity.agents[*key].working())
             .count()
     }
+    /// Whether work runs behind Main: a Subagent, or a background task (a
+    /// shell, a monitor) of Main's transcript. The Notice waits for it,
+    /// and the nav counts it as working.
+    pub fn background_work(self) -> bool {
+        self.working_descendants() > 0
+            || self.main().transcript().progress().working_background() > 0
+    }
     /// Is an operator prompt out and unanswered — from the live prompt
     /// until the root turn end that answers it? True before the provider
     /// has streamed a byte, which `SubjectView::busy` is not.

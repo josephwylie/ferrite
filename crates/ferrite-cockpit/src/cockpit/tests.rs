@@ -429,10 +429,13 @@ fn hold_wall_clock() -> ferrite_core::clock::ThreadFixture {
 /// A turn that ended just now, dated as the log dates them: what the bell
 /// lists a Thread for (`Store::last_activity`); an unused Thread has none.
 fn did_something_now(store: &std::path::Path, thread: ThreadId) {
+    did_something_at(store, thread, &ferrite_core::clock::now_stamp());
+}
+
+fn did_something_at(store: &std::path::Path, thread: ThreadId, stamp: &str) {
     use std::io::Write;
     let record = format!(
-        r#"{{"type":"completion_observation","elapsed_ms":1,"completed_at":"{}"}}"#,
-        ferrite_core::clock::now_stamp()
+        r#"{{"type":"completion_observation","elapsed_ms":1,"completed_at":"{stamp}"}}"#
     );
     let mut log = std::fs::OpenOptions::new()
         .append(true)
@@ -458,11 +461,14 @@ fn cockpit(name: &str, panes: usize) -> (Cockpit, Fake) {
     let dir = scratch(name);
     let store = Store::open(&dir).unwrap();
     let mut cockpit = Cockpit::new(store, Box::new(fake.clone()));
+    // One moment for them all: the nav lists Threads alike in creation
+    // order, however long the opening took.
+    let now = ferrite_core::clock::now_stamp();
     for _ in 0..panes {
         let thread = cockpit
             .open(Provider::Claude, WorkspaceChoice::Main { checkout: here() })
             .unwrap();
-        did_something_now(&dir, thread);
+        did_something_at(&dir, thread, &now);
     }
     (cockpit, fake)
 }
