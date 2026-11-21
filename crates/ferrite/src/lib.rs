@@ -54,6 +54,12 @@ fn keep_mouse_cursor_visible(cx: &mut App) {
 /// The app: a Chromium helper, a capture, or the window. The binary has
 /// already dispatched the commands that never start one.
 pub fn launch() {
+    // `headless` turns on the crates' test hooks, so a headless build and
+    // the Cockpit's tests compile each crate once. Under them the motion
+    // kit rests unless asked to move; a headless window and every capture
+    // move as the window on screen does.
+    #[cfg(feature = "headless")]
+    ferrite_ui::motion::testing::drive();
     // A Chromium helper process is this same binary, started
     // by Chromium with `--type=…`; it runs the helper and exits here, before
     // any shell, store or window. In the app this only readies Chromium
