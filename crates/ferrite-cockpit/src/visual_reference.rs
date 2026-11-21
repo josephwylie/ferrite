@@ -998,6 +998,7 @@ fn build(state: &str, label: &str) -> (Scene, Setup) {
                         ahead: 2,
                         behind: 1,
                         dirty: 3,
+                        changes: None,
                     }),
                 )]);
                 view.facts.pr_answered(
