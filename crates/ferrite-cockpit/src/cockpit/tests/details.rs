@@ -418,11 +418,13 @@ fn details_preferences_can_empty_and_restore_the_card(cx: &mut TestAppContext) {
     });
 }
 
-/// Lineage folds under its heading, `Lineage ▸ N`, folded at first like
-/// the Panel's Connectors; the fold is the Thread's and holds across
-/// renders.
+/// Lineage as T3 draws it: a quiet `Lineage · N running` heading, a row per
+/// running agent, and the finished ones folded under one counted
+/// `Previous agents` row; the fold is the Thread's, so a re-render keeps it,
+/// and the card grows and shrinks with it. A Subagent's card instead leads
+/// back to its parent: a press on that row returns the Pane to Main.
 #[gpui::test]
-fn the_lineage_heading_folds_its_agents(cx: &mut TestAppContext) {
+fn lineage_lists_running_agents_and_folds_the_previous_ones(cx: &mut TestAppContext) {
     use ferrite_core::activity::{ActivityEvent, AgentInfo, AgentKey, AgentStatus, Subject};
     let (core, fake) = cockpit("details-lineage-fold", 1);
     bind_production_keys(cx);
@@ -450,44 +452,66 @@ fn the_lineage_heading_folds_its_agents(cx: &mut TestAppContext) {
         });
     }
     tick(cx);
+    let height = |cx: &mut gpui::VisualTestContext| {
+        f32::from(cx.debug_bounds("details-card").unwrap().size.height)
+    };
     assert!(
-        cx.debug_bounds("details-lineage-count-3").is_some(),
-        "the heading counts the agents"
+        cx.debug_bounds("details-lineage-running-1").is_some(),
+        "the heading says how many run"
     );
+    assert!(cx.debug_bounds("details-lineage-agent-Atlas").is_some());
     assert!(
-        cx.debug_bounds("details-item-lineage-0").is_none(),
-        "folded at first"
+        cx.debug_bounds("details-lineage-previous-count-2").is_some(),
+        "the finished agents fold under their count"
     );
-
-    let head = cx
-        .debug_bounds("details-lineage-head")
-        .expect("the Lineage heading");
-    cx.simulate_click(head.center(), gpui::Modifiers::none());
-    tick(cx);
-    for row in [
-        "details-item-lineage-0",
-        "details-item-lineage-1",
-        "details-item-lineage-2",
-    ] {
-        assert!(
-            cx.debug_bounds(row).is_some(),
-            "a press on the heading opens {row}"
-        );
+    for row in ["details-lineage-agent-Birch", "details-lineage-agent-Cedar"] {
+        assert!(cx.debug_bounds(row).is_none(), "{row} is folded at first");
     }
+    let folded = height(cx);
+
+    let previous = cx.debug_bounds("details-lineage-previous").unwrap();
+    cx.simulate_click(previous.center(), gpui::Modifiers::none());
+    tick(cx);
+    for row in ["details-lineage-agent-Birch", "details-lineage-agent-Cedar"] {
+        assert!(cx.debug_bounds(row).is_some(), "a press opens {row}");
+    }
+    assert!(height(cx) > folded, "the card grows with the fold");
 
     emit(ActivityEvent::Status {
-        key: key("Birch"),
-        state: AgentStatus::Working,
+        key: key("Atlas"),
+        state: AgentStatus::Waiting,
     });
     tick(cx);
     assert!(
-        cx.debug_bounds("details-item-lineage-2").is_some(),
+        cx.debug_bounds("details-lineage-agent-Cedar").is_some(),
         "the fold outlives a re-render"
     );
 
-    let head = cx.debug_bounds("details-lineage-head").unwrap();
-    cx.simulate_click(head.center(), gpui::Modifiers::none());
+    let previous = cx.debug_bounds("details-lineage-previous").unwrap();
+    cx.simulate_click(previous.center(), gpui::Modifiers::none());
     tick(cx);
-    assert!(cx.debug_bounds("details-item-lineage-0").is_none());
-    assert!(cx.debug_bounds("details-lineage-count-3").is_some());
+    assert!(cx.debug_bounds("details-lineage-agent-Birch").is_none());
+    assert_eq!(height(cx), folded, "and shrinks when it shuts");
+
+    let thread = view.read_with(cx, |view, _| view.panes[0].thread().unwrap());
+    cx.update(|window, app| {
+        view.update(app, |view, cx| {
+            view.select_subject(thread, Subject::Subagent(key("Atlas")), window, cx)
+        })
+    });
+    tick(cx);
+    assert!(
+        cx.debug_bounds("details-lineage-agent-Atlas").is_none(),
+        "a Subagent's card lists its own agents, not its siblings"
+    );
+    let parent = cx
+        .debug_bounds("details-lineage-parent")
+        .expect("a Subagent's card leads back to its parent");
+    cx.simulate_click(parent.center(), gpui::Modifiers::none());
+    tick(cx);
+    assert!(
+        view.read_with(cx, |view, _| view.panes[0].is_main()),
+        "the parent row returns the Pane to Main"
+    );
+    assert!(cx.debug_bounds("details-lineage-parent").is_none());
 }
