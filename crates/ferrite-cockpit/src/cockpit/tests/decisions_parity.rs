@@ -48,9 +48,12 @@ fn waiting<'a>(
 }
 
 fn cursor(view: &gpui::Entity<CockpitView>, cx: &mut gpui::VisualTestContext) -> Option<usize> {
-    view.read_with(cx, |view, _| {
+    view.read_with(cx, |view, cx| {
         let request = view.shown_request(0).expect("a Decision waits");
-        view.panes[0].request_forms.cursor(&request.handle)
+        view.decisions
+            .read(cx)
+            .forms(view.panes[0].identity)?
+            .cursor(&request.handle)
     })
 }
 
@@ -337,9 +340,10 @@ fn the_amend_note_rides_a_denial(cx: &mut TestAppContext) {
     assert!(cx.debug_bounds("decision-note").is_some(), "the note opens");
     let focused = view.update_in(cx, |view, window, cx| {
         let request = view.shown_request(0).unwrap();
-        view.panes[0]
-            .request_forms
-            .note(&request.handle)
+        view.decisions
+            .read(cx)
+            .forms(view.panes[0].identity)
+            .and_then(|forms| forms.note(&request.handle))
             .expect("a note")
             .focus_handle(cx)
             .is_focused(window)
@@ -417,50 +421,6 @@ fn esc_closes_the_note_then_denies(cx: &mut TestAppContext) {
         "{:?}",
         answered(&fake)
     );
-}
-
-/// D-8: a lone single-select question answers on one option, and false
-/// sends the caller to the Pane for anything more.
-#[gpui::test]
-fn answer_question_option_answers_a_lone_single_select(cx: &mut TestAppContext) {
-    let (core, fake) = cockpit("parity-question-option", 1);
-    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
-    cx.simulate_resize(gpui::size(px(1200.), px(800.)));
-    fake.streams.borrow()[0].send(question("lone")).unwrap();
-    tick(cx);
-    let thread = view.read_with(cx, |view, _| view.panes[0].thread().unwrap());
-    assert!(!view.update_in(cx, |view, window, cx| view
-        .answer_question_option(thread, 9, window, cx)));
-    assert!(view.update_in(cx, |view, window, cx| view
-        .answer_question_option(thread, 1, window, cx)));
-    tick(cx);
-    assert!(
-        matches!(answered(&fake).as_slice(),
-            [(id, DecisionAnswer::Questions { answers })] if id == "lone" && answers[0].picks == [1]),
-        "{:?}",
-        answered(&fake)
-    );
-}
-
-/// D-8: a multi-select question needs its form: false, and nothing sent.
-#[gpui::test]
-fn answer_question_option_leaves_a_multi_select_to_its_form(cx: &mut TestAppContext) {
-    let (core, fake) = cockpit("parity-question-multi", 1);
-    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
-    cx.simulate_resize(gpui::size(px(1200.), px(800.)));
-    let SessionEvent::DecisionRequested { mut decision } = question("multi") else {
-        unreachable!()
-    };
-    let ferrite_core::DecisionKind::Questions(questions) = &mut decision.kind else {
-        unreachable!()
-    };
-    questions[0].multi_select = true;
-    fake.streams.borrow()[0].send(ask(decision)).unwrap();
-    tick(cx);
-    let thread = view.read_with(cx, |view, _| view.panes[0].thread().unwrap());
-    assert!(!view.update_in(cx, |view, window, cx| view
-        .answer_question_option(thread, 0, window, cx)));
-    assert!(answered(&fake).is_empty(), "a multi-select needs its form");
 }
 
 /// D-8: a question's cursor walks its options and ⏎ answers the one under
@@ -559,8 +519,8 @@ fn the_split_offers_the_providers_auto_mode(cx: &mut TestAppContext) {
         .send(ask(bash("switch", "ls")))
         .unwrap();
     tick(cx);
-    let switch = view.read_with(cx, |view, _| {
-        view.decision_cards(0, false, false)
+    let switch = view.read_with(cx, |view, cx| {
+        view.decision_cards(0, false, false, cx)
             .and_then(|cards| cards.switch)
             .map(|(mode, label, _)| (mode, label.to_string()))
     });

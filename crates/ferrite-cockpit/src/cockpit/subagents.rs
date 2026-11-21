@@ -84,6 +84,137 @@ impl RequestForms {
     ) -> Option<Vec<ferrite_core::questions::Answer>> {
         self.0.borrow().get(handle).map(|form| form.answers.clone())
     }
+
+    /// `handle`'s amend note's words, taken: the note closes.
+    pub(super) fn take_note(&self, handle: &DecisionHandle, cx: &mut gpui::App) -> Option<String> {
+        let note = self.note(handle)?;
+        self.set_note(handle, None);
+        Some(note.update(cx, |line, cx| line.take(cx)))
+    }
+
+    /// The Decisions `keep` refuses take what their cards kept with them.
+    pub(super) fn retain(&self, keep: impl Fn(&DecisionHandle) -> bool) {
+        self.0.borrow_mut().retain(|handle, _| keep(handle));
+        self.1.borrow_mut().retain(|handle, _| keep(handle));
+    }
+
+    /// A question form's answers as they stand, each with the words typed
+    /// under it; None while its card has not drawn.
+    pub(super) fn question_answers(
+        &self,
+        handle: &DecisionHandle,
+        cx: &gpui::App,
+    ) -> Option<Vec<ferrite_core::questions::Answer>> {
+        let mut state = self.0.borrow_mut();
+        let form = state.get_mut(handle)?;
+        for (answer, input) in form.answers.iter_mut().zip(&form.inputs) {
+            answer.other =
+                Some(input.read(cx).value().to_string()).filter(|text| !text.trim().is_empty());
+        }
+        Some(form.answers.clone())
+    }
+
+    /// An MCP form's values as they stand, its typed fields read in; None
+    /// while its card has not drawn.
+    pub(super) fn form_values(
+        &self,
+        handle: &DecisionHandle,
+        fields: &[ferrite_core::FormField],
+        cx: &gpui::App,
+    ) -> Option<serde_json::Value> {
+        let mut state = self.0.borrow_mut();
+        let form = state.get_mut(handle)?;
+        for field in fields {
+            let Some(input) = form.form_inputs.get(&field.id) else {
+                continue;
+            };
+            let text = input.read(cx).value().to_string();
+            if text.trim().is_empty() {
+                if field.required {
+                    form.values
+                        .insert(field.id.clone(), serde_json::Value::Null);
+                } else {
+                    form.values.remove(&field.id);
+                }
+                continue;
+            }
+            let value = match &field.kind {
+                ferrite_core::FormFieldKind::String { .. } => serde_json::Value::String(text),
+                ferrite_core::FormFieldKind::Number { .. } => match text
+                    .parse::<f64>()
+                    .ok()
+                    .and_then(serde_json::Number::from_f64)
+                {
+                    Some(value) => serde_json::Value::Number(value),
+                    None => serde_json::Value::String(text),
+                },
+                ferrite_core::FormFieldKind::Integer { .. } => match text.parse::<i64>() {
+                    Ok(value) => serde_json::Value::from(value),
+                    Err(_) => serde_json::Value::String(text),
+                },
+                _ => continue,
+            };
+            form.values.insert(field.id.clone(), value);
+        }
+        Some(serde_json::Value::Object(form.values.clone()))
+    }
+
+    /// Digit `n` (0-based) on `handle`'s question form: option n of its
+    /// digit question, or its words field one past its options.
+    pub(super) fn pick(
+        &self,
+        handle: &DecisionHandle,
+        questions: &[ferrite_core::questions::Question],
+        n: usize,
+        cx: &gpui::App,
+    ) -> Pick {
+        let mut state = self.0.borrow_mut();
+        // The card builds its form on first paint; a question never drawn
+        // (a compact cell's expander) has nothing to pick in yet.
+        let Some(form) = state.get_mut(handle) else {
+            return Pick::Untaken;
+        };
+        let Some(qi) = digit_question(&form.answers, questions) else {
+            return Pick::Untaken;
+        };
+        let question = &questions[qi];
+        if n < question.options.len() {
+            // One key answers a lone single-select question outright.
+            if questions.len() == 1
+                && !question.multi_select
+                && form.inputs[qi].read(cx).value().trim().is_empty()
+            {
+                return Pick::Answers;
+            }
+            pick_option(&mut form.answers[qi].picks, n, question.multi_select);
+            drop(state);
+            self.set_cursor(handle, Some(n));
+            Pick::Picked
+        } else if question.allow_other && n == question.options.len() {
+            Pick::Words(form.inputs[qi].read(cx).focus_handle(cx))
+        } else {
+            Pick::Untaken
+        }
+    }
+}
+
+/// Whether every question has a pick or typed words.
+pub(super) fn answered(answers: &[ferrite_core::questions::Answer]) -> bool {
+    answers
+        .iter()
+        .all(|answer| !answer.picks.is_empty() || answer.other.is_some())
+}
+
+/// What a digit did on a question form.
+pub(super) enum Pick {
+    /// Nothing here takes it: it types.
+    Untaken,
+    /// It answers the lone single-select question as it is.
+    Answers,
+    /// It picked (or for a multi-select toggled) the option.
+    Picked,
+    /// It is the words field's, which takes the keyboard.
+    Words(FocusHandle),
 }
 
 struct RequestForm {
@@ -639,9 +770,9 @@ impl CockpitView {
                         open.pending_decisions().iter().any(|p| &p.handle == handle)
                     });
                     if !pending {
-                        let forms = &self.panes[index].request_forms;
-                        forms.0.borrow_mut().remove(handle);
-                        forms.1.borrow_mut().remove(handle);
+                        let pane = self.panes[index].identity;
+                        self.decisions
+                            .update(cx, |decisions, _| decisions.forget(pane, handle));
                     }
                     self.panes[index].request_error = None;
                 }
@@ -661,9 +792,15 @@ impl CockpitView {
     /// of the cockpit: the requests, their owner's provider and context,
     /// and the Pane's forms. `overlay` cards lie on the plane over the
     /// transcript's foot; the transcript's own cards scroll with its rows.
-    pub(super) fn decision_cards(&self, index: usize, overlay: bool, short: bool) -> Option<Cards> {
+    pub(super) fn decision_cards(
+        &self,
+        index: usize,
+        overlay: bool,
+        short: bool,
+        cx: &gpui::App,
+    ) -> Option<Cards> {
         let subject = self.panes.get(index)?.selected.clone();
-        self.decision_inputs(index, &subject, overlay, short)
+        self.decision_inputs(index, &subject, overlay, short, cx)
     }
 
     /// The cards of `subject`'s requests, answered through Pane `index`'s
@@ -675,6 +812,7 @@ impl CockpitView {
         subject: &Subject,
         overlay: bool,
         short: bool,
+        cx: &gpui::App,
     ) -> Option<Cards> {
         let pane = self.panes.get(index)?;
         let thread = pane.thread()?;
@@ -751,7 +889,7 @@ impl CockpitView {
                 .map(|workspace| workspace.cwd().to_path_buf()),
             reading: self.prefs.settings.reading_size,
             rich: pane.rich.clone(),
-            forms: pane.request_forms.clone(),
+            forms: self.decisions.read(cx).forms(pane.identity)?.clone(),
             request_error: pane.request_error.clone(),
             short,
             overlay,
@@ -776,7 +914,7 @@ impl CockpitView {
             .find(|(at, _)| *at == index)
             .map(|(_, rect)| rect);
         let short = rect.is_some_and(|rect| rect.h < theme::DECISION_SHORT_PANE_H);
-        let mut cards = self.decision_cards(index, true, short)?;
+        let mut cards = self.decision_cards(index, true, short, cx)?;
         if let Some(rect) = rect {
             cards.inset = theme::tx_inset_at(rect.w, true);
         }
@@ -793,45 +931,15 @@ impl CockpitView {
         let Some(index) = self.pane_for(thread) else {
             return;
         };
-        let forms = self.panes[index].request_forms.clone();
-        let mut state = forms.0.borrow_mut();
-        let Some(form) = state.get_mut(handle) else {
+        let pane = self.panes[index].identity;
+        let Some(values) = self
+            .decisions
+            .read(cx)
+            .forms(pane)
+            .and_then(|forms| forms.form_values(handle, fields, cx))
+        else {
             return;
         };
-        for field in fields {
-            let Some(input) = form.form_inputs.get(&field.id) else {
-                continue;
-            };
-            let text = input.read(cx).value().to_string();
-            if text.trim().is_empty() {
-                if field.required {
-                    form.values
-                        .insert(field.id.clone(), serde_json::Value::Null);
-                } else {
-                    form.values.remove(&field.id);
-                }
-                continue;
-            }
-            let value = match &field.kind {
-                ferrite_core::FormFieldKind::String { .. } => serde_json::Value::String(text),
-                ferrite_core::FormFieldKind::Number { .. } => match text
-                    .parse::<f64>()
-                    .ok()
-                    .and_then(serde_json::Number::from_f64)
-                {
-                    Some(value) => serde_json::Value::Number(value),
-                    None => serde_json::Value::String(text),
-                },
-                ferrite_core::FormFieldKind::Integer { .. } => match text.parse::<i64>() {
-                    Ok(value) => serde_json::Value::from(value),
-                    Err(_) => serde_json::Value::String(text),
-                },
-                _ => continue,
-            };
-            form.values.insert(field.id.clone(), value);
-        }
-        let values = serde_json::Value::Object(form.values.clone());
-        drop(state);
         if let Err(error) = ferrite_core::validate_form(fields, &values) {
             self.panes[index].request_error = Some((handle.clone(), error));
             cx.notify();
@@ -865,21 +973,16 @@ impl CockpitView {
         let Some(index) = self.pane_for(thread) else {
             return false;
         };
-        let forms = self.panes[index].request_forms.clone();
-        let mut state = forms.0.borrow_mut();
-        let Some(form) = state.get_mut(handle) else {
+        let pane = self.panes[index].identity;
+        let Some(answers) = self
+            .decisions
+            .read(cx)
+            .forms(pane)
+            .and_then(|forms| forms.question_answers(handle, cx))
+        else {
             return false;
         };
-        for (answer, input) in form.answers.iter_mut().zip(&form.inputs) {
-            answer.other =
-                Some(input.read(cx).value().to_string()).filter(|text| !text.trim().is_empty());
-        }
-        if form
-            .answers
-            .iter()
-            .any(|answer| answer.picks.is_empty() && answer.other.is_none())
-        {
-            drop(state);
+        if !answered(&answers) {
             if !quiet {
                 self.panes[index].request_error = Some((
                     handle.clone(),
@@ -889,8 +992,6 @@ impl CockpitView {
             }
             return false;
         }
-        let answers = form.answers.clone();
-        drop(state);
         self.respond_exact(thread, handle, DecisionAnswer::Questions { answers }, cx);
         true
     }
@@ -920,76 +1021,6 @@ impl CockpitView {
             .iter()
             .find(|request| shown_on(pane, request))
             .cloned()
-    }
-
-    /// Digit `n` (0-based) on the request this Pane shows: an approval
-    /// answers option n (`1` allow, `2` allow for this thread, `3` deny and
-    /// steer); a question picks option n of its digit question — a single
-    /// single-select question with no typed words then sends at once (one
-    /// key) — or focuses the words field one past its options. False when
-    /// nothing here takes the digit, so it types.
-    pub(super) fn pick_request_row(
-        &mut self,
-        index: usize,
-        n: usize,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> bool {
-        let Some(request) = self.shown_request(index) else {
-            return false;
-        };
-        let thread = self.panes[index].thread().expect("a request has a Thread");
-        if request.submitting {
-            return true;
-        }
-        let Some(questions) = pane::questions_of(&request.decision) else {
-            if !matches!(request.decision.kind, ferrite_core::DecisionKind::Approval) {
-                return false;
-            }
-            let Some(choice) = decision::ApprovalChoice::from_index(n) else {
-                return false;
-            };
-            if !self.approval_choice_enabled(thread, &request, choice) {
-                return false;
-            }
-            let note = self.take_decision_note(thread, &request.handle, cx);
-            self.answer_approval_request(thread, &request, choice, note, Some(window), cx);
-            return true;
-        };
-        let forms = self.panes[index].request_forms.clone();
-        let mut state = forms.0.borrow_mut();
-        // The card builds its form on first paint; a question never drawn
-        // (a compact cell's expander) has nothing to pick in yet.
-        let Some(form) = state.get_mut(&request.handle) else {
-            return false;
-        };
-        let Some(qi) = digit_question(&form.answers, questions) else {
-            return false;
-        };
-        let question = &questions[qi];
-        if n < question.options.len() {
-            let one_key = questions.len() == 1
-                && !question.multi_select
-                && form.inputs[qi].read(cx).value().trim().is_empty();
-            if one_key {
-                drop(state);
-                // One key answers a lone single-select question outright.
-                return self.answer_question_option(thread, n, window, cx);
-            }
-            pick_option(&mut form.answers[qi].picks, n, question.multi_select);
-            drop(state);
-            forms.set_cursor(&request.handle, Some(n));
-            self.clear_request_error(thread, &request.handle);
-            cx.notify();
-            true
-        } else if question.allow_other && n == question.options.len() {
-            let focus = form.inputs[qi].read(cx).focus_handle(cx);
-            drop(state);
-            window.focus(&focus, cx);
-            true
-        } else {
-            false
-        }
     }
 
     /// `Retry`: ask again for `subject`'s saved history, wherever it is
@@ -1027,7 +1058,9 @@ impl CockpitView {
             })
     }
 
-    pub(super) fn prune_request_forms(&mut self, index: usize) {
+    /// What the cards of Pane `index` kept goes with each Decision its
+    /// Thread no longer waits on.
+    pub(super) fn prune_request_forms(&mut self, index: usize, cx: &mut Context<Self>) {
         let Some(thread) = self.panes[index]
             .thread()
             .and_then(|id| self.cockpit.thread(id))
@@ -1035,15 +1068,10 @@ impl CockpitView {
             return;
         };
         let pending = thread.pending_decisions();
-        let forms = &self.panes[index].request_forms;
-        forms
-            .0
-            .borrow_mut()
-            .retain(|handle, _| pending.iter().any(|request| &request.handle == handle));
-        forms
-            .1
-            .borrow_mut()
-            .retain(|handle, _| pending.iter().any(|request| &request.handle == handle));
+        let pane = self.panes[index].identity;
+        if let Some(forms) = self.decisions.read(cx).forms(pane) {
+            forms.retain(|handle| pending.iter().any(|request| &request.handle == handle));
+        }
     }
 
     pub(super) fn answer_subject(&mut self, answer: Answer, cx: &mut Context<Self>) {
