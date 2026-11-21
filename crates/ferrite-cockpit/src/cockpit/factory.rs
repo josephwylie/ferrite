@@ -170,6 +170,48 @@ pub(crate) enum FactoryEvent {
     Clear,
     /// New task: its sheet opens, as it was last closed.
     NewTask,
+    /// A Task's card: its panel opens.
+    OpenTask(TaskId),
+}
+
+/// One Task as its card says it.
+pub(crate) struct TaskCard {
+    id: TaskId,
+    title: String,
+    status: Status,
+    provider: Provider,
+    /// Its Step, whether it is deciding an approval, and what it runs on.
+    agent: String,
+    /// Its result or stop reason.
+    outcome: Option<String>,
+    /// Its pull request.
+    pr: Option<String>,
+}
+
+impl TaskCard {
+    fn of(task: &Task) -> Self {
+        Self {
+            id: task.id.clone(),
+            title: task.title.clone(),
+            status: task.status,
+            provider: task.agent.provider,
+            agent: match task.current_step() {
+                Some(step) => format!(
+                    "{}{} \u{b7} {}",
+                    step.name,
+                    if task.oversight.deciding {
+                        " \u{b7} approval decision"
+                    } else {
+                        ""
+                    },
+                    core_factory::agent_label(&task.agent)
+                ),
+                None => core_factory::agent_label(&task.agent),
+            },
+            outcome: task.outcome().map(str::to_string),
+            pr: super::delivery::card_line(task),
+        }
+    }
 }
 
 /// What the Factory's head draws from the window: the Project and its
@@ -177,9 +219,10 @@ pub(crate) enum FactoryEvent {
 pub(crate) struct FactoryInputs {
     /// The Project's title.
     title: String,
-    /// How many Tasks are on the board, and whether one is Completed.
-    tasks: usize,
-    completed: bool,
+    /// The Tasks on the board, as their cards say them.
+    cards: Vec<TaskCard>,
+    /// The board's width, which the columns and the Task panel share.
+    board_w: f32,
     /// How many the Archive holds.
     archived: usize,
     /// The Coordinator's waiting proposals, and the Project's Workflows.
@@ -199,8 +242,15 @@ impl FactoryView {
     }
 
     /// The Factory board: its head, why its store could not be read, and
-    /// `body`, the surface shown, which the root draws.
-    fn board(&self, inputs: &FactoryInputs, body: AnyElement, cx: &mut Context<Self>) -> Div {
+    /// the surface shown: `body`, which the root draws, else the Board's
+    /// columns with the open Task's `panel` beside them.
+    fn board(
+        &self,
+        inputs: &FactoryInputs,
+        body: Option<AnyElement>,
+        panel: Option<AnyElement>,
+        cx: &mut Context<Self>,
+    ) -> Div {
         use ferrite_ui::theme::*;
         div()
             .debug_selector(|| "factory-board".into())
@@ -218,18 +268,19 @@ impl FactoryView {
             .text_color(rgb(INK_STRONG))
             .child(self.head(inputs, cx))
             .children(inputs.trouble.clone().map(trouble))
-            .child(body)
+            .child(body.unwrap_or_else(|| self.board_columns(inputs, panel, cx)))
     }
 
     /// The head: the Project's title, its Tasks, the surface tabs, the
     /// note, and the Board's own buttons.
     fn head(&self, inputs: &FactoryInputs, cx: &mut Context<Self>) -> Div {
         use ferrite_ui::theme::*;
-        let count = match inputs.tasks {
+        let count = match inputs.cards.len() {
             0 => "No tasks".to_string(),
             1 => "1 task".to_string(),
             n => format!("{n} tasks"),
         };
+        let completed = inputs.cards.iter().any(|card| card.status == Status::Completed);
         let on_board = self.surface == super::workflows::Surface::Board && !self.archive_shown;
         div()
             .debug_selector(|| "factory-head".into())
@@ -290,7 +341,7 @@ impl FactoryView {
             }))
             // Clear, while Completed holds a Task: in the head, where it
             // stays clickable however far the columns scroll.
-            .when(on_board && inputs.completed, |head| {
+            .when(on_board && completed, |head| {
                 head.child(
                     ferrite_ui::components::ghost_button("factory-clear", "Clear completed", cx)
                         .flex_shrink_0()
@@ -332,6 +383,240 @@ impl FactoryView {
             )
     }
 
+    /// The Board: its six columns of Task cards with the open Task's
+    /// `panel` beside them, which the root draws; while it holds no Task,
+    /// how to start one.
+    fn board_columns(
+        &self,
+        inputs: &FactoryInputs,
+        panel: Option<AnyElement>,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        use ferrite_ui::theme::*;
+        if inputs.cards.is_empty() {
+            return div()
+                .debug_selector(|| "factory-empty".into())
+                .flex_1()
+                .flex()
+                .flex_col()
+                .items_center()
+                .justify_center()
+                .gap(px(SPACE_2))
+                .child(ferrite_ui::icons::icon(
+                    ferrite_ui::icons::BOARD,
+                    SPACE_6,
+                    INK_SUBTLE,
+                ))
+                .child(
+                    div()
+                        .font_weight(W_LABEL)
+                        .text_color(rgb(INK_STRONG))
+                        .child("No tasks yet"),
+                )
+                .child(
+                    div()
+                        .text_size(px(FS_META))
+                        .text_color(rgb(INK_SUBTLE))
+                        .child("Start one with New task. Nothing runs until you do."),
+                )
+                .into_any_element();
+        }
+        let open = self.open.as_deref();
+        let mut columns = div()
+            .id("factory-columns")
+            .debug_selector(|| "factory-columns".into())
+            .flex_1()
+            .min_w_0()
+            .min_h_0()
+            .flex()
+            .flex_row()
+            .gap(px(SPACE_3))
+            .px(px(SPACE_4))
+            .pb(px(SPACE_4))
+            .overflow_x_scroll()
+            .track_scroll(&self.columns);
+        let fit = ColumnFit::of(
+            inputs.board_w - if panel.is_some() { TASK_PANEL_W } else { 0. },
+        );
+        // The open Task's column comes into view beside its panel, and
+        // again when the Task moves column, whole columns either side.
+        if let Some(task) = open.and_then(|open| inputs.cards.iter().find(|card| card.id == open)) {
+            let at = Status::ALL
+                .iter()
+                .position(|each| *each == task.status)
+                .unwrap_or_default();
+            let key = (task.id.clone(), at, fit.shown);
+            if self.revealed.take().as_ref() != Some(&key) {
+                let first = fit.first_showing(at, self.columns.offset().x);
+                self.columns
+                    .set_offset(gpui::point(px(-fit.offset(first)), px(0.)));
+            }
+            self.revealed.set(Some(key));
+        }
+        for status in Status::ALL {
+            let in_column: Vec<&TaskCard> = inputs
+                .cards
+                .iter()
+                .filter(|card| card.status == status)
+                .collect();
+            let key = status_key(status);
+            let mut column = div()
+                .id(SharedString::from(format!("factory-column-{key}")))
+                .debug_selector({
+                    let key = key.clone();
+                    move || format!("factory-column-{key}")
+                })
+                .flex()
+                .flex_col()
+                .map(|column| match fit.width {
+                    Some(width) => column.flex_shrink_0().w(px(width)),
+                    None => column.flex_1().min_w(px(COLUMN_MIN_W)),
+                })
+                .min_h_0()
+                .gap(px(SPACE_2))
+                .overflow_y_scroll()
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap(px(SPACE_2))
+                        .h(px(CONTROL_H))
+                        .flex_shrink_0()
+                        .child(ferrite_ui::components::status_dot(status_ink(status)))
+                        .child(
+                            div()
+                                .min_w_0()
+                                .truncate()
+                                .font_weight(W_LABEL)
+                                .text_size(px(FS_LABEL))
+                                .text_color(rgb(INK_STRONG))
+                                .child(status.column()),
+                        )
+                        .child(
+                            div()
+                                .flex_shrink_0()
+                                .text_size(px(FS_META))
+                                .text_color(rgb(INK_SUBTLE))
+                                .child(SharedString::from(in_column.len().to_string())),
+                        ),
+                );
+            if in_column.is_empty() {
+                column = column.child(
+                    div()
+                        .text_size(px(FS_META))
+                        .text_color(rgb(INK_SUBTLE))
+                        .child("None"),
+                );
+            }
+            for task in in_column {
+                column = column.child(self.task_card(task, open == Some(task.id.as_str()), cx));
+            }
+            columns = columns.child(column);
+        }
+        div()
+            .flex_1()
+            .min_h_0()
+            .flex()
+            .flex_row()
+            .child(columns)
+            .children(panel)
+            .into_any_element()
+    }
+
+    /// One Task's card: its title, its Worker's Provider and model, and
+    /// its result or stop reason.
+    fn task_card(&self, task: &TaskCard, open: bool, cx: &mut Context<Self>) -> AnyElement {
+        use ferrite_ui::theme::*;
+        let id = task.id.clone();
+        let key = format!("factory-card-{}", task.id);
+        let agent_key = format!("{key}-agent");
+        let outcome_key = format!("{key}-outcome");
+        let card = div()
+            .id(SharedString::from(key.clone()))
+            .debug_selector(move || key.clone())
+            .flex()
+            .flex_col()
+            .flex_shrink_0()
+            .min_w_0()
+            .gap(px(SPACE_1))
+            .p(px(SPACE_3))
+            .rounded(px(R_CONTROL))
+            .border_1()
+            .border_color(paint::CARD_RING)
+            .cursor_pointer()
+            .map(|card| {
+                if open {
+                    card.bg(paint::SELECTED)
+                } else {
+                    card.bg(paint::RAISED)
+                        .hover(|card| card.bg(paint::SELECTED))
+                }
+            })
+            .child(
+                div()
+                    .text_size(px(FS_META))
+                    .text_color(rgb(INK_SUBTLE))
+                    .child(SharedString::from(format!("#{}", task.id))),
+            )
+            .child(
+                div()
+                    .text_color(rgb(INK_STRONG))
+                    .line_clamp(2)
+                    .text_ellipsis()
+                    .child(SharedString::from(task.title.clone())),
+            )
+            .child(
+                div()
+                    .debug_selector(move || agent_key.clone())
+                    .flex()
+                    .items_center()
+                    .min_w_0()
+                    .gap(px(SPACE_1))
+                    .text_size(px(FS_META))
+                    .text_color(rgb(INK_SUBTLE))
+                    .child({
+                        let (mark, ink) = ferrite_ui::provider::mark(task.provider);
+                        ferrite_ui::icons::icon(mark, BAR_MARK, ink)
+                    })
+                    .child(
+                        div()
+                            .min_w_0()
+                            .truncate()
+                            .child(SharedString::from(task.agent.clone())),
+                    ),
+            )
+            .children(task.outcome.clone().map(|line| {
+                div()
+                    .debug_selector(move || outcome_key.clone())
+                    .text_size(px(FS_META))
+                    .text_color(rgb(if task.status == Status::Stopped {
+                        BLOCKED
+                    } else {
+                        INK_STRONG
+                    }))
+                    .line_clamp(3)
+                    .text_ellipsis()
+                    .child(SharedString::from(line))
+            }))
+            .children(task.pr.clone().map(|line| {
+                let pr_key = format!("factory-card-{}-pr", task.id);
+                div()
+                    .debug_selector(move || pr_key.clone())
+                    .text_size(px(FS_META))
+                    .text_color(rgb(INK_SUBTLE))
+                    .child(SharedString::from(line))
+            }))
+            .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
+                if view.open.as_deref() == Some(id.as_str()) {
+                    view.open = None;
+                    cx.notify();
+                } else {
+                    cx.emit(FactoryEvent::OpenTask(id.clone()));
+                }
+            }));
+        card.into_any_element()
+    }
+
     /// The surface tabs: Coordinator, Board and Workflows, each with its
     /// count.
     fn surface_tabs(&self, inputs: &FactoryInputs, cx: &mut Context<Self>) -> Div {
@@ -339,7 +624,7 @@ impl FactoryView {
         use ferrite_ui::theme::*;
         let counts = [
             (Surface::Coordinator, "Coordinator", inputs.proposals),
-            (Surface::Board, "Board", inputs.tasks),
+            (Surface::Board, "Board", inputs.cards.len()),
             (Surface::Workflows, "Workflows", inputs.workflows),
         ];
         let mut tabs = div().flex().items_center().gap(px(SPACE_1));
@@ -454,7 +739,8 @@ impl CockpitView {
         view
     }
 
-    /// The head's presses: a surface tab, Clear completed, New task.
+    /// The head's presses (a surface tab, Clear completed, New task) and
+    /// a Task's card.
     fn on_factory_event(
         &mut self,
         _: Entity<FactoryView>,
@@ -472,6 +758,7 @@ impl CockpitView {
             }
             FactoryEvent::Clear => self.clear_completed(cx),
             FactoryEvent::NewTask => self.open_new_task(cx),
+            FactoryEvent::OpenTask(task) => self.open_task(task, cx),
         }
     }
 
@@ -862,12 +1149,11 @@ impl CockpitView {
             .collect()
     }
 
-    /// What the Factory's head draws: the Project and its Factory as the
-    /// board says them now.
-    fn factory_inputs(&self) -> Option<FactoryInputs> {
+    /// What the Factory's head and the Board draw: the Project and its
+    /// Factory as the board says them now.
+    fn factory_inputs(&self, window: &Window) -> Option<FactoryInputs> {
         let project = self.factory_project()?;
         let board = self.cockpit.factory();
-        let tasks: Vec<&Task> = board.on_board(project).collect();
         Some(FactoryInputs {
             title: self
                 .cockpit
@@ -875,8 +1161,8 @@ impl CockpitView {
                 .project(project)
                 .map(|project| project.title.clone())
                 .unwrap_or_else(|| "Project".into()),
-            tasks: tasks.len(),
-            completed: tasks.iter().any(|task| task.status == Status::Completed),
+            cards: board.on_board(project).map(TaskCard::of).collect(),
+            board_w: self.board_bounds(window).w,
             archived: board.archive(project, "").count(),
             proposals: board
                 .proposals_of(project)
@@ -887,271 +1173,31 @@ impl CockpitView {
         })
     }
 
-    /// The Factory board: the Factory's head over the surface shown, the
-    /// six columns with the open Task's panel beside them on the Board.
+    /// The Factory board: the Factory's head over the surface shown; on
+    /// the Board, the open Task's panel the view sets beside its columns.
     pub(super) fn factory_board(&self, window: &mut Window, cx: &mut Context<Self>) -> Div {
-        use ferrite_ui::theme::*;
-        let (Some(project), Some(factory)) = (self.factory_project(), self.factory().cloned())
+        let (Some(factory), Some(inputs)) = (self.factory().cloned(), self.factory_inputs(window))
         else {
             return div();
         };
-        let Some(inputs) = self.factory_inputs() else {
-            return div();
-        };
-        let (surface, archive_shown, open, editor, columns) = {
+        let (surface, archive_shown, editor) = {
             let view = factory.read(cx);
-            (
-                view.surface,
-                view.archive_shown,
-                view.open.clone(),
-                view.editor.clone(),
-                view.columns.clone(),
-            )
+            (view.surface, view.archive_shown, view.editor.clone())
         };
-        let board = self.cockpit.factory();
-        let tasks: Vec<&Task> = board.on_board(project).collect();
-        let body = if surface == super::workflows::Surface::Workflows {
-            editor.into_any_element()
+        // A surface the root draws in the Board's place, else the open
+        // Task's panel beside the Board's columns.
+        let (body, panel) = if surface == super::workflows::Surface::Workflows {
+            (Some(editor.into_any_element()), None)
         } else if surface == super::workflows::Surface::Coordinator {
-            self.coordinator_surface(window, cx).into_any_element()
+            (Some(self.coordinator_surface(window, cx).into_any_element()), None)
         } else if archive_shown {
-            self.archive_surface(window, cx).into_any_element()
-        } else if tasks.is_empty() {
-            div()
-                .debug_selector(|| "factory-empty".into())
-                .flex_1()
-                .flex()
-                .flex_col()
-                .items_center()
-                .justify_center()
-                .gap(px(SPACE_2))
-                .child(ferrite_ui::icons::icon(
-                    ferrite_ui::icons::BOARD,
-                    SPACE_6,
-                    INK_SUBTLE,
-                ))
-                .child(
-                    div()
-                        .font_weight(W_LABEL)
-                        .text_color(rgb(INK_STRONG))
-                        .child("No tasks yet"),
-                )
-                .child(
-                    div()
-                        .text_size(px(FS_META))
-                        .text_color(rgb(INK_SUBTLE))
-                        .child("Start one with New task. Nothing runs until you do."),
-                )
-                .into_any_element()
+            (Some(self.archive_surface(window, cx).into_any_element()), None)
+        } else if inputs.cards.is_empty() {
+            (None, None)
         } else {
-            let open = open.as_deref();
-            let scroll = columns;
-            let mut columns = div()
-                .id("factory-columns")
-                .debug_selector(|| "factory-columns".into())
-                .flex_1()
-                .min_w_0()
-                .min_h_0()
-                .flex()
-                .flex_row()
-                .gap(px(SPACE_3))
-                .px(px(SPACE_4))
-                .pb(px(SPACE_4))
-                .overflow_x_scroll()
-                .track_scroll(&scroll);
-            let panel = self.task_panel(window, cx);
-            let fit = ColumnFit::of(
-                self.board_bounds(window).w - if panel.is_some() { TASK_PANEL_W } else { 0. },
-            );
-            // The open Task's column comes into view beside its panel, and
-            // again when the Task moves column, whole columns either side.
-            if let Some(task) = open.and_then(|open| tasks.iter().find(|task| task.id == open)) {
-                let at = Status::ALL
-                    .iter()
-                    .position(|each| *each == task.status)
-                    .unwrap_or_default();
-                let key = (task.id.clone(), at, fit.shown);
-                let revealed = &factory.read(cx).revealed;
-                if revealed.take().as_ref() != Some(&key) {
-                    let first = fit.first_showing(at, scroll.offset().x);
-                    scroll.set_offset(gpui::point(px(-fit.offset(first)), px(0.)));
-                }
-                revealed.set(Some(key));
-            }
-            for status in Status::ALL {
-                let in_column: Vec<&&Task> =
-                    tasks.iter().filter(|task| task.status == status).collect();
-                let key = status_key(status);
-                let mut column = div()
-                    .id(SharedString::from(format!("factory-column-{key}")))
-                    .debug_selector({
-                        let key = key.clone();
-                        move || format!("factory-column-{key}")
-                    })
-                    .flex()
-                    .flex_col()
-                    .map(|column| match fit.width {
-                        Some(width) => column.flex_shrink_0().w(px(width)),
-                        None => column.flex_1().min_w(px(COLUMN_MIN_W)),
-                    })
-                    .min_h_0()
-                    .gap(px(SPACE_2))
-                    .overflow_y_scroll()
-                    .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .gap(px(SPACE_2))
-                            .h(px(CONTROL_H))
-                            .flex_shrink_0()
-                            .child(ferrite_ui::components::status_dot(status_ink(status)))
-                            .child(
-                                div()
-                                    .min_w_0()
-                                    .truncate()
-                                    .font_weight(W_LABEL)
-                                    .text_size(px(FS_LABEL))
-                                    .text_color(rgb(INK_STRONG))
-                                    .child(status.column()),
-                            )
-                            .child(
-                                div()
-                                    .flex_shrink_0()
-                                    .text_size(px(FS_META))
-                                    .text_color(rgb(INK_SUBTLE))
-                                    .child(SharedString::from(in_column.len().to_string())),
-                            ),
-                    );
-                if in_column.is_empty() {
-                    column = column.child(
-                        div()
-                            .text_size(px(FS_META))
-                            .text_color(rgb(INK_SUBTLE))
-                            .child("None"),
-                    );
-                }
-                for task in in_column {
-                    column = column.child(self.task_card(task, open == Some(task.id.as_str()), cx));
-                }
-                columns = columns.child(column);
-            }
-            div()
-                .flex_1()
-                .min_h_0()
-                .flex()
-                .flex_row()
-                .child(columns)
-                .children(panel)
-                .into_any_element()
+            (None, self.task_panel(window, cx))
         };
-
-        factory.update(cx, |factory, cx| factory.board(&inputs, body, cx))
-    }
-
-    /// One Task's card: its title, its Worker's Provider and model, and
-    /// its result or stop reason.
-    fn task_card(&self, task: &Task, open: bool, cx: &mut Context<Self>) -> AnyElement {
-        use ferrite_ui::theme::*;
-        let id = task.id.clone();
-        let key = format!("factory-card-{}", task.id);
-        let agent_key = format!("{key}-agent");
-        let outcome_key = format!("{key}-outcome");
-        let card = div()
-            .id(SharedString::from(key.clone()))
-            .debug_selector(move || key.clone())
-            .flex()
-            .flex_col()
-            .flex_shrink_0()
-            .min_w_0()
-            .gap(px(SPACE_1))
-            .p(px(SPACE_3))
-            .rounded(px(R_CONTROL))
-            .border_1()
-            .border_color(paint::CARD_RING)
-            .cursor_pointer()
-            .map(|card| {
-                if open {
-                    card.bg(paint::SELECTED)
-                } else {
-                    card.bg(paint::RAISED)
-                        .hover(|card| card.bg(paint::SELECTED))
-                }
-            })
-            .child(
-                div()
-                    .text_size(px(FS_META))
-                    .text_color(rgb(INK_SUBTLE))
-                    .child(SharedString::from(format!("#{}", task.id))),
-            )
-            .child(
-                div()
-                    .text_color(rgb(INK_STRONG))
-                    .line_clamp(2)
-                    .text_ellipsis()
-                    .child(SharedString::from(task.title.clone())),
-            )
-            .child(
-                div()
-                    .debug_selector(move || agent_key.clone())
-                    .flex()
-                    .items_center()
-                    .min_w_0()
-                    .gap(px(SPACE_1))
-                    .text_size(px(FS_META))
-                    .text_color(rgb(INK_SUBTLE))
-                    .child({
-                        let (mark, ink) = ferrite_ui::provider::mark(task.agent.provider);
-                        ferrite_ui::icons::icon(mark, BAR_MARK, ink)
-                    })
-                    .child(div().min_w_0().truncate().child(SharedString::from(
-                        match task.current_step() {
-                            Some(step) => format!(
-                                "{}{} \u{b7} {}",
-                                step.name,
-                                if task.oversight.deciding {
-                                    " \u{b7} approval decision"
-                                } else {
-                                    ""
-                                },
-                                core_factory::agent_label(&task.agent)
-                            ),
-                            None => core_factory::agent_label(&task.agent),
-                        },
-                    ))),
-            )
-            .children(task.outcome().map(|line| {
-                div()
-                    .debug_selector(move || outcome_key.clone())
-                    .text_size(px(FS_META))
-                    .text_color(rgb(if task.status == Status::Stopped {
-                        BLOCKED
-                    } else {
-                        INK_STRONG
-                    }))
-                    .line_clamp(3)
-                    .text_ellipsis()
-                    .child(SharedString::from(line))
-            }))
-            .children(super::delivery::card_line(task).map(|line| {
-                let pr_key = format!("factory-card-{}-pr", task.id);
-                div()
-                    .debug_selector(move || pr_key.clone())
-                    .text_size(px(FS_META))
-                    .text_color(rgb(INK_SUBTLE))
-                    .child(SharedString::from(line))
-            }))
-            .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
-                let shut = view
-                    .factory()
-                    .is_some_and(|shown| shown.read(cx).open.as_deref() == Some(id.as_str()));
-                if shut {
-                    view.update_factory(cx, |shown, _| shown.open = None);
-                    cx.notify();
-                } else {
-                    view.open_task(&id, cx);
-                }
-            }));
-        card.into_any_element()
+        factory.update(cx, |factory, cx| factory.board(&inputs, body, panel, cx))
     }
 
     /// The open Task's panel: its status, tabs, and the tab's content.
