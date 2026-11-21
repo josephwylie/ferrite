@@ -172,6 +172,21 @@ pub(crate) enum FactoryEvent {
     NewTask,
     /// A Task's card: its panel opens.
     OpenTask(TaskId),
+    /// A tab of the open Task's panel: the Worker's takes the keyboard to
+    /// its Pane.
+    Tab(TaskTab),
+    /// Stop, Resume or Delete on the open Task.
+    Command(TaskAction),
+}
+
+/// What the open Task's panel draws from the window.
+pub(crate) struct TaskPanel {
+    /// The Task, as the board says it now.
+    task: Task,
+    /// On its Worker tab, what only the root draws: the Worker's Pane, an
+    /// earlier Worker read, or the Workers it had; none while no agent
+    /// works on it.
+    worker: Option<AnyElement>,
 }
 
 /// One Task as its card says it.
@@ -242,15 +257,31 @@ impl FactoryView {
     }
 
     /// The Factory board: its head, why its store could not be read, and
-    /// the surface shown: `body`, which the root draws, else the Board's
-    /// columns with the open Task's `panel` beside them.
+    /// the surface shown: the Coordinator's (`coordinator`, which the root
+    /// draws round its Pane), the Workflows editor, the Archive's list or
+    /// the Board's columns, with the open Task's `panel` beside them.
     fn board(
         &self,
         inputs: &FactoryInputs,
-        body: Option<AnyElement>,
-        panel: Option<AnyElement>,
+        coordinator: Option<AnyElement>,
+        panel: Option<TaskPanel>,
         cx: &mut Context<Self>,
     ) -> Div {
+        use super::workflows::Surface;
+        let panel = panel.map(|panel| self.task_panel(panel, cx));
+        let body = match self.surface {
+            Surface::Workflows => self.editor.clone().into_any_element(),
+            Surface::Coordinator => coordinator.unwrap_or_else(|| div().into_any_element()),
+            Surface::Board if self.archive_shown => div()
+                .flex_1()
+                .min_h_0()
+                .flex()
+                .flex_row()
+                .child(self.archive.clone())
+                .children(panel)
+                .into_any_element(),
+            Surface::Board => self.board_columns(inputs, panel, cx),
+        };
         use ferrite_ui::theme::*;
         div()
             .debug_selector(|| "factory-board".into())
@@ -268,7 +299,7 @@ impl FactoryView {
             .text_color(rgb(INK_STRONG))
             .child(self.head(inputs, cx))
             .children(inputs.trouble.clone().map(trouble))
-            .child(body.unwrap_or_else(|| self.board_columns(inputs, panel, cx)))
+            .child(body)
     }
 
     /// The head: the Project's title, its Tasks, the surface tabs, the
@@ -617,6 +648,295 @@ impl FactoryView {
         card.into_any_element()
     }
 
+    /// The open Task's panel: its status, tabs, and the tab's content.
+    fn task_panel(&self, panel: TaskPanel, cx: &mut Context<Self>) -> AnyElement {
+        use ferrite_ui::theme::*;
+        let TaskPanel { task, worker } = panel;
+        let task = &task;
+        let tab = self.tab;
+        let id = task.id.clone();
+
+        let mut actions = div().flex().items_center().gap(px(SPACE_2));
+        // Archived, a Task is read-only (#226).
+        let archived = task.archived();
+        if archived {
+            actions = actions.child(
+                div()
+                    .debug_selector(|| "task-archived".into())
+                    .text_size(px(FS_META))
+                    .text_color(rgb(INK_SUBTLE))
+                    .child(SharedString::from(match task.keeping.archived_ms {
+                        Some(at) => format!("Archived {}", core_factory::when_label(at)),
+                        None => "Archived".to_string(),
+                    })),
+            );
+        } else if task.status.stoppable() {
+            let task = id.clone();
+            actions = actions.child(
+                ferrite_ui::components::secondary_button("task-stop", None, "Stop", cx)
+                    .debug_selector(|| "task-stop".into())
+                    .on_click(cx.listener(move |_, _: &ClickEvent, _, cx| {
+                        cx.emit(FactoryEvent::Command(TaskAction::Stop { task: task.clone() }))
+                    })),
+            );
+        }
+        if task.status == Status::Stopped && !archived {
+            let task = id.clone();
+            actions = actions.child(
+                ferrite_ui::components::secondary_button("task-resume", None, "Resume", cx)
+                    .debug_selector(|| "task-resume".into())
+                    .on_click(cx.listener(move |_, _: &ClickEvent, _, cx| {
+                        cx.emit(FactoryEvent::Command(TaskAction::Resume { task: task.clone() }))
+                    })),
+            );
+        }
+        if task.status.deletable() && !archived {
+            let task = id.clone();
+            actions = actions.child(
+                crate::project_editor::destructive_button("task-delete", "Delete", false, cx)
+                    .debug_selector(|| "task-delete".into())
+                    .on_click(cx.listener(move |_, _: &ClickEvent, _, cx| {
+                        cx.emit(FactoryEvent::Command(TaskAction::Delete { task: task.clone() }))
+                    })),
+            );
+        }
+        let close = ferrite_ui::components::ghost_button("task-close", "Close", cx)
+            .debug_selector(|| "task-close".into())
+            .on_click(cx.listener(|view, _: &ClickEvent, _, cx| {
+                view.open = None;
+                cx.notify();
+            }));
+        let head = div()
+            .flex()
+            .flex_col()
+            .flex_shrink_0()
+            .gap(px(SPACE_2))
+            .p(px(SPACE_4))
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(SPACE_2))
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .font_weight(W_LABEL)
+                            .truncate()
+                            .child(SharedString::from(task.title.clone())),
+                    )
+                    .child(close),
+            )
+            .child(
+                div()
+                    .debug_selector(|| "task-status".into())
+                    .flex()
+                    .items_center()
+                    .gap(px(SPACE_2))
+                    .text_size(px(FS_META))
+                    .text_color(rgb(INK_SUBTLE))
+                    .child(ferrite_ui::components::status_dot(status_ink(task.status)))
+                    .child(task.status.word())
+                    .child("\u{b7}")
+                    .child(SharedString::from(core_factory::agent_label(&task.agent)))
+                    .when(task.oversight.deciding, |line| {
+                        line.child("\u{b7} approval decision")
+                    }),
+            )
+            .child(actions);
+
+        let mut tabs = div()
+            .flex()
+            .flex_shrink_0()
+            .items_center()
+            .gap(px(SPACE_1))
+            .px(px(SPACE_4))
+            .border_b_1()
+            .border_color(paint::LINE);
+        for each in TaskTab::ALL {
+            let key = format!("task-tab-{}", each.key());
+            let selected = each == tab;
+            tabs = tabs.child(
+                div()
+                    .id(SharedString::from(key.clone()))
+                    .debug_selector(move || key.clone())
+                    .px(px(SPACE_2))
+                    .h(px(CONTROL_H))
+                    .flex()
+                    .items_center()
+                    .rounded(px(R_CONTROL))
+                    .cursor_pointer()
+                    .text_size(px(FS_LABEL))
+                    .font_weight(if selected { W_LABEL } else { W_BODY })
+                    .text_color(rgb(if selected { INK_STRONG } else { INK_SUBTLE }))
+                    .when(selected, |tab| tab.bg(paint::RAISED))
+                    .when(!selected, |tab| tab.hover(|tab| tab.bg(paint::HOVER)))
+                    .child(each.word())
+                    .on_click(
+                        cx.listener(move |_, _: &ClickEvent, _, cx| cx.emit(FactoryEvent::Tab(each))),
+                    ),
+            );
+        }
+
+        let content: AnyElement = match tab {
+            TaskTab::Overview => {
+                // A question, a permission or the approval block says it.
+                let why_said = task.oversight.question.is_some()
+                    || task.oversight.permission.is_some()
+                    || task.status == Status::Approval;
+                let line = |label: &'static str, text: String| {
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap(px(SPACE_0_5))
+                        .child(
+                            div()
+                                .text_size(px(FS_META))
+                                .text_color(rgb(INK_SUBTLE))
+                                .child(label),
+                        )
+                        .child(div().child(SharedString::from(text)))
+                };
+                div()
+                    .id("task-overview")
+                    .debug_selector(|| "task-overview".into())
+                    .flex_1()
+                    .min_h_0()
+                    .overflow_y_scroll()
+                    .flex()
+                    .flex_col()
+                    .gap(px(SPACE_3))
+                    .p(px(SPACE_4))
+                    .children(
+                        task.result
+                            .clone()
+                            .filter(|_| task.status != Status::Approval)
+                            .map(|result| line("Result", result)),
+                    )
+                    .children(
+                        task.reason
+                            .clone()
+                            .filter(|_| !why_said)
+                            .map(|reason| line("Why", reason).debug_selector(|| "task-why".into())),
+                    )
+                    .child(line("Status", task.status.word().to_string()))
+                    .children(super::direction::says(task).then(|| self.direction.clone()))
+                    .children(super::delivery::task_delivery(task, cx))
+                    .into_any_element()
+            }
+            TaskTab::Activity => {
+                let mut list = div()
+                    .id("task-activity")
+                    .debug_selector(|| "task-activity".into())
+                    .flex()
+                    .flex_col()
+                    .gap(px(SPACE_2))
+                    .p(px(SPACE_4))
+                    .overflow_y_scroll();
+                for (at, entry) in task.activity.iter().enumerate() {
+                    let who = entry.by.word();
+                    let text = match entry.revision {
+                        Some(revision) => format!("{} \u{b7} revision {revision}", entry.text),
+                        None => entry.text.clone(),
+                    };
+                    list = list.child(
+                        div()
+                            .debug_selector(move || format!("task-activity-{at}"))
+                            .flex()
+                            .gap(px(SPACE_2))
+                            .child(
+                                div()
+                                    .flex_shrink_0()
+                                    .w(px(64.))
+                                    .text_size(px(FS_META))
+                                    .text_color(rgb(INK_SUBTLE))
+                                    .child(who),
+                            )
+                            .child(div().flex_1().min_w_0().child(SharedString::from(text))),
+                    );
+                }
+                list.into_any_element()
+            }
+            TaskTab::Context => {
+                let fact = |label: &'static str, text: String| {
+                    div()
+                        .flex()
+                        .gap(px(SPACE_2))
+                        .child(
+                            div()
+                                .flex_shrink_0()
+                                .w(px(80.))
+                                .text_size(px(FS_META))
+                                .text_color(rgb(INK_SUBTLE))
+                                .child(label),
+                        )
+                        .child(div().flex_1().min_w_0().child(SharedString::from(text)))
+                };
+                div()
+                    .id("task-context")
+                    .debug_selector(|| "task-context".into())
+                    .flex()
+                    .flex_col()
+                    .gap(px(SPACE_2))
+                    .p(px(SPACE_4))
+                    .overflow_y_scroll()
+                    .child(fact("Branch", task.branch.clone()))
+                    .children(
+                        task.worktree.as_ref().map(|path| {
+                            fact("Worktree", ferrite_ui::components::home_relative(path))
+                        }),
+                    )
+                    .child(fact("Agent", core_factory::agent_label(&task.agent)))
+                    .children(task.delivery.pr.as_ref().map(|pr| fact("PR", pr.url())))
+                    .children(task.workflow.as_ref().map(|run| {
+                        fact(
+                            "Workflow",
+                            format!("{} \u{b7} version {}", run.definition.name, run.version),
+                        )
+                    }))
+                    .children(
+                        task.current_step()
+                            .map(|step| fact("Step", step.name.clone())),
+                    )
+                    .child(
+                        div()
+                            .pt(px(SPACE_2))
+                            .text_size(px(FS_META))
+                            .text_color(rgb(INK_SUBTLE))
+                            .child("Instructions"),
+                    )
+                    .child(
+                        div()
+                            .debug_selector(|| "task-instructions".into())
+                            .child(SharedString::from(task.instructions.clone())),
+                    )
+                    .into_any_element()
+            }
+            TaskTab::Worker => worker.unwrap_or_else(|| {
+                div()
+                    .debug_selector(|| "task-worker-none".into())
+                    .p(px(SPACE_4))
+                    .text_color(rgb(INK_SUBTLE))
+                    .child("No agent is working on this task right now.")
+                    .into_any_element()
+            }),
+        };
+
+        div()
+            .debug_selector(|| "task-panel".into())
+            .flex()
+            .flex_col()
+            .flex_shrink_0()
+            .w(px(TASK_PANEL_W))
+            .min_h_0()
+            .border_l_1()
+            .border_color(paint::LINE)
+            .child(head)
+            .child(tabs)
+            .child(div().flex_1().min_h_0().flex().flex_col().child(content))
+            .into_any_element()
+    }
+
     /// The surface tabs: Coordinator, Board and Workflows, each with its
     /// count.
     fn surface_tabs(&self, inputs: &FactoryInputs, cx: &mut Context<Self>) -> Div {
@@ -739,8 +1059,8 @@ impl CockpitView {
         view
     }
 
-    /// The head's presses (a surface tab, Clear completed, New task) and
-    /// a Task's card.
+    /// The head's presses (a surface tab, Clear completed, New task), a
+    /// Task's card, and the open Task's panel's tabs and commands.
     fn on_factory_event(
         &mut self,
         _: Entity<FactoryView>,
@@ -759,6 +1079,8 @@ impl CockpitView {
             FactoryEvent::Clear => self.clear_completed(cx),
             FactoryEvent::NewTask => self.open_new_task(cx),
             FactoryEvent::OpenTask(task) => self.open_task(task, cx),
+            FactoryEvent::Tab(tab) => self.task_tab(*tab, cx),
+            FactoryEvent::Command(action) => self.task_command(action.clone(), cx),
         }
     }
 
@@ -1173,339 +1495,58 @@ impl CockpitView {
         })
     }
 
-    /// The Factory board: the Factory's head over the surface shown; on
-    /// the Board, the open Task's panel the view sets beside its columns.
+    /// The Factory board: the Factory's head over the surface shown.
     pub(super) fn factory_board(&self, window: &mut Window, cx: &mut Context<Self>) -> Div {
         let (Some(factory), Some(inputs)) = (self.factory().cloned(), self.factory_inputs(window))
         else {
             return div();
         };
-        let (surface, archive_shown, editor) = {
+        let (surface, archive_shown) = {
             let view = factory.read(cx);
-            (view.surface, view.archive_shown, view.editor.clone())
+            (view.surface, view.archive_shown)
         };
-        // A surface the root draws in the Board's place, else the open
-        // Task's panel beside the Board's columns.
-        let (body, panel) = if surface == super::workflows::Surface::Workflows {
-            (Some(editor.into_any_element()), None)
-        } else if surface == super::workflows::Surface::Coordinator {
-            (Some(self.coordinator_surface(window, cx).into_any_element()), None)
-        } else if archive_shown {
-            (Some(self.archive_surface(window, cx).into_any_element()), None)
-        } else if inputs.cards.is_empty() {
-            (None, None)
-        } else {
-            (None, self.task_panel(window, cx))
+        // What only the root draws: the Coordinator's surface round its
+        // Pane, else the open Task's panel's inputs on the Board or the
+        // Archive.
+        let (coordinator, panel) = match surface {
+            super::workflows::Surface::Coordinator => {
+                (Some(self.coordinator_surface(window, cx).into_any_element()), None)
+            }
+            super::workflows::Surface::Board if archive_shown || !inputs.cards.is_empty() => {
+                (None, self.task_panel_inputs(window, cx))
+            }
+            _ => (None, None),
         };
-        factory.update(cx, |factory, cx| factory.board(&inputs, body, panel, cx))
+        factory.update(cx, |factory, cx| factory.board(&inputs, coordinator, panel, cx))
     }
 
-    /// The open Task's panel: its status, tabs, and the tab's content.
-    pub(super) fn task_panel(
-        &self,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> Option<AnyElement> {
-        use ferrite_ui::theme::*;
+    /// What the open Task's panel draws from the window: the Task as the
+    /// board says it now and, on its Worker tab, what only the root draws
+    /// (the Worker's Pane, an earlier Worker read, the Workers it had).
+    fn task_panel_inputs(&self, window: &mut Window, cx: &mut Context<Self>) -> Option<TaskPanel> {
         let tab = self.factory()?.read(cx).tab;
-        let task = self.open_task_now(cx)?;
-        let id = task.id.clone();
-
-        let mut actions = div().flex().items_center().gap(px(SPACE_2));
-        // Archived, a Task is read-only (#226).
-        let archived = task.archived();
-        if archived {
-            actions = actions.child(
-                div()
-                    .debug_selector(|| "task-archived".into())
-                    .text_size(px(FS_META))
-                    .text_color(rgb(INK_SUBTLE))
-                    .child(SharedString::from(match task.keeping.archived_ms {
-                        Some(at) => format!("Archived {}", core_factory::when_label(at)),
-                        None => "Archived".to_string(),
-                    })),
-            );
-        } else if task.status.stoppable() {
-            let task = id.clone();
-            actions = actions.child(
-                ferrite_ui::components::secondary_button("task-stop", None, "Stop", cx)
-                    .debug_selector(|| "task-stop".into())
-                    .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
-                        view.task_command(TaskAction::Stop { task: task.clone() }, cx)
-                    })),
-            );
-        }
-        if task.status == Status::Stopped && !archived {
-            let task = id.clone();
-            actions = actions.child(
-                ferrite_ui::components::secondary_button("task-resume", None, "Resume", cx)
-                    .debug_selector(|| "task-resume".into())
-                    .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
-                        view.task_command(TaskAction::Resume { task: task.clone() }, cx)
-                    })),
-            );
-        }
-        if task.status.deletable() && !archived {
-            let task = id.clone();
-            actions = actions.child(
-                crate::project_editor::destructive_button("task-delete", "Delete", false, cx)
-                    .debug_selector(|| "task-delete".into())
-                    .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
-                        view.task_command(TaskAction::Delete { task: task.clone() }, cx)
-                    })),
-            );
-        }
-        let close = ferrite_ui::components::ghost_button("task-close", "Close", cx)
-            .debug_selector(|| "task-close".into())
-            .on_click(cx.listener(|view, _: &ClickEvent, _, cx| {
-                view.update_factory(cx, |view, _| view.open = None);
-                cx.notify();
-            }));
-        let head = div()
-            .flex()
-            .flex_col()
-            .flex_shrink_0()
-            .gap(px(SPACE_2))
-            .p(px(SPACE_4))
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap(px(SPACE_2))
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .font_weight(W_LABEL)
-                            .truncate()
-                            .child(SharedString::from(task.title.clone())),
-                    )
-                    .child(close),
-            )
-            .child(
-                div()
-                    .debug_selector(|| "task-status".into())
-                    .flex()
-                    .items_center()
-                    .gap(px(SPACE_2))
-                    .text_size(px(FS_META))
-                    .text_color(rgb(INK_SUBTLE))
-                    .child(ferrite_ui::components::status_dot(status_ink(task.status)))
-                    .child(task.status.word())
-                    .child("\u{b7}")
-                    .child(SharedString::from(core_factory::agent_label(&task.agent)))
-                    .when(task.oversight.deciding, |line| {
-                        line.child("\u{b7} approval decision")
-                    }),
-            )
-            .child(actions);
-
-        let mut tabs = div()
-            .flex()
-            .flex_shrink_0()
-            .items_center()
-            .gap(px(SPACE_1))
-            .px(px(SPACE_4))
-            .border_b_1()
-            .border_color(paint::LINE);
-        for each in TaskTab::ALL {
-            let key = format!("task-tab-{}", each.key());
-            let selected = each == tab;
-            tabs = tabs.child(
-                div()
-                    .id(SharedString::from(key.clone()))
-                    .debug_selector(move || key.clone())
-                    .px(px(SPACE_2))
-                    .h(px(CONTROL_H))
-                    .flex()
-                    .items_center()
-                    .rounded(px(R_CONTROL))
-                    .cursor_pointer()
-                    .text_size(px(FS_LABEL))
-                    .font_weight(if selected { W_LABEL } else { W_BODY })
-                    .text_color(rgb(if selected { INK_STRONG } else { INK_SUBTLE }))
-                    .when(selected, |tab| tab.bg(paint::RAISED))
-                    .when(!selected, |tab| tab.hover(|tab| tab.bg(paint::HOVER)))
-                    .child(each.word())
-                    .on_click(
-                        cx.listener(move |view, _: &ClickEvent, _, cx| view.task_tab(each, cx)),
-                    ),
-            );
-        }
-
-        let content: AnyElement = match tab {
-            TaskTab::Overview => {
-                // A question, a permission or the approval block says it.
-                let why_said = task.oversight.question.is_some()
-                    || task.oversight.permission.is_some()
-                    || task.status == Status::Approval;
-                let line = |label: &'static str, text: String| {
+        let task = self.open_task_now(cx)?.clone();
+        let worker = if tab == TaskTab::Worker {
+            match self.pane_for_worker(&task) {
+                Some(index) => Some(
                     div()
+                        .debug_selector(|| "task-worker".into())
+                        .flex_1()
+                        .min_h_0()
                         .flex()
                         .flex_col()
-                        .gap(px(SPACE_0_5))
-                        .child(
-                            div()
-                                .text_size(px(FS_META))
-                                .text_color(rgb(INK_SUBTLE))
-                                .child(label),
-                        )
-                        .child(div().child(SharedString::from(text)))
-                };
-                div()
-                    .id("task-overview")
-                    .debug_selector(|| "task-overview".into())
-                    .flex_1()
-                    .min_h_0()
-                    .overflow_y_scroll()
-                    .flex()
-                    .flex_col()
-                    .gap(px(SPACE_3))
-                    .p(px(SPACE_4))
-                    .children(
-                        task.result
-                            .clone()
-                            .filter(|_| task.status != Status::Approval)
-                            .map(|result| line("Result", result)),
-                    )
-                    .children(
-                        task.reason
-                            .clone()
-                            .filter(|_| !why_said)
-                            .map(|reason| line("Why", reason).debug_selector(|| "task-why".into())),
-                    )
-                    .child(line("Status", task.status.word().to_string()))
-                    .children(self.direction(cx).filter(|_| super::direction::says(task)))
-                    .children(self.task_delivery(task, cx))
-                    .into_any_element()
-            }
-            TaskTab::Activity => {
-                let mut list = div()
-                    .id("task-activity")
-                    .debug_selector(|| "task-activity".into())
-                    .flex()
-                    .flex_col()
-                    .gap(px(SPACE_2))
-                    .p(px(SPACE_4))
-                    .overflow_y_scroll();
-                for (at, entry) in task.activity.iter().enumerate() {
-                    let who = entry.by.word();
-                    let text = match entry.revision {
-                        Some(revision) => format!("{} \u{b7} revision {revision}", entry.text),
-                        None => entry.text.clone(),
-                    };
-                    list = list.child(
-                        div()
-                            .debug_selector(move || format!("task-activity-{at}"))
-                            .flex()
-                            .gap(px(SPACE_2))
-                            .child(
-                                div()
-                                    .flex_shrink_0()
-                                    .w(px(64.))
-                                    .text_size(px(FS_META))
-                                    .text_color(rgb(INK_SUBTLE))
-                                    .child(who),
-                            )
-                            .child(div().flex_1().min_w_0().child(SharedString::from(text))),
-                    );
-                }
-                list.into_any_element()
-            }
-            TaskTab::Context => {
-                let fact = |label: &'static str, text: String| {
-                    div()
-                        .flex()
-                        .gap(px(SPACE_2))
-                        .child(
-                            div()
-                                .flex_shrink_0()
-                                .w(px(80.))
-                                .text_size(px(FS_META))
-                                .text_color(rgb(INK_SUBTLE))
-                                .child(label),
-                        )
-                        .child(div().flex_1().min_w_0().child(SharedString::from(text)))
-                };
-                div()
-                    .id("task-context")
-                    .debug_selector(|| "task-context".into())
-                    .flex()
-                    .flex_col()
-                    .gap(px(SPACE_2))
-                    .p(px(SPACE_4))
-                    .overflow_y_scroll()
-                    .child(fact("Branch", task.branch.clone()))
-                    .children(
-                        task.worktree.as_ref().map(|path| {
-                            fact("Worktree", ferrite_ui::components::home_relative(path))
-                        }),
-                    )
-                    .child(fact("Agent", core_factory::agent_label(&task.agent)))
-                    .children(task.delivery.pr.as_ref().map(|pr| fact("PR", pr.url())))
-                    .children(task.workflow.as_ref().map(|run| {
-                        fact(
-                            "Workflow",
-                            format!("{} \u{b7} version {}", run.definition.name, run.version),
-                        )
-                    }))
-                    .children(
-                        task.current_step()
-                            .map(|step| fact("Step", step.name.clone())),
-                    )
-                    .child(
-                        div()
-                            .pt(px(SPACE_2))
-                            .text_size(px(FS_META))
-                            .text_color(rgb(INK_SUBTLE))
-                            .child("Instructions"),
-                    )
-                    .child(
-                        div()
-                            .debug_selector(|| "task-instructions".into())
-                            .child(SharedString::from(task.instructions.clone())),
-                    )
-                    .into_any_element()
-            }
-            TaskTab::Worker => match self.pane_for_worker(task) {
-                Some(index) => div()
-                    .debug_selector(|| "task-worker".into())
-                    .flex_1()
-                    .min_h_0()
-                    .flex()
-                    .flex_col()
-                    .p(px(SPACE_2))
-                    .child(self.pane_slot(index, window, cx))
-                    .into_any_element(),
+                        .p(px(ferrite_ui::theme::SPACE_2))
+                        .child(self.pane_slot(index, window, cx))
+                        .into_any_element(),
+                ),
                 None => self
-                    .worker_read(task, cx)
-                    .or_else(|| self.worker_history(task, cx))
-                    .unwrap_or_else(|| {
-                        div()
-                            .debug_selector(|| "task-worker-none".into())
-                            .p(px(SPACE_4))
-                            .text_color(rgb(INK_SUBTLE))
-                            .child("No agent is working on this task right now.")
-                            .into_any_element()
-                    }),
-            },
+                    .worker_read(&task, cx)
+                    .or_else(|| self.worker_history(&task, cx)),
+            }
+        } else {
+            None
         };
-
-        Some(
-            div()
-                .debug_selector(|| "task-panel".into())
-                .flex()
-                .flex_col()
-                .flex_shrink_0()
-                .w(px(TASK_PANEL_W))
-                .min_h_0()
-                .border_l_1()
-                .border_color(paint::LINE)
-                .child(head)
-                .child(tabs)
-                .child(div().flex_1().min_h_0().flex().flex_col().child(content))
-                .into_any_element(),
-        )
+        Some(TaskPanel { task, worker })
     }
 
     /// The Worker's live Pane, for a Task whose Workers are not parked:

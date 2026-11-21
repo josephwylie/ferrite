@@ -10,8 +10,9 @@
 //! render is the list beside the Task panel, reading the archived Tasks
 //! that match through `archive_inputs`; what a row or Board asks it says
 //! as an `ArchiveEvent`. Whether the Archive shows stays the Factory's
-//! (`archive_shown`), as the Task panel, its Worker tab and reopening an
-//! earlier Worker to be read stay the root's.
+//! (`archive_shown`), which sets the list beside the Task panel; reopening
+//! an earlier Worker to be read, and drawing it on the panel's Worker tab,
+//! stay the root's.
 
 use gpui::WeakEntity;
 
@@ -446,20 +447,6 @@ impl CockpitView {
             return;
         };
         self.task_command(TaskAction::Clear { project }, cx);
-    }
-
-    /// The Archive: its list, the open Task's panel beside it.
-    pub(super) fn archive_surface(&self, window: &mut Window, cx: &mut Context<Self>) -> Div {
-        let Some(archive) = self.factory().map(|view| view.read(cx).archive.clone()) else {
-            return div();
-        };
-        div()
-            .flex_1()
-            .min_h_0()
-            .flex()
-            .flex_row()
-            .child(archive)
-            .children(self.task_panel(window, cx))
     }
 
     /// The Workers a Task had, each Step's and the last, for a Task with

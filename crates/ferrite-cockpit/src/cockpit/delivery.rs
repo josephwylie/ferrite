@@ -102,89 +102,87 @@ pub(crate) fn evidence_list(task: &Task) -> Div {
     list
 }
 
-impl CockpitView {
-    /// The Overview's PR section, the evidence (Ready to approve shows
-    /// its own) and why the worktree stayed.
-    pub(super) fn task_delivery(&self, task: &Task, cx: &mut Context<Self>) -> Vec<AnyElement> {
-        use ferrite_ui::theme::*;
-        let mut out = Vec::new();
-        if let Some(pr) = &task.delivery.pr {
-            let url = pr.url();
-            let link = div()
-                .id("task-pr-link")
-                .debug_selector(|| "task-pr-link".into())
-                .flex()
-                .items_center()
-                .gap(px(SPACE_1))
-                .cursor_pointer()
-                .text_color(rgb(INK_STRONG))
-                .child(SharedString::from(pr.label()))
-                .on_click(cx.listener(move |_, _: &ClickEvent, _, cx| cx.open_url(&url)));
-            let state = if pr.merged {
-                "Merged, as the merge agent confirmed.".to_string()
-            } else {
-                match (pr.approved, pr.current()) {
-                    (Some(approved), Some(now)) if approved == now.revision => {
-                        format!("Revision {approved} is approved.")
-                    }
-                    (Some(approved), Some(now)) => format!(
-                        "Revision {approved} was approved; the current revision {} is not.",
-                        now.revision
-                    ),
-                    (None, Some(_)) => "Not approved yet.".into(),
-                    (_, None) => "No revision has been reported yet.".into(),
+/// The Overview's PR section, the evidence (Ready to approve shows
+/// its own) and why the worktree stayed.
+pub(super) fn task_delivery<V: 'static>(task: &Task, cx: &mut Context<V>) -> Vec<AnyElement> {
+    use ferrite_ui::theme::*;
+    let mut out = Vec::new();
+    if let Some(pr) = &task.delivery.pr {
+        let url = pr.url();
+        let link = div()
+            .id("task-pr-link")
+            .debug_selector(|| "task-pr-link".into())
+            .flex()
+            .items_center()
+            .gap(px(SPACE_1))
+            .cursor_pointer()
+            .text_color(rgb(INK_STRONG))
+            .child(SharedString::from(pr.label()))
+            .on_click(cx.listener(move |_, _: &ClickEvent, _, cx| cx.open_url(&url)));
+        let state = if pr.merged {
+            "Merged, as the merge agent confirmed.".to_string()
+        } else {
+            match (pr.approved, pr.current()) {
+                (Some(approved), Some(now)) if approved == now.revision => {
+                    format!("Revision {approved} is approved.")
                 }
-            };
-            let mut section = section("task-pr", "Pull request")
-                .child(link)
-                .child(meta(state).debug_selector(|| "task-pr-state".into()));
-            for each in pr.revisions.iter().rev() {
-                let approved = pr.approved == Some(each.revision);
-                let selector = format!(
-                    "task-pr-revision-{}{}",
-                    each.revision,
-                    if approved { "-approved" } else { "" }
-                );
-                section = section.child(
-                    div()
-                        .debug_selector(move || selector.clone())
-                        .flex()
-                        .gap(px(SPACE_2))
-                        .text_size(px(FS_META))
-                        .child(div().flex_shrink_0().text_color(rgb(INK_STRONG)).child(
-                            SharedString::from(format!(
-                                "Revision {} \u{b7} {}",
-                                each.revision,
-                                core_factory::short(&each.head)
-                            )),
-                        ))
-                        .child(div().flex_1().min_w_0().text_color(rgb(INK_SUBTLE)).child(
-                            SharedString::from(format!(
-                                "Reported by {}{}",
-                                each.by,
-                                if approved { " \u{b7} approved" } else { "" }
-                            )),
-                        )),
-                );
+                (Some(approved), Some(now)) => format!(
+                    "Revision {approved} was approved; the current revision {} is not.",
+                    now.revision
+                ),
+                (None, Some(_)) => "Not approved yet.".into(),
+                (_, None) => "No revision has been reported yet.".into(),
             }
-            out.push(section.into_any_element());
+        };
+        let mut section = section("task-pr", "Pull request")
+            .child(link)
+            .child(meta(state).debug_selector(|| "task-pr-state".into()));
+        for each in pr.revisions.iter().rev() {
+            let approved = pr.approved == Some(each.revision);
+            let selector = format!(
+                "task-pr-revision-{}{}",
+                each.revision,
+                if approved { "-approved" } else { "" }
+            );
+            section = section.child(
+                div()
+                    .debug_selector(move || selector.clone())
+                    .flex()
+                    .gap(px(SPACE_2))
+                    .text_size(px(FS_META))
+                    .child(div().flex_shrink_0().text_color(rgb(INK_STRONG)).child(
+                        SharedString::from(format!(
+                            "Revision {} \u{b7} {}",
+                            each.revision,
+                            core_factory::short(&each.head)
+                        )),
+                    ))
+                    .child(div().flex_1().min_w_0().text_color(rgb(INK_SUBTLE)).child(
+                        SharedString::from(format!(
+                            "Reported by {}{}",
+                            each.by,
+                            if approved { " \u{b7} approved" } else { "" }
+                        )),
+                    )),
+            );
         }
-        if task.status != Status::Approval && !task.delivery.evidence.is_empty() {
+        out.push(section.into_any_element());
+    }
+    if task.status != Status::Approval && !task.delivery.evidence.is_empty() {
+        out.push(
+            section("task-evidence-section", "Evidence")
+                .child(evidence_list(task))
+                .into_any_element(),
+        );
+    }
+    if task.status == Status::Completed {
+        if let Some(kept) = &task.delivery.kept {
             out.push(
-                section("task-evidence-section", "Evidence")
-                    .child(evidence_list(task))
+                section("task-kept", "Worktree")
+                    .child(div().child(SharedString::from(kept.clone())))
                     .into_any_element(),
             );
         }
-        if task.status == Status::Completed {
-            if let Some(kept) = &task.delivery.kept {
-                out.push(
-                    section("task-kept", "Worktree")
-                        .child(div().child(SharedString::from(kept.clone())))
-                        .into_any_element(),
-                );
-            }
-        }
-        out
     }
+    out
 }
