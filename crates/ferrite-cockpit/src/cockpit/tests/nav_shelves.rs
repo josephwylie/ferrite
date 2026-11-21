@@ -443,6 +443,8 @@ fn a_hovered_card_shows_its_detail_card(cx: &mut TestAppContext) {
             title: Some("Thread cards in the nav".into()),
             checks: None,
             runs: Vec::new(),
+            review: None,
+            merge: None,
         };
         view.facts.pr_answered(threads[0], Some(pr));
         cx.notify();

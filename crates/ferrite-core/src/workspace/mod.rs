@@ -559,6 +559,62 @@ pub struct PullRequest {
     /// what the checks card lists. Empty exactly when `checks`
     /// is `None` — the rollup *is* this list, folded.
     pub runs: Vec<Check>,
+    /// What its reviewers decided; `None` when the forge asks for no
+    /// review or did not say.
+    pub review: Option<ReviewDecision>,
+    /// Whether it can merge now; `None` while the forge has not worked it
+    /// out.
+    pub merge: Option<MergeState>,
+}
+
+/// A pull request's review decision (`gh`'s `reviewDecision`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReviewDecision {
+    Approved,
+    ChangesRequested,
+    /// A review is required and none has approved it yet.
+    Required,
+}
+
+impl ReviewDecision {
+    /// `gh`'s word; an empty or unknown one is no decision.
+    fn of_gh(word: &str) -> Option<Self> {
+        match word {
+            "APPROVED" => Some(Self::Approved),
+            "CHANGES_REQUESTED" => Some(Self::ChangesRequested),
+            "REVIEW_REQUIRED" => Some(Self::Required),
+            _ => None,
+        }
+    }
+}
+
+/// Whether a pull request can merge now (`gh`'s `mergeStateStatus`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MergeState {
+    /// Mergeable, its checks passing.
+    Clean,
+    /// Mergeable, but its checks are not all passing.
+    Unstable,
+    /// Its head is behind the base branch.
+    Behind,
+    /// A gate holds it: a required review or check, or it is a draft.
+    Blocked,
+    Conflicting,
+}
+
+impl MergeState {
+    /// `gh`'s word; `UNKNOWN` (GitHub has not worked it out yet) and any
+    /// word we do not know are no claim.
+    fn of_gh(word: &str) -> Option<Self> {
+        match word {
+            "CLEAN" | "HAS_HOOKS" => Some(Self::Clean),
+            "UNSTABLE" => Some(Self::Unstable),
+            "BEHIND" => Some(Self::Behind),
+            "BLOCKED" | "DRAFT" => Some(Self::Blocked),
+            "DIRTY" => Some(Self::Conflicting),
+            _ => None,
+        }
+    }
 }
 
 impl PullRequest {
@@ -622,6 +678,13 @@ impl PullRequest {
             title: (!pr.title.is_empty()).then(|| pr.title.clone()),
             checks: (!runs.is_empty()).then(|| rollup_state(&runs)),
             runs,
+            review: None,
+            merge: match pr.merge {
+                crate::protocol::WireMerge::Clean => Some(MergeState::Clean),
+                crate::protocol::WireMerge::Conflicting => Some(MergeState::Conflicting),
+                crate::protocol::WireMerge::Blocked => Some(MergeState::Blocked),
+                crate::protocol::WireMerge::Unknown => None,
+            },
         }
     }
 }
@@ -739,7 +802,7 @@ pub fn pr_view(cwd: &Path) -> Option<String> {
             "pr",
             "view",
             "--json",
-            "number,state,isDraft,url,title,statusCheckRollup",
+            "number,state,isDraft,url,title,statusCheckRollup,reviewDecision,mergeStateStatus",
         ],
     )
 }
@@ -799,6 +862,7 @@ pub fn parse_pr_json(body: &str) -> Option<PullRequest> {
     // No runs is no rollup: the silence stays a silence rather than
     // becoming a pass.
     let checks = (!runs.is_empty()).then(|| rollup_state(&runs));
+    let word = |key: &str| value.get(key).and_then(serde_json::Value::as_str);
     Some(PullRequest {
         number,
         state,
@@ -807,6 +871,8 @@ pub fn parse_pr_json(body: &str) -> Option<PullRequest> {
         title,
         checks,
         runs,
+        review: word("reviewDecision").and_then(ReviewDecision::of_gh),
+        merge: word("mergeStateStatus").and_then(MergeState::of_gh),
     })
 }
 

@@ -15,6 +15,8 @@ struct Row {
     item: ContextCardItem,
     label: String,
     meta: Option<String>,
+    /// The meta's ink, when it is not the dim default.
+    ink: Option<u32>,
     glyph: &'static str,
     action: Option<Action>,
     fill: Option<f32>,
@@ -27,6 +29,7 @@ impl Row {
             item,
             label: label.into(),
             meta: None,
+            ink: None,
             glyph,
             action: None,
             fill: None,
@@ -224,7 +227,7 @@ impl Content {
                         div()
                             .flex_shrink_0()
                             .text_size(px(12.))
-                            .text_color(rgb(INK_SUBTLE))
+                            .text_color(rgb(row.ink.unwrap_or(INK_SUBTLE)))
                             .child(meta.clone()),
                     );
                 }
@@ -309,21 +312,7 @@ impl CockpitView {
             rows.push(row);
         }
         if let Some(pr) = self.facts.pr(thread) {
-            let mut row = Row::new(
-                Item::Branch,
-                pr.title
-                    .clone()
-                    .unwrap_or_else(|| format!("Pull request #{}", pr.number)),
-                icons::GIT_PULL_REQUEST,
-            );
-            row.meta = Some(format!("#{}", pr.number));
-            row.tooltip = Some(format!(
-                "{:?}{}",
-                pr.state,
-                if pr.draft { " · Draft" } else { "" }
-            ));
-            row.action = Some(Action::Surface(SurfaceId::PullRequest(pr.number)));
-            rows.push(row);
+            rows.extend(pr_rows(pr));
         }
         if let Some(facts) = self.facts.get(thread) {
             if self.thread_branch(thread).is_some() {
@@ -420,6 +409,65 @@ impl CockpitView {
         });
         Content { rows }
     }
+}
+
+/// The pull request's rows: its title, then where it stands (its state
+/// and checks in the Overview's words, the review decision, and whether
+/// an open one can merge). A fact the forge did not give gets no row.
+/// Every row opens the pull request.
+fn pr_rows(pr: &ferrite_core::workspace::PullRequest) -> Vec<Row> {
+    use super::super::surfaces::SurfaceId;
+    use crate::pr;
+    use ferrite_core::workspace::{CheckState, PrState};
+    use ContextCardItem as Item;
+    let mut title = Row::new(
+        Item::Branch,
+        pr.title
+            .clone()
+            .unwrap_or_else(|| format!("Pull request #{}", pr.number)),
+        icons::GIT_PULL_REQUEST,
+    );
+    title.meta = Some(format!("#{}", pr.number));
+    let mut state = Row::new(
+        Item::Branch,
+        pr::state_word(pr),
+        match pr.checks {
+            Some(CheckState::Passing) => icons::CHECK_CIRCLE,
+            Some(CheckState::Failing) => icons::X_CIRCLE,
+            Some(CheckState::Pending) => icons::CIRCLE_DASHED,
+            Some(CheckState::Skipped) => icons::CIRCLE_MINUS,
+            None if pr.state == PrState::Merged => icons::GIT_MERGE,
+            None => icons::GIT_PULL_REQUEST,
+        },
+    );
+    if let Some((word, ink)) = pr.checks.map(pr::checks_word) {
+        let tally = pr.tally();
+        state.meta = Some(word.to_string());
+        state.ink = Some(ink);
+        state.tooltip = Some(format!(
+            "{} of {} checks passed",
+            tally.passing,
+            tally.total()
+        ));
+    }
+    let mut rows = vec![title, state];
+    if let Some((word, ink)) = pr.review.map(pr::review_word) {
+        let mut review = Row::new(Item::Branch, "Review", icons::EYE);
+        review.meta = Some(word.to_string());
+        review.ink = Some(ink);
+        rows.push(review);
+    }
+    let open = pr.state == PrState::Open;
+    if let Some((word, ink)) = pr.merge.filter(|_| open).map(pr::merge_word) {
+        let mut merge = Row::new(Item::Branch, "Merge", icons::GIT_MERGE);
+        merge.meta = Some(word.to_string());
+        merge.ink = Some(ink);
+        rows.push(merge);
+    }
+    for row in &mut rows {
+        row.action = Some(Action::Surface(SurfaceId::PullRequest(pr.number)));
+    }
+    rows
 }
 
 fn tokens(value: u64) -> String {
