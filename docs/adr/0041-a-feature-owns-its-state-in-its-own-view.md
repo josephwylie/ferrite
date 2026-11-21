@@ -589,8 +589,37 @@ that happened to touch it, and nothing in the code said whose a field was.
   focus, a drop on a Pane, and a press outside, which mutes it too. The
   root draws it as the focused Pane's drawer, and only that Pane reads
   it as it draws. The rows it is made of (`menu_rows.rs`) are shared with
-  the band menu and the model picker, which stay the root's popups (ADR
-  0043).
+  the band menu and the model picker, which are popups in the root's slot
+  (ADR 0043).
+- **The model picker is the twenty-ninth, and the Composer's second
+  view.** `ModelPickerView` (`cockpit/model_picker.rs`) owns what the
+  provider, model and effort picker keeps while it is up: every Provider's
+  model rows, each carrying its pick, and which of them the tab or the
+  search lists, the Reasoning column's rungs, the tab and the rail pill's
+  slide, the column the arrows act in and each column's cursor, the list's
+  scroll, the search line, and the favourites it ranks by. The popup slot
+  holds it (`Popup::ModelPicker`), made as the picker opens, so it goes
+  as the popup does, as the floats hold the palette. What it lists the
+  root reads through `model_picker_inputs`, as it opens and again after a
+  pick, an announcement, or a turn starting or ending
+  (`rebuild_model_picker`): the rows for the Thread or the draft's
+  binding from each Provider's catalog, the rungs, the model's name, the
+  Provider a pick hands over to, why every row is held (`tuning_hold`),
+  the Providers whose CLI is missing and the favourites. Its keys (↑ ↓ ← →
+  ⏎ and ⌘1–⌘9) answer on its own element, where its search line holds the
+  keyboard, as the palette's do; esc goes on to the slot. A tab, the
+  arrows and the search are its own. It emits `ModelPickerEvent`: a model
+  row or a rung picked (`Pick`), which the root makes, re-aiming the
+  Thread or making the draft's band choice, unless a turn began since the
+  picker drew, and a row's star (`Favourite`), which the root saves in
+  the window's settings and hands back. A pick from a picker fading out
+  is dropped. The slot keeps what is the slot's (ADR 0043): the Pane the
+  picker hangs over, opening it, closing it on esc or a press outside,
+  where the keyboard goes back, and the permission mode menu nested in
+  it, which only the root opens and closes. The footer stays the root's
+  drawing, since the permission mode is the Session's: the root hangs the
+  view and the footer in one surface over the Composer (`model_picker_element`).
+  It keeps nothing by Thread, so a gone Thread leaves it nothing to free.
 
 ## What does not get a view
 
@@ -776,6 +805,7 @@ make; the card, the Overview and the stop read it for their own Session
 (`of`). The Session controls card stays the root's drawing, and the
 Session is core's. A view would add events for a call the root makes
 anyway.
+
 
 ## Precedent
 

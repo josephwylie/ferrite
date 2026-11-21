@@ -587,7 +587,7 @@ fn delayed_bootstrap_preserves_edited_composer_focus_and_another_drafts_picker(
             Some(PaneIdentity::Draft(other))
         );
         assert_eq!(
-            view.model_picker().unwrap().0.pane,
+            view.model_picker().unwrap().pane,
             PaneIdentity::Draft(other)
         );
         let first = view

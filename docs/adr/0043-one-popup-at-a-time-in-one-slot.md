@@ -72,6 +72,9 @@ the slot as `Popup::ModelPicker`, `Popup::Band` and `Popup::Attach`. The
 permission mode menu opened from the picker's footer is no longer a
 popup of its own: it nests inside the picker, so the first Escape closes
 it and the second the picker, and it cannot outlive what it hangs from.
+The picker's own state later moved into a view the slot holds
+(`ModelPickerView`, ADR 0041); the slot keeps its Pane and the nested
+mode menu.
 The Composer's `popover` field keeps only the text menus, and the bounds
 of the controls popups hang from moved into the slot. Five faults the
 old shape hid are pinned in `cockpit/tests/popups.rs`: a sheet opening

@@ -1,4 +1,5 @@
 use super::*;
+use crate::cockpit::model_picker::Picked;
 
 /// A background task can park a Thread without going through this window's
 /// close action. The surviving Pane must keep the keyboard and the same draft
@@ -169,9 +170,8 @@ fn composer_busy_tuning_choices_explain_and_preserve_selection(cx: &mut TestAppC
     view.update_in(cx, |view, window, cx| {
         view.open_provider_picker(thread, cx);
         let pick = view
-            .model_picker()
+            .model_picker_view(cx)
             .unwrap()
-            .0
             .rows
             .iter()
             .position(|row| !row.inert && !row.active)
@@ -185,14 +185,14 @@ fn composer_busy_tuning_choices_explain_and_preserve_selection(cx: &mut TestAppC
             }),
         );
         let _ = window;
-        view.pick_model_row(pick, cx);
-        let (menu, picker) = view.model_picker().expect("explanation stays open");
+        view.pick_in_model_picker(Picked::Model(pick), cx);
+        let picker = view.model_picker_view(cx).expect("explanation stays open");
         assert_eq!(picker.hold, Some(TUNING_BUSY_HINT));
-        assert!(menu.rows.iter().all(|row| row.inert));
-        assert!(menu.rows.iter().any(|row| row.active));
+        assert!(picker.rows.iter().all(|row| row.inert));
+        assert!(picker.rows.iter().any(|row| row.active));
         assert_eq!(view.cockpit.thread(thread).unwrap().model(), Some("sonnet"));
         view.open_effort_picker(thread, cx);
-        let (_, picker) = view.model_picker().unwrap();
+        let picker = view.model_picker_view(cx).unwrap();
         assert_eq!(picker.hold, Some(TUNING_BUSY_HINT));
         // SPEC §5.5: each busy choice is disabled, the reason its tooltip.
         assert!(!picker.efforts.is_empty());
@@ -212,12 +212,12 @@ fn composer_busy_tuning_choices_explain_and_preserve_selection(cx: &mut TestAppC
         })
         .unwrap();
     tick(cx);
-    view.read_with(cx, |view, _| {
-        let (menu, picker) = view
-            .model_picker()
+    view.read_with(cx, |view, cx| {
+        let picker = view
+            .model_picker_view(cx)
             .expect("finishing keeps the picker open");
         assert_eq!(picker.hold, None);
-        assert!(menu.rows.iter().any(|row| !row.inert));
+        assert!(picker.rows.iter().any(|row| !row.inert));
         assert_eq!(
             picker.efforts.iter().find(|rung| rung.active).unwrap().name,
             "High"
@@ -238,7 +238,7 @@ fn a_tuning_change_waiting_on_the_provider_holds_the_pickers(cx: &mut TestAppCon
         view.pick_effort(thread, Some("high".into()), cx);
         assert_eq!(view.cockpit.thread(thread).unwrap().effort(), None);
         view.open_effort_picker(thread, cx);
-        let (_, picker) = view.model_picker().unwrap();
+        let picker = view.model_picker_view(cx).unwrap();
         assert_eq!(picker.hold, Some(TUNING_PENDING_HINT));
         assert!(picker.efforts.iter().all(|rung| rung.inert));
     });
@@ -250,10 +250,10 @@ fn a_tuning_change_waiting_on_the_provider_holds_the_pickers(cx: &mut TestAppCon
         .send(Ok(()))
         .unwrap();
     tick(cx);
-    view.read_with(cx, |view, _| {
+    view.read_with(cx, |view, cx| {
         assert_eq!(view.cockpit.thread(thread).unwrap().effort(), Some("high"));
-        let (_, picker) = view
-            .model_picker()
+        let picker = view
+            .model_picker_view(cx)
             .expect("the answer keeps the picker open");
         assert_eq!(picker.hold, None);
         assert!(picker.efforts.iter().any(|rung| !rung.inert));
@@ -641,8 +641,8 @@ fn effort_opens_the_picker_on_its_reasoning_column(cx: &mut TestAppContext) {
     cx.simulate_keystrokes("enter");
     tick(cx);
     let column = |view: &gpui::Entity<CockpitView>, cx: &mut gpui::VisualTestContext| {
-        view.read_with(cx, |view, _| {
-            let (_, picker) = view.model_picker().expect("the picker is open");
+        view.read_with(cx, |view, cx| {
+            let picker = view.model_picker_view(cx).expect("the picker is open");
             (
                 picker.column,
                 picker.efforts.iter().position(|rung| rung.active),

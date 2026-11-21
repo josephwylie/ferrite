@@ -24,7 +24,7 @@ pub(super) enum Popup {
     Checks(ThreadId),
     Session { thread: ThreadId, generation: u64 },
     /// The model picker, with the mode menu its footer opens inside it.
-    ModelPicker(Box<Popover<ModelPicker>>),
+    ModelPicker(ModelPicker),
     /// A draft's Project or Workspace menu.
     Band(Popover<Band>),
     /// The Composer's `+` menu on one Pane, the keyboard on `focus`. The
@@ -52,8 +52,8 @@ pub(super) const PICKER_MODE: &str = "picker-mode-in";
 impl Popup {
     fn keys(&self, cx: &gpui::App) -> Keys {
         match self {
-            Popup::ModelPicker(picker) if picker.kind.mode.is_none() => {
-                Keys::Field(picker.kind.search.read(cx).focus_handle(cx))
+            Popup::ModelPicker(picker) if picker.mode.is_none() => {
+                Keys::Field(picker.view.read(cx).search.read(cx).focus_handle(cx))
             }
             Popup::Attach { focus, .. } => Keys::Field(focus.clone()),
             Popup::Band(menu) => Keys::Composer(menu.pane),
@@ -78,7 +78,7 @@ impl Popup {
             Popup::Mode(menu) => hit(&mode_menu::chip_trigger(menu.thread)),
             Popup::ModelPicker(picker) => {
                 hit(&model_picker::chip_trigger(picker.pane))
-                    || picker.kind.mode.is_some() && hit(PICKER_MODE)
+                    || picker.mode.is_some() && hit(PICKER_MODE)
             }
             Popup::Band(menu) => hit(&menu.kind.trigger()),
             Popup::ContextMenu(menu) => {
@@ -268,7 +268,7 @@ impl CockpitView {
     /// first, then the popup. Whether anything did.
     pub(super) fn dismiss_popup(&mut self, cx: &mut Context<Self>) -> bool {
         if let Some(Popup::ModelPicker(picker)) = self.popups.up_mut() {
-            if picker.kind.mode.take().is_some() {
+            if picker.mode.take().is_some() {
                 cx.notify();
                 return true;
             }
@@ -324,14 +324,15 @@ impl CockpitView {
             .is_some_and(|popup| !matches!(popup.keys(cx), Keys::Composer(_)))
     }
 
-    pub(super) fn model_picker_popover(&self) -> Option<&Popover<ModelPicker>> {
+    /// The model picker up.
+    pub(super) fn model_picker(&self) -> Option<&ModelPicker> {
         match self.popups.up() {
             Some(Popup::ModelPicker(picker)) => Some(picker),
             _ => None,
         }
     }
 
-    pub(super) fn model_picker_popover_mut(&mut self) -> Option<&mut Popover<ModelPicker>> {
+    pub(super) fn model_picker_mut(&mut self) -> Option<&mut ModelPicker> {
         match self.popups.up_mut() {
             Some(Popup::ModelPicker(picker)) => Some(picker),
             _ => None,
@@ -372,16 +373,16 @@ impl CockpitView {
         cx: &mut Context<Self>,
     ) {
         let stale_mode = self
-            .model_picker_popover()
-            .and_then(|picker| picker.kind.mode.as_ref())
+            .model_picker()
+            .and_then(|picker| picker.mode.as_ref())
             .is_some_and(|menu| {
                 self.cockpit
                     .thread(menu.thread)
                     .is_none_or(|open| open.generation() != menu.generation)
             });
         if stale_mode {
-            if let Some(picker) = self.model_picker_popover_mut() {
-                picker.kind.mode = None;
+            if let Some(picker) = self.model_picker_mut() {
+                picker.mode = None;
             }
         }
         let on = |thread: ThreadId, generation: Option<u64>| {
@@ -496,7 +497,7 @@ impl CockpitView {
         if id == PICKER_MODE {
             if !self.popups.triggers.hit(model_picker::PICKER_PERMISSIONS, at) {
                 if let Some(Popup::ModelPicker(picker)) = self.popups.up_mut() {
-                    picker.kind.mode = None;
+                    picker.mode = None;
                     cx.notify();
                 }
             }

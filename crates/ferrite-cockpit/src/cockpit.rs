@@ -2110,12 +2110,12 @@ impl CockpitView {
             }
         }
         let models_changed = self.cockpit.take_models_changed();
-        let tuning_availability_changed = self.model_picker().is_some_and(|(open, picker)| {
+        let tuning_availability_changed = self.model_picker().is_some_and(|open| {
             open.pane.thread().is_some_and(|thread| {
                 self.cockpit
                     .thread(thread)
                     .and_then(|thread| tuning_hold(&thread))
-                    != picker.hold
+                    != open.view.read(cx).hold
             })
         });
         if models_changed || tuning_availability_changed {
@@ -5352,7 +5352,7 @@ impl CockpitView {
     /// Discovery can finish while a picker is open. Rebuild its rows and
     /// preserve the highlighted choice by value, even if row order changes.
     fn refresh_model_picker(&mut self, cx: &mut Context<Self>) {
-        self.rebuild_model_picker(None, cx);
+        self.rebuild_model_picker(cx);
     }
 
     /// Stop the submitted startup before Escape or a choice changes its draft.

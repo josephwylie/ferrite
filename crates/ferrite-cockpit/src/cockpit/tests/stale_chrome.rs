@@ -265,7 +265,7 @@ fn the_model_picker_opens_placed_and_its_cursor_follows_the_arrows(cx: &mut Test
         "already where a full redraw puts it"
     );
     let cursor = |view: &gpui::Entity<CockpitView>, cx: &mut gpui::VisualTestContext| {
-        view.read_with(cx, |view, _| view.model_picker().map(|(open, _)| open.selected))
+        view.read_with(cx, |view, cx| view.model_picker_view(cx).map(|picker| picker.selected))
     };
     let start = cursor(&b.view, b.cx);
     b.cx.simulate_keystrokes("down");
