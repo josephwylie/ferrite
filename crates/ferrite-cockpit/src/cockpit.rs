@@ -352,6 +352,9 @@ impl std::ops::DerefMut for CockpitPane {
 pub struct CockpitView {
     pub(crate) cockpit: Cockpit,
     browsers: browser::Browsers,
+    /// The provider's control of the Browsers' pages and the live
+    /// annotation's capture queue, which the pump runs.
+    browser_controls: browser::Controls,
     /// Each Thread's Browser chrome: its address field and whether a new
     /// tab is being entered.
     browser_chrome: Entity<browser::BrowserChromeView>,
@@ -1313,7 +1316,7 @@ impl CockpitView {
             view.flush_panel_persistence(cx);
             view.cockpit.halt_sessions();
             #[cfg(feature = "cef")]
-            let browser = view.browsers.controller.clone();
+            let browser = view.browser_controls.controller.clone();
             let executor = cx.background_executor().clone();
             async move {
                 #[cfg(feature = "cef")]
@@ -1406,6 +1409,7 @@ impl CockpitView {
         let mut view = Self {
             cockpit,
             browsers: Default::default(),
+            browser_controls: Default::default(),
             browser_chrome,
             browser_dialog,
             browser_review,
