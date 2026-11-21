@@ -806,6 +806,19 @@ make; the card, the Overview and the stop read it for their own Session
 Session is core's. A view would add events for a call the root makes
 anyway.
 
+The plan card and the CI checks card are the fourteenth. Each is a popup
+that drops from a Thread's Pane head (`Popup::Plan`, `Popup::Checks`), and
+the slot holds all the state either has: which Thread it is for. What they show is the agent's
+plan in the Thread's transcript and the checks of its pull request (the
+Facts'). The root reads them and hangs the card under the head
+(`plan_card_element`, `context_checks_element`); the card is drawn from
+what was read, the plan as plain values (`PlanCard::of`, `render`) and the
+checks by a free function whose rows open a run's log through the root
+(`checks_card`), both in `cockpit/head_cards.rs`. A view would hold no
+state and add events for a press the root answers anyway. The Composer's
+footer (the toolbar, send and stop, the `+` menu, the mode chip and menu,
+the session controls card) and the draft band menu's rows follow in the
+same shape.
 
 ## Precedent
 

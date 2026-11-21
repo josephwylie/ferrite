@@ -26,6 +26,7 @@ pub(crate) mod direction;
 mod draft_commands;
 mod drafts;
 mod fields;
+mod head_cards;
 pub(crate) mod empty_board;
 pub(crate) mod environment;
 pub(crate) mod factory;
@@ -2752,10 +2753,8 @@ impl CockpitView {
         cx.notify();
     }
 
-    /// The plan card (`open_plan`): the float grammar's head (`plan · 3/4`),
-    /// then one row per step — done `INK_SUBTLE` behind a dim check, the
-    /// step being worked `INK_STRONG` behind the strong `❯`, the rest
-    /// `INK_STRONG` behind a faint ring.
+    /// The plan card (`open_plan`), hung under the Pane head
+    /// (`head_cards::PlanCard`).
     fn plan_card_element(
         &self,
         thread: ThreadId,
@@ -2763,75 +2762,21 @@ impl CockpitView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
-        use ferrite_ui::theme::*;
-        let open = self.cockpit.thread(thread)?;
-        let transcript = open.transcript();
-        let todos = transcript.todos()?;
-        let current = transcript.current_task();
+        let card = head_cards::PlanCard::of(self.cockpit.thread(thread)?.transcript())?;
         let at = self.card_corner(
             format!("plan-{}", thread.get()),
             CardFrom::Head(PaneIdentity::Thread(thread)),
             window,
         )?;
-        let mut card = ferrite_ui::menu::float()
-            .min_w(px(CHECKS_CARD_W))
-            .max_w(px(CHECKS_CARD_MAX_W))
-            .pb(px(FLOAT_PAD))
-            .child(
-                ferrite_ui::menu::head("Plan").child(SharedString::from(format!(
-                    "{}/{}",
-                    todos.done, todos.total
-                ))),
-            );
-        let mut marked = false;
-        for (index, step) in transcript.progress().plan.iter().enumerate() {
-            let done = step.status == ferrite_core::progress::StepStatus::Completed;
-            let working = !done && !marked && current == Some(step.text.as_str());
-            marked |= working;
-            let mark = if done {
-                ferrite_ui::components::glyph("\u{2713}", INK_SUBTLE).into_any_element()
-            } else if working {
-                ferrite_ui::components::prompt_mark(INK_STRONG)
-            } else {
-                div()
-                    .text_color(rgb(TEXT_FAINT))
-                    .child("\u{25cb}")
-                    .into_any_element()
-            };
-            card = card.child(
-                div()
-                    .debug_selector(move || format!("plan-step-{index}"))
-                    .flex()
-                    .items_center()
-                    .h(px(FLOAT_ROW_H))
-                    .px(px(FLOAT_PAD_X))
-                    .child(
-                        div()
-                            .flex()
-                            .flex_shrink_0()
-                            .items_center()
-                            .w(px(SPACE_4 + SPACE_1))
-                            .child(mark),
-                    )
-                    .child(
-                        div()
-                            .min_w_0()
-                            .truncate()
-                            .text_color(rgb(if done { INK_SUBTLE } else { INK_STRONG }))
-                            .child(SharedString::from(step.text.clone())),
-                    ),
-            );
-        }
-        let card = card.id("plan-card").debug_selector(|| "plan-card".into());
         Some(
             anchored()
                 .anchor(gpui::Anchor::TopRight)
                 .position(at)
-                .snap_to_window_with_margin(px(GRID_PAD))
+                .snap_to_window_with_margin(px(ferrite_ui::theme::GRID_PAD))
                 .child(self.popup_face(
                     face,
                     "plan-card-in",
-                    card,
+                    card.render(),
                     ferrite_ui::motion::Opens::Down,
                     cx,
                 ))
@@ -8706,10 +8651,8 @@ impl CockpitView {
         )
     }
 
-    /// The checks card: every run behind the header's rollup, grouped by
-    /// the workflow that owns it, each row opening its own log. Built here
-    /// rather than in `pane.rs` because the rows are controls and a
-    /// listener needs this view's `Context`.
+    /// The checks card (`head_cards::checks_card`), hung under the Pane
+    /// head.
     fn context_checks_element(
         &self,
         thread: ThreadId,
@@ -8722,32 +8665,7 @@ impl CockpitView {
             CardFrom::Head(PaneIdentity::Thread(thread)),
             window,
         )?;
-        let pr = self.facts.pr(thread)?;
-        let mut card = pane::checks_card().child(pane::checks_head(pr));
-        let mut workflow: Option<Option<&str>> = None;
-        for (index, run) in pr.runs.iter().enumerate() {
-            let group = run.workflow.as_deref();
-            if workflow != Some(group) {
-                card = card.child(pane::checks_group(group, workflow.is_none()));
-                workflow = Some(group);
-            }
-            let row = pane::check_row(index, run);
-            card = card.child(match run.url.clone() {
-                // Keep the run's log with the Thread's other browser tabs.
-                Some(url) => row.on_mouse_down(
-                    MouseButton::Left,
-                    cx.listener(move |view, _: &MouseDownEvent, _, cx| {
-                        cx.stop_propagation();
-                        view.browser_action(thread, ferrite_core::browser::Action::Open { url: url.clone() }, cx);
-                        view.close_popup(cx);
-                    }),
-                ),
-                None => row,
-            });
-        }
-        let card = card
-            .id("context-checks-card")
-            .debug_selector(|| "context-checks-card".into());
+        let card = head_cards::checks_card(thread, self.facts.pr(thread)?, cx);
         // The mark rides the Pane head's checkout line: the card drops
         // below it, from its left edge.
         Some(
