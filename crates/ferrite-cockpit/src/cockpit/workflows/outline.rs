@@ -1,5 +1,6 @@
 //! The Workflows surface: the surface tabs, the list of Workflows, and
-//! the outline of Steps with their routes.
+//! the outline of Steps with their routes, which the editor's view draws
+//! and whose presses it says as `WorkflowsEvent`s.
 
 use super::*;
 
@@ -84,7 +85,8 @@ impl CockpitView {
         cx: &mut Context<Self>,
     ) -> Div {
         use ferrite_ui::theme::*;
-        let Some(workflow) = self.shown_workflow(cx) else {
+        let editor = self.factory().map(|view| view.editor.clone());
+        let (Some(editor), Some(workflow)) = (editor, self.shown_workflow(cx)) else {
             return div()
                 .debug_selector(|| "workflows-empty".into())
                 .flex_1()
@@ -110,7 +112,10 @@ impl CockpitView {
                 )
                 .child(self.new_workflow_button(cx));
         };
-        let problems = workflow.draft.problems(&self.factory_catalog());
+        let Some(inputs) = self.workflows_inputs(editor.read(cx)) else {
+            return div();
+        };
+        let problems = &inputs.problems;
         let unsaved = workflow.unsaved();
         let version = match workflow.latest() {
             Some(latest) if unsaved => format!("version {} \u{b7} edited", latest.version),
@@ -254,7 +259,7 @@ impl CockpitView {
                     .min_h_0()
                     .flex()
                     .flex_row()
-                    .child(self.outline(workflow, &problems, window, cx))
+                    .child(editor.update(cx, |editor, cx| editor.outline(&inputs, window, cx)))
                     .child(self.inspector(workflow, window, cx)),
             )
     }
@@ -294,36 +299,32 @@ impl CockpitView {
                 }),
             )
     }
+}
 
+impl WorkflowsView {
     /// The outline: the Workflow's name, then each Step's row with its
     /// routes, in order. No box round a row; the chosen row is filled.
     pub(super) fn outline(
         &self,
-        workflow: &Workflow,
-        problems: &[Problem],
-        window: &mut Window,
+        inputs: &WorkflowsInputs,
+        window: &Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         use ferrite_ui::theme::*;
-        let Some(view) = self.factory() else {
-            return div().into_any_element();
-        };
-        let editor = view.editor.read(cx);
-        let inspected = editor.inspected;
-        let approval_shown = inspected == Inspected::Approval;
-        let (outline_focus, outline_scroll) =
-            (editor.outline_focus.clone(), editor.outline_scroll.clone());
+        let draft = &inputs.draft;
+        let problems = &inputs.problems;
+        let approval_shown = self.inspected == Inspected::Approval;
         // While the start or the approval settings show, no Step's row
         // is the chosen one.
-        let shown = self
-            .shown_step(cx)
-            .map(|step| step.id.clone())
-            .filter(|_| inspected == Inspected::Step);
-        let name_field = Field::WorkflowName(workflow.id.clone());
+        let shown = inputs
+            .step
+            .clone()
+            .filter(|_| self.inspected == Inspected::Step);
+        let name_field = Field::WorkflowName(inputs.workflow.clone());
         let mut outline = div()
             .id("outline")
             .debug_selector(|| "outline".into())
-            .track_focus(&outline_focus)
+            .track_focus(&self.outline_focus)
             .flex()
             .flex_col()
             .flex_shrink_0()
@@ -334,17 +335,15 @@ impl CockpitView {
             .border_r_1()
             .border_color(paint::LINE)
             .overflow_y_scroll()
-            .track_scroll(&outline_scroll)
-            .on_key_down(cx.listener(|view, event: &gpui::KeyDownEvent, _, cx| {
-                view.outline_key(&event.keystroke, cx)
+            .track_scroll(&self.outline_scroll)
+            .on_key_down(cx.listener(|editor, event: &gpui::KeyDownEvent, _, cx| {
+                editor.outline_key(&event.keystroke, cx)
             }))
             .on_mouse_down(
                 MouseButton::Left,
-                cx.listener(|view, _: &MouseDownEvent, _, cx| {
-                    if let Some(view) = view.factory() {
-                        view.editor.update(cx, |editor, _| editor.focused = None);
-                    }
-                    cx.notify();
+                cx.listener(|editor, _: &MouseDownEvent, _, cx| {
+                    editor.focused = None;
+                    cx.emit(WorkflowsEvent::Focused);
                 }),
             )
             .child(
@@ -352,8 +351,8 @@ impl CockpitView {
                     .flex()
                     .flex_col()
                     .gap(px(SPACE_1))
-                    .children(self.text_input(&name_field, "Workflow name", window, cx))
-                    .child(self.start_outline_row(workflow, cx))
+                    .children(self.input(&name_field, "Workflow name", window, cx))
+                    .child(self.start_row(inputs, cx))
                     .child(
                         div()
                             .flex()
@@ -365,12 +364,12 @@ impl CockpitView {
                             .child("\u{201c}Next agent\u{201d} follows this order"),
                     ),
             );
-        for (at, step) in workflow.draft.steps.iter().enumerate() {
+        for (at, step) in draft.steps.iter().enumerate() {
             let flagged = problems
                 .iter()
                 .any(|problem| problem.step.as_deref() == Some(step.id.as_str()));
-            outline = outline.child(self.outline_row(
-                workflow,
+            outline = outline.child(Self::outline_row(
+                inputs,
                 step,
                 at,
                 shown.as_deref() == Some(step.id.as_str()),
@@ -379,13 +378,10 @@ impl CockpitView {
             ));
         }
         let approval_flagged = problems.iter().any(|problem| problem.approval);
-        let approval = &workflow.draft.approval;
+        let approval = &draft.approval;
         let decides = match approval.by {
             Approver::Human => "You approve".to_string(),
-            Approver::Agent => match approval
-                .step
-                .as_deref()
-                .and_then(|id| workflow.draft.step(id))
+            Approver::Agent => match approval.step.as_deref().and_then(|id| draft.step(id))
             {
                 Some(step) => format!("{} decides", step.name),
                 None => "An agent decides".into(),
@@ -426,27 +422,26 @@ impl CockpitView {
                             }))
                             .child(SharedString::from(decides)),
                     )
-                    .on_click(cx.listener(|view, _: &ClickEvent, _, cx| {
+                    .on_click(cx.listener(|_, _: &ClickEvent, _, cx| {
                         cx.stop_propagation();
-                        view.select_approval(cx)
+                        cx.emit(WorkflowsEvent::Approval)
                     })),
             )
             .child(
                 div().pt(px(SPACE_2)).child(
                     ferrite_ui::components::ghost_button("outline-add", "+ Add agent", cx)
                         .debug_selector(|| "outline-add".into())
-                        .on_click(cx.listener(|view, _: &ClickEvent, _, cx| {
+                        .on_click(cx.listener(|_, _: &ClickEvent, _, cx| {
                             cx.stop_propagation();
-                            view.add_step(None, cx);
+                            cx.emit(WorkflowsEvent::Add);
                         })),
                 ),
             )
             .into_any_element()
     }
 
-    pub(super) fn outline_row(
-        &self,
-        workflow: &Workflow,
+    fn outline_row(
+        inputs: &WorkflowsInputs,
         step: &Step,
         at: usize,
         selected: bool,
@@ -463,7 +458,7 @@ impl CockpitView {
         };
         let provider = step.agent.provider;
         let mut meta = vec![match &step.agent.model {
-            Some(model) => model_name(&self.cockpit.model_catalog(provider), model),
+            Some(model) => model_name(inputs.models(provider), model),
             None => provider.to_string(),
         }];
         if let Some(effort) = &step.agent.effort {
@@ -479,8 +474,8 @@ impl CockpitView {
         }
         let route = |kind: RouteKind, to: &Destination, cx: &mut Context<Self>| {
             let trigger = Trigger::default();
-            let label = workflow.draft.route_label(&step.id, to);
-            let broken = workflow.draft.broken(&step.id, to).is_some();
+            let label = inputs.draft.route_label(&step.id, to);
+            let broken = inputs.draft.broken(&step.id, to).is_some();
             let which = kind.word();
             let selector = format!(
                 "outline-route-{}-{which}{}",
@@ -529,17 +524,14 @@ impl CockpitView {
                         .child(trigger.probe())
                         .on_mouse_down(
                             MouseButton::Left,
-                            cx.listener(move |view, event: &MouseDownEvent, _, cx| {
+                            cx.listener(move |_, event: &MouseDownEvent, _, cx| {
                                 cx.stop_propagation();
-                                let Some(step) = view
-                                    .shown_workflow(cx)
-                                    .and_then(|workflow| workflow.draft.step(&step_id))
-                                    .cloned()
-                                else {
-                                    return;
-                                };
-                                let picks = view.route_picks(&step, kind, cx);
-                                view.open_picks(picks, &trigger, event.position, cx);
+                                cx.emit(WorkflowsEvent::Route {
+                                    step: step_id.clone(),
+                                    kind,
+                                    trigger: trigger.clone(),
+                                    at: event.position,
+                                });
                             }),
                         ),
                 )
@@ -586,11 +578,16 @@ impl CockpitView {
                 cx.new(|_| StepDragPreview(name))
             })
             .drag_over::<StepDrag>(|style, _, _, _| style.bg(paint::SELECTED))
-            .on_drop(cx.listener(move |view, drag: &StepDrag, _, cx| view.drop_step(drag, at, cx)))
+            .on_drop(cx.listener(move |_, drag: &StepDrag, _, cx| {
+                cx.emit(WorkflowsEvent::Drop {
+                    drag: drag.clone(),
+                    onto: at,
+                })
+            }))
             .on_mouse_down(
                 MouseButton::Left,
-                cx.listener(move |view, _: &MouseDownEvent, _, cx| {
-                    view.select_step(select.clone(), cx)
+                cx.listener(move |_, _: &MouseDownEvent, _, cx| {
+                    cx.emit(WorkflowsEvent::Select(select.clone()))
                 }),
             )
             .child(
@@ -644,17 +641,13 @@ impl CockpitView {
                                     .child(more.probe())
                                     .on_mouse_down(
                                         MouseButton::Left,
-                                        cx.listener(move |view, event: &MouseDownEvent, _, cx| {
+                                        cx.listener(move |_, event: &MouseDownEvent, _, cx| {
                                             cx.stop_propagation();
-                                            let Some(step) = view
-                                                .shown_workflow(cx)
-                                                .and_then(|workflow| workflow.draft.step(&more_id))
-                                                .cloned()
-                                            else {
-                                                return;
-                                            };
-                                            let picks = view.row_picks(&step, cx);
-                                            view.open_picks(picks, &more, event.position, cx);
+                                            cx.emit(WorkflowsEvent::RowMenu {
+                                                step: more_id.clone(),
+                                                trigger: more.clone(),
+                                                at: event.position,
+                                            });
                                         }),
                                     ),
                             ),
@@ -674,6 +667,68 @@ impl CockpitView {
             .into_any_element()
     }
 
+    /// The outline's row for the start, above the agents.
+    fn start_row(&self, inputs: &WorkflowsInputs, cx: &mut Context<Self>) -> AnyElement {
+        use ferrite_ui::theme::*;
+        let selected = self.inspected == Inspected::Start;
+        let key = if selected {
+            "outline-start-selected"
+        } else {
+            "outline-start"
+        };
+        let start = &inputs.draft.start;
+        let mut said = start.kind.label().to_string();
+        if start.kind.automatic() {
+            said = format!(
+                "{said} \u{b7} automatic starts {}",
+                inputs.switch.word().to_lowercase()
+            );
+        }
+        div()
+            .id("outline-start")
+            .debug_selector(move || key.into())
+            .flex()
+            .items_center()
+            .gap(px(SPACE_2))
+            .px(px(SPACE_2))
+            .py(px(SPACE_1_5))
+            .rounded(px(R_CONTROL))
+            .cursor_pointer()
+            .map(|row| {
+                if selected {
+                    row.bg(paint::SELECTED)
+                } else {
+                    row.hover(|row| row.bg(paint::HOVER))
+                }
+            })
+            .child(
+                div()
+                    .flex_shrink_0()
+                    .font_weight(W_LABEL)
+                    .text_color(rgb(INK_STRONG))
+                    .child("Tasks start"),
+            )
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .truncate()
+                    .text_size(px(FS_META))
+                    .text_color(rgb(INK_SUBTLE))
+                    .child(SharedString::from(said)),
+            )
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|_, _: &MouseDownEvent, _, cx| {
+                    cx.stop_propagation();
+                    cx.emit(WorkflowsEvent::Start);
+                }),
+            )
+            .into_any_element()
+    }
+}
+
+impl CockpitView {
     /// One text field, drawn by the editor.
     pub(in crate::cockpit) fn text_input(
         &self,

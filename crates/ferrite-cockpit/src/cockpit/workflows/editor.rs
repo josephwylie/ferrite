@@ -5,18 +5,70 @@
 //! the field that holds the keyboard. The Factory holds it.
 //!
 //! It has no render of its own: the root draws the surface and has it
-//! draw each field (`input`). Which fields the surface shows the root
-//! decides from the draft (`ensure_fields`); what is typed it says as a
-//! `WorkflowsEvent`, since every edit is a Server ask.
+//! draw the outline (`outline`) and each field (`input`), with what it
+//! reads of the window (`WorkflowsInputs`). Which fields the surface shows
+//! the root decides from the draft (`ensure_fields`); what is typed or
+//! pressed it says as a `WorkflowsEvent`, since every edit is a Server ask.
+
+use gpui::WeakEntity;
 
 use super::*;
 
-/// What the editor's fields ask of the window.
+/// What the editor asks of the window.
 pub(crate) enum WorkflowsEvent {
     /// A field was typed in: what it holds goes to the draft.
     Edited(Field),
-    /// A press on a field: it holds the keyboard now.
+    /// A press on a field or the outline: what holds the keyboard moved.
     Focused,
+    /// A Step's row pressed, or ↑ ↓: the inspector shows it.
+    Select(StepId),
+    /// The approval's row: the inspector shows the approval settings.
+    Approval,
+    /// The start's row: the inspector shows how Tasks start.
+    Start,
+    /// ⌥↑ ⌥↓: the Step moves to index `to` of the outline.
+    Move { step: StepId, to: usize },
+    /// A dragged row let go on the row at `onto`.
+    Drop { drag: StepDrag, onto: usize },
+    /// A route's picker on a Step's row: its rows open under `trigger`.
+    Route {
+        step: StepId,
+        kind: RouteKind,
+        trigger: Trigger,
+        at: Point<Pixels>,
+    },
+    /// A Step's row's `⋯`: its menu opens under `trigger`.
+    RowMenu {
+        step: StepId,
+        trigger: Trigger,
+        at: Point<Pixels>,
+    },
+    /// `+ Add agent`: a new Step at the end.
+    Add,
+}
+
+/// What the editor draws from the window: the Workflow shown, the Step
+/// shown, the draft's problems and each Provider's models.
+pub(crate) struct WorkflowsInputs {
+    pub(super) workflow: WorkflowId,
+    pub(super) draft: Definition,
+    /// The Step shown: the one chosen, else the first.
+    pub(super) step: Option<StepId>,
+    /// Its automatic starts' switch, which the start's row says.
+    pub(super) switch: Switch,
+    pub(super) problems: Vec<Problem>,
+    /// Each Provider's models, as a Step's row names its own.
+    pub(super) models: Vec<(Provider, Vec<ferrite_core::ModelInfo>)>,
+}
+
+impl WorkflowsInputs {
+    /// `provider`'s models.
+    pub(super) fn models(&self, provider: Provider) -> &[ferrite_core::ModelInfo] {
+        self.models
+            .iter()
+            .find(|(each, _)| *each == provider)
+            .map_or(&[], |(_, models)| models)
+    }
 }
 
 /// What the inspector shows beside the outline, whose row for it is the
@@ -34,6 +86,7 @@ pub(crate) enum Inspected {
 
 /// A Factory's Workflows editor.
 pub(crate) struct WorkflowsView {
+    cockpit: WeakEntity<CockpitView>,
     /// The Workflow chosen; none, the Project's first.
     pub(crate) selected: Option<WorkflowId>,
     /// The Step chosen; none, the Workflow's first.
@@ -53,8 +106,9 @@ pub(crate) struct WorkflowsView {
 impl EventEmitter<WorkflowsEvent> for WorkflowsView {}
 
 impl WorkflowsView {
-    fn new(cx: &mut Context<Self>) -> Self {
+    fn new(cockpit: WeakEntity<CockpitView>, cx: &mut Context<Self>) -> Self {
         Self {
+            cockpit,
             selected: None,
             step: None,
             inspected: Inspected::Step,
@@ -82,6 +136,57 @@ impl WorkflowsView {
     pub(crate) fn inspect(&mut self, inspected: Inspected) {
         self.inspected = inspected;
         self.focused = None;
+    }
+
+    /// The Step `draft` shows: the one chosen, else the first.
+    pub(super) fn shown_step<'a>(&self, draft: &'a Definition) -> Option<&'a Step> {
+        self.step
+            .as_deref()
+            .and_then(|id| draft.step(id))
+            .or_else(|| draft.steps.first())
+    }
+
+    /// The outline's keys: ↑ ↓ choose a Step, ⌥↑ ⌥↓ move it, read against
+    /// the draft as it is now.
+    pub(super) fn outline_key(&mut self, keystroke: &gpui::Keystroke, cx: &mut Context<Self>) {
+        let Some(inputs) = self
+            .cockpit
+            .upgrade()
+            .and_then(|cockpit| cockpit.read(cx).workflows_inputs(self))
+        else {
+            return;
+        };
+        let steps = &inputs.draft.steps;
+        let Some(at) = inputs
+            .step
+            .as_ref()
+            .and_then(|step| steps.iter().position(|each| each.id == *step))
+        else {
+            return;
+        };
+        let up = match keystroke.key.as_str() {
+            "up" => true,
+            "down" => false,
+            _ => return,
+        };
+        let to = if up {
+            at.checked_sub(1)
+        } else {
+            (at + 1 < steps.len()).then_some(at + 1)
+        };
+        let Some(to) = to else {
+            return;
+        };
+        cx.emit(if keystroke.modifiers.alt {
+            WorkflowsEvent::Move {
+                step: steps[at].id.clone(),
+                to,
+            }
+        } else {
+            WorkflowsEvent::Select(steps[to].id.clone())
+        });
+        // The chosen row stays in view: the head is the outline's first child.
+        self.outline_scroll.scroll_to_item(to + 1);
     }
 
     /// `field`'s Composer, filled with `text` when it is first made; one
@@ -143,13 +248,32 @@ impl WorkflowsView {
 impl CockpitView {
     /// A Factory's Workflows editor, heard from its making.
     pub(in crate::cockpit) fn new_workflows(&mut self, cx: &mut Context<Self>) -> Entity<WorkflowsView> {
-        let editor = cx.new(WorkflowsView::new);
+        let me = cx.entity().downgrade();
+        let editor = cx.new(|cx| WorkflowsView::new(me, cx));
         cx.subscribe(&editor, Self::on_workflows_event).detach();
         editor
     }
 
+    /// What the editor draws, for what `editor` chose: none while the
+    /// Project has no Workflow.
+    pub(in crate::cockpit) fn workflows_inputs(&self, editor: &WorkflowsView) -> Option<WorkflowsInputs> {
+        let workflow = self.chosen_workflow(editor.selected.as_deref())?;
+        Some(WorkflowsInputs {
+            workflow: workflow.id.clone(),
+            step: editor.shown_step(&workflow.draft).map(|step| step.id.clone()),
+            switch: workflow.automation.switch,
+            problems: workflow.draft.problems(&self.factory_catalog()),
+            draft: workflow.draft.clone(),
+            models: Provider::ALL
+                .into_iter()
+                .map(|provider| (provider, self.cockpit.model_catalog(provider)))
+                .collect(),
+        })
+    }
+
     /// A field typed in goes to the draft; one pressed has the focus pump
-    /// hand it the keyboard.
+    /// hand it the keyboard; a row, a route, a drop, a key or Add agent
+    /// chooses or asks the Server.
     fn on_workflows_event(
         &mut self,
         _: Entity<WorkflowsView>,
@@ -159,6 +283,31 @@ impl CockpitView {
         match event {
             WorkflowsEvent::Edited(field) => self.field_edited(field, cx),
             WorkflowsEvent::Focused => cx.notify(),
+            WorkflowsEvent::Select(step) => self.select_step(step.clone(), cx),
+            WorkflowsEvent::Approval => self.select_approval(cx),
+            WorkflowsEvent::Start => self.open_start(cx),
+            WorkflowsEvent::Move { step, to } => self.move_step(step.clone(), *to, cx),
+            WorkflowsEvent::Drop { drag, onto } => self.drop_step(drag, *onto, cx),
+            WorkflowsEvent::Route {
+                step,
+                kind,
+                trigger,
+                at,
+            } => {
+                let Some(step) = self.shown_step_of(step, cx) else {
+                    return;
+                };
+                let picks = self.route_picks(&step, *kind, cx);
+                self.open_picks(picks, trigger, *at, cx);
+            }
+            WorkflowsEvent::RowMenu { step, trigger, at } => {
+                let Some(step) = self.shown_step_of(step, cx) else {
+                    return;
+                };
+                let picks = self.row_picks(&step, cx);
+                self.open_picks(picks, trigger, *at, cx);
+            }
+            WorkflowsEvent::Add => self.add_step(None, cx),
         }
     }
 }

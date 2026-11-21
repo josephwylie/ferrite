@@ -15,15 +15,15 @@ use std::collections::HashMap;
 
 use super::*;
 use ferrite_core::factory::{
-    ApprovalChange, Approver, Catalog, Destination, Problem, RouteKind, Step, StepChange, StepId,
-    Template, Workflow, WorkflowId,
+    ApprovalChange, Approver, Catalog, Definition, Destination, Problem, RouteKind, Step,
+    StepChange, StepId, Switch, Template, Workflow, WorkflowId,
 };
 use ferrite_core::protocol::{Done, WorkflowAction};
 use ferrite_pane::composer::{Composer, Edited, Role};
 use gpui::component::Disableable as _;
 
 mod editor;
-pub(crate) use editor::{Inspected, WorkflowsView};
+pub(crate) use editor::{Inspected, WorkflowsEvent, WorkflowsInputs, WorkflowsView};
 mod inspector;
 mod outline;
 pub(crate) use outline::field_input;
@@ -213,12 +213,15 @@ impl CockpitView {
 
     /// The Workflow the surface shows: the one chosen, else the first.
     pub(crate) fn shown_workflow(&self, cx: &gpui::App) -> Option<&Workflow> {
+        self.chosen_workflow(self.factory()?.editor.read(cx).selected.as_deref())
+    }
+
+    /// The Workflow shown with `chosen` chosen: it, else the Project's
+    /// first.
+    fn chosen_workflow(&self, chosen: Option<&str>) -> Option<&Workflow> {
         let view = self.factory()?;
         let board = self.cockpit.factory();
-        view.editor
-            .read(cx)
-            .selected
-            .as_deref()
+        chosen
             .and_then(|id| board.workflow(id))
             .filter(|workflow| workflow.project == view.project)
             .or_else(|| board.workflows_of(view.project).next())
@@ -227,10 +230,12 @@ impl CockpitView {
     /// The Step the inspector shows: the one chosen, else the first.
     pub(crate) fn shown_step(&self, cx: &gpui::App) -> Option<&Step> {
         let workflow = self.shown_workflow(cx)?;
-        let chosen = self.factory()?.editor.read(cx).step.as_deref();
-        chosen
-            .and_then(|id| workflow.draft.step(id))
-            .or_else(|| workflow.draft.steps.first())
+        self.factory()?.editor.read(cx).shown_step(&workflow.draft)
+    }
+
+    /// The shown Workflow's Step `step`, as the draft holds it now.
+    fn shown_step_of(&self, step: &str, cx: &gpui::App) -> Option<Step> {
+        self.shown_workflow(cx)?.draft.step(step).cloned()
     }
 
     /// One Workflow ask; a refusal is said in the view's note.
@@ -368,40 +373,6 @@ impl CockpitView {
         }
         self.ensure_fields(cx);
         cx.notify();
-    }
-
-    /// The outline's keys: ↑ ↓ choose a Step, ⌥↑ ⌥↓ move it.
-    pub(crate) fn outline_key(&mut self, keystroke: &gpui::Keystroke, cx: &mut Context<Self>) {
-        let (Some(workflow), Some(step)) = (self.shown_workflow(cx), self.shown_step(cx)) else {
-            return;
-        };
-        let steps: Vec<StepId> = workflow.draft.steps.iter().map(|s| s.id.clone()).collect();
-        let step = step.id.clone();
-        let Some(at) = steps.iter().position(|each| *each == step) else {
-            return;
-        };
-        let up = match keystroke.key.as_str() {
-            "up" => true,
-            "down" => false,
-            _ => return,
-        };
-        let to = if up {
-            at.checked_sub(1)
-        } else {
-            (at + 1 < steps.len()).then_some(at + 1)
-        };
-        let Some(to) = to else {
-            return;
-        };
-        if keystroke.modifiers.alt {
-            self.move_step(step, to, cx);
-        } else {
-            self.select_step(steps[to].clone(), cx);
-        }
-        // The chosen row stays in view: the head is the outline's first child.
-        if let Some(view) = self.factory() {
-            view.editor.read(cx).outline_scroll.scroll_to_item(to + 1);
-        }
     }
 
     /// Keep a Composer for each text field the surface shows, filled from
