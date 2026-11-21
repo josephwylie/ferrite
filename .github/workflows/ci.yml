@@ -72,12 +72,14 @@ jobs:
       - uses: mozilla-actions/sccache-action@v0.0.11
       - uses: Swatinem/rust-cache@v2
         with:
+          # Bumped so main saves a cache that holds the CEF builds' output.
+          prefix-key: v1-rust
           save-if: ${{ github.ref == 'refs/heads/main' }}
           cache-on-failure: true
       - name: Install nextest
         uses: taiki-e/install-action@nextest
-      # Default features exercise the synthetic engine. Packaged CEF remains
-      # independently verified by browser-window.yml.
+      # Default features exercise the synthetic engine. The CEF builds are
+      # checked below; browser-window.yml runs the packaged engine.
       - name: Test affected workspace packages (synthetic engine)
         env:
           PACKAGES: ${{ needs.scope.outputs.packages }}
@@ -104,6 +106,19 @@ jobs:
       # change to what they call broke them unseen.
       - name: Check the visual-reference build
         run: cargo check -p ferrite --locked --features visual-reference
+      # Nothing else on most PRs compiles the code behind these features: the
+      # packaged browser run starts only for Browser changes (ci_scope.py).
+      # The CEF download is the slow part of the check, and Cargo.lock pins it.
+      - uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/cef
+          key: cef-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('**/Cargo.lock') }}
+      - name: Check the CEF builds
+        env:
+          CEF_PATH: ${{ runner.temp }}/cef
+        run: |
+          cargo check -p ferrite --locked --features cef
+          cargo check -p ferrite --locked --features browser-smoke
       # Last, so a new raw press does not hide the tests' results. The cap
       # keeps the vendored crates' own deny attributes from stopping clippy;
       # bash's pipefail fails the step if clippy errors (docs/adr/0044).
@@ -148,6 +163,8 @@ jobs:
           version: v0.16.0
       - uses: Swatinem/rust-cache@v2
         with:
+          # Bumped so main saves a cache that holds the CEF builds' output.
+          prefix-key: v1-rust
           workspaces: ${{ env.DEV_DRIVE_WORKSPACE }}
           save-if: ${{ github.ref == 'refs/heads/main' }}
           cache-on-failure: true
@@ -167,6 +184,17 @@ jobs:
       - name: Build app
         working-directory: ${{ env.DEV_DRIVE_WORKSPACE }}
         run: cargo build -p ferrite --locked
+      # The Windows half of the CEF code, as on macOS above.
+      # The CEF download is the slow part of the check, and Cargo.lock pins it.
+      - uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/cef
+          key: cef-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('**/Cargo.lock') }}
+      - name: Check the CEF build
+        working-directory: ${{ env.DEV_DRIVE_WORKSPACE }}
+        env:
+          CEF_PATH: ${{ runner.temp }}/cef
+        run: cargo check -p ferrite --locked --features cef
       - name: Windows staging contract
         shell: pwsh
         working-directory: ${{ env.DEV_DRIVE_WORKSPACE }}
@@ -175,7 +203,9 @@ jobs:
   verification:
     name: Verification decisions
     needs: [scope, macos, windows]
-    if: ${{ always() }}
+    # A run replaced by a newer one (a PR opened with its labels starts two)
+    # reports nothing rather than a failure.
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     steps:
       - name: Require selected checks and explain intentional skips

@@ -11,16 +11,25 @@ env:
   RUSTC_WRAPPER: sccache
   SCCACHE_GHA_ENABLED: 'true'
 
+# Every merge to main runs it. A PR runs it when it changes what only this run
+# sees whole (scripts/ci_scope.py) or carries the `browser-ci` label.
 on:
+  push:
+    branches: [main]
   pull_request:
+    types: [opened, synchronize, reopened, labeled]
   workflow_dispatch:
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
+  # Adding any other label starts a run that does nothing, so it must not
+  # replace this PR's real one. Main's runs all finish and save the caches
+  # PRs read; a newer merge replaces only a run still waiting.
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}${{ github.event.action == 'labeled' && github.event.label.name != 'browser-ci' && format('-{0}', github.run_id) || '' }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   scope:
+    if: ${{ github.event.action != 'labeled' || github.event.label.name == 'browser-ci' }}
     runs-on: ubuntu-latest
     outputs:
       browser: ${{ steps.scope.outputs.browser }}
@@ -36,14 +45,16 @@ jobs:
         env:
           EVENT: ${{ github.event_name }}
           BASE: ${{ github.event.pull_request.base.sha }}
+          BROWSER_LABEL: ${{ contains(github.event.pull_request.labels.*.name, 'browser-ci') }}
         run: |
           args=()
           if [ "$EVENT" = pull_request ]; then args+=(--base "$BASE"); fi
+          if [ "$BROWSER_LABEL" = true ]; then args+=(--browser); fi
           python scripts/ci_scope.py "${args[@]}" --github-output "$GITHUB_OUTPUT"
 
   packaged-cef:
     needs: scope
-    if: ${{ !cancelled() && needs.scope.outputs.browser != 'false' }}
+    if: ${{ needs.scope.outputs.browser == 'true' }}
     name: CEF pass, production Cockpit window (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: 75
@@ -209,56 +220,11 @@ jobs:
           path: target/browser-window-evidence
           if-no-files-found: warn
 
-  focused-regressions:
-    needs: scope
-    if: ${{ !cancelled() && needs.scope.outputs.browser != 'false' }}
-    name: Synthetic-engine pass, focused browser, provider and GPUI regressions
-    runs-on: macos-latest
-    timeout-minutes: 60
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      # Pinned for Windows' long rustc commands; see ci.yml.
-      - uses: mozilla-actions/sccache-action@v0.0.11
-        continue-on-error: true
-        with:
-          version: v0.16.0
-      - name: Keep compiler cache optional
-        shell: bash
-        run: |
-          if ! command -v sccache >/dev/null 2>&1; then echo 'RUSTC_WRAPPER=' >> "$GITHUB_ENV"; fi
-      - uses: Swatinem/rust-cache@v2
-        with:
-          shared-key: browser-focused
-          cache-on-failure: true
-      - name: Install nextest
-        uses: taiki-e/install-action@nextest
-      - name: Compile the focused packages once
-        id: focused-build
-        run: cargo nextest run -p ferrite-core -p ferrite-pane -p ferrite-cockpit --locked --features ferrite-core/test-support --no-run
-      - name: Public browser, ownership, unknown-wire and annotation service regressions
-        if: always() && steps.focused-build.outcome == 'success'
-        run: cargo nextest run -p ferrite-core --locked --features test-support browser
-      - name: Actual provider serialization regressions
-        if: always() && steps.focused-build.outcome == 'success'
-        run: cargo nextest run -p ferrite-core --locked --features test-support --test it -E 'test(/^(visuals|claude_session|codex_session)::/)'
-      - name: Native view input and full viewport regressions
-        if: always() && steps.focused-build.outcome == 'success'
-        run: cargo nextest run -p ferrite-pane --locked --lib visual::element::tests
-      - name: All annotation editor controls
-        if: always() && steps.focused-build.outcome == 'success'
-        run: cargo nextest run -p ferrite-pane --locked --lib annotation_editor
-      - name: Actual Cockpit annotation and browser host regressions
-        if: always() && steps.focused-build.outcome == 'success'
-        run: cargo nextest run -p ferrite-cockpit --locked --lib browser
-      - name: Existing preview shell regression boundary
-        if: always() && steps.focused-build.outcome == 'success'
-        run: cargo nextest run -p ferrite-cockpit --locked --lib cockpit::tests::panel_preview
-
   verification:
     name: Browser verification decisions
-    needs: [scope, packaged-cef, focused-regressions]
-    if: ${{ always() }}
+    needs: [scope, packaged-cef]
+    # Nothing to report for a replaced run or another label's empty one.
+    if: ${{ !cancelled() && needs.scope.result != 'skipped' }}
     runs-on: ubuntu-latest
     steps:
       - name: Require selected checks and explain intentional skips
@@ -266,14 +232,11 @@ jobs:
           SCOPE: ${{ needs.scope.result }}
           BROWSER: ${{ needs.scope.outputs.browser }}
           PACKAGED: ${{ needs.packaged-cef.result }}
-          FOCUSED: ${{ needs.focused-regressions.result }}
         run: |
           test "$SCOPE" = success
           if [ "$BROWSER" = false ]; then
             test "$PACKAGED" = skipped
-            test "$FOCUSED" = skipped
-            echo 'No packaged browser inputs changed. Browser checks intentionally skipped.'
+            echo 'No Browser input changed. The packaged run is left to main; add browser-ci to force it.'
           else
             test "$PACKAGED" = success
-            test "$FOCUSED" = success
           fi

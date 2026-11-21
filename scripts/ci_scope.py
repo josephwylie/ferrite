@@ -87,12 +87,30 @@ VENDOR = "vendor/"
 SHARED_INPUTS = (VENDOR, "scripts/", "assets/", "resources/", ".cargo/", ".config/", ".github/workflows/")
 SHARED_FILES = {"Cargo.toml", "Cargo.lock", "rust-toolchain", "rust-toolchain.toml"}
 
+# The packaged browser run (browser-window.yml) holds scarce macOS runners for
+# most of an hour, so a PR runs it only for the inputs it alone sees whole:
+# the Browser, the app crate, the GPUI stack, dependencies, the packaging
+# scripts, and any line naming the `cef` or `browser-smoke` feature. ci.yml
+# compiles both features on every PR, so a caller's change that breaks gated
+# code fails there, and main runs the packaged browser after every merge.
+BROWSER_FILES = {"Cargo.toml", "Cargo.lock", "rust-toolchain", "rust-toolchain.toml", ".github/workflows/browser-window.yml",
+                 "scripts/ci_scope.py", "scripts/install-app.sh", "scripts/stage-windows.ps1", "scripts/copy-chromium-windows.ps1"}
+BROWSER_INPUTS = (VENDOR, ".cargo/", "scripts/patches/", "crates/ferrite/", "crates/ferrite-pane/src/visual/",
+                  "crates/ferrite-pane/src/annotation_editor")
+CEF_GATE = re.compile(r'feature\s*=\s*"(cef|browser-smoke)"')
 
-def select(packages: dict[str, Package], paths: list[str], full: bool = False) -> dict:
+
+def browser_input(path: str) -> bool:
+    return (path in BROWSER_FILES or path.startswith(BROWSER_INPUTS) or path.endswith("/Cargo.toml")
+            or (path.startswith(("crates/", "scripts/")) and "browser" in path))
+
+
+def select(packages: dict[str, Package], paths: list[str], full: bool = False, browser: bool = False) -> dict:
     check_boundaries(packages)
     selected = set()
     reasons = set()
     all_packages = full or not paths
+    browser = browser or not paths or any(map(browser_input, paths))
     if all_packages:
         reasons.add("full run or unavailable change list")
     for path in paths:
@@ -122,7 +140,7 @@ def select(packages: dict[str, Package], paths: list[str], full: bool = False) -
             selected = expanded
     return {
         "code": bool(selected),
-        "browser": "ferrite" in selected or all_packages,
+        "browser": browser,
         "full": full,
         "packages": sorted(name for name in selected if not packages[name].directory.startswith(VENDOR)),
         "vendored": sorted(name for name in selected if packages[name].directory.startswith(VENDOR)),
@@ -140,19 +158,31 @@ def changed_paths(root: Path, base: str, head: str) -> list[str]:
     return [path for path in paths if path]
 
 
+def changes_cef_gate(root: Path, base: str, head: str) -> bool:
+    """Whether the diff adds or removes a line naming the `cef` or `browser-smoke` feature."""
+    result = subprocess.run(
+        ["git", "diff", "--unified=0", "--no-renames", "--no-color", f"{base}...{head}", "--"],
+        cwd=root, check=True, stdout=subprocess.PIPE,
+    )
+    return any(line[:1] in "+-" and not line.startswith(("+++", "---")) and CEF_GATE.search(line)
+               for line in result.stdout.decode(errors="replace").splitlines() if line)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--root", type=Path, default=Path(__file__).resolve().parents[1])
     parser.add_argument("--base", help="Compare against this Git revision's merge base")
     parser.add_argument("--head", default="HEAD")
     parser.add_argument("--full", action="store_true", help="Select every package and Windows CI")
+    parser.add_argument("--browser", action="store_true", help="Select the packaged browser checks")
     parser.add_argument("--github-output", type=Path)
     args = parser.parse_args()
     if (args.base and args.base.startswith("-")) or args.head.startswith("-"):
         parser.error("Git revisions cannot start with a dash")
     root = args.root.resolve()
     paths = changed_paths(root, args.base, args.head) if args.base else []
-    result = select(workspace(root), paths, full=args.full or not args.base)
+    browser = args.browser or (bool(args.base) and changes_cef_gate(root, args.base, args.head))
+    result = select(workspace(root), paths, full=args.full or not args.base, browser=browser)
     print(json.dumps(result, indent=2))
     if args.github_output:
         with args.github_output.open("a") as output:
