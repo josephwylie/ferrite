@@ -178,13 +178,15 @@ pub fn working_tail(facts: WorkingFacts) -> Option<WorkingTail> {
 }
 
 /// The words a header or live row wears: `TURN_FOLD_TEXT` on
-/// `TURN_FOLD_LINE`, `INK_SUBTLE`, tabular, on a `TURN_FOLD_ROW_H` line.
+/// `TURN_FOLD_LINE`, `INK_SUBTLE`, tabular, on a `TURN_FOLD_ROW_H` line,
+/// never wider than the column it stands in.
 fn row_words() -> Div {
     components::tabular(
         div()
             .flex()
             .items_center()
             .min_w_0()
+            .max_w_full()
             .min_h(px(theme::TURN_FOLD_ROW_H))
             .font_family(theme::FONT_UI)
             .text_size(px(theme::TURN_FOLD_TEXT))
@@ -440,7 +442,6 @@ fn live_row(live: &Live, work: &[Block], disclosure: Option<LineDisclosure>) -> 
     };
     let mut row = row_words()
         .debug_selector(move || selector.into())
-        .max_w_full()
         .child(working_mark(live.spinning))
         .child(face);
     if let Some(disclosure) = disclosure {
