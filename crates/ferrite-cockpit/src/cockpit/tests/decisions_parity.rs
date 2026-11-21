@@ -594,3 +594,33 @@ fn the_split_offers_the_providers_auto_mode(cx: &mut TestAppContext) {
     });
     assert_eq!(switch, Some(("auto".into(), "Auto".into())));
 }
+
+/// A press outside the split button's open menu closes it and answers
+/// nothing, as every other menu closes; a press on its `▾` still shuts it.
+#[gpui::test]
+fn a_press_outside_closes_the_allow_menu(cx: &mut TestAppContext) {
+    let (view, fake, cx) = waiting("parity-menu-outside", cx, bash("menu-outside", "cargo test"));
+    let (thread, serial) = view.read_with(cx, |view, _| {
+        let request = view.shown_request(0).unwrap();
+        (view.panes[0].thread().unwrap(), request.handle.serial)
+    });
+    let always = format!("request-always-{}-{serial}", thread.get()).leak();
+    let more = bounds(cx, format!("request-more-{}-{serial}", thread.get()));
+    cx.simulate_click(more.center(), gpui::Modifiers::none());
+    tick(cx);
+    assert!(cx.debug_bounds(always).is_some(), "the menu is open");
+    let well = cx.debug_bounds("approval-well").expect("the command well");
+    cx.simulate_click(well.center(), gpui::Modifiers::none());
+    tick(cx);
+    assert!(cx.debug_bounds(always).is_none(), "a press outside closed the menu");
+    assert!(answered(&fake).is_empty(), "closing the menu answers nothing");
+    assert!(view.read_with(cx, |view, _| view.shown_request(0).is_some()));
+
+    cx.simulate_click(more.center(), gpui::Modifiers::none());
+    tick(cx);
+    assert!(cx.debug_bounds(always).is_some(), "the menu opens again");
+    cx.simulate_click(more.center(), gpui::Modifiers::none());
+    tick(cx);
+    assert!(cx.debug_bounds(always).is_none(), "a second press on its button shuts it");
+    assert!(answered(&fake).is_empty(), "{:?}", answered(&fake));
+}
