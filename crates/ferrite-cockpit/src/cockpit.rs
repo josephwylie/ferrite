@@ -7346,7 +7346,6 @@ impl CockpitView {
             transcript: retained_transcript,
             attachments,
             menu: self.popover_element(index, cx),
-            subagent_head: self.subagent_head(index, cx),
             activity_decisions,
             details: self.details_card(index, window, cx),
             details_lane_width: self.details_lane_width(index),
