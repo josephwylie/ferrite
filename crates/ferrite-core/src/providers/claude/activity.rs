@@ -63,6 +63,9 @@ pub(super) struct Decoder {
     /// notification names the call, and settles it (`handback`).
     backgrounded: HashMap<String, (Subject, bool)>,
     main_stream_message: Option<String>,
+    /// Main's newest thought in the message streaming now, until a block
+    /// that is not a thought follows it (`say_update`).
+    main_thought: Option<MainThought>,
     /// Main's streaming `show_visual` inputs, drawn as they arrive.
     visual_drafts: super::drafts::Drafts,
     main_stream_blocks: HashMap<(String, u64), MainStreamBlock>,
@@ -753,6 +756,13 @@ impl Decoder {
             .then(|| value.get("tool_use_result"))
             .flatten();
         for (ordinal, block) in blocks.iter().enumerate() {
+            if child.is_none() && assistant && block["type"] != "thinking" {
+                if let Some(thought) = self.main_thought.take() {
+                    if block["type"] == "tool_use" && thought.is_update(value) {
+                        self.say_update(thought, value, events);
+                    }
+                }
+            }
             let kind = match string(block, "type") {
                 Some("text") => Some(MainStreamKind::Text),
                 Some("thinking") => Some(MainStreamKind::Thinking),
@@ -807,6 +817,22 @@ impl Decoder {
                         self.working(key, events);
                         self.content_message(key, value, id, event, events);
                     } else {
+                        if assistant && thinking {
+                            let message = value["message"]["id"].as_str().unwrap_or_default();
+                            let follows_thought = self
+                                .main_thought
+                                .take()
+                                .is_some_and(|previous| previous.message == message);
+                            self.main_thought = id
+                                .clone()
+                                .filter(|_| !text.trim().is_empty())
+                                .map(|id| MainThought {
+                                    message: message.to_owned(),
+                                    id,
+                                    text: text.to_owned(),
+                                    follows_thought,
+                                });
+                        }
                         self.main_content(value, id, event, events);
                     }
                 }
@@ -1116,6 +1142,19 @@ impl Decoder {
         if self.pending_retractions.contains(&key) {
             self.retract_content(subject, vec![id.into()], events);
         }
+    }
+
+    /// Says a thought that was the model's update (`MainThought::is_update`):
+    /// the thought leaves the transcript and its text stands in its place,
+    /// as T3 Code shows it.
+    fn say_update(&mut self, thought: MainThought, value: &Value, events: &mut Vec<SessionEvent>) {
+        self.retract_content(&Subject::Main, vec![thought.id.clone()], events);
+        self.main_content(
+            value,
+            Some(format!("{}:said", thought.id)),
+            ExecutionEvent::Text { text: thought.text },
+            events,
+        );
     }
 
     fn retract_content(&self, subject: &Subject, ids: Vec<String>, events: &mut Vec<SessionEvent>) {
@@ -1604,6 +1643,49 @@ fn delivery_id(value: &Value, part: &str) -> Option<String> {
     Some(format!("{kind}@{at}:{:x}:{part}", hasher.finish()))
 }
 
+/// A thought of main's, kept until the block after it shows what it was.
+struct MainThought {
+    /// The API message it is a block of.
+    message: String,
+    id: String,
+    text: String,
+    /// The block before it in its message was a thought too.
+    follows_thought: bool,
+}
+
+impl MainThought {
+    /// Claude 5.1 and later write the update they would say before a call
+    /// as a thinking block, at most one such block before each call: a
+    /// second thought in a row, directly before a call in the same message,
+    /// is that update (T3 Code's `claudeWritesUpdatesAsThinking`).
+    fn is_update(&self, call: &Value) -> bool {
+        self.follows_thought
+            && call["message"]["id"].as_str() == Some(self.message.as_str())
+            && call["message"]["model"]
+                .as_str()
+                .and_then(claude_version)
+                .is_some_and(|version| version >= (5, 1))
+    }
+}
+
+/// The version a Claude model id names: `claude-opus-5-5` is 5.5,
+/// `claude-sonnet-4-5-20250929` 4.5, `claude-opus-5-20261001` 5.0.
+fn claude_version(model: &str) -> Option<(u32, u32)> {
+    let digits = |text: &str| text.bytes().take_while(u8::is_ascii_digit).count();
+    model.match_indices("claude-").find_map(|(at, prefix)| {
+        let rest = &model[at + prefix.len()..];
+        let family = rest.bytes().take_while(u8::is_ascii_lowercase).count();
+        let rest = rest[family..].strip_prefix('-').filter(|_| family > 0)?;
+        let major = digits(rest);
+        let version = rest[..major].parse().ok()?;
+        let minor = rest[major..]
+            .strip_prefix('-')
+            .and_then(|rest| (1..=2).contains(&digits(rest)).then(|| &rest[..digits(rest)]))
+            .map_or(Some(0), |minor| minor.parse().ok())?;
+        Some((version, minor))
+    })
+}
+
 fn main_block_id(message: &str, index: u64) -> String {
     format!("stream:{message}:{index}")
 }
@@ -1647,6 +1729,118 @@ mod tests {
             .flat_map(|line| decoder.decode(line))
             .collect();
         (decoder, events)
+    }
+
+    /// One API message as the CLI streams it: two thinking blocks, then a
+    /// Bash call (shape captured from 2.1.330 with `--include-partial-messages`).
+    fn two_thoughts_then_a_call(model: &str) -> Vec<String> {
+        let frame = |event: Value| {
+            json!({"type":"stream_event","event":event,"session_id":"s1","parent_tool_use_id":null,
+                "uuid":format!("{}-{}", event["type"], event["index"]),"api_message_id":"msg_1"})
+            .to_string()
+        };
+        let snapshot = |uuid: &str, block: Value| {
+            json!({"type":"assistant","session_id":"s1","parent_tool_use_id":null,"uuid":uuid,
+                "message":{"model":model,"id":"msg_1","type":"message","role":"assistant","content":[block]}})
+            .to_string()
+        };
+        let thought = |index: u64, text: &str| {
+            vec![
+                frame(json!({"type":"content_block_start","index":index,
+                    "content_block":{"type":"thinking","thinking":"","signature":""}})),
+                frame(json!({"type":"content_block_delta","index":index,
+                    "delta":{"type":"thinking_delta","thinking":text}})),
+                snapshot(
+                    &format!("snap{index}"),
+                    json!({"type":"thinking","thinking":text,"signature":"sig"}),
+                ),
+                frame(json!({"type":"content_block_stop","index":index})),
+            ]
+        };
+        let mut lines = vec![frame(json!({"type":"message_start","message":{
+            "model":model,"id":"msg_1","type":"message","role":"assistant","content":[]}}))];
+        lines.extend(thought(
+            0,
+            "I'll finish with wrap_up after the last command.\n\n",
+        ));
+        lines.extend(thought(
+            1,
+            "The repo has only a seed commit, so I'm planning from scratch.\n\n",
+        ));
+        let call = json!({"type":"tool_use","id":"toolu_1","name":"Bash","input":{"command":"ls"}});
+        lines.push(frame(
+            json!({"type":"content_block_start","index":2,"content_block":call}),
+        ));
+        lines.push(snapshot("snap2", call));
+        lines.push(frame(json!({"type":"content_block_stop","index":2})));
+        lines.push(frame(json!({"type":"message_stop"})));
+        lines
+    }
+
+    /// The main transcript's blocks in order, as `thought:`, `said:` or
+    /// `call:` lines.
+    fn main_shape(lines: &[String]) -> Vec<String> {
+        let mut decoder = Decoder::default();
+        let mut activity = Activity::default();
+        activity.apply(ActivityInput::Connect { generation: 1 });
+        for event in lines.iter().flat_map(|line| decoder.decode(line)) {
+            activity.apply(match event {
+                SessionEvent::Activity(event) => ActivityInput::Observe {
+                    generation: 1,
+                    event,
+                    at: Instant::now(),
+                },
+                event => ActivityInput::Main {
+                    input: crate::transcript::Input::Event(event),
+                    at: Instant::now(),
+                },
+            });
+        }
+        use crate::transcript::Body;
+        activity
+            .view()
+            .main()
+            .transcript()
+            .blocks()
+            .iter()
+            .filter_map(|block| match &block.body {
+                Body::Thinking(text) => Some(format!("thought: {}", text.trim())),
+                Body::Paragraph { spans } => Some(format!(
+                    "said: {}",
+                    spans
+                        .iter()
+                        .map(|span| span.text.as_str())
+                        .collect::<String>()
+                        .trim()
+                )),
+                Body::Tool(tool) => Some(format!("call: {}", tool.name)),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// Claude 5.1 and later write the update they would say before a call
+    /// as a thinking block: a second thought in a row before a call is
+    /// that update, said to the operator as T3 Code shows it (its
+    /// `claudeWritesUpdatesAsThinking`). The first stays a thought.
+    #[test]
+    fn a_second_thought_before_a_call_is_said_on_claude_5_1_and_later() {
+        assert_eq!(
+            main_shape(&two_thoughts_then_a_call("claude-opus-5-5")),
+            [
+                "thought: I'll finish with wrap_up after the last command.",
+                "said: The repo has only a seed commit, so I'm planning from scratch.",
+                "call: Bash",
+            ]
+        );
+        assert_eq!(
+            main_shape(&two_thoughts_then_a_call("claude-sonnet-4-5-20250929")),
+            [
+                "thought: I'll finish with wrap_up after the last command.",
+                "thought: The repo has only a seed commit, so I'm planning from scratch.",
+                "call: Bash",
+            ]
+        );
     }
 
     /// Work the CLI will start itself, which Ferrite cannot watch: a
