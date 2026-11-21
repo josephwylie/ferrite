@@ -27,8 +27,8 @@ impl CockpitView {
         let Some((thread, pane)) = self.focused_details() else {
             return;
         };
-        self.panes[pane].details.previous_pages.set(0);
         if self.details_inline(pane) {
+            self.panes[pane].details.reset_pages();
             self.apply_surface(thread, surfaces::SurfaceAction::ToggleDetails);
             cx.notify();
             return;
@@ -216,7 +216,7 @@ impl CockpitView {
         };
         let available = (f32::from(canvas.size.height) - top - DETAILS_GAP).max(0.);
         let content =
-            self.details_content(thread, &pane.selected, pane.details.previous_pages.get(), cx);
+            self.details_content(thread, &pane.selected, pane.details.previous_pages(), cx);
         let width = (f32::from(canvas.size.width) - 2. * DETAILS_GAP).clamp(0., DETAILS_W);
         let measured = pane.details.measurements.clone();
         measured.borrow_mut().prepare(

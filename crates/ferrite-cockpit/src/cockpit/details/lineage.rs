@@ -281,8 +281,7 @@ impl Lineage {
                     .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
                         cx.stop_propagation();
                         if let Some(index) = view.pane_for(thread) {
-                            let pages = &view.panes[index].details.previous_pages;
-                            pages.set(pages.get() + 1);
+                            view.panes[index].details.show_more();
                             cx.notify();
                         }
                     })),
