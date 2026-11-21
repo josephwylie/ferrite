@@ -320,9 +320,12 @@ fn distance(
 
 /// The visual as a page a desktop browser can open: the same theme and the
 /// same Content-Security-Policy as inline (nothing fetched), written to a
-/// temp file. Returns its path.
+/// temp file. Returns its path. The browser reads the page after this
+/// returns, so it cannot go at once: each write first removes the pages
+/// written a day or more ago.
 fn write_standalone(id: &str, html: &str, theme_css: &str) -> std::io::Result<std::path::PathBuf> {
     let dir = std::env::temp_dir().join("ferrite-visuals");
+    ferrite_core::disk::remove_stale(&dir, PAGE_RETENTION);
     std::fs::create_dir_all(&dir)?;
     let name: String = id
         .chars()
@@ -338,6 +341,9 @@ fn write_standalone(id: &str, html: &str, theme_css: &str) -> std::io::Result<st
     std::fs::write(&path, standalone(html, theme_css))?;
     Ok(path)
 }
+
+/// How long a page written for a browser stays, for the browser to reload.
+const PAGE_RETENTION: std::time::Duration = std::time::Duration::from_secs(24 * 60 * 60);
 
 /// See [`write_standalone`].
 fn standalone(html: &str, theme_css: &str) -> String {
@@ -361,6 +367,16 @@ mod tests {
         assert!(page.contains("--ferrite-bg:#1b1b1c"));
         assert!(page.contains("connect-src 'none'"));
         assert!(page.ends_with("<p>hi</p>"));
+    }
+
+    #[test]
+    fn a_page_written_for_a_browser_goes_a_day_later() {
+        let old = write_standalone("old", "<p>old</p>", "").unwrap();
+        let day_ago = std::time::SystemTime::now() - PAGE_RETENTION;
+        std::fs::File::options().write(true).open(&old).unwrap().set_modified(day_ago).unwrap();
+        let new = write_standalone("new", "<p>new</p>", "").unwrap();
+        assert!(!old.exists(), "a day-old page outlived the next write");
+        assert!(new.is_file(), "the page just written is the browser's to read");
     }
 
     #[test]
