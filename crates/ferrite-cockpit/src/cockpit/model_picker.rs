@@ -8,11 +8,20 @@
 //! The footer's permission mode opens the mode menu inside it
 //! (`ModelPicker::mode`): the first esc shuts that, the next the picker.
 //!
-//! The rows are the popup's own (`Popover::rows`, every Provider's models,
-//! each carrying its pick); the picker keeps which of them the tab or the
-//! search lists, the Reasoning column's rungs and the search line.
+//! A view of its own (ADR 0041), `ModelPickerView`, which the popup slot
+//! holds: its rows (every Provider's models, each carrying its pick), which
+//! of them the tab or the search lists, the Reasoning column's rungs, the
+//! cursors, the search line and the favourites it ranks by. The root reads
+//! what it lists (`model_picker_inputs`) as it opens and again after a pick,
+//! an announcement or a turn starting or ending. Its keys answer on its own
+//! element, as the palette's do, but for esc, which is the slot's. A pick or
+//! a star it says as a `ModelPickerEvent`: re-aiming a Thread is a Server
+//! ask, and the favourites are the window's settings. The slot keeps the
+//! Pane it hangs over and the mode menu, and the root draws the footer: the
+//! permission mode is the Session's.
 
 use super::*;
+use ferrite_core::settings::FavouriteModel;
 use ferrite_pane::composer::Role;
 use ferrite_ui::theme::*;
 
@@ -42,39 +51,85 @@ pub(super) enum Column {
     Reasoning,
 }
 
+/// The picker as the popup slot holds it.
 pub(super) struct ModelPicker {
+    /// The Pane whose Composer it hangs over.
+    pub(super) pane: PaneIdentity,
+    pub(super) view: Entity<ModelPickerView>,
+    /// The permission mode menu the footer opened over the picker. The
+    /// root holds the keyboard while it is up.
+    pub(super) mode: Option<super::mode_menu::ModeMenu>,
+}
+
+/// What the root reads for the picker (`model_picker_inputs`).
+pub(super) struct ModelPickerInputs {
+    /// Every Provider's models, each carrying its pick, held while
+    /// `hold` says so.
+    rows: Vec<Row>,
+    /// The Reasoning column's rungs, each carrying its pick.
+    efforts: Vec<Row>,
+    /// The model the column serves, named as the chip names it.
+    label: SharedString,
+    /// The Pane's Provider, the tab it opens on with nothing starred.
+    current: Provider,
+    /// The Provider a pick hands the Thread over to, once its first prompt
+    /// has fixed the other.
+    handover: Option<Provider>,
+    /// Why every row is dead for now (`tuning_hold`).
+    hold: Option<&'static str>,
+    /// Providers that cannot serve, and why (their CLI is missing).
+    unavailable: Vec<(Provider, SharedString)>,
+    favourites: Vec<FavouriteModel>,
+}
+
+/// Which row a press or a key picked.
+#[derive(Clone, Copy, Debug)]
+pub(super) enum Picked {
+    /// A model row: an index into the view's rows.
+    Model(usize),
+    /// A rung of the Reasoning column.
+    Rung(usize),
+}
+
+/// What the picker leaves to the root.
+pub(super) enum ModelPickerEvent {
+    /// Re-aim the Thread, or make the draft's band choice, unless a turn
+    /// began since the picker drew.
+    Pick(Picked),
+    /// A row's star: the model joins Favourites, or leaves them.
+    Favourite(ProviderChoice),
+}
+
+impl EventEmitter<ModelPickerEvent> for ModelPickerView {}
+
+pub(super) struct ModelPickerView {
     pub(super) tab: Tab,
     pub(super) column: Column,
     /// The `Search models...` line. It holds the keyboard while the picker
     /// is open; the picker's keys ride its `ModelPicker` context.
     pub(super) search: Entity<Composer>,
-    /// The permission mode menu the footer opened over the picker. The
-    /// root holds the keyboard while it is up.
-    pub(super) mode: Option<super::mode_menu::ModeMenu>,
+    /// Every Provider's models, as `ModelPickerInputs::rows`.
+    pub(super) rows: Vec<Row>,
+    /// The list's cursor: an index into `rows`.
+    pub(super) selected: usize,
     /// Why every row is dead for now (`tuning_hold`): a picker built while
     /// its Thread's turn runs. The disabled rows say it in their tooltip.
     pub(super) hold: Option<&'static str>,
-    /// The rows listed now, in order: indices into `Popover::rows`.
+    /// The rows listed now, in order: indices into `rows`.
     pub(super) shown: Vec<usize>,
-    /// The Reasoning column's rungs, each carrying its pick.
     pub(super) efforts: Vec<Row>,
     pub(super) effort_cursor: usize,
-    /// The model the column serves, named as the chip names it.
-    pub(super) model_label: SharedString,
-    /// The Provider a pick hands the Thread over to, once its first prompt
-    /// has fixed the other.
+    model_label: SharedString,
     handover: Option<Provider>,
-    /// Providers that cannot serve, and why (their CLI is missing).
     pub(super) unavailable: Vec<(Provider, SharedString)>,
+    favourites: Vec<FavouriteModel>,
+    /// The list's scroll: the arrows keep the cursor in view, and a fresh
+    /// list reveals its cursor once (`revealed`).
+    scroll: ScrollHandle,
+    revealed: std::cell::Cell<bool>,
     /// The rail pill's slide between tabs.
     pill: std::cell::Cell<Option<ferrite_ui::motion::Tween>>,
     _edited: gpui::Subscription,
-}
-
-impl ModelPicker {
-    pub(super) fn query(&self, cx: &gpui::App) -> String {
-        self.search.read(cx).text().trim().to_string()
-    }
 }
 
 /// What a model row picks.
@@ -93,15 +148,18 @@ fn favourite_value(choice: &ProviderChoice) -> &str {
     choice.model.as_deref().unwrap_or("default")
 }
 
-fn is_favourite(settings: &ferrite_core::settings::Settings, row: &Row) -> bool {
-    row_choice(row)
-        .is_some_and(|choice| settings.is_favourite(choice.provider, favourite_value(choice)))
+fn is_favourite(favourites: &[FavouriteModel], row: &Row) -> bool {
+    row_choice(row).is_some_and(|choice| {
+        favourites.iter().any(|favourite| {
+            favourite.provider == choice.provider && favourite.model == favourite_value(choice)
+        })
+    })
 }
 
 /// The rows a tab lists (T3's `sortProviderModelItems`): a Provider's tab
 /// its models with its favourites first; Favourites the starred models in
 /// Provider order.
-fn tab_rows(rows: &[Row], tab: Tab, settings: &ferrite_core::settings::Settings) -> Vec<usize> {
+fn tab_rows(rows: &[Row], tab: Tab, favourites: &[FavouriteModel]) -> Vec<usize> {
     let of = |provider: Provider| {
         (0..rows.len()).filter(move |at| {
             row_choice(&rows[*at]).is_some_and(|choice| choice.provider == provider)
@@ -111,11 +169,11 @@ fn tab_rows(rows: &[Row], tab: Tab, settings: &ferrite_core::settings::Settings)
         Tab::Favourites => Provider::ALL
             .into_iter()
             .flat_map(of)
-            .filter(|at| is_favourite(settings, &rows[*at]))
+            .filter(|at| is_favourite(favourites, &rows[*at]))
             .collect(),
         Tab::Provider(provider) => {
             let (mut starred, rest): (Vec<usize>, Vec<usize>) =
-                of(provider).partition(|at| is_favourite(settings, &rows[*at]));
+                of(provider).partition(|at| is_favourite(favourites, &rows[*at]));
             starred.extend(rest);
             starred
         }
@@ -126,7 +184,7 @@ fn tab_rows(rows: &[Row], tab: Tab, settings: &ferrite_core::settings::Settings)
 /// word of the query must match the model's name or its Provider's, the
 /// closest matches first, a favourite a little ahead, an exact name first
 /// of all; ties keep the catalogue's order.
-fn ranked(rows: &[Row], query: &str, settings: &ferrite_core::settings::Settings) -> Vec<usize> {
+fn ranked(rows: &[Row], query: &str, favourites: &[FavouriteModel]) -> Vec<usize> {
     let words: Vec<String> = query.split_whitespace().map(str::to_lowercase).collect();
     let mut scored: Vec<(i64, usize)> = rows
         .iter()
@@ -142,7 +200,7 @@ fn ranked(rows: &[Row], query: &str, settings: &ferrite_core::settings::Settings
             for word in &words {
                 score += crate::fuzzy::matches(word, &haystack)?.0;
             }
-            if is_favourite(settings, row) {
+            if is_favourite(favourites, row) {
                 score += 24;
             }
             Some((score, at))
@@ -179,96 +237,31 @@ pub(super) fn chip_trigger(pane: PaneIdentity) -> SharedString {
     format!("model-chip-{pane:?}").into()
 }
 
-/// The picker's rows, rungs and names for one Pane.
-struct Content {
-    rows: Vec<Row>,
-    efforts: Vec<Row>,
-    label: SharedString,
-    current: Provider,
-    handover: Option<Provider>,
-    hold: Option<&'static str>,
-}
-
-impl CockpitView {
-    /// The model chip's door: the picker on its model list.
-    pub(super) fn open_provider_picker(&mut self, thread: ThreadId, cx: &mut Context<Self>) {
-        self.open_model_picker(PaneIdentity::Thread(thread), Column::List, cx);
-    }
-
-    /// `/effort`'s and the palette's door: the same picker, the keyboard in
-    /// its Reasoning column.
-    pub(super) fn open_effort_picker(&mut self, thread: ThreadId, cx: &mut Context<Self>) {
-        self.open_model_picker(PaneIdentity::Thread(thread), Column::Reasoning, cx);
-    }
-
-    pub(super) fn model_picker_open(&self, pane: PaneIdentity) -> bool {
-        self.model_picker().is_some_and(|(open, _)| open.pane == pane)
-    }
-
-    /// A model chip as a control: a press opens its Pane's picker, or
-    /// shuts it, and the chip records where it stands for the picker to
-    /// hang from. The press stops there, so the root's dismissal never
-    /// undoes it.
-    pub(super) fn model_chip_control(
-        &self,
-        index: usize,
-        chip: gpui::component::button::Button,
-        cx: &mut Context<Self>,
-    ) -> AnyElement {
-        let identity = self.panes[index].identity;
-        let chip = chip.group(chip_trigger(identity)).on_mouse_down(
-            MouseButton::Left,
-            cx.listener(move |view, _: &MouseDownEvent, _, cx| {
-                cx.stop_propagation();
-                let Some(index) = view.index_of(identity) else {
-                    return;
-                };
-                view.focus_pane(index);
-                if view.model_picker_open(identity) {
-                    view.close_popup(cx);
-                } else {
-                    view.open_model_picker(identity, Column::List, cx);
-                }
-            }),
-        );
-        ferrite_ui::components::on_bounds(
-            div().flex().min_w_0().child(chip),
-            self.record_trigger(chip_trigger(identity)),
-        )
-        .into_any_element()
-    }
-
-    /// Open the picker for `pane` (a Thread's, or a draft's band): on
-    /// Favourites when any model is starred, else on the Pane's Provider
-    /// (T3's); the cursor on the model in force.
-    pub(super) fn open_model_picker(
-        &mut self,
-        pane: PaneIdentity,
-        column: Column,
-        cx: &mut Context<Self>,
-    ) {
-        let Some(content) = self.model_picker_content(pane) else {
-            return;
-        };
+impl ModelPickerView {
+    /// The picker on what the root read: on Favourites when any model is
+    /// starred, else on the Pane's Provider (T3's); the cursor on the model
+    /// in force, the keyboard in `column`.
+    fn new(column: Column, inputs: ModelPickerInputs, cx: &mut Context<Self>) -> Self {
         let search = cx.new(|cx| {
             let mut line = Composer::new(cx);
             line.set_role(Role::Field(Some("ModelPicker")), cx);
             line.set_visible_row_limit(1, cx);
             line
         });
-        let edited = cx.subscribe(&search, |view: &mut Self, _, _: &Edited, cx| {
-            view.model_picker_searched(cx);
+        let edited = cx.subscribe(&search, |picker: &mut Self, _, _: &Edited, cx| {
+            picker.searched(cx);
         });
-        let tab = if self.prefs.settings.favourite_models.is_empty() {
-            Tab::Provider(content.current)
+        let tab = if inputs.favourites.is_empty() {
+            Tab::Provider(inputs.current)
         } else {
             Tab::Favourites
         };
-        let picker = ModelPicker {
+        let mut picker = Self {
             tab,
             column,
             search,
-            mode: None,
+            rows: Vec::new(),
+            selected: 0,
             hold: None,
             shown: Vec::new(),
             efforts: Vec::new(),
@@ -276,629 +269,223 @@ impl CockpitView {
             model_label: SharedString::default(),
             handover: None,
             unavailable: Vec::new(),
+            favourites: Vec::new(),
+            scroll: ScrollHandle::new(),
+            revealed: Default::default(),
             pill: Default::default(),
             _edited: edited,
         };
-        self.show_popup(
-            Popup::ModelPicker(Box::new(Popover {
-                scroll: ScrollHandle::new(),
-                revealed: Default::default(),
-                pane,
-                kind: picker,
-                rows: Vec::new(),
-                selected: 0,
-            })),
-            cx,
-        );
-        self.fill_model_picker(content, None, cx);
+        picker.fill(inputs, cx);
+        picker
     }
 
-    /// Derive the open picker again from what stands now — after a pick,
-    /// an announcement, a turn starting or ending — keeping its tab, its
-    /// search, its column (unless `column` moves it) and its cursor's row.
-    pub(super) fn rebuild_model_picker(&mut self, column: Option<Column>, cx: &mut Context<Self>) {
-        let Some(pane) = self.model_picker().map(|(open, _)| open.pane) else {
-            return;
-        };
-        match self.model_picker_content(pane) {
-            Some(content) => self.fill_model_picker(content, column, cx),
-            None => {
-                self.close_popup(cx);
-            }
-        }
+    pub(super) fn query(&self, cx: &gpui::App) -> String {
+        self.search.read(cx).text().trim().to_string()
     }
 
-    fn fill_model_picker(&mut self, content: Content, column: Option<Column>, cx: &mut Context<Self>) {
-        let unavailable: Vec<(Provider, SharedString)> = Provider::ALL
-            .into_iter()
-            .filter_map(|provider| {
-                matches!(
-                    self.cli_updates.state(provider),
-                    crate::cli_updates::State::Current(ferrite_core::providers::update::Status::Missing)
-                )
-                .then(|| {
-                    (
-                        provider,
-                        format!("{} is not installed", crate::cli_updates::name(provider)).into(),
-                    )
-                })
-            })
-            .collect();
-        let Some(open) = self.model_picker_popover_mut() else {
-            return;
-        };
-        let previous = open
-            .rows
-            .get(open.selected)
-            .map(|row| row.consequence.clone());
-        let picker = &mut open.kind;
-        let Content {
-            mut rows,
-            mut efforts,
+    /// Take what the root read again, keeping the tab, the search, the
+    /// column and each cursor's row.
+    fn fill(&mut self, inputs: ModelPickerInputs, cx: &mut Context<Self>) {
+        let ModelPickerInputs {
+            rows,
+            efforts,
             label,
             handover,
             hold,
+            unavailable,
+            favourites,
             ..
-        } = content;
-        Self::hold_tuning_rows(&mut rows, hold);
-        Self::hold_tuning_rows(&mut efforts, hold);
-        let previous_rung = picker
+        } = inputs;
+        let previous = self.rows.get(self.selected).map(|row| row.consequence.clone());
+        let previous_rung = self
             .efforts
-            .get(picker.effort_cursor)
+            .get(self.effort_cursor)
             .map(|row| row.consequence.clone());
-        picker.effort_cursor = previous_rung
+        self.effort_cursor = previous_rung
             .and_then(|rung| efforts.iter().position(|row| row.consequence == rung))
             .or_else(|| efforts.iter().position(|row| row.active))
             .unwrap_or(0);
-        picker.efforts = efforts;
-        picker.model_label = label;
-        picker.handover = handover;
-        picker.unavailable = unavailable;
-        if let Some(column) = column {
-            picker.column = column;
-        }
-        picker.hold = hold;
-        open.rows = rows;
-        open.selected = previous
-            .and_then(|consequence| open.rows.iter().position(|row| row.consequence == consequence))
-            .or_else(|| open.rows.iter().position(|row| row.active))
+        self.efforts = efforts;
+        self.model_label = label;
+        self.handover = handover;
+        self.unavailable = unavailable;
+        self.favourites = favourites;
+        self.hold = hold;
+        self.rows = rows;
+        self.selected = previous
+            .and_then(|consequence| self.rows.iter().position(|row| row.consequence == consequence))
+            .or_else(|| self.rows.iter().position(|row| row.active))
             .unwrap_or(0);
-        self.list_model_picker(cx);
+        self.list(cx);
     }
 
-    /// Re-list the open picker's rows for its tab or its search, the
-    /// cursor kept on its row while it is listed, else on the first.
-    fn list_model_picker(&mut self, cx: &mut Context<Self>) {
-        let Some((open, picker)) = self.model_picker() else {
-            return;
-        };
-        let settings = &self.prefs.settings;
-        let query = picker.query(cx);
-        let shown = if query.is_empty() {
-            tab_rows(&open.rows, picker.tab, settings)
+    /// The favourites changed: list again by them.
+    fn favourites_changed(&mut self, favourites: Vec<FavouriteModel>, cx: &mut Context<Self>) {
+        self.favourites = favourites;
+        self.list(cx);
+    }
+
+    /// Re-list the rows for the tab or the search, the cursor kept on its
+    /// row while it is listed, else on the first.
+    fn list(&mut self, cx: &mut Context<Self>) {
+        let query = self.query(cx);
+        self.shown = if query.is_empty() {
+            tab_rows(&self.rows, self.tab, &self.favourites)
         } else {
-            ranked(&open.rows, &query, settings)
+            ranked(&self.rows, &query, &self.favourites)
         };
-        let Some(open) = self.model_picker_popover_mut() else {
-            return;
-        };
-        let picker = &mut open.kind;
-        picker.shown = shown;
-        if !picker.shown.contains(&open.selected) {
-            open.selected = picker
+        if !self.shown.contains(&self.selected) {
+            self.selected = self
                 .shown
                 .iter()
                 .copied()
-                .find(|at| open.rows[*at].active)
-                .or_else(|| picker.shown.first().copied())
+                .find(|at| self.rows[*at].active)
+                .or_else(|| self.shown.first().copied())
                 .unwrap_or(0);
         }
-        open.revealed.set(false);
+        self.revealed.set(false);
         cx.notify();
-    }
-
-    fn model_picker_content(&self, pane: PaneIdentity) -> Option<Content> {
-        match pane {
-            PaneIdentity::Thread(thread) => {
-                let open = self.cockpit.thread(thread)?;
-                let current = open.provider();
-                let chosen = open.model().map(str::to_string);
-                let serving = open.transcript().model().map(str::to_string);
-                let locked = open.first_prompt_sent();
-                let (rows, _) = self.provider_rows(
-                    current,
-                    chosen.as_deref(),
-                    serving.as_deref(),
-                    locked,
-                    Consequence::Provision,
-                );
-                let label = ferrite_core::providers::models::footer_name(
-                    current,
-                    open.model().or(open.transcript().model()),
-                    open.models(),
-                );
-                let efforts = self
-                    .effort_ladder(thread)
-                    .map(|(steps, _, chosen)| {
-                        let default = effort_in_force(
-                            None,
-                            self.prefs.settings.effort_for(current),
-                            current,
-                            open.model(),
-                            open.models(),
-                        );
-                        effort_rows(steps, chosen, default, |level| {
-                            Consequence::Effort(Some(level))
-                        })
-                    })
-                    .unwrap_or_default();
-                Some(Content {
-                    rows: self.listable(rows, current, serving.as_deref()),
-                    efforts,
-                    label: label.into(),
-                    current,
-                    handover: Provider::ALL
-                        .into_iter()
-                        .find(|provider| locked && *provider != current),
-                    hold: tuning_hold(&open),
-                })
-            }
-            PaneIdentity::Draft(_) => {
-                let index = self.index_of(pane)?;
-                let draft = self.panes[index].draft()?;
-                let choice = draft.binding.provider();
-                let current = choice.provider;
-                let model = choice.model.clone();
-                let (rows, _) = self.provider_rows(current, model.as_deref(), None, false, |choice| {
-                    Consequence::Band(BandChoice::Provider(choice))
-                });
-                let announced = self.cockpit.announced_models(current);
-                let label =
-                    ferrite_core::providers::models::footer_name(current, model.as_deref(), &announced);
-                let efforts = self
-                    .draft_effort_ladder(index)
-                    .map(|(steps, _, chosen)| {
-                        let default = effort_in_force(
-                            None,
-                            self.prefs.settings.effort_for(current),
-                            current,
-                            model.as_deref(),
-                            &announced,
-                        );
-                        effort_rows(steps, chosen, default, |level| {
-                            Consequence::Band(BandChoice::Effort(Some(level)))
-                        })
-                    })
-                    .unwrap_or_default();
-                Some(Content {
-                    rows: self.listable(rows, current, None),
-                    efforts,
-                    label: label.into(),
-                    current,
-                    handover: None,
-                    hold: None,
-                })
-            }
-        }
-    }
-
-    /// `provider_rows` as the list shows them: no section titles (the rail
-    /// and each row's mark name the Provider), and the CLI's own `Default`
-    /// only while nothing else can carry the ✓ — a known serving model
-    /// takes it instead (Claude's model menu).
-    fn listable(&self, rows: Vec<Row>, current: Provider, serving: Option<&str>) -> Vec<Row> {
-        let mut rows: Vec<Row> = rows
-            .into_iter()
-            .filter(|row| row_choice(row).is_some())
-            .collect();
-        let of_current = |row: &Row| row_choice(row).is_some_and(|choice| choice.provider == current);
-        let Some(default) = rows
-            .iter()
-            .position(|row| of_current(row) && row_choice(row).is_some_and(|c| c.model.is_none()))
-        else {
-            return rows;
-        };
-        let serving_row = serving
-            .and_then(|serving| {
-                self.cockpit
-                    .model_catalog(current)
-                    .into_iter()
-                    .find(|model| model.value != "default" && model.is(serving))
-            })
-            .and_then(|model| {
-                rows.iter().position(|row| {
-                    of_current(row)
-                        && row_choice(row).and_then(|c| c.model.as_deref()) == Some(model.value.as_str())
-                })
-            });
-        let active = rows[default].active;
-        if !active || serving_row.is_some() {
-            if let Some(serving_row) = serving_row.filter(|_| active) {
-                rows[serving_row].active = true;
-            }
-            rows.remove(default);
-        }
-        rows
     }
 
     /// The search line moved: list what matches across every Provider, the
     /// keyboard back on the list.
-    fn model_picker_searched(&mut self, cx: &mut Context<Self>) {
-        if let Some((_, _, picker)) = self.model_picker_mut() {
-            picker.column = Column::List;
-        }
-        self.list_model_picker(cx);
-    }
-
-    /// The picker up, and what it lists.
-    pub(super) fn model_picker(&self) -> Option<(&Popover<ModelPicker>, &ModelPicker)> {
-        self.model_picker_popover().map(|open| (open, &open.kind))
-    }
-
-    fn model_picker_mut(&mut self) -> Option<(&mut Vec<Row>, &mut usize, &mut ModelPicker)> {
-        let open = self.model_picker_popover_mut()?;
-        Some((&mut open.rows, &mut open.selected, &mut open.kind))
+    fn searched(&mut self, cx: &mut Context<Self>) {
+        self.column = Column::List;
+        self.list(cx);
     }
 
     /// Show `tab`'s models, the rail's pill sliding to its button.
-    pub(super) fn model_picker_tab(&mut self, tab: Tab, cx: &mut Context<Self>) {
+    pub(super) fn show_tab(&mut self, tab: Tab, cx: &mut Context<Self>) {
         let now = cx.background_executor().now();
         let reduced = ferrite_ui::motion::reduced_motion(cx);
-        let Some((_, _, picker)) = self.model_picker_mut() else {
-            return;
-        };
-        if picker.tab != tab {
-            let from = pill_top(picker.tab);
-            picker.pill.set(Some(ferrite_ui::motion::Tween::retarget(
-                picker.pill.get(),
+        if self.tab != tab {
+            let from = pill_top(self.tab);
+            self.pill.set(Some(ferrite_ui::motion::Tween::retarget(
+                self.pill.get(),
                 from,
                 pill_top(tab),
                 ferrite_ui::motion::RAIL_SLIDE,
                 now,
                 reduced,
             )));
-            picker.tab = tab;
+            self.tab = tab;
         }
-        picker.column = Column::List;
-        self.list_model_picker(cx);
+        self.column = Column::List;
+        self.list(cx);
     }
 
     /// ↑ / ↓: the cursor down the list or the column, held at the ends.
-    fn model_picker_step(&mut self, delta: isize, cx: &mut Context<Self>) {
-        let Some((_, selected, picker)) = self.model_picker_mut() else {
-            return;
-        };
-        match picker.column {
+    fn step(&mut self, delta: isize, cx: &mut Context<Self>) {
+        match self.column {
             Column::List => {
-                let Some(last) = picker.shown.len().checked_sub(1) else {
+                let Some(last) = self.shown.len().checked_sub(1) else {
                     return;
                 };
-                let at = picker.shown.iter().position(|row| row == selected).unwrap_or(0);
+                let at = self.shown.iter().position(|row| *row == self.selected).unwrap_or(0);
                 let next = (at as isize + delta).clamp(0, last as isize) as usize;
-                *selected = picker.shown[next];
+                self.selected = self.shown[next];
             }
             Column::Reasoning => {
-                let Some(last) = picker.efforts.len().checked_sub(1) else {
+                let Some(last) = self.efforts.len().checked_sub(1) else {
                     return;
                 };
-                picker.effort_cursor =
-                    (picker.effort_cursor as isize + delta).clamp(0, last as isize) as usize;
+                self.effort_cursor =
+                    (self.effort_cursor as isize + delta).clamp(0, last as isize) as usize;
             }
         }
-        if let Some((open, picker)) = self.model_picker() {
-            if let Some(at) = picker.shown.iter().position(|row| *row == open.selected) {
-                open.scroll.scroll_to_item(at);
-            }
+        if let Some(at) = self.shown.iter().position(|row| *row == self.selected) {
+            self.scroll.scroll_to_item(at);
         }
         cx.notify();
     }
 
     /// ↵: pick the cursor's model, or its rung.
-    fn model_picker_confirm(&mut self, cx: &mut Context<Self>) {
-        let Some((open, picker)) = self.model_picker() else {
-            return;
-        };
-        match picker.column {
-            Column::List => {
-                let row = open.selected;
-                self.pick_model_row(row, cx);
-            }
-            Column::Reasoning => {
-                let rung = picker.effort_cursor;
-                self.pick_effort_rung(rung, cx);
-            }
-        }
+    fn confirm(&mut self, cx: &mut Context<Self>) {
+        cx.emit(ModelPickerEvent::Pick(match self.column {
+            Column::List => Picked::Model(self.selected),
+            Column::Reasoning => Picked::Rung(self.effort_cursor),
+        }));
     }
 
     /// ←: from the column back to the list; on the list with nothing
     /// typed, the rail's tab above. Otherwise the line's caret moves.
-    fn model_picker_left(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some((_, picker)) = self.model_picker() else {
-            return;
-        };
-        if picker.column == Column::Reasoning {
-            if let Some((_, _, picker)) = self.model_picker_mut() {
-                picker.column = Column::List;
-            }
+    fn left(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.column == Column::Reasoning {
+            self.column = Column::List;
             cx.notify();
             return;
         }
-        if !picker.query(cx).is_empty() {
+        if !self.query(cx).is_empty() {
             window.dispatch_action(Box::new(ferrite_pane::composer::Left), cx);
             return;
         }
         let tabs: Vec<Tab> = rail_tabs().collect();
-        let at = tabs.iter().position(|tab| *tab == picker.tab).unwrap_or(0);
+        let at = tabs.iter().position(|tab| *tab == self.tab).unwrap_or(0);
         let tab = tabs[(at + tabs.len() - 1) % tabs.len()];
-        self.model_picker_tab(tab, cx);
+        self.show_tab(tab, cx);
     }
 
     /// →: at the line's end, into the Reasoning column — picking the
     /// cursor's model first when it is not the one in force, so the column
     /// shows its rungs (T3's).
-    fn model_picker_right(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some((open, picker)) = self.model_picker() else {
-            return;
-        };
-        if picker.column == Column::Reasoning {
+    fn right(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.column == Column::Reasoning {
             return;
         }
-        let search = picker.search.read(cx);
+        let search = self.search.read(cx);
         if search.cursor() < search.text().len() {
             window.dispatch_action(Box::new(ferrite_pane::composer::Right), cx);
             return;
         }
-        let row = open.selected;
-        if open.rows.get(row).is_some_and(|row| !row.active && !row.inert) {
-            self.pick_model_row(row, cx);
-        } else if let Some((_, _, picker)) = self.model_picker_mut() {
-            picker.column = Column::Reasoning;
+        let row = self.selected;
+        if self.rows.get(row).is_some_and(|row| !row.active && !row.inert) {
+            cx.emit(ModelPickerEvent::Pick(Picked::Model(row)));
+        } else {
+            self.column = Column::Reasoning;
             cx.notify();
         }
     }
 
     /// ⌘N: pick the Nth listed model (T3's `modelPicker.jump.N`).
-    fn model_picker_jump(&mut self, nth: usize, cx: &mut Context<Self>) {
-        let Some((open, picker)) = self.model_picker() else {
-            return;
-        };
-        let Some(row) = picker.shown.iter().copied().filter(|at| !open.rows[*at].inert).nth(nth)
+    fn jump(&mut self, nth: usize, cx: &mut Context<Self>) {
+        let Some(row) = self.shown.iter().copied().filter(|at| !self.rows[*at].inert).nth(nth)
         else {
             return;
         };
-        self.pick_model_row(row, cx);
+        cx.emit(ModelPickerEvent::Pick(Picked::Model(row)));
     }
 
-    /// Pick model row `row` (an index into the popover's rows): the Thread
-    /// re-aimed — or the draft's band choice made — and the picker kept
-    /// open on the new model, the keyboard in its column. A turn that began
-    /// since the picker drew holds every row instead.
-    pub(super) fn pick_model_row(&mut self, row: usize, cx: &mut Context<Self>) {
-        let Some((open, _)) = self.model_picker() else {
-            return;
-        };
-        let pane = open.pane;
-        if self.picker_held(pane) {
-            self.rebuild_model_picker(None, cx);
-            return;
-        }
-        let Some(consequence) = open
-            .rows
-            .get(row)
-            .filter(|row| !row.inert)
-            .map(|row| row.consequence.clone())
-        else {
-            return;
-        };
-        if let Some((_, selected, _)) = self.model_picker_mut() {
-            *selected = row;
-        }
-        self.apply_picker_choice(pane, consequence, cx);
-        self.rebuild_model_picker(Some(Column::Reasoning), cx);
-    }
-
-    /// Pick rung `at` of the Reasoning column; the picker stays open.
-    pub(super) fn pick_effort_rung(&mut self, at: usize, cx: &mut Context<Self>) {
-        let Some((open, picker)) = self.model_picker() else {
-            return;
-        };
-        let pane = open.pane;
-        if self.picker_held(pane) {
-            self.rebuild_model_picker(None, cx);
-            return;
-        }
-        let Some(consequence) = picker
-            .efforts
-            .get(at)
-            .filter(|row| !row.inert)
-            .map(|row| row.consequence.clone())
-        else {
-            return;
-        };
-        if let Some((_, _, picker)) = self.model_picker_mut() {
-            picker.effort_cursor = at;
-            picker.column = Column::Reasoning;
-        }
-        self.apply_picker_choice(pane, consequence, cx);
-        self.rebuild_model_picker(None, cx);
-    }
-
-    /// A turn started, or a change still waits on the provider: a visible
-    /// choice must not become a certain refusal in the transcript.
-    fn picker_held(&self, pane: PaneIdentity) -> bool {
-        pane.thread().is_some_and(|thread| {
-            self.cockpit
-                .thread(thread)
-                .and_then(|thread| tuning_hold(&thread))
-                .is_some()
-        })
-    }
-
-    fn apply_picker_choice(&mut self, pane: PaneIdentity, choice: Consequence, cx: &mut Context<Self>) {
-        match (choice, pane.thread()) {
-            (Consequence::Provision(choice), Some(thread)) => self.pick_provider(thread, choice, cx),
-            (Consequence::Effort(effort), Some(thread)) => self.pick_effort(thread, effort, cx),
-            (Consequence::Band(choice), None) => {
-                let Some(index) = self.index_of(pane) else {
-                    return;
-                };
-                self.focus_pane(index);
-                let composer = self.panes[index].composer.clone();
-                self.pick_band(&choice, &composer, cx);
+    /// The root made `picked`: the cursor goes to it and the keyboard into
+    /// the column. What it picks, unless it picks nothing.
+    fn take(&mut self, picked: Picked, cx: &mut Context<Self>) -> Option<Consequence> {
+        let consequence = match picked {
+            Picked::Model(row) => {
+                let consequence = self.rows.get(row).filter(|row| !row.inert)?.consequence.clone();
+                self.selected = row;
+                consequence
             }
-            _ => {}
-        }
-    }
-
-    /// The star on row `row`: the model joins Favourites, or leaves them,
-    /// saved at once.
-    pub(super) fn toggle_favourite(&mut self, row: usize, cx: &mut Context<Self>) {
-        let Some(choice) = self
-            .model_picker()
-            .and_then(|(open, _)| open.rows.get(row))
-            .and_then(row_choice)
-            .cloned()
-        else {
-            return;
+            Picked::Rung(at) => {
+                let consequence = self.efforts.get(at).filter(|row| !row.inert)?.consequence.clone();
+                self.effort_cursor = at;
+                consequence
+            }
         };
-        self.change_settings(
-            |settings| settings.toggle_favourite(choice.provider, favourite_value(&choice)),
-            cx,
-        );
-        self.list_model_picker(cx);
+        self.column = Column::Reasoning;
+        cx.notify();
+        Some(consequence)
     }
 
-    /// The picker's keys, heard on the cockpit's root while its line holds
-    /// the keyboard.
-    pub(super) fn register_model_picker_actions(&self, root: Div, cx: &mut Context<Self>) -> Div {
-        root.on_action(cx.listener(|view, _: &Up, _, cx| view.model_picker_step(-1, cx)))
-            .on_action(cx.listener(|view, _: &Down, _, cx| view.model_picker_step(1, cx)))
-            .on_action(cx.listener(|view, _: &Confirm, _, cx| view.model_picker_confirm(cx)))
-            .on_action(cx.listener(|view, _: &Dismiss, _, cx| {
-                view.dismiss_popup(cx);
-            }))
-            .on_action(cx.listener(|view, _: &Left, window, cx| view.model_picker_left(window, cx)))
-            .on_action(
-                cx.listener(|view, _: &Right, window, cx| view.model_picker_right(window, cx)),
-            )
-            .on_action(cx.listener(|view, _: &Jump1, _, cx| view.model_picker_jump(0, cx)))
-            .on_action(cx.listener(|view, _: &Jump2, _, cx| view.model_picker_jump(1, cx)))
-            .on_action(cx.listener(|view, _: &Jump3, _, cx| view.model_picker_jump(2, cx)))
-            .on_action(cx.listener(|view, _: &Jump4, _, cx| view.model_picker_jump(3, cx)))
-            .on_action(cx.listener(|view, _: &Jump5, _, cx| view.model_picker_jump(4, cx)))
-            .on_action(cx.listener(|view, _: &Jump6, _, cx| view.model_picker_jump(5, cx)))
-            .on_action(cx.listener(|view, _: &Jump7, _, cx| view.model_picker_jump(6, cx)))
-            .on_action(cx.listener(|view, _: &Jump8, _, cx| view.model_picker_jump(7, cx)))
-            .on_action(cx.listener(|view, _: &Jump9, _, cx| view.model_picker_jump(8, cx)))
-    }
-
-    /// The picker, hung over its Pane's Composer: its foot
-    /// `MODEL_PICKER_GAP` over the box, its left edge at the chip's (T3's
-    /// `side="top" align="start"`), kept inside the window, and the mode
-    /// menu its footer opened over it. It waits a frame for the box to be
-    /// laid out.
-    pub(super) fn model_picker_element(
-        &self,
-        open: &Popover<ModelPicker>,
-        face: popups::Face,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> Option<AnyElement> {
-        let picker = &open.kind;
-        let index = self.index_of(open.pane)?;
-        let Some(field) = self.panes[index].geometry.get().composer else {
-            ferrite_ui::motion::request_frame(window);
-            return None;
-        };
-        let left = self
-            .trigger(&chip_trigger(open.pane))
-            .map_or(field.left(), |chip| chip.left());
-        let viewport = f32::from(window.viewport_size().width);
-        let width = (MODEL_PICKER_LIST_W + REASONING_W).min(viewport - 2. * GRID_PAD);
-        let surface = self.model_picker_surface(open, picker, width, window, cx);
-        let mode = picker
-            .mode
-            .as_ref()
-            .and_then(|menu| self.picker_mode_element(menu, face, window, cx));
-        Some(
-            div()
-                .child(
-                    anchored()
-                        .anchor(gpui::Anchor::BottomLeft)
-                        .position(gpui::point(left, field.top() - px(MODEL_PICKER_GAP)))
-                        .snap_to_window_with_margin(px(GRID_PAD))
-                        .child(self.popup_face(
-                            face,
-                            "model-picker-in",
-                            surface,
-                            ferrite_ui::motion::Opens::Up,
-                            cx,
-                        )),
-                )
-                .children(mode)
-                .into_any_element(),
-        )
-    }
-
-    /// Open the permission mode menu over the footer's button, or shut it.
-    fn toggle_picker_mode(&mut self, thread: ThreadId, generation: u64, cx: &mut Context<Self>) {
-        if let Some((_, _, picker)) = self.model_picker_mut() {
-            picker.mode = match picker.mode.take() {
-                Some(_) => None,
-                None => Some(super::mode_menu::ModeMenu {
-                    thread,
-                    generation,
-                    preview: None,
-                }),
-            };
-            cx.notify();
-        }
-    }
-
-    fn model_picker_surface(
-        &self,
-        open: &Popover<ModelPicker>,
-        picker: &ModelPicker,
-        width: f32,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> Div {
-        let searching = !picker.query(cx).is_empty();
-        let body = div()
-            .debug_selector(|| "model-picker-body".into())
-            .flex()
-            .flex_row()
-            .h(px(MODEL_PICKER_H))
-            .min_h_0()
-            .when(!searching, |body| body.child(self.model_picker_rail(picker, window, cx)))
-            .child(self.model_picker_list(open, picker, searching, cx))
-            .child(self.model_picker_reasoning(picker, cx));
-        ferrite_ui::menu::float()
-            .debug_selector(|| "model-picker".into())
-            .w(px(width))
-            .flex()
-            .flex_col()
-            .overflow_hidden()
-            .child(body)
-            .child(self.model_picker_footer(open, cx))
-    }
-
-    fn model_picker_rail(
-        &self,
-        picker: &ModelPicker,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> Div {
+    fn rail(&self, window: &mut Window, cx: &mut Context<Self>) -> Div {
         let now = cx.background_executor().now();
         let reduced = ferrite_ui::motion::reduced_motion(cx);
-        let top = match picker.pill.get() {
+        let top = match self.pill.get() {
             Some(tween) => {
                 if tween.running(now, reduced) {
                     ferrite_ui::motion::request_frame(window);
                 }
                 tween.value(now, reduced)
             }
-            None => pill_top(picker.tab),
+            None => pill_top(self.tab),
         };
         let button = MODEL_PICKER_RAIL_W - 2. * MODEL_PICKER_RAIL_PAD;
         let mut rail = div()
@@ -931,7 +518,7 @@ impl CockpitView {
                     None,
                 ),
                 Tab::Provider(provider) => {
-                    let reason = picker
+                    let reason = self
                         .unavailable
                         .iter()
                         .find(|(p, _)| *p == provider)
@@ -967,10 +554,10 @@ impl CockpitView {
                     .tooltip(ferrite_ui::menu::tooltip(tip))
                     .on_mouse_down(
                         MouseButton::Left,
-                        cx.listener(move |view, _: &MouseDownEvent, _, cx| {
+                        cx.listener(move |picker, _: &MouseDownEvent, _, cx| {
                             cx.stop_propagation();
                             if !dead {
-                                view.model_picker_tab(tab, cx);
+                                picker.show_tab(tab, cx);
                             }
                         }),
                     )
@@ -988,14 +575,7 @@ impl CockpitView {
         rail
     }
 
-    fn model_picker_list(
-        &self,
-        open: &Popover<ModelPicker>,
-        picker: &ModelPicker,
-        searching: bool,
-        cx: &mut Context<Self>,
-    ) -> Div {
-        let settings = &self.prefs.settings;
+    fn list_column(&self, searching: bool, cx: &mut Context<Self>) -> Div {
         let search = div()
             .flex_shrink_0()
             .px(px(SPACE_3))
@@ -1040,14 +620,14 @@ impl CockpitView {
                                         .child("Search models..."),
                                 )
                             })
-                            .child(div().w_full().child(picker.search.clone())),
+                            .child(div().w_full().child(self.search.clone())),
                     ),
             );
-        let live: Vec<usize> = picker
+        let live: Vec<usize> = self
             .shown
             .iter()
             .copied()
-            .filter(|at| !open.rows[*at].inert)
+            .filter(|at| !self.rows[*at].inert)
             .take(JUMP_LABELS.len())
             .collect();
         let mut rows = div()
@@ -1059,44 +639,44 @@ impl CockpitView {
             .p(px(SPACE_1))
             .gap(px(MODEL_PICKER_ROW_GAP))
             .overflow_y_scroll()
-            .track_scroll(&open.scroll);
-        if !open.revealed.replace(true) {
-            if let Some(at) = picker.shown.iter().position(|row| *row == open.selected) {
-                open.scroll.scroll_to_item(at);
+            .track_scroll(&self.scroll);
+        if !self.revealed.replace(true) {
+            if let Some(at) = self.shown.iter().position(|row| *row == self.selected) {
+                self.scroll.scroll_to_item(at);
             }
         }
-        for (place, at) in picker.shown.iter().copied().enumerate() {
-            let row = &open.rows[at];
+        for (place, at) in self.shown.iter().copied().enumerate() {
+            let row = &self.rows[at];
             let choice = row_choice(row);
-            let favourite = is_favourite(settings, row);
+            let favourite = is_favourite(&self.favourites, row);
             let jump = live.iter().position(|live| *live == at).map(|nth| JUMP_LABELS[nth]);
-            let handover = choice.is_some_and(|choice| Some(choice.provider) == picker.handover);
-            rows = rows.child(self.model_row(
+            let handover = choice.is_some_and(|choice| Some(choice.provider) == self.handover);
+            rows = rows.child(model_row(
                 place,
                 at,
                 row,
                 ModelRowFace {
                     provider: choice.map(|choice| choice.provider),
-                    cursor: picker.column == Column::List && open.selected == at,
+                    cursor: self.column == Column::List && self.selected == at,
                     favourite,
-                    star_on_hover: picker.tab == Tab::Favourites && !searching,
+                    star_on_hover: self.tab == Tab::Favourites && !searching,
                     jump,
                     note: handover.then_some("handover"),
-                    why: picker.hold.map(SharedString::from).or_else(|| {
+                    why: self.hold.map(SharedString::from).or_else(|| {
                         (!row.detail.is_empty()).then(|| row.detail.clone())
                     }),
                 },
                 cx,
             ));
         }
-        if picker.shown.is_empty() {
+        if self.shown.is_empty() {
             rows = rows.child(
                 div()
                     .px(px(SPACE_2))
                     .py(px(SPACE_1_5))
                     .text_size(px(FS_UI))
                     .text_color(rgb(INK_SUBTLE))
-                    .child(if picker.tab == Tab::Favourites && !searching {
+                    .child(if self.tab == Tab::Favourites && !searching {
                         "No favourites yet"
                     } else {
                         "No models found"
@@ -1115,124 +695,7 @@ impl CockpitView {
             .child(rows)
     }
 
-    fn model_row(
-        &self,
-        place: usize,
-        at: usize,
-        row: &Row,
-        face: ModelRowFace,
-        cx: &mut Context<Self>,
-    ) -> AnyElement {
-        let group = SharedString::from(format!("model-picker-row-{place}"));
-        let selector = group.to_string();
-        let star_selector = format!("model-picker-star-{place}");
-        let star_ink = if face.favourite { YELLOW } else { INK_SUBTLE };
-        let star_shown = face.favourite && !face.star_on_hover || face.cursor;
-        let star = div()
-            .id(SharedString::from(star_selector.clone()))
-            .debug_selector(move || star_selector.clone())
-            .flex()
-            .items_center()
-            .justify_center()
-            .size(px(KEY_CAP_SOFT))
-            .rounded(px(R_CONTROL))
-            .cursor_pointer()
-            .when(!star_shown, |star| {
-                star.opacity(0.).group_hover(group.clone(), |style| style.opacity(1.))
-            })
-            .hover(|style| style.bg(rgba(MODEL_PICKER_RAIL_HOVER)))
-            .tooltip(ferrite_ui::menu::tooltip(if face.favourite {
-                "Remove from favourites"
-            } else {
-                "Add to favourites"
-            }))
-            .on_mouse_down(
-                MouseButton::Left,
-                cx.listener(move |view, _: &MouseDownEvent, _, cx| {
-                    cx.stop_propagation();
-                    view.toggle_favourite(at, cx);
-                }),
-            )
-            .child(ferrite_ui::icons::icon(ferrite_ui::icons::STAR, 12., star_ink));
-        let inert = row.inert;
-        div()
-            .id(group.clone())
-            .group(group.clone())
-            .debug_selector(move || selector.clone())
-            .flex()
-            .flex_shrink_0()
-            .items_center()
-            .gap(px(SPACE_2))
-            .h(px(MODEL_PICKER_ROW_H))
-            .px(px(SPACE_2))
-            .rounded(px(MODEL_PICKER_ROW_R))
-            .font_family(FONT_UI)
-            .text_size(px(FS_UI))
-            .when(face.cursor, |row| row.bg(rgba(MODEL_PICKER_ROW_HOVER)))
-            .when(inert, |row| row.opacity(0.64))
-            .when(!inert, |row| {
-                row.cursor_pointer()
-                    .hover(|style| style.bg(rgba(MODEL_PICKER_ROW_HOVER)))
-            })
-            .when_some(face.why, |row, why| row.tooltip(ferrite_ui::menu::tooltip(why)))
-            .on_mouse_down(
-                MouseButton::Left,
-                cx.listener(move |view, _: &MouseDownEvent, _, cx| {
-                    cx.stop_propagation();
-                    view.pick_model_row(at, cx);
-                }),
-            )
-            .children(face.provider.map(|provider| {
-                let (path, ink) = ferrite_ui::provider::mark(provider);
-                ferrite_ui::icons::icon(path, MODEL_PICKER_MARK, ink)
-            }))
-            .child(
-                div()
-                    .flex()
-                    .flex_1()
-                    .min_w_0()
-                    .items_center()
-                    .gap(px(SPACE_2))
-                    .child(
-                        div()
-                            .min_w_0()
-                            .truncate()
-                            .text_color(rgb(INK_STRONG))
-                            .child(row.name.clone()),
-                    )
-                    .when(row.active, |name| {
-                        name.child(
-                            div()
-                                .debug_selector(|| "model-picker-check".into())
-                                .child(ferrite_ui::icons::icon(
-                                    ferrite_ui::icons::CHECK,
-                                    14.,
-                                    MENU_CHECK_INK,
-                                )),
-                        )
-                    })
-                    .children(face.note.map(|note| {
-                        div()
-                            .min_w_0()
-                            .truncate()
-                            .text_size(px(FS_BADGE))
-                            .text_color(rgb(INK_SUBTLE))
-                            .child(note)
-                    })),
-            )
-            .child(
-                div()
-                    .flex()
-                    .flex_shrink_0()
-                    .items_center()
-                    .gap(px(SPACE_1_5))
-                    .child(star)
-                    .children(face.jump.map(super::panel::soft_key_cap)),
-            )
-            .into_any_element()
-    }
-
-    fn model_picker_reasoning(&self, picker: &ModelPicker, cx: &mut Context<Self>) -> Div {
+    fn reasoning(&self, cx: &mut Context<Self>) -> Div {
         let head = div().flex_shrink_0().px(px(SPACE_3)).pt(px(MODEL_PICKER_INSET_T)).child(
             div()
                 .flex()
@@ -1252,7 +715,7 @@ impl CockpitView {
                         .min_w_0()
                         .truncate()
                         .text_size(px(FS_BADGE))
-                        .child(picker.model_label.clone()),
+                        .child(self.model_label.clone()),
                 ),
         );
         let mut rungs = div()
@@ -1266,7 +729,7 @@ impl CockpitView {
             .pb(px(SPACE_1_5))
             .font_family(FONT_UI)
             .text_size(px(FS_UI));
-        if picker.efforts.is_empty() {
+        if self.efforts.is_empty() {
             rungs = rungs.child(
                 div()
                     .flex()
@@ -1277,9 +740,9 @@ impl CockpitView {
                     .child("No effort levels"),
             );
         }
-        for (at, rung) in picker.efforts.iter().enumerate() {
+        for (at, rung) in self.efforts.iter().enumerate() {
             let selector = format!("model-picker-effort-{at}");
-            let cursor = picker.column == Column::Reasoning && picker.effort_cursor == at;
+            let cursor = self.column == Column::Reasoning && self.effort_cursor == at;
             let inert = rung.inert;
             let why = (!rung.detail.is_empty()).then(|| rung.detail.clone());
             rungs = rungs.child(
@@ -1302,9 +765,9 @@ impl CockpitView {
                     .when_some(why, |row, why| row.tooltip(ferrite_ui::menu::tooltip(why)))
                     .on_mouse_down(
                         MouseButton::Left,
-                        cx.listener(move |view, _: &MouseDownEvent, _, cx| {
+                        cx.listener(move |_, _: &MouseDownEvent, _, cx| {
                             cx.stop_propagation();
-                            view.pick_effort_rung(at, cx);
+                            cx.emit(ModelPickerEvent::Pick(Picked::Rung(at)));
                         }),
                     )
                     .child(
@@ -1348,12 +811,572 @@ impl CockpitView {
             .child(head)
             .child(rungs)
     }
+}
+
+/// The picker's body: the rail (unless a search lists every Provider), the
+/// list under its search line and the Reasoning column. Its keys answer
+/// here, where the search line holds the keyboard; esc goes on to the slot.
+impl Render for ModelPickerView {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let searching = !self.query(cx).is_empty();
+        div()
+            .debug_selector(|| "model-picker-body".into())
+            .flex()
+            .flex_row()
+            .h(px(MODEL_PICKER_H))
+            .min_h_0()
+            .on_action(cx.listener(|picker, _: &Up, _, cx| picker.step(-1, cx)))
+            .on_action(cx.listener(|picker, _: &Down, _, cx| picker.step(1, cx)))
+            .on_action(cx.listener(|picker, _: &Confirm, _, cx| picker.confirm(cx)))
+            .on_action(cx.listener(|picker, _: &Left, window, cx| picker.left(window, cx)))
+            .on_action(cx.listener(|picker, _: &Right, window, cx| picker.right(window, cx)))
+            .on_action(cx.listener(|picker, _: &Jump1, _, cx| picker.jump(0, cx)))
+            .on_action(cx.listener(|picker, _: &Jump2, _, cx| picker.jump(1, cx)))
+            .on_action(cx.listener(|picker, _: &Jump3, _, cx| picker.jump(2, cx)))
+            .on_action(cx.listener(|picker, _: &Jump4, _, cx| picker.jump(3, cx)))
+            .on_action(cx.listener(|picker, _: &Jump5, _, cx| picker.jump(4, cx)))
+            .on_action(cx.listener(|picker, _: &Jump6, _, cx| picker.jump(5, cx)))
+            .on_action(cx.listener(|picker, _: &Jump7, _, cx| picker.jump(6, cx)))
+            .on_action(cx.listener(|picker, _: &Jump8, _, cx| picker.jump(7, cx)))
+            .on_action(cx.listener(|picker, _: &Jump9, _, cx| picker.jump(8, cx)))
+            .when(!searching, |body| body.child(self.rail(window, cx)))
+            .child(self.list_column(searching, cx))
+            .child(self.reasoning(cx))
+    }
+}
+
+/// How one model row reads, beyond the row itself.
+struct ModelRowFace {
+    provider: Option<Provider>,
+    cursor: bool,
+    favourite: bool,
+    /// In Favourites every row is starred, so its star shows on hover.
+    star_on_hover: bool,
+    jump: Option<&'static str>,
+    /// The muted word after the name (`handover`).
+    note: Option<&'static str>,
+    /// The tooltip: why the row is dead for now, else what the model is.
+    why: Option<SharedString>,
+}
+
+fn model_row(
+    place: usize,
+    at: usize,
+    row: &Row,
+    face: ModelRowFace,
+    cx: &mut Context<ModelPickerView>,
+) -> AnyElement {
+    let group = SharedString::from(format!("model-picker-row-{place}"));
+    let selector = group.to_string();
+    let star_selector = format!("model-picker-star-{place}");
+    let star_ink = if face.favourite { YELLOW } else { INK_SUBTLE };
+    let star_shown = face.favourite && !face.star_on_hover || face.cursor;
+    let starred = row_choice(row).cloned();
+    let star = div()
+        .id(SharedString::from(star_selector.clone()))
+        .debug_selector(move || star_selector.clone())
+        .flex()
+        .items_center()
+        .justify_center()
+        .size(px(KEY_CAP_SOFT))
+        .rounded(px(R_CONTROL))
+        .cursor_pointer()
+        .when(!star_shown, |star| {
+            star.opacity(0.).group_hover(group.clone(), |style| style.opacity(1.))
+        })
+        .hover(|style| style.bg(rgba(MODEL_PICKER_RAIL_HOVER)))
+        .tooltip(ferrite_ui::menu::tooltip(if face.favourite {
+            "Remove from favourites"
+        } else {
+            "Add to favourites"
+        }))
+        .on_mouse_down(
+            MouseButton::Left,
+            cx.listener(move |_, _: &MouseDownEvent, _, cx| {
+                cx.stop_propagation();
+                if let Some(choice) = starred.clone() {
+                    cx.emit(ModelPickerEvent::Favourite(choice));
+                }
+            }),
+        )
+        .child(ferrite_ui::icons::icon(ferrite_ui::icons::STAR, 12., star_ink));
+    let inert = row.inert;
+    div()
+        .id(group.clone())
+        .group(group.clone())
+        .debug_selector(move || selector.clone())
+        .flex()
+        .flex_shrink_0()
+        .items_center()
+        .gap(px(SPACE_2))
+        .h(px(MODEL_PICKER_ROW_H))
+        .px(px(SPACE_2))
+        .rounded(px(MODEL_PICKER_ROW_R))
+        .font_family(FONT_UI)
+        .text_size(px(FS_UI))
+        .when(face.cursor, |row| row.bg(rgba(MODEL_PICKER_ROW_HOVER)))
+        .when(inert, |row| row.opacity(0.64))
+        .when(!inert, |row| {
+            row.cursor_pointer()
+                .hover(|style| style.bg(rgba(MODEL_PICKER_ROW_HOVER)))
+        })
+        .when_some(face.why, |row, why| row.tooltip(ferrite_ui::menu::tooltip(why)))
+        .on_mouse_down(
+            MouseButton::Left,
+            cx.listener(move |_, _: &MouseDownEvent, _, cx| {
+                cx.stop_propagation();
+                cx.emit(ModelPickerEvent::Pick(Picked::Model(at)));
+            }),
+        )
+        .children(face.provider.map(|provider| {
+            let (path, ink) = ferrite_ui::provider::mark(provider);
+            ferrite_ui::icons::icon(path, MODEL_PICKER_MARK, ink)
+        }))
+        .child(
+            div()
+                .flex()
+                .flex_1()
+                .min_w_0()
+                .items_center()
+                .gap(px(SPACE_2))
+                .child(
+                    div()
+                        .min_w_0()
+                        .truncate()
+                        .text_color(rgb(INK_STRONG))
+                        .child(row.name.clone()),
+                )
+                .when(row.active, |name| {
+                    name.child(
+                        div()
+                            .debug_selector(|| "model-picker-check".into())
+                            .child(ferrite_ui::icons::icon(
+                                ferrite_ui::icons::CHECK,
+                                14.,
+                                MENU_CHECK_INK,
+                            )),
+                    )
+                })
+                .children(face.note.map(|note| {
+                    div()
+                        .min_w_0()
+                        .truncate()
+                        .text_size(px(FS_BADGE))
+                        .text_color(rgb(INK_SUBTLE))
+                        .child(note)
+                })),
+        )
+        .child(
+            div()
+                .flex()
+                .flex_shrink_0()
+                .items_center()
+                .gap(px(SPACE_1_5))
+                .child(star)
+                .children(face.jump.map(super::panel::soft_key_cap)),
+        )
+        .into_any_element()
+}
+
+impl CockpitView {
+    /// The model chip's door: the picker on its model list.
+    pub(super) fn open_provider_picker(&mut self, thread: ThreadId, cx: &mut Context<Self>) {
+        self.open_model_picker(PaneIdentity::Thread(thread), Column::List, cx);
+    }
+
+    /// `/effort`'s and the palette's door: the same picker, the keyboard in
+    /// its Reasoning column.
+    pub(super) fn open_effort_picker(&mut self, thread: ThreadId, cx: &mut Context<Self>) {
+        self.open_model_picker(PaneIdentity::Thread(thread), Column::Reasoning, cx);
+    }
+
+    pub(super) fn model_picker_open(&self, pane: PaneIdentity) -> bool {
+        self.model_picker().is_some_and(|open| open.pane == pane)
+    }
+
+    /// The open picker's view, for a test to read.
+    #[cfg(test)]
+    pub(super) fn model_picker_view<'a>(&self, cx: &'a gpui::App) -> Option<&'a ModelPickerView> {
+        self.model_picker().map(|open| open.view.read(cx))
+    }
+
+    /// A model chip as a control: a press opens its Pane's picker, or
+    /// shuts it, and the chip records where it stands for the picker to
+    /// hang from. The press stops there, so the root's dismissal never
+    /// undoes it.
+    pub(super) fn model_chip_control(
+        &self,
+        index: usize,
+        chip: gpui::component::button::Button,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let identity = self.panes[index].identity;
+        let chip = chip.group(chip_trigger(identity)).on_mouse_down(
+            MouseButton::Left,
+            cx.listener(move |view, _: &MouseDownEvent, _, cx| {
+                cx.stop_propagation();
+                let Some(index) = view.index_of(identity) else {
+                    return;
+                };
+                view.focus_pane(index);
+                if view.model_picker_open(identity) {
+                    view.close_popup(cx);
+                } else {
+                    view.open_model_picker(identity, Column::List, cx);
+                }
+            }),
+        );
+        ferrite_ui::components::on_bounds(
+            div().flex().min_w_0().child(chip),
+            self.record_trigger(chip_trigger(identity)),
+        )
+        .into_any_element()
+    }
+
+    /// Open the picker for `pane` (a Thread's, or a draft's band), the
+    /// keyboard in `column`.
+    pub(super) fn open_model_picker(
+        &mut self,
+        pane: PaneIdentity,
+        column: Column,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(inputs) = self.model_picker_inputs(pane) else {
+            return;
+        };
+        let view = cx.new(|cx| ModelPickerView::new(column, inputs, cx));
+        cx.subscribe(&view, Self::on_model_picker_event).detach();
+        self.show_popup(
+            Popup::ModelPicker(ModelPicker {
+                pane,
+                view,
+                mode: None,
+            }),
+            cx,
+        );
+    }
+
+    /// Derive the open picker again from what stands now — after a pick,
+    /// an announcement, a turn starting or ending — keeping its tab, its
+    /// search, its column and its cursor's row.
+    pub(super) fn rebuild_model_picker(&mut self, cx: &mut Context<Self>) {
+        let Some((pane, view)) = self.model_picker().map(|open| (open.pane, open.view.clone())) else {
+            return;
+        };
+        match self.model_picker_inputs(pane) {
+            Some(inputs) => view.update(cx, |picker, cx| picker.fill(inputs, cx)),
+            None => {
+                self.close_popup(cx);
+            }
+        }
+    }
+
+    /// What the picker lists for `pane`: every Provider's models and the
+    /// Reasoning column's rungs for the Thread or the draft's binding,
+    /// held while its turn runs (`tuning_hold`), the Providers whose CLI is
+    /// missing, and the favourites.
+    fn model_picker_inputs(&self, pane: PaneIdentity) -> Option<ModelPickerInputs> {
+        let (mut rows, mut efforts, label, current, handover, hold) = match pane {
+            PaneIdentity::Thread(thread) => {
+                let open = self.cockpit.thread(thread)?;
+                let current = open.provider();
+                let chosen = open.model().map(str::to_string);
+                let serving = open.transcript().model().map(str::to_string);
+                let locked = open.first_prompt_sent();
+                let (rows, _) = self.provider_rows(
+                    current,
+                    chosen.as_deref(),
+                    serving.as_deref(),
+                    locked,
+                    Consequence::Provision,
+                );
+                let label = ferrite_core::providers::models::footer_name(
+                    current,
+                    open.model().or(open.transcript().model()),
+                    open.models(),
+                );
+                let efforts = self
+                    .effort_ladder(thread)
+                    .map(|(steps, _, chosen)| {
+                        let default = effort_in_force(
+                            None,
+                            self.prefs.settings.effort_for(current),
+                            current,
+                            open.model(),
+                            open.models(),
+                        );
+                        effort_rows(steps, chosen, default, |level| {
+                            Consequence::Effort(Some(level))
+                        })
+                    })
+                    .unwrap_or_default();
+                (
+                    self.listable(rows, current, serving.as_deref()),
+                    efforts,
+                    label,
+                    current,
+                    Provider::ALL
+                        .into_iter()
+                        .find(|provider| locked && *provider != current),
+                    tuning_hold(&open),
+                )
+            }
+            PaneIdentity::Draft(_) => {
+                let index = self.index_of(pane)?;
+                let draft = self.panes[index].draft()?;
+                let choice = draft.binding.provider();
+                let current = choice.provider;
+                let model = choice.model.clone();
+                let (rows, _) = self.provider_rows(current, model.as_deref(), None, false, |choice| {
+                    Consequence::Band(BandChoice::Provider(choice))
+                });
+                let announced = self.cockpit.announced_models(current);
+                let label =
+                    ferrite_core::providers::models::footer_name(current, model.as_deref(), &announced);
+                let efforts = self
+                    .draft_effort_ladder(index)
+                    .map(|(steps, _, chosen)| {
+                        let default = effort_in_force(
+                            None,
+                            self.prefs.settings.effort_for(current),
+                            current,
+                            model.as_deref(),
+                            &announced,
+                        );
+                        effort_rows(steps, chosen, default, |level| {
+                            Consequence::Band(BandChoice::Effort(Some(level)))
+                        })
+                    })
+                    .unwrap_or_default();
+                (self.listable(rows, current, None), efforts, label, current, None, None)
+            }
+        };
+        Self::hold_tuning_rows(&mut rows, hold);
+        Self::hold_tuning_rows(&mut efforts, hold);
+        let unavailable = Provider::ALL
+            .into_iter()
+            .filter_map(|provider| {
+                matches!(
+                    self.cli_updates.state(provider),
+                    crate::cli_updates::State::Current(ferrite_core::providers::update::Status::Missing)
+                )
+                .then(|| {
+                    (
+                        provider,
+                        format!("{} is not installed", crate::cli_updates::name(provider)).into(),
+                    )
+                })
+            })
+            .collect();
+        Some(ModelPickerInputs {
+            rows,
+            efforts,
+            label: label.into(),
+            current,
+            handover,
+            hold,
+            unavailable,
+            favourites: self.prefs.settings.favourite_models.clone(),
+        })
+    }
+
+    /// `provider_rows` as the list shows them: no section titles (the rail
+    /// and each row's mark name the Provider), and the CLI's own `Default`
+    /// only while nothing else can carry the ✓ — a known serving model
+    /// takes it instead (Claude's model menu).
+    fn listable(&self, rows: Vec<Row>, current: Provider, serving: Option<&str>) -> Vec<Row> {
+        let mut rows: Vec<Row> = rows
+            .into_iter()
+            .filter(|row| row_choice(row).is_some())
+            .collect();
+        let of_current = |row: &Row| row_choice(row).is_some_and(|choice| choice.provider == current);
+        let Some(default) = rows
+            .iter()
+            .position(|row| of_current(row) && row_choice(row).is_some_and(|c| c.model.is_none()))
+        else {
+            return rows;
+        };
+        let serving_row = serving
+            .and_then(|serving| {
+                self.cockpit
+                    .model_catalog(current)
+                    .into_iter()
+                    .find(|model| model.value != "default" && model.is(serving))
+            })
+            .and_then(|model| {
+                rows.iter().position(|row| {
+                    of_current(row)
+                        && row_choice(row).and_then(|c| c.model.as_deref()) == Some(model.value.as_str())
+                })
+            });
+        let active = rows[default].active;
+        if !active || serving_row.is_some() {
+            if let Some(serving_row) = serving_row.filter(|_| active) {
+                rows[serving_row].active = true;
+            }
+            rows.remove(default);
+        }
+        rows
+    }
+
+    /// What the picker up said. One fading out says nothing.
+    fn on_model_picker_event(
+        &mut self,
+        view: Entity<ModelPickerView>,
+        event: &ModelPickerEvent,
+        cx: &mut Context<Self>,
+    ) {
+        if self.model_picker().is_none_or(|open| open.view != view) {
+            return;
+        }
+        match event {
+            ModelPickerEvent::Pick(picked) => self.pick_in_model_picker(*picked, cx),
+            ModelPickerEvent::Favourite(choice) => self.toggle_favourite(choice, cx),
+        }
+    }
+
+    /// Make `picked` (a model row, or a rung of the Reasoning column): the
+    /// Thread re-aimed — or the draft's band choice made — and the picker
+    /// kept open on it, the keyboard in its column. A turn that began since
+    /// the picker drew holds every row instead.
+    pub(super) fn pick_in_model_picker(&mut self, picked: Picked, cx: &mut Context<Self>) {
+        let Some((pane, view)) = self.model_picker().map(|open| (open.pane, open.view.clone())) else {
+            return;
+        };
+        if self.picker_held(pane) {
+            self.rebuild_model_picker(cx);
+            return;
+        }
+        let Some(consequence) = view.update(cx, |picker, cx| picker.take(picked, cx)) else {
+            return;
+        };
+        self.apply_picker_choice(pane, consequence, cx);
+        self.rebuild_model_picker(cx);
+    }
+
+    /// A turn started, or a change still waits on the provider: a visible
+    /// choice must not become a certain refusal in the transcript.
+    fn picker_held(&self, pane: PaneIdentity) -> bool {
+        pane.thread().is_some_and(|thread| {
+            self.cockpit
+                .thread(thread)
+                .and_then(|thread| tuning_hold(&thread))
+                .is_some()
+        })
+    }
+
+    fn apply_picker_choice(&mut self, pane: PaneIdentity, choice: Consequence, cx: &mut Context<Self>) {
+        match (choice, pane.thread()) {
+            (Consequence::Provision(choice), Some(thread)) => self.pick_provider(thread, choice, cx),
+            (Consequence::Effort(effort), Some(thread)) => self.pick_effort(thread, effort, cx),
+            (Consequence::Band(choice), None) => {
+                let Some(index) = self.index_of(pane) else {
+                    return;
+                };
+                self.focus_pane(index);
+                let composer = self.panes[index].composer.clone();
+                self.pick_band(&choice, &composer, cx);
+            }
+            _ => {}
+        }
+    }
+
+    /// A row's star: the model joins Favourites, or leaves them, saved at
+    /// once.
+    fn toggle_favourite(&mut self, choice: &ProviderChoice, cx: &mut Context<Self>) {
+        self.change_settings(
+            |settings| settings.toggle_favourite(choice.provider, favourite_value(choice)),
+            cx,
+        );
+        let favourites = self.prefs.settings.favourite_models.clone();
+        if let Some(open) = self.model_picker() {
+            open.view
+                .clone()
+                .update(cx, |picker, cx| picker.favourites_changed(favourites, cx));
+        }
+    }
+
+    /// Esc on the picker's search line: the slot's.
+    pub(super) fn register_model_picker_actions(&self, root: Div, cx: &mut Context<Self>) -> Div {
+        root.on_action(cx.listener(|view, _: &Dismiss, _, cx| {
+            view.dismiss_popup(cx);
+        }))
+    }
+
+    /// The picker, hung over its Pane's Composer: its foot
+    /// `MODEL_PICKER_GAP` over the box, its left edge at the chip's (T3's
+    /// `side="top" align="start"`), kept inside the window, and the mode
+    /// menu its footer opened over it. It waits a frame for the box to be
+    /// laid out.
+    pub(super) fn model_picker_element(
+        &self,
+        open: &ModelPicker,
+        face: popups::Face,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Option<AnyElement> {
+        let index = self.index_of(open.pane)?;
+        let Some(field) = self.panes[index].geometry.get().composer else {
+            ferrite_ui::motion::request_frame(window);
+            return None;
+        };
+        let left = self
+            .trigger(&chip_trigger(open.pane))
+            .map_or(field.left(), |chip| chip.left());
+        let viewport = f32::from(window.viewport_size().width);
+        let width = (MODEL_PICKER_LIST_W + REASONING_W).min(viewport - 2. * GRID_PAD);
+        let surface = ferrite_ui::menu::float()
+            .debug_selector(|| "model-picker".into())
+            .w(px(width))
+            .flex()
+            .flex_col()
+            .overflow_hidden()
+            .child(open.view.clone())
+            .child(self.model_picker_footer(open, cx));
+        let mode = open
+            .mode
+            .as_ref()
+            .and_then(|menu| self.picker_mode_element(menu, face, window, cx));
+        Some(
+            div()
+                .child(
+                    anchored()
+                        .anchor(gpui::Anchor::BottomLeft)
+                        .position(gpui::point(left, field.top() - px(MODEL_PICKER_GAP)))
+                        .snap_to_window_with_margin(px(GRID_PAD))
+                        .child(self.popup_face(
+                            face,
+                            "model-picker-in",
+                            surface,
+                            ferrite_ui::motion::Opens::Up,
+                            cx,
+                        )),
+                )
+                .children(mode)
+                .into_any_element(),
+        )
+    }
+
+    /// Open the permission mode menu over the footer's button, or shut it.
+    fn toggle_picker_mode(&mut self, thread: ThreadId, generation: u64, cx: &mut Context<Self>) {
+        if let Some(open) = self.model_picker_mut() {
+            open.mode = match open.mode.take() {
+                Some(_) => None,
+                None => Some(super::mode_menu::ModeMenu {
+                    thread,
+                    generation,
+                    preview: None,
+                }),
+            };
+            cx.notify();
+        }
+    }
 
     /// The footer (T3's `ComposerPickerFooter`): the permission mode at its
     /// far end, opening the permission menu over it. Speed and Ultracode
     /// segments stand only where a model announces them, and no provider
     /// announces either to Ferrite yet.
-    fn model_picker_footer(&self, open: &Popover<ModelPicker>, cx: &mut Context<Self>) -> Div {
+    fn model_picker_footer(&self, open: &ModelPicker, cx: &mut Context<Self>) -> Div {
         div()
             .debug_selector(|| "model-picker-footer".into())
             .flex()
@@ -1365,13 +1388,14 @@ impl CockpitView {
             .border_t_1()
             .border_color(rgba(MODEL_PICKER_EDGE))
             .bg(rgba(MODEL_PICKER_LIST_GROUND))
-            .children(self.picker_permissions(open.pane, cx))
+            .children(self.picker_permissions(open, cx))
     }
 
     /// The footer's permissions button: the mode's icon, its label and a
     /// chevron; on a Thread that can switch modes it opens the permission
     /// menu, on a draft it says the mode the Thread will start in.
-    fn picker_permissions(&self, pane: PaneIdentity, cx: &mut Context<Self>) -> Option<AnyElement> {
+    fn picker_permissions(&self, open: &ModelPicker, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let pane = open.pane;
         let (label, mode, opens) = match pane {
             PaneIdentity::Thread(thread) => {
                 let open = self.cockpit.thread(thread)?;
@@ -1401,7 +1425,7 @@ impl CockpitView {
         } else {
             INK_SUBTLE
         };
-        let lit = opens.is_some() && self.model_picker().is_some_and(|(_, picker)| picker.mode.is_some());
+        let lit = opens.is_some() && open.mode.is_some();
         Some(
             ferrite_ui::components::on_bounds(
                 div()
@@ -1455,20 +1479,6 @@ impl CockpitView {
 /// The key the picker footer's permissions button records its bounds
 /// under, where the permission menu then hangs.
 pub(super) const PICKER_PERMISSIONS: &str = "model-picker-permissions";
-
-/// How one model row reads, beyond the row itself.
-struct ModelRowFace {
-    provider: Option<Provider>,
-    cursor: bool,
-    favourite: bool,
-    /// In Favourites every row is starred, so its star shows on hover.
-    star_on_hover: bool,
-    jump: Option<&'static str>,
-    /// The muted word after the name (`handover`).
-    note: Option<&'static str>,
-    /// The tooltip: why the row is dead for now, else what the model is.
-    why: Option<SharedString>,
-}
 
 /// The Reasoning column's rungs: the model's ladder in title case, the ✓
 /// on the level in force, `Default` on the level a Thread starts on when
@@ -1537,10 +1547,11 @@ mod tests {
             row(Provider::Codex, "gpt-5.6-sol", "GPT-5.6 Sol"),
         ];
         let settings = ferrite_core::settings::Settings::default();
-        assert_eq!(ranked(&rows, "gpt-5.6", &settings), [2, 3]);
-        assert_eq!(ranked(&rows, "codex", &settings), [2, 3]);
-        assert_eq!(ranked(&rows, "so", &settings)[0], 1, "Sonnet's run beats Sol's");
-        assert!(ranked(&rows, "zzz", &settings).is_empty());
+        let favourites = &settings.favourite_models;
+        assert_eq!(ranked(&rows, "gpt-5.6", favourites), [2, 3]);
+        assert_eq!(ranked(&rows, "codex", favourites), [2, 3]);
+        assert_eq!(ranked(&rows, "so", favourites)[0], 1, "Sonnet's run beats Sol's");
+        assert!(ranked(&rows, "zzz", favourites).is_empty());
     }
 
     /// Favourites lists the starred models in Provider order; a Provider's
@@ -1555,9 +1566,10 @@ mod tests {
         let mut settings = ferrite_core::settings::Settings::default();
         settings.toggle_favourite(Provider::Codex, "gpt-5.6");
         settings.toggle_favourite(Provider::Claude, "sonnet");
-        assert_eq!(tab_rows(&rows, Tab::Favourites, &settings), [1, 2]);
-        assert_eq!(tab_rows(&rows, Tab::Provider(Provider::Claude), &settings), [1, 0]);
-        assert_eq!(tab_rows(&rows, Tab::Provider(Provider::Codex), &settings), [2]);
+        let favourites = &settings.favourite_models;
+        assert_eq!(tab_rows(&rows, Tab::Favourites, favourites), [1, 2]);
+        assert_eq!(tab_rows(&rows, Tab::Provider(Provider::Claude), favourites), [1, 0]);
+        assert_eq!(tab_rows(&rows, Tab::Provider(Provider::Codex), favourites), [2]);
     }
 
     /// The pill stands centred on its button, past the hairline under

@@ -1,5 +1,5 @@
 {
-  "crates/ferrite-cockpit/src/cockpit.rs": 10,
+  "crates/ferrite-cockpit/src/cockpit.rs": 9,
   "crates/ferrite-cockpit/src/cockpit/archive.rs": 3,
   "crates/ferrite-cockpit/src/cockpit/background_dialog_view.rs": 2,
   "crates/ferrite-cockpit/src/cockpit/background_work.rs": 3,
@@ -16,6 +16,7 @@
   "crates/ferrite-cockpit/src/cockpit/direction.rs": 1,
   "crates/ferrite-cockpit/src/cockpit/empty_board.rs": 3,
   "crates/ferrite-cockpit/src/cockpit/factory.rs": 4,
+  "crates/ferrite-cockpit/src/cockpit/head_cards.rs": 1,
   "crates/ferrite-cockpit/src/cockpit/lightbox.rs": 6,
   "crates/ferrite-cockpit/src/cockpit/menu_rows.rs": 2,
   "crates/ferrite-cockpit/src/cockpit/mode_menu.rs": 1,
