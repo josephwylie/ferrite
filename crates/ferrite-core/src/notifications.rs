@@ -715,6 +715,19 @@ mod tests {
                 state: AgentStatus::Idle,
             })
         }
+
+        /// A background shell of Main's: its status as the provider
+        /// reports it.
+        fn shell(&mut self, status: crate::progress::TaskStatus) -> Option<NoticeId> {
+            self.main(Input::Event(SessionEvent::Progress {
+                event: crate::progress::ProgressEvent::Background {
+                    id: "shell".into(),
+                    label: "sleep 60".into(),
+                    status,
+                    detail: String::new(),
+                },
+            }))
+        }
     }
 
     fn done() -> TurnOutcome {
@@ -813,6 +826,25 @@ mod tests {
         });
         assert!(b.frame(applied).is_some());
         assert_eq!(b.notifications.unread(), 1);
+    }
+
+    /// A background shell is work, as a Subagent is: Main ending its turn
+    /// while one runs is not a finish, and the shell ending is.
+    #[test]
+    fn a_turn_end_with_a_background_shell_running_waits_for_it() {
+        use crate::progress::TaskStatus;
+        let mut b = Bench::new(Duration::from_secs(3));
+        b.prompt();
+        b.stream();
+        assert_eq!(b.shell(TaskStatus::Working), None);
+        assert_eq!(b.turn_ended(done()), None, "the shell still runs");
+        assert!(!b.notifications.attention(b.thread));
+        assert_eq!(b.wait(Duration::from_secs(60)), None, "however long it runs");
+        assert_eq!(b.shell(TaskStatus::Completed), None, "the grace starts now");
+        assert!(
+            b.wait(Duration::from_secs(4)).is_some(),
+            "nobody resumed Main"
+        );
     }
 
     #[test]
