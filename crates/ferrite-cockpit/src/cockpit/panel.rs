@@ -161,7 +161,7 @@ fn floor_w(active: Option<&SurfaceId>, window: f32, nav: f32) -> f32 {
             ((window - nav).max(0.) * FILES_SHARE).max(FILES_MIN_W)
         }
         Some(SurfaceId::Terminal(_)) => TERMINAL_W,
-        Some(SurfaceId::SideChat(_) | SurfaceId::Agent(_)) => SIDE_CHAT_W,
+        Some(SurfaceId::SideChat(_)) => SIDE_CHAT_W,
     }
 }
 
@@ -329,11 +329,6 @@ impl CockpitView {
                 self.terminals.update(cx, |terminals, cx| terminals.end(thread, *number, cx))
             }
             SurfaceId::SideChat(tab) => self.close_side_tab(thread, *tab, cx),
-            SurfaceId::Agent(key) => {
-                if self.agent_drills.update(cx, |drills, _| drills.close(thread, key)) {
-                    cx.notify();
-                }
-            }
             SurfaceId::File(path) => self.close_preview_of(thread, path, cx),
             SurfaceId::Browser => self.close_preview_of(thread, std::path::Path::new(preview::BROWSER_PATH), cx),
             SurfaceId::Overview
@@ -388,7 +383,6 @@ impl CockpitView {
         self.panel.focus.retain_threads(keep);
         self.pull_request.update(cx, |reader, _| reader.retain_threads(keep));
         self.background.update(cx, |background, _| background.retain_threads(keep));
-        self.agent_drills.update(cx, |drills, _| drills.retain_threads(keep));
         self.browsers.retain_threads(keep);
         self.browser_chrome.update(cx, |chrome, _| chrome.retain_threads(keep));
         self.browser_dialog.update(cx, |dialog, _| dialog.retain_threads(keep));
@@ -409,7 +403,6 @@ impl CockpitView {
             + self.panel.focus.held_for_test(thread)
             + self.pull_request.read(cx).held_for_test(thread)
             + self.background.read(cx).held_for_test(thread)
-            + self.agent_drills.read(cx).held_for_test(thread)
             + self.browsers.held_for_test(thread)
             + self.browser_chrome.read(cx).held_for_test(thread)
             + self.browser_dialog.read(cx).held_for_test(thread)
@@ -857,7 +850,6 @@ impl CockpitView {
             Some(SurfaceId::Changes) => filled(self.changes_pane(tools::Diff::Changes(thread), cx).into_any_element()),
             Some(SurfaceId::Terminal(_)) => filled(self.terminals.clone().into_any_element()),
             Some(SurfaceId::SideChat(_)) => filled(self.side_chat.clone().into_any_element()),
-            Some(SurfaceId::Agent(_)) => filled(self.agent_drills.clone().into_any_element()),
             Some(SurfaceId::PullRequest(_)) => filled(self.pull_request.clone().into_any_element()),
         };
         let body = if takes_keys { keyed(body) } else { body };

@@ -13,7 +13,8 @@
 //! The tabs, the active one, maximized and the width outlive a restart
 //! (`Persisted`, a versioned `panel.json` beside `settings.json`); on load
 //! every Surface is checked again and one that no longer resolves (its
-//! Thread gone, its file deleted, its shell or page dead) is dropped.
+//! Thread gone, its file deleted, its shell or page dead, its kind no
+//! longer in this build) is dropped.
 
 use std::collections::{BTreeMap, HashMap};
 use std::io;
@@ -39,8 +40,6 @@ pub(crate) enum SurfaceId {
     Terminal(u64),
     /// One side chat, by its tab's id (the fork lands after it opens).
     SideChat(u64),
-    /// A subagent's drill-in, by its stored `AgentKey`.
-    Agent(String),
     /// The pull request of the Thread's branch, by its number.
     PullRequest(u64),
 }
@@ -50,8 +49,8 @@ pub(crate) enum Close {
     /// Nothing outlives the tab but its identity: the Surface reads what it
     /// shows from the Thread.
     Hide,
-    /// The view is put away; the durable subject (a file on disk, an agent's
-    /// saved history) stays, and reopening builds the view again from it.
+    /// The view is put away; the durable subject (a file on disk) stays, and
+    /// reopening builds the view again from it.
     Release,
     /// The resource ends with its tab, and nothing brings it back. Names
     /// what ends, for the menu's `End <what>`.
@@ -92,7 +91,7 @@ impl SurfaceId {
             | Self::Files
             | Self::Background
             | Self::PullRequest(_) => Lifecycle::new(Close::Hide, Restart::Restore),
-            Self::File(_) | Self::Agent(_) => Lifecycle::new(Close::Release, Restart::Restore),
+            Self::File(_) => Lifecycle::new(Close::Release, Restart::Restore),
             Self::Browser => Lifecycle::new(Close::End("page"), Restart::Ends),
             Self::Terminal(_) => Lifecycle::new(Close::End("shell"), Restart::Ends),
             Self::SideChat(_) => Lifecycle::new(Close::End("side chat"), Restart::Ends),
@@ -451,12 +450,22 @@ struct PersistedThread {
     open: bool,
     #[serde(default = "details_inline_default")]
     details_inline_open: bool,
-    tabs: Vec<SurfaceId>,
-    active: Option<SurfaceId>,
+    tabs: Vec<StoredTab>,
+    active: Option<StoredTab>,
     maximized: bool,
     width: f32,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pr_tabs: BTreeMap<u64, PrTab>,
+}
+
+/// A stored tab: a Surface this build knows, or one of a kind it no longer
+/// has (a retired Surface, as a subagent's drill-in is), kept as written
+/// so the shown tab is still found among the tabs, then dropped.
+#[derive(PartialEq, Serialize, Deserialize)]
+#[serde(untagged)]
+enum StoredTab {
+    Known(SurfaceId),
+    Retired(serde_json::Value),
 }
 
 impl PersistedThread {
@@ -465,8 +474,8 @@ impl PersistedThread {
             thread: thread.get(),
             open: surfaces.open,
             details_inline_open: surfaces.details_inline_open,
-            tabs: surfaces.tabs.clone(),
-            active: surfaces.active.clone(),
+            tabs: surfaces.tabs.iter().cloned().map(StoredTab::Known).collect(),
+            active: surfaces.active.clone().map(StoredTab::Known),
             maximized: surfaces.maximized,
             width: surfaces.width,
             pr_tabs: surfaces.pr_tabs.clone(),
@@ -545,10 +554,13 @@ fn migrate(persisted: Persisted, resolves: impl Fn(ThreadId, &SurfaceId) -> bool
         let mut tabs: Vec<SurfaceId> = Vec::new();
         // Where the shown tab stood among those kept, kept or not.
         let mut shown_at = None;
-        for id in stored.tabs {
-            if stored.active.as_ref() == Some(&id) {
+        for tab in stored.tabs {
+            if stored.active.as_ref() == Some(&tab) {
                 shown_at = Some(tabs.len());
             }
+            let StoredTab::Known(id) = tab else {
+                continue;
+            };
             if resolves(thread, &id) && !tabs.contains(&id) {
                 tabs.push(id);
             }

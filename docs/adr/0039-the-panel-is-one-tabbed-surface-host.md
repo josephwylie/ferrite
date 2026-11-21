@@ -19,11 +19,11 @@ and chose T3's. The measured spec is
 
 The Panel holds **Surfaces as tabs**, one list per Thread: an Overview
 (environment, context, connectors), Changes, Files, a File (a preview),
-a Browser tab, a Terminal, a side chat, an agent, background work, a
-pull request. A Surface's identity is its kind plus what it shows, so
+a Browser tab, a Terminal, a side chat, background work, a pull
+request. A Surface's identity is its kind plus what it shows, so
 opening something already open activates its tab rather than adding one.
-Every way in (a file link, a changed file, ⇧⌘D, a side chat, an agent
-row) goes through that one door.
+Every way in (a file link, a changed file, ⇧⌘D, a side chat) goes
+through that one door.
 
 One head row: the tabs, a **+** menu listing every Surface with a
 one-letter key (unavailable ones dimmed, with the reason), and maximize.
@@ -35,3 +35,14 @@ tab strips, expand and close buttons and the dock's columns go.
 
 The Review slot and a Thread beside another stay where they are: they
 are the board's layout, not side surfaces.
+
+## Amendment (2026-11-21): a Subagent opens in the Pane, not the Panel
+
+The agent Surface is gone. A Subagent had two views, its full chat in the
+Pane (the Pane switching its Subject to it) and a compact one held in the
+Panel, and the operator wants only the full chat. Every way to a Subagent
+(its `Ran agent` row, Background work's `Open` and `Open thread`, the
+details card's Lineage rows) now switches the Pane's Subject, and the
+Subagent's head has no `Side panel` button. A `panel.json` written before
+this still loads: a tab of a kind this build no longer has is dropped,
+and every other tab is kept.

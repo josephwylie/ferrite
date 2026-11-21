@@ -4,19 +4,6 @@ use super::side_chat::side_tabs;
 use super::*;
 use crate::cockpit::surfaces::SurfaceId;
 use crate::palette::{Act, Command};
-use ferrite_core::activity::{
-    ActivityEvent, AgentInfo, AgentKey, AgentStatus, ExecutionEvent, Subject, TranscriptCoverage,
-};
-
-fn agent_key(name: &str) -> AgentKey {
-    AgentKey::new(Provider::Claude, "ui-fixture", name)
-}
-
-fn emit(fake: &Fake, event: ActivityEvent) {
-    fake.streams.borrow()[0]
-        .send(SessionEvent::Activity(event))
-        .unwrap();
-}
 
 fn reopen_closed(view: &Entity<CockpitView>, cx: &mut gpui::VisualTestContext) {
     cx.update(|window, cx| {
@@ -46,96 +33,6 @@ fn click(name: impl Into<String>, cx: &mut gpui::VisualTestContext) {
         .center();
     cx.simulate_click(at, gpui::Modifiers::none());
     tick(cx);
-}
-
-#[gpui::test]
-fn a_closed_agent_tab_reopens_the_same_agent_with_its_transcript(cx: &mut TestAppContext) {
-    let (core, fake) = cockpit("reopen-agent", 1);
-    bind_production_keys(cx);
-    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
-    cx.simulate_resize(gpui::size(px(1600.), px(800.)));
-    let mut info = AgentInfo::new(agent_key("Quillon"));
-    info.name = Some("Quillon".into());
-    info.parent = Some(Subject::Main);
-    info.coverage = TranscriptCoverage::Live;
-    emit(&fake, ActivityEvent::Discovered(info));
-    emit(
-        &fake,
-        ActivityEvent::Content {
-            key: agent_key("Quillon"),
-            id: Some("marker".into()),
-            event: ExecutionEvent::Text {
-                text: "marker-7f3a quillon\n\n".into(),
-            },
-        },
-    );
-    emit(
-        &fake,
-        ActivityEvent::Status {
-            key: agent_key("Quillon"),
-            state: AgentStatus::Idle,
-        },
-    );
-    tick(cx);
-    let thread = view.read_with(cx, |view, _| view.panes[0].thread().unwrap());
-    assert!(
-        !palette_names(&view, cx)
-            .iter()
-            .any(|name| name == "Reopen closed surface"),
-        "nothing is closed yet, so nothing is offered"
-    );
-    view.update(cx, |view, cx| {
-        view.open_agent_drill(thread, Subject::Subagent(agent_key("Quillon")), cx)
-    });
-    tick(cx);
-    assert!(cx.debug_bounds("agent-drill").is_some());
-
-    click("panel-tab-Agent-close", cx);
-    assert!(cx.debug_bounds("agent-drill").is_none(), "the tab closed");
-    assert!(palette_names(&view, cx)
-        .iter()
-        .any(|name| name == "Reopen closed surface"));
-
-    reopen_closed(&view, cx);
-    assert!(
-        cx.debug_bounds("agent-drill").is_some(),
-        "the agent's view is back"
-    );
-    assert!(cx.debug_bounds("agent-unavailable").is_none());
-    view.read_with(cx, |view, cx| {
-        let subject = view
-            .agent_drills
-            .read(cx)
-            .subject(thread)
-            .expect("the same agent is held again");
-        assert_eq!(*subject, Subject::Subagent(agent_key("Quillon")));
-        let held = view.cockpit.thread(thread).unwrap();
-        let transcript = held.activity().subject(subject).unwrap();
-        assert!(plain_text(transcript.transcript().blocks()).contains("marker-7f3a"));
-    });
-}
-
-#[gpui::test]
-fn a_reopened_agent_the_thread_no_longer_knows_says_so_and_offers_to_close(
-    cx: &mut TestAppContext,
-) {
-    let (core, _fake) = cockpit("reopen-agent-gone", 1);
-    bind_production_keys(cx);
-    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
-    cx.simulate_resize(gpui::size(px(1600.), px(800.)));
-    let thread = view.read_with(cx, |view, _| view.panes[0].thread().unwrap());
-    view.update(cx, |view, cx| {
-        view.upsert_surface(thread, SurfaceId::Agent("gone-agent".into()), cx)
-    });
-    tick(cx);
-    assert!(
-        cx.debug_bounds("agent-unavailable").is_some(),
-        "a note, not a blank body"
-    );
-    click("agent-unavailable-close", cx);
-    assert!(!panel_tabs(&view, thread, cx)
-        .0
-        .contains(&SurfaceId::Agent("gone-agent".into())));
 }
 
 #[gpui::test]

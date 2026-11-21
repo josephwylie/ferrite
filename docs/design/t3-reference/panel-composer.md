@@ -316,7 +316,6 @@ pub enum SurfaceId {               // the id is the dedupe key (T3's kind-prefix
     Browser(TabId),                // ADR 0036 tab
     Terminal(TermId),              // splits inside
     SideChat(ThreadId),            // one tab per fork, replaces side chat's own strip
-    Agent(SubagentId),             // drill-in
     Background,                    // background tasks pane
     PullRequest(PrRef),            // with remembered sub-tab (Summary/Timeline/Code)
 }
@@ -326,7 +325,7 @@ pub struct ThreadSurfaces { open: bool, active: Option<SurfaceId>, tabs: Vec<Sur
 ```
 - One API: `upsert(thread, id)` (activate if present), `activate`, `close`, `close_others`, `close_right`,
   `move_to`, `reveal` (agent-initiated, refused if operator acted since — T3's userActionRevision).
-  Every current opener (open_preview, open_in_files, press_tool, side chat start, agent drill, open_browser,
+  Every current opener (open_preview, open_in_files, press_tool, side chat start, open_browser,
   Show changes) calls `upsert`. Delete the precedence ladder in `panel_element`: the body is
   `match active { … }` (T3's RightPanelSurfaceContent switch); each module keeps only its body + an optional
   sub-toolbar row (Diff scope dropdown, PR segmented tabs, terminal splits).
