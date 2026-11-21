@@ -1,11 +1,9 @@
 //! Subject navigation and supervision. Provider execution stays in core.
 use super::*;
-use ferrite_core::activity::{
-    AgentInfo, AgentStatus, DecisionHandle, PendingDecision, Subject, TranscriptCoverage,
-};
+use ferrite_core::activity::{DecisionHandle, PendingDecision, Subject};
 use super::decisions::DecisionEvent;
 use ferrite_pane::decision;
-use ferrite_ui::components::{self, MenuButton as _, Tip as _};
+use ferrite_ui::components::MenuButton as _;
 use ferrite_ui::theme;
 use gpui::component::{
     checkbox::Checkbox,
@@ -348,80 +346,6 @@ fn pick_option(picks: &mut Vec<usize>, option: usize, multi: bool) {
     }
 }
 
-/// An agent's state in the shared lexicon (`theme::words`); an idle or
-/// unclassified agent has none.
-fn status_label(status: AgentStatus, fresh: bool) -> Option<&'static str> {
-    use theme::words;
-    if !fresh {
-        return Some(words::UNAVAILABLE);
-    }
-    match status {
-        AgentStatus::Working => Some(words::WORKING),
-        AgentStatus::Waiting => Some(words::NEEDS_YOU),
-        AgentStatus::Pending => Some(words::STARTING),
-        AgentStatus::Paused => Some(words::PAUSED),
-        AgentStatus::Interrupted | AgentStatus::Shutdown => Some(words::INTERRUPTED),
-        AgentStatus::Failed | AgentStatus::NotFound => Some(words::FAILED),
-        AgentStatus::NotLoaded => Some(words::UNAVAILABLE),
-        AgentStatus::Idle | AgentStatus::Unknown => None,
-    }
-}
-
-/// The word a subagent's head says of it: its state word, or `done`.
-fn state_word(status: AgentStatus, fresh: bool) -> &'static str {
-    status_label(status, fresh).unwrap_or(theme::words::DONE)
-}
-
-/// A subagent's mark (the nav's, `nav::mark`): the working mark while
-/// it works, the `ATTENTION` dot while it waits on the operator, the
-/// `BLOCKED` dot once it failed; none otherwise, the slot kept.
-fn agent_mark(status: AgentStatus, fresh: bool, waiting: bool) -> Option<AnyElement> {
-    use crate::nav::RowStatus;
-    let face = match status {
-        _ if waiting || fresh && status == AgentStatus::Waiting => RowStatus::NeedsYou,
-        AgentStatus::Working if fresh => RowStatus::Working,
-        AgentStatus::Failed | AgentStatus::NotFound => RowStatus::Failed,
-        _ => return None,
-    };
-    Some(crate::nav::mark(face, false))
-}
-
-pub(crate) fn agent_name(info: &AgentInfo) -> String {
-    info.name
-        .as_deref()
-        .filter(|s| !s.trim().is_empty())
-        .map(str::to_string)
-        .or_else(|| {
-            info.description
-                .as_deref()
-                .filter(|s| !s.trim().is_empty())
-                .map(str::to_string)
-        })
-        .or_else(|| info.kind.clone())
-        .unwrap_or_else(|| "Subagent".into())
-}
-
-/// What a subagent's transcript covers, as a lead and an optional tail
-/// that shows only where it fits; a complete transcript says nothing.
-fn coverage_words(
-    retained: bool,
-    coverage: TranscriptCoverage,
-) -> Option<(&'static str, Option<&'static str>)> {
-    if !retained {
-        return Some(("Loading saved transcript\u{2026}", None));
-    }
-    match coverage {
-        TranscriptCoverage::Unavailable => Some(("Transcript unavailable", None)),
-        TranscriptCoverage::ToolActivity => Some(("Tool activity only", None)),
-        TranscriptCoverage::Live => Some((
-            "Live transcript",
-            Some(" \u{b7} earlier messages may be unavailable"),
-        )),
-        TranscriptCoverage::Partial => Some(("Partial transcript", None)),
-        TranscriptCoverage::Complete => None,
-    }
-}
-
 impl CockpitView {
     /// The agent's Subject, from the call that started it.
     pub(super) fn agent_of_call(&self, thread: ThreadId, call: &str) -> Option<Subject> {
@@ -431,8 +355,8 @@ impl CockpitView {
     }
 
     /// Show `subject`'s transcript in `thread`'s Pane: Main, or a subagent
-    /// opened from its row (`open_agent_from`) and left by its head's
-    /// crumbs, back button or escape. Every Subject switch the operator
+    /// opened from its row (`open_agent_from`) and left by the title bar's
+    /// back arrow (`history`) or escape. Every Subject switch the operator
     /// makes comes through here.
     pub(super) fn select_subject(
         &mut self,
@@ -537,227 +461,6 @@ impl CockpitView {
         }
         lineage.extend(reversed.into_iter().rev());
         lineage
-    }
-
-    /// What a Subject's transcript covers, or why its saved history could
-    /// not load with `Retry`: the one line the full head and the compact
-    /// Panel view both say it with.
-    pub(super) fn subject_history_line(
-        &self,
-        thread: ThreadId,
-        subject: &Subject,
-        error: Option<&str>,
-        cx: &mut Context<Self>,
-    ) -> Option<AnyElement> {
-        let view = self.cockpit.thread(thread)?.activity().subject(subject)?;
-        if let Some(error) = error {
-            // `Couldn't load transcript · <error>  Retry`: the words in
-            // `BLOCKED`, the error machine text.
-            let subject = subject.clone();
-            return Some(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap(px(theme::SPACE_2))
-                    .min_w_0()
-                    .child(
-                        div()
-                            .flex_shrink_0()
-                            .text_color(rgb(theme::BLOCKED))
-                            .child("Couldn\u{2019}t load transcript"),
-                    )
-                    .child(
-                        div()
-                            .min_w_0()
-                            .truncate()
-                            .font_family(theme::FONT_CODE)
-                            .child(SharedString::from(error.to_owned())),
-                    )
-                    .child(
-                        components::ghost_button(
-                            ("retry-child-history", thread.get()),
-                            "Retry",
-                            cx,
-                        )
-                        .tab_stop(true)
-                        .on_click(cx.listener(move |view, _, _, cx| {
-                            view.reload_subject_history(thread, &subject, cx)
-                        })),
-                    )
-                    .into_any_element(),
-            );
-        }
-        let (lead, tail) = coverage_words(view.retained(), view.coverage())?;
-        Some(
-            div()
-                .flex()
-                .flex_wrap()
-                .justify_end()
-                .h(px(theme::LH_UI))
-                .overflow_hidden()
-                .min_w_0()
-                .child(div().flex_shrink_0().child(lead))
-                .children(tail.map(|tail| div().flex_shrink_0().child(tail)))
-                .into_any_element(),
-        )
-    }
-
-    /// A subagent's head, over its transcript while the Pane shows one
-    /// (Claude's drill-in): the back button, to its immediate parent, and
-    /// the crumbs of its ancestry from `Main`, each of which goes there;
-    /// the agent's mark, its name and its state word; at the far end what
-    /// its transcript covers (`subject_history_line`) and `Stop` while it
-    /// runs.
-    /// Main has no head: its agents are its transcript's `Ran agent` rows.
-    pub(super) fn subagent_head(&self, index: usize, cx: &mut Context<Self>) -> Option<AnyElement> {
-        let pane = &self.panes[index];
-        if pane.is_main() {
-            return None;
-        }
-        let thread = pane.thread()?;
-        let selected = pane.selected.clone();
-        let activity = self.cockpit.thread(thread)?.activity();
-        activity.subject(&selected)?;
-        let agent = activity
-            .children()
-            .into_iter()
-            .find(|agent| agent.subject() == selected)?;
-        let waiting = activity
-            .pending_decisions()
-            .iter()
-            .any(|request| request.subject.as_ref() == Some(&selected));
-        let lineage = self.agent_lineage(thread, &selected);
-        let crumb_name = |subject: &Subject| -> SharedString {
-            match subject {
-                Subject::Main => "Main".into(),
-                Subject::Subagent(_) => activity
-                    .children()
-                    .into_iter()
-                    .find(|agent| agent.subject() == *subject)
-                    .map_or_else(|| "Subagent".to_owned(), |agent| agent_name(agent.info()))
-                    .into(),
-            }
-        };
-        let parent = lineage.last().cloned().unwrap_or(Subject::Main);
-        let back_to = crumb_name(&parent);
-        let back_label = format!("Back to {back_to}");
-        let back_button = components::icon_button(
-            format!("subagent-back-{}", thread.get()),
-            ferrite_ui::icons::BACK,
-            components::IconSize::Standard,
-            back_label.clone(),
-            cx,
-        )
-        .tip(back_label)
-        .on_click(cx.listener(move |view, _: &ClickEvent, window, cx| {
-            view.select_subject(thread, parent.clone(), window, cx)
-        }));
-        let name = agent_name(agent.info());
-        let word = state_word(agent.status(), agent.fresh());
-        let running = agent.fresh()
-            && matches!(
-                agent.status(),
-                AgentStatus::Pending | AgentStatus::Working | AgentStatus::Waiting
-            );
-        let current = div()
-            .debug_selector(move || format!("subagent-name-{}", thread.get()))
-            .flex()
-            .items_center()
-            .gap(px(theme::SUBAGENT_NAME_GAP))
-            .min_w_0()
-            .child(
-                div()
-                    .flex()
-                    .flex_shrink_0()
-                    .items_center()
-                    .justify_center()
-                    .w(px(theme::SUBAGENT_MARK_W))
-                    .children(agent_mark(agent.status(), agent.fresh(), waiting)),
-            )
-            .child(
-                div()
-                    .min_w_0()
-                    .truncate()
-                    .text_color(rgb(theme::INK_STRONG))
-                    .child(name),
-            )
-            .child(
-                div()
-                    .debug_selector(move || format!("subagent-state-{}", thread.get()))
-                    .flex_shrink_0()
-                    .text_color(rgb(theme::INK_SUBTLE))
-                    .child(word),
-            );
-        let mut head = div()
-            .debug_selector(move || format!("subagent-head-{}", thread.get()))
-            .font_family(theme::FONT_UI)
-            .font_weight(theme::W_BODY)
-            .text_size(px(theme::FS_LABEL))
-            .line_height(px(theme::LH_UI))
-            .flex()
-            .flex_1()
-            .items_center()
-            .min_w_0()
-            .gap(px(theme::SPACE_0_5))
-            .child(back_button);
-        for (depth, ancestor) in lineage.into_iter().enumerate() {
-            let label = crumb_name(&ancestor);
-            let selector = if depth == 0 {
-                format!("subagent-main-{}", thread.get())
-            } else {
-                format!("subagent-ancestor-{depth}-{}", thread.get())
-            };
-            head = head
-                .child(
-                    components::button(SharedString::from(format!(
-                        "subagent-crumb-{depth}-{}",
-                        thread.get()
-                    )))
-                    .debug_selector(move || selector.clone())
-                    .flex_shrink(1.)
-                    .min_w_0()
-                    .h(px(theme::SUBAGENT_CRUMB_H))
-                    .px(px(theme::SPACE_1_5))
-                    .rounded(px(theme::R_CONTROL))
-                    .text_color(rgb(theme::INK_SUBTLE))
-                    .child(div().truncate().child(label))
-                    .on_click(cx.listener(move |view, _: &ClickEvent, window, cx| {
-                        view.select_subject(thread, ancestor.clone(), window, cx)
-                    })),
-                )
-                .child(ferrite_ui::icons::icon(
-                    ferrite_ui::icons::CHEVRON_RIGHT,
-                    theme::SUBAGENT_CRUMB_ICON,
-                    theme::TEXT_FAINT,
-                ));
-        }
-        let history = self.subject_history_line(thread, &selected, pane.history_error.as_deref(), cx);
-        let stop_key = agent.key().clone();
-        Some(
-            native_keys(
-                head.child(div().flex_1().min_w_0().pl(px(theme::SPACE_1)).child(current))
-                    .children(history.map(|history| {
-                        div()
-                            .debug_selector(move || format!("subagent-coverage-{}", thread.get()))
-                            .flex()
-                            .flex_shrink(1.)
-                            .min_w_0()
-                            .ml(px(theme::SPACE_2))
-                            .text_color(rgb(theme::INK_SUBTLE))
-                            .child(history)
-                    }))
-                    .children(running.then(|| {
-                        components::ghost_button(("subagent-stop", thread.get()), "Stop", cx)
-                            .debug_selector(move || format!("subagent-stop-{}", thread.get()))
-                            .tab_stop(true)
-                            .on_click(cx.listener(move |view, _, _, cx| {
-                                view.stop_subagent(thread, &stop_key);
-                                cx.notify();
-                            }))
-                    })),
-            )
-            .into_any_element(),
-        )
     }
 
     pub(super) fn respond_exact(
@@ -1025,20 +728,6 @@ impl CockpitView {
             .iter()
             .find(|request| shown_on(pane, request))
             .cloned()
-    }
-
-    /// `Retry`: ask again for `subject`'s saved history, which the Pane
-    /// shows.
-    fn reload_subject_history(&mut self, thread: ThreadId, subject: &Subject, cx: &mut Context<Self>) {
-        let error = self
-            .cockpit
-            .retry_subject_history(thread, subject)
-            .err()
-            .map(|error| error.to_string());
-        if let Some(index) = self.pane_for(thread).filter(|&index| self.panes[index].selected == *subject) {
-            self.panes[index].history_error = error;
-        }
-        cx.notify();
     }
 
     pub(super) fn retry_subject_history(&mut self, index: usize, cx: &mut Context<Self>) {
@@ -2356,61 +2045,4 @@ fn form_defaults(fields: &[ferrite_core::FormField]) -> serde_json::Map<String, 
             Some((field.id.clone(), value))
         })
         .collect()
-}
-
-#[cfg(test)]
-mod status_word_tests {
-    use super::*;
-
-    /// Nothing here schedules a loop of its own: a working agent's spinner
-    /// is the shared one (`nav::mark`).
-    #[test]
-    fn subagents_schedule_no_loops() {
-        let source = include_str!("subagents.rs");
-        let needle = [".repeat", "()"].concat();
-        assert!(!source.contains(&needle), "no repeating animation here");
-    }
-
-    #[test]
-    fn every_agent_state_reads_in_the_lexicon() {
-        use theme::words;
-        let cases = [
-            (AgentStatus::Working, Some(words::WORKING)),
-            (AgentStatus::Waiting, Some(words::NEEDS_YOU)),
-            (AgentStatus::Failed, Some(words::FAILED)),
-            (AgentStatus::NotFound, Some(words::FAILED)),
-            (AgentStatus::Interrupted, Some(words::INTERRUPTED)),
-            (AgentStatus::Shutdown, Some(words::INTERRUPTED)),
-            (AgentStatus::Pending, Some(words::STARTING)),
-            (AgentStatus::Paused, Some(words::PAUSED)),
-            (AgentStatus::NotLoaded, Some(words::UNAVAILABLE)),
-            (AgentStatus::Idle, None),
-            (AgentStatus::Unknown, None),
-        ];
-        for (status, word) in cases {
-            assert_eq!(status_label(status, true), word, "{status:?}");
-            assert_eq!(
-                status_label(status, false),
-                Some(words::UNAVAILABLE),
-                "{status:?} unobserved"
-            );
-        }
-        assert_eq!(state_word(AgentStatus::Idle, true), words::DONE);
-        assert_eq!(state_word(AgentStatus::Waiting, true), words::NEEDS_YOU);
-    }
-
-    /// A subagent's head says what its transcript covers; a complete one
-    /// says nothing.
-    #[test]
-    fn the_head_says_what_a_transcript_covers() {
-        assert_eq!(
-            coverage_words(false, TranscriptCoverage::Complete),
-            Some(("Loading saved transcript\u{2026}", None))
-        );
-        assert_eq!(coverage_words(true, TranscriptCoverage::Complete), None);
-        assert_eq!(
-            coverage_words(true, TranscriptCoverage::ToolActivity),
-            Some(("Tool activity only", None))
-        );
-    }
 }
