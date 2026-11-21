@@ -731,6 +731,70 @@ fn an_agent_row_runs_with_its_agent_and_opens_it(cx: &mut TestAppContext) {
     assert!(cx.debug_bounds("agent-elapsed-live").is_none(), "its time holds");
 }
 
+/// A subagent's row stands as T3's does: one waiting on the operator says
+/// `Waiting`, one stopped says `Stopped`, one done shows its last words as
+/// its result.
+#[gpui::test]
+fn an_agents_face_reads_its_agents_state_as_t3s(cx: &mut TestAppContext) {
+    use ferrite_pane::pane::AgentRun;
+    let (core, fake) = cockpit("subagents-row-states", 1);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    for (name, status) in [
+        ("Atlas", AgentStatus::Waiting),
+        ("Birch", AgentStatus::Interrupted),
+        ("Cedar", AgentStatus::Idle),
+        ("Delta", AgentStatus::Failed),
+    ] {
+        agent_call(&fake, name);
+        child(&fake, name, status);
+    }
+    tick(cx);
+    view.read_with(cx, |view, _| {
+        let activity = view
+            .cockpit
+            .thread(view.panes[0].thread().unwrap())
+            .unwrap()
+            .activity();
+        let faces = crate::cockpit::transcript_glue::agent_faces(activity);
+        let read = |call: &str| {
+            let face = faces.get(call).unwrap();
+            (face.run, face.summary.clone(), face.result.clone())
+        };
+        assert_eq!(read("Atlas"), (AgentRun::Waiting, None, None), "no `Needs you`");
+        assert_eq!(read("Birch"), (AgentRun::Stopped, None, Some("Birch transcript".into())));
+        assert_eq!(read("Cedar"), (AgentRun::Done, None, Some("Cedar transcript".into())));
+        assert_eq!(read("Delta"), (AgentRun::Failed, None, Some("Delta transcript".into())));
+    });
+}
+
+/// A background agent's row is T3's row alone: no `View live output`; the
+/// row itself opens the agent.
+#[gpui::test]
+fn a_background_agents_row_has_no_live_output_link(cx: &mut TestAppContext) {
+    let (core, fake) = cockpit("subagents-row-background", 1);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(1280.), px(800.)));
+    agent_call(&fake, "Atlas");
+    fake.streams.borrow()[0]
+        .send(SessionEvent::ToolCompleted {
+            id: "Atlas".into(),
+            output: "Async agent launched successfully.".into(),
+            is_error: false,
+            result: ferrite_core::ToolResult::Background { task: "a1".into() },
+        })
+        .unwrap();
+    child(&fake, "Atlas", AgentStatus::Working);
+    tick(cx);
+    assert!(cx.debug_bounds("agent-row-Atlas").is_some());
+    assert!(cx.debug_bounds("tool-background-live").is_none(), "no View live output");
+    let row = cx.debug_bounds("agent-open-Atlas").expect("the row opens");
+    cx.simulate_click(row.center(), gpui::Modifiers::none());
+    cx.run_until_parked();
+    view.read_with(cx, |view, _| {
+        assert_eq!(view.panes[0].selected, Subject::Subagent(key("Atlas")));
+    });
+}
+
 /// Agents started together draw T3's subagent card: shut, its trigger
 /// alone over 24px avatars; pressed, it snaps open on their rows, the
 /// working one's dot running, each row the way into its agent.

@@ -547,6 +547,7 @@ mod tests {
             AgentFace {
                 run: AgentRun::Running,
                 summary: Some("Reading nav.rs".into()),
+                result: None,
                 clock: None,
             },
         );
@@ -555,6 +556,7 @@ mod tests {
             AgentFace {
                 run: AgentRun::Failed,
                 summary: None,
+                result: None,
                 clock: None,
             },
         );
@@ -563,6 +565,7 @@ mod tests {
             AgentFace {
                 run: AgentRun::Done,
                 summary: None,
+                result: None,
                 clock: None,
             },
         );
@@ -600,6 +603,71 @@ mod tests {
         assert_eq!(
             [elapsed(45), elapsed(125), elapsed(3_780)],
             ["45s", "2m 05s", "1h 03m"]
+        );
+    }
+
+    fn face(run: AgentRun, summary: Option<&str>, result: Option<&str>) -> AgentFace {
+        AgentFace {
+            run,
+            summary: summary.map(Into::into),
+            result: result.map(Into::into),
+            clock: None,
+        }
+    }
+
+    /// A subagent's row in each state reads as T3's `SubagentTimelineLink`:
+    /// its task over its progress while it runs (its result once settled),
+    /// else its status word; the status again at the right when the detail
+    /// line holds something else and it has not completed.
+    #[test]
+    fn an_agent_row_reads_as_t3s_in_every_state() {
+        let blocks = agents(&[("a", "Agent")]);
+        let call = tool(&blocks[0]);
+        let row = |run, summary, result| agent_row(call, Some(&face(run, summary, result)));
+        let read = |row: AgentRow| (row.standing, row.detail, row.label);
+        use Standing::*;
+        assert_eq!(row(AgentRun::Running, None, None).title, "Count files");
+        assert_eq!(
+            read(row(AgentRun::Running, Some("Reading nav.rs"), None)),
+            (Running, "Reading nav.rs".into(), Some("Running"))
+        );
+        assert_eq!(read(row(AgentRun::Running, None, None)), (Running, "Running".into(), None));
+        assert_eq!(
+            read(row(AgentRun::Waiting, Some("Asks to run cargo"), None)),
+            (Waiting, "Asks to run cargo".into(), Some("Waiting"))
+        );
+        assert_eq!(read(row(AgentRun::Waiting, None, None)), (Waiting, "Waiting".into(), None));
+        assert_eq!(
+            read(row(AgentRun::Done, Some("Reading"), Some("Found `3`\n- a.rs\n- b.rs"))),
+            (Done, "Found 3 a.rs b.rs".into(), None),
+            "settled, its result, flat"
+        );
+        assert_eq!(read(row(AgentRun::Done, None, None)), (Done, "Completed".into(), None));
+        assert_eq!(
+            read(row(AgentRun::Failed, None, Some("No such file"))),
+            (Failed, "No such file".into(), Some("Failed"))
+        );
+        assert_eq!(read(row(AgentRun::Failed, None, None)), (Failed, "Failed".into(), None));
+        assert_eq!(
+            read(row(AgentRun::Stopped, Some("Reading nav.rs"), None)),
+            (Stopped, "Reading nav.rs".into(), Some("Stopped"))
+        );
+        assert_eq!(read(row(AgentRun::Stopped, None, None)), (Stopped, "Stopped".into(), None));
+    }
+
+    /// A call no agent answers for (a foreground call the activity has not
+    /// seen) reads from the call alone: its result line, else its state.
+    #[test]
+    fn an_agent_row_without_its_agent_reads_its_call() {
+        let blocks = agents(&[("a", "Agent")]);
+        let mut call = tool(&blocks[0]).clone();
+        assert_eq!(agent_row(&call, None).detail, "Running");
+        call.state = ToolState::Ok;
+        call.result_line = Some("All 12 files read".into());
+        let row = agent_row(&call, None);
+        assert_eq!(
+            (row.standing, row.detail, row.label),
+            (Standing::Done, "All 12 files read".into(), None)
         );
     }
 }

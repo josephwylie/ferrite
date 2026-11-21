@@ -194,6 +194,7 @@ mod tests {
             kind,
             label: label.into(),
             launched: None,
+            activity: None,
         }
     }
 
@@ -231,5 +232,22 @@ mod tests {
             "Running a subagent"
         );
         assert_eq!(present(&[], true), None);
+    }
+
+    /// T3's description: a lone task's activity (a subagent's progress);
+    /// of several, the first with an activity as `label: activity`, else
+    /// the labels.
+    #[test]
+    fn the_description_is_what_the_work_is_doing() {
+        let mut agent = task(WorkKind::Subagent, "Run sleep command");
+        agent.activity = Some("Running python".into());
+        let alone = present(std::slice::from_ref(&agent), true).unwrap();
+        assert_eq!(alone.title, "Waiting \u{b7} Run sleep command");
+        assert_eq!(alone.description.as_deref(), Some("Running python"));
+        let several = present(&[task(WorkKind::Command, "cargo test"), agent], true).unwrap();
+        assert_eq!(
+            several.description.as_deref(),
+            Some("Run sleep command: Running python")
+        );
     }
 }
