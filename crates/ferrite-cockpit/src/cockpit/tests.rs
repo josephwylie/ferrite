@@ -103,6 +103,7 @@ mod ui_g;
 mod updating;
 mod user_commands;
 mod visuals;
+mod wakes;
 mod wall;
 mod workflows;
 mod workspace_binding;

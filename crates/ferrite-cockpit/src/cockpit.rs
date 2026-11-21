@@ -950,6 +950,27 @@ pub(crate) mod drawn {
         static PANE_RENDERS: RefCell<HashMap<PaneIdentity, usize>> = RefCell::new(HashMap::new());
         static NAV_RENDERS: Cell<usize> = const { Cell::new(0) };
         static NAV_ROWS: RefCell<HashMap<ThreadId, String>> = RefCell::new(HashMap::new());
+        static PUMPS: Cell<usize> = const { Cell::new(0) };
+        static LISTS: Cell<usize> = const { Cell::new(0) };
+    }
+
+    pub(crate) fn listed() {
+        LISTS.with(|lists| lists.set(lists.get() + 1));
+    }
+
+    /// How many times the window has worked out which Threads the nav
+    /// lists, and in which section, on this thread.
+    pub(crate) fn lists() -> usize {
+        LISTS.with(Cell::get)
+    }
+
+    pub(crate) fn pumped() {
+        PUMPS.with(|pumps| pumps.set(pumps.get() + 1));
+    }
+
+    /// How many times the pump's body has run on this thread.
+    pub(crate) fn pumps() -> usize {
+        PUMPS.with(Cell::get)
     }
 
     pub(crate) fn built_pane(identity: PaneIdentity) {
@@ -2053,6 +2074,8 @@ impl CockpitView {
     /// One frame for the whole cockpit. Only Panes the pump reports as
     /// changed are worth a repaint; a frame where nothing moved costs nothing.
     fn pump(&mut self, cx: &mut Context<Self>) {
+        #[cfg(test)]
+        drawn::pumped();
         // What a stream can move beyond its own Pane and nav row, before it
         // moves: a frame that changes none of it redraws only those.
         let shared = self.parts.borrow().on.then(|| self.shared_chrome());
@@ -5780,6 +5803,8 @@ impl CockpitView {
     /// notes.
     fn listed_threads(&self) -> Vec<(ThreadId, nav::Section, Option<std::time::SystemTime>)> {
         use nav::Section;
+        #[cfg(test)]
+        drawn::listed();
         let mut threads: Vec<ThreadId> = self
             .panes
             .iter()
