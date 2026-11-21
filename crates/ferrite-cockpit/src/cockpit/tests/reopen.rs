@@ -158,9 +158,7 @@ fn a_closed_side_chat_is_ended_not_reopened_and_no_fork_is_substituted(cx: &mut 
         .unwrap();
     tick(cx);
     let thread = view.read_with(cx, |view, _| view.focused_thread().unwrap());
-    view.update(cx, |view, cx| {
-        view.open_side_chat(thread, Some("marker-91bc".into()), cx)
-    });
+    view.update(cx, |view, cx| view.open_side_chat(thread, cx));
     tick(cx);
     tick(cx);
     let side = |cx: &mut gpui::VisualTestContext| {
