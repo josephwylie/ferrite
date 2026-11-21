@@ -1210,11 +1210,11 @@ impl CockpitView {
             .map(|machines| {
                 let machines = machines.read(cx);
                 machines
-                    .rows(self.cockpit.server())
+                    .rows(self.cockpit.read(cx).server())
                     .into_iter()
                     .filter_map(|row| {
                         let machine = machines.machine(row.index)?.clone();
-                        let state = machines.server_state(row.index, self.cockpit.server());
+                        let state = machines.server_state(row.index, self.cockpit.read(cx).server());
                         let unsaved = machines
                             .unsaved()
                             .is_some_and(|unsaved| unsaved.target == machine.target);
@@ -1316,7 +1316,7 @@ impl CockpitView {
             .save(&self.prefs.dir)
             .map_err(|error| format!("Environment not saved: {error}. Try again."))?;
         self.prefs.settings = settings;
-        self.cockpit.settings_changed(&self.prefs.settings);
+        self.cockpit.update(cx, |cockpit, _| cockpit.settings_changed(&self.prefs.settings));
         self.machines_changed(cx);
         cx.notify();
         Ok(())
@@ -1361,7 +1361,7 @@ impl CockpitView {
             });
         }
         if selected {
-            self.cockpit.retry_server();
+            self.cockpit.update(cx, |cockpit, _| cockpit.retry_server());
         }
     }
 
@@ -1428,7 +1428,7 @@ impl CockpitView {
             return Err(format!("Settings cannot be saved: {error}"));
         }
         let enabled = !self.prefs.settings.local_environment_enabled;
-        if !enabled && !self.on_machine() {
+        if !enabled && !self.on_machine(cx) {
             if let Some(error) = self.files_leave_error(cx) {
                 return Err(error.into());
             }

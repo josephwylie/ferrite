@@ -86,16 +86,17 @@ fn the_coordinator_is_empty_until_the_operator_speaks(cx: &mut TestAppContext) {
             .unwrap()
     });
     click(cx, &format!("context-menu-row-{codex}"));
-    view.read_with(cx, |view, _| {
+    view.read_with(cx, |view, cx| {
         let agent = view
             .cockpit
+            .read(cx)
             .factory()
             .coordinator(project)
             .unwrap()
             .agent
             .clone();
         assert_eq!(agent.map(|agent| agent.provider), Some(Provider::Codex));
-        assert_eq!(view.coordinator_agent().provider, Provider::Codex);
+        assert_eq!(view.coordinator_agent(cx).provider, Provider::Codex);
     });
 
     // The first words start it.
@@ -104,7 +105,7 @@ fn the_coordinator_is_empty_until_the_operator_speaks(cx: &mut TestAppContext) {
     tick(cx);
     click(cx, "coordinator-send");
     view.read_with(cx, |view, cx| {
-        let board = view.cockpit.factory();
+        let board = view.cockpit.read(cx).factory();
         let coordinator = board.coordinator(project).unwrap();
         assert!(coordinator.starting, "the Factory starts it");
         assert!(board.tasks.is_empty(), "talking starts nothing");
@@ -152,7 +153,7 @@ fn proposals_are_cards_accepted_or_dismissed_beside_the_conversation(cx: &mut Te
     assert!(!shows(cx, "coordinator-empty"));
     view.read_with(cx, |view, cx| {
         assert!(
-            !view.cockpit.operators(coordinator),
+            !view.cockpit.read(cx).operators(coordinator),
             "not the operator's own"
         );
         assert_eq!(view.coordinator_drawn(cx), Some(coordinator));
@@ -166,16 +167,16 @@ fn proposals_are_cards_accepted_or_dismissed_beside_the_conversation(cx: &mut Te
     click(cx, "proposal-p-2-dismiss");
     assert!(shows(cx, "proposal-p-2-dismissed"));
     assert!(!shows(cx, "proposal-p-2-accept"));
-    view.read_with(cx, |view, _| {
+    view.read_with(cx, |view, cx| {
         assert!(
-            view.cockpit.factory().tasks.is_empty(),
+            view.cockpit.read(cx).factory().tasks.is_empty(),
             "dismissed: nothing"
         );
     });
 
     click(cx, "proposal-p-1-accept");
-    let task = view.read_with(cx, |view, _| {
-        let board = view.cockpit.factory();
+    let task = view.read_with(cx, |view, cx| {
+        let board = view.cockpit.read(cx).factory();
         let card = board.proposal("p-1").unwrap();
         assert_eq!(card.status, ProposalStatus::Accepted);
         assert_eq!(board.tasks.len(), 1, "accepted: the Task");
@@ -214,10 +215,10 @@ fn focusing_a_coordinator_by_id_opens_its_projects_coordinator_tab(cx: &mut Test
     tick(cx);
     view.update(cx, |view, cx| {
         view.cockpit
-            .fixture_task_alert(ferrite_core::protocol::ServerMessage::Focus {
+            .update(cx, |cockpit, _| cockpit.fixture_task_alert(ferrite_core::protocol::ServerMessage::Focus {
                 thread: coordinator,
                 fork_of: None,
-            });
+            }));
         cx.notify();
     });
     tick(cx);

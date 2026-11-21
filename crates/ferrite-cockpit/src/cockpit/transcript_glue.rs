@@ -167,7 +167,7 @@ impl CockpitView {
         cx: &Context<Self>,
     ) -> Option<TranscriptTail> {
         self.decision_tail(index, cx)
-            .or_else(|| self.failure_tail(index, cx.weak_entity()))
+            .or_else(|| self.failure_tail(index, cx.weak_entity(), cx))
             .or_else(|| self.background_work_tail(index, cx))
     }
 
@@ -175,14 +175,14 @@ impl CockpitView {
     /// Thread's last turn failed: why (`failure_words`), and `Retry`, which
     /// re-sends the failed turn's prompt (`retry_failed_turn`) — none for a
     /// closed Session, which has nothing to send to.
-    fn failure_tail(&self, index: usize, owner: gpui::WeakEntity<Self>) -> Option<TranscriptTail> {
+    fn failure_tail(&self, index: usize, owner: gpui::WeakEntity<Self>, cx: &App) -> Option<TranscriptTail> {
         use ferrite_core::transcript::Status;
         let pane = self.panes.get(index)?;
         if !pane.is_main() {
             return None;
         }
         let thread = pane.thread()?;
-        let turn = self.cockpit.thread(thread)?.turn();
+        let turn = self.cockpit.read(cx).thread(thread)?.turn();
         let Some(ferrite_core::TurnOutcome::Error(message)) = &turn.outcome else {
             return None;
         };
@@ -220,7 +220,7 @@ impl CockpitView {
         let Some(index) = self.pane_for(thread) else {
             return false;
         };
-        let prompt = self.cockpit.thread(thread).and_then(|open| {
+        let prompt = self.cockpit.read(cx).thread(thread).and_then(|open| {
             let main = open
                 .activity()
                 .subject(&ferrite_core::activity::Subject::Main)?;
@@ -263,7 +263,7 @@ impl CockpitView {
                     let Some(index) = view.index_of(identity) else {
                         return;
                     };
-                    view.focus_pane(index);
+                    view.focus_pane(index, cx);
                     view.open_preview(path, line, window, cx);
                 });
             });
@@ -318,7 +318,7 @@ impl CockpitView {
         at: gpui::Point<gpui::Pixels>,
         cx: &mut Context<Self>,
     ) {
-        self.focus_pane(index);
+        self.focus_pane(index, cx);
         let Some(thread) = self.panes[index].thread() else {
             return;
         };
@@ -342,7 +342,7 @@ impl CockpitView {
         files: bool,
         cx: &mut Context<Self>,
     ) {
-        let Some(prompt) = self.cockpit.thread(thread).and_then(|open| {
+        let Some(prompt) = self.cockpit.read(cx).thread(thread).and_then(|open| {
             open.transcript()
                 .blocks()
                 .iter()
@@ -353,15 +353,15 @@ impl CockpitView {
             return;
         };
         let asked = match action {
-            PromptAction::Edit => self.cockpit.rewind(thread, &prompt, false, true),
+            PromptAction::Edit => self.cockpit.update(cx, |cockpit, _| cockpit.rewind(thread, &prompt, false, true)),
             // Claude's "Takes this and what follows out of the
             // conversation": its words come back to the Composer, to edit
             // and send again.
-            PromptAction::Rewind => self.cockpit.rewind(thread, &prompt, files, true),
+            PromptAction::Rewind => self.cockpit.update(cx, |cockpit, _| cockpit.rewind(thread, &prompt, files, true)),
             PromptAction::Fork => return self.fork_thread(thread, Some(prompt), None, cx),
         };
         if let Err(why) = asked {
-            self.cockpit.say(thread, format!("rewind refused: {why}"));
+            self.cockpit.update(cx, |cockpit, _| cockpit.say(thread, format!("rewind refused: {why}")));
         }
         cx.notify();
     }
@@ -376,9 +376,9 @@ impl CockpitView {
         draft: Option<String>,
         cx: &mut Context<Self>,
     ) {
-        match self.cockpit.fork(thread, before.as_deref(), draft) {
+        match self.cockpit.update(cx, |cockpit, _| cockpit.fork(thread, before.as_deref(), draft)) {
             Ok(()) => self.side_chat.update(cx, |chat, _| chat.forget_fork(thread)),
-            Err(why) => self.cockpit.say(thread, format!("fork refused: {why}")),
+            Err(why) => self.cockpit.update(cx, |cockpit, _| cockpit.say(thread, format!("fork refused: {why}"))),
         }
         cx.notify();
     }
@@ -387,7 +387,7 @@ impl CockpitView {
     /// `after` — before the next prompt, or all of it when the answer is
     /// the latest.
     pub(super) fn fork_after(&mut self, thread: ThreadId, after: BlockId, cx: &mut Context<Self>) {
-        let next = self.cockpit.thread(thread).and_then(|open| {
+        let next = self.cockpit.read(cx).thread(thread).and_then(|open| {
             open.transcript()
                 .blocks()
                 .iter()
@@ -399,8 +399,9 @@ impl CockpitView {
     }
 
     /// `thread`'s latest prompt a rewind can name.
-    pub(super) fn last_prompt(&self, thread: ThreadId) -> Option<BlockId> {
+    pub(super) fn last_prompt(&self, thread: ThreadId, cx: &App) -> Option<BlockId> {
         self.cockpit
+            .read(cx)
             .thread(thread)?
             .transcript()
             .blocks()
@@ -419,18 +420,19 @@ impl CockpitView {
         prompt: String,
         cx: &mut Context<Self>,
     ) -> Result<Handoff, String> {
-        self.focus_pane(index);
+        self.focus_pane(index, cx);
         let handoff = if self
             .cockpit
+            .read(cx)
             .thread(thread)
             .is_some_and(|open| open.needs_queue())
         {
-            if !self.cockpit.queue(thread, prompt) {
+            if !self.cockpit.update(cx, |cockpit, _| cockpit.queue(thread, prompt)) {
                 return Err("The agent's queue did not take it.".into());
             }
             Ok(Handoff::Queued)
         } else {
-            match self.cockpit.send(thread, prompt) {
+            match self.cockpit.update(cx, |cockpit, _| cockpit.send(thread, prompt)) {
                 Admission::Delivered => {
                     self.scroll_transcript_to_new_prompt(index, cx);
                     Ok(Handoff::Sent)
@@ -442,7 +444,7 @@ impl CockpitView {
                 )),
             }
         };
-        self.facts.acted(&self.cockpit, thread);
+        self.facts.acted(self.cockpit.read(cx), thread);
         cx.notify();
         handoff
     }

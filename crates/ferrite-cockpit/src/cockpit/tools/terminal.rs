@@ -190,13 +190,13 @@ impl CockpitView {
     /// One more shell in the Thread's folder, its Surface opened and
     /// shown (⌘J's first, the `+` menu's Terminal).
     pub(in crate::cockpit) fn new_terminal_surface(&mut self, thread: ThreadId, cx: &mut Context<Self>) {
-        let Some(directory) = self.thread_path(thread) else {
+        let Some(directory) = self.thread_path(thread, cx) else {
             return;
         };
-        let machine = self.cockpit.machine().map(AsRef::as_ref);
-        let number = self
-            .terminals
-            .update(cx, |terminals, cx| terminals.open(thread, &directory, machine, cx));
+        let machine = self.cockpit.read(cx).machine().cloned();
+        let number = self.terminals.update(cx, |terminals, cx| {
+            terminals.open(thread, &directory, machine.as_deref(), cx)
+        });
         self.upsert_surface(thread, SurfaceId::Terminal(number), cx);
     }
 
@@ -209,7 +209,7 @@ impl CockpitView {
         match event {
             TerminalsEvent::Attach { thread, text } => {
                 if let Some(index) = self.pane_for(*thread) {
-                    self.focus_pane(index);
+                    self.focus_pane(index, cx);
                     let reply = Reply::new(text.trim(), "");
                     self.panes[index]
                         .composer
@@ -223,12 +223,12 @@ impl CockpitView {
             TerminalsEvent::Door(door) => self.toggle_door(*door, cx),
             TerminalsEvent::Open { thread, address } => self.open_terminal_address(*thread, address, cx),
             TerminalsEvent::Retry { thread, number } => {
-                let Some(directory) = self.thread_path(*thread) else {
+                let Some(directory) = self.thread_path(*thread, cx) else {
                     return;
                 };
-                let machine = self.cockpit.machine().map(AsRef::as_ref);
+                let machine = self.cockpit.read(cx).machine().cloned();
                 self.terminals.update(cx, |terminals, cx| {
-                    terminals.retry(*thread, *number, &directory, machine, cx)
+                    terminals.retry(*thread, *number, &directory, machine.as_deref(), cx)
                 });
             }
             TerminalsEvent::Ended { thread, number } => {
@@ -241,7 +241,7 @@ impl CockpitView {
     /// A ⌘-press on an address in the shell: it opens where the Panel
     /// opens it (`Destination`), against the folder the shell started in.
     fn open_terminal_address(&mut self, thread: ThreadId, address: &str, cx: &mut Context<Self>) {
-        let folder = self.thread_path(thread);
+        let folder = self.thread_path(thread, cx);
         match Destination::of(address, folder.as_deref()) {
             Some(Destination::Web(url)) => {
                 self.browser_action(thread, ferrite_core::browser::Action::Open { url }, cx)
@@ -271,7 +271,7 @@ impl CockpitView {
     /// (`render`'s) leaves it alone, else it would hand the keyboard back to
     /// the Composer every frame.
     pub(in crate::cockpit) fn terminal_holds_focus(&self, window: &Window, cx: &gpui::App) -> bool {
-        self.focused_thread().is_some_and(|thread| {
+        self.focused_thread(cx).is_some_and(|thread| {
             self.shown_terminal(thread)
                 .is_some_and(|number| self.terminals.read(cx).holds_focus(thread, number, window, cx))
         })
@@ -286,12 +286,12 @@ impl CockpitView {
     }
 
     /// Everything the Terminal draws from: the shell the Panel shows.
-    fn terminal_inputs(&self) -> Option<TerminalInputs> {
-        let thread = self.panes[self.panel_drawn_pane()?].thread()?;
+    fn terminal_inputs(&self, cx: &gpui::App) -> Option<TerminalInputs> {
+        let thread = self.panes[self.panel_drawn_pane(cx)?].thread()?;
         Some(TerminalInputs {
             thread,
             number: self.shown_terminal(thread)?,
-            focused: self.focused_thread() == Some(thread),
+            focused: self.focused_thread(cx) == Some(thread),
             doors: self.doors(),
         })
     }
@@ -660,7 +660,7 @@ impl Render for TerminalsView {
         let Some(inputs) = self
             .cockpit
             .upgrade()
-            .and_then(|cockpit| cockpit.read(cx).terminal_inputs())
+            .and_then(|cockpit| cockpit.read(cx).terminal_inputs(cx))
         else {
             return div().into_any_element();
         };

@@ -27,7 +27,7 @@ fn two_prs<'a>(
     hold_nav_open(&view, cx);
     cx.simulate_resize(gpui::size(px(1900.), px(900.)));
     tick(cx);
-    let threads = view.read_with(cx, |view, _| view.cockpit.threads());
+    let threads = view.read_with(cx, |view, cx| view.cockpit.read(cx).threads());
     let (a, b_thread) = (threads[0], threads[1]);
     view.update(cx, |view, cx| {
         view.pr_landed(a, Some(pr(101, Some(REPO_A))), cx);
@@ -69,11 +69,11 @@ fn clipboard(cx: &mut gpui::VisualTestContext) -> Option<String> {
 fn another_threads_pr_badge_shows_that_threads_pr(cx: &mut TestAppContext) {
     let (view, [a, b], cx) = two_prs("link-pr-badge-b", Some(REPO_B), cx);
     assert!(cx.debug_bounds("pr-header").is_none(), "nothing of a PR shows yet");
-    assert_eq!(view.read_with(cx, |view, _| view.focused_thread()), Some(a));
+    assert_eq!(view.read_with(cx, |view, cx| view.focused_thread(cx)), Some(a));
 
     press(badge(b), MouseButton::Left, gpui::Modifiers::none(), cx);
 
-    assert_eq!(view.read_with(cx, |view, _| view.focused_thread()), Some(b));
+    assert_eq!(view.read_with(cx, |view, cx| view.focused_thread(cx)), Some(b));
     let shown = view.read_with(cx, |view, _| view.panel.surfaces.get(b).map(|s| (s.open, s.active.clone())));
     assert_eq!(shown, Some((true, Some(SurfaceId::PullRequest(202)))));
     assert!(cx.debug_bounds("pr-header").is_some(), "its native detail is drawn");
@@ -127,7 +127,7 @@ fn a_command_press_on_the_badge_opens_the_forge_in_the_system_browser(cx: &mut T
     };
     press(badge(b), MouseButton::Left, secondary, cx);
     assert_eq!(cx.opened_url().as_deref(), Some(REPO_B));
-    assert_eq!(view.read_with(cx, |view, _| view.focused_thread()), Some(a), "the Thread stays");
+    assert_eq!(view.read_with(cx, |view, cx| view.focused_thread(cx)), Some(a), "the Thread stays");
 }
 
 /// A PR the forge has not given an address for opens natively, and says

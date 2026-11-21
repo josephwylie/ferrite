@@ -11,7 +11,7 @@ impl CockpitView {
     /// `composer`'s files are going to this window's agents: on this
     /// computer or on its machine, and kept in the app's own store.
     pub(super) fn aim_attachments(&self, composer: &Entity<Composer>, cx: &mut Context<Self>) {
-        let destination = if self.on_machine() {
+        let destination = if self.on_machine(cx) {
             Destination::Remote
         } else {
             Destination::Local
@@ -37,7 +37,7 @@ impl CockpitView {
         if composer.update(cx, |composer, cx| composer.has_blocked_file(cx)) {
             return false;
         }
-        let root = self.pane_root(index);
+        let root = self.pane_root(index, cx);
         composer.update(cx, |composer, cx| {
             composer.retain_files(root.as_deref(), cx)
         })
@@ -51,7 +51,7 @@ impl CockpitView {
     ) -> Result<(), String> {
         let pane = self
             .panes
-            .get(self.focused())
+            .get(self.focused(cx))
             .ok_or("Open a Thread or draft before attaching files.")?;
         pane.composer
             .update(cx, |composer, cx| composer.add_local_files(paths, cx));
@@ -63,11 +63,11 @@ impl CockpitView {
         composer: &Entity<Composer>,
         cx: &mut Context<Self>,
     ) {
-        let Some(machine) = self.cockpit.machine().cloned() else {
+        let Some(machine) = self.cockpit.read(cx).machine().cloned() else {
             return;
         };
         for (path, attempt) in composer.update(cx, |composer, cx| composer.pending_uploads(cx)) {
-            let upload = match self.cockpit.upload_attachment(path.clone()) {
+            let upload = match self.cockpit.update(cx, |cockpit, _| cockpit.upload_attachment(path.clone())) {
                 Ok(upload) => upload,
                 Err(error) => {
                     composer.update(cx, |composer, cx| {
@@ -85,6 +85,7 @@ impl CockpitView {
                     let active = this
                         .update(cx, |view, cx| {
                             view.cockpit
+                                .read(cx)
                                 .machine()
                                 .is_some_and(|current| std::sync::Arc::ptr_eq(current, &machine))
                                 && composer
@@ -128,7 +129,7 @@ impl CockpitView {
                     if let Some(result) = result {
                         let _ =
                             this.update(cx, |view, cx| {
-                                if !view.cockpit.machine().is_some_and(|current| {
+                                if !view.cockpit.read(cx).machine().is_some_and(|current| {
                                     std::sync::Arc::ptr_eq(current, &machine)
                                 }) {
                                     return;
@@ -164,7 +165,7 @@ impl CockpitView {
     }
 
     pub(super) fn fetch_attachment_previews(&mut self, cx: &mut Context<Self>) {
-        let Some(machine) = self.cockpit.machine().cloned() else {
+        let Some(machine) = self.cockpit.read(cx).machine().cloned() else {
             return;
         };
         let key = self
@@ -184,7 +185,7 @@ impl CockpitView {
             })
             .collect();
         for (preview, owner, (path, request)) in requests {
-            let receiver = match self.cockpit.read_attachment(&path) {
+            let receiver = match self.cockpit.update(cx, |cockpit, _| cockpit.read_attachment(&path)) {
                 Ok(receiver) => receiver,
                 Err(error) => {
                     preview.finish_attachment(&path, request, Err(error.to_string()));
@@ -227,6 +228,7 @@ impl CockpitView {
                 let _ = this.update(cx, |view, cx| {
                     if view
                         .cockpit
+                        .read(cx)
                         .machine()
                         .is_some_and(|current| std::sync::Arc::ptr_eq(current, &machine))
                     {
@@ -241,11 +243,12 @@ impl CockpitView {
 
     /// The folder pane `index`'s agent works in: its Thread's, or the one
     /// its draft is bound to.
-    pub(super) fn pane_root(&self, index: usize) -> Option<PathBuf> {
+    pub(super) fn pane_root(&self, index: usize, cx: &gpui::App) -> Option<PathBuf> {
         let pane = self.panes.get(index)?;
         match (pane.thread(), pane.draft()) {
             (Some(thread), _) => Some(
                 self.cockpit
+                    .read(cx)
                     .thread(thread)?
                     .workspace()?
                     .cwd()
@@ -254,7 +257,7 @@ impl CockpitView {
             (None, Some(draft)) => Some(
                 draft
                     .binding
-                    .resolve(self.cockpit.registry(), !self.on_machine())
+                    .resolve(self.cockpit.read(cx).registry(), !self.on_machine(cx))
                     .ok()?
                     .source_root()
                     .to_path_buf(),

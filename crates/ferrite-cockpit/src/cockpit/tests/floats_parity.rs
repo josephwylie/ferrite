@@ -58,7 +58,7 @@ fn cmd_k_opens_the_palette_centred_over_the_board(cx: &mut TestAppContext) {
     tick(cx);
     assert!(palette_open(&view, cx));
     let palette = cx.debug_bounds("palette").expect("the palette is up");
-    let board = cx.update(|window, cx| view.read(cx).board_bounds(window));
+    let board = cx.update(|window, cx| view.read(cx).board_bounds(window, cx));
     assert!(
         (palette.size.width - px(ferrite_ui::theme::PALETTE_W)).abs() <= px(1.),
         "670 wide (Claude's): {palette:?}"
@@ -198,7 +198,7 @@ fn palette_keys_wrap_and_land_on_a_thread(cx: &mut TestAppContext) {
     cx.simulate_resize(gpui::size(px(1440.), px(900.)));
     tick(cx);
     view.update(cx, |view, cx| {
-        view.focus_pane(0);
+        view.focus_pane(0, cx);
         cx.notify();
     });
     tick(cx);
@@ -245,7 +245,7 @@ fn palette_keys_wrap_and_land_on_a_thread(cx: &mut TestAppContext) {
     tick(cx);
     assert!(!palette_open(&view, cx));
     assert_eq!(
-        view.read_with(cx, |view, _| view.focused_thread()),
+        view.read_with(cx, |view, cx| view.focused_thread(cx)),
         Some(threads[1])
     );
 }
@@ -259,7 +259,7 @@ fn cmd_backspace_deletes_text_without_parking_empty_threads(cx: &mut TestAppCont
     cx.simulate_resize(gpui::size(px(1440.), px(900.)));
     tick(cx);
     let open = |cx: &mut gpui::VisualTestContext| {
-        view.read_with(cx, |view, _| view.cockpit.threads().len())
+        view.read_with(cx, |view, cx| view.cockpit.read(cx).threads().len())
     };
     cx.simulate_input("abc def");
     tick(cx);
@@ -267,7 +267,7 @@ fn cmd_backspace_deletes_text_without_parking_empty_threads(cx: &mut TestAppCont
     tick(cx);
     view.read_with(cx, |view, cx| {
         assert!(
-            view.panes[view.focused()].composer.read(cx).is_empty(),
+            view.panes[view.focused(cx)].composer.read(cx).is_empty(),
             "text: delete to start"
         );
     });
@@ -349,7 +349,7 @@ fn the_shortcuts_sheet_filters_as_the_operator_types(cx: &mut TestAppContext) {
     assert!(view.read_with(cx, |view, _| view.floats.shortcuts.is_some()));
     // ⏎ in the filter sends nothing: not the Pane's draft from under it.
     view.update(cx, |view, cx| {
-        let composer = view.panes[view.focused()].composer.clone();
+        let composer = view.panes[view.focused(cx)].composer.clone();
         composer.update(cx, |composer, cx| composer.set("draft".into(), cx));
     });
     assert_eq!(resolves("enter", cx), None);
@@ -357,7 +357,7 @@ fn the_shortcuts_sheet_filters_as_the_operator_types(cx: &mut TestAppContext) {
     tick(cx);
     assert!(fake.sent.borrow().is_empty());
     view.read_with(cx, |view, cx| {
-        assert_eq!(view.panes[view.focused()].composer.read(cx).text(), "draft");
+        assert_eq!(view.panes[view.focused(cx)].composer.read(cx).text(), "draft");
         assert!(view.floats.shortcuts.is_some());
     });
     cx.simulate_keystrokes("escape");
@@ -403,8 +403,9 @@ fn cmd_i_walks_the_list_requests_first(cx: &mut TestAppContext) {
     cx.simulate_resize(gpui::size(px(1440.), px(900.)));
     tick(cx);
     let stream = |thread: ThreadId, cx: &mut gpui::VisualTestContext| {
-        view.read_with(cx, |view, _| {
+        view.read_with(cx, |view, cx| {
             view.cockpit
+                .read(cx)
                 .threads()
                 .into_iter()
                 .position(|open| open == thread)
@@ -427,9 +428,9 @@ fn cmd_i_walks_the_list_requests_first(cx: &mut TestAppContext) {
             .unwrap();
     }
     tick(cx);
-    view.read_with(cx, |view, _| {
+    view.read_with(cx, |view, cx| {
         assert_eq!(
-            view.cockpit.notifications().unread_requests(),
+            view.cockpit.read(cx).notifications().unread_requests(),
             2,
             "2 waiting; 3 unread completions never count"
         );
@@ -480,11 +481,11 @@ fn a_toasts_quick_answers_answer_the_request_and_leave(cx: &mut TestAppContext) 
     cx.simulate_resize(gpui::size(px(1440.), px(900.)));
     view.update(cx, |view, cx| view.set_nav_collapsed(true, cx));
     tick(cx);
-    let (off, at) = view.read_with(cx, |view, _| {
-        let threads = view.cockpit.threads();
+    let (off, at) = view.read_with(cx, |view, cx| {
+        let threads = view.cockpit.read(cx).threads();
         let at = threads
             .iter()
-            .position(|thread| Some(*thread) != view.focused_thread())
+            .position(|thread| Some(*thread) != view.focused_thread(cx))
             .unwrap();
         (threads[at], at)
     });
@@ -561,7 +562,7 @@ fn decision_keys_resolve_only_on_an_empty_line(cx: &mut TestAppContext) {
     tick(cx);
     view.read_with(cx, |view, cx| {
         assert_eq!(
-            view.panes[view.focused()].composer.read(cx).text(),
+            view.panes[view.focused(cx)].composer.read(cx).text(),
             "go1",
             "a typed number is a character"
         );
@@ -577,14 +578,14 @@ fn the_effort_ladder_always_has_a_chosen_step(cx: &mut TestAppContext) {
     tick(cx);
     let thread = view.read_with(cx, |view, _| view.panes[0].thread().unwrap());
     for model in ferrite_core::providers::models::fallback(Provider::Claude) {
-        view.update(cx, |view, _| {
-            let _ = view.cockpit.set_model(
+        view.update(cx, |view, cx| {
+            let _ = view.cockpit.update(cx, |cockpit, _| cockpit.set_model(
                 thread,
                 Some(model.value.clone()).filter(|value| value != "default"),
-            );
+            ));
         });
         tick(cx);
-        let ladder = view.read_with(cx, |view, _| view.effort_ladder(thread));
+        let ladder = view.read_with(cx, |view, cx| view.effort_ladder(thread, cx));
         match ladder {
             Some((steps, labels, chosen)) => {
                 assert_eq!(steps.len(), labels.len());
@@ -738,7 +739,7 @@ fn the_palette_jumps_to_a_project_and_names_a_threads_directory(cx: &mut TestApp
     });
     tick(cx);
     assert_eq!(
-        view.read_with(cx, |view, _| view.cockpit.roster().focused_thread()),
+        view.read_with(cx, |view, cx| view.cockpit.read(cx).roster().focused_thread()),
         Some(threads[2]),
         "the Project's Thread that waits"
     );
@@ -758,7 +759,7 @@ fn esc_after_a_wait_closes_the_palette_on_screen(cx: &mut TestAppContext) {
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     cx.simulate_resize(gpui::size(px(1440.), px(900.)));
     view.update(cx, |view, cx| {
-        view.focus_pane(0);
+        view.focus_pane(0, cx);
         cx.notify();
     });
     tick(cx);

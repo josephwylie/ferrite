@@ -40,7 +40,7 @@ fn focused<'a>(
     cx.simulate_resize(gpui::size(px(1440.), px(900.)));
     cx.update(|window, _| window.activate_window());
     view.update(cx, |view, cx| {
-        view.focus_pane(0);
+        view.focus_pane(0, cx);
         cx.notify();
     });
     tick(cx);
@@ -270,7 +270,7 @@ fn a_frame_the_cockpit_did_not_ask_for_replays_it(cx: &mut TestAppContext) {
     assert_eq!(renders(), before, "the cached Cockpit was replayed");
     // And it is still the Cockpit that answers: a change it makes shows.
     view.update(cx, |view, cx| {
-        view.focus_pane(0);
+        view.focus_pane(0, cx);
         cx.notify();
     });
     cx.run_until_parked();

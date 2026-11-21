@@ -269,7 +269,7 @@ impl CockpitView {
     fn archive_inputs(&self, query: &str, cx: &gpui::App) -> Option<ArchiveInputs> {
         let project = self.factory_project()?;
         let view = self.factory()?.read(cx);
-        let board = self.cockpit.factory();
+        let board = self.cockpit.read(cx).factory();
         let found = board
             .archive(project, query)
             .map(|task| ArchivedRow {
@@ -324,10 +324,10 @@ impl CockpitView {
             archive.update(cx, |archive, _| archive.reading.take())
         });
         if let Some((was, true)) = was.filter(|(was, _)| Some(*was) != thread) {
-            if let Err(error) = self.cockpit.park(was) {
+            if let Err(error) = self.cockpit.update(cx, |cockpit, _| cockpit.park(was)) {
                 ferrite_core::log!("factory: an earlier Worker could not be parked again: {error}");
             }
-            let focused = self.cockpit.roster().focused();
+            let focused = self.cockpit.read(cx).roster().focused();
             if let Some(Destination {
                 shows: Shows::Factory(..),
                 focus_at_open,
@@ -339,12 +339,12 @@ impl CockpitView {
         if let Some(thread) = thread {
             let reopened = match was {
                 Some((same, reopened)) if same == thread => Ok(reopened),
-                _ if self.cockpit.thread(thread).is_some() => Ok(false),
-                _ => self.cockpit.revive(thread).map(|()| true),
+                _ if self.cockpit.read(cx).thread(thread).is_some() => Ok(false),
+                _ => self.cockpit.update(cx, |cockpit, _| cockpit.revive(thread).map(|()| true)),
             };
             // Reopening it moves the roster's focus before this window has
             // its Pane: that is not the operator leaving the board.
-            let focused = self.cockpit.roster().focused();
+            let focused = self.cockpit.read(cx).roster().focused();
             if let Some(Destination {
                 shows: Shows::Factory(_, view),
                 focus_at_open,
@@ -379,6 +379,7 @@ impl CockpitView {
         let thread = self.worker_reading(task, cx)?;
         let text = self
             .cockpit
+            .read(cx)
             .thread(thread)
             .map(|open| ferrite_core::transcript::plain_text(open.transcript().blocks()))
             .unwrap_or_default();

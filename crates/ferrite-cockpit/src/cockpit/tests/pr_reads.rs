@@ -56,11 +56,11 @@ fn held<'a>(
     hold_nav_open(&view, cx);
     cx.simulate_resize(gpui::size(px(1900.), px(900.)));
     tick(cx);
-    let threads = view.read_with(cx, |view, _| view.cockpit.threads());
+    let threads = view.read_with(cx, |view, cx| view.cockpit.read(cx).threads());
     view.update(cx, |view, cx| {
-        let path = view.thread_path(threads[0]).unwrap();
-        view.cockpit.fixture_forge(path.clone(), PrView::NoPr);
-        view.cockpit.fixture_hold_pr_reads(path);
+        let path = view.thread_path(threads[0], cx).unwrap();
+        view.cockpit.update(cx, |cockpit, _| cockpit.fixture_forge(path.clone(), PrView::NoPr));
+        view.cockpit.update(cx, |cockpit, _| cockpit.fixture_hold_pr_reads(path));
         for thread in &threads {
             view.pr_landed(*thread, Some(reading_of(48)), cx);
         }
@@ -78,7 +78,7 @@ fn open(view: &Entity<CockpitView>, thread: ThreadId, cx: &mut gpui::VisualTestC
 }
 
 fn waiting(view: &Entity<CockpitView>, cx: &mut gpui::VisualTestContext) -> Vec<HeldRead> {
-    view.update(cx, |view, _| view.cockpit.take_held_reads())
+    view.update(cx, |view, cx| view.cockpit.update(cx, |cockpit, _| cockpit.take_held_reads()))
 }
 
 fn title(

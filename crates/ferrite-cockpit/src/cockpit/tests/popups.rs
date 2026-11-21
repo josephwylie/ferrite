@@ -100,7 +100,7 @@ fn open(view: &Entity<CockpitView>, kind: Kind, cx: &mut gpui::VisualTestContext
                 cx,
             ),
             Kind::Mode => {
-                let generation = view.cockpit.thread(thread).unwrap().generation();
+                let generation = view.cockpit.read(cx).thread(thread).unwrap().generation();
                 view.toggle_mode_menu(thread, generation, cx);
             }
             Kind::Plan => view.open_plan(window, cx),
@@ -153,7 +153,7 @@ fn window<'a>(
             .unwrap();
     }
     view.update(cx, |view, cx| {
-        for thread in view.cockpit.threads().to_vec() {
+        for thread in view.cockpit.read(cx).threads().to_vec() {
             view.facts.pr_answered(thread, Some(pr_with_checks()));
         }
         cx.notify();
@@ -261,13 +261,13 @@ fn the_plan_card_closes_when_another_thread_takes_focus(cx: &mut TestAppContext)
     let (view, _fake, cx) = window(cx, "popups-plan-focus", 2);
     open(&view, Kind::Plan, cx);
     view.update(cx, |view, cx| {
-        view.focus_pane(1);
+        view.focus_pane(1, cx);
         cx.notify();
     });
     tick(cx);
     assert_eq!(up(&view, cx), [], "another Thread's focus closes the card");
     view.update(cx, |view, cx| {
-        view.focus_pane(0);
+        view.focus_pane(0, cx);
         cx.notify();
     });
     tick(cx);
@@ -431,8 +431,8 @@ fn a_band_menu_takes_the_arrows_and_enter(cx: &mut TestAppContext) {
     cx.simulate_keystrokes("down enter");
     tick(cx);
     assert_eq!(up(&view, cx), [], "the pick closes it");
-    let target = view.read_with(cx, |view, _| {
-        view.panes[view.focused()].draft().unwrap().binding.target().clone()
+    let target = view.read_with(cx, |view, cx| {
+        view.panes[view.focused(cx)].draft().unwrap().binding.target().clone()
     });
     assert!(!matches!(target, DraftTarget::Main), "the pick moved the draft off the checkout");
 }
@@ -486,7 +486,7 @@ fn a_press_on_a_submenu_row_runs_it(cx: &mut TestAppContext) {
     tick(cx);
     assert_eq!(up(&view, cx), [], "the row closes the menu");
     assert!(
-        view.read_with(cx, |view, _| view.cockpit.thread(thread).unwrap().snooze().is_some()),
+        view.read_with(cx, |view, cx| view.cockpit.read(cx).thread(thread).unwrap().snooze().is_some()),
         "and its verb ran"
     );
 }

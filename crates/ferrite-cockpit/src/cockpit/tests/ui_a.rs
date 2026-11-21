@@ -95,7 +95,7 @@ fn a_leading_heading_starts_on_the_answer_rows_top(cx: &mut TestAppContext) {
     let answer = debug_bounds(cx, "transcript-answer".into()).unwrap();
     let heading = view.read_with(cx, |view, cx| {
         let thread = view.panes[0].thread().unwrap();
-        let block = &view.cockpit.thread(thread).unwrap().transcript().blocks()[0];
+        let block = &view.cockpit.read(cx).thread(thread).unwrap().transcript().blocks()[0];
         let id = format!(
             "markdown-{}-{:?}",
             view.panes[0].text_namespace(),

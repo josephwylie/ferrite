@@ -401,8 +401,8 @@ pub(crate) fn agent_name(info: &AgentInfo) -> String {
 
 impl CockpitView {
     /// The agent's Subject, from the call that started it.
-    pub(super) fn agent_of_call(&self, thread: ThreadId, call: &str) -> Option<Subject> {
-        self.cockpit.thread(thread)?.activity().invocations().find_map(
+    pub(super) fn agent_of_call(&self, thread: ThreadId, call: &str, cx: &gpui::App) -> Option<Subject> {
+        self.cockpit.read(cx).thread(thread)?.activity().invocations().find_map(
             |(native, agent)| (native == call).then(|| agent.subject()),
         )
     }
@@ -421,8 +421,8 @@ impl CockpitView {
         let Some(index) = self.take_subject(thread, subject, cx) else {
             return;
         };
-        self.cockpit.focus_thread(thread);
-        self.focus_pane(index);
+        self.cockpit.update(cx, |cockpit, _| cockpit.focus_thread(thread));
+        self.focus_pane(index, cx);
         // Keep native text selections in their retained Subject entities.
         // A subagent's transcript must not edit or focus Main's hidden
         // Composer.
@@ -441,7 +441,7 @@ impl CockpitView {
         let Some(thread) = self.panes.get(index).and_then(|pane| pane.thread()) else {
             return;
         };
-        if let Some(subject) = self.agent_of_call(thread, &call) {
+        if let Some(subject) = self.agent_of_call(thread, &call, cx) {
             self.open_subagent(thread, subject, cx);
         }
     }
@@ -451,8 +451,8 @@ impl CockpitView {
     /// card's Lineage. A subagent has no other view.
     pub(super) fn open_subagent(&mut self, thread: ThreadId, subject: Subject, cx: &mut Context<Self>) {
         if let Some(index) = self.take_subject(thread, subject, cx) {
-            self.cockpit.focus_thread(thread);
-            self.focus_pane(index);
+            self.cockpit.update(cx, |cockpit, _| cockpit.focus_thread(thread));
+            self.focus_pane(index, cx);
         }
     }
 
@@ -476,14 +476,14 @@ impl CockpitView {
         cx: &mut Context<Self>,
     ) -> Option<usize> {
         let index = self.pane_for(thread)?;
-        let open = self.cockpit.thread(thread)?;
+        let open = self.cockpit.read(cx).thread(thread)?;
         let subject = open.activity().canonical_subject(&subject);
         let generation = open.activity().subject(&subject)?.revision();
         self.panes[index].select_subject(subject, generation, cx);
         self.panes[index].details.reset_pages();
         self.retry_subject_history(index, cx);
         self.cockpit
-            .set_visible_subject(thread, self.panes[index].selected.clone());
+            .update(cx, |cockpit, _| cockpit.set_visible_subject(thread, self.panes[index].selected.clone()));
         self.close_composer_menu(cx);
         cx.notify();
         Some(index)
@@ -491,8 +491,8 @@ impl CockpitView {
 
     /// `subject`'s ancestors by each agent's recorded parent, the
     /// immediate parent last (Main, which every chain ends in, first).
-    pub(super) fn agent_lineage(&self, thread: ThreadId, subject: &Subject) -> Vec<Subject> {
-        let Some(open) = self.cockpit.thread(thread) else {
+    pub(super) fn agent_lineage(&self, thread: ThreadId, subject: &Subject, cx: &gpui::App) -> Vec<Subject> {
+        let Some(open) = self.cockpit.read(cx).thread(thread) else {
             return vec![Subject::Main];
         };
         let activity = open.activity();
@@ -519,10 +519,10 @@ impl CockpitView {
         answer: DecisionAnswer,
         cx: &mut Context<Self>,
     ) {
-        match self.cockpit.respond_decision(thread, handle, answer) {
+        match self.cockpit.update(cx, |cockpit, _| cockpit.respond_decision(thread, handle, answer)) {
             Ok(true) => {
                 if let Some(index) = self.pane_for(thread) {
-                    let pending = self.cockpit.thread(thread).is_some_and(|open| {
+                    let pending = self.cockpit.read(cx).thread(thread).is_some_and(|open| {
                         open.pending_decisions().iter().any(|p| &p.handle == handle)
                     });
                     if !pending {
@@ -540,7 +540,7 @@ impl CockpitView {
                 }
             }
         }
-        self.facts.acted(&self.cockpit, thread);
+        self.facts.acted(self.cockpit.read(cx), thread);
         cx.notify();
     }
 
@@ -572,7 +572,7 @@ impl CockpitView {
     ) -> Option<Cards> {
         let pane = self.panes.get(index)?;
         let thread = pane.thread()?;
-        let open = self.cockpit.thread(thread)?;
+        let open = self.cockpit.read(cx).thread(thread)?;
         let activity = open.activity();
         let requests: Vec<(PendingDecision, bool)> = activity
             .pending_decisions()
@@ -616,7 +616,7 @@ impl CockpitView {
                     })
             })
             .collect();
-        let (provider, context) = self.decision_context(thread);
+        let (provider, context) = self.decision_context(thread, cx);
         // Claude's `Allow and switch to Auto`: the provider's own auto mode
         // (`Settings::auto_mode_for`), when this Session offers it and it
         // is not in force already.
@@ -665,7 +665,7 @@ impl CockpitView {
         // Below the short-Pane height a question body keeps two option rows
         // and scrolls, so its head and answer row stay in reach.
         let rect = self
-            .pane_rects(window)
+            .pane_rects(window, cx)
             .into_iter()
             .find(|(at, _)| *at == index)
             .map(|(_, rect)| rect);
@@ -756,8 +756,8 @@ impl CockpitView {
     /// when every one of its questions is answered. False leaves the key to
     /// the Composer (an empty line's ↵ takes a held prompt back).
     pub(super) fn send_ready_question(&mut self, cx: &mut Context<Self>) -> bool {
-        let index = self.focused();
-        let Some(request) = self.shown_request(index) else {
+        let index = self.focused(cx);
+        let Some(request) = self.shown_request(index, cx) else {
             return false;
         };
         if request.submitting || pane::questions_of(&request.decision).is_none() {
@@ -769,9 +769,10 @@ impl CockpitView {
 
     /// The first request this Pane's selected Subject shows — the one its
     /// digit keys pick in.
-    pub(super) fn shown_request(&self, index: usize) -> Option<PendingDecision> {
+    pub(super) fn shown_request(&self, index: usize, cx: &gpui::App) -> Option<PendingDecision> {
         let pane = self.panes.get(index)?;
         self.cockpit
+            .read(cx)
             .thread(pane.thread()?)?
             .pending_decisions()
             .iter()
@@ -784,22 +785,20 @@ impl CockpitView {
             return;
         };
         let subject = self.panes[index].selected.clone();
-        self.panes[index].history_error = self.load_subject_history(thread, &subject);
+        self.panes[index].history_error = self.load_subject_history(thread, &subject, cx);
         cx.notify();
     }
 
     /// Ask core for `subject`'s saved history (it never resumes the
     /// provider); the reason it could not be had.
-    pub(super) fn load_subject_history(&mut self, thread: ThreadId, subject: &Subject) -> Option<String> {
-        self.cockpit
-            .ensure_subject_history(thread, subject)
-            .err()
-            .map(|error| error.to_string())
-            .or_else(|| {
-                self.cockpit
-                    .subject_history_error(thread, subject)
-                    .map(str::to_string)
-            })
+    pub(super) fn load_subject_history(&mut self, thread: ThreadId, subject: &Subject, cx: &mut gpui::App) -> Option<String> {
+        self.cockpit.update(cx, |cockpit, _| {
+            cockpit
+                .ensure_subject_history(thread, subject)
+                .err()
+                .map(|error| error.to_string())
+                .or_else(|| cockpit.subject_history_error(thread, subject).map(str::to_string))
+        })
     }
 
     /// What the cards of Pane `index` kept goes with each Decision its
@@ -807,7 +806,7 @@ impl CockpitView {
     pub(super) fn prune_request_forms(&mut self, index: usize, cx: &mut Context<Self>) {
         let Some(thread) = self.panes[index]
             .thread()
-            .and_then(|id| self.cockpit.thread(id))
+            .and_then(|id| self.cockpit.read(cx).thread(id))
         else {
             return;
         };
@@ -819,12 +818,13 @@ impl CockpitView {
     }
 
     pub(super) fn answer_subject(&mut self, answer: Answer, cx: &mut Context<Self>) {
-        let index = self.focused();
+        let index = self.focused(cx);
         let Some(thread) = self.panes[index].thread() else {
             return;
         };
         let Some(request) =
             self.cockpit
+                .read(cx)
                 .thread(thread)
                 .and_then(|thread| {
                     thread.pending_decisions().iter().find(|request| {

@@ -1018,7 +1018,7 @@ impl CockpitView {
                 let Some(index) = view.index_of(identity) else {
                     return;
                 };
-                view.focus_pane(index);
+                view.focus_pane(index, cx);
                 if view.model_picker_open(identity) {
                     view.close_popup(cx);
                 } else {
@@ -1041,7 +1041,7 @@ impl CockpitView {
         column: Column,
         cx: &mut Context<Self>,
     ) {
-        let Some(inputs) = self.model_picker_inputs(pane) else {
+        let Some(inputs) = self.model_picker_inputs(pane, cx) else {
             return;
         };
         let view = cx.new(|cx| ModelPickerView::new(column, inputs, cx));
@@ -1063,7 +1063,7 @@ impl CockpitView {
         let Some((pane, view)) = self.model_picker().map(|open| (open.pane, open.view.clone())) else {
             return;
         };
-        match self.model_picker_inputs(pane) {
+        match self.model_picker_inputs(pane, cx) {
             Some(inputs) => view.update(cx, |picker, cx| picker.fill(inputs, cx)),
             None => {
                 self.close_popup(cx);
@@ -1075,10 +1075,10 @@ impl CockpitView {
     /// Reasoning column's rungs for the Thread or the draft's binding,
     /// held while its turn runs (`tuning_hold`), the Providers whose CLI is
     /// missing, and the favourites.
-    fn model_picker_inputs(&self, pane: PaneIdentity) -> Option<ModelPickerInputs> {
+    fn model_picker_inputs(&self, pane: PaneIdentity, cx: &gpui::App) -> Option<ModelPickerInputs> {
         let (mut rows, mut efforts, label, current, handover, hold) = match pane {
             PaneIdentity::Thread(thread) => {
-                let open = self.cockpit.thread(thread)?;
+                let open = self.cockpit.read(cx).thread(thread)?;
                 let current = open.provider();
                 let chosen = open.model().map(str::to_string);
                 let serving = open.transcript().model().map(str::to_string);
@@ -1089,6 +1089,7 @@ impl CockpitView {
                     serving.as_deref(),
                     locked,
                     Consequence::Provision,
+                    cx,
                 );
                 let label = ferrite_core::providers::models::footer_name(
                     current,
@@ -1096,7 +1097,7 @@ impl CockpitView {
                     open.models(),
                 );
                 let efforts = self
-                    .effort_ladder(thread)
+                    .effort_ladder(thread, cx)
                     .map(|(steps, _, chosen)| {
                         let default = effort_in_force(
                             None,
@@ -1111,7 +1112,7 @@ impl CockpitView {
                     })
                     .unwrap_or_default();
                 (
-                    self.listable(rows, current, serving.as_deref()),
+                    self.listable(rows, current, serving.as_deref(), cx),
                     efforts,
                     label,
                     current,
@@ -1129,12 +1130,12 @@ impl CockpitView {
                 let model = choice.model.clone();
                 let (rows, _) = self.provider_rows(current, model.as_deref(), None, false, |choice| {
                     Consequence::Band(BandChoice::Provider(choice))
-                });
-                let announced = self.cockpit.announced_models(current);
+                }, cx);
+                let announced = self.cockpit.read(cx).announced_models(current);
                 let label =
                     ferrite_core::providers::models::footer_name(current, model.as_deref(), &announced);
                 let efforts = self
-                    .draft_effort_ladder(index)
+                    .draft_effort_ladder(index, cx)
                     .map(|(steps, _, chosen)| {
                         let default = effort_in_force(
                             None,
@@ -1148,7 +1149,7 @@ impl CockpitView {
                         })
                     })
                     .unwrap_or_default();
-                (self.listable(rows, current, None), efforts, label, current, None, None)
+                (self.listable(rows, current, None, cx), efforts, label, current, None, None)
             }
         };
         Self::hold_tuning_rows(&mut rows, hold);
@@ -1184,7 +1185,7 @@ impl CockpitView {
     /// and each row's mark name the Provider), and the CLI's own `Default`
     /// only while nothing else can carry the ✓ — a known serving model
     /// takes it instead (Claude's model menu).
-    fn listable(&self, rows: Vec<Row>, current: Provider, serving: Option<&str>) -> Vec<Row> {
+    fn listable(&self, rows: Vec<Row>, current: Provider, serving: Option<&str>, cx: &gpui::App) -> Vec<Row> {
         let mut rows: Vec<Row> = rows
             .into_iter()
             .filter(|row| row_choice(row).is_some())
@@ -1199,6 +1200,7 @@ impl CockpitView {
         let serving_row = serving
             .and_then(|serving| {
                 self.cockpit
+                    .read(cx)
                     .model_catalog(current)
                     .into_iter()
                     .find(|model| model.value != "default" && model.is(serving))
@@ -1243,7 +1245,7 @@ impl CockpitView {
         let Some((pane, view)) = self.model_picker().map(|open| (open.pane, open.view.clone())) else {
             return;
         };
-        if self.picker_held(pane) {
+        if self.picker_held(pane, cx) {
             self.rebuild_model_picker(cx);
             return;
         }
@@ -1256,9 +1258,10 @@ impl CockpitView {
 
     /// A turn started, or a change still waits on the provider: a visible
     /// choice must not become a certain refusal in the transcript.
-    fn picker_held(&self, pane: PaneIdentity) -> bool {
+    fn picker_held(&self, pane: PaneIdentity, cx: &gpui::App) -> bool {
         pane.thread().is_some_and(|thread| {
             self.cockpit
+                .read(cx)
                 .thread(thread)
                 .and_then(|thread| tuning_hold(&thread))
                 .is_some()
@@ -1273,7 +1276,7 @@ impl CockpitView {
                 let Some(index) = self.index_of(pane) else {
                     return;
                 };
-                self.focus_pane(index);
+                self.focus_pane(index, cx);
                 let composer = self.panes[index].composer.clone();
                 self.pick_band(&choice, &composer, cx);
             }
@@ -1398,7 +1401,7 @@ impl CockpitView {
         let pane = open.pane;
         let (label, mode, opens) = match pane {
             PaneIdentity::Thread(thread) => {
-                let open = self.cockpit.thread(thread)?;
+                let open = self.cockpit.read(cx).thread(thread)?;
                 let modes = open.permission_modes();
                 if modes.is_empty() && open.permission_mode().is_none() {
                     return None;

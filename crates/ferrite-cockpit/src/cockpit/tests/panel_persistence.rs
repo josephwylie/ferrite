@@ -128,10 +128,10 @@ fn a_deleted_threads_working_set_is_saved_away_once(cx: &mut TestAppContext) {
     let dir = prefs.dir.clone();
     let view = cx.new(|cx| CockpitView::new_with_settings(core, Provider::Claude, prefs, cx));
     let thread = view.update(cx, |view, cx| {
-        let thread = view.cockpit.threads().into_iter().find(|&thread| thread != other).unwrap();
+        let thread = view.cockpit.read(cx).threads().into_iter().find(|&thread| thread != other).unwrap();
         view.open_in_files(thread, checkout.join("src/lib.rs"), None, true, cx);
         view.flush_panel_persistence(cx);
-        view.delete_thread(thread).unwrap();
+        view.delete_thread(thread, cx).unwrap();
         view.pump(cx);
         view.open_in_files(other, checkout.join("README.md"), None, true, cx);
         view.pump(cx);

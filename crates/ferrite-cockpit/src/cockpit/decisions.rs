@@ -510,6 +510,7 @@ impl CockpitView {
                         *thread,
                         *generation,
                         ferrite_core::SessionControl::SetPermissionMode { mode: mode.clone() },
+                        cx,
                     );
                 }
             }
@@ -553,8 +554,8 @@ impl CockpitView {
                     answers: answers.clone(),
                 };
                 self.respond_exact(*thread, handle, answer, cx);
-                if let Some(note) = note.clone().filter(|_| !self.still_waiting(*thread, handle)) {
-                    self.cockpit.queue(*thread, note);
+                if let Some(note) = note.clone().filter(|_| !self.still_waiting(*thread, handle, cx)) {
+                    self.cockpit.update(cx, |cockpit, _| cockpit.queue(*thread, note));
                 }
                 cx.notify();
             }
@@ -595,8 +596,9 @@ impl CockpitView {
     pub(super) fn decision_context(
         &self,
         thread: ThreadId,
+        cx: &App,
     ) -> (Option<Provider>, Option<SharedString>) {
-        let Some(open) = self.cockpit.thread(thread) else {
+        let Some(open) = self.cockpit.read(cx).thread(thread) else {
             return (None, None);
         };
         let provider = open.provider();
@@ -609,8 +611,9 @@ impl CockpitView {
         (Some(provider), Some(context))
     }
 
-    fn thread_workspace(&self, thread: ThreadId) -> Option<std::path::PathBuf> {
+    fn thread_workspace(&self, thread: ThreadId, cx: &App) -> Option<std::path::PathBuf> {
         self.cockpit
+            .read(cx)
             .thread(thread)?
             .workspace()
             .map(|workspace| workspace.cwd().to_path_buf())
@@ -618,8 +621,8 @@ impl CockpitView {
 
     /// The approval `thread` waits on: the one its Pane shows, else Main's,
     /// else any.
-    fn pending_approval(&self, thread: ThreadId) -> Option<PendingDecision> {
-        let pending = self.cockpit.thread(thread)?.pending_decisions();
+    fn pending_approval(&self, thread: ThreadId, cx: &App) -> Option<PendingDecision> {
+        let pending = self.cockpit.read(cx).thread(thread)?.pending_decisions();
         let approval = |request: &&PendingDecision| {
             matches!(request.decision.kind, ferrite_core::DecisionKind::Approval)
                 && !request.submitting
@@ -651,7 +654,7 @@ impl CockpitView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if let Some(request) = self.pending_approval(thread) {
+        if let Some(request) = self.pending_approval(thread, cx) {
             self.answer_approval_request(thread, &request, choice, note, Some(window), cx);
         }
     }
@@ -696,7 +699,7 @@ impl CockpitView {
                     value: decision.suggestions[at].value.clone(),
                 },
                 None if allows => {
-                    let workspace = self.thread_workspace(thread);
+                    let workspace = self.thread_workspace(thread, cx);
                     rule = Some(ThreadRule::new(thread, decision, workspace.as_deref()));
                     DecisionAnswer::Allow {
                         input: decision.input.clone(),
@@ -723,7 +726,7 @@ impl CockpitView {
             }
             _ => {
                 if let Some(note) = note {
-                    self.cockpit.queue(thread, note);
+                    self.cockpit.update(cx, |cockpit, _| cockpit.queue(thread, note));
                 }
             }
         }
@@ -740,8 +743,8 @@ impl CockpitView {
         if !self.panes[index].is_main() {
             self.select_subject(thread, Subject::Main, window, cx);
         }
-        self.cockpit.focus_thread(thread);
-        self.focus_pane(index);
+        self.cockpit.update(cx, |cockpit, _| cockpit.focus_thread(thread));
+        self.focus_pane(index, cx);
         let focus = self.panes[index].composer.read(cx).focus_handle(cx);
         window.focus(&focus, cx);
     }
@@ -762,9 +765,10 @@ impl CockpitView {
             if !rules.covers_any(thread) {
                 continue;
             }
-            let workspace = self.thread_workspace(thread);
+            let workspace = self.thread_workspace(thread, cx);
             let covered: Vec<PendingDecision> = self
                 .cockpit
+                .read(cx)
                 .thread(thread)
                 .map(|open| {
                     open.pending_decisions()
@@ -825,7 +829,7 @@ impl CockpitView {
     }
 
     fn decision_key(&mut self, key: DecisionKey, window: &mut Window, cx: &mut Context<Self>) {
-        if !self.decision_key_taken(self.focused(), key, window, cx) {
+        if !self.decision_key_taken(self.focused(cx), key, window, cx) {
             cx.propagate();
         }
     }
@@ -856,12 +860,12 @@ impl CockpitView {
     ) -> Option<KeyTarget> {
         let pane = self.panes.get(index)?;
         let thread = pane.thread()?;
-        let request = request.or_else(|| self.shown_request(index))?;
+        let request = request.or_else(|| self.shown_request(index, cx))?;
         let approval = pane::questions_of(&request.decision).is_none()
             && matches!(request.decision.kind, ferrite_core::DecisionKind::Approval);
         let approval_rows = if approval {
-            let workspace = self.thread_workspace(thread);
-            let provider = self.cockpit.thread(thread).map(|open| open.provider());
+            let workspace = self.thread_workspace(thread, cx);
+            let provider = self.cockpit.read(cx).thread(thread).map(|open| open.provider());
             decision::approval_rows(&request.decision, provider, workspace.as_deref())
                 .iter()
                 .map(|row| row.enabled)
@@ -880,8 +884,8 @@ impl CockpitView {
 
     /// Whether `handle` still waits on the operator (not answered, not in
     /// flight).
-    fn still_waiting(&self, thread: ThreadId, handle: &DecisionHandle) -> bool {
-        self.cockpit.thread(thread).is_some_and(|open| {
+    fn still_waiting(&self, thread: ThreadId, handle: &DecisionHandle, cx: &App) -> bool {
+        self.cockpit.read(cx).thread(thread).is_some_and(|open| {
             open.pending_decisions()
                 .iter()
                 .any(|request| &request.handle == handle && !request.submitting)
@@ -911,7 +915,7 @@ impl CockpitView {
         let Some(index) = self.pane_for(thread) else {
             return;
         };
-        let request = self.cockpit.thread(thread).and_then(|open| {
+        let request = self.cockpit.read(cx).thread(thread).and_then(|open| {
             open.pending_decisions()
                 .iter()
                 .find(|request| &request.handle == handle)
@@ -938,8 +942,8 @@ impl CockpitView {
     /// The open note on the focused Pane's Decision, which holds the
     /// keyboard while it is open (the render's focus snap asks).
     pub(super) fn decision_note_focus(&self, cx: &App) -> Option<FocusHandle> {
-        let pane = self.panes.get(self.focused())?;
-        let request = self.shown_request(self.focused())?;
+        let pane = self.panes.get(self.focused(cx))?;
+        let request = self.shown_request(self.focused(cx), cx)?;
         self.decisions
             .read(cx)
             .note_focus(pane.identity, &request.handle, cx)

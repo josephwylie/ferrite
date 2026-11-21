@@ -11,7 +11,7 @@ fn the_solo_thread_is_named_by_the_view_head_and_meters_no_plan(cx: &mut TestApp
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     hide_panel(&view, cx);
     cx.simulate_resize(gpui::size(px(1000.), px(700.)));
-    let thread = view.read_with(cx, |view, _| view.cockpit.threads()[0]);
+    let thread = view.read_with(cx, |view, cx| view.cockpit.read(cx).threads()[0]);
     view.update(cx, |view, cx| {
         view.facts.pr_answered(thread, Some(pr_with_checks()));
         cx.notify();
@@ -122,7 +122,7 @@ fn the_prompt_bubble_keeps_the_transcript_column(cx: &mut TestAppContext) {
         })
         .unwrap();
     tick(cx);
-    let rect = cx.update(|window, cx| view.read(cx).pane_rects(window)[0].1);
+    let rect = cx.update(|window, cx| view.read(cx).pane_rects(window, cx)[0].1);
     let inset = ferrite_ui::theme::tx_inset_at(rect.w, true);
     let column = px(rect.x + inset);
     let column_end = px(rect.x + rect.w - inset);
@@ -158,9 +158,9 @@ fn the_next_digit_arms_the_own_answer_line(cx: &mut TestAppContext) {
     cx.simulate_input("mine");
     tick(cx);
     assert_eq!(composer_text(&view, cx), "", "the Composer keeps its line");
-    let (thread, serial) = view.read_with(cx, |view, _| {
+    let (thread, serial) = view.read_with(cx, |view, cx| {
         let thread = view.panes[0].thread().unwrap();
-        let serial = view.cockpit.thread(thread).unwrap().pending_decisions()[0]
+        let serial = view.cockpit.read(cx).thread(thread).unwrap().pending_decisions()[0]
             .handle
             .serial;
         (thread, serial)
@@ -223,8 +223,8 @@ fn a_card_title_takes_its_line_and_the_branch_its_own(cx: &mut TestAppContext) {
             "Switch the payment worker to the new settlement queue",
             "Fix",
         ]) {
-            view.cockpit.rename_thread(*thread, title).unwrap();
-            view.facts.renamed(&view.cockpit, *thread);
+            view.cockpit.update(cx, |cockpit, _| cockpit.rename_thread(*thread, title).unwrap());
+            view.facts.renamed(view.cockpit.read(cx), *thread);
         }
         view.facts.set_branches(
             threads
@@ -301,9 +301,9 @@ fn a_failed_threads_dot_is_blocked_until_the_failure_is_seen(cx: &mut TestAppCon
         fake.streams.borrow()[0].send(event).unwrap();
     }
     tick(cx);
-    view.read_with(cx, |view, _| {
-        let thread = view.cockpit.threads()[0];
-        let row = view.thread_row(thread);
+    view.read_with(cx, |view, cx| {
+        let thread = view.cockpit.read(cx).threads()[0];
+        let row = view.thread_row(thread, cx);
         assert_eq!(
             row.tail,
             nav::NavTail::Failed,
@@ -315,21 +315,21 @@ fn a_failed_threads_dot_is_blocked_until_the_failure_is_seen(cx: &mut TestAppCon
             "and the nav and rail mark say it too"
         );
         assert_eq!(
-            pane::thread_word(view.cockpit.thread(thread).unwrap(), None, true),
+            pane::thread_word(view.cockpit.read(cx).thread(thread).unwrap(), None, true),
             Some(pane::HeadSlot::Failed),
             "the Pane's word agrees"
         );
     });
     cx.update(|window, _| window.activate_window());
     cx.run_until_parked();
-    view.read_with(cx, |view, _| {
-        let thread = view.cockpit.threads()[0];
-        assert!(!view.cockpit.notifications().attention(thread), "seen");
-        let row = view.thread_row(thread);
+    view.read_with(cx, |view, cx| {
+        let thread = view.cockpit.read(cx).threads()[0];
+        assert!(!view.cockpit.read(cx).notifications().attention(thread), "seen");
+        let row = view.thread_row(thread, cx);
         assert_ne!(row.tail, nav::NavTail::Failed, "seen, it says nothing");
         assert_eq!(row.status, nav::RowStatus::Idle, "and wears no dot");
         assert_eq!(
-            pane::thread_word(view.cockpit.thread(thread).unwrap(), None, false),
+            pane::thread_word(view.cockpit.read(cx).thread(thread).unwrap(), None, false),
             None,
             "nor does the Pane"
         );

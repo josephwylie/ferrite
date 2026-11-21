@@ -197,7 +197,7 @@ fn a_file_attached_from_the_workspace_is_sent_as_its_own_path(cx: &mut TestAppCo
 #[gpui::test]
 fn a_dropped_file_inside_the_workspace_is_sent_as_its_own_path(cx: &mut TestAppContext) {
     let (view, fake, dir, cx) = window_on("attach-drop-inside", cx);
-    let root = view.read_with(cx, |view, _| view.pane_root(0)).expect("the pane has a workspace");
+    let root = view.read_with(cx, |view, cx| view.pane_root(0, cx)).expect("the pane has a workspace");
     let notes = root.join("dropped-notes.txt");
     std::fs::write(&notes, "one").unwrap();
     view.update(cx, |view, cx| {
@@ -366,7 +366,7 @@ fn upload_admission(name: &str, fresh: bool, cx: &mut TestAppContext) {
     }
     let local = dir.join("desktop-only.txt");
     let receipt = PathBuf::from("/server-only/attachments/receipt/desktop-only.txt");
-    let composer = view.read_with(cx, |view, _| view.panes[view.focused()].composer.clone());
+    let composer = view.read_with(cx, |view, cx| view.panes[view.focused(cx)].composer.clone());
     let attempt = composer.update(cx, |composer, cx| {
         composer.aim_files(Destination::Remote, dir, cx);
         composer.set(WORDS.into(), cx);

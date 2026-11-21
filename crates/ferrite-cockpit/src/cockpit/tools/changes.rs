@@ -448,14 +448,14 @@ pub(in crate::cockpit) enum ChangesEvent {
 impl CockpitView {
     /// Where `diff` is read: its Thread's checkout on the window's machine,
     /// or the checkout or Project its pull request is read in.
-    pub(in crate::cockpit) fn changes_origin(&self, diff: Diff) -> Option<Origin> {
+    pub(in crate::cockpit) fn changes_origin(&self, diff: Diff, cx: &App) -> Option<Origin> {
         match diff {
             Diff::Changes(thread) => Some(Origin {
-                root: self.thread_path(thread)?,
-                machine: self.cockpit.machine().cloned(),
+                root: self.thread_path(thread, cx)?,
+                machine: self.cockpit.read(cx).machine().cloned(),
             }),
             Diff::PullRequest(target) => Some(Origin {
-                root: self.pr_source_path(target.source)?,
+                root: self.pr_source_path(target.source, cx)?,
                 machine: None,
             }),
         }
@@ -485,7 +485,7 @@ impl CockpitView {
 
     /// Ask for `diff` in its scope, and hand the answer to the Changes.
     pub(in crate::cockpit) fn read_diff(&mut self, diff: Diff, keep_shown: bool, cx: &mut Context<Self>) {
-        let Some(origin) = self.changes_origin(diff) else {
+        let Some(origin) = self.changes_origin(diff, cx) else {
             return;
         };
         let Some((generation, scope)) = self
@@ -496,20 +496,20 @@ impl CockpitView {
         };
         match diff {
             Diff::Changes(_) => {
-                let answer = self.cockpit.changes(&origin.root, scope);
+                let answer = self.cockpit.update(cx, |cockpit, _| cockpit.changes(&origin.root, scope));
                 self.changes.update(cx, |changes, cx| {
                     changes.wait_local(diff, generation, origin, answer, cx)
                 });
             }
             Diff::PullRequest(target) => {
                 let answer = if cfg!(any(test, feature = "visual-reference"))
-                    && !self.cockpit.has_forge_fixture(&origin.root)
+                    && !self.cockpit.read(cx).has_forge_fixture(&origin.root)
                 {
                     Err(std::io::Error::other(
                         "No published diff fixture for this pull request",
                     ))
                 } else {
-                    self.cockpit.review_pull_request_diff(&origin.root, target.number)
+                    self.cockpit.update(cx, |cockpit, _| cockpit.review_pull_request_diff(&origin.root, target.number))
                 };
                 self.changes.update(cx, |changes, cx| {
                     changes.wait_published(diff, generation, origin, answer, cx)
@@ -521,13 +521,13 @@ impl CockpitView {
     /// Stage or unstage `path` in `diff`'s checkout; the Changes read the
     /// list again once git answers.
     fn stage_file(&mut self, diff: Diff, path: String, stage: bool, cx: &mut Context<Self>) {
-        let Some(origin) = diff.local_thread().and_then(|_| self.changes_origin(diff)) else {
+        let Some(origin) = diff.local_thread().and_then(|_| self.changes_origin(diff, cx)) else {
             return;
         };
         let Some(generation) = self.changes.update(cx, |changes, _| changes.begin_stage(diff)) else {
             return;
         };
-        let outcome = self.cockpit.set_file_staged(&origin.root, path.clone(), stage);
+        let outcome = self.cockpit.update(cx, |cockpit, _| cockpit.set_file_staged(&origin.root, path.clone(), stage));
         self.changes.update(cx, |changes, cx| {
             changes.wait_stage(diff, generation, origin, path, stage, outcome, cx)
         });
@@ -558,7 +558,7 @@ impl CockpitView {
                 self.stage_file(*diff, path.clone(), *stage, cx)
             }
             ChangesEvent::Open { thread, path } => {
-                if let Some(root) = self.thread_path(*thread) {
+                if let Some(root) = self.thread_path(*thread, cx) {
                     self.open_in_files(*thread, root.join(path), None, false, cx);
                 }
             }
@@ -668,7 +668,7 @@ impl ChangesView {
     fn current(&self, diff: Diff, origin: &Origin, cx: &App) -> bool {
         self.cockpit
             .upgrade()
-            .and_then(|cockpit| cockpit.read(cx).changes_origin(diff))
+            .and_then(|cockpit| cockpit.read(cx).changes_origin(diff, cx))
             .as_ref()
             == Some(origin)
     }

@@ -449,9 +449,9 @@ fn the_last_turn_reads_what_changed_since_the_prompt(cx: &mut TestAppContext) {
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     cx.simulate_resize(gpui::size(px(1440.), px(900.)));
     tick(cx);
-    view.update(cx, |view, _| {
+    view.update(cx, |view, cx| {
         let thread = view.panes[0].thread().unwrap();
-        let _ = view.cockpit.send(thread, "Add notes".into());
+        let _ = view.cockpit.update(cx, |cockpit, _| cockpit.send(thread, "Add notes".into()));
     });
     // The turn's write lands once its start is snapshotted, never in it.
     turn_host_wrote(cx, snapshotted);

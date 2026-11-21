@@ -98,7 +98,7 @@ fn window<'a>(
 }
 
 fn asks(view: &Entity<CockpitView>, cx: &mut gpui::VisualTestContext) -> Vec<TaskAction> {
-    view.read_with(cx, |view, _| view.cockpit.fixture_task_asks().to_vec())
+    view.read_with(cx, |view, cx| view.cockpit.read(cx).fixture_task_asks().to_vec())
 }
 
 /// A Rework or Direct this task sheet is up.
@@ -482,21 +482,21 @@ fn a_sheet_follows_its_task_and_goes_with_it(cx: &mut TestAppContext) {
     );
     let project = view.read_with(cx, |view, _| view.factory_project().unwrap());
     click(cx, "task-redirect-open");
-    view.update(cx, |view, _| {
-        view.cockpit.fixture_factory(Board {
+    view.update(cx, |view, cx| {
+        view.cockpit.update(cx, |cockpit, _| cockpit.fixture_factory(Board {
             workflows: Vec::new(),
             tasks: vec![task(project, Status::Working, serde_json::json!({}))],
             ..Default::default()
-        })
+        }))
     });
     tick(cx);
     assert!(shows(cx, "redirect-sheet"), "stays up as its Task moves on");
-    view.update(cx, |view, _| {
-        view.cockpit.fixture_factory(Board {
+    view.update(cx, |view, cx| {
+        view.cockpit.update(cx, |cockpit, _| cockpit.fixture_factory(Board {
             workflows: Vec::new(),
             tasks: Vec::new(),
             ..Default::default()
-        })
+        }))
     });
     tick(cx);
     assert!(!shows(cx, "redirect-sheet"), "goes with its Task");
@@ -516,7 +516,7 @@ fn leaving_the_factory_takes_the_sheet_and_its_words(cx: &mut TestAppContext) {
     cx.simulate_input("Gone");
     tick(cx);
     view.update(cx, |view, cx| {
-        let thread = view.focused_thread().unwrap();
+        let thread = view.focused_thread(cx).unwrap();
         view.focus_thread(thread, cx)
     });
     tick(cx);

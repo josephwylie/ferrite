@@ -37,7 +37,7 @@ impl Door {
 
 /// What a menu button reads from the slot as it is drawn: the target whose
 /// menu is up from its button, and where to record its bounds.
-#[derive(Clone)]
+#[derive(Clone, PartialEq)]
 pub(crate) struct Doors {
     up: Option<MenuTarget>,
     triggers: Triggers,

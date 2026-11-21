@@ -262,6 +262,7 @@ impl CockpitView {
         };
         let shown = self.shown_id(cx);
         self.cockpit
+            .read(cx)
             .factory()
             .workflows_of(project)
             .map(|workflow| {
@@ -299,7 +300,7 @@ impl CockpitView {
             ferrite_ui::menu::Item::new("One-off: a single agent").checked(chosen.is_none()),
             Pick::Process(None),
         )];
-        for workflow in self.cockpit.factory().workflows_of(project) {
+        for workflow in self.cockpit.read(cx).factory().workflows_of(project) {
             let Some(latest) = workflow.latest() else {
                 continue;
             };

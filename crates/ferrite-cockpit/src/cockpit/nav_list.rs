@@ -100,7 +100,7 @@ impl NavView {
         nav::content().w(px(inputs.width))
             .child(self.search_row(inputs, window, cx))
             // Over the list, outside its keys: the field's ⏎ and Esc are its own.
-            .children(self.snooze_field(cx))
+            .children(self.snooze_field(inputs))
             .child(
                 div()
                     .relative()

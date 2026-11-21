@@ -112,7 +112,7 @@ fn archived_tasks_leave_the_board_and_clear_asks_for_the_rest(cx: &mut TestAppCo
         );
     }
     click(cx, "factory-clear");
-    let asks = view.read_with(cx, |view, _| view.cockpit.fixture_task_asks().to_vec());
+    let asks = view.read_with(cx, |view, cx| view.cockpit.read(cx).fixture_task_asks().to_vec());
     assert_eq!(asks, vec![TaskAction::Clear { project }]);
 }
 
@@ -160,8 +160,8 @@ fn the_archive_is_searched_and_opens_a_task_read_only(cx: &mut TestAppContext) {
 
     // G4: an earlier Worker's transcript opens to be read, with nothing
     // to type into, and goes back to being parked.
-    let (parked, row) = view.read_with(cx, |view, _| {
-        let task = view.cockpit.factory().task("t-1").unwrap();
+    let (parked, row) = view.read_with(cx, |view, cx| {
+        let task = view.cockpit.read(cx).factory().task("t-1").unwrap();
         let parked = task.worker.unwrap();
         let row = task.every_worker().iter().position(|each| *each == parked);
         (parked, row.unwrap())
@@ -170,13 +170,13 @@ fn the_archive_is_searched_and_opens_a_task_read_only(cx: &mut TestAppContext) {
     assert!(shows(cx, "task-worker-read"), "its transcript, to read");
     assert!(!shows(cx, "task-worker"), "no live Pane, no Composer");
     assert!(
-        view.read_with(cx, |view, _| view.cockpit.thread(parked).is_some()),
+        view.read_with(cx, |view, cx| view.cockpit.read(cx).thread(parked).is_some()),
         "reopened with nothing running"
     );
     click(cx, "task-worker-read-back");
     assert!(shows(cx, &format!("task-worker-history-{row}")));
     assert!(
-        view.read_with(cx, |view, _| view.cockpit.thread(parked).is_none()),
+        view.read_with(cx, |view, cx| view.cockpit.read(cx).thread(parked).is_none()),
         "parked again"
     );
 

@@ -40,7 +40,7 @@ fn a_thread_keeps_its_prs_reading(cx: &mut TestAppContext) {
     let (core, _fake) = cockpit("pr-label", 1);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     tick(cx);
-    let thread = view.read_with(cx, |view, _| view.cockpit.threads()[0]);
+    let thread = view.read_with(cx, |view, cx| view.cockpit.read(cx).threads()[0]);
     assert_eq!(asked(&view, cx), [(thread, false)], "opened, asked once");
     assert_eq!(reading(&view, thread, cx), None, "no PR known yet");
 
@@ -65,7 +65,7 @@ fn focusing_a_thread_asks_at_most_every_thirty_seconds(cx: &mut TestAppContext) 
     let (core, _fake) = cockpit("pr-focus", 2);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     tick(cx);
-    let threads = view.read_with(cx, |view, _| view.cockpit.threads());
+    let threads = view.read_with(cx, |view, cx| view.cockpit.read(cx).threads());
     let mut opened = asked(&view, cx);
     opened.sort();
     assert_eq!(opened, [(threads[0], false), (threads[1], false)]);
@@ -93,7 +93,7 @@ fn the_menu_and_the_palette_offer_the_pr_actions(cx: &mut TestAppContext) {
     let (core, _fake) = cockpit("pr-actions", 1);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     tick(cx);
-    let thread = view.read_with(cx, |view, _| view.cockpit.threads()[0]);
+    let thread = view.read_with(cx, |view, cx| view.cockpit.read(cx).threads()[0]);
     let menu = |view: &CockpitView, cx: &gpui::App| -> Vec<String> {
         view.context_rows(MenuTarget::Thread(thread), cx)
             .into_iter()
@@ -141,7 +141,7 @@ fn a_push_reads_the_pr_again(cx: &mut TestAppContext) {
     let (core, fake) = cockpit("pr-after-push", 1);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     tick(cx);
-    let thread = view.read_with(cx, |view, _| view.cockpit.threads()[0]);
+    let thread = view.read_with(cx, |view, cx| view.cockpit.read(cx).threads()[0]);
     land(&view, thread, None, cx);
     asked(&view, cx);
     let send = |event: SessionEvent| fake.streams.borrow()[0].send(event).unwrap();
@@ -604,9 +604,9 @@ fn a_prs_code_view_reads_the_published_diff(cx: &mut TestAppContext) {
     use ferrite_core::protocol::WirePrState;
     let (view, thread, _fake, cx) = with_pr("pr-code", WirePrState::Open, cx);
     view.update(cx, |view, cx| {
-        let path = view.thread_path(thread).unwrap();
+        let path = view.thread_path(thread, cx).unwrap();
         let files = ferrite_core::protocol::sides_of_unified("diff --git a/published.rs b/published.rs\n--- a/published.rs\n+++ b/published.rs\n@@ -1 +1 @@\n-old\n+published\n");
-        view.cockpit.fixture_forge_diff(path, 48, files);
+        view.cockpit.update(cx, |cockpit, _| cockpit.fixture_forge_diff(path, 48, files));
         view.upsert_surface(thread, SurfaceId::Changes, cx);
     });
     tick(cx);

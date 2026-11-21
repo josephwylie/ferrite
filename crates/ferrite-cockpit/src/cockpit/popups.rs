@@ -121,6 +121,14 @@ pub(super) struct Popups {
 #[derive(Clone, Default)]
 pub(super) struct Triggers(Rc<RefCell<HashMap<SharedString, gpui::Bounds<Pixels>>>>);
 
+/// One record is the same as itself: what it holds is laid out afresh
+/// each frame.
+impl PartialEq for Triggers {
+    fn eq(&self, other: &Self) -> bool {
+        Rc::ptr_eq(&self.0, &other.0)
+    }
+}
+
 impl Triggers {
     /// Records the laid-out bounds of a control a popup hangs from, under
     /// `key`.
@@ -356,7 +364,7 @@ impl CockpitView {
     /// Whether `pane` is the focused Pane with no sheet over it: where a
     /// Composer's popup stands.
     fn pane_shown_alone(&self, pane: PaneIdentity, cx: &gpui::App) -> bool {
-        self.panes.get(self.focused()).is_some_and(|focused| focused.identity == pane)
+        self.panes.get(self.focused(cx)).is_some_and(|focused| focused.identity == pane)
             && !self.sheet_up(cx)
     }
 
@@ -377,6 +385,7 @@ impl CockpitView {
             .and_then(|picker| picker.mode.as_ref())
             .is_some_and(|menu| {
                 self.cockpit
+                    .read(cx)
                     .thread(menu.thread)
                     .is_none_or(|open| open.generation() != menu.generation)
             });
@@ -386,9 +395,9 @@ impl CockpitView {
             }
         }
         let on = |thread: ThreadId, generation: Option<u64>| {
-            self.focused_thread() == Some(thread)
+            self.focused_thread(cx) == Some(thread)
                 && !self.sheet_up(cx)
-                && self.cockpit.thread(thread).is_some_and(|open| {
+                && self.cockpit.read(cx).thread(thread).is_some_and(|open| {
                     generation.is_none_or(|generation| open.generation() == generation)
                 })
         };
@@ -400,7 +409,7 @@ impl CockpitView {
             Some(Popup::ModelPicker(picker)) => {
                 let pane = picker.pane;
                 let lives = match pane {
-                    PaneIdentity::Thread(thread) => self.cockpit.thread(thread).is_some(),
+                    PaneIdentity::Thread(thread) => self.cockpit.read(cx).thread(thread).is_some(),
                     PaneIdentity::Draft(_) => self
                         .index_of(pane)
                         .is_some_and(|index| self.panes[index].draft().is_some()),
@@ -411,6 +420,7 @@ impl CockpitView {
                 on(*thread, None)
                     && self
                         .cockpit
+                        .read(cx)
                         .thread(*thread)
                         .is_some_and(|open| open.transcript().todos().is_some())
             }

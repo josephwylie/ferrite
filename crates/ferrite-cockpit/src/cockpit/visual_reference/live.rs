@@ -31,7 +31,7 @@ use crate::headless::Driver;
 use ferrite_pane::transcript::ScrollTarget;
 
 /// What a step waits on before it acts or shoots.
-type Probe = dyn Fn(&CockpitView) -> bool;
+type Probe = dyn Fn(&CockpitView, &gpui::App) -> bool;
 
 struct Live {
     driver: Driver,
@@ -55,8 +55,8 @@ impl Live {
         self.driver.tick(ms);
     }
 
-    fn read<R>(&mut self, f: impl FnOnce(&CockpitView) -> R) -> R {
-        self.driver.read(|view, _| f(view))
+    fn read<R>(&mut self, f: impl FnOnce(&CockpitView, &gpui::App) -> R) -> R {
+        self.driver.read(f)
     }
 
     fn act<R>(
@@ -73,7 +73,7 @@ impl Live {
         let start = Instant::now();
         loop {
             self.tick(60);
-            if self.read(|view| probe(view)) {
+            if self.read(|view, cx| probe(view, cx)) {
                 self.note(format!(
                     "ok   {what} ({:.1}s)",
                     start.elapsed().as_secs_f32()
@@ -136,7 +136,7 @@ impl Live {
     /// Put `text` on the focused Composer and send it with ⏎.
     fn send(&mut self, text: &str) {
         self.act(|view, window, cx| {
-            let composer = view.panes[view.focused()].composer.clone();
+            let composer = view.panes[view.focused(cx)].composer.clone();
             composer.update(cx, |composer, cx| composer.set(text.to_string(), cx));
             let focus = composer.read(cx).focus_handle(cx);
             window.focus(&focus, cx);
@@ -156,8 +156,8 @@ impl Live {
     /// What `thread` said, row by row, as the log keeps it: the evidence
     /// behind each shot's rows.
     fn dump(&mut self, thread: ThreadId, label: &str) {
-        let lines = self.read(|view| {
-            let Some(open) = view.cockpit.thread(thread) else {
+        let lines = self.read(|view, cx| {
+            let Some(open) = view.cockpit.read(cx).thread(thread) else {
                 return vec!["(not open)".to_string()];
             };
             let transcript = open.transcript();
@@ -215,28 +215,29 @@ impl Live {
     }
 }
 
-fn waiting(view: &CockpitView, thread: ThreadId) -> bool {
-    view.cockpit.thread(thread).is_some_and(|open| {
+fn waiting(view: &CockpitView, thread: ThreadId, cx: &gpui::App) -> bool {
+    view.cockpit.read(cx).thread(thread).is_some_and(|open| {
         open.pending_decisions()
             .iter()
             .any(|request| !request.submitting)
     })
 }
 
-fn turns(view: &CockpitView, thread: ThreadId) -> usize {
+fn turns(view: &CockpitView, thread: ThreadId, cx: &gpui::App) -> usize {
     view.cockpit
+        .read(cx)
         .thread(thread)
         .map(|open| open.transcript().turn_count())
         .unwrap_or(0)
 }
 
-fn busy(view: &CockpitView, thread: ThreadId) -> bool {
-    view.cockpit.thread(thread).is_some_and(|open| open.busy())
+fn busy(view: &CockpitView, thread: ThreadId, cx: &gpui::App) -> bool {
+    view.cockpit.read(cx).thread(thread).is_some_and(|open| open.busy())
 }
 
 /// A tool call still running, and how far its test count got.
-fn running_tool(view: &CockpitView, thread: ThreadId) -> Option<Option<(u32, u32)>> {
-    let open = view.cockpit.thread(thread)?;
+fn running_tool(view: &CockpitView, thread: ThreadId, cx: &gpui::App) -> Option<Option<(u32, u32)>> {
+    let open = view.cockpit.read(cx).thread(thread)?;
     open.transcript()
         .blocks()
         .iter()
@@ -339,7 +340,7 @@ pub fn capture(output: String) {
     );
 
     // Every Session ends with the capture: no CLI outlives it.
-    live.act(|view, _, _| view.cockpit.halt_sessions());
+    live.act(|view, _, cx| view.cockpit.update(cx, |cockpit, _| cockpit.halt_sessions()));
     for _ in 0..10 {
         live.tick(50);
     }
@@ -359,8 +360,8 @@ fn aim_draft(
     let model = model.to_string();
     let effort = effort.map(str::to_string);
     live.act(move |view, _, cx| {
-        let announced = view.cockpit.announced_models(provider);
-        if let Some(draft) = view.focused_draft_mut() {
+        let announced = view.cockpit.read(cx).announced_models(provider);
+        if let Some(draft) = view.focused_draft_mut(cx) {
             draft.binding.choose_checkout(project);
             draft.binding.choose_provider(
                 ProviderChoice {
@@ -376,12 +377,12 @@ fn aim_draft(
 }
 
 fn focused_thread(live: &mut Live) -> Option<ThreadId> {
-    live.read(|view| view.focused_thread())
+    live.read(|view, cx| view.focused_thread(cx))
 }
 
 /// The tool a standing request of `thread` asks for, if one stands.
-fn asking(view: &CockpitView, thread: ThreadId) -> Option<String> {
-    view.cockpit.thread(thread).and_then(|open| {
+fn asking(view: &CockpitView, thread: ThreadId, cx: &gpui::App) -> Option<String> {
+    view.cockpit.read(cx).thread(thread).and_then(|open| {
         open.pending_decisions()
             .iter()
             .find(|request| !request.submitting)
@@ -389,8 +390,9 @@ fn asking(view: &CockpitView, thread: ThreadId) -> Option<String> {
     })
 }
 
-fn mode(view: &CockpitView, thread: ThreadId) -> Option<String> {
+fn mode(view: &CockpitView, thread: ThreadId, cx: &gpui::App) -> Option<String> {
     view.cockpit
+        .read(cx)
         .thread(thread)
         .and_then(|open| open.permission_mode().map(str::to_owned))
 }
@@ -398,10 +400,10 @@ fn mode(view: &CockpitView, thread: ThreadId) -> Option<String> {
 /// Waits until `thread` asks something or its turn `turn` is over; true
 /// when it asks.
 fn asks_or_ends(live: &mut Live, what: &str, thread: ThreadId, turn: usize, secs: u64) -> bool {
-    live.wait(what, secs, &move |view| {
-        waiting(view, thread) || (turns(view, thread) >= turn && !busy(view, thread))
+    live.wait(what, secs, &move |view, cx| {
+        waiting(view, thread, cx) || (turns(view, thread, cx) >= turn && !busy(view, thread, cx))
     });
-    live.read(|view| waiting(view, thread))
+    live.read(|view, cx| waiting(view, thread, cx))
 }
 
 /// Waits for `thread`'s running call to stream a test count past a fifth
@@ -409,14 +411,14 @@ fn asks_or_ends(live: &mut Live, what: &str, thread: ThreadId, turn: usize, secs
 fn shoot_running_suite(live: &mut Live, thread: ThreadId, turn: usize, name: &str) -> bool {
     // A known total a fifth done, or (Codex lost the announcement) a count
     // of a few dozen; a request or the turn's end stops the wait.
-    let counting = move |view: &CockpitView| {
-        matches!(running_tool(view, thread), Some(Some((done, total)))
+    let counting = move |view: &CockpitView, cx: &gpui::App| {
+        matches!(running_tool(view, thread, cx), Some(Some((done, total)))
             if (total > 0 && done * 5 > total && done < total) || (total == 0 && done > 40))
     };
-    let counted = live.wait(&format!("{name}: suite counting"), 120, &move |view| {
-        counting(view)
-            || waiting(view, thread)
-            || (turns(view, thread) >= turn && !busy(view, thread))
+    let counted = live.wait(&format!("{name}: suite counting"), 120, &move |view, cx| {
+        counting(view, cx)
+            || waiting(view, thread, cx)
+            || (turns(view, thread, cx) >= turn && !busy(view, thread, cx))
     });
     if counted && live.read(counting) {
         live.shot(name);
@@ -474,8 +476,8 @@ fn rest_pointer(live: &mut Live) {
 fn focus_thread(live: &mut Live, thread: ThreadId) {
     live.act(move |view, window, cx| {
         if let Some(index) = view.pane_for(thread) {
-            view.cockpit.focus_thread(thread);
-            view.focus_pane(index);
+            view.cockpit.update(cx, |cockpit, _| cockpit.focus_thread(thread));
+            view.focus_pane(index, cx);
             let focus = view.panes[index].composer.read(cx).focus_handle(cx);
             window.focus(&focus, cx);
         }
@@ -500,8 +502,8 @@ fn scenario(
     live.send(
         "Run `cargo test` in this repo and tell me in one sentence which test fails. Do not edit any files.",
     );
-    if !live.wait("claude thread started", 60, &|view| {
-        view.focused_thread().is_some()
+    if !live.wait("claude thread started", 60, &|view, cx| {
+        view.focused_thread(cx).is_some()
     }) {
         return None;
     }
@@ -515,8 +517,8 @@ fn scenario(
         live.key("1");
         shoot_running_suite(live, claude, 1, "claude-running");
     }
-    live.wait("claude turn 1 ends", 300, &move |view| {
-        turns(view, claude) >= 1 && !busy(view, claude)
+    live.wait("claude turn 1 ends", 300, &move |view, cx| {
+        turns(view, claude, cx) >= 1 && !busy(view, claude, cx)
     });
     live.scroll_bottom(claude);
     live.shot("claude-turn1");
@@ -539,7 +541,7 @@ fn scenario(
             ) {
                 break;
             }
-            let tool = live.read(|view| asking(view, claude)).unwrap_or_default();
+            let tool = live.read(|view, cx| asking(view, claude, cx)).unwrap_or_default();
             live.shot(&format!("claude-ask-{round}-{}", tool.to_lowercase()));
             match tool.as_str() {
                 "Edit" | "MultiEdit" | "Write" if !noted => {
@@ -558,8 +560,8 @@ fn scenario(
                 }
             }
         }
-        live.wait("claude turn 2 ends", 300, &move |view| {
-            turns(view, claude) >= 2 && !busy(view, claude)
+        live.wait("claude turn 2 ends", 300, &move |view, cx| {
+            turns(view, claude, cx) >= 2 && !busy(view, claude, cx)
         });
         live.scroll_bottom(claude);
         live.shot("claude-turn2");
@@ -576,12 +578,13 @@ fn scenario(
         }
 
         // ---- the path preview, hovered for real, and ⌘-click's reader
-        let edited = live.read(move |view| {
+        let edited = live.read(move |view, cx| {
             let root = view
                 .cockpit
+                .read(cx)
                 .thread(claude)
                 .and_then(|open| open.workspace().map(|w| w.cwd().to_path_buf()));
-            view.cockpit.thread(claude).and_then(|open| {
+            view.cockpit.read(cx).thread(claude).and_then(|open| {
                 open.transcript()
                     .blocks()
                     .iter()
@@ -654,14 +657,14 @@ fn scenario(
     live.shot("shortcuts");
     live.key("escape");
     // ⇧⇥ round the cycle, stopping on `default` so the next request asks.
-    let start = live.read(move |view| mode(view, claude));
+    let start = live.read(move |view, cx| mode(view, claude, cx));
     live.note(format!("mode {start:?}"));
     for step in 0..5 {
         live.key("shift-tab");
         for _ in 0..4 {
             live.tick(60);
         }
-        let now = live.read(move |view| mode(view, claude));
+        let now = live.read(move |view, cx| mode(view, claude, cx));
         live.note(format!("mode after shift-tab {step}: {now:?}"));
         if step == 0 {
             live.shot("claude-mode-cycled");
@@ -678,8 +681,8 @@ fn scenario(
             live.shot("claude-esc-decision");
             live.key("escape");
         }
-        live.wait("claude turn 3 ends", 240, &move |view| {
-            turns(view, claude) >= 3 && !busy(view, claude)
+        live.wait("claude turn 3 ends", 240, &move |view, cx| {
+            turns(view, claude, cx) >= 3 && !busy(view, claude, cx)
         });
         live.scroll_bottom(claude);
         live.shot("claude-turn3");
@@ -702,8 +705,8 @@ fn scenario(
     live.send(
         "Run `cargo test` in this repo. It has to build, so request escalated (write) permission for it up front. Then tell me in one sentence whether any test fails.",
     );
-    if !live.wait("codex thread started", 90, &move |view| {
-        view.focused_thread().is_some_and(|thread| thread != claude)
+    if !live.wait("codex thread started", 90, &move |view, cx| {
+        view.focused_thread(cx).is_some_and(|thread| thread != claude)
     }) {
         return Some(claude);
     }
@@ -729,8 +732,8 @@ fn scenario(
             allowed = shoot_running_suite(live, codex, 1, "codex-running");
         }
     }
-    live.wait("codex turn 1 ends", 300, &move |view| {
-        turns(view, codex) >= 1 && !busy(view, codex)
+    live.wait("codex turn 1 ends", 300, &move |view, cx| {
+        turns(view, codex, cx) >= 1 && !busy(view, codex, cx)
     });
     live.scroll_bottom(codex);
     live.shot("codex-turn1");
@@ -751,8 +754,8 @@ fn scenario(
             }
             live.shot("codex-toast-denied");
         }
-        live.wait("codex turn 2 ends", 240, &move |view| {
-            turns(view, codex) >= 2 && !busy(view, codex)
+        live.wait("codex turn 2 ends", 240, &move |view, cx| {
+            turns(view, codex, cx) >= 2 && !busy(view, codex, cx)
         });
         // ---- `2` allows for the Thread, from the Pane
         focus_thread(live, codex);
@@ -773,8 +776,8 @@ fn scenario(
             focus_thread(live, codex);
             live.key("2");
         }
-        live.wait("codex turn 3 ends", 240, &move |view| {
-            turns(view, codex) >= target && !busy(view, codex)
+        live.wait("codex turn 3 ends", 240, &move |view, cx| {
+            turns(view, codex, cx) >= target && !busy(view, codex, cx)
         });
         live.scroll_bottom(codex);
         live.shot("codex-turn3");
@@ -789,8 +792,8 @@ fn scenario(
             live.key("3");
             live.shot("codex-denied");
         }
-        live.wait("codex turn 4 ends", 240, &move |view| {
-            turns(view, codex) >= target && !busy(view, codex)
+        live.wait("codex turn 4 ends", 240, &move |view, cx| {
+            turns(view, codex, cx) >= target && !busy(view, codex, cx)
         });
         live.scroll_bottom(codex);
         live.shot("codex-turn4");
@@ -841,7 +844,7 @@ fn scenario(
     // ---- the empty board over this store, every Pane closed as ⌘W
     // closes it: its real recent Threads and the CLIs found on this machine
     for _ in 0..8 {
-        if live.read(|view| view.empty_board_shown()) {
+        if live.read(|view, cx| view.empty_board_shown(cx)) {
             break;
         }
         live.key("cmd-w");

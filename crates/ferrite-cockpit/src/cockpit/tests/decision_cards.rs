@@ -13,10 +13,11 @@ fn one_keystroke_answers_the_card(cx: &mut TestAppContext) {
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     fake.streams.borrow()[0].send(decision("perm_01")).unwrap();
     tick(cx);
-    view.read_with(cx, |view, _| {
+    view.read_with(cx, |view, cx| {
         let thread = view.panes[0].thread().unwrap();
         assert!(
             view.cockpit
+                .read(cx)
                 .thread(thread)
                 .and_then(|open| open.pending())
                 .is_some(),
@@ -26,10 +27,11 @@ fn one_keystroke_answers_the_card(cx: &mut TestAppContext) {
 
     cx.simulate_keystrokes("y");
 
-    view.read_with(cx, |view, _| {
+    view.read_with(cx, |view, cx| {
         let thread = view.panes[0].thread().unwrap();
         assert!(
             view.cockpit
+                .read(cx)
                 .thread(thread)
                 .and_then(|open| open.pending())
                 .is_none(),
@@ -144,8 +146,8 @@ fn a_question_decision_is_answered_by_its_form(cx: &mut TestAppContext) {
     );
     cx.simulate_click(choice.center(), gpui::Modifiers::none());
     cx.run_until_parked();
-    let serial = view.read_with(cx, |view, _| {
-        view.cockpit.thread(thread).unwrap().pending_decisions()[0]
+    let serial = view.read_with(cx, |view, cx| {
+        view.cockpit.read(cx).thread(thread).unwrap().pending_decisions()[0]
             .handle
             .serial
     });
@@ -180,8 +182,8 @@ fn a_typed_line_answers_a_question_in_the_operators_words(cx: &mut TestAppContex
     let thread = view.read_with(cx, |view, _| view.panes[0].thread().unwrap());
     fake.streams.borrow()[0].send(question("q_02")).unwrap();
     tick(cx);
-    let serial = view.read_with(cx, |view, _| {
-        view.cockpit.thread(thread).unwrap().pending_decisions()[0]
+    let serial = view.read_with(cx, |view, cx| {
+        view.cockpit.read(cx).thread(thread).unwrap().pending_decisions()[0]
             .handle
             .serial
     });
@@ -217,23 +219,23 @@ fn a_typed_line_answers_a_question_in_the_operators_words(cx: &mut TestAppContex
 fn a_titlers_answer_names_only_an_untitled_thread(cx: &mut TestAppContext) {
     let (core, _fake) = cockpit("titler-adopt", 2);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
-    let (first, second) = view.read_with(cx, |view, _| {
-        let threads = view.cockpit.threads();
+    let (first, second) = view.read_with(cx, |view, cx| {
+        let threads = view.cockpit.read(cx).threads();
         (threads[0], threads[1])
     });
     view.update(cx, |view, cx| {
         view.adopt_title(first, None, cx);
-        assert!(view.cockpit.thread(first).unwrap().title().is_none());
+        assert!(view.cockpit.read(cx).thread(first).unwrap().title().is_none());
         view.adopt_title(first, Some("Wire the titler".into()), cx);
         assert_eq!(
-            view.cockpit.thread(first).unwrap().title(),
+            view.cockpit.read(cx).thread(first).unwrap().title(),
             Some("Wire the titler")
         );
         assert_eq!(view.facts.name(first).as_ref(), "Wire the titler");
 
-        view.cockpit.rename_thread(second, "Mine").unwrap();
+        view.cockpit.update(cx, |cockpit, _| cockpit.rename_thread(second, "Mine").unwrap());
         view.adopt_title(second, Some("Model's idea".into()), cx);
-        assert_eq!(view.cockpit.thread(second).unwrap().title(), Some("Mine"));
+        assert_eq!(view.cockpit.read(cx).thread(second).unwrap().title(), Some("Mine"));
     });
 }
 
@@ -258,7 +260,7 @@ fn clicking_a_keycap_runs_its_own_decide_verb(cx: &mut TestAppContext) {
             !view.panes[0].composer.read(cx).is_empty(),
             "the premise: half-typed text on the line"
         );
-        view.cockpit.thread(thread).unwrap().pending_decisions()[0]
+        view.cockpit.read(cx).thread(thread).unwrap().pending_decisions()[0]
             .handle
             .serial
     });
@@ -266,8 +268,8 @@ fn clicking_a_keycap_runs_its_own_decide_verb(cx: &mut TestAppContext) {
     let _ = serial;
     cx.simulate_click(deny.center(), gpui::Modifiers::none());
     cx.run_until_parked();
-    view.read_with(cx, |view, _| {
-        assert!(view.cockpit.thread(thread).unwrap().pending().is_none());
+    view.read_with(cx, |view, cx| {
+        assert!(view.cockpit.read(cx).thread(thread).unwrap().pending().is_none());
     });
     assert!(
         matches!(

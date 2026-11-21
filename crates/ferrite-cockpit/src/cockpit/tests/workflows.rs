@@ -184,8 +184,8 @@ fn the_outline_is_shaped_by_mouse_and_keyboard(cx: &mut TestAppContext) {
     tick(cx);
     cx.simulate_input(" for docs");
     tick(cx);
-    view.read_with(cx, |view, _| {
-        let board = view.cockpit.factory();
+    view.read_with(cx, |view, cx| {
+        let board = view.cockpit.read(cx).factory();
         assert_eq!(board.workflows_of(project).count(), 2);
         assert_eq!(
             board.workflow(&blank).unwrap().draft.name,

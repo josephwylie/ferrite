@@ -38,7 +38,7 @@ impl Scenario {
                 .ok_or("Boundary UI request has no action")?
                 .to_string();
             let state = view
-                .update(cx, |view, _| view.cockpit.browser_attach(thread))
+                .update(cx, |view, cx| view.cockpit.update(cx, |cockpit, _| cockpit.browser_attach(thread)))
                 .map_err(|e| e.to_string())?;
             let Some(tab) = state.tabs.iter().find(|tab| {
                 Some(tab.id) == state.active
@@ -113,7 +113,7 @@ impl Scenario {
         }
         let (id, action, before) = self.pending.as_ref().unwrap();
         let state = view
-            .update(cx, |view, _| view.cockpit.browser_attach(thread))
+            .update(cx, |view, cx| view.cockpit.update(cx, |cockpit, _| cockpit.browser_attach(thread)))
             .map_err(|e| e.to_string())?;
         let ready = state
             .tabs

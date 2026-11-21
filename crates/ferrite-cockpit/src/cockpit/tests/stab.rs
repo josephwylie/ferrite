@@ -223,7 +223,7 @@ fn the_parked_fold_holds_still_with_no_toast_card(cx: &mut TestAppContext) {
         );
     });
     assert_eq!(
-        view.read_with(cx, |view, _| view.cockpit.notifications().unread()),
+        view.read_with(cx, |view, cx| view.cockpit.read(cx).notifications().unread()),
         3,
         "the Inbox lists every finish"
     );
@@ -342,8 +342,8 @@ fn the_own_answer_is_one_bare_line_on_the_label_column(cx: &mut TestAppContext) 
     fake.streams.borrow()[0].send(question("own")).unwrap();
     tick(cx);
     let thread = view.read_with(cx, |view, _| view.panes[0].thread().unwrap());
-    let serial = view.read_with(cx, |view, _| {
-        view.cockpit.thread(thread).unwrap().pending_decisions()[0]
+    let serial = view.read_with(cx, |view, cx| {
+        view.cockpit.read(cx).thread(thread).unwrap().pending_decisions()[0]
             .handle
             .serial
     });
@@ -519,7 +519,7 @@ fn the_checks_card_grows_to_its_tally(cx: &mut TestAppContext) {
     let (core, _fake) = cockpit("checks-card-width", 1);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     cx.simulate_resize(gpui::size(px(1200.), px(800.)));
-    let thread = view.read_with(cx, |view, _| view.cockpit.threads()[0]);
+    let thread = view.read_with(cx, |view, cx| view.cockpit.read(cx).threads()[0]);
     let pr = pr_with_checks();
     let tally = pr.tally();
     let text = [
@@ -583,7 +583,7 @@ fn a_project_in_use_keeps_its_remove_verb_disabled(cx: &mut TestAppContext) {
     cx.simulate_click(remove.center(), gpui::Modifiers::none());
     tick(cx);
     view.read_with(cx, |view, cx| {
-        assert!(view.cockpit.registry().project(project).is_some());
+        assert!(view.cockpit.read(cx).registry().project(project).is_some());
         assert!(view.project_card(cx).is_some(), "the sheet stays up");
     });
 }
@@ -673,9 +673,9 @@ fn the_ui_and_code_faces_follow_what_the_text_is(cx: &mut TestAppContext) {
     tick(cx);
     open_folds(&view, cx);
 
-    let (namespace, blocks, composer) = view.read_with(cx, |view, _| {
+    let (namespace, blocks, composer) = view.read_with(cx, |view, cx| {
         let pane = &view.panes[0];
-        let thread = view.cockpit.thread(pane.thread().unwrap()).unwrap();
+        let thread = view.cockpit.read(cx).thread(pane.thread().unwrap()).unwrap();
         let blocks: Vec<_> = thread
             .transcript()
             .blocks()
@@ -877,9 +877,9 @@ fn the_prompt_heads_its_turn_at_prose_size(cx: &mut TestAppContext) {
         });
     });
     tick(cx);
-    let (namespace, prompts, answers) = view.read_with(cx, |view, _| {
+    let (namespace, prompts, answers) = view.read_with(cx, |view, cx| {
         let pane = &view.panes[0];
-        let thread = view.cockpit.thread(pane.thread().unwrap()).unwrap();
+        let thread = view.cockpit.read(cx).thread(pane.thread().unwrap()).unwrap();
         let ids = |kind: fn(&Body) -> bool| -> Vec<_> {
             thread
                 .transcript()
@@ -1062,10 +1062,10 @@ fn the_restart_button_answers_its_press(cx: &mut TestAppContext) {
         cx.simulate_click(restart.center(), gpui::Modifiers::none());
         tick(cx);
     }
-    view.read_with(cx, |view, _| {
+    view.read_with(cx, |view, cx| {
         assert!(
             matches!(
-                view.cockpit.server_restart(),
+                view.cockpit.read(cx).server_restart(),
                 Some(ferrite_core::cockpit::ServerRestart::Failed { .. })
             ),
             "a Server that does not answer cannot restart, and the window says so"

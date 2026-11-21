@@ -133,8 +133,9 @@ impl CockpitView {
         &self,
         thread: ThreadId,
         opener: Opener,
+        cx: &gpui::App,
     ) -> Option<&'static str> {
-        let checkout = self.thread_path(thread).is_some();
+        let checkout = self.thread_path(thread, cx).is_some();
         match opener {
             Opener::Terminal | Opener::Files if !checkout => Some("Needs a checkout"),
             Opener::Changes if !checkout => Some("Needs a checkout"),
@@ -144,6 +145,7 @@ impl CockpitView {
             Opener::SideChat
                 if self
                     .cockpit
+                    .read(cx)
                     .thread(thread)
                     .is_none_or(|open| transcript_glue::rewind_gate(&open).is_none()) =>
             {
@@ -156,7 +158,7 @@ impl CockpitView {
     /// A row of the `+` menu or of "Open a surface": its Surface opens in
     /// `thread`'s Panel. Nothing for a row that cannot run.
     pub(crate) fn run_opener(&mut self, thread: ThreadId, opener: Opener, cx: &mut Context<Self>) {
-        if self.opener_unavailable(thread, opener).is_some() {
+        if self.opener_unavailable(thread, opener, cx).is_some() {
             return;
         }
         match opener {
@@ -176,13 +178,14 @@ impl CockpitView {
     pub(in crate::cockpit) fn surface_menu_rows(
         &self,
         thread: ThreadId,
+        cx: &gpui::App,
     ) -> Vec<Option<(menu::Item, MenuVerb)>> {
         Opener::ALL
             .into_iter()
             .map(|opener| {
                 let mut item = menu::Item::new(opener.label()).shortcut(opener.letter());
                 item.leading = Some((opener.icon(), ferrite_ui::theme::INK_SUBTLE));
-                if let Some(why) = self.opener_unavailable(thread, opener) {
+                if let Some(why) = self.opener_unavailable(thread, opener, cx) {
                     item.disabled = true;
                     item.why = Some(why.into());
                 }
@@ -275,7 +278,7 @@ impl CockpitView {
     pub(crate) fn surface_pending(&self, thread: ThreadId, id: &SurfaceId, cx: &gpui::App) -> bool {
         match id {
             SurfaceId::SideChat(tab) => self.side_chat_running(thread, *tab, cx),
-            SurfaceId::Background => self.cockpit.thread(thread).is_some_and(|open| {
+            SurfaceId::Background => self.cockpit.read(cx).thread(thread).is_some_and(|open| {
                 open.transcript()
                     .background_calls()
                     .any(|call| call.in_background())
@@ -588,14 +591,14 @@ impl CockpitView {
     /// The `+ menu` command: the focused Thread's Panel opens with its
     /// opener menu up under the head's left end.
     pub(in crate::cockpit) fn open_surface_menu(&mut self, cx: &mut Context<Self>) {
-        let Some(thread) = self.focused_thread() else {
+        let Some(thread) = self.focused_thread(cx) else {
             return;
         };
         if !self.panel_open(thread) {
             self.apply_surface(thread, SurfaceAction::SetOpen(true));
         }
         let window = self.panel.window_w;
-        let left = window - self.panel_target_w() + ferrite_ui::theme::SURFACE_HEAD_PAD_L;
+        let left = window - self.panel_target_w(cx) + ferrite_ui::theme::SURFACE_HEAD_PAD_L;
         let at = gpui::point(px(left), px(ferrite_ui::theme::WIN_CHROME_H));
         self.open_context_menu_at(
             MenuTarget::SurfaceMenu(thread),
@@ -613,7 +616,7 @@ impl CockpitView {
         use ferrite_ui::theme::*;
         let highlight = self.panel.empty_highlight;
         let rows = Opener::ALL.into_iter().enumerate().map(|(at, opener)| {
-            let why = self.opener_unavailable(thread, opener);
+            let why = self.opener_unavailable(thread, opener, cx);
             let id = SharedString::from(format!("panel-open-{}", opener.letter()));
             let selector = id.to_string();
             let key = ferrite_ui::pointer::hover_key(&gpui::ElementId::from(id.clone()));

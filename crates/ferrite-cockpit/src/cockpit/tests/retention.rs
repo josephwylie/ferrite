@@ -114,9 +114,9 @@ fn a_transcript_at_its_retention_cap_keeps_its_text_identity_as_it_streams(
     for _ in 0..4 {
         pump(&view, cx);
     }
-    let first = view.read_with(cx, |view, _| {
+    let first = view.read_with(cx, |view, cx| {
         let thread = view.panes[0].thread().unwrap();
-        plain_text(view.cockpit.thread(thread).unwrap().transcript().blocks())
+        plain_text(view.cockpit.read(cx).thread(thread).unwrap().transcript().blocks())
     });
     assert!(
         !first.starts_with("turn 0 "),
@@ -173,8 +173,8 @@ fn a_thread_past_its_cap_says_where_its_history_starts_and_copies_all_of_it(
     for _ in 0..4 {
         pump(&view, cx);
     }
-    let kept = view.read_with(cx, |view, _| {
-        plain_text(view.cockpit.thread(thread).unwrap().transcript().blocks())
+    let kept = view.read_with(cx, |view, cx| {
+        plain_text(view.cockpit.read(cx).thread(thread).unwrap().transcript().blocks())
     });
     assert!(!kept.contains("the very first question"), "the cap dropped it");
     assert!(

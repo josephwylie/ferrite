@@ -93,7 +93,7 @@ pub(super) fn stage(view: &Entity<CockpitView>, name: &str, cx: &mut gpui::Visua
     std::fs::write(&file, "attached").unwrap();
     let annotation = annotation(&format!("{name}-annotation"));
     view.update(cx, |view, cx| {
-        let focused = view.focused();
+        let focused = view.focused(cx);
         view.panes[focused].composer.update(cx, |composer, cx| {
             composer.add_files(&[file], cx);
             composer.reply(Reply::new("a passage", "what about it"), cx);
@@ -148,9 +148,10 @@ pub(super) fn held(
 pub(super) const WHOLE: (usize, usize, usize, usize) = (1, 1, 1, 1);
 
 pub(super) fn notices(view: &Entity<CockpitView>, cx: &mut gpui::VisualTestContext) -> Vec<String> {
-    view.read_with(cx, |view, _| {
+    view.read_with(cx, |view, cx| {
         let thread = view.panes[0].thread().unwrap();
         view.cockpit
+            .read(cx)
             .thread(thread)
             .unwrap()
             .transcript()

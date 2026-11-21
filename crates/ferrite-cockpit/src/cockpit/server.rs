@@ -76,10 +76,10 @@ impl CockpitView {
     /// Whether the Server's state moved since the pump last looked: an
     /// attach that fails or succeeds streams nothing, and the bands and
     /// the nav's glyph are drawn from the state alone.
-    pub(super) fn server_moved(&mut self) -> bool {
-        let now = self.cockpit.server();
+    pub(super) fn server_moved(&mut self, cx: &gpui::App) -> bool {
+        let now = self.cockpit.read(cx).server();
         // A restart that times out moves no state but its own.
-        let restart = self.cockpit.server_restart().cloned();
+        let restart = self.cockpit.read(cx).server_restart().cloned();
         if self.server_bands.seen == now && self.server_bands.restart_seen == restart {
             return false;
         }
@@ -91,15 +91,15 @@ impl CockpitView {
     /// Say when there is no Server, or offer to restart one running an
     /// older build from this window's executable.
     pub(super) fn present_server(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if !self.cockpit.environment_available() {
+        if !self.cockpit.read(cx).environment_available() {
             return;
         }
-        match self.cockpit.server() {
+        match self.cockpit.read(cx).server() {
             None => {}
             // Down mid-restart: the restart's own notice says so.
             Some(ServerState::Detached { .. })
                 if matches!(
-                    self.cockpit.server_restart(),
+                    self.cockpit.read(cx).server_restart(),
                     Some(ServerRestart::Restarting)
                 ) => {}
             Some(ServerState::Detached { reason, attention }) => {
@@ -109,6 +109,7 @@ impl CockpitView {
                 }
                 let machine = self
                     .cockpit
+                    .read(cx)
                     .machine()
                     .map(|bridge| bridge.name().to_string());
                 let gone = match (&machine, attention) {
@@ -168,7 +169,7 @@ impl CockpitView {
                                 if gone == Gone::SignIn {
                                     view.sign_in(cx);
                                 } else {
-                                    view.cockpit.retry_server();
+                                    view.cockpit.update(cx, |cockpit, _| cockpit.retry_server());
                                 }
                                 view.server_bands.detached = None;
                                 cx.notify();
@@ -183,7 +184,7 @@ impl CockpitView {
                 if self.server_bands.detached.take().is_some() {
                     window.remove_notification::<Detached>(cx);
                 }
-                if !self.server_is_older(&server, since) {
+                if !self.server_is_older(&server, since, cx) {
                     if std::mem::take(&mut self.server_bands.updating) {
                         window.remove_notification::<Updating>(cx);
                     }
@@ -217,7 +218,7 @@ impl CockpitView {
     /// then restarted on the new build, or why not. The offer to restart is
     /// taken down as soon as one is under way.
     pub(super) fn present_restart(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let restart = self.cockpit.server_restart().cloned();
+        let restart = self.cockpit.read(cx).server_restart().cloned();
         if restart == self.server_bands.restart {
             return;
         }
@@ -239,7 +240,7 @@ impl CockpitView {
                 true,
                 false,
             ),
-            ServerRestart::Restarted { version } if self.server_build() == Some(Build::Older) => (
+            ServerRestart::Restarted { version } if self.server_build(cx) == Some(Build::Older) => (
                 NotificationType::Warning,
                 "Ferrite’s server restarted on an older build".to_string(),
                 format!("It runs {version}, not the installed build. Click to restart again."),
@@ -249,7 +250,7 @@ impl CockpitView {
             ServerRestart::Restarted { version } => (
                 NotificationType::Success,
                 "Ferrite’s server restarted".to_string(),
-                match self.server_build() {
+                match self.server_build(cx) {
                     Some(Build::Installed) => format!("It runs {version}, the installed build."),
                     _ => format!("It runs {version}."),
                 },
@@ -276,10 +277,10 @@ impl CockpitView {
                     // Down, there is nothing to restart: reach for it again.
                     notice.on_click(move |_, window, cx| {
                         view.update(cx, |view, cx| {
-                            if matches!(view.cockpit.server(), Some(ServerState::Attached { .. })) {
+                            if matches!(view.cockpit.read(cx).server(), Some(ServerState::Attached { .. })) {
                                 view.restart_server(window, cx);
                             } else {
-                                view.cockpit.retry_server();
+                                view.cockpit.update(cx, |cockpit, _| cockpit.retry_server());
                                 cx.notify();
                             }
                         })
@@ -294,19 +295,19 @@ impl CockpitView {
     /// it: its build and uptime and whether it is the installed one,
     /// restarting, or not running. (About does not repeat it: one place per
     /// fact.)
-    fn server_standing(&self) -> String {
+    fn server_standing(&self, cx: &gpui::App) -> String {
         if matches!(
-            self.cockpit.server_restart(),
+            self.cockpit.read(cx).server_restart(),
             Some(ServerRestart::Restarting)
         ) {
             return "restarting…".to_string();
         }
-        match self.cockpit.server() {
+        match self.cockpit.read(cx).server() {
             None => "This window runs without a separate server".to_string(),
             Some(ServerState::Detached { reason, .. }) => format!("not running \u{b7} {reason}"),
             Some(ServerState::Attached { server, since }) => {
                 let up = format!("{} · up {}", server.version, uptime(since.elapsed()));
-                match self.server_build() {
+                match self.server_build(cx) {
                     Some(Build::Older) => {
                         format!("{up} · an older build: restart to use the installed one")
                     }
@@ -319,15 +320,15 @@ impl CockpitView {
 
     /// Which build the attached Server runs, as far as this window can
     /// tell: `None` unattached.
-    fn server_build(&self) -> Option<Build> {
-        let Some(ServerState::Attached { server, since }) = self.cockpit.server() else {
+    fn server_build(&self, cx: &gpui::App) -> Option<Build> {
+        let Some(ServerState::Attached { server, since }) = self.cockpit.read(cx).server() else {
             return None;
         };
-        let ours = self.cockpit.machine().is_none()
+        let ours = self.cockpit.read(cx).machine().is_none()
             && std::env::current_exe().is_ok_and(|exe| exe == server.executable);
         Some(if !ours {
             Build::Other
-        } else if self.server_is_older(&server, since) {
+        } else if self.server_is_older(&server, since, cx) {
             Build::Older
         } else {
             Build::Installed
@@ -354,8 +355,9 @@ impl CockpitView {
         &self,
         server: &ferrite_core::protocol::ServerInfo,
         since: std::time::Instant,
+        cx: &gpui::App,
     ) -> bool {
-        if self.cockpit.machine().is_some() {
+        if self.cockpit.read(cx).machine().is_some() {
             return false;
         }
         std::env::current_exe().is_ok_and(|executable| {
@@ -378,8 +380,8 @@ impl CockpitView {
     pub(super) fn restart_server(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         // A refused restart is the restart's own notice (`present_restart`),
         // not a second line beside it.
-        self.server_act("Restart", window, cx, |view| {
-            let _ = view.cockpit.restart_server(When::Now);
+        self.server_act("Restart", window, cx, |cockpit| {
+            let _ = cockpit.restart_server(When::Now);
             Ok(())
         });
     }
@@ -387,9 +389,7 @@ impl CockpitView {
     /// Stop the Server, asking first as a restart does. Its open Threads
     /// resume when a window starts it again.
     fn stop_server(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.server_act("Stop", window, cx, |view| {
-            view.cockpit.stop_server(When::Now)
-        });
+        self.server_act("Stop", window, cx, |cockpit| cockpit.stop_server(When::Now));
     }
 
     fn server_act(
@@ -397,15 +397,15 @@ impl CockpitView {
         verb: &'static str,
         window: &mut Window,
         cx: &mut Context<Self>,
-        act: impl FnOnce(&mut Self) -> std::io::Result<()> + 'static,
+        act: impl FnOnce(&mut Cockpit) -> std::io::Result<()> + 'static,
     ) {
         let done = move |view: &mut Self, result: std::io::Result<()>| {
             if let Err(error) = result {
                 view.nav_notice.problem(format!("the server did not {verb}: {error}"));
             }
         };
-        let Some(busy) = self.in_flight() else {
-            let result = act(self);
+        let Some(busy) = self.in_flight(cx) else {
+            let result = self.cockpit.update(cx, |cockpit, _| act(cockpit));
             done(self, result);
             cx.notify();
             return;
@@ -422,7 +422,7 @@ impl CockpitView {
         cx.spawn_in(window, async move |view, cx| {
             if answer.await == Ok(0) {
                 let _ = view.update(cx, |view, cx| {
-                    let result = act(view);
+                    let result = view.cockpit.update(cx, |cockpit, _| act(cockpit));
                     done(view, result);
                     cx.notify();
                 });
@@ -435,9 +435,9 @@ impl CockpitView {
     /// Server runs this one: an update stops it first, and waits for it to
     /// end (ADR 0025). Its agents are idle by then, and the relaunched
     /// window starts the new Server, which resumes their Threads.
-    pub(super) fn release_executable(&mut self) {
-        if cfg!(windows) && self.cockpit.server().is_some() {
-            if let Err(error) = self.cockpit.stop_server_and_wait(RELEASE_WAIT) {
+    pub(super) fn release_executable(&mut self, cx: &mut gpui::App) {
+        if cfg!(windows) && self.cockpit.read(cx).server().is_some() {
+            if let Err(error) = self.cockpit.update(cx, |cockpit, _| cockpit.stop_server_and_wait(RELEASE_WAIT)) {
                 ferrite_core::log!("the server was not stopped for the update: {error}");
             }
         }
@@ -445,23 +445,23 @@ impl CockpitView {
 
     /// Settings › Server, for a window attached to one.
     pub(super) fn server_rows(&self, cx: &Context<Self>) -> Vec<settings::Row> {
-        let Some(state) = self.cockpit.server() else {
+        let Some(state) = self.cockpit.read(cx).server() else {
             // A sentence, so the row's words (as About says it), not a
             // fact's machine-text value.
             return vec![settings::action(
                 "settings-server-none",
                 "Status",
-                self.server_standing(),
+                self.server_standing(cx),
                 SharedString::default(),
                 None,
                 |_, _| {},
             )];
         };
-        let mut status = self.server_standing();
+        let mut status = self.server_standing(cx);
         if let ServerState::Attached { server, .. } = state {
             let live: usize = Provider::ALL
                 .into_iter()
-                .map(|provider| self.cockpit.live_sessions(provider))
+                .map(|provider| self.cockpit.read(cx).live_sessions(provider))
                 .sum();
             status.push_str(&match live {
                 1 => " · 1 live session".to_string(),
@@ -483,7 +483,7 @@ impl CockpitView {
         // A development build never installs the LaunchAgent (main), and
         // must not point the operator's at itself. A machine's Server is
         // not this computer's to start.
-        if !crate::DEV && self.cockpit.machine().is_none() {
+        if !crate::DEV && self.cockpit.read(cx).machine().is_none() {
             rows.push(settings::toggle(
                 "settings-start-at-login",
                 "Start at login",

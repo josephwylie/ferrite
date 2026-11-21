@@ -121,9 +121,9 @@ impl NavView {
     }
 
     /// The rows the keyboard walks now.
-    fn items_now(&self, cx: &App) -> Vec<NavCursor> {
-        self.inputs(cx)
-            .map(|inputs| self.items(&inputs))
+    fn items_now(&self) -> Vec<NavCursor> {
+        self.inputs()
+            .map(|inputs| self.items(inputs))
             .unwrap_or_default()
     }
 
@@ -153,7 +153,7 @@ impl NavView {
 
     /// Home / End: the list's first or last row.
     fn to_end(&mut self, last: bool, window: &mut Window, cx: &mut Context<Self>) {
-        let items = self.items_now(cx);
+        let items = self.items_now();
         let next = if last { items.last() } else { items.first() }.cloned();
         self.move_cursor(next, window, cx);
     }
@@ -166,7 +166,7 @@ impl NavView {
         };
         match item {
             NavItem::Shelf(shelf) => {
-                let open = self.inputs(cx).is_some_and(|inputs| inputs.shelf_open(shelf));
+                let open = self.inputs().is_some_and(|inputs| inputs.shelf_open(shelf));
                 cx.emit(NavEvent::SetShelfOpen(shelf, !open));
             }
             NavItem::Thread(thread) => {
@@ -196,7 +196,7 @@ impl NavView {
         let shelf = match item {
             NavItem::Shelf(shelf) => shelf,
             NavItem::Thread(thread) if fold => {
-                let Some(inputs) = self.inputs(cx) else {
+                let Some(inputs) = self.inputs() else {
                     return;
                 };
                 let Some(shelf) = SHELVES.into_iter().find(|shelf| {
@@ -251,11 +251,11 @@ impl NavView {
                 }),
             )
             .on_action(cx.listener(|nav, _: &nav::SelectNext, window, cx| {
-                let items = nav.items_now(cx);
+                let items = nav.items_now();
                 nav.step(1, &items, window, cx)
             }))
             .on_action(cx.listener(|nav, _: &nav::SelectPrevious, window, cx| {
-                let items = nav.items_now(cx);
+                let items = nav.items_now();
                 nav.step(-1, &items, window, cx)
             }))
             .on_action(
@@ -341,14 +341,14 @@ impl CockpitView {
     /// ⌘⇧E: the list takes the keyboard, its cursor on the row the board
     /// shows (else the first card).
     pub(super) fn focus_nav(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let shown = self.focused_thread();
-        let inputs = self.nav_inputs(cx);
+        let shown = self.focused_thread(cx);
         let nav = self.nav_view.read(cx);
-        let start = nav
-            .items(&inputs)
-            .into_iter()
-            .find(|cursor| matches!(cursor.item, NavItem::Thread(thread) if Some(thread) == shown))
-            .or_else(|| nav.first_card(&inputs));
+        let start = nav.inputs().and_then(|inputs| {
+            nav.items(inputs)
+                .into_iter()
+                .find(|cursor| matches!(cursor.item, NavItem::Thread(thread) if Some(thread) == shown))
+                .or_else(|| nav.first_card(inputs))
+        });
         self.focus_nav_on(start, window, cx);
     }
 
@@ -368,7 +368,8 @@ impl CockpitView {
 
     /// The nav's first card, as ⌘I's cursor starts on it.
     pub(super) fn first_nav_card(&self, cx: &App) -> Option<NavCursor> {
-        self.nav_view.read(cx).first_card(&self.nav_inputs(cx))
+        let nav = self.nav_view.read(cx);
+        nav.first_card(nav.inputs()?)
     }
 
     /// ⌘W while the list holds the keys: the cursor's Thread parks, and
@@ -376,7 +377,7 @@ impl CockpitView {
     pub(super) fn park_nav_cursor(&mut self, cx: &mut Context<Self>) {
         let cursor = self.nav_view.read(cx).cursor.as_ref().map(|cursor| cursor.item);
         if let Some(NavItem::Thread(thread)) = cursor {
-            if self.cockpit.thread(thread).is_some() {
+            if self.cockpit.read(cx).thread(thread).is_some() {
                 self.park_listed(&[thread], cx);
             }
         }
@@ -386,9 +387,10 @@ impl CockpitView {
     /// the sidebar draws, in its order. A parked row is not one of them: a
     /// key that walks must not spend a Session reviving a Thread.
     pub(super) fn thread_order(&self, cx: &App) -> Vec<ThreadId> {
-        self.nav_view
-            .read(cx)
-            .items(&self.nav_inputs(cx))
+        let nav = self.nav_view.read(cx);
+        nav.inputs()
+            .map(|inputs| nav.items(inputs))
+            .unwrap_or_default()
             .into_iter()
             .filter_map(|cursor| match cursor.item {
                 NavItem::Thread(thread) => Some(thread),
@@ -408,7 +410,7 @@ impl CockpitView {
             return;
         }
         let at = self
-            .focused_thread()
+            .focused_thread(cx)
             .and_then(|shown| order.iter().position(|thread| *thread == shown));
         let next = match at {
             Some(at) => (at as isize + delta).rem_euclid(len),

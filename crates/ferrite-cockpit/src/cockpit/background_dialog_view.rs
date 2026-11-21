@@ -196,7 +196,7 @@ impl CockpitView {
     /// is not open. It never reads the dialog: the dialog calls it while its
     /// own update is running.
     fn background_dialog_inputs(&self, thread: ThreadId, cx: &App) -> Option<BackgroundDialogInputs> {
-        let inputs = self.background_inputs(thread, true)?;
+        let inputs = self.background_inputs(thread, true, cx)?;
         let stop = self.background.read(cx).stop_control(&inputs, &inputs.running);
         let BackgroundInputs { busy, running, calls, .. } = inputs;
         let work = running

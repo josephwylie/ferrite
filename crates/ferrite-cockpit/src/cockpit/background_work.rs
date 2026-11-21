@@ -550,8 +550,8 @@ impl BackgroundView {
 impl CockpitView {
     /// What the background work draws of `thread`, none once it is not
     /// open. `outputs`: with the blocks of its calls, for their output.
-    pub(super) fn background_inputs(&self, thread: ThreadId, outputs: bool) -> Option<BackgroundInputs> {
-        let open = self.cockpit.thread(thread)?;
+    pub(super) fn background_inputs(&self, thread: ThreadId, outputs: bool, cx: &App) -> Option<BackgroundInputs> {
+        let open = self.cockpit.read(cx).thread(thread)?;
         let transcript = open.transcript();
         let running = running_work(&open);
         let refusals = running
@@ -602,8 +602,8 @@ impl CockpitView {
 
     /// The background work line's title for Pane `index`, as it draws.
     #[cfg(test)]
-    pub(super) fn background_work_title(&self, index: usize) -> Option<String> {
-        let inputs = self.background_inputs(self.panes.get(index)?.thread()?, false)?;
+    pub(super) fn background_work_title(&self, index: usize, cx: &App) -> Option<String> {
+        let inputs = self.background_inputs(self.panes.get(index)?.thread()?, false, cx)?;
         let tasks: Vec<BackgroundTask> =
             inputs.line_work().into_iter().map(|work| work.task).collect();
         pane::present_background_work(&tasks, !inputs.busy).map(|presented| presented.title)
@@ -612,7 +612,7 @@ impl CockpitView {
     /// Why the line says the stop of task `id` of Pane `index` failed.
     #[cfg(test)]
     pub(super) fn background_stop_reason(&self, index: usize, id: &str, cx: &App) -> Option<String> {
-        let inputs = self.background_inputs(self.panes.get(index)?.thread()?, false)?;
+        let inputs = self.background_inputs(self.panes.get(index)?.thread()?, false, cx)?;
         match self.background.read(cx).stop_state(&inputs, &StopTarget::Command(id.into()))? {
             StopState::Refused(why) => Some(why),
             _ => None,
@@ -622,7 +622,7 @@ impl CockpitView {
     /// The line under Pane `index`'s transcript, if it is a Main's.
     pub(super) fn background_work_tail(&self, index: usize, cx: &App) -> Option<TranscriptTail> {
         let pane = self.panes.get(index).filter(|pane| pane.is_main())?;
-        let inputs = self.background_inputs(pane.thread()?, false)?;
+        let inputs = self.background_inputs(pane.thread()?, false, cx)?;
         self.background.read(cx).line(self.background.downgrade(), &inputs)
     }
 
@@ -639,7 +639,7 @@ impl CockpitView {
             .get(index)
             .filter(|pane| pane.is_main())
             .and_then(|pane| pane.thread())
-            .and_then(|thread| self.background_inputs(thread, false))
+            .and_then(|thread| self.background_inputs(thread, false, cx))
             .and_then(|inputs| lone_launch(&inputs.line_work()))
         else {
             return;
@@ -684,7 +684,7 @@ impl CockpitView {
         work_of: fn(&BackgroundInputs) -> Vec<Work>,
         cx: &mut Context<Self>,
     ) {
-        let Some(inputs) = self.background_inputs(thread, false) else {
+        let Some(inputs) = self.background_inputs(thread, false, cx) else {
             return;
         };
         for target in inputs.targets(&work_of(&inputs)) {
@@ -698,7 +698,7 @@ impl CockpitView {
     /// stops nothing else.
     fn send_stop(&mut self, thread: ThreadId, generation: u64, target: StopTarget, cx: &mut Context<Self>) {
         let Some(inputs) = self
-            .background_inputs(thread, false)
+            .background_inputs(thread, false, cx)
             .filter(|inputs| inputs.generation == generation)
         else {
             return;
@@ -716,6 +716,7 @@ impl CockpitView {
                     thread,
                     generation,
                     ferrite_core::SessionControl::StopTask { id },
+                    cx,
                 );
                 if let Some(why) = self.session_control_error.of(thread, generation) {
                     let why = why.to_string();
@@ -724,7 +725,7 @@ impl CockpitView {
                 }
             }
             StopTarget::Agent(key) => {
-                self.stop_subagent(thread, &key);
+                self.stop_subagent(thread, &key, cx);
             }
         }
         cx.notify();
@@ -732,9 +733,9 @@ impl CockpitView {
 
     /// Forget the stops of work that has ended, or of a Session that has.
     pub(super) fn prune_background_stops(&mut self, cx: &mut Context<Self>) {
-        self.background.update(cx, |background, _| {
+        self.background.update(cx, |background, cx| {
             background.prune(|thread| {
-                let inputs = self.background_inputs(thread, false)?;
+                let inputs = self.background_inputs(thread, false, cx)?;
                 Some((inputs.generation, inputs.targets(&inputs.running)))
             })
         });
@@ -747,7 +748,7 @@ impl CockpitView {
         if self.background_dialog(cx).is_some() {
             self.hide_sheet(cx);
         }
-        if let Some(subject) = self.agent_of_call(thread, call) {
+        if let Some(subject) = self.agent_of_call(thread, call, cx) {
             self.open_subagent(thread, subject, cx);
         }
         cx.notify();

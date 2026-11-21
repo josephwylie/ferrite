@@ -98,7 +98,7 @@ impl CockpitView {
 
     /// The menu for `menu`'s Session, none once another one runs.
     fn mode_menu_surface(&self, menu: &ModeMenu, cx: &mut Context<Self>) -> Option<Stateful<Div>> {
-        Some(ModeSegments::of(menu, &self.cockpit.thread(menu.thread)?)?.render(cx))
+        Some(ModeSegments::of(menu, &self.cockpit.read(cx).thread(menu.thread)?)?.render(cx))
     }
 }
 

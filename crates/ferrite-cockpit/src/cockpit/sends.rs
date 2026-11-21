@@ -51,7 +51,7 @@ impl CockpitView {
         match admission {
             Admission::Delivered => true,
             Admission::Held => {
-                let listed = self.cockpit.thread(thread).is_some_and(|view| {
+                let listed = self.cockpit.read(cx).thread(thread).is_some_and(|view| {
                     view.queue()
                         .iter()
                         .any(|queued| queued.text.trim() == draft.prompt().trim())
@@ -69,12 +69,12 @@ impl CockpitView {
             }
             Admission::Unconfirmed(reason) => {
                 let named = named(draft.line());
-                self.cockpit.say(
+                self.cockpit.update(cx, |cockpit, _| cockpit.say(
                     thread,
                     format!(
                         "\"{named}\" may or may not have been sent ({reason}). It is back in the composer: check the transcript before sending it again."
                     ),
-                );
+                ));
                 self.put_back_send(index, draft, true, cx);
                 false
             }
@@ -134,8 +134,8 @@ impl CockpitView {
     /// go, one still waiting or handed back and not yet collected is kept,
     /// and one whose Thread closed under it is marked lost. A deleted
     /// Thread's go.
-    pub(super) fn settle_held_sends(&mut self) {
-        let cockpit = &self.cockpit;
+    pub(super) fn settle_held_sends(&mut self, cx: &gpui::App) {
+        let cockpit = self.cockpit.read(cx);
         self.held_sends.0.retain(|&thread, held| {
             let Some(view) = cockpit.thread(thread) else {
                 if cockpit.peek(thread).is_err() {

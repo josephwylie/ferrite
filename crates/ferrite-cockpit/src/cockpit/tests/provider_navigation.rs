@@ -176,7 +176,7 @@ fn a_folded_nav_leaves_only_its_edge_tab(cx: &mut TestAppContext) {
     view.update(cx, |view, cx| view.set_nav_collapsed(true, cx));
     tick(cx);
 
-    let first = view.read_with(cx, |view, _| view.nav_state().open_rows().next().unwrap().thread);
+    let first = view.read_with(cx, |view, cx| view.nav_state(cx).open_rows().next().unwrap().thread);
     let row: &'static str = format!("nav-thread-{}", first.get()).leak();
     assert!(cx.debug_bounds(row).is_none(), "folded, no rows");
     assert!(cx.debug_bounds("nav-column").is_none(), "no column");

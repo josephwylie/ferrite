@@ -272,7 +272,7 @@ fn focus_moving_to_another_thread_shuts_the_card_it_left(cx: &mut TestAppContext
         })
     };
     view.update(cx, |view, cx| {
-        view.focus_pane(0);
+        view.focus_pane(0, cx);
         cx.notify();
     });
     tick(cx);
@@ -281,7 +281,7 @@ fn focus_moving_to_another_thread_shuts_the_card_it_left(cx: &mut TestAppContext
     assert_eq!(cards(cx), [true, false]);
 
     view.update(cx, |view, cx| {
-        view.focus_pane(1);
+        view.focus_pane(1, cx);
         cx.notify();
     });
     tick(cx);

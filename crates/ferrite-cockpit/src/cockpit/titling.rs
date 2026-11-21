@@ -30,6 +30,7 @@ impl CockpitView {
         }
         let Some(provider) = self
             .cockpit
+            .read(cx)
             .thread(thread)
             .filter(|open| open.title().is_none())
             .map(|open| open.provider())
@@ -47,7 +48,7 @@ impl CockpitView {
                 prompt,
                 reply: None,
             },
-            &self.cockpit.model_catalog(provider),
+            &self.cockpit.read(cx).model_catalog(provider),
         );
         let rx = ferrite_core::titler::spawn(form);
         self.titling.0.insert(thread);
@@ -74,13 +75,14 @@ impl CockpitView {
         };
         if self
             .cockpit
+            .read(cx)
             .thread(thread)
             .is_none_or(|open| open.title().is_some())
         {
             return;
         }
-        if self.cockpit.rename_thread(thread, &title).is_ok() {
-            self.facts.renamed(&self.cockpit, thread);
+        if self.cockpit.update(cx, |cockpit, _| cockpit.rename_thread(thread, &title).is_ok()) {
+            self.facts.renamed(self.cockpit.read(cx), thread);
             self.refresh_names();
             cx.notify();
         }

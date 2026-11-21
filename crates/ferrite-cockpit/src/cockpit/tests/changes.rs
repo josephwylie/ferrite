@@ -338,7 +338,7 @@ fn f6_from_the_filter_steps_to_the_panels_controls(cx: &mut TestAppContext) {
     typed_into_the_filter("b", cx);
     cx.simulate_keystrokes("f6");
     tick(cx);
-    assert!(cx.update(|window, cx| view.read(cx).panel_control_focused(window)));
+    assert!(cx.update(|window, cx| view.read(cx).panel_control_focused(window, cx)));
     cx.simulate_keystrokes("f6");
     tick(cx);
     cx.simulate_input("hi");
@@ -351,7 +351,7 @@ fn f6_from_the_filter_steps_to_the_panels_controls(cx: &mut TestAppContext) {
 fn moving_to_another_thread_takes_the_keys_from_the_filter_with_it(cx: &mut TestAppContext) {
     let (view, _fake, repo, thread, cx) = window_with_agent("changes-filter-thread", cx);
     view.update(cx, |view, cx| {
-        view.cockpit.open(Provider::Claude, WorkspaceChoice::Main { checkout: repo }).unwrap();
+        view.cockpit.update(cx, |cockpit, _| cockpit.open(Provider::Claude, WorkspaceChoice::Main { checkout: repo }).unwrap());
         view.sync_panes(cx);
     });
     tick(cx);

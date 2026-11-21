@@ -217,7 +217,7 @@ fn picking_import_opens_the_session_picker_and_sends_the_provider_nothing(cx: &m
                 if path.ends_with("bbbb.jsonl") && *into == thread
         ));
         // Nothing reached the provider: no prompt, no running turn.
-        let transcript = view.cockpit.thread(thread).unwrap().transcript();
+        let transcript = view.cockpit.read(cx).thread(thread).unwrap().transcript();
         assert!(
             !transcript
                 .blocks()
@@ -225,7 +225,7 @@ fn picking_import_opens_the_session_picker_and_sends_the_provider_nothing(cx: &m
                 .any(|block| matches!(block.body, Body::Prompt(_))),
             "picking import must not prompt the provider"
         );
-        assert!(!view.cockpit.thread(thread).is_some_and(|open| open.busy()));
+        assert!(!view.cockpit.read(cx).thread(thread).is_some_and(|open| open.busy()));
     });
 
     // Typing searches; escape dismisses with the keyboard back in the
@@ -316,17 +316,17 @@ fn enter_adopts_the_picked_session_and_the_blank_thread_goes(cx: &mut TestAppCon
     cx.simulate_keystrokes("enter");
     cx.run_until_parked();
 
-    view.read_with(cx, |view, _| {
+    view.read_with(cx, |view, cx| {
         assert!(view.floats.palette.is_none(), "the pick closed the picker");
         assert_eq!(view.panes.len(), 1, "one Pane: the adopted Thread");
         let adopted = view.panes[0].thread().unwrap();
         assert_ne!(adopted, blank);
         assert_eq!(
-            view.focused_thread(),
+            view.focused_thread(cx),
             Some(adopted),
             "the adopted Thread takes focus"
         );
-        let transcript = view.cockpit.thread(adopted).unwrap().transcript();
+        let transcript = view.cockpit.read(cx).thread(adopted).unwrap().transcript();
         assert_eq!(
             transcript.session_id(),
             Some("adopt-4f2a"),
@@ -341,8 +341,8 @@ fn enter_adopts_the_picked_session_and_the_blank_thread_goes(cx: &mut TestAppCon
             transcript.blocks()
         );
         // The blank Thread is gone entirely — not parked clutter.
-        assert!(view.cockpit.thread(blank).is_none());
-        assert!(view.cockpit.parked().unwrap().is_empty());
+        assert!(view.cockpit.read(cx).thread(blank).is_none());
+        assert!(view.cockpit.read(cx).parked().unwrap().is_empty());
     });
 }
 
@@ -384,11 +384,12 @@ fn palette_import_over_a_conversation_opens_alongside(cx: &mut TestAppContext) {
     cx.simulate_keystrokes("enter");
     tick(cx);
 
-    view.read_with(cx, |view, _| {
-        let adopted = view.focused_thread().expect("the import is focused");
+    view.read_with(cx, |view, cx| {
+        let adopted = view.focused_thread(cx).expect("the import is focused");
         assert_ne!(adopted, busy);
         assert_eq!(
             view.cockpit
+                .read(cx)
                 .thread(adopted)
                 .unwrap()
                 .transcript()
@@ -396,7 +397,7 @@ fn palette_import_over_a_conversation_opens_alongside(cx: &mut TestAppContext) {
             Some("beside")
         );
         assert!(
-            view.cockpit.thread(busy).is_some(),
+            view.cockpit.read(cx).thread(busy).is_some(),
             "the conversation it was opened over stays"
         );
     });
@@ -462,7 +463,7 @@ fn typed_import_with_the_menu_muted_opens_the_picker(cx: &mut TestAppContext) {
             palette.read(cx).scope,
             crate::palette::PaletteScope::Sessions
         );
-        let transcript = view.cockpit.thread(thread).unwrap().transcript();
+        let transcript = view.cockpit.read(cx).thread(thread).unwrap().transcript();
         assert!(
             !transcript
                 .blocks()
@@ -500,9 +501,9 @@ fn tab_on_a_session_row_does_nothing(cx: &mut TestAppContext) {
     cx.run_until_parked();
 
     assert_eq!(session_rows(&view, cx).len(), 1, "the picker stays open");
-    view.read_with(cx, |view, _| {
+    view.read_with(cx, |view, cx| {
         assert_eq!(view.panes.len(), 1, "nothing opened beside");
-        assert_eq!(view.cockpit.threads().len(), 1, "nothing imported");
+        assert_eq!(view.cockpit.read(cx).threads().len(), 1, "nothing imported");
     });
 }
 
@@ -564,7 +565,7 @@ fn palette_import_from_the_empty_board_shows_the_import(cx: &mut TestAppContext)
     tick(cx);
     cx.simulate_keystrokes("cmd-w");
     tick(cx);
-    assert!(view.read_with(cx, |view, _| view.empty_board_shown()));
+    assert!(view.read_with(cx, |view, cx| view.empty_board_shown(cx)));
 
     cx.simulate_keystrokes("cmd-k");
     tick(cx);
@@ -575,10 +576,11 @@ fn palette_import_from_the_empty_board_shows_the_import(cx: &mut TestAppContext)
     cx.simulate_keystrokes("enter");
     tick(cx);
 
-    view.read_with(cx, |view, _| {
-        let adopted = view.focused_thread().expect("the import is focused");
+    view.read_with(cx, |view, cx| {
+        let adopted = view.focused_thread(cx).expect("the import is focused");
         assert_eq!(
             view.cockpit
+                .read(cx)
                 .thread(adopted)
                 .unwrap()
                 .transcript()
@@ -586,7 +588,7 @@ fn palette_import_from_the_empty_board_shows_the_import(cx: &mut TestAppContext)
             Some("board")
         );
         assert!(
-            !view.empty_board_shown(),
+            !view.empty_board_shown(cx),
             "the board gave way to the import"
         );
     });
@@ -633,9 +635,9 @@ fn a_refused_import_with_no_pane_toasts(cx: &mut TestAppContext) {
     tick(cx);
 
     assert_eq!(toasts(cx), before + 1, "the refusal is a toast");
-    view.read_with(cx, |view, _| {
+    view.read_with(cx, |view, cx| {
         assert_eq!(view.panes.len(), 1, "no Thread was added");
-        assert!(view.cockpit.parked().unwrap().is_empty());
+        assert!(view.cockpit.read(cx).parked().unwrap().is_empty());
     });
 }
 
@@ -666,14 +668,14 @@ fn a_foreign_file_pick_surfaces_the_refusal_in_the_transcript(cx: &mut TestAppCo
     cx.simulate_keystrokes("enter");
     cx.run_until_parked();
 
-    view.read_with(cx, |view, _| {
+    view.read_with(cx, |view, cx| {
         assert!(
             view.floats.palette.is_none(),
             "the refusal closed the picker"
         );
         assert_eq!(view.panes.len(), 1);
         assert_eq!(view.panes[0].thread().unwrap(), thread, "the Thread stays");
-        let transcript = view.cockpit.thread(thread).unwrap().transcript();
+        let transcript = view.cockpit.read(cx).thread(thread).unwrap().transcript();
         assert!(
             transcript.blocks().iter().any(|block| matches!(
                 &block.body,
@@ -683,7 +685,7 @@ fn a_foreign_file_pick_surfaces_the_refusal_in_the_transcript(cx: &mut TestAppCo
             transcript.blocks()
         );
         assert!(
-            view.cockpit.parked().unwrap().is_empty(),
+            view.cockpit.read(cx).parked().unwrap().is_empty(),
             "no half-imported Thread was left"
         );
     });
@@ -773,7 +775,7 @@ fn draft_import_replaces_the_draft_and_focuses_the_imported_thread(cx: &mut Test
         assert!(view.panes[0].draft().is_none());
         assert!(view.panes[0].thread().is_some());
         assert_eq!(view.panes[0].composer.read(cx).text(), "");
-        assert_eq!(view.focused(), 0);
+        assert_eq!(view.focused(cx), 0);
     });
 }
 

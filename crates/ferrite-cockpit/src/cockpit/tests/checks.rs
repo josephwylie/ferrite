@@ -11,7 +11,7 @@ fn the_checks_command_opens_the_checks_it_counts(cx: &mut TestAppContext) {
     bind_production_keys(cx);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     cx.simulate_resize(gpui::size(px(1000.), px(700.)));
-    let thread = view.read_with(cx, |view, _| view.cockpit.threads()[0]);
+    let thread = view.read_with(cx, |view, cx| view.cockpit.read(cx).threads()[0]);
     view.update(cx, |view, cx| {
         view.facts.pr_answered(thread, Some(pr_with_checks()));
         cx.notify();
@@ -46,7 +46,7 @@ fn a_pr_without_checks_opens_no_checks_card(cx: &mut TestAppContext) {
     let (core, _fake) = cockpit("ci-no-checks", 1);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     cx.simulate_resize(gpui::size(px(1000.), px(700.)));
-    let thread = view.read_with(cx, |view, _| view.cockpit.threads()[0]);
+    let thread = view.read_with(cx, |view, cx| view.cockpit.read(cx).threads()[0]);
     view.update(cx, |view, cx| {
         let mut pr = pr_with_checks();
         pr.checks = None;

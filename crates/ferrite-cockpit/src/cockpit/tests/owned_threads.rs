@@ -34,8 +34,8 @@ fn owned_threads_are_out_of_the_lists_and_ring_nothing(cx: &mut TestAppContext) 
     // in view rings nothing for any Thread, owned or not.
     view.update(cx, |view, cx| view.focus_thread(watched, cx));
     tick(cx);
-    view.read_with(cx, |view, _| {
-        assert_eq!(view.focused_thread(), Some(watched));
+    view.read_with(cx, |view, cx| {
+        assert_eq!(view.focused_thread(cx), Some(watched));
     });
 
     let toasts = |cx: &mut gpui::VisualTestContext| {
@@ -49,7 +49,7 @@ fn owned_threads_are_out_of_the_lists_and_ring_nothing(cx: &mut TestAppContext) 
     assert_eq!(toasts(cx), 0, "a Worker's request rings nothing");
 
     let listed = |view: &CockpitView, thread: ThreadId, cx: &gpui::App| {
-        let state = view.nav_state();
+        let state = view.nav_state(cx);
         state
             .open_rows()
             .chain(&state.parked)
@@ -63,7 +63,7 @@ fn owned_threads_are_out_of_the_lists_and_ring_nothing(cx: &mut TestAppContext) 
         assert!(listed(view, mine, cx), "the operator's own is listed");
         assert!(!listed(view, worker, cx), "the Worker is not");
         assert!(!listed(view, coordinator, cx), "nor the parked Coordinator");
-        assert!(view.cockpit.needs_you().is_empty(), "⌘D has nothing");
+        assert!(view.cockpit.read(cx).needs_you().is_empty(), "⌘D has nothing");
     });
     let rows = cx.update(|_, cx| view.read(cx).palette_thread_rows(cx));
     assert!(rows.iter().any(|row| row.act == Act::Thread(mine)));

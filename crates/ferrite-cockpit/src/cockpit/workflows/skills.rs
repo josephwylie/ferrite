@@ -103,13 +103,14 @@ impl CockpitView {
         }
         let Some(cwd) = self
             .cockpit
+            .read(cx)
             .registry()
             .project(project)
             .map(|project| project.root.clone())
         else {
             return;
         };
-        let reply = self.cockpit.discover_commands(provider, &cwd);
+        let reply = self.cockpit.update(cx, |cockpit, _| cockpit.discover_commands(provider, &cwd));
         self.update_factory(cx, |view, _| view.skills.listen(provider, reply));
     }
 
@@ -130,7 +131,7 @@ impl CockpitView {
         Catalog {
             models: Provider::ALL
                 .into_iter()
-                .map(|provider| (provider, self.cockpit.announced_models(provider)))
+                .map(|provider| (provider, self.cockpit.read(cx).announced_models(provider)))
                 .collect(),
             skills: Provider::ALL
                 .into_iter()

@@ -157,7 +157,7 @@ fn draft_command_discovery_discards_old_workspace_replies_and_shows_failures(
     let (tx, rx) = mpsc::channel();
     *fake.command_discovery.borrow_mut() = Some(rx);
     view.update(cx, |view, cx| {
-        view.aim_launch(&elsewhere);
+        view.aim_launch(&elsewhere, cx);
         view.sync_menu(cx);
     });
     assert!(
@@ -207,7 +207,7 @@ fn discovery_updates_an_open_draft_picker_without_starting_a_session(cx: &mut Te
     tx.send((Provider::Codex, models.clone())).unwrap();
     tick(cx);
     let index = view.read_with(cx, |view, cx| {
-        assert_eq!(view.cockpit.model_catalog(Provider::Codex), models);
+        assert_eq!(view.cockpit.read(cx).model_catalog(Provider::Codex), models);
         picker(view, cx)
             .rows
             .iter()
@@ -219,7 +219,7 @@ fn discovery_updates_an_open_draft_picker_without_starting_a_session(cx: &mut Te
         "discovery creates no Session"
     );
     view.update(cx, |view, cx| view.pick_in_model_picker(Picked::Model(index), cx));
-    view.read_with(cx, |view, _| {
+    view.read_with(cx, |view, cx| {
         assert_eq!(
             view.panes[0]
                 .draft()
@@ -230,7 +230,7 @@ fn discovery_updates_an_open_draft_picker_without_starting_a_session(cx: &mut Te
                 .as_deref(),
             Some("gpt-future-model")
         );
-        assert!(view.cockpit.threads().is_empty());
+        assert!(view.cockpit.read(cx).threads().is_empty());
     });
     assert!(
         fake.spawned.borrow().is_empty(),
@@ -241,7 +241,7 @@ fn discovery_updates_an_open_draft_picker_without_starting_a_session(cx: &mut Te
     tick(cx);
     view.update(cx, |view, cx| {
         assert_eq!(
-            view.cockpit.model_catalog(Provider::Codex),
+            view.cockpit.read(cx).model_catalog(Provider::Codex),
             models,
             "an empty discovery keeps the last usable menu"
         );
@@ -364,12 +364,12 @@ fn the_slash_provider_row_opens_the_picker_and_picks_codex(cx: &mut TestAppConte
         let picker = picker(view, cx);
         assert_eq!(picker.column, Column::Reasoning, "the keyboard moves to the column");
         assert_eq!(
-            view.cockpit.thread(thread).map(|open| open.provider()),
+            view.cockpit.read(cx).thread(thread).map(|open| open.provider()),
             Some(Provider::Codex)
         );
-        let transcript = view.cockpit.thread(thread).unwrap().transcript();
+        let transcript = view.cockpit.read(cx).thread(thread).unwrap().transcript();
         assert!(transcript.blocks().is_empty());
-        assert!(!view.cockpit.thread(thread).is_some_and(|open| open.busy()));
+        assert!(!view.cockpit.read(cx).thread(thread).is_some_and(|open| open.busy()));
     });
     let spawned = fake.spawned.borrow().last().unwrap().clone();
     assert_eq!(spawned.provider, Provider::Codex, "the choice drives the spawn");
@@ -425,8 +425,8 @@ fn announced_models_ride_the_picker_and_a_pick_reaims_the_model(cx: &mut TestApp
         },
         "the model rides the spawn; the provider stands"
     );
-    view.read_with(cx, |view, _| {
-        assert_eq!(view.cockpit.thread(thread).and_then(|open| open.model()), Some("opus"));
+    view.read_with(cx, |view, cx| {
+        assert_eq!(view.cockpit.read(cx).thread(thread).and_then(|open| open.model()), Some("opus"));
     });
 
     fake.streams
@@ -461,20 +461,20 @@ fn a_draft_inherits_the_focused_provider_model_and_only_announced_models(cx: &mu
     tick(cx);
     view.update(cx, |view, cx| {
         view.cockpit
-            .set_provider(
+            .update(cx, |cockpit, _| cockpit.set_provider(
                 thread,
                 ProviderChoice {
                     provider: Provider::Claude,
                     model: Some("opus".into()),
                 },
-            )
+            ))
             .unwrap();
         view.open_draft(DraftTarget::Main, cx);
         view.open_band_menu(pane::BandChip::Provider, false, cx);
     });
 
     view.update(cx, |view, cx| {
-        let draft = view.panes[view.focused()].draft().unwrap();
+        let draft = view.panes[view.focused(cx)].draft().unwrap();
         assert_eq!(draft.binding.provider().model.as_deref(), Some("opus"));
         // Announced once (deduplicated), the standing choice appended
         // where the list did not name it.
@@ -485,7 +485,7 @@ fn a_draft_inherits_the_focused_provider_model_and_only_announced_models(cx: &mu
         assert_eq!(picker.selected, opus);
         view.pick_in_model_picker(Picked::Model(opus), cx);
         assert_eq!(
-            view.panes[view.focused()]
+            view.panes[view.focused(cx)]
                 .draft()
                 .unwrap()
                 .binding
@@ -599,8 +599,8 @@ fn reopening_the_picker_and_pressing_enter_keeps_the_standing_choice(cx: &mut Te
     tick(cx);
     cx.simulate_keystrokes("down enter escape");
     tick(cx);
-    view.read_with(cx, |view, _| {
-        assert_eq!(view.cockpit.thread(thread).and_then(|open| open.model()), Some("opus"));
+    view.read_with(cx, |view, cx| {
+        assert_eq!(view.cockpit.read(cx).thread(thread).and_then(|open| open.model()), Some("opus"));
     });
     let spawns = fake.streams.borrow().len();
 
@@ -624,9 +624,9 @@ fn reopening_the_picker_and_pressing_enter_keeps_the_standing_choice(cx: &mut Te
         spawns,
         "a re-pick of the standing choice must not respawn"
     );
-    view.read_with(cx, |view, _| {
+    view.read_with(cx, |view, cx| {
         assert_eq!(
-            view.cockpit.thread(thread).and_then(|open| open.model()),
+            view.cockpit.read(cx).thread(thread).and_then(|open| open.model()),
             Some("opus"),
             "the model stands"
         );
@@ -648,7 +648,7 @@ fn the_reasoning_column_takes_the_arrows_and_left_returns_to_search(cx: &mut Tes
     announce(&fake, 0, vec![model("sonnet", "Sonnet 5", &["low", "medium", "high"])]);
     tick(cx);
     view.update(cx, |view, cx| {
-        view.cockpit.set_model(thread, Some("sonnet".into())).unwrap();
+        view.cockpit.update(cx, |cockpit, _| cockpit.set_model(thread, Some("sonnet".into())).unwrap());
         view.open_effort_picker(thread, cx);
     });
     tick(cx);
@@ -680,7 +680,7 @@ fn the_reasoning_column_takes_the_arrows_and_left_returns_to_search(cx: &mut Tes
     cx.simulate_keystrokes("enter");
     tick(cx);
     view.read_with(cx, |view, cx| {
-        assert_eq!(view.cockpit.thread(thread).unwrap().effort(), Some("high"));
+        assert_eq!(view.cockpit.read(cx).thread(thread).unwrap().effort(), Some("high"));
         let picker = picker(view, cx);
         assert!(picker.efforts[2].active, "the ✓ follows the pick");
     });
@@ -714,8 +714,8 @@ fn command_digits_jump_to_the_listed_models(cx: &mut TestAppContext) {
     assert!(cx.debug_bounds("model-picker-row-2").is_some());
     cx.simulate_keystrokes("cmd-2");
     tick(cx);
-    view.read_with(cx, |view, _| {
-        assert_eq!(view.cockpit.thread(thread).and_then(|open| open.model()), Some("opus"));
+    view.read_with(cx, |view, cx| {
+        assert_eq!(view.cockpit.read(cx).thread(thread).and_then(|open| open.model()), Some("opus"));
         assert!(view.model_picker().is_some(), "the docked picker stays open");
     });
     cx.simulate_input("hai");
@@ -723,8 +723,8 @@ fn command_digits_jump_to_the_listed_models(cx: &mut TestAppContext) {
     view.read_with(cx, |view, cx| assert_eq!(listed(view, cx)[0], "Haiku 4.5"));
     cx.simulate_keystrokes("cmd-1");
     tick(cx);
-    view.read_with(cx, |view, _| {
-        assert_eq!(view.cockpit.thread(thread).and_then(|open| open.model()), Some("haiku"));
+    view.read_with(cx, |view, cx| {
+        assert_eq!(view.cockpit.read(cx).thread(thread).and_then(|open| open.model()), Some("haiku"));
     });
 }
 
@@ -910,8 +910,8 @@ fn ferrites_effort_row_replaces_the_providers_and_a_typed_level_is_honoured(
     cx.simulate_input("ort high");
     cx.simulate_keystrokes("enter");
     cx.run_until_parked();
-    view.read_with(cx, |view, _| {
-        assert_eq!(view.cockpit.thread(thread).unwrap().effort(), Some("high"));
+    view.read_with(cx, |view, cx| {
+        assert_eq!(view.cockpit.read(cx).thread(thread).unwrap().effort(), Some("high"));
     });
     assert!(
         fake.sent.borrow().is_empty(),
@@ -937,7 +937,7 @@ fn a_draft_says_its_permission_mode(cx: &mut TestAppContext) {
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     cx.simulate_resize(gpui::size(px(1400.), px(800.)));
     tick(cx);
-    let index = view.read_with(cx, |view, _| view.focused());
+    let index = view.read_with(cx, |view, cx| view.focused(cx));
     let mode = cx
         .debug_bounds(Box::leak(format!("draft-mode-{index}").into_boxed_str()))
         .expect("the draft's permission word");
@@ -961,9 +961,9 @@ fn the_draft_model_chip_sets_its_effort_in_the_reasoning_column(cx: &mut TestApp
         cx.debug_bounds("draft-effort-picker").is_none(),
         "no effort chip of its own"
     );
-    let steps = view.read_with(cx, |view, _| {
+    let steps = view.read_with(cx, |view, cx| {
         let (steps, _, chosen) = view
-            .draft_effort_ladder(view.focused())
+            .draft_effort_ladder(view.focused(cx), cx)
             .expect("the premise: the default model takes an effort");
         assert!(chosen.is_some(), "the chip names the level in force");
         steps
@@ -984,9 +984,9 @@ fn the_draft_model_chip_sets_its_effort_in_the_reasoning_column(cx: &mut TestApp
         .expect("every level is a rung");
     cx.simulate_click(pick.center(), gpui::Modifiers::none());
     tick(cx);
-    view.read_with(cx, |view, _| {
+    view.read_with(cx, |view, cx| {
         assert!(view.model_picker().is_some(), "the docked picker stays open");
-        let draft = view.panes[view.focused()].draft().expect("still a draft");
+        let draft = view.panes[view.focused(cx)].draft().expect("still a draft");
         assert_eq!(draft.binding.effort(), Some("high"));
     });
     cx.simulate_keystrokes("escape");
@@ -994,9 +994,9 @@ fn the_draft_model_chip_sets_its_effort_in_the_reasoning_column(cx: &mut TestApp
     cx.simulate_input("go");
     cx.simulate_keystrokes("enter");
     cx.run_until_parked();
-    view.read_with(cx, |view, _| {
+    view.read_with(cx, |view, cx| {
         let thread = view.panes[0].thread().expect("bootstrapped");
-        assert_eq!(view.cockpit.thread(thread).unwrap().effort(), Some("high"));
+        assert_eq!(view.cockpit.read(cx).thread(thread).unwrap().effort(), Some("high"));
     });
 }
 

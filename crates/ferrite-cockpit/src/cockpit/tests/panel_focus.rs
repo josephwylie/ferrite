@@ -262,7 +262,7 @@ fn closing_a_tab_by_key_never_parks_its_thread(cx: &mut TestAppContext) {
     let (tabs, _) = panel_tabs(&view, thread, cx);
     assert_eq!(tabs.len(), 1, "⌘W closes one more tab");
     assert!(
-        view.read_with(cx, |view, _| view.cockpit.thread(thread).is_some()),
+        view.read_with(cx, |view, cx| view.cockpit.read(cx).thread(thread).is_some()),
         "the Thread is still open"
     );
     assert_eq!(
@@ -272,7 +272,7 @@ fn closing_a_tab_by_key_never_parks_its_thread(cx: &mut TestAppContext) {
     );
     press("cmd-w", cx);
     assert!(
-        view.read_with(cx, |view, _| view.cockpit.thread(thread).is_some()
+        view.read_with(cx, |view, cx| view.cockpit.read(cx).thread(thread).is_some()
             && view.panes.len() == 1),
         "an emptied Panel's last close does not park the Thread"
     );
@@ -335,7 +335,7 @@ fn a_thread_switch_by_key_leaves_the_keyboard_to_the_new_composer(cx: &mut TestA
     let shown_composer_focused = |cx: &mut gpui::VisualTestContext| {
         cx.update(|window, cx| {
             let view = view.read(cx);
-            view.panes[view.focused()]
+            view.panes[view.focused(cx)]
                 .composer
                 .read(cx)
                 .focus_target(window, cx)
@@ -395,17 +395,17 @@ fn a_focus_the_server_asks_for_leaves_the_keyboard_to_the_new_composer(cx: &mut 
     press("end left", cx);
     assert_eq!(focused_control(&view, cx), Some(PanelControl::Plus));
 
-    view.update(cx, |view, _| {
+    view.update(cx, |view, cx| {
         view.cockpit
-            .fixture_task_alert(ferrite_core::protocol::ServerMessage::Focus {
+            .update(cx, |cockpit, _| cockpit.fixture_task_alert(ferrite_core::protocol::ServerMessage::Focus {
                 thread: second,
                 fork_of: None,
-            });
+            }));
     });
     tick(cx);
     let (shown, composer_focused) = cx.update(|window, cx| {
         let view = view.read(cx);
-        let pane = &view.panes[view.focused()];
+        let pane = &view.panes[view.focused(cx)];
         (
             pane.thread(),
             pane.composer.read(cx).focus_target(window, cx).is_focused(window),
@@ -609,7 +609,7 @@ fn command_arrows_go_to_the_ends_of_a_code_file(cx: &mut TestAppContext) {
 #[gpui::test]
 fn find_in_a_prose_file_searches_the_document_and_shows_the_hit(cx: &mut TestAppContext) {
     let (view, thread, _file, cx) = with_marked_file("focus-prose-find", cx);
-    let readme = view.read_with(cx, |view, _| view.thread_path(thread).unwrap()).join("README.md");
+    let readme = view.read_with(cx, |view, cx| view.thread_path(thread, cx).unwrap()).join("README.md");
     let pad = "A paragraph that only pads the document.\n\n".repeat(80);
     std::fs::write(&readme, format!("# Notes\n\n{pad}The {ONLY_IN_THE_FILE} is here.\n")).unwrap();
     view.update(cx, |view, cx| view.open_in_files(thread, readme, None, true, cx));
@@ -645,7 +645,7 @@ fn find_in_a_prose_file_searches_the_document_and_shows_the_hit(cx: &mut TestApp
 #[gpui::test]
 fn f6_from_a_document_in_the_panel_enters_its_controls(cx: &mut TestAppContext) {
     let (view, thread, _file, cx) = with_marked_file("focus-f6-readme", cx);
-    let readme = view.read_with(cx, |view, _| view.thread_path(thread).unwrap()).join("README.md");
+    let readme = view.read_with(cx, |view, cx| view.thread_path(thread, cx).unwrap()).join("README.md");
     std::fs::write(&readme, "# Hello\n\nbody\n").unwrap();
     view.update(cx, |view, cx| view.open_in_files(thread, readme, None, true, cx));
     tick(cx);

@@ -94,29 +94,43 @@ impl CockpitView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        match self.overview_inputs(thread, cx) {
-            Some(inputs) => self
-                .overview
-                .update(cx, |overview, cx| overview.sections(inputs, window, cx)),
-            None => div().into_any_element(),
+        if self.cockpit.read(cx).thread(thread).is_none() {
+            return div().into_any_element();
         }
+        let folder = self.thread_path(thread, cx);
+        let background = self
+            .background_inputs(thread, false, cx)
+            .and_then(|inputs| self.background.update(cx, |background, cx| background.section(&inputs, cx)));
+        // The model is lent, not written: the Overview draws what it
+        // borrows of it under its own update.
+        self.cockpit.update(cx, |model, cx| {
+            match self.overview_inputs(model, thread, folder, background) {
+                Some(inputs) => self
+                    .overview
+                    .update(cx, |overview, cx| overview.sections(inputs, window, cx)),
+                None => div().into_any_element(),
+            }
+        })
     }
 
     /// What the Overview draws of the window for `thread`.
-    fn overview_inputs(&self, thread: ThreadId, cx: &mut Context<Self>) -> Option<OverviewInputs<'_>> {
-        let open = self.cockpit.thread(thread)?;
+    fn overview_inputs<'a>(
+        &'a self,
+        model: &'a Cockpit,
+        thread: ThreadId,
+        folder: Option<std::path::PathBuf>,
+        background: Option<Div>,
+    ) -> Option<OverviewInputs<'a>> {
+        let open = model.thread(thread)?;
         let transcript = open.transcript();
-        let background = self
-            .background_inputs(thread, false)
-            .and_then(|inputs| self.background.update(cx, |background, cx| background.section(&inputs, cx)));
         let facts = self.facts.get(thread);
         Some(OverviewInputs {
             thread,
-            machine: self.cockpit.machine().map_or_else(
+            machine: model.machine().map_or_else(
                 || "This computer".to_string(),
                 |bridge| bridge.name().to_string(),
             ),
-            folder: self.thread_path(thread),
+            folder,
             branch: self.thread_branch(thread),
             facts,
             files: facts.map(|facts| facts.changed_files.as_slice()).unwrap_or_default(),
@@ -168,12 +182,12 @@ impl CockpitView {
         if !self.overview.read(cx).wants_read(thread, &path, stat) {
             return;
         }
-        let Some(workspace) = self.thread_path(thread) else {
+        let Some(workspace) = self.thread_path(thread, cx) else {
             return;
         };
         let answer = self
             .cockpit
-            .review_diff(&workspace, ferrite_reviewr::ferrite::Read::Uncommitted);
+            .update(cx, |cockpit, _| cockpit.review_diff(&workspace, ferrite_reviewr::ferrite::Read::Uncommitted));
         self.overview.update(cx, |overview, cx| {
             overview.wait_hunks(thread, path, stat, &workspace, answer, cx)
         });

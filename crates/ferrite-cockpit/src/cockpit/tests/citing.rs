@@ -432,7 +432,7 @@ fn only_the_field_holding_the_keyboard_shows_a_caret(cx: &mut TestAppContext) {
     ferrite_ui::motion::testing::drive();
     cx.update(|window, _| window.activate_window());
     view.update(cx, |view, cx| {
-        view.focus_pane(0);
+        view.focus_pane(0, cx);
         cx.notify();
     });
     tick(cx);
@@ -597,8 +597,8 @@ fn a_source_that_arrives_later_is_no_longer_unavailable(cx: &mut TestAppContext)
         if transcript.read_with(cx, |transcript, _| transcript.holds_block(later)) {
             break;
         }
-        let _ = view.update(cx, |view, _| {
-            view.cockpit.send(thread, format!("more {round}"))
+        let _ = view.update(cx, |view, cx| {
+            view.cockpit.update(cx, |cockpit, _| cockpit.send(thread, format!("more {round}")))
         });
         answer(&format!("answer {round}\n\n"));
         tick(cx);
@@ -803,7 +803,7 @@ fn go_to_source_clears_the_band_of_the_turn_it_lands_in(cx: &mut TestAppContext)
     stream.send(answer("First")).unwrap();
     stream.send(ended()).unwrap();
     tick(cx);
-    let _ = view.update(cx, |view, _| view.cockpit.send(thread, "Next".into()));
+    let _ = view.update(cx, |view, cx| view.cockpit.update(cx, |cockpit, _| cockpit.send(thread, "Next".into())));
     stream.send(answer("Second")).unwrap();
     stream.send(ended()).unwrap();
     tick(cx);

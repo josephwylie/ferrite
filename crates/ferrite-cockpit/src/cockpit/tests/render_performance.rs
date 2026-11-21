@@ -123,10 +123,11 @@ fn thinking_id(
     cx: &mut gpui::VisualTestContext,
     row: usize,
 ) -> String {
-    view.read_with(cx, |view, _| {
+    view.read_with(cx, |view, cx| {
         let thread = view.panes[0].thread().unwrap();
         let block = &view
             .cockpit
+            .read(cx)
             .thread(thread)
             .unwrap()
             .activity()
@@ -163,10 +164,11 @@ fn thinking_details(
     cx: &mut gpui::VisualTestContext,
     row: usize,
 ) -> String {
-    view.read_with(cx, |view, _| {
+    view.read_with(cx, |view, cx| {
         let thread = view.panes[0].thread().unwrap();
         let thought = view
             .cockpit
+            .read(cx)
             .thread(thread)
             .unwrap()
             .activity()
@@ -203,9 +205,10 @@ fn wrapped_thinking_caret(
 }
 
 fn expand_reasoning_rows(view: &gpui::Entity<CockpitView>, cx: &mut gpui::VisualTestContext) {
-    let rows = view.read_with(cx, |view, _| {
+    let rows = view.read_with(cx, |view, cx| {
         let thread = view.panes[0].thread().unwrap();
         view.cockpit
+            .read(cx)
             .thread(thread)
             .unwrap()
             .activity()
@@ -309,9 +312,9 @@ fn retained_transcript_relative_file_links_use_the_thread_workspace_and_copy_tex
     });
     tick(cx);
 
-    let id = view.read_with(cx, |view, _| {
+    let id = view.read_with(cx, |view, cx| {
         let thread = view.panes[0].thread().unwrap();
-        let block = &view.cockpit.thread(thread).unwrap().transcript().blocks()[0];
+        let block = &view.cockpit.read(cx).thread(thread).unwrap().transcript().blocks()[0];
         format!(
             "markdown-{}-{:?}",
             view.panes[0].text_namespace(),
@@ -394,9 +397,10 @@ fn native_transcript_rows_stay_bounded_by_a_fixed_viewport_as_history_grows(
 
     reasoning_rows(&fake, 30, 200);
     tick(cx);
-    let retained_thinking_rows = view.read_with(cx, |view, _| {
+    let retained_thinking_rows = view.read_with(cx, |view, cx| {
         let thread = view.panes[0].thread().unwrap();
         view.cockpit
+            .read(cx)
             .thread(thread)
             .unwrap()
             .activity()
@@ -720,10 +724,11 @@ fn replacing_an_offscreen_selected_thinking_row_clears_only_that_selection(
         })
         .unwrap();
     tick(cx);
-    view.read_with(cx, |view, _| {
+    view.read_with(cx, |view, cx| {
         let thread = view.panes[0].thread().unwrap();
         let block = &view
             .cockpit
+            .read(cx)
             .thread(thread)
             .unwrap()
             .activity()
@@ -765,7 +770,7 @@ fn reading_size_reflows_without_replacing_text_or_selection(cx: &mut TestAppCont
             .unwrap();
     }
     tick(cx);
-    let index = view.read_with(cx, |view, _| view.focused());
+    let index = view.read_with(cx, |view, cx| view.focused(cx));
     let prefix = view.read_with(cx, |view, _| {
         format!("markdown-{}-", view.panes[index].text_namespace())
     });
@@ -918,7 +923,7 @@ fn code_copy_traversal_does_not_accept_an_empty_composers_followup(cx: &mut Test
             "leaving Copy cannot accept ghost text"
         );
         assert_eq!(
-            view.cockpit.thread(thread).unwrap().suggestion(),
+            view.cockpit.read(cx).thread(thread).unwrap().suggestion(),
             Some("Run the tests")
         );
     });
@@ -954,7 +959,7 @@ fn answer_gutter_and_padding_survive_wrapping_resize(cx: &mut TestAppContext) {
         let answer = debug_bounds(cx, "transcript-answer".into()).unwrap();
         let text = view.read_with(cx, |view, cx| {
             let thread = view.panes[0].thread().unwrap();
-            let block = &view.cockpit.thread(thread).unwrap().transcript().blocks()[0];
+            let block = &view.cockpit.read(cx).thread(thread).unwrap().transcript().blocks()[0];
             let id = format!(
                 "markdown-{}-{:?}",
                 view.panes[0].text_namespace(),
@@ -1052,7 +1057,7 @@ fn a_focused_idle_window_does_not_render_the_cockpit_at_the_pulse_rate(cx: &mut 
     cx.simulate_resize(gpui::size(px(1440.), px(900.)));
     cx.update(|window, _| window.activate_window());
     view.update(cx, |view, cx| {
-        view.focus_pane(0);
+        view.focus_pane(0, cx);
         cx.notify();
     });
     tick(cx);
@@ -1370,7 +1375,7 @@ fn panel_width(cx: &mut gpui::VisualTestContext) -> Option<f32> {
 }
 
 fn solo_card_right(view: &gpui::Entity<CockpitView>, cx: &mut gpui::VisualTestContext) -> f32 {
-    let card = cx.update(|window, cx| view.read(cx).pane_rects(window))[0].1;
+    let card = cx.update(|window, cx| view.read(cx).pane_rects(window, cx))[0].1;
     card.x + card.w
 }
 
@@ -1419,7 +1424,7 @@ fn a_preview_snaps_the_panel_wide(cx: &mut TestAppContext) {
         })
     });
     cx.run_until_parked();
-    let wide = view.read_with(cx, |view, _| view.board_right());
+    let wide = view.read_with(cx, |view, cx| view.board_right(cx));
     assert!(wide > least_w() + 100., "a 1600 window previews wide: {wide}");
     assert_eq!(panel_width(cx), Some(wide), "wide at once");
     assert!((solo_card_right(&view, cx) - (1600. - wide)).abs() <= 1.);
@@ -1471,7 +1476,7 @@ fn a_preview_opens_a_hidden_panel(cx: &mut TestAppContext) {
     cx.run_until_parked();
     settle(cx);
     let wide = panel_width(cx).expect("shown");
-    assert_eq!(wide, view.read_with(cx, |view, _| view.board_right()));
+    assert_eq!(wide, view.read_with(cx, |view, cx| view.board_right(cx)));
     assert!(
         !view.read_with(cx, |view, _| view.prefs.settings.panel_shown),
         "still off"
@@ -1567,7 +1572,7 @@ fn a_nav_hover_sweep_redraws_the_cockpit_and_not_the_transcript(cx: &mut TestApp
     tick(cx);
     tick(cx);
     settle(cx);
-    let focused = view.read_with(cx, |view, _| view.focused());
+    let focused = view.read_with(cx, |view, cx| view.focused(cx));
     let prefix = view.read_with(cx, |view, _| {
         format!("markdown-{}-", view.panes[focused].text_namespace())
     });
@@ -1635,8 +1640,8 @@ fn the_nav_list_at_rest_asks_for_no_frames(cx: &mut TestAppContext) {
             .unwrap();
     }
     tick(cx);
-    let listed = view.read_with(cx, |view, _| {
-        let state = view.nav_state();
+    let listed = view.read_with(cx, |view, cx| {
+        let state = view.nav_state(cx);
         state.active.len() + state.working.len()
     });
     // The untouched first Thread was opened today too.
@@ -1668,7 +1673,7 @@ fn a_pending_decision_does_not_render_the_cockpit_at_the_pulse_rate(cx: &mut Tes
     cx.simulate_resize(gpui::size(px(1440.), px(900.)));
     cx.update(|window, _| window.activate_window());
     view.update(cx, |view, cx| {
-        view.focus_pane(0);
+        view.focus_pane(0, cx);
         cx.notify();
     });
     fake.streams.borrow()[0]
@@ -1676,9 +1681,10 @@ fn a_pending_decision_does_not_render_the_cockpit_at_the_pulse_rate(cx: &mut Tes
         .unwrap();
     tick(cx);
     cockpit_renders_over(cx, 1_000);
-    view.read_with(cx, |view, _| {
+    view.read_with(cx, |view, cx| {
         assert_eq!(
             view.cockpit
+                .read(cx)
                 .thread(thread)
                 .unwrap()
                 .pending_decisions()
@@ -1828,7 +1834,7 @@ fn solo_board<'a>(
     cx.simulate_resize(gpui::size(px(1600.), px(1000.)));
     cx.update(|window, _| window.activate_window());
     view.update(cx, |view, cx| {
-        view.focus_pane(0);
+        view.focus_pane(0, cx);
         cx.notify();
     });
     tick(cx);

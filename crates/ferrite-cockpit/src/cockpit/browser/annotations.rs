@@ -70,16 +70,12 @@ impl CockpitView {
         let Some(target) = target else {
             return;
         };
-        self.finish_browser_interaction(thread, target.owner, target.document.tab);
+        self.finish_browser_interaction(thread, target.owner, target.document.tab, cx);
         window.focus(&target.focus, cx);
         let send_enabled = self.annotation_send_enabled(thread, cx);
-        let begun = LiveAnnotation::begin(
-            thread,
-            target,
-            window.window_handle(),
-            send_enabled,
-            &mut self.cockpit,
-        );
+        let begun = self.cockpit.update(cx, |cockpit, _| {
+            LiveAnnotation::begin(thread, target, window.window_handle(), send_enabled, cockpit)
+        });
         let browser = self.browsers.threads.get_mut(&thread).unwrap();
         match begun {
             Ok(annotation) => {
@@ -92,8 +88,8 @@ impl CockpitView {
     }
 
     fn annotation_send_enabled(&self, thread: ThreadId, cx: &gpui::App) -> bool {
-        self.focused_thread() == Some(thread)
-            && self.cockpit.thread(thread).is_some()
+        self.focused_thread(cx) == Some(thread)
+            && self.cockpit.read(cx).thread(thread).is_some()
             && self.pane_for(thread).is_some_and(|index| {
                 self.panes[index].is_main() && self.panes[index].composer.read(cx).comment_valid(cx)
             })
@@ -203,7 +199,7 @@ impl CockpitView {
             }
             match self
                 .cockpit
-                .browser_annotation_image(thread, retained.clone())
+                .update(cx, |cockpit, _| cockpit.browser_annotation_image(thread, retained.clone()))
             {
                 Ok(image) => self
                     .browser_review
@@ -233,14 +229,16 @@ impl CockpitView {
             };
             let send_enabled = self.annotation_send_enabled(thread, cx);
             let composer = self.pane_for(thread).is_some();
-            let step = annotation.tend(
-                thread,
-                &self.browsers.threads[&thread],
-                &mut self.cockpit,
-                &mut self.browser_controls,
-                send_enabled,
-                composer,
-            );
+            let step = self.cockpit.update(cx, |cockpit, _| {
+                annotation.tend(
+                    thread,
+                    &self.browsers.threads[&thread],
+                    cockpit,
+                    &mut self.browser_controls,
+                    send_enabled,
+                    composer,
+                )
+            });
             let browser = self.browsers.threads.get_mut(&thread).unwrap();
             if let Some(error) = step.error {
                 browser.error = Some(error);

@@ -79,8 +79,8 @@ impl CockpitView {
         if !self.ferrite_update.restart_offered() {
             return;
         }
-        if self.in_flight().is_none() {
-            self.release_executable();
+        if self.in_flight(cx).is_none() {
+            self.release_executable(cx);
             restart(cx);
             return;
         }
@@ -91,9 +91,9 @@ impl CockpitView {
         cx.spawn(async move |this, cx| loop {
             cx.background_executor().timer(IDLE_POLL).await;
             let idle = this.update(cx, |view, cx| {
-                let idle = view.in_flight().is_none();
+                let idle = view.in_flight(cx).is_none();
                 if idle {
-                    view.release_executable();
+                    view.release_executable(cx);
                     restart(cx);
                 }
                 idle
@@ -128,18 +128,18 @@ impl CockpitView {
                 // On Windows the update stops the Server too, so it asks
                 // even when the window's going alone would end nothing.
                 let warning = if cfg!(windows) {
-                    self.in_flight()
+                    self.in_flight(cx)
                         .map(|what| format!("{what}. The update stops them."))
                 } else {
                     self.leaving_warning(cx)
                 };
                 let view = cx.entity().downgrade();
                 let leave = move |_: &mut Window, cx: &mut gpui::App| {
-                    view.update(cx, |view, _| view.release_executable()).ok();
+                    view.update(cx, |view, cx| view.release_executable(cx)).ok();
                     restart(cx);
                 };
                 if self.confirm_leaving("Restart", warning, window, cx, leave) {
-                    self.release_executable();
+                    self.release_executable(cx);
                     restart(cx);
                 }
             }
@@ -154,7 +154,7 @@ impl CockpitView {
         if !self.prefs.ferrite_updates {
             return Vec::new();
         }
-        let busy = self.in_flight();
+        let busy = self.in_flight(cx);
         let (detail, button) = self.ferrite_update.describe(busy.as_deref());
         let view = cx.entity().downgrade();
         vec![

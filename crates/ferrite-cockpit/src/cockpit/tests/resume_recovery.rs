@@ -52,11 +52,11 @@ fn lost<'a>(
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     cx.simulate_resize(gpui::size(px(1000.), px(700.)));
     tick(cx);
-    view.update(cx, |view, _| {
-        view.cockpit.watch_memory(Box::new(Meter), 1);
+    view.update(cx, |view, cx| {
+        view.cockpit.update(cx, |cockpit, _| cockpit.watch_memory(Box::new(Meter), 1));
         *fake.fail.borrow_mut() = true;
         assert_eq!(
-            view.cockpit.sweep().len(),
+            view.cockpit.update(cx, |cockpit, _| cockpit.sweep().len()),
             1,
             "the restart fails: no Session"
         );
@@ -77,8 +77,9 @@ fn prompts(
     thread: ThreadId,
     cx: &mut gpui::VisualTestContext,
 ) -> Vec<String> {
-    view.read_with(cx, |view, _| {
+    view.read_with(cx, |view, cx| {
         view.cockpit
+            .read(cx)
             .thread(thread)
             .unwrap()
             .transcript()
@@ -164,7 +165,7 @@ fn a_lost_conversation_is_recovered_from_the_offer_once_in_the_same_thread(
         "the old transcript stays: {said:?}"
     );
     assert_eq!(
-        view.read_with(cx, |view, _| view.cockpit.threads().len()),
+        view.read_with(cx, |view, cx| view.cockpit.read(cx).threads().len()),
         1,
         "the same Thread"
     );
@@ -188,8 +189,8 @@ fn a_conversation_in_use_is_refused_and_never_forked(cx: &mut TestAppContext) {
         "no offer to start over"
     );
     let attempts = fake.resumed.borrow().len();
-    view.update(cx, |view, _| {
-        assert!(view.cockpit.start_fresh_conversation(thread).is_ok());
+    view.update(cx, |view, cx| {
+        assert!(view.cockpit.update(cx, |cockpit, _| cockpit.start_fresh_conversation(thread).is_ok()));
     });
     assert_eq!(
         fake.resumed.borrow().len(),

@@ -49,7 +49,7 @@ fn waiting<'a>(
 
 fn cursor(view: &gpui::Entity<CockpitView>, cx: &mut gpui::VisualTestContext) -> Option<usize> {
     view.read_with(cx, |view, cx| {
-        let request = view.shown_request(0).expect("a Decision waits");
+        let request = view.shown_request(0, cx).expect("a Decision waits");
         view.decisions
             .read(cx)
             .forms(view.panes[0].identity)?
@@ -73,8 +73,8 @@ fn the_decision_box_reads_head_well_options_hint(cx: &mut TestAppContext) {
         cx,
         bash("row", "gh issue close 212 --reason \"not planned\""),
     );
-    let (thread, serial) = view.read_with(cx, |view, _| {
-        let request = view.shown_request(0).unwrap();
+    let (thread, serial) = view.read_with(cx, |view, cx| {
+        let request = view.shown_request(0, cx).unwrap();
         (view.panes[0].thread().unwrap(), request.handle.serial)
     });
     let card = cx.debug_bounds("question-island").expect("the box");
@@ -150,7 +150,7 @@ fn the_decision_box_reads_head_well_options_hint(cx: &mut TestAppContext) {
 fn the_head_names_its_provider_and_context(cx: &mut TestAppContext) {
     let (view, _fake, cx) = waiting("parity-head", cx, bash("head", "ls"));
     let thread = view.read_with(cx, |view, _| view.panes[0].thread().unwrap());
-    let (provider, context) = view.read_with(cx, |view, _| view.decision_context(thread));
+    let (provider, context) = view.read_with(cx, |view, cx| view.decision_context(thread, cx));
     assert_eq!(provider, Some(Provider::Claude));
     assert_eq!(
         context.as_deref(),
@@ -168,7 +168,7 @@ fn the_head_states_the_announced_sandbox_not_the_default(cx: &mut TestAppContext
     let (view, fake, cx) = waiting("parity-sandbox", cx, bash("sandbox", "ls"));
     let thread = view.read_with(cx, |view, _| view.panes[0].thread().unwrap());
     let context = |view: &gpui::Entity<CockpitView>, cx: &mut gpui::VisualTestContext| {
-        view.read_with(cx, |view, _| view.decision_context(thread).1)
+        view.read_with(cx, |view, cx| view.decision_context(thread, cx).1)
     };
     assert_eq!(context(&view, cx).as_deref(), Some("default"));
     *fake.sandbox.borrow_mut() = Some("workspace-write".into());
@@ -339,7 +339,7 @@ fn the_amend_note_rides_a_denial(cx: &mut TestAppContext) {
     tick(cx);
     assert!(cx.debug_bounds("decision-note").is_some(), "the note opens");
     let focused = view.update_in(cx, |view, window, cx| {
-        let request = view.shown_request(0).unwrap();
+        let request = view.shown_request(0, cx).unwrap();
         view.decisions
             .read(cx)
             .forms(view.panes[0].identity)
@@ -377,8 +377,9 @@ fn the_amend_note_follows_an_allow_as_the_next_prompt(cx: &mut TestAppContext) {
         answered(&fake)
     );
     let thread = view.read_with(cx, |view, _| view.panes[0].thread().unwrap());
-    let queued: Vec<String> = view.read_with(cx, |view, _| {
+    let queued: Vec<String> = view.read_with(cx, |view, cx| {
         view.cockpit
+            .read(cx)
             .thread(thread)
             .unwrap()
             .queue()
@@ -428,8 +429,8 @@ fn esc_closes_the_note_then_denies(cx: &mut TestAppContext) {
 #[gpui::test]
 fn esc_closes_the_allow_menu_then_denies(cx: &mut TestAppContext) {
     let (view, fake, cx) = waiting("parity-menu-esc", cx, bash("menu-esc", "cargo test"));
-    let (thread, serial) = view.read_with(cx, |view, _| {
-        let request = view.shown_request(0).unwrap();
+    let (thread, serial) = view.read_with(cx, |view, cx| {
+        let request = view.shown_request(0, cx).unwrap();
         (view.panes[0].thread().unwrap(), request.handle.serial)
     });
     let always = format!("request-always-{}-{serial}", thread.get()).leak();
@@ -441,7 +442,7 @@ fn esc_closes_the_allow_menu_then_denies(cx: &mut TestAppContext) {
     tick(cx);
     assert!(cx.debug_bounds(always).is_none(), "esc closed the menu");
     assert!(answered(&fake).is_empty(), "closing the menu answers nothing");
-    assert!(view.read_with(cx, |view, _| view.shown_request(0).is_some()));
+    assert!(view.read_with(cx, |view, cx| view.shown_request(0, cx).is_some()));
     cx.simulate_keystrokes("escape");
     tick(cx);
     assert!(
@@ -459,8 +460,8 @@ fn esc_closes_the_allow_menu_then_denies(cx: &mut TestAppContext) {
 #[gpui::test]
 fn esc_closes_the_menu_before_the_note(cx: &mut TestAppContext) {
     let (view, fake, cx) = waiting("parity-menu-note", cx, bash("menu-note", "cargo test"));
-    let (thread, serial) = view.read_with(cx, |view, _| {
-        let request = view.shown_request(0).unwrap();
+    let (thread, serial) = view.read_with(cx, |view, cx| {
+        let request = view.shown_request(0, cx).unwrap();
         (view.panes[0].thread().unwrap(), request.handle.serial)
     });
     let always = format!("request-always-{}-{serial}", thread.get()).leak();
@@ -600,8 +601,8 @@ fn the_split_offers_the_providers_auto_mode(cx: &mut TestAppContext) {
 #[gpui::test]
 fn a_press_outside_closes_the_allow_menu(cx: &mut TestAppContext) {
     let (view, fake, cx) = waiting("parity-menu-outside", cx, bash("menu-outside", "cargo test"));
-    let (thread, serial) = view.read_with(cx, |view, _| {
-        let request = view.shown_request(0).unwrap();
+    let (thread, serial) = view.read_with(cx, |view, cx| {
+        let request = view.shown_request(0, cx).unwrap();
         (view.panes[0].thread().unwrap(), request.handle.serial)
     });
     let always = format!("request-always-{}-{serial}", thread.get()).leak();
@@ -614,7 +615,7 @@ fn a_press_outside_closes_the_allow_menu(cx: &mut TestAppContext) {
     tick(cx);
     assert!(cx.debug_bounds(always).is_none(), "a press outside closed the menu");
     assert!(answered(&fake).is_empty(), "closing the menu answers nothing");
-    assert!(view.read_with(cx, |view, _| view.shown_request(0).is_some()));
+    assert!(view.read_with(cx, |view, cx| view.shown_request(0, cx).is_some()));
 
     cx.simulate_click(more.center(), gpui::Modifiers::none());
     tick(cx);

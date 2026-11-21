@@ -147,7 +147,7 @@ fn restarted<'a>(
         view.flush_panel_persistence(cx);
         let thread = view.panes[0].thread().unwrap();
         if quit {
-            view.cockpit.park(thread).unwrap();
+            view.cockpit.update(cx, |cockpit, _| cockpit.park(thread).unwrap());
         }
         thread
     });

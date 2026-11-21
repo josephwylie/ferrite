@@ -31,7 +31,7 @@ fn answered<'a>(
 
 fn open_chat(view: &Entity<CockpitView>, cx: &mut gpui::VisualTestContext) {
     view.update(cx, |view, cx| {
-        let owner = view.focused_thread().unwrap();
+        let owner = view.focused_thread(cx).unwrap();
         view.open_side_chat(owner, cx);
     });
     tick(cx);
@@ -39,7 +39,7 @@ fn open_chat(view: &Entity<CockpitView>, cx: &mut gpui::VisualTestContext) {
 }
 
 fn owner(view: &Entity<CockpitView>, cx: &mut gpui::VisualTestContext) -> ferrite_core::ThreadId {
-    view.read_with(cx, |view, _| view.focused_thread().unwrap())
+    view.read_with(cx, |view, cx| view.focused_thread(cx).unwrap())
 }
 
 /// `owner`'s side chat Surfaces, in tab order.
@@ -91,7 +91,7 @@ fn field_of(
 }
 
 fn bring_back_blocked(view: &CockpitView, owner: ThreadId, id: u64, cx: &gpui::App) -> Option<&'static str> {
-    view.bring_back_blocked(owner, view.side_chat.read(cx).fork(owner, id))
+    view.bring_back_blocked(owner, view.side_chat.read(cx).fork(owner, id), cx)
 }
 
 fn shown_pane<R>(
@@ -142,10 +142,10 @@ fn a_side_chat_opens_as_a_panel_tab_with_an_empty_word(cx: &mut TestAppContext) 
 
     view.read_with(cx, |view, cx| {
         assert_eq!(view.panes.len(), 1, "the fork is no Pane");
-        assert_eq!(view.cockpit.threads().len(), 2);
+        assert_eq!(view.cockpit.read(cx).threads().len(), 2);
         let fork = shown_fork(view, owner, cx).expect("the tab took the fork");
         assert!(owns(view, fork, cx));
-        assert_eq!(view.focused_thread(), Some(owner), "the window stays");
+        assert_eq!(view.focused_thread(cx), Some(owner), "the window stays");
         assert_eq!(draft(view, owner, cx).as_deref(), Some(""));
     });
 }
@@ -266,7 +266,7 @@ fn a_side_chat_question_goes_to_its_fork_and_shows_only_the_new_words(cx: &mut T
     );
     view.read_with(cx, |view, cx| {
         assert_eq!(draft(view, owner, cx).as_deref(), Some(""));
-        let open = view.cockpit.thread(fork).expect("the fork is open");
+        let open = view.cockpit.read(cx).thread(fork).expect("the fork is open");
         assert!(
             open.transcript().blocks().iter().any(|block| matches!(
                 &block.body,
@@ -274,7 +274,7 @@ fn a_side_chat_question_goes_to_its_fork_and_shows_only_the_new_words(cx: &mut T
             )),
             "the fork holds the Thread's history too"
         );
-        let main = view.cockpit.thread(owner).unwrap();
+        let main = view.cockpit.read(cx).thread(owner).unwrap();
         assert!(
             !main
                 .transcript()
@@ -430,8 +430,8 @@ fn deleting_a_thread_retires_its_side_chats_forks(cx: &mut TestAppContext) {
         .expect("the side chat has its fork");
     press_nav_verb(&view, owner, MenuVerb::Delete, cx);
     view.read_with(cx, |view, cx| {
-        assert!(view.cockpit.thread(owner).is_none(), "the Thread is gone");
-        assert!(view.cockpit.thread(fork).is_none(), "its side chat's fork went with it");
+        assert!(view.cockpit.read(cx).thread(owner).is_none(), "the Thread is gone");
+        assert!(view.cockpit.read(cx).thread(fork).is_none(), "its side chat's fork went with it");
         assert!(!owns(view, fork, cx), "and the side chat with it");
     });
 }
@@ -446,9 +446,9 @@ fn cmd_w_in_the_side_chat_field_ends_its_tab(cx: &mut TestAppContext) {
     cx.simulate_keystrokes("cmd-w");
     tick(cx);
     assert!(side_tabs(&view, owner, cx).is_empty(), "the tab is gone");
-    view.read_with(cx, |view, _| {
-        assert_eq!(view.focused_thread(), Some(owner), "the Thread stays");
-        assert_eq!(view.cockpit.threads(), [owner], "the fork is retired");
+    view.read_with(cx, |view, cx| {
+        assert_eq!(view.focused_thread(cx), Some(owner), "the Thread stays");
+        assert_eq!(view.cockpit.read(cx).threads(), [owner], "the fork is retired");
     });
 }
 
@@ -511,8 +511,8 @@ fn a_tool_row_in_a_side_chat_unfolds_in_its_tab(cx: &mut TestAppContext) {
 }
 
 /// Whether `thread`'s transcript holds `text` anywhere.
-fn holds(view: &CockpitView, thread: ThreadId, text: &str) -> bool {
-    view.cockpit.thread(thread).is_some_and(|open| {
+fn holds(view: &CockpitView, thread: ThreadId, text: &str, cx: &gpui::App) -> bool {
+    view.cockpit.read(cx).thread(thread).is_some_and(|open| {
         ferrite_core::transcript::plain_text(open.transcript().blocks()).contains(text)
     })
 }
@@ -531,10 +531,10 @@ fn a_fork_that_lands_after_its_tab_closed_is_retired(cx: &mut TestAppContext) {
     tick(cx);
     tick(cx);
     assert_eq!(fake.forks.borrow().len(), 1, "the fork was asked");
-    view.read_with(cx, |view, _| {
+    view.read_with(cx, |view, cx| {
         assert_eq!(view.panes.len(), 1, "the fork is no Pane");
-        assert_eq!(view.focused_thread(), Some(owner), "the window stays");
-        assert_eq!(view.cockpit.threads(), [owner], "the fork is retired");
+        assert_eq!(view.focused_thread(cx), Some(owner), "the window stays");
+        assert_eq!(view.cockpit.read(cx).threads(), [owner], "the fork is retired");
     });
 }
 
@@ -547,7 +547,7 @@ fn each_fork_lands_in_the_tab_of_the_thread_it_forks(cx: &mut TestAppContext) {
     *fake.native_controls.borrow_mut() = true;
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     cx.simulate_resize(gpui::size(px(1600.), px(700.)));
-    let threads = view.read_with(cx, |view, _| view.cockpit.threads());
+    let threads = view.read_with(cx, |view, cx| view.cockpit.read(cx).threads());
     let (first, second) = (threads[0], threads[1]);
     // A Thread's agent is heard once the window has landed on it.
     for (stream, thread, text) in [(1, second, "beta\n\n"), (0, first, "alpha\n\n")] {
@@ -560,8 +560,8 @@ fn each_fork_lands_in_the_tab_of_the_thread_it_forks(cx: &mut TestAppContext) {
         });
         tick(cx);
     }
-    view.read_with(cx, |view, _| {
-        assert!(holds(view, first, "alpha") && holds(view, second, "beta"));
+    view.read_with(cx, |view, cx| {
+        assert!(holds(view, first, "alpha", cx) && holds(view, second, "beta", cx));
     });
     view.update(cx, |view, cx| {
         view.open_side_chat(first, cx);
@@ -574,10 +574,10 @@ fn each_fork_lands_in_the_tab_of_the_thread_it_forks(cx: &mut TestAppContext) {
     assert_eq!(fake.forks.borrow().len(), 2, "both forks were asked");
     view.read_with(cx, |view, cx| {
         assert_eq!(view.panes.len(), 2, "no fork is a Pane");
-        assert_eq!(view.focused_thread(), Some(first), "the window stays");
+        assert_eq!(view.focused_thread(cx), Some(first), "the window stays");
         let fork = shown_fork(view, second, cx).expect("the second tab took a fork");
-        assert!(holds(view, fork, "beta"), "the second Thread's own fork");
-        assert_eq!(view.cockpit.threads().len(), 3, "the first fork is retired");
+        assert!(holds(view, fork, "beta", cx), "the second Thread's own fork");
+        assert_eq!(view.cockpit.read(cx).threads().len(), 3, "the first fork is retired");
     });
 }
 
@@ -589,31 +589,31 @@ fn a_focus_asked_while_a_fork_is_on_its_way_lands_the_window(cx: &mut TestAppCon
     let (view, fake, cx) = answered("side-chat-focus-meanwhile", cx);
     let owner = owner(&view, cx);
     assert!(
-        view.read_with(cx, |view, _| view.cockpit.names_fork_owners()),
+        view.read_with(cx, |view, cx| view.cockpit.read(cx).names_fork_owners()),
         "a Server that names a fork's owner"
     );
-    let other = view.update(cx, |view, _| {
+    let other = view.update(cx, |view, cx| {
         view.cockpit
-            .open(Provider::Claude, WorkspaceChoice::Main { checkout: here() })
+            .update(cx, |cockpit, _| cockpit.open(Provider::Claude, WorkspaceChoice::Main { checkout: here() }))
             .unwrap()
     });
     tick(cx);
     view.update(cx, |view, cx| {
         view.cockpit
-            .fixture_task_alert(ferrite_core::protocol::ServerMessage::Focus {
+            .update(cx, |cockpit, _| cockpit.fixture_task_alert(ferrite_core::protocol::ServerMessage::Focus {
                 thread: other,
                 fork_of: None,
-            });
+            }));
         view.open_side_chat(owner, cx);
     });
     tick(cx);
     tick(cx);
     assert_eq!(fake.forks.borrow().len(), 1, "the fork was asked");
     view.read_with(cx, |view, cx| {
-        assert_eq!(view.focused_thread(), Some(other), "the window lands where it was asked");
+        assert_eq!(view.focused_thread(cx), Some(other), "the window lands where it was asked");
         assert!(view.pane_for(other).is_some(), "the other Thread keeps its Pane");
         let fork = shown_fork(view, owner, cx).expect("the tab took its fork");
-        assert!(holds(view, fork, "alpha"), "the owner's own fork");
+        assert!(holds(view, fork, "alpha", cx), "the owner's own fork");
     });
 }
 
@@ -624,14 +624,14 @@ fn a_focus_asked_while_a_fork_is_on_its_way_lands_the_window(cx: &mut TestAppCon
 fn a_server_from_before_fork_of_still_gives_the_waiting_tab_its_fork(cx: &mut TestAppContext) {
     let (view, fake, cx) = answered("side-chat-old-server", cx);
     let owner = owner(&view, cx);
-    view.update(cx, |view, _| view.cockpit.fixture_server_before_fork_of());
+    view.update(cx, |view, cx| view.cockpit.update(cx, |cockpit, _| cockpit.fixture_server_before_fork_of()));
     open_chat(&view, cx);
     assert_eq!(fake.forks.borrow().len(), 1, "the fork was asked");
     view.read_with(cx, |view, cx| {
-        assert_eq!(view.focused_thread(), Some(owner), "the window stays");
+        assert_eq!(view.focused_thread(cx), Some(owner), "the window stays");
         assert_eq!(view.panes.len(), 1, "the fork is no Pane");
         let fork = shown_fork(view, owner, cx).expect("the tab took its fork");
-        assert!(holds(view, fork, "alpha"), "the owner's own fork");
+        assert!(holds(view, fork, "alpha", cx), "the owner's own fork");
     });
 }
 
@@ -644,8 +644,8 @@ fn a_server_from_before_fork_of_guesses_no_owner_between_two(cx: &mut TestAppCon
     *fake.native_controls.borrow_mut() = true;
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     cx.simulate_resize(gpui::size(px(1600.), px(700.)));
-    view.update(cx, |view, _| view.cockpit.fixture_server_before_fork_of());
-    let threads = view.read_with(cx, |view, _| view.cockpit.threads());
+    view.update(cx, |view, cx| view.cockpit.update(cx, |cockpit, _| cockpit.fixture_server_before_fork_of()));
+    let threads = view.read_with(cx, |view, cx| view.cockpit.read(cx).threads());
     let (first, second) = (threads[0], threads[1]);
     for (stream, thread) in [(1, second), (0, first)] {
         view.update(cx, |view, cx| view.focus_thread(thread, cx));
@@ -667,7 +667,7 @@ fn a_server_from_before_fork_of_guesses_no_owner_between_two(cx: &mut TestAppCon
     view.read_with(cx, |view, cx| {
         assert_eq!(shown_fork(view, first, cx), None, "the first tab took no fork");
         assert_eq!(shown_fork(view, second, cx), None, "the second tab took no fork");
-        let landed = view.focused_thread().unwrap();
+        let landed = view.focused_thread(cx).unwrap();
         assert!(![first, second].contains(&landed), "the window lands on a fork");
     });
 }
@@ -697,7 +697,7 @@ fn a_failed_fork_leaves_the_next_forks_where_they_belong(cx: &mut TestAppContext
     tick(cx);
     tick(cx);
     view.read_with(cx, |view, cx| {
-        let landed = view.focused_thread().unwrap();
+        let landed = view.focused_thread(cx).unwrap();
         assert_ne!(landed, owner, "the window lands on the ordinary fork");
         assert!(!owns(view, landed, cx), "no side chat took it");
     });

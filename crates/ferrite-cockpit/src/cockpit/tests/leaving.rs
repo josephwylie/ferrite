@@ -14,8 +14,8 @@ fn closing_while_an_agent_works_asks_first(cx: &mut TestAppContext) {
         "nothing to interrupt, nothing asked"
     );
 
-    let _ = view.update(cx, |view, _| {
-        view.cockpit.send(thread, "Run the checks".into())
+    let _ = view.update(cx, |view, cx| {
+        view.cockpit.update(cx, |cockpit, _| cockpit.send(thread, "Run the checks".into()))
     });
     fake.streams.borrow()[0]
         .send(SessionEvent::TextDelta {
@@ -36,10 +36,10 @@ fn closing_while_an_agent_works_asks_first(cx: &mut TestAppContext) {
     cx.simulate_prompt_answer("Cancel");
     cx.run_until_parked();
     assert!(!cx.has_pending_prompt());
-    view.read_with(cx, |view, _| {
+    view.read_with(cx, |view, cx| {
         assert!(!view.leave_asked, "the next ⌘Q asks again");
         assert_eq!(
-            view.cockpit.threads(),
+            view.cockpit.read(cx).threads(),
             vec![thread],
             "the Thread stays live"
         );

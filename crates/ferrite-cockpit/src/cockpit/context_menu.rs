@@ -207,7 +207,7 @@ impl CockpitView {
     /// the window's thread; with no log to read here, or none readable, the
     /// kept part is copied and says it is partial.
     pub(super) fn copy_transcript(&mut self, thread: ThreadId, cx: &mut Context<Self>) {
-        let Some(open) = self.cockpit.thread(thread) else {
+        let Some(open) = self.cockpit.read(cx).thread(thread) else {
             return;
         };
         let kept = plain_text(open.transcript().blocks());
@@ -219,7 +219,7 @@ impl CockpitView {
             return;
         }
         let partial = format!("{PARTIAL_HISTORY}\n\n{kept}");
-        let Some(store) = self.cockpit.history_log(thread).cloned() else {
+        let Some(store) = self.cockpit.read(cx).history_log(thread).cloned() else {
             cx.write_to_clipboard(ClipboardItem::new_string(partial));
             return;
         };
@@ -346,7 +346,7 @@ impl CockpitView {
                 rows.push(None);
                 rows.push(Some((menu::Item::new("Rename"), MenuVerb::Rename)));
                 rows.push(None);
-                if !self.on_machine() {
+                if !self.on_machine(cx) {
                     rows.push(Some((
                         menu::Item::new("Reveal in Finder"),
                         MenuVerb::Reveal,
@@ -363,8 +363,8 @@ impl CockpitView {
             }
             // The Parked shelf's header: the shelf, and the one bulk act it
             // exists for — clearing the parked history it holds.
-            MenuTarget::NavFilter => rows.extend(self.filter_rows()),
-            MenuTarget::NavFactory => rows.extend(self.factory_rows()),
+            MenuTarget::NavFilter => rows.extend(self.filter_rows(cx)),
+            MenuTarget::NavFactory => rows.extend(self.factory_rows(cx)),
             MenuTarget::Parked => {
                 rows.push(Some((
                     menu::Item::new(if self.shelf_open(nav::Shelf::Parked) {
@@ -378,7 +378,7 @@ impl CockpitView {
                 rows.push(Some((
                     menu::Item::new("Delete parked threads")
                         .destructive()
-                        .disabled(self.parked_threads().is_empty()),
+                        .disabled(self.parked_threads(cx).is_empty()),
                     MenuVerb::DeleteAllParked,
                 )));
             }
@@ -390,7 +390,7 @@ impl CockpitView {
                     MenuVerb::Comment,
                 )));
                 rows.push(Some((
-                    menu::Item::new("Open file at this line").disabled(self.on_machine()),
+                    menu::Item::new("Open file at this line").disabled(self.on_machine(cx)),
                     MenuVerb::OpenAtLine,
                 )));
                 rows.push(Some((menu::Item::new("Copy"), MenuVerb::CopySelection)));
@@ -406,7 +406,7 @@ impl CockpitView {
                     },
                     MenuVerb::Rewind,
                 )));
-                let files = self.cockpit.thread(thread).is_some_and(|open| {
+                let files = self.cockpit.read(cx).thread(thread).is_some_and(|open| {
                     open.supports_control(ferrite_core::ControlKind::RewindFiles)
                 });
                 rows.extend(files.then(|| {
@@ -421,7 +421,7 @@ impl CockpitView {
                     ))
                 }));
             }
-            MenuTarget::File(_) => rows = tools::FilesView::row_rows(self.on_machine()),
+            MenuTarget::File(_) => rows = tools::FilesView::row_rows(self.on_machine(cx)),
             MenuTarget::FilesMore(thread) => rows = self.files.read(cx).more_rows(thread),
             MenuTarget::ChangesScope(diff) => rows = self.changes.read(cx).scope_rows(diff),
             MenuTarget::ChangesMore(diff) => rows = self.changes.read(cx).more_rows(diff),
@@ -432,7 +432,7 @@ impl CockpitView {
             MenuTarget::Details(_) => rows = self.details_menu_rows(),
             MenuTarget::Terminal(_) => rows = self.terminals.read(cx).context_rows(),
             MenuTarget::TerminalMore(_) => rows = self.terminals.read(cx).more_rows(),
-            MenuTarget::SurfaceMenu(thread) => rows = self.surface_menu_rows(thread),
+            MenuTarget::SurfaceMenu(thread) => rows = self.surface_menu_rows(thread, cx),
             MenuTarget::SurfaceTab { thread, at } => rows = self.surface_tab_rows(thread, at),
             MenuTarget::PrMore(target) => {
                 rows = self.pull_request.read(cx).menu_rows(target, self.branch_pr(target))
@@ -508,9 +508,9 @@ impl CockpitView {
                 rows.push(None);
             }
         };
-        let open = self.cockpit.thread(thread);
+        let open = self.cockpit.read(cx).thread(thread);
         // A machine's path is not in this computer's Finder or Terminal.
-        if !self.on_machine() {
+        if !self.on_machine(cx) {
             rows.push(Some((
                 menu::Item::new("Open in"),
                 MenuVerb::Submenu(Submenu::OpenIn),
@@ -525,9 +525,10 @@ impl CockpitView {
         // On screen, the Thread is seen again the next frame.
         let visible = self
             .cockpit
+            .read(cx)
             .visible()
             .contains(&PaneIdentity::Thread(thread));
-        if !visible && self.cockpit.notifications().can_mark_unread(thread) {
+        if !visible && self.cockpit.read(cx).notifications().can_mark_unread(thread) {
             rows.push(Some((key("Mark as unread", "U"), MenuVerb::MarkUnread)));
         }
         rows.push(Some((key("Rename", "R"), MenuVerb::Rename)));
@@ -539,7 +540,7 @@ impl CockpitView {
             };
             rows.push(Some((fork, MenuVerb::Fork)));
         }
-        if self.cockpit.roster().focused_thread() != Some(thread) {
+        if self.cockpit.read(cx).roster().focused_thread() != Some(thread) {
             rows.push(Some((
                 key(if open.is_some() { "Open" } else { "Resume" }, "O"),
                 MenuVerb::Focus,
@@ -936,10 +937,10 @@ impl CockpitView {
             (MenuTarget::Review { thread, line }, MenuVerb::OpenAtLine) => {
                 let place = self.review_of(thread).and_then(|review| {
                     let (path, number) = review.read(cx).place(line)?;
-                    Some((self.thread_path(thread)?.join(path), number))
+                    Some((self.thread_path(thread, cx)?.join(path), number))
                 });
                 if let (Some((path, number)), Some(index)) = (place, self.pane_for(thread)) {
-                    self.focus_pane(index);
+                    self.focus_pane(index, cx);
                     self.open_preview(path, Some(number), window, cx);
                 }
             }
@@ -971,7 +972,7 @@ impl CockpitView {
                 let project = match target {
                     MenuTarget::Thread(thread)
                     | MenuTarget::Pane(thread)
-                    | MenuTarget::Snooze(thread) => self.cockpit.project_id(thread),
+                    | MenuTarget::Snooze(thread) => self.cockpit.read(cx).project_id(thread),
                     MenuTarget::Parked
                     | MenuTarget::NavFilter
                     | MenuTarget::NavFactory
@@ -994,7 +995,7 @@ impl CockpitView {
                     | MenuTarget::Page(_) => None,
                 };
                 self.open_draft(DraftTarget::Main, cx);
-                if let (Some(project), Some(draft)) = (project, self.focused_draft_mut()) {
+                if let (Some(project), Some(draft)) = (project, self.focused_draft_mut(cx)) {
                     draft.binding.choose_checkout(project);
                 }
             }
@@ -1003,7 +1004,7 @@ impl CockpitView {
                     cx.reveal_path(&path);
                 }
             }
-            (MenuTarget::Thread(thread), MenuVerb::MarkUnread) => self.cockpit.mark_unread(thread),
+            (MenuTarget::Thread(thread), MenuVerb::MarkUnread) => self.cockpit.update(cx, |cockpit, _| cockpit.mark_unread(thread)),
             (MenuTarget::Thread(thread), MenuVerb::Fork) => {
                 self.fork_thread(thread, None, None, cx)
             }
@@ -1030,7 +1031,7 @@ impl CockpitView {
                 }
             }
             (MenuTarget::Thread(thread) | MenuTarget::Pane(thread), MenuVerb::Delete) => {
-                match self.delete_thread(thread) {
+                match self.delete_thread(thread, cx) {
                     Err(error) => self.nav_notice.problem(format!("delete refused: {error}")),
                     Ok(()) => self.nav_notice.clear(),
                 }

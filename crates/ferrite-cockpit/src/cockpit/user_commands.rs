@@ -33,10 +33,10 @@ impl CockpitView {
     /// The palette's rows for the operator's commands, after the built-in
     /// ones: only while the focused Thread has a directory to run in. A
     /// running command's row stops it.
-    pub(super) fn user_command_rows(&self) -> Vec<PaletteRow> {
+    pub(super) fn user_command_rows(&self, cx: &gpui::App) -> Vec<PaletteRow> {
         let runnable = self
-            .focused_thread()
-            .is_some_and(|thread| self.thread_path(thread).is_some());
+            .focused_thread(cx)
+            .is_some_and(|thread| self.thread_path(thread, cx).is_some());
         if !runnable {
             return Vec::new();
         }
@@ -76,10 +76,10 @@ impl CockpitView {
         let Some(command) = self.prefs.settings.commands.get(index).cloned() else {
             return;
         };
-        let Some(thread) = self.focused_thread() else {
+        let Some(thread) = self.focused_thread(cx) else {
             return;
         };
-        let Some(cwd) = self.thread_path(thread) else {
+        let Some(cwd) = self.thread_path(thread, cx) else {
             return;
         };
         let owner = PaneIdentity::Thread(thread);

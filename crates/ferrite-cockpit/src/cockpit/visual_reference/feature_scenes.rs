@@ -183,7 +183,7 @@ enum Staged {
 fn review(staged: Staged) -> (Scene, Setup) {
     let scene = conversation("review");
     let setup: Setup = Box::new(move |view, window, cx| {
-        let index = view.focused();
+        let index = view.focused(cx);
         let composer = view.panes[index].composer.clone();
         let reading = view.prefs.settings.reading_size;
         let review =
@@ -534,7 +534,7 @@ fn find() -> (Scene, Setup) {
     let scene = conversation("find");
     let setup: Setup = Box::new(|view, window, cx| {
         view.open_find(&ferrite_pane::find::Open, window, cx);
-        if let Some(transcript) = view.panes[view.focused()].transcript() {
+        if let Some(transcript) = view.panes[view.focused(cx)].transcript() {
             transcript.update(cx, |transcript, cx| transcript.type_find("nav", cx));
         }
     });
@@ -556,7 +556,7 @@ fn scroll_to_end() -> (Scene, Setup) {
     scene.core.queue(thread, "Then push the branch.".into());
     scene.core.pump();
     let setup: Setup = Box::new(|view, _, cx| {
-        if let Some(transcript) = view.panes[view.focused()].transcript() {
+        if let Some(transcript) = view.panes[view.focused(cx)].transcript() {
             transcript.update(cx, |transcript, cx| {
                 transcript.scroll_to(ferrite_pane::transcript::ScrollTarget::Top, cx)
             });
@@ -571,13 +571,13 @@ fn scroll_to_end() -> (Scene, Setup) {
 fn send_landed() -> (Scene, Setup) {
     let scene = conversation("send-landed");
     let setup: Setup = Box::new(|view, _, cx| {
-        let Some(thread) = view.focused_thread() else {
+        let Some(thread) = view.focused_thread(cx) else {
             return;
         };
         let _ = view
             .cockpit
-            .send(thread, "Push the branch with the nav fix.".into());
-        view.scroll_transcript_to_new_prompt(view.focused(), cx);
+            .update(cx, |cockpit, _| cockpit.send(thread, "Push the branch with the nav fix.".into()));
+        view.scroll_transcript_to_new_prompt(view.focused(cx), cx);
     });
     (scene, setup)
 }
@@ -589,7 +589,7 @@ fn send_landed() -> (Scene, Setup) {
 fn reply_card() -> (Scene, Setup) {
     let scene = conversation("reply-card");
     let setup: Setup = Box::new(|view, _, cx| {
-        let index = view.focused();
+        let index = view.focused(cx);
         view.panes[index].composer.update(cx, |composer, cx| {
             composer.reply(
                 ferrite_core::replies::Reply::new("Both commands ran.", "testing"),
@@ -617,7 +617,7 @@ fn reply_card() -> (Scene, Setup) {
 fn tools(state: &str, tools: &'static [Opener], file: Option<&'static str>) -> (Scene, Setup) {
     let scene = conversation(state);
     let setup: Setup = Box::new(move |view, _, cx| {
-        let Some(thread) = view.focused_thread() else {
+        let Some(thread) = view.focused_thread(cx) else {
             return;
         };
         for tool in tools {
@@ -652,7 +652,7 @@ enum PanelStaged {
 fn panel(state: &str, staged: PanelStaged) -> (Scene, Setup) {
     let scene = conversation(state);
     let setup: Setup = Box::new(move |view, _, cx| {
-        let Some(thread) = view.focused_thread() else {
+        let Some(thread) = view.focused_thread(cx) else {
             return;
         };
         for opener in [Opener::Changes, Opener::Files, Opener::Terminal] {
@@ -683,7 +683,7 @@ enum PrStaged {
 fn panel_pr(label: &'static str, staged: PrStaged) -> (Scene, Setup) {
     let scene = conversation(label);
     let setup: Setup = Box::new(move |view, _, cx| {
-        let Some(thread) = view.focused_thread() else {
+        let Some(thread) = view.focused_thread(cx) else {
             return;
         };
         let Ok(mut pr) = pull_request().pr else {
@@ -733,7 +733,7 @@ fn panel_pr(label: &'static str, staged: PrStaged) -> (Scene, Setup) {
 fn side_chat() -> (Scene, Setup) {
     let scene = conversation("side-chat");
     let setup: Setup = Box::new(|view, _, cx| {
-        if let Some(owner) = view.focused_thread() {
+        if let Some(owner) = view.focused_thread(cx) {
             view.fixture_side_chat(owner, cx);
         }
     });
@@ -1179,7 +1179,7 @@ fn composer_stop() -> (Scene, Setup) {
 fn head_breadcrumb() -> (Scene, Setup) {
     let scene = conversation("head-breadcrumb");
     let setup: Setup = Box::new(|view, window, cx| {
-        if let Some(thread) = view.focused_thread() {
+        if let Some(thread) = view.focused_thread(cx) {
             ferrite_ui::motion::hover_listener(format!("view-title-hover-{}", thread.get()).into())(
                 &true, window, cx,
             );
@@ -1248,7 +1248,7 @@ fn long_prompt() -> (Scene, Setup) {
 fn cite() -> (Scene, Setup) {
     let scene = conversation("cite");
     let setup: Setup = Box::new(|view, _, cx| {
-        if let Some(transcript) = view.panes[view.focused()].transcript() {
+        if let Some(transcript) = view.panes[view.focused(cx)].transcript() {
             transcript.update(cx, |transcript, cx| {
                 transcript.fixture_cite(
                     "The nav rows jump by a line when a Thread starts streaming.",
@@ -1487,7 +1487,7 @@ fn annotation_editor() -> (Scene, Setup) {
     )
     .unwrap();
     let setup: Setup = Box::new(move |view, _, cx| {
-        let thread = view.panes[view.focused()].thread().unwrap();
+        let thread = view.panes[view.focused(cx)].thread().unwrap();
         view.fixture_annotation_editor(thread, annotation, image, cx);
     });
     (scene, setup)
@@ -1496,7 +1496,7 @@ fn annotation_editor() -> (Scene, Setup) {
 fn cite_comment() -> (Scene, Setup) {
     let scene = conversation("cite-comment");
     let setup: Setup = Box::new(|view, _, cx| {
-        let index = view.focused();
+        let index = view.focused(cx);
         view.panes[index].composer.update(cx, |composer, cx| {
             composer.cite_with_comment(
                 ferrite_core::replies::Reply::new(

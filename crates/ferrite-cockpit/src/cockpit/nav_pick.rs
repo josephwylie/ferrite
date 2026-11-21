@@ -75,7 +75,7 @@ impl NavView {
                 .picked
                 .last()
                 .copied()
-                .or_else(|| self.inputs(cx).and_then(|inputs| inputs.shown))
+                .or_else(|| self.inputs().and_then(|inputs| inputs.shown))
                 .unwrap_or(thread);
             self.picked = self.drawn_span(anchor, thread);
         } else {

@@ -122,8 +122,9 @@ impl CockpitView {
     pub(super) fn delete_thread(
         &mut self,
         thread: ThreadId,
+        cx: &mut gpui::App,
     ) -> std::io::Result<()> {
-        self.cockpit.delete(thread)?;
+        self.cockpit.update(cx, |cockpit, _| cockpit.delete(thread))?;
         self.panel.deleted.push(thread);
         if self.cited_sources.forget(thread) {
             if let Err(error) = self.cited_sources.save(&self.prefs.dir) {
@@ -154,7 +155,7 @@ impl CockpitView {
         if kept.is_empty() {
             return;
         }
-        let focused = self.cockpit.roster().focused();
+        let focused = self.cockpit.read(cx).roster().focused();
         for fresh in kept {
             let id = self.spawn_draft_pane(fresh.binding, cx);
             if let Some(pane) = self
@@ -167,7 +168,7 @@ impl CockpitView {
             }
         }
         if let Some(focused) = focused {
-            self.cockpit.focus(focused);
+            self.cockpit.update(cx, |cockpit, _| cockpit.focus(focused));
             self.sync_panes(cx);
         }
     }

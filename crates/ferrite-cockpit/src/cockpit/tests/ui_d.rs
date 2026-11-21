@@ -20,7 +20,7 @@ fn the_composer_box_stands_inside_the_card(cx: &mut TestAppContext) {
             .debug_bounds("focused-prompt-editor")
             .or_else(|| cx.debug_bounds("prompt-editor"))
             .unwrap();
-        let pane = cx.update(|window, cx| view.read(cx).pane_rects(window)[0].1);
+        let pane = cx.update(|window, cx| view.read(cx).pane_rects(window, cx)[0].1);
         // The reading column and its outset: at most `COMPOSER_MAX_W`,
         // centred in the card, never nearer its sides than `COMPOSER_INSET`.
         let inset = ferrite_ui::theme::COMPOSER_INSET;

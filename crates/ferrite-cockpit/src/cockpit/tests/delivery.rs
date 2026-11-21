@@ -139,7 +139,7 @@ fn ready_to_approve_says_the_revision_approved(cx: &mut TestAppContext) {
     });
     click(cx, "task-approve");
     assert_eq!(
-        view.read_with(cx, |view, _| view.cockpit.fixture_task_asks().to_vec()),
+        view.read_with(cx, |view, cx| view.cockpit.read(cx).fixture_task_asks().to_vec()),
         [TaskAction::Approve { task: "t-1".into() }]
     );
 }
@@ -158,7 +158,7 @@ fn the_new_task_sheet_sends_its_pr(cx: &mut TestAppContext) {
     assert!(shows(cx, "new-task-pr-focused"));
     view.update(cx, |view, cx| view.start_new_task(cx));
     tick(cx);
-    let asks = view.read_with(cx, |view, _| view.cockpit.fixture_task_asks().to_vec());
+    let asks = view.read_with(cx, |view, cx| view.cockpit.read(cx).fixture_task_asks().to_vec());
     match asks.as_slice() {
         [TaskAction::Start {
             instructions, pr, ..

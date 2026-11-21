@@ -126,7 +126,7 @@ impl Detail {
 }
 
 /// One row of the list (and the face of a toast), worded by the cockpit.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Row {
     /// The machine off screen it is on; `None` for the one on screen. Its
     /// title then begins with the machine's name.

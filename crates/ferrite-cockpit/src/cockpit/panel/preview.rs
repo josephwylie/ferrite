@@ -756,16 +756,16 @@ impl CockpitView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if let Some(thread) = self.focused_thread().filter(|thread| self.uses_remote_files(*thread, cx)) {
+        if let Some(thread) = self.focused_thread(cx).filter(|thread| self.uses_remote_files(*thread, cx)) {
             self.open_in_files(thread, path, line, true, cx);
             return;
         }
-        if self.on_machine() {
+        if self.on_machine(cx) {
             self.nav_notice.hint("Start a Thread in this remote workspace before opening its files.");
             cx.notify();
             return;
         }
-        if let Some(pane) = self.panes.get(self.focused()) {
+        if let Some(pane) = self.panes.get(self.focused(cx)) {
             pane.preview.open(path, line, &[], window, cx);
         }
         cx.notify();
@@ -774,7 +774,7 @@ impl CockpitView {
     /// Whether Pane `index`'s Panel shows its preview: a File or the
     /// Browser is its shown Surface — always, for a draft, which has no
     /// other.
-    pub(in crate::cockpit) fn preview_shown(&self, index: usize) -> bool {
+    pub(in crate::cockpit) fn preview_shown(&self, index: usize, cx: &gpui::App) -> bool {
         let Some(pane) = self.panes.get(index) else {
             return false;
         };
@@ -782,7 +782,7 @@ impl CockpitView {
             && match pane.thread() {
                 None => true,
                 Some(_) => matches!(
-                    self.shown_surface(index),
+                    self.shown_surface(index, cx),
                     Some(SurfaceId::File(_) | SurfaceId::Browser)
                 ),
             }
@@ -802,7 +802,7 @@ impl CockpitView {
             }
             _ => pane.preview.close(),
         }
-        self.focus_pane(index);
+        self.focus_pane(index, cx);
         cx.notify();
     }
 
@@ -872,7 +872,7 @@ impl CockpitView {
                     })
                     .and_then(|thread| {
                         self.cockpit
-                            .browser_annotation_image(thread, annotation.clone())
+                            .update(cx, |cockpit, _| cockpit.browser_annotation_image(thread, annotation.clone()))
                     });
                 match image {
                     Ok(image) => {
@@ -937,14 +937,14 @@ impl CockpitView {
             match kept {
                 Some(document) => pane.preview.restore(document),
                 None if wanted == Path::new(BROWSER_PATH) => pane.preview.show_browser(),
-                None => match self.sent_annotation(thread, &wanted) {
+                None => match self.sent_annotation(thread, &wanted, cx) {
                     Some(annotation) => pane.preview.review_annotation(annotation, window),
                     // An image opens in the lightbox and never becomes the
                     // tab's document, so it would open again every frame.
                     // Only the history can claim it, and that streams in
                     // after the first frames draw the Thread.
                     None if ferrite_pane::image_viewer::is_image(&wanted) => {
-                        if self.cockpit.thread(thread).is_some_and(|open| open.history_loaded()) {
+                        if self.cockpit.read(cx).thread(thread).is_some_and(|open| open.history_loaded()) {
                             unfillable.push((thread, SurfaceId::File(wanted)));
                         }
                     }
@@ -964,8 +964,9 @@ impl CockpitView {
         &self,
         thread: ThreadId,
         original: &Path,
+        cx: &gpui::App,
     ) -> Option<ferrite_core::browser_annotations::Annotation> {
-        self.cockpit.thread(thread)?.transcript().blocks().iter().find_map(|block| {
+        self.cockpit.read(cx).thread(thread)?.transcript().blocks().iter().find_map(|block| {
             let ferrite_core::transcript::Body::Prompt(words) = &block.body else {
                 return None;
             };
@@ -1007,7 +1008,7 @@ impl CockpitView {
         Some(FileSurfaceInputs {
             owner,
             preview: pane.preview.clone(),
-            workspace: pane.thread().and_then(|thread| self.thread_path(thread)),
+            workspace: pane.thread().and_then(|thread| self.thread_path(thread, cx)),
             browser,
         })
     }
@@ -1029,7 +1030,7 @@ impl CockpitView {
             }
             FileSurfaceEvent::Pressed(owner) => {
                 if let Some(index) = self.index_of(owner) {
-                    self.focus_pane(index);
+                    self.focus_pane(index, cx);
                     cx.notify();
                 }
             }

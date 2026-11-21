@@ -212,12 +212,12 @@ impl CockpitView {
     /// keyboard. A review already open there switches scope (and reads it
     /// afresh) rather than opening another.
     fn open_review(&mut self, scope: Scope, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(pane) = self.panes.get(self.focused()) else {
+        let Some(pane) = self.panes.get(self.focused(cx)) else {
             return;
         };
         let Some((thread, workspace)) = pane
             .thread()
-            .and_then(|thread| Some((thread, self.thread_path(thread)?)))
+            .and_then(|thread| Some((thread, self.thread_path(thread, cx)?)))
         else {
             return;
         };
@@ -272,7 +272,7 @@ impl CockpitView {
             .get(thread)
             .and_then(|facts| facts.branch.clone())
             .map_or_else(|| home_relative(&workspace), |branch| branch.to_string());
-        let index = self.focused();
+        let index = self.focused(cx);
         self.panes[index].review.show(review.clone(), title);
         window.focus(&review.focus_handle(cx), cx);
         review.update(cx, |review, cx| review.pick_scope(scope, cx));
@@ -294,12 +294,12 @@ impl CockpitView {
         scope: Scope,
         cx: &mut Context<Self>,
     ) {
-        let Some(workspace) = self.thread_path(thread) else {
+        let Some(workspace) = self.thread_path(thread, cx) else {
             return;
         };
         let read = match scope {
             Scope::Commits => {
-                let commits = self.cockpit.review_commits(&workspace);
+                let commits = self.cockpit.update(cx, |cockpit, _| cockpit.review_commits(&workspace));
                 land(
                     review,
                     commits,
@@ -314,7 +314,7 @@ impl CockpitView {
             Scope::Branch => Read::Branch,
             Scope::LastTurn => Read::LastTurn,
         };
-        let files = self.cockpit.review_diff(&workspace, read);
+        let files = self.cockpit.update(cx, |cockpit, _| cockpit.review_diff(&workspace, read));
         land(
             review,
             files,
@@ -333,12 +333,12 @@ impl CockpitView {
         pick: CommitPick,
         cx: &mut Context<Self>,
     ) {
-        let Some(workspace) = self.thread_path(thread) else {
+        let Some(workspace) = self.thread_path(thread, cx) else {
             return;
         };
         let files = self
             .cockpit
-            .review_diff(&workspace, Read::Commits(pick.clone()));
+            .update(cx, |cockpit, _| cockpit.review_diff(&workspace, Read::Commits(pick.clone())));
         land(
             review,
             files,
@@ -358,10 +358,10 @@ impl CockpitView {
         query: String,
         cx: &mut Context<Self>,
     ) {
-        let Some(workspace) = self.thread_path(thread) else {
+        let Some(workspace) = self.thread_path(thread, cx) else {
             return;
         };
-        let found = self.cockpit.search_repo(&workspace, &query);
+        let found = self.cockpit.update(cx, |cockpit, _| cockpit.search_repo(&workspace, &query));
         let (shown, failed) = (query.clone(), query.clone());
         land(
             review,
@@ -381,10 +381,10 @@ impl CockpitView {
         path: String,
         cx: &mut Context<Self>,
     ) {
-        let Some(workspace) = self.thread_path(thread) else {
+        let Some(workspace) = self.thread_path(thread, cx) else {
             return;
         };
-        let text = self.cockpit.read_review_file(&workspace, &path);
+        let text = self.cockpit.update(cx, |cockpit, _| cockpit.read_review_file(&workspace, &path));
         let opened = path.clone();
         land(
             review,
@@ -403,10 +403,10 @@ impl CockpitView {
         review: Entity<ReviewView>,
         cx: &mut Context<Self>,
     ) {
-        let Some(workspace) = self.thread_path(thread) else {
+        let Some(workspace) = self.thread_path(thread, cx) else {
             return;
         };
-        let pr = self.cockpit.review_pull_request(&workspace, None);
+        let pr = self.cockpit.update(cx, |cockpit, _| cockpit.review_pull_request(&workspace, None));
         land(
             review,
             pr,
@@ -424,10 +424,10 @@ impl CockpitView {
         review: Entity<ReviewView>,
         cx: &mut Context<Self>,
     ) {
-        let Some(workspace) = self.thread_path(thread) else {
+        let Some(workspace) = self.thread_path(thread, cx) else {
             return;
         };
-        let files = self.cockpit.review_files(&workspace);
+        let files = self.cockpit.update(cx, |cockpit, _| cockpit.review_files(&workspace));
         land(
             review,
             files,
@@ -445,10 +445,10 @@ impl CockpitView {
         review: Entity<ReviewView>,
         cx: &mut Context<Self>,
     ) {
-        let Some(workspace) = self.thread_path(thread) else {
+        let Some(workspace) = self.thread_path(thread, cx) else {
             return;
         };
-        let bases = self.cockpit.review_bases(&workspace);
+        let bases = self.cockpit.update(cx, |cockpit, _| cockpit.review_bases(&workspace));
         land(
             review,
             bases,
@@ -467,10 +467,10 @@ impl CockpitView {
         base: String,
         cx: &mut Context<Self>,
     ) {
-        let Some(workspace) = self.thread_path(thread) else {
+        let Some(workspace) = self.thread_path(thread, cx) else {
             return;
         };
-        let picked = self.cockpit.pick_review_base(&workspace, &base);
+        let picked = self.cockpit.update(cx, |cockpit, _| cockpit.pick_review_base(&workspace, &base));
         land(
             review,
             picked,
@@ -487,7 +487,7 @@ impl CockpitView {
     pub(super) fn close_review(&mut self, index: usize, cx: &mut Context<Self>) {
         if let Some(pane) = self.panes.get_mut(index) {
             pane.review.close();
-            self.focus_pane(index);
+            self.focus_pane(index, cx);
             cx.notify();
         }
     }
@@ -703,7 +703,7 @@ impl CockpitView {
                 MouseButton::Left,
                 cx.listener(move |view, _: &MouseDownEvent, _, cx| {
                     if let Some(index) = view.pane_for(owner) {
-                        view.focus_pane(index);
+                        view.focus_pane(index, cx);
                         cx.notify();
                     }
                 }),

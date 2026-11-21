@@ -22,12 +22,12 @@ fn a_thread_can_be_opened_in_its_own_worktree(cx: &mut TestAppContext) {
         ]);
     });
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
-    view.update(cx, |view, _| view.aim_launch(&repo));
+    view.update(cx, |view, cx| view.aim_launch(&repo, cx));
     tick(cx);
 
     cx.simulate_keystrokes("cmd-shift-n");
-    view.read_with(cx, |view, _| {
-        let draft = view.panes[view.focused()].draft().expect("a draft Pane");
+    view.read_with(cx, |view, cx| {
+        let draft = view.panes[view.focused(cx)].draft().expect("a draft Pane");
         assert_eq!(
             *draft.binding.target(),
             DraftTarget::New,
@@ -39,12 +39,13 @@ fn a_thread_can_be_opened_in_its_own_worktree(cx: &mut TestAppContext) {
     cx.simulate_input("set up the branch");
     cx.simulate_keystrokes("enter");
 
-    view.read_with(cx, |view, _| {
-        let thread = view.panes[view.focused()]
+    view.read_with(cx, |view, cx| {
+        let thread = view.panes[view.focused(cx)]
             .thread()
             .expect("the first send made a Thread of the draft");
         let binding = view
             .cockpit
+            .read(cx)
             .thread(thread)
             .and_then(|open| open.workspace())
             .expect("a binding");
@@ -75,17 +76,18 @@ fn a_new_thread_binds_to_the_main_checkout(cx: &mut TestAppContext) {
         ]);
     });
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
-    view.update(cx, |view, _| view.aim_launch(&repo));
+    view.update(cx, |view, cx| view.aim_launch(&repo, cx));
     tick(cx);
 
     cx.simulate_keystrokes("cmd-n");
     cx.simulate_input("hello");
     cx.simulate_keystrokes("enter");
 
-    view.read_with(cx, |view, _| {
+    view.read_with(cx, |view, cx| {
         let binding = view
             .cockpit
-            .thread(view.panes[view.focused()].thread().unwrap())
+            .read(cx)
+            .thread(view.panes[view.focused(cx)].thread().unwrap())
             .and_then(|open| open.workspace())
             .expect("a binding");
         assert!(matches!(binding, WorkspaceBinding::Main { .. }));
@@ -117,7 +119,7 @@ fn the_branch_chip_offers_the_checkout_its_other_branch_and_both_new_branch_mode
     let core = Cockpit::new(store, Box::new(fake));
     bind_band_keys(cx);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
-    view.update(cx, |view, _| view.aim_launch(&repo));
+    view.update(cx, |view, cx| view.aim_launch(&repo, cx));
     tick(cx);
 
     cx.simulate_keystrokes("tab");
@@ -178,25 +180,25 @@ fn the_workspace_chip_scopes_to_the_chosen_project(cx: &mut TestAppContext) {
     bind_band_keys(cx);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     view.update(cx, |view, cx| {
-        view.aim_launch(&repo_one);
+        view.aim_launch(&repo_one, cx);
         // The second project holds one registered worktree — made
         // through the core's own bootstrap, then parked away.
         let thread = view
             .cockpit
-            .open(
+            .update(cx, |cockpit, _| cockpit.open(
                 Provider::Claude,
                 WorkspaceChoice::NewWorktree {
                     repo: repo_two.clone(),
                 },
-            )
+            ))
             .unwrap();
-        view.cockpit.park(thread).unwrap();
+        view.cockpit.update(cx, |cockpit, _| cockpit.park(thread).unwrap());
         cx.notify();
     });
     tick(cx);
-    view.read_with(cx, |view, _| {
+    view.read_with(cx, |view, cx| {
         assert!(
-            view.panes[view.focused()].draft().is_some(),
+            view.panes[view.focused(cx)].draft().is_some(),
             "an empty store launches as a draft Pane"
         );
     });
@@ -219,8 +221,8 @@ fn the_workspace_chip_scopes_to_the_chosen_project(cx: &mut TestAppContext) {
     // project registered after it — "second", the one with a worktree.
     cx.simulate_keystrokes("down");
     cx.simulate_keystrokes("enter");
-    let chosen = view.read_with(cx, |view, _| {
-        let draft = view.panes[view.focused()].draft().expect("still a draft");
+    let chosen = view.read_with(cx, |view, cx| {
+        let draft = view.panes[view.focused(cx)].draft().expect("still a draft");
         assert_eq!(
             *draft.binding.target(),
             DraftTarget::Main,
@@ -228,6 +230,7 @@ fn the_workspace_chip_scopes_to_the_chosen_project(cx: &mut TestAppContext) {
         );
         assert_eq!(
             view.cockpit
+                .read(cx)
                 .registry()
                 .project(draft.binding.project())
                 .unwrap()
@@ -268,10 +271,10 @@ fn the_workspace_chip_scopes_to_the_chosen_project(cx: &mut TestAppContext) {
     cx.simulate_keystrokes("enter");
     cx.simulate_keystrokes("tab"); // → workspace
     cx.simulate_keystrokes("enter");
-    view.read_with(cx, |view, _| {
+    view.read_with(cx, |view, cx| {
         let band = view.band_menu().expect("the workspace popover again");
         assert_eq!(band.kind.chip, pane::BandChip::Workspace);
-        let draft = view.panes[view.focused()].draft().expect("still a draft");
+        let draft = view.panes[view.focused(cx)].draft().expect("still a draft");
         assert_ne!(
             draft.binding.project(),
             chosen,
@@ -299,7 +302,7 @@ fn the_workspace_chip_lists_the_repos_other_worktrees_and_local_branches(cx: &mu
     let core = Cockpit::new(store, Box::new(fake));
     bind_band_keys(cx);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
-    view.update(cx, |view, _| view.aim_launch(&repo));
+    view.update(cx, |view, cx| view.aim_launch(&repo, cx));
     tick(cx);
 
     cx.simulate_keystrokes("tab");
@@ -342,7 +345,7 @@ fn picking_an_existing_worktree_binds_the_thread_to_its_path(cx: &mut TestAppCon
     let core = Cockpit::new(store, Box::new(fake));
     bind_production_keys(cx);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
-    view.update(cx, |view, _| view.aim_launch(&repo));
+    view.update(cx, |view, cx| view.aim_launch(&repo, cx));
     tick(cx);
 
     // tab ×3 to the workspace chip, ↵ opens it; down reaches the
@@ -353,9 +356,9 @@ fn picking_an_existing_worktree_binds_the_thread_to_its_path(cx: &mut TestAppCon
     cx.simulate_keystrokes("enter");
     cx.simulate_keystrokes("down");
     cx.simulate_keystrokes("enter");
-    view.read_with(cx, |view, _| {
+    view.read_with(cx, |view, cx| {
         assert!(view.band_menu().is_none(), "the pick closed the popover");
-        let draft = view.panes[view.focused()].draft().expect("still a draft");
+        let draft = view.panes[view.focused(cx)].draft().expect("still a draft");
         match draft.binding.target() {
             DraftTarget::Existing { branch, path } => {
                 assert_eq!(branch, "feature/wt");
@@ -371,12 +374,13 @@ fn picking_an_existing_worktree_binds_the_thread_to_its_path(cx: &mut TestAppCon
     cx.simulate_keystrokes("enter");
     tick(cx);
 
-    view.read_with(cx, |view, _| {
-        let thread = view.panes[view.focused()]
+    view.read_with(cx, |view, cx| {
+        let thread = view.panes[view.focused(cx)]
             .thread()
             .expect("the draft became a Thread");
         let cwd = view
             .cockpit
+            .read(cx)
             .thread(thread)
             .unwrap()
             .workspace()
@@ -384,9 +388,9 @@ fn picking_an_existing_worktree_binds_the_thread_to_its_path(cx: &mut TestAppCon
             .cwd()
             .to_path_buf();
         assert_eq!(std::fs::canonicalize(cwd).unwrap(), worktree);
-        let project = view.cockpit.registry().projects()[0].id;
+        let project = view.cockpit.read(cx).registry().projects()[0].id;
         assert!(
-            view.cockpit.registry().worktrees(project).is_empty(),
+            view.cockpit.read(cx).registry().worktrees(project).is_empty(),
             "adoption minted nothing"
         );
         assert_eq!(
@@ -417,7 +421,7 @@ fn a_repo_without_a_main_branch_offers_no_main_row(cx: &mut TestAppContext) {
     let core = Cockpit::new(store, Box::new(fake));
     bind_band_keys(cx);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
-    view.update(cx, |view, _| view.aim_launch(&repo));
+    view.update(cx, |view, cx| view.aim_launch(&repo, cx));
     tick(cx);
 
     cx.simulate_keystrokes("tab");
@@ -455,17 +459,18 @@ fn the_first_send_bootstraps_the_thread_and_drops_the_band(cx: &mut TestAppConte
     let core = Cockpit::new(store, Box::new(fake.clone()));
     bind_band_keys(cx);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
-    view.update(cx, |view, _| view.aim_launch(&repo));
+    view.update(cx, |view, cx| view.aim_launch(&repo, cx));
     tick(cx);
 
     cx.simulate_input("run the tests");
     cx.simulate_keystrokes("enter");
 
     view.read_with(cx, |view, cx| {
-        let pane = &view.panes[view.focused()];
+        let pane = &view.panes[view.focused(cx)];
         let thread = pane.thread().expect("the draft became a Thread");
         assert!(
             view.cockpit
+                .read(cx)
                 .thread(thread)
                 .is_some_and(|open| open.first_prompt_sent()),
             "the first send armed the lock"
@@ -474,7 +479,7 @@ fn the_first_send_bootstraps_the_thread_and_drops_the_band(cx: &mut TestAppConte
             pane.composer.read(cx).is_empty(),
             "the sent prompt left the line"
         );
-        let blocks = view.cockpit.thread(thread).unwrap().transcript().blocks();
+        let blocks = view.cockpit.read(cx).thread(thread).unwrap().transcript().blocks();
         assert!(
             matches!(
                 &blocks[0].body,
@@ -557,20 +562,20 @@ fn delayed_bootstrap_preserves_edited_composer_focus_and_another_drafts_picker(
     );
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     let (submitted, other) = view.update(cx, |view, cx| {
-        view.aim_launch(&repo);
-        let submitted = view.panes[view.focused()].identity.draft().unwrap();
-        view.panes[view.focused()]
+        view.aim_launch(&repo, cx);
+        let submitted = view.panes[view.focused(cx)].identity.draft().unwrap();
+        view.panes[view.focused(cx)]
             .composer
             .update(cx, |composer, cx| composer.set("first".into(), cx));
         view.bootstrap_draft(cx);
-        assert!(view.cockpit.draft_starting(submitted));
-        view.panes[view.focused()]
+        assert!(view.cockpit.read(cx).draft_starting(submitted));
+        view.panes[view.focused(cx)]
             .composer
             .update(cx, |composer, cx| {
                 composer.set("edited while starting".into(), cx)
             });
         view.open_draft(DraftTarget::Main, cx);
-        let other = view.panes[view.focused()].identity.draft().unwrap();
+        let other = view.panes[view.focused(cx)].identity.draft().unwrap();
         view.open_band_menu(pane::BandChip::Provider, false, cx);
         (submitted, other)
     });
@@ -578,12 +583,12 @@ fn delayed_bootstrap_preserves_edited_composer_focus_and_another_drafts_picker(
     ferrite_core::doorbell::until("startup did not settle", || {
         view.update(cx, |view, cx| {
             view.pump(cx);
-            !view.cockpit.draft_starting(submitted)
+            !view.cockpit.read(cx).draft_starting(submitted)
         })
     });
     view.update(cx, |view, cx| {
         assert_eq!(
-            view.cockpit.roster().focused(),
+            view.cockpit.read(cx).roster().focused(),
             Some(PaneIdentity::Draft(other))
         );
         assert_eq!(
@@ -600,12 +605,12 @@ fn delayed_bootstrap_preserves_edited_composer_focus_and_another_drafts_picker(
         // A changed draft choice cancels the submitted startup before
         // applying the new choice, so the old request can never send.
         view.close_popup(cx);
-        let composer = view.panes[view.focused()].composer.clone();
+        let composer = view.panes[view.focused(cx)].composer.clone();
         composer.update(cx, |composer, cx| {
             composer.set("cancel on choice".into(), cx)
         });
         view.bootstrap_draft(cx);
-        assert!(view.cockpit.draft_starting(other));
+        assert!(view.cockpit.read(cx).draft_starting(other));
         view.pick_band(
             &BandChoice::Provider(ProviderChoice {
                 provider: Provider::Codex,
@@ -614,19 +619,19 @@ fn delayed_bootstrap_preserves_edited_composer_focus_and_another_drafts_picker(
             &composer,
             cx,
         );
-        assert!(!view.cockpit.draft_starting(other));
+        assert!(!view.cockpit.read(cx).draft_starting(other));
         assert_eq!(composer.read(cx).text(), "cancel on choice");
     });
     cancel_tx.send(()).unwrap();
     view.update(cx, |view, cx| {
         view.bootstrap_draft(cx);
-        assert!(view.cockpit.draft_starting(other));
+        assert!(view.cockpit.read(cx).draft_starting(other));
     });
     cx.update(|window, cx| view.update(cx, |view, cx| view.interrupt(&Interrupt, window, cx)));
     view.read_with(cx, |view, cx| {
-        assert!(!view.cockpit.draft_starting(other));
+        assert!(!view.cockpit.read(cx).draft_starting(other));
         assert_eq!(
-            view.panes[view.focused()].composer.read(cx).text(),
+            view.panes[view.focused(cx)].composer.read(cx).text(),
             "cancel on choice"
         );
     });
@@ -646,7 +651,7 @@ fn a_failed_bootstrap_keeps_the_draft_and_the_prompt(cx: &mut TestAppContext) {
     let core = Cockpit::new(store, Box::new(fake.clone()));
     bind_band_keys(cx);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
-    view.update(cx, |view, _| view.aim_launch(&repo));
+    view.update(cx, |view, cx| view.aim_launch(&repo, cx));
     tick(cx);
     *fake.fail_send.borrow_mut() = true;
 
@@ -654,7 +659,7 @@ fn a_failed_bootstrap_keeps_the_draft_and_the_prompt(cx: &mut TestAppContext) {
     cx.simulate_keystrokes("enter");
 
     view.read_with(cx, |view, cx| {
-        let pane = &view.panes[view.focused()];
+        let pane = &view.panes[view.focused(cx)];
         let draft = pane.draft().expect("the Pane stays draft");
         assert!(
             draft
@@ -670,7 +675,7 @@ fn a_failed_bootstrap_keeps_the_draft_and_the_prompt(cx: &mut TestAppContext) {
             "the prompt is preserved for the retry"
         );
         assert_eq!(
-            view.cockpit.parked().unwrap(),
+            view.cockpit.read(cx).parked().unwrap(),
             vec![],
             "no half-born Thread"
         );
@@ -679,9 +684,9 @@ fn a_failed_bootstrap_keeps_the_draft_and_the_prompt(cx: &mut TestAppContext) {
     // The retry goes through once the Session accepts the first prompt.
     *fake.fail_send.borrow_mut() = false;
     cx.simulate_keystrokes("enter");
-    view.read_with(cx, |view, _| {
+    view.read_with(cx, |view, cx| {
         assert!(
-            view.panes[view.focused()].thread().is_some(),
+            view.panes[view.focused(cx)].thread().is_some(),
             "the same draft bootstraps on the retry"
         );
     });
@@ -714,7 +719,7 @@ fn the_workspace_chip_never_asks_git_on_the_ui_thread(cx: &mut TestAppContext) {
 
     let before = spawned();
     view.update(cx, |view, cx| {
-        view.aim_launch(&repo);
+        view.aim_launch(&repo, cx);
         cx.notify();
     });
     assert_eq!(spawned() - before, 0, "a frame asked git for the chip");
@@ -787,7 +792,7 @@ fn a_turn_end_rereads_the_checkout_off_the_ui_thread(cx: &mut TestAppContext) {
         .unwrap();
     tick(cx);
     assert!(
-        view.read_with(cx, |view, _| view.cockpit.thread(thread).unwrap().busy()),
+        view.read_with(cx, |view, cx| view.cockpit.read(cx).thread(thread).unwrap().busy()),
         "the premise: a turn is under way"
     );
     let branch = |view: &gpui::Entity<CockpitView>, cx: &mut gpui::VisualTestContext| {
@@ -816,7 +821,7 @@ fn a_turn_end_rereads_the_checkout_off_the_ui_thread(cx: &mut TestAppContext) {
         "the turn end asked git on the UI thread"
     );
     assert!(
-        view.read_with(cx, |view, _| !view.cockpit.thread(thread).unwrap().busy()),
+        view.read_with(cx, |view, cx| !view.cockpit.read(cx).thread(thread).unwrap().busy()),
         "the pump saw the turn end"
     );
     cx.run_until_parked();
@@ -834,7 +839,7 @@ fn the_workspace_menu_with_a_previous_worktree_is_336_or_the_window_less_32(cx: 
     let store = Store::open(base.join("threads")).unwrap();
     let core = Cockpit::new(store, Box::new(Fake::default()));
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
-    view.update(cx, |view, _| view.aim_launch(&repo));
+    view.update(cx, |view, cx| view.aim_launch(&repo, cx));
     view.update(cx, |view, cx| view.open_draft(DraftTarget::Main, cx));
     // The menu, opened from its chip in a window `window` wide.
     let menu_w = |window: f32, cx: &mut gpui::VisualTestContext| {

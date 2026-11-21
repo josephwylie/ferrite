@@ -306,7 +306,7 @@ impl CockpitView {
                         match self.send_again(index, thread, prompt.clone(), cx) {
                             Ok(Handoff::Sent) => Ok((prompt, Stage::Running)),
                             Ok(Handoff::Queued) => {
-                                let open = self.cockpit.thread(thread);
+                                let open = self.cockpit.read(cx).thread(thread);
                                 let queued = Queued {
                                     item: queued_as(open.as_ref(), &prompt).unwrap_or_default(),
                                     prompts_before: prompts_of(open.as_ref(), &prompt),
@@ -333,10 +333,13 @@ impl CockpitView {
         settled: bool,
         cx: &mut Context<Self>,
     ) {
-        let open = self.cockpit.thread(thread);
-        let checking = self
-            .pull_request
-            .update(cx, |reader, cx| reader.advance(thread, open.as_ref(), settled, cx));
+        // The model is lent, not written: the reader reads the Thread under
+        // its own update.
+        let checking = self.cockpit.update(cx, |model, cx| {
+            let open = model.thread(thread);
+            self.pull_request
+                .update(cx, |reader, cx| reader.advance(thread, open.as_ref(), settled, cx))
+        });
         if checking.is_empty() {
             return;
         }

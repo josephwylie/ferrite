@@ -362,7 +362,10 @@ impl std::ops::DerefMut for CockpitPane {
 }
 
 pub struct CockpitView {
-    pub(crate) cockpit: Cockpit,
+    /// The client's model. On a beat that brought something the pump has
+    /// it say `Arrived`, which the views that build from it hear (the
+    /// nav). Nothing notifies it.
+    pub(crate) cockpit: Entity<Cockpit>,
     browsers: browser::Browsers,
     /// The provider's control of the Browsers' pages and the live
     /// annotation's capture queue, which the pump runs.
@@ -450,10 +453,6 @@ pub struct CockpitView {
     /// to that Project's section — which Panes the Cockpit flies is never
     /// touched by it.
     nav_filter: Option<ProjectId>,
-    /// When each listed Thread came into its section, which the list and
-    /// the Working shelf order by (`nav_state`). Only the pump writes it
-    /// (`note_arrivals`).
-    nav_arrivals: nav::Arrivals,
     /// The nav, a view of its own (ADR 0041): it owns its list's motion,
     /// scroll, keyboard, search, picks and undo notice, and asks the
     /// Cockpit for the rest through `NavEvent`.
@@ -633,6 +632,17 @@ pub enum Landing {
 }
 
 impl EventEmitter<GoToMachine> for CockpitView {}
+
+/// What the model says on a pump beat that brought something: a Session's
+/// events, a restart, a sweep that moved a fact or a clock, the Server's
+/// state, an ask, parked Threads, the Panes, a start, the models or the
+/// commands. A feature that draws from the model subscribes and looks
+/// again (`NavView::look`). Nothing notifies the model: every view that
+/// reads it while drawing would be rebuilt (vendored gpui,
+/// `tracking_reads`).
+pub(crate) struct Arrived;
+
+impl EventEmitter<Arrived> for Cockpit {}
 
 /// What a card hangs from (`card_corner`): its Pane's Composer (opening
 /// up) or head (opening down).
@@ -950,6 +960,27 @@ pub(crate) mod drawn {
         static PANE_RENDERS: RefCell<HashMap<PaneIdentity, usize>> = RefCell::new(HashMap::new());
         static NAV_RENDERS: Cell<usize> = const { Cell::new(0) };
         static NAV_ROWS: RefCell<HashMap<ThreadId, String>> = RefCell::new(HashMap::new());
+        static PUMPS: Cell<usize> = const { Cell::new(0) };
+        static LISTS: Cell<usize> = const { Cell::new(0) };
+    }
+
+    pub(crate) fn listed() {
+        LISTS.with(|lists| lists.set(lists.get() + 1));
+    }
+
+    /// How many times the window has worked out which Threads the nav
+    /// lists, and in which section, on this thread.
+    pub(crate) fn lists() -> usize {
+        LISTS.with(Cell::get)
+    }
+
+    pub(crate) fn pumped() {
+        PUMPS.with(|pumps| pumps.set(pumps.get() + 1));
+    }
+
+    /// How many times the pump's body has run on this thread.
+    pub(crate) fn pumps() -> usize {
+        PUMPS.with(Cell::get)
     }
 
     pub(crate) fn built_pane(identity: PaneIdentity) {
@@ -1083,7 +1114,7 @@ impl CockpitView {
             view.save_drafts(cx);
             view.files.update(cx, |files, cx| files.flush_for_quit(cx));
             view.flush_panel_persistence(cx);
-            view.cockpit.halt_sessions();
+            view.cockpit.update(cx, |cockpit, _| cockpit.halt_sessions());
             #[cfg(feature = "cef")]
             let browser = view.browser_controls.controller.clone();
             let executor = cx.background_executor().clone();
@@ -1125,6 +1156,7 @@ impl CockpitView {
             gpui::KeyBinding::new("escape", ferrite_pane::annotation_editor::Cancel, Some("AnnotationEditor")),
         ]);
         let cockpit_weak = cx.weak_entity();
+        let cockpit = cx.new(|_| cockpit);
         let composer_menu = cx.new(|_| composer_menu::ComposerMenuView::default());
         // Whether a Composer's key context is the menu's follows the menu.
         cx.observe(&composer_menu, |view, _, cx| view.sync_composer_floats(cx))
@@ -1178,7 +1210,7 @@ impl CockpitView {
         // And a retained annotation's review, in the page's place.
         cx.observe(&browser_review, |_, _, cx| cx.notify()).detach();
         let mut view = Self {
-            cockpit,
+            cockpit: cockpit.clone(),
             browsers: Default::default(),
             browser_controls: Default::default(),
             browser_chrome,
@@ -1212,8 +1244,7 @@ impl CockpitView {
             toasts,
             native_copy: None,
             nav_filter: None,
-            nav_arrivals: nav::Arrivals::default(),
-            nav_view: cx.new(|cx| nav_view::NavView::new(cockpit_weak, cx)),
+            nav_view: cx.new(|cx| nav_view::NavView::new(cockpit_weak, cockpit, cx)),
             view_events: None,
             activation: None,
             composer_menu,
@@ -1302,7 +1333,7 @@ impl CockpitView {
         // Nothing revived: the cockpit starts as one draft Pane (#29) —
         // nothing spawns before the operator's choice. A machine's Threads
         // arrive once it is connected, and its Projects are its own.
-        if view.panes.is_empty() && view.cockpit.machine().is_none() {
+        if view.panes.is_empty() && view.cockpit.read(cx).machine().is_none() {
             if view.launch_project.is_some() {
                 view.open_draft_with_provider(DraftTarget::Main, launch_provider, cx);
             } else {
@@ -1362,7 +1393,7 @@ impl CockpitView {
     /// `open_draft_with_choice`, which knows their binding; the roster
     /// never holds a draft this window did not open.
     fn sync_panes(&mut self, cx: &mut Context<Self>) {
-        let wanted = self.cockpit.roster().panes().to_vec();
+        let wanted = self.cockpit.read(cx).roster().panes().to_vec();
         let before = self.panes.len();
         self.panes.retain(|pane| wanted.contains(&pane.identity));
         // What the File Surface kept of a Pane's preview goes with it, as
@@ -1382,7 +1413,7 @@ impl CockpitView {
             let pane = CockpitPane::new(PaneView::new(thread, cx), cx);
             self.decisions
                 .update(cx, |decisions, _| decisions.open_pane(*identity));
-            pane.preview.set_remote_files(self.on_machine());
+            pane.preview.set_remote_files(self.on_machine(cx));
             self.aim_attachments(&pane.composer, cx);
             cx.subscribe(&pane.composer, Self::composer_edited).detach();
             cx.subscribe(&pane.composer, Self::composer_opens_source).detach();
@@ -1414,14 +1445,14 @@ impl CockpitView {
     /// rows the Server published, and fetch what only `git` can say on the
     /// background executor — the rows fill in when it answers.
     fn parked_changed(&mut self, cx: &mut Context<Self>) {
-        let lookups = self.facts.parked_changed(&self.cockpit);
+        let lookups = self.facts.parked_changed(self.cockpit.read(cx));
         self.look_up(lookups, cx);
     }
 
     /// A Thread's Pane opened: its facts afresh, what only git can say
     /// read off the UI thread.
     fn thread_opened(&mut self, thread: ThreadId, cx: &mut Context<Self>) {
-        let lookups = self.facts.opened(&self.cockpit, thread);
+        let lookups = self.facts.opened(self.cockpit.read(cx), thread);
         self.look_up(lookups, cx);
         self.check_pr(thread, false, cx);
     }
@@ -1474,7 +1505,7 @@ impl CockpitView {
     /// wherever the nav row's own click would land. A Thread already
     /// shown stays put.
     fn show_thread(&mut self, thread: ThreadId, cx: &mut Context<Self>) {
-        if self.focused_thread() != Some(thread) || self.destination_shown() {
+        if self.focused_thread(cx) != Some(thread) || self.destination_shown() {
             self.open_nav_row(thread, cx);
         }
     }
@@ -1483,7 +1514,7 @@ impl CockpitView {
     /// find. On a machine the git half is left out: its checkouts are the
     /// machine's (ADR 0026).
     fn look_up(&mut self, mut lookups: crate::facts::Lookups, cx: &mut Context<Self>) {
-        if self.on_machine() {
+        if self.on_machine(cx) {
             lookups.branches.clear();
             lookups.default_branches.clear();
         }
@@ -1516,7 +1547,7 @@ impl CockpitView {
                         thread,
                         pane.selected.clone(),
                         pane.text_namespace(),
-                        index == self.focused(),
+                        index == self.focused(cx),
                         pane.selection_scope,
                         pane.disclosure_revision(),
                     )
@@ -1525,99 +1556,112 @@ impl CockpitView {
         else {
             return;
         };
-        let Some(open) = self.cockpit.thread(thread) else {
+        let Some(subject_view) = self
+            .cockpit
+            .read(cx)
+            .thread(thread)
+            .and_then(|open| open.activity().subject(&subject))
+        else {
             return;
         };
-        let Some(subject_view) = open.activity().subject(&subject) else {
-            return;
-        };
-        let revision = subject_view.presentation_revision();
-        let status = pane::transcript_status(subject_view.status(), subject_view.fresh());
-        // One reading size for every transcript, on every board.
-        let reading_size = self.prefs.settings.reading_size;
+        // What the root's own reads give, before the model is lent to the
+        // transcript's update below.
+        let earlier = self.earlier_history(thread, subject_view.transcript(), self.panes[index].is_main(), cx);
         let tail = self.transcript_tail(index, cx);
-        self.wake_for_background_clock(index, cx);
-        // The gated call hides while its Decision waits as the tail row.
-        let pending_call = tail
-            .as_ref()
-            .and_then(|_| open.pending())
-            .map(|decision| decision.tool_use_id.clone())
-            .filter(|call| !call.is_empty());
-        let workspace =
-            ferrite_core::workspace::effective_cwd(open.session_project_root(), open.workspace())
-                .map(std::path::Path::to_path_buf);
         let solo = self.on_plane(thread, cx);
-        // While the turn runs, its header under its prompt and its live
-        // row at the tail (`pane::working_tail`), over a Decision that
-        // waits.
-        let working = pane::working_tail(pane::WorkingFacts {
-            transcript: subject_view.transcript(),
-            thread,
-            starting: open.starting(),
-            solo,
-            focused,
-            reduce_motion: cx.reduce_motion(),
-        });
-        let agents = transcript_glue::agent_faces(open.activity());
-        let rewind = transcript_glue::rewind_gate(&open);
-        // A subagent's tab draws no Composer to quote into.
-        let quotes = self.panes[index].is_main();
-        let queued = open.queue().len();
-        let earlier = self.earlier_history(thread, subject_view.transcript(), quotes);
-        let presentation = ferrite_pane::transcript::TranscriptPresentation {
-            thread,
-            selection_scope,
-            disclosure_focus: self.panes[index].tool_focus(),
-            namespace,
-            content_revision: revision,
-            display_revision: disclosure_revision,
-            focused,
-            signal_status: Some(status),
-            reading_size,
-            working,
-            tail,
-            pending_call,
-            workspace,
-            solo,
-            thinking: self.prefs.settings.show_thinking,
-            agents,
-            rewind,
-            quotes,
-            reply_to: open.provider().to_string().into(),
-            skills: open.commands().into(),
-            cited: self
-                .cited_sources
-                .of(thread)
-                .map(std::borrow::Cow::Borrowed)
-                .unwrap_or_default(),
-            note: None,
-            earlier,
-            queued,
-        };
+        self.wake_for_background_clock(index, cx);
         let entity = self.panes[index]
             .ensure_transcript(cx)
             .expect("thread Pane has a transcript entity");
         if self.transcript_entities.insert(entity.entity_id()) {
             cx.subscribe(&entity, Self::transcript_event).detach();
         }
-        let transcript = subject_view.transcript();
+        // One reading size for every transcript, on every board.
+        let reading_size = self.prefs.settings.reading_size;
+        let reduce_motion = cx.reduce_motion();
         let pane = &self.panes[index];
         let selection = self.selection.clone();
-        entity.update(cx, |view, cx| {
-            view.reconcile(
-                presentation,
-                || {
-                    let disclosure = pane.transcript_disclosure_snapshot();
-                    ferrite_pane::transcript::TranscriptBody {
-                        blocks: pane::rendered_window(transcript.blocks()).to_vec(),
-                        preview: pane.preview.clone(),
-                        expanded: disclosure.0,
-                        target: disclosure.1,
-                    }
-                },
-                selection,
-                cx,
-            );
+        self.cockpit.update(cx, |model, cx| {
+            let Some(open) = model.thread(thread) else {
+                return;
+            };
+            let Some(subject_view) = open.activity().subject(&subject) else {
+                return;
+            };
+            let revision = subject_view.presentation_revision();
+            let status = pane::transcript_status(subject_view.status(), subject_view.fresh());
+            // The gated call hides while its Decision waits as the tail row.
+            let pending_call = tail
+                .as_ref()
+                .and_then(|_| open.pending())
+                .map(|decision| decision.tool_use_id.clone())
+                .filter(|call| !call.is_empty());
+            let workspace =
+                ferrite_core::workspace::effective_cwd(open.session_project_root(), open.workspace())
+                    .map(std::path::Path::to_path_buf);
+            // While the turn runs, its header under its prompt and its live
+            // row at the tail (`pane::working_tail`), over a Decision that
+            // waits.
+            let working = pane::working_tail(pane::WorkingFacts {
+                transcript: subject_view.transcript(),
+                thread,
+                starting: open.starting(),
+                solo,
+                focused,
+                reduce_motion,
+            });
+            let agents = transcript_glue::agent_faces(open.activity());
+            let rewind = transcript_glue::rewind_gate(&open);
+            // A subagent's tab draws no Composer to quote into.
+            let quotes = pane.is_main();
+            let queued = open.queue().len();
+            let presentation = ferrite_pane::transcript::TranscriptPresentation {
+                thread,
+                selection_scope,
+                disclosure_focus: pane.tool_focus(),
+                namespace,
+                content_revision: revision,
+                display_revision: disclosure_revision,
+                focused,
+                signal_status: Some(status),
+                reading_size,
+                working,
+                tail,
+                pending_call,
+                workspace,
+                solo,
+                thinking: self.prefs.settings.show_thinking,
+                agents,
+                rewind,
+                quotes,
+                reply_to: open.provider().to_string().into(),
+                skills: open.commands().into(),
+                cited: self
+                    .cited_sources
+                    .of(thread)
+                    .map(std::borrow::Cow::Borrowed)
+                    .unwrap_or_default(),
+                note: None,
+                earlier,
+                queued,
+            };
+            let transcript = subject_view.transcript();
+            entity.update(cx, |view, cx| {
+                view.reconcile(
+                    presentation,
+                    || {
+                        let disclosure = pane.transcript_disclosure_snapshot();
+                        ferrite_pane::transcript::TranscriptBody {
+                            blocks: pane::rendered_window(transcript.blocks()).to_vec(),
+                            preview: pane.preview.clone(),
+                            expanded: disclosure.0,
+                            target: disclosure.1,
+                        }
+                    },
+                    selection,
+                    cx,
+                );
+            });
         });
     }
 
@@ -1630,12 +1674,13 @@ impl CockpitView {
         thread: ThreadId,
         transcript: &ferrite_core::transcript::Transcript,
         main: bool,
+        cx: &gpui::App,
     ) -> Option<ferrite_pane::transcript::Earlier> {
         let dropped = transcript.earlier_dropped();
         let cut = pane::rendered_window(transcript.blocks()).len()
             < transcript.blocks().len();
         (dropped || cut).then(|| ferrite_pane::transcript::Earlier {
-            copyable: main && (!dropped || self.cockpit.history_log(thread).is_some()),
+            copyable: main && (!dropped || self.cockpit.read(cx).history_log(thread).is_some()),
         })
     }
 
@@ -1649,7 +1694,7 @@ impl CockpitView {
     /// frame rather than again in the next; render repeats it for state it
     /// derives itself. Each push notifies only on a change.
     fn sync_composer_floats(&self, cx: &mut Context<Self>) {
-        let focused_index = self.focused();
+        let focused_index = self.focused(cx);
         let float_open = self.overlay_open(cx);
         let menu_on = self
             .composer_menu
@@ -1674,7 +1719,7 @@ impl CockpitView {
     }
 
     fn sync_visible_transcripts(&mut self, cx: &mut Context<Self>) {
-        let mut shown = self.visible_indices();
+        let mut shown = self.visible_indices(cx);
         // The Factory draws a Worker or its Coordinator the roster does not
         // show (its Task's Worker tab, the Coordinator surface).
         shown.extend(
@@ -1693,11 +1738,12 @@ impl CockpitView {
         &mut self,
         index: usize,
         changed: &[ferrite_core::cockpit::SubjectUpdate],
+        cx: &gpui::App,
     ) {
         let Some(thread) = self.panes[index].thread() else {
             return;
         };
-        let Some(activity) = self.cockpit.thread(thread).map(|thread| thread.activity()) else {
+        let Some(activity) = self.cockpit.read(cx).thread(thread).map(|thread| thread.activity()) else {
             return;
         };
         for change in changed {
@@ -1732,7 +1778,7 @@ impl CockpitView {
         }
         if let Some(transcript) = self
             .panes
-            .get(self.focused())
+            .get(self.focused(cx))
             .and_then(|pane| pane.transcript())
         {
             transcript.update(cx, |transcript, cx| transcript.page(page, cx));
@@ -1761,15 +1807,15 @@ impl CockpitView {
     /// document when it holds focus, else the Files tab the panel's keys
     /// are on. Everything else leaves them to the transcript.
     fn reader(&self, window: &Window, cx: &gpui::App) -> Option<Reader> {
-        let index = self.focused();
+        let index = self.focused(cx);
         let pane = self.panes.get(index)?;
-        if pane.preview.focused(window, cx) && self.preview_shown(index) {
+        if pane.preview.focused(window, cx) && self.preview_shown(index, cx) {
             if let Some(scroll) = self.file_surface.read(cx).reader_scroll(pane.identity) {
                 return Some(Reader::Document(scroll));
             }
         }
         let thread = pane.thread()?;
-        let on_panel = self.panel_control_focused(window) || self.panel_keys_held(window, cx);
+        let on_panel = self.panel_control_focused(window, cx) || self.panel_keys_held(window, cx);
         if !on_panel || self.active_surface(thread) != Some(crate::cockpit::surfaces::SurfaceId::Files) {
             return None;
         }
@@ -1811,14 +1857,14 @@ impl CockpitView {
             ferrite_pane::transcript::TranscriptEvent::ToggleDisclosure(call) => {
                 // A click just opens or closes the row; the keyboard ring is
                 // Tab's alone, so a click never leaves one behind.
-                self.focus_pane(index);
+                self.focus_pane(index, cx);
                 self.panes[index].clear_tool_target();
                 self.panes[index].toggle_tool(call);
                 cx.notify();
             }
             ferrite_pane::transcript::TranscriptEvent::OpenReader { path, line } => {
                 // ⌘-click on a path: the Thread's preview, in the Panel.
-                self.focus_pane(index);
+                self.focus_pane(index, cx);
                 self.open_preview_from(index, path.clone(), *line, cx);
             }
             ferrite_pane::transcript::TranscriptEvent::OpenAgent(call) => {
@@ -1834,7 +1880,7 @@ impl CockpitView {
                 if let Some((thread, block)) = self.panes[index].thread().zip(*block) {
                     reply = reply.cited_from(ferrite_core::replies::Source { thread, block });
                 }
-                self.focus_pane(index);
+                self.focus_pane(index, cx);
                 self.panes[index]
                     .composer
                     .update(cx, |composer, cx| composer.cite_with_comment(reply, anchor.clone(), cx));
@@ -1852,9 +1898,9 @@ impl CockpitView {
             }
             // A wrap-up's next step: its words go as the next prompt.
             ferrite_pane::transcript::TranscriptEvent::Send(words) => {
-                self.focus_pane(index);
+                self.focus_pane(index, cx);
                 if let Some(thread) = self.panes[index].thread() {
-                    let _ = self.cockpit.send(thread, words.clone());
+                    let _ = self.cockpit.update(cx, |cockpit, _| cockpit.send(thread, words.clone()));
                 }
                 cx.notify();
             }
@@ -1862,25 +1908,25 @@ impl CockpitView {
                 self.focus_thread(*thread, cx);
             }
             ferrite_pane::transcript::TranscriptEvent::OpenPullRequest { number, url } => {
-                self.focus_pane(index);
+                self.focus_pane(index, cx);
                 if let Some(thread) = self.panes[index].thread() {
                     self.open_named_pr(thread, *number, url.clone(), cx);
                 }
             }
             ferrite_pane::transcript::TranscriptEvent::OpenBackground => {
-                self.focus_pane(index);
+                self.focus_pane(index, cx);
                 if let Some(thread) = self.panes[index].thread() {
                     self.open_background(thread, cx);
                 }
             }
             ferrite_pane::transcript::TranscriptEvent::OpenChanges(path) => {
-                self.focus_pane(index);
+                self.focus_pane(index, cx);
                 let Some(thread) = self.panes[index].thread() else {
                     return;
                 };
                 match path {
                     Some(path) => {
-                        let root = self.thread_path(thread);
+                        let root = self.thread_path(thread, cx);
                         let relative = root
                             .as_deref()
                             .and_then(|root| std::path::Path::new(path).strip_prefix(root).ok())
@@ -1989,7 +2035,7 @@ impl CockpitView {
             .map(|pane| pane.identity)
         {
             if let Some(thread) = identity.thread() {
-                self.cockpit.set_composing(thread, unsent);
+                self.cockpit.update(cx, |cockpit, _| cockpit.set_composing(thread, unsent));
             }
             self.keep_draft(identity, cx);
         }
@@ -2053,9 +2099,11 @@ impl CockpitView {
     /// One frame for the whole cockpit. Only Panes the pump reports as
     /// changed are worth a repaint; a frame where nothing moved costs nothing.
     fn pump(&mut self, cx: &mut Context<Self>) {
+        #[cfg(test)]
+        drawn::pumped();
         // What a stream can move beyond its own Pane and nav row, before it
         // moves: a frame that changes none of it redraws only those.
-        let shared = self.parts.borrow().on.then(|| self.shared_chrome());
+        let shared = self.parts.borrow().on.then(|| self.shared_chrome(cx));
         self.poll_navigation(cx);
         self.poll_machines(cx);
         if let Some(connections) = self.connections(cx) {
@@ -2065,7 +2113,7 @@ impl CockpitView {
         if commands_changed {
             self.sync_menu(cx);
         }
-        let frame = self.cockpit.pump();
+        let frame = self.cockpit.update(cx, |cockpit, _| cockpit.pump());
         self.fetch_attachment_previews(cx);
         self.note_work(&frame);
         self.prune_background_stops(cx);
@@ -2075,16 +2123,16 @@ impl CockpitView {
             card.update(cx, |card, cx| card.poll_remote_path(cx));
         }
         self.poll_machine_repo(cx);
-        let server_moved = self.server_moved();
+        let server_moved = self.server_moved(cx);
         // A Focus or a toast an API caller asked for is presented by the
         // render, so it needs one even when nothing else moved.
-        let asked = self.cockpit.has_asked();
+        let asked = self.cockpit.read(cx).has_asked();
         // The Server says when its parked Threads' rows moved.
-        let parked_moved = self.cockpit.take_parked_changed();
+        let parked_moved = self.cockpit.update(cx, |cockpit, _| cockpit.take_parked_changed());
         if parked_moved {
             self.parked_changed(cx);
         }
-        if self.cockpit.take_factory_changed() {
+        if self.cockpit.update(cx, |cockpit, _| cockpit.take_factory_changed()) {
             self.factory_changed(cx);
         }
         self.poll_factory_skills(cx);
@@ -2092,13 +2140,13 @@ impl CockpitView {
         self.apply_thread_rules(&frame, cx);
         self.land(cx);
         self.ring_alerts(cx);
-        self.settle_held_sends();
+        self.settle_held_sends(cx);
         for index in 0..self.panes.len() {
             if let Some(thread) = self.panes[index].thread() {
                 for draft in self.lost_sends(thread) {
                     self.put_back_send(index, draft, true, cx);
                 }
-                while let Some((held, prepend)) = self.cockpit.take_retrieved_prompt(thread) {
+                while let Some((held, prepend)) = self.cockpit.update(cx, |cockpit, _| cockpit.take_retrieved_prompt(thread)) {
                     let content = self.recovered_content(thread, held);
                     self.panes[index].composer.update(cx, |composer, cx| {
                         composer.restore_content(content, prepend, cx)
@@ -2107,10 +2155,11 @@ impl CockpitView {
                 }
             }
         }
-        let models_changed = self.cockpit.take_models_changed();
+        let models_changed = self.cockpit.update(cx, |cockpit, _| cockpit.take_models_changed());
         let tuning_availability_changed = self.model_picker().is_some_and(|open| {
             open.pane.thread().is_some_and(|thread| {
                 self.cockpit
+                    .read(cx)
                     .thread(thread)
                     .and_then(|thread| tuning_hold(&thread))
                     != open.view.read(cx).hold
@@ -2119,7 +2168,7 @@ impl CockpitView {
         if models_changed || tuning_availability_changed {
             self.refresh_model_picker(cx);
         }
-        let completions = self.cockpit.take_bootstrap_results();
+        let completions = self.cockpit.update(cx, |cockpit, _| cockpit.take_bootstrap_results());
         let startup_changed = !completions.is_empty();
         for completion in completions {
             if let Some(draft) = completion.draft {
@@ -2137,6 +2186,7 @@ impl CockpitView {
         // its existing Composer when it becomes a Thread.
         let panes_changed = !self.panes.iter().map(|pane| pane.identity).eq(self
             .cockpit
+            .read(cx)
             .roster()
             .panes()
             .iter()
@@ -2145,9 +2195,6 @@ impl CockpitView {
             self.sync_panes(cx);
         }
         self.watch_prs(cx);
-        if self.note_arrivals() {
-            self.notify_part(parts::Part::Nav, cx);
-        }
         let mut restarted = Vec::new();
         // What the sweep found moved: a fact or a Thread's age (everything
         // redraws), a working Thread (its Pane and the nav), the frame's
@@ -2159,7 +2206,7 @@ impl CockpitView {
         if now.duration_since(self.swept) >= SWEEP_INTERVAL {
             self.swept = now;
             // The core logs each restart (`Cockpit::sweep`).
-            for restart in self.cockpit.sweep() {
+            for restart in self.cockpit.update(cx, |cockpit, _| cockpit.sweep()) {
                 restarted.push(restart.thread);
             }
             // Redraw only for what moved: a fact, a working Thread's clock
@@ -2167,13 +2214,15 @@ impl CockpitView {
             // row's age turning over. An idle window stays undrawn.
             // A Thread's facts (its name, Project, last use) are drawn by
             // its nav row and its Pane: they redraw like a working one.
-            let moved = self.facts.tick(&self.cockpit);
+            let moved = self.facts.tick(self.cockpit.read(cx));
             swept_busy = self
                 .cockpit
+                .read(cx)
                 .threads()
                 .into_iter()
                 .filter(|thread| {
                     self.cockpit
+                        .read(cx)
                         .thread(*thread)
                         .is_some_and(|open| open.busy() || open.working_descendants() > 0)
                 })
@@ -2202,7 +2251,7 @@ impl CockpitView {
                     transcript.update(cx, |_, cx| cx.notify());
                 }
             }
-        } else if self.cockpit.wants_worktree_listing() {
+        } else if self.cockpit.read(cx).wants_worktree_listing() {
             // A Main just finished making a worktree: ask git now, not in
             // up to two seconds, so the header follows without a pause.
             self.refresh_branches(cx);
@@ -2211,7 +2260,7 @@ impl CockpitView {
         // A restart writes a Notice even when no Session streamed this frame —
         // and a failed respawn will never stream again, so this notify is that
         // notice's only ride to the screen.
-        if frame.is_empty()
+        let idle = frame.is_empty()
             && restarted.is_empty()
             && !swept_change
             && swept_busy.is_empty()
@@ -2222,8 +2271,14 @@ impl CockpitView {
             && !server_moved
             && !asked
             && !parked_moved
-            && !panes_changed
-        {
+            && !panes_changed;
+        // Something arrived, or the Server said something no Pane shows
+        // (another window's Snooze): what draws from the model looks again
+        // once the pump is done (the nav, `NavView::look`).
+        if !idle || self.cockpit.update(cx, |cockpit, _| cockpit.take_arrived()) {
+            self.cockpit.update(cx, |_, cx| cx.emit(Arrived));
+        }
+        if idle {
             return;
         }
         let mut turn_ended = false;
@@ -2232,10 +2287,11 @@ impl CockpitView {
                 for (from, to) in &update.redirects {
                     self.panes[index].redirect_subject(from, to);
                 }
-                self.release_evicted_transcripts(index, &update.subjects);
+                self.release_evicted_transcripts(index, &update.subjects, cx);
                 let mut selected = self.panes[index].selected.clone();
                 let resolves = self
                     .cockpit
+                    .read(cx)
                     .thread(update.thread)
                     .is_some_and(|open| open.activity().subject(&selected).is_some());
                 // A fresh Session forgets its agents: the Pane they filled
@@ -2245,6 +2301,7 @@ impl CockpitView {
                 }
                 let generation = self
                     .cockpit
+                    .read(cx)
                     .thread(update.thread)
                     .and_then(|open| open.activity().subject(&selected))
                     .map(|subject| subject.revision())
@@ -2256,15 +2313,17 @@ impl CockpitView {
                     .any(|change| change.subject == selected && change.content_changed)
                     || (self.panes[index].is_main() && !update.dirty.is_empty());
                 if update.activity_changed || content_changed || !update.evicted.is_empty() {
-                    self.prune_tool_disclosures(update.thread);
+                    self.prune_tool_disclosures(update.thread, cx);
                 }
                 self.prune_request_forms(index, cx);
                 self.panes[index].history_error = self
                     .cockpit
+                    .read(cx)
                     .subject_history_error(update.thread, &self.panes[index].selected)
                     .map(str::to_string);
                 let unretained = self
                     .cockpit
+                    .read(cx)
                     .thread(update.thread)
                     .and_then(|thread| thread.activity().subject(&self.panes[index].selected))
                     .is_some_and(|subject| !subject.retained());
@@ -2273,7 +2332,7 @@ impl CockpitView {
                 }
             }
             // Native progress can change without appending a transcript row.
-            let settled = self.facts.streamed(&self.cockpit, update.thread);
+            let settled = self.facts.streamed(self.cockpit.read(cx), update.thread);
             self.advance_pr_actions(update.thread, settled, cx);
             turn_ended |= settled;
         }
@@ -2286,9 +2345,9 @@ impl CockpitView {
             && !startup_changed
             && !models_changed
             && !commands_changed
-            && shared.is_some_and(|shared| shared == self.shared_chrome());
+            && shared.is_some_and(|shared| shared == self.shared_chrome(cx));
         for thread in restarted {
-            self.facts.acted(&self.cockpit, thread);
+            self.facts.acted(self.cockpit.read(cx), thread);
         }
         if turn_ended {
             // The agent may have moved the checkout during its turn.
@@ -2303,13 +2362,15 @@ impl CockpitView {
         // new inputs first, as the Cockpit's own notify has them do
         // (`observe_self`), so they draw in this same frame.
         self.sync_visible_transcripts(cx);
-        let rows = !swept_busy.is_empty()
-            || (!frame.is_empty() && self.nav_view.read(cx).rows_moved(&self.nav_state()));
+        // A working row's clock is drawn from the time, not the model: the
+        // sweep is its ride under reduced motion, so the nav redraws for it
+        // as it is. Its rows the nav finds moved itself.
+        let clocks = !swept_busy.is_empty();
         for thread in frame.iter().map(|update| update.thread).chain(swept_busy) {
             self.notify_thread_pane(thread, cx);
         }
-        if rows {
-            self.notify_part(parts::Part::Nav, cx);
+        if clocks {
+            self.nav_view.update(cx, |_, cx| cx.notify());
         }
         self.notify_frame(cx);
     }
@@ -2319,19 +2380,20 @@ impl CockpitView {
     /// waiting on the operator (the Inbox's needs-you rows), the unread
     /// notices and attention (the Inbox, each
     /// Pane's head).
-    fn shared_chrome(&self) -> String {
-        let notifications = self.cockpit.notifications();
+    fn shared_chrome(&self, cx: &gpui::App) -> String {
+        let notifications = self.cockpit.read(cx).notifications();
         let attention: Vec<ThreadId> = self
             .cockpit
+            .read(cx)
             .threads()
             .into_iter()
             .filter(|thread| notifications.attention(*thread))
             .collect();
         format!(
             "{:?} {:?} {:?} {} {:?}",
-            self.cockpit.account_limits(Provider::Claude),
-            self.cockpit.account_limits(Provider::Codex),
-            self.cockpit.needs_you(),
+            self.cockpit.read(cx).account_limits(Provider::Claude),
+            self.cockpit.read(cx).account_limits(Provider::Codex),
+            self.cockpit.read(cx).needs_you(),
             notifications.unread(),
             attention,
         )
@@ -2355,7 +2417,7 @@ impl CockpitView {
     /// (`workspace::follow`), and the labels re-read on the very next pass.
     /// None of it on a machine: no git here can read its checkouts.
     fn refresh_branches(&mut self, cx: &mut Context<Self>) {
-        if self.on_machine() {
+        if self.on_machine(cx) {
             return;
         }
         // A draft has no Thread yet, but its workspace chip names its
@@ -2375,10 +2437,11 @@ impl CockpitView {
         let taken_at = std::time::Instant::now();
         let targets: Vec<_> = self
             .cockpit
+            .read(cx)
             .threads()
             .into_iter()
             .filter_map(|thread| {
-                let open = self.cockpit.thread(thread)?;
+                let open = self.cockpit.read(cx).thread(thread)?;
                 let repo = open.workspace().map(|binding| binding.repo().to_path_buf());
                 let cwd = ferrite_core::workspace::effective_cwd(
                     open.session_project_root(),
@@ -2386,10 +2449,11 @@ impl CockpitView {
                 )?;
                 let project = self
                     .cockpit
+                    .read(cx)
                     .peek(thread)
                     .ok()
                     .and_then(|meta| meta.project_id)
-                    .and_then(|project| self.cockpit.registry().project(project));
+                    .and_then(|project| self.cockpit.read(cx).registry().project(project));
                 let directories = project
                     .map(|project| {
                         project
@@ -2468,7 +2532,7 @@ impl CockpitView {
                 );
                 let mut moved = false;
                 for (thread, listing) in listings {
-                    if view.cockpit.worktrees_listed(thread, listing, taken_at) {
+                    if view.cockpit.update(cx, |cockpit, _| cockpit.worktrees_listed(thread, listing, taken_at)) {
                         moved = true;
                         // Into a worktree: its branch is another PR's.
                         view.check_pr(thread, false, cx);
@@ -2499,13 +2563,14 @@ impl CockpitView {
 
     /// Transcript membership changes only through the pump. Prune stale
     /// expanded call ids here once per changed Thread, never per frame.
-    fn prune_tool_disclosures(&mut self, thread: ThreadId) {
+    fn prune_tool_disclosures(&mut self, thread: ThreadId, cx: &gpui::App) {
         let Some(index) = self.pane_for(thread) else {
             return;
         };
         let mut valid = std::collections::HashSet::new();
         if let Some(transcript) = self
             .cockpit
+            .read(cx)
             .thread(thread)
             .and_then(|open| open.activity().subject(&self.panes[index].selected))
             .map(|subject| subject.transcript())
@@ -2537,7 +2602,7 @@ impl CockpitView {
                         for output in ferrite_core::transcript::outputs::of_turn(&blocks[turn_start..at]) {
                             if let ferrite_core::transcript::outputs::Output::Changes(changes) = output {
                                 valid.extend(
-                                    ferrite_pane::transcript::changes_folders(&changes, self.thread_path(thread).as_deref())
+                                    ferrite_pane::transcript::changes_folders(&changes, self.thread_path(thread, cx).as_deref())
                                         .into_iter()
                                         .map(|folder| pane::DisclosureId::Folder(block.id, folder)),
                                 );
@@ -2568,15 +2633,15 @@ impl CockpitView {
         self.nav_collapsed || (self.nav_auto_fold.get() && !self.nav_forced_open)
     }
 
-    fn update_auto_fold(&mut self, window: &Window) {
+    fn update_auto_fold(&mut self, window: &Window, cx: &gpui::App) {
         use ferrite_ui::theme::{NAV_AUTO_FOLD_BOARD_W, NAV_AUTO_FOLD_HYSTERESIS, NAV_AUTO_FOLD_PANE_W};
         let held = self.nav_auto_fold.get();
         let slack = if held { NAV_AUTO_FOLD_HYSTERESIS } else { 0.0 };
         let width = f32::from(window.viewport_size().width);
-        let right = self.panel_target_w();
+        let right = self.panel_target_w(cx);
         let board = width - self.nav_expanded_width() - right;
         let narrowest = |view: &Self| {
-            view.pane_rects(window)
+            view.pane_rects(window, cx)
                 .iter()
                 .map(|(_, rect)| rect.w)
                 .fold(f32::INFINITY, f32::min)
@@ -2590,21 +2655,21 @@ impl CockpitView {
         let fold = board < NAV_AUTO_FOLD_BOARD_W + slack || cramped;
         self.nav_auto_fold.set(fold);
         // `board_bounds` cached the full-column board while measuring.
-        self.board_bounds(window);
+        self.board_bounds(window, cx);
     }
 
     /// The board the cards lay out in, in window coordinates (theme WP-C):
     /// flush right of the nav, from under the head row
     /// (`frame::board_top`) to the window's foot, and `board_right` short
     /// of its right edge (the panel, or the gutter).
-    fn board_bounds(&self, window: &Window) -> layout::Rect {
+    fn board_bounds(&self, window: &Window, cx: &gpui::App) -> layout::Rect {
         let viewport = window.viewport_size();
         let top = ferrite_ui::frame::board_top();
         let left = self.nav_width();
         let bounds = layout::Rect {
             x: left,
             y: top,
-            w: (f32::from(viewport.width) - left - self.board_right()).max(0.0),
+            w: (f32::from(viewport.width) - left - self.board_right(cx)).max(0.0),
             h: (f32::from(viewport.height) - top).max(0.0),
         };
         self.board.set(bounds);
@@ -2613,8 +2678,8 @@ impl CockpitView {
 
     /// The board on screen, when a tree lays it out: the shown Pane's,
     /// while it has a reader slot. A plain Pane has none.
-    fn board(&self) -> Option<Board> {
-        match self.visible_indices().as_slice() {
+    fn board(&self, cx: &gpui::App) -> Option<Board> {
+        match self.visible_indices(cx).as_slice() {
             [index] if self.has_reader(*index) => Some(Board(self.panes[*index].identity)),
             _ => None,
         }
@@ -2625,12 +2690,12 @@ impl CockpitView {
     /// its reader slot while a document is open or sliding shut. A reader
     /// the tree has not placed yet opens beside its Pane, on the right.
     /// Every slot is at rest here: `slid_tree` draws a slide.
-    fn board_tree(&self, board: Board) -> Option<Tree> {
+    fn board_tree(&self, board: Board, cx: &gpui::App) -> Option<Tree> {
         if let Some(drag) = self.seam_drag.as_ref().filter(|drag| drag.board == board) {
             return Some(drag.tree.clone());
         }
         let readers: Vec<ThreadId> = self
-            .visible_indices()
+            .visible_indices(cx)
             .into_iter()
             .filter(|index| self.has_reader(*index))
             .filter_map(|index| self.panes[index].thread())
@@ -2676,10 +2741,10 @@ impl CockpitView {
     /// board's tree as this frame draws it (or, measuring at rest, where
     /// the reader's slide ends), or the whole board. The reader slot is no
     /// Pane and is left out.
-    fn pane_rects(&self, window: &Window) -> Vec<(usize, layout::Rect)> {
-        let bounds = self.board_bounds(window);
-        if let Some(board) = self.board() {
-            let Some(tree) = self.board_tree(board) else {
+    fn pane_rects(&self, window: &Window, cx: &gpui::App) -> Vec<(usize, layout::Rect)> {
+        let bounds = self.board_bounds(window, cx);
+        if let Some(board) = self.board(cx) {
+            let Some(tree) = self.board_tree(board, cx) else {
                 return Vec::new();
             };
             let tree = if self.nav_measure_rest.get() || self.nav_measure_full.get() {
@@ -2696,7 +2761,7 @@ impl CockpitView {
                 })
                 .collect();
         }
-        self.visible_indices()
+        self.visible_indices(cx)
             .first()
             .map(|index| vec![(*index, bounds)])
             .unwrap_or_default()
@@ -2706,7 +2771,7 @@ impl CockpitView {
     /// focused Thread's PR, hung from its Pane's top edge. Nothing when the
     /// PR reports no checks.
     pub(crate) fn open_checks(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
-        let Some(thread) = self.focused_thread() else {
+        let Some(thread) = self.focused_thread(cx) else {
             return;
         };
         let has_checks = self.facts.pr(thread).is_some_and(|pr| pr.checks.is_some());
@@ -2720,11 +2785,12 @@ impl CockpitView {
     /// card — its steps in order, the done ones checked, the one being
     /// worked marked — hung from its Pane's top edge. Nothing without a plan.
     pub(crate) fn open_plan(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
-        let Some(thread) = self.focused_thread() else {
+        let Some(thread) = self.focused_thread(cx) else {
             return;
         };
         if self
             .cockpit
+            .read(cx)
             .thread(thread)
             .and_then(|open| open.transcript().todos())
             .is_none()
@@ -2762,11 +2828,12 @@ impl CockpitView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
-        let card = head_cards::PlanCard::of(self.cockpit.thread(thread)?.transcript())?;
+        let card = head_cards::PlanCard::of(self.cockpit.read(cx).thread(thread)?.transcript())?;
         let at = self.card_corner(
             format!("plan-{}", thread.get()),
             CardFrom::Head(PaneIdentity::Thread(thread)),
             window,
+            cx,
         )?;
         Some(
             anchored()
@@ -2786,8 +2853,9 @@ impl CockpitView {
 
     /// The Panes on screen, as indices into the mirror — the roster's
     /// `visible`, in its order.
-    fn visible_indices(&self) -> Vec<usize> {
+    fn visible_indices(&self, cx: &gpui::App) -> Vec<usize> {
         self.cockpit
+            .read(cx)
             .visible()
             .into_iter()
             .filter_map(|identity| self.index_of(identity))
@@ -2818,10 +2886,10 @@ impl CockpitView {
             None
         };
         if let Some((thread, title)) = asked {
-            match self.cockpit.rename_thread(thread, &title) {
+            match self.cockpit.update(cx, |cockpit, _| cockpit.rename_thread(thread, &title)) {
                 Err(error) => self.nav_notice.problem(error.to_string()),
                 Ok(_) => {
-                    self.facts.renamed(&self.cockpit, thread);
+                    self.facts.renamed(self.cockpit.read(cx), thread);
                     self.refresh_names();
                     self.nav_notice.clear();
                 }
@@ -2833,22 +2901,23 @@ impl CockpitView {
     /// The Threads the Parked shelf lists and counts: every parked
     /// Thread the Project filter admits; a parked Thread on screen is still
     /// a parked Thread.
-    fn parked_threads(&self) -> Vec<ThreadId> {
+    fn parked_threads(&self, cx: &gpui::App) -> Vec<ThreadId> {
         self.facts
             .parked()
             .iter()
             .copied()
-            .filter(|thread| self.admitted(*thread))
+            .filter(|thread| self.admitted(*thread, cx))
             .collect()
     }
 
     /// Whether any Thread, open or parked, records this Project.
-    fn project_in_use(&self, project: ProjectId) -> bool {
+    fn project_in_use(&self, project: ProjectId, cx: &gpui::App) -> bool {
         self.cockpit
+            .read(cx)
             .threads()
             .into_iter()
             .chain(self.facts.parked().iter().copied())
-            .any(|thread| self.cockpit.project_id(thread) == Some(project))
+            .any(|thread| self.cockpit.read(cx).project_id(thread) == Some(project))
     }
 
     /// A Thread's effective cwd.
@@ -2856,7 +2925,7 @@ impl CockpitView {
         match target {
             MenuTarget::Thread(thread)
             | MenuTarget::Pane(thread)
-            | MenuTarget::Snooze(thread) => self.thread_path(thread),
+            | MenuTarget::Snooze(thread) => self.thread_path(thread, cx),
             MenuTarget::File(thread) => self.files.read(cx).pressed(thread),
             MenuTarget::FilesMore(_)
             | MenuTarget::ChangesScope(_)
@@ -2880,15 +2949,15 @@ impl CockpitView {
         }
     }
 
-    fn thread_path(&self, thread: ThreadId) -> Option<std::path::PathBuf> {
-        if let Some(open) = self.cockpit.thread(thread) {
+    fn thread_path(&self, thread: ThreadId, cx: &gpui::App) -> Option<std::path::PathBuf> {
+        if let Some(open) = self.cockpit.read(cx).thread(thread) {
             return ferrite_core::workspace::effective_cwd(
                 open.session_project_root(),
                 open.workspace(),
             )
             .map(std::path::Path::to_path_buf);
         }
-        let meta = self.cockpit.peek(thread).ok()?;
+        let meta = self.cockpit.read(cx).peek(thread).ok()?;
         ferrite_core::workspace::effective_cwd(
             meta.session_project_root.as_deref(),
             meta.workspace.as_ref(),
@@ -2902,11 +2971,11 @@ impl CockpitView {
     /// into the nav's banner, with the last reason, and the survivors stay
     /// listed where the operator can deal with them one at a time.
     fn delete_parked_threads(&mut self, cx: &mut Context<Self>) {
-        let parked = self.parked_threads();
+        let parked = self.parked_threads(cx);
         let mut refused = 0usize;
         let mut reason = None;
         for thread in parked {
-            if let Err(error) = self.delete_thread(thread) {
+            if let Err(error) = self.delete_thread(thread, cx) {
                 refused += 1;
                 reason = Some(error.to_string());
             }
@@ -2937,7 +3006,7 @@ impl CockpitView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Div {
-        let bounds = self.board_bounds(window);
+        let bounds = self.board_bounds(window, cx);
         let origin_x = self.nav_width();
         let local = |rect: layout::Rect| layout::Rect {
             x: rect.x - origin_x,
@@ -3177,7 +3246,7 @@ impl CockpitView {
     /// the moves until release re-derive the ratio from the pointer.
     fn begin_seam_drag(&mut self, board: Board, seam: SeamId, cx: &mut Context<Self>) {
         self.land_reader_slides(cx);
-        let Some(tree) = self.board_tree(board) else {
+        let Some(tree) = self.board_tree(board, cx) else {
             return;
         };
         self.seam_drag = Some(SeamDrag { board, seam, tree });
@@ -3193,7 +3262,7 @@ impl CockpitView {
         window: &Window,
         cx: &mut Context<Self>,
     ) {
-        let bounds = self.board_bounds(window);
+        let bounds = self.board_bounds(window, cx);
         let pointer = layout::Point {
             x: f32::from(position.x),
             y: f32::from(position.y),
@@ -3229,8 +3298,8 @@ impl CockpitView {
         cx: &mut Context<Self>,
     ) {
         let on_board = self
-            .board()
-            .and_then(|board| self.board_tree(board))
+            .board(cx)
+            .and_then(|board| self.board_tree(board, cx))
             .is_some_and(|tree| tree.contains(source) && tree.contains(target));
         let preview = (source != target && on_board).then(|| {
             let (pointer, rect) = drop_geometry(position, bounds);
@@ -3268,10 +3337,10 @@ impl CockpitView {
         zone: Zone,
         cx: &mut Context<Self>,
     ) {
-        let Some(board) = self.board() else {
+        let Some(board) = self.board(cx) else {
             return;
         };
-        let Some(mut tree) = self.board_tree(board) else {
+        let Some(mut tree) = self.board_tree(board, cx) else {
             return;
         };
         if source == target || !tree.contains(source) || !tree.contains(target) {
@@ -3318,7 +3387,7 @@ impl CockpitView {
             return;
         }
         for provider in self.cli_updates.ready() {
-            if self.cockpit.live_sessions(provider) == 0 {
+            if self.cockpit.read(cx).live_sessions(provider) == 0 {
                 self.update_cli(provider, cx);
             }
         }
@@ -3342,7 +3411,7 @@ impl CockpitView {
         use gpui::component::notification::{Notification, NotificationType};
         use gpui::component::WindowExt as _;
         let toasts = self.cli_updates.take_toasts();
-        let place = self.machine_place();
+        let place = self.machine_place(cx);
         if toasts.is_empty() {
             // Called every render: a notify here with nothing to show would
             // rebuild the Cockpit on every frame anything else draws.
@@ -3397,7 +3466,7 @@ impl CockpitView {
             ),
             ("Claude CLI", claude.to_string()),
             ("Codex CLI", codex.to_string()),
-            ("Open Threads", self.cockpit.threads().len().to_string()),
+            ("Open Threads", self.cockpit.read(cx).threads().len().to_string()),
         ];
         let dir = self.prefs.dir.clone();
         cx.spawn(async move |this, cx| {
@@ -3451,7 +3520,7 @@ impl CockpitView {
     /// What an agent or a script asked of the windows through the API
     /// (ADR 0027), one at a time.
     fn present_asked(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        for asked in self.cockpit.take_asked() {
+        for asked in self.cockpit.update(cx, |cockpit, _| cockpit.take_asked()) {
             self.present(asked, window, cx);
         }
     }
@@ -3513,7 +3582,7 @@ impl CockpitView {
         use ferrite_core::providers::limits::LimitWindow;
         use gpui::component::notification::{Notification, NotificationType};
         use gpui::component::WindowExt as _;
-        for warning in self.cockpit.take_allowance_warnings() {
+        for warning in self.cockpit.update(cx, |cockpit, _| cockpit.take_allowance_warnings()) {
             let span = match warning.window {
                 LimitWindow::FiveHour => "5-hour",
                 LimitWindow::Weekly => "weekly",
@@ -3552,7 +3621,7 @@ impl CockpitView {
             }
         }
         // Saved first: a Server rereads the file.
-        self.cockpit.settings_changed(&self.prefs.settings);
+        self.cockpit.update(cx, |cockpit, _| cockpit.settings_changed(&self.prefs.settings));
         self.machines_changed(cx);
         if let Ok(mut defaults) = self.prefs.defaults.lock() {
             *defaults = ferrite_core::spawner::SessionDefaults::from_settings(&self.prefs.settings);
@@ -3563,8 +3632,8 @@ impl CockpitView {
         );
         if self.facts.set_auto_title(self.prefs.settings.auto_title) {
             self.parked_changed(cx);
-            for thread in self.cockpit.threads() {
-                self.facts.renamed(&self.cockpit, thread);
+            for thread in self.cockpit.read(cx).threads() {
+                self.facts.renamed(self.cockpit.read(cx), thread);
             }
             self.refresh_names();
         }
@@ -3620,16 +3689,17 @@ impl CockpitView {
     /// The focused identity's index in this window's mirror. A core act can
     /// receive roster changes before the next pump reconciles the Panes;
     /// another Thread's old index must never receive this one's input.
-    fn focused(&self) -> usize {
+    fn focused(&self, cx: &gpui::App) -> usize {
         self.cockpit
+            .read(cx)
             .roster()
             .focused()
             .and_then(|identity| self.index_of(identity))
             .unwrap_or(0)
     }
 
-    fn focused_thread(&self) -> Option<ThreadId> {
-        self.cockpit.roster().focused_thread()
+    fn focused_thread(&self, cx: &gpui::App) -> Option<ThreadId> {
+        self.cockpit.read(cx).roster().focused_thread()
     }
 
     /// The one plane's seams (theme rule 2): a `LINE` hairline closing the
@@ -3659,15 +3729,15 @@ impl CockpitView {
     }
 
     /// The focused Pane's draft, to change — None on a Thread.
-    fn focused_draft_mut(&mut self) -> Option<&mut pane::DraftBinding> {
-        let focused = self.focused();
+    fn focused_draft_mut(&mut self, cx: &gpui::App) -> Option<&mut pane::DraftBinding> {
+        let focused = self.focused(cx);
         self.panes
             .get_mut(focused)
             .and_then(|pane| pane.draft_mut())
     }
 
     fn submit(&mut self, _: &Submit, window: &mut Window, cx: &mut Context<Self>) {
-        if self.panes.get(self.focused()).is_some_and(|pane| !pane.composer.read(cx).comment_valid(cx)) {
+        if self.panes.get(self.focused(cx)).is_some_and(|pane| !pane.composer.read(cx).comment_valid(cx)) {
             return;
         }
         // The card's ↵ is its confirm — but in a machine's path field that
@@ -3696,7 +3766,7 @@ impl CockpitView {
         // typed-out `/import`.
         if let Some(band_focus) = self
             .panes
-            .get(self.focused())
+            .get(self.focused(cx))
             .and_then(|pane| pane.draft())
             .map(|draft| draft.band_focus)
         {
@@ -3707,22 +3777,22 @@ impl CockpitView {
             }
             return;
         }
-        let Some(thread) = self.focused_thread() else {
+        let Some(thread) = self.focused_thread(cx) else {
             return;
         };
-        if !self.panes[self.focused()].is_main() {
+        if !self.panes[self.focused(cx)].is_main() {
             return;
         }
         // ↵ on an empty line sends a pending question whose every question
         // is answered (digits toggled a multi-select; ↵ sends it).
-        if self.panes[self.focused()].composer.read(cx).is_empty() && self.send_ready_question(cx) {
+        if self.panes[self.focused(cx)].composer.read(cx).is_empty() && self.send_ready_question(cx) {
             return;
         }
         if self.typed_import(window, cx) {
             return;
         }
-        let composer = self.panes[self.focused()].composer.clone();
-        if !self.admit_files(self.focused(), cx) {
+        let composer = self.panes[self.focused(cx)].composer.clone();
+        if !self.admit_files(self.focused(cx), cx) {
             return;
         }
         let draft = composer.update(cx, |composer, cx| composer.take_draft(cx));
@@ -3732,7 +3802,7 @@ impl CockpitView {
         // acts, the same as the pickers: the chip stays truthful, Codex
         // (which has no such command) gets them too, and a level or model
         // Ferrite does not know goes to the provider as text.
-        if let Some(handled) = self.typed_tuning(thread, &text) {
+        if let Some(handled) = self.typed_tuning(thread, &text, cx) {
             match handled {
                 Tuning::Effort(effort) => self.pick_effort(thread, effort, cx),
                 Tuning::Model(model) => self.pick_provider(
@@ -3740,6 +3810,7 @@ impl CockpitView {
                     ProviderChoice {
                         provider: self
                             .cockpit
+                            .read(cx)
                             .thread(thread)
                             .map(|open| open.provider())
                             .unwrap_or(self.prefs.settings.default_provider),
@@ -3752,7 +3823,7 @@ impl CockpitView {
         }
         if text.is_empty() {
             // Enter on an empty line takes a held prompt back to edit it.
-            if let Some(held) = self.cockpit.unqueue(thread) {
+            if let Some(held) = self.cockpit.update(cx, |cockpit, _| cockpit.unqueue(thread)) {
                 let content = self.recovered_content(thread, held);
                 composer.update(cx, |composer, cx| {
                     composer.restore_content(content, true, cx)
@@ -3762,13 +3833,14 @@ impl CockpitView {
             return;
         }
         // Typing does not wait for the agent; sending does.
-        let focused = self.focused();
+        let focused = self.focused(cx);
         let admitted = if self
             .cockpit
+            .read(cx)
             .thread(thread)
             .is_some_and(|open| open.needs_queue())
         {
-            let queued = self.cockpit.queue(thread, text.clone());
+            let queued = self.cockpit.update(cx, |cockpit, _| cockpit.queue(thread, text.clone()));
             if queued {
                 self.hold_queued(thread, draft);
             } else {
@@ -3776,7 +3848,7 @@ impl CockpitView {
             }
             queued
         } else {
-            let admission = self.cockpit.send(thread, text.clone());
+            let admission = self.cockpit.update(cx, |cockpit, _| cockpit.send(thread, text.clone()));
             let admitted = self.settle_send(focused, thread, draft, admission, cx);
             if admitted {
                 self.scroll_transcript_to_new_prompt(focused, cx);
@@ -3786,11 +3858,11 @@ impl CockpitView {
         if admitted {
             self.keep_cited_sources(thread, &cited);
         }
-        self.facts.acted(&self.cockpit, thread);
+        self.facts.acted(self.cockpit.read(cx), thread);
         // A first prompt names an untitled Thread.
-        self.facts.renamed(&self.cockpit, thread);
+        self.facts.renamed(self.cockpit.read(cx), thread);
         self.refresh_names();
-        if admitted && self.is_first_prompt(thread) {
+        if admitted && self.is_first_prompt(thread, cx) {
             self.start_titling(thread, text, cx);
         }
         cx.notify();
@@ -3807,24 +3879,25 @@ impl CockpitView {
     ) {
         // ⌫ in the palette's line edits the query, never the queue.
         if self.floats.palette.is_some()
-            || self.panes.get(self.focused()).is_none_or(|pane| !pane.is_main())
+            || self.panes.get(self.focused(cx)).is_none_or(|pane| !pane.is_main())
         {
             return;
         }
-        let Some(thread) = self.focused_thread() else {
+        let Some(thread) = self.focused_thread(cx) else {
             return;
         };
-        if !self.panes[self.focused()].composer.read(cx).is_empty() {
+        if !self.panes[self.focused(cx)].composer.read(cx).is_empty() {
             return;
         }
         let Some(id) = self
             .cockpit
+            .read(cx)
             .thread(thread)
             .and_then(|open| queued_to_take_back(&open))
         else {
             return;
         };
-        self.cockpit.remove_queued_item(thread, &id, false);
+        self.cockpit.update(cx, |cockpit, _| cockpit.remove_queued_item(thread, &id, false));
         cx.notify();
     }
 
@@ -3832,7 +3905,7 @@ impl CockpitView {
         if self.dismiss_popup(cx) {
             return;
         }
-        if let Some(transcript) = self.panes.get(self.focused()).and_then(|pane| pane.transcript()) {
+        if let Some(transcript) = self.panes.get(self.focused(cx)).and_then(|pane| pane.transcript()) {
             if transcript.update(cx, |transcript, cx| transcript.dismiss_offer(cx)) {
                 return;
             }
@@ -3858,14 +3931,14 @@ impl CockpitView {
             self.finish_rename(false, cx);
             return;
         }
-        if !self.cancel_focused_draft_start() {
+        if !self.cancel_focused_draft_start(cx) {
             cx.notify();
             return;
         }
         // On a draft, escape returns to the prompt (#29): the band's tab
         // focus clears. (An open band menu holds the ComposerMenu keys, so
         // escape there dismisses through `menu_dismiss` instead.)
-        if let Some(draft) = self.focused_draft_mut() {
+        if let Some(draft) = self.focused_draft_mut(cx) {
             draft.band_focus = None;
             cx.notify();
             return;
@@ -3874,29 +3947,29 @@ impl CockpitView {
         // Subagents and background work it started; on a Subagent that
         // Subagent alone — and once it has nothing to stop, it goes back to
         // its parent.
-        if let Some(thread) = self.focused_thread().filter(|_| !self.machine_lost()) {
-            let selected = self.panes[self.focused()].selected.clone();
+        if let Some(thread) = self.focused_thread(cx).filter(|_| !self.machine_lost(cx)) {
+            let selected = self.panes[self.focused(cx)].selected.clone();
             match &selected {
-                ferrite_core::activity::Subject::Main => self.cockpit.interrupt(thread),
+                ferrite_core::activity::Subject::Main => self.cockpit.update(cx, |cockpit, _| cockpit.interrupt(thread)),
                 ferrite_core::activity::Subject::Subagent(key) => {
-                    if !self.stop_subagent(thread, key) {
+                    if !self.stop_subagent(thread, key, cx) {
                         let parent = self
-                            .agent_lineage(thread, &selected)
+                            .agent_lineage(thread, &selected, cx)
                             .pop()
                             .unwrap_or(ferrite_core::activity::Subject::Main);
                         self.select_subject(thread, parent, window, cx);
                     }
                 }
             }
-            self.facts.acted(&self.cockpit, thread);
+            self.facts.acted(self.cockpit.read(cx), thread);
         }
         cx.notify();
     }
 
     /// Stop the Subagent `key` while it runs; whether it did. A finished
     /// one has nothing to stop, and its escape must not reach Main's turn.
-    fn stop_subagent(&mut self, thread: ThreadId, key: &ferrite_core::activity::AgentKey) -> bool {
-        let Some(open) = self.cockpit.thread(thread) else {
+    fn stop_subagent(&mut self, thread: ThreadId, key: &ferrite_core::activity::AgentKey, cx: &mut gpui::App) -> bool {
+        let Some(open) = self.cockpit.read(cx).thread(thread) else {
             return false;
         };
         let running = open
@@ -3911,7 +3984,7 @@ impl CockpitView {
                 )
             });
         if running {
-            self.cockpit.stop_subagent(thread, key);
+            self.cockpit.update(cx, |cockpit, _| cockpit.stop_subagent(thread, key));
         }
         running
     }
@@ -3934,10 +4007,10 @@ impl CockpitView {
         {
             return false;
         }
-        let Some(thread) = self.focused_thread() else {
+        let Some(thread) = self.focused_thread(cx) else {
             return false;
         };
-        let Some(open) = self.cockpit.thread(thread) else {
+        let Some(open) = self.cockpit.read(cx).thread(thread) else {
             return false;
         };
         let offered = followup::suggest(
@@ -3950,7 +4023,7 @@ impl CockpitView {
         };
         let Some(composer) = self
             .panes
-            .get(self.focused())
+            .get(self.focused(cx))
             .map(|pane| pane.composer.clone())
         else {
             return false;
@@ -3981,8 +4054,8 @@ impl CockpitView {
         }
         if self.sheet_up(cx)
             || self
-                .focused_thread()
-                .and_then(|thread| self.cockpit.thread(thread))
+                .focused_thread(cx)
+                .and_then(|thread| self.cockpit.read(cx).thread(thread))
                 .is_some_and(|thread| {
                     thread
                         .pending_decisions()
@@ -3995,14 +4068,14 @@ impl CockpitView {
         }
         let composer = self
             .panes
-            .get(self.focused())
+            .get(self.focused(cx))
             .map(|pane| pane.composer.clone());
         if composer.is_some_and(|composer| {
             composer.update(cx, |composer, cx| composer.cycle_files(false, window, cx))
         }) {
             return;
         }
-        let Some(draft) = self.focused_draft_mut() else {
+        let Some(draft) = self.focused_draft_mut(cx) else {
             self.cycle_tools(false, window, cx);
             return;
         };
@@ -4022,8 +4095,8 @@ impl CockpitView {
     ) {
         if self.sheet_up(cx)
             || self
-                .focused_thread()
-                .and_then(|thread| self.cockpit.thread(thread))
+                .focused_thread(cx)
+                .and_then(|thread| self.cockpit.read(cx).thread(thread))
                 .is_some_and(|thread| {
                     !thread.activity().children().is_empty()
                         || thread
@@ -4036,7 +4109,7 @@ impl CockpitView {
         } else {
             let composer = self
                 .panes
-                .get(self.focused())
+                .get(self.focused(cx))
                 .map(|pane| pane.composer.clone());
             if !composer.is_some_and(|composer| {
                 composer.update(cx, |composer, cx| composer.cycle_files(true, window, cx))
@@ -4047,10 +4120,10 @@ impl CockpitView {
     }
 
     fn cycle_tools(&mut self, reverse: bool, window: &mut Window, cx: &mut Context<Self>) {
-        if self.panes[self.focused()].draft().is_some() {
+        if self.panes[self.focused(cx)].draft().is_some() {
             return;
         }
-        let focused = self.focused();
+        let focused = self.focused(cx);
         let calls = self.expandable_tools(focused, cx);
         let transcript = self.panes[focused].transcript();
         let tool_focus = self.panes[focused].tool_focus();
@@ -4095,15 +4168,15 @@ impl CockpitView {
     /// ↵ on the keyboard's row: a tool call opens or folds; an agent's row,
     /// which has no details, opens its agent.
     fn toggle_tool_action(&mut self, _: &ToggleTool, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(thread) = self.focused_thread() else {
+        let Some(thread) = self.focused_thread(cx) else {
             return;
         };
-        let Some(call) = self.panes[self.focused()].targeted_tool().cloned() else {
+        let Some(call) = self.panes[self.focused(cx)].targeted_tool().cloned() else {
             return;
         };
         if let pane::DisclosureId::Tool(agent) = &call {
-            if self.targeted_agent(thread, &call).is_some() {
-                let index = self.focused();
+            if self.targeted_agent(thread, &call, cx).is_some() {
+                let index = self.focused(cx);
                 self.open_agent_from(index, agent.clone(), cx);
                 return;
             }
@@ -4114,16 +4187,16 @@ impl CockpitView {
     /// ⌫ on the keyboard's agent row: its subagent stops, while it runs
     /// (`stop_subagent`); on any other row, nothing.
     fn stop_agent_action(&mut self, _: &StopAgent, _: &mut Window, cx: &mut Context<Self>) {
-        let Some(thread) = self.focused_thread() else {
+        let Some(thread) = self.focused_thread(cx) else {
             return;
         };
-        let Some(call) = self.panes[self.focused()].targeted_tool().cloned() else {
+        let Some(call) = self.panes[self.focused(cx)].targeted_tool().cloned() else {
             return;
         };
         if let Some(ferrite_core::activity::Subject::Subagent(key)) =
-            self.targeted_agent(thread, &call)
+            self.targeted_agent(thread, &call, cx)
         {
-            if self.stop_subagent(thread, &key) {
+            if self.stop_subagent(thread, &key, cx) {
                 cx.notify();
             }
         }
@@ -4134,11 +4207,13 @@ impl CockpitView {
         &self,
         thread: ThreadId,
         target: &pane::DisclosureId,
+        cx: &gpui::App,
     ) -> Option<ferrite_core::activity::Subject> {
         let pane::DisclosureId::Tool(call) = target else {
             return None;
         };
         self.cockpit
+            .read(cx)
             .thread(thread)?
             .activity()
             .invocations()
@@ -4174,7 +4249,7 @@ impl CockpitView {
     /// ⌘⏎ / ⇧⌘⏎, the approval buttons' chords: they answer whether or not
     /// text is on the line, a Subagent's approval as Main's.
     fn answer_chorded(&mut self, answer: Answer, window: &mut Window, cx: &mut Context<Self>) {
-        if !self.panes[self.focused()].is_main() {
+        if !self.panes[self.focused(cx)].is_main() {
             self.answer_subject(answer, cx);
         } else {
             self.answer(answer, window, cx);
@@ -4187,22 +4262,23 @@ impl CockpitView {
         // The focused Thread if it is the one waiting; otherwise whichever
         // Thread the wall is flagging. Answering from across the room is the
         // point of the badge.
-        let thread = match self.focused_thread() {
+        let thread = match self.focused_thread(cx) {
             Some(thread)
                 if self
                     .cockpit
+                    .read(cx)
                     .thread(thread)
                     .and_then(|open| open.pending())
                     .is_some() =>
             {
                 Some(thread)
             }
-            _ => self.cockpit.answer_target(),
+            _ => self.cockpit.read(cx).answer_target(),
         };
         let Some(thread) = thread else {
             return;
         };
-        let Some(request) = self.cockpit.thread(thread).and_then(|open| {
+        let Some(request) = self.cockpit.read(cx).thread(thread).and_then(|open| {
             let pending = open.pending()?;
             open.pending_decisions()
                 .iter()
@@ -4222,7 +4298,7 @@ impl CockpitView {
             };
             // A denial steers from the Pane the operator is in; one sent
             // across the room leaves the keyboard where it is.
-            let steer = self.focused_thread() == Some(thread);
+            let steer = self.focused_thread(cx) == Some(thread);
             self.answer_approval_request(
                 thread,
                 &request,
@@ -4236,7 +4312,7 @@ impl CockpitView {
             // allowing an unanswered question would send the model nothing.
             self.answer_request(thread, request, answer, cx);
         }
-        self.facts.acted(&self.cockpit, thread);
+        self.facts.acted(self.cockpit.read(cx), thread);
         cx.notify();
     }
 
@@ -4257,13 +4333,13 @@ impl CockpitView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if let Some(thread) = self.panel_thread() {
-            let on_controls = self.panel_control_focused(window);
+        if let Some(thread) = self.panel_thread(cx) {
+            let on_controls = self.panel_control_focused(window, cx);
             if self.open_files_find(thread, on_controls, window, cx) {
                 return;
             }
         }
-        let index = self.focused();
+        let index = self.focused(cx);
         let Some(pane) = self.panes.get(index) else {
             return;
         };
@@ -4271,7 +4347,7 @@ impl CockpitView {
         let reading =
             self.file_surface.read(cx).pressed() == Some(owner) || preview.focused(window, cx);
         if reading
-            && self.preview_shown(index)
+            && self.preview_shown(index, cx)
             && self
                 .file_surface
                 .update(cx, |files, cx| files.open_find(owner, &preview, window, cx))
@@ -4338,7 +4414,7 @@ impl CockpitView {
     }
 
     fn recall_history(&mut self, direction: HistoryDirection, cx: &mut Context<Self>) {
-        let index = self.focused();
+        let index = self.focused(cx);
         if !self.history_available(index, cx) {
             return;
         }
@@ -4347,11 +4423,12 @@ impl CockpitView {
         };
         if let Some(id) = self
             .cockpit
+            .read(cx)
             .thread(thread)
             .and_then(|open| queued_to_take_back(&open))
         {
             if matches!(direction, HistoryDirection::Older) {
-                self.cockpit.edit_queued_item(thread, &id);
+                self.cockpit.update(cx, |cockpit, _| cockpit.edit_queued_item(thread, &id));
                 cx.notify();
             }
             return;
@@ -4360,7 +4437,7 @@ impl CockpitView {
         let draft = composer.read(cx).editable();
         self.unsent
             .step_from(thread, draft.clone(), composer.read(cx).content());
-        let Some(text) = self.cockpit.recall_prompt(thread, direction, &draft) else {
+        let Some(text) = self.cockpit.update(cx, |cockpit, _| cockpit.recall_prompt(thread, direction, &draft)) else {
             return;
         };
         self.composer_menu.update(cx, |menu, cx| menu.recalled(cx));
@@ -4370,13 +4447,13 @@ impl CockpitView {
     }
 
     fn history_available(&self, index: usize, cx: &gpui::App) -> bool {
-        if index != self.focused() {
+        if index != self.focused(cx) {
             return false;
         }
         let Some(thread) = self.panes.get(index).and_then(|pane| pane.thread()) else {
             return false;
         };
-        let Some(open) = self.cockpit.thread(thread) else {
+        let Some(open) = self.cockpit.read(cx).thread(thread) else {
             return false;
         };
         !self.panes[index].has_tool_target()
@@ -4415,7 +4492,7 @@ impl CockpitView {
     fn menu_dismiss(&mut self, _: &MenuDismiss, _window: &mut Window, cx: &mut Context<Self>) {
         if !self.composer_menu.update(cx, |menu, cx| menu.dismiss(cx)) && self.band_menu().is_some() {
             self.close_popup(cx);
-            if let Some(draft) = self.focused_draft_mut() {
+            if let Some(draft) = self.focused_draft_mut(cx) {
                 draft.band_focus = None;
             }
         }
@@ -4513,9 +4590,9 @@ impl CockpitView {
 
     /// Ferrite's own words to one Pane: a Notice in a Thread's transcript,
     /// or the error line under a draft's band.
-    fn say_to(&mut self, pane: PaneIdentity, message: String) {
+    fn say_to(&mut self, pane: PaneIdentity, message: String, cx: &mut gpui::App) {
         match pane {
-            PaneIdentity::Thread(thread) => self.cockpit.say(thread, message),
+            PaneIdentity::Thread(thread) => self.cockpit.update(cx, |cockpit, _| cockpit.say(thread, message)),
             PaneIdentity::Draft(_) => {
                 if let Some(draft) = self
                     .index_of(pane)
@@ -4550,6 +4627,7 @@ impl CockpitView {
         serving: Option<&str>,
         locked: bool,
         consequence: impl Fn(ProviderChoice) -> Consequence,
+        cx: &gpui::App,
     ) -> (Vec<Row>, usize) {
         let mut rows: Vec<Row> = Vec::new();
         let mut selected = None;
@@ -4574,7 +4652,7 @@ impl CockpitView {
                 consequence: Consequence::Inert,
             });
             let mut catalog = ferrite_core::providers::models::menu(
-                self.cockpit.model_catalog(provider),
+                self.cockpit.read(cx).model_catalog(provider),
                 chosen.filter(|_| provider == current),
             );
             if provider == current {
@@ -4593,6 +4671,7 @@ impl CockpitView {
                                 || (serving.is_some_and(|serving| model.is(serving))
                                     && !self
                                         .cockpit
+                                        .read(cx)
                                         .model_catalog(provider)
                                         .iter()
                                         .any(|row| row.value == "default"))
@@ -4653,17 +4732,18 @@ impl CockpitView {
     fn pick_provider(&mut self, thread: ThreadId, choice: ProviderChoice, cx: &mut Context<Self>) {
         let same_provider = self
             .cockpit
+            .read(cx)
             .thread(thread)
             .is_some_and(|open| open.provider() == choice.provider);
         let result = if same_provider {
-            self.cockpit.set_model(thread, choice.model)
+            self.cockpit.update(cx, |cockpit, _| cockpit.set_model(thread, choice.model))
         } else {
-            self.cockpit.set_provider(thread, choice)
+            self.cockpit.update(cx, |cockpit, _| cockpit.set_provider(thread, choice))
         };
         if let Err(e) = result {
-            self.cockpit.say(thread, format!("model unchanged: {e}"));
+            self.cockpit.update(cx, |cockpit, _| cockpit.say(thread, format!("model unchanged: {e}")));
         }
-        self.facts.acted(&self.cockpit, thread);
+        self.facts.acted(self.cockpit.read(cx), thread);
         cx.notify();
     }
 
@@ -4682,7 +4762,7 @@ impl CockpitView {
     ) {
         // The Pane may have gone while the picker was up.
         let into = into.filter(|pane| self.index_of(*pane).is_some());
-        match self.cockpit.adopt_into(into, path) {
+        match self.cockpit.update(cx, |cockpit, _| cockpit.adopt_into(into, path)) {
             Ok(adopted) => {
                 let draft = into.filter(|pane| pane.draft().is_some());
                 if let Some(error) = &adopted.not_opened {
@@ -4715,7 +4795,7 @@ impl CockpitView {
             Err(e) => {
                 let message = format!("cannot import {}: {e}", path.display());
                 match into {
-                    Some(pane) => self.say_to(pane, message),
+                    Some(pane) => self.say_to(pane, message, cx),
                     None => {
                         use gpui::component::notification::{Notification, NotificationType};
                         use gpui::component::WindowExt as _;
@@ -4744,11 +4824,11 @@ impl CockpitView {
     fn open_draft(&mut self, target: DraftTarget, cx: &mut Context<Self>) {
         let provider = self
             .panes
-            .get(self.focused())
+            .get(self.focused(cx))
             .map(|pane| match pane.draft() {
                 Some(draft) => draft.binding.provider().clone(),
                 None => {
-                    let open = pane.thread().and_then(|thread| self.cockpit.thread(thread));
+                    let open = pane.thread().and_then(|thread| self.cockpit.read(cx).thread(thread));
                     ProviderChoice {
                         provider: open
                             .map_or(self.prefs.settings.default_provider, |open| open.provider()),
@@ -4800,7 +4880,7 @@ impl CockpitView {
             let standing = self.panes.iter().position(|pane| {
                 pane.identity
                     .draft()
-                    .is_some_and(|draft| !self.cockpit.draft_starting(draft))
+                    .is_some_and(|draft| !self.cockpit.read(cx).draft_starting(draft))
             });
             if let Some(draft) = standing.and_then(|index| self.panes[index].draft_mut()) {
                 // The same move the Project chip makes, so the workspace
@@ -4859,23 +4939,24 @@ impl CockpitView {
         chosen: Option<ProjectId>,
         cx: &mut Context<Self>,
     ) {
-        if !self.cockpit.environment_available() {
+        if !self.cockpit.read(cx).environment_available() {
             return;
         }
         // The draft starts in the Project of the Thread the operator is in:
         // the focused one, else the one focus last left.
         let current = self
             .cockpit
+            .read(cx)
             .roster()
             .current_thread()
-            .and_then(|thread| self.cockpit.project_id(thread));
+            .and_then(|thread| self.cockpit.read(cx).project_id(thread));
         // A second press with a draft already up must not stack another:
         // focus the standing draft and re-aim it at the caller's target.
         // A draft mid-bootstrap is on its way out and does not count.
         if let Some(index) = self.panes.iter().position(|pane| {
             pane.identity
                 .draft()
-                .is_some_and(|draft| !self.cockpit.draft_starting(draft))
+                .is_some_and(|draft| !self.cockpit.read(cx).draft_starting(draft))
         }) {
             // The standing draft is re-aimed at the Project as well: the
             // chip must not sit there naming the Project of an earlier
@@ -4889,7 +4970,7 @@ impl CockpitView {
                     draft.error = None;
                 }
             }
-            self.cockpit.focus(identity);
+            self.cockpit.update(cx, |cockpit, _| cockpit.focus(identity));
             // The draft may be the Pane focused as the Factory or the PRs
             // opened, so focus never moves to leave them: give the board
             // back here.
@@ -4927,11 +5008,11 @@ impl CockpitView {
             band_focus: None,
             error: None,
         };
-        let draft = self.cockpit.open_draft();
+        let draft = self.cockpit.update(cx, |cockpit, _| cockpit.open_draft());
         let pane = CockpitPane::new(PaneView::new_draft(draft, binding, cx), cx);
         self.decisions
             .update(cx, |decisions, _| decisions.open_pane(pane.identity));
-        pane.preview.set_remote_files(self.on_machine());
+        pane.preview.set_remote_files(self.on_machine(cx));
         self.aim_attachments(&pane.composer, cx);
         cx.subscribe(&pane.composer, Self::composer_edited).detach();
         cx.subscribe(&pane.composer, Self::composer_opens_source).detach();
@@ -4954,7 +5035,7 @@ impl CockpitView {
         from_hero: bool,
         cx: &mut Context<Self>,
     ) {
-        let Some(pane) = self.panes.get(self.focused()) else {
+        let Some(pane) = self.panes.get(self.focused(cx)) else {
             return;
         };
         let Some(draft) = pane.draft() else {
@@ -5005,12 +5086,13 @@ impl CockpitView {
     /// the open popover's rows in when the answer lands. One listing per
     /// open, never per frame. On a machine, its Server asks git there.
     fn refresh_repo_listing(&mut self, project: ProjectId, cx: &mut Context<Self>) {
-        if self.on_machine() {
-            self.ask_machine_repo(project);
+        if self.on_machine(cx) {
+            self.ask_machine_repo(project, cx);
             return;
         }
         let Some(root) = self
             .cockpit
+            .read(cx)
             .registry()
             .project(project)
             .map(|project| project.root.clone())
@@ -5082,7 +5164,7 @@ impl CockpitView {
     /// Project at a time, and `checkouts_read` takes the answers. Never on
     /// a machine, whose checkouts no git here can read.
     fn look_up_checkouts(&self, projects: impl IntoIterator<Item = ProjectId>, cx: &Context<Self>) {
-        if self.on_machine() {
+        if self.on_machine(cx) {
             return;
         }
         let mut roots: Vec<(ProjectId, std::path::PathBuf)> = Vec::new();
@@ -5090,7 +5172,7 @@ impl CockpitView {
             if self.checkouts.asking(project) || roots.iter().any(|(asked, _)| *asked == project) {
                 continue;
             }
-            if let Some(found) = self.cockpit.registry().project(project) {
+            if let Some(found) = self.cockpit.read(cx).registry().project(project) {
                 roots.push((project, found.root.clone()));
             }
         }
@@ -5134,10 +5216,10 @@ impl CockpitView {
     fn project_menu_rows(&self, draft: &pane::DraftBinding, cx: &Context<Self>) -> Vec<Row> {
         let typed = self
             .panes
-            .get(self.focused())
+            .get(self.focused(cx))
             .map(|pane| pane.composer.read(cx).text().trim().to_string())
             .unwrap_or_default();
-        menu_rows::project_rows(self.cockpit.registry().projects(), draft, &typed)
+        menu_rows::project_rows(self.cockpit.read(cx).registry().projects(), draft, &typed)
     }
 
     /// The workspace chip's rows for `draft` (`menu_rows::workspace_rows`),
@@ -5161,7 +5243,7 @@ impl CockpitView {
         if !open {
             return;
         }
-        let Some(draft) = self.panes.get(self.focused()).and_then(|pane| pane.draft()) else {
+        let Some(draft) = self.panes.get(self.focused(cx)).and_then(|pane| pane.draft()) else {
             return;
         };
         let rows = self.project_menu_rows(draft, cx);
@@ -5178,18 +5260,18 @@ impl CockpitView {
     }
 
     /// Stop the submitted startup before Escape or a choice changes its draft.
-    fn cancel_focused_draft_start(&mut self) -> bool {
+    fn cancel_focused_draft_start(&mut self, cx: &mut gpui::App) -> bool {
         let Some(id) = self
             .panes
-            .get(self.focused())
+            .get(self.focused(cx))
             .and_then(|pane| pane.identity.draft())
         else {
             return true;
         };
-        match self.cockpit.cancel_draft_start(id) {
+        match self.cockpit.update(cx, |cockpit, _| cockpit.cancel_draft_start(id)) {
             Ok(_) => true,
             Err(error) => {
-                if let Some(draft) = self.focused_draft_mut() {
+                if let Some(draft) = self.focused_draft_mut(cx) {
                     draft.error = Some(error.to_string().into());
                 }
                 false
@@ -5206,25 +5288,25 @@ impl CockpitView {
         composer: &Entity<Composer>,
         cx: &mut Context<Self>,
     ) {
-        if !self.cancel_focused_draft_start() {
+        if !self.cancel_focused_draft_start(cx) {
             return;
         }
         match choice {
             BandChoice::Provider(provider) => {
-                let announced = self.cockpit.announced_models(provider.provider);
-                if let Some(draft) = self.focused_draft_mut() {
+                let announced = self.cockpit.read(cx).announced_models(provider.provider);
+                if let Some(draft) = self.focused_draft_mut(cx) {
                     draft.binding.choose_provider(provider.clone(), &announced);
                     draft.error = None;
                 }
             }
             BandChoice::Effort(effort) => {
-                if let Some(draft) = self.focused_draft_mut() {
+                if let Some(draft) = self.focused_draft_mut(cx) {
                     draft.binding.choose_effort(effort.clone());
                     draft.error = None;
                 }
             }
             BandChoice::Project(project) => {
-                if let Some(draft) = self.focused_draft_mut() {
+                if let Some(draft) = self.focused_draft_mut(cx) {
                     draft.binding.choose_project(*project);
                     draft.error = None;
                 }
@@ -5234,9 +5316,9 @@ impl CockpitView {
                 // waiting for the relaunch.
                 self.launch_project = Some(*project);
             }
-            BandChoice::RegisterPath(path) => match self.cockpit.register_project(path) {
+            BandChoice::RegisterPath(path) => match self.cockpit.update(cx, |cockpit, _| cockpit.register_project(path)) {
                 Ok(project) => {
-                    if let Some(draft) = self.focused_draft_mut() {
+                    if let Some(draft) = self.focused_draft_mut(cx) {
                         draft.binding.choose_checkout(project);
                         draft.error = None;
                     }
@@ -5248,7 +5330,7 @@ impl CockpitView {
                     });
                 }
                 Err(e) => {
-                    if let Some(draft) = self.focused_draft_mut() {
+                    if let Some(draft) = self.focused_draft_mut(cx) {
                         draft.error = Some(SharedString::from(format!(
                             "cannot register {}: {e}",
                             path.display()
@@ -5257,7 +5339,7 @@ impl CockpitView {
                 }
             },
             BandChoice::Target(target) => {
-                if let Some(draft) = self.focused_draft_mut() {
+                if let Some(draft) = self.focused_draft_mut(cx) {
                     draft.binding.choose_target(target.clone());
                     draft.error = None;
                 }
@@ -5274,7 +5356,7 @@ impl CockpitView {
     /// stays draft, the error shows where the band is, and the prompt stays
     /// in the Composer.
     fn bootstrap_draft(&mut self, cx: &mut Context<Self>) {
-        let Some(pane) = self.panes.get(self.focused()) else {
+        let Some(pane) = self.panes.get(self.focused(cx)) else {
             return;
         };
         let (Some(draft), Some(id)) = (pane.draft(), pane.identity.draft()) else {
@@ -5282,7 +5364,7 @@ impl CockpitView {
         };
         let binding = draft.binding.clone();
         let composer = pane.composer.clone();
-        if !self.admit_files(self.focused(), cx) {
+        if !self.admit_files(self.focused(cx), cx) {
             return;
         }
         let text = composer.read(cx).prompt().trim().to_string();
@@ -5292,11 +5374,11 @@ impl CockpitView {
         let provider = binding.provider().clone();
         let effort = binding.effort().map(str::to_owned);
         let resolved = binding
-            .resolve(self.cockpit.registry(), !self.on_machine())
+            .resolve(self.cockpit.read(cx).registry(), !self.on_machine(cx))
             .map_err(|e| e.to_string());
         let opened = resolved.and_then(|choice| {
             self.cockpit
-                .bootstrap_draft(id, provider, choice, &text, effort.clone())
+                .update(cx, |cockpit, _| cockpit.bootstrap_draft(id, provider, choice, &text, effort.clone()))
                 .map_err(|e| e.to_string())
         });
         self.finish_draft_start(id, &text, opened, cx);
@@ -5359,6 +5441,7 @@ impl CockpitView {
         let composer = self.panes[index].composer.clone();
         let project_title = self
             .cockpit
+            .read(cx)
             .registry()
             .project(draft.binding.project())
             .map(|project| project.title.clone())
@@ -5410,7 +5493,7 @@ impl CockpitView {
                             .iter()
                             .position(|pane| pane.composer == chip_composer)
                         {
-                            view.focus_pane(at);
+                            view.focus_pane(at, cx);
                         }
                         view.open_band_menu(chip, false, cx);
                     }),
@@ -5432,7 +5515,7 @@ impl CockpitView {
         let draft = self.panes[index].draft()?;
         let provider = draft.binding.provider().provider;
         let model = draft.binding.provider().model.as_deref();
-        let announced = self.cockpit.announced_models(provider);
+        let announced = self.cockpit.read(cx).announced_models(provider);
         // The model's name, the provider's default until one is chosen.
         let model_label = SharedString::from(ferrite_core::providers::models::footer_name(
             provider, model, &announced,
@@ -5488,12 +5571,12 @@ impl CockpitView {
             return None;
         }
         let (running, line_empty) = self.running_and_empty(index, cx);
+        let queue = pane.thread().map_or_else(Vec::new, |thread| {
+            composer_footer::queue_acts(index, thread, &self.cockpit, running, cx)
+        });
         let open_thread = pane
             .thread()
-            .and_then(|thread| Some((thread, self.cockpit.thread(thread)?)));
-        let queue = open_thread.as_ref().map_or_else(Vec::new, |(thread, open)| {
-            composer_footer::queue_acts(index, *thread, open.queue(), running, cx)
-        });
+            .and_then(|thread| Some((thread, self.cockpit.read(cx).thread(thread)?)));
         let attach = composer_footer::AttachMenu::of(
             index,
             pane.identity,
@@ -5504,11 +5587,11 @@ impl CockpitView {
                     floor: f32::from(field.top()),
                     limit_right: f32::from(field.right()),
                 },
-                None => self.bar_place(),
+                None => self.bar_place(cx),
             },
             open_thread.as_ref().map(|(thread, open)| (*thread, open)),
-        )
-        .render(cx);
+        );
+        let attach = attach.render(cx);
         let (env, mut words, mode, ring) = match pane.thread() {
             None => {
                 // A draft has no Session to ask: its mode is the one a new
@@ -5518,6 +5601,7 @@ impl CockpitView {
                     pane::plan_usage_ring(
                         ("draft-usage-ring", index),
                         self.cockpit
+                            .read(cx)
                             .account_limits(draft.binding.provider().provider),
                         None,
                         self.usage_popover_held,
@@ -5541,7 +5625,8 @@ impl CockpitView {
                 )
             }
             Some(thread) => {
-                let open = open_thread.as_ref().map(|(_, open)| open);
+                let open = self.cockpit.read(cx).thread(thread);
+                let open = open.as_ref();
                 // An empty Thread says where its work runs, as a draft
                 // does; its Project and checkout are settled, so as words.
                 let empty = open.is_some_and(|open| pane::offers_import(Some(open.transcript())));
@@ -5559,19 +5644,21 @@ impl CockpitView {
                 let ring = open.and_then(|open| {
                     pane::plan_usage_ring(
                         ("plan-usage-ring", thread.get() as usize),
-                        self.cockpit.account_limits(open.provider()),
+                        self.cockpit.read(cx).account_limits(open.provider()),
                         open.transcript().plan().map(SharedString::from),
                         self.usage_popover_held,
                         cx,
                     )
                 });
+                let chip = open.and_then(|open| {
+                    let menu_up = self.mode_menu().is_some_and(|menu| menu.thread == thread);
+                    composer_footer::ModeChip::of(index, thread, open, menu_up)
+                });
                 (
                     env,
                     self.model_chip(index, cx).into_iter().collect(),
-                    open.and_then(|open| {
-                        let menu_up = self.mode_menu().is_some_and(|menu| menu.thread == thread);
-                        let chip = composer_footer::ModeChip::of(index, thread, open, menu_up)?;
-                        Some(chip.render(self.record_trigger(mode_menu::chip_trigger(thread)), cx))
+                    chip.map(|chip| {
+                        chip.render(self.record_trigger(mode_menu::chip_trigger(thread)), cx)
                     }),
                     ring.map(IntoElement::into_any_element),
                 )
@@ -5598,7 +5685,7 @@ impl CockpitView {
         let pane = &self.panes[index];
         let running = pane
             .thread()
-            .and_then(|thread| self.cockpit.thread(thread))
+            .and_then(|thread| self.cockpit.read(cx).thread(thread))
             .is_some_and(|open| turn_running(&open));
         (running, pane.composer.read(cx).is_empty())
     }
@@ -5625,10 +5712,10 @@ impl CockpitView {
     /// Test-only: aim the launch project at a scratch repo — production
     /// registers `here()` once at construction, which tests cannot sit in.
     #[cfg(test)]
-    fn aim_launch(&mut self, root: &std::path::Path) {
+    fn aim_launch(&mut self, root: &std::path::Path, cx: &mut gpui::App) {
         self.launch_project = Some(
             self.cockpit
-                .register_project(root)
+                .update(cx, |cockpit, _| cockpit.register_project(root))
                 .expect("the scratch repo registers"),
         );
         for pane in &mut self.panes {
@@ -5642,7 +5729,7 @@ impl CockpitView {
 
     /// The open popover for this Pane, which hangs it above the line.
     fn popover_element(&self, index: usize, cx: &mut Context<Self>) -> Option<AnyElement> {
-        (index == self.focused()
+        (index == self.focused(cx)
             && self.composer_menu.read(cx).pane() == Some(self.panes[index].identity))
             .then(|| self.composer_menu.clone().into_any_element())
     }
@@ -5704,123 +5791,14 @@ impl CockpitView {
         )
     }
 
-    /// The nav's per-frame state (ADR 0040), from caches and O(1) reads
-    /// only; the Project filter narrows it and nothing else. Every open
-    /// Thread is in one section, by priority: snoozed, pinned, working,
-    /// else active. A Thread works while its turn, its background work
-    /// or a prompt waiting its turn runs, unless a Decision waits. Pinned
-    /// keeps pin order; Active puts pending Decisions first, oldest
-    /// request first, then the latest arrival (`nav::Arrivals`), so a
-    /// Thread done with its work comes back at the top; Working the latest
-    /// arrival first; Snoozed the soonest to wake first; Parked the park
-    /// order. Drafts are not rows (#29).
-    ///
-    /// The one selection is the shown Thread. The empty board shows none.
-    fn nav_state(&self) -> nav::NavState {
-        use nav::Section;
-        let roster = self.cockpit.roster();
-        let shown = (!self.empty_board_shown())
-            .then(|| roster.focused_thread())
-            .flatten();
-        let row = |thread: ThreadId| nav::ThreadRow {
-            selected: shown == Some(thread),
-            ..self.thread_row(thread)
-        };
-        let pins = &self.prefs.settings.pinned_threads;
-        let listed = self.listed_threads();
-        let arrivals = &self.nav_arrivals;
-        // The latest arrival first; arrivals alike keep creation order.
-        let latest =
-            |row: &nav::ThreadRow| (std::cmp::Reverse(arrivals.since(row.thread)), row.thread);
-        let mut state = nav::NavState::default();
-        let mut pinned = Vec::new();
-        let mut snoozed = Vec::new();
-        for (thread, section, _) in listed {
-            if !self.admitted(thread) {
-                continue;
-            }
-            match section {
-                Section::Snoozed => {
-                    let until = self
-                        .cockpit
-                        .thread(thread)
-                        .and_then(|open| open.snooze())
-                        .map(|snooze| snooze.until);
-                    snoozed.push((until, row(thread)));
-                }
-                Section::Pinned => {
-                    let at = pins.iter().position(|pin| *pin == thread);
-                    pinned.push((at, row(thread)));
-                }
-                Section::Working => state.working.push(row(thread)),
-                Section::Active => state.active.push(row(thread)),
-            }
-        }
-        pinned.sort_by_key(|(at, _)| *at);
-        state.pinned = pinned.into_iter().map(|(_, row)| row).collect();
-        snoozed.sort_by_key(|(until, _)| *until);
-        state.snoozed = snoozed.into_iter().map(|(_, row)| row).collect();
-        let queue = self.cockpit.needs_you();
-        state.active.sort_by_key(|row| {
-            (
-                queue
-                    .iter()
-                    .position(|id| *id == row.thread)
-                    .unwrap_or(usize::MAX),
-                latest(row),
-            )
-        });
-        state.working.sort_by_key(latest);
-        state.parked = self.parked_threads().into_iter().map(row).collect();
-        state
-    }
-
-    /// Every open Thread the nav lists, the Project filter's or not, with
-    /// the section it is in and its last activity: what `nav::Arrivals`
-    /// notes.
-    fn listed_threads(&self) -> Vec<(ThreadId, nav::Section, Option<std::time::SystemTime>)> {
-        use nav::Section;
-        let mut threads: Vec<ThreadId> = self
-            .panes
-            .iter()
-            .filter_map(|pane| pane.thread())
-            .filter(|thread| {
-                self.cockpit.thread(*thread).is_some() && self.cockpit.operators(*thread)
-            })
-            .collect();
-        threads.sort();
-        threads.dedup();
-        let pins = &self.prefs.settings.pinned_threads;
-        // Every listed Thread's section, the filter's or not: a Thread
-        // that moves while filtered out has still moved.
-        threads
-            .into_iter()
-            .map(|thread| {
-                let open = self.cockpit.thread(thread);
-                let section = if open.is_some_and(|open| open.snooze().is_some()) {
-                    Section::Snoozed
-                } else if pins.contains(&thread) {
-                    Section::Pinned
-                } else if open.is_some_and(|open| {
-                    open.pending_decisions().is_empty()
-                        && (open.needs_queue() || open.background_work() || !open.queue().is_empty())
-                }) {
-                    Section::Working
-                } else {
-                    Section::Active
-                };
-                (thread, section, self.facts.last_used(thread))
-            })
-            .collect()
-    }
-
-    /// Note which Threads came into a section since the last frame
-    /// (`nav::Arrivals`). Only the pump writes it, so the nav's render
-    /// reads where each row is. True when an arrival moved, so the nav
-    /// redraws.
-    fn note_arrivals(&mut self) -> bool {
-        let listed = self.listed_threads();
-        self.nav_arrivals.note(&listed, ferrite_core::clock::system_time())
+    /// The nav's rows as it last read them: what it draws.
+    #[cfg(test)]
+    pub(super) fn nav_state(&self, cx: &gpui::App) -> nav::NavState {
+        self.nav_view
+            .read(cx)
+            .inputs()
+            .map(|inputs| inputs.state.clone())
+            .unwrap_or_default()
     }
 
     /// Does the Project filter admit this Thread? `All projects` admits
@@ -5828,9 +5806,9 @@ impl CockpitView {
     /// ProjectId is it — so a Thread whose Project is unknown appears under
     /// `All projects` alone, rather than being quietly filed under someone
     /// else's Project.
-    fn admitted(&self, thread: ThreadId) -> bool {
+    fn admitted(&self, thread: ThreadId, cx: &gpui::App) -> bool {
         // An owned Thread (a Worker, a Coordinator) is its owner's to list.
-        if !self.cockpit.operators(thread) {
+        if !self.cockpit.read(cx).operators(thread) {
             return false;
         }
         let Some(wanted) = self.nav_filter else {
@@ -5843,12 +5821,12 @@ impl CockpitView {
     /// is no display name), its state, the cached Project and checkout
     /// facts, and its word. Not selected: `nav_state` decides what carries
     /// the selection.
-    fn thread_row(&self, thread: ThreadId) -> nav::ThreadRow {
+    fn thread_row(&self, thread: ThreadId, cx: &gpui::App) -> nav::ThreadRow {
         let facts = self.facts.get(thread);
-        let open = self.cockpit.thread(thread);
+        let open = self.cockpit.read(cx).thread(thread);
         let now = ferrite_core::clock::system_time();
         // A Notice not yet seen makes a quiet Thread done.
-        let unread = self.cockpit.notifications().attention(thread);
+        let unread = self.cockpit.read(cx).notifications().attention(thread);
         // The tail reads the Pane's own head slot, so the nav and the Pane
         // never disagree about a Thread (C10).
         let slot =
@@ -5933,7 +5911,7 @@ impl CockpitView {
     }
 
     fn land_on_thread(&mut self, thread: ThreadId, cx: &mut Context<Self>) {
-        if let Some(owner) = self.cockpit.owner(thread) {
+        if let Some(owner) = self.cockpit.read(cx).owner(thread) {
             self.land_on_owned(thread, owner, cx);
             return;
         }
@@ -5958,9 +5936,9 @@ impl CockpitView {
     /// move.
     fn focus_thread(&mut self, thread: ThreadId, cx: &mut Context<Self>) {
         self.leave_destination();
-        if self.cockpit.focus_thread(thread) {
+        if self.cockpit.update(cx, |cockpit, _| cockpit.focus_thread(thread)) {
             if let Some(index) = self.pane_for(thread) {
-                self.focus_pane(index);
+                self.focus_pane(index, cx);
             }
             self.widen_scope_to(thread, cx);
             cx.notify();
@@ -5972,7 +5950,7 @@ impl CockpitView {
     /// list (and the Filter button says why). Owned Threads are never
     /// listed, so nothing here reveals them.
     fn widen_scope_to(&mut self, thread: ThreadId, cx: &mut Context<Self>) {
-        if self.nav_filter.is_some() && self.cockpit.operators(thread) && !self.admitted(thread) {
+        if self.nav_filter.is_some() && self.cockpit.read(cx).operators(thread) && !self.admitted(thread, cx) {
             self.choose_nav_filter(None, cx);
         }
     }
@@ -5998,7 +5976,7 @@ impl CockpitView {
         thread: ThreadId,
         cx: &mut Context<Self>,
     ) -> std::io::Result<()> {
-        self.cockpit.reopen(thread)?;
+        self.cockpit.update(cx, |cockpit, _| cockpit.reopen(thread))?;
         self.leave_destination();
         self.widen_scope_to(thread, cx);
         self.sync_panes(cx);
@@ -6008,9 +5986,9 @@ impl CockpitView {
 
     /// Focus by grid index — the pointer's and the tests' spelling of the
     /// core's one door.
-    fn focus_pane(&mut self, index: usize) {
+    fn focus_pane(&mut self, index: usize, cx: &mut gpui::App) {
         if let Some(identity) = self.panes.get(index).map(|pane| pane.identity) {
-            self.cockpit.focus(identity);
+            self.cockpit.update(cx, |cockpit, _| cockpit.focus(identity));
         }
     }
 
@@ -6054,7 +6032,7 @@ impl CockpitView {
     /// park order, then creation order.
     fn reopen_thread(&mut self, _: &ReopenThread, window: &mut Window, cx: &mut Context<Self>) {
         self.switch_thread(window, cx, |view, _, cx| {
-            if let Some((thread, result)) = view.cockpit.reopen_last() {
+            if let Some((thread, result)) = view.cockpit.update(cx, |cockpit, _| cockpit.reopen_last()) {
                 let outcome = nav_undo::Outcome {
                     thread,
                     result: result.map_err(|e| e.to_string()),
@@ -6078,13 +6056,13 @@ impl CockpitView {
         }
         // ⌘W over the lightbox closes it; in the focused Pane's preview or
         // Review it closes that, not the Pane (F-14).
-        if let Some((index, _)) = self.lightbox() {
+        if let Some((index, _)) = self.lightbox(cx) {
             self.close_lightbox(index, cx);
             return;
         }
-        let index = self.focused();
+        let index = self.focused(cx);
         if let Some(pane) = self.panes.get(index) {
-            if self.preview_shown(index) && pane.preview.focused(window, cx) {
+            if self.preview_shown(index, cx) && pane.preview.focused(window, cx) {
                 self.close_preview(index, cx);
                 return;
             }
@@ -6096,7 +6074,7 @@ impl CockpitView {
         if self.close_panel_in_focus(window, cx) {
             return;
         }
-        let Some(identity) = self.cockpit.roster().focused() else {
+        let Some(identity) = self.cockpit.read(cx).roster().focused() else {
             return;
         };
         self.close_pane(identity, cx);
@@ -6106,7 +6084,7 @@ impl CockpitView {
     /// refusal landing in the nav's notice — and a park that would not
     /// flush is logged, the Pane gone either way.
     fn close_pane(&mut self, identity: PaneIdentity, cx: &mut Context<Self>) {
-        let result = self.cockpit.close(identity);
+        let result = self.cockpit.update(cx, |cockpit, _| cockpit.close(identity));
         let closed = result.is_ok();
         if let Err(error) = result {
             ferrite_core::log!("pane {identity:?} did not close cleanly: {error}");
@@ -6124,11 +6102,11 @@ impl CockpitView {
 
     /// Jump to the next Thread waiting on the operator.
     fn next_decision(&mut self, _: &NextDecision, window: &mut Window, cx: &mut Context<Self>) {
-        let focused = self.focused();
+        let focused = self.focused(cx);
         let mut requests = Vec::new();
         // The answer order (`Cockpit::needs_you`): ⌘D walks the answer
         // queue top to bottom, so its first press lands on the answer target.
-        let queue = self.cockpit.needs_you();
+        let queue = self.cockpit.read(cx).needs_you();
         let mut panes: Vec<&CockpitPane> = self.panes.iter().collect();
         panes.sort_by_key(|pane| {
             pane.thread()
@@ -6137,7 +6115,7 @@ impl CockpitView {
         });
         for pane in panes {
             if let Some(thread) = pane.thread() {
-                if let Some(open) = self.cockpit.thread(thread) {
+                if let Some(open) = self.cockpit.read(cx).thread(thread) {
                     for request in open.pending_decisions() {
                         requests.push((
                             thread,
@@ -6180,7 +6158,7 @@ impl CockpitView {
         if let Some(pane) = self.panes.get_mut(index) {
             pane.clear_tool_target();
         }
-        self.focus_pane(index);
+        self.focus_pane(index, cx);
         cx.notify();
     }
 
@@ -6196,7 +6174,7 @@ impl CockpitView {
 
     /// Cite the selection from the keyboard, as the button beside it does.
     fn cite_selection(&mut self, _: &CiteSelection, window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(transcript) = self.panes[self.focused()].transcript() {
+        if let Some(transcript) = self.panes[self.focused(cx)].transcript() {
             transcript.update(cx, |transcript, cx| transcript.cite_selection(window, cx));
         }
     }
@@ -6221,13 +6199,13 @@ impl CockpitView {
             }
             return;
         }
-        if !self.panes[self.focused()].is_main() {
+        if !self.panes[self.focused(cx)].is_main() {
             return;
         }
         let Some(item) = cx.read_from_clipboard() else {
             return;
         };
-        let index = self.focused();
+        let index = self.focused(cx);
         let Some(pane) = self.panes.get(index) else {
             return;
         };
@@ -6440,16 +6418,16 @@ impl Render for CockpitView {
         // unfocused sees nothing until it is focused — and the window coming
         // back reads what it shows, which every part then draws.
         if self.activation.is_none() {
-            self.cockpit.set_window_active(window.is_window_active());
+            self.cockpit.update(cx, |cockpit, _| cockpit.set_window_active(window.is_window_active()));
             self.activation = Some(cx.observe_window_activation(window, |view, window, cx| {
-                if view.cockpit.set_window_active(window.is_window_active()) {
+                if view.cockpit.update(cx, |cockpit, _| cockpit.set_window_active(window.is_window_active())) {
                     cx.notify();
                 }
             }));
             self.watch_lost_focus(window, cx);
         }
         self.hear_views(window, cx);
-        self.tend_history();
+        self.tend_history(cx);
         self.tend_popup_focus(window, cx);
         self.tend_sheet_focus(window, cx);
         let root = self.render_cockpit(window, cx);
@@ -6502,7 +6480,7 @@ impl CockpitView {
         // Every age the Cockpit can show: a Thread's (the nav, a parked
         // Pane, the palette), a notice's and a waiting request's (the
         // Inbox, its toasts).
-        let notifications = self.cockpit.notifications();
+        let notifications = self.cockpit.read(cx).notifications();
         let notices = notifications
             .notices()
             .map(|notice| notice.at)
@@ -6529,7 +6507,7 @@ impl CockpitView {
         let mut everything = nav.into_iter().chain(frame).min();
         // Each Pane's working clocks: its own part rides them.
         for pane in &self.panes {
-            let Some(open) = pane.thread().and_then(|thread| self.cockpit.thread(thread)) else {
+            let Some(open) = pane.thread().and_then(|thread| self.cockpit.read(cx).thread(thread)) else {
                 continue;
             };
             let Some(next) = [
@@ -6553,8 +6531,8 @@ impl CockpitView {
             }
         }
         // Every working Thread's nav row reads its clock.
-        for thread in self.cockpit.threads() {
-            if let Some(next) = rollover(self.cockpit.thread(thread).map(|open| open.turn())) {
+        for thread in self.cockpit.read(cx).threads() {
+            if let Some(next) = rollover(self.cockpit.read(cx).thread(thread).map(|open| open.turn())) {
                 nav = Some(nav.map_or(next, |at| at.min(next)));
                 everything = Some(everything.map_or(next, |at| at.min(next)));
             }
@@ -6587,7 +6565,7 @@ impl CockpitView {
         self.redirect_previews_to_files(cx);
         self.tend_panel(window, cx);
         self.measure_nav_width(window, cx);
-        self.update_auto_fold(window);
+        self.update_auto_fold(window, cx);
         self.tend_columns(cx);
         self.tend_details(window, cx);
         if self.nav_folded() {
@@ -6607,17 +6585,17 @@ impl CockpitView {
         // What this frame draws is what the window streams whole;
         // everything else reads its digest (ADR 0032).
         let drawn: Vec<ThreadId> = self
-            .visible_indices()
+            .visible_indices(cx)
             .into_iter()
             .filter_map(|index| self.panes[index].thread())
             .collect();
         // The open Task's Worker, drawn in its panel, streams whole too.
-        self.leave_destination_if_moved();
+        self.leave_destination_if_moved(cx);
         let drawn: Vec<ThreadId> = match self.factory_worker_drawn(cx) {
             Some(worker) => vec![worker],
             None => drawn,
         };
-        self.cockpit.draws_transcripts(drawn);
+        self.cockpit.update(cx, |cockpit, _| cockpit.draws_transcripts(drawn));
 
         for index in 0..self.panes.len() {
             let target = self.panes[index].targeted_tool().cloned();
@@ -6639,13 +6617,13 @@ impl CockpitView {
         if let Some(on) = self.composer_menu.read(cx).pane() {
             if self
                 .panes
-                .get(self.focused())
+                .get(self.focused(cx))
                 .is_none_or(|pane| pane.identity != on)
             {
                 self.close_composer_menu(cx);
             }
         }
-        let pane_rects = self.pane_rects(window);
+        let pane_rects = self.pane_rects(window, cx);
         for (index, pane) in self.panes.iter().enumerate() {
             let row_limit = pane_rects
                 .iter()
@@ -6653,7 +6631,7 @@ impl CockpitView {
                 .map(|(_, rect)| {
                     let queued = pane
                         .thread()
-                        .and_then(|thread| self.cockpit.thread(thread))
+                        .and_then(|thread| self.cockpit.read(cx).thread(thread))
                         .map_or(0, |thread| thread.queue().len());
                     pane::composer_row_limit(rect.h, queued)
                 })
@@ -6663,7 +6641,7 @@ impl CockpitView {
             // or changing Subjects gives the draft its rows back.
             let answering_question = pane
                 .thread()
-                .and_then(|thread| self.cockpit.thread(thread))
+                .and_then(|thread| self.cockpit.read(cx).thread(thread))
                 .is_some_and(|open| {
                     open.pending_decisions().iter().any(|request| {
                         (request.subject.as_ref() == Some(&pane.selected)
@@ -6683,13 +6661,17 @@ impl CockpitView {
         // Each Thread's line chips the `/name`s its Session knows, however
         // they got into the text (a draft's line keeps what its `/` menu
         // last discovered: `derive_menu`).
-        for pane in &self.panes {
-            if let Some(open) = pane.thread().and_then(|thread| self.cockpit.thread(thread)) {
-                pane.composer.update(cx, |composer, cx| {
-                    composer.set_commands(open.commands(), cx)
-                });
+        // The model is lent, not written: each Composer copies the commands
+        // it chips under its own update.
+        self.cockpit.update(cx, |model, cx| {
+            for pane in &self.panes {
+                if let Some(open) = pane.thread().and_then(|thread| model.thread(thread)) {
+                    pane.composer.update(cx, |composer, cx| {
+                        composer.set_commands(open.commands(), cx)
+                    });
+                }
             }
-        }
+        });
         let history_available: Vec<bool> = (0..self.panes.len())
             .map(|index| self.history_available(index, cx))
             .collect();
@@ -6707,7 +6689,7 @@ impl CockpitView {
         // first Thread. A machine whose Server
         // went is read-only (ADR 0026): the root holds the keyboard, so no
         // Composer or control on its board takes a key until it is back.
-        let lost = self.machine_lost();
+        let lost = self.machine_lost(cx);
         let wanted = self
             .rename
             .shown()
@@ -6730,29 +6712,29 @@ impl CockpitView {
             // took; a review beside the focused Pane keeps its own, from its
             // first frame (a review's comment field's too).
             .or_else(|| {
-                let (index, _) = self.lightbox()?;
+                let (index, _) = self.lightbox(cx)?;
                 self.panes[index].preview.held_focus(window, cx)
             })
             .or_else(|| {
-                let index = self.focused();
-                if !self.preview_shown(index) { return None; }
+                let index = self.focused(cx);
+                if !self.preview_shown(index, cx) { return None; }
                 let pane = self.panes.get(index)?;
                 if !pane.preview.document().is_some_and(|document| matches!(&document.body, ferrite_pane::preview::Body::Browser)) { return None; }
                 self.browser_annotation_focus(pane.thread()?, cx)
             })
             .or_else(|| {
                 self.panes
-                    .get(self.focused())?
+                    .get(self.focused(cx))?
                     .review
                     .held_focus(window, cx)
             })
             .or_else(|| {
-                let pane = self.panes.get(self.focused())?;
+                let pane = self.panes.get(self.focused(cx))?;
                 // A Thread whose facts have not landed draws no Composer:
                 // the root holds the keyboard until they do.
                 if pane
                     .thread()
-                    .is_some_and(|thread| self.cockpit.thread(thread).is_none())
+                    .is_some_and(|thread| self.cockpit.read(cx).thread(thread).is_none())
                 {
                     return None;
                 }
@@ -6777,7 +6759,7 @@ impl CockpitView {
             focus
         } else if !self.rename.is_open() && self.prs_shown() {
             self.prs.read(cx).focus.clone()
-        } else if !self.rename.is_open() && self.empty_board_shown() {
+        } else if !self.rename.is_open() && self.empty_board_shown(cx) {
             self.empty_board.read(cx).focus.clone()
         } else {
             wanted
@@ -6785,18 +6767,18 @@ impl CockpitView {
         use gpui::component::WindowExt as _;
         let native_text_focused = self
             .panes
-            .get(self.focused())
+            .get(self.focused(cx))
             .is_some_and(|pane| pane.transcript_focus.contains_focused(window, cx))
             && (ferrite_pane::rich::controls_focused(window)
                 || gpui::base::TextSelection::has_selection(window, cx)
-                || self.panes.get(self.focused()).is_some_and(|pane| {
+                || self.panes.get(self.focused(cx)).is_some_and(|pane| {
                     pane.rich.output_focused(&pane.text_namespace(), window, cx)
                 }));
         let pane_control_focused = !lost
-            && self.panes.get(self.focused()).is_some_and(|pane| {
+            && self.panes.get(self.focused(cx)).is_some_and(|pane| {
                 let controls = pane
                     .thread()
-                    .and_then(|id| self.cockpit.thread(id))
+                    .and_then(|id| self.cockpit.read(cx).thread(id))
                     .is_some_and(|thread| {
                         !pane.is_main()
                             || thread.pending_decisions().len() > 1
@@ -6814,8 +6796,8 @@ impl CockpitView {
         // is undone. The focused Pane's only: focus moving to another Pane
         // takes the keyboard with it, and the image viewer's own focus is
         // no text (`Preview::text_focused`).
-        let reader_text_focused = self.panes.get(self.focused()).is_some_and(|pane| {
-            (self.preview_shown(self.focused()) && pane.preview.text_focused(window, cx))
+        let reader_text_focused = self.panes.get(self.focused(cx)).is_some_and(|pane| {
+            (self.preview_shown(self.focused(cx), cx) && pane.preview.text_focused(window, cx))
                 || pane.review.inner_focused(window, cx)
         });
         // The list keeps the keyboard it was handed until the operator
@@ -6827,7 +6809,7 @@ impl CockpitView {
         // So does a Panel body that reads its own keys: "Open a surface",
         // pressed, or a Files editor or filter being typed in.
         let panel_keys_held =
-            self.panel_keys.contains_focused(window, cx) || self.panel_control_focused(window);
+            self.panel_keys.contains_focused(window, cx) || self.panel_control_focused(window, cx);
         let field_holds_keyboard = self.field_holds_keyboard(&wanted, window, cx);
         let dialog_took_focus = self.focus_shown_dialogs(window, cx);
         // Here, before focus is handed out: a page's dialog is modal and
@@ -6866,8 +6848,8 @@ impl CockpitView {
         // The cards start under the head row (`frame::board_top`), flush to
         // the panel (`board_bounds`), riding or at rest.
         let board_top = ferrite_ui::frame::board_top();
-        let panel_w = self.panel_column_w();
-        let frame_right = self.board_right() - panel_w;
+        let panel_w = self.panel_column_w(cx);
+        let frame_right = self.board_right(cx) - panel_w;
         let frame = || {
             div()
                 .flex_1()
@@ -6876,10 +6858,10 @@ impl CockpitView {
                 .pt(px(board_top))
                 .pr(px(frame_right))
         };
-        let visible = self.visible_indices();
+        let visible = self.visible_indices(cx);
         // The empty board names the provider CLIs it found: ask once.
-        if self.cockpit.environment_available()
-            && self.empty_board_shown()
+        if self.cockpit.read(cx).environment_available()
+            && self.empty_board_shown(cx)
             && self.cli_versions.is_none()
             && !self.cli_probing
             && !cfg!(test)
@@ -6887,7 +6869,7 @@ impl CockpitView {
             self.cli_probing = true;
             self.probe_cli_versions(cx);
         }
-        let grid = if !self.cockpit.environment_available() {
+        let grid = if !self.cockpit.read(cx).environment_available() {
             frame().flex().child(self.no_environment(cx))
         } else if self.factory().is_some() {
             // A Project's Factory board stands in the board's place.
@@ -6895,8 +6877,8 @@ impl CockpitView {
         } else if self.prs_shown() {
             frame().flex().child(self.prs.clone())
         } else if let Some((board, tree)) = self
-            .board()
-            .and_then(|board| self.board_tree(board).map(|tree| (board, tree)))
+            .board(cx)
+            .and_then(|board| self.board_tree(board, cx).map(|tree| (board, tree)))
         {
             // A board is its split tree: the Pane and its reader at the
             // rects the tree gives them, a grab band over the seam, and —
@@ -6947,7 +6929,7 @@ impl CockpitView {
             .when(!lost, |root| {
                 root.on_action(cx.listener(Self::submit))
                     .on_action(cx.listener(|view, _: &ferrite_pane::composer::SaveAndSendComment, window, cx| {
-                        let composer = view.panes[view.focused()].composer.clone();
+                        let composer = view.panes[view.focused(cx)].composer.clone();
                         if composer.update(cx, |composer, cx| composer.save_comment(window, cx)) {
                             view.submit(&Submit, window, cx);
                         }
@@ -6957,7 +6939,7 @@ impl CockpitView {
                     .on_action(cx.listener(Self::deny))
                     .on_action(cx.listener(Self::always))
                     .on_action(cx.listener(|view, _: &AttachFiles, _, cx| {
-                        let index = view.focused();
+                        let index = view.focused(cx);
                         if view.panes[index].is_main() {
                             view.attach_files(index, false, cx);
                         }
@@ -7065,12 +7047,12 @@ impl CockpitView {
             .on_action(cx.listener(Self::toggle_notifications))
             .on_action(cx.listener(|view, _: &nav::Focus, window, cx| view.focus_nav(window, cx)))
             .on_action(cx.listener(|view, _: &RefreshPrStatus, _, cx| {
-                if let Some(thread) = view.focused_thread() {
+                if let Some(thread) = view.focused_thread(cx) {
                     view.check_pr(thread, true, cx);
                 }
             }))
             .on_action(cx.listener(|view, _: &OpenPrInBrowser, _, cx| {
-                if let Some(thread) = view.focused_thread() {
+                if let Some(thread) = view.focused_thread(cx) {
                     view.open_pr(thread, cx);
                 }
             }))
@@ -7178,7 +7160,7 @@ impl CockpitView {
                     .flex_1()
                     .min_h_0()
                     .w_full()
-                    .children(self.nav())
+                    .children(self.nav(cx))
                     // The board lies from its own left edge — the column's
                     // width this frame — so it rides cmd-B with the column,
                     // every frame (F-12).
@@ -7258,7 +7240,7 @@ impl CockpitView {
                 let _ = view.update(cx, |view, cx| {
                     view.file_drop_over = None;
                     if let Some(index) = view.index_of(identity) {
-                        view.focus_pane(index);
+                        view.focus_pane(index, cx);
                         if let Some(draft) = view.panes[index].draft_mut() {
                             draft.band_focus = None;
                         }
@@ -7279,7 +7261,7 @@ impl CockpitView {
 
     fn pane_content(&self, index: usize, window: &mut Window, cx: &mut Context<Self>) -> Div {
         let pane = &self.panes[index];
-        let focused = index == self.focused();
+        let focused = index == self.focused(cx);
         let cell = div()
             .relative()
             .flex()
@@ -7305,7 +7287,7 @@ impl CockpitView {
                         .trim_end_matches('\n')
                         .to_string();
                     view.native_copy = (!copied.is_empty()).then_some(copied);
-                    view.focus_pane(index);
+                    view.focus_pane(index, cx);
                     view.open_context_menu(MenuTarget::Pane(thread), event.position, cx);
                 }),
             );
@@ -7334,9 +7316,9 @@ impl CockpitView {
         let cell = cell.debug_selector(move || format!("view-thread-{}", thread.get()));
         // Over a link, the roster can list a Thread a frame before its
         // facts land: the cell stays an empty shell until they do.
-        let Some(open) = self.cockpit.thread(thread) else {
+        if self.cockpit.read(cx).thread(thread).is_none() {
             return cell;
-        };
+        }
         let retained_transcript = pane.transcript().map(|transcript| {
             let document = transcript.read(cx).selection_document();
             gpui::base::TextSelectionDocumentOwner::new(document)
@@ -7351,26 +7333,32 @@ impl CockpitView {
                 )
                 .into_any_element()
         });
+        let attachments = Composer::attachments(&pane.composer, &pane.preview, cx);
+        // The docked Decision merges into the Composer when that Composer
+        // is a live block with nothing floating between them (rule 2.8.1).
+        let joins = pane.is_main() && attachments.is_none();
+        let activity_decisions = self.activity_decisions(index, joins, window, cx);
+        let menu = self.popover_element(index, cx);
+        let details = self.details_card(index, window, cx);
+        let toolbar = self.composer_toolbar(index, cx);
+        let resume_offer = self.resume_offer(index, cx);
+        // The parts above draw with `cx`; the facts read the model after.
+        let Some(open) = self.cockpit.read(cx).thread(thread) else {
+            return cell;
+        };
         let facts = pane::PaneFacts {
-            thread: open,
             composer_empty: pane.composer.read(cx).is_empty(),
             focused,
-            unread: self.cockpit.notifications().attention(thread),
+            unread: self.cockpit.read(cx).notifications().attention(thread),
             reduce_motion: cx.reduce_motion(),
             editing: focused
                 && window.is_window_active()
                 && pane.composer.read(cx).focus_handle(cx).is_focused(window),
             drop_target: self.drop_target(index, cx),
             plane: self.on_plane(thread, cx),
-            decision_joined: false,
+            decision_joined: joins && activity_decisions.is_some(),
+            thread: open,
         };
-        let attachments = Composer::attachments(&pane.composer, &pane.preview, cx);
-        // The docked Decision merges into the Composer when that Composer
-        // is a live block with nothing floating between them (rule 2.8.1).
-        let joins = pane.is_main() && attachments.is_none();
-        let activity_decisions = self.activity_decisions(index, joins, window, cx);
-        let mut facts = facts;
-        facts.decision_joined = joins && activity_decisions.is_some();
         #[cfg(test)]
         drawn::record_pane(
             pane.identity,
@@ -7388,24 +7376,24 @@ impl CockpitView {
                     .get(&thread)
                     .map(|(w, _)| *w)
                     .or_else(|| {
-                        self.pane_rects(window)
+                        self.pane_rects(window, cx)
                             .into_iter()
                             .find(|(at, _)| *at == index)
                             .map(|(_, rect)| rect.w)
                     })
-                    .unwrap_or_else(|| self.board_bounds(window).w),
+                    .unwrap_or_else(|| self.board_bounds(window, cx).w),
                 clock: open.turn().elapsed().map(ferrite_core::progress::live_seconds),
             },
         );
         let wiring = pane::PaneWiring {
             transcript: retained_transcript,
             attachments,
-            menu: self.popover_element(index, cx),
+            menu,
             activity_decisions,
-            details: self.details_card(index, window, cx),
+            details,
             details_lane_width: self.details_lane_width(index),
-            toolbar: self.composer_toolbar(index, cx),
-            resume_offer: self.resume_offer(index, cx),
+            toolbar,
+            resume_offer,
             // An empty Thread wears the draft's start card until its first
             // prompt.
             start: if pane.is_main() && open.transcript().blocks().is_empty() {
@@ -7422,18 +7410,19 @@ impl CockpitView {
     /// world's figure. Nothing on a machine, whose checkouts are its own;
     /// tests and captures never read the real disk.
     fn read_free_disk(&mut self, cx: &mut Context<Self>) {
-        if let Some(bytes) = self.cockpit.free_disk_fixture() {
+        if let Some(bytes) = self.cockpit.read(cx).free_disk_fixture() {
             self.free_disk_landed(Some(bytes), cx);
             return;
         }
-        if self.on_machine() || cfg!(any(test, feature = "visual-reference")) {
+        if self.on_machine(cx) || cfg!(any(test, feature = "visual-reference")) {
             return;
         }
         let mut paths: Vec<std::path::PathBuf> = self
             .cockpit
+            .read(cx)
             .threads()
             .into_iter()
-            .filter_map(|thread| self.thread_path(thread))
+            .filter_map(|thread| self.thread_path(thread, cx))
             .collect();
         paths.sort();
         paths.dedup();
@@ -7522,7 +7511,7 @@ impl CockpitView {
         let Some(index) = self.pane_for(thread) else {
             return;
         };
-        self.focus_pane(index);
+        self.focus_pane(index, cx);
         gpui::base::TextSelection::clear(window, cx);
         self.panes[index]
             .rich
@@ -7544,7 +7533,7 @@ impl CockpitView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let index = self.focused();
+        let index = self.focused(cx);
         let typing = self
             .panes
             .get(index)
@@ -7565,7 +7554,7 @@ impl CockpitView {
     /// picker, as its menu row does, rather than going to the provider as
     /// text.
     fn typed_import(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
-        let Some(pane) = self.panes.get(self.focused()) else {
+        let Some(pane) = self.panes.get(self.focused(cx)) else {
             return false;
         };
         let (identity, composer) = (pane.identity, pane.composer.clone());
@@ -7587,8 +7576,8 @@ impl CockpitView {
     /// honour: the level is on the model's ladder (or `default`), the name
     /// matches a catalog row by value or display name. Anything else is
     /// None and goes to the provider as text.
-    fn typed_tuning(&self, thread: ThreadId, text: &str) -> Option<Tuning> {
-        let open = self.cockpit.thread(thread)?;
+    fn typed_tuning(&self, thread: ThreadId, text: &str, cx: &gpui::App) -> Option<Tuning> {
+        let open = self.cockpit.read(cx).thread(thread)?;
         let mut words = text.split_whitespace();
         let command = words.next()?;
         let argument = words.next()?;
@@ -7616,6 +7605,7 @@ impl CockpitView {
                     return Some(Tuning::Model(None));
                 }
                 self.cockpit
+                    .read(cx)
                     .model_catalog(open.provider())
                     .into_iter()
                     .find(|row| {
@@ -7631,8 +7621,8 @@ impl CockpitView {
 
     /// Whether `thread`'s transcript holds exactly one prompt — the moment
     /// a title is asked for.
-    fn is_first_prompt(&self, thread: ThreadId) -> bool {
-        self.cockpit.thread(thread).is_some_and(|open| {
+    fn is_first_prompt(&self, thread: ThreadId, cx: &gpui::App) -> bool {
+        self.cockpit.read(cx).thread(thread).is_some_and(|open| {
             open.transcript()
                 .blocks()
                 .iter()
@@ -7647,7 +7637,7 @@ impl CockpitView {
     /// provider has none to resume. It says what the way on costs.
     fn resume_offer(&self, index: usize, cx: &mut Context<Self>) -> Option<AnyElement> {
         let thread = self.panes.get(index).filter(|pane| pane.is_main())?.thread()?;
-        self.cockpit.thread(thread).filter(|open| open.resume_lost())?;
+        self.cockpit.read(cx).thread(thread).filter(|open| open.resume_lost())?;
         let key = thread.get();
         let line = "A fresh conversation starts from the transcript's latest turns, sent as \
                     context with your next prompt. It will not remember the rest.";
@@ -7678,16 +7668,16 @@ impl CockpitView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if !self.cockpit.thread(thread).is_some_and(|open| open.resume_lost()) {
+        if !self.cockpit.read(cx).thread(thread).is_some_and(|open| open.resume_lost()) {
             return;
         }
-        if let Err(error) = self.cockpit.start_fresh_conversation(thread) {
+        if let Err(error) = self.cockpit.update(cx, |cockpit, _| cockpit.start_fresh_conversation(thread)) {
             self.cockpit
-                .say(thread, format!("could not start a fresh conversation: {error}"));
+                .update(cx, |cockpit, _| cockpit.say(thread, format!("could not start a fresh conversation: {error}")));
             cx.notify();
             return;
         }
-        self.focus_pane(index);
+        self.focus_pane(index, cx);
         if !self.panes[index].composer.read(cx).is_empty() {
             self.submit(&Submit, window, cx);
         }
@@ -7705,6 +7695,7 @@ impl CockpitView {
         key: String,
         from: CardFrom,
         window: &mut Window,
+        cx: &gpui::App,
     ) -> Option<Point<Pixels>> {
         let up = !matches!(from, CardFrom::Head(_));
         let (CardFrom::Composer(identity) | CardFrom::Head(identity)) = from;
@@ -7720,7 +7711,7 @@ impl CockpitView {
             window.request_animation_frame();
             return None;
         }
-        Some(self.board_card_corner(up, window))
+        Some(self.board_card_corner(up, window, cx))
     }
 
     /// A Pane's own card: off its Composer's right edge opening up, its
@@ -7753,22 +7744,22 @@ impl CockpitView {
     /// The limits a surface summoned from the window's bar rests within
     /// (ADR 0014): its foot over the bar's top, its right edge inside the
     /// window's margin.
-    fn bar_place(&self) -> ferrite_ui::components::FloatPlace {
+    fn bar_place(&self, cx: &gpui::App) -> ferrite_ui::components::FloatPlace {
         use ferrite_ui::theme::GRID_PAD;
         // The board stops at the bar and `board_right` short of the
         // window's right edge.
         let board = self.board.get();
         ferrite_ui::components::FloatPlace {
             floor: board.y + board.h,
-            limit_right: board.x + board.w + self.board_right() - GRID_PAD,
+            limit_right: board.x + board.w + self.board_right(cx) - GRID_PAD,
         }
     }
 
     /// Where a card hangs with no geometry to hang from: off the board as
     /// though it were the Pane — from its foot (where a Composer would be)
     /// for a card opening up, its head for one opening down.
-    fn board_card_corner(&self, up: bool, window: &Window) -> Point<Pixels> {
-        let board = self.board_bounds(window);
+    fn board_card_corner(&self, up: bool, window: &Window, cx: &gpui::App) -> Point<Pixels> {
+        let board = self.board_bounds(window, cx);
         let right = board.x + board.w;
         let bottom = board.y + board.h;
         let place = ferrite_ui::components::FloatPlace {
@@ -7796,10 +7787,11 @@ impl CockpitView {
         let set = ferrite_core::SessionControl::SetPermissionMode { mode: mode.clone() };
         let standing = self
             .cockpit
+            .read(cx)
             .thread(thread)
             .is_some_and(|open| open.permission_mode() == Some(mode.as_str()));
         if standing || !ferrite_ui::theme::mode_stops_asking(&mode) {
-            self.run_session_control(thread, generation, set);
+            self.run_session_control(thread, generation, set, cx);
             return;
         }
         let answer = window.prompt(
@@ -7812,7 +7804,7 @@ impl CockpitView {
         cx.spawn_in(window, async move |view, cx| {
             if answer.await == Ok(0) {
                 let _ = view.update(cx, |view, cx| {
-                    view.run_session_control(thread, generation, set);
+                    view.run_session_control(thread, generation, set, cx);
                     cx.notify();
                 });
             }
@@ -7834,11 +7826,12 @@ impl CockpitView {
             format!("session-{}", thread.get()),
             CardFrom::Composer(PaneIdentity::Thread(thread)),
             window,
+            cx,
         )?;
         let card = session_card::SessionCard::of(
             thread,
             generation,
-            &self.cockpit.thread(thread)?,
+            &self.cockpit.read(cx).thread(thread)?,
             self.session_control_error.of(thread, generation),
         )?;
         Some(
@@ -7870,6 +7863,7 @@ impl CockpitView {
             format!("ci-{}", thread.get()),
             CardFrom::Head(PaneIdentity::Thread(thread)),
             window,
+            cx,
         )?;
         let card = head_cards::checks_card(thread, self.facts.pr(thread)?, cx);
         // The mark rides the Pane head's checkout line: the card drops
@@ -7919,7 +7913,7 @@ impl CockpitView {
 
     fn model_chip(&self, index: usize, cx: &mut Context<Self>) -> Option<AnyElement> {
         let thread = self.panes[index].thread()?;
-        let open = self.cockpit.thread(thread)?;
+        let open = self.cockpit.read(cx).thread(thread)?;
         let provider = open.provider();
         let hold = tuning_hold(&open);
         // The standing choice names the chip; else what the Session's own
@@ -7953,8 +7947,9 @@ impl CockpitView {
     pub(super) fn effort_ladder(
         &self,
         thread: ThreadId,
+        cx: &gpui::App,
     ) -> Option<(Vec<String>, Vec<SharedString>, Option<usize>)> {
-        let open = self.cockpit.thread(thread)?;
+        let open = self.cockpit.read(cx).thread(thread)?;
         let provider = open.provider();
         effort_ladder_of(
             open.effort(),
@@ -7970,6 +7965,7 @@ impl CockpitView {
     fn draft_effort_ladder(
         &self,
         index: usize,
+        cx: &gpui::App,
     ) -> Option<(Vec<String>, Vec<SharedString>, Option<usize>)> {
         let draft = self.panes.get(index)?.draft()?;
         let provider = draft.binding.provider().provider;
@@ -7978,7 +7974,7 @@ impl CockpitView {
             self.prefs.settings.effort_for(provider),
             provider,
             draft.binding.provider().model.as_deref(),
-            &self.cockpit.announced_models(provider),
+            &self.cockpit.read(cx).announced_models(provider),
         )
     }
 
@@ -7986,10 +7982,10 @@ impl CockpitView {
     /// first prompt, by resuming after it, refused mid-turn — its own
     /// words land in the transcript either way).
     fn pick_effort(&mut self, thread: ThreadId, effort: Option<String>, cx: &mut Context<Self>) {
-        if let Err(e) = self.cockpit.set_effort(thread, effort) {
-            self.cockpit.say(thread, format!("effort unchanged: {e}"));
+        if let Err(e) = self.cockpit.update(cx, |cockpit, _| cockpit.set_effort(thread, effort)) {
+            self.cockpit.update(cx, |cockpit, _| cockpit.say(thread, format!("effort unchanged: {e}")));
         }
-        self.facts.acted(&self.cockpit, thread);
+        self.facts.acted(self.cockpit.read(cx), thread);
         cx.notify();
     }
 
@@ -8023,24 +8019,26 @@ impl CockpitView {
             Verb::OpenThread(thread) => self.land_on_thread(thread, cx),
             Verb::Open(id) => {
                 self.drop_toast(&crate::notifications::RowTarget::Notice(id), cx);
-                if self.cockpit.open_notice(id).is_some() {
+                if self.cockpit.update(cx, |cockpit, _| cockpit.open_notice(id).is_some()) {
                     self.sync_panes(cx);
                 }
                 self.nav_view.update(cx, |nav, cx| nav.close_snooze(cx));
             }
             Verb::Dismiss(id) => {
-                self.cockpit.dismiss_notice(id);
+                self.cockpit.update(cx, |cockpit, _| cockpit.dismiss_notice(id));
             }
             Verb::OpenDecision(id) => {
                 self.drop_toast(&crate::notifications::RowTarget::Decision(id.clone()), cx);
                 let subject = self
                     .cockpit
+                    .read(cx)
                     .notifications()
                     .decision(&id)
                     .and_then(|notice| notice.subject.clone())
                     .unwrap_or(ferrite_core::activity::Subject::Main);
                 let pending_subject = self
                     .cockpit
+                    .read(cx)
                     .thread(id.thread)
                     .and_then(|open| {
                         open.pending_decisions()
@@ -8053,7 +8051,7 @@ impl CockpitView {
                             .clone()
                             .unwrap_or(ferrite_core::activity::Subject::Main)
                     });
-                if let Some(thread) = self.cockpit.open_decision_notice(&id) {
+                if let Some(thread) = self.cockpit.update(cx, |cockpit, _| cockpit.open_decision_notice(&id)) {
                     self.sync_panes(cx);
                     self.select_subject_from_notice(thread, subject, cx);
                 } else if let Some(subject) = pending_subject {
@@ -8063,12 +8061,12 @@ impl CockpitView {
                 self.nav_view.update(cx, |nav, cx| nav.close_snooze(cx));
             }
             Verb::DismissDecision(id) => {
-                self.cockpit.dismiss_decision_notice(&id);
+                self.cockpit.update(cx, |cockpit, _| cockpit.dismiss_decision_notice(&id));
             }
             // Every row read, none removed: titles drop to plain, the badge
             // clears.
             Verb::MarkAllRead => {
-                self.cockpit.mark_notices_read();
+                self.cockpit.update(cx, |cockpit, _| cockpit.mark_notices_read());
                 if let Some(machines) = &self.machines {
                     machines.update(cx, |machines, _| machines.mark_notices_read());
                 }
@@ -8112,11 +8110,13 @@ impl CockpitView {
         &self,
         notice: &ferrite_core::notifications::Notice,
         now: std::time::SystemTime,
+        cx: &gpui::App,
     ) -> NoticeRow {
         use crate::notifications::{Detail, State};
         let title = self.facts.name(notice.thread);
         let finish = self
             .cockpit
+            .read(cx)
             .thread(notice.thread)
             .map(|open| open.digest().finish.clone())
             .unwrap_or_default();
@@ -8170,13 +8170,13 @@ impl CockpitView {
         let (stale, sound, posts) = self.toasts.update(cx, |toasts, cx| {
             let needs_you = &mut toasts.needs_you;
             let machines = entity.as_ref().map(|machines| machines.read(cx));
-            let notifications = self.cockpit.notifications();
+            let notifications = self.cockpit.read(cx).notifications();
             // Until its Server answers, a Cockpit's Notices are none, not news:
             // hearing them would forget the requests heard of it, and judging
             // its alerts by them would drop the ones the window brought along.
-            let here = self.attached().then_some(notifications);
+            let here = self.attached(cx).then_some(notifications);
             if let Some(here) = here {
-                let operators = |thread: ThreadId| self.cockpit.operators(thread);
+                let operators = |thread: ThreadId| self.cockpit.read(cx).operators(thread);
                 let (fresh, requests) = news(here, needs_you.presented(None), &operators);
                 needs_you.hear(None, fresh, requests, now);
             }
@@ -8200,9 +8200,9 @@ impl CockpitView {
                 .collect();
             let (mut redraw, mut sound, mut posts) = (false, None, Vec::new());
             if needs_you.busy() {
-                let present = self.cockpit.window_active();
+                let present = self.cockpit.read(cx).window_active();
                 let on_board: std::collections::HashSet<ThreadId> = self
-                    .visible_indices()
+                    .visible_indices(cx)
                     .into_iter()
                     .filter_map(|index| self.panes[index].thread())
                     .collect();
@@ -8217,7 +8217,7 @@ impl CockpitView {
                     .rang
                     .iter()
                     .filter(|alert| {
-                        self.alert_provider(alert, machines)
+                        self.alert_provider(alert, machines, cx)
                             .is_some_and(|provider| settings.sounds_for(provider))
                     })
                     .map(|alert| {
@@ -8230,7 +8230,7 @@ impl CockpitView {
                     .max_by_key(|sound| *sound == Sound::NeedsYou);
                 if settings.system_notifications {
                     let now = ferrite_core::clock::system_time();
-                    let focused = self.focused_thread();
+                    let focused = self.focused_thread(cx);
                     posts = ring
                         .rang
                         .into_iter()
@@ -8238,7 +8238,7 @@ impl CockpitView {
                             let focused = alert.away.is_none() && focused == Some(alert.thread);
                             crate::system_notifications::wanted(focused, present)
                         })
-                        .filter_map(|alert| Some((self.system_posting(&alert, machines, now)?, alert)))
+                        .filter_map(|alert| Some((self.system_posting(&alert, machines, now, cx)?, alert)))
                         .collect();
                 }
             }
@@ -8269,10 +8269,12 @@ impl CockpitView {
         &self,
         alert: &crate::notifications::Alert,
         machines: Option<&crate::machines::Machines>,
+        cx: &gpui::App,
     ) -> Option<Provider> {
         match &alert.away {
             None => self
                 .cockpit
+                .read(cx)
                 .thread(alert.thread)
                 .map(|open| open.provider()),
             Some(key) => machines?.away(key)?.status.provider(alert.thread),
@@ -8287,8 +8289,9 @@ impl CockpitView {
         alert: &crate::notifications::Alert,
         machines: Option<&crate::machines::Machines>,
         now: std::time::SystemTime,
+        cx: &gpui::App,
     ) -> Option<crate::system_notifications::Posting> {
-        let row = self.alert_row(alert, machines, now)?;
+        let row = self.alert_row(alert, machines, now, cx)?;
         let machine = match alert.away.clone() {
             Some(machine) => machine,
             None => match machines {
@@ -8300,6 +8303,7 @@ impl CockpitView {
         let cwd = match alert.away {
             None => self
                 .cockpit
+                .read(cx)
                 .thread(alert.thread)
                 .and_then(|open| open.workspace())
                 .map(|binding| binding.cwd().to_path_buf()),
@@ -8312,7 +8316,7 @@ impl CockpitView {
             title: row.title.to_string(),
             detail: row.detail.text(),
             agent: self
-                .alert_provider(alert, machines)
+                .alert_provider(alert, machines, cx)
                 .map(|provider| provider.to_string()),
             cwd,
         })
@@ -8351,15 +8355,16 @@ impl CockpitView {
         alert: &crate::notifications::Alert,
         machines: Option<&crate::machines::Machines>,
         now: std::time::SystemTime,
+        cx: &gpui::App,
     ) -> Option<NoticeRow> {
         if let Some(key) = &alert.away {
             return machines::away_row(&machines?.away(key)?, &alert.target, now);
         }
-        let notifications = self.cockpit.notifications();
+        let notifications = self.cockpit.read(cx).notifications();
         Some(match &alert.target {
             RowTarget::Thread(_) => return None,
-            RowTarget::Notice(id) => self.notice_row(notifications.get(*id)?, now),
-            RowTarget::Decision(id) => self.decision_row(notifications.decision(id)?, now),
+            RowTarget::Notice(id) => self.notice_row(notifications.get(*id)?, now, cx),
+            RowTarget::Decision(id) => self.decision_row(notifications.decision(id)?, now, cx),
         })
     }
 
@@ -8369,10 +8374,11 @@ impl CockpitView {
         &self,
         notice: &ferrite_core::notifications::DecisionNotice,
         now: std::time::SystemTime,
+        cx: &gpui::App,
     ) -> NoticeRow {
         use crate::notifications::{Detail, State};
         let thread = notice.id.thread;
-        let open = self.cockpit.thread(thread);
+        let open = self.cockpit.read(cx).thread(thread);
         let detail = open
             .and_then(|open| {
                 open.pending_decisions()
@@ -8426,26 +8432,26 @@ impl CockpitView {
     /// Requests precede other rows, retaining each machine's attention order.
     #[cfg(test)]
     pub(super) fn needs_you_rows(&self, cx: &gpui::App) -> Vec<NoticeRow> {
-        self.inbox_rows(&self.nav_state(), cx)
+        self.inbox_rows(&self.nav_state(cx), cx)
     }
 
     /// The Active section as the Inbox's rows: each local Thread's, then a
     /// connected machine's requests and finishes, requests first.
     pub(super) fn inbox_rows(&self, state: &nav::NavState, cx: &gpui::App) -> Vec<NoticeRow> {
         let now = ferrite_core::clock::system_time();
-        let notifications = self.cockpit.notifications();
+        let notifications = self.cockpit.read(cx).notifications();
         let mut rows: Vec<_> = state
             .active
             .iter()
             .map(|entry| {
                 let thread = entry.thread;
                 if let Some(decision) = notifications.first_request(thread) {
-                    self.decision_row(decision, now)
+                    self.decision_row(decision, now, cx)
                 } else if let Some(notice) = notifications
                     .notices()
                     .find(|notice| notice.thread == thread)
                 {
-                    self.notice_row(notice, now)
+                    self.notice_row(notice, now, cx)
                 } else {
                     NoticeRow {
                         away: None,
@@ -8472,13 +8478,13 @@ impl CockpitView {
     /// The nav column as far in as it is this frame, its face pinned to the
     /// board's edge and clipped as it slides, under a veil that takes the
     /// pointer while it slides out.
-    fn nav(&self) -> Option<AnyElement> {
+    fn nav(&self, cx: &gpui::App) -> Option<AnyElement> {
         let drawn = self.nav_width();
         if drawn <= 0.0 {
             return None;
         }
         let width = self.nav_expanded_width();
-        let face = nav::column(self.board_ground())
+        let face = nav::column(self.board_ground(cx))
             .w(px(width))
             .absolute()
             .top_0()
@@ -8497,8 +8503,8 @@ impl CockpitView {
         )
     }
 
-    fn board_ground(&self) -> ferrite_ui::theme::Paint {
-        let lone = !self.destination_shown() && !self.empty_board_shown();
+    fn board_ground(&self, cx: &gpui::App) -> ferrite_ui::theme::Paint {
+        let lone = !self.destination_shown() && !self.empty_board_shown(cx);
         ferrite_ui::theme::Paint::solid(ferrite_ui::theme::tx_ground(lone))
     }
 
