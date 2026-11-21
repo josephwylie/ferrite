@@ -126,6 +126,7 @@ icons![
     // A plan's pending step (the transcript's task list).
     "circle-dashed",
     "circle-minus",
+    "circle-dot",
     // A row's more menu (the nav's `⋯`).
     "ellipsis",
     // The Composer's `+` menu (Claude's marks).
@@ -154,6 +155,7 @@ icons![
     "message-circle-question",
     "circle-alert",
     "git-pull-request-draft",
+    "git-pull-request-closed",
     "folder-git-2",
     "pin-off",
     "undo-2",
@@ -305,6 +307,8 @@ pub const X_CIRCLE: &str = "icons/x-circle.svg";
 pub const CIRCLE_DASHED: &str = "icons/circle-dashed.svg";
 /// A plan's step the turn stopped on: a bar in a ring (the task list).
 pub const CIRCLE_MINUS: &str = "icons/circle-minus.svg";
+/// Checks still running, or awaiting approval: a dot in a ring.
+pub const CIRCLE_DOT: &str = "icons/circle-dot.svg";
 /// A row's more menu: `⋯`, under the pointer.
 pub const ELLIPSIS: &str = "icons/ellipsis.svg";
 /// The permission mode.
@@ -364,6 +368,8 @@ pub const MESSAGE_CIRCLE_QUESTION: &str = "icons/message-circle-question.svg";
 pub const CIRCLE_ALERT: &str = "icons/circle-alert.svg";
 /// A draft PR on a Thread card's chip.
 pub const GIT_PULL_REQUEST_DRAFT: &str = "icons/git-pull-request-draft.svg";
+/// A closed pull request.
+pub const GIT_PULL_REQUEST_CLOSED: &str = "icons/git-pull-request-closed.svg";
 /// A Thread working in a worktree, on its card's checkout line.
 pub const FOLDER_GIT: &str = "icons/folder-git-2.svg";
 /// A pinned card's pin under the pointer: the press unpins.

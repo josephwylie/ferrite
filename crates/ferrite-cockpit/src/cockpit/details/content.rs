@@ -411,6 +411,35 @@ impl CockpitView {
     }
 }
 
+/// The card's pull request block, drawn as T3 Code draws it: the state's
+/// glyph and the title (two lines at most), and under it one quiet line,
+/// `#N` and then the mark. With no mark, one row: `#N: title`.
+#[derive(Clone, Debug, PartialEq)]
+struct PrBlock {
+    number: u64,
+    title: String,
+    glyph: &'static str,
+    ink: u32,
+    mark: Option<PrMark>,
+    /// T3's hover: the title in full and `#N`, the state, then the checks
+    /// in words while it is open.
+    tooltip: String,
+}
+
+/// What the quiet line says after `#N`: the checks' ring and count, or a
+/// conflict in red.
+#[derive(Clone, Debug, PartialEq)]
+struct PrMark {
+    glyph: Option<&'static str>,
+    ink: u32,
+    words: Option<String>,
+}
+
+/// The block a pull request draws as (see [`PrBlock`]).
+fn pr_block(_pr: &ferrite_core::workspace::PullRequest) -> PrBlock {
+    todo!()
+}
+
 /// The pull request's rows: its title, then where it stands (its state
 /// and checks in the Overview's words, the review decision, and whether
 /// an open one can merge). A fact the forge did not give gets no row.
@@ -504,74 +533,132 @@ mod tests {
         );
     }
 
-    /// The card says where the Thread's pull request stands, under its
-    /// title: the state and its checks in the Overview's words, then the
-    /// review decision and whether it can merge.
+    /// The card draws the Thread's pull request as T3 Code does: one
+    /// block, the title over a quiet line of `#N` and the checks' ring and
+    /// count (`5/6 checks` while any run, `N failed` once they settle,
+    /// the ring alone when all passed). A draft shows no checks; a
+    /// conflict says so in red where T3 offers Resolve; with nothing for
+    /// that line, one row, `#N: title`.
     #[test]
-    fn details_card_reads_the_pull_requests_checks_review_and_merge() {
-        use ferrite_core::workspace::{CheckState, MergeState, PrState, PullRequest, ReviewDecision};
-        let mut pr = PullRequest {
-            number: 48,
+    fn details_card_draws_the_pull_request_as_one_block() {
+        use ferrite_core::workspace::{Check, CheckState, PrState, PullRequest};
+        use CheckState::*;
+        let run = |(state, detail): (CheckState, &str)| Check {
+            name: "ci".into(),
+            workflow: None,
+            state,
+            detail: detail.into(),
+            url: None,
+        };
+        let pr = |runs: &[(CheckState, &str)]| PullRequest {
+            number: 418,
             state: PrState::Open,
             draft: false,
             url: None,
-            title: Some("Thread cards".into()),
-            checks: Some(CheckState::Failing),
-            runs: Vec::new(),
-            review: Some(ReviewDecision::ChangesRequested),
-            merge: Some(MergeState::Conflicting),
+            title: Some("feat(details): the card".into()),
+            checks: None,
+            runs: runs.iter().copied().map(run).collect(),
+            review: None,
+            merge: None,
         };
-        let read = |pr: &PullRequest| {
-            pr_rows(pr)
-                .into_iter()
-                .map(|row| (row.label, row.meta))
-                .collect::<Vec<_>>()
+        let line = |block: &PrBlock| {
+            block
+                .mark
+                .as_ref()
+                .map(|mark| (mark.glyph, mark.ink, mark.words.clone()))
         };
-        let some = |word: &str| Some(word.to_string());
+        let words = |words: &str| Some(words.to_string());
+        let passed = (Passing, "success");
+        let running = (Pending, "in_progress");
+        let failed = (Failing, "failure");
+        let awaiting = (Failing, "action_required");
+        let skipped = (Skipped, "skipped");
+
+        let block = pr_block(&pr(&[passed, passed, passed, passed, passed, running]));
         assert_eq!(
-            read(&pr),
-            [
-                ("Thread cards".into(), some("#48")),
-                ("Open".into(), some("checks failing")),
-                ("Review".into(), some("Changes requested")),
-                ("Merge".into(), some("Conflicts")),
-            ]
+            (block.number, block.title.as_str(), block.glyph, block.ink),
+            (418, "feat(details): the card", icons::GIT_PULL_REQUEST, GREEN)
         );
-        let rows = pr_rows(&pr);
-        assert_eq!(rows[1].ink, Some(BLOCKED), "failing checks need the operator");
-        assert!(
-            rows.iter().all(|row| matches!(
-                row.action,
-                Some(Action::Surface(super::super::super::surfaces::SurfaceId::PullRequest(48)))
-            )),
-            "every PR row opens the pull request"
+        assert_eq!(
+            line(&block),
+            Some((Some(icons::CIRCLE_DOT), YELLOW, words("5/6 checks"))),
+            "checks running: the amber ring and the settled count"
+        );
+        assert_eq!(block.tooltip, "feat(details): the card #418\nOpen\n1 of 6 running");
+
+        let block = pr_block(&pr(&[passed, passed, passed, passed, failed, failed]));
+        assert_eq!(
+            line(&block),
+            Some((Some(icons::X_CIRCLE), RED, words("2 failed"))),
+            "some failed, the rest settled"
+        );
+        assert_eq!(block.tooltip, "feat(details): the card #418\nOpen\n2 of 6 failing");
+
+        let block = pr_block(&pr(&[passed, failed, running]));
+        assert_eq!(
+            line(&block),
+            Some((Some(icons::X_CIRCLE), RED, words("2/3 checks"))),
+            "a failure while another still runs: the red ring, still counting"
+        );
+        assert_eq!(
+            block.tooltip,
+            "feat(details): the card #418\nOpen\n1 of 3 running · 1 failed"
         );
 
-        pr.checks = None;
-        pr.review = None;
-        pr.merge = None;
+        let block = pr_block(&pr(&[passed, passed, passed, passed, passed, awaiting]));
         assert_eq!(
-            read(&pr),
-            [
-                ("Thread cards".into(), some("#48")),
-                ("Open".into(), None),
-            ],
-            "silence claims nothing"
+            line(&block),
+            Some((Some(icons::CIRCLE_DOT), YELLOW, words("5/6 checks"))),
+            "a run awaiting approval has not finished"
+        );
+        assert_eq!(
+            block.tooltip,
+            "feat(details): the card #418\nOpen\n1 of 6 awaiting action"
         );
 
-        pr.state = PrState::Merged;
-        pr.checks = Some(CheckState::Passing);
-        pr.review = Some(ReviewDecision::Approved);
-        pr.merge = Some(MergeState::Clean);
+        let block = pr_block(&pr(&[passed, passed, skipped]));
         assert_eq!(
-            read(&pr),
-            [
-                ("Thread cards".into(), some("#48")),
-                ("Merged".into(), some("checks passing")),
-                ("Review".into(), some("Approved")),
-            ],
-            "a merged pull request has nothing left to merge"
+            line(&block),
+            Some((Some(icons::CHECK_CIRCLE), GREEN, None)),
+            "all passed: the green ring alone"
         );
+        assert_eq!(block.tooltip, "feat(details): the card #418\nOpen\n2 of 3 passing");
+        let block = pr_block(&pr(&[passed, passed]));
+        assert_eq!(block.tooltip, "feat(details): the card #418\nOpen\nAll checks passed");
+
+        for runs in [&[][..], &[skipped][..]] {
+            let block = pr_block(&pr(runs));
+            assert_eq!(line(&block), None, "no checks to count: one row");
+        }
+
+        let mut draft = pr(&[passed, running]);
+        draft.draft = true;
+        let block = pr_block(&draft);
+        assert_eq!((block.glyph, block.ink), (icons::GIT_PULL_REQUEST_DRAFT, INK_SUBTLE));
+        assert_eq!(line(&block), None, "a draft shows no checks");
+        assert_eq!(block.tooltip, "feat(details): the card #418\nDraft\n1 of 2 running");
+
+        let mut conflicting = pr(&[passed, running]);
+        conflicting.merge = Some(ferrite_core::workspace::MergeState::Conflicting);
+        assert_eq!(
+            line(&pr_block(&conflicting)),
+            Some((None, RED, words("Conflicts"))),
+            "conflicts replace the checks"
+        );
+
+        let mut merged = pr(&[passed]);
+        merged.state = PrState::Merged;
+        let block = pr_block(&merged);
+        assert_eq!((block.glyph, block.ink), (icons::GIT_MERGE, MAGENTA));
+        assert_eq!(line(&block), Some((Some(icons::CHECK_CIRCLE), GREEN, None)));
+        assert_eq!(block.tooltip, "feat(details): the card #418\nMerged");
+
+        let mut closed = pr(&[]);
+        closed.state = PrState::Closed;
+        closed.title = None;
+        let block = pr_block(&closed);
+        assert_eq!((block.glyph, block.ink), (icons::GIT_PULL_REQUEST_CLOSED, RED));
+        assert_eq!(block.title, "Pull request #418");
     }
 
     #[test]
