@@ -9,9 +9,8 @@
 //! Factory view is open, so what was typed survives a picker, a revealed
 //! field, a notice, a scroll and a switch of surface; the draft keeps it
 //! across a save and a reopen. What is chosen, the Composers and the field
-//! that holds the keyboard are the editor's own view's (`editor`), which
-//! draws the outline and the inspector; the root draws the head, the
-//! problems and the empty state, and answers every edit.
+//! that holds the keyboard are the editor's own view's (`editor`), whose
+//! render is the surface; the root hosts it and answers every edit.
 
 use std::collections::HashMap;
 

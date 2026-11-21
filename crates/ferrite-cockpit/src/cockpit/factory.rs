@@ -700,11 +700,11 @@ impl CockpitView {
             );
 
         let body = if view.surface == super::workflows::Surface::Workflows {
-            self.workflows_surface(window, cx)
+            view.editor.clone().into_any_element()
         } else if view.surface == super::workflows::Surface::Coordinator {
-            self.coordinator_surface(window, cx)
+            self.coordinator_surface(window, cx).into_any_element()
         } else if view.archive_shown {
-            self.archive_surface(window, cx)
+            self.archive_surface(window, cx).into_any_element()
         } else if tasks.is_empty() {
             div()
                 .debug_selector(|| "factory-empty".into())
@@ -731,6 +731,7 @@ impl CockpitView {
                         .text_color(rgb(INK_SUBTLE))
                         .child("Start one with New task. Nothing runs until you do."),
                 )
+                .into_any_element()
         } else {
             let open = view.open.as_deref();
             let mut columns = div()
@@ -829,6 +830,7 @@ impl CockpitView {
                 .flex_row()
                 .child(columns)
                 .children(panel)
+                .into_any_element()
         };
 
         div()

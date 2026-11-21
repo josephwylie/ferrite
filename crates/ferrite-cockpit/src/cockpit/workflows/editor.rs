@@ -4,11 +4,12 @@
 //! field's Composer, made once for as long as the Factory is open, and
 //! the field that holds the keyboard. The Factory holds it.
 //!
-//! It has no render of its own: the root draws the surface and has it
-//! draw the outline (`outline`) and the inspector (`inspector`), with what
-//! it reads of the window (`WorkflowsInputs`). Which fields the surface shows
-//! the root decides from the draft (`ensure_fields`); what is typed or
-//! pressed it says as a `WorkflowsEvent`, since every edit is a Server ask.
+//! Its render is the Workflows surface: the head, the draft's problems,
+//! the outline (`outline`) and the inspector (`inspector`), or the empty
+//! state, with what it reads of the window (`WorkflowsInputs`). Which
+//! fields the surface shows the root decides from the draft
+//! (`ensure_fields`); what is typed or pressed it says as a
+//! `WorkflowsEvent`, since every edit is a Server ask.
 
 use gpui::WeakEntity;
 
@@ -61,6 +62,13 @@ pub(crate) enum WorkflowsEvent {
     RemoveSkill(String),
     /// `Delete agent`.
     Delete(StepId),
+    /// The head's Workflow picker: the Project's Workflows open under
+    /// `trigger`.
+    Workflows { trigger: Trigger, at: Point<Pixels> },
+    /// `Run task`: the New task sheet, on the Workflow shown.
+    Run,
+    /// `Save`: the draft becomes the next version.
+    Save,
 }
 
 /// What the editor draws from the window: the Workflow shown, the Step
@@ -68,6 +76,12 @@ pub(crate) enum WorkflowsEvent {
 /// view.
 pub(crate) struct WorkflowsInputs {
     pub(super) workflow: WorkflowId,
+    /// Its name as its picker says it.
+    pub(super) title: String,
+    /// Its latest saved version's number, if one was saved.
+    pub(super) saved: Option<u32>,
+    /// The draft differs from that version, or none was saved.
+    pub(super) unsaved: bool,
     pub(super) draft: Definition,
     /// The Step shown: the one chosen, else the first.
     pub(super) step: Option<StepId>,
@@ -274,6 +288,17 @@ impl WorkflowsView {
     }
 }
 
+impl Render for WorkflowsView {
+    /// The Workflows surface, as the root's state stands now.
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let inputs = self
+            .cockpit
+            .upgrade()
+            .and_then(|cockpit| cockpit.read(cx).workflows_inputs(self));
+        self.surface(inputs, window, cx)
+    }
+}
+
 impl CockpitView {
     /// A Factory's Workflows editor, heard from its making.
     pub(in crate::cockpit) fn new_workflows(&mut self, cx: &mut Context<Self>) -> Entity<WorkflowsView> {
@@ -293,6 +318,9 @@ impl CockpitView {
         let catalog = self.factory_catalog();
         Some(WorkflowsInputs {
             workflow: workflow.id.clone(),
+            title: workflow_title(workflow),
+            saved: workflow.latest().map(|latest| latest.version),
+            unsaved: workflow.unsaved(),
             step: step.map(|step| step.id.clone()),
             switch: workflow.automation.switch,
             problems: workflow.draft.problems(&catalog),
@@ -313,8 +341,9 @@ impl CockpitView {
     }
 
     /// A field typed in goes to the draft; one pressed has the focus pump
-    /// hand it the keyboard; a row or a key chooses what the inspector
-    /// shows; a picker opens its rows; every edit asks the Server.
+    /// hand it the keyboard; a row, a problem or a key chooses what the
+    /// inspector shows; a picker opens its rows; every edit and Save ask
+    /// the Server; Run task opens the New task sheet.
     fn on_workflows_event(
         &mut self,
         _: Entity<WorkflowsView>,
@@ -359,6 +388,16 @@ impl CockpitView {
             WorkflowsEvent::AddSkill(name) => self.add_skill(name.clone(), cx),
             WorkflowsEvent::RemoveSkill(name) => self.remove_skill(name, cx),
             WorkflowsEvent::Delete(step) => self.delete_step(step.clone(), cx),
+            WorkflowsEvent::Workflows { trigger, at } => {
+                let picks = self.workflow_picks(cx);
+                self.open_picks(picks, trigger, *at, cx)
+            }
+            WorkflowsEvent::Run => {
+                let workflow = self.shown_id(cx);
+                self.open_new_task(cx);
+                self.set_new_task_workflow(workflow, cx);
+            }
+            WorkflowsEvent::Save => self.save_workflow(cx),
         }
     }
 }

@@ -434,8 +434,8 @@ that happened to touch it, and nothing in the code said whose a field was.
   one `field_input` the editor's own fields use. It keeps nothing by
   Thread. Left of the Factory: the Workflows editor, the Coordinator
   surface and the shell.
-- **The Workflows editor is the twenty-fifth, in part, the Factory's
-  fourth slice.** `WorkflowsView` (`cockpit/workflows/editor.rs`) owns
+- **The Workflows editor is the twenty-fifth, the Factory's fourth
+  slice.** `WorkflowsView` (`cockpit/workflows/editor.rs`) owns
   what the editor has chosen and what is being typed in it: the Workflow
   and Step shown, what the inspector shows (`Inspected`: a Step, the
   approval settings or the start, one at a time, so only its outline row
@@ -443,35 +443,38 @@ that happened to touch it, and nothing in the code said whose a field was.
   skills search is revealed, the outline's focus and scroll, each text
   field's Composer, made once for as long as the Factory is open (the
   start's two included), and the field that holds the keyboard. The
-  Factory holds it, as it holds the Archive's. It has no render of its
-  own yet: the root draws the surface's head, its problems and the empty
-  state, and has the view draw the outline and the inspector beside it
-  with what they read from `workflows_inputs`: the shown Workflow's
-  draft, the Step shown, the automatic starts' switch, the draft's
-  problems and the catalog they were found against, each Provider's
-  models, the shown Step's Provider's installed skills, and the starts'
-  view, which draws the start. The outline's keys read the same inputs
+  Factory holds it, as it holds the Archive's. Its render is the
+  Workflows surface, which the root only hosts: the head (the Workflow
+  picker, the version, New workflow, Run task, Save), the draft's
+  problems, the outline and the inspector, or the empty state while the
+  Project has no Workflow, with what they read from `workflows_inputs`:
+  the shown Workflow's name, its latest version and whether the draft
+  differs from it, the draft, the Step shown, the automatic starts'
+  switch, the draft's problems and the catalog they were found against,
+  each Provider's models, the shown Step's Provider's installed skills,
+  and the starts' view, which draws the start. The outline's keys read the same inputs
   through a weak handle to the root, so a second key before the next
   frame reads the draft the first one left. The focus pump hands the
   keyboard to the chosen field, else the outline. It emits
   `WorkflowsEvent`: a field typed in, whose text the root sends to the
   draft; a press on a field or the outline; a Step's row, ↑ ↓, the
-  approval's or the start's row, which the root shows (`select_step`,
-  `select_approval`, `open_start`) and fills the fields of
+  approval's, the start's or a problem's row, which the root shows
+  (`select_step`, `select_approval`, `open_start`) and fills the fields of
   (`ensure_fields`, which reads the draft); ⌥↑ ⌥↓, a drop, Add agent, a
   Step's switch, a skill added or removed and Delete agent; a route's
-  picker, a row's `⋯` and an inspector chooser, whose rows the root
-  opens; and a segment's choice. Every edit is a Server ask
-  (`workflow_ask`), so editing stays the root's. Each Provider's
+  picker, a row's `⋯`, an inspector chooser, the head's Workflow picker
+  and New workflow, whose rows the root opens; a segment's choice; Run
+  task, which opens the New task sheet on the Workflow shown; and Save.
+  Every edit and Save is a Server ask (`workflow_ask`,
+  `save_workflow`), so editing stays the root's. Each Provider's
   installed skills get no view, by the rule below: only the root asks
   for them and only its pump takes the answers, so they are a plain
   struct on the Factory (`Skills`), in the shape of the import picker's
   listing (`listen`, `listed`). The open picker's rows stay the Factory's
   (`picks`), shared with the New task sheet, a Task's sheets and the
-  Coordinator, and the popup slot and the focus pump stay the root's.
-  Left of the editor: the surface's head, its problems and the empty
-  state, after which the view's render is the Workflows surface. Left of
-  the Factory after the editor: the Coordinator surface, then the shell.
+  Coordinator, and the popup slot and the focus pump stay the root's, as
+  do the Factory head's surface tabs, which the shell draws. Left of the
+  Factory: the Coordinator surface, then the shell.
 
 ## What does not get a view
 

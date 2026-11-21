@@ -1,6 +1,7 @@
-//! The Workflows surface: the surface tabs, the list of Workflows, and
-//! the outline of Steps with their routes, which the editor's view draws
-//! and whose presses it says as `WorkflowsEvent`s.
+//! The Workflows surface, which the editor's view draws and whose presses
+//! it says as `WorkflowsEvent`s: its head with the Workflows' picker, the
+//! draft's problems, the outline of Steps with their routes, and the empty
+//! state. The Factory head's surface tabs stay the root's.
 
 use super::*;
 
@@ -76,17 +77,20 @@ impl CockpitView {
         }
         tabs
     }
+}
 
+impl WorkflowsView {
     /// The Workflows surface: its head, the draft's problems, the outline
-    /// and the inspector.
-    pub(in crate::cockpit) fn workflows_surface(
+    /// and the inspector; while the Project has no Workflow, the empty
+    /// state.
+    pub(super) fn surface(
         &self,
-        window: &mut Window,
+        inputs: Option<WorkflowsInputs>,
+        window: &Window,
         cx: &mut Context<Self>,
     ) -> Div {
         use ferrite_ui::theme::*;
-        let editor = self.factory().map(|view| view.editor.clone());
-        let (Some(editor), Some(workflow)) = (editor, self.shown_workflow(cx)) else {
+        let Some(inputs) = inputs else {
             return div()
                 .debug_selector(|| "workflows-empty".into())
                 .flex_1()
@@ -112,17 +116,14 @@ impl CockpitView {
                 )
                 .child(self.new_workflow_button(cx));
         };
-        let Some(inputs) = self.workflows_inputs(editor.read(cx)) else {
-            return div();
-        };
         let problems = &inputs.problems;
-        let unsaved = workflow.unsaved();
-        let version = match workflow.latest() {
-            Some(latest) if unsaved => format!("version {} \u{b7} edited", latest.version),
-            Some(latest) => format!("version {}", latest.version),
+        let unsaved = inputs.unsaved;
+        let version = match inputs.saved {
+            Some(saved) if unsaved => format!("version {saved} \u{b7} edited"),
+            Some(saved) => format!("version {saved}"),
             None => "not saved".into(),
         };
-        let runnable = workflow.latest().is_some() && problems.is_empty();
+        let runnable = inputs.saved.is_some() && problems.is_empty();
         let save_disabled = !unsaved || !problems.is_empty();
         let picker = Trigger::default();
         let head = div()
@@ -148,7 +149,7 @@ impl CockpitView {
                     .cursor_pointer()
                     .hover(|picker| picker.bg(paint::HOVER))
                     .font_weight(W_LABEL)
-                    .child(SharedString::from(workflow_title(workflow)))
+                    .child(SharedString::from(inputs.title.clone()))
                     .child(ferrite_ui::icons::icon(
                         ferrite_ui::icons::CHEVRON_DOWN,
                         ROW_ICON,
@@ -158,10 +159,12 @@ impl CockpitView {
                     .child(picker.probe())
                     .on_mouse_down(
                         MouseButton::Left,
-                        cx.listener(move |view, event: &MouseDownEvent, _, cx| {
+                        cx.listener(move |_, event: &MouseDownEvent, _, cx| {
                             cx.stop_propagation();
-                            let picks = view.workflow_picks(cx);
-                            view.open_picks(picks, &picker, event.position, cx);
+                            cx.emit(WorkflowsEvent::Workflows {
+                                trigger: picker.clone(),
+                                at: event.position,
+                            });
                         }),
                     ),
             )
@@ -187,11 +190,9 @@ impl CockpitView {
                 )
                 .debug_selector(|| "workflow-run".into())
                 .disabled(!runnable)
-                .on_click(cx.listener(|view, _: &ClickEvent, _, cx| {
+                .on_click(cx.listener(|_, _: &ClickEvent, _, cx| {
                     cx.stop_propagation();
-                    let workflow = view.shown_id(cx);
-                    view.open_new_task(cx);
-                    view.set_new_task_workflow(workflow, cx);
+                    cx.emit(WorkflowsEvent::Run);
                 })),
             )
             .child(
@@ -202,9 +203,9 @@ impl CockpitView {
                     cx,
                 )
                 .debug_selector(|| "workflow-save".into())
-                .on_click(cx.listener(|view, _: &ClickEvent, _, cx| {
+                .on_click(cx.listener(|_, _: &ClickEvent, _, cx| {
                     cx.stop_propagation();
-                    view.save_workflow(cx);
+                    cx.emit(WorkflowsEvent::Save);
                 })),
             );
 
@@ -235,9 +236,9 @@ impl CockpitView {
                         .text_color(rgb(INK_STRONG))
                         .when(step.is_some(), |row| row.cursor_pointer())
                         .child(SharedString::from(problem.message.clone()))
-                        .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
+                        .on_click(cx.listener(move |_, _: &ClickEvent, _, cx| {
                             if let Some(step) = step.clone() {
-                                view.select_step(step, cx);
+                                cx.emit(WorkflowsEvent::Select(step));
                             }
                         })),
                 );
@@ -259,16 +260,13 @@ impl CockpitView {
                     .min_h_0()
                     .flex()
                     .flex_row()
-                    .children(editor.update(cx, |editor, cx| {
-                        [
-                            editor.outline(&inputs, window, cx),
-                            editor.inspector(&inputs, window, cx),
-                        ]
-                    })),
+                    .child(self.outline(&inputs, window, cx))
+                    .child(self.inspector(&inputs, window, cx)),
             )
     }
 
-    pub(super) fn new_workflow_button(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    /// `New workflow`: the templates' picker.
+    fn new_workflow_button(&self, cx: &mut Context<Self>) -> impl IntoElement {
         use ferrite_ui::theme::*;
         let trigger = Trigger::default();
         div()
@@ -297,15 +295,17 @@ impl CockpitView {
             .child(trigger.probe())
             .on_mouse_down(
                 MouseButton::Left,
-                cx.listener(move |view, event: &MouseDownEvent, _, cx| {
+                cx.listener(move |_, event: &MouseDownEvent, _, cx| {
                     cx.stop_propagation();
-                    view.open_picks(Self::template_picks(), &trigger, event.position, cx);
+                    cx.emit(WorkflowsEvent::Picks {
+                        picks: CockpitView::template_picks(),
+                        trigger: trigger.clone(),
+                        at: event.position,
+                    });
                 }),
             )
     }
-}
 
-impl WorkflowsView {
     /// The outline: the Workflow's name, then each Step's row with its
     /// routes, in order. No box round a row; the chosen row is filled.
     pub(super) fn outline(
