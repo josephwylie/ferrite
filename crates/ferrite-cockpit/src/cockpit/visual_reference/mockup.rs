@@ -126,6 +126,7 @@ fn status(branch: &str, ahead: u32, behind: u32, dirty: u32) -> BranchStatus {
         ahead,
         behind,
         dirty,
+        changes: None,
     }
 }
 
