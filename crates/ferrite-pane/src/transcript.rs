@@ -1416,6 +1416,7 @@ impl TranscriptView {
                 &group,
                 shown(group.clone()),
                 |block| shown(self.member_id(block)),
+                &self.input.presentation.agents,
                 selection,
             );
         } else if let Some(block) = row.blocks().first() {
@@ -1424,7 +1425,13 @@ impl TranscriptView {
                 Body::Thinking(_) => shown(DisclosureId::Reasoning(block.id)),
                 _ => false,
             };
-            pane::collect_block_text(block, expanded, &self.input.presentation.skills, selection);
+            pane::collect_block_text(
+                block,
+                expanded,
+                &self.input.presentation.skills,
+                &self.input.presentation.agents,
+                selection,
+            );
         }
     }
 
@@ -1933,10 +1940,9 @@ impl TranscriptView {
                 tool,
                 row_cx,
                 pane::AgentRowCx {
-                    clock: face.and_then(|face| face.clock),
+                    face,
                     open,
                     targeted,
-                    live: background_opener(tool, view),
                     ground: theme::tx_ground(self.input.presentation.solo),
                 },
             );

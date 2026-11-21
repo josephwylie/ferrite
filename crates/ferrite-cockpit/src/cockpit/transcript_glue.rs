@@ -57,47 +57,89 @@ pub(super) fn rewind_gate(
 }
 
 /// How each subagent stands, by the call that started it, for that call's
-/// row (`pane::render_agent`): running while it starts, works or waits on
-/// the operator — saying what it does, its latest progress summary, or that
-/// it needs you —, failed, or done. Every Subject's transcript reads the
-/// same faces: a subagent's own agent calls open its children.
+/// row (`pane::render_agent`, T3's statuses): running while it starts or
+/// works, waiting on the operator, failed, stopped, or done; what it does
+/// (its latest progress summary) while it runs or waits; once it has ended,
+/// its last words as its result. Every Subject's transcript reads the same
+/// faces: a subagent's own agent calls open its children.
 pub(super) fn agent_faces(activity: ActivityView<'_>) -> AgentFaces {
     let mut faces = AgentFaces::default();
     for (call, agent) in activity.invocations() {
         let run = match agent.status() {
             AgentStatus::Failed | AgentStatus::NotFound => AgentRun::Failed,
+            AgentStatus::Waiting if agent.running() => AgentRun::Waiting,
             _ if agent.running() => AgentRun::Running,
+            AgentStatus::Interrupted => AgentRun::Stopped,
             _ => AgentRun::Done,
         };
-        let summary = (run == AgentRun::Running)
+        let live = matches!(run, AgentRun::Running | AgentRun::Waiting);
+        let transcript = agent.transcript();
+        let summary = live
             .then(|| {
-                if agent.status() == AgentStatus::Waiting {
-                    return Some(ferrite_ui::theme::words::NEEDS_YOU.to_owned());
-                }
-                let detail = agent.transcript().progress().detail.trim();
+                let detail = transcript.progress().detail.trim();
                 (!detail.is_empty()).then(|| detail.to_owned())
             })
             .flatten();
-        let transcript = agent.transcript();
+        let result = (!live).then(|| last_words(transcript.blocks())).flatten();
         let clock = match transcript.turn_started() {
-            Some(at) if run == AgentRun::Running => Some(AgentClock::Since(at)),
+            Some(at) if live => Some(AgentClock::Since(at)),
             _ => transcript.blocks().iter().rev().find_map(|block| match &block.body {
                 ferrite_core::transcript::Body::TurnEnd(end) => end
                     .elapsed_ms
                     .map(|ms| AgentClock::Took(std::time::Duration::from_millis(ms))),
                 _ => None,
             }),
-        };
+        }
+        .or_else(|| call_took(activity, agent, &call));
         faces.insert(
             call,
             AgentFace {
                 run,
                 summary,
+                result,
                 clock,
             },
         );
     }
     faces
+}
+
+/// How long a settled agent ran where its own transcript does not say: the
+/// time its parent's `call` took, when the call waited on it (not one that
+/// launched it into the background and returned at once).
+fn call_took(
+    activity: ActivityView<'_>,
+    agent: ferrite_core::activity::AgentView<'_>,
+    call: &str,
+) -> Option<AgentClock> {
+    let parent = activity.subject(agent.info().parent.as_ref()?)?;
+    if parent.transcript().tool(call)?.background.is_some() {
+        return None;
+    }
+    match parent.timings().get(call)? {
+        ferrite_core::activity::ToolTiming::Done(took) => Some(AgentClock::Took(*took)),
+        ferrite_core::activity::ToolTiming::Running(_) => None,
+    }
+}
+
+/// What an agent said last: the prose that closes its transcript (its
+/// answer), after whatever it last ran.
+fn last_words(blocks: &[ferrite_core::transcript::Block]) -> Option<String> {
+    use ferrite_core::transcript::Body;
+    let mut words: Vec<String> = blocks
+        .iter()
+        .rev()
+        .filter(|block| !matches!(block.body, Body::TurnEnd(_) | Body::Meta(_)))
+        .map_while(|block| match &block.body {
+            Body::Paragraph { spans } | Body::Heading { spans, .. } | Body::Bullet { spans } => {
+                Some(spans.iter().map(|span| span.text.as_str()).collect::<String>())
+            }
+            _ => None,
+        })
+        .collect();
+    words.reverse();
+    let words = words.join("\n");
+    (!words.trim().is_empty()).then_some(words)
 }
 
 /// What the failure strip says of a failed turn: the provider's reason,

@@ -397,18 +397,6 @@ pub(crate) fn agent_title(tool: &ToolBlock) -> String {
     }
 }
 
-/// An agent row's second line (T3's): what it is doing while it runs (its
-/// progress, carried as the call's result line: `AgentFaces::apply`), else
-/// its standing.
-pub(crate) fn agent_detail(tool: &ToolBlock) -> String {
-    let standing = super::agents::Standing::of(tool);
-    tool.result_line
-        .as_deref()
-        .map(str::trim)
-        .filter(|summary| standing == super::agents::Standing::Running && !summary.is_empty())
-        .map_or_else(|| standing.word().to_owned(), str::to_owned)
-}
-
 /// A subagent card's title: `3 subagents`.
 pub(crate) fn agent_card_title(tools: &[&ToolBlock]) -> String {
     format!("{} subagents", tools.len())
@@ -430,7 +418,6 @@ pub(crate) fn agent_card_status(tools: &[&ToolBlock]) -> String {
         .collect::<Vec<_>>()
         .join(" \u{b7} ")
 }
-
 
 /// A group's summary line, as it reads and copies (T3 Code's
 /// `summarizeToolGroup`): a group of thoughts alone is `Thought (×3)`;
@@ -736,6 +723,7 @@ pub(crate) fn collect_block_text(
     block: &Block,
     expanded: bool,
     skills: &[ferrite_core::SessionCommand],
+    agents: &super::AgentFaces,
     selection: &TextRuns,
 ) {
     match &block.body {
@@ -792,7 +780,7 @@ pub(crate) fn collect_block_text(
         Body::Code { source, .. } => {
             let _ = selection.line(block.id, source.clone(), Vec::new());
         }
-        Body::Tool(tool) => collect_tool_text(block.id, tool, expanded, selection),
+        Body::Tool(tool) => collect_tool_text(block.id, tool, expanded, agents, selection),
     }
 }
 
@@ -804,6 +792,7 @@ pub(crate) fn collect_group_text(
     group: &DisclosureId,
     expanded: bool,
     member_expanded: impl Fn(&Block) -> bool,
+    agents: &super::AgentFaces,
     selection: &TextRuns,
 ) {
     let Some(leader) = members.first() else {
@@ -823,7 +812,7 @@ pub(crate) fn collect_group_text(
     };
     let live = group_live(members);
     for block in drawn {
-        let collect = || collect_block_text(block, member_expanded(block), &[], selection);
+        let collect = || collect_block_text(block, member_expanded(block), &[], agents, selection);
         if live.iter().any(|working| working.id == block.id) {
             collect();
         } else {
@@ -835,10 +824,17 @@ pub(crate) fn collect_group_text(
 /// A call's copy fragments, in the order `render_tool` registers them: its
 /// call line; a failure's tag; once open, a command's `$ cmd` and its
 /// output or another call's details, then its diffs.
-fn collect_tool_text(block: BlockId, tool: &ToolBlock, expanded: bool, selection: &TextRuns) {
+fn collect_tool_text(
+    block: BlockId,
+    tool: &ToolBlock,
+    expanded: bool,
+    agents: &super::AgentFaces,
+    selection: &TextRuns,
+) {
     if super::agents::is_agent(tool) {
-        let _ = selection.line(block, agent_title(tool), Vec::new());
-        let _ = selection.line(block, agent_detail(tool), Vec::new());
+        let row = super::agents::agent_row(tool, agents.get(&tool.call));
+        let _ = selection.line(block, row.title, Vec::new());
+        let _ = selection.line(block, row.detail, Vec::new());
         return;
     }
     match call_pieces(tool) {

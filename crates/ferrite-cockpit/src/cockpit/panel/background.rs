@@ -12,8 +12,10 @@
 //!   `No output yet`); then `Finished N`, a card each, closed, with how
 //!   long it took, opening on its output and `[exited with code 0]`.
 //!
-//! There is no shelf over the Composer: running work lives here and in its
-//! own row (`pane::background_link`, `View live output ▸`).
+//! There is no shelf over the Composer: running work lives here, in the
+//! line under the transcript, and a command's own row (`pane::background_link`,
+//! `View live output ▸`). A subagent's row has no such link: it opens the
+//! agent, as T3 Code's does.
 
 use super::*;
 use crate::cockpit::background_work::{BackgroundEvent, BackgroundInputs, BackgroundView, StopTarget, Work};

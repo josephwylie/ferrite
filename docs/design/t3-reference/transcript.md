@@ -269,8 +269,9 @@ Claude 5.1 and later write the update they would say before a call as a thinking
 - Agent row (`SubagentTimelineLink`, V2LifecycleRow.tsx:397-545): `group/subagent flex w-full items-center gap-2.5 rounded-md px-2 py-1.5`, a button with `hover:bg-accent/20`.
   - The avatar carries a **status dot**: `absolute size-2 rounded-full ring-2 ring-background -right-px -bottom-px`. Colours: `bg-info` for queued/running/waiting, `bg-success` completed, `bg-destructive` failed, `bg-muted-foreground/50` idle, `/60` stopped.
   - Title `text-xs font-medium text-foreground` truncated (plus `on <env>`).
-  - Detail line `text-2xs leading-relaxed text-muted-foreground`: progress while running, result when settled, or the status label (`Running`, `Completed`, `Idle · resumable`, `Stopped`). Paths are middle-truncated.
-  - Status label at the right `text-xs` when the detail is shown and the agent is not completed.
+  - Detail line `text-2xs leading-relaxed text-muted-foreground` (`text-destructive` when failed): progress while running, result when settled (`subagentCardDetail`: links to their words, no backticks or list marks, whitespace collapsed), or the status label (`Queued`, `Running`, `Waiting`, `Completed`, `Idle · resumable`, `Failed`, `Stopped`). Paths are middle-truncated.
+  - Status label at the right `text-xs` (muted, destructive when failed) when the detail is shown and the agent is not completed.
+  - Nothing else: no `View live output`, no stop. The whole row opens the subagent's thread (V2LifecycleRow.tsx:435-588 at 0fd48228). Ferrite: `pane::agent_row` builds the row's words, one `AgentRow` per state.
   - Elapsed `text-xs tabular-nums`, then `ChevronRightIcon size-3.5 text-muted-foreground/60` going to foreground on hover.
   - Tooltip hover card after a 200ms delay.
 - A single subagent renders as one lifecycle row with its own status dot.
@@ -294,9 +295,9 @@ Claude 5.1 and later write the update they would say before a call as a thinking
   `mx-auto flex w-full min-w-0 max-w-(--chat-content-max-width) items-baseline gap-1.5 px-1 pb-2 text-xs text-muted-foreground [&_svg]:size-3.5`. It fades in with `transition-opacity duration-150 ease-out starting:opacity-0`.
 - Icon: `TerminalIcon` if every task is a command, otherwise `CircleDashedIcon`.
 - Title (`presentPendingBackgroundWork`, packages/client-runtime/src/state/threadExecution.ts:568-616): `Waiting on 2 subagents` or `Running 1 command and 2 subagents` (joinWithAnd of kind counts). A single named task reads `Waiting · <label>`, an unnamed one `Waiting on a subagent`.
-- Description after it at `text-muted-foreground/60`: the newest progress (`label: activity`), or the labels joined by `, `.
-- Actions `ms-1.5 flex shrink-0 items-baseline gap-2.5`: a ticking `formatDuration` when there is a single task; **`Details`** (InlineButton: `font-medium text-foreground hover:underline underline-offset-2`); `Open` (muted) for a single child thread; **`Stop`** (InlineButton, `Stopping...` while it stops).
-- `Details` opens a **Dialog titled "Background work"** (BackgroundWorkDetails.tsx). It is `space-y-5`, one section per task (`space-y-2 text-sm`): `h3.font-medium` title with `Waiting`/`Running` (`text-xs muted`) at the right; the command in `rounded-md border border-border bg-muted/20 p-3 font-mono text-xs whitespace-pre-wrap`; live output (CommandOutputPanel, max-h-80); and an `Open thread` inline button.
+- Description after it at `text-muted-foreground/60`: a single task's activity (a subagent's progress); of several, the newest progress (`label: activity`), or the labels joined by `, `.
+- Actions `ms-1.5 flex shrink-0 items-baseline gap-2.5`: a ticking `formatDuration` when there is a single task; **`Details`** (InlineButton: `font-medium text-foreground hover:underline underline-offset-2`); **`Stop`** (InlineButton, `Stopping...` while it stops). There is no `Open` on the line (ThreadActivityBanners.tsx:198-302 at 0fd48228): a subagent opens from its row or the dialog.
+- `Details` opens a **Dialog titled "Background work"** (BackgroundWorkDetails.tsx). It is `space-y-5`, one section per task (`space-y-2 text-sm`): `h3.font-medium` title with `Waiting`/`Running` (`text-xs muted`) at the right; the command in `rounded-md border border-border bg-muted/20 p-3 font-mono text-xs whitespace-pre-wrap`; live output (CommandOutputPanel, max-h-80); and an `Open subagent` inline button.
 - Other ThreadNow lines share the same look: stopping (`Stopping` / `Agent not responding to Stop` + `Force stop`), the goal, sync status, and child input requests.
 
 ## 17. Inline thread links and file links

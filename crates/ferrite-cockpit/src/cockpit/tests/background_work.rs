@@ -313,32 +313,31 @@ fn working_agent(fake: &Fake, native: &str, name: &str) -> ferrite_core::activit
     key
 }
 
-/// A line of agents alone offers a Stop that says it ends agents, and ends
-/// each of them.
+/// A line of agents alone offers T3's plain `Stop`, which ends each of them.
 #[gpui::test]
-fn stop_on_a_line_of_agents_says_agents_and_stops_them(cx: &mut TestAppContext) {
+fn stop_on_a_line_of_agents_stops_them(cx: &mut TestAppContext) {
     let (core, fake) = cockpit("background-stop-agents", 1);
     let (_view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     let first = working_agent(&fake, "toolu_a", "Read the docs");
     let second = working_agent(&fake, "toolu_b", "Run the audit");
     tick(cx);
-    assert!(debug_bounds(cx, "background-stop-says-Stop agents".into()).is_some());
+    assert!(debug_bounds(cx, "background-stop-says-Stop".into()).is_some());
     press_stop(cx);
     let mut stopped = fake.stopped.borrow().clone();
     stopped.sort();
     assert_eq!(stopped, [first, second]);
 }
 
-/// Commands and agents together: Stop says it ends all, and does.
+/// Commands and agents together: `Stop` ends both.
 #[gpui::test]
-fn stop_on_commands_and_agents_says_all_and_stops_both(cx: &mut TestAppContext) {
+fn stop_on_commands_and_agents_stops_both(cx: &mut TestAppContext) {
     let (core, fake) = cockpit("background-stop-all-work", 1);
     *fake.native_controls.borrow_mut() = true;
     let (_view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     running(&fake, &[("task:1", "cargo test")]);
     let agent = working_agent(&fake, "toolu_a", "Read the docs");
     tick(cx);
-    assert!(debug_bounds(cx, "background-stop-says-Stop all".into()).is_some());
+    assert!(debug_bounds(cx, "background-stop-says-Stop".into()).is_some());
     press_stop(cx);
     assert_eq!(
         *fake.controls.borrow(),
@@ -348,15 +347,15 @@ fn stop_on_commands_and_agents_says_all_and_stops_both(cx: &mut TestAppContext) 
 }
 
 /// Where the Session cannot stop commands, the line does not pretend to:
-/// its Stop ends the agents and says so.
+/// its `Stop` ends the agents and says what it leaves running.
 #[gpui::test]
-fn stop_that_cannot_reach_commands_says_agents(cx: &mut TestAppContext) {
+fn stop_that_cannot_reach_commands_says_what_it_leaves(cx: &mut TestAppContext) {
     let (core, fake) = cockpit("background-stop-agents-only-of-both", 1);
     let (_view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     running(&fake, &[("task:1", "cargo test")]);
     working_agent(&fake, "toolu_a", "Read the docs");
     tick(cx);
-    assert!(debug_bounds(cx, "background-stop-says-Stop agent".into()).is_some());
+    assert!(debug_bounds(cx, "background-stop-says-Stop".into()).is_some());
     assert!(debug_bounds(cx, "background-stop-remains-1 command left running".into()).is_some());
 }
 
@@ -382,7 +381,7 @@ fn stop_that_cannot_reach_an_unknown_agent_names_it(cx: &mut TestAppContext) {
         .send(SessionEvent::Activity(ActivityEvent::Status { key, state: AgentStatus::Unknown }))
         .unwrap();
     tick(cx);
-    assert!(debug_bounds(cx, "background-stop-says-Stop commands".into()).is_some());
+    assert!(debug_bounds(cx, "background-stop-says-Stop".into()).is_some());
     assert!(debug_bounds(cx, "background-stop-remains-1 agent left running".into()).is_some());
 }
 

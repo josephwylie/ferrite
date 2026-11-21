@@ -11,22 +11,27 @@
 use super::*;
 use std::collections::BTreeMap;
 
-/// How a subagent stands, for its call's row.
+/// How a subagent stands, for its call's row (T3's subagent statuses).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AgentRun {
-    /// Starting, working, or waiting on the operator.
+    /// Starting or working.
     Running,
+    /// Held on the operator: a question or an approval.
+    Waiting,
     Done,
     Failed,
+    /// Stopped before it finished.
+    Stopped,
 }
 
-/// One subagent as its call's row shows it: how it stands, while it runs
-/// what it is doing (its latest progress summary, Claude's
-/// `task_progress.summary`), and how long it has run.
+/// One subagent as its call's row shows it: how it stands, what it is
+/// doing (its latest progress summary, Claude's `task_progress.summary`),
+/// what it answered once its turn ended, and how long it has run.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AgentFace {
     pub run: AgentRun,
     pub summary: Option<String>,
+    pub result: Option<String>,
     pub clock: Option<AgentClock>,
 }
 
@@ -78,9 +83,9 @@ impl AgentFaces {
         self.0.get(call)
     }
 
-    /// The agent calls in `blocks` take on their agents' standing: running
-    /// while the agent runs, its summary as the call's result line (what it
-    /// is doing now); failed when it failed; settled once it is done.
+    /// The agent calls in `blocks` take on their agents' standing, so a
+    /// group's tense and counts read them: running while the agent runs or
+    /// waits; failed or stopped as it ended; settled once it is done.
     pub fn apply(&self, blocks: &mut [Block]) {
         if self.0.is_empty() {
             return;
@@ -93,17 +98,20 @@ impl AgentFaces {
                 continue;
             };
             match face.run {
-                AgentRun::Running => {
+                AgentRun::Running | AgentRun::Waiting => {
                     tool.state = ToolState::Running;
                     tool.result_line = face.summary.clone();
                 }
                 AgentRun::Failed if !matches!(tool.state, ToolState::Failed(_)) => {
                     tool.state = ToolState::Failed(String::new());
                 }
+                AgentRun::Stopped if !matches!(tool.state, ToolState::Failed(_)) => {
+                    tool.state = ToolState::Stopped;
+                }
                 AgentRun::Done if tool.state == ToolState::Running => {
                     tool.state = ToolState::Ok;
                 }
-                AgentRun::Failed | AgentRun::Done => {}
+                AgentRun::Failed | AgentRun::Stopped | AgentRun::Done => {}
             }
         }
     }
@@ -115,12 +123,90 @@ pub(crate) fn is_agent(tool: &ToolBlock) -> bool {
         == ferrite_core::transcript::tools::ToolKind::Agent
 }
 
+/// What an agent's row says (T3's `SubagentTimelineLink`), before it is
+/// drawn: its task, its detail line (progress while it runs, its result once
+/// settled, else its status word), and its status word again at the right
+/// when the detail line holds something else and it has not completed.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct AgentRow {
+    pub standing: Standing,
+    pub title: String,
+    pub detail: String,
+    pub label: Option<&'static str>,
+}
+
+/// The row of the agent `tool` started, as `face` says it stands; with no
+/// face (no agent answers for the call), as the call reads.
+pub(crate) fn agent_row(tool: &ToolBlock, face: Option<&AgentFace>) -> AgentRow {
+    let standing = face.map_or_else(|| Standing::of(tool), |face| Standing::from(face.run));
+    let (progress, result) = match face {
+        Some(face) => (face.summary.as_deref(), face.result.as_deref()),
+        None if standing.settled() => (None, tool.result_line.as_deref()),
+        None => (tool.result_line.as_deref(), None),
+    };
+    let progress = progress.and_then(flat);
+    let result = result.and_then(flat);
+    let detail = if standing.settled() {
+        result.or(progress)
+    } else {
+        progress.or(result)
+    };
+    AgentRow {
+        standing,
+        title: text::agent_title(tool),
+        label: detail
+            .as_ref()
+            .filter(|_| standing != Standing::Done)
+            .map(|_| standing.word()),
+        detail: detail.unwrap_or_else(|| standing.word().to_owned()),
+    }
+}
+
+/// A progress or result as one line (T3's `subagentCardDetail`): links to
+/// their words, no backticks or list marks, whitespace collapsed.
+fn flat(text: &str) -> Option<String> {
+    let lines: Vec<&str> = text
+        .lines()
+        .map(|line| {
+            let line = line.trim_start();
+            line.strip_prefix("- ")
+                .or_else(|| line.strip_prefix("* "))
+                .unwrap_or(line)
+        })
+        .collect();
+    let joined = unlink(&lines.join(" ")).replace('`', "");
+    let words: Vec<&str> = joined.split_whitespace().collect();
+    (!words.is_empty()).then(|| words.join(" "))
+}
+
+/// `[words](target)` and `![words](target)` as their words.
+fn unlink(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(open) = rest.find('[') {
+        let link = rest[open + 1..]
+            .split_once("](")
+            .filter(|(words, _)| !words.contains('['))
+            .and_then(|(words, after)| after.find(')').map(|close| (words, &after[close + 1..])));
+        let Some((words, after)) = link else {
+            out.push_str(&rest[..=open]);
+            rest = &rest[open + 1..];
+            continue;
+        };
+        out.push_str(rest[..open].strip_suffix('!').unwrap_or(&rest[..open]));
+        out.push_str(words);
+        rest = after;
+    }
+    out.push_str(rest);
+    out
+}
+
 /// An agent call's row, alone or in its card (T3's `SubagentTimelineLink`):
 /// the agent's avatar with its status dot, its task over what it does
 /// (its progress while it runs, else its standing), the standing again at
 /// the right while it is not done, how long it has run, and a `›` that
-/// brightens under the pointer. `open`, laid over the whole row, opens the
-/// agent's own transcript. `targeted`: the keyboard's walk has landed on
+/// brightens under the pointer ([`agent_row`] says which words). `open`,
+/// laid over the whole row, opens the agent's own transcript. `targeted`: the keyboard's walk has landed on
 /// the row (its focus, whose keys open the agent and stop it); it wears
 /// `paint::RAISED`, as a targeted disclosure does.
 pub(crate) fn render_agent(
@@ -130,15 +216,25 @@ pub(crate) fn render_agent(
     face: AgentRowCx,
 ) -> AnyElement {
     let AgentRowCx {
-        clock,
+        face,
         open,
         targeted,
-        live,
         ground,
     } = face;
     let selection = row_cx.selection;
-    let standing = Standing::of(tool);
-    let detail = text::agent_detail(tool);
+    let AgentRow {
+        standing,
+        title,
+        detail,
+        label,
+    } = agent_row(tool, face);
+    let clock = face.and_then(|face| face.clock);
+    // T3: the status reads muted, destructive once it failed.
+    let ink = if standing == Standing::Failed {
+        theme::BLOCKED
+    } else {
+        INK_SUBTLE
+    };
     let title = div()
         .debug_selector(|| "agent-call".into())
         .min_w_0()
@@ -147,21 +243,22 @@ pub(crate) fn render_agent(
         .line_height(px(theme::LH_META))
         .font_weight(theme::W_LABEL)
         .text_color(rgb(INK_STRONG))
-        .child(selection.line(block, text::agent_title(tool), Vec::new()));
+        .child(selection.line(block, title, Vec::new()));
     let detail_line = div()
         .debug_selector(|| "agent-detail".into())
         .min_w_0()
         .truncate()
         .text_size(px(theme::AGENT_DETAIL_FS))
         .line_height(px(theme::AGENT_DETAIL_LH))
-        .text_color(rgb(INK_SUBTLE))
-        .child(selection.line(block, detail.clone(), Vec::new()));
-    let label = (standing != Standing::Done && detail != standing.word()).then(|| {
+        .text_color(rgb(ink))
+        .child(selection.line(block, detail, Vec::new()));
+    let label = label.map(|word| {
         div()
+            .debug_selector(move || format!("agent-status-{word}"))
             .flex_shrink_0()
             .text_size(px(theme::FS_BADGE))
-            .text_color(rgb(standing.ink()))
-            .child(standing.word())
+            .text_color(rgb(ink))
+            .child(word)
     });
     let elapsed = clock.map(|clock| {
         div()
@@ -206,9 +303,7 @@ pub(crate) fn render_agent(
                 .group_hover(DISCLOSURE_ROW, |style| style.text_color(rgb(INK_STRONG)))
                 .child(icons::icon(icons::CHEVRON_RIGHT, theme::AGENT_CHEVRON, theme::TEXT_FAINT))
         }))
-        .children(open)
-        // Over the opener, so a press on it opens the tasks pane instead.
-        .children(live);
+        .children(open);
     match targeted {
         Some(focus) => row
             .bg(theme::paint::RAISED)
@@ -225,14 +320,13 @@ pub(crate) fn render_agent(
     }
 }
 
-/// What an agent row draws besides its call: how long its agent has run,
-/// its opener, the keyboard's target, its background link, and the ground
-/// its avatar's ring is cut from.
+/// What an agent row draws besides its call: how its agent stands (none
+/// when no agent answers for the call), its opener, the keyboard's target,
+/// and the ground its avatar's ring is cut from.
 pub(crate) struct AgentRowCx<'a> {
-    pub clock: Option<AgentClock>,
+    pub face: Option<&'a AgentFace>,
     pub open: Option<AnyElement>,
     pub targeted: Option<&'a gpui::FocusHandle>,
-    pub live: Option<AnyElement>,
     pub ground: u32,
 }
 
@@ -406,12 +500,30 @@ pub(crate) struct AgentCardCx {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Standing {
     Running,
+    Waiting,
     Done,
     Failed,
     Stopped,
 }
 
+impl From<AgentRun> for Standing {
+    fn from(run: AgentRun) -> Self {
+        match run {
+            AgentRun::Running => Self::Running,
+            AgentRun::Waiting => Self::Waiting,
+            AgentRun::Done => Self::Done,
+            AgentRun::Failed => Self::Failed,
+            AgentRun::Stopped => Self::Stopped,
+        }
+    }
+}
+
 impl Standing {
+    /// Ended: its result, not its progress, is what it says.
+    fn settled(self) -> bool {
+        matches!(self, Self::Done | Self::Failed | Self::Stopped)
+    }
+
     pub(crate) fn of(tool: &ToolBlock) -> Self {
         match tool.state {
             ToolState::Running => Self::Running,
@@ -425,17 +537,18 @@ impl Standing {
     pub(crate) fn word(self) -> &'static str {
         match self {
             Self::Running => "Running",
+            Self::Waiting => "Waiting",
             Self::Done => "Completed",
             Self::Failed => "Failed",
             Self::Stopped => "Stopped",
         }
     }
 
-    /// Its status dot's ink: info while it runs, success done,
+    /// Its status dot's ink: info while it runs or waits, success done,
     /// destructive failed, muted stopped.
     fn ink(self) -> u32 {
         match self {
-            Self::Running => theme::BLUE,
+            Self::Running | Self::Waiting => theme::BLUE,
             Self::Done => theme::GREEN,
             Self::Failed => theme::BLOCKED,
             Self::Stopped => theme::TEXT_FAINT,
@@ -547,6 +660,7 @@ mod tests {
             AgentFace {
                 run: AgentRun::Running,
                 summary: Some("Reading nav.rs".into()),
+                result: None,
                 clock: None,
             },
         );
@@ -555,6 +669,7 @@ mod tests {
             AgentFace {
                 run: AgentRun::Failed,
                 summary: None,
+                result: None,
                 clock: None,
             },
         );
@@ -563,6 +678,7 @@ mod tests {
             AgentFace {
                 run: AgentRun::Done,
                 summary: None,
+                result: None,
                 clock: None,
             },
         );
@@ -577,18 +693,15 @@ mod tests {
         assert_eq!(tool(&blocks[3]).state, ToolState::Ok);
     }
 
-    /// An agent row reads as T3's: its task over what it does while it
-    /// runs, else its standing; a card counts its agents by how they stand.
+    /// A card counts its agents by how they stand, as T3's does.
     #[test]
     fn an_agent_row_and_its_card_read_as_t3s() {
         let blocks = agents(&[("a", "Agent"), ("b", "Agent"), ("c", "Agent")]);
         let mut running = tool(&blocks[0]).clone();
         running.result_line = Some("Reading nav.rs".into());
         assert_eq!(text::agent_title(&running), "Count files");
-        assert_eq!(text::agent_detail(&running), "Reading nav.rs");
         let mut done = running.clone();
         done.state = ToolState::Ok;
-        assert_eq!(text::agent_detail(&done), "Completed");
         let mut failed = running.clone();
         failed.state = ToolState::Failed(String::new());
         let tools = [&running, &done, &done];
@@ -600,6 +713,71 @@ mod tests {
         assert_eq!(
             [elapsed(45), elapsed(125), elapsed(3_780)],
             ["45s", "2m 05s", "1h 03m"]
+        );
+    }
+
+    fn face(run: AgentRun, summary: Option<&str>, result: Option<&str>) -> AgentFace {
+        AgentFace {
+            run,
+            summary: summary.map(Into::into),
+            result: result.map(Into::into),
+            clock: None,
+        }
+    }
+
+    /// A subagent's row in each state reads as T3's `SubagentTimelineLink`:
+    /// its task over its progress while it runs (its result once settled),
+    /// else its status word; the status again at the right when the detail
+    /// line holds something else and it has not completed.
+    #[test]
+    fn an_agent_row_reads_as_t3s_in_every_state() {
+        let blocks = agents(&[("a", "Agent")]);
+        let call = tool(&blocks[0]);
+        let row = |run, summary, result| agent_row(call, Some(&face(run, summary, result)));
+        let read = |row: AgentRow| (row.standing, row.detail, row.label);
+        use Standing::*;
+        assert_eq!(row(AgentRun::Running, None, None).title, "Count files");
+        assert_eq!(
+            read(row(AgentRun::Running, Some("Reading nav.rs"), None)),
+            (Running, "Reading nav.rs".into(), Some("Running"))
+        );
+        assert_eq!(read(row(AgentRun::Running, None, None)), (Running, "Running".into(), None));
+        assert_eq!(
+            read(row(AgentRun::Waiting, Some("Asks to run cargo"), None)),
+            (Waiting, "Asks to run cargo".into(), Some("Waiting"))
+        );
+        assert_eq!(read(row(AgentRun::Waiting, None, None)), (Waiting, "Waiting".into(), None));
+        assert_eq!(
+            read(row(AgentRun::Done, Some("Reading"), Some("Found `3` in [the docs](https://x.y/z)\n- a.rs\n- b.rs"))),
+            (Done, "Found 3 in the docs a.rs b.rs".into(), None),
+            "settled, its result, flat"
+        );
+        assert_eq!(read(row(AgentRun::Done, None, None)), (Done, "Completed".into(), None));
+        assert_eq!(
+            read(row(AgentRun::Failed, None, Some("No such file"))),
+            (Failed, "No such file".into(), Some("Failed"))
+        );
+        assert_eq!(read(row(AgentRun::Failed, None, None)), (Failed, "Failed".into(), None));
+        assert_eq!(
+            read(row(AgentRun::Stopped, Some("Reading nav.rs"), None)),
+            (Stopped, "Reading nav.rs".into(), Some("Stopped"))
+        );
+        assert_eq!(read(row(AgentRun::Stopped, None, None)), (Stopped, "Stopped".into(), None));
+    }
+
+    /// A call no agent answers for (a foreground call the activity has not
+    /// seen) reads from the call alone: its result line, else its state.
+    #[test]
+    fn an_agent_row_without_its_agent_reads_its_call() {
+        let blocks = agents(&[("a", "Agent")]);
+        let mut call = tool(&blocks[0]).clone();
+        assert_eq!(agent_row(&call, None).detail, "Running");
+        call.state = ToolState::Ok;
+        call.result_line = Some("All 12 files read".into());
+        let row = agent_row(&call, None);
+        assert_eq!(
+            (row.standing, row.detail, row.label),
+            (Standing::Done, "All 12 files read".into(), None)
         );
     }
 }
