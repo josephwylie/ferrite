@@ -43,7 +43,7 @@ fn the_project_chip_picks_a_project_or_adds_one(cx: &mut TestAppContext) {
         // The row opens the same card the nav's dropdown opens, and
         // what it creates is what the draft ends up on.
         view.open_project_creator(cx);
-        assert!(view.popover.is_none(), "the card replaces the popover");
+        assert!(view.popover(cx).is_none(), "the card replaces the popover");
         view.adopt_editor_directory(added.clone(), cx);
         view.confirm_project_editor(cx);
 

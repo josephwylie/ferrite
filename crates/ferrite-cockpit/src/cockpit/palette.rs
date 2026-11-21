@@ -163,7 +163,7 @@ impl CockpitView {
 
     /// Close every other surface a float opening replaces.
     pub(super) fn clear_for_float(&mut self, cx: &mut Context<Self>) {
-        self.popover = None;
+        self.close_composer_menu(cx);
         self.close_popup(cx);
         self.floats.shortcuts = None;
     }

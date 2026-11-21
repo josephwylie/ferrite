@@ -1034,12 +1034,8 @@ impl CockpitView {
                     Err(error) => self.nav_notice.problem(format!("delete refused: {error}")),
                     Ok(()) => self.nav_notice.clear(),
                 }
-                if self
-                    .popover
-                    .as_ref()
-                    .is_some_and(|open| open.pane == PaneIdentity::Thread(thread))
-                {
-                    self.popover = None;
+                if self.composer_menu.read(cx).pane() == Some(PaneIdentity::Thread(thread)) {
+                    self.close_composer_menu(cx);
                 }
                 self.sync_panes(cx);
                 self.parked_changed(cx);

@@ -1361,16 +1361,12 @@ fn a_draft_on_a_machine_starts_a_thread_in_a_directory_typed_there(cx: &mut Test
     });
     until(cx, |cx| {
         view.read_with(cx, |view, _| {
-            view.checked_out
-                .borrow()
-                .get(&project)
-                .map(|branch| branch.as_ref())
-                == Some("trunk")
+            view.checkouts.branch(project).as_deref() == Some("trunk")
         })
     });
     view.update(cx, |view, cx| {
         assert!(
-            view.checking_out.borrow().is_empty(),
+            !view.checkouts.asking_any(),
             "no git here was asked what the machine's checkout is on"
         );
         view.open_band_menu(pane::BandChip::Workspace, false, cx);

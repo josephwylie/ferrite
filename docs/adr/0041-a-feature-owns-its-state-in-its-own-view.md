@@ -565,6 +565,32 @@ that happened to touch it, and nothing in the code said whose a field was.
   notifications (`task_toasts`, which the window raises whether or not
   the Factory shows), and the Factory's rows in the nav and the palette.
   Nothing the Factory keeps is left on the root.
+- **The Composer menu is the twenty-eighth, and the Composer's first
+  view.** `ComposerMenuView` (`cockpit/composer_menu.rs`) owns the `/`,
+  `@` and `$` menu: the open menu and the line it stands on, the mute an
+  escape or a press elsewhere leaves until the text moves, the one edit a
+  recalled prompt makes without opening it, and the file search a
+  Thread's Session runs for `@`. What the caret opens it reads from the
+  line itself (`Wanted`); what that menu lists the root reads for it
+  through `composer_menu_inputs`, asking only for what it lists: the
+  focused Pane and its Composer, the Thread's commands or the draft's
+  listing (`DraftCommands`), or the Pane's root, the Session's file search
+  and whether the window is a machine's. The root still derives it, on an
+  edit and when a draft's listing or a search answer lands, since only
+  the root knows which Pane is focused. A command, a skill or a file the
+  view splices into the line; every other pick it says as
+  `ComposerMenuEvent::Pick` (a picker to open, `/import`, a Provider, an
+  effort, a band choice), which the root makes as it makes the band
+  menu's. Its keys (`MenuNext`, `MenuPrevious`, `MenuPick`,
+  `MenuDismiss`, and ⇥ on a `/` row) stay the root's actions, since the
+  keyboard is in the Composer, and the root hands them to the view, as it
+  does the Decision keys. What closes it from outside calls the view: a
+  sheet, a popup or the palette opening, the Pane going or losing the
+  focus, a drop on a Pane, and a press outside, which mutes it too. The
+  root draws it as the focused Pane's drawer, and only that Pane reads
+  it as it draws. The rows it is made of (`menu_rows.rs`) are shared with
+  the band menu and the model picker, which stay the root's popups (ADR
+  0043).
 
 ## What does not get a view
 
@@ -687,6 +713,69 @@ root keeps the commit and where its refusal is said, the nav's notice,
 and the focus pump, which holds the keyboard on the field. A view would
 add events for calls the root makes on it anyway. A Project is renamed
 in the Project card, not here.
+
+A draft's command listing is the ninth, and the Composer's first slice.
+Before a draft has a Session, its `/` and `$` menus list what its
+Provider finds in its folder. `DraftCommands`
+(`cockpit/draft_commands.rs`) keeps that listing: the Provider and folder
+it is for, the discovery still out, and the commands it found or why it
+could not. Only the root writes it, in the shape of the import picker's
+listing (`listen`, `listed`): deriving a menu asks afresh when the draft's
+Provider or folder changed and takes an answer that came
+(`draft_commands`), which then tells the draft's line which tokens are
+commands; the pump takes an answer that lands between keystrokes and
+derives the menu again; an edit with neither a `/` command nor a `$`
+skill at the caret, and a draft whose folder is gone, drop it (`forget`). A Thread's commands are
+its Session's, in core. A view would add events for asks the root makes
+anyway; the menu that reads it (`ComposerMenuView`) is handed what it
+lists.
+
+A draft's checkouts are the tenth, and the Composer's second slice.
+`Checkouts` (`cockpit/checkouts.rs`) keeps what a draft's workspace chip
+and its menu read of the Project's repo: the branch each Project's
+checkout is on, the Projects being asked about, what the repo lists (its
+other worktrees and its local branches) and, on a machine, the listing
+its Server is reading. Only the root asks, off the UI thread
+(`look_up_checkouts`, `refresh_repo_listing`) or of the machine's Server
+(`ask_machine_repo`), and only the answers and the pump write it
+(`listed`, `set_listing`, `machine_listed`); the chip and the menu's rows
+read it as they draw. A view would add events for asks the root makes
+anyway. The Project and Workspace menus, their rows and their picks stay
+the root's, in the popup slot (ADR 0043). A Thread's checkout labels are
+the Facts' (`refresh_branches`).
+
+The PR watch is the eleventh. `PrWatch` (`cockpit/pr_watch.rs`) keeps
+what the window remembers to ask `gh` for a Thread's PR on its own: the
+Thread the pump last saw focused, and each Thread's
+`Transcript::published` as last seen, so a commit or a push reads the PR
+again at once (HD27). Only the pump writes it (`watch_prs`), and a gone
+Thread's count goes in `forget_gone_threads`. The ask (`check_pr`), which
+the palette, the context menu and opening a Thread make too, and its
+answer (`pr_landed`) stay the root's, and the reading is the Facts'
+(`ask_pr`, `pr_answered`). A view would add events for asks the root makes
+anyway.
+
+The titler's names on their way are the twelfth. `Titling`
+(`cockpit/titling.rs`) keeps the Threads the titler is naming from their
+first prompt, whose nav cards draw the title faded until the answer
+lands. Only the root asks, off the UI thread (`start_titling`), and only
+the answer writes it (`adopt_title`), which an operator's rename in the
+meantime outranks; the nav's row reads it as the root builds it
+(`naming`). Renaming is the store's (`rename_thread`). It is not the
+Facts': they are what the Server and git say of a Thread, and this is
+an ask of the window's own.
+
+A refused Session control is the thirteenth. `SessionControlError`
+(`cockpit/session_control.rs`) keeps why the last control the operator
+asked of a running Session (a permission mode, a model, an effort, a
+stop) was refused, with the Thread and the Session's generation it was
+asked of, so a restarted Session says nothing of it. Only the send writes
+it (`run_session_control`), which the Session controls card, the
+palette, the Decisions, the Panel and the background work's stop all
+make; the card, the Overview and the stop read it for their own Session
+(`of`). The Session controls card stays the root's drawing, and the
+Session is core's. A view would add events for a call the root makes
+anyway.
 
 ## Precedent
 

@@ -33,10 +33,9 @@ fn contract_native_file_menu_excludes_git_metadata_and_duplicate_paths(cx: &mut 
     ]);
     reply.send(Ok(files)).unwrap();
     tick(cx);
-    view.read_with(cx, |view, _| {
+    view.read_with(cx, |view, cx| {
         assert_eq!(
-            view.popover
-                .as_ref()
+            view.popover(cx)
                 .unwrap()
                 .rows
                 .iter()
@@ -96,8 +95,8 @@ fn contract_native_files_keep_provider_order_and_ignore_old_queries(cx: &mut Tes
         matched: vec![],
     }]));
     tick(cx);
-    view.read_with(cx, |view, _| {
-        let menu = view.popover.as_ref().unwrap();
+    view.read_with(cx, |view, cx| {
+        let menu = view.popover(cx).unwrap();
         assert_eq!(
             menu.rows
                 .iter()
@@ -162,8 +161,8 @@ fn contract_native_discovery_dismissal_does_not_reopen_picker(cx: &mut TestAppCo
     cx.run_until_parked();
     let _ = tx.send(Ok(vec![]));
     tick(cx);
-    view.read_with(cx, |view, _| {
-        assert!(view.popover.is_none() && view.floats.palette.is_none())
+    view.read_with(cx, |view, cx| {
+        assert!(view.popover(cx).is_none() && view.floats.palette.is_none())
     });
 }
 

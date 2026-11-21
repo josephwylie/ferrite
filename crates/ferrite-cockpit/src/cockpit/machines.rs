@@ -9,7 +9,6 @@ use crate::notifications::{Alert, Detail, State};
 use ferrite_core::cockpit::ServerState;
 use ferrite_core::notifications::Notifications;
 use gpui::App;
-use std::sync::mpsc::TryRecvError;
 
 /// What a lost machine still shows (ADR 0026): `element` dimmed under a
 /// cover, `id`, that takes every press until the machine is back.
@@ -203,11 +202,8 @@ impl CockpitView {
     /// An older Server cannot say, and the popover offers the fresh starts
     /// alone.
     pub(super) fn ask_machine_repo(&mut self, project: ProjectId) {
-        self.asking_repo = self
-            .cockpit
-            .list_repo(project)
-            .ok()
-            .map(|answer| (project, answer));
+        let reply = self.cockpit.list_repo(project).ok();
+        self.checkouts.listen_machine(project, reply);
     }
 
     /// Take the machine's answer to `ask_machine_repo`, once it lands: the
@@ -216,24 +212,14 @@ impl CockpitView {
     /// With nothing on its way, ask about a draft's Project whose branch
     /// the chip has no answer for yet.
     pub(super) fn poll_machine_repo(&mut self, cx: &mut Context<Self>) {
-        let Some((project, answer)) = &self.asking_repo else {
-            self.ask_drafted_checkout();
-            return;
-        };
-        let project = *project;
-        let listing = match answer.try_recv() {
-            Err(TryRecvError::Empty) => return,
-            Ok(listing) => listing.unwrap_or_default(),
-            Err(TryRecvError::Disconnected) => RepoListing::default(),
-        };
-        let branch = listing.checked_out.as_deref().unwrap_or(MAIN_BRANCH);
-        self.checked_out
-            .borrow_mut()
-            .insert(project, SharedString::from(branch.to_string()));
-        self.repo_listing = Some((project, listing));
-        self.asking_repo = None;
-        self.sync_workspace_rows(cx);
-        cx.notify();
+        match self.checkouts.machine_listed() {
+            None => self.ask_drafted_checkout(),
+            Some(false) => {}
+            Some(true) => {
+                self.sync_workspace_rows(cx);
+                cx.notify();
+            }
+        }
     }
 
     /// A draft's workspace chip names its checkout's branch, which on a
@@ -243,14 +229,12 @@ impl CockpitView {
         if !self.on_machine() || self.machine_lost() {
             return;
         }
-        let unknown = {
-            let known = self.checked_out.borrow();
-            self.panes
-                .iter()
-                .filter_map(|pane| pane.draft())
-                .map(|draft| draft.binding.project())
-                .find(|project| !known.contains_key(project))
-        };
+        let unknown = self
+            .panes
+            .iter()
+            .filter_map(|pane| pane.draft())
+            .map(|draft| draft.binding.project())
+            .find(|project| self.checkouts.branch(*project).is_none());
         if let Some(project) = unknown {
             self.ask_machine_repo(project);
         }

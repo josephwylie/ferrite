@@ -126,9 +126,8 @@ impl CockpitView {
             usage_details: transcript.usage_details(),
             session_error: self
                 .session_control_error
-                .as_ref()
-                .filter(|(shown, generation, _)| *shown == thread && *generation == open.generation())
-                .map(|(_, _, error)| error.clone()),
+                .of(thread, open.generation())
+                .map(str::to_string),
             servers: transcript.mcp_servers(),
             background,
         })

@@ -239,7 +239,7 @@ impl CockpitView {
     /// Put `popup` up in place of whatever was, with no exit for that one.
     /// A rename in progress ends and the Composer's `/`/`@` menu closes.
     pub(super) fn show_popup(&mut self, popup: Popup, cx: &mut Context<Self>) {
-        self.popover = None;
+        self.close_composer_menu(cx);
         if self.rename.is_open() {
             self.finish_rename(false, cx);
         }

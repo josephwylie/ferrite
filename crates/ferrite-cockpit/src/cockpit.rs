@@ -12,7 +12,9 @@ pub(crate) mod beside;
 mod browser;
 #[cfg(feature = "browser-smoke")]
 mod browser_smoke;
+mod checkouts;
 mod columns;
+mod composer_menu;
 mod context_menu;
 pub(crate) mod coordinator;
 pub(crate) mod decisions;
@@ -21,6 +23,7 @@ mod destination;
 mod details;
 mod direct_view;
 pub(crate) mod direction;
+mod draft_commands;
 mod drafts;
 mod fields;
 pub(crate) mod empty_board;
@@ -31,6 +34,8 @@ mod leaving;
 mod lightbox;
 mod mode_menu;
 mod model_picker;
+mod menu_rows;
+use self::menu_rows::*;
 mod machines;
 mod menu_button;
 mod connections_view;
@@ -44,9 +49,11 @@ mod palette;
 pub(crate) mod panel;
 mod parts;
 mod popups;
+mod pr_watch;
 mod prs_view;
 mod sends;
 mod server;
+mod session_control;
 mod new_task_view;
 mod project_editor_view;
 mod settings_view;
@@ -58,6 +65,7 @@ mod snooze;
 pub(crate) mod starts;
 mod surfaces;
 mod tab_scroll;
+mod titling;
 mod toasts;
 pub(crate) mod subagents;
 pub(crate) mod tools;
@@ -404,28 +412,9 @@ pub struct CockpitView {
     /// A moment that must not be skipped (a turn ended) asked for a
     /// refresh while one was under way: another follows it.
     branch_refresh_queued: bool,
-    /// The branch each Project's checkout is on, as git last answered —
-    /// what a draft's workspace chip names every frame. Never read from a
-    /// frame: a Project the chip has not named yet, every draft's Project
-    /// on each branch refresh, and the Project whose band popover opens
-    /// are all asked about off the UI thread (`look_up_checkouts`), and the
-    /// last answer stands until the new one lands. On a machine, its Server
-    /// answers each draft's Project once (`list_repo`).
-    checked_out: std::cell::RefCell<std::collections::HashMap<ProjectId, SharedString>>,
-    /// Projects whose checkout is being asked about: one lookup each at a
-    /// time, however many frames name it meanwhile.
-    checking_out: std::cell::RefCell<std::collections::HashSet<ProjectId>>,
-    /// What git lists for a draft's chosen repo — its other worktrees and
-    /// its local branches — read off the UI thread when the workspace
-    /// popover opens and kept by project: the rows show the last answer
-    /// at once and take the fresh one when it lands. Never read per frame.
-    repo_listing: Option<(ProjectId, RepoListing)>,
-    /// On a machine, the listing its Server is reading for the popover or
-    /// a draft's chip.
-    asking_repo: Option<(
-        ProjectId,
-        std::sync::mpsc::Receiver<std::io::Result<RepoListing>>,
-    )>,
+    /// What a draft's workspace chip and its menu read of its Project's
+    /// repo, as git or the machine's Server last answered.
+    checkouts: checkouts::Checkouts,
     /// Stable text-run identities; selection itself belongs to GPUI.
     selection: TranscriptText,
     /// Every Thread's side chat, a body of the Panel.
@@ -470,25 +459,16 @@ pub struct CockpitView {
     /// The window's activation, followed into the Cockpit
     /// (`Cockpit::set_window_active`) once the first frame has a window.
     activation: Option<gpui::Subscription>,
-    /// The one popover in the Composer's slot, or None: the `/`/`@` menu
-    /// (#23), a picker (#11, #25) or a band chip (#29). Always on the
-    /// focused Pane's Composer; render self-heals it shut when the operator
-    /// leaves that Pane or its offer expires.
-    popover: Option<Popover>,
-    /// Escape (or a press elsewhere) dismissed the menu: stay shut until
-    /// the text moves again, or `sync_menu` would reopen it on the very
-    /// text the operator dismissed it over.
-    menu_muted: bool,
-    draft_commands: Option<DraftCommands>,
-    /// A recalled slash/mention prompt is a programmatic edit: consume its
-    /// `Edited` event without deriving a menu. The next operator edit clears
-    /// the ordinary `menu_muted` latch and derives again.
-    suppress_recall_menu_once: bool,
+    /// The Composer's `/`, `@` and `$` menu (`composer_menu`). Always on
+    /// the focused Pane's Composer; render shuts it when the operator
+    /// leaves that Pane.
+    composer_menu: Entity<composer_menu::ComposerMenuView>,
+    /// What a draft's `/` and `$` menus list before it has a Session.
+    draft_commands: draft_commands::DraftCommands,
     /// Where the vendors keep session files — discovery's roots, defaulted
     /// to the real homes and aimed at scratch directories by tests. Read
     /// once per picker open, never per frame.
     session_file_roots: Vec<(Provider, std::path::PathBuf)>,
-    pending_files: Option<PendingFileSearch>,
     /// The Project new drafts fall back to: the last one the operator was
     /// working in. The launch reads it from the store's most recently used
     /// Thread, and every explicit pick in the Composer's Project chip moves
@@ -517,10 +497,10 @@ pub struct CockpitView {
     /// Holds every footer's plan-usage popover open, its ring's own clicks
     /// aside: a visual-reference scene's (`usagepopover`), never the app's.
     usage_popover_held: bool,
-    session_control_error: Option<(ThreadId, u64, String)>,
-    /// The Threads the titler is naming right now: their cards draw the
-    /// title at `NAV_CARD_RETITLING_OPACITY` until its answer lands.
-    titling: std::collections::HashSet<ThreadId>,
+    /// Why the last Session control was refused (`session_control`).
+    session_control_error: session_control::SessionControlError,
+    /// The Threads the titler is naming right now (`titling`).
+    titling: titling::Titling,
     /// Frames each open card has waited for its trigger's or Pane's
     /// geometry, by trigger key (`card_corner`); none once it has some.
     card_waits: std::cell::RefCell<std::collections::HashMap<String, u8>>,
@@ -599,15 +579,8 @@ pub struct CockpitView {
     /// The chimes that would have played (`chime`).
     #[cfg(test)]
     pub(crate) chimed: Vec<Sound>,
-    /// The Thread the pump last saw focused: focusing another asks for its
-    /// PR (`check_pr`).
-    pr_focus: Option<ThreadId>,
-    /// Each Thread's `Transcript::published` as last seen: when it moves,
-    /// its PR is read again at once (`refresh_published`, HD27).
-    published: std::collections::HashMap<ThreadId, u64>,
-    /// The PR reads `check_pr` would have sent `gh`: (Thread, manual).
-    #[cfg(test)]
-    pub(crate) pr_asked: Vec<(ThreadId, bool)>,
+    /// When the pump asks for a Thread's PR on its own (`pr_watch`).
+    pr_watch: pr_watch::PrWatch,
     /// The palette, the shortcuts sheet and the notifications list's focus
     /// (`cockpit::palette`).
     floats: palette::Floats,
@@ -914,48 +887,6 @@ fn version_label(version: &str, dev: bool) -> String {
     }
 }
 
-/// The one popover the Composer's slot can hold — the `/` or `@` menu
-/// (#23), the provider picker (#25) or a draft's band chip (#29) — and
-/// everything it shows. At most one for the whole cockpit, always on the
-/// focused Pane's Composer: `pane` names that Pane by the roster's own
-/// identity. Rows are discovered when it opens and re-derived only by its
-/// kind's own rule, never per frame; each row carries what picking it
-/// does, so the two can never drift apart.
-struct Popover<K = Kind> {
-    /// The Pane whose Composer holds it.
-    pane: PaneIdentity,
-    kind: K,
-    rows: Vec<Row>,
-    selected: usize,
-    /// The row list's scroll: arrows keep the keyboard cursor in view.
-    /// A fresh popover reveals its first cursor once (`revealed`), which
-    /// may be a picker's standing choice below the fold.
-    scroll: ScrollHandle,
-    revealed: std::cell::Cell<bool>,
-}
-
-/// Which popover holds the slot. The rows, keys, dismissal, heal and paint
-/// are shared; the kind decides the row recipe and the rule that closes it.
-enum Kind {
-    /// `/` — the Session's own commands (Claude's initialize `commands[]`,
-    /// Codex's skills/list), straight from core. Nothing static — except
-    /// Ferrite's own local rows riding on top, never sent to the provider:
-    /// `provider` (#25) — the picker's door pre-lock, an inert explanation
-    /// after — then `import` while the Thread still offers adoption (#11).
-    /// Derived from the line's own text: every edit re-syncs it.
-    Commands,
-    /// `@` — files under the Thread's workspace binding. The walk runs once
-    /// when the menu opens and is filtered per keystroke; `token_start` is
-    /// where the `@` sits, so a pick knows what to splice out. Text-derived
-    /// like `Commands`.
-    Files {
-        files: std::rc::Rc<Vec<String>>,
-        token_start: usize,
-        query: String,
-        request_id: u64,
-    },
-}
-
 /// #29: a draft's Project or Workspace menu, a popup (`Popup::Band`): one
 /// band chip's choices — registry reads, never a filesystem scan — except
 /// the Project chip's type-a-path row, which re-derives from the Composer
@@ -965,127 +896,6 @@ struct Band {
     /// Opened from the start hero's project word (`draft_hero`): it drops
     /// below the word rather than standing over the strip's chip.
     from_hero: bool,
-}
-
-struct PendingFileSearch {
-    pane: PaneIdentity,
-    thread: ThreadId,
-    generation: u64,
-    request_id: u64,
-    query: String,
-    token_start: usize,
-    root: std::path::PathBuf,
-    started: std::time::Instant,
-    reply: std::sync::mpsc::Receiver<std::io::Result<Vec<ferrite_core::providers::FileSuggestion>>>,
-    fallback: Option<std::sync::mpsc::Receiver<Vec<pane::MenuRow>>>,
-}
-
-static NEXT_FILE_SEARCH: AtomicU64 = AtomicU64::new(1);
-
-/// One row beside its own consequence. The paint half is the Pane's
-/// `MenuRow`, reached through `Deref` so a row reads like the line it
-/// draws.
-struct Row {
-    row: pane::MenuRow,
-    /// The ✓ — the standing choice on picker and band rows; never on a
-    /// menu row.
-    active: bool,
-    consequence: Consequence,
-}
-
-impl Row {
-    fn consequence_is_inert(&self) -> bool {
-        matches!(self.consequence, Consequence::Inert)
-    }
-}
-
-impl std::ops::Deref for Row {
-    type Target = pane::MenuRow;
-
-    fn deref(&self) -> &pane::MenuRow {
-        &self.row
-    }
-}
-
-/// One draft menu request. Its provider and cwd prevent late replies from
-/// leaking commands across project/workspace changes.
-struct DraftCommands {
-    provider: Provider,
-    cwd: std::path::PathBuf,
-    pending: Option<ferrite_core::providers::commands::Discovery>,
-    commands: Vec<ferrite_core::SessionCommand>,
-    error: Option<String>,
-}
-
-impl DraftCommands {
-    fn poll(&mut self) -> bool {
-        let Some(rx) = &self.pending else {
-            return false;
-        };
-        let result = match rx.try_recv() {
-            Ok(result) => result,
-            Err(std::sync::mpsc::TryRecvError::Empty) => return false,
-            Err(error) => Err(std::io::Error::other(error)),
-        };
-        self.pending = None;
-        match result {
-            Ok(commands) => {
-                self.commands = commands;
-                self.error = None;
-            }
-            Err(error) => self.error = Some(error.to_string()),
-        }
-        true
-    }
-}
-
-/// What picking a row does. A command or a file lands in the line; every
-/// other pick is Ferrite's own act, never a prompt.
-#[derive(Clone, PartialEq)]
-enum Consequence {
-    /// Replace the active `/filter` with `/name ` — sent later as plain text
-    /// on Claude and translated to the typed skill item inside the Codex
-    /// Session.
-    Command(SharedString),
-    /// Replace the active `$filter` with the skill's `$name ` token, which
-    /// goes on the wire as `/name` (`composer::wire_text`).
-    Skill(SharedString),
-    /// The local `provider` row pre-lock (#25): clear the line and open
-    /// the picker in the menu's place.
-    OpenProviderPicker,
-    /// The local `effort` row: clear the line and open the effort picker.
-    OpenEffortPicker,
-    /// An effort-row pick: this level, or None for the operator's default.
-    Effort(Option<String>),
-    /// The local `import` row (#11): open the import picker — clearing the
-    /// line on a Thread, and leaving it alone on a draft, whose typed
-    /// command must survive a refused adoption.
-    OpenImportPicker,
-    /// The locked door's row is an explanation, not an offer: its pick
-    /// dismisses and nothing else.
-    Inert,
-    /// Replace the `@token` with `@rel/path ` and stage the comp's pill
-    /// over it, whichever the provider: the wire stays untouched — Claude's
-    /// CLI reads the `@path` text itself, Codex's send derives its mention
-    /// item — the pick just paints the standing token.
-    Mention(SharedString),
-    Provision(ProviderChoice),
-    Band(BandChoice),
-}
-
-/// What picking a band row does to the focused draft.
-#[derive(Clone, PartialEq)]
-enum BandChoice {
-    Provider(ProviderChoice),
-    /// The effort chip: a rung, or None for the operator's default.
-    Effort(Option<String>),
-    Project(ProjectId),
-    /// The type-a-path row: register the typed path as a project, then
-    /// choose it.
-    RegisterPath(std::path::PathBuf),
-    Target(DraftTarget),
-    /// Open the Project card, as the nav's dropdown does.
-    AddProject,
 }
 
 /// Allow only pixel rounding at the bottom of a native scroll container.
@@ -1310,6 +1120,10 @@ impl CockpitView {
             gpui::KeyBinding::new("escape", ferrite_pane::annotation_editor::Cancel, Some("AnnotationEditor")),
         ]);
         let cockpit_weak = cx.weak_entity();
+        let composer_menu = cx.new(|_| composer_menu::ComposerMenuView::default());
+        // Whether a Composer's key context is the menu's follows the menu.
+        cx.observe(&composer_menu, |view, _, cx| view.sync_composer_floats(cx))
+            .detach();
         let sheets = cx.new(|_| sheets::Sheets::default());
         cx.subscribe(&sheets, Self::on_sheets_event).detach();
         let prs = cx.new(|cx| prs_view::PrsView::new(cockpit_weak.clone(), cx));
@@ -1399,17 +1213,11 @@ impl CockpitView {
             nav_view: cx.new(|cx| nav_view::NavView::new(cockpit_weak, cx)),
             view_events: None,
             activation: None,
-            popover: None,
-            menu_muted: false,
-            draft_commands: None,
-            suppress_recall_menu_once: false,
+            composer_menu,
+            draft_commands: Default::default(),
             session_file_roots: ferrite_core::import::default_roots(),
-            pending_files: None,
             launch_project,
-            checked_out: Default::default(),
-            checking_out: Default::default(),
-            repo_listing: None,
-            asking_repo: None,
+            checkouts: Default::default(),
             rename: Default::default(),
             popups: Default::default(),
             panel,
@@ -1418,8 +1226,8 @@ impl CockpitView {
             panel_closing_focus: cx.focus_handle(),
             history: Default::default(),
             usage_popover_held: false,
-            session_control_error: None,
-            titling: std::collections::HashSet::new(),
+            session_control_error: Default::default(),
+            titling: Default::default(),
             card_waits: Default::default(),
             nav_collapsed: prefs.settings.nav_collapsed,
             nav_auto_fold: std::cell::Cell::new(false),
@@ -1455,10 +1263,7 @@ impl CockpitView {
             landing: None,
             #[cfg(test)]
             chimed: Vec::new(),
-            pr_focus: None,
-            published: std::collections::HashMap::new(),
-            #[cfg(test)]
-            pr_asked: Vec::new(),
+            pr_watch: Default::default(),
             floats: palette::Floats::new(),
             transcript_entities: Default::default(),
             decisions,
@@ -1616,84 +1421,6 @@ impl CockpitView {
         let lookups = self.facts.opened(&self.cockpit, thread);
         self.look_up(lookups, cx);
         self.check_pr(thread, false, cx);
-    }
-
-    /// Ask `gh` for the Thread's PR where its checkout is
-    /// (`Cockpit::pull_request`, on a machine its Server): at once when
-    /// `manual`, else at most once per `pr::AUTO_EVERY`. The row's symbol
-    /// turns until the answer lands. A manual ask reads the open PR tab
-    /// again too: its checks and conversation move without the reading.
-    pub(crate) fn check_pr(&mut self, thread: ThreadId, manual: bool, cx: &mut Context<Self>) {
-        if manual {
-            self.refresh_pr_tab(thread, cx);
-        }
-        let Some(path) = self.thread_path(thread) else {
-            return;
-        };
-        if !self
-            .facts
-            .ask_pr(thread, cx.background_executor().now(), manual)
-        {
-            return;
-        }
-        self.notify_part(parts::Part::Nav, cx);
-        #[cfg(test)]
-        self.pr_asked.push((thread, manual));
-        // Tests and captures never run `gh`: only a fixture world's forge
-        // answers them (`Cockpit::fixture_forge`); a test reads what was
-        // asked.
-        if cfg!(any(test, feature = "visual-reference")) && !self.cockpit.has_forge_fixture(&path) {
-            return;
-        }
-        let answer = self.cockpit.pull_request(&path);
-        cx.spawn(async move |this, cx| {
-            // A read that failed is `gh` with nothing to say: no label.
-            let reading = beside::answered(answer, cx).await.ok().flatten();
-            this.update(cx, |view, cx| view.pr_landed(thread, reading, cx))
-                .ok();
-        })
-        .detach();
-    }
-
-    /// A Thread whose work may have moved its git or forge state since the
-    /// last frame — a commit, a push, a PR, background work handed back
-    /// (`Transcript::published`): its PR is read again at once, so Changes
-    /// follows (HD27). First sight only notes the count: opening a Thread
-    /// asks already.
-    fn refresh_published(&mut self, cx: &mut Context<Self>) {
-        let moved: Vec<ThreadId> = self
-            .cockpit
-            .threads()
-            .into_iter()
-            .filter(|thread| {
-                let Some(count) = self
-                    .cockpit
-                    .thread(*thread)
-                    .map(|open| open.transcript().published())
-                else {
-                    return false;
-                };
-                self.published
-                    .insert(*thread, count)
-                    .is_some_and(|seen| seen != count)
-            })
-            .collect();
-        for thread in moved {
-            self.check_pr(thread, true, cx);
-        }
-    }
-
-    /// Adopt what `gh` said about the Thread's PR.
-    fn pr_landed(
-        &mut self,
-        thread: ThreadId,
-        reading: Option<ferrite_core::workspace::PullRequest>,
-        cx: &mut Context<Self>,
-    ) {
-        if self.facts.pr_answered(thread, reading) {
-            self.notify_part(parts::Part::Nav, cx);
-            self.pr_reading_changed(thread, cx);
-        }
     }
 
     /// Open the Thread's PR in its browser preview. An explicit open: the
@@ -1921,13 +1648,13 @@ impl CockpitView {
     fn sync_composer_floats(&self, cx: &mut Context<Self>) {
         let focused_index = self.focused();
         let float_open = self.overlay_open(cx);
+        let menu_on = self
+            .composer_menu
+            .read(cx)
+            .pane()
+            .or_else(|| self.band_menu().map(|open| open.pane));
         for (index, pane) in self.panes.iter().enumerate() {
-            let open = self
-                .popover
-                .as_ref()
-                .map(|open| open.pane)
-                .or_else(|| self.band_menu().map(|open| open.pane))
-                == Some(pane.identity);
+            let open = menu_on == Some(pane.identity);
             let lit = index == focused_index;
             pane.composer.update(cx, |composer, cx| {
                 composer.set_menu_open(open, cx);
@@ -2246,9 +1973,13 @@ impl CockpitView {
         {
             draft.error = None;
         }
+        // The `/` and `$` menus read one listing: only a line with neither
+        // at the caret lets it go.
         let state = composer.read(cx);
-        if slash_token(state.text(), state.cursor()).is_none() {
-            self.draft_commands = None;
+        if slash_token(state.text(), state.cursor()).is_none()
+            && skill_token(state.text(), state.cursor()).is_none()
+        {
+            self.draft_commands.forget();
         }
         // The API reports it as the Thread's `draft` (ADR 0030), so no
         // agent types over the operator.
@@ -2283,17 +2014,13 @@ impl CockpitView {
         } else if band.is_some() && !composer.read(cx).is_empty() {
             self.close_popup(cx);
         }
-        let popover_on = self.popover.as_ref().map(|open| open.pane);
-        if self.suppress_recall_menu_once {
-            self.suppress_recall_menu_once = false;
-            self.popover = None;
-        } else {
-            self.menu_muted = false;
+        let popover_on = self.composer_menu.read(cx).pane();
+        if self.composer_menu.update(cx, |menu, cx| menu.edited(cx)) {
             self.sync_menu(cx);
         }
         // A keystroke redraws its own Pane (its line, its menu); only a
         // menu moving to another Pane redraws more.
-        let menu_moved = [popover_on, self.popover.as_ref().map(|open| open.pane)]
+        let menu_moved = [popover_on, self.composer_menu.read(cx).pane()]
             .into_iter()
             .flatten()
             .any(|pane| Some(pane) != edited);
@@ -2336,10 +2063,7 @@ impl CockpitView {
         if let Some(connections) = self.connections(cx) {
             connections.update(cx, |connections, cx| connections.poll(cx));
         }
-        let commands_changed = self
-            .draft_commands
-            .as_mut()
-            .is_some_and(DraftCommands::poll);
+        let commands_changed = self.draft_commands.listed();
         if commands_changed {
             self.sync_menu(cx);
         }
@@ -2422,14 +2146,7 @@ impl CockpitView {
         if panes_changed {
             self.sync_panes(cx);
         }
-        self.refresh_published(cx);
-        let focused = self.focused_thread();
-        if focused != self.pr_focus {
-            self.pr_focus = focused;
-            if let Some(thread) = focused {
-                self.check_pr(thread, false, cx);
-            }
-        }
+        self.watch_prs(cx);
         let mut restarted = Vec::new();
         // What the sweep found moved: a fact or a Thread's age (everything
         // redraws), a working Thread (its Pane and the nav), the frame's
@@ -2841,7 +2558,7 @@ impl CockpitView {
     /// press (the frame's titlebar).
     fn overlay_open(&self, cx: &gpui::App) -> bool {
         self.sheet_up(cx)
-            || self.popover.is_some()
+            || self.composer_menu.read(cx).is_open()
             || self.popup_up()
             || self.sheet_float_open()
     }
@@ -4268,7 +3985,7 @@ impl CockpitView {
         if self.sheet_up(cx)
             || self.rename.is_open()
             || self.nav_view.read(cx).snooze_line().is_some()
-            || self.popover.is_some()
+            || self.composer_menu.read(cx).is_open()
         {
             return false;
         }
@@ -4310,13 +4027,8 @@ impl CockpitView {
         {
             return;
         }
-        if let Some(at) = self
-            .popover
-            .as_ref()
-            .filter(|open| matches!(open.kind, Kind::Commands))
-            .map(|open| open.selected)
-        {
-            self.pick(at, window, cx);
+        if let Some(at) = self.composer_menu.read(cx).command_selected() {
+            self.composer_menu.update(cx, |menu, cx| menu.pick(at, cx));
             return;
         }
         if self.accept_suggestion(window, cx) {
@@ -4662,377 +4374,6 @@ impl CockpitView {
     /// an `@token` under the caret opens files, anything else closes. A
     /// picker or a band chip holds the slot while it is up and is left
     /// alone here.
-    fn sync_menu(&mut self, cx: &mut Context<Self>) {
-        // A band menu reads the line itself (`sync_band_rows`).
-        if self.band_menu().is_some() {
-            return;
-        }
-        self.popover = self.derive_menu(cx);
-    }
-
-    /// The `$` menu (T3's): the skills the Session serving the focused
-    /// Pane lists, through the fuzzy filter; while a draft's catalogue
-    /// loads, or when none matches, one inert line says so.
-    fn skill_menu(&mut self, filter: String, cx: &mut Context<Self>) -> Option<Popover> {
-        let pane = self.panes.get(self.focused())?;
-        let identity = pane.identity;
-        let (skills, loading): (Vec<ferrite_core::SessionCommand>, bool) = match pane.thread() {
-            Some(thread) => (self.cockpit.thread(thread)?.commands().to_vec(), false),
-            None => {
-                let draft = pane.draft()?;
-                let provider = draft.binding.provider().provider;
-                let cwd = draft
-                    .binding
-                    .resolve(self.cockpit.registry(), !self.on_machine())
-                    .ok()?
-                    .source_root()
-                    .to_path_buf();
-                let line = pane.composer.clone();
-                let menu = self.draft_commands(provider, cwd);
-                menu.poll();
-                if menu.pending.is_none() && menu.error.is_none() {
-                    line.update(cx, |composer, cx| composer.set_commands(&menu.commands, cx));
-                }
-                (menu.commands.clone(), menu.pending.is_some())
-            }
-        };
-        let skills: Vec<_> = skills.into_iter().filter(|command| command.is_skill()).collect();
-        let mut rows: Vec<Row> = command_rows(&skills, &filter)
-            .into_iter()
-            .map(|row| Row {
-                consequence: Consequence::Skill(row.insert.clone()),
-                row,
-                active: false,
-            })
-            .collect();
-        if rows.is_empty() {
-            rows.push(note_row(if loading {
-                "Searching workspace skills..."
-            } else {
-                "No skills found. Try / to browse provider commands."
-            }));
-        }
-        Some(Popover {
-            scroll: ScrollHandle::new(),
-            revealed: Default::default(),
-            pane: identity,
-            kind: Kind::Commands,
-            rows,
-            selected: 0,
-        })
-    }
-
-    /// The draft's command catalogue for `provider` in `cwd`, asked for
-    /// afresh when either changed.
-    fn draft_commands(&mut self, provider: Provider, cwd: std::path::PathBuf) -> &mut DraftCommands {
-        if self
-            .draft_commands
-            .as_ref()
-            .is_none_or(|menu| menu.provider != provider || menu.cwd != cwd)
-        {
-            let pending = self.cockpit.discover_commands(provider, &cwd);
-            self.draft_commands = Some(DraftCommands {
-                provider,
-                cwd,
-                pending,
-                commands: Vec::new(),
-                error: None,
-            });
-        }
-        self.draft_commands.as_mut().expect("initialized above")
-    }
-
-    fn derive_menu(&mut self, cx: &mut Context<Self>) -> Option<Popover> {
-        // Muted until the text moves again.
-        if self.menu_muted {
-            return None;
-        }
-        let pane = self.panes.get(self.focused())?;
-        let thread = pane.thread();
-        let (text, cursor) = {
-            let composer = pane.composer.read(cx);
-            (composer.text().to_string(), composer.cursor())
-        };
-        let mention = mention_token(&text, cursor);
-        if mention.is_none() {
-            if let Some((_, filter)) = skill_token(&text, cursor) {
-                return self.skill_menu(filter.to_string(), cx);
-            }
-        }
-        // A slash inside an active @path belongs to file completion.
-        if let Some((token_start, filter)) =
-            slash_token(&text, cursor).filter(|_| mention.is_none())
-        {
-            // Local actions consume the entire command line. Inside prose,
-            // offer provider skills only so a pick cannot discard the draft.
-            let standalone = token_start == 0 && cursor == text.len();
-            let Some(thread) = thread else {
-                let identity = pane.identity;
-                let draft = pane.draft()?;
-                let provider = draft.binding.provider().provider;
-                let cwd = match draft
-                    .binding
-                    .resolve(self.cockpit.registry(), !self.on_machine())
-                {
-                    Ok(workspace) => workspace.source_root().to_path_buf(),
-                    Err(_) => {
-                        // Import remains available when a workspace was removed.
-                        // Never reuse commands from the previous valid binding.
-                        self.draft_commands = None;
-                        if !standalone {
-                            return None;
-                        }
-                        let row =
-                            local_row(filter, "import", "Resume a Claude or Codex session", false)?;
-                        return Some(Popover {
-                            scroll: ScrollHandle::new(),
-                            revealed: Default::default(),
-                            pane: identity,
-                            kind: Kind::Commands,
-                            rows: vec![Row {
-                                row,
-                                active: false,
-                                consequence: Consequence::OpenImportPicker,
-                            }],
-                            selected: 0,
-                        });
-                    }
-                };
-                let line = pane.composer.clone();
-                let menu = self.draft_commands(provider, cwd);
-                menu.poll();
-                if menu.pending.is_none() && menu.error.is_none() {
-                    line.update(cx, |composer, cx| composer.set_commands(&menu.commands, cx));
-                }
-                let mut rows: Vec<Row> = command_rows(&menu.commands, filter)
-                    .into_iter()
-                    .map(|row| Row {
-                        consequence: Consequence::Command(row.insert.clone()),
-                        row,
-                        active: false,
-                    })
-                    .collect();
-                if let Some(row) = standalone
-                    .then(|| local_row(filter, "import", "Resume a Claude or Codex session", false))
-                    .flatten()
-                {
-                    rows.retain(|existing| existing.row.name != row.name);
-                    rows.insert(
-                        0,
-                        Row {
-                            row,
-                            active: false,
-                            consequence: Consequence::OpenImportPicker,
-                        },
-                    );
-                }
-                let status = if menu.pending.is_some() {
-                    Some(("Searching workspace skills...", ""))
-                } else {
-                    menu.error
-                        .as_deref()
-                        .map(|error| ("Could not load commands", error))
-                };
-                if let Some((name, detail)) = status {
-                    rows.push(Row {
-                        row: pane::MenuRow {
-                            insert: "".into(),
-                            name: name.into(),
-                            detail: detail.to_string().into(),
-                            matched: Vec::new(),
-                            prose_detail: true,
-                            inert: true,
-                            tag: None,
-                        },
-                        active: false,
-                        consequence: Consequence::Inert,
-                    });
-                }
-                if rows.is_empty() {
-                    return standalone.then(|| note_popover(identity, NO_COMMAND));
-                }
-                return Some(Popover {
-                    scroll: ScrollHandle::new(),
-                    revealed: Default::default(),
-                    pane: identity,
-                    kind: Kind::Commands,
-                    rows,
-                    selected: 0,
-                });
-            };
-            let open = self.cockpit.thread(thread)?;
-            let mut rows: Vec<Row> = command_rows(open.commands(), filter)
-                .into_iter()
-                .map(|row| Row {
-                    consequence: Consequence::Command(row.insert.clone()),
-                    row,
-                    active: false,
-                })
-                .collect();
-            // Ferrite's local rows ride on top, through the same fuzzy
-            // filter and under the same cap as every row. #11: `import`
-            // always — in the Thread's place while it is blank, else
-            // alongside. #25: `provider` always — live before the first
-            // prompt, and kept visible but inert after it, so the door's
-            // absence never reads as a bug.
-            // A local row replaces a provider command of the same name
-            // (Claude lists its own `effort`): Ferrite's opens the picker,
-            // and the typed form (`/effort max`) still works — `submit`
-            // reads it.
-            let push_local = |rows: &mut Vec<Row>, row: Row| {
-                rows.retain(|existing| existing.row.name != row.row.name);
-                rows.insert(0, row);
-                rows.truncate(MENU_ROWS_MAX);
-            };
-            if standalone {
-                if let Some(row) =
-                    local_row(filter, "import", "Resume a Claude or Codex session", false)
-                {
-                    push_local(
-                        &mut rows,
-                        Row {
-                            row,
-                            active: false,
-                            consequence: Consequence::OpenImportPicker,
-                        },
-                    );
-                }
-            }
-            // The model can change at any time, and so can the provider:
-            // after the first prompt the other one starts a fresh
-            // conversation with the earlier one handed over as context,
-            // which the picker itself explains.
-            let detail = "Switch model or hand over to the other provider";
-            if let Some(row) = standalone
-                .then(|| local_row(filter, "effort", "Switch reasoning effort", false))
-                .flatten()
-            {
-                push_local(
-                    &mut rows,
-                    Row {
-                        row,
-                        active: false,
-                        consequence: Consequence::OpenEffortPicker,
-                    },
-                );
-            }
-            if let Some(row) = standalone
-                .then(|| local_row(filter, "model", detail, false))
-                .flatten()
-            {
-                push_local(
-                    &mut rows,
-                    Row {
-                        row,
-                        active: false,
-                        consequence: Consequence::OpenProviderPicker,
-                    },
-                );
-            }
-            // A command line with no match says so; a `/word` in prose
-            // that names nothing is prose, and opens nothing.
-            if rows.is_empty() {
-                return standalone.then(|| note_popover(pane.identity, NO_COMMAND));
-            }
-            return Some(Popover {
-                scroll: ScrollHandle::new(),
-                revealed: Default::default(),
-                pane: pane.identity,
-                kind: Kind::Commands,
-                rows,
-                selected: 0,
-            });
-        }
-        let (token_start, filter) = mention?;
-        // No binding → nothing to walk → no popover.
-        let root = self.pane_root(self.focused())?;
-        if let Some(thread) = thread {
-            if let Ok(receiver) = self.cockpit.search_files(thread, filter) {
-                let request_id = NEXT_FILE_SEARCH.fetch_add(1, Ordering::Relaxed);
-                let generation = self.cockpit.thread(thread)?.generation();
-                self.pending_files = Some(PendingFileSearch {
-                    pane: pane.identity,
-                    thread,
-                    generation,
-                    request_id,
-                    query: filter.to_string(),
-                    token_start,
-                    root: root.clone(),
-                    started: std::time::Instant::now(),
-                    reply: receiver,
-                    fallback: None,
-                });
-                return Some(Popover {
-                    scroll: ScrollHandle::new(),
-                    revealed: Default::default(),
-                    pane: pane.identity,
-                    kind: Kind::Files {
-                        files: std::rc::Rc::new(Vec::new()),
-                        token_start,
-                        query: filter.to_string(),
-                        request_id,
-                    },
-                    rows: vec![Row {
-                        row: pane::MenuRow {
-                            insert: SharedString::default(),
-                            name: "Searching workspace files...".into(),
-                            matched: Vec::new(),
-                            detail: SharedString::default(),
-                            prose_detail: true,
-                            inert: true,
-                            tag: None,
-                        },
-                        active: false,
-                        consequence: Consequence::Inert,
-                    }],
-                    selected: 0,
-                });
-            }
-        }
-        // A machine's files are its Sessions' to search (ADR 0026).
-        if self.on_machine() {
-            return None;
-        }
-        // The walk runs once per open menu; keystrokes only re-filter it.
-        let walked = match &self.popover {
-            Some(open) if open.pane == pane.identity => match &open.kind {
-                Kind::Files { files, .. } => Some(files.clone()),
-                _ => None,
-            },
-            _ => None,
-        };
-        let files = walked.unwrap_or_else(|| {
-            std::rc::Rc::new(ferrite_core::workspace::mention_files(
-                &root,
-                MENTION_FILE_CAP,
-            ))
-        });
-        let rows: Vec<Row> = mention_rows(&files, filter)
-            .into_iter()
-            .map(|row| Row {
-                consequence: Consequence::Mention(row.insert.clone()),
-                row,
-                active: false,
-            })
-            .collect();
-        if rows.is_empty() {
-            return Some(note_popover(pane.identity, NO_FILES));
-        }
-        Some(Popover {
-            scroll: ScrollHandle::new(),
-            revealed: Default::default(),
-            pane: pane.identity,
-            kind: Kind::Files {
-                files,
-                token_start,
-                query: filter.to_string(),
-                request_id: 0,
-            },
-            rows,
-            selected: 0,
-        })
-    }
-
     /// The menu keys serve whichever rows menu rides the Composer: the
     /// `/`/`@` menu or a band menu — one key context, no second table.
     fn menu_next(&mut self, _: &MenuNext, _window: &mut Window, cx: &mut Context<Self>) {
@@ -5077,9 +4418,7 @@ impl CockpitView {
         let Some(text) = self.cockpit.recall_prompt(thread, direction, &draft) else {
             return;
         };
-        self.popover = None;
-        self.menu_muted = true;
-        self.suppress_recall_menu_once = true;
+        self.composer_menu.update(cx, |menu, cx| menu.recalled(cx));
         let content = self.unsent.stepped_to(text);
         composer.update(cx, |composer, cx| composer.put(content, cx));
         cx.notify();
@@ -5098,7 +4437,7 @@ impl CockpitView {
         !self.panes[index].has_tool_target()
             && !self.rename.is_open()
             && self.nav_view.read(cx).snooze_line().is_none()
-            && self.popover.is_none()
+            && !self.composer_menu.read(cx).is_open()
             && ((self.panes[index].is_main() && queued_to_take_back(&open).is_some())
                 || (open.has_prompt_history()
                     && !open.busy()
@@ -5108,21 +4447,17 @@ impl CockpitView {
 
     /// Clamp-step the selection of the rows menu riding the Composer.
     fn step_popover(&mut self, delta: isize, cx: &mut Context<Self>) {
-        let stepped = match &mut self.popover {
-            Some(open) => open.step(delta),
-            None => self.band_menu_mut().is_some_and(|open| open.step(delta)),
-        };
-        if stepped {
+        if self.composer_menu.read(cx).is_open() {
+            self.composer_menu.update(cx, |menu, cx| menu.step(delta, cx));
+        } else if self.band_menu_mut().is_some_and(|open| open.step(delta)) {
             cx.notify();
         }
     }
 
     fn menu_pick(&mut self, _: &MenuPick, window: &mut Window, cx: &mut Context<Self>) {
-        let at = match &self.popover {
-            Some(open) => Some(open.selected),
-            None => self.band_menu().map(|open| open.selected),
-        };
-        if let Some(at) = at {
+        if let Some(at) = self.composer_menu.read(cx).popover().map(|open| open.selected) {
+            self.composer_menu.update(cx, |menu, cx| menu.pick(at, cx));
+        } else if let Some(at) = self.band_menu().map(|open| open.selected) {
             self.pick(at, window, cx);
         }
     }
@@ -5133,9 +4468,7 @@ impl CockpitView {
     /// picker takes no mute, since nothing reopens it; a band menu also
     /// returns the chip's tab focus to the prompt line.
     fn menu_dismiss(&mut self, _: &MenuDismiss, _window: &mut Window, cx: &mut Context<Self>) {
-        if self.popover.take().is_some() {
-            self.menu_muted = true;
-        } else if self.band_menu().is_some() {
+        if !self.composer_menu.update(cx, |menu, cx| menu.dismiss(cx)) && self.band_menu().is_some() {
             self.close_popup(cx);
             if let Some(draft) = self.focused_draft_mut() {
                 draft.band_focus = None;
@@ -5144,29 +4477,31 @@ impl CockpitView {
         cx.notify();
     }
 
-    /// The shared tail of ↵ and a row click: the row's own consequence,
-    /// dispatched. The menu closes either way — a door it opens (the
-    /// pickers) is a fresh popover in its place.
+    /// ↵ or a press on row `at` of a band menu: its choice, made. The
+    /// menu closes first.
     fn pick(&mut self, at: usize, window: &mut Window, cx: &mut Context<Self>) {
-        let (pane, consequence, token_start) = if let Some(open) = self.popover.take() {
-            let Some(row) = open.rows.get(at) else {
-                return;
-            };
-            let token_start = match open.kind {
-                Kind::Files { token_start, .. } => Some(token_start),
-                _ => None,
-            };
-            (open.pane, row.consequence.clone(), token_start)
-        } else if let Some(open) = self.band_menu() {
-            let Some(row) = open.rows.get(at) else {
-                return;
-            };
-            let picked = (open.pane, row.consequence.clone(), None);
-            self.close_popup(cx);
-            picked
-        } else {
+        let Some(open) = self.band_menu() else {
             return;
         };
+        let Some(row) = open.rows.get(at) else {
+            return;
+        };
+        let (pane, consequence) = (open.pane, row.consequence.clone());
+        self.close_popup(cx);
+        self.run_pick(pane, &consequence, window, cx);
+    }
+
+    /// What a pick of the band menu or the Composer menu leaves to the
+    /// root: a picker opened in the menu's place, a Provider, an effort or
+    /// a band choice. A command, a skill or a file the Composer menu put
+    /// in the line itself.
+    fn run_pick(
+        &mut self,
+        pane: PaneIdentity,
+        consequence: &Consequence,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let Some(composer) = self
             .index_of(pane)
             .map(|index| self.panes[index].composer.clone())
@@ -5180,50 +4515,11 @@ impl CockpitView {
                 composer.splice(whole, text, cx);
             });
         };
-        match &consequence {
-            Consequence::Command(name) => {
-                composer.update(cx, |composer, cx| {
-                    let cursor = composer.cursor();
-                    let text = composer.text();
-                    let Some((start, _)) = slash_token(text, cursor) else {
-                        return;
-                    };
-                    // Complete the whole token even when editing its middle.
-                    let mut end = cursor
-                        + text[cursor..]
-                            .find(char::is_whitespace)
-                            .unwrap_or(text.len() - cursor);
-                    // Reuse an existing separator instead of inserting two spaces.
-                    if text[end..].starts_with(' ') {
-                        end += 1;
-                    }
-                    // The pick is a chip, as a mention is; it sends as
-                    // the plain `/name` it reads.
-                    let token = format!("/{name}");
-                    composer.splice(start..end, &format!("{token} "), cx);
-                    composer.stage_chip(SharedString::from(token), cx);
-                });
-            }
-            Consequence::Skill(name) => {
-                composer.update(cx, |composer, cx| {
-                    let cursor = composer.cursor();
-                    let text = composer.text();
-                    let Some((start, _)) = skill_token(text, cursor) else {
-                        return;
-                    };
-                    let mut end = cursor
-                        + text[cursor..]
-                            .find(char::is_whitespace)
-                            .unwrap_or(text.len() - cursor);
-                    if text[end..].starts_with(' ') {
-                        end += 1;
-                    }
-                    let token = format!("${name}");
-                    composer.splice(start..end, &format!("{token} "), cx);
-                    composer.stage_chip(SharedString::from(token), cx);
-                });
-            }
-            Consequence::Inert => {}
+        match consequence {
+            Consequence::Command(_)
+            | Consequence::Skill(_)
+            | Consequence::Mention(_)
+            | Consequence::Inert => {}
             Consequence::OpenProviderPicker => {
                 if let Some(thread) = pane.thread() {
                     splice_line(cx, "");
@@ -5241,17 +4537,6 @@ impl CockpitView {
                     }
                 };
                 self.open_import_palette(into, window, cx);
-            }
-            Consequence::Mention(path) => {
-                let Some(start) = token_start else {
-                    return;
-                };
-                let token = format!("@{path}");
-                composer.update(cx, |composer, cx| {
-                    let cursor = composer.cursor();
-                    composer.splice(start..cursor, &format!("{token} "), cx);
-                    composer.stage_chip(SharedString::from(token), cx);
-                });
             }
             Consequence::Provision(choice) => {
                 if let Some(thread) = pane.thread() {
@@ -5277,73 +4562,7 @@ impl CockpitView {
     }
 
     fn poll_navigation(&mut self, cx: &mut Context<Self>) {
-        use std::sync::mpsc::TryRecvError;
-        if let Some(mut pending) = self.pending_files.take() {
-            let current = self.panes.get(self.focused()).is_some_and(|pane| pane.identity == pending.pane)
-                && self.cockpit.thread(pending.thread).is_some_and(|live| live.generation() == pending.generation)
-                && self.popover.as_ref().is_some_and(|open| open.pane == pending.pane && matches!(&open.kind, Kind::Files { request_id, query, token_start, .. } if *request_id == pending.request_id && query == &pending.query && *token_start == pending.token_start));
-            if current {
-                let rows = if let Some(fallback) = &pending.fallback {
-                    match fallback.try_recv() {
-                        Ok(rows) => Some(rows),
-                        Err(TryRecvError::Empty) => None,
-                        Err(TryRecvError::Disconnected) => Some(Vec::new()),
-                    }
-                } else {
-                    match pending.reply.try_recv() {
-                        Ok(Ok(files)) => Some(native_mention_rows(&files)),
-                        Err(TryRecvError::Empty)
-                            if pending.started.elapsed() < Duration::from_secs(5) =>
-                        {
-                            None
-                        }
-                        // A machine's files are walked by none of this
-                        // computer's threads (ADR 0026).
-                        _ if self.on_machine() => Some(Vec::new()),
-                        _ => {
-                            let root = pending.root.clone();
-                            let query = pending.query.clone();
-                            let (tx, rx) = std::sync::mpsc::channel();
-                            if std::thread::Builder::new()
-                                .name("ferrite-file-fallback".into())
-                                .spawn(move || {
-                                    let paths = ferrite_core::workspace::mention_files(
-                                        &root,
-                                        MENTION_FILE_CAP,
-                                    );
-                                    let _ = tx.send(mention_rows(&paths, &query));
-                                })
-                                .is_ok()
-                            {
-                                pending.fallback = Some(rx);
-                                None
-                            } else {
-                                Some(Vec::new())
-                            }
-                        }
-                    }
-                };
-                if let Some(rows) = rows {
-                    if let Some(open) = &mut self.popover {
-                        open.rows = rows
-                            .into_iter()
-                            .map(|row| Row {
-                                consequence: Consequence::Mention(row.insert.clone()),
-                                row,
-                                active: false,
-                            })
-                            .collect();
-                        if open.rows.is_empty() {
-                            open.rows = vec![note_row(NO_FILES)];
-                        }
-                        open.selected = 0;
-                    }
-                    cx.notify();
-                } else {
-                    self.pending_files = Some(pending);
-                }
-            }
-        }
+        self.poll_composer_menu(cx);
         self.poll_session_discovery(cx);
     }
 
@@ -5859,7 +5078,7 @@ impl CockpitView {
                 .spawn(async move { ferrite_core::workspace::repo_listing(&root) })
                 .await;
             this.update(cx, |view, cx| {
-                view.repo_listing = Some((project, listing));
+                view.checkouts.set_listing(project, listing);
                 view.sync_workspace_rows(cx);
             })
             .ok();
@@ -5906,8 +5125,8 @@ impl CockpitView {
     /// lands — the name a Project git cannot answer for keeps, the branch
     /// a fresh clone would be sitting on.
     fn checked_out_branch(&self, project: ProjectId, cx: &Context<Self>) -> SharedString {
-        if let Some(branch) = self.checked_out.borrow().get(&project) {
-            return branch.clone();
+        if let Some(branch) = self.checkouts.branch(project) {
+            return branch;
         }
         self.look_up_checkouts([project], cx);
         SharedString::from(MAIN_BRANCH)
@@ -5921,10 +5140,9 @@ impl CockpitView {
         if self.on_machine() {
             return;
         }
-        let mut checking = self.checking_out.borrow_mut();
         let mut roots: Vec<(ProjectId, std::path::PathBuf)> = Vec::new();
         for project in projects {
-            if checking.contains(&project) || roots.iter().any(|(asked, _)| *asked == project) {
+            if self.checkouts.asking(project) || roots.iter().any(|(asked, _)| *asked == project) {
                 continue;
             }
             if let Some(found) = self.cockpit.registry().project(project) {
@@ -5934,7 +5152,7 @@ impl CockpitView {
         if roots.is_empty() {
             return;
         }
-        checking.extend(roots.iter().map(|(project, _)| *project));
+        self.checkouts.listen(roots.iter().map(|(project, _)| *project));
         cx.spawn(async move |this, cx| {
             let answers = cx
                 .background_executor()
@@ -5960,21 +5178,7 @@ impl CockpitView {
         answers: Vec<(ProjectId, Option<String>)>,
         cx: &mut Context<Self>,
     ) {
-        let mut changed = false;
-        {
-            let mut checking = self.checking_out.borrow_mut();
-            let mut known = self.checked_out.borrow_mut();
-            for (project, branch) in answers {
-                checking.remove(&project);
-                let branch =
-                    branch.map_or_else(|| SharedString::from(MAIN_BRANCH), SharedString::from);
-                if known.get(&project) != Some(&branch) {
-                    known.insert(project, branch);
-                    changed = true;
-                }
-            }
-        }
-        if changed {
+        if self.checkouts.listed(answers) {
             self.sync_workspace_rows(cx);
             cx.notify();
         }
@@ -6060,11 +5264,7 @@ impl CockpitView {
             *target == DraftTarget::Main,
             BandChoice::Target(DraftTarget::Main),
         )];
-        let listing = self
-            .repo_listing
-            .as_ref()
-            .filter(|(listed, _)| *listed == project)
-            .map(|(_, listing)| listing);
+        let listing = self.checkouts.listing(project);
         // A branch already on offer as the checkout or as a
         // worktree is not offered again as a plain branch: git
         // would refuse to switch the checkout onto it anyway.
@@ -6935,11 +6135,9 @@ impl CockpitView {
 
     /// The open popover for this Pane, which hangs it above the line.
     fn popover_element(&self, index: usize, cx: &mut Context<Self>) -> Option<AnyElement> {
-        let open = self
-            .popover
-            .as_ref()
-            .filter(|open| open.pane == self.panes[index].identity)?;
-        Some(self.menu_surface(open, Some(&open.kind), cx))
+        (index == self.focused()
+            && self.composer_menu.read(cx).pane() == Some(self.panes[index].identity))
+            .then(|| self.composer_menu.clone().into_any_element())
     }
 
     /// A draft's Project or Workspace menu, hung off its chip on the strip
@@ -6988,7 +6186,7 @@ impl CockpitView {
         let surface = div()
             .debug_selector(|| "composer-menu".into())
             .w(px(width))
-            .child(self.menu_surface(open, None, cx));
+            .child(menu_surface(open, None, |_, _, _| {}, Self::pick, cx));
         Some(
             anchored()
                 .anchor(anchor)
@@ -6997,154 +6195,6 @@ impl CockpitView {
                 .child(self.popup_face(face, "band-menu-in", surface, opens, cx))
                 .into_any_element(),
         )
-    }
-
-    /// A rows menu's surface — a `/`/`@` menu's (`text`) or a band menu's —
-    /// rows wired to their picks: assembled
-    /// here so its clicks land beside every other pointer wire (the root
-    /// selector's precedent). Every row is the one menu row: `/`, `@` and
-    /// import rows through `pane::menu_row` (slash descriptions in one
-    /// aligned column), band rows through `pane::picker_row` with the
-    /// strong check on the standing choice; an inert explanation
-    /// ("Searching workspace files...", a refusal) is a `menu_note`. The rows scroll
-    /// inside the popover's cap.
-    fn menu_surface<K>(
-        &self,
-        open: &Popover<K>,
-        text: Option<&Kind>,
-        cx: &mut Context<Self>,
-    ) -> AnyElement {
-        fn wire<E: InteractiveElement + IntoElement + 'static>(
-            drawn: E,
-            at: usize,
-            cx: &mut Context<CockpitView>,
-        ) -> AnyElement {
-            drawn
-                .debug_selector(move || format!("composer-menu-row-{at}"))
-                .on_mouse_move(cx.listener(move |view, _: &gpui::MouseMoveEvent, _, cx| {
-                    if let Some(open) = &mut view.popover {
-                        if matches!(open.kind, Kind::Commands)
-                            && open.selected != at
-                            && open.rows.get(at).is_some_and(|row| !row.inert)
-                        {
-                            open.selected = at;
-                            cx.notify();
-                        }
-                    }
-                }))
-                .on_mouse_down(
-                    MouseButton::Left,
-                    cx.listener(move |view, _: &MouseDownEvent, window, cx| {
-                        cx.stop_propagation();
-                        view.pick(at, window, cx);
-                    }),
-                )
-                .into_any_element()
-        }
-        // Slash commands align their descriptions in one column sized to
-        // the longest name shown, measured in the row's face (a match
-        // draws at `W_LABEL`), so no name is ever cut.
-        let label_w = matches!(text, Some(Kind::Commands)).then(|| {
-            let measure = nav::Measure::Text(cx, self.nav_expanded_width());
-            open.rows
-                .iter()
-                .map(|row| {
-                    measure.ui(
-                        &row.name,
-                        ferrite_ui::theme::FS_UI,
-                        ferrite_ui::theme::W_LABEL,
-                    )
-                })
-                .fold(0., f32::max)
-                .ceil()
-        });
-        if !open.revealed.replace(true) {
-            open.scroll.scroll_to_item(open.selected);
-        }
-        let mut rows = div()
-            .id("composer-menu-rows")
-            .debug_selector(|| "composer-menu-rows".into())
-            .flex()
-            .flex_col()
-            .min_h_0()
-            .overflow_y_scroll()
-            .track_scroll(&open.scroll);
-        for (at, row) in open.rows.iter().enumerate() {
-            let cursor = at == open.selected;
-            let explains = row.inert
-                && row.consequence_is_inert()
-                && row.detail.is_empty()
-                && row.matched.is_empty();
-            let drawn = match text {
-                _ if explains => wire(ferrite_ui::menu::note(row.name.clone()), at, cx),
-                Some(_) => wire(
-                    pane::menu_row(("composer-menu-row", at), &row.row, cursor, label_w),
-                    at,
-                    cx,
-                ),
-                None => wire(
-                    pane::picker_row(
-                        ("composer-menu-row", at),
-                        row.name.clone(),
-                        row.detail.clone(),
-                        cursor,
-                        row.active,
-                        row.inert,
-                    ),
-                    at,
-                    cx,
-                ),
-            };
-            rows = rows.child(drawn);
-        }
-        // A press on the popover's own dead space is not a press outside
-        // it: swallowed, so the root's dismissal never sees it. No key-hint
-        // footer: the keys act in place (Claude's and Codex's menus).
-        // Claude's slash picker explains the row under the cursor in a card
-        // at its side (claude/slash-picker.png), so a description cut by the
-        // popover's width is still read, by key as well as by pointer. The
-        // card stands level with the row, rows being one grid row each.
-        let explained = matches!(text, Some(Kind::Commands))
-            .then(|| open.rows.get(open.selected))
-            .flatten()
-            .filter(|row| !row.row.inert && !row.row.detail.is_empty())
-            .map(|row| row.row.detail.clone());
-        let row_top = open.selected as f32 * ferrite_ui::theme::FLOAT_ROW_H
-            + f32::from(open.scroll.offset().y);
-        let cap = if text.is_some() {
-            ferrite_ui::theme::SLASH_MENU_MAX_H
-        } else {
-            ferrite_ui::theme::MENU_MAX_H
-        };
-        let popover = pane::menu_popover(cap)
-            .on_mouse_down(
-                MouseButton::Left,
-                cx.listener(|_, _: &MouseDownEvent, _, cx| cx.stop_propagation()),
-            )
-            .child(rows);
-        div()
-            .relative()
-            .w_full()
-            .child(popover)
-            .children(explained.map(|detail| {
-                let card = ferrite_ui::menu::float()
-                    .debug_selector(|| "composer-menu-tip".into())
-                    .w(px(ferrite_ui::theme::TOOLTIP_MAX_W))
-                    .px(px(ferrite_ui::theme::TOOLTIP_PAD_X))
-                    .py(px(ferrite_ui::theme::TOOLTIP_PAD_Y))
-                    .text_size(px(ferrite_ui::theme::FS_META))
-                    .line_height(px(ferrite_ui::theme::LH_META))
-                    .text_color(rgb(ferrite_ui::theme::INK_STRONG))
-                    .child(detail);
-                // A drawer as wide as the box has no room on its right.
-                crate::float::beside(
-                    ferrite_ui::theme::SUBMENU_GAP,
-                    row_top.max(0.),
-                    ferrite_ui::theme::MENU_WINDOW_MARGIN,
-                    card.into_any_element(),
-                )
-            }))
-            .into_any_element()
     }
 
     /// The nav's per-frame state (ADR 0040), from caches and O(1) reads
@@ -7292,7 +6342,7 @@ impl CockpitView {
                 .filter(|_| working)
                 .and_then(|open| open.turn().started),
             pinned: self.prefs.settings.pinned_threads.contains(&thread),
-            retitling: self.titling.contains(&thread),
+            retitling: self.titling.naming(thread),
             // The nav wears its own picks (`NavView::card_picked`).
             picked: false,
         };
@@ -7502,13 +6552,9 @@ impl CockpitView {
         if let Err(error) = result {
             ferrite_core::log!("pane {identity:?} did not close cleanly: {error}");
         }
-        // A popover on the closed Pane goes with it.
-        if self
-            .popover
-            .as_ref()
-            .is_some_and(|open| open.pane == identity)
-        {
-            self.popover = None;
+        // A menu on the closed Pane goes with it.
+        if self.composer_menu.read(cx).pane() == Some(identity) {
+            self.close_composer_menu(cx);
         }
         self.sync_panes(cx);
         if let (true, PaneIdentity::Draft(draft)) = (closed, identity) {
@@ -7649,268 +6695,10 @@ enum Answer {
     Always,
 }
 
-/// How many rows a Composer menu shows — a dense keyboard menu, not a
-/// browser; the fuzzy filter is how the operator reaches the rest.
-const MENU_ROWS_MAX: usize = 8;
-
-/// How many files the `@` walk will offer. Bounds one open, not a frame:
-/// the walk runs when the menu opens and keystrokes only re-filter it.
-const MENTION_FILE_CAP: usize = 2000;
-
-/// The slash and filter immediately before the caret, anywhere in a draft.
-/// Whitespace ends the filter; a letter must directly follow the slash.
-/// A lone leading slash keeps the existing full-command discovery shortcut.
-fn slash_token(text: &str, cursor: usize) -> Option<(usize, &str)> {
-    let head = text.get(..cursor)?;
-    let start = head.rfind('/')?;
-    let filter = &head[start + 1..];
-    if filter.contains(char::is_whitespace) {
-        return None;
-    }
-    let valid = filter
-        .chars()
-        .next()
-        .map_or(start == 0, char::is_alphabetic);
-    valid.then_some((start, filter))
-}
-
-/// T3's empty Composer menus' words.
-const NO_COMMAND: &str = "No matching command.";
-const NO_FILES: &str = "No matching files or folders.";
-
-/// A Composer menu's one inert line: what it is searching, or that
-/// nothing matched.
-fn note_row(note: &'static str) -> Row {
-    Row {
-        row: pane::MenuRow {
-            insert: "".into(),
-            name: note.into(),
-            detail: "".into(),
-            matched: Vec::new(),
-            prose_detail: true,
-            inert: true,
-            tag: None,
-        },
-        active: false,
-        consequence: Consequence::Inert,
-    }
-}
-
-/// A Composer menu holding only `note_row(note)`.
-fn note_popover(pane: PaneIdentity, note: &'static str) -> Popover {
-    Popover {
-        scroll: ScrollHandle::new(),
-        revealed: Default::default(),
-        pane,
-        kind: Kind::Commands,
-        rows: vec![note_row(note)],
-        selected: 0,
-    }
-}
-
-/// The `$` token the caret sits in (T3's skill trigger): the `$`'s byte
-/// offset and the filter typed after it. As `@`, the `$` opens a token —
-/// start of line or after whitespace — and a digit after it is a price,
-/// not a skill (`$5`).
-fn skill_token(text: &str, cursor: usize) -> Option<(usize, &str)> {
-    let head = text.get(..cursor)?;
-    let at = head.rfind('$')?;
-    let filter = &head[at + 1..];
-    if filter.contains(char::is_whitespace) || filter.starts_with(|ch: char| ch.is_ascii_digit()) {
-        return None;
-    }
-    let opens_token = at == 0 || text[..at].ends_with(char::is_whitespace);
-    opens_token.then_some((at, filter))
-}
-
-/// The `@` token the caret sits in: the `@`'s byte offset and the filter
-/// typed after it. The `@` must open a token — start of line or after
-/// whitespace — so `a@b.example` stays prose, exactly as the wire reads it.
-fn mention_token(text: &str, cursor: usize) -> Option<(usize, &str)> {
-    let head = text.get(..cursor)?;
-    let at = head.rfind('@')?;
-    let filter = &head[at + 1..];
-    if filter.contains(char::is_whitespace) {
-        return None;
-    }
-    let opens_token = at == 0 || text[..at].ends_with(char::is_whitespace);
-    opens_token.then_some((at, filter))
-}
-
-/// The `/` menu's rows: the Session's own commands through the fuzzy
-/// filter, best first (ties keep the provider's order), capped, each
-/// tagged with where it comes from.
-fn command_rows(commands: &[ferrite_core::SessionCommand], filter: &str) -> Vec<pane::MenuRow> {
-    let mut scored: Vec<(i64, pane::MenuRow)> = commands
-        .iter()
-        .filter_map(|command| {
-            let (score, matched) = crate::fuzzy::matches(filter, &command.name)?;
-            Some((
-                score,
-                pane::MenuRow {
-                    insert: SharedString::from(command.name.clone()),
-                    // The bare name, as Claude's menu lists it: the `/` is
-                    // already on the line.
-                    name: SharedString::from(command.name.clone()),
-                    matched,
-                    detail: SharedString::from(command.description.clone()),
-                    prose_detail: true,
-                    inert: false,
-                    // Where it comes from, as the provider says.
-                    tag: command
-                        .source
-                        .as_ref()
-                        .and_then(ferrite_core::CommandSource::tag)
-                        .map(SharedString::from),
-                },
-            ))
-        })
-        .collect();
-    scored.sort_by_key(|(score, _)| std::cmp::Reverse(*score));
-    scored
-        .into_iter()
-        .take(MENU_ROWS_MAX)
-        .map(|(_, row)| row)
-        .collect()
-}
-
-/// The `@` menu's rows: the walked files through the fuzzy filter. The
-/// match runs over the whole relative path; the row shows name and
-/// directory apart (PromptBox state 03), so highlights are clamped into
-/// the name they decorate.
-fn mention_rows(files: &[String], filter: &str) -> Vec<pane::MenuRow> {
-    let mut scored: Vec<(i64, pane::MenuRow)> = files
-        .iter()
-        .filter_map(|file| {
-            let (score, matched) = crate::fuzzy::matches(filter, file)?;
-            // A directory ends in `/`: its name is the last segment with
-            // that slash, its directory everything before.
-            let stem = file.strip_suffix('/').unwrap_or(file);
-            let split = stem.rfind('/').map(|at| at + 1).unwrap_or(0);
-            let matched = matched
-                .into_iter()
-                .filter_map(|range| {
-                    let start = range.start.max(split);
-                    (range.end > split).then(|| start - split..range.end - split)
-                })
-                .collect();
-            Some((
-                score,
-                pane::MenuRow {
-                    insert: SharedString::from(file.clone()),
-                    name: SharedString::from(file[split..].to_string()),
-                    matched,
-                    detail: SharedString::from(if split == 0 {
-                        String::new()
-                    } else {
-                        file[..split - 1].to_string()
-                    }),
-                    prose_detail: false,
-                    inert: false,
-                    tag: None,
-                },
-            ))
-        })
-        .collect();
-    scored.sort_by_key(|(score, _)| std::cmp::Reverse(*score));
-    scored
-        .into_iter()
-        .take(MENU_ROWS_MAX)
-        .map(|(_, row)| row)
-        .collect()
-}
-
-/// Preserve provider order and matches, while keeping repository metadata
-/// and repeated paths from crowding working files out of the bounded menu.
-fn native_mention_rows(files: &[ferrite_core::providers::FileSuggestion]) -> Vec<pane::MenuRow> {
-    let mut seen = std::collections::HashSet::new();
-    files
-        .iter()
-        .filter(|file| {
-            !std::path::Path::new(&file.path)
-                .components()
-                .any(|part| part.as_os_str() == ".git")
-                && seen.insert(file.path.trim_end_matches('/'))
-        })
-        .take(MENU_ROWS_MAX)
-        .map(|file| {
-            let mut path = file.path.clone();
-            if file.is_directory && !path.ends_with('/') {
-                path.push('/');
-            }
-            let stem = path.strip_suffix('/').unwrap_or(&path);
-            let split = stem.rfind('/').map(|at| at + 1).unwrap_or(0);
-            let chars: Vec<_> = path.char_indices().collect();
-            let matched = file
-                .matched
-                .iter()
-                .filter_map(|index| {
-                    let (start, character) = *chars.get(*index)?;
-                    (start >= split).then_some(
-                        start.saturating_sub(split)
-                            ..start.saturating_sub(split) + character.len_utf8(),
-                    )
-                })
-                .collect();
-            pane::MenuRow {
-                insert: path.clone().into(),
-                name: path[split..].to_string().into(),
-                matched,
-                detail: if split == 0 {
-                    "".into()
-                } else {
-                    path[..split - 1].to_string().into()
-                },
-                prose_detail: false,
-                inert: false,
-                tag: None,
-            }
-        })
-        .collect()
-}
-
 /// How many sessions the import picker lists (#11), newest first: enough
 /// history to search, few enough that the listing reads a bounded slice
 /// of each file rather than every session ever run.
 const IMPORT_ROWS_MAX: usize = 200;
-
-/// One Ferrite-local `/` row (#11's `import`, #25's `provider`) — never
-/// the provider's, which its description says out loud. The same fuzzy
-/// filter as every row.
-fn local_row(
-    filter: &str,
-    name: &'static str,
-    detail: &'static str,
-    inert: bool,
-) -> Option<pane::MenuRow> {
-    let (_, matched) = crate::fuzzy::matches(filter, name)?;
-    Some(pane::MenuRow {
-        insert: SharedString::from(name),
-        name: SharedString::from(name),
-        matched,
-        detail: SharedString::from(detail),
-        prose_detail: true,
-        inert,
-        tag: None,
-    })
-}
-
-/// One band row: a label and its detail beside the choice it makes.
-fn band_row(label: SharedString, detail: SharedString, active: bool, choice: BandChoice) -> Row {
-    Row {
-        row: pane::MenuRow {
-            insert: SharedString::default(),
-            name: label,
-            matched: Vec::new(),
-            detail,
-            prose_detail: false,
-            inert: false,
-            tag: None,
-        },
-        active,
-        consequence: Consequence::Band(choice),
-    }
-}
 
 /// The Provider's name as a person says it — the picker's section titles
 /// and the chip before any model is known.
@@ -7967,31 +6755,6 @@ fn effort_chip_label(effort: &str) -> SharedString {
 /// opens (`band_menu_element`).
 /// The start hero's project word, as a float trigger (`draft_hero`).
 const HERO_TRIGGER: &str = "start-hero-project";
-
-impl<K> Popover<K> {
-    /// Clamp-step the cursor by `delta`; whether it moved. Inert rows (a
-    /// picker's section headers) are skipped over: the arrows land only
-    /// where ↵ would do something.
-    fn step(&mut self, delta: isize) -> bool {
-        let mut stepped = self.selected;
-        loop {
-            let next = stepped.saturating_add_signed(delta);
-            if next >= self.rows.len() || (delta < 0 && stepped == 0) {
-                break;
-            }
-            stepped = next;
-            if !self.rows[stepped].inert {
-                break;
-            }
-        }
-        if self.rows.get(stepped).is_some_and(|row| row.inert) || stepped == self.selected {
-            return false;
-        }
-        self.selected = stepped;
-        self.scroll.scroll_to_item(stepped);
-        true
-    }
-}
 
 fn band_trigger(chip: pane::BandChip) -> SharedString {
     format!("band-{chip:?}").into()
@@ -8097,6 +6860,7 @@ impl CockpitView {
                 cx.subscribe_in(&self.browser_dialog, window, Self::on_browser_dialog_event),
                 cx.subscribe_in(&self.browser_review, window, Self::on_browser_review_event),
                 cx.subscribe_in(&self.empty_board, window, Self::on_empty_board_event),
+                cx.subscribe_in(&self.composer_menu, window, Self::on_composer_menu_event),
             ]);
         }
     }
@@ -8314,12 +7078,14 @@ impl CockpitView {
 
         // The `/`/`@` menu belongs to the focused Pane's Composer (#23):
         // leaving that Pane closes it here.
-        if self.popover.as_ref().is_some_and(|open| {
-            self.panes
+        if let Some(on) = self.composer_menu.read(cx).pane() {
+            if self
+                .panes
                 .get(self.focused())
-                .is_none_or(|pane| pane.identity != open.pane)
-        }) {
-            self.popover = None;
+                .is_none_or(|pane| pane.identity != on)
+            {
+                self.close_composer_menu(cx);
+            }
         }
         let pane_rects = self.pane_rects(window);
         for (index, pane) in self.panes.iter().enumerate() {
@@ -8805,13 +7571,11 @@ impl CockpitView {
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(|view, _: &MouseDownEvent, _, cx| {
-                    let mut dismissed = false;
-                    if view.popover.take().is_some() {
-                        // The menu mutes until the text moves, or the very
-                        // next frame would reopen it over the same trigger.
-                        view.menu_muted = true;
-                        dismissed = true;
-                    }
+                    // The menu mutes until the text moves, or the very
+                    // next frame would reopen it over the same trigger.
+                    let dismissed = view
+                        .composer_menu
+                        .update(cx, |menu, cx| menu.dismiss(cx));
                     // A press outside the editor abandons the rename — the
                     // operator looked away, which is escape, not enter.
                     // It notifies itself, so it is not counted above.
@@ -8940,7 +7704,7 @@ impl CockpitView {
                         if let Some(draft) = view.panes[index].draft_mut() {
                             draft.band_focus = None;
                         }
-                        view.popover = None;
+                        view.close_composer_menu(cx);
                         cx.notify();
                     }
                 });
@@ -9321,71 +8085,6 @@ impl CockpitView {
         })
     }
 
-    /// Ask the titler for a name, off the UI thread, and adopt it when it
-    /// arrives — unless the operator has named the Thread meanwhile, or
-    /// turned auto-titles off. No titler configured (tests, the demo)
-    /// means the prompt-derived name stands.
-    fn start_titling(&mut self, thread: ThreadId, prompt: String, cx: &mut Context<Self>) {
-        if !self.prefs.settings.auto_title || !self.prefs.titler {
-            return;
-        }
-        let Some(provider) = self
-            .cockpit
-            .thread(thread)
-            .filter(|open| open.title().is_none())
-            .map(|open| open.provider())
-        else {
-            return;
-        };
-        // The Thread's own Provider writes its title, through the one form
-        // each adapter fills: Claude's `claude -p`, Codex's `codex exec` —
-        // the same copy of the CLI the Session runs.
-        let program = ferrite_core::providers::discover::program(provider);
-        let form = ferrite_core::titler::form_for(
-            provider,
-            &program,
-            &ferrite_core::titler::TitleRequest {
-                prompt,
-                reply: None,
-            },
-            &self.cockpit.model_catalog(provider),
-        );
-        let rx = ferrite_core::titler::spawn(form);
-        self.titling.insert(thread);
-        cx.spawn(async move |this, cx| {
-            let title = cx
-                .background_executor()
-                .spawn(async move { rx.recv().ok().flatten() })
-                .await;
-            this.update(cx, |view, cx| view.adopt_title(thread, title, cx))
-                .ok();
-        })
-        .detach();
-    }
-
-    /// The titler's answer lands only on a Thread still untitled: an
-    /// operator's rename in the meantime wins, and a parked Thread keeps
-    /// its prompt-derived name.
-    fn adopt_title(&mut self, thread: ThreadId, title: Option<String>, cx: &mut Context<Self>) {
-        if self.titling.remove(&thread) {
-            self.notify_part(parts::Part::Nav, cx);
-        }
-        let Some(title) = title else {
-            return;
-        };
-        if self
-            .cockpit
-            .thread(thread)
-            .is_none_or(|open| open.title().is_some())
-        {
-            return;
-        }
-        if self.cockpit.rename_thread(thread, &title).is_ok() {
-            self.facts.renamed(&self.cockpit, thread);
-            self.refresh_names();
-            cx.notify();
-        }
-    }
 
     /// The offer to go on in a fresh conversation, while the Thread's
     /// provider has none to resume. It says what the way on costs.
@@ -9524,26 +8223,6 @@ impl CockpitView {
             gpui::Bounds::new(gpui::point(px(right), px(edge)), gpui::Size::default()),
             up,
         )
-    }
-
-    fn run_session_control(
-        &mut self,
-        thread: ThreadId,
-        generation: u64,
-        action: ferrite_core::SessionControl,
-    ) {
-        let current = self
-            .cockpit
-            .thread(thread)
-            .is_some_and(|open| open.generation() == generation);
-        if !current {
-            return;
-        }
-        self.session_control_error = self
-            .cockpit
-            .control(thread, action)
-            .err()
-            .map(|error| (thread, generation, error.to_string()));
     }
 
     /// A pick of permission mode `mode`. A mode that stops asking
@@ -9707,15 +8386,10 @@ impl CockpitView {
             .w(px(ferrite_ui::theme::SESSION_CARD_W))
             .max_h(px(ferrite_ui::theme::MENU_MAX_H))
             .overflow_y_scroll();
-        let error = self
-            .session_control_error
-            .as_ref()
-            .filter(|(shown, shown_generation, _)| {
-                *shown == thread && *shown_generation == generation
-            });
+        let error = self.session_control_error.of(thread, generation);
         let errored = error.is_some();
-        if let Some((_, _, error)) = error {
-            card = card.child(pane::card_error(error.clone()).id("session-control-error"));
+        if let Some(error) = error {
+            card = card.child(pane::card_error(error.to_string()).id("session-control-error"));
         }
         let modes = open.permission_modes();
         let modes_empty = modes.is_empty();
@@ -10207,7 +8881,7 @@ impl CockpitView {
             self.nav_view.update(cx, |nav, cx| nav.leave(window, cx));
             return;
         }
-        self.popover = None;
+        self.close_composer_menu(cx);
         self.close_popup(cx);
         self.floats.palette = None;
         self.floats.shortcuts = None;

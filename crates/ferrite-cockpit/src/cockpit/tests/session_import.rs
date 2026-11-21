@@ -52,10 +52,9 @@ fn a_fresh_thread_lists_the_local_import_entry_atop_the_slash_menu(cx: &mut Test
     // #25's model door on top, then the import door.
     cx.simulate_input("/");
     cx.run_until_parked();
-    view.read_with(cx, |view, _| {
+    view.read_with(cx, |view, cx| {
         let menu = view
-            .popover
-            .as_ref()
+            .popover(cx)
             .expect("/ offers import on a fresh Thread");
         let names: Vec<&str> = menu.rows.iter().map(|row| row.name.as_ref()).collect();
         assert_eq!(names, ["model", "effort", "import"]);
@@ -79,15 +78,15 @@ fn a_fresh_thread_lists_the_local_import_entry_atop_the_slash_menu(cx: &mut Test
     tick(cx);
     cx.simulate_input("co");
     cx.run_until_parked();
-    view.read_with(cx, |view, _| {
-        let menu = view.popover.as_ref().expect("open");
+    view.read_with(cx, |view, cx| {
+        let menu = view.popover(cx).expect("open");
         let names: Vec<&str> = menu.rows.iter().map(|row| row.name.as_ref()).collect();
         assert_eq!(names, ["code-review", "commit", "compact"]);
     });
     cx.simulate_keystrokes("backspace backspace");
     cx.run_until_parked();
-    view.read_with(cx, |view, _| {
-        let menu = view.popover.as_ref().expect("open");
+    view.read_with(cx, |view, cx| {
+        let menu = view.popover(cx).expect("open");
         let names: Vec<&str> = menu.rows.iter().map(|row| row.name.as_ref()).collect();
         assert_eq!(
             names,
@@ -113,8 +112,8 @@ fn a_fresh_thread_lists_the_local_import_entry_atop_the_slash_menu(cx: &mut Test
     cx.run_until_parked();
     cx.simulate_input("/");
     cx.run_until_parked();
-    view.read_with(cx, |view, _| {
-        let menu = view.popover.as_ref().expect("the model menu still lists");
+    view.read_with(cx, |view, cx| {
+        let menu = view.popover(cx).expect("the model menu still lists");
         assert!(
             menu.rows.iter().any(|row| row.name.as_ref() == "import"),
             "a Thread with history still offers import, alongside"
@@ -452,7 +451,7 @@ fn typed_import_with_the_menu_muted_opens_the_picker(cx: &mut TestAppContext) {
     cx.run_until_parked();
     cx.simulate_keystrokes("escape");
     cx.run_until_parked();
-    view.read_with(cx, |view, _| assert!(view.menu_muted));
+    view.read_with(cx, |view, cx| assert!(view.composer_menu.read(cx).muted()));
     cx.simulate_keystrokes("enter");
     cx.run_until_parked();
 
@@ -693,8 +692,8 @@ fn a_foreign_file_pick_surfaces_the_refusal_in_the_transcript(cx: &mut TestAppCo
     // offers import for the next try.
     cx.simulate_input("/");
     cx.run_until_parked();
-    view.read_with(cx, |view, _| {
-        let menu = view.popover.as_ref().expect("the menu reopens");
+    view.read_with(cx, |view, cx| {
+        let menu = view.popover(cx).expect("the menu reopens");
         assert!(
             menu.rows.iter().any(|row| row.name.as_ref() == "import"),
             "the import door stays open"
@@ -753,8 +752,8 @@ fn draft_import_replaces_the_draft_and_focuses_the_imported_thread(cx: &mut Test
 
     cx.simulate_input("/im");
     cx.run_until_parked();
-    view.read_with(cx, |view, _| {
-        let menu = view.popover.as_ref().expect("draft slash menu");
+    view.read_with(cx, |view, cx| {
+        let menu = view.popover(cx).expect("draft slash menu");
         assert_eq!(menu.rows.len(), 1);
         assert_eq!(menu.rows[0].insert.as_ref(), "import");
     });
