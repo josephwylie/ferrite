@@ -82,6 +82,10 @@ pub(crate) struct NavView {
     /// When each listed Thread came into its section, which the list and
     /// the Working shelf order by. Only `look` writes it.
     arrivals: nav::Arrivals,
+    /// The Projects the Factory door lists, as `look` last read them: its
+    /// menu's rows (`factory_rows`). The door draws only whether one needs
+    /// the operator, so a change here alone does not redraw the nav.
+    factories: Vec<ProjectId>,
     /// The Cockpit's notify and the model's `Arrived`, each of which has
     /// the nav look again.
     watching: Vec<gpui::Subscription>,
@@ -226,6 +230,7 @@ impl NavView {
             snooze: None,
             inputs: None,
             arrivals: nav::Arrivals::default(),
+            factories: Vec::new(),
             watching: Vec::new(),
         }
     }
@@ -253,7 +258,8 @@ impl NavView {
         let listed = listed_threads(view, model);
         self.arrivals
             .note(&listed, ferrite_core::clock::system_time());
-        let inputs = nav_inputs(view, model, &listed, &self.arrivals, cx);
+        let (inputs, factories) = nav_inputs(view, model, &listed, &self.arrivals, cx);
+        self.factories = factories;
         if self.inputs.as_ref() != Some(&inputs) {
             self.inputs = Some(inputs);
             cx.notify();
@@ -284,6 +290,11 @@ impl NavView {
     /// What the nav draws, as it last read it.
     pub(super) fn inputs(&self) -> Option<&NavInputs> {
         self.inputs.as_ref()
+    }
+
+    /// The Projects the Factory door lists, as the nav last read them.
+    pub(super) fn factories(&self) -> &[ProjectId] {
+        &self.factories
     }
 
     /// The list holds the keyboard it was handed.
@@ -323,18 +334,19 @@ impl Render for NavView {
 }
 
 /// Everything the nav draws from the Cockpit, as plain values: `listed`
-/// and `arrivals` as `look` noted them.
+/// and `arrivals` as `look` noted them. With them, the Projects the
+/// Factory door lists.
 fn nav_inputs(
     view: &CockpitView,
     model: &Cockpit,
     listed: &[(ThreadId, nav::Section, Option<std::time::SystemTime>)],
     arrivals: &nav::Arrivals,
     cx: &App,
-) -> NavInputs {
+) -> (NavInputs, Vec<ProjectId>) {
     use crate::ferrite_update::State;
     let state = nav_state(view, model, listed, arrivals, cx);
     let inbox = view.inbox_rows(&state, cx);
-    let projects = view.factory_nav_projects(&state, cx);
+    let projects = factory_projects(view, model, &state);
     let factory = (!projects.is_empty()).then(|| {
         projects
             .iter()
@@ -364,7 +376,7 @@ fn nav_inputs(
         State::HandedOver { version } => Some(format!("Install Ferrite {version}").into()),
         _ => None,
     };
-    NavInputs {
+    let inputs = NavInputs {
         machines: view.machine_rows(cx),
         machine_lost: view.machine_lost(cx),
         inbox,
@@ -388,7 +400,34 @@ fn nav_inputs(
         free_disk: view.free_disk,
         update,
         state,
-    }
+    };
+    (inputs, projects)
+}
+
+/// The Projects with a Factory entry over the nav's cards: each one an
+/// operator's Thread or a Task is in or whose automatic starts are on,
+/// the chosen one's alone while the list is filtered to a Project,
+/// which shows it even when empty. Any other Project's Factory is the
+/// palette's (`Factory: <Project>`).
+fn factory_projects(view: &CockpitView, model: &Cockpit, state: &nav::NavState) -> Vec<ProjectId> {
+    let board = model.factory();
+    let automatic = board
+        .workflows
+        .iter()
+        .filter(|workflow| workflow.automation.switch == ferrite_core::factory::Switch::On)
+        .map(|workflow| workflow.project);
+    let mut projects: Vec<ProjectId> = state
+        .open_rows()
+        .chain(&state.parked)
+        .filter_map(|row| view.facts.get(row.thread).and_then(|facts| facts.project))
+        .chain(board.tasks.iter().map(|task| task.project))
+        .chain(automatic)
+        .chain(view.nav_filter)
+        .filter(|project| view.nav_filter.is_none_or(|wanted| wanted == *project))
+        .collect();
+    projects.sort();
+    projects.dedup();
+    projects
 }
 
 /// The nav's per-frame state (ADR 0040), from caches and O(1) reads

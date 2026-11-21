@@ -959,6 +959,7 @@ pub(crate) mod drawn {
         static PANES: RefCell<HashMap<PaneIdentity, Pane>> = RefCell::new(HashMap::new());
         static PANE_RENDERS: RefCell<HashMap<PaneIdentity, usize>> = RefCell::new(HashMap::new());
         static NAV_RENDERS: Cell<usize> = const { Cell::new(0) };
+        static TOAST_RENDERS: Cell<usize> = const { Cell::new(0) };
         static NAV_ROWS: RefCell<HashMap<ThreadId, String>> = RefCell::new(HashMap::new());
         static PUMPS: Cell<usize> = const { Cell::new(0) };
         static LISTS: Cell<usize> = const { Cell::new(0) };
@@ -993,6 +994,15 @@ pub(crate) mod drawn {
 
     pub(crate) fn built_nav() {
         NAV_RENDERS.with(|renders| renders.set(renders.get() + 1));
+    }
+
+    pub(crate) fn built_toasts() {
+        TOAST_RENDERS.with(|renders| renders.set(renders.get() + 1));
+    }
+
+    /// How many times the toast float has been built on this thread.
+    pub(crate) fn toast_renders() -> usize {
+        TOAST_RENDERS.with(Cell::get)
     }
 
     pub(crate) fn record_row(thread: ThreadId, row: String) {
@@ -1194,7 +1204,7 @@ impl CockpitView {
         // The root draws its card into its own frame, so each change
         // redraws the window.
         cx.observe(&file_surface, |_, _, cx| cx.notify()).detach();
-        let toasts = cx.new(|_| toasts::ToastsView::new(cockpit_weak.clone()));
+        let toasts = cx.new(|cx| toasts::ToastsView::new(cockpit_weak.clone(), cockpit.clone(), cx));
         let decisions = cx.new(|_| decisions::DecisionsView::default());
         // A card's pick lives in its Pane's forms, and the root draws the
         // cards into its transcripts, so each change redraws the window.
@@ -6580,7 +6590,7 @@ impl CockpitView {
         self.present_allowance_warnings(window, cx);
         self.present_asked(window, cx);
         self.retire_task_toasts(window, cx);
-        self.toast_margins(cx);
+        self.place_toasts(cx);
         self.maximized = window.is_maximized();
         // What this frame draws is what the window streams whole;
         // everything else reads its digest (ADR 0032).
@@ -7194,7 +7204,7 @@ impl CockpitView {
             .children(self.title_tools_element(cx))
             .children(self.popup_element(window, cx))
             .child(self.sheets.clone())
-            .child(self.toasts.clone())
+            .child(self.toast_float())
             .children(self.sheet_floats(window, cx))
             .children(self.lightbox_element(cx))
             .children(gpui::component::Root::render_dialog_layer(window, cx))
@@ -8249,7 +8259,7 @@ impl CockpitView {
                 needs_you.posted.insert(posting.tag.clone(), alert.clone());
             }
             if redraw {
-                cx.notify();
+                toasts.look_again(cx);
             }
             (stale, sound, posts)
         });
