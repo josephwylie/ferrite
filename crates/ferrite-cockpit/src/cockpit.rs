@@ -5726,6 +5726,10 @@ impl CockpitView {
                 }
             }
             self.cockpit.focus(identity);
+            // The draft may be the Pane focused as the Factory or the PRs
+            // opened, so focus never moves to leave them: give the board
+            // back here.
+            self.leave_destination();
             self.sync_panes(cx);
             cx.notify();
             return;
