@@ -1649,6 +1649,118 @@ mod tests {
         (decoder, events)
     }
 
+    /// One API message as the CLI streams it: two thinking blocks, then a
+    /// Bash call (shape captured from 2.1.330 with `--include-partial-messages`).
+    fn two_thoughts_then_a_call(model: &str) -> Vec<String> {
+        let frame = |event: Value| {
+            json!({"type":"stream_event","event":event,"session_id":"s1","parent_tool_use_id":null,
+                "uuid":format!("{}-{}", event["type"], event["index"]),"api_message_id":"msg_1"})
+            .to_string()
+        };
+        let snapshot = |uuid: &str, block: Value| {
+            json!({"type":"assistant","session_id":"s1","parent_tool_use_id":null,"uuid":uuid,
+                "message":{"model":model,"id":"msg_1","type":"message","role":"assistant","content":[block]}})
+            .to_string()
+        };
+        let thought = |index: u64, text: &str| {
+            vec![
+                frame(json!({"type":"content_block_start","index":index,
+                    "content_block":{"type":"thinking","thinking":"","signature":""}})),
+                frame(json!({"type":"content_block_delta","index":index,
+                    "delta":{"type":"thinking_delta","thinking":text}})),
+                snapshot(
+                    &format!("snap{index}"),
+                    json!({"type":"thinking","thinking":text,"signature":"sig"}),
+                ),
+                frame(json!({"type":"content_block_stop","index":index})),
+            ]
+        };
+        let mut lines = vec![frame(json!({"type":"message_start","message":{
+            "model":model,"id":"msg_1","type":"message","role":"assistant","content":[]}}))];
+        lines.extend(thought(
+            0,
+            "I'll finish with wrap_up after the last command.\n\n",
+        ));
+        lines.extend(thought(
+            1,
+            "The repo has only a seed commit, so I'm planning from scratch.\n\n",
+        ));
+        let call = json!({"type":"tool_use","id":"toolu_1","name":"Bash","input":{"command":"ls"}});
+        lines.push(frame(
+            json!({"type":"content_block_start","index":2,"content_block":call}),
+        ));
+        lines.push(snapshot("snap2", call));
+        lines.push(frame(json!({"type":"content_block_stop","index":2})));
+        lines.push(frame(json!({"type":"message_stop"})));
+        lines
+    }
+
+    /// The main transcript's blocks in order, as `thought:`, `said:` or
+    /// `call:` lines.
+    fn main_shape(lines: &[String]) -> Vec<String> {
+        let mut decoder = Decoder::default();
+        let mut activity = Activity::default();
+        activity.apply(ActivityInput::Connect { generation: 1 });
+        for event in lines.iter().flat_map(|line| decoder.decode(line)) {
+            activity.apply(match event {
+                SessionEvent::Activity(event) => ActivityInput::Observe {
+                    generation: 1,
+                    event,
+                    at: Instant::now(),
+                },
+                event => ActivityInput::Main {
+                    input: crate::transcript::Input::Event(event),
+                    at: Instant::now(),
+                },
+            });
+        }
+        use crate::transcript::Body;
+        activity
+            .view()
+            .main()
+            .transcript()
+            .blocks()
+            .iter()
+            .filter_map(|block| match &block.body {
+                Body::Thinking(text) => Some(format!("thought: {}", text.trim())),
+                Body::Paragraph { spans } => Some(format!(
+                    "said: {}",
+                    spans
+                        .iter()
+                        .map(|span| span.text.as_str())
+                        .collect::<String>()
+                        .trim()
+                )),
+                Body::Tool(tool) => Some(format!("call: {}", tool.name)),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// Claude 5.1 and later write the update they would say before a call
+    /// as a thinking block: a second thought in a row before a call is
+    /// that update, said to the operator as T3 Code shows it (its
+    /// `claudeWritesUpdatesAsThinking`). The first stays a thought.
+    #[test]
+    fn a_second_thought_before_a_call_is_said_on_claude_5_1_and_later() {
+        assert_eq!(
+            main_shape(&two_thoughts_then_a_call("claude-opus-5-5")),
+            [
+                "thought: I'll finish with wrap_up after the last command.",
+                "said: The repo has only a seed commit, so I'm planning from scratch.",
+                "call: Bash",
+            ]
+        );
+        assert_eq!(
+            main_shape(&two_thoughts_then_a_call("claude-sonnet-4-5-20250929")),
+            [
+                "thought: I'll finish with wrap_up after the last command.",
+                "thought: The repo has only a seed commit, so I'm planning from scratch.",
+                "call: Bash",
+            ]
+        );
+    }
+
     /// Work the CLI will start itself, which Ferrite cannot watch: a
     /// wakeup, cron or monitor the agent scheduled, or an ambient task.
     #[test]

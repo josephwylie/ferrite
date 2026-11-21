@@ -421,7 +421,7 @@ fn live_row(live: &Live, work: &[Block], disclosure: Option<LineDisclosure>) -> 
         .then(|| {
             work.iter().rev().find_map(|block| match &block.body {
                 Body::Thinking(text) if !text.trim().is_empty() => {
-                    Some(ferrite_core::progress::headline(text))
+                    Some(text::live_thought_line(text))
                 }
                 _ => None,
             })

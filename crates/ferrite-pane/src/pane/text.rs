@@ -33,6 +33,11 @@ pub(crate) fn live_words(tool: &ToolBlock) -> String {
     }
 }
 
+/// What the live row's thought line says of the newest thought.
+pub(crate) fn live_thought_line(markdown: &str) -> String {
+    ferrite_core::progress::headline(markdown)
+}
+
 /// A command line's program (T3's `commandProgramName`): its first word
 /// past any `NAME=value` settings, a path's last part (`/usr/bin/sed` →
 /// `sed`).
@@ -994,6 +999,44 @@ mod tests {
                 command(t, "a");
             }),
             "Ran 1 command"
+        );
+    }
+
+    /// T3's `liveThoughtLine`: a bold heading alone on the thought's first
+    /// line, or else the first sentence, its Markdown flattened.
+    #[test]
+    fn the_live_thought_line_is_a_leading_heading_or_the_first_sentence() {
+        // A summarized Claude thought, as Opus 5.5 streamed it.
+        assert_eq!(
+            live_thought_line(
+                "I'm comparing 3/22 and 2/15 by cross-multiplying, which gives 45 against 44, so \
+                 3/22 is slightly larger. Over a common denominator of 330 the gap is 1/330. \
+                 Next I'll check it with decimals.\n\n"
+            ),
+            "I'm comparing 3/22 and 2/15 by cross-multiplying, which gives 45 against 44, so \
+             3/22 is slightly larger."
+        );
+        assert_eq!(
+            live_thought_line("**Checking fold call sites**\n\nI'll read rows.rs first."),
+            "Checking fold call sites"
+        );
+        assert_eq!(
+            live_thought_line("The `rows.rs` call is **not** the fault. It is the helper."),
+            "The rows.rs call is not the fault."
+        );
+        assert_eq!(
+            live_thought_line("- Read [the ADR](docs/adr/0038.md) and *then*\n  the doc"),
+            "Read the ADR and then the doc"
+        );
+        assert_eq!(
+            live_thought_line("3.5 is larger than 3"),
+            "3.5 is larger than 3"
+        );
+        assert_eq!(live_thought_line("先读文件。然后再改。"), "先读文件。");
+        let long = format!("{} end. Next.", "word ".repeat(60));
+        assert_eq!(
+            live_thought_line(&long),
+            format!("{} end.", "word ".repeat(60).trim_end())
         );
     }
 }
