@@ -33,6 +33,11 @@ if ($visuals) {
 
 cargo build --release --locked --manifest-path $manifest -p ferrite @features
 if ($LASTEXITCODE -ne 0) { throw "cargo build failed" }
+if ($visuals) {
+    # The application DLL the bootstrap loads (crates/ferrite/Cargo.toml).
+    cargo rustc --release --locked --manifest-path $manifest -p ferrite --lib @features --crate-type cdylib
+    if ($LASTEXITCODE -ne 0) { throw "cargo rustc (ferrite.dll) failed" }
+}
 
 $metadata = cargo metadata --no-deps --format-version 1 --manifest-path $manifest | ConvertFrom-Json
 if ($LASTEXITCODE -ne 0) { throw "cargo metadata failed" }
