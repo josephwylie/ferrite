@@ -71,9 +71,10 @@ fn the_coordinator_is_empty_until_the_operator_speaks(cx: &mut TestAppContext) {
     // Settings: Codex, chosen from the provider chooser.
     click(cx, "coordinator-provider");
     assert!(shows(cx, "context-menu"));
-    let codex = view.read_with(cx, |view, _| {
+    let codex = view.read_with(cx, |view, cx| {
         view.factory()
             .unwrap()
+            .read(cx)
             .picks
             .iter()
             .position(|(_, pick)| {
@@ -107,7 +108,7 @@ fn the_coordinator_is_empty_until_the_operator_speaks(cx: &mut TestAppContext) {
         let coordinator = board.coordinator(project).unwrap();
         assert!(coordinator.starting, "the Factory starts it");
         assert!(board.tasks.is_empty(), "talking starts nothing");
-        let field = view.factory().unwrap().opening.clone().unwrap();
+        let field = view.factory().unwrap().read(cx).coordinator.read(cx).field.clone();
         assert_eq!(field.read(cx).text(), "", "sent");
     });
 }
@@ -149,12 +150,12 @@ fn proposals_are_cards_accepted_or_dismissed_beside_the_conversation(cx: &mut Te
     let (view, cx) = window(cx, core, project);
     assert!(shows(cx, "coordinator-pane"), "its ordinary Pane");
     assert!(!shows(cx, "coordinator-empty"));
-    view.read_with(cx, |view, _| {
+    view.read_with(cx, |view, cx| {
         assert!(
             !view.cockpit.operators(coordinator),
             "not the operator's own"
         );
-        assert_eq!(view.coordinator_drawn(), Some(coordinator));
+        assert_eq!(view.coordinator_drawn(cx), Some(coordinator));
     });
     assert!(shows(cx, "coordinator-proposals"));
     assert!(shows(cx, "proposal-p-1") && shows(cx, "proposal-p-2"));
@@ -185,8 +186,8 @@ fn proposals_are_cards_accepted_or_dismissed_beside_the_conversation(cx: &mut Te
     assert!(!shows(cx, "proposal-p-1-accept"), "accepted once");
 
     click(cx, "proposal-p-1-open");
-    view.read_with(cx, |view, _| {
-        let factory = view.factory().unwrap();
+    view.read_with(cx, |view, cx| {
+        let factory = view.factory().unwrap().read(cx);
         assert_eq!(factory.surface, Surface::Board);
         assert_eq!(factory.open.as_deref(), Some(task.as_str()));
     });
@@ -221,9 +222,9 @@ fn focusing_a_coordinator_by_id_opens_its_projects_coordinator_tab(cx: &mut Test
     });
     tick(cx);
     assert!(shows(cx, "coordinator-pane"));
-    view.read_with(cx, |view, _| {
-        let factory = view.factory().expect("the Factory shows");
-        assert_eq!(factory.project, project);
+    view.read_with(cx, |view, cx| {
+        let factory = view.factory().expect("the Factory shows").read(cx);
+        assert_eq!(view.factory_project(), Some(project));
         assert_eq!(factory.surface, Surface::Coordinator);
     });
 }

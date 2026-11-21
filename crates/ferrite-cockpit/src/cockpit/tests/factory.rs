@@ -433,7 +433,7 @@ fn an_empty_projects_factory_opens_from_the_nav(cx: &mut TestAppContext) {
     assert!(shows(cx, "factory-board"));
     view.read_with(cx, |view, _| {
         assert_eq!(
-            view.factory().map(|view| view.project),
+            view.factory_project(),
             Some(empty)
         );
     });
@@ -478,8 +478,8 @@ fn focusing_a_worker_by_id_opens_its_tasks_worker_tab(cx: &mut TestAppContext) {
     tick(cx);
     assert!(shows(cx, "task-panel"));
     assert!(shows(cx, "task-worker"), "the Worker tab");
-    view.read_with(cx, |view, _| {
-        let factory = view.factory().expect("the Factory shows");
+    view.read_with(cx, |view, cx| {
+        let factory = view.factory().expect("the Factory shows").read(cx);
         assert_eq!(factory.open.as_deref(), Some("t-1"));
         assert_eq!(factory.tab, crate::cockpit::factory::TaskTab::Worker);
     });

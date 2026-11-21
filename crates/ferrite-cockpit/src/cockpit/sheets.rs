@@ -278,7 +278,7 @@ impl CockpitView {
                 self.cockpit.thread(dialog.read(cx).thread).is_none()
             }
             Some(Sheet::NewTask(sheet)) => {
-                self.factory().map(|view| view.project) != Some(sheet.read(cx).project)
+                self.factory_project() != Some(sheet.read(cx).project)
             }
             Some(Sheet::Direct(sheet)) => {
                 let sheet = sheet.read(cx);

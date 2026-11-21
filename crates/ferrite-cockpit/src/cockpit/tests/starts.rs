@@ -96,7 +96,7 @@ fn each_source_shows_its_own_settings_and_keeps_what_was_typed(cx: &mut TestAppC
     assert!(shows(cx, "outline-start-selected"));
     assert!(shows(cx, "inspector-start"));
     click(cx, "start-kind");
-    let rows = view.read_with(cx, |view, _| view.factory_pick_rows());
+    let rows = view.read_with(cx, |view, cx| view.factory_pick_rows(cx));
     let labels: Vec<String> = rows.iter().map(|row| row.label.to_string()).collect();
     assert_eq!(
         labels,
@@ -161,8 +161,8 @@ fn each_source_shows_its_own_settings_and_keeps_what_was_typed(cx: &mut TestAppC
         assert!(shows(cx, selector), "{selector}");
     }
     click(cx, "start-repository-flagged");
-    let repositories: Vec<String> = view.read_with(cx, |view, _| {
-        view.factory_pick_rows()
+    let repositories: Vec<String> = view.read_with(cx, |view, cx| {
+        view.factory_pick_rows(cx)
             .iter()
             .map(|row| row.label.to_string())
             .collect()
@@ -171,8 +171,8 @@ fn each_source_shows_its_own_settings_and_keeps_what_was_typed(cx: &mut TestAppC
     click(cx, "context-menu-row-0");
     settle(cx);
     click(cx, "start-label-flagged");
-    let labels: Vec<String> = view.read_with(cx, |view, _| {
-        view.factory_pick_rows()
+    let labels: Vec<String> = view.read_with(cx, |view, cx| {
+        view.factory_pick_rows(cx)
             .iter()
             .map(|row| row.label.to_string())
             .collect()
@@ -189,7 +189,7 @@ fn each_source_shows_its_own_settings_and_keeps_what_was_typed(cx: &mut TestAppC
     assert_eq!(github.extra_instructions, "Open a PR that closes it");
     click(cx, "start-trigger");
     assert_eq!(
-        view.read_with(cx, |view, _| view.factory_pick_rows().len()),
+        view.read_with(cx, |view, cx| view.factory_pick_rows(cx).len()),
         2,
         "an issue cannot request a review"
     );

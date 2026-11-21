@@ -254,7 +254,7 @@ impl CockpitView {
     /// no longer shows. It never reads the sheet: the sheet calls it while
     /// its own update is running.
     fn new_task_inputs(&self, project: ProjectId, workflow: Option<&str>) -> Option<NewTaskInputs> {
-        if self.factory()?.project != project {
+        if self.factory_project()? != project {
             return None;
         }
         let process = match workflow
@@ -290,11 +290,13 @@ impl CockpitView {
     /// The shown Factory's New task sheet, in place of any other sheet, as
     /// it was last closed.
     pub(crate) fn open_new_task(&mut self, cx: &mut Context<Self>) {
-        let Some(view) = self.factory_mut() else {
+        let Some(project) = self.factory_project() else {
             return;
         };
-        let project = view.project;
-        let kept = view.kept.take().unwrap_or_else(KeptNewTask::new);
+        let kept = self
+            .update_factory(cx, |view, _| view.kept.take())
+            .flatten()
+            .unwrap_or_else(KeptNewTask::new);
         let cockpit = cx.weak_entity();
         let sheet = cx.new(|cx| NewTaskView::new(cockpit, project, kept, cx));
         cx.subscribe(&sheet, Self::on_new_task_event).detach();
@@ -313,10 +315,13 @@ impl CockpitView {
 
     /// The sheet gone, closed or replaced: what was typed stays on its
     /// Factory, if that still shows.
-    pub(super) fn new_task_gone(&mut self, sheet: &Entity<NewTaskView>, cx: &App) {
-        let sheet = sheet.read(cx);
-        if let Some(view) = self.factory_mut().filter(|view| view.project == sheet.project) {
-            view.kept = Some(sheet.kept(cx));
+    pub(super) fn new_task_gone(&mut self, sheet: &Entity<NewTaskView>, cx: &mut App) {
+        let (project, kept) = {
+            let sheet = sheet.read(cx);
+            (sheet.project, sheet.kept(cx))
+        };
+        if self.factory_project() == Some(project) {
+            self.update_factory(cx, |view, _| view.kept = Some(kept));
         }
     }
 
@@ -350,13 +355,13 @@ impl CockpitView {
             match self.cockpit.task(action) {
                 Ok(Some(Done::Task { task })) => {
                     self.hide_sheet(cx);
-                    if let Some(view) = self.factory_mut() {
+                    self.update_factory(cx, |view, _| {
                         view.kept = None;
                         view.surface = Surface::Board;
                         view.open = Some(task);
                         view.tab = TaskTab::Overview;
                         view.note = None;
-                    }
+                    });
                     None
                 }
                 Ok(_) => Some(SharedString::from("The Server did not start the task.")),

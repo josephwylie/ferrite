@@ -10,27 +10,38 @@ pub(crate) struct Destination {
 }
 
 pub(crate) enum Shows {
-    /// A Project's Factory board (ADR 0037).
-    Factory(factory::FactoryView),
+    /// A Project's Factory board (ADR 0037): which Project's, and its view,
+    /// which keeps what the Factory keeps while it shows.
+    Factory(ProjectId, Entity<factory::FactoryView>),
     /// The PRs list. What it holds lives on `PrsView`, kept for the next
     /// visit.
     Prs,
 }
 
 impl CockpitView {
-    /// The Factory, when it stands in the board's place.
-    pub(super) fn factory(&self) -> Option<&factory::FactoryView> {
+    /// The Factory's view, when it stands in the board's place.
+    pub(super) fn factory(&self) -> Option<&Entity<factory::FactoryView>> {
         match &self.destination.as_ref()?.shows {
-            Shows::Factory(view) => Some(view),
+            Shows::Factory(_, view) => Some(view),
             Shows::Prs => None,
         }
     }
 
-    pub(super) fn factory_mut(&mut self) -> Option<&mut factory::FactoryView> {
-        match &mut self.destination.as_mut()?.shows {
-            Shows::Factory(view) => Some(view),
+    /// The Project whose Factory stands in the board's place.
+    pub(super) fn factory_project(&self) -> Option<ProjectId> {
+        match &self.destination.as_ref()?.shows {
+            Shows::Factory(project, _) => Some(*project),
             Shows::Prs => None,
         }
+    }
+
+    /// Change what the Factory keeps, while it stands in the board's place.
+    pub(super) fn update_factory<R>(
+        &self,
+        cx: &mut gpui::App,
+        change: impl FnOnce(&mut factory::FactoryView, &mut Context<factory::FactoryView>) -> R,
+    ) -> Option<R> {
+        self.factory().cloned().map(|view| view.update(cx, change))
     }
 
     /// Whether the PRs stand in the board's place.

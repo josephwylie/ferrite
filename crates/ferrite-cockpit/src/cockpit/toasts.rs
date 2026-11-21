@@ -144,7 +144,7 @@ impl CockpitView {
                 .filter(|_| self.nav_folded())
                 .and_then(|alert| self.alert_row(alert, machines, ferrite_core::clock::system_time())),
             nav_w: self.nav_width(),
-            board_right: self.panel_column_w() + self.task_panel_w(),
+            board_right: self.panel_column_w() + self.task_panel_w(cx),
         }
     }
 
@@ -172,7 +172,7 @@ impl CockpitView {
     /// follows the panel, written only when it moves.
     pub(super) fn toast_margins(&self, cx: &mut gpui::App) {
         let right =
-            px(self.panel_column_w() + self.task_panel_w() + ferrite_ui::theme::TOAST_BOX_RIGHT);
+            px(self.panel_column_w() + self.task_panel_w(cx) + ferrite_ui::theme::TOAST_BOX_RIGHT);
         if gpui::component::Theme::global(cx)
             .notification
             .margins

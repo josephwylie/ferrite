@@ -434,8 +434,8 @@ that happened to touch it, and nothing in the code said whose a field was.
   one `field_input` the editor's own fields use. It keeps nothing by
   Thread. Left of the Factory: the Workflows editor, the Coordinator
   surface and the shell.
-- **The Workflows editor is the twenty-fifth, in part, the Factory's
-  fourth slice.** `WorkflowsView` (`cockpit/workflows/editor.rs`) owns
+- **The Workflows editor is the twenty-fifth, the Factory's fourth
+  slice.** `WorkflowsView` (`cockpit/workflows/editor.rs`) owns
   what the editor has chosen and what is being typed in it: the Workflow
   and Step shown, what the inspector shows (`Inspected`: a Step, the
   approval settings or the start, one at a time, so only its outline row
@@ -443,35 +443,115 @@ that happened to touch it, and nothing in the code said whose a field was.
   skills search is revealed, the outline's focus and scroll, each text
   field's Composer, made once for as long as the Factory is open (the
   start's two included), and the field that holds the keyboard. The
-  Factory holds it, as it holds the Archive's. It has no render of its
-  own yet: the root draws the surface's head, its problems and the empty
-  state, and has the view draw the outline and the inspector beside it
-  with what they read from `workflows_inputs`: the shown Workflow's
-  draft, the Step shown, the automatic starts' switch, the draft's
-  problems and the catalog they were found against, each Provider's
-  models, the shown Step's Provider's installed skills, and the starts'
-  view, which draws the start. The outline's keys read the same inputs
+  Factory holds it, as it holds the Archive's. Its render is the
+  Workflows surface, which the root only hosts: the head (the Workflow
+  picker, the version, New workflow, Run task, Save), the draft's
+  problems, the outline and the inspector, or the empty state while the
+  Project has no Workflow, with what they read from `workflows_inputs`:
+  the shown Workflow's name, its latest version and whether the draft
+  differs from it, the draft, the Step shown, the automatic starts'
+  switch, the draft's problems and the catalog they were found against,
+  each Provider's models, the shown Step's Provider's installed skills,
+  and the starts' view, which draws the start. The outline's keys read the same inputs
   through a weak handle to the root, so a second key before the next
   frame reads the draft the first one left. The focus pump hands the
   keyboard to the chosen field, else the outline. It emits
   `WorkflowsEvent`: a field typed in, whose text the root sends to the
   draft; a press on a field or the outline; a Step's row, ↑ ↓, the
-  approval's or the start's row, which the root shows (`select_step`,
-  `select_approval`, `open_start`) and fills the fields of
+  approval's, the start's or a problem's row, which the root shows
+  (`select_step`, `select_approval`, `open_start`) and fills the fields of
   (`ensure_fields`, which reads the draft); ⌥↑ ⌥↓, a drop, Add agent, a
   Step's switch, a skill added or removed and Delete agent; a route's
-  picker, a row's `⋯` and an inspector chooser, whose rows the root
-  opens; and a segment's choice. Every edit is a Server ask
-  (`workflow_ask`), so editing stays the root's. Each Provider's
+  picker, a row's `⋯`, an inspector chooser, the head's Workflow picker
+  and New workflow, whose rows the root opens; a segment's choice; Run
+  task, which opens the New task sheet on the Workflow shown; and Save.
+  Every edit and Save is a Server ask (`workflow_ask`,
+  `save_workflow`), so editing stays the root's. Each Provider's
   installed skills get no view, by the rule below: only the root asks
   for them and only its pump takes the answers, so they are a plain
   struct on the Factory (`Skills`), in the shape of the import picker's
   listing (`listen`, `listed`). The open picker's rows stay the Factory's
   (`picks`), shared with the New task sheet, a Task's sheets and the
-  Coordinator, and the popup slot and the focus pump stay the root's.
-  Left of the editor: the surface's head, its problems and the empty
-  state, after which the view's render is the Workflows surface. Left of
-  the Factory after the editor: the Coordinator surface, then the shell.
+  Coordinator, and the popup slot and the focus pump stay the root's, as
+  do the Factory head's surface tabs, which the shell draws. Left of the
+  Factory: the Coordinator surface, then the shell.
+- **The Coordinator surface is the twenty-sixth, the Factory's fifth
+  slice.** `CoordinatorView` (`cockpit/coordinator.rs`) owns the one
+  thing the window keeps of a Factory's Coordinator (#224): the opening
+  field whose Send starts it, made once as the Factory opens. The Factory
+  holds it, as it holds the Archive's. The rest is the Server's: the
+  Coordinator's Thread, whether it is starting and why it could not, the
+  Provider, model and effort chosen for it, and its proposals, all on
+  the board the Server publishes. It has no render of its own:
+  the Coordinator's conversation, once it runs, is its ordinary Pane,
+  which only the root can draw (`pane_slot`, with the parts' cache), so
+  the root draws the Pane and has the view draw the surface round it
+  (`coordinator_surface`): the choosers for what it runs on, the empty
+  conversation with the field and Send until it runs, and the proposals'
+  cards, reading through `coordinator_inputs` what it runs on and that
+  Provider's models, whether it is starting and why it could not, and
+  each proposal as its card says it, with the Task an accepted one
+  started while the board has it. It emits `CoordinatorEvent`: Send, a
+  chooser's rows, which the root opens, a proposal's accept and `Not
+  now`, and `Open task`, which gives the board back and opens the Task's
+  panel. Starting it, choosing what it runs on, accepting and dismissing
+  are Server asks (`coordinator_ask`), so they stay the root's, which
+  clears the field once the Server took its words; a refusal is said in
+  the Factory's `note`. The focus pump hands the keyboard to its Pane's
+  Composer once it runs, else the field. It keeps nothing by Thread.
+  Left of the Factory: the shell, `FactoryView` itself, with what it keeps
+  for every surface: which surface shows (`surface`) and its tabs, the
+  last command's `note`, the open picker's rows (`picks`), shared by the
+  Workflows editor, the New task sheet, a Task's sheets and the
+  Coordinator, the New task sheet as last closed, opening and closing the
+  Factory, and the board with its columns and the Task panel.
+- **The Factory's shell is the twenty-seventh, its last slice.**
+  `FactoryView` (`cockpit/factory.rs`) was a struct the root held and
+  drew; now it is a view the root holds in the board's place, made as the
+  Factory opens on a Project and heard from its making (`new_factory`),
+  so it goes when the Factory leaves the board's place, as before. Which
+  Project's Factory shows stays the root's `destination`
+  (`Shows::Factory(project, view)`), as whether the PRs show does. It
+  owns what the Factory keeps for every surface: which surface shows
+  (`surface`) and whether the Archive stands in the Board's place, the
+  open Task and its panel's tab, the last command's `note`, the New task
+  sheet as last closed (`kept`), the columns' scroll and the column it
+  last brought into view, the skills found, the open picker's rows
+  (`picks`) and the five leaf views. It has no render of its own: the
+  Coordinator's Pane and a Worker's are drawn only by the root
+  (`pane_slot`), so the root has it draw the board (`board`), reading
+  through `factory_inputs` the Project's title, each Task on the board as
+  its card says it (`TaskCard`), how many the Archive holds, the tabs'
+  counts, the board's width and the store's trouble, and hands in what
+  only it draws: the Coordinator's surface round its Pane, and for the
+  open Task's panel the Task as the board says it now with, on the Worker
+  tab, the Worker's Pane, an earlier Worker read or the Workers it had
+  (`TaskPanel`, `task_panel_inputs`). The view draws the head (the title
+  and count, the surface tabs, the note, Clear completed, the Archive's
+  button, New task), the trouble, and the surface shown: the Workflows
+  editor, the Archive's list, the Board's six columns of cards, each with
+  the Task panel (its status, Stop, Resume, Delete, Close, the tabs, the
+  Overview with the Task's say and pull request, Activity, Context).
+  Dismissing the note, opening the Archive, a card pressed again and
+  Close are its own. It emits `FactoryEvent`: a surface tab, which the
+  root shows (`factory_surface`, the Board's closing the Archive first),
+  Clear completed and Stop, Resume or Delete (`Command`), Server asks
+  sent through `task_command`, New task, whose sheet the sheet host
+  shows, a card (`OpenTask`), which `open_task` opens, and a panel's tab
+  (`Tab`), as `task_tab`, which hands the Worker's Pane the keyboard.
+  `picks` stays the Factory's: a picker's rows are `Pick`s, the
+  Factory's own type, filled by every picker it has (the Workflows
+  editor's, the New task sheet's, a Task's sheets', the Coordinator's),
+  read by the popup slot through `MenuTarget::Factory`, and gone with the
+  Factory, as they were; putting them on the slot would make every
+  target carry a Factory's rows. What stays the root's is the root's:
+  every Server ask and the `note` each answer leaves (`workflow_ask`,
+  `coordinator_ask`, `task_command`, `read_worker`, starting a Task),
+  opening the Factory and a Task, the sheet host, the popup slot, the
+  focus pump (`factory_focus`), the Panes, a Task's toasts and
+  notifications (`task_toasts`, which the window raises whether or not
+  the Factory shows), and the Factory's rows in the nav and the palette.
+  Nothing the Factory keeps is left on the root.
 
 ## What does not get a view
 

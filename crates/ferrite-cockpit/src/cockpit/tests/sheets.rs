@@ -418,7 +418,7 @@ fn a_task_started_closes_the_new_task_sheet_and_spends_its_words(cx: &mut TestAp
     assert_eq!(new_task_error(&view, cx), None);
     assert!(!new_task_up(cx), "Start closes it");
     assert_eq!(
-        view.read_with(cx, |view, _| view.factory().unwrap().open.clone()).as_deref(),
+        view.read_with(cx, |view, cx| view.factory().unwrap().read(cx).open.clone()).as_deref(),
         Some("started-1"),
         "on the Task's panel"
     );
@@ -431,7 +431,7 @@ fn a_task_started_closes_the_new_task_sheet_and_spends_its_words(cx: &mut TestAp
 #[gpui::test]
 fn leaving_the_factory_takes_the_new_task_sheet_and_its_words(cx: &mut TestAppContext) {
     let (view, cx) = factory_window(cx, "sheets-new-task-leave");
-    let project = view.read_with(cx, |view, _| view.factory().unwrap().project);
+    let project = view.read_with(cx, |view, _| view.factory_project().unwrap());
     view.update(cx, |view, cx| view.open_new_task(cx));
     tick(cx);
     cx.simulate_input("Gone");

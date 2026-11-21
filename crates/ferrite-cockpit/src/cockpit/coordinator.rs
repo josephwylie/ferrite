@@ -7,249 +7,104 @@
 //! conversation and a field whose Send starts it. Once it runs, its Pane
 //! is the one this window already holds, drawn here as the Task panel's
 //! Worker tab draws a Worker's. A proposal changes nothing until accepted.
+//!
+//! The opening field lives in a view of its own (ADR 0041),
+//! `CoordinatorView`, which the Factory holds. It has no render of its
+//! own: the root has it draw the surface with what it reads of the window
+//! (`CoordinatorInputs`), round the Coordinator's Pane, which the root
+//! draws; what is pressed it says as a `CoordinatorEvent`, since every
+//! change is a Server ask.
 
 use super::workflows::Pick;
 use super::*;
-use ferrite_core::factory::{Agent, Proposal, ProposalStatus};
+use ferrite_core::factory::{Act, Agent, Proposal, ProposalId, ProposalStatus, TaskId};
 use ferrite_core::protocol::{CoordinatorAction, Done};
 use ferrite_pane::composer::{Composer, Role};
 
 /// The proposals' column beside the conversation.
 const PROPOSALS_W: f32 = 380.;
 
-/// A choice on the Coordinator's settings.
-#[derive(Clone, Debug, PartialEq)]
-pub(crate) enum CoordinatorPick {
-    Provider(Provider),
-    /// Empty: the Provider's default.
-    Model(String),
-    Effort(String),
+/// What the Coordinator surface asks of the window.
+pub(crate) enum CoordinatorEvent {
+    /// Send: the Coordinator starts on the opening field's words.
+    Send,
+    /// A setting's chooser: its rows open under `trigger`.
+    Picks {
+        picks: Vec<(ferrite_ui::menu::Item, Pick)>,
+        trigger: super::workflows::Trigger,
+        at: Point<Pixels>,
+    },
+    /// A proposal's action: accepting it runs it.
+    Accept(ProposalId),
+    /// `Not now`: the proposal is dismissed and changes nothing.
+    Dismiss(ProposalId),
+    /// `Open task` on an accepted proposal: the Task's panel on the Board.
+    OpenTask(TaskId),
 }
 
-impl CockpitView {
-    /// The shown Project's Coordinator's Thread, once started.
-    pub(crate) fn coordinator_thread(&self) -> Option<ThreadId> {
-        let project = self.factory()?.project;
-        self.cockpit.factory().coordinator(project)?.thread
+/// What the surface draws from the window: the Coordinator and its
+/// proposals as the board says them now.
+pub(crate) struct CoordinatorInputs {
+    /// What it runs on: the Factory's choice, else the operator's defaults.
+    agent: Agent,
+    /// That Provider's models, as a chooser names and offers them.
+    models: Vec<ferrite_core::ModelInfo>,
+    /// It is being started, or has started.
+    starting: bool,
+    /// Why it could not start, last time.
+    error: Option<String>,
+    /// Its proposals, waiting ones first, newest first within each.
+    proposals: Vec<ProposalCard>,
+}
+
+/// One proposal as its card says it.
+struct ProposalCard {
+    id: ProposalId,
+    title: String,
+    /// Exactly what accepting it does, line by line.
+    lines: Vec<(String, String)>,
+    /// Its accept button's word.
+    action: &'static str,
+    status: ProposalStatus,
+    /// The Task it started or redirects, while the board has it.
+    task: Option<TaskId>,
+}
+
+/// A Factory's Coordinator surface: the field whose Send starts the
+/// Coordinator, made once for as long as the Factory is open.
+pub(crate) struct CoordinatorView {
+    pub(super) field: Entity<Composer>,
+}
+
+impl EventEmitter<CoordinatorEvent> for CoordinatorView {}
+
+impl CoordinatorView {
+    fn new(cx: &mut Context<Self>) -> Self {
+        let field = cx.new(Composer::new);
+        field.update(cx, |field, cx| field.set_role(Role::Field(None), cx));
+        cx.observe(&field, |_, _, cx| cx.notify()).detach();
+        Self { field }
     }
 
-    /// Its Pane in this window, once started.
-    fn coordinator_pane(&self) -> Option<usize> {
-        self.pane_for(self.coordinator_thread()?)
+    /// The opening field's focus, which holds the keyboard while the
+    /// surface shows and the Coordinator has no Pane.
+    fn focus(&self, cx: &gpui::App) -> FocusHandle {
+        self.field.read(cx).focus_handle(cx)
     }
 
-    /// The Coordinator drawn on its surface, which streams whole.
-    pub(super) fn coordinator_drawn(&self) -> Option<ThreadId> {
-        let view = self.factory()?;
-        (view.surface == super::workflows::Surface::Coordinator)
-            .then(|| self.coordinator_thread())
-            .flatten()
-            .filter(|thread| self.pane_for(*thread).is_some())
-    }
 
-    /// What the Coordinator runs on: the Factory's choice, else the
-    /// operator's defaults.
-    pub(crate) fn coordinator_agent(&self) -> Agent {
-        let chosen = self.factory().and_then(|view| {
-            self.cockpit
-                .factory()
-                .coordinator(view.project)?
-                .agent
-                .clone()
-        });
-        chosen.unwrap_or_else(|| {
-            let settings = &self.prefs.settings;
-            let provider = settings.default_provider;
-            let (model, effort) = match provider {
-                Provider::Claude => (&settings.claude_model, &settings.claude_effort),
-                Provider::Codex => (&settings.codex_model, &settings.codex_effort),
-            };
-            Agent {
-                provider,
-                model: model.clone(),
-                effort: effort.clone(),
-            }
-        })
-    }
-
-    /// The opening field, made once.
-    pub(crate) fn ensure_coordinator_field(&mut self, cx: &mut Context<Self>) {
-        let Some(view) = self.factory() else {
-            return;
-        };
-        if view.opening.is_some() {
-            return;
-        }
-        let composer = cx.new(Composer::new);
-        composer.update(cx, |composer, cx| composer.set_role(Role::Field(None), cx));
-        cx.observe(&composer, |_, _, cx| cx.notify()).detach();
-        if let Some(view) = self.factory_mut() {
-            view.opening = Some(composer);
-        }
-    }
-
-    /// The keyboard while the Coordinator surface shows: its Pane's
-    /// Composer once it runs, else the opening field.
-    pub(super) fn coordinator_focus(&self, window: &Window, cx: &gpui::App) -> Option<FocusHandle> {
-        let view = self.factory()?;
-        if view.surface != super::workflows::Surface::Coordinator {
-            return None;
-        }
-        if let Some(index) = self.coordinator_pane() {
-            return Some(self.panes[index].composer.read(cx).focus_target(window, cx));
-        }
-        Some(view.opening.as_ref()?.read(cx).focus_handle(cx))
-    }
-
-    /// A Coordinator command; its refusal in the view's note.
-    fn coordinator_ask(
-        &mut self,
-        action: CoordinatorAction,
+    /// The Coordinator surface: its settings, the conversation (its Pane,
+    /// `pane`, once it runs, else the empty one with its opening field),
+    /// and the proposals beside it.
+    fn surface(
+        &self,
+        inputs: &CoordinatorInputs,
+        pane: Option<Div>,
+        window: &Window,
         cx: &mut Context<Self>,
-    ) -> Option<Done> {
-        let (done, note) = match self.cockpit.coordinator(action) {
-            Ok(done) => (done, None),
-            Err(error) => (None, Some(SharedString::from(error.to_string()))),
-        };
-        if let Some(view) = self.factory_mut() {
-            view.note = note;
-        }
-        cx.notify();
-        done
-    }
-
-    /// Send the opening field's words: the Coordinator starts on them.
-    pub(crate) fn speak_to_coordinator(&mut self, cx: &mut Context<Self>) {
-        let Some(view) = self.factory() else {
-            return;
-        };
-        let project = view.project;
-        let Some(field) = view.opening.clone() else {
-            return;
-        };
-        let text = field.read(cx).text().trim().to_string();
-        if text.is_empty() {
-            return;
-        }
-        let action = CoordinatorAction::Say { project, text };
-        if self.coordinator_ask(action, cx).is_some() {
-            field.update(cx, |field, cx| {
-                field.take(cx);
-            });
-        }
-    }
-
-    pub(crate) fn accept_proposal(&mut self, proposal: &str, cx: &mut Context<Self>) {
-        let skills = self.factory_catalog().skills;
-        let action = CoordinatorAction::Accept {
-            proposal: proposal.to_string(),
-            skills,
-        };
-        self.coordinator_ask(action, cx);
-    }
-
-    pub(crate) fn dismiss_proposal(&mut self, proposal: &str, cx: &mut Context<Self>) {
-        let action = CoordinatorAction::Dismiss {
-            proposal: proposal.to_string(),
-        };
-        self.coordinator_ask(action, cx);
-    }
-
-    pub(crate) fn apply_coordinator_pick(&mut self, pick: CoordinatorPick, cx: &mut Context<Self>) {
-        let Some(project) = self.factory().map(|view| view.project) else {
-            return;
-        };
-        let mut agent = self.coordinator_agent();
-        match pick {
-            CoordinatorPick::Provider(provider) => {
-                if agent.provider != provider {
-                    agent = Agent {
-                        provider,
-                        model: None,
-                        effort: None,
-                    };
-                }
-            }
-            CoordinatorPick::Model(model) => agent.model = (!model.is_empty()).then_some(model),
-            CoordinatorPick::Effort(effort) => {
-                agent.effort = (!effort.is_empty()).then_some(effort)
-            }
-        }
-        self.coordinator_ask(CoordinatorAction::Agent { project, agent }, cx);
-    }
-
-    fn coordinator_picks(&self, which: &str) -> Vec<(ferrite_ui::menu::Item, Pick)> {
-        let agent = self.coordinator_agent();
-        let pick = |item: ferrite_ui::menu::Item, choice: CoordinatorPick| {
-            (item, Pick::Coordinator(choice))
-        };
-        let models = self.cockpit.model_catalog(agent.provider);
-        match which {
-            "provider" => Provider::ALL
-                .into_iter()
-                .map(|provider| {
-                    pick(
-                        ferrite_ui::menu::Item::new(provider.to_string())
-                            .checked(agent.provider == provider),
-                        CoordinatorPick::Provider(provider),
-                    )
-                })
-                .collect(),
-            "model" => super::workflows::model_choices(&models)
-                .into_iter()
-                .map(|(label, value)| {
-                    let chosen = super::workflows::model_chosen(agent.model.as_deref(), &value);
-                    pick(
-                        ferrite_ui::menu::Item::new(label).checked(chosen),
-                        CoordinatorPick::Model(value),
-                    )
-                })
-                .collect(),
-            _ => {
-                let mut efforts: Vec<String> = agent
-                    .model
-                    .as_ref()
-                    .and_then(|value| models.iter().find(|model| &model.value == value))
-                    .map(|model| model.efforts.clone())
-                    .unwrap_or_default();
-                if efforts.is_empty() {
-                    for model in &models {
-                        for effort in &model.efforts {
-                            if !efforts.contains(effort) {
-                                efforts.push(effort.clone());
-                            }
-                        }
-                    }
-                }
-                std::iter::once(pick(
-                    ferrite_ui::menu::Item::new("Default").checked(agent.effort.is_none()),
-                    CoordinatorPick::Effort(String::new()),
-                ))
-                .chain(efforts.into_iter().map(|effort| {
-                    pick(
-                        ferrite_ui::menu::Item::new(effort.clone())
-                            .checked(agent.effort.as_deref() == Some(effort.as_str())),
-                        CoordinatorPick::Effort(effort),
-                    )
-                }))
-                .collect()
-            }
-        }
-    }
-
-    // ----------------------------------------------------------- drawing
-
-    /// The Coordinator surface: its settings, the conversation (or the
-    /// empty one with its opening field), and the proposals beside it.
-    pub(super) fn coordinator_surface(&self, window: &mut Window, cx: &mut Context<Self>) -> Div {
+    ) -> Div {
         use ferrite_ui::theme::*;
-        let Some(view) = self.factory() else {
-            return div();
-        };
-        let project = view.project;
-        let board = self.cockpit.factory();
-        let coordinator = board.coordinator(project);
-        let agent = self.coordinator_agent();
+        let agent = &inputs.agent;
 
         let settings = div()
             .debug_selector(|| "coordinator-settings".into())
@@ -278,10 +133,7 @@ impl CockpitView {
                         agent.model.as_deref().map_or_else(
                             || "Default model".into(),
                             |model| {
-                                super::workflows::model_name(
-                                    &self.cockpit.model_catalog(agent.provider),
-                                    model,
-                                )
+                                super::workflows::model_name(&inputs.models, model)
                             },
                         ),
                         "model",
@@ -302,13 +154,22 @@ impl CockpitView {
                         .flex_1()
                         .min_w_0()
                         .max_w(px(ferrite_ui::theme::SETTINGS_MENU_MAX_W))
-                        .child(super::direction::chooser(
-                            selector,
-                            text,
-                            false,
-                            self.coordinator_picks(which),
-                            cx,
-                        ))
+                        .child({
+                            let picks = std::rc::Rc::new(coordinator_picks(inputs, which));
+                            super::direction::picker_button(
+                                selector,
+                                text,
+                                false,
+                                move |_, trigger, at, cx: &mut Context<Self>| {
+                                    cx.emit(CoordinatorEvent::Picks {
+                                        picks: (*picks).clone(),
+                                        trigger,
+                                        at,
+                                    })
+                                },
+                                cx,
+                            )
+                        })
                 }),
             )
             .child(div().flex_1());
@@ -327,8 +188,8 @@ impl CockpitView {
                     .child("Talking starts nothing; work starts only when you accept."),
             );
 
-        let conversation = match self.coordinator_pane() {
-            Some(index) => div()
+        let conversation = match pane {
+            Some(pane) => div()
                 .debug_selector(|| "coordinator-pane".into())
                 .flex_1()
                 .min_w_0()
@@ -336,15 +197,11 @@ impl CockpitView {
                 .flex()
                 .flex_col()
                 .p(px(SPACE_2))
-                .child(self.pane_slot(index, window, cx)),
-            None => self.coordinator_opening(coordinator, window, cx),
+                .child(pane),
+            None => self.opening(inputs, window, cx),
         };
 
-        let mut proposals: Vec<&Proposal> = board.proposals_of(project).collect();
-        // Waiting ones first, newest first within each.
-        proposals.reverse();
-        proposals.sort_by_key(|proposal| proposal.status != ProposalStatus::Pending);
-        let column = (!proposals.is_empty()).then(|| {
+        let column = (!inputs.proposals.is_empty()).then(|| {
             div()
                 .id("coordinator-proposals")
                 .debug_selector(|| "coordinator-proposals".into())
@@ -365,9 +222,10 @@ impl CockpitView {
                         .child("Proposals"),
                 )
                 .children(
-                    proposals
-                        .into_iter()
-                        .map(|proposal| self.proposal_card(proposal, cx)),
+                    inputs
+                        .proposals
+                        .iter()
+                        .map(|card| Self::proposal_card(card, cx)),
                 )
         });
 
@@ -391,26 +249,15 @@ impl CockpitView {
 
     /// Before the Coordinator runs: an empty conversation and the field
     /// whose Send starts it.
-    fn coordinator_opening(
-        &self,
-        coordinator: Option<&ferrite_core::factory::Coordinator>,
-        window: &Window,
-        cx: &mut Context<Self>,
-    ) -> Div {
+    fn opening(&self, inputs: &CoordinatorInputs, window: &Window, cx: &mut Context<Self>) -> Div {
         use ferrite_ui::theme::*;
-        let starting = coordinator.is_some_and(|c| c.starting || c.thread.is_some());
-        let error = coordinator.and_then(|c| c.error.clone());
-        let field = self
-            .factory()
-            .and_then(|view| view.opening.clone());
-        let focused = field
-            .as_ref()
-            .is_some_and(|field| field.read(cx).focus_handle(cx).is_focused(window));
+        let field = self.field.clone();
+        let focused = field.read(cx).focus_handle(cx).is_focused(window);
         let send = crate::project_editor::primary_button("coordinator-send", "Send", false, cx)
             .debug_selector(|| "coordinator-send".into())
-            .on_click(cx.listener(|view, _: &ClickEvent, _, cx| {
+            .on_click(cx.listener(|_, _: &ClickEvent, _, cx| {
                 cx.stop_propagation();
-                view.speak_to_coordinator(cx)
+                cx.emit(CoordinatorEvent::Send)
             }));
         div()
             .debug_selector(|| "coordinator-empty".into())
@@ -437,13 +284,13 @@ impl CockpitView {
                 div()
                     .text_size(px(FS_META))
                     .text_color(rgb(INK_SUBTLE))
-                    .child(if starting {
+                    .child(if inputs.starting {
                         "Starting the Coordinator\u{2026}"
                     } else {
                         "Talk it through, hand off a task, start a workflow, or describe a new one."
                     }),
             )
-            .children(error.map(|error| {
+            .children(inputs.error.clone().map(|error| {
                 div()
                     .debug_selector(|| "coordinator-error".into())
                     .text_size(px(FS_META))
@@ -452,7 +299,7 @@ impl CockpitView {
                         "The Coordinator could not start: {error}"
                     )))
             }))
-            .children(field.map(|field| {
+            .child(
                 div()
                     .id("coordinator-field")
                     .debug_selector(|| "coordinator-field".into())
@@ -464,18 +311,17 @@ impl CockpitView {
                         field,
                         focused,
                         "factory-field-focused",
-                    ))
-            }))
+                    )),
+            )
             .child(div().flex().child(send))
     }
 
     /// One proposal: what it is, exactly what accepting it does, and its
     /// buttons while it waits (its outcome after).
-    fn proposal_card(&self, proposal: &Proposal, cx: &mut Context<Self>) -> AnyElement {
+    fn proposal_card(card: &ProposalCard, cx: &mut Context<Self>) -> AnyElement {
         use ferrite_ui::theme::*;
-        let board = self.cockpit.factory();
-        let key = format!("proposal-{}", proposal.id);
-        let status = match proposal.status {
+        let key = format!("proposal-{}", card.id);
+        let status = match card.status {
             ProposalStatus::Pending => None,
             ProposalStatus::Accepted => Some("accepted"),
             ProposalStatus::Dismissed => Some("dismissed"),
@@ -485,7 +331,7 @@ impl CockpitView {
                 .flex_1()
                 .min_w_0()
                 .font_weight(W_LABEL)
-                .child(SharedString::from(proposal.title(board))),
+                .child(SharedString::from(card.title.clone())),
         );
         if let Some(word) = status {
             let selector = format!("{key}-{word}");
@@ -500,9 +346,10 @@ impl CockpitView {
                     .child(word),
             );
         }
-        let lines: Vec<Div> = proposal
-            .lines(board)
-            .into_iter()
+        let lines: Vec<Div> = card
+            .lines
+            .iter()
+            .cloned()
             .enumerate()
             .map(|(at, (label, value))| {
                 let selector = format!("{key}-line-{at}");
@@ -522,25 +369,25 @@ impl CockpitView {
             })
             .collect();
         let mut actions = div().flex().items_center().gap(px(SPACE_2));
-        match proposal.status {
+        match card.status {
             ProposalStatus::Pending => {
-                let accept_id = proposal.id.clone();
-                let dismiss_id = proposal.id.clone();
+                let accept_id = card.id.clone();
+                let dismiss_id = card.id.clone();
                 let accept_key = format!("{key}-accept");
                 let dismiss_key = format!("{key}-dismiss");
                 actions = actions
                     .child(
                         crate::project_editor::primary_button(
                             SharedString::from(accept_key.clone()),
-                            proposal.action(),
+                            card.action,
                             false,
                             cx,
                         )
                         .debug_selector(move || accept_key.clone())
                         .on_click(cx.listener(
-                            move |view, _: &ClickEvent, _, cx| {
+                            move |_, _: &ClickEvent, _, cx| {
                                 cx.stop_propagation();
-                                view.accept_proposal(&accept_id, cx)
+                                cx.emit(CoordinatorEvent::Accept(accept_id.clone()))
                             },
                         )),
                     )
@@ -552,19 +399,15 @@ impl CockpitView {
                         )
                         .debug_selector(move || dismiss_key.clone())
                         .on_click(cx.listener(
-                            move |view, _: &ClickEvent, _, cx| {
+                            move |_, _: &ClickEvent, _, cx| {
                                 cx.stop_propagation();
-                                view.dismiss_proposal(&dismiss_id, cx)
+                                cx.emit(CoordinatorEvent::Dismiss(dismiss_id.clone()))
                             },
                         )),
                     );
             }
             ProposalStatus::Accepted => {
-                let task = proposal.task.clone().or_else(|| match &proposal.act {
-                    ferrite_core::factory::Act::Redirect { task, .. } => Some(task.clone()),
-                    _ => None,
-                });
-                if let Some(task) = task.filter(|task| board.task(task).is_some()) {
+                if let Some(task) = card.task.clone() {
                     let open_key = format!("{key}-open");
                     actions = actions.child(
                         ferrite_ui::components::secondary_button(
@@ -575,10 +418,9 @@ impl CockpitView {
                         )
                         .debug_selector(move || open_key.clone())
                         .on_click(cx.listener(
-                            move |view, _: &ClickEvent, _, cx| {
+                            move |_, _: &ClickEvent, _, cx| {
                                 cx.stop_propagation();
-                                view.factory_surface(super::workflows::Surface::Board, cx);
-                                view.open_task(&task, cx);
+                                cx.emit(CoordinatorEvent::OpenTask(task.clone()))
                             },
                         )),
                     );
@@ -596,12 +438,294 @@ impl CockpitView {
             .rounded(px(R_CARD))
             .border_1()
             .border_color(paint::LINE)
-            .when(proposal.status == ProposalStatus::Dismissed, |card| {
-                card.opacity(0.6)
+            .when(card.status == ProposalStatus::Dismissed, |each| {
+                each.opacity(0.6)
             })
             .child(head)
             .children(lines)
             .child(actions)
             .into_any_element()
+    }
+}
+
+/// A choice on the Coordinator's settings.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) enum CoordinatorPick {
+    Provider(Provider),
+    /// Empty: the Provider's default.
+    Model(String),
+    Effort(String),
+}
+
+impl CockpitView {
+    /// A Factory's Coordinator surface, heard from its making.
+    pub(super) fn new_coordinator(&mut self, cx: &mut Context<Self>) -> Entity<CoordinatorView> {
+        let coordinator = cx.new(CoordinatorView::new);
+        cx.subscribe(&coordinator, Self::on_coordinator_event).detach();
+        coordinator
+    }
+
+    /// What the surface draws.
+    fn coordinator_inputs(&self) -> Option<CoordinatorInputs> {
+        let project = self.factory_project()?;
+        let board = self.cockpit.factory();
+        let coordinator = board.coordinator(project);
+        let agent = self.coordinator_agent();
+        let mut proposals: Vec<&Proposal> = board.proposals_of(project).collect();
+        // Waiting ones first, newest first within each.
+        proposals.reverse();
+        proposals.sort_by_key(|proposal| proposal.status != ProposalStatus::Pending);
+        Some(CoordinatorInputs {
+            models: self.cockpit.model_catalog(agent.provider),
+            agent,
+            starting: coordinator.is_some_and(|c| c.starting || c.thread.is_some()),
+            error: coordinator.and_then(|c| c.error.clone()),
+            proposals: proposals
+                .into_iter()
+                .map(|proposal| ProposalCard {
+                    id: proposal.id.clone(),
+                    title: proposal.title(board),
+                    lines: proposal.lines(board),
+                    action: proposal.action(),
+                    status: proposal.status,
+                    task: proposal
+                        .task
+                        .clone()
+                        .or_else(|| match &proposal.act {
+                            Act::Redirect { task, .. } => Some(task.clone()),
+                            _ => None,
+                        })
+                        .filter(|task| board.task(task).is_some()),
+                })
+                .collect(),
+        })
+    }
+
+    /// The Coordinator surface, which its view draws round the
+    /// Coordinator's Pane once it runs.
+    pub(super) fn coordinator_surface(&self, window: &mut Window, cx: &mut Context<Self>) -> Div {
+        let (Some(view), Some(inputs)) = (self.factory(), self.coordinator_inputs()) else {
+            return div();
+        };
+        let coordinator = view.read(cx).coordinator.clone();
+        let pane = self
+            .coordinator_pane()
+            .map(|index| self.pane_slot(index, window, cx));
+        coordinator.update(cx, |coordinator, cx| {
+            coordinator.surface(&inputs, pane, window, cx)
+        })
+    }
+
+    /// Send starts the Coordinator; a chooser opens its rows; a
+    /// proposal's buttons ask the Server, or open the Task it started.
+    fn on_coordinator_event(
+        &mut self,
+        _: Entity<CoordinatorView>,
+        event: &CoordinatorEvent,
+        cx: &mut Context<Self>,
+    ) {
+        match event {
+            CoordinatorEvent::Send => self.speak_to_coordinator(cx),
+            CoordinatorEvent::Picks { picks, trigger, at } => {
+                self.open_picks(picks.clone(), trigger, *at, cx)
+            }
+            CoordinatorEvent::Accept(proposal) => self.accept_proposal(proposal, cx),
+            CoordinatorEvent::Dismiss(proposal) => self.dismiss_proposal(proposal, cx),
+            CoordinatorEvent::OpenTask(task) => {
+                self.factory_surface(super::workflows::Surface::Board, cx);
+                self.open_task(task, cx);
+            }
+        }
+    }
+
+    /// The shown Project's Coordinator's Thread, once started.
+    pub(crate) fn coordinator_thread(&self) -> Option<ThreadId> {
+        let project = self.factory_project()?;
+        self.cockpit.factory().coordinator(project)?.thread
+    }
+
+    /// Its Pane in this window, once started.
+    fn coordinator_pane(&self) -> Option<usize> {
+        self.pane_for(self.coordinator_thread()?)
+    }
+
+    /// The Coordinator drawn on its surface, which streams whole.
+    pub(super) fn coordinator_drawn(&self, cx: &gpui::App) -> Option<ThreadId> {
+        let view = self.factory()?.read(cx);
+        (view.surface == super::workflows::Surface::Coordinator)
+            .then(|| self.coordinator_thread())
+            .flatten()
+            .filter(|thread| self.pane_for(*thread).is_some())
+    }
+
+    /// What the Coordinator runs on: the Factory's choice, else the
+    /// operator's defaults.
+    pub(crate) fn coordinator_agent(&self) -> Agent {
+        let chosen = self.factory_project().and_then(|project| {
+            self.cockpit
+                .factory()
+                .coordinator(project)?
+                .agent
+                .clone()
+        });
+        chosen.unwrap_or_else(|| {
+            let settings = &self.prefs.settings;
+            let provider = settings.default_provider;
+            let (model, effort) = match provider {
+                Provider::Claude => (&settings.claude_model, &settings.claude_effort),
+                Provider::Codex => (&settings.codex_model, &settings.codex_effort),
+            };
+            Agent {
+                provider,
+                model: model.clone(),
+                effort: effort.clone(),
+            }
+        })
+    }
+
+    /// The keyboard while the Coordinator surface shows: its Pane's
+    /// Composer once it runs, else the opening field.
+    pub(super) fn coordinator_focus(&self, window: &Window, cx: &gpui::App) -> Option<FocusHandle> {
+        let view = self.factory()?.read(cx);
+        if view.surface != super::workflows::Surface::Coordinator {
+            return None;
+        }
+        if let Some(index) = self.coordinator_pane() {
+            return Some(self.panes[index].composer.read(cx).focus_target(window, cx));
+        }
+        Some(view.coordinator.read(cx).focus(cx))
+    }
+
+    /// A Coordinator command; its refusal in the view's note.
+    fn coordinator_ask(
+        &mut self,
+        action: CoordinatorAction,
+        cx: &mut Context<Self>,
+    ) -> Option<Done> {
+        let (done, note) = match self.cockpit.coordinator(action) {
+            Ok(done) => (done, None),
+            Err(error) => (None, Some(SharedString::from(error.to_string()))),
+        };
+        self.update_factory(cx, |view, _| view.note = note);
+        cx.notify();
+        done
+    }
+
+    /// Send the opening field's words: the Coordinator starts on them.
+    pub(crate) fn speak_to_coordinator(&mut self, cx: &mut Context<Self>) {
+        let (Some(project), Some(view)) = (self.factory_project(), self.factory()) else {
+            return;
+        };
+        let field = view.read(cx).coordinator.read(cx).field.clone();
+        let text = field.read(cx).text().trim().to_string();
+        if text.is_empty() {
+            return;
+        }
+        let action = CoordinatorAction::Say { project, text };
+        if self.coordinator_ask(action, cx).is_some() {
+            field.update(cx, |field, cx| {
+                field.take(cx);
+            });
+        }
+    }
+
+    pub(crate) fn accept_proposal(&mut self, proposal: &str, cx: &mut Context<Self>) {
+        let skills = self.factory_catalog(cx).skills;
+        let action = CoordinatorAction::Accept {
+            proposal: proposal.to_string(),
+            skills,
+        };
+        self.coordinator_ask(action, cx);
+    }
+
+    pub(crate) fn dismiss_proposal(&mut self, proposal: &str, cx: &mut Context<Self>) {
+        let action = CoordinatorAction::Dismiss {
+            proposal: proposal.to_string(),
+        };
+        self.coordinator_ask(action, cx);
+    }
+
+    pub(crate) fn apply_coordinator_pick(&mut self, pick: CoordinatorPick, cx: &mut Context<Self>) {
+        let Some(project) = self.factory_project() else {
+            return;
+        };
+        let mut agent = self.coordinator_agent();
+        match pick {
+            CoordinatorPick::Provider(provider) => {
+                if agent.provider != provider {
+                    agent = Agent {
+                        provider,
+                        model: None,
+                        effort: None,
+                    };
+                }
+            }
+            CoordinatorPick::Model(model) => agent.model = (!model.is_empty()).then_some(model),
+            CoordinatorPick::Effort(effort) => {
+                agent.effort = (!effort.is_empty()).then_some(effort)
+            }
+        }
+        self.coordinator_ask(CoordinatorAction::Agent { project, agent }, cx);
+    }
+}
+
+/// A chooser's rows: `which` of the Coordinator's settings, as `inputs`
+/// say them.
+fn coordinator_picks(inputs: &CoordinatorInputs, which: &str) -> Vec<(ferrite_ui::menu::Item, Pick)> {
+    let agent = &inputs.agent;
+    let pick = |item: ferrite_ui::menu::Item, choice: CoordinatorPick| {
+        (item, Pick::Coordinator(choice))
+    };
+    let models = &inputs.models;
+    match which {
+        "provider" => Provider::ALL
+            .into_iter()
+            .map(|provider| {
+                pick(
+                    ferrite_ui::menu::Item::new(provider.to_string())
+                        .checked(agent.provider == provider),
+                    CoordinatorPick::Provider(provider),
+                )
+            })
+            .collect(),
+        "model" => super::workflows::model_choices(models)
+            .into_iter()
+            .map(|(label, value)| {
+                let chosen = super::workflows::model_chosen(agent.model.as_deref(), &value);
+                pick(
+                    ferrite_ui::menu::Item::new(label).checked(chosen),
+                    CoordinatorPick::Model(value),
+                )
+            })
+            .collect(),
+        _ => {
+            let mut efforts: Vec<String> = agent
+                .model
+                .as_ref()
+                .and_then(|value| models.iter().find(|model| &model.value == value))
+                .map(|model| model.efforts.clone())
+                .unwrap_or_default();
+            if efforts.is_empty() {
+                for model in models {
+                    for effort in &model.efforts {
+                        if !efforts.contains(effort) {
+                            efforts.push(effort.clone());
+                        }
+                    }
+                }
+            }
+            std::iter::once(pick(
+                ferrite_ui::menu::Item::new("Default").checked(agent.effort.is_none()),
+                CoordinatorPick::Effort(String::new()),
+            ))
+            .chain(efforts.into_iter().map(|effort| {
+                pick(
+                    ferrite_ui::menu::Item::new(effort.clone())
+                        .checked(agent.effort.as_deref() == Some(effort.as_str())),
+                    CoordinatorPick::Effort(effort),
+                )
+            }))
+            .collect()
+        }
     }
 }

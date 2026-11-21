@@ -94,33 +94,31 @@ impl Skills {
 
 impl CockpitView {
     /// Ask the Provider which skills it has installed in the Project, once.
-    pub(super) fn discover_skills(&mut self, provider: Provider) {
-        let Some(view) = self.factory() else {
+    pub(super) fn discover_skills(&mut self, provider: Provider, cx: &mut gpui::App) {
+        let (Some(project), Some(view)) = (self.factory_project(), self.factory()) else {
             return;
         };
-        if view.skills.asked(provider) {
+        if view.read(cx).skills.asked(provider) {
             return;
         }
         let Some(cwd) = self
             .cockpit
             .registry()
-            .project(view.project)
+            .project(project)
             .map(|project| project.root.clone())
         else {
             return;
         };
         let reply = self.cockpit.discover_commands(provider, &cwd);
-        if let Some(view) = self.factory_mut() {
-            view.skills.listen(provider, reply);
-        }
+        self.update_factory(cx, |view, _| view.skills.listen(provider, reply));
     }
 
     /// A discovery that answered: its skills, for the picker and the check.
     pub(in crate::cockpit) fn poll_factory_skills(&mut self, cx: &mut Context<Self>) {
         self.poll_start_lists(cx);
         if self
-            .factory_mut()
-            .is_some_and(|view| view.skills.listed())
+            .update_factory(cx, |view, _| view.skills.listed())
+            .unwrap_or(false)
         {
             cx.notify();
         }
@@ -128,7 +126,7 @@ impl CockpitView {
 
     /// What is known installed: models as the Providers announced them,
     /// skills as discovered.
-    pub(crate) fn factory_catalog(&self) -> Catalog {
+    pub(crate) fn factory_catalog(&self, cx: &gpui::App) -> Catalog {
         Catalog {
             models: Provider::ALL
                 .into_iter()
@@ -137,7 +135,7 @@ impl CockpitView {
             skills: Provider::ALL
                 .into_iter()
                 .filter_map(|provider| {
-                    let skills = self.factory()?.skills.installed(provider)?;
+                    let skills = self.factory()?.read(cx).skills.installed(provider)?;
                     Some((provider, skills.iter().map(|s| s.name.clone()).collect()))
                 })
                 .collect(),
@@ -147,7 +145,7 @@ impl CockpitView {
     /// The shown draft's problems.
     pub(crate) fn draft_problems(&self, cx: &gpui::App) -> Vec<Problem> {
         self.shown_workflow(cx)
-            .map(|workflow| workflow.draft.problems(&self.factory_catalog()))
+            .map(|workflow| workflow.draft.problems(&self.factory_catalog(cx)))
             .unwrap_or_default()
     }
 

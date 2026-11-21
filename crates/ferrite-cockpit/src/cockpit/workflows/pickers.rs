@@ -68,10 +68,9 @@ impl CockpitView {
         at: Point<Pixels>,
         cx: &mut Context<Self>,
     ) {
-        let Some(view) = self.factory_mut() else {
+        if self.update_factory(cx, |view, _| view.picks = picks).is_none() {
             return;
-        };
-        view.picks = picks;
+        }
         let target = context_menu::MenuTarget::Factory;
         match trigger.bounds() {
             Some(under) => self.open_context_menu_below(
@@ -86,9 +85,9 @@ impl CockpitView {
     }
 
     /// The rows of the open Factory picker.
-    pub(in crate::cockpit) fn factory_pick_rows(&self) -> Vec<ferrite_ui::menu::Item> {
+    pub(in crate::cockpit) fn factory_pick_rows(&self, cx: &gpui::App) -> Vec<ferrite_ui::menu::Item> {
         self.factory()
-            .map(|view| view.picks.iter().map(|(item, _)| item.clone()).collect())
+            .map(|view| view.read(cx).picks.iter().map(|(item, _)| item.clone()).collect())
             .unwrap_or_default()
     }
 
@@ -96,7 +95,7 @@ impl CockpitView {
     pub(crate) fn factory_pick(&mut self, index: usize, cx: &mut Context<Self>) {
         let Some(pick) = self
             .factory()
-            .and_then(|view| view.picks.get(index))
+            .and_then(|view| view.read(cx).picks.get(index))
             .map(|(_, pick)| pick.clone())
         else {
             return;
@@ -116,7 +115,7 @@ impl CockpitView {
                 self.edit_step(step, StepChange::route(kind, to), cx);
             }
             Pick::Provider(step, provider) => {
-                self.discover_skills(provider);
+                self.discover_skills(provider, cx);
                 self.edit_step(
                     step,
                     StepChange {
