@@ -13,6 +13,7 @@ struct Counts {
     nav: usize,
     toasts: usize,
     root: usize,
+    head: usize,
     panes: [usize; 2],
 }
 
@@ -24,6 +25,7 @@ fn counts(panes: &[ferrite_core::roster::PaneIdentity]) -> Counts {
         nav: drawn::nav_renders(),
         toasts: drawn::toast_renders(),
         root: crate::cockpit::RENDERS.with(std::cell::Cell::get),
+        head: drawn::head_renders(),
         panes: [pane(0), pane(1)],
     }
 }
@@ -37,6 +39,7 @@ impl std::ops::Sub for Counts {
             nav: self.nav - before.nav,
             toasts: self.toasts - before.toasts,
             root: self.root - before.root,
+            head: self.head - before.head,
             panes: [
                 self.panes[0] - before.panes[0],
                 self.panes[1] - before.panes[1],
@@ -98,8 +101,8 @@ fn an_idle_window_sleeps_and_redraws_nothing(cx: &mut TestAppContext) {
     }
     let idle = counts(&panes) - before;
     eprintln!(
-        "WAKES idle_4s beats={beats} pumps={} nav_lists={} nav={} toasts={} root={} pane={}",
-        idle.pumps, idle.lists, idle.nav, idle.toasts, idle.root, idle.panes[0]
+        "WAKES idle_4s beats={beats} pumps={} nav_lists={} nav={} toasts={} root={} head={} pane={}",
+        idle.pumps, idle.lists, idle.nav, idle.toasts, idle.root, idle.head, idle.panes[0]
     );
     assert!(idle.pumps <= 4 * 5, "an idle pump runs at most five times a second");
     assert!(idle.pumps >= 2, "its two sweeps still run");
@@ -132,10 +135,12 @@ fn a_streaming_thread_redraws_the_nav_only_when_its_rows_move(cx: &mut TestAppCo
     // nav does not draw, as the pump does when the Server's models move and
     // as most window actions do: the nav is not redrawn for it.
     let nav = drawn::nav_renders();
+    let at_rest = counts(&panes);
     for _ in 0..3 {
         view.update(cx, |_, cx| cx.notify());
         beat(cx);
     }
+    let bare = counts(&panes) - at_rest;
     let bare_redraws = drawn::nav_renders() - nav;
     let before = counts(&panes);
     let mut last = rows(&view, cx);
@@ -174,9 +179,11 @@ fn a_streaming_thread_redraws_the_nav_only_when_its_rows_move(cx: &mut TestAppCo
     load.lists -= oracle.get();
     eprintln!(
         "WAKES stream beats={beats} pumps={} nav_lists={} rows_moved={moved} nav={} \
-         nav_for_bare_notifies={bare_redraws} toasts={} root={} \
-         shown_pane={} hidden_pane={}",
-        load.pumps, load.lists, load.nav, load.toasts, load.root, load.panes[0], load.panes[1]
+         nav_for_bare_notifies={bare_redraws} toasts={} root={} head={} \
+         shown_pane={} hidden_pane={} bare3_root={} bare3_head={} bare3_shown_pane={} \
+         bare3_hidden_pane={}",
+        load.pumps, load.lists, load.nav, load.toasts, load.root, load.head, load.panes[0],
+        load.panes[1], bare.root, bare.head, bare.panes[0], bare.panes[1]
     );
     assert!(moved > 0, "the stream moved the nav's rows");
     assert_eq!(bare_redraws, 0, "a notify that moves nothing it draws leaves the nav");

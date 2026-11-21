@@ -28,6 +28,8 @@ impl CockpitView {
     /// The head over the board: the shown Thread's name, when the board
     /// shows one.
     pub(super) fn view_head(&self, cx: &mut Context<Self>) -> AnyElement {
+        #[cfg(test)]
+        drawn::built_head();
         let mut parts = Vec::new();
         if self.factory().is_some() {
             parts.extend(self.factory_head(cx));

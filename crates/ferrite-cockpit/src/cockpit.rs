@@ -979,6 +979,7 @@ pub(crate) mod drawn {
         static PANE_RENDERS: RefCell<HashMap<PaneIdentity, usize>> = RefCell::new(HashMap::new());
         static NAV_RENDERS: Cell<usize> = const { Cell::new(0) };
         static TOAST_RENDERS: Cell<usize> = const { Cell::new(0) };
+        static HEAD_RENDERS: Cell<usize> = const { Cell::new(0) };
         static NAV_ROWS: RefCell<HashMap<ThreadId, String>> = RefCell::new(HashMap::new());
         static PUMPS: Cell<usize> = const { Cell::new(0) };
         static LISTS: Cell<usize> = const { Cell::new(0) };
@@ -1017,6 +1018,16 @@ pub(crate) mod drawn {
 
     pub(crate) fn built_toasts() {
         TOAST_RENDERS.with(|renders| renders.set(renders.get() + 1));
+    }
+
+    pub(crate) fn built_head() {
+        HEAD_RENDERS.with(|renders| renders.set(renders.get() + 1));
+    }
+
+    /// How many times the view head over the board has been built on this
+    /// thread.
+    pub(crate) fn head_renders() -> usize {
+        HEAD_RENDERS.with(Cell::get)
     }
 
     /// How many times the toast float has been built on this thread.
