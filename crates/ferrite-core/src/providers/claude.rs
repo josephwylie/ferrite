@@ -71,6 +71,8 @@ const EFFORT_ACK_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// The request id spawn uses for the handshake, before any operator traffic.
 const HANDSHAKE_REQUEST_ID: &str = "req_1";
+/// The request that builds the CLI's file index (`warm_file_index`).
+const FILE_INDEX_REQUEST_ID: &str = "ferrite_file_index";
 
 /// How to spawn a Claude Session.
 #[derive(Debug, Clone)]
@@ -678,6 +680,22 @@ impl ClaudeSession {
             return Err(error);
         }
         Ok(())
+    }
+
+    /// The CLI starts building its file index at the first file search and
+    /// answers that one from the index as it stands, so a fresh process
+    /// finds nothing (2.1.329). The app's spawner asks once as the Session
+    /// starts, so the operator's first `@` finds the index built. The answer
+    /// is dropped; a write that fails is a CLI that died, which the reader
+    /// reports. Its own request id leaves the numbered ones as they were.
+    pub fn warm_file_index(&mut self) {
+        let id = FILE_INDEX_REQUEST_ID.to_string();
+        lock(&self.file_search).warm(id.clone());
+        let _ = self.write_line(&serde_json::json!({
+            "type": "control_request",
+            "request_id": id,
+            "request": {"subtype": "file_suggestions", "query": ""},
+        }));
     }
 
     /// Send one user prompt; the CLI starts (or queues) a turn.

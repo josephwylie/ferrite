@@ -1,4 +1,5 @@
-//! One latest-wins native file suggestion request for a Claude Session.
+//! One latest-wins native file suggestion request for a Claude Session,
+//! and the one a Session makes as it starts to build the CLI's file index.
 use std::io;
 use std::sync::mpsc::SyncSender;
 
@@ -9,6 +10,8 @@ use crate::providers::FileSuggestion;
 #[derive(Default)]
 pub(super) struct Requests {
     pending: Option<(String, SyncSender<io::Result<Vec<FileSuggestion>>>)>,
+    /// The request that builds the index (`warm`), whose answer nobody reads.
+    warming: Option<String>,
 }
 
 impl Requests {
@@ -19,6 +22,11 @@ impl Requests {
                 "file search superseded",
             )));
         }
+    }
+
+    /// Request `id` only builds the CLI's file index: its answer is dropped.
+    pub fn warm(&mut self, id: String) {
+        self.warming = Some(id);
     }
 
     pub fn discard(&mut self, id: &str) {
@@ -36,6 +44,10 @@ impl Requests {
         let Some(id) = frame["response"]["request_id"].as_str() else {
             return false;
         };
+        if self.warming.as_deref() == Some(id) {
+            self.warming = None;
+            return true;
+        }
         if self.pending.as_ref().map(|(pending, _)| pending.as_str()) != Some(id) {
             return false;
         }

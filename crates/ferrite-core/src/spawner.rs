@@ -244,8 +244,11 @@ impl SessionConfig {
         let (provider, inner): (Provider, Box<dyn Session + Send>) = match self {
             SessionConfig::Claude(config) => {
                 let resuming = config.resume.is_some();
-                let session = ClaudeSession::spawn(config)
+                let mut session = ClaudeSession::spawn(config)
                     .map_err(|e| ResumeRefused::error(resuming, e.to_string()))?;
+                // Before the operator can type `@`: a fresh CLI answers its
+                // first file search from no index.
+                session.warm_file_index();
                 (Provider::Claude, Box::new(session))
             }
             SessionConfig::Codex(config) => {
