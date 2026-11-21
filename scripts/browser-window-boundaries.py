@@ -116,7 +116,14 @@ class Boundary:
         encoded=images[0].get('data',images[0].get('imageUrl','').removeprefix('data:image/png;base64,')) if len(images)==1 else ''
         if not encoded or not base64.b64decode(encoded,validate=True).startswith(b'\x89PNG\r\n\x1a\n'):raise ValueError('Held operator screenshot was not one real PNG')
         if state.get('observation') is not None:raise ValueError('Screenshot incorrectly minted readable Observe permission')
+        self.require_held(state)
         self.control(self.a,{'kind':'click','reference':self.target},self.held_rejected,True)
+    @staticmethod
+    def require_held(state):
+        # The button is still down: the stale-observation rule alone would
+        # refuse the click below, so only this catches a dropped hold.
+        tab=next(tab for tab in state['state']['tabs'] if tab['id']==state['state']['active'])
+        if tab['protected'] is not True:raise ValueError('Held operator gesture lost its protection before the held screenshot')
     def held_rejected(self,*_):
         self.checks.append('held operator input refuses old agent write; screenshot does not discharge barrier')
         self.operator('release')
