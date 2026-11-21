@@ -65,10 +65,10 @@ impl CockpitView {
     /// What leaving now would interrupt or lose, or `None` when nothing
     /// would.
     pub(crate) fn leaving_warning(&self, cx: &App) -> Option<String> {
-        let agents = if self.cockpit.server().is_some() {
+        let agents = if self.cockpit.read(cx).server().is_some() {
             None
         } else {
-            self.in_flight().map(|what| {
+            self.in_flight(cx).map(|what| {
                 format!("{what}. Leaving stops them; their Threads reopen next launch.")
             })
         };
@@ -85,13 +85,14 @@ impl CockpitView {
     /// Who is working and who waits on a Decision, or `None` when every
     /// agent is idle. Work behind Main (its Subagents, its background
     /// tasks) counts: it outlives Main's turn, and leaving ends it too.
-    pub(crate) fn in_flight(&self) -> Option<String> {
-        let waiting = self.cockpit.blocked().len();
+    pub(crate) fn in_flight(&self, cx: &App) -> Option<String> {
+        let waiting = self.cockpit.read(cx).blocked().len();
         let working = self
             .cockpit
+            .read(cx)
             .threads()
             .into_iter()
-            .filter_map(|thread| self.cockpit.thread(thread))
+            .filter_map(|thread| self.cockpit.read(cx).thread(thread))
             .filter(|thread| {
                 (thread.working() || thread.background_work()) && thread.pending().is_none()
             })

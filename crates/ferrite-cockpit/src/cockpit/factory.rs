@@ -1086,7 +1086,7 @@ impl CockpitView {
 
     /// Show `project`'s Factory board in the board's place.
     pub(crate) fn open_factory(&mut self, project: ProjectId, cx: &mut Context<Self>) {
-        let focus_at_open = self.cockpit.roster().focused();
+        let focus_at_open = self.cockpit.read(cx).roster().focused();
         match self.destination.as_mut() {
             Some(Destination {
                 shows: Shows::Factory(shown, _),
@@ -1109,6 +1109,7 @@ impl CockpitView {
     pub(crate) fn open_task(&mut self, task: &str, cx: &mut Context<Self>) {
         let Some((project, archived)) = self
             .cockpit
+            .read(cx)
             .factory()
             .task(task)
             .map(|task| (task.project, task.archived()))
@@ -1147,7 +1148,7 @@ impl CockpitView {
         // looks at: what is typed there is said to the Worker.
         if tab == TaskTab::Worker {
             if let Some(index) = self.open_worker_pane(cx) {
-                self.focus_pane(index);
+                self.focus_pane(index, cx);
             }
         }
         cx.notify();
@@ -1176,9 +1177,10 @@ impl CockpitView {
 
     /// The open Task, as the board says it now, while it is where the
     /// Factory looks: a Task cleared to the Archive leaves the board's panel.
-    pub(super) fn open_task_now(&self, cx: &gpui::App) -> Option<&Task> {
+    pub(super) fn open_task_now<'a>(&self, cx: &'a gpui::App) -> Option<&'a Task> {
         let view = self.factory()?.read(cx);
         self.cockpit
+            .read(cx)
             .factory()
             .task(view.open.as_deref()?)
             .filter(|task| task.archived() == view.archive_shown)
@@ -1210,7 +1212,7 @@ impl CockpitView {
         let gone = self
             .factory()
             .and_then(|view| view.read(cx).open.as_deref())
-            .is_some_and(|id| self.cockpit.factory().task(id).is_none());
+            .is_some_and(|id| self.cockpit.read(cx).factory().task(id).is_none());
         if gone {
             self.update_factory(cx, |view, _| view.open = None);
         }
@@ -1248,7 +1250,7 @@ impl CockpitView {
 
     /// The Factory command a press makes, its answer in the view's note.
     pub(crate) fn task_command(&mut self, action: TaskAction, cx: &mut Context<Self>) {
-        let note = match self.cockpit.task(action) {
+        let note = match self.cockpit.update(cx, |cockpit, _| cockpit.task(action)) {
             Ok(Some(Done::Deleted { kept })) => {
                 self.update_factory(cx, |view, _| view.open = None);
                 kept.map(SharedString::from)
@@ -1274,12 +1276,13 @@ impl CockpitView {
     ) {
         use gpui::component::WindowExt as _;
         use gpui::component::notification::{Notification, NotificationType};
-        let found = self.cockpit.factory().task(&task);
+        let found = self.cockpit.read(cx).factory().task(&task);
         let provider = found.map(|found| found.agent.provider);
         let cwd = found.and_then(|found| found.worktree.clone());
         let detail = detail.unwrap_or_else(|| title.clone());
         let project_title = self
             .cockpit
+            .read(cx)
             .registry()
             .project(project)
             .map(|project| project.title.clone());
@@ -1341,7 +1344,7 @@ impl CockpitView {
             });
         }
         if self.prefs.settings.system_notifications
-            && crate::system_notifications::wanted(false, self.cockpit.window_active())
+            && crate::system_notifications::wanted(false, self.cockpit.read(cx).window_active())
         {
             crate::system_notifications::post(
                 crate::system_notifications::Posting {
@@ -1363,7 +1366,7 @@ impl CockpitView {
     /// its request is answered.
     pub(super) fn retire_task_toasts(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         use gpui::component::WindowExt as _;
-        let board = self.cockpit.factory();
+        let board = self.cockpit.read(cx).factory();
         let gone: Vec<String> = self
             .task_toasts
             .iter()
@@ -1425,8 +1428,8 @@ impl CockpitView {
     /// the chosen one's alone while the list is filtered to a Project,
     /// which shows it even when empty. Any other Project's Factory is the
     /// palette's (`Factory: <Project>`).
-    pub(super) fn factory_nav_projects(&self, state: &nav::NavState) -> Vec<ProjectId> {
-        let board = self.cockpit.factory();
+    pub(super) fn factory_nav_projects(&self, state: &nav::NavState, cx: &gpui::App) -> Vec<ProjectId> {
+        let board = self.cockpit.read(cx).factory();
         let automatic = board
             .workflows
             .iter()
@@ -1452,12 +1455,13 @@ impl CockpitView {
         let Some(nav) = self.nav_view.read(cx).inputs() else {
             return Vec::new();
         };
-        let board = self.cockpit.factory();
-        self.factory_nav_projects(&nav.state)
+        let board = self.cockpit.read(cx).factory();
+        self.factory_nav_projects(&nav.state, cx)
             .into_iter()
             .map(|project| {
                 let title = self
                     .cockpit
+                    .read(cx)
                     .registry()
                     .project(project)
                     .map(|project| project.title.clone())
@@ -1475,18 +1479,19 @@ impl CockpitView {
 
     /// What the Factory's head and the Board draw: the Project and its
     /// Factory as the board says them now.
-    fn factory_inputs(&self, window: &Window) -> Option<FactoryInputs> {
+    fn factory_inputs(&self, window: &Window, cx: &gpui::App) -> Option<FactoryInputs> {
         let project = self.factory_project()?;
-        let board = self.cockpit.factory();
+        let board = self.cockpit.read(cx).factory();
         Some(FactoryInputs {
             title: self
                 .cockpit
+                .read(cx)
                 .registry()
                 .project(project)
                 .map(|project| project.title.clone())
                 .unwrap_or_else(|| "Project".into()),
             cards: board.on_board(project).map(TaskCard::of).collect(),
-            board_w: self.board_bounds(window).w,
+            board_w: self.board_bounds(window, cx).w,
             archived: board.archive(project, "").count(),
             proposals: board
                 .proposals_of(project)
@@ -1499,7 +1504,7 @@ impl CockpitView {
 
     /// The Factory board: the Factory's head over the surface shown.
     pub(super) fn factory_board(&self, window: &mut Window, cx: &mut Context<Self>) -> Div {
-        let (Some(factory), Some(inputs)) = (self.factory().cloned(), self.factory_inputs(window))
+        let (Some(factory), Some(inputs)) = (self.factory().cloned(), self.factory_inputs(window, cx))
         else {
             return div();
         };

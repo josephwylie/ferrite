@@ -125,15 +125,15 @@ impl History {
 
 impl CockpitView {
     /// Where the Cockpit is this frame, as the history keeps it.
-    fn place(&self) -> Option<Place> {
-        if self.empty_board_shown() {
+    fn place(&self, cx: &gpui::App) -> Option<Place> {
+        if self.empty_board_shown(cx) {
             return None;
         }
         let subject_of = |thread: ThreadId| {
             let index = self.pane_for(thread)?;
             Some(self.panes[index].selected.clone())
         };
-        let thread = self.focused_thread()?;
+        let thread = self.focused_thread(cx)?;
         Some(Place {
             thread,
             subject: subject_of(thread)?,
@@ -142,13 +142,13 @@ impl CockpitView {
 
     /// The root render's hook: forget what is gone, keep where the
     /// Cockpit is.
-    pub(super) fn tend_history(&mut self) {
+    pub(super) fn tend_history(&mut self, cx: &gpui::App) {
         let parked = self.facts.parked();
-        let cockpit = &self.cockpit;
+        let cockpit = self.cockpit.read(cx);
         let exists =
             |thread: ThreadId| cockpit.thread(thread).is_some() || parked.contains(&thread);
         self.history.prune(|place| exists(place.thread));
-        let place = self.place();
+        let place = self.place(cx);
         self.history.visit(place);
     }
 

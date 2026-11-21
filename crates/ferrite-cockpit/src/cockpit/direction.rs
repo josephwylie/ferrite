@@ -562,7 +562,7 @@ impl CockpitView {
 
     /// A Task command; whether the Server took it. A refusal is said.
     fn direct_command(&mut self, action: TaskAction, cx: &mut Context<Self>) -> bool {
-        let (taken, note) = match self.cockpit.task(action) {
+        let (taken, note) = match self.cockpit.update(cx, |cockpit, _| cockpit.task(action)) {
             Ok(_) => (true, None),
             Err(error) => (false, Some(SharedString::from(error.to_string()))),
         };
@@ -615,7 +615,7 @@ impl CockpitView {
     fn direct_send(&self, cx: &gpui::App) -> Option<(TaskId, String, Choice)> {
         let sheet = self.direct_sheet(cx)?;
         let sheet = sheet.read(cx);
-        self.direct_inputs(sheet.project, &sheet.task)?;
+        self.direct_inputs(sheet.project, &sheet.task, cx)?;
         let text = sheet.field.read(cx).text().trim().to_string();
         Some((sheet.task.clone(), text, sheet.choice.clone()))
     }

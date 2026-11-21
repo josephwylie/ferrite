@@ -59,7 +59,7 @@ fn open(
     hold_nav_open(&view, cx);
     cx.simulate_resize(gpui::size(px(1600.), px(900.)));
     view.update(cx, |view, cx| {
-        view.focus_pane(0);
+        view.focus_pane(0, cx);
         cx.notify();
     });
     tick(cx);
@@ -230,7 +230,7 @@ fn each_thread_keeps_its_own_preview(cx: &mut TestAppContext) {
     let wide = panel_w(cx).unwrap();
     let focus = |index: usize, cx: &mut gpui::VisualTestContext| {
         view.update(cx, |view, cx| {
-            view.focus_pane(index);
+            view.focus_pane(index, cx);
             cx.notify();
         });
         tick(cx);
@@ -292,10 +292,10 @@ fn a_draft_previews_in_the_panel_and_keeps_it_through_its_first_send(cx: &mut Te
     bind_band_keys(cx);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     cx.simulate_resize(gpui::size(px(1600.), px(900.)));
-    view.update(cx, |view, _| view.aim_launch(&repo));
+    view.update(cx, |view, cx| view.aim_launch(&repo, cx));
     tick(cx);
     assert!(
-        view.read_with(cx, |view, _| view.panes[view.focused()].thread().is_none()),
+        view.read_with(cx, |view, cx| view.panes[view.focused(cx)].thread().is_none()),
         "the premise: a draft"
     );
     let file = source("preview-draft-file", 20);
@@ -311,7 +311,7 @@ fn a_draft_previews_in_the_panel_and_keeps_it_through_its_first_send(cx: &mut Te
     cx.simulate_keystrokes("enter");
     tick(cx);
     assert!(
-        view.read_with(cx, |view, _| view.panes[view.focused()].thread().is_some()),
+        view.read_with(cx, |view, cx| view.panes[view.focused(cx)].thread().is_some()),
         "the draft became a Thread"
     );
     assert_eq!(panel_w(cx), Some(wide));

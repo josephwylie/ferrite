@@ -101,12 +101,12 @@ pub fn run(http: Arc<dyn gpui::http_client::HttpClient>) {
         driver.pass(TICK_MS);
         let source = driver.current_view();
         let requests = driver.cx.update(|cx| {
-            source.update(cx, |view, _| view.cockpit.take_drives())
+            source.update(cx, |view, cx| view.cockpit.update(cx, |cockpit, _| cockpit.take_drives()))
         });
         for (request, action) in requests {
             let answer = act(&mut driver, action);
             driver.cx.update(|cx| {
-                source.update(cx, |view, _| view.cockpit.driven(request, answer));
+                source.update(cx, |view, cx| view.cockpit.update(cx, |cockpit, _| cockpit.driven(request, answer)));
             });
         }
     }
@@ -462,7 +462,7 @@ impl Driver {
                     .map(|context| format!("{context:?}"))
                     .collect(),
                 selector: window.focused_debug_selector(),
-                label: view.read(cx).keyboard_label(window).map(String::from),
+                label: view.read(cx).keyboard_label(window, cx).map(String::from),
             })
             .expect("the off-screen window stands")
     }

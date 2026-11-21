@@ -4,7 +4,7 @@ use super::*;
 use ferrite_core::activity::{ActivityEvent, AgentInfo, AgentKey, AgentStatus, Subject};
 
 fn shown(view: &Entity<CockpitView>, cx: &mut gpui::VisualTestContext) -> Option<ThreadId> {
-    view.read_with(cx, |view, _| view.focused_thread())
+    view.read_with(cx, |view, cx| view.focused_thread(cx))
 }
 
 fn ends(view: &Entity<CockpitView>, cx: &mut gpui::VisualTestContext) -> (bool, bool) {
@@ -273,8 +273,8 @@ fn the_solo_head_is_a_project_then_title_breadcrumb(cx: &mut TestAppContext) {
 
     cx.simulate_click(project.center(), gpui::Modifiers::none());
     tick(cx);
-    view.read_with(cx, |view, _| {
-        let draft = view.panes[view.focused()].draft().expect("a new Thread");
+    view.read_with(cx, |view, cx| {
+        let draft = view.panes[view.focused(cx)].draft().expect("a new Thread");
         assert_eq!(draft.binding.project(), here, "in the head's project");
     });
 }
@@ -288,7 +288,7 @@ fn deferred_preview_follows_its_pane_after_reflow(cx: &mut TestAppContext) {
     let source = view.update(cx, |view, cx| {
         let first = view.panes[0].identity;
         let source = view.panes[1].identity;
-        view.focus_pane(2);
+        view.focus_pane(2, cx);
         view.open_preview_from(1, path.clone(), Some(3), cx);
         view.close_pane(first, cx);
         assert_eq!(view.index_of(source), Some(0));
@@ -297,7 +297,7 @@ fn deferred_preview_follows_its_pane_after_reflow(cx: &mut TestAppContext) {
     tick(cx);
 
     view.read_with(cx, |view, cx| {
-        assert_eq!(view.cockpit.roster().focused(), Some(source));
+        assert_eq!(view.cockpit.read(cx).roster().focused(), Some(source));
         let thread = source.thread().unwrap();
         assert_eq!(view.files.read(cx).active_path(thread), Some(path));
         assert_eq!(
@@ -324,7 +324,7 @@ fn deferred_preview_for_a_closed_pane_is_dropped(cx: &mut TestAppContext) {
     let focused = view.update(cx, |view, cx| {
         let source = view.panes[1].identity;
         let focused = view.panes[2].identity;
-        view.focus_pane(2);
+        view.focus_pane(2, cx);
         view.open_preview_from(1, path, None, cx);
         view.close_pane(source, cx);
         focused
@@ -332,7 +332,7 @@ fn deferred_preview_for_a_closed_pane_is_dropped(cx: &mut TestAppContext) {
     tick(cx);
 
     view.read_with(cx, |view, cx| {
-        assert_eq!(view.cockpit.roster().focused(), Some(focused));
+        assert_eq!(view.cockpit.read(cx).roster().focused(), Some(focused));
         assert!(view.panes.iter().all(|pane| !pane.preview.is_open()
             && pane
                 .thread()
@@ -351,12 +351,12 @@ fn a_focus_the_server_asks_for_shows_at_once(cx: &mut TestAppContext) {
     tick(cx);
     let first = shown(&view, cx).expect("a Thread shows");
     let second = *threads.iter().find(|thread| **thread != first).unwrap();
-    view.update(cx, |view, _| {
+    view.update(cx, |view, cx| {
         view.cockpit
-            .fixture_task_alert(ferrite_core::protocol::ServerMessage::Focus {
+            .update(cx, |cockpit, _| cockpit.fixture_task_alert(ferrite_core::protocol::ServerMessage::Focus {
                 thread: second,
                 fork_of: None,
-            });
+            }));
     });
     tick(cx);
     assert_eq!(shown(&view, cx), Some(second));
@@ -384,12 +384,12 @@ fn the_shown_thread_is_drawn_by_its_id_and_no_other(cx: &mut TestAppContext) {
     };
     assert_eq!(drawn(cx), [true, false]);
 
-    view.update(cx, |view, _| {
+    view.update(cx, |view, cx| {
         view.cockpit
-            .fixture_task_alert(ferrite_core::protocol::ServerMessage::Focus {
+            .update(cx, |cockpit, _| cockpit.fixture_task_alert(ferrite_core::protocol::ServerMessage::Focus {
                 thread: order[1],
                 fork_of: None,
-            });
+            }));
     });
     tick(cx);
     assert_eq!(drawn(cx), [false, true], "a Focus the Server asked for");

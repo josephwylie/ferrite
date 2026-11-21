@@ -24,7 +24,7 @@ impl CockpitView {
     }
 
     pub(super) fn toggle_details_now(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some((thread, pane)) = self.focused_details() else {
+        let Some((thread, pane)) = self.focused_details(cx) else {
             return;
         };
         if self.details_inline(pane) {
@@ -40,7 +40,7 @@ impl CockpitView {
         let card = &self.panes[pane].details;
         card.set_open(true);
         window.focus(&card.focus, cx);
-        self.refresh_context(thread);
+        self.refresh_context(thread, cx);
         cx.notify();
     }
 
@@ -50,7 +50,7 @@ impl CockpitView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if let Some((thread, _)) = self.focused_details() {
+        if let Some((thread, _)) = self.focused_details(cx) {
             self.close_details(thread, window, cx);
         }
     }
@@ -108,9 +108,9 @@ impl CockpitView {
     /// only reaches the focused Pane's card.
     pub(super) fn tend_details(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let previous_rest = self.nav_measure_rest.replace(true);
-        let targets = self.pane_rects(window);
+        let targets = self.pane_rects(window, cx);
         self.nav_measure_rest.set(previous_rest);
-        let current_rects = self.pane_rects(window);
+        let current_rects = self.pane_rects(window, cx);
         for (index, target) in targets {
             let pane = &self.panes[index];
             let current = current_rects
@@ -128,7 +128,7 @@ impl CockpitView {
             };
             pane.details.fit_width.set(Some(fit));
         }
-        let focused = self.focused();
+        let focused = self.focused(cx);
         let stale: Vec<ThreadId> = self
             .panes
             .iter()
@@ -141,14 +141,14 @@ impl CockpitView {
         }
     }
 
-    fn focused_details(&self) -> Option<(ThreadId, usize)> {
-        let index = self.focused();
+    fn focused_details(&self, cx: &gpui::App) -> Option<(ThreadId, usize)> {
+        let index = self.focused(cx);
         let thread = self.panes.get(index)?.thread()?;
         Some((thread, index))
     }
 
-    pub(super) fn details_open(&self) -> bool {
-        self.focused_details().is_some_and(|(_, index)| {
+    pub(super) fn details_open(&self, cx: &gpui::App) -> bool {
+        self.focused_details(cx).is_some_and(|(_, index)| {
             if self.details_inline(index) {
                 self.details_inline_open(index)
             } else {
@@ -166,7 +166,7 @@ impl CockpitView {
 
     pub(super) fn details_hold_focus(&self, window: &Window, cx: &gpui::App) -> bool {
         self.panes
-            .get(self.focused())
+            .get(self.focused(cx))
             .is_some_and(|pane| pane.details.focus.contains_focused(window, cx))
     }
 
@@ -348,13 +348,13 @@ impl CockpitView {
 
     pub(super) fn details_toggle(&self, cx: &mut Context<Self>) -> gpui::component::button::Button {
         use ferrite_ui::components::{bound_chord, icon_button_as, IconSize, IconState, Tip};
-        let card = self.focused_details().map(|(_, index)| index);
+        let card = self.focused_details(cx).map(|(_, index)| index);
         let door = icon_button_as(
             "details-toggle",
             ferrite_ui::icons::DETAILS,
             IconSize::Standard,
             "Toggle thread details",
-            IconState::Toggle(self.details_open()),
+            IconState::Toggle(self.details_open(cx)),
             cx,
         )
         .occlude()

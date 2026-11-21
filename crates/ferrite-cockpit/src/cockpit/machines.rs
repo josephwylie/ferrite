@@ -32,20 +32,20 @@ impl CockpitView {
         let machines = self.machines.as_ref()?.read(cx);
         machines
             .listed()
-            .then(|| machines.rows(self.cockpit.server()))
+            .then(|| machines.rows(self.cockpit.read(cx).server()))
     }
 
     /// Remote and empty clients must never substitute local files or defaults.
-    pub(super) fn on_machine(&self) -> bool {
-        !self.cockpit.environment_available() || self.cockpit.machine().is_some()
+    pub(super) fn on_machine(&self, cx: &App) -> bool {
+        !self.cockpit.read(cx).environment_available() || self.cockpit.read(cx).machine().is_some()
     }
 
     /// The window is on a machine whose Server is not there: what it shows
     /// stays, dimmed, and takes no input until it is back.
-    pub(super) fn machine_lost(&self) -> bool {
-        self.cockpit.environment_available()
-            && self.on_machine()
-            && matches!(self.cockpit.server(), Some(ServerState::Detached { .. }))
+    pub(super) fn machine_lost(&self, cx: &App) -> bool {
+        self.cockpit.read(cx).environment_available()
+            && self.on_machine(cx)
+            && matches!(self.cockpit.read(cx).server(), Some(ServerState::Detached { .. }))
     }
 
     /// Take what the machines off screen said.
@@ -81,8 +81,9 @@ impl CockpitView {
 
     /// Whether the Cockpit's Server answers (or it runs an Engine of its
     /// own): what it mirrors is the Server's.
-    pub(super) fn attached(&self) -> bool {
+    pub(super) fn attached(&self, cx: &App) -> bool {
         self.cockpit
+            .read(cx)
             .server()
             .is_none_or(|server| matches!(server, ServerState::Attached { .. }))
     }
@@ -94,12 +95,12 @@ impl CockpitView {
     pub(super) fn land(&mut self, cx: &mut Context<Self>) {
         let now = cx.background_executor().now();
         let expired = self.landing.as_ref().is_some_and(|(_, until)| now > *until);
-        if !expired && !self.attached() {
+        if !expired && !self.attached(cx) {
             return;
         }
         match self.landing.take().filter(|_| !expired) {
             Some((Landing::Alert(alert), _))
-                if alert.target.wants(self.cockpit.notifications()) =>
+                if alert.target.wants(self.cockpit.read(cx).notifications()) =>
             {
                 self.notice_verb(alert.open_verb(), cx)
             }
@@ -166,7 +167,7 @@ impl CockpitView {
 
     /// Sign in to the machine the window is on, in a terminal.
     pub(super) fn sign_in(&mut self, cx: &mut Context<Self>) {
-        let Some(bridge) = self.cockpit.machine() else {
+        let Some(bridge) = self.cockpit.read(cx).machine() else {
             return;
         };
         if let Err(error) = bridge.sign_in() {
@@ -201,8 +202,8 @@ impl CockpitView {
     /// workspace popover (`list_repo`): git there, never here (ADR 0026).
     /// An older Server cannot say, and the popover offers the fresh starts
     /// alone.
-    pub(super) fn ask_machine_repo(&mut self, project: ProjectId) {
-        let reply = self.cockpit.list_repo(project).ok();
+    pub(super) fn ask_machine_repo(&mut self, project: ProjectId, cx: &mut App) {
+        let reply = self.cockpit.update(cx, |cockpit, _| cockpit.list_repo(project).ok());
         self.checkouts.listen_machine(project, reply);
     }
 
@@ -213,7 +214,7 @@ impl CockpitView {
     /// the chip has no answer for yet.
     pub(super) fn poll_machine_repo(&mut self, cx: &mut Context<Self>) {
         match self.checkouts.machine_listed() {
-            None => self.ask_drafted_checkout(),
+            None => self.ask_drafted_checkout(cx),
             Some(false) => {}
             Some(true) => {
                 self.sync_workspace_rows(cx);
@@ -225,8 +226,8 @@ impl CockpitView {
     /// A draft's workspace chip names its checkout's branch, which on a
     /// machine only its Server can read: ask about the first drafted
     /// Project it has no answer for.
-    fn ask_drafted_checkout(&mut self) {
-        if !self.on_machine() || self.machine_lost() {
+    fn ask_drafted_checkout(&mut self, cx: &mut App) {
+        if !self.on_machine(cx) || self.machine_lost(cx) {
             return;
         }
         let unknown = self
@@ -236,7 +237,7 @@ impl CockpitView {
             .map(|draft| draft.binding.project())
             .find(|project| self.checkouts.branch(*project).is_none());
         if let Some(project) = unknown {
-            self.ask_machine_repo(project);
+            self.ask_machine_repo(project, cx);
         }
     }
 }

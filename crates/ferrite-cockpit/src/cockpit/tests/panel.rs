@@ -30,12 +30,12 @@ fn own_settings(view: &Entity<CockpitView>, name: &str, cx: &mut gpui::VisualTes
 
 /// The Thread the panel shows for this frame.
 fn shown(view: &Entity<CockpitView>, cx: &mut gpui::VisualTestContext) -> Option<ThreadId> {
-    view.read_with(cx, |view, _| view.panel_thread())
+    view.read_with(cx, |view, cx| view.panel_thread(cx))
 }
 
 /// The Solo card's right edge, as the board laid it out.
 fn card_right(view: &Entity<CockpitView>, cx: &mut gpui::VisualTestContext) -> f32 {
-    let card = cx.update(|window, cx| view.read(cx).pane_rects(window))[0].1;
+    let card = cx.update(|window, cx| view.read(cx).pane_rects(window, cx))[0].1;
     card.x + card.w
 }
 
@@ -62,7 +62,7 @@ fn the_panel_never_hides_for_width(cx: &mut TestAppContext) {
 #[gpui::test]
 fn the_panel_follows_the_shown_thread(cx: &mut TestAppContext) {
     let (view, cx) = solo("panel-follows", 2, 1600., cx);
-    let threads = view.read_with(cx, |view, _| view.cockpit.threads());
+    let threads = view.read_with(cx, |view, cx| view.cockpit.read(cx).threads());
     view.update(cx, |view, cx| view.focus_thread(threads[0], cx));
     tick(cx);
     assert!(cx.debug_bounds("panel").is_some(), "a Thread shows it");
@@ -85,7 +85,7 @@ fn the_panel_follows_the_shown_thread(cx: &mut TestAppContext) {
 #[gpui::test]
 fn the_panel_stays_with_a_reader_open(cx: &mut TestAppContext) {
     let (view, cx) = solo("panel-beside", 1, 1600., cx);
-    let threads = view.read_with(cx, |view, _| view.cockpit.threads());
+    let threads = view.read_with(cx, |view, cx| view.cockpit.read(cx).threads());
     view.update(cx, |view, cx| view.focus_thread(threads[0], cx));
     tick(cx);
     let dir = scratch("panel-reader");
@@ -208,7 +208,7 @@ fn the_palette_toggles_the_panel(cx: &mut TestAppContext) {
 #[gpui::test]
 fn the_overview_is_one_scroll_of_sections(cx: &mut TestAppContext) {
     let (view, cx) = solo("panel-sections", 1, 1600., cx);
-    let thread = view.read_with(cx, |view, _| view.cockpit.threads()[0]);
+    let thread = view.read_with(cx, |view, cx| view.cockpit.read(cx).threads()[0]);
     for section in ["panel-environment-head", "panel-environment-machine"] {
         assert!(cx.debug_bounds(section).is_some(), "{section}");
     }
@@ -233,7 +233,7 @@ fn the_overview_is_one_scroll_of_sections(cx: &mut TestAppContext) {
 fn the_pull_request_is_a_row_in_changes(cx: &mut TestAppContext) {
     use crate::cockpit::panel::least_w;
     let (view, cx) = solo("panel-pr-row", 1, 1600., cx);
-    let thread = view.read_with(cx, |view, _| view.cockpit.threads()[0]);
+    let thread = view.read_with(cx, |view, cx| view.cockpit.read(cx).threads()[0]);
     view.update(cx, |view, cx| {
         view.facts.pr_answered(thread, Some(pr_with_checks()));
         cx.notify();

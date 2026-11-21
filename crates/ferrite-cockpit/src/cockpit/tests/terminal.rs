@@ -70,7 +70,7 @@ fn deleting_a_thread_ends_the_shells_its_panel_held(cx: &mut TestAppContext) {
     opened(&view, cx);
     assert_eq!(numbers(&view, thread, cx), [1]);
     press_nav_verb(&view, thread, MenuVerb::Delete, cx);
-    assert!(!view.read_with(cx, |view, _| view.cockpit.known_threads().contains(&thread)), "the Thread is gone");
+    assert!(!view.read_with(cx, |view, cx| view.cockpit.read(cx).known_threads().contains(&thread)), "the Thread is gone");
     assert!(numbers(&view, thread, cx).is_empty(), "its shell ended with it");
 }
 
@@ -79,7 +79,7 @@ fn a_parked_thread_keeps_its_shells(cx: &mut TestAppContext) {
     let (view, thread, cx) = window("terminal-thread-parked", cx);
     opened(&view, cx);
     press_nav_verb(&view, thread, MenuVerb::Park, cx);
-    assert!(view.read_with(cx, |view, _| view.cockpit.thread(thread).is_none()), "the Thread is parked");
+    assert!(view.read_with(cx, |view, cx| view.cockpit.read(cx).thread(thread).is_none()), "the Thread is parked");
     assert_eq!(numbers(&view, thread, cx), [1], "its shell runs on");
     assert!(panel_tabs(&view, thread, cx).0.contains(&SurfaceId::Terminal(1)), "and keeps its tab");
 }
@@ -105,7 +105,7 @@ fn a_parked_worker_keeps_its_shells(cx: &mut TestAppContext) {
     assert_eq!(numbers(&view, worker, cx), [1]);
     view.update(cx, |view, cx| view.close_pane(PaneIdentity::Thread(worker), cx));
     tick(cx);
-    assert!(view.read_with(cx, |view, _| view.cockpit.thread(worker).is_none()), "the Worker is parked");
+    assert!(view.read_with(cx, |view, cx| view.cockpit.read(cx).thread(worker).is_none()), "the Worker is parked");
     assert_eq!(numbers(&view, worker, cx), [1], "its shell runs on");
     assert!(panel_tabs(&view, worker, cx).0.contains(&SurfaceId::Terminal(1)), "and keeps its tab");
 }
@@ -141,7 +141,7 @@ fn cmd_w_in_the_shell_closes_its_tab_not_the_thread(cx: &mut TestAppContext) {
     tick(cx);
     assert!(numbers(&view, thread, cx).is_empty(), "⌘W ended the shell's tab");
     assert!(
-        view.read_with(cx, |view, _| view.cockpit.thread(thread).is_some() && view.panes.len() == 1),
+        view.read_with(cx, |view, cx| view.cockpit.read(cx).thread(thread).is_some() && view.panes.len() == 1),
         "the Thread stays open"
     );
 }
@@ -585,14 +585,14 @@ fn back_to_shell(cx: &mut gpui::VisualTestContext) {
 /// What a Server linked to this window sends back for the open it was asked:
 /// the same action, read a frame later than the operator's next click.
 fn hear_own_open_echoed(view: &gpui::Entity<CockpitView>, thread: ThreadId, cx: &mut gpui::VisualTestContext) {
-    view.update(cx, |view, _| {
-        view.cockpit.fixture_browser_message(ferrite_core::protocol::ServerMessage::Browser {
+    view.update(cx, |view, cx| {
+        view.cockpit.update(cx, |cockpit, _| cockpit.fixture_browser_message(ferrite_core::protocol::ServerMessage::Browser {
             thread,
             owner: None,
             state: Default::default(),
             action: Some(ferrite_core::browser::Action::Open { url: "http://localhost:5173/app".into() }),
             owned: false,
-        })
+        }))
     });
     settle(cx);
 }
@@ -624,7 +624,7 @@ fn cmd_click_opens_what_the_shell_printed(cx: &mut TestAppContext) {
     std::fs::write(checkout.join("src/main.rs"), "one\ntwo\nthree\nfour\n").unwrap();
     bind_production_keys(cx);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
-    view.update(cx, |view, _| view.cockpit.fixture_browser_accepts());
+    view.update(cx, |view, cx| view.cockpit.update(cx, |cockpit, _| cockpit.fixture_browser_accepts()));
     hold_nav_open(&view, cx);
     cx.simulate_resize(gpui::size(px(1900.), px(900.)));
     tick(cx);

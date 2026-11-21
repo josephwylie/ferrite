@@ -531,18 +531,18 @@ impl CockpitView {
     /// Everything the sheet draws from. It never reads the sheet: the
     /// sheet calls it while its own update is running.
     pub(super) fn settings_inputs(&mut self, cx: &mut Context<Self>) -> SettingsInputs {
-        let place = self.machine_place();
+        let place = self.machine_place(cx);
         let providers = Provider::ALL
             .into_iter()
             .map(|provider| ProviderInputs {
                 provider,
-                catalog: self.cockpit.model_catalog(provider),
-                announced: self.cockpit.announced_models(provider),
+                catalog: self.cockpit.read(cx).model_catalog(provider),
+                announced: self.cockpit.read(cx).announced_models(provider),
                 update: crate::cli_updates::describe(
                     provider,
                     self.cli_updates.state(provider),
                     self.prefs.settings.auto_update_clis,
-                    self.cockpit.live_sessions(provider),
+                    self.cockpit.read(cx).live_sessions(provider),
                     &place,
                 ),
             })
@@ -602,7 +602,7 @@ impl CockpitView {
         if self.cli_versions.is_none() {
             self.probe_cli_versions(cx);
         }
-        self.ask_server_defaults();
+        self.ask_server_defaults(cx);
         view
     }
 }

@@ -64,7 +64,7 @@ fn the_empty_board_answers_a_press(cx: &mut TestAppContext) {
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     cx.simulate_resize(gpui::size(px(1440.), px(900.)));
     tick(cx);
-    let thread = view.read_with(cx, |view, _| view.cockpit.threads()[0]);
+    let thread = view.read_with(cx, |view, cx| view.cockpit.read(cx).threads()[0]);
     cx.simulate_keystrokes("cmd-w");
     tick(cx);
     let recent = bounds(cx, format!("empty-board-recent-{}", thread.get()));
@@ -133,7 +133,7 @@ fn a_file_opens_in_the_panel_and_closes(cx: &mut TestAppContext) {
     hold_nav_open(&view, cx);
     cx.simulate_resize(gpui::size(px(1440.), px(900.)));
     tick(cx);
-    let whole = cx.update(|window, cx| view.read(cx).pane_rects(window)[0].1.w);
+    let whole = cx.update(|window, cx| view.read(cx).pane_rects(window, cx)[0].1.w);
     cx.update(|window, cx| {
         view.update(cx, |view, cx| {
             view.open_preview(file.clone(), Some(3), window, cx)
@@ -146,13 +146,13 @@ fn a_file_opens_in_the_panel_and_closes(cx: &mut TestAppContext) {
         let view = view.read(cx);
         (
             view.panes[0].preview.document().and_then(|doc| doc.line()),
-            view.pane_rects(window)[0].1.w,
+            view.pane_rects(window, cx)[0].1.w,
         )
     });
     assert_eq!(line, Some(3));
     // The Panel widens to read it (SPEC §5.6.3): the board gives up what
     // it gains.
-    let wide = view.read_with(cx, |view, _| view.board_right());
+    let wide = view.read_with(cx, |view, cx| view.board_right(cx));
     assert!(wide > crate::cockpit::panel::least_w());
     assert!(
         (narrowed - (whole - (wide - crate::cockpit::panel::least_w()))).abs() <= 1.0,
@@ -165,7 +165,7 @@ fn a_file_opens_in_the_panel_and_closes(cx: &mut TestAppContext) {
     tick(cx);
     // Closed, the Panel is back at the operator's width: the file's floor
     // was never saved.
-    let back = cx.update(|window, cx| view.read(cx).pane_rects(window)[0].1.w);
+    let back = cx.update(|window, cx| view.read(cx).pane_rects(window, cx)[0].1.w);
     assert!(cx.debug_bounds("panel-preview").is_none());
     assert!(
         (back - whole).abs() <= 0.5,
@@ -186,7 +186,7 @@ fn the_solo_card_sits_on_the_frame(cx: &mut TestAppContext) {
     hold_nav_open(&view, cx);
     cx.simulate_resize(gpui::size(px(1600.), px(960.)));
     tick(cx);
-    let rects = cx.update(|window, cx| view.read(cx).pane_rects(window));
+    let rects = cx.update(|window, cx| view.read(cx).pane_rects(window, cx));
     let card = rects[0].1;
     assert_eq!((card.x, card.y), (nav::COLUMN_WIDTH, WIN_CHROME_H));
     assert_eq!(card.x + card.w, 1600. - least_w());
@@ -212,7 +212,7 @@ fn retry_re_sends_the_failed_turns_prompt(cx: &mut TestAppContext) {
     let (view, fake, cx) = solo_of("frame-retry", cx);
     let thread = view.read_with(cx, |view, _| view.panes[0].thread().unwrap());
     view.update(cx, |view, cx| {
-        let _ = view.cockpit.send(thread, "build the range sheet".into());
+        let _ = view.cockpit.update(cx, |cockpit, _| cockpit.send(thread, "build the range sheet".into()));
         cx.notify();
     });
     tick(cx);
@@ -249,7 +249,7 @@ fn a_session_closed_mid_turn_leaves_the_strip_without_retry(cx: &mut TestAppCont
     let (view, fake, cx) = solo_of("frame-closed-mid-turn", cx);
     let thread = view.read_with(cx, |view, _| view.panes[0].thread().unwrap());
     view.update(cx, |view, cx| {
-        let _ = view.cockpit.send(thread, "build the range sheet".into());
+        let _ = view.cockpit.update(cx, |cockpit, _| cockpit.send(thread, "build the range sheet".into()));
         cx.notify();
     });
     tick(cx);

@@ -31,9 +31,10 @@ impl RemoteFiles {
                 let machine = machine.clone();
                 cx.defer(move |cx| {
                     let requested = view
-                        .update(cx, |view, _| {
+                        .update(cx, |view, cx| {
                             if !view
                                 .cockpit
+                                .read(cx)
                                 .machine()
                                 .is_some_and(|current| Arc::ptr_eq(current, &machine))
                             {
@@ -41,7 +42,7 @@ impl RemoteFiles {
                                     "This connection changed. Reopen the file on its machine.",
                                 ));
                             }
-                            view.cockpit.file_operation(request)
+                            view.cockpit.update(cx, |cockpit, _| cockpit.file_operation(request))
                         })
                         .map_err(|error| io::Error::other(error.to_string()))
                         .and_then(|result| result);

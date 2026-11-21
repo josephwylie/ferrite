@@ -358,10 +358,10 @@ fn mark_as_unread_brings_back_a_read_threads_notice(cx: &mut TestAppContext) {
         .is_none(),
         "already unread"
     );
-    view.update(cx, |view, _| view.cockpit.mark_notices_read());
+    view.update(cx, |view, cx| view.cockpit.update(cx, |cockpit, _| cockpit.mark_notices_read()));
     tick(cx);
     let row = view.read_with(cx, |view, cx| {
-        assert!(!view.cockpit.notifications().attention(threads[2]), "read");
+        assert!(!view.cockpit.read(cx).notifications().attention(threads[2]), "read");
         row_of(
             &view.context_rows(MenuTarget::Thread(threads[2]), cx),
             MenuVerb::MarkUnread,
@@ -377,9 +377,9 @@ fn mark_as_unread_brings_back_a_read_threads_notice(cx: &mut TestAppContext) {
         view.press_menu_row(row, window, cx);
     });
     tick(cx);
-    view.read_with(cx, |view, _| {
+    view.read_with(cx, |view, cx| {
         assert!(
-            view.cockpit.notifications().attention(threads[2]),
+            view.cockpit.read(cx).notifications().attention(threads[2]),
             "unread again"
         );
     });

@@ -449,7 +449,7 @@ fn did_something_at(store: &std::path::Path, thread: ThreadId, stamp: &str) {
 /// (the fixtures' workspace) is on: its card hugs its two lines.
 fn without_checkouts(view: &Entity<CockpitView>, cx: &mut gpui::VisualTestContext) {
     view.update(cx, |view, cx| {
-        let threads = view.cockpit.threads();
+        let threads = view.cockpit.read(cx).threads();
         view.facts
             .set_branches(threads.into_iter().map(|thread| (thread, None)).collect());
         view.notify_part(parts::Part::Nav, cx);
@@ -627,6 +627,7 @@ fn open_folds(view: &gpui::Entity<CockpitView>, cx: &mut gpui::VisualTestContext
         };
         let prompts: Vec<_> = view
             .cockpit
+            .read(cx)
             .thread(thread)
             .unwrap()
             .transcript()
@@ -1030,6 +1031,7 @@ fn caret(
         let thread = view.panes[0].thread().unwrap();
         let blocks = view
             .cockpit
+            .read(cx)
             .thread(thread)
             .unwrap()
             .activity()

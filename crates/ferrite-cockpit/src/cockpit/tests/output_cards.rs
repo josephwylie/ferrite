@@ -373,9 +373,10 @@ fn a_steered_turns_opened_folder_stays_open(cx: &mut TestAppContext) {
         .unwrap();
     tick(cx);
     hide_panel(&view, cx);
-    let steered = view.read_with(cx, |view, _| {
-        let thread = view.cockpit.threads()[0];
+    let steered = view.read_with(cx, |view, cx| {
+        let thread = view.cockpit.read(cx).threads()[0];
         view.cockpit
+            .read(cx)
             .thread(thread)
             .unwrap()
             .transcript()

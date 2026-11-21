@@ -54,11 +54,11 @@ fn cli_line(binary: Option<&CliBinary>) -> SharedString {
 
 impl CockpitView {
     /// Where the window's Sessions run, as Settings says it.
-    pub(super) fn machine_place(&self) -> SharedString {
-        if !self.cockpit.environment_available() {
+    pub(super) fn machine_place(&self, cx: &gpui::App) -> SharedString {
+        if !self.cockpit.read(cx).environment_available() {
             return "No environment selected".into();
         }
-        match self.cockpit.machine() {
+        match self.cockpit.read(cx).machine() {
             Some(machine) => machine.name().to_string().into(),
             None => "this computer".into(),
         }
@@ -66,27 +66,27 @@ impl CockpitView {
 
     /// What a machine's failure reads as: a Server from before the command
     /// is told to update, not shown its refusal.
-    fn said(&self, error: &std::io::Error) -> SharedString {
+    fn said(&self, error: &std::io::Error, cx: &gpui::App) -> SharedString {
         match error.kind() {
             std::io::ErrorKind::Unsupported => {
-                format!("update ferrited on {}", self.machine_place()).into()
+                format!("update ferrited on {}", self.machine_place(cx)).into()
             }
             _ => error.to_string().into(),
         }
     }
 
     /// Read the machine's defaults, unless a read is out.
-    pub(super) fn ask_server_defaults(&mut self) {
-        if self.on_machine() && self.environment.defaults_asked.is_empty() {
-            self.send_defaults(None);
+    pub(super) fn ask_server_defaults(&mut self, cx: &mut gpui::App) {
+        if self.on_machine(cx) && self.environment.defaults_asked.is_empty() {
+            self.send_defaults(None, cx);
         }
     }
 
     /// Send a read, or with `set` a write, of the machine's defaults.
     /// Whether it went out.
-    fn send_defaults(&mut self, set: Option<ServerDefaults>) -> bool {
+    fn send_defaults(&mut self, set: Option<ServerDefaults>, cx: &mut gpui::App) -> bool {
         let write = set.is_some();
-        match self.cockpit.server_defaults(set) {
+        match self.cockpit.update(cx, |cockpit, _| cockpit.server_defaults(set)) {
             Ok(answer) => {
                 self.environment
                     .defaults_asked
@@ -94,7 +94,7 @@ impl CockpitView {
                 true
             }
             Err(error) => {
-                self.defaults_failed(write, self.said(&error));
+                self.defaults_failed(write, self.said(&error, cx));
                 false
             }
         }
@@ -102,8 +102,8 @@ impl CockpitView {
 
     /// The defaults Settings shows: this computer's from its own file, or
     /// the machine's once it has said them.
-    pub(super) fn shown_defaults(&self) -> Option<ServerDefaults> {
-        if self.on_machine() {
+    pub(super) fn shown_defaults(&self, cx: &gpui::App) -> Option<ServerDefaults> {
+        if self.on_machine(cx) {
             self.environment.defaults.clone()
         } else {
             Some(self.prefs.settings.server_defaults())
@@ -111,8 +111,8 @@ impl CockpitView {
     }
 
     /// How many Factory Tasks the machine works at once, when known.
-    pub(super) fn factory_limit(&self) -> Option<usize> {
-        self.shown_defaults()
+    pub(super) fn factory_limit(&self, cx: &gpui::App) -> Option<usize> {
+        self.shown_defaults(cx)
             .map(|defaults| defaults.factory_tasks_at_once)
     }
 
@@ -124,7 +124,7 @@ impl CockpitView {
         change: impl FnOnce(&mut ServerDefaults),
         cx: &mut Context<Self>,
     ) {
-        if !self.on_machine() {
+        if !self.on_machine(cx) {
             self.change_settings(
                 |settings| {
                     let mut defaults = settings.server_defaults();
@@ -139,7 +139,7 @@ impl CockpitView {
             return;
         };
         change(&mut defaults);
-        if self.send_defaults(Some(defaults.clone())) {
+        if self.send_defaults(Some(defaults.clone()), cx) {
             self.environment.defaults = Some(defaults);
         }
         cx.notify();
@@ -159,8 +159,8 @@ impl CockpitView {
     }
 
     /// What stands in for the machine's rows until it has said them.
-    fn defaults_unread(&self) -> settings::Row {
-        if !self.cockpit.environment_available() {
+    fn defaults_unread(&self, cx: &gpui::App) -> settings::Row {
+        if !self.cockpit.read(cx).environment_available() {
             return settings::fact(
                 "Defaults",
                 "Enable or add an environment in Connections".into(),
@@ -168,28 +168,28 @@ impl CockpitView {
         }
         let status: SharedString = match &self.environment.defaults_error {
             Some(DefaultsTrouble::Unread(error)) => format!("Could not read them: {error}").into(),
-            _ => format!("Reading from {}…", self.machine_place()).into(),
+            _ => format!("Reading from {}…", self.machine_place(cx)).into(),
         };
         settings::fact("Defaults", status)
     }
 
     /// The machine's refusal of an edit, shown beside the values it kept.
-    fn defaults_unsaved(&self) -> Option<settings::Row> {
+    fn defaults_unsaved(&self, cx: &gpui::App) -> Option<settings::Row> {
         let Some(DefaultsTrouble::Unsaved(error)) = &self.environment.defaults_error else {
             return None;
         };
         Some(settings::fact(
             "Defaults",
-            format!("Not saved on {}: {error}", self.machine_place()).into(),
+            format!("Not saved on {}: {error}", self.machine_place(cx)).into(),
         ))
     }
 
     /// Settings › Permissions: how each provider's Sessions ask before
     /// acting, as the machine they run on says.
     pub(super) fn permission_groups(&self, cx: &Context<Self>) -> Vec<settings::Group> {
-        let applies = settings::fact("Applies to", self.machine_place());
-        let Some(defaults) = self.shown_defaults() else {
-            return vec![settings::Group::new(None).rows([applies, self.defaults_unread()])];
+        let applies = settings::fact("Applies to", self.machine_place(cx));
+        let Some(defaults) = self.shown_defaults(cx) else {
+            return vec![settings::Group::new(None).rows([applies, self.defaults_unread(cx)])];
         };
         let modes = |options: &[(&str, Option<&str>)], selected: Option<&str>| {
             options
@@ -254,7 +254,7 @@ impl CockpitView {
         ];
         vec![
             settings::Group::new(None)
-                .rows(std::iter::once(applies).chain(self.defaults_unsaved())),
+                .rows(std::iter::once(applies).chain(self.defaults_unsaved(cx))),
             provider_group(Provider::Claude).rows(claude),
             provider_group(Provider::Codex).rows(codex),
         ]
@@ -263,15 +263,15 @@ impl CockpitView {
     /// Settings › Behaviour's group of what the machine does on its own
     /// account: follow-up suggestions and its Factory's limit.
     pub(super) fn machine_group(&self, cx: &Context<Self>) -> settings::Group {
-        let applies = settings::fact("Applies to", self.machine_place());
+        let applies = settings::fact("Applies to", self.machine_place(cx));
         let group = settings::Group::new(Some("Machine defaults"));
-        let Some(defaults) = self.shown_defaults() else {
-            return group.rows([applies, self.defaults_unread()]);
+        let Some(defaults) = self.shown_defaults(cx) else {
+            return group.rows([applies, self.defaults_unread(cx)]);
         };
         let at_once = defaults.factory_tasks_at_once;
         group.rows(
             std::iter::once(applies)
-                .chain(self.defaults_unsaved())
+                .chain(self.defaults_unsaved(cx))
                 .chain([
                     settings::toggle(
                         "settings-placeholder-suggestions",
@@ -301,7 +301,7 @@ impl CockpitView {
 
     /// Ask the machine's CLIs their versions.
     pub(super) fn probe_cli_versions(&mut self, cx: &mut Context<Self>) {
-        match self.cockpit.cli(CliAction::Versions) {
+        match self.cockpit.update(cx, |cockpit, _| cockpit.cli(CliAction::Versions)) {
             Ok(answer) => self.environment.versions = Some(answer),
             Err(error) => {
                 ferrite_core::log!("could not ask the CLIs' versions: {error}");
@@ -313,7 +313,7 @@ impl CockpitView {
 
     /// Ask the machine to check its CLIs against the registry.
     pub(super) fn check_clis(&mut self, cx: &mut Context<Self>) {
-        match self.cockpit.cli(CliAction::Check) {
+        match self.cockpit.update(cx, |cockpit, _| cockpit.cli(CliAction::Check)) {
             Ok(answer) => self.environment.check = Some(answer),
             Err(error) => {
                 let auto = self.prefs.settings.auto_update_clis;
@@ -328,7 +328,7 @@ impl CockpitView {
 
     /// Have the machine install `provider`'s newest CLI.
     pub(super) fn install_cli(&mut self, provider: Provider, cx: &mut Context<Self>) {
-        match self.cockpit.cli(CliAction::Update { provider }) {
+        match self.cockpit.update(cx, |cockpit, _| cockpit.cli(CliAction::Update { provider })) {
             Ok(answer) => self.environment.updates.push((provider, answer)),
             Err(error) => self.cli_updates.updated(provider, Err(error.to_string())),
         }
@@ -352,7 +352,7 @@ impl CockpitView {
     /// reply keeps the edits still in flight, so only the last one replaces
     /// what Settings shows; a write that failed is read back, so the rows
     /// show what the machine kept.
-    fn poll_defaults(&mut self) -> bool {
+    fn poll_defaults(&mut self, cx: &mut gpui::App) -> bool {
         let mut landed = Vec::new();
         let mut waiting = Vec::new();
         for ask in std::mem::take(&mut self.environment.defaults_asked) {
@@ -385,12 +385,12 @@ impl CockpitView {
                 }
                 Err(error) => {
                     unsaved |= write;
-                    self.defaults_failed(write, self.said(&error));
+                    self.defaults_failed(write, self.said(&error, cx));
                 }
             }
         }
         if unsaved && self.environment.defaults_asked.is_empty() {
-            self.send_defaults(None);
+            self.send_defaults(None, cx);
         }
         heard
     }
@@ -398,7 +398,7 @@ impl CockpitView {
     /// What the machine answered since the pump last looked.
     pub(super) fn poll_environment(&mut self, cx: &mut Context<Self>) {
         let mut heard = false;
-        heard |= self.poll_defaults();
+        heard |= self.poll_defaults(cx);
         if let Some(answer) = take_answer(&mut self.environment.versions) {
             heard = true;
             self.cli_versions = Some(match answer {
@@ -413,7 +413,7 @@ impl CockpitView {
                     (line(Provider::Claude), line(Provider::Codex))
                 }
                 Err(error) => {
-                    let said = self.said(&error);
+                    let said = self.said(&error, cx);
                     (said.clone(), said)
                 }
                 _ => ("unavailable".into(), "unavailable".into()),
@@ -462,7 +462,7 @@ impl CockpitView {
                 Ok(Done::CliUpdated { binary, .. }) => {
                     // Open Threads restart on the new CLI as each goes idle,
                     // and the pickers ask for its menu now.
-                    self.cockpit.cli_replaced(provider);
+                    self.cockpit.update(cx, |cockpit, _| cockpit.cli_replaced(provider));
                     self.cli_updates.updated(provider, Ok(binary.version));
                     self.probe_cli_versions(cx);
                 }

@@ -26,8 +26,8 @@ fn queued_prompts_pile_up_a_row_each(cx: &mut TestAppContext) {
     cx.simulate_input("second thing");
     cx.simulate_keystrokes("enter");
     tick(cx);
-    view.read_with(cx, |view, _| {
-        let open = view.cockpit.thread(thread).unwrap();
+    view.read_with(cx, |view, cx| {
+        let open = view.cockpit.read(cx).thread(thread).unwrap();
         assert_eq!(
             open.queue()
                 .iter()
@@ -82,18 +82,19 @@ fn backspace_on_an_empty_line_unqueues_the_held_prompt(cx: &mut TestAppContext) 
         })
         .unwrap();
     tick(cx);
-    view.read_with(cx, |view, _| {
+    view.read_with(cx, |view, cx| {
         assert!(
-            view.cockpit.thread(thread).is_some_and(|open| open.busy()),
+            view.cockpit.read(cx).thread(thread).is_some_and(|open| open.busy()),
             "the premise: a turn in flight"
         );
     });
     cx.simulate_input("also this");
     cx.simulate_keystrokes("enter");
     tick(cx);
-    view.read_with(cx, |view, _| {
+    view.read_with(cx, |view, cx| {
         assert_eq!(
             view.cockpit
+                .read(cx)
                 .thread(thread)
                 .and_then(|open| open.queue().first().map(|item| item.text.as_str())),
             Some("also this")
@@ -110,6 +111,7 @@ fn backspace_on_an_empty_line_unqueues_the_held_prompt(cx: &mut TestAppContext) 
         );
         assert_eq!(
             view.cockpit
+                .read(cx)
                 .thread(thread)
                 .and_then(|open| open.queue().first().map(|item| item.text.as_str())),
             Some("also this")
@@ -122,6 +124,7 @@ fn backspace_on_an_empty_line_unqueues_the_held_prompt(cx: &mut TestAppContext) 
         assert!(view.panes[0].composer.read(cx).is_empty());
         assert_eq!(
             view.cockpit
+                .read(cx)
                 .thread(thread)
                 .and_then(|open| open.queue().first().map(|item| item.text.as_str())),
             Some("also this")
@@ -129,9 +132,10 @@ fn backspace_on_an_empty_line_unqueues_the_held_prompt(cx: &mut TestAppContext) 
     });
     cx.simulate_keystrokes("backspace");
     tick(cx);
-    view.read_with(cx, |view, _| {
+    view.read_with(cx, |view, cx| {
         assert_eq!(
             view.cockpit
+                .read(cx)
                 .thread(thread)
                 .and_then(|open| open.queue().first().map(|item| item.text.as_str())),
             None,
@@ -172,8 +176,8 @@ fn backspace_on_an_empty_line_unqueues_the_held_prompt(cx: &mut TestAppContext) 
 
     // Up walks rows first, then edits the visible newest native prompt.
     view.update(cx, |view, cx| {
-        view.cockpit.queue(thread, "earlier queued".into());
-        view.cockpit.queue(thread, "edit queued".into());
+        view.cockpit.update(cx, |cockpit, _| cockpit.queue(thread, "earlier queued".into()));
+        view.cockpit.update(cx, |cockpit, _| cockpit.queue(thread, "edit queued".into()));
         view.panes[0].composer.update(cx, |composer, cx| {
             composer.set("draft\nsecond row".into(), cx)
         });
@@ -184,6 +188,7 @@ fn backspace_on_an_empty_line_unqueues_the_held_prompt(cx: &mut TestAppContext) 
     view.read_with(cx, |view, cx| {
         assert_eq!(
             view.cockpit
+                .read(cx)
                 .thread(thread)
                 .unwrap()
                 .queue()
@@ -198,6 +203,7 @@ fn backspace_on_an_empty_line_unqueues_the_held_prompt(cx: &mut TestAppContext) 
     view.read_with(cx, |view, cx| {
         assert_eq!(
             view.cockpit
+                .read(cx)
                 .thread(thread)
                 .unwrap()
                 .queue()
@@ -258,7 +264,7 @@ fn a_steering_prompt_offers_no_edit_or_remove(cx: &mut TestAppContext) {
     );
     cx.simulate_keystrokes("backspace");
     tick(cx);
-    view.read_with(cx, |view, _| {
-        assert_eq!(view.cockpit.thread(thread).unwrap().queue().len(), 1);
+    view.read_with(cx, |view, cx| {
+        assert_eq!(view.cockpit.read(cx).thread(thread).unwrap().queue().len(), 1);
     });
 }

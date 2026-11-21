@@ -341,7 +341,7 @@ impl CockpitView {
     /// ⌘⇧E: the list takes the keyboard, its cursor on the row the board
     /// shows (else the first card).
     pub(super) fn focus_nav(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let shown = self.focused_thread();
+        let shown = self.focused_thread(cx);
         let nav = self.nav_view.read(cx);
         let start = nav.inputs().and_then(|inputs| {
             nav.items(inputs)
@@ -377,7 +377,7 @@ impl CockpitView {
     pub(super) fn park_nav_cursor(&mut self, cx: &mut Context<Self>) {
         let cursor = self.nav_view.read(cx).cursor.as_ref().map(|cursor| cursor.item);
         if let Some(NavItem::Thread(thread)) = cursor {
-            if self.cockpit.thread(thread).is_some() {
+            if self.cockpit.read(cx).thread(thread).is_some() {
                 self.park_listed(&[thread], cx);
             }
         }
@@ -410,7 +410,7 @@ impl CockpitView {
             return;
         }
         let at = self
-            .focused_thread()
+            .focused_thread(cx)
             .and_then(|shown| order.iter().position(|thread| *thread == shown));
         let next = match at {
             Some(at) => (at as isize + delta).rem_euclid(len),

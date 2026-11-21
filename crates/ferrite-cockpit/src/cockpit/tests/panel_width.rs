@@ -120,7 +120,7 @@ fn every_tool_leaves_the_chosen_width_alone_at_any_window_width(cx: &mut TestApp
                     "the editor stays readable at {window_w}: {editor}"
                 );
             }
-            let card = cx.update(|window, cx| view.read(cx).pane_rects(window))[0].1;
+            let card = cx.update(|window, cx| view.read(cx).pane_rects(window, cx))[0].1;
             assert!(
                 card.w >= DOCK_THREAD_MIN_W,
                 "chat keeps its least beside {id:?} at {window_w}: {}",

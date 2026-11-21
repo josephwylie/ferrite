@@ -221,7 +221,7 @@ impl CockpitView {
             PaletteScope::All => {
                 let mut rows = self.palette_thread_rows(cx);
                 rows.extend(self.palette_project_rows(cx));
-                rows.extend(self.palette_factory_rows());
+                rows.extend(self.palette_factory_rows(cx));
                 rows.extend(self.palette_command_rows(window, cx));
                 rows
             }
@@ -282,7 +282,7 @@ impl CockpitView {
     ) {
         self.open_palette(PaletteScope::Sessions, "", window, cx);
         let roots = self.session_file_roots.clone();
-        match self.cockpit.discover_sessions(roots, IMPORT_ROWS_MAX) {
+        match self.cockpit.update(cx, |cockpit, _| cockpit.discover_sessions(roots, IMPORT_ROWS_MAX)) {
             Some(reply) => {
                 if let Some(palette) = self.floats.palette.clone() {
                     palette.update(cx, |palette, _| palette.listen(into, reply));
@@ -365,11 +365,11 @@ impl CockpitView {
     /// place: a draft with nothing typed, or a Thread that still offers
     /// import.
     pub(super) fn import_target(&self, cx: &gpui::App) -> Option<PaneIdentity> {
-        let pane = self.panes.get(self.focused())?;
+        let pane = self.panes.get(self.focused(cx))?;
         let blank = match pane.identity {
             PaneIdentity::Draft(_) => pane.composer.read(cx).is_empty(),
             PaneIdentity::Thread(thread) => {
-                pane::offers_import(self.cockpit.thread(thread).map(|open| open.transcript()))
+                pane::offers_import(self.cockpit.read(cx).thread(thread).map(|open| open.transcript()))
             }
         };
         blank.then_some(pane.identity)
@@ -382,9 +382,9 @@ impl CockpitView {
         let order = self.thread_order(cx);
         let project_of = |thread: ThreadId| self.facts.get(thread).and_then(|facts| facts.project);
         let open_threads: Vec<ThreadId> = {
-            let mut open = self.cockpit.threads();
+            let mut open = self.cockpit.read(cx).threads();
             let side_chat = self.side_chat.read(cx);
-            open.retain(|thread| !side_chat.owns(*thread) && self.cockpit.operators(*thread));
+            open.retain(|thread| !side_chat.owns(*thread) && self.cockpit.read(cx).operators(*thread));
             open.sort();
             open
         };
@@ -408,6 +408,7 @@ impl CockpitView {
             .collect();
         let mut projects: Vec<Option<ProjectId>> = self
             .cockpit
+            .read(cx)
             .registry()
             .projects()
             .iter()
@@ -433,7 +434,7 @@ impl CockpitView {
                 if !seen.insert(thread) {
                     continue;
                 }
-                let row = self.thread_row(thread);
+                let row = self.thread_row(thread, cx);
                 let age = self
                     .facts
                     .last_used(thread)
@@ -460,7 +461,7 @@ impl CockpitView {
                     context: context_words(scope, word),
                     status: Some(row.status),
                     detail: self
-                        .thread_path(thread)
+                        .thread_path(thread, cx)
                         .map(|path| SharedString::from(home_relative(&path))),
                     keys,
                     used: self.facts.last_used(thread),
@@ -476,6 +477,7 @@ impl CockpitView {
     /// Project with no open Thread has nowhere to land.
     fn palette_project_rows(&self, cx: &gpui::App) -> Vec<PaletteRow> {
         self.cockpit
+            .read(cx)
             .registry()
             .projects()
             .iter()
@@ -500,9 +502,10 @@ impl CockpitView {
 
     /// Every Project's Factory (`Act::Factory`), `Factory: <Project>`,
     /// an empty one's too: the nav lists only the busy ones.
-    fn palette_factory_rows(&self) -> Vec<PaletteRow> {
-        let board = self.cockpit.factory();
+    fn palette_factory_rows(&self, cx: &gpui::App) -> Vec<PaletteRow> {
+        let board = self.cockpit.read(cx).factory();
         self.cockpit
+            .read(cx)
             .registry()
             .projects()
             .iter()
@@ -529,7 +532,7 @@ impl CockpitView {
 
     /// A Project's open Threads' rows, in creation order.
     fn project_rows(&self, project: ProjectId, cx: &gpui::App) -> Vec<nav::ThreadRow> {
-        let mut threads = self.cockpit.threads();
+        let mut threads = self.cockpit.read(cx).threads();
         threads.sort();
         threads
             .into_iter()
@@ -537,7 +540,7 @@ impl CockpitView {
             .filter(|thread| {
                 self.facts.get(*thread).and_then(|facts| facts.project) == Some(project)
             })
-            .map(|thread| self.thread_row(thread))
+            .map(|thread| self.thread_row(thread, cx))
             .collect()
     }
 
@@ -559,11 +562,11 @@ impl CockpitView {
         cx: &mut Context<Self>,
     ) -> Vec<PaletteRow> {
         use ferrite_ui::components::{bound_chord, bound_chord_in};
-        let focused = self.focused_thread();
-        let open = focused.and_then(|thread| self.cockpit.thread(thread));
+        let focused = self.focused_thread(cx);
+        let open = focused.and_then(|thread| self.cockpit.read(cx).thread(thread));
         let draft = self
             .panes
-            .get(self.focused())
+            .get(self.focused(cx))
             .is_some_and(|pane| pane.draft().is_some());
         let parked = !self.parked_threads_all().is_empty();
         let supports =
@@ -581,7 +584,7 @@ impl CockpitView {
             .and_then(super::transcript_glue::rewind_gate)
             .is_some_and(|allowed| allowed.is_ok());
         let rewindable =
-            cuttable && focused.is_some_and(|thread| self.last_prompt(thread).is_some());
+            cuttable && focused.is_some_and(|thread| self.last_prompt(thread, cx).is_some());
         let ladder = open.is_some_and(|open| {
             !ferrite_core::providers::models::efforts_for(
                 open.provider(),
@@ -593,7 +596,7 @@ impl CockpitView {
         let facts = focused.and_then(|thread| self.facts.get(thread));
         // The changes show in the panel, so only where it has a Thread.
         let changed = facts.is_some_and(|facts| !facts.changed_files.is_empty())
-            && self.panel_candidate().is_some();
+            && self.panel_candidate(cx).is_some();
         let pr = facts.and_then(|facts| facts.pr.reading.as_ref());
         let checks = pr.is_some_and(|pr| pr.checks.is_some());
         let plan = open.is_some_and(|open| open.transcript().todos().is_some());
@@ -629,14 +632,14 @@ impl CockpitView {
             Command::ShowParked,
         );
         add(
-            focused.is_some_and(|thread| self.thread_path(thread).is_some()),
+            focused.is_some_and(|thread| self.thread_path(thread, cx).is_some()),
             "Review branch".into(),
             "against the default branch",
             bound_chord("palette::ReviewBranch"),
             Command::ReviewBranch,
         );
         add(
-            focused.is_some_and(|thread| self.thread_path(thread).is_some()),
+            focused.is_some_and(|thread| self.thread_path(thread, cx).is_some()),
             "Review changes".into(),
             "comment on the diff",
             None,
@@ -672,6 +675,7 @@ impl CockpitView {
         );
         let projects: Vec<(ProjectId, String)> = self
             .cockpit
+            .read(cx)
             .registry()
             .projects()
             .iter()
@@ -728,14 +732,14 @@ impl CockpitView {
             Command::ToggleSidebar,
         );
         add(
-            self.panel_candidate().is_some(),
+            self.panel_candidate(cx).is_some(),
             "Toggle panel".into(),
             "",
             bound_chord("cockpit::TogglePanel"),
             Command::TogglePanel,
         );
         add(
-            self.focused_thread().is_some(),
+            self.focused_thread(cx).is_some(),
             "Toggle thread details".into(),
             "",
             bound_chord("cockpit::ToggleDetails"),
@@ -824,7 +828,7 @@ impl CockpitView {
             Command::Shortcuts,
         );
         add(
-            !self.cockpit.needs_you().is_empty(),
+            !self.cockpit.read(cx).needs_you().is_empty(),
             "Next request".into(),
             "",
             bound_chord("cockpit::NextDecision"),
@@ -945,7 +949,7 @@ impl CockpitView {
             Command::ResetKeys,
         );
         let _ = cx;
-        rows.extend(self.user_command_rows());
+        rows.extend(self.user_command_rows(cx));
         rows
     }
 
@@ -967,9 +971,9 @@ impl CockpitView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let thread = self.focused_thread();
+        let thread = self.focused_thread(cx);
         let generation = thread
-            .and_then(|thread| self.cockpit.thread(thread))
+            .and_then(|thread| self.cockpit.read(cx).thread(thread))
             .map(|open| open.generation());
         match command {
             Command::ParkThread => self.close_thread(&CloseThread, window, cx),
@@ -1005,23 +1009,23 @@ impl CockpitView {
             Command::Shortcuts => self.toggle_shortcuts(window, cx),
             Command::NextRequest => self.next_decision(&NextDecision, window, cx),
             Command::CopyPrompt => {
-                let index = self.focused();
+                let index = self.focused(cx);
                 self.copy_reading_prompt(index, cx);
             }
             Command::ResendPrompt => {
-                let index = self.focused();
+                let index = self.focused(cx);
                 self.resend_reading_prompt(index, cx);
             }
             // The prompt's own Rewind menu, as its ↶ opens it, over the
             // middle of its Pane.
             Command::Rewind => {
                 if let Some((thread, block)) =
-                    thread.and_then(|thread| Some((thread, self.last_prompt(thread)?)))
+                    thread.and_then(|thread| Some((thread, self.last_prompt(thread, cx)?)))
                 {
                     let at = self
-                        .pane_rects(window)
+                        .pane_rects(window, cx)
                         .into_iter()
-                        .find(|(index, _)| *index == self.focused())
+                        .find(|(index, _)| *index == self.focused(cx))
                         .map_or_else(gpui::Point::default, |(_, rect)| {
                             gpui::point(px(rect.x + rect.w / 2.), px(rect.y + rect.h / 2.))
                         });
@@ -1036,7 +1040,7 @@ impl CockpitView {
             Command::Model | Command::Effort => {
                 if let Some(thread) = thread {
                     if let Some(index) = self.pane_for(thread) {
-                        self.focus_pane(index);
+                        self.focus_pane(index, cx);
                     }
                     if command == Command::Effort {
                         self.open_effort_picker(thread, cx);
@@ -1063,6 +1067,7 @@ impl CockpitView {
                         thread,
                         generation,
                         ferrite_core::SessionControl::RefreshMcp,
+                        cx,
                     );
                 }
             }
@@ -1070,6 +1075,7 @@ impl CockpitView {
                 if let (Some(thread), Some(generation)) = (thread, generation) {
                     let failed: Vec<String> = self
                         .cockpit
+                        .read(cx)
                         .thread(thread)
                         .map(|open| {
                             open.transcript()
@@ -1090,6 +1096,7 @@ impl CockpitView {
                             thread,
                             generation,
                             ferrite_core::SessionControl::ReconnectMcp { server },
+                            cx,
                         );
                     }
                 }
@@ -1101,7 +1108,7 @@ impl CockpitView {
             }
             Command::ShowChanges => {
                 if let Some(thread) = thread {
-                    match self.opener_unavailable(thread, panel::Opener::Changes) {
+                    match self.opener_unavailable(thread, panel::Opener::Changes, cx) {
                         None => self.run_opener(thread, panel::Opener::Changes, cx),
                         Some(_) => self.open_panel(thread, cx),
                     }
@@ -1140,7 +1147,7 @@ impl CockpitView {
             }
             Command::UpdateFerrite => self.restart_to_update(cx),
             Command::DiscardDraft => {
-                if let Some(identity) = self.panes.get(self.focused()).map(|pane| pane.identity) {
+                if let Some(identity) = self.panes.get(self.focused(cx)).map(|pane| pane.identity) {
                     if identity.thread().is_none() {
                         self.close_pane(identity, cx);
                     }
@@ -1199,8 +1206,8 @@ impl CockpitView {
     /// Session that offers no modes keeps ⇧⇥'s old step: back through the
     /// Pane's files, tool calls and code actions.
     pub(super) fn cycle_mode(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let step = self.focused_thread().and_then(|thread| {
-            let open = self.cockpit.thread(thread)?;
+        let step = self.focused_thread(cx).and_then(|thread| {
+            let open = self.cockpit.read(cx).thread(thread)?;
             if !open.supports_control(ferrite_core::ControlKind::SetPermissionMode) {
                 return None;
             }
@@ -1219,6 +1226,7 @@ impl CockpitView {
                     thread,
                     generation,
                     ferrite_core::SessionControl::SetPermissionMode { mode: next },
+                    cx,
                 );
                 cx.notify();
             }
@@ -1253,7 +1261,7 @@ impl CockpitView {
             cx.background_executor().now(),
             ferrite_ui::motion::reduced_motion(cx),
         );
-        let board = self.board_bounds(window);
+        let board = self.board_bounds(window, cx);
         let anchor = gpui::Bounds::new(
             gpui::point(px(board.x), px(board.y)),
             gpui::size(px(board.w), px(board.h)),

@@ -388,8 +388,8 @@ impl Render for EmptyBoardView {
 
 impl CockpitView {
     /// Whether the empty board is what the board draws this frame.
-    pub(super) fn empty_board_shown(&self) -> bool {
-        self.visible_indices().is_empty()
+    pub(super) fn empty_board_shown(&self, cx: &gpui::App) -> bool {
+        self.visible_indices(cx).is_empty()
     }
 
     /// What the empty board draws: the CLIs found, the ways to start that
@@ -426,10 +426,10 @@ impl CockpitView {
         ));
 
         let now = ferrite_core::clock::system_time();
-        let mut recent: Vec<ThreadId> = self.cockpit.threads();
+        let mut recent: Vec<ThreadId> = self.cockpit.read(cx).threads();
         let side_chat = self.side_chat.read(cx);
         recent.retain(|thread| !side_chat.owns(*thread));
-        for thread in self.parked_threads() {
+        for thread in self.parked_threads(cx) {
             if !recent.contains(&thread) {
                 recent.push(thread);
             }
@@ -439,7 +439,7 @@ impl CockpitView {
         let recent = recent
             .into_iter()
             .map(|thread| RecentRow {
-                row: self.thread_row(thread),
+                row: self.thread_row(thread, cx),
                 age: self
                     .facts
                     .last_used(thread)
@@ -479,6 +479,7 @@ impl CockpitView {
         let draft = self.panes[index].draft()?;
         let project = self
             .cockpit
+            .read(cx)
             .registry()
             .project(draft.binding.project())
             .map(|project| SharedString::from(project.title.clone()))
@@ -491,7 +492,7 @@ impl CockpitView {
                 // this opens.
                 cx.stop_propagation();
                 if let Some(at) = view.panes.iter().position(|pane| pane.composer == composer) {
-                    view.focus_pane(at);
+                    view.focus_pane(at, cx);
                 }
                 view.open_band_menu(pane::BandChip::Project, true, cx);
             }),

@@ -268,14 +268,14 @@ impl PanelFocus {
 }
 
 impl CockpitView {
-    pub(crate) fn panel_control_focused(&self, window: &Window) -> bool {
-        self.panel_pane().is_some() && self.panel.focus.focused(window).is_some()
+    pub(crate) fn panel_control_focused(&self, window: &Window, cx: &App) -> bool {
+        self.panel_pane(cx).is_some() && self.panel.focus.focused(window).is_some()
     }
 
     /// What the Cockpit calls the place that holds the keyboard, for a
     /// headless driver to say: the Panel stop by its name in the row.
-    pub(crate) fn keyboard_label(&self, window: &Window) -> Option<SharedString> {
-        self.panel_pane()?;
+    pub(crate) fn keyboard_label(&self, window: &Window, cx: &App) -> Option<SharedString> {
+        self.panel_pane(cx)?;
         let (_, semantics) = self.panel.focus.focused_stop(window)?;
         Some(semantics.name)
     }
@@ -301,7 +301,7 @@ impl CockpitView {
         cx: &mut Context<Self>,
     ) {
         if let Some(handle) = self.panel.focus.handle(control) {
-            if let (PanelControl::FileTab(path), Some(thread)) = (control, self.panel_thread()) {
+            if let (PanelControl::FileTab(path), Some(thread)) = (control, self.panel_thread(cx)) {
                 self.files.update(cx, |files, _| {
                     if let Some(at) = files.tab_index(thread, path) {
                         files.reveal_tab(thread, at);
@@ -323,7 +323,7 @@ impl CockpitView {
     /// no Panel is shown.
     pub(crate) fn focus_panel(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
         let Some(entry) = self
-            .panel_thread()
+            .panel_thread(cx)
             .and_then(|thread| self.panel_entry(thread))
         else {
             return false;
@@ -343,10 +343,10 @@ impl CockpitView {
         cx: &mut Context<Self>,
         switch: impl FnOnce(&mut Self, &mut Window, &mut Context<Self>),
     ) {
-        let shown = self.focused_thread();
-        let on_stop = self.panel_control_focused(window);
+        let shown = self.focused_thread(cx);
+        let on_stop = self.panel_control_focused(window, cx);
         switch(self, window, cx);
-        if on_stop && self.focused_thread() != shown {
+        if on_stop && self.focused_thread(cx) != shown {
             window.blur(cx);
         }
     }
@@ -362,13 +362,13 @@ impl CockpitView {
     /// conversation: a Panel stop, or the transcript row or code action Tab
     /// put it on in the focused Pane. Whether it was on one.
     pub(in crate::cockpit) fn leave_control(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
-        let index = self.focused();
+        let index = self.focused(cx);
         let in_transcript = self.panes.get(index).is_some_and(|pane| {
             pane.tool_focus().contains_focused(window, cx)
                 || (pane.transcript_focus.contains_focused(window, cx)
                     && ferrite_pane::rich::controls_focused(window))
         });
-        if !in_transcript && !self.panel_control_focused(window) {
+        if !in_transcript && !self.panel_control_focused(window, cx) {
             return false;
         }
         if let Some(pane) = self.panes.get_mut(index) {
@@ -400,7 +400,7 @@ impl CockpitView {
         }
         // The Composer is not the focus yet, so the platform would hand
         // this character to the control, which takes none.
-        if let Some(composer) = self.panes.get(self.focused()).map(|pane| pane.composer.clone()) {
+        if let Some(composer) = self.panes.get(self.focused(cx)).map(|pane| pane.composer.clone()) {
             composer.update(cx, |composer, cx| composer.insert(text, cx));
         }
         cx.stop_propagation();
@@ -410,7 +410,7 @@ impl CockpitView {
     /// Panel's controls. Typing or reading in a Panel body is neither: its
     /// next area is the controls above it, not a way out of the Panel.
     pub(in crate::cockpit) fn step_area(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.panel_control_focused(window) {
+        if self.panel_control_focused(window, cx) {
             self.leave_panel(window, cx);
         } else {
             self.focus_panel(window, cx);
@@ -489,17 +489,17 @@ impl CockpitView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
-        let Some(thread) = self.panel_thread() else {
+        let Some(thread) = self.panel_thread(cx) else {
             return false;
         };
-        let held = self.panel_control_focused(window)
+        let held = self.panel_control_focused(window, cx)
             || self.panel_keys_held(window, cx)
             || self.terminal_holds_focus(window, cx)
             || self.side_chat_holds_focus(window, cx);
         if !held {
             return false;
         }
-        let on_control = self.panel_control_focused(window);
+        let on_control = self.panel_control_focused(window, cx);
         let focused = self.panel.focus.focused(window);
         if let Some(PanelControl::FileTab(path)) = focused {
             self.close_file_tab(thread, &path, window, cx);
@@ -555,7 +555,7 @@ impl CockpitView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Some(thread) = self.panel_thread() else {
+        let Some(thread) = self.panel_thread(cx) else {
             return;
         };
         match self.panel.focus.focused(window) {
@@ -575,7 +575,7 @@ impl CockpitView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Some(thread) = self.panel_thread() else {
+        let Some(thread) = self.panel_thread(cx) else {
             return;
         };
         let Some(control) = self.panel.focus.focused(window) else {

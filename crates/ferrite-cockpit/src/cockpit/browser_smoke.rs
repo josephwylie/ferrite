@@ -79,7 +79,7 @@ impl CockpitView {
                             if !boundaries { return Ok(true); }
                             if !reclamation_phase { phase(&output,"reclamation-and-restoration");reclamation_phase=true; }
                             let thread=scenario_thread.expect("scenario Thread");
-                            let state=view.update(cx,|view,_|view.cockpit.browser_attach(thread)).map_err(|e|e.to_string())?;
+                            let state=view.update(cx,|view,cx|view.cockpit.update(cx, |cockpit, _| cockpit.browser_attach(thread))).map_err(|e|e.to_string())?;
                             if let Some((document,ref url))=restoring_page {
                                 if let Some(tab)=state.tabs.iter().find(|tab|tab.id==document.tab && tab.live && !tab.loading && tab.error.is_none() && tab.url==*url) {
                                     if tab.document()==document { return Err("Reclaimed page restoration reused stale document identity".into()); }
@@ -91,7 +91,7 @@ impl CockpitView {
                                 std::fs::write(output.join("lifecycle-before-restoration.json"),serde_json::to_vec_pretty(&state.tabs).unwrap()).map_err(|e|e.to_string())?;
                                 if let Some(tab)=state.tabs.iter().find(|tab|Some(tab.id)!=state.active && !tab.live) {
                                     restoring_page=Some((tab.document(),tab.url.clone()));
-                                    view.update(cx,|view,_|view.cockpit.browser(thread,ferrite_core::browser::Action::Select{tab:tab.id})).map_err(|e|e.to_string())?;
+                                    view.update(cx,|view,cx|view.cockpit.update(cx, |cockpit, _| cockpit.browser(thread,ferrite_core::browser::Action::Select{tab:tab.id}))).map_err(|e|e.to_string())?;
                                     phase(&output,"restored-page");quiet_started=Some(Instant::now());return Ok(false);
                                 }
                             }
@@ -141,14 +141,14 @@ impl CockpitView {
                                 // A fresh production Thread advertises dynamic
                                 // tools at thread/start. Imported Codex sessions
                                 // retain their original capabilities on resume.
-                                let thread = view.cockpit.open(ferrite_core::store::Provider::Codex,
+                                let thread = view.cockpit.update(cx, |cockpit, _| cockpit.open(ferrite_core::store::Provider::Codex,
                                     ferrite_core::workspace::WorkspaceChoice::Main {
                                         checkout: std::env::current_dir().map_err(|error| error.to_string())?,
-                                    }).map_err(|error| error.to_string())?;
+                                    }).map_err(|error| error.to_string()))?;
                                 scenario_thread = Some(thread);
                                 return Ok(false);
                             } else {
-                                let Some(thread) = view.cockpit.threads().first().copied() else { return Ok(false); };
+                                let Some(thread) = view.cockpit.read(cx).threads().first().copied() else { return Ok(false); };
                                 thread
                             };
                             scenario_thread = Some(thread);
@@ -193,9 +193,9 @@ impl CockpitView {
                         return Ok(false);
                     }
                     if work_orders {
-                        let document = view.update(cx, |view, _| {
+                        let document = view.update(cx, |view, cx| {
                             let thread = scenario_thread.expect("scenario Thread");
-                            let state = view.cockpit.browser_attach(thread).map_err(|error| error.to_string())?;
+                            let state = view.cockpit.update(cx, |cockpit, _| cockpit.browser_attach(thread).map_err(|error| error.to_string()))?;
                             Ok::<_, String>(state.tabs.iter().find(|tab| Some(tab.id) == state.active)
                                 .filter(|tab| tab.live && tab.visible && !tab.loading && tab.error.is_none() && tab.url == url)
                                 .map(|tab| tab.document()))
@@ -204,9 +204,9 @@ impl CockpitView {
                         ready_document = document;
                         if !stable { return Ok(false); }
                         image.save(output.join("window-work-order-before.png")).map_err(|error| error.to_string())?;
-                        view.update(cx, |view, _| {
+                        view.update(cx, |view, cx| {
                             let thread = scenario_thread.expect("scenario Thread");
-                            view.cockpit.send(thread, "Complete the prescribed work order through browser tools".into());
+                            view.cockpit.update(cx, |cockpit, _| cockpit.send(thread, "Complete the prescribed work order through browser tools".into()));
                         });
                         provider_started = true;
                         return Ok(false);
@@ -228,9 +228,9 @@ impl CockpitView {
                         // current across a frame before injecting one gesture.
                         // Otherwise production correctly discards that gesture
                         // when its older document is superseded in the queue.
-                        let document = view.update(cx, |view, _| {
+                        let document = view.update(cx, |view, cx| {
                             let thread = scenario_thread.expect("scenario Thread");
-                            let state = view.cockpit.browser_attach(thread).map_err(|error| error.to_string())?;
+                            let state = view.cockpit.update(cx, |cockpit, _| cockpit.browser_attach(thread).map_err(|error| error.to_string()))?;
                             Ok::<_, String>(state.tabs.iter()
                                 .find(|tab| Some(tab.id) == state.active)
                                 .filter(|tab| tab.live && tab.visible && !tab.loading && tab.error.is_none() && tab.url == url)
@@ -254,9 +254,9 @@ impl CockpitView {
                             let position = point(px(x_sum as f32 / count as f32 / scale), px(y_sum as f32 / count as f32 / scale));
                             window.dispatch_event(PlatformInput::MouseDown(MouseDownEvent { position, button: MouseButton::Left, modifiers: Modifiers::default(), click_count: 1, first_mouse: false }), cx);
                         }
-                        view.update(cx, |view, _| {
+                        view.update(cx, |view, cx| {
                             let thread = scenario_thread.expect("scenario Thread");
-                            view.cockpit.send(thread, "Observe the displayed fixture, click its button, and observe the result".into());
+                            view.cockpit.update(cx, |cockpit, _| cockpit.send(thread, "Observe the displayed fixture, click its button, and observe the result".into()));
                         });
                         provider_started = true;
                         return Ok(false);

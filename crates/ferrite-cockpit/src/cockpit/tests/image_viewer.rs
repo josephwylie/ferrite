@@ -107,7 +107,7 @@ fn a_sent_image_opens_in_the_lightbox(cx: &mut TestAppContext) {
     hold_nav_open(&view, cx);
     cx.simulate_resize(gpui::size(px(1440.), px(900.)));
     tick(cx);
-    let panel = view.read_with(cx, |view, _| view.board_right());
+    let panel = view.read_with(cx, |view, cx| view.board_right(cx));
     let sent = cx.debug_bounds("sent-image").expect("a sent image");
     cx.simulate_click(sent.center(), gpui::Modifiers::none());
     tick(cx);
@@ -122,7 +122,7 @@ fn a_sent_image_opens_in_the_lightbox(cx: &mut TestAppContext) {
     assert_eq!(gallery, Some(2), "it steps among the prompt's images");
     settle(cx);
     assert_eq!(
-        view.read_with(cx, |view, _| view.board_right()),
+        view.read_with(cx, |view, cx| view.board_right(cx)),
         panel,
         "the Panel is left as it was"
     );

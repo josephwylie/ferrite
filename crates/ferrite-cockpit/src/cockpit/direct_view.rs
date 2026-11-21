@@ -224,7 +224,7 @@ impl DirectView {
         let (project, id) = (self.project, self.task.clone());
         let task = self
             .cockpit
-            .read_with(cx, |cockpit, _| cockpit.direct_inputs(project, &id))
+            .read_with(cx, |cockpit, cx| cockpit.direct_inputs(project, &id, cx))
             .ok()??;
         let definition = &task.workflow.as_ref()?.definition;
         let tried = self.tried;
@@ -477,11 +477,12 @@ impl CockpitView {
     /// now: none once that Factory no longer shows, or the Task left the
     /// board or runs no Workflow. It never reads the sheet: the sheet calls
     /// it while its own update is running.
-    pub(super) fn direct_inputs(&self, project: ProjectId, task: &str) -> Option<Task> {
+    pub(super) fn direct_inputs(&self, project: ProjectId, task: &str, cx: &App) -> Option<Task> {
         if self.factory_project()? != project {
             return None;
         }
         self.cockpit
+            .read(cx)
             .factory()
             .task(task)
             .filter(|task| task.workflow.is_some())

@@ -99,7 +99,7 @@ impl CockpitView {
         cx: &mut Context<Self>,
     ) -> &Listing {
         if !self.draft_commands.is_for(provider, &cwd) {
-            let reply = self.cockpit.discover_commands(provider, &cwd);
+            let reply = self.cockpit.update(cx, |cockpit, _| cockpit.discover_commands(provider, &cwd));
             self.draft_commands.listen(provider, cwd, reply);
         }
         self.draft_commands.listed();

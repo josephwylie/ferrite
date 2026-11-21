@@ -273,16 +273,16 @@ impl CockpitView {
             Some(Sheet::ProjectEditor(card)) => card
                 .read(cx)
                 .target
-                .is_some_and(|project| self.cockpit.registry().project(project).is_none()),
+                .is_some_and(|project| self.cockpit.read(cx).registry().project(project).is_none()),
             Some(Sheet::BackgroundDialog(dialog)) => {
-                self.cockpit.thread(dialog.read(cx).thread).is_none()
+                self.cockpit.read(cx).thread(dialog.read(cx).thread).is_none()
             }
             Some(Sheet::NewTask(sheet)) => {
                 self.factory_project() != Some(sheet.read(cx).project)
             }
             Some(Sheet::Direct(sheet)) => {
                 let sheet = sheet.read(cx);
-                self.direct_inputs(sheet.project, &sheet.task).is_none()
+                self.direct_inputs(sheet.project, &sheet.task, cx).is_none()
             }
         };
         if gone {

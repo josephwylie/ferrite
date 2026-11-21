@@ -407,11 +407,13 @@ impl CockpitView {
     pub(in crate::cockpit) fn pr_source_path(
         &self,
         source: PrSource,
+        cx: &gpui::App,
     ) -> Option<std::path::PathBuf> {
         match source {
-            PrSource::Thread(thread) => self.thread_path(thread),
+            PrSource::Thread(thread) => self.thread_path(thread, cx),
             PrSource::Project(project) => self
                 .cockpit
+                .read(cx)
                 .registry()
                 .project(project)
                 .map(|project| project.root.clone()),
@@ -427,10 +429,10 @@ impl CockpitView {
         again: bool,
         cx: &mut Context<Self>,
     ) {
-        let Some(path) = self.pr_source_path(target.source) else {
+        let Some(path) = self.pr_source_path(target.source, cx) else {
             return;
         };
-        if cfg!(any(test, feature = "visual-reference")) && !self.cockpit.has_forge_fixture(&path) {
+        if cfg!(any(test, feature = "visual-reference")) && !self.cockpit.read(cx).has_forge_fixture(&path) {
             return;
         }
         let Some(request) = self
@@ -439,7 +441,7 @@ impl CockpitView {
         else {
             return;
         };
-        let answer = self.cockpit.review_pull_request(&path, Some(target.number));
+        let answer = self.cockpit.update(cx, |cockpit, _| cockpit.review_pull_request(&path, Some(target.number)));
         self.pull_request
             .update(cx, |reader, cx| reader.wait(target, request, answer, cx));
     }
@@ -495,9 +497,9 @@ impl CockpitView {
     }
 
     /// The PR the Panel shows this frame, if it shows one.
-    pub(super) fn shown_pr(&self) -> Option<PrTarget> {
-        let index = self.panel_pane()?;
-        match (self.panes[index].thread()?, self.shown_surface(index)?) {
+    pub(super) fn shown_pr(&self, cx: &gpui::App) -> Option<PrTarget> {
+        let index = self.panel_pane(cx)?;
+        match (self.panes[index].thread()?, self.shown_surface(index, cx)?) {
             (thread, SurfaceId::PullRequest(number)) => Some(PrTarget::thread(thread, number)),
             _ => None,
         }
@@ -551,7 +553,7 @@ impl CockpitView {
 
     /// Everything the Panel's PR Surface draws from: the PR the Panel shows.
     fn pr_inputs(&self, cx: &mut Context<Self>) -> Option<PrInputs> {
-        let thread = self.panes[self.panel_drawn_pane()?].thread()?;
+        let thread = self.panes[self.panel_drawn_pane(cx)?].thread()?;
         let Some(SurfaceId::PullRequest(number)) = self.active_surface(thread) else {
             return None;
         };

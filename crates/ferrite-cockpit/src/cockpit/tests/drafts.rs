@@ -124,7 +124,7 @@ fn a_new_pane_comes_back_with_its_words_and_binding(cx: &mut TestAppContext) {
     cx.simulate_input("> first thoughts");
     tick(cx);
     let binding = view.update(cx, |view, cx| {
-        let focused = view.focused();
+        let focused = view.focused(cx);
         view.panes[focused]
             .draft_mut()
             .unwrap()
@@ -138,7 +138,7 @@ fn a_new_pane_comes_back_with_its_words_and_binding(cx: &mut TestAppContext) {
     let (core, _fake) = cockpit("drafts-fresh-again", 0);
     let (view, cx) = window_with(core, prefs_at(&dir), cx);
     view.read_with(cx, |view, cx| {
-        let pane = &view.panes[view.focused()];
+        let pane = &view.panes[view.focused(cx)];
         assert_eq!(pane.composer.read(cx).text(), "> first thoughts");
         assert_eq!(pane.draft().map(|draft| &draft.binding), Some(&binding));
     });

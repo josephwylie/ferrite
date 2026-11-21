@@ -56,8 +56,8 @@ fn approval_words_type_into_the_composer_and_answer_nothing(cx: &mut TestAppCont
     fake.streams.borrow()[0].send(decision("perm_words")).unwrap();
     tick(cx);
     let pending = |view: &Entity<CockpitView>, cx: &mut gpui::VisualTestContext| {
-        view.read_with(cx, |view, _| {
-            view.cockpit.thread(thread).and_then(|open| open.pending()).is_some()
+        view.read_with(cx, |view, cx| {
+            view.cockpit.read(cx).thread(thread).and_then(|open| open.pending()).is_some()
         })
     };
     assert!(pending(&view, cx), "the approval is up");
@@ -96,8 +96,8 @@ fn the_deny_chord_denies_an_approval_with_text_on_the_line(cx: &mut TestAppConte
     assert!(answered(&fake).is_empty());
     cx.simulate_keystrokes("cmd-.");
     cx.run_until_parked();
-    let pending = view.read_with(cx, |view, _| {
-        view.cockpit.thread(thread).and_then(|open| open.pending()).is_some()
+    let pending = view.read_with(cx, |view, cx| {
+        view.cockpit.read(cx).thread(thread).and_then(|open| open.pending()).is_some()
     });
     assert!(!pending, "the chord answered the approval");
     assert_eq!(answered(&fake).len(), 1);
@@ -333,8 +333,8 @@ fn a_subagent_questions_own_answer_types_its_letters(cx: &mut TestAppContext) {
     cx.simulate_keystrokes("n a y");
     tick(cx);
     assert!(answered(&fake).is_empty(), "typing answered nothing: {:?}", answered(&fake));
-    let serial = view.read_with(cx, |view, _| {
-        view.cockpit.thread(thread).unwrap().pending_decisions()[0].handle.serial
+    let serial = view.read_with(cx, |view, cx| {
+        view.cockpit.read(cx).thread(thread).unwrap().pending_decisions()[0].handle.serial
     });
     let send = bounds(cx, format!("request-submit-{}-{serial}", thread.get()));
     cx.simulate_click(send.center(), gpui::Modifiers::none());

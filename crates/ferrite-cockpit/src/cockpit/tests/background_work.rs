@@ -117,7 +117,7 @@ fn one_running_subagent_is_waited_on_once(cx: &mut TestAppContext) {
     }
     tick(cx);
     assert_eq!(
-        view.read_with(cx, |view, _| view.background_work_title(0)).as_deref(),
+        view.read_with(cx, |view, cx| view.background_work_title(0, cx)).as_deref(),
         Some("Waiting on a subagent")
     );
     assert!(debug_bounds(cx, "background-work-line".into()).is_some());
@@ -388,7 +388,7 @@ fn stop_that_cannot_reach_an_unknown_agent_names_it(cx: &mut TestAppContext) {
 fn open_background_tab(view: &gpui::Entity<CockpitView>, cx: &mut gpui::VisualTestContext) {
     cx.simulate_resize(gpui::size(px(1400.), px(800.)));
     view.update(cx, |view, cx| {
-        let thread = view.focused_thread().unwrap();
+        let thread = view.focused_thread(cx).unwrap();
         view.open_background(thread, cx);
     });
     tick(cx);
@@ -466,8 +466,8 @@ fn an_agent_is_in_the_tab_while_main_is_busy(cx: &mut TestAppContext) {
     working_agent(&fake, "toolu_bg", "In the background");
     working_agent(&fake, "toolu_fg", "Waited on");
     tick(cx);
-    assert!(view.read_with(cx, |view, _| {
-        view.cockpit.thread(view.panes[0].thread().unwrap()).unwrap().busy()
+    assert!(view.read_with(cx, |view, cx| {
+        view.cockpit.read(cx).thread(view.panes[0].thread().unwrap()).unwrap().busy()
     }));
     open_background_tab(&view, cx);
     assert!(debug_bounds(cx, "background-work-line".into()).is_none(), "the rows show it");

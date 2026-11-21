@@ -105,8 +105,8 @@ fn the_list_scrolls_to_and_opens_its_last_card(cx: &mut TestAppContext) {
     );
     cx.simulate_click(last.center(), gpui::Modifiers::none());
     tick(cx);
-    view.read_with(cx, |view, _| {
-        assert_eq!(view.focused_thread(), Some(last_thread));
+    view.read_with(cx, |view, cx| {
+        assert_eq!(view.focused_thread(cx), Some(last_thread));
     });
 }
 
@@ -117,7 +117,7 @@ fn the_list_scrolls_to_and_opens_its_last_card(cx: &mut TestAppContext) {
 fn a_finished_thread_needs_you_until_it_is_seen(cx: &mut TestAppContext) {
     let (core, fake) = cockpit("finished-needs-you", 2);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
-    let threads = view.read_with(cx, |view, _| view.cockpit.threads());
+    let threads = view.read_with(cx, |view, cx| view.cockpit.read(cx).threads());
     view.update(cx, |view, cx| view.focus_thread(threads[0], cx));
     fake.streams.borrow()[1]
         .send(SessionEvent::TextDelta {
@@ -132,7 +132,7 @@ fn a_finished_thread_needs_you_until_it_is_seen(cx: &mut TestAppContext) {
         .unwrap();
     tick(cx);
     view.read_with(cx, |view, cx| {
-        let notifications = view.cockpit.notifications();
+        let notifications = view.cockpit.read(cx).notifications();
         assert_eq!(notifications.unread(), 1);
         assert!(notifications.attention(threads[1]), "off the screen");
         assert!(!notifications.attention(threads[0]));
@@ -144,8 +144,8 @@ fn a_finished_thread_needs_you_until_it_is_seen(cx: &mut TestAppContext) {
 
     view.update(cx, |view, cx| view.focus_thread(threads[1], cx));
     tick(cx);
-    view.read_with(cx, |view, _| {
-        let notifications = view.cockpit.notifications();
+    view.read_with(cx, |view, cx| {
+        let notifications = view.cockpit.read(cx).notifications();
         assert_eq!(notifications.unread(), 0, "landing on the Pane reads it");
         assert!(!notifications.attention(threads[1]));
         assert_eq!(
@@ -165,7 +165,7 @@ fn a_finished_thread_needs_you_until_it_is_seen(cx: &mut TestAppContext) {
 fn a_finish_is_done_until_it_is_seen(cx: &mut TestAppContext) {
     let (core, fake) = cockpit("finished-nav-row", 2);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
-    let threads = view.read_with(cx, |view, _| view.cockpit.threads());
+    let threads = view.read_with(cx, |view, cx| view.cockpit.read(cx).threads());
     view.update(cx, |view, cx| view.focus_thread(threads[0], cx));
     let finish = |at: usize| {
         fake.streams.borrow()[at]
@@ -177,8 +177,8 @@ fn a_finish_is_done_until_it_is_seen(cx: &mut TestAppContext) {
     };
     finish(1);
     tick(cx);
-    view.read_with(cx, |view, _| {
-        let finished = view.thread_row(threads[1]);
+    view.read_with(cx, |view, cx| {
+        let finished = view.thread_row(threads[1], cx);
         assert_eq!(finished.status, nav::RowStatus::Done, "off the screen");
         assert_eq!(finished.tail, nav::NavTail::Done);
         assert_eq!(
@@ -186,13 +186,13 @@ fn a_finish_is_done_until_it_is_seen(cx: &mut TestAppContext) {
             ferrite_ui::theme::INK_SUBTLE,
             "a dim check, never ochre"
         );
-        assert_eq!(view.thread_row(threads[0]).status, nav::RowStatus::Idle);
+        assert_eq!(view.thread_row(threads[0], cx).status, nav::RowStatus::Idle);
     });
 
     view.update(cx, |view, cx| view.land_on_thread(threads[1], cx));
     tick(cx);
-    view.read_with(cx, |view, _| {
-        let read = view.thread_row(threads[1]);
+    view.read_with(cx, |view, cx| {
+        let read = view.thread_row(threads[1], cx);
         assert_eq!(read.status, nav::RowStatus::Idle, "seen on its Pane");
         assert_ne!(read.tail, nav::NavTail::Done);
     });
@@ -203,7 +203,7 @@ fn a_finish_is_done_until_it_is_seen(cx: &mut TestAppContext) {
     finish(1);
     tick(cx);
     let status = |view: &Entity<CockpitView>, cx: &mut gpui::VisualTestContext| {
-        view.read_with(cx, |view, _| view.thread_row(threads[1]).status)
+        view.read_with(cx, |view, cx| view.thread_row(threads[1], cx).status)
     };
     assert_eq!(
         status(&view, cx),
@@ -230,8 +230,8 @@ fn a_window_opened_unfocused_sees_nothing_until_focused(cx: &mut TestAppContext)
         .unwrap();
     tick(cx);
     let status = |view: &Entity<CockpitView>, cx: &mut gpui::VisualTestContext| {
-        view.read_with(cx, |view, _| {
-            view.thread_row(view.cockpit.threads()[0]).status
+        view.read_with(cx, |view, cx| {
+            view.thread_row(view.cockpit.read(cx).threads()[0], cx).status
         })
     };
     assert_eq!(status(&view, cx), nav::RowStatus::Done, "not yet seen");
@@ -253,8 +253,8 @@ fn a_finish_on_the_focused_pane_is_read_at_once_and_never_toasts(cx: &mut TestAp
         })
         .unwrap();
     tick(cx);
-    view.read_with(cx, |view, _| {
-        let notifications = view.cockpit.notifications();
+    view.read_with(cx, |view, cx| {
+        let notifications = view.cockpit.read(cx).notifications();
         assert_eq!(notifications.notices().count(), 1);
         assert_eq!(notifications.unread(), 0);
     });
@@ -279,18 +279,18 @@ fn opening_a_notice_lands_on_its_pane_and_reads_it(cx: &mut TestAppContext) {
         })
         .unwrap();
     tick(cx);
-    let id = view.read_with(cx, |view, _| {
-        assert_eq!(view.focused(), 0);
-        view.cockpit.notifications().newest().unwrap()
+    let id = view.read_with(cx, |view, cx| {
+        assert_eq!(view.focused(cx), 0);
+        view.cockpit.read(cx).notifications().newest().unwrap()
     });
     view.update(cx, |view, cx| view.notice_verb(Verb::Open(id), cx));
-    view.read_with(cx, |view, _| {
-        assert_eq!(view.focused(), 2, "focus landed on the finished Pane");
-        assert!(view.cockpit.notifications().get(id).unwrap().read);
+    view.read_with(cx, |view, cx| {
+        assert_eq!(view.focused(cx), 2, "focus landed on the finished Pane");
+        assert!(view.cockpit.read(cx).notifications().get(id).unwrap().read);
     });
     view.update(cx, |view, cx| view.notice_verb(Verb::Dismiss(id), cx));
-    view.read_with(cx, |view, _| {
-        assert_eq!(view.cockpit.notifications().notices().count(), 0);
+    view.read_with(cx, |view, cx| {
+        assert_eq!(view.cockpit.read(cx).notifications().notices().count(), 0);
     });
 }
 
@@ -322,11 +322,12 @@ fn contract_request_attention_toasts_once_and_cancellation_removes_it(cx: &mut T
     };
     let cancelled =
         |name: &str| SessionEvent::Activity(ActivityEvent::DecisionCancelled { id: name.into() });
-    let off = view.read_with(cx, |view, _| {
+    let off = view.read_with(cx, |view, cx| {
         view.cockpit
+            .read(cx)
             .threads()
             .into_iter()
-            .position(|thread| Some(thread) != view.focused_thread())
+            .position(|thread| Some(thread) != view.focused_thread(cx))
             .unwrap()
     });
     fake.streams.borrow()[off].send(request("Early")).unwrap();
@@ -353,15 +354,15 @@ fn contract_request_attention_toasts_once_and_cancellation_removes_it(cx: &mut T
     tick(cx);
     ring(cx);
     view.read_with(cx, |view, cx| {
-        assert_eq!(view.cockpit.notifications().unread(), 2);
+        assert_eq!(view.cockpit.read(cx).notifications().unread(), 2);
         assert_eq!(view.toasts.read(cx).needs_you.toasts().len(), 1, "one toast per Thread");
     });
     for name in ["AskUserQuestion", "Bash"] {
         fake.streams.borrow()[off].send(cancelled(name)).unwrap();
     }
     tick(cx);
-    view.read_with(cx, |view, _| {
-        assert_eq!(view.cockpit.notifications().unread(), 0)
+    view.read_with(cx, |view, cx| {
+        assert_eq!(view.cockpit.read(cx).notifications().unread(), 0)
     });
     assert_eq!(toasts(cx), 0, "cancelled requests leave no stale toast");
     view.read_with(cx, |view, _| {
@@ -378,11 +379,12 @@ fn contract_request_attention_toasts_once_and_cancellation_removes_it(cx: &mut T
 fn a_request_toast_expires(cx: &mut TestAppContext) {
     let (core, fake) = cockpit("request-toast-expiry", 2);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
-    let off = view.read_with(cx, |view, _| {
+    let off = view.read_with(cx, |view, cx| {
         view.cockpit
+            .read(cx)
             .threads()
             .into_iter()
-            .position(|thread| Some(thread) != view.focused_thread())
+            .position(|thread| Some(thread) != view.focused_thread(cx))
             .unwrap()
     });
     fake.streams.borrow()[off].send(decision("waits")).unwrap();
@@ -398,7 +400,7 @@ fn a_request_toast_expires(cx: &mut TestAppContext) {
     view.read_with(cx, |view, cx| {
         assert!(view.toasts.read(cx).needs_you.toasts().is_empty(), "it went on its own");
         assert_eq!(
-            view.cockpit.notifications().unread(),
+            view.cockpit.read(cx).notifications().unread(),
             1,
             "the request still waits in the Inbox"
         );
@@ -413,18 +415,18 @@ fn a_request_off_the_board_posts_while_the_window_is_frontmost(cx: &mut TestAppC
     let (core, fake) = cockpit("system-notification-frontmost", 2);
     cx.update(|cx| cx.set_app_identity("com.github.josephwylie.ferrite", "Ferrite"));
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
-    let threads = view.read_with(cx, |view, _| view.cockpit.threads());
-    let off = view.read_with(cx, |view, _| {
+    let threads = view.read_with(cx, |view, cx| view.cockpit.read(cx).threads());
+    let off = view.read_with(cx, |view, cx| {
         threads
             .iter()
-            .position(|thread| Some(*thread) != view.focused_thread())
+            .position(|thread| Some(*thread) != view.focused_thread(cx))
             .unwrap()
     });
     fake.streams.borrow()[off].send(decision("waits")).unwrap();
     tick(cx);
     ring(cx);
     view.read_with(cx, |view, cx| {
-        assert!(view.cockpit.window_active());
+        assert!(view.cockpit.read(cx).window_active());
         assert_eq!(view.toasts.read(cx).needs_you.toasts().len(), 1);
     });
     assert_eq!(
@@ -446,7 +448,7 @@ fn away_from_the_window_the_shown_thread_s_finish_posts_a_notification(
     let (core, fake) = cockpit("system-notification-shown", 1);
     cx.update(|cx| cx.set_app_identity("com.github.josephwylie.ferrite", "Ferrite"));
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
-    let thread = view.read_with(cx, |view, _| view.cockpit.threads()[0]);
+    let thread = view.read_with(cx, |view, cx| view.cockpit.read(cx).threads()[0]);
     let home = crate::machines::MachineKey(None);
     cx.deactivate_window();
     fake.streams.borrow()[0]
@@ -475,8 +477,8 @@ fn away_from_the_window_the_shown_thread_s_finish_posts_a_notification(
         action_id: None,
     });
     tick(cx);
-    view.read_with(cx, |view, _| {
-        assert!(!view.cockpit.notifications().attention(thread));
+    view.read_with(cx, |view, cx| {
+        assert!(!view.cockpit.read(cx).notifications().attention(thread));
     });
     assert!(
         tags(cx).is_empty(),
@@ -492,7 +494,7 @@ fn clicking_a_request_s_system_notification_opens_it(cx: &mut TestAppContext) {
     let (core, fake) = cockpit("system-notification-request", 2);
     cx.update(|cx| cx.set_app_identity("com.github.josephwylie.ferrite", "Ferrite"));
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
-    let threads = view.read_with(cx, |view, _| view.cockpit.threads());
+    let threads = view.read_with(cx, |view, cx| view.cockpit.read(cx).threads());
     let home = crate::machines::MachineKey(None);
     cx.deactivate_window();
     fake.streams.borrow()[1].send(decision("away")).unwrap();
@@ -513,8 +515,8 @@ fn clicking_a_request_s_system_notification_opens_it(cx: &mut TestAppContext) {
     });
     tick(cx);
     view.read_with(cx, |view, cx| {
-        assert_eq!(view.focused(), 1, "the click landed on its Thread");
-        let request = view.cockpit.notifications().decisions().next().unwrap();
+        assert_eq!(view.focused(cx), 1, "the click landed on its Thread");
+        let request = view.cockpit.read(cx).notifications().decisions().next().unwrap();
         assert!(request.read);
         assert!(view.toasts.read(cx).needs_you.toasts().is_empty());
     });
@@ -644,8 +646,9 @@ fn contract_request_notice_opens_its_owning_child(cx: &mut TestAppContext) {
         }))
         .unwrap();
     tick(cx);
-    let id = view.read_with(cx, |view, _| {
+    let id = view.read_with(cx, |view, cx| {
         view.cockpit
+            .read(cx)
             .notifications()
             .decisions()
             .next()
@@ -658,12 +661,12 @@ fn contract_request_notice_opens_its_owning_child(cx: &mut TestAppContext) {
     });
     tick(cx);
     view.read_with(cx, |view, cx| {
-        assert_eq!(view.focused(), 1);
+        assert_eq!(view.focused(cx), 1);
         assert_eq!(
-            view.panes[view.focused()].selected,
+            view.panes[view.focused(cx)].selected,
             Subject::Subagent(key.clone())
         );
-        assert!(view.cockpit.notifications().decision(&id).unwrap().read);
+        assert!(view.cockpit.read(cx).notifications().decision(&id).unwrap().read);
         assert!(!view.nav_view.read(cx).keys_held);
     });
 }
@@ -756,7 +759,7 @@ fn the_list_empty_over_working_then_a_decision_parks_from_the_keyboard(cx: &mut 
     view.read_with(cx, |view, cx| {
         assert!(view.needs_you_rows(cx).is_empty());
         assert_eq!(view.nav_state(cx).working.len(), 2);
-        assert_eq!(view.cockpit.parked().unwrap(), vec![threads[1]]);
+        assert_eq!(view.cockpit.read(cx).parked().unwrap(), vec![threads[1]]);
     });
     assert!(cx.debug_bounds("nav-empty").is_some());
     assert!(cx.debug_bounds("nav-shelf-working").is_some());
@@ -778,7 +781,7 @@ fn the_keyboard_parks_the_cursors_card_and_the_cursor_follows_it(cx: &mut TestAp
     cx.simulate_keystrokes("cmd-i down cmd-w");
     tick(cx);
     view.read_with(cx, |view, cx| {
-        assert_eq!(view.cockpit.parked().unwrap(), vec![active[1]]);
+        assert_eq!(view.cockpit.read(cx).parked().unwrap(), vec![active[1]]);
         assert_eq!(view.needs_you_rows(cx).len(), 2);
         assert_eq!(
             view.nav_view.read(cx).cursor.as_ref().map(|cursor| cursor.item),
@@ -796,7 +799,7 @@ fn the_keyboard_parks_the_cursors_card_and_the_cursor_follows_it(cx: &mut TestAp
     tick(cx);
     view.read_with(cx, |view, cx| {
         assert!(view.needs_you_rows(cx).is_empty());
-        assert_eq!(view.cockpit.parked().unwrap().len(), 3);
+        assert_eq!(view.cockpit.read(cx).parked().unwrap().len(), 3);
     });
 }
 
@@ -824,7 +827,7 @@ fn inbox_followup_returns_to_work_and_repeated_finishes_stay_one_row(cx: &mut Te
         );
     }
     view.update(cx, |view, cx| {
-        let id = view.cockpit.notifications().notices().next().unwrap().id;
+        let id = view.cockpit.read(cx).notifications().notices().next().unwrap().id;
         view.notice_verb(Verb::Dismiss(id), cx);
         assert_eq!(
             view.needs_you_rows(cx).len(),
@@ -930,9 +933,9 @@ fn inbox_completion_keeps_keyboard_park_on_the_selected_thread(cx: &mut TestAppC
     tick(cx);
     cx.simulate_keystrokes("cmd-w");
     tick(cx);
-    view.read_with(cx, |view, _| {
+    view.read_with(cx, |view, cx| {
         assert_eq!(
-            view.cockpit.parked().unwrap(),
+            view.cockpit.read(cx).parked().unwrap(),
             vec![threads[2]],
             "completion cannot redirect Park to another Thread"
         );
@@ -954,8 +957,8 @@ fn pressing_a_card_opens_its_thread_and_the_list_stays(cx: &mut TestAppContext) 
     let row = cx.debug_bounds(card(threads[1])).unwrap();
     cx.simulate_click(row.center(), gpui::Modifiers::none());
     tick(cx);
-    view.read_with(cx, |view, _| {
-        assert_eq!(view.focused_thread(), Some(threads[1]));
+    view.read_with(cx, |view, cx| {
+        assert_eq!(view.focused_thread(cx), Some(threads[1]));
     });
     assert!(cx.debug_bounds(card(threads[0])).is_some(), "the list stays");
     fake.streams.borrow()[0]
@@ -965,8 +968,8 @@ fn pressing_a_card_opens_its_thread_and_the_list_stays(cx: &mut TestAppContext) 
     let row = cx.debug_bounds(card(threads[0])).unwrap();
     cx.simulate_click(row.center(), gpui::Modifiers::none());
     tick(cx);
-    view.read_with(cx, |view, _| {
-        assert_eq!(view.focused_thread(), Some(threads[0]));
+    view.read_with(cx, |view, cx| {
+        assert_eq!(view.focused_thread(cx), Some(threads[0]));
     });
     assert!(cx.debug_bounds(card(threads[1])).is_some(), "the list stays");
 }
@@ -977,12 +980,12 @@ fn snooze_hides_a_thread_until_woken_and_new_decisions_wake_it(cx: &mut TestAppC
     let threads = core.threads();
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     tick(cx);
-    view.update(cx, |view, _| {
+    view.update(cx, |view, cx| {
         view.cockpit
-            .snooze_thread(
+            .update(cx, |cockpit, _| cockpit.snooze_thread(
                 threads[0],
                 Some(ferrite_core::clock::system_time() + Duration::from_secs(3600)),
-            )
+            ))
             .unwrap()
     });
     tick(cx);
@@ -1048,10 +1051,10 @@ fn snooze_expiry_returns_threads_without_an_alert(cx: &mut TestAppContext) {
     tick(cx);
     view.update(cx, |view, cx| {
         view.cockpit
-            .snooze_thread(
+            .update(cx, |cockpit, _| cockpit.snooze_thread(
                 thread,
                 Some(ferrite_core::clock::system_time() + Duration::from_secs(3600)),
-            )
+            ))
             .unwrap();
         cx.notify();
     });

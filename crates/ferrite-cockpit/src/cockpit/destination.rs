@@ -67,11 +67,11 @@ impl CockpitView {
 
     /// Focus moved to another of the operator's own Panes (a new draft, a
     /// landing): the destination gives way to it.
-    pub(super) fn leave_destination_if_moved(&mut self) {
+    pub(super) fn leave_destination_if_moved(&mut self, cx: &gpui::App) {
         let Some(destination) = self.destination.as_ref() else {
             return;
         };
-        let now = self.cockpit.roster().focused();
+        let now = self.cockpit.read(cx).roster().focused();
         if now == destination.focus_at_open {
             return;
         }
@@ -79,7 +79,7 @@ impl CockpitView {
         // have no Pane in this window yet.
         let owned = now
             .and_then(PaneIdentity::thread)
-            .is_some_and(|thread| !self.cockpit.operators(thread));
+            .is_some_and(|thread| !self.cockpit.read(cx).operators(thread));
         if !owned {
             self.destination = None;
         }

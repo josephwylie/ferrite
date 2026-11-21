@@ -294,14 +294,14 @@ fn automatic_starts_are_a_switch_apart_from_saving(cx: &mut TestAppContext) {
 
     let workflow = view.read_with(cx, |view, cx| view.shown_workflow(cx).unwrap().id.clone());
     view.update(cx, |view, cx| {
-        view.cockpit.fixture_factory_command(Command::GitHubRead {
+        view.cockpit.update(cx, |cockpit, _| cockpit.fixture_factory_command(Command::GitHubRead {
             workflow: workflow.clone(),
             version: 1,
             result: Ok(GitHubRead::Matches {
                 etag: None,
                 items: vec![issue(1), issue(2)],
             }),
-        });
+        }));
         cx.notify();
     });
     tick(cx);
@@ -312,21 +312,21 @@ fn automatic_starts_are_a_switch_apart_from_saving(cx: &mut TestAppContext) {
     view.read_with(cx, |view, cx| {
         let automation = &view.shown_workflow(cx).unwrap().automation;
         assert_eq!(automation.seen.len(), 2, "passed over");
-        assert!(view.cockpit.factory().tasks.is_empty(), "nothing started");
+        assert!(view.cockpit.read(cx).factory().tasks.is_empty(), "nothing started");
     });
 
     view.update(cx, |view, cx| {
-        view.cockpit.fixture_factory_command(Command::GitHubRead {
+        view.cockpit.update(cx, |cockpit, _| cockpit.fixture_factory_command(Command::GitHubRead {
             workflow: workflow.clone(),
             version: 1,
             result: Err("gh: not logged in".into()),
-        });
+        }));
         cx.notify();
     });
     tick(cx);
     assert!(shows(cx, "automation-error"), "a failed check is said");
     assert!(
-        view.read_with(cx, |view, _| view.cockpit.factory().tasks.is_empty()),
+        view.read_with(cx, |view, cx| view.cockpit.read(cx).factory().tasks.is_empty()),
         "never as a Task"
     );
 }

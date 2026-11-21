@@ -40,7 +40,7 @@ fn contract_context_card_refreshes_and_shows_native_details(cx: &mut TestAppCont
     }
     tick(cx);
     // Opening the panel asks the Session for a fresh reading.
-    let thread = view.read_with(cx, |view, _| view.cockpit.threads()[0]);
+    let thread = view.read_with(cx, |view, cx| view.cockpit.read(cx).threads()[0]);
     view.update(cx, |view, cx| view.open_panel(thread, cx));
     cx.run_until_parked();
     assert_eq!(
@@ -289,9 +289,9 @@ fn contract_native_turn_diff_is_kept_without_a_fake_tool(cx: &mut TestAppContext
     cx.simulate_resize(gpui::size(px(1100.), px(900.)));
     fake.streams.borrow()[0].send(SessionEvent::TurnDiff{turn_id:"native-turn".into(),diff:"diff --git a/a.txt b/a.txt\n--- a/a.txt\n+++ b/a.txt\n@@ -1 +1 @@\n-old-native\n+new-native\n".into()}).unwrap();
     tick(cx);
-    view.read_with(cx, |v, _| {
+    view.read_with(cx, |v, cx| {
         let thread = v.panes[0].thread().unwrap();
-        let open = v.cockpit.thread(thread).unwrap();
+        let open = v.cockpit.read(cx).thread(thread).unwrap();
         // The transcript keeps the turn's change set and draws no summary
         // row for it.
         assert_eq!(
@@ -384,7 +384,7 @@ fn background_work_lives_in_its_row_the_rail_and_the_pane(cx: &mut TestAppContex
     });
     tick(cx);
     view.update(cx, |view, cx| {
-        let thread = view.focused_thread().unwrap();
+        let thread = view.focused_thread(cx).unwrap();
         view.open_panel(thread, cx);
     });
     tick(cx);
@@ -536,7 +536,7 @@ fn a_wrap_up_is_spent_once_the_thread_moves_on(cx: &mut TestAppContext) {
     tick(cx);
     assert!(cx.debug_bounds("wrap-up-step-w-0").is_some());
     view.update(cx, |view, cx| {
-        let _ = view.cockpit.send(thread, "something else".into());
+        let _ = view.cockpit.update(cx, |cockpit, _| cockpit.send(thread, "something else".into()));
         cx.notify();
     });
     tick(cx);
@@ -582,7 +582,7 @@ fn a_mode_that_stops_asking_waits_for_a_yes(cx: &mut TestAppContext) {
     let ask = |cx: &mut gpui::VisualTestContext, view: &Entity<CockpitView>| {
         view.update_in(cx, |view, window, cx| {
             let thread = view.panes[0].thread().unwrap();
-            let generation = view.cockpit.thread(thread).unwrap().generation();
+            let generation = view.cockpit.read(cx).thread(thread).unwrap().generation();
             view.request_mode(thread, generation, "bypassPermissions".into(), window, cx);
         });
     };

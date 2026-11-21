@@ -286,13 +286,14 @@ impl SessionCard {
                         .debug_selector(move || format!("mcp-login-{index}"))
                         .tab_stop(true)
                         .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
-                            if has_server(view, thread, generation, &name) {
+                            if has_server(view, thread, generation, &name, cx) {
                                 view.run_session_control(
                                     thread,
                                     generation,
                                     SessionControl::LoginMcp {
                                         server: name.clone(),
                                     },
+                                    cx,
                                 );
                             }
                             cx.notify();
@@ -326,13 +327,14 @@ impl SessionCard {
                             .group_hover(format!("mcp-row-{index}"), |style| style.visible())
                     })
                     .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
-                        if has_server(view, thread, generation, &name) {
+                        if has_server(view, thread, generation, &name, cx) {
                             view.run_session_control(
                                 thread,
                                 generation,
                                 SessionControl::ReconnectMcp {
                                     server: name.clone(),
                                 },
+                                cx,
                             );
                         }
                         cx.notify();
@@ -357,7 +359,7 @@ impl SessionCard {
                 action_row("mcp-reload".into(), "Reload MCP servers")
                     .debug_selector(|| "mcp-reload".into())
                     .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
-                        view.run_session_control(thread, generation, SessionControl::ReloadMcp);
+                        view.run_session_control(thread, generation, SessionControl::ReloadMcp, cx);
                         cx.notify();
                     })),
             );
@@ -389,7 +391,7 @@ impl SessionCard {
                     )
                     .debug_selector(move || format!("background-stop-{index}"))
                     .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
-                        let exists = view.cockpit.thread(thread).is_some_and(|open| {
+                        let exists = view.cockpit.read(cx).thread(thread).is_some_and(|open| {
                             open.generation() == generation
                                 && open.transcript().progress().background().iter().any(|task| {
                                     task.id == id
@@ -402,6 +404,7 @@ impl SessionCard {
                                 thread,
                                 generation,
                                 SessionControl::StopTask { id: id.clone() },
+                                cx,
                             );
                         }
                         cx.notify();
@@ -419,6 +422,7 @@ impl SessionCard {
                             thread,
                             generation,
                             SessionControl::BackgroundTasks,
+                            cx,
                         );
                         cx.notify();
                     })),
@@ -430,8 +434,8 @@ impl SessionCard {
 
 /// Whether `thread`'s Session `generation` still runs and still reports
 /// the MCP server `name`, as a press on its row finds it.
-fn has_server(view: &CockpitView, thread: ThreadId, generation: u64, name: &str) -> bool {
-    view.cockpit.thread(thread).is_some_and(|open| {
+fn has_server(view: &CockpitView, thread: ThreadId, generation: u64, name: &str, cx: &gpui::App) -> bool {
+    view.cockpit.read(cx).thread(thread).is_some_and(|open| {
         open.generation() == generation
             && open
                 .transcript()

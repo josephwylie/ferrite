@@ -121,7 +121,7 @@ fn under_the_pointer_the_status_gives_way_to_snooze_and_park(cx: &mut TestAppCon
     cx.simulate_click(park.center(), gpui::Modifiers::none());
     tick(cx);
     assert!(
-        view.read_with(cx, |view, _| view.cockpit.thread(thread).is_none()),
+        view.read_with(cx, |view, cx| view.cockpit.read(cx).thread(thread).is_none()),
         "Park parks the Thread"
     );
 }
@@ -173,12 +173,14 @@ fn a_park_press_swept_across_three_cards_parks_all_three(cx: &mut TestAppContext
     let (_, last) = cards[2];
     cx.simulate_mouse_up(last.center(), MouseButton::Left, gpui::Modifiers::none());
     tick(cx);
-    let open = |view: &CockpitView, thread: ThreadId| view.cockpit.thread(thread).is_some();
+    let open = |view: &CockpitView, thread: ThreadId, cx: &gpui::App| {
+        view.cockpit.read(cx).thread(thread).is_some()
+    };
     for (thread, _) in &cards[..3] {
-        assert!(!view.read_with(cx, |view, _| open(view, *thread)), "swept and parked");
+        assert!(!view.read_with(cx, |view, cx| open(view, *thread, cx)), "swept and parked");
     }
     assert!(
-        view.read_with(cx, |view, _| open(view, cards[3].0)),
+        view.read_with(cx, |view, cx| open(view, cards[3].0, cx)),
         "the card the sweep never reached stays"
     );
 }
@@ -195,11 +197,11 @@ fn cmd_and_shift_click_pick_cards_and_park_takes_the_pick(cx: &mut TestAppContex
     cx.simulate_resize(gpui::size(px(1000.), px(900.)));
     tick(cx);
     let cards = cards_top_down(cx, &threads);
-    let shown = view.read_with(cx, |view, _| view.focused_thread());
+    let shown = view.read_with(cx, |view, cx| view.focused_thread(cx));
     cx.simulate_click(cards[0].1.center(), gpui::Modifiers::command());
     tick(cx);
     assert_eq!(
-        view.read_with(cx, |view, _| view.focused_thread()),
+        view.read_with(cx, |view, cx| view.focused_thread(cx)),
         shown,
         "a picking press does not open the card"
     );
@@ -224,9 +226,9 @@ fn cmd_and_shift_click_pick_cards_and_park_takes_the_pick(cx: &mut TestAppContex
     });
     tick(cx);
     for thread in &picked {
-        assert!(view.read_with(cx, |view, _| view.cockpit.thread(*thread).is_none()));
+        assert!(view.read_with(cx, |view, cx| view.cockpit.read(cx).thread(*thread).is_none()));
     }
-    assert!(view.read_with(cx, |view, _| view.cockpit.thread(cards[3].0).is_some()));
+    assert!(view.read_with(cx, |view, cx| view.cockpit.read(cx).thread(cards[3].0).is_some()));
 }
 
 /// A working card says how long its run has worked — `42s`, `12m`,
@@ -246,8 +248,8 @@ fn a_working_card_counts_its_run_and_recedes(cx: &mut TestAppContext) {
     cx.simulate_resize(gpui::size(px(1000.), px(700.)));
     view.update(cx, |view, cx| view.focus_thread(threads[1], cx));
     tick(cx);
-    let label = |view: &CockpitView| {
-        let row = view.thread_row(threads[0]);
+    let label = |view: &CockpitView, cx: &gpui::App| {
+        let row = view.thread_row(threads[0], cx);
         nav::status_label(
             &row,
             ferrite_core::clock::instant(),
@@ -255,9 +257,9 @@ fn a_working_card_counts_its_run_and_recedes(cx: &mut TestAppContext) {
         )
         .expect("a label")
     };
-    let started = view.read_with(cx, |view, _| view.thread_row(threads[0]).working_since);
+    let started = view.read_with(cx, |view, cx| view.thread_row(threads[0], cx).working_since);
     assert!(started.is_some(), "the run's start is on the row");
-    let first = view.read_with(cx, |view, _| label(view));
+    let first = view.read_with(cx, |view, cx| label(view, cx));
     assert_eq!(first.ink, NAV_WORKING_INK);
     for (by, text) in [
         (42, "Working 42s"),
@@ -265,7 +267,7 @@ fn a_working_card_counts_its_run_and_recedes(cx: &mut TestAppContext) {
         (65 * 60 - 12 * 60, "Working 1h 5m"),
     ] {
         clock.advance(Duration::from_secs(by));
-        assert_eq!(view.read_with(cx, |view, _| label(view)).text, text);
+        assert_eq!(view.read_with(cx, |view, cx| label(view, cx)).text, text);
     }
 
     view.update(cx, |view, cx| view.set_shelf_open(nav::Shelf::Working, true, cx));
@@ -327,7 +329,7 @@ fn two_decisions_head_the_list_and_no_toast(cx: &mut TestAppContext) {
             "the requests head the list, oldest first"
         );
         for at in [0, 2] {
-            let row = view.thread_row(threads[at]);
+            let row = view.thread_row(threads[at], cx);
             assert_eq!(row.status, nav::RowStatus::NeedsYou);
             assert_eq!(
                 row.tail,
@@ -335,14 +337,14 @@ fn two_decisions_head_the_list_and_no_toast(cx: &mut TestAppContext) {
                 "the word says what it waits for"
             );
         }
-        assert_ne!(view.thread_row(threads[1]).status, nav::RowStatus::NeedsYou);
+        assert_ne!(view.thread_row(threads[1], cx).status, nav::RowStatus::NeedsYou);
     });
     assert!(
         cx.debug_bounds("nav-needs-you").is_none(),
         "no strip: the rows are the list"
     );
     assert_eq!(
-        view.read_with(cx, |view, _| view.cockpit.answer_target()),
+        view.read_with(cx, |view, cx| view.cockpit.read(cx).answer_target()),
         Some(threads[2]),
         "⌘D answers the request that has waited longest"
     );
@@ -534,11 +536,11 @@ fn the_parked_shelf_shows_its_rows_and_its_menu_deletes_them(cx: &mut TestAppCon
             "every parked Thread is gone from the nav"
         );
         assert!(
-            view.cockpit.parked().unwrap().is_empty(),
+            view.cockpit.read(cx).parked().unwrap().is_empty(),
             "and from the store"
         );
         assert_eq!(
-            view.cockpit.threads().len(),
+            view.cockpit.read(cx).threads().len(),
             2,
             "the open Threads are untouched"
         );
@@ -583,7 +585,7 @@ fn cmd_i_hands_the_list_the_keys_on_its_first_card(cx: &mut TestAppContext) {
         "on the first card"
     );
     assert_eq!(
-        view.read_with(cx, |view, _| view.cockpit.answer_target()),
+        view.read_with(cx, |view, cx| view.cockpit.read(cx).answer_target()),
         Some(threads[2]),
         "⌘D answers the request that has waited longest"
     );
@@ -625,7 +627,7 @@ fn a_working_thread_moves_to_the_working_shelf_and_back(cx: &mut TestAppContext)
         .unwrap();
     tick(cx);
     assert_eq!(
-        view.read_with(cx, |view, _| view.thread_row(busy).status),
+        view.read_with(cx, |view, cx| view.thread_row(busy, cx).status),
         nav::RowStatus::Working,
         "the premise: it started work"
     );
@@ -749,14 +751,14 @@ fn clicking_a_parked_nav_row_revives_that_thread(cx: &mut TestAppContext) {
         .expect("shown, the parked Thread's row is drawn");
     cx.simulate_click(row.center(), gpui::Modifiers::none());
 
-    view.read_with(cx, |view, _| {
+    view.read_with(cx, |view, cx| {
         assert_eq!(view.panes.len(), 2, "the revived Thread got a Pane");
         assert_eq!(
             view.panes[1].thread().unwrap(),
             parked,
             "and it is the same Thread"
         );
-        assert_eq!(view.focused(), 1, "focus followed the revival");
+        assert_eq!(view.focused(cx), 1, "focus followed the revival");
         assert!(view.facts.parked().is_empty(), "its nav row moved up");
     });
 
@@ -769,8 +771,8 @@ fn clicking_a_parked_nav_row_revives_that_thread(cx: &mut TestAppContext) {
 
 /// The Threads in creation order.
 fn in_order(view: &Entity<CockpitView>, cx: &mut gpui::VisualTestContext) -> Vec<ThreadId> {
-    view.read_with(cx, |view, _| {
-        let mut threads = view.cockpit.threads();
+    view.read_with(cx, |view, cx| {
+        let mut threads = view.cockpit.read(cx).threads();
         threads.sort();
         threads
     })
@@ -779,7 +781,7 @@ fn in_order(view: &Entity<CockpitView>, cx: &mut gpui::VisualTestContext) -> Vec
 /// Does the focused Pane's Composer hold the keyboard?
 fn composer_has_keys(view: &Entity<CockpitView>, cx: &mut gpui::VisualTestContext) -> bool {
     view.update_in(cx, |view, window, cx| {
-        let pane = &view.panes[view.focused()];
+        let pane = &view.panes[view.focused(cx)];
         pane.composer.read(cx).focus_handle(cx).is_focused(window)
     })
 }
@@ -797,7 +799,7 @@ fn a_press_on_a_row_leaves_the_keys_with_the_composer(cx: &mut TestAppContext) {
     let threads = in_order(&view, cx);
     let other = threads
         .into_iter()
-        .find(|thread| view.read_with(cx, |view, _| view.focused_thread()) != Some(*thread))
+        .find(|thread| view.read_with(cx, |view, cx| view.focused_thread(cx)) != Some(*thread))
         .expect("a Thread not shown");
     let row = cx
         .debug_bounds(format!("nav-thread-{}", other.get()).leak())
@@ -805,7 +807,7 @@ fn a_press_on_a_row_leaves_the_keys_with_the_composer(cx: &mut TestAppContext) {
     cx.simulate_click(row.center(), gpui::Modifiers::none());
     tick(cx);
     assert_eq!(
-        view.read_with(cx, |view, _| view.focused_thread()),
+        view.read_with(cx, |view, cx| view.focused_thread(cx)),
         Some(other)
     );
     assert!(
@@ -816,7 +818,7 @@ fn a_press_on_a_row_leaves_the_keys_with_the_composer(cx: &mut TestAppContext) {
     cx.simulate_input("hi");
     tick(cx);
     assert!(view.read_with(cx, |view, cx| {
-        view.panes[view.focused()]
+        view.panes[view.focused(cx)]
             .composer
             .read(cx)
             .text()
@@ -841,7 +843,7 @@ fn the_cursor_clears_when_the_tree_lets_go(cx: &mut TestAppContext) {
         .key;
     // The keys go to the board without Esc.
     view.update_in(cx, |view, window, cx| {
-        let pane = &view.panes[view.focused()];
+        let pane = &view.panes[view.focused(cx)];
         window.focus(&pane.composer.read(cx).focus_handle(cx), cx);
     });
     tick(cx);

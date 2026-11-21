@@ -145,7 +145,7 @@ fn dialog_up(view: &Entity<CockpitView>, cx: &mut gpui::VisualTestContext) -> bo
 
 fn open_dialog(view: &Entity<CockpitView>, cx: &mut gpui::VisualTestContext) {
     view.update(cx, |view, cx| {
-        let thread = view.focused_thread().unwrap();
+        let thread = view.focused_thread(cx).unwrap();
         view.open_background_dialog(thread, cx)
     });
     tick(cx);
@@ -257,7 +257,7 @@ fn the_project_card_closes_with_its_project(cx: &mut TestAppContext) {
     view.update(cx, |view, cx| view.open_project_editor(project, cx));
     tick(cx);
     assert_eq!(up(&view, cx), (false, true), "the card is up");
-    view.update(cx, |view, _| view.cockpit.remove_project(project).unwrap());
+    view.update(cx, |view, cx| view.cockpit.update(cx, |cockpit, _| cockpit.remove_project(project).unwrap()));
     tick(cx);
     assert_eq!(up(&view, cx), (false, false), "the card closes with its Project");
 }
@@ -356,7 +356,7 @@ fn new_task_error(view: &Entity<CockpitView>, cx: &mut gpui::VisualTestContext) 
 fn the_new_task_sheet_keeps_what_was_typed_across_a_close(cx: &mut TestAppContext) {
     let (view, cx) = factory_window(cx, "sheets-new-task-keeps");
     view.update(cx, |view, cx| {
-        view.cockpit.fixture_record_tasks();
+        view.cockpit.update(cx, |cockpit, _| cockpit.fixture_record_tasks());
         view.open_new_task(cx);
     });
     tick(cx);
@@ -381,7 +381,7 @@ fn the_new_task_sheet_keeps_what_was_typed_across_a_close(cx: &mut TestAppContex
     assert!(cx.debug_bounds("new-task-instructions-focused").is_some());
     view.update(cx, |view, cx| view.start_new_task(cx));
     tick(cx);
-    let asks = view.read_with(cx, |view, _| view.cockpit.fixture_task_asks().to_vec());
+    let asks = view.read_with(cx, |view, cx| view.cockpit.read(cx).fixture_task_asks().to_vec());
     match asks.as_slice() {
         [ferrite_core::protocol::TaskAction::Start { request: first, workflow: w1, .. }, ferrite_core::protocol::TaskAction::Start { request: second, workflow: w2, .. }] => {
             assert_eq!(first, second, "one request across the close");
@@ -409,7 +409,7 @@ fn the_new_task_sheet_refuses_a_start_with_no_instructions(cx: &mut TestAppConte
 fn a_task_started_closes_the_new_task_sheet_and_spends_its_words(cx: &mut TestAppContext) {
     let (view, cx) = factory_window(cx, "sheets-new-task-started");
     view.update(cx, |view, cx| {
-        view.cockpit.fixture_start_tasks();
+        view.cockpit.update(cx, |cockpit, _| cockpit.fixture_start_tasks());
         view.open_new_task(cx);
     });
     tick(cx);
@@ -437,7 +437,7 @@ fn leaving_the_factory_takes_the_new_task_sheet_and_its_words(cx: &mut TestAppCo
     cx.simulate_input("Gone");
     tick(cx);
     view.update(cx, |view, cx| {
-        let thread = view.focused_thread().unwrap();
+        let thread = view.focused_thread(cx).unwrap();
         view.focus_thread(thread, cx)
     });
     tick(cx);

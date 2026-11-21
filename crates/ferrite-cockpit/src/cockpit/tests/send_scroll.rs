@@ -610,9 +610,9 @@ fn a_queued_send_stays_put_and_scroll_to_end_names_it(cx: &mut TestAppContext) {
     cx.simulate_input("third");
     send(cx);
     tick(cx);
-    let queued = view.read_with(cx, |view, _| {
-        let thread = view.cockpit.threads()[0];
-        view.cockpit.thread(thread).map(|open| open.queue().len())
+    let queued = view.read_with(cx, |view, cx| {
+        let thread = view.cockpit.read(cx).threads()[0];
+        view.cockpit.read(cx).thread(thread).map(|open| open.queue().len())
     });
     assert_eq!(queued, Some(1), "the premise: it was queued");
     assert!(!scroll.easing(), "no ease");
@@ -814,7 +814,7 @@ fn expanding_completed_work_keeps_the_clicked_heading(cx: &mut TestAppContext) {
     cx.simulate_resize(gpui::size(px(1000.), px(700.)));
     for turn in 0..6 {
         if turn > 0 {
-            let admission = view.update(cx, |view, _| view.cockpit.send(thread, format!("turn {turn}")));
+            let admission = view.update(cx, |view, cx| view.cockpit.update(cx, |cockpit, _| cockpit.send(thread, format!("turn {turn}"))));
             assert_eq!(admission, ferrite_core::cockpit::Admission::Delivered);
         }
         let stream = fake.streams.borrow().len() - 1;
@@ -895,7 +895,7 @@ fn expanding_work_at_the_followed_tail_keeps_the_clicked_heading(cx: &mut TestAp
     cx.simulate_resize(gpui::size(px(1000.), px(700.)));
     for turn in 0..3 {
         if turn > 0 {
-            let admission = view.update(cx, |view, _| view.cockpit.send(thread, format!("turn {turn}")));
+            let admission = view.update(cx, |view, cx| view.cockpit.update(cx, |cockpit, _| cockpit.send(thread, format!("turn {turn}"))));
             assert_eq!(admission, ferrite_core::cockpit::Admission::Delivered);
         }
         let stream = fake.streams.borrow().len() - 1;

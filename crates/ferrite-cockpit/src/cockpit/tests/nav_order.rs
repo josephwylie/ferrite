@@ -67,6 +67,7 @@ fn a_thread_whose_shell_outlives_its_turn_works_until_the_shell_ends(cx: &mut Te
         assert!(
             !view
                 .cockpit
+                .read(cx)
                 .notifications()
                 .notices()
                 .any(|notice| notice.thread == last),
@@ -89,6 +90,7 @@ fn a_thread_whose_shell_outlives_its_turn_works_until_the_shell_ends(cx: &mut Te
         );
         assert!(view
             .cockpit
+            .read(cx)
             .notifications()
             .notices()
             .any(|notice| notice.thread == last));
@@ -138,7 +140,7 @@ fn a_window_that_starts_watching_mid_shell_sees_the_thread_working(cx: &mut Test
     }
     tick(cx);
     view.read_with(cx, |view, cx| {
-        assert!(view.cockpit.thread(threads[1]).unwrap().background_work());
+        assert!(view.cockpit.read(cx).thread(threads[1]).unwrap().background_work());
         assert_eq!(ids(&view.nav_state(cx).working), vec![threads[1]]);
     });
 }
@@ -171,7 +173,7 @@ fn a_window_that_starts_watching_mid_subagent_sees_the_thread_working(cx: &mut T
     }
     tick(cx);
     view.read_with(cx, |view, cx| {
-        assert!(view.cockpit.thread(threads[1]).unwrap().background_work());
+        assert!(view.cockpit.read(cx).thread(threads[1]).unwrap().background_work());
         let state = view.nav_state(cx);
         assert_eq!(ids(&state.working), vec![threads[1]]);
         assert_eq!(

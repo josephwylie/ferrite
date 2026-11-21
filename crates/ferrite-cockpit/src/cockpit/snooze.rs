@@ -27,7 +27,7 @@ impl CockpitView {
         until: Option<std::time::SystemTime>,
         cx: &mut Context<Self>,
     ) {
-        match self.cockpit.snooze_thread(thread, until) {
+        match self.cockpit.update(cx, |cockpit, _| cockpit.snooze_thread(thread, until)) {
             Ok(()) => {
                 if until.is_some() {
                     self.nav_view.update(cx, |nav, cx| {

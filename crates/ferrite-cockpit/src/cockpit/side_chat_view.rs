@@ -153,84 +153,89 @@ impl CockpitView {
         skip: usize,
         cx: &mut Context<Self>,
     ) {
-        let Some(open) = self.cockpit.thread(thread) else {
-            return;
-        };
-        let Some(subject_view) = open.activity().subject(subject) else {
-            return;
-        };
-        let namespace = pane.text_namespace();
-        let revision = subject_view.presentation_revision();
-        let status = pane::transcript_status(subject_view.status(), subject_view.fresh());
-        let reading_size = self.prefs.settings.reading_size;
-        let transcript = subject_view.transcript();
-        let working = pane::working_tail(pane::WorkingFacts {
-            transcript,
-            thread,
-            starting: open.starting(),
-            solo: false,
-            focused: true,
-            reduce_motion: cx.reduce_motion(),
-        });
-        let workspace =
-            ferrite_core::workspace::effective_cwd(open.session_project_root(), open.workspace())
-                .map(std::path::Path::to_path_buf);
-        let presentation = ferrite_pane::transcript::TranscriptPresentation {
-            thread,
-            selection_scope: pane.selection_scope,
-            disclosure_focus: pane.tool_focus(),
-            namespace,
-            content_revision: revision,
-            display_revision: pane.disclosure_revision(),
-            focused: true,
-            signal_status: Some(status),
-            reading_size,
-            working,
-            tail: None,
-            pending_call: None,
-            workspace,
-            solo: false,
-            thinking: self.prefs.settings.show_thinking,
-            agents: Default::default(),
-            rewind: None,
-            quotes: false,
-            reply_to: open.provider().to_string().into(),
-            skills: open.commands().into(),
-            cited: Default::default(),
-            note: None,
-            earlier: None,
-            queued: 0,
-        };
-        let Some(entity) = pane.transcript() else {
-            return;
-        };
-        let selection = self.selection.clone();
-        entity.update(cx, |view, cx| {
-            view.reconcile(
-                presentation,
-                || {
-                    let mut blocks =
-                        pane::rendered_window(transcript.blocks()).to_vec();
-                    let first = transcript.blocks().len() - blocks.len();
-                    blocks.drain(..skip.saturating_sub(first).min(blocks.len()));
-                    let disclosure = pane.transcript_disclosure_snapshot();
-                    ferrite_pane::transcript::TranscriptBody {
-                        blocks,
-                        preview: pane.preview.clone(),
-                        expanded: disclosure.0,
-                        target: disclosure.1,
-                    }
-                },
-                selection,
-                cx,
-            );
+        let reduce_motion = cx.reduce_motion();
+        // The model is lent, not written: the transcript copies what it
+        // borrows of it under its own update.
+        self.cockpit.update(cx, |model, cx| {
+            let Some(open) = model.thread(thread) else {
+                return;
+            };
+            let Some(subject_view) = open.activity().subject(subject) else {
+                return;
+            };
+            let namespace = pane.text_namespace();
+            let revision = subject_view.presentation_revision();
+            let status = pane::transcript_status(subject_view.status(), subject_view.fresh());
+            let reading_size = self.prefs.settings.reading_size;
+            let transcript = subject_view.transcript();
+            let working = pane::working_tail(pane::WorkingFacts {
+                transcript,
+                thread,
+                starting: open.starting(),
+                solo: false,
+                focused: true,
+                reduce_motion,
+            });
+            let workspace =
+                ferrite_core::workspace::effective_cwd(open.session_project_root(), open.workspace())
+                    .map(std::path::Path::to_path_buf);
+            let presentation = ferrite_pane::transcript::TranscriptPresentation {
+                thread,
+                selection_scope: pane.selection_scope,
+                disclosure_focus: pane.tool_focus(),
+                namespace,
+                content_revision: revision,
+                display_revision: pane.disclosure_revision(),
+                focused: true,
+                signal_status: Some(status),
+                reading_size,
+                working,
+                tail: None,
+                pending_call: None,
+                workspace,
+                solo: false,
+                thinking: self.prefs.settings.show_thinking,
+                agents: Default::default(),
+                rewind: None,
+                quotes: false,
+                reply_to: open.provider().to_string().into(),
+                skills: open.commands().into(),
+                cited: Default::default(),
+                note: None,
+                earlier: None,
+                queued: 0,
+            };
+            let Some(entity) = pane.transcript() else {
+                return;
+            };
+            let selection = self.selection.clone();
+            entity.update(cx, |view, cx| {
+                view.reconcile(
+                    presentation,
+                    || {
+                        let mut blocks =
+                            pane::rendered_window(transcript.blocks()).to_vec();
+                        let first = transcript.blocks().len() - blocks.len();
+                        blocks.drain(..skip.saturating_sub(first).min(blocks.len()));
+                        let disclosure = pane.transcript_disclosure_snapshot();
+                        ferrite_pane::transcript::TranscriptBody {
+                            blocks,
+                            preview: pane.preview.clone(),
+                            expanded: disclosure.0,
+                            target: disclosure.1,
+                        }
+                    },
+                    selection,
+                    cx,
+                );
+            });
         });
     }
 
     /// The Panel's `+` Side chat: open `owner`'s side chat, or add a tab to
     /// it, asking the agent for the fork that holds the conversation.
     pub(super) fn open_side_chat(&mut self, owner: ThreadId, cx: &mut Context<Self>) {
-        let asked = self.ask_side_fork(owner);
+        let asked = self.ask_side_fork(owner, cx);
         let id = self
             .side_chat
             .update(cx, |chat, cx| chat.open(owner, asked, cx));
@@ -240,16 +245,17 @@ impl CockpitView {
 
     /// Ask `owner`'s agent for a fork of the whole conversation, or say
     /// why it cannot make one now.
-    fn ask_side_fork(&mut self, owner: ThreadId) -> Result<(), SharedString> {
+    fn ask_side_fork(&mut self, owner: ThreadId, cx: &mut gpui::App) -> Result<(), SharedString> {
         let open = self
             .cockpit
+            .read(cx)
             .thread(owner)
             .ok_or_else(|| SharedString::from("That thread is not open"))?;
         if transcript_glue::rewind_gate(&open).is_none() {
             return Err("Its agent cannot start a side chat".into());
         }
         self.cockpit
-            .fork(owner, None, None)
+            .update(cx, |cockpit, _| cockpit.fork(owner, None, None))
             .map_err(|why| SharedString::from(why))
     }
 
@@ -268,7 +274,7 @@ impl CockpitView {
     /// way, and then the one Thread waiting on a fork takes it: with two
     /// waiting it could be either's. Delete once no such Server runs.
     pub(super) fn unnamed_fork_owner(&self, thread: ThreadId, cx: &gpui::App) -> Option<ThreadId> {
-        if self.cockpit.names_fork_owners() {
+        if self.cockpit.read(cx).names_fork_owners() {
             return None;
         }
         self.side_chat
@@ -289,6 +295,7 @@ impl CockpitView {
     ) -> bool {
         let inherited = self
             .cockpit
+            .read(cx)
             .thread(thread)
             .map_or(0, |open| open.transcript().blocks().len());
         let fork = Fork { thread, inherited };
@@ -296,11 +303,11 @@ impl CockpitView {
             return false;
         };
         // The fork joined the roster as any open Thread does: it leaves it.
-        self.cockpit.set_aside(thread);
+        self.cockpit.update(cx, |cockpit, _| cockpit.set_aside(thread));
         self.sync_panes(cx);
         if !taken {
             // Its tab closed while the agent worked: nothing wants it.
-            self.retire(thread);
+            self.retire(thread, cx);
         }
         cx.notify();
         true
@@ -309,13 +316,13 @@ impl CockpitView {
     /// Put a fork away with its tab. Deleted, so it leaves no Thread
     /// behind — but a fork that works in a legacy worktree would take the
     /// operator's checkout with it, so that one is only parked.
-    fn retire(&mut self, thread: ThreadId) {
-        let worktree = self.cockpit.thread(thread).is_some_and(|open| {
+    fn retire(&mut self, thread: ThreadId, cx: &mut gpui::App) {
+        let worktree = self.cockpit.read(cx).thread(thread).is_some_and(|open| {
             matches!(open.workspace(), Some(WorkspaceBinding::Worktree { .. }))
         });
         if worktree {
-            let _ = self.cockpit.park(thread);
-        } else if let Err(error) = self.delete_thread(thread) {
+            let _ = self.cockpit.update(cx, |cockpit, _| cockpit.park(thread));
+        } else if let Err(error) = self.delete_thread(thread, cx) {
             ferrite_core::log!("side chat thread {thread} could not be deleted: {error:?}");
         }
     }
@@ -323,14 +330,14 @@ impl CockpitView {
     /// Its Surface's tab closed: the side chat and its fork go.
     pub(super) fn close_side_tab(&mut self, owner: ThreadId, id: u64, cx: &mut Context<Self>) {
         if let Some(fork) = self.side_chat.update(cx, |chat, cx| chat.close(owner, id, cx)) {
-            self.retire(fork);
+            self.retire(fork, cx);
         }
     }
 
     /// Whether the shown side chat's field holds the keyboard, so ⌘W
     /// closes its tab (`close_panel_in_focus`).
     pub(super) fn side_chat_holds_focus(&self, window: &Window, cx: &gpui::App) -> bool {
-        self.focused_thread()
+        self.focused_thread(cx)
             .is_some_and(|owner| self.side_chat.read(cx).holds_focus(owner, window, cx))
     }
 
@@ -356,13 +363,14 @@ impl CockpitView {
         let text = draft.prompt().trim().to_string();
         let admitted = if self
             .cockpit
+            .read(cx)
             .thread(fork)
             .is_some_and(|open| open.needs_queue())
         {
-            self.cockpit.queue(fork, text)
+            self.cockpit.update(cx, |cockpit, _| cockpit.queue(fork, text))
         } else {
             matches!(
-                self.cockpit.send(fork, text),
+                self.cockpit.update(cx, |cockpit, _| cockpit.send(fork, text)),
                 Admission::Delivered | Admission::Held
             )
         };
@@ -381,7 +389,7 @@ impl CockpitView {
         conversation: impl FnOnce(ThreadId, u64) -> Option<(Fork, &'a PaneView)>,
         cx: &mut Context<Self>,
     ) -> Option<SideChatInputs> {
-        let owner = self.panes[self.panel_drawn_pane()?].thread()?;
+        let owner = self.panes[self.panel_drawn_pane(cx)?].thread()?;
         let Some(SurfaceId::SideChat(tab)) = self.active_surface(owner) else {
             return None;
         };
@@ -392,15 +400,16 @@ impl CockpitView {
         let fork = conversation.map(|(fork, _)| fork);
         let answered = fork.is_some_and(|fork| {
             self.cockpit
+                .read(cx)
                 .thread(fork.thread)
                 .is_some_and(|open| open.transcript().blocks().len() > fork.inherited)
         });
         Some(SideChatInputs {
             owner,
             tab,
-            shown: self.panel_thread() == Some(owner),
+            shown: self.panel_thread(cx) == Some(owner),
             answered,
-            blocked: self.bring_back_blocked(owner, fork),
+            blocked: self.bring_back_blocked(owner, fork, cx),
             confirm_delete: self.prefs.settings.confirm_delete,
         })
     }
@@ -408,10 +417,11 @@ impl CockpitView {
     /// Why Bring back cannot run for `owner`'s side chat now (T3's
     /// reasons), or None: the main Thread must be idle, and the side chat's
     /// `fork` must hold a finished reply.
-    pub(super) fn bring_back_blocked(&self, owner: ThreadId, fork: Option<Fork>) -> Option<&'static str> {
+    pub(super) fn bring_back_blocked(&self, owner: ThreadId, fork: Option<Fork>, cx: &gpui::App) -> Option<&'static str> {
         use ferrite_core::transcript::Status;
         let busy = |thread: ThreadId| {
             self.cockpit
+                .read(cx)
                 .thread(thread)
                 .is_none_or(|open| matches!(open.transcript().status(), Status::Streaming | Status::Blocked))
         };
@@ -419,16 +429,16 @@ impl CockpitView {
             return Some("Available when the main thread is idle.");
         }
         let replied = fork
-            .and_then(|fork| self.side_run(fork))
+            .and_then(|fork| self.side_run(fork, cx))
             .is_some_and(|run| !run.is_empty());
         (!replied).then_some("Available after a finished reply.")
     }
 
     /// `fork`'s latest run, its question and the reply, as plain text: None
     /// while the fork is answering or has not answered.
-    fn side_run(&self, fork: Fork) -> Option<String> {
+    fn side_run(&self, fork: Fork, cx: &gpui::App) -> Option<String> {
         use ferrite_core::transcript::{Body, Status};
-        let open = self.cockpit.thread(fork.thread)?;
+        let open = self.cockpit.read(cx).thread(fork.thread)?;
         let transcript = open.transcript();
         if transcript.status() != Status::Idle {
             return None;
@@ -447,10 +457,10 @@ impl CockpitView {
     /// side chat to that message). Nothing while it cannot run.
     fn bring_back(&mut self, owner: ThreadId, fork: Fork, window: &mut Window, cx: &mut Context<Self>) {
         use gpui::component::{notification::Notification, WindowExt};
-        if self.bring_back_blocked(owner, Some(fork)).is_some() {
+        if self.bring_back_blocked(owner, Some(fork), cx).is_some() {
             return;
         }
-        let (Some(run), Some(index)) = (self.side_run(fork), self.pane_for(owner)) else {
+        let (Some(run), Some(index)) = (self.side_run(fork, cx), self.pane_for(owner)) else {
             return;
         };
         let quote = ferrite_core::replies::compose(&[Reply::new(format!("From a side chat:\n{run}"), "")], "");
@@ -471,7 +481,7 @@ impl CockpitView {
         self.side_chat
             .read(cx)
             .fork(owner, id)
-            .and_then(|fork| self.cockpit.thread(fork.thread))
+            .and_then(|fork| self.cockpit.read(cx).thread(fork.thread))
             .is_some_and(|open| open.transcript().status() == ferrite_core::transcript::Status::Streaming)
     }
 }

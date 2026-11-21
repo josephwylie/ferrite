@@ -337,6 +337,7 @@ impl CockpitView {
         let mut environment = Row::new(
             Item::Environment,
             self.cockpit
+                .read(cx)
                 .machine()
                 .map_or_else(|| "Local".to_string(), |machine| machine.name().to_string()),
             icons::LAPTOP,
@@ -350,7 +351,7 @@ impl CockpitView {
             .to_string()
         });
         rows.push(environment);
-        if let Some(path) = self.thread_path(thread) {
+        if let Some(path) = self.thread_path(thread, cx) {
             let mut folder = Row::new(
                 Item::Environment,
                 path.file_name().map_or_else(
@@ -362,7 +363,7 @@ impl CockpitView {
             folder.tooltip = Some(path.to_string_lossy().into_owned());
             folder.action = Some(Action::Reveal(path.clone()));
             rows.push(folder);
-            if !self.on_machine() {
+            if !self.on_machine(cx) {
                 let label = if cfg!(target_os = "macos") {
                     "Open in Finder"
                 } else if cfg!(target_os = "windows") {
@@ -410,7 +411,7 @@ impl CockpitView {
                     .map(changes_tally);
                 row.tooltip = row.changes.as_ref().map(|tally| tally.against.clone());
                 if self
-                    .opener_unavailable(thread, panel::Opener::Changes)
+                    .opener_unavailable(thread, panel::Opener::Changes, cx)
                     .is_none()
                 {
                     row.action = Some(Action::Surface(SurfaceId::Changes));
@@ -420,7 +421,7 @@ impl CockpitView {
         }
         let mut lineage = Lineage::default();
         let mut provider = Provider::Claude;
-        if let Some(open) = self.cockpit.thread(thread) {
+        if let Some(open) = self.cockpit.read(cx).thread(thread) {
             provider = open.provider();
             if self
                 .prefs
@@ -447,7 +448,7 @@ impl CockpitView {
                     }
                 }
             }
-            let limits = self.cockpit.account_limits(open.provider());
+            let limits = self.cockpit.read(cx).account_limits(open.provider());
             for (name, limit) in [("5 hours", limits.five_hour), ("Weekly", limits.weekly)] {
                 if let Some(limit) = limit {
                     let mut row = Row::new(Item::Usage, name, icons::CLOCK);

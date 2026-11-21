@@ -48,7 +48,7 @@ fn open<'a>(
     cx.simulate_resize(gpui::size(px(1600.), px(1000.)));
     cx.update(|window, _| window.activate_window());
     view.update(cx, |view, cx| {
-        view.focus_pane(0);
+        view.focus_pane(0, cx);
         cx.notify();
     });
     for index in working {
@@ -84,7 +84,7 @@ impl Board<'_> {
         self.cx.update(|window, cx| {
             let view = view.read(cx);
             let index = view.index_of(identity).expect("on the board");
-            view.pane_rects(window)
+            view.pane_rects(window, cx)
                 .into_iter()
                 .find(|(at, _)| *at == index)
                 .map(|(_, rect)| rect)

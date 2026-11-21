@@ -733,11 +733,11 @@ fn build(state: &str, label: &str) -> (Scene, Setup) {
         "running" => (running_turn(false), none),
         "answer" => (running_turn(true), none),
         "answer-fold-open" => {
-            let setup: Setup = Box::new(|view, _, _| {
+            let setup: Setup = Box::new(|view, _, cx| {
                 let Some(thread) = view.panes[0].thread() else {
                     return;
                 };
-                let prompt = view.cockpit.thread(thread).and_then(|open| {
+                let prompt = view.cockpit.read(cx).thread(thread).and_then(|open| {
                     open.transcript()
                         .blocks()
                         .iter()
@@ -849,7 +849,7 @@ fn build(state: &str, label: &str) -> (Scene, Setup) {
         "contextmenu" => {
             let (scene, _) = nav();
             let setup: Setup = Box::new(|view, window, cx| {
-                let thread = view.cockpit.roster().focused_thread().expect("focus");
+                let thread = view.cockpit.read(cx).roster().focused_thread().expect("focus");
                 ferrite_ui::motion::hover_listener(format!("nav-thread-0-{}", thread.get()).into())(
                     &true, window, cx,
                 );
@@ -861,7 +861,7 @@ fn build(state: &str, label: &str) -> (Scene, Setup) {
         "row-menu" => {
             let (scene, _) = nav();
             let setup: Setup = Box::new(|view, window, cx| {
-                let thread = view.cockpit.roster().focused_thread().expect("focus");
+                let thread = view.cockpit.read(cx).roster().focused_thread().expect("focus");
                 ferrite_ui::motion::hover_listener(format!("nav-thread-0-{}", thread.get()).into())(
                     &true, window, cx,
                 );
@@ -1137,7 +1137,7 @@ fn build(state: &str, label: &str) -> (Scene, Setup) {
                 .expect("fixture Session is listening");
             let setup: Setup = Box::new(|view, _, cx| {
                 let thread = view.panes[0].thread().expect("a Thread Pane");
-                let generation = view.cockpit.thread(thread).expect("open").generation();
+                let generation = view.cockpit.read(cx).thread(thread).expect("open").generation();
                 view.show_popup(super::Popup::Session { thread, generation }, cx);
             });
             (scene, setup)
@@ -1147,7 +1147,7 @@ fn build(state: &str, label: &str) -> (Scene, Setup) {
             let scene = conversation(label);
             let setup: Setup = Box::new(|view, _, cx| {
                 let thread = view.panes[0].thread().expect("a Thread Pane");
-                let generation = view.cockpit.thread(thread).expect("open").generation();
+                let generation = view.cockpit.read(cx).thread(thread).expect("open").generation();
                 view.toggle_mode_menu(thread, generation, cx);
             });
             (scene, setup)
@@ -1312,7 +1312,7 @@ fn build(state: &str, label: &str) -> (Scene, Setup) {
             let (scene, branches) = nav();
             let setup: Setup = Box::new(|view, window, cx| {
                 branches(view, window, cx);
-                let notes = named_thread(view, "Release notes 0.9");
+                let notes = named_thread(view, "Release notes 0.9", cx);
                 view.land_on_thread(notes, cx);
             });
             (scene, setup)
@@ -1365,11 +1365,11 @@ fn build(state: &str, label: &str) -> (Scene, Setup) {
             let (scene, branches) = nav();
             let setup: Setup = Box::new(|view, window, cx| {
                 branches(view, window, cx);
-                let copy = named_thread(view, "Checkout copy review");
+                let copy = named_thread(view, "Checkout copy review", cx);
                 let wake =
                     ferrite_core::clock::system_time() + std::time::Duration::from_secs(3 * 3600);
                 view.cockpit
-                    .snooze_thread(copy, Some(wake))
+                    .update(cx, |cockpit, _| cockpit.snooze_thread(copy, Some(wake)))
                     .expect("snooze the fixture Thread");
                 view.set_shelf_open(crate::nav::Shelf::Working, true, cx);
                 cx.notify();
@@ -1396,7 +1396,7 @@ fn build(state: &str, label: &str) -> (Scene, Setup) {
             let (scene, branches) = nav();
             let setup: Setup = Box::new(|view, window, cx| {
                 branches(view, window, cx);
-                let harness = named_thread(view, "Screenshot harness");
+                let harness = named_thread(view, "Screenshot harness", cx);
                 view.facts
                     .pr_answered(harness, Some(fixture_pr(415, PrState::Open, false)));
                 crate::nav::card_hover(crate::nav::card_key(harness), false, None)(&true, window, cx);
@@ -1429,10 +1429,10 @@ fn build(state: &str, label: &str) -> (Scene, Setup) {
                         fixture_pr(96, PrState::Closed, false),
                     ),
                 ] {
-                    let thread = named_thread(view, name);
+                    let thread = named_thread(view, name, cx);
                     view.facts.pr_answered(thread, Some(reading));
                 }
-                let running = named_thread(view, "Retained transcript rendering");
+                let running = named_thread(view, "Retained transcript rendering", cx);
                 crate::nav::card_hover(crate::nav::card_key(running), true, None)(&true, window, cx);
                 cx.notify();
             });
@@ -2015,8 +2015,9 @@ fn nav() -> (Scene, Setup) {
 }
 
 /// The open Thread a nav scene's fixture titled `name`.
-fn named_thread(view: &CockpitView, name: &str) -> ThreadId {
+fn named_thread(view: &CockpitView, name: &str, cx: &gpui::App) -> ThreadId {
     view.cockpit
+        .read(cx)
         .threads()
         .into_iter()
         .find(|thread| view.facts.name(*thread).as_ref() == name)
@@ -2888,7 +2889,7 @@ fn loops_frames(
                 .iter()
                 .position(|pane| pane.thread() == Some(thread))
                 .expect("the working Thread's Pane");
-            view.focus_pane(index);
+            view.focus_pane(index, cx);
             let composer = view.panes[index].composer.clone();
             composer.update(cx, |composer, cx| {
                 composer.insert("blink over this text", cx);

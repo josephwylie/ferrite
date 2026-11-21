@@ -81,9 +81,9 @@ fn the_factory_button_lists_each_project_and_a_fresh_one_is_empty(cx: &mut TestA
     assert!(shows(cx, "factory-empty"), "no invented Tasks");
     assert!(!shows(cx, "factory-columns"));
     assert_eq!(fake.streams.borrow().len(), streams, "nothing started");
-    view.read_with(cx, |view, _| {
-        assert!(view.cockpit.factory().tasks.is_empty());
-        assert_eq!(view.cockpit.threads().len(), 1);
+    view.read_with(cx, |view, cx| {
+        assert!(view.cockpit.read(cx).factory().tasks.is_empty());
+        assert_eq!(view.cockpit.read(cx).threads().len(), 1);
     });
 }
 
@@ -130,7 +130,7 @@ fn the_board_lays_cards_in_their_columns(cx: &mut TestAppContext) {
     tick(cx);
     assert!(shows(cx, "nav-factory-attention"), "one needs you");
     view.update(cx, |view, cx| {
-        assert_eq!(view.cockpit.factory().needs_you(project), 1);
+        assert_eq!(view.cockpit.read(cx).factory().needs_you(project), 1);
         view.open_factory(project, cx);
     });
     tick(cx);
@@ -211,8 +211,8 @@ fn a_tasks_panel_shows_its_worker_and_offers_delete_only_at_rest(cx: &mut TestAp
     });
     tick(cx);
     assert!(shows(cx, "task-worker"), "the Worker's Pane");
-    view.read_with(cx, |view, _| {
-        assert_eq!(view.focused_thread(), Some(worker));
+    view.read_with(cx, |view, cx| {
+        assert_eq!(view.focused_thread(cx), Some(worker));
         assert!(view.factory().is_some(), "the board stays");
     });
     assert_eq!(fake.streams.borrow().len(), streams, "no second run");
@@ -224,11 +224,11 @@ fn a_tasks_panel_shows_its_worker_and_offers_delete_only_at_rest(cx: &mut TestAp
         (Status::Completed, true, false),
     ] {
         view.update(cx, |view, cx| {
-            view.cockpit.fixture_factory(Board {
+            view.cockpit.update(cx, |cockpit, _| cockpit.fixture_factory(Board {
                 workflows: Vec::new(),
                 tasks: vec![task("t-1", project, status, Some(worker), None, None)],
                 ..Default::default()
-            });
+            }));
             view.open_task("t-1", cx);
         });
         tick(cx);
@@ -273,16 +273,16 @@ fn a_task_alert_toasts_chimes_and_posts_but_not_to_the_inbox(cx: &mut TestAppCon
     };
     let inbox_before = view.read_with(cx, |view, cx| inbox_len(view, cx));
     view.update(cx, |view, cx| {
-        let watched = view.cockpit.threads()[0];
+        let watched = view.cockpit.read(cx).threads()[0];
         view.focus_thread(watched, cx);
         view.cockpit
-            .fixture_task_alert(ferrite_core::protocol::ServerMessage::TaskAlert {
+            .update(cx, |cockpit, _| cockpit.fixture_task_alert(ferrite_core::protocol::ServerMessage::TaskAlert {
                 project,
                 task: "t-1".into(),
                 status: Status::NeedsHuman,
                 title: "Task t-1".into(),
                 detail: Some("No access".into()),
-            });
+            }));
         cx.notify();
     });
     tick(cx);
@@ -338,18 +338,18 @@ fn a_task_toast_goes_when_the_task_leaves_the_state_it_announced(cx: &mut TestAp
     };
     let alert = |view: &mut CockpitView, cx: &mut Context<CockpitView>| {
         view.cockpit
-            .fixture_task_alert(ferrite_core::protocol::ServerMessage::TaskAlert {
+            .update(cx, |cockpit, _| cockpit.fixture_task_alert(ferrite_core::protocol::ServerMessage::TaskAlert {
                 project,
                 task: "t-1".into(),
                 status: Status::NeedsHuman,
                 title: "Task needs you: Task t-1".into(),
                 detail: Some("No access".into()),
-            });
+            }));
         cx.notify();
     };
     let before = toasts(cx);
     view.update(cx, |view, cx| {
-        let watched = view.cockpit.threads()[0];
+        let watched = view.cockpit.read(cx).threads()[0];
         view.focus_thread(watched, cx);
         alert(view, cx);
     });
@@ -359,7 +359,7 @@ fn a_task_toast_goes_when_the_task_leaves_the_state_it_announced(cx: &mut TestAp
 
     view.update(cx, |view, cx| {
         view.cockpit
-            .fixture_factory(needs_human(Status::Working, None));
+            .update(cx, |cockpit, _| cockpit.fixture_factory(needs_human(Status::Working, None)));
         cx.notify();
     });
     tick(cx);
@@ -368,7 +368,7 @@ fn a_task_toast_goes_when_the_task_leaves_the_state_it_announced(cx: &mut TestAp
     assert_eq!(toasts(cx), before, "answered: the toast goes");
 
     view.update(cx, |view, cx| {
-        view.cockpit.fixture_factory(Board {
+        view.cockpit.update(cx, |cockpit, _| cockpit.fixture_factory(Board {
             workflows: Vec::new(),
             tasks: vec![task(
                 "t-1",
@@ -379,7 +379,7 @@ fn a_task_toast_goes_when_the_task_leaves_the_state_it_announced(cx: &mut TestAp
                 Some("Out of disk"),
             )],
             ..Default::default()
-        });
+        }));
         alert(view, cx);
     });
     tick(cx);
@@ -395,7 +395,7 @@ fn a_task_toast_goes_when_the_task_leaves_the_state_it_announced(cx: &mut TestAp
 
     view.update(cx, |view, cx| {
         view.cockpit
-            .fixture_factory(needs_human(Status::Completed, Some("Created hello.txt")));
+            .update(cx, |cockpit, _| cockpit.fixture_factory(needs_human(Status::Completed, Some("Created hello.txt"))));
         cx.notify();
     });
     tick(cx);
@@ -469,10 +469,10 @@ fn focusing_a_worker_by_id_opens_its_tasks_worker_tab(cx: &mut TestAppContext) {
     tick(cx);
     view.update(cx, |view, cx| {
         view.cockpit
-            .fixture_task_alert(ferrite_core::protocol::ServerMessage::Focus {
+            .update(cx, |cockpit, _| cockpit.fixture_task_alert(ferrite_core::protocol::ServerMessage::Focus {
                 thread: worker,
                 fork_of: None,
-            });
+            }));
         cx.notify();
     });
     tick(cx);
@@ -494,8 +494,8 @@ fn new_thread_leaves_the_factory_for_the_draft_that_stood(cx: &mut TestAppContex
     bind_production_keys(cx);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     tick(cx);
-    let project = view.read_with(cx, |view, _| {
-        assert!(view.panes[view.focused()].draft().is_some(), "a draft stands");
+    let project = view.read_with(cx, |view, cx| {
+        assert!(view.panes[view.focused(cx)].draft().is_some(), "a draft stands");
         view.launch_project.unwrap()
     });
     view.update(cx, |view, cx| view.open_factory(project, cx));
@@ -503,8 +503,8 @@ fn new_thread_leaves_the_factory_for_the_draft_that_stood(cx: &mut TestAppContex
     assert!(view.read_with(cx, |view, _| view.factory().is_some()));
     cx.dispatch_action(NewThread);
     tick(cx);
-    view.read_with(cx, |view, _| {
+    view.read_with(cx, |view, cx| {
         assert!(!view.destination_shown(), "the board is back");
-        assert!(view.panes[view.focused()].draft().is_some(), "on the draft");
+        assert!(view.panes[view.focused(cx)].draft().is_some(), "on the draft");
     });
 }

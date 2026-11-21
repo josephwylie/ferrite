@@ -64,10 +64,10 @@ impl CockpitView {
     /// ⌘J: the focused Thread's last shell brought forward, or its first
     /// started.
     pub(super) fn toggle_terminal(&mut self, _: &ToggleTerminal, _: &mut Window, cx: &mut Context<Self>) {
-        let Some(thread) = self.focused_thread() else {
+        let Some(thread) = self.focused_thread(cx) else {
             return;
         };
-        if self.opener_unavailable(thread, panel::Opener::Terminal).is_some() {
+        if self.opener_unavailable(thread, panel::Opener::Terminal, cx).is_some() {
             return;
         }
         let open = self
@@ -102,20 +102,20 @@ impl CockpitView {
     }
 
     fn open_tool_surface(&mut self, opener: panel::Opener, cx: &mut Context<Self>) {
-        if let Some(thread) = self.focused_thread() {
+        if let Some(thread) = self.focused_thread(cx) {
             self.run_opener(thread, opener, cx);
         }
     }
 
     pub(super) fn toggle_file_tree_action(&mut self, _: &ToggleFileTree, _: &mut Window, cx: &mut Context<Self>) {
-        if let Some(thread) = self.focused_thread() {
+        if let Some(thread) = self.focused_thread(cx) {
             self.files
                 .update(cx, |files, cx| files.run_verb(thread, FilesVerb::ToggleTree, cx));
         }
     }
 
     pub(super) fn go_to_file_action(&mut self, _: &GoToFile, window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(thread) = self.focused_thread() {
+        if let Some(thread) = self.focused_thread(cx) {
             self.go_to_file(thread, window, cx);
         }
     }

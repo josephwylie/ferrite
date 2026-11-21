@@ -8,7 +8,6 @@
 //! press acts through the root.
 
 use super::*;
-use ferrite_core::engine::QueueItem;
 use ferrite_core::{ControlKind, McpStatus, SessionControl};
 
 /// The queue strip's acts on Pane `index`, each row's own, aimed at its
@@ -17,19 +16,31 @@ use ferrite_core::{ControlKind, McpStatus, SessionControl};
 pub(super) fn queue_acts(
     index: usize,
     thread: ThreadId,
-    queue: &[QueueItem],
+    model: &Entity<Cockpit>,
     running: bool,
     cx: &mut Context<CockpitView>,
 ) -> Vec<Vec<AnyElement>> {
     type Act = fn(&mut Cockpit, ThreadId, &str);
+    // What each queued item offers, read before the buttons are made.
+    let queue: Vec<_> = model
+        .read(cx)
+        .thread(thread)
+        .map(|open| {
+            open.queue()
+                .iter()
+                .map(|item| {
+                    (item.id.clone(), pane::queued_takes_back(item), pane::queued_sends_now(item, running))
+                })
+                .collect()
+        })
+        .unwrap_or_default();
     queue
-        .iter()
+        .into_iter()
         .enumerate()
-        .map(|(at, item)| {
-            let takes_back = pane::queued_takes_back(item);
+        .map(|(at, (id, takes_back, sends_now))| {
             let acts: [(Option<gpui::component::button::Button>, Act); 3] = [
                 (
-                    pane::queued_sends_now(item, running).then(|| pane::queued_send_now(at, cx)),
+                    sends_now.then(|| pane::queued_send_now(at, cx)),
                     |cockpit, thread, id| cockpit.send_queued_now(thread, id),
                 ),
                 (
@@ -43,15 +54,15 @@ pub(super) fn queue_acts(
             ];
             acts.into_iter()
                 .filter_map(|(button, act)| {
-                    let id = item.id.clone();
+                    let id = id.clone();
                     let button = button?.on_click(cx.listener(
                         move |view, _: &ClickEvent, window, cx| {
                             cx.stop_propagation();
-                            view.focus_pane(index);
+                            view.focus_pane(index, cx);
                             let focus = view.panes[index].composer.read(cx).focus_handle(cx);
                             window.focus(&focus, cx);
-                            act(&mut view.cockpit, thread, &id);
-                            view.facts.acted(&view.cockpit, thread);
+                            view.cockpit.update(cx, |cockpit, _| act(cockpit, thread, &id));
+                            view.facts.acted(view.cockpit.read(cx), thread);
                             cx.notify();
                         },
                     ));
@@ -77,7 +88,7 @@ pub(super) fn send_button(
     let button = pane::send_button(running, empty, cx)
         .on_click(cx.listener(move |view, _: &ClickEvent, window, cx| {
             cx.stop_propagation();
-            view.focus_pane(index);
+            view.focus_pane(index, cx);
             let focus = view.panes[index].composer.read(cx).focus_handle(cx);
             window.focus(&focus, cx);
             view.submit(&Submit, window, cx);
@@ -100,12 +111,12 @@ pub(super) fn stop_button(
     let button = pane::stop_button(cx)
         .on_click(cx.listener(move |view, _: &ClickEvent, window, cx| {
             cx.stop_propagation();
-            view.focus_pane(index);
+            view.focus_pane(index, cx);
             let focus = view.panes[index].composer.read(cx).focus_handle(cx);
             window.focus(&focus, cx);
             if let Some(thread) = view.panes[index].thread() {
-                view.cockpit.interrupt(thread);
-                view.facts.acted(&view.cockpit, thread);
+                view.cockpit.update(cx, |cockpit, _| cockpit.interrupt(thread));
+                view.facts.acted(view.cockpit.read(cx), thread);
                 cx.notify();
             }
         }))
@@ -267,7 +278,7 @@ impl AttachMenu {
             on_open: std::rc::Rc::new(move |open, _, cx| {
                 let _ = weak.update(cx, |view, cx| {
                     if open {
-                        view.focus_pane(index);
+                        view.focus_pane(index, cx);
                         let focus = cx.focus_handle();
                         view.show_popup(Popup::Attach { pane: identity, focus }, cx);
                     } else if view.attach_menu_focus(identity).is_some() {
@@ -331,7 +342,7 @@ fn submenus(
                 let act = acts.get(at).cloned().flatten();
                 let _ = view.update(cx, |view, cx| {
                     match act {
-                        Some(act) => view.run_session_control(thread, generation, act),
+                        Some(act) => view.run_session_control(thread, generation, act, cx),
                         None => view.open_panel(thread, cx),
                     }
                     cx.notify();
@@ -476,7 +487,7 @@ impl ModeChip {
             MouseButton::Left,
             cx.listener(move |view, _: &MouseDownEvent, _, cx| {
                 cx.stop_propagation();
-                view.focus_pane(index);
+                view.focus_pane(index, cx);
                 view.toggle_mode_menu(thread, generation, cx);
             }),
         );

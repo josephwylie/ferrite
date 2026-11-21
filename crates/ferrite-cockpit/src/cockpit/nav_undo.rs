@@ -18,7 +18,7 @@ impl CockpitView {
         let mut parked = Vec::new();
         let mut outcomes = Vec::new();
         for &thread in threads {
-            let result = self.cockpit.park_thread(thread).map_err(|e| e.to_string());
+            let result = self.cockpit.update(cx, |cockpit, _| cockpit.park_thread(thread).map_err(|e| e.to_string()));
             if result.is_ok() {
                 parked.push(thread);
             }

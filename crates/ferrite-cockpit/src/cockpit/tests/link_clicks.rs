@@ -381,9 +381,9 @@ fn issue_answer<'a>(
 
 /// The PR the Panel shows beside the conversation, if it shows one.
 fn shown_pr(view: &Entity<CockpitView>, cx: &mut gpui::VisualTestContext) -> Option<u64> {
-    view.read_with(cx, |view, _| {
+    view.read_with(cx, |view, cx| {
         assert!(!view.destination_shown(), "the conversation keeps the board");
-        match view.shown_surface(0)? {
+        match view.shown_surface(0, cx)? {
             crate::cockpit::surfaces::SurfaceId::PullRequest(number) => Some(number),
             _ => None,
         }

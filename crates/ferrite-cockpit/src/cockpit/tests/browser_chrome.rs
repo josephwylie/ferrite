@@ -19,8 +19,8 @@ fn browser_chrome_keeps_its_geometry_through_loading_empty_and_failure(cx: &mut 
         engine.live_views() == 1 && cx.debug_bounds("browser-preview").is_some()
     });
     until(cx, |cx| {
-        view.update(cx, |view, _| {
-            !view.cockpit.browser_attach(thread).unwrap().tabs[0].loading
+        view.update(cx, |view, cx| {
+            !view.cockpit.update(cx, |cockpit, _| cockpit.browser_attach(thread).unwrap().tabs[0].loading)
         })
     });
     let controls = |cx: &mut gpui::VisualTestContext| {
@@ -122,12 +122,12 @@ fn a_pending_new_tab_can_be_left_by_its_page_tab_or_escape(cx: &mut TestAppConte
         engine.live_views() == 1 && cx.debug_bounds("browser-preview").is_some()
     });
     until(cx, |cx| {
-        view.update(cx, |view, _| {
-            !view.cockpit.browser_attach(thread).unwrap().tabs[0].loading
+        view.update(cx, |view, cx| {
+            !view.cockpit.update(cx, |cockpit, _| cockpit.browser_attach(thread).unwrap().tabs[0].loading)
         })
     });
-    let page = view.update(cx, |view, _| {
-        view.cockpit.browser_attach(thread).unwrap().tabs[0].id
+    let page = view.update(cx, |view, cx| {
+        view.cockpit.update(cx, |cockpit, _| cockpit.browser_attach(thread).unwrap().tabs[0].id)
     });
     let page_tab: &'static str = Box::leak(format!("browser-tab-{}", page.0).into_boxed_str());
     assert!(cx.debug_bounds("browser-notice").is_none());
@@ -180,15 +180,15 @@ pub(super) fn browser_window<'a>(cx: &'a mut TestAppContext, name: &str) -> Wind
         engine.live_views() == 1 && cx.debug_bounds("browser-preview").is_some()
     });
     until(cx, |cx| {
-        view.update(cx, |view, _| {
-            !view.cockpit.browser_attach(thread).unwrap().tabs[0].loading
+        view.update(cx, |view, cx| {
+            !view.cockpit.update(cx, |cockpit, _| cockpit.browser_attach(thread).unwrap().tabs[0].loading)
         })
     });
     (engine, view, thread, cx)
 }
 
 fn tab_count(view: &Entity<CockpitView>, thread: ThreadId, cx: &mut gpui::VisualTestContext) -> usize {
-    view.update(cx, |view, _| view.cockpit.browser_attach(thread).unwrap().tabs.len())
+    view.update(cx, |view, cx| view.cockpit.update(cx, |cockpit, _| cockpit.browser_attach(thread).unwrap().tabs.len()))
 }
 
 #[gpui::test]
@@ -297,9 +297,9 @@ fn a_page_asking_for_a_new_window_gets_a_tab(cx: &mut TestAppContext) {
     let (engine, view, thread, cx) = browser_window(cx, "bnt-window");
     engine.request_window("http://localhost:5173/popup");
     until(cx, |cx| tab_count(&view, thread, cx) == 2);
-    let urls = view.update(cx, |view, _| {
+    let urls = view.update(cx, |view, cx| {
         view.cockpit
-            .browser_attach(thread)
+            .update(cx, |cockpit, _| cockpit.browser_attach(thread))
             .unwrap()
             .tabs
             .iter()
@@ -353,7 +353,7 @@ fn open_second_page(
     let second = view.update(cx, |view, cx| {
         let second = view
             .cockpit
-            .open(Provider::Claude, WorkspaceChoice::Main { checkout: here() })
+            .update(cx, |cockpit, _| cockpit.open(Provider::Claude, WorkspaceChoice::Main { checkout: here() }))
             .unwrap();
         view.browser_action(second, ferrite_core::browser::Action::Open { url: url.into() }, cx);
         view.focus_thread(first, cx);
@@ -468,8 +468,8 @@ fn an_address_draft_survives_the_pages_own_navigation(cx: &mut TestAppContext) {
     cx.simulate_click(address.center(), gpui::Modifiers::none());
     cx.simulate_keystrokes("cmd-a");
     cx.simulate_input("http://localhost:5173/typed-half");
-    let document = view.update(cx, |view, _| {
-        view.cockpit.browser_attach(thread).unwrap().tabs[0].document()
+    let document = view.update(cx, |view, cx| {
+        view.cockpit.update(cx, |cockpit, _| cockpit.browser_attach(thread).unwrap().tabs[0].document())
     });
     view.update(cx, |view, cx| {
         view.browser_action(
@@ -479,8 +479,10 @@ fn an_address_draft_survives_the_pages_own_navigation(cx: &mut TestAppContext) {
         )
     });
     until(cx, |cx| {
-        view.update(cx, |view, _| {
-            view.cockpit.browser_attach(thread).unwrap().tabs[0].url == "http://localhost:5173/moved"
+        view.update(cx, |view, cx| {
+            view.cockpit.update(cx, |cockpit, _| {
+                cockpit.browser_attach(thread).unwrap().tabs[0].url == "http://localhost:5173/moved"
+            })
         })
     });
     tick(cx);

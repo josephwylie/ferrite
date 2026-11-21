@@ -52,7 +52,7 @@ pub(super) fn click_child(
     name: &str,
 ) {
     let thread = view.read_with(cx, |view, _| view.panes[0].thread().unwrap());
-    let subject = view.read_with(cx, |view, _| view.agent_of_call(thread, name).unwrap());
+    let subject = view.read_with(cx, |view, cx| view.agent_of_call(thread, name, cx).unwrap());
     cx.update(|window, app| {
         view.update(app, |view, cx| view.select_subject(thread, subject, window, cx))
     });
@@ -98,6 +98,7 @@ fn child_tabs_switch_transcripts_preserve_main_draft_and_survive_reorder(cx: &mu
         assert_eq!(view.panes[0].composer.read(cx).text(), "keep my draft");
         let subject = view
             .cockpit
+            .read(cx)
             .thread(thread)
             .unwrap()
             .activity()
@@ -273,6 +274,7 @@ fn core_eviction_releases_a_hidden_retained_transcript_entity(cx: &mut TestAppCo
             view.update(cx, |view, cx| {
                 let generation = view
                     .cockpit
+                    .read(cx)
                     .thread(thread)
                     .unwrap()
                     .activity()
@@ -302,9 +304,10 @@ fn core_eviction_releases_a_hidden_retained_transcript_entity(cx: &mut TestAppCo
     for _ in 0..8 {
         tick(cx);
     }
-    view.read_with(cx, |view, _| {
+    view.read_with(cx, |view, cx| {
         let atlas_core = view
             .cockpit
+            .read(cx)
             .thread(thread)
             .unwrap()
             .activity()
@@ -349,8 +352,9 @@ fn hidden_child_requests_jump_and_reply_only_to_their_captured_handle(cx: &mut T
         view.read_with(cx, |view, _| view.panes[0].selected.clone()),
         Subject::Subagent(key("Atlas"))
     );
-    let serial = view.read_with(cx, |view, _| {
+    let serial = view.read_with(cx, |view, cx| {
         view.cockpit
+            .read(cx)
             .thread(view.panes[0].thread().unwrap())
             .unwrap()
             .pending_decisions()[0]
@@ -363,9 +367,10 @@ fn hidden_child_requests_jump_and_reply_only_to_their_captured_handle(cx: &mut T
     cx.run_until_parked();
     assert_eq!(fake.answered.borrow().len(), 1);
     assert_eq!(fake.answered.borrow()[0].0, "Atlas");
-    view.read_with(cx, |view, _| {
+    view.read_with(cx, |view, cx| {
         let pending = view
             .cockpit
+            .read(cx)
             .thread(view.panes[0].thread().unwrap())
             .unwrap()
             .pending_decisions();
@@ -423,9 +428,10 @@ fn unattributed_question_keeps_native_input_focus_across_repaint_and_sends_exact
         },
     );
     tick(cx);
-    let serial = view.read_with(cx, |view, _| {
+    let serial = view.read_with(cx, |view, cx| {
         let activity = view
             .cockpit
+            .read(cx)
             .thread(view.panes[0].thread().unwrap())
             .unwrap()
             .activity();
@@ -684,9 +690,10 @@ fn an_agent_row_runs_with_its_agent_and_opens_it(cx: &mut TestAppContext) {
         cx.debug_bounds("agent-elapsed-live").is_some(),
         "its time counts on its own while it runs"
     );
-    view.read_with(cx, |view, _| {
+    view.read_with(cx, |view, cx| {
         let activity = view
             .cockpit
+            .read(cx)
             .thread(view.panes[0].thread().unwrap())
             .unwrap()
             .activity();
@@ -746,9 +753,10 @@ fn an_agents_face_reads_its_agents_state_as_t3s(cx: &mut TestAppContext) {
         })
         .unwrap();
     tick(cx);
-    view.read_with(cx, |view, _| {
+    view.read_with(cx, |view, cx| {
         let activity = view
             .cockpit
+            .read(cx)
             .thread(view.panes[0].thread().unwrap())
             .unwrap()
             .activity();
@@ -1096,8 +1104,9 @@ fn an_evicted_agent_opens_from_its_row_and_loads_its_history(cx: &mut TestAppCon
             tick(cx);
         }
     }
-    assert!(view.read_with(cx, |view, _| !view
+    assert!(view.read_with(cx, |view, cx| !view
         .cockpit
+        .read(cx)
         .thread(thread)
         .unwrap()
         .activity()
@@ -1110,8 +1119,8 @@ fn an_evicted_agent_opens_from_its_row_and_loads_its_history(cx: &mut TestAppCon
     for _ in 0..8 {
         tick(cx);
     }
-    view.read_with(cx, |view, _| {
-        let subject = view.cockpit.thread(thread).unwrap().activity().subject(&atlas).unwrap();
+    view.read_with(cx, |view, cx| {
+        let subject = view.cockpit.read(cx).thread(thread).unwrap().activity().subject(&atlas).unwrap();
         assert!(subject.retained(), "its saved history came back");
     });
     assert!(fake.sent.borrow().is_empty(), "the provider was not resumed");
@@ -1145,8 +1154,9 @@ fn a_waiting_agent_opened_from_its_row_answers_its_own_request(cx: &mut TestAppC
     click(cx, "agent-card-Atlas");
     click(cx, "agent-open-Cedar");
     assert_eq!(selected(&view, cx), Subject::Subagent(key("Cedar")));
-    let serial = view.read_with(cx, |view, _| {
+    let serial = view.read_with(cx, |view, cx| {
         view.cockpit
+            .read(cx)
             .thread(view.panes[0].thread().unwrap())
             .unwrap()
             .pending_decisions()

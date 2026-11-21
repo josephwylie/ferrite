@@ -193,7 +193,7 @@ fn an_open_task_that_moves_column_stays_in_view(cx: &mut TestAppContext) {
     let mut board = every_column(project);
     board.tasks[2].status = Status::Completed;
     view.update(cx, |view, cx| {
-        view.cockpit.fixture_factory(board);
+        view.cockpit.update(cx, |cockpit, _| cockpit.fixture_factory(board));
         cx.notify();
     });
     tick(cx);
@@ -225,8 +225,9 @@ fn an_empty_projects_factory_is_one_palette_search_away(cx: &mut TestAppContext)
     view.read_with(cx, |view, cx| {
         assert_eq!(view.factory_rows(cx).len(), 1, "no row for every Project");
     });
-    let title = view.read_with(cx, |view, _| {
+    let title = view.read_with(cx, |view, cx| {
         view.cockpit
+            .read(cx)
             .registry()
             .project(empty)
             .unwrap()
@@ -413,10 +414,10 @@ fn the_coordinators_pane_draws_without_a_click(cx: &mut TestAppContext) {
     });
     tick(cx);
     tick(cx);
-    view.read_with(cx, |view, _| {
+    view.read_with(cx, |view, cx| {
         let index = view.pane_for(coordinator).expect("its Pane");
         assert!(
-            !view.visible_indices().contains(&index),
+            !view.visible_indices(cx).contains(&index),
             "the roster does not show it: only the Factory draws it"
         );
     });
@@ -459,7 +460,7 @@ fn a_tasks_toast_is_not_raised_over_its_own_panel(cx: &mut TestAppContext) {
     };
     view.update(cx, |view, cx| {
         view.cockpit
-            .fixture_task_alert(alert("t-4", Status::Approval));
+            .update(cx, |cockpit, _| cockpit.fixture_task_alert(alert("t-4", Status::Approval)));
         cx.notify();
     });
     tick(cx);
@@ -469,7 +470,7 @@ fn a_tasks_toast_is_not_raised_over_its_own_panel(cx: &mut TestAppContext) {
 
     view.update(cx, |view, cx| {
         view.cockpit
-            .fixture_task_alert(alert("t-3", Status::NeedsHuman));
+            .update(cx, |cockpit, _| cockpit.fixture_task_alert(alert("t-3", Status::NeedsHuman)));
         cx.notify();
     });
     tick(cx);
@@ -491,7 +492,7 @@ fn a_tasks_toast_is_not_raised_over_its_own_panel(cx: &mut TestAppContext) {
     view.update(cx, |view, cx| {
         view.factory_surface(Surface::Workflows, cx);
         view.cockpit
-            .fixture_task_alert(alert("t-3", Status::NeedsHuman));
+            .update(cx, |cockpit, _| cockpit.fixture_task_alert(alert("t-3", Status::NeedsHuman)));
         cx.notify();
     });
     tick(cx);
@@ -539,7 +540,7 @@ fn the_title_bar_names_the_factory_and_its_open_task(cx: &mut TestAppContext) {
         serde_json::json!({"result": "Created hello.txt", "archived_ms": 2_000}),
     );
     view.update(cx, |view, cx| {
-        view.cockpit.fixture_factory(cleared);
+        view.cockpit.update(cx, |cockpit, _| cockpit.fixture_factory(cleared));
         cx.notify();
     });
     tick(cx);
@@ -624,10 +625,10 @@ fn focusing_a_worker_by_id_brings_its_panel_forward_from_workflows(cx: &mut Test
     tick(cx);
     view.update(cx, |view, cx| {
         view.cockpit
-            .fixture_task_alert(ferrite_core::protocol::ServerMessage::Focus {
+            .update(cx, |cockpit, _| cockpit.fixture_task_alert(ferrite_core::protocol::ServerMessage::Focus {
                 thread: worker,
                 fork_of: None,
-            });
+            }));
         cx.notify();
     });
     tick(cx);
@@ -871,7 +872,7 @@ fn the_process_menu_opens_over_the_sheet_and_its_pick_starts_the_task(cx: &mut T
     };
     let (view, cx) = template_window(cx, "fit-process", vec![opus]);
     view.update(cx, |view, cx| {
-        view.cockpit.fixture_record_tasks();
+        view.cockpit.update(cx, |cockpit, _| cockpit.fixture_record_tasks());
         view.save_workflow(cx);
     });
     tick(cx);
@@ -898,7 +899,7 @@ fn the_process_menu_opens_over_the_sheet_and_its_pick_starts_the_task(cx: &mut T
     assert!(!shows(cx, "context-menu"), "the pick closes the menu");
     assert!(shows(cx, "new-task-card"), "and leaves the sheet up");
     click(cx, "new-task-start");
-    let asks = view.read_with(cx, |view, _| view.cockpit.fixture_task_asks().to_vec());
+    let asks = view.read_with(cx, |view, cx| view.cockpit.read(cx).fixture_task_asks().to_vec());
     match asks.as_slice() {
         [ferrite_core::protocol::TaskAction::Start {
             instructions,

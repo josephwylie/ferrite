@@ -2,11 +2,11 @@
 //! reads: its list's motion and folds, its scroll, its keyboard and
 //! cursor, its search, the cards picked or swept, the undo notice, the
 //! Snooze field, and when each Thread came into its section. It reads
-//! what it draws (`NavInputs`) itself, as the Cockpit or the pump's bell
-//! notifies (`look`), and its render draws only that, so it redraws only
-//! when what it draws moved. What the operator asks of the window it says
-//! as a `NavEvent`, which the Cockpit answers once the nav's own update
-//! has ended.
+//! what it draws (`NavInputs`) itself, as the Cockpit or the client's
+//! model notifies (`look`), and its render draws only that, so it redraws
+//! only when what it draws moved. What the operator asks of the window it
+//! says as a `NavEvent`, which the Cockpit answers once the nav's own
+//! update has ended.
 
 use super::nav_chrome::{NavUndo, UndoAct};
 use super::nav_pick::ParkSweep;
@@ -23,6 +23,8 @@ use std::rc::Rc;
 
 pub(crate) struct NavView {
     pub(super) cockpit: WeakEntity<CockpitView>,
+    /// The client's model, which the nav reads what it lists from.
+    model: Entity<Cockpit>,
     /// The list's motion (`nav::flip`), shared with its elements.
     pub(super) motion: nav_list::NavMotion,
     /// The next frame's list stands still rather than sliding: a shelf
@@ -80,8 +82,8 @@ pub(crate) struct NavView {
     /// When each listed Thread came into its section, which the list and
     /// the Working shelf order by. Only `look` writes it.
     arrivals: nav::Arrivals,
-    /// The Cockpit's notify and the pump's bell, each of which has the nav
-    /// look again.
+    /// The Cockpit's notify and the model's, each of which has the nav look
+    /// again.
     watching: Vec<gpui::Subscription>,
 }
 
@@ -190,16 +192,17 @@ impl menu_button::MenuHost for NavView {
 impl NavView {
     pub(super) fn new(
         cockpit: WeakEntity<CockpitView>,
-        arrived: Entity<parts::Arrived>,
+        model: Entity<Cockpit>,
         cx: &mut Context<Self>,
     ) -> Self {
         // The Cockpit is still being made: the nav first looks once it is.
         let nav = cx.weak_entity();
         cx.defer(move |cx| {
-            nav.update(cx, |nav, cx| nav.watch(arrived, cx)).ok();
+            nav.update(cx, |nav, cx| nav.watch(cx)).ok();
         });
         Self {
             cockpit,
+            model,
             motion: Default::default(),
             snap: Cell::new(false),
             shelf_folds: Default::default(),
@@ -227,30 +230,30 @@ impl NavView {
         }
     }
 
-    fn watch(&mut self, arrived: Entity<parts::Arrived>, cx: &mut Context<Self>) {
+    fn watch(&mut self, cx: &mut Context<Self>) {
         let Some(cockpit) = self.cockpit.upgrade() else {
             return;
         };
         self.watching = vec![
             cx.observe(&cockpit, |nav, _, cx| nav.look(cx)),
-            cx.observe(&arrived, |nav, _, cx| nav.look(cx)),
+            cx.observe(&self.model, |nav, _, cx| nav.look(cx)),
         ];
         self.look(cx);
     }
 
-    /// Read what the nav draws from the Cockpit, note which Threads came
-    /// into a section, and redraw when any of it moved. It runs as the
-    /// Cockpit or the pump's bell notifies, never in a draw, so a draw
-    /// never writes.
+    /// Read what the nav draws from the Cockpit and the model, note which
+    /// Threads came into a section, and redraw when any of it moved. It
+    /// runs as either notifies, never in a draw, so a draw never writes.
     pub(super) fn look(&mut self, cx: &mut Context<Self>) {
         let Some(cockpit) = self.cockpit.upgrade() else {
             return;
         };
         let view = cockpit.read(cx);
-        let listed = listed_threads(view);
+        let model = self.model.read(cx);
+        let listed = listed_threads(view, model);
         self.arrivals
             .note(&listed, ferrite_core::clock::system_time());
-        let inputs = nav_inputs(view, &listed, &self.arrivals, cx);
+        let inputs = nav_inputs(view, model, &listed, &self.arrivals, cx);
         if self.inputs.as_ref() != Some(&inputs) {
             self.inputs = Some(inputs);
             cx.notify();
@@ -321,24 +324,25 @@ impl Render for NavView {
 /// and `arrivals` as `look` noted them.
 fn nav_inputs(
     view: &CockpitView,
+    model: &Cockpit,
     listed: &[(ThreadId, nav::Section, Option<std::time::SystemTime>)],
     arrivals: &nav::Arrivals,
     cx: &App,
 ) -> NavInputs {
     use crate::ferrite_update::State;
-    let state = nav_state(view, listed, arrivals);
+    let state = nav_state(view, model, listed, arrivals, cx);
     let inbox = view.inbox_rows(&state, cx);
-    let projects = view.factory_nav_projects(&state);
+    let projects = view.factory_nav_projects(&state, cx);
     let factory = (!projects.is_empty()).then(|| {
         projects
             .iter()
-            .any(|project| view.cockpit.factory().needs_you(*project) > 0)
+            .any(|project| model.factory().needs_you(*project) > 0)
     });
     let open = state
         .open_rows()
         .chain(&state.parked)
         .filter_map(|row| {
-            let open = view.cockpit.thread(row.thread)?;
+            let open = model.thread(row.thread)?;
             Some((
                 row.thread,
                 OpenThread {
@@ -348,9 +352,9 @@ fn nav_inputs(
             ))
         })
         .collect();
-    let shown = view.focused_thread();
+    let shown = view.focused_thread(cx);
     let provider = shown
-        .and_then(|thread| view.cockpit.thread(thread))
+        .and_then(|thread| model.thread(thread))
         .map(|open| open.provider())
         .unwrap_or(view.launch_provider);
     let update = match view.ferrite_update.state() {
@@ -360,7 +364,7 @@ fn nav_inputs(
     };
     NavInputs {
         machines: view.machine_rows(cx),
-        machine_lost: view.machine_lost(),
+        machine_lost: view.machine_lost(cx),
         inbox,
         open_shelves: view.prefs.settings.open_shelves.clone(),
         width: view.nav_expanded_width(),
@@ -368,7 +372,7 @@ fn nav_inputs(
         notice: view.nav_notice.text().cloned(),
         filtered: view
             .nav_filter
-            .and_then(|project| view.cockpit.registry().project(project))
+            .and_then(|project| model.registry().project(project))
             .map(|project| project.title.clone().into()),
         factory,
         menu: view.context_menu().map(|menu| menu.target),
@@ -378,7 +382,7 @@ fn nav_inputs(
             Some((RenameTarget::Thread(thread), editor)) => Some((thread, editor.clone())),
             _ => None,
         },
-        limits: view.cockpit.account_limits(provider),
+        limits: model.account_limits(provider),
         free_disk: view.free_disk,
         update,
         state,
@@ -399,17 +403,19 @@ fn nav_inputs(
 /// The one selection is the shown Thread. The empty board shows none.
 fn nav_state(
     view: &CockpitView,
+    model: &Cockpit,
     listed: &[(ThreadId, nav::Section, Option<std::time::SystemTime>)],
     arrivals: &nav::Arrivals,
+    cx: &App,
 ) -> nav::NavState {
     use nav::Section;
-    let roster = view.cockpit.roster();
-    let shown = (!view.empty_board_shown())
+    let roster = model.roster();
+    let shown = (!view.empty_board_shown(cx))
         .then(|| roster.focused_thread())
         .flatten();
     let row = |thread: ThreadId| nav::ThreadRow {
         selected: shown == Some(thread),
-        ..view.thread_row(thread)
+        ..view.thread_row(thread, cx)
     };
     let pins = &view.prefs.settings.pinned_threads;
     // The latest arrival first; arrivals alike keep creation order.
@@ -419,14 +425,12 @@ fn nav_state(
     let mut pinned = Vec::new();
     let mut snoozed = Vec::new();
     for &(thread, section, _) in listed {
-        if !view.admitted(thread) {
+        if !view.admitted(thread, cx) {
             continue;
         }
         match section {
             Section::Snoozed => {
-                let until = view
-                    .cockpit
-                    .thread(thread)
+                let until = model.thread(thread)
                     .and_then(|open| open.snooze())
                     .map(|snooze| snooze.until);
                 snoozed.push((until, row(thread)));
@@ -443,7 +447,7 @@ fn nav_state(
     state.pinned = pinned.into_iter().map(|(_, row)| row).collect();
     snoozed.sort_by_key(|(until, _)| *until);
     state.snoozed = snoozed.into_iter().map(|(_, row)| row).collect();
-    let queue = view.cockpit.needs_you();
+    let queue = model.needs_you();
     state.active.sort_by_key(|row| {
         (
             queue
@@ -454,14 +458,14 @@ fn nav_state(
         )
     });
     state.working.sort_by_key(latest);
-    state.parked = view.parked_threads().into_iter().map(row).collect();
+    state.parked = view.parked_threads(cx).into_iter().map(row).collect();
     state
 }
 
 /// Every open Thread the nav lists, the Project filter's or not, with
 /// the section it is in and its last activity: what `nav::Arrivals`
 /// notes.
-fn listed_threads(view: &CockpitView) -> Vec<(ThreadId, nav::Section, Option<std::time::SystemTime>)> {
+fn listed_threads(view: &CockpitView, model: &Cockpit) -> Vec<(ThreadId, nav::Section, Option<std::time::SystemTime>)> {
     use nav::Section;
     #[cfg(test)]
     drawn::listed();
@@ -470,7 +474,7 @@ fn listed_threads(view: &CockpitView) -> Vec<(ThreadId, nav::Section, Option<std
         .iter()
         .filter_map(|pane| pane.thread())
         .filter(|thread| {
-            view.cockpit.thread(*thread).is_some() && view.cockpit.operators(*thread)
+            model.thread(*thread).is_some() && model.operators(*thread)
         })
         .collect();
     threads.sort();
@@ -481,7 +485,7 @@ fn listed_threads(view: &CockpitView) -> Vec<(ThreadId, nav::Section, Option<std
     threads
         .into_iter()
         .map(|thread| {
-            let open = view.cockpit.thread(thread);
+            let open = model.thread(thread);
             let section = if open.is_some_and(|open| open.snooze().is_some()) {
                 Section::Snoozed
             } else if pins.contains(&thread) {
@@ -543,7 +547,7 @@ impl CockpitView {
                 open: None,
             }),
             NavEvent::Snooze(thread, until) => {
-                let refused = match self.cockpit.snooze_thread(thread, Some(until)) {
+                let refused = match self.cockpit.update(cx, |cockpit, _| cockpit.snooze_thread(thread, Some(until))) {
                     Ok(()) => {
                         self.nav_notice.clear();
                         None

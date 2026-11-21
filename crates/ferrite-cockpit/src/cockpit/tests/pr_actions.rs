@@ -37,9 +37,9 @@ fn on_pr<'a>(
     tick(cx);
     let thread = view.read_with(cx, |view, _| view.panes[0].thread().unwrap());
     view.update(cx, |view, cx| {
-        let path = view.thread_path(thread).unwrap();
-        view.cockpit.fixture_forge(path.clone(), PrView::NoPr);
-        view.cockpit.fixture_hold_pr_reads(path);
+        let path = view.thread_path(thread, cx).unwrap();
+        view.cockpit.update(cx, |cockpit, _| cockpit.fixture_forge(path.clone(), PrView::NoPr));
+        view.cockpit.update(cx, |cockpit, _| cockpit.fixture_hold_pr_reads(path));
         view.pr_landed(thread, Some(pr_with_checks()), cx);
         view.fixture_pr_snapshot(thread, pr, cx);
         view.open_pr_surface(thread, cx);
@@ -66,7 +66,7 @@ fn sent(fake: &Fake) -> usize {
 }
 
 fn reads(view: &Entity<CockpitView>, cx: &mut gpui::VisualTestContext) -> Vec<HeldRead> {
-    view.update(cx, |view, _| view.cockpit.take_held_reads())
+    view.update(cx, |view, cx| view.cockpit.update(cx, |cockpit, _| cockpit.take_held_reads()))
 }
 
 /// The words of the notice strip, as it draws them.
@@ -340,9 +340,9 @@ fn a_queued_action_a_turn_picks_up_runs_and_is_checked(cx: &mut TestAppContext) 
         .unwrap();
     tick(cx);
     merge(cx);
-    let id = view.read_with(cx, |view, _| {
+    let id = view.read_with(cx, |view, cx| {
         let thread = view.panes[0].thread().unwrap();
-        view.cockpit.thread(thread).unwrap().queue()[0].id.clone()
+        view.cockpit.read(cx).thread(thread).unwrap().queue()[0].id.clone()
     });
     let stream = fake.streams.borrow()[0].clone();
     stream

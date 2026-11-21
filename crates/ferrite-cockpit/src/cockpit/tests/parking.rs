@@ -23,11 +23,11 @@ fn closing_a_pane_parks_the_thread_rather_than_losing_it(cx: &mut TestAppContext
             .any(|row| row.thread == closed));
         assert_eq!(view.panes.len(), 1, "the Pane is gone");
         assert!(
-            view.cockpit.thread(closed).is_none(),
+            view.cockpit.read(cx).thread(closed).is_none(),
             "and so is its memory"
         );
         assert!(
-            view.cockpit.parked().unwrap().contains(&closed),
+            view.cockpit.read(cx).parked().unwrap().contains(&closed),
             "but the Thread is still there to reopen"
         );
     });
@@ -62,7 +62,7 @@ fn reopening_brings_a_parked_thread_back_with_its_history(cx: &mut TestAppContex
             view.panes.iter().any(|pane| pane.thread() == Some(closed)),
             "and it is the same Thread, not a new one"
         );
-        assert!(view.cockpit.thread(closed).is_some(), "with its history");
+        assert!(view.cockpit.read(cx).thread(closed).is_some(), "with its history");
     });
 }
 
@@ -82,7 +82,7 @@ fn reopening_revives_the_thread_parked_most_recently(cx: &mut TestAppContext) {
     tick(cx);
     let (a, b) = created(&view, cx);
 
-    view.update(cx, |view, _| view.focus_pane(view.pane_for(b).unwrap()));
+    view.update(cx, |view, cx| view.focus_pane(view.pane_for(b).unwrap(), cx));
     cx.simulate_keystrokes("cmd-w"); // park B
     cx.simulate_keystrokes("cmd-w"); // then A — the most recent park
     cx.simulate_keystrokes("cmd-o");
@@ -112,7 +112,7 @@ fn reopening_again_walks_the_park_order_backwards(cx: &mut TestAppContext) {
     tick(cx);
     let (a, b) = created(&view, cx);
 
-    view.update(cx, |view, _| view.focus_pane(view.pane_for(a).unwrap()));
+    view.update(cx, |view, cx| view.focus_pane(view.pane_for(a).unwrap(), cx));
     cx.simulate_keystrokes("cmd-w"); // park A
     cx.simulate_keystrokes("cmd-w"); // then B
 

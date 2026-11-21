@@ -47,12 +47,12 @@ fn disabled_placeholder_suggestions_are_hidden_and_tab_does_not_accept_them(
 
     view.read_with(cx, |view, cx| {
         assert_eq!(
-            view.cockpit.thread(thread).unwrap().suggestion(),
+            view.cockpit.read(cx).thread(thread).unwrap().suggestion(),
             None,
             "turning the setting off clears the visible prediction"
         );
         assert!(
-            view.panes[view.focused()].composer.read(cx).is_empty(),
+            view.panes[view.focused(cx)].composer.read(cx).is_empty(),
             "Tab must not accept a disabled prediction"
         );
     });
@@ -101,9 +101,10 @@ fn history_arrows_only_replace_the_composer_and_restore_the_exact_draft(cx: &mut
         assert_eq!(composer_text(&view, cx), expected);
     }
     assert_eq!(fake.sent.borrow().as_slice(), ["one", "two"]);
-    view.read_with(cx, |view, _| {
+    view.read_with(cx, |view, cx| {
         assert_eq!(
             view.cockpit
+                .read(cx)
                 .thread(thread)
                 .map(|open| open.transcript())
                 .unwrap()
@@ -660,7 +661,7 @@ fn draft_mentions_are_scoped_to_the_selected_project(cx: &mut TestAppContext) {
     let core = Cockpit::new(store, Box::new(fake));
     bind_production_keys(cx);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
-    view.update(cx, |view, _| view.aim_launch(&project));
+    view.update(cx, |view, cx| view.aim_launch(&project, cx));
     cx.simulate_resize(gpui::size(px(1000.), px(700.)));
     tick(cx);
 
@@ -688,19 +689,19 @@ fn draft_mentions_follow_the_selected_workspace(cx: &mut TestAppContext) {
     let core = Cockpit::new(store, Box::new(fake));
     bind_production_keys(cx);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
-    view.update(cx, |view, _| {
-        view.aim_launch(&repo);
+    view.update(cx, |view, cx| {
+        view.aim_launch(&repo, cx);
         let thread = view
             .cockpit
-            .open(
+            .update(cx, |cockpit, _| cockpit.open(
                 Provider::Claude,
                 WorkspaceChoice::NewWorktree { repo: repo.clone() },
-            )
+            ))
             .unwrap();
-        view.cockpit.park(thread).unwrap();
-        let focused = view.focused();
+        view.cockpit.update(cx, |cockpit, _| cockpit.park(thread).unwrap());
+        let focused = view.focused(cx);
         let entry = view.panes[focused].draft().unwrap().binding.project();
-        let worktree = view.cockpit.registry().worktrees(entry)[0].clone();
+        let worktree = view.cockpit.read(cx).registry().worktrees(entry)[0].clone();
         std::fs::write(worktree.path.join("worktree-only.txt"), "tree\n").unwrap();
         view.panes[focused]
             .draft_mut()
@@ -728,10 +729,10 @@ fn draft_mentions_follow_the_selected_workspace(cx: &mut TestAppContext) {
     });
 
     view.update(cx, |view, cx| {
-        view.panes[view.focused()]
+        view.panes[view.focused(cx)]
             .composer
             .update(cx, |composer, cx| composer.set(String::new(), cx));
-        let focused = view.focused();
+        let focused = view.focused(cx);
         view.panes[focused]
             .draft_mut()
             .unwrap()
@@ -756,12 +757,12 @@ fn draft_mentions_follow_the_selected_workspace(cx: &mut TestAppContext) {
     // send. The resulting Thread keeps that same directory, not the
     // Project checkout.
     view.update(cx, |view, cx| {
-        view.panes[view.focused()]
+        view.panes[view.focused(cx)]
             .composer
             .update(cx, |composer, cx| composer.set(String::new(), cx));
-        let focused = view.focused();
+        let focused = view.focused(cx);
         let project = view.panes[focused].draft().unwrap().binding.project();
-        let worktree = view.cockpit.registry().worktrees(project)[0].clone();
+        let worktree = view.cockpit.read(cx).registry().worktrees(project)[0].clone();
         view.panes[focused]
             .draft_mut()
             .unwrap()
@@ -777,12 +778,13 @@ fn draft_mentions_follow_the_selected_workspace(cx: &mut TestAppContext) {
     assert_eq!(composer_text(&view, cx), "@worktree-only.txt ");
     cx.simulate_keystrokes("enter");
     tick(cx);
-    view.read_with(cx, |view, _| {
-        let thread = view.panes[view.focused()]
+    view.read_with(cx, |view, cx| {
+        let thread = view.panes[view.focused(cx)]
             .thread()
             .expect("first send bound the Thread");
         let cwd = view
             .cockpit
+            .read(cx)
             .thread(thread)
             .unwrap()
             .workspace()
@@ -805,9 +807,9 @@ fn a_stale_draft_workspace_neither_completes_nor_sends_from_main(cx: &mut TestAp
     );
     bind_production_keys(cx);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
-    view.update(cx, |view, _| {
-        view.aim_launch(&repo);
-        view.focused_draft_mut()
+    view.update(cx, |view, cx| {
+        view.aim_launch(&repo, cx);
+        view.focused_draft_mut(cx)
             .unwrap()
             .binding
             .choose_target(DraftTarget::Existing {
@@ -820,8 +822,8 @@ fn a_stale_draft_workspace_neither_completes_nor_sends_from_main(cx: &mut TestAp
     cx.run_until_parked();
     view.read_with(cx, |view, cx| assert!(view.popover(cx).is_none()));
     cx.simulate_keystrokes("enter");
-    view.read_with(cx, |view, _| {
-        let draft = view.panes[view.focused()].draft().expect("still a draft");
+    view.read_with(cx, |view, cx| {
+        let draft = view.panes[view.focused(cx)].draft().expect("still a draft");
         assert!(draft.error.as_ref().unwrap().contains("removed-worktree"));
     });
     assert_eq!(composer_text(&view, cx), "@main-only");
@@ -960,16 +962,17 @@ fn a_pending_decision_keeps_the_composer_live(cx: &mut TestAppContext) {
         .send(decision("perm_live"))
         .unwrap();
     tick(cx);
-    view.read_with(cx, |view, _| {
+    view.read_with(cx, |view, cx| {
         assert!(
             view.cockpit
+                .read(cx)
                 .thread(thread)
                 .and_then(|open| open.pending())
                 .is_some(),
             "the card is up"
         );
         assert!(
-            view.cockpit.thread(thread).is_some_and(|open| open.busy()),
+            view.cockpit.read(cx).thread(thread).is_some_and(|open| open.busy()),
             "the turn is running"
         );
     });
@@ -979,15 +982,17 @@ fn a_pending_decision_keeps_the_composer_live(cx: &mut TestAppContext) {
     cx.simulate_input("fix the tests too");
     cx.simulate_keystrokes("enter");
     tick(cx);
-    view.read_with(cx, |view, _| {
+    view.read_with(cx, |view, cx| {
         assert_eq!(
             view.cockpit
+                .read(cx)
                 .thread(thread)
                 .and_then(|open| open.queue().first().map(|item| item.text.as_str())),
             Some("fix the tests too")
         );
         assert!(
             view.cockpit
+                .read(cx)
                 .thread(thread)
                 .and_then(|open| open.pending())
                 .is_some(),
@@ -1006,9 +1011,10 @@ fn the_announced_permission_mode_reaches_the_meta_row_state(cx: &mut TestAppCont
     cx.simulate_resize(gpui::size(px(1000.), px(700.)));
     tick(cx);
     let thread = view.read_with(cx, |view, _| view.panes[0].thread().unwrap());
-    view.read_with(cx, |view, _| {
+    view.read_with(cx, |view, cx| {
         assert_eq!(
             view.cockpit
+                .read(cx)
                 .thread(thread)
                 .and_then(|open| open.permission_mode()),
             None,
@@ -1023,9 +1029,10 @@ fn the_announced_permission_mode_reaches_the_meta_row_state(cx: &mut TestAppCont
         .unwrap();
     tick(cx);
 
-    view.read_with(cx, |view, _| {
+    view.read_with(cx, |view, cx| {
         assert_eq!(
             view.cockpit
+                .read(cx)
                 .thread(thread)
                 .and_then(|open| open.permission_mode()),
             Some("acceptEdits")

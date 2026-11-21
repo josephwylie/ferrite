@@ -429,7 +429,7 @@ impl ProjectEditorView {
             machine,
         } = self
             .cockpit
-            .read_with(cx, |cockpit, _| cockpit.project_editor_inputs(self.target))
+            .read_with(cx, |cockpit, cx| cockpit.project_editor_inputs(self.target, cx))
             .ok()?;
         // An editing card whose Project was removed underneath it has
         // nothing left to edit.
@@ -588,9 +588,9 @@ impl ProjectEditorView {
 impl CockpitView {
     /// Everything the card draws from, for the card on `target`. It never
     /// reads the card: the card calls it while its own update is running.
-    fn project_editor_inputs(&self, target: Option<ProjectId>) -> ProjectEditorInputs {
+    fn project_editor_inputs(&self, target: Option<ProjectId>, cx: &App) -> ProjectEditorInputs {
         let project = target
-            .and_then(|project| self.cockpit.registry().project(project))
+            .and_then(|project| self.cockpit.read(cx).registry().project(project))
             .map(|project| {
                 (
                     project.title.clone(),
@@ -601,9 +601,10 @@ impl CockpitView {
             });
         ProjectEditorInputs {
             project,
-            in_use: target.is_some_and(|project| self.project_in_use(project)),
+            in_use: target.is_some_and(|project| self.project_in_use(project, cx)),
             machine: self
                 .cockpit
+                .read(cx)
                 .machine()
                 .map_or_else(String::new, |bridge| bridge.name().to_string()),
         }
@@ -620,17 +621,17 @@ impl CockpitView {
             ProjectEditorEvent::RemoveDirectory(project, index) => {
                 let refusal = self
                     .cockpit
-                    .remove_project_directory(project, index)
+                    .update(cx, |cockpit, _| cockpit.remove_project_directory(project, index))
                     .err()
                     .map(|error| SharedString::from(format!("directory unchanged · {error}")));
                 card.update(cx, |card, cx| card.set_error(refusal, cx));
                 cx.notify();
             }
             ProjectEditorEvent::RemoveProject(project) => {
-                if self.project_in_use(project) {
+                if self.project_in_use(project, cx) {
                     return;
                 }
-                match self.cockpit.remove_project(project) {
+                match self.cockpit.update(cx, |cockpit, _| cockpit.remove_project(project)) {
                     Err(error) => {
                         let error = Some(format!("not removed · {error}").into());
                         card.update(cx, |card, cx| card.set_error(error, cx));
@@ -662,6 +663,7 @@ impl CockpitView {
     pub(crate) fn open_project_editor(&mut self, project: ProjectId, cx: &mut Context<Self>) {
         let Some(title) = self
             .cockpit
+            .read(cx)
             .registry()
             .project(project)
             .map(|project| project.title.clone())
@@ -685,7 +687,7 @@ impl CockpitView {
         cx: &mut Context<Self>,
     ) {
         let cockpit = cx.weak_entity();
-        let on_machine = self.on_machine();
+        let on_machine = self.on_machine(cx);
         let card =
             cx.new(|cx| ProjectEditorView::new(cockpit, target, title, on_machine, cx));
         cx.subscribe(&card, Self::on_project_editor_event).detach();
@@ -714,21 +716,20 @@ impl CockpitView {
                 if typed.is_empty() {
                     Ok(project)
                 } else {
-                    self.cockpit
-                        .rename_project(project, typed)
-                        .map(|()| project)
+                    self.cockpit.update(cx, |cockpit, _| {
+                        cockpit.rename_project(project, typed).map(|()| project)
+                    })
                 }
             }
-            None => self
-                .cockpit
-                .register_project_directories(&staged)
-                .and_then(|project| {
+            None => self.cockpit.update(cx, |cockpit, _| {
+                cockpit.register_project_directories(&staged).and_then(|project| {
                     match name {
-                        Some(name) => self.cockpit.rename_project(project, &name),
+                        Some(name) => cockpit.rename_project(project, &name),
                         None => Ok(()),
                     }
                     .map(|()| project)
-                }),
+                })
+            }),
         };
         match outcome {
             Ok(project) => {
@@ -766,7 +767,7 @@ impl CockpitView {
             Some(project) => {
                 let refusal = self
                     .cockpit
-                    .add_project_directories(project, &[path])
+                    .update(cx, |cockpit, _| cockpit.add_project_directories(project, &[path]))
                     .err()
                     .map(|error| format!("directory unchanged · {error}").into());
                 card.update(cx, |card, cx| card.set_error(refusal, cx));
@@ -789,7 +790,7 @@ impl CockpitView {
             None
         } else {
             self.cockpit
-                .list_dir(std::path::Path::new(&directory))
+                .update(cx, |cockpit, _| cockpit.list_dir(std::path::Path::new(&directory)))
                 .ok()
                 .map(|answer| (directory, answer))
         };

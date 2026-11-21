@@ -69,8 +69,9 @@ fn window<'a>(
         beat(cx);
     }
     // In the order of the Threads, which is the order of the fake's streams.
-    let panes = view.read_with(cx, |view, _| {
+    let panes = view.read_with(cx, |view, cx| {
         view.cockpit
+            .read(cx)
             .threads()
             .into_iter()
             .map(|thread| view.panes[view.pane_for(thread).unwrap()].identity)
@@ -183,7 +184,7 @@ fn a_streaming_thread_redraws_the_nav_only_when_its_rows_move(cx: &mut TestAppCo
 fn the_nav_moves_a_working_thread_on_the_beat_without_the_window(cx: &mut TestAppContext) {
     let _clock = hold_wall_clock();
     let (view, fake, _panes, cx) = window("wakes-section", 2, cx);
-    let threads = view.read_with(cx, |view, _| view.cockpit.threads());
+    let threads = view.read_with(cx, |view, cx| view.cockpit.read(cx).threads());
     let notified = std::rc::Rc::new(std::cell::Cell::new(0));
     let _watch = cx.update({
         let notified = notified.clone();

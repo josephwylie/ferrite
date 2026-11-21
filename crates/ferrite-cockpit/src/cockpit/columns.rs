@@ -245,7 +245,7 @@ impl CockpitView {
         if !nav_open {
             self.cancel_nav_resize();
         }
-        let wanted = self.panel_pane().map(|index| self.panes[index].identity);
+        let wanted = self.panel_pane(cx).map(|index| self.panes[index].identity);
         let owner_present = self
             .columns
             .panel_owner
@@ -282,7 +282,7 @@ impl CockpitView {
     /// drag starts from the board at rest.
     pub(super) fn land_panel(&mut self, cx: &gpui::App) {
         let now = cx.background_executor().now();
-        let open = self.panel_pane().is_some();
+        let open = self.panel_pane(cx).is_some();
         self.columns.panel = ColumnSlide::at_rest(open, now);
         if !open {
             self.columns.panel_owner = None;
@@ -314,8 +314,8 @@ impl CockpitView {
 
     /// The Pane whose panel is drawn this frame: the one open, or the one
     /// sliding shut.
-    pub(super) fn panel_drawn_pane(&self) -> Option<usize> {
-        self.panel_pane().or_else(|| {
+    pub(super) fn panel_drawn_pane(&self, cx: &gpui::App) -> Option<usize> {
+        self.panel_pane(cx).or_else(|| {
             self.columns
                 .panel_owner
                 .and_then(|owner| self.index_of(owner))
@@ -323,11 +323,11 @@ impl CockpitView {
     }
 
     /// The panel's width on screen this frame.
-    pub(super) fn panel_column_w(&self) -> f32 {
+    pub(super) fn panel_column_w(&self, cx: &gpui::App) -> f32 {
         if self.measuring_rest() {
-            return self.panel_target_w();
+            return self.panel_target_w(cx);
         }
-        self.panel_drawn_pane().map_or(0.0, |index| {
+        self.panel_drawn_pane(cx).map_or(0.0, |index| {
             self.panel_rest_w(index) * self.columns.panel.drawn
         })
     }
@@ -341,7 +341,7 @@ impl CockpitView {
     /// an editor in the panel hears nothing typed during the slide.
     pub(super) fn closing_holds_focus(&self, window: &Window, cx: &gpui::App) -> bool {
         let panel_closing =
-            self.panel_pane().is_none() && self.panel_closing_focus.contains_focused(window, cx);
+            self.panel_pane(cx).is_none() && self.panel_closing_focus.contains_focused(window, cx);
         let nav_closing = self.nav_folded() && self.nav_view.read(cx).focus.contains_focused(window, cx);
         panel_closing || nav_closing
     }

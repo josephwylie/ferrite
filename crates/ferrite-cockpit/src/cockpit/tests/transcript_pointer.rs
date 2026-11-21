@@ -136,7 +136,7 @@ fn a_reopened_thread_opens_at_the_bottom_and_keeps_following_the_tail(cx: &mut T
             .position(|pane| pane.thread() == Some(closed))
             .unwrap()
     });
-    view.update(cx, |view, _| view.focus_pane(at));
+    view.update(cx, |view, cx| view.focus_pane(at, cx));
     cx.simulate_keystrokes("cmd-w");
     view.read_with(cx, |view, _| assert_eq!(view.panes.len(), 1));
 
@@ -165,7 +165,7 @@ fn a_reopened_thread_opens_at_the_bottom_and_keeps_following_the_tail(cx: &mut T
     );
 
     // Streaming into the reopened Pane keeps it on the tail.
-    view.update(cx, |view, _| view.cockpit.set_composing(closed, true));
+    view.update(cx, |view, cx| view.cockpit.update(cx, |cockpit, _| cockpit.set_composing(closed, true)));
     tick(cx);
     for line in 80..100 {
         say(line);

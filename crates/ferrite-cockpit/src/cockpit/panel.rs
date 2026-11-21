@@ -187,8 +187,8 @@ fn panel_w(state: &ThreadSurfaces, window: f32, nav: f32) -> f32 {
 
 impl CockpitView {
     /// The Pane whose panel shows this frame (see the module doc), if any.
-    pub(super) fn panel_pane(&self) -> Option<usize> {
-        let index = self.panel_candidate_index()?;
+    pub(super) fn panel_pane(&self, cx: &gpui::App) -> Option<usize> {
+        let index = self.panel_candidate_index(cx)?;
         let pane = &self.panes[index];
         match pane.thread() {
             Some(thread) => self.panel_open(thread),
@@ -198,22 +198,22 @@ impl CockpitView {
     }
 
     /// The Thread whose panel shows this frame, if it shows for one.
-    pub(super) fn panel_thread(&self) -> Option<ThreadId> {
-        self.panes[self.panel_pane()?].thread()
+    pub(super) fn panel_thread(&self, cx: &gpui::App) -> Option<ThreadId> {
+        self.panes[self.panel_pane(cx)?].thread()
     }
 
     /// The Pane the panel is for, shown or hidden: the focused Pane's, a
     /// Thread's or a draft's with a preview open. None on the empty board.
-    pub(super) fn panel_candidate(&self) -> Option<PaneIdentity> {
-        Some(self.panes[self.panel_candidate_index()?].identity)
+    pub(super) fn panel_candidate(&self, cx: &gpui::App) -> Option<PaneIdentity> {
+        Some(self.panes[self.panel_candidate_index(cx)?].identity)
     }
 
-    fn panel_candidate_index(&self) -> Option<usize> {
+    fn panel_candidate_index(&self, cx: &gpui::App) -> Option<usize> {
         // A Panel is its Thread's: the Factory in the board's place has none.
-        if self.empty_board_shown() || self.destination_shown() {
+        if self.empty_board_shown(cx) || self.destination_shown() {
             return None;
         }
-        let index = self.focused();
+        let index = self.focused(cx);
         let pane = self.panes.get(index)?;
         (pane.thread().is_some() || pane.preview.is_open()).then_some(index)
     }
@@ -239,9 +239,9 @@ impl CockpitView {
     }
 
     /// The Surface Pane `index`'s Panel shows this frame, if it shows one.
-    pub(super) fn shown_surface(&self, index: usize) -> Option<SurfaceId> {
+    pub(super) fn shown_surface(&self, index: usize, cx: &gpui::App) -> Option<SurfaceId> {
         let thread = self.panes.get(index)?.thread()?;
-        (self.panel_pane() == Some(index))
+        (self.panel_pane(cx) == Some(index))
             .then(|| self.active_surface(thread))
             .flatten()
     }
@@ -263,7 +263,7 @@ impl CockpitView {
                 self.ensure_files(thread, cx);
             }
             SurfaceId::Changes => self.ensure_diff(tools::Diff::Changes(thread), cx),
-            SurfaceId::Overview => self.refresh_context(thread),
+            SurfaceId::Overview => self.refresh_context(thread, cx),
             SurfaceId::PullRequest(number) => {
                 self.read_pr_snapshot(pr_read::PrTarget::thread(thread, *number), true, cx)
             }
@@ -361,7 +361,7 @@ impl CockpitView {
     /// its open agents, its facts and rules.
     fn forget_gone_threads(&mut self, cx: &mut Context<Self>) {
         let deleted = std::mem::take(&mut self.panel.deleted);
-        let known = self.cockpit.known_threads();
+        let known = self.cockpit.read(cx).known_threads();
         // A Server not yet heard from knows no Thread: absence alone is no
         // deletion then.
         let heard = !known.is_empty();
@@ -450,7 +450,7 @@ impl CockpitView {
     /// Whichever way a tab comes to show, the strip scrolls it into view.
     fn tend_tab_pick(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let shown = self
-            .panel_pane()
+            .panel_pane(cx)
             .and_then(|index| self.panes[index].thread())
             .map(|thread| (thread, self.active_surface(thread)));
         if shown == self.panel.shown {
@@ -486,11 +486,11 @@ impl CockpitView {
     /// Surface what it needs to draw (a PR tab on Code, its diff).
     pub(super) fn tend_panel(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.tend_previews(window, cx);
-        if let Some(thread) = self.panel_thread() {
+        if let Some(thread) = self.panel_thread(cx) {
             self.files
                 .update(cx, |files, _| files.tend_prose_find(thread, window));
         }
-        let shown = self.shown_pr();
+        let shown = self.shown_pr(cx);
         self.pull_request.update(cx, |reader, _| reader.disarm_unless(shown));
         let board = self.prs.read(cx).open();
         if let Some((target, PrTab::Code)) = board {
@@ -499,7 +499,7 @@ impl CockpitView {
         self.panel.window_w = f32::from(window.viewport_size().width);
         self.tend_tab_pick(window, cx);
         if let Some(thread) = self
-            .panel_pane()
+            .panel_pane(cx)
             .and_then(|index| self.panes[index].thread())
         {
             let active = self.active_surface(thread);
@@ -537,15 +537,15 @@ impl CockpitView {
 
     /// How wide the panel ends up: its rest width while it shows or opens,
     /// none while it is hidden or sliding shut.
-    pub(super) fn panel_target_w(&self) -> f32 {
-        self.panel_pane()
+    pub(super) fn panel_target_w(&self, cx: &gpui::App) -> f32 {
+        self.panel_pane(cx)
             .map_or(0., |index| self.panel_rest_w(index))
     }
 
     /// What the board leaves at its right: the panel's column as far in as
     /// it is (SPEC §4).
-    pub(super) fn board_right(&self) -> f32 {
-        self.panel_column_w()
+    pub(super) fn board_right(&self, cx: &gpui::App) -> f32 {
+        self.panel_column_w(cx)
     }
 
     /// ⌥⌘B, the View menu, the palette and the title bar's toggle: show or
@@ -559,7 +559,7 @@ impl CockpitView {
     /// as. A draft's Panel, shown for its preview alone, puts the preview
     /// away. Showing asks the Thread's Session for a fresh context reading.
     pub(super) fn toggle_panel_now(&mut self, cx: &mut Context<Self>) {
-        let Some(owner) = self.panel_candidate() else {
+        let Some(owner) = self.panel_candidate(cx) else {
             return;
         };
         let shown = match owner.thread() {
@@ -567,7 +567,7 @@ impl CockpitView {
                 let shown = !self.panel_open(thread);
                 self.apply_surface(thread, SurfaceAction::SetOpen(shown));
                 if shown {
-                    self.refresh_context(thread);
+                    self.refresh_context(thread, cx);
                 }
                 shown
             }
@@ -591,8 +591,8 @@ impl CockpitView {
     }
 
     /// Ask `thread`'s Session to report its context afresh, when it can.
-    pub(super) fn refresh_context(&mut self, thread: ThreadId) {
-        let Some(open) = self.cockpit.thread(thread) else {
+    pub(super) fn refresh_context(&mut self, thread: ThreadId, cx: &mut gpui::App) {
+        let Some(open) = self.cockpit.read(cx).thread(thread) else {
             return;
         };
         if open.supports_control(ferrite_core::ControlKind::RefreshContext) {
@@ -601,6 +601,7 @@ impl CockpitView {
                 thread,
                 generation,
                 ferrite_core::SessionControl::RefreshContext,
+                cx,
             );
         }
     }
@@ -678,13 +679,13 @@ impl CockpitView {
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
         use ferrite_ui::theme::*;
-        let index = self.panel_drawn_pane();
+        let index = self.panel_drawn_pane(cx);
         let owner = index.map(|index| self.panes[index].identity);
         self.panel
             .focus
             .begin(owner.and_then(|owner| owner.thread()), window, cx);
         let (index, owner) = (index?, owner?);
-        let sliding_out = self.panel_pane().is_none();
+        let sliding_out = self.panel_pane(cx).is_none();
         let column = div()
             .size_full()
             .flex()
@@ -744,7 +745,7 @@ impl CockpitView {
                 // A hairline short of the window's foot, as it stood
                 // above the old bottom bar's rule.
                 .bottom(px(ferrite_ui::theme::HAIRLINE_W))
-                .w(px(self.panel_column_w()))
+                .w(px(self.panel_column_w(cx)))
                 .overflow_hidden()
                 .bg(paint::PANEL)
                 .child(
@@ -837,7 +838,7 @@ impl CockpitView {
                     .pr(px(PANEL_PAD_R))
                     .pb(px(PANEL_PAD_B))
                     .child(panel_body(
-                        self.background_inputs(thread, true)
+                        self.background_inputs(thread, true, cx)
                             .map(|inputs| self.background.update(cx, |background, cx| background.pane(&inputs, cx)))
                             .unwrap_or_else(div)
                             .into_any_element(),

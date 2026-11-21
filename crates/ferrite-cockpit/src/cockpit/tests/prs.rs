@@ -260,10 +260,10 @@ fn a_project_pr_reads_published_code_without_a_thread(cx: &mut TestAppContext) {
     use crate::cockpit::panel::pr_read::PrTarget;
     use crate::cockpit::tools::Diff;
     let (world, cx) = world("prs-published-code", 0, two_rows(), false, cx);
-    world.view.update(cx, |view, _| {
+    world.view.update(cx, |view, cx| {
         let files = ferrite_core::protocol::sides_of_unified("diff --git a/remote.rs b/remote.rs\n--- a/remote.rs\n+++ b/remote.rs\n@@ -1 +1 @@\n-old\n+remote\n");
-        view.cockpit.fixture_forge_diff(world.path.clone(), 7, files);
-        view.cockpit.fixture_forge_diff(world.path.clone(), 3, Vec::new());
+        view.cockpit.update(cx, |cockpit, _| cockpit.fixture_forge_diff(world.path.clone(), 7, files));
+        view.cockpit.update(cx, |cockpit, _| cockpit.fixture_forge_diff(world.path.clone(), 3, Vec::new()));
     });
     click(cx, "nav-pull-requests");
     lands(cx, "prs-row-7");
@@ -292,10 +292,10 @@ fn a_project_pr_opened_on_code_reads_its_diff(cx: &mut TestAppContext) {
     use crate::cockpit::panel::pr_read::PrTarget;
     use crate::cockpit::tools::Diff;
     let (world, cx) = world("prs-code-reads", 0, two_rows(), false, cx);
-    world.view.update(cx, |view, _| {
+    world.view.update(cx, |view, cx| {
         let files = ferrite_core::protocol::sides_of_unified("diff --git a/remote.rs b/remote.rs\n--- a/remote.rs\n+++ b/remote.rs\n@@ -1 +1 @@\n-old\n+remote\n");
-        view.cockpit.fixture_forge_diff(world.path.clone(), 7, files);
-        view.cockpit.fixture_forge_diff(world.path.clone(), 3, Vec::new());
+        view.cockpit.update(cx, |cockpit, _| cockpit.fixture_forge_diff(world.path.clone(), 7, files));
+        view.cockpit.update(cx, |cockpit, _| cockpit.fixture_forge_diff(world.path.clone(), 3, Vec::new()));
     });
     let read = |number: u64, cx: &mut gpui::VisualTestContext| {
         let diff = Diff::PullRequest(PrTarget::project(world.project, number));
@@ -394,25 +394,25 @@ fn a_capped_list_says_so(cx: &mut TestAppContext) {
 #[gpui::test]
 fn a_failed_list_offers_retry(cx: &mut TestAppContext) {
     let (world, cx) = world("prs-failed", 0, two_rows(), false, cx);
-    world.view.update(cx, |view, _| {
-        view.cockpit.fixture_pr_list(
+    world.view.update(cx, |view, cx| {
+        view.cockpit.update(cx, |cockpit, _| cockpit.fixture_pr_list(
             world.path.clone(),
             WirePrFilter::Open,
             ReviewPullRequests {
                 list: Err("Rate limit reached".into()),
                 unread: Some(WirePrUnread::RateLimited),
             },
-        )
+        ))
     });
     click(cx, "nav-pull-requests");
     lands(cx, "prs-failed");
     assert!(!shows(cx, "prs-row-7"));
-    world.view.update(cx, |view, _| {
-        view.cockpit.fixture_pr_list(
+    world.view.update(cx, |view, cx| {
+        view.cockpit.update(cx, |cockpit, _| cockpit.fixture_pr_list(
             world.path.clone(),
             WirePrFilter::Open,
             list_of(two_rows(), false),
-        )
+        ))
     });
     click(cx, "prs-retry");
     lands(cx, "prs-row-7");
@@ -420,9 +420,9 @@ fn a_failed_list_offers_retry(cx: &mut TestAppContext) {
 }
 
 fn set_list(world: &World, list: ReviewPullRequests, cx: &mut gpui::VisualTestContext) {
-    world.view.update(cx, |view, _| {
+    world.view.update(cx, |view, cx| {
         view.cockpit
-            .fixture_pr_list(world.path.clone(), WirePrFilter::Open, list)
+            .update(cx, |cockpit, _| cockpit.fixture_pr_list(world.path.clone(), WirePrFilter::Open, list))
     });
 }
 
@@ -483,8 +483,8 @@ fn a_pr_opened_again_is_read_again_and_follows_the_forge(cx: &mut TestAppContext
     assert_eq!(state(cx), Some(WirePrState::Open));
     click(cx, "prs-back");
 
-    world.view.update(cx, |view, _| {
-        view.cockpit.fixture_hold_pr_reads(world.path.clone())
+    world.view.update(cx, |view, cx| {
+        view.cockpit.update(cx, |cockpit, _| cockpit.fixture_hold_pr_reads(world.path.clone()))
     });
     click(cx, "prs-row-7");
     assert!(shows(cx, "pr-body"), "the last read stays");
@@ -498,7 +498,7 @@ fn a_pr_opened_again_is_read_again_and_follows_the_forge(cx: &mut TestAppContext
     merged.state = WirePrState::Merged;
     let reads = world
         .view
-        .update(cx, |view, _| view.cockpit.take_held_reads());
+        .update(cx, |view, cx| view.cockpit.update(cx, |cockpit, _| cockpit.take_held_reads()));
     assert_eq!(reads.len(), 1, "one read for the opening");
     for read in reads {
         read.answer(ReviewPullRequest {
@@ -524,8 +524,8 @@ fn a_merged_pr_shows_its_state_and_no_merge_line(cx: &mut TestAppContext) {
     let (world, cx) = world("prs-merged", 0, two_rows(), false, cx);
     let mut merged = full_pr();
     merged.state = WirePrState::Merged;
-    world.view.update(cx, |view, _| {
-        view.cockpit.fixture_forge_numbered(
+    world.view.update(cx, |view, cx| {
+        view.cockpit.update(cx, |cockpit, _| cockpit.fixture_forge_numbered(
             world.path.clone(),
             7,
             ReviewPullRequest {
@@ -533,7 +533,7 @@ fn a_merged_pr_shows_its_state_and_no_merge_line(cx: &mut TestAppContext) {
                 pr: Ok(merged),
                 unread: None,
             },
-        )
+        ))
     });
     click(cx, "nav-pull-requests");
     lands(cx, "prs-row-7");
@@ -611,11 +611,11 @@ fn a_transcript_pr_keeps_the_conversation_and_loads_the_requested_number(cx: &mu
     let (world, cx) = world("pr-transcript-number", 1, two_rows(), false, cx);
     let thread = world
         .view
-        .read_with(cx, |view, _| view.cockpit.threads()[0]);
+        .read_with(cx, |view, cx| view.cockpit.read(cx).threads()[0]);
     world.view.update(cx, |view, cx| {
         view.pr_landed(thread, Some(pr_with_checks()), cx);
         let base =
-            ferrite_pane::file_links::origin_base(&view.thread_path(thread).unwrap()).unwrap();
+            ferrite_pane::file_links::origin_base(&view.thread_path(thread, cx).unwrap()).unwrap();
         view.open_named_pr(thread, 7, format!("{base}/pull/7"), cx);
     });
     lands(cx, "pr-body");
@@ -642,11 +642,11 @@ fn a_bare_pr_reference_uses_the_contextual_panel(cx: &mut TestAppContext) {
     let (world, cx) = world("pr-bare-number", 1, two_rows(), false, cx);
     let thread = world
         .view
-        .read_with(cx, |view, _| view.cockpit.threads()[0]);
+        .read_with(cx, |view, cx| view.cockpit.read(cx).threads()[0]);
     world.view.update(cx, |view, cx| {
         view.pr_landed(thread, Some(pr_with_checks()), cx);
         let base =
-            ferrite_pane::file_links::origin_base(&view.thread_path(thread).unwrap()).unwrap();
+            ferrite_pane::file_links::origin_base(&view.thread_path(thread, cx).unwrap()).unwrap();
         view.open_named_pr(thread, 7, format!("{base}/issues/7"), cx);
     });
     lands(cx, "pr-body");
@@ -661,7 +661,7 @@ fn a_foreign_pr_with_the_same_number_keeps_its_repository(cx: &mut TestAppContex
     let (world, cx) = world("pr-foreign-number", 1, two_rows(), false, cx);
     let thread = world
         .view
-        .read_with(cx, |view, _| view.cockpit.threads()[0]);
+        .read_with(cx, |view, cx| view.cockpit.read(cx).threads()[0]);
     world.view.update(cx, |view, cx| {
         let pr = pr_with_checks();
         let number = pr.number;
@@ -702,9 +702,9 @@ fn choosing_another_project_reads_its_list_and_lets_the_mark_go(cx: &mut TestApp
 #[gpui::test]
 fn a_filter_reads_its_own_list(cx: &mut TestAppContext) {
     let (world, cx) = world("prs-filter-empty", 0, two_rows(), false, cx);
-    world.view.update(cx, |view, _| {
+    world.view.update(cx, |view, cx| {
         view.cockpit
-            .fixture_pr_list(world.path.clone(), WirePrFilter::Closed, list_of(Vec::new(), false))
+            .update(cx, |cockpit, _| cockpit.fixture_pr_list(world.path.clone(), WirePrFilter::Closed, list_of(Vec::new(), false)))
     });
     click(cx, "nav-pull-requests");
     lands(cx, "prs-row-7");
@@ -724,11 +724,11 @@ fn with_no_project_the_view_offers_to_add_one(cx: &mut TestAppContext) {
     hold_nav_open(&view, cx);
     cx.simulate_resize(gpui::size(px(1900.), px(900.)));
     tick(cx);
-    view.update(cx, |view, _| {
+    view.update(cx, |view, cx| {
         let projects: Vec<ProjectId> =
-            view.cockpit.registry().projects().iter().map(|project| project.id).collect();
+            view.cockpit.read(cx).registry().projects().iter().map(|project| project.id).collect();
         for project in projects {
-            view.cockpit.remove_project(project).unwrap();
+            view.cockpit.update(cx, |cockpit, _| cockpit.remove_project(project).unwrap());
         }
     });
     click(cx, "nav-pull-requests");

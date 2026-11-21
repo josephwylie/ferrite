@@ -236,7 +236,7 @@ fn f6_returns_to_the_file_tab_it_left_after_one_before_it_closes(cx: &mut TestAp
         open(&view, thread, &file, true, cx);
     }
     let keyboard = |cx: &mut gpui::VisualTestContext| {
-        cx.update(|window, cx| view.read(cx).keyboard_label(window).map(|name| name.to_string()))
+        cx.update(|window, cx| view.read(cx).keyboard_label(window, cx).map(|name| name.to_string()))
     };
     let b = view.read_with(cx, |view, _| {
         let drawn = view.panel.focus.drawn();

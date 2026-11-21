@@ -64,9 +64,10 @@ fn a_folded_shelf_still_shows_the_shown_threads_row(cx: &mut TestAppContext) {
     hide_panel(&view, cx);
     tick(cx);
     let (shown, other) = view.update(cx, |view, cx| {
-        let shown = view.focused_thread().expect("a shown Thread");
+        let shown = view.focused_thread(cx).expect("a shown Thread");
         let other = view
             .cockpit
+            .read(cx)
             .threads()
             .into_iter()
             .find(|thread| *thread != shown)
@@ -188,8 +189,8 @@ fn the_search_row_replaces_the_list_with_its_results(cx: &mut TestAppContext) {
     }
     let name = "Needle in the nav";
     view.update(cx, |view, cx| {
-        view.cockpit.rename_thread(threads[1], name).unwrap();
-        view.facts.renamed(&view.cockpit, threads[1]);
+        view.cockpit.update(cx, |cockpit, _| cockpit.rename_thread(threads[1], name).unwrap());
+        view.facts.renamed(view.cockpit.read(cx), threads[1]);
         view.refresh_names();
         cx.notify();
     });
@@ -209,7 +210,7 @@ fn the_search_row_replaces_the_list_with_its_results(cx: &mut TestAppContext) {
     cx.simulate_keystrokes("enter");
     tick(cx);
     assert_eq!(
-        view.read_with(cx, |view, _| view.focused_thread()),
+        view.read_with(cx, |view, cx| view.focused_thread(cx)),
         Some(threads[1])
     );
     assert!(cx.debug_bounds("nav-results").is_none(), "cleared on open");
@@ -236,8 +237,8 @@ fn the_search_highlight_follows_its_thread_through_live_updates(cx: &mut TestApp
     hide_panel(&view, cx);
     view.update(cx, |view, cx| {
         for (n, thread) in threads.iter().enumerate() {
-            view.cockpit.rename_thread(*thread, &format!("Needle {n}")).unwrap();
-            view.facts.renamed(&view.cockpit, *thread);
+            view.cockpit.update(cx, |cockpit, _| cockpit.rename_thread(*thread, &format!("Needle {n}")).unwrap());
+            view.facts.renamed(view.cockpit.read(cx), *thread);
         }
         view.refresh_names();
         cx.notify();
@@ -266,7 +267,7 @@ fn the_search_highlight_follows_its_thread_through_live_updates(cx: &mut TestApp
     cx.simulate_keystrokes("enter");
     tick(cx);
     assert_eq!(
-        view.read_with(cx, |view, _| view.focused_thread()),
+        view.read_with(cx, |view, cx| view.focused_thread(cx)),
         Some(order[1]),
         "⏎ opens the Thread that was highlighted"
     );

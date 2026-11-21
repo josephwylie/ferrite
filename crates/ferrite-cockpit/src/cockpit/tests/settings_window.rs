@@ -366,7 +366,7 @@ fn a_right_click_summons_the_menu_and_delete_takes_two_presses(cx: &mut TestAppC
     let thread = view.read_with(cx, |view, _| view.panes[0].thread().unwrap());
 
     // Right-click inside the focused Pane's transcript.
-    let card = cx.update(|window, cx| view.read(cx).pane_rects(window))[0].1;
+    let card = cx.update(|window, cx| view.read(cx).pane_rects(window, cx))[0].1;
     cx.simulate_mouse_down(
         gpui::point(px(card.x + card.w / 2.), px(300.)),
         gpui::MouseButton::Right,
@@ -397,7 +397,7 @@ fn a_right_click_summons_the_menu_and_delete_takes_two_presses(cx: &mut TestAppC
             .expect("the nav row's menu deletes");
         (
             delete,
-            view.cockpit.threads().len() + view.cockpit.parked().unwrap().len(),
+            view.cockpit.read(cx).threads().len() + view.cockpit.read(cx).parked().unwrap().len(),
         )
     });
 
@@ -421,11 +421,11 @@ fn a_right_click_summons_the_menu_and_delete_takes_two_presses(cx: &mut TestAppC
             "the second press runs and closes"
         );
         assert!(
-            view.cockpit.thread(thread).is_none(),
+            view.cockpit.read(cx).thread(thread).is_none(),
             "the Thread is gone from the grid"
         );
         assert_eq!(
-            view.cockpit.threads().len() + view.cockpit.parked().unwrap().len(),
+            view.cockpit.read(cx).threads().len() + view.cockpit.read(cx).parked().unwrap().len(),
             count - 1,
             "and from the store"
         );
@@ -773,7 +773,7 @@ fn settings_open_on_cmd_comma_and_every_change_saves(cx: &mut TestAppContext) {
             .unwrap();
         view.press_menu_row(delete, window, cx);
         assert!(view.context_menu().is_none());
-        assert!(view.cockpit.thread(thread).is_none(), "gone on one press");
+        assert!(view.cockpit.read(cx).thread(thread).is_none(), "gone on one press");
     });
     let _ = std::fs::remove_dir_all(&dir);
 }

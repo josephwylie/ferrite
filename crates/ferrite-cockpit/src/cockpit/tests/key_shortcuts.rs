@@ -9,7 +9,7 @@ fn one_key_shows_the_thread_that_needs_answering(cx: &mut TestAppContext) {
     bind_production_keys(cx);
     let (core, fake) = cockpit("jump-solo", 3);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
-    let threads = view.read_with(cx, |view, _| view.cockpit.threads());
+    let threads = view.read_with(cx, |view, cx| view.cockpit.read(cx).threads());
     view.update(cx, |view, cx| view.focus_thread(threads[0], cx));
     fake.streams.borrow()[2].send(decision("perm_03")).unwrap();
     tick(cx);
@@ -44,17 +44,17 @@ fn cmd_t_opens_a_new_thread_and_cmd_n_still_does(cx: &mut TestAppContext) {
     tick(cx);
 
     cx.simulate_keystrokes("cmd-t");
-    view.read_with(cx, |view, _| {
+    view.read_with(cx, |view, cx| {
         assert_eq!(view.panes.len(), 2, "cmd-t opened a draft");
-        assert!(view.panes[view.focused()].draft().is_some());
+        assert!(view.panes[view.focused(cx)].draft().is_some());
     });
 
     // cmd-n reaches the same action; with that draft still up it
     // re-focuses it rather than stacking a second.
     cx.simulate_keystrokes("cmd-n");
-    view.read_with(cx, |view, _| {
+    view.read_with(cx, |view, cx| {
         assert_eq!(view.panes.len(), 2, "and cmd-n reuses the standing draft");
-        assert!(view.panes[view.focused()].draft().is_some());
+        assert!(view.panes[view.focused(cx)].draft().is_some());
     });
 }
 
@@ -74,8 +74,8 @@ fn cmd_t_from_a_thread_starts_in_its_project(cx: &mut TestAppContext) {
     tick(cx);
 
     cx.simulate_keystrokes("cmd-t");
-    view.read_with(cx, |view, _| {
-        let draft = view.panes[view.focused()]
+    view.read_with(cx, |view, cx| {
+        let draft = view.panes[view.focused(cx)]
             .draft()
             .expect("cmd-t opened a draft");
         assert_eq!(draft.binding.project(), here);
@@ -97,8 +97,8 @@ fn cmd_t_from_a_thread_outranks_the_nav_filter(cx: &mut TestAppContext) {
     tick(cx);
 
     cx.simulate_keystrokes("cmd-t");
-    view.read_with(cx, |view, _| {
-        let draft = view.panes[view.focused()]
+    view.read_with(cx, |view, cx| {
+        let draft = view.panes[view.focused(cx)]
             .draft()
             .expect("cmd-t opened a draft");
         assert_eq!(draft.binding.project(), here);
@@ -121,8 +121,8 @@ fn cmd_t_from_a_thread_brings_the_standing_draft_to_its_project(cx: &mut TestApp
     view.update(cx, |view, cx| view.open_draft_in_project(elsewhere, cx));
     tick(cx);
     let project = |view: &Entity<CockpitView>, cx: &mut gpui::VisualTestContext| {
-        view.read_with(cx, |view, _| {
-            view.panes[view.focused()]
+        view.read_with(cx, |view, cx| {
+            view.panes[view.focused(cx)]
                 .draft()
                 .expect("the draft is focused")
                 .binding
@@ -139,7 +139,7 @@ fn cmd_t_from_a_thread_brings_the_standing_draft_to_its_project(cx: &mut TestApp
 
     view.update(cx, |view, cx| {
         view.open_draft_in_project(elsewhere, cx);
-        view.cockpit.focus(PaneIdentity::Thread(thread));
+        view.cockpit.update(cx, |cockpit, _| cockpit.focus(PaneIdentity::Thread(thread)));
     });
     tick(cx);
     cx.simulate_keystrokes("cmd-t");

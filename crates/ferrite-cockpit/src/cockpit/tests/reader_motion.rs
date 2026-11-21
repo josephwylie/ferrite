@@ -11,7 +11,7 @@ use ferrite_ui::theme::{BOARD_SEAM, MOTION_SLOT_CLOSE_MS, MOTION_SLOT_OPEN_MS};
 /// Changes tab's button opens one, no checkout read.
 fn read(view: &Entity<CockpitView>, cx: &mut gpui::VisualTestContext) {
     view.update(cx, |view, cx| {
-        let index = view.focused();
+        let index = view.focused(cx);
         let review = view.panes[index].review.review().unwrap_or_else(|| {
             let composer = view.panes[index].composer.clone();
             let reading = view.prefs.settings.reading_size;
@@ -66,7 +66,7 @@ fn pane(
 ) -> layout::Rect {
     cx.update(|window, cx| {
         view.read(cx)
-            .pane_rects(window)
+            .pane_rects(window, cx)
             .into_iter()
             .find(|(at, _)| *at == index)
             .expect("the Pane is on the board")
@@ -215,7 +215,7 @@ fn a_seam_grabbed_mid_slide_lands_it(cx: &mut TestAppContext) {
     read(&view, cx);
     at(MOTION_SLOT_OPEN_MS / 4, cx);
     view.update(cx, |view, cx| {
-        let board = view.board().expect("a reader board");
+        let board = view.board(cx).expect("a reader board");
         view.begin_seam_drag(board, layout::SeamId(Vec::new()), cx);
     });
     cx.run_until_parked();

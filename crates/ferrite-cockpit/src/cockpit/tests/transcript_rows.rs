@@ -17,6 +17,7 @@ fn short_reasoning_has_no_empty_disclosure(cx: &mut TestAppContext) {
         let pane = &view.panes[0];
         let block = &view
             .cockpit
+            .read(cx)
             .thread(pane.thread().unwrap())
             .unwrap()
             .transcript()
@@ -78,8 +79,9 @@ fn reasoning_discloses_body_without_repeating_its_heading(cx: &mut TestAppContex
         .unwrap();
     tick(cx);
     open_live(cx);
-    let id = view.read_with(cx, |view, _| {
+    let id = view.read_with(cx, |view, cx| {
         view.cockpit
+            .read(cx)
             .thread(view.panes[0].thread().unwrap())
             .unwrap()
             .transcript()
@@ -175,6 +177,7 @@ fn transcript_details_wrap_to_the_pane(cx: &mut TestAppContext) {
         );
         let id = view
             .cockpit
+            .read(cx)
             .thread(thread)
             .unwrap()
             .transcript()
@@ -204,6 +207,7 @@ fn transcript_details_wrap_to_the_pane(cx: &mut TestAppContext) {
             let viewport = pane.transcript().unwrap().read(cx).scroll().bounds();
             let transcript = view
                 .cockpit
+                .read(cx)
                 .thread(pane.thread().unwrap())
                 .unwrap()
                 .transcript();
@@ -279,6 +283,7 @@ fn the_prompt_echo_reads_at_the_answer_size_at_every_reading_size(cx: &mut TestA
             let pane = &view.panes[0];
             let block = view
                 .cockpit
+                .read(cx)
                 .thread(thread)
                 .unwrap()
                 .transcript()
@@ -485,9 +490,9 @@ fn multiline_tool_input_is_compact_and_disclosable_while_running(cx: &mut TestAp
     });
     cx.simulate_click(chevron, gpui::Modifiers::none());
     cx.run_until_parked();
-    view.read_with(cx, |view, _| {
+    view.read_with(cx, |view, cx| {
         assert!(!view.panes[0].tool_expanded("multiline"));
-        let transcript = view.cockpit.thread(thread).unwrap().transcript();
+        let transcript = view.cockpit.read(cx).thread(thread).unwrap().transcript();
         assert!(transcript
             .blocks()
             .iter()
@@ -546,7 +551,7 @@ fn clicking_the_tool_chevron_replaces_the_compact_line_with_selectable_output(
     open_live(cx);
 
     view.read_with(cx, |view, cx| {
-        let transcript = view.cockpit.thread(thread).unwrap().transcript();
+        let transcript = view.cockpit.read(cx).thread(thread).unwrap().transcript();
         let id = |call: &str| {
             transcript
                 .blocks()
@@ -596,13 +601,14 @@ fn clicking_the_tool_chevron_replaces_the_compact_line_with_selectable_output(
     cx.simulate_click(chevron, gpui::Modifiers::none());
     cx.run_until_parked();
 
-    view.read_with(cx, |view, _| {
+    view.read_with(cx, |view, cx| {
         assert!(view.panes[0].tool_expanded("toolu_9"));
         let runs = view.selection.registered(thread);
         // Large output is one native read-only document, retaining exact
         // hard lines and Unicode without per-character Markdown layout.
         let tool_block = view
             .cockpit
+            .read(cx)
             .thread(thread)
             .unwrap()
             .transcript()
@@ -630,6 +636,7 @@ fn clicking_the_tool_chevron_replaces_the_compact_line_with_selectable_output(
     let (output_state, expected) = view.read_with(cx, |view, cx| {
         let block = view
             .cockpit
+            .read(cx)
             .thread(thread)
             .unwrap()
             .transcript()
@@ -769,6 +776,7 @@ fn streaming_output_preserves_native_selection_scroll_and_command_identity(
     let (command_state, result_state) = view.read_with(cx, |view, cx| {
         let block = view
             .cockpit
+            .read(cx)
             .thread(thread)
             .unwrap()
             .transcript()
@@ -1031,7 +1039,7 @@ fn edited_files_are_in_the_panel_and_one_click_away(cx: &mut TestAppContext) {
     let section = cx
         .debug_bounds("panel-changes-section")
         .expect("the panel counts the edited files");
-    let card = cx.update(|window, cx| view.read(cx).pane_rects(window))[0].1;
+    let card = cx.update(|window, cx| view.read(cx).pane_rects(window, cx))[0].1;
     assert!(
         f32::from(section.left()) >= card.x + card.w,
         "beside the Pane, not in it"
@@ -1585,7 +1593,7 @@ fn a_turn_heads_with_working_for_and_settles_into_its_fold(cx: &mut TestAppConte
     assert!(call.top() > fold.bottom() && call.bottom() < cx.debug_bounds("transcript-answer").unwrap().top());
     // The open state is the turn's: a next turn projects the rows again
     // and leaves it open.
-    let _ = view.update(cx, |view, _| view.cockpit.send(thread, "And again".into()));
+    let _ = view.update(cx, |view, cx| view.cockpit.update(cx, |cockpit, _| cockpit.send(thread, "And again".into())));
     send(SessionEvent::TextDelta {
         text: "Again.\n\n".into(),
     });

@@ -30,8 +30,8 @@ impl CockpitView {
     /// The focused Pane's lightbox, while it has one open. Focus moving to
     /// another Pane (⌘}) takes the keyboard there, the lightbox kept for
     /// coming back.
-    pub(super) fn lightbox(&self) -> Option<(usize, Lightbox)> {
-        let index = self.focused();
+    pub(super) fn lightbox(&self, cx: &gpui::App) -> Option<(usize, Lightbox)> {
+        let index = self.focused(cx);
         Some((index, self.panes.get(index)?.preview.lightbox()?))
     }
 
@@ -39,7 +39,7 @@ impl CockpitView {
     pub(super) fn close_lightbox(&mut self, index: usize, cx: &mut Context<Self>) {
         if let Some(pane) = self.panes.get(index) {
             pane.preview.close_lightbox();
-            self.focus_pane(index);
+            self.focus_pane(index, cx);
             cx.notify();
         }
     }
@@ -58,7 +58,7 @@ impl CockpitView {
 
     /// The lightbox over the window, while one is open.
     pub(super) fn lightbox_element(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
-        let (index, lightbox) = self.lightbox()?;
+        let (index, lightbox) = self.lightbox(cx)?;
         let count = lightbox.gallery.len();
         let path = lightbox.path().to_path_buf();
         let name = path.file_name().map_or_else(

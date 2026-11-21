@@ -747,7 +747,7 @@ impl CockpitView {
     /// the Session only for what that menu lists. None when it opens
     /// nothing.
     fn composer_menu_inputs(&mut self, cx: &mut Context<Self>) -> Option<ComposerMenuInputs> {
-        let index = self.focused();
+        let index = self.focused(cx);
         let pane = self.panes.get(index)?;
         let wanted = self.composer_menu.read(cx).wanted(pane.composer.read(cx))?;
         let identity = pane.identity;
@@ -756,13 +756,13 @@ impl CockpitView {
         let ask = match wanted {
             Wanted::Skills { filter } => {
                 let listed = match thread {
-                    Some(thread) => Listed::Session(self.cockpit.thread(thread)?.commands().to_vec()),
+                    Some(thread) => Listed::Session(self.cockpit.read(cx).thread(thread)?.commands().to_vec()),
                     None => {
                         let draft = pane.draft()?;
                         let provider = draft.binding.provider().provider;
                         let cwd = draft
                             .binding
-                            .resolve(self.cockpit.registry(), !self.on_machine())
+                            .resolve(self.cockpit.read(cx).registry(), !self.on_machine(cx))
                             .ok()?
                             .source_root()
                             .to_path_buf();
@@ -773,13 +773,13 @@ impl CockpitView {
             }
             Wanted::Commands { filter, standalone } => {
                 let listed = match thread {
-                    Some(thread) => Listed::Session(self.cockpit.thread(thread)?.commands().to_vec()),
+                    Some(thread) => Listed::Session(self.cockpit.read(cx).thread(thread)?.commands().to_vec()),
                     None => {
                         let draft = pane.draft()?;
                         let provider = draft.binding.provider().provider;
                         let cwd = draft
                             .binding
-                            .resolve(self.cockpit.registry(), !self.on_machine())
+                            .resolve(self.cockpit.read(cx).registry(), !self.on_machine(cx))
                             .ok()
                             .map(|workspace| workspace.source_root().to_path_buf());
                         match cwd {
@@ -801,12 +801,12 @@ impl CockpitView {
             }
             Wanted::Files { token_start, filter } => {
                 // No binding → nothing to walk → no menu.
-                let root = self.pane_root(index)?;
+                let root = self.pane_root(index, cx)?;
                 let search = match thread {
-                    Some(thread) => match self.cockpit.search_files(thread, &filter) {
+                    Some(thread) => match self.cockpit.update(cx, |cockpit, _| cockpit.search_files(thread, &filter)) {
                         Ok(reply) => Some(FileSearch {
                             thread,
-                            generation: self.cockpit.thread(thread)?.generation(),
+                            generation: self.cockpit.read(cx).thread(thread)?.generation(),
                             reply,
                         }),
                         Err(_) => None,
@@ -818,7 +818,7 @@ impl CockpitView {
                     filter,
                     root,
                     search,
-                    on_machine: self.on_machine(),
+                    on_machine: self.on_machine(cx),
                 }
             }
         };
@@ -851,9 +851,9 @@ impl CockpitView {
         let Some(thread) = menu.read(cx).searching() else {
             return;
         };
-        let focused = self.panes.get(self.focused()).map(|pane| pane.identity);
-        let generation = self.cockpit.thread(thread).map(|open| open.generation());
-        let on_machine = self.on_machine();
+        let focused = self.panes.get(self.focused(cx)).map(|pane| pane.identity);
+        let generation = self.cockpit.read(cx).thread(thread).map(|open| open.generation());
+        let on_machine = self.on_machine(cx);
         menu.update(cx, |menu, cx| menu.poll_files(focused, generation, on_machine, cx));
     }
 

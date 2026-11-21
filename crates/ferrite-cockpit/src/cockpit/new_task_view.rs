@@ -139,7 +139,7 @@ impl NewTaskView {
         let (project, workflow) = (self.project, self.workflow.clone());
         let NewTaskInputs { process } = self
             .cockpit
-            .read_with(cx, |cockpit, _| cockpit.new_task_inputs(project, workflow.as_deref()))
+            .read_with(cx, |cockpit, cx| cockpit.new_task_inputs(project, workflow.as_deref(), cx))
             .ok()??;
         let close = ferrite_ui::sheet::sheet_close("new-task-close", "Close New task", cx)
             .on_click(cx.listener(|_, _: &ClickEvent, _, cx| {
@@ -253,12 +253,12 @@ impl CockpitView {
     /// What the sheet of `project`'s Factory draws, none once that Factory
     /// no longer shows. It never reads the sheet: the sheet calls it while
     /// its own update is running.
-    fn new_task_inputs(&self, project: ProjectId, workflow: Option<&str>) -> Option<NewTaskInputs> {
+    fn new_task_inputs(&self, project: ProjectId, workflow: Option<&str>, cx: &App) -> Option<NewTaskInputs> {
         if self.factory_project()? != project {
             return None;
         }
         let process = match workflow
-            .and_then(|id| self.cockpit.factory().workflow(id))
+            .and_then(|id| self.cockpit.read(cx).factory().workflow(id))
             .and_then(|workflow| workflow.latest())
         {
             Some(latest) => format!("{} \u{b7} version {}", latest.definition.name, latest.version),
@@ -352,7 +352,7 @@ impl CockpitView {
                 workflow,
                 pr,
             };
-            match self.cockpit.task(action) {
+            match self.cockpit.update(cx, |cockpit, _| cockpit.task(action)) {
                 Ok(Some(Done::Task { task })) => {
                     self.hide_sheet(cx);
                     self.update_factory(cx, |view, _| {

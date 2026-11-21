@@ -47,8 +47,9 @@ fn contract_typed_question_renders_and_returns_normalized_picks(cx: &mut TestApp
         .send(typed_decision(DecisionKind::Questions(vec![q])))
         .unwrap();
     tick(cx);
-    let serial = view.read_with(cx, |v, _| {
+    let serial = view.read_with(cx, |v, cx| {
         v.cockpit
+            .read(cx)
             .thread(v.panes[0].thread().unwrap())
             .unwrap()
             .pending_decisions()[0]
@@ -104,8 +105,9 @@ fn async_question_sends_picks_and_typed_answers_while_work_continues(cx: &mut Te
             .send(SessionEvent::DecisionRequested { decision })
             .unwrap();
         tick(cx);
-        let serial = view.read_with(cx, |v, _| {
+        let serial = view.read_with(cx, |v, cx| {
             v.cockpit
+                .read(cx)
                 .thread(v.panes[0].thread().unwrap())
                 .unwrap()
                 .pending_decisions()
@@ -258,8 +260,9 @@ fn contract_mcp_form_defaults_submit_typed_values(cx: &mut TestAppContext) {
         }))
         .unwrap();
     tick(cx);
-    let serial = view.read_with(cx, |v, _| {
+    let serial = view.read_with(cx, |v, cx| {
         v.cockpit
+            .read(cx)
             .thread(v.panes[0].thread().unwrap())
             .unwrap()
             .pending_decisions()[0]
@@ -324,8 +327,9 @@ fn contract_mcp_required_input_without_default_is_editable_and_validated(cx: &mu
         }))
         .unwrap();
     tick(cx);
-    let serial = view.read_with(cx, |v, _| {
+    let serial = view.read_with(cx, |v, cx| {
         v.cockpit
+            .read(cx)
             .thread(v.panes[0].thread().unwrap())
             .unwrap()
             .pending_decisions()[0]
@@ -380,8 +384,9 @@ fn a_typed_form_value_is_sent_exactly_and_the_draft_is_untouched(cx: &mut TestAp
         }))
         .unwrap();
     tick(cx);
-    let serial = view.read_with(cx, |v, _| {
+    let serial = view.read_with(cx, |v, cx| {
         v.cockpit
+            .read(cx)
             .thread(v.panes[0].thread().unwrap())
             .unwrap()
             .pending_decisions()[0]
@@ -437,9 +442,9 @@ fn contract_the_standing_native_choice_is_option_two(cx: &mut TestAppContext) {
         .send(SessionEvent::DecisionRequested { decision })
         .unwrap();
     tick(cx);
-    let (thread, serial) = view.read_with(cx, |v, _| {
+    let (thread, serial) = view.read_with(cx, |v, cx| {
         let thread = v.panes[0].thread().unwrap();
-        let serial = v.cockpit.thread(thread).unwrap().pending_decisions()[0]
+        let serial = v.cockpit.read(cx).thread(thread).unwrap().pending_decisions()[0]
             .handle
             .serial;
         (thread, serial)
@@ -565,12 +570,12 @@ fn project_completion_stays_visible_while_a_compact_form_scrolls(cx: &mut TestAp
                 view.project_card(app).is_none(),
                 "the visible footer completes the form"
             );
-            assert_eq!(view.cockpit.registry().projects().len(), before + 1);
+            assert_eq!(view.cockpit.read(app).registry().projects().len(), before + 1);
             let project = view.nav_filter.expect("the completed Project is selected");
             if let Some(created) = created {
                 assert_eq!(project, created, "Done must edit the same Project");
             }
-            let record = view.cockpit.registry().project(project).unwrap();
+            let record = view.cockpit.read(app).registry().project(project).unwrap();
             assert_eq!(record.title, title);
             assert_eq!(record.root, directories[0]);
             assert_eq!(record.additional_roots, directories[1..]);
@@ -606,8 +611,8 @@ fn a_blocking_question_leaves_no_notice_row(cx: &mut TestAppContext) {
         .send(typed_decision(DecisionKind::Questions(vec![q])))
         .unwrap();
     tick(cx);
-    view.read_with(cx, |v, _| {
-        let thread = v.cockpit.thread(v.panes[0].thread().unwrap()).unwrap();
+    view.read_with(cx, |v, cx| {
+        let thread = v.cockpit.read(cx).thread(v.panes[0].thread().unwrap()).unwrap();
         assert!(
             !thread.transcript().blocks().iter().any(
                 |block| matches!(&block.body, ferrite_core::transcript::Body::Notice(line)

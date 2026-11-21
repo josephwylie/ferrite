@@ -18,10 +18,10 @@ fn composer_survives_background_thread_removal(cx: &mut TestAppContext) {
 
     // Exercise the core mutation seen from the Server, without the UI close
     // action (which already synchronizes its mirror).
-    view.update(cx, |view, _| {
-        view.cockpit.park_thread(threads[0]).unwrap();
+    view.update(cx, |view, cx| {
+        view.cockpit.update(cx, |cockpit, _| cockpit.park_thread(threads[0]).unwrap());
         assert_eq!(
-            view.panes[view.focused()].thread(),
+            view.panes[view.focused(cx)].thread(),
             Some(threads[2]),
             "focus follows identity even before the next UI pump"
         );
@@ -37,14 +37,14 @@ fn composer_survives_background_thread_removal(cx: &mut TestAppContext) {
     view.read_with(cx, |view, cx| {
         let pane = &view.panes[view.pane_for(threads[2]).unwrap()];
         assert_eq!(pane.composer.read(cx).text(), "keep this draft typed");
-        assert_eq!(view.panes[view.focused()].thread(), Some(threads[2]));
+        assert_eq!(view.panes[view.focused(cx)].thread(), Some(threads[2]));
     });
     cx.update(|_, cx| cx.write_to_clipboard(ClipboardItem::new_string(" pasted".into())));
     cx.dispatch_action(Paste);
     tick(cx);
     view.read_with(cx, |view, cx| {
         assert_eq!(
-            view.panes[view.focused()].composer.read(cx).text(),
+            view.panes[view.focused(cx)].composer.read(cx).text(),
             "keep this draft typed pasted"
         );
     });
@@ -117,6 +117,7 @@ fn composer_escape_stops_a_running_turn_with_text_in_the_line(cx: &mut TestAppCo
     view.read_with(cx, |view, cx| {
         assert_eq!(
             view.cockpit
+                .read(cx)
                 .thread(thread)
                 .unwrap()
                 .queue()
@@ -142,6 +143,7 @@ fn composer_escape_stops_a_running_turn_with_text_in_the_line(cx: &mut TestAppCo
     view.read_with(cx, |view, cx| {
         assert_eq!(
             view.cockpit
+                .read(cx)
                 .thread(thread)
                 .unwrap()
                 .queue()
@@ -177,20 +179,20 @@ fn composer_busy_tuning_choices_explain_and_preserve_selection(cx: &mut TestAppC
             .position(|row| !row.inert && !row.active)
             .unwrap();
         // A click from the menu's previous frame also observes current busy state.
-        let _ = view.cockpit.send(thread, "work".into());
-        view.cockpit.apply_input(
+        let _ = view.cockpit.update(cx, |cockpit, _| cockpit.send(thread, "work".into()));
+        view.cockpit.update(cx, |cockpit, _| cockpit.apply_input(
             thread,
             ferrite_core::transcript::Input::Event(SessionEvent::RunState {
                 state: ferrite_core::RunState::Running,
             }),
-        );
+        ));
         let _ = window;
         view.pick_in_model_picker(Picked::Model(pick), cx);
         let picker = view.model_picker_view(cx).expect("explanation stays open");
         assert_eq!(picker.hold, Some(TUNING_BUSY_HINT));
         assert!(picker.rows.iter().all(|row| row.inert));
         assert!(picker.rows.iter().any(|row| row.active));
-        assert_eq!(view.cockpit.thread(thread).unwrap().model(), Some("sonnet"));
+        assert_eq!(view.cockpit.read(cx).thread(thread).unwrap().model(), Some("sonnet"));
         view.open_effort_picker(thread, cx);
         let picker = view.model_picker_view(cx).unwrap();
         assert_eq!(picker.hold, Some(TUNING_BUSY_HINT));
@@ -236,7 +238,7 @@ fn a_tuning_change_waiting_on_the_provider_holds_the_pickers(cx: &mut TestAppCon
     tick(cx);
     view.update(cx, |view, cx| {
         view.pick_effort(thread, Some("high".into()), cx);
-        assert_eq!(view.cockpit.thread(thread).unwrap().effort(), None);
+        assert_eq!(view.cockpit.read(cx).thread(thread).unwrap().effort(), None);
         view.open_effort_picker(thread, cx);
         let picker = view.model_picker_view(cx).unwrap();
         assert_eq!(picker.hold, Some(TUNING_PENDING_HINT));
@@ -251,7 +253,7 @@ fn a_tuning_change_waiting_on_the_provider_holds_the_pickers(cx: &mut TestAppCon
         .unwrap();
     tick(cx);
     view.read_with(cx, |view, cx| {
-        assert_eq!(view.cockpit.thread(thread).unwrap().effort(), Some("high"));
+        assert_eq!(view.cockpit.read(cx).thread(thread).unwrap().effort(), Some("high"));
         let picker = view
             .model_picker_view(cx)
             .expect("the answer keeps the picker open");
@@ -465,9 +467,10 @@ fn the_queued_row_drops_and_the_send_circle_sends_or_stops(cx: &mut TestAppConte
         .expect("the first row's close button");
     cx.simulate_click(close.center(), gpui::Modifiers::none());
     tick(cx);
-    view.read_with(cx, |view, _| {
+    view.read_with(cx, |view, cx| {
         assert_eq!(
             view.cockpit
+                .read(cx)
                 .thread(thread)
                 .unwrap()
                 .queue()
@@ -547,7 +550,7 @@ fn the_queue_strip_edits_and_sends_now(cx: &mut TestAppContext) {
     cx.simulate_click(edit.center(), gpui::Modifiers::none());
     tick(cx);
     view.read_with(cx, |view, cx| {
-        assert!(view.cockpit.thread(thread).unwrap().queue().is_empty());
+        assert!(view.cockpit.read(cx).thread(thread).unwrap().queue().is_empty());
         assert_eq!(view.panes[0].composer.read(cx).text(), "Held follow-up");
     });
 }

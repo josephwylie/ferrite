@@ -69,12 +69,12 @@ pub(super) fn search_line(cx: &mut Context<NavView>) -> Entity<Composer> {
 
 impl CockpitView {
     /// The Filter menu's rows: every Project, the scoped one checked.
-    pub(super) fn filter_rows(&self) -> Vec<Option<(menu::Item, MenuVerb)>> {
+    pub(super) fn filter_rows(&self, cx: &gpui::App) -> Vec<Option<(menu::Item, MenuVerb)>> {
         let mut rows = vec![Some((
             menu::Item::new("All projects").checked(self.nav_filter.is_none()),
             MenuVerb::FilterProject(None),
         ))];
-        rows.extend(self.cockpit.registry().projects().iter().map(|project| {
+        rows.extend(self.cockpit.read(cx).registry().projects().iter().map(|project| {
             Some((
                 menu::Item::new(project.title.clone()).checked(self.nav_filter == Some(project.id)),
                 MenuVerb::FilterProject(Some(project.id)),

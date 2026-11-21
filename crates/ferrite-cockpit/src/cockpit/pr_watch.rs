@@ -57,7 +57,7 @@ impl CockpitView {
     /// whose work published since, have their PR read.
     pub(super) fn watch_prs(&mut self, cx: &mut Context<Self>) {
         self.refresh_published(cx);
-        if let Some(thread) = self.pr_watch.focus_moved(self.focused_thread()) {
+        if let Some(thread) = self.pr_watch.focus_moved(self.focused_thread(cx)) {
             self.check_pr(thread, false, cx);
         }
     }
@@ -71,7 +71,7 @@ impl CockpitView {
         if manual {
             self.refresh_pr_tab(thread, cx);
         }
-        let Some(path) = self.thread_path(thread) else {
+        let Some(path) = self.thread_path(thread, cx) else {
             return;
         };
         if !self
@@ -86,10 +86,10 @@ impl CockpitView {
         // Tests and captures never run `gh`: only a fixture world's forge
         // answers them (`Cockpit::fixture_forge`); a test reads what was
         // asked.
-        if cfg!(any(test, feature = "visual-reference")) && !self.cockpit.has_forge_fixture(&path) {
+        if cfg!(any(test, feature = "visual-reference")) && !self.cockpit.read(cx).has_forge_fixture(&path) {
             return;
         }
-        let answer = self.cockpit.pull_request(&path);
+        let answer = self.cockpit.update(cx, |cockpit, _| cockpit.pull_request(&path));
         cx.spawn(async move |this, cx| {
             // A read that failed is `gh` with nothing to say: no label.
             let reading = beside::answered(answer, cx).await.ok().flatten();
@@ -107,11 +107,13 @@ impl CockpitView {
     fn refresh_published(&mut self, cx: &mut Context<Self>) {
         let moved: Vec<ThreadId> = self
             .cockpit
+            .read(cx)
             .threads()
             .into_iter()
             .filter(|thread| {
                 let Some(count) = self
                     .cockpit
+                    .read(cx)
                     .thread(*thread)
                     .map(|open| open.transcript().published())
                 else {

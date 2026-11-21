@@ -182,8 +182,8 @@ fn tab_walks_a_group_and_enter_opens_it(cx: &mut TestAppContext) {
     tick(cx);
     // The settled turn's fold is the first stop; Enter opens it, its work
     // in place under it.
-    let prompt = view.read_with(cx, |view, _| {
-        view.cockpit.thread(thread).unwrap().transcript().blocks()[0].id
+    let prompt = view.read_with(cx, |view, cx| {
+        view.cockpit.read(cx).thread(thread).unwrap().transcript().blocks()[0].id
     });
     let fold = pane::DisclosureId::Turn(prompt);
     cx.simulate_keystrokes("tab");

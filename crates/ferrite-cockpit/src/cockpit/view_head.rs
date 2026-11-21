@@ -35,18 +35,18 @@ impl CockpitView {
             let prs = self.prs.read(cx);
             let project = prs
                 .project
-                .and_then(|project| self.cockpit.registry().project(project))
+                .and_then(|project| self.cockpit.read(cx).registry().project(project))
                 .map(|project| SharedString::from(project.title.clone()));
             parts.extend(prs.head(project));
-        } else if !self.empty_board_shown() {
+        } else if !self.empty_board_shown(cx) {
             parts.extend(self.solo_head(cx).into_iter().flatten());
         }
         // The head runs to the column's edge (or the window's), clear of
         // the tools that stand against it.
-        let right = self.view_head_end();
+        let right = self.view_head_end(cx);
         let menu_thread = self
-            .focused_thread()
-            .filter(|_| !self.empty_board_shown() && !self.destination_shown());
+            .focused_thread(cx)
+            .filter(|_| !self.empty_board_shown(cx) && !self.destination_shown());
         div()
             .debug_selector(|| "view-head".into())
             .when_some(menu_thread, |head, thread| {
@@ -67,7 +67,7 @@ impl CockpitView {
             .items_center()
             .gap(px(theme::VIEW_HEAD_GAP))
             .pl(px(self.view_head_pad_l()))
-            .pr(px(self.view_head_pad_r(right)))
+            .pr(px(self.view_head_pad_r(right, cx)))
             .font_family(theme::FONT_UI)
             .text_size(px(theme::FS_UI))
             .line_height(px(theme::LH_UI))
@@ -79,11 +79,11 @@ impl CockpitView {
     /// Where the view head ends, in from the window's right edge: the
     /// board's edge, or — with no column, on Windows — short of the
     /// caption buttons.
-    fn view_head_end(&self) -> f32 {
-        if self.panel_drawn_pane().is_none() && ferrite_ui::frame::CUSTOM {
+    fn view_head_end(&self, cx: &gpui::App) -> f32 {
+        if self.panel_drawn_pane(cx).is_none() && ferrite_ui::frame::CUSTOM {
             super::panel::tools_inset()
         } else {
-            self.board_right()
+            self.board_right(cx)
         }
     }
 
@@ -96,8 +96,8 @@ impl CockpitView {
 
     /// The head's padding at its end, which keeps its content clear of
     /// the tools (`right` is where the head ends).
-    fn view_head_pad_r(&self, right: f32) -> f32 {
-        if !self.panel_toggle_shown() {
+    fn view_head_pad_r(&self, right: f32, cx: &gpui::App) -> f32 {
+        if !self.panel_toggle_shown(cx) {
             return theme::VIEW_HEAD_PAD_X;
         }
         (self.title_tools_right() + theme::TITLE_TOOLS_W + theme::VIEW_HEAD_PAD_X - right)
@@ -181,8 +181,8 @@ impl CockpitView {
 
     /// Whether the title bar shows the Panel's toggle: for a Thread, not a
     /// draft or the empty board.
-    fn panel_toggle_shown(&self) -> bool {
-        !self.empty_board_shown() && !self.destination_shown() && self.focused_thread().is_some()
+    fn panel_toggle_shown(&self, cx: &gpui::App) -> bool {
+        !self.empty_board_shown(cx) && !self.destination_shown() && self.focused_thread(cx).is_some()
     }
 
     /// The Factory's breadcrumb: its Project, `Factory`, then the Task
@@ -194,6 +194,7 @@ impl CockpitView {
         let surface = view.read(cx).surface;
         let project = self
             .cockpit
+            .read(cx)
             .registry()
             .project(project)
             .map(|project| SharedString::from(project.title.clone()))
@@ -246,7 +247,7 @@ impl CockpitView {
     /// right end at the window's edge (`title_tools_right`): the Panel's
     /// toggle (T3's "Toggle right panel"), pressed while the Panel shows.
     pub(super) fn title_tools_element(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
-        if !self.panel_toggle_shown() {
+        if !self.panel_toggle_shown(cx) {
             return None;
         }
         let panel = icon_button_as(
@@ -254,7 +255,7 @@ impl CockpitView {
             icons::PANEL_RIGHT,
             IconSize::Standard,
             "Toggle panel",
-            IconState::Toggle(self.panel_pane().is_some()),
+            IconState::Toggle(self.panel_pane(cx).is_some()),
             cx,
         )
         .occlude()
@@ -285,7 +286,7 @@ impl CockpitView {
     /// where a machine runs it (`From` the machine), the branch while the
     /// panel that says it is hidden, and a spacer.
     fn solo_head(&self, cx: &mut Context<Self>) -> Option<Vec<AnyElement>> {
-        let thread = self.focused_thread()?;
+        let thread = self.focused_thread(cx)?;
         let mut crumbs = Vec::new();
         if let Some(project) = self.head_project(thread, cx) {
             crumbs.extend([project, separator()]);
@@ -304,11 +305,11 @@ impl CockpitView {
             .gap(px(theme::HEAD_CRUMB_GAP))
             .children(crumbs)
             .into_any_element()];
-        if let Some(machine) = self.cockpit.machine() {
+        if let Some(machine) = self.cockpit.read(cx).machine() {
             parts.push(environment_badge(machine.name()));
         }
         let branch = self
-            .panel_pane()
+            .panel_pane(cx)
             .is_none()
             .then(|| self.head_branch(thread))
             .flatten();

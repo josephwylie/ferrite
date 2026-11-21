@@ -983,7 +983,7 @@ impl Render for StartsView {
 impl CockpitView {
     /// Settings' stepper on how many Factory Tasks work at once.
     pub(crate) fn step_factory_limit(&mut self, delta: i32, cx: &mut Context<Self>) {
-        let Some(now) = self.factory_limit() else {
+        let Some(now) = self.factory_limit(cx) else {
             return;
         };
         let next = if delta == 0 {
@@ -1184,7 +1184,7 @@ impl CockpitView {
             .map(|repository| GitHubAsk::Labels { repository });
         for ask in std::iter::once(GitHubAsk::Repositories).chain(labels) {
             if starts.read(cx).unasked(&ask) {
-                let asked = self.cockpit.github_names(ask.clone());
+                let asked = self.cockpit.update(cx, |cockpit, _| cockpit.github_names(ask.clone()));
                 starts.update(cx, |starts, cx| starts.listen(ask, asked, cx));
             }
         }

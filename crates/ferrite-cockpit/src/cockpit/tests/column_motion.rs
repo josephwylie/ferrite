@@ -61,7 +61,7 @@ fn board_left(cx: &mut gpui::VisualTestContext) -> f32 {
 }
 
 fn card_right(view: &Entity<CockpitView>, cx: &mut gpui::VisualTestContext) -> f32 {
-    let card = cx.update(|window, cx| view.read(cx).pane_rects(window))[0].1;
+    let card = cx.update(|window, cx| view.read(cx).pane_rects(window, cx))[0].1;
     card.x + card.w
 }
 
@@ -233,7 +233,7 @@ fn reduced_motion_lands_both_columns(cx: &mut TestAppContext) {
 }
 
 fn thread(view: &Entity<CockpitView>, cx: &mut gpui::VisualTestContext) -> ThreadId {
-    view.read_with(cx, |view, _| view.focused_thread().expect("a Thread"))
+    view.read_with(cx, |view, cx| view.focused_thread(cx).expect("a Thread"))
 }
 
 fn show(view: &Entity<CockpitView>, id: SurfaceId, cx: &mut gpui::VisualTestContext) {
@@ -243,7 +243,7 @@ fn show(view: &Entity<CockpitView>, id: SurfaceId, cx: &mut gpui::VisualTestCont
 }
 
 fn drawn_w(view: &Entity<CockpitView>, cx: &mut gpui::VisualTestContext) -> f32 {
-    view.read_with(cx, |view, _| view.panel_target_w())
+    view.read_with(cx, |view, cx| view.panel_target_w(cx))
 }
 
 /// Visiting Files, then Overview again, leaves the compact panel as it

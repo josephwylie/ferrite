@@ -120,23 +120,24 @@ impl CockpitView {
     /// told, else where it was left, else the shown Thread's Project, else
     /// the first one.
     pub(crate) fn open_prs(&mut self, project: Option<ProjectId>, cx: &mut Context<Self>) {
-        let focused = self.focused_thread();
+        let focused = self.focused_thread(cx);
         let from_thread =
             focused.and_then(|thread| self.facts.get(thread).and_then(|facts| facts.project));
         let first = self
             .cockpit
+            .read(cx)
             .registry()
             .projects()
             .first()
             .map(|project| project.id);
-        let known = |project: &ProjectId| self.cockpit.registry().project(*project).is_some();
+        let known = |project: &ProjectId| self.cockpit.read(cx).registry().project(*project).is_some();
         let chosen = project
             .or(self.prs.read(cx).project.filter(known))
             .or(from_thread)
             .or(first);
         self.destination = Some(Destination {
             shows: Shows::Prs,
-            focus_at_open: self.cockpit.roster().focused(),
+            focus_at_open: self.cockpit.read(cx).roster().focused(),
         });
         self.prs.update(cx, |prs, cx| prs.show(chosen, cx));
         cx.notify();
@@ -153,7 +154,7 @@ impl CockpitView {
     ) {
         let origin = |path: &std::path::Path| ferrite_pane::file_links::origin_base(path);
         let checkout = self
-            .thread_path(thread)
+            .thread_path(thread, cx)
             .and_then(|path| origin(&path))
             .or_else(|| {
                 self.facts
@@ -180,7 +181,7 @@ impl CockpitView {
     /// when its branch has one, else the destination.
     pub(crate) fn open_prs_from_foot(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         match self
-            .focused_thread()
+            .focused_thread(cx)
             .filter(|thread| self.facts.pr(*thread).is_some())
         {
             Some(thread) => {
@@ -220,16 +221,17 @@ impl CockpitView {
     ) {
         let Some(path) = self
             .cockpit
+            .read(cx)
             .registry()
             .project(project)
             .map(|project| project.root.clone())
         else {
             return;
         };
-        if cfg!(any(test, feature = "visual-reference")) && !self.cockpit.has_forge_fixture(&path) {
+        if cfg!(any(test, feature = "visual-reference")) && !self.cockpit.read(cx).has_forge_fixture(&path) {
             return;
         }
-        let answer = self.cockpit.list_pull_requests(&path, filter);
+        let answer = self.cockpit.update(cx, |cockpit, _| cockpit.list_pull_requests(&path, filter));
         self.prs
             .update(cx, |prs, cx| prs.reading((project, filter), answer, cx));
     }
@@ -239,6 +241,7 @@ impl CockpitView {
     fn prs_inputs(&self, open: Option<(PrTarget, PrTab)>, cx: &mut Context<Self>) -> PrsInputs {
         let projects = self
             .cockpit
+            .read(cx)
             .registry()
             .projects()
             .iter()

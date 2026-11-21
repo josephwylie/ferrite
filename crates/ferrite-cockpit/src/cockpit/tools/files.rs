@@ -308,7 +308,7 @@ impl CockpitView {
         cx: &mut Context<Self>,
     ) {
         self.upsert_surface(thread, SurfaceId::Files, cx);
-        let beside = self.files_tree_beside();
+        let beside = self.files_tree_beside(cx);
         self.files
             .update(cx, |files, cx| files.open(thread, path, line, keep, beside, cx));
     }
@@ -320,10 +320,10 @@ impl CockpitView {
         if self.files.read(cx).holds(thread) {
             return;
         }
-        let Some(root) = self.thread_path(thread) else {
+        let Some(root) = self.thread_path(thread, cx) else {
             return;
         };
-        let machine = self.cockpit.machine().cloned();
+        let machine = self.cockpit.read(cx).machine().cloned();
         let stored = self.panel.working_sets.get(thread.get()).cloned();
         self.files
             .update(cx, |files, cx| files.make(thread, root, machine, stored, cx));
@@ -357,7 +357,7 @@ impl CockpitView {
     }
 
     pub(in crate::cockpit) fn uses_remote_files(&self, thread: ThreadId, cx: &gpui::App) -> bool {
-        self.on_machine() || self.files.read(cx).is_remote(thread)
+        self.on_machine(cx) || self.files.read(cx).is_remote(thread)
     }
 
     pub(crate) fn files_leave_error(&self, cx: &gpui::App) -> Option<&'static str> {
@@ -376,6 +376,7 @@ impl CockpitView {
         }
         let known = self
             .cockpit
+            .read(cx)
             .known_threads()
             .into_iter()
             .map(ThreadId::get)
@@ -396,7 +397,7 @@ impl CockpitView {
                 let document = pane.preview.document()?;
                 let plain = document.name.is_none()
                     && matches!(document.body, DocBody::Text { .. })
-                    && self.thread_path(thread).is_some_and(|root| document.path.starts_with(root));
+                    && self.thread_path(thread, cx).is_some_and(|root| document.path.starts_with(root));
                 plain.then(|| (thread, document.path.clone(), document.line()))
             })
             .collect();
@@ -453,17 +454,17 @@ impl CockpitView {
     /// Whether the Panel is wide enough for the tree beside a readable
     /// editor. Narrower, the tree is a page over the editor, and a file
     /// picked from it shows the editor again.
-    fn files_tree_beside(&self) -> bool {
-        self.panel_pane()
+    fn files_tree_beside(&self, cx: &gpui::App) -> bool {
+        self.panel_pane(cx)
             .is_some_and(|index| self.panel_rest_w(index) >= theme::FILES_TREE_W + theme::FILES_EDITOR_MIN_W)
     }
 
     /// Everything Files draws from: the Thread whose Panel shows it.
-    fn files_inputs(&self) -> Option<FilesInputs> {
-        let thread = self.panes[self.panel_drawn_pane()?].thread()?;
+    fn files_inputs(&self, cx: &gpui::App) -> Option<FilesInputs> {
+        let thread = self.panes[self.panel_drawn_pane(cx)?].thread()?;
         (self.active_surface(thread) == Some(SurfaceId::Files)).then(|| FilesInputs {
             thread,
-            beside: self.files_tree_beside(),
+            beside: self.files_tree_beside(cx),
             doors: self.doors(),
             focus: self.panel.focus.clone(),
             changes: self.changes.clone(),
@@ -1793,7 +1794,7 @@ impl FilesView {
 
 impl Render for FilesView {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        match self.cockpit.upgrade().and_then(|cockpit| cockpit.read(cx).files_inputs()) {
+        match self.cockpit.upgrade().and_then(|cockpit| cockpit.read(cx).files_inputs(cx)) {
             Some(inputs) => self.pane(&inputs, cx),
             None => div().flex_1(),
         }

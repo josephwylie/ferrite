@@ -14,11 +14,11 @@ fn a_request_toast_stands_top_right_clear_of_the_composer(cx: &mut TestAppContex
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     cx.simulate_resize(gpui::size(px(1440.), px(900.)));
     tick(cx);
-    let off_focus = view.read_with(cx, |view, _| {
+    let off_focus = view.read_with(cx, |view, cx| {
         threads
             .iter()
             .copied()
-            .find(|thread| Some(*thread) != view.focused_thread())
+            .find(|thread| Some(*thread) != view.focused_thread(cx))
             .unwrap()
     });
     let stream = threads
@@ -45,7 +45,7 @@ fn a_request_toast_stands_top_right_clear_of_the_composer(cx: &mut TestAppContex
         .expect("the nav folded: it toasts");
     use ferrite_ui::theme::{PANE_HEAD_H, TOAST_BOX_RIGHT, TOAST_TOP, TOAST_W, WIN_CHROME_H};
     let window = cx.update(|window, _| window.viewport_size());
-    let panel = view.read_with(cx, |view, _| view.panel_column_w());
+    let panel = view.read_with(cx, |view, cx| view.panel_column_w(cx));
     assert!(panel > 0., "the premise: the panel shows");
     // On the transcript's column, under the Pane heads, `TOAST_BOX_RIGHT`
     // in from the panel's left: the panel is never covered.

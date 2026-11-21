@@ -311,7 +311,7 @@ impl CockpitView {
     /// What the editor draws, for what `editor` chose: none while the
     /// Project has no Workflow.
     pub(in crate::cockpit) fn workflows_inputs(&self, editor: &WorkflowsView, cx: &gpui::App) -> Option<WorkflowsInputs> {
-        let workflow = self.chosen_workflow(editor.selected.as_deref())?;
+        let workflow = self.chosen_workflow(editor.selected.as_deref(), cx)?;
         let view = self.factory()?.read(cx);
         let step = editor.shown_step(&workflow.draft);
         let provider = step.map(|step| step.agent.provider);
@@ -328,7 +328,7 @@ impl CockpitView {
             draft: workflow.draft.clone(),
             models: Provider::ALL
                 .into_iter()
-                .map(|provider| (provider, self.cockpit.model_catalog(provider)))
+                .map(|provider| (provider, self.cockpit.read(cx).model_catalog(provider)))
                 .collect(),
             installed: provider
                 .and_then(|provider| view.skills.installed(provider))

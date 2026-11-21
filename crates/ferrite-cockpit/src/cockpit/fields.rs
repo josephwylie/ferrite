@@ -56,7 +56,7 @@ impl CockpitView {
         if !self.focus.contains_focused(window, cx) {
             return fresh;
         }
-        let focused = self.focused();
+        let focused = self.focused(cx);
         let in_composer = window
             .context_stack()
             .iter()

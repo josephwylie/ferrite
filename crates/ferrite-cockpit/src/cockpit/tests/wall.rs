@@ -20,7 +20,7 @@ fn the_smallest_window_still_draws_the_transcript_and_composer(cx: &mut TestAppC
         })
         .unwrap();
     tick(cx);
-    let rect = cx.update(|window, cx| view.read(cx).pane_rects(window)[0].1);
+    let rect = cx.update(|window, cx| view.read(cx).pane_rects(window, cx)[0].1);
     assert!(
         rect.w < 300.0 || rect.h < 360.0,
         "the premise: the cell is under the old 300 by 360 transcript floor: {rect:?}"
@@ -95,7 +95,7 @@ fn a_decision_or_a_turn_end_refolds_the_wall_card_at_once(cx: &mut TestAppContex
     send(turn_ended());
     step(cx, 16);
     assert!(
-        view.read_with(cx, |view, _| !view.cockpit.thread(thread).unwrap().busy()),
+        view.read_with(cx, |view, cx| !view.cockpit.read(cx).thread(thread).unwrap().busy()),
         "the premise: the turn is over"
     );
     assert!(
@@ -121,7 +121,7 @@ fn the_locked_pane_caches_the_actual_checkout_branch(cx: &mut TestAppContext) {
     let core = Cockpit::new(store, Box::new(fake));
     bind_band_keys(cx);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
-    view.update(cx, |view, _| view.aim_launch(&repo));
+    view.update(cx, |view, cx| view.aim_launch(&repo, cx));
     tick(cx);
 
     cx.simulate_input("hello");
@@ -137,8 +137,8 @@ fn the_locked_pane_caches_the_actual_checkout_branch(cx: &mut TestAppContext) {
         String::from_utf8_lossy(&out.stdout).trim().to_string()
     };
     let expected = git(&["branch", "--show-current"]);
-    let thread = view.read_with(cx, |view, _| {
-        let thread = view.panes[view.focused()].thread().expect("locked");
+    let thread = view.read_with(cx, |view, cx| {
+        let thread = view.panes[view.focused(cx)].thread().expect("locked");
         assert_eq!(
             view.facts
                 .get(thread)

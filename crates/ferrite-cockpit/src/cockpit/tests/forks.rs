@@ -33,11 +33,11 @@ fn answered<'a>(
 fn landed_on_fork(view: &Entity<CockpitView>, fake: &Fake, cx: &mut gpui::VisualTestContext) {
     tick(cx);
     assert_eq!(fake.forks.borrow().len(), 1, "one fork asked");
-    view.read_with(cx, |view, _| {
-        let threads = view.cockpit.threads();
+    view.read_with(cx, |view, cx| {
+        let threads = view.cockpit.read(cx).threads();
         assert_eq!(threads.len(), 2, "the fork is open");
         assert_eq!(
-            view.focused_thread(),
+            view.focused_thread(cx),
             Some(threads[1]),
             "the window lands on it"
         );
@@ -166,7 +166,7 @@ fn the_menu_and_the_palette_fork_and_rewind(cx: &mut TestAppContext) {
 
     // A sent prompt goes out under its id: the palette's Rewind opens its
     // menu.
-    let _ = view.update(cx, |view, _| view.cockpit.send(thread, "again".into()));
+    let _ = view.update(cx, |view, cx| view.cockpit.update(cx, |cockpit, _| cockpit.send(thread, "again".into())));
     fake.streams.borrow()[0]
         .send(SessionEvent::TurnEnded {
             outcome: ferrite_core::TurnOutcome::Completed,
@@ -198,6 +198,7 @@ fn the_rewind_menu_offers_the_code_only_where_the_agent_restores_files(cx: &mut 
     let labels = |view: &CockpitView, thread, cx: &gpui::App| {
         let block = view
             .cockpit
+            .read(cx)
             .thread(thread)
             .and_then(|open| open.transcript().blocks().first().map(|shown| shown.id));
         let Some(block) = block else {
@@ -211,7 +212,7 @@ fn the_rewind_menu_offers_the_code_only_where_the_agent_restores_files(cx: &mut 
     };
     let (view, _fake, cx) = answered("rewind-code", cx);
     view.read_with(cx, |view, cx| {
-        let thread = view.cockpit.threads()[0];
+        let thread = view.cockpit.read(cx).threads()[0];
         assert_eq!(
             labels(view, thread, cx),
             ["Rewind conversation", "Rewind conversation and code"]
@@ -231,7 +232,7 @@ fn the_rewind_menu_offers_the_code_only_where_the_agent_restores_files(cx: &mut 
         .unwrap();
     tick(cx);
     view.read_with(cx, |view, cx| {
-        let thread = view.cockpit.threads()[0];
+        let thread = view.cockpit.read(cx).threads()[0];
         assert_eq!(labels(view, thread, cx), ["Rewind conversation"]);
     });
 }
@@ -268,7 +269,7 @@ fn right_clicking_an_answer_or_a_prompt_opens_the_message_menu(cx: &mut TestAppC
     assert!(cx.debug_bounds("answer-chapter").is_some(), "pinned");
 
     // A prompt: the same menu with its own rows.
-    let _ = view.update(cx, |view, _| view.cockpit.send(thread, "again".into()));
+    let _ = view.update(cx, |view, cx| view.cockpit.update(cx, |cockpit, _| cockpit.send(thread, "again".into())));
     fake.streams.borrow()[0]
         .send(SessionEvent::TextDelta {
             text: "bravo\n\n".into(),

@@ -193,10 +193,10 @@ impl CockpitView {
         if surface == Surface::Coordinator {
             // Its Pane takes the keyboard, as a Worker's on its tab.
             if let Some(index) = self
-                .coordinator_thread()
+                .coordinator_thread(cx)
                 .and_then(|thread| self.pane_for(thread))
             {
-                self.focus_pane(index);
+                self.focus_pane(index, cx);
             }
         }
         cx.notify();
@@ -208,15 +208,15 @@ impl CockpitView {
     }
 
     /// The Workflow the surface shows: the one chosen, else the first.
-    pub(crate) fn shown_workflow(&self, cx: &gpui::App) -> Option<&Workflow> {
-        self.chosen_workflow(self.factory()?.read(cx).editor.read(cx).selected.as_deref())
+    pub(crate) fn shown_workflow<'a>(&self, cx: &'a gpui::App) -> Option<&'a Workflow> {
+        self.chosen_workflow(self.factory()?.read(cx).editor.read(cx).selected.as_deref(), cx)
     }
 
     /// The Workflow shown with `chosen` chosen: it, else the Project's
     /// first.
-    fn chosen_workflow(&self, chosen: Option<&str>) -> Option<&Workflow> {
+    fn chosen_workflow<'a>(&self, chosen: Option<&str>, cx: &'a gpui::App) -> Option<&'a Workflow> {
         let project = self.factory_project()?;
-        let board = self.cockpit.factory();
+        let board = self.cockpit.read(cx).factory();
         chosen
             .and_then(|id| board.workflow(id))
             .filter(|workflow| workflow.project == project)
@@ -224,7 +224,7 @@ impl CockpitView {
     }
 
     /// The Step the inspector shows: the one chosen, else the first.
-    pub(crate) fn shown_step(&self, cx: &gpui::App) -> Option<&Step> {
+    pub(crate) fn shown_step<'a>(&self, cx: &'a gpui::App) -> Option<&'a Step> {
         let workflow = self.shown_workflow(cx)?;
         self.factory()?.read(cx).editor.read(cx).shown_step(&workflow.draft)
     }
@@ -240,7 +240,7 @@ impl CockpitView {
         action: WorkflowAction,
         cx: &mut Context<Self>,
     ) -> Option<Done> {
-        let done = match self.cockpit.workflow(action) {
+        let done = match self.cockpit.update(cx, |cockpit, _| cockpit.workflow(action)) {
             Ok(done) => {
                 self.update_factory(cx, |view, _| view.note = None);
                 done
