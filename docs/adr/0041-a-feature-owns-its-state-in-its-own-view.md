@@ -816,9 +816,50 @@ what was read, the plan as plain values (`PlanCard::of`, `render`) and the
 checks by a free function whose rows open a run's log through the root
 (`checks_card`), both in `cockpit/head_cards.rs`. A view would hold no
 state and add events for a press the root answers anyway. The Composer's
-footer (the toolbar, send and stop, the `+` menu, the mode chip and menu,
-the session controls card) and the draft band menu's rows follow in the
-same shape.
+draw code follows in the same shape, below.
+
+A draft's band menu's rows are the fifteenth. The Project and Workspace
+chips open a popup in the slot (`Popup::Band`), which keeps the open menu,
+its rows and its cursor (ADR 0043). What the rows list is the registry's
+Projects, the draft's binding, its line (a `path …` to register) and what
+`Checkouts` holds of the repo. The root reads them (`project_menu_rows`,
+`workspace_menu_rows`, the second asking git about a checkout not named
+yet), and the rows are built from what was read as plain values
+(`menu_rows::project_rows`, `workspace_rows`). A pick stays the root's
+(`pick_band`), as does building them again as the line changes or a
+listing lands (`sync_band_rows`, `sync_workspace_rows`).
+
+The Session controls card is the sixteenth. It is a popup that hangs over
+a Thread's Composer (`Popup::Session`), and the slot holds all it keeps:
+the Session it is for, a Thread and its generation. What it shows is the
+Session's: its permission modes, its MCP servers with the sign-in pages
+the provider handed over, its background tasks, which controls it takes,
+and why it refused the last one (`SessionControlError`). The root reads
+them and hangs the card (`session_controls_element`); the card is drawn
+from what was read as plain values (`SessionCard::of`, `render`,
+`cockpit/session_card.rs`), none once another Session runs. Each row's
+press sends its control through the root (`request_mode`,
+`run_session_control`), after checking that the Session still runs and
+still reports the server or task.
+
+The Composer's footer is the seventeenth. Its controls (the queue strip's
+acts, send and stop, the `+` and its menu, a Thread's permission mode chip
+or a draft's mode word) and the permission menu the chip opens keep
+nothing of their own on the root: the line is the Pane's Composer, and the
+`+` menu's focus and the permission menu with the mode under the pointer
+are the popup slot's (`Popup::Attach`, `Popup::Mode`). The root reads the
+Pane's Thread once as it builds the toolbar (`composer_toolbar`): whether
+its turn runs and its line is empty, its queue, its MCP servers and
+plugins, its permission modes and mode. The controls are drawn from what
+was read (`cockpit/composer_footer.rs`: `queue_acts`, `send_button`,
+`stop_button`, `AttachMenu::of`, `ModeChip::of`, `draft_mode_word`; and
+`ModeSegments` in `mode_menu.rs`). Every press acts through the root, as
+before: the submit, the interrupt, a queued message's act, opening the `+`
+menu and the file picker, a connector's control, a plugin's command on the
+line, the permission menu's toggle and a mode's `request_mode`. What stays
+the root's is the root's: putting the toolbar together, the model chip and
+a draft's band chips, which open the model picker and the band menus, the
+plan usage ring, and hanging the cards and menus over the Composer.
 
 ## Precedent
 

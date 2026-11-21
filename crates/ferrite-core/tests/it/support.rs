@@ -60,7 +60,7 @@ impl Replay {
             quote(&directory.join("frames"))
         );
         script.push_str(&format!(
-            "skill_reads=0\nwhile IFS= read -r frame; do\nprintf '%s\\n' \"$frame\" >> {}\n",
+            "skill_reads=0\nfile_searches=0\nwhile IFS= read -r frame; do\nprintf '%s\\n' \"$frame\" >> {}\n",
             quote(&directory.join("host"))
         ));
         script.push_str(r#"case "$frame" in
@@ -69,7 +69,14 @@ request=$(printf '%s' "$frame" | sed -n 's/.*"id":\([^,}]*\).*/\1/p')
 printf '{"id":%s,"result":{"files":[{"root":"/workspace","path":"src/zé.rs","match_type":"file","file_name":"zé.rs","score":90,"indices":[5]},{"root":"/workspace","path":"src/a","match_type":"directory","file_name":"a","score":80,"indices":null}]}}\n' "$request";;
 *'"subtype":"file_suggestions"'*)
 request=$(printf '%s' "$frame" | sed -n 's/.*"request_id":"\([^"]*\)".*/\1/p')
-printf '{"type":"control_response","response":{"subtype":"success","request_id":"%s","response":{"suggestions":[{"path":"src/zé.rs"},{"path":"src/a/"},{"path":"/external/file.md"}]}}}\n' "$request";;
+# As the installed CLI does: the first ask starts its file index and is
+# answered from the index as it stands, empty.
+file_searches=$((file_searches + 1))
+if [ "$file_searches" -eq 1 ]; then
+printf '{"type":"control_response","response":{"subtype":"success","request_id":"%s","response":{"suggestions":[]}}}\n' "$request"
+else
+printf '{"type":"control_response","response":{"subtype":"success","request_id":"%s","response":{"suggestions":[{"path":"src/zé.rs"},{"path":"src/a/"},{"path":"/external/file.md"}]}}}\n' "$request"
+fi;;
 *'"method":"mcpServerStatus/list"'*)
 request=$(printf '%s' "$frame" | sed -n 's/.*"id":\([^,}]*\).*/\1/p')
 printf '{"id":%s,"result":{"data":[{"name":"search","runtimeStatus":"authenticationRequired","authStatus":"notLoggedIn","tools":{},"resources":[],"resourceTemplates":[]}],"nextCursor":null}}\n' "$request";;
@@ -133,13 +140,14 @@ done
         fs::set_permissions(&program, fs::Permissions::from_mode(0o700)).unwrap();
         let program = program.display().to_string();
         let session: Box<dyn Session> = if provider == "claude" {
-            Box::new(
-                ClaudeSession::spawn(ClaudeConfig {
-                    program,
-                    ..Default::default()
-                })
-                .unwrap(),
-            )
+            let mut session = ClaudeSession::spawn(ClaudeConfig {
+                program,
+                ..Default::default()
+            })
+            .unwrap();
+            // As the app's spawner starts it.
+            session.warm_file_index();
+            Box::new(session)
         } else {
             Box::new(
                 CodexSession::spawn(CodexConfig {

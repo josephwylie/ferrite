@@ -26,11 +26,29 @@ fn native_file_search_preserves_ranking_paths_and_directory_identity() {
                 .is_some_and(|s| !s.is_empty()));
         } else {
             assert_eq!(rows[2].path, "/external/file.md");
-            let frame = replay.wait_host(|v| v["request"]["subtype"] == "file_suggestions");
+            // The search's own frame, not the one that built the index.
+            let frame = replay.wait_host(|v| {
+                v["request"]["subtype"] == "file_suggestions"
+                    && v["request_id"] != "ferrite_file_index"
+            });
             assert_eq!(frame["request"]["query"], "src");
         }
         let (answer, reply) = std::sync::mpsc::sync_channel(1);
         replay.session.search_files("next", answer).unwrap();
         reply.recv_timeout(Duration::from_secs(3)).unwrap().unwrap();
     }
+}
+
+/// The Claude CLI starts its file index at the first file search and answers
+/// that one from the index as it stands, so a fresh process finds nothing.
+/// The operator's first `@` on a Claude Session still lists the files.
+#[test]
+fn a_claude_sessions_first_file_search_lists_files() {
+    let mut replay = Replay::new("claude", vec![]);
+    replay.drain();
+    let (answer, reply) = std::sync::mpsc::sync_channel(1);
+    replay.session.search_files("src", answer).unwrap();
+    let rows = reply.recv_timeout(Duration::from_secs(3)).unwrap().unwrap();
+    let paths: Vec<_> = rows.iter().map(|row| row.path.as_str()).collect();
+    assert_eq!(paths, ["src/zé.rs", "src/a/", "/external/file.md"]);
 }
