@@ -342,9 +342,9 @@ that happened to touch it, and nothing in the code said whose a field was.
   Surface's: the entry is made with its Pane, so a card always has one to
   draw from, goes with it (`sync_panes`), and a draft's first send hands
   it to the Thread's Pane (`adopt`). It has no render of its own: the root
-  draws the cards into each Pane's transcript and the compact transcripts
-  from a snapshot it takes in `decision_inputs` (`Cards`), and a card
-  drawn inside a cached transcript presses through the view. It answers
+  draws the cards into each Pane's transcript from a snapshot it takes in
+  `decision_inputs` (`Cards`), and a card drawn inside a cached transcript
+  presses through the view; no compact transcript draws one. It answers
   the Decision keys (↑ ↓ ⏎ esc ⇥, `1`–`4`): they stay actions on the
   root's element, since the view has no element in the focus chain, and
   each hands the view the request the Pane shows with what only the root
@@ -850,6 +850,15 @@ line, the permission menu's toggle and a mode's `request_mode`. What stays
 the root's is the root's: putting the toolbar together, the model chip and
 a draft's band chips, which open the model picker and the band menus, the
 plan usage ring, and hanging the cards and menus over the Composer.
+
+The nav's arrivals are the eighteenth. `Arrivals` (`nav.rs`) keeps when
+each open Thread came into the section it is listed in, which the list
+and the Working shelf order by, the latest first: a Thread whose work,
+its background work included, ends comes back at the top of the list.
+The root holds it beside the nav (`nav_arrivals`). Only the pump writes
+it (`note_arrivals`), after the Server's events, and redraws the nav
+when an arrival moved; `nav_state`, which the nav's inputs read, only
+reads it. A view would add events for what only the pump writes.
 
 ## Precedent
 

@@ -215,7 +215,12 @@ impl Arrivals {
     /// Note where each Thread is listed now, with its last activity: one
     /// that moved arrived `now`. A Thread no longer listed is forgotten,
     /// so one that comes back (revived, reopened) is first seen again.
-    pub fn note(&mut self, listed: &[(ThreadId, Section, Option<SystemTime>)], now: SystemTime) {
+    /// True when any of it changed.
+    pub fn note(
+        &mut self,
+        listed: &[(ThreadId, Section, Option<SystemTime>)],
+        now: SystemTime,
+    ) -> bool {
         let mut at = HashMap::with_capacity(listed.len());
         for (thread, section, last_activity) in listed {
             let since = match self.at.get(thread) {
@@ -225,7 +230,9 @@ impl Arrivals {
             };
             at.insert(*thread, (*section, since));
         }
+        let changed = at != self.at;
         self.at = at;
+        changed
     }
 
     /// When `thread` came into its section.

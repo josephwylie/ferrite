@@ -451,8 +451,9 @@ pub struct CockpitView {
     /// touched by it.
     nav_filter: Option<ProjectId>,
     /// When each listed Thread came into its section, which the list and
-    /// the Working shelf order by (`nav_state`).
-    nav_arrivals: std::cell::RefCell<nav::Arrivals>,
+    /// the Working shelf order by (`nav_state`). Only the pump writes it
+    /// (`note_arrivals`).
+    nav_arrivals: nav::Arrivals,
     /// The nav, a view of its own (ADR 0041): it owns its list's motion,
     /// scroll, keyboard, search, picks and undo notice, and asks the
     /// Cockpit for the rest through `NavEvent`.
@@ -1211,7 +1212,7 @@ impl CockpitView {
             toasts,
             native_copy: None,
             nav_filter: None,
-            nav_arrivals: std::cell::RefCell::default(),
+            nav_arrivals: nav::Arrivals::default(),
             nav_view: cx.new(|cx| nav_view::NavView::new(cockpit_weak, cx)),
             view_events: None,
             activation: None,
@@ -2144,6 +2145,9 @@ impl CockpitView {
             self.sync_panes(cx);
         }
         self.watch_prs(cx);
+        if self.note_arrivals() {
+            self.notify_part(parts::Part::Nav, cx);
+        }
         let mut restarted = Vec::new();
         // What the sweep found moved: a fact or a Thread's age (everything
         // redraws), a working Thread (its Pane and the nav), the frame's
@@ -5722,40 +5726,9 @@ impl CockpitView {
             selected: shown == Some(thread),
             ..self.thread_row(thread)
         };
-        let mut threads: Vec<ThreadId> = self
-            .panes
-            .iter()
-            .filter_map(|pane| pane.thread())
-            .filter(|thread| {
-                self.cockpit.thread(*thread).is_some() && self.cockpit.operators(*thread)
-            })
-            .collect();
-        threads.sort();
-        threads.dedup();
         let pins = &self.prefs.settings.pinned_threads;
-        // Every listed Thread's section, the filter's or not: a Thread
-        // that moves while filtered out has still moved.
-        let listed: Vec<(ThreadId, Section, Option<std::time::SystemTime>)> = threads
-            .into_iter()
-            .map(|thread| {
-                let open = self.cockpit.thread(thread);
-                let section = if open.is_some_and(|open| open.snooze().is_some()) {
-                    Section::Snoozed
-                } else if pins.contains(&thread) {
-                    Section::Pinned
-                } else if open.is_some_and(|open| {
-                    open.pending_decisions().is_empty()
-                        && (open.needs_queue() || open.background_work() || !open.queue().is_empty())
-                }) {
-                    Section::Working
-                } else {
-                    Section::Active
-                };
-                (thread, section, self.facts.last_used(thread))
-            })
-            .collect();
-        let mut arrivals = self.nav_arrivals.borrow_mut();
-        arrivals.note(&listed, ferrite_core::clock::system_time());
+        let listed = self.listed_threads();
+        let arrivals = &self.nav_arrivals;
         // The latest arrival first; arrivals alike keep creation order.
         let latest =
             |row: &nav::ThreadRow| (std::cmp::Reverse(arrivals.since(row.thread)), row.thread);
@@ -5802,7 +5775,55 @@ impl CockpitView {
         state
     }
 
-    /// Does the Project filter admit this Thread?    /// Does the Project filter admit this Thread? `All projects` admits
+    /// Every open Thread the nav lists, the Project filter's or not, with
+    /// the section it is in and its last activity: what `nav::Arrivals`
+    /// notes.
+    fn listed_threads(&self) -> Vec<(ThreadId, nav::Section, Option<std::time::SystemTime>)> {
+        use nav::Section;
+        let mut threads: Vec<ThreadId> = self
+            .panes
+            .iter()
+            .filter_map(|pane| pane.thread())
+            .filter(|thread| {
+                self.cockpit.thread(*thread).is_some() && self.cockpit.operators(*thread)
+            })
+            .collect();
+        threads.sort();
+        threads.dedup();
+        let pins = &self.prefs.settings.pinned_threads;
+        // Every listed Thread's section, the filter's or not: a Thread
+        // that moves while filtered out has still moved.
+        threads
+            .into_iter()
+            .map(|thread| {
+                let open = self.cockpit.thread(thread);
+                let section = if open.is_some_and(|open| open.snooze().is_some()) {
+                    Section::Snoozed
+                } else if pins.contains(&thread) {
+                    Section::Pinned
+                } else if open.is_some_and(|open| {
+                    open.pending_decisions().is_empty()
+                        && (open.needs_queue() || open.background_work() || !open.queue().is_empty())
+                }) {
+                    Section::Working
+                } else {
+                    Section::Active
+                };
+                (thread, section, self.facts.last_used(thread))
+            })
+            .collect()
+    }
+
+    /// Note which Threads came into a section since the last frame
+    /// (`nav::Arrivals`). Only the pump writes it, so the nav's render
+    /// reads where each row is. True when an arrival moved, so the nav
+    /// redraws.
+    fn note_arrivals(&mut self) -> bool {
+        let listed = self.listed_threads();
+        self.nav_arrivals.note(&listed, ferrite_core::clock::system_time())
+    }
+
+    /// Does the Project filter admit this Thread? `All projects` admits
     /// everything; a chosen Project admits only Threads whose cached
     /// ProjectId is it — so a Thread whose Project is unknown appears under
     /// `All projects` alone, rather than being quietly filed under someone
