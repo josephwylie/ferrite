@@ -385,6 +385,7 @@ pub fn launch() {
                         ..Default::default()
                     },
                     |window, cx| {
+                        motion::adopt_renderer(window.gpu_specs(), cx);
                         let view = cx.new(|cx| {
                             let view = CockpitView::new_with_settings(
                                 core,
