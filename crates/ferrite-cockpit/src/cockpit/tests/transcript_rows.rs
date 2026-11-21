@@ -834,6 +834,39 @@ fn streaming_output_preserves_native_selection_scroll_and_command_identity(
 }
 
 #[gpui::test]
+fn the_live_thought_wraps_inside_the_column(cx: &mut TestAppContext) {
+    let (mut core, fake) = cockpit("live-thought-wraps", 1);
+    let thread = core.threads()[0];
+    let _ = core.send(thread, "Inspect progress".into());
+    let (_view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new_thinking(core, cx));
+    cx.simulate_resize(gpui::size(px(1000.), px(700.)));
+    fake.streams.borrow()[0]
+        .send(SessionEvent::ThinkingDelta {
+            text: "Checking the fold call sites and the column bounds ".repeat(6),
+        })
+        .unwrap();
+    tick(cx);
+    for width in [1000., 720.] {
+        cx.simulate_resize(gpui::size(px(width), px(700.)));
+        cx.run_until_parked();
+        let column = cx
+            .debug_bounds("transcript-progress")
+            .expect("the live row is the transcript's last row");
+        let thought = cx
+            .debug_bounds("live-thought")
+            .expect("the trailing thought stands over the live row");
+        assert!(
+            thought.right() <= column.right(),
+            "at {width}px the thought ends past its column: {thought:?} in {column:?}"
+        );
+        assert!(
+            thought.size.height > px(ferrite_ui::theme::TURN_FOLD_ROW_H),
+            "at {width}px a long thought wraps to more than one line: {thought:?}"
+        );
+    }
+}
+
+#[gpui::test]
 fn native_progress_follows_the_tail_and_metadata_refreshes_the_wall(cx: &mut TestAppContext) {
     use ferrite_core::progress::{Phase, ProgressEvent};
     let (mut core, fake) = cockpit("native-progress", 1);
