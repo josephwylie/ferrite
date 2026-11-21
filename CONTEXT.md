@@ -2,8 +2,8 @@
 
 Ferrite is an open-source, native (GPUI) multi-provider agent cockpit: many
 coding-agent conversations run in parallel and are watched, steered, and
-approved from one dense grid. This file is the project's canonical language —
-glossary only, no implementation.
+approved from one window, one Thread at a time. This file is the project's
+canonical language — glossary only, no implementation.
 
 ## Glossary
 
@@ -53,8 +53,8 @@ An agent backend a Session runs on. v1: Claude and Codex.
 _Avoid_: model (a provider selects models; it is not one).
 
 **Pane**
-The board's one plane, showing one Thread at some zoom level. A view, never
-an identity.
+The board's one plane, showing one Thread: its transcript and its Composer,
+at any size. A view, never an identity.
 _Avoid_: window, tile, terminal, fullscreen Pane (Solo already fills the
 board).
 
@@ -93,11 +93,10 @@ _Avoid_: reader (the board's reader slot is the Review's), viewer (that is
 the image's part of it).
 
 **Bar**
-The window's one strip at the bottom: the view tabs, the needs-you count,
-usage, free disk when it runs low, and the clock. It carries no status
-line: a Thread's mode, model and Effort are chips in its Composer, and its
-context and changes are the Panel's.
-_Avoid_: status bar, status line (both are gone).
+Gone. The window has no strip at the bottom: usage, and free disk when it
+runs low, are in the nav's foot. A Thread's mode, model and Effort are
+chips in its Composer, and its context and changes are the Panel's.
+_Avoid_: bottom bar, status bar, status line (all gone).
 
 **Group**
 Gone (ADR 0025's 2026-11-17 amendment). An older Store's `groups.json` is
@@ -282,8 +281,8 @@ Project named outright (the palette's "New thread in …") outranks it.
 _Avoid_: active thread, last thread.
 
 **Remote**
-Following and answering Decisions away from the desktop. Wanted soon;
-scope under discussion.
+Following and answering Decisions away from the computer the agents run
+on: a window on another Machine's Server.
 
 **Server**
 The headless Ferrite process (`ferrite server`) that owns every Session,
@@ -293,10 +292,11 @@ _Avoid_: daemon, backend (that is a Provider), host.
 
 **Machine**
 Another computer whose Server a window reaches over ssh (`ferrite --remote
-<target>`, or saved in Settings). The window is on one machine at a time —
-this computer, `local`, or another — and watches only that one's Threads;
-the others stream status to the nav. A machine runs `ferrited`, the Server
-without a window.
+<target>`, or saved in Settings) or over a remote link (`ferrited remote
+serve`, `docs/guides/remote-links.md`). The window is on one machine at a
+time — this computer, `local`, or another — and watches only that one's
+Threads; the others stream status to the nav. A machine runs `ferrited`,
+the Server without a window.
 _Avoid_: host, remote (as a noun), node.
 
 **API**
@@ -352,9 +352,9 @@ never calls model APIs itself. It orchestrates official agent CLIs (each
 Provider's own harness) and renders what they stream. The agents' behavior,
 auth, and ToS posture belong to their vendors, not to Ferrite.
 
-**No Terminal.** Ferrite has no terminal, PTY, or shell concept. Agents run
-as headless processes streaming structured events. Any future "shell pane"
-would be a new concept, not a revival of this one.
+**No agent in a terminal.** Agents run as headless processes streaming
+structured events, never in a PTY. The one terminal is a Surface: the
+operator's own shell in the Thread's folder.
 
 ## Settled product decisions (2026-08-25)
 
