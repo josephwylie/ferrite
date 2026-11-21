@@ -6,6 +6,9 @@
 # own, so git does not wait for it; what it did is in the main checkout's
 # target/reclaim.log.
 
+# Not on Windows yet: the script locks with fcntl and finds builds with lsof.
+case "$(uname -s)" in MINGW* | MSYS*) exit 0 ;; esac
+
 main="$(git worktree list --porcelain | sed -n '1s/^worktree //p')"
 [ -d "$main/target" ] || exit 0
 scripts/reclaim-worktree-builds.py >>"$main/target/reclaim.log" 2>&1 </dev/null &
