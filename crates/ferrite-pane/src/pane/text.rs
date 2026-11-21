@@ -152,7 +152,11 @@ fn sentence_end(text: &str) -> Option<usize> {
     while let Some((at, c)) = chars.next() {
         let (closers, needs_space): (&[char], bool) = match c {
             '.' | '?' | '!' => (&['"', '\'', '”', '’', ')'], true),
-            '。' | '！' | '？' => (&['"', '\'', '”', '’', '）', '」', '』'], false),
+            // `。`, `！`, `？`, then `）`, `」`, `』`: matched, never drawn.
+            '\u{3002}' | '\u{ff01}' | '\u{ff1f}' => (
+                &['"', '\'', '”', '’', '\u{ff09}', '\u{300d}', '\u{300f}'],
+                false,
+            ),
             _ => continue,
         };
         let mut end = at + c.len_utf8();
