@@ -12,7 +12,7 @@ use ferrite_core::SessionCommand;
 use super::*;
 
 /// What one Provider's discovery says.
-pub(crate) enum Found {
+enum Found {
     /// Asked, not yet answered.
     Looking(Discovery),
     /// The skills among the commands it listed.
@@ -66,11 +66,21 @@ impl Skills {
     }
 
     /// What `provider`'s discovery says, once asked.
-    pub(super) fn found(&self, provider: Provider) -> Option<&Found> {
+    fn found(&self, provider: Provider) -> Option<&Found> {
         self.0
             .iter()
             .find(|(each, _)| *each == provider)
             .map(|(_, found)| found)
+    }
+
+    /// What the inspector says of `provider`'s skills.
+    pub(super) fn note(&self, provider: Provider) -> String {
+        match self.found(provider) {
+            Some(Found::Looking(_)) => "Looking for installed skills\u{2026}".into(),
+            Some(Found::Failed(error)) => format!("Could not list skills: {error}"),
+            Some(Found::Listed(skills)) => format!("{} installed for {provider}", skills.len()),
+            None => String::new(),
+        }
     }
 
     /// The skills found for `provider`, once its discovery answered.
@@ -88,7 +98,7 @@ impl CockpitView {
         let Some(view) = self.factory() else {
             return;
         };
-        if view.workflows.skills.asked(provider) {
+        if view.skills.asked(provider) {
             return;
         }
         let Some(cwd) = self
@@ -101,7 +111,7 @@ impl CockpitView {
         };
         let reply = self.cockpit.discover_commands(provider, &cwd);
         if let Some(view) = self.factory_mut() {
-            view.workflows.skills.listen(provider, reply);
+            view.skills.listen(provider, reply);
         }
     }
 
@@ -110,7 +120,7 @@ impl CockpitView {
         self.poll_start_lists(cx);
         if self
             .factory_mut()
-            .is_some_and(|view| view.workflows.skills.listed())
+            .is_some_and(|view| view.skills.listed())
         {
             cx.notify();
         }
@@ -127,7 +137,7 @@ impl CockpitView {
             skills: Provider::ALL
                 .into_iter()
                 .filter_map(|provider| {
-                    let skills = self.factory()?.workflows.skills.installed(provider)?;
+                    let skills = self.factory()?.skills.installed(provider)?;
                     Some((provider, skills.iter().map(|s| s.name.clone()).collect()))
                 })
                 .collect(),
@@ -180,14 +190,5 @@ impl CockpitView {
             },
             cx,
         );
-    }
-
-    pub(crate) fn reveal_skills(&mut self, open: bool, cx: &mut Context<Self>) {
-        if let Some(view) = self.factory_mut() {
-            view.workflows.skills_open = open;
-            view.editor
-                .update(cx, |editor, _| editor.focused = open.then_some(Field::SkillSearch));
-        }
-        cx.notify();
     }
 }

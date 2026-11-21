@@ -9,7 +9,9 @@
 //! Factory view is open, so what was typed survives a picker, a revealed
 //! field, a notice, a scroll and a switch of surface; the draft keeps it
 //! across a save and a reopen. What is chosen, the Composers and the field
-//! that holds the keyboard are the editor's own view's (`editor`).
+//! that holds the keyboard are the editor's own view's (`editor`), which
+//! draws the outline and the inspector; the root draws the head, the
+//! problems and the empty state, and answers every edit.
 
 use std::collections::HashMap;
 
@@ -29,8 +31,10 @@ mod outline;
 pub(crate) use outline::field_input;
 mod pickers;
 pub(crate) use pickers::{model_choices, model_chosen, model_name, Trigger};
+use pickers::{effort_picks, model_picks, provider_picks};
 mod save;
 mod skills;
+pub(crate) use skills::Skills;
 
 /// The outline's width beside the inspector.
 const OUTLINE_W: f32 = 440.;
@@ -122,15 +126,6 @@ pub(crate) enum Pick {
     Start(super::starts::StartPick),
     /// The Coordinator's Provider, model or effort (#224).
     Coordinator(super::coordinator::CoordinatorPick),
-}
-
-/// What the Workflows surface keeps beside its editor's view.
-#[derive(Default)]
-pub(crate) struct Workflows {
-    /// The skills search is revealed.
-    pub(crate) skills_open: bool,
-    /// The skills each Step's Provider has installed.
-    pub(crate) skills: skills::Skills,
 }
 
 /// A Step's row, dragged to a new place in the outline.

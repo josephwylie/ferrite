@@ -1,12 +1,12 @@
 //! The Workflows editor's own state, in a view of its own (ADR 0041):
-//! the Workflow and Step chosen, what the inspector shows, the outline's
-//! focus and scroll, each text
+//! the Workflow and Step chosen, what the inspector shows, whether the
+//! skills search is revealed, the outline's focus and scroll, each text
 //! field's Composer, made once for as long as the Factory is open, and
 //! the field that holds the keyboard. The Factory holds it.
 //!
 //! It has no render of its own: the root draws the surface and has it
-//! draw the outline (`outline`) and each field (`input`), with what it
-//! reads of the window (`WorkflowsInputs`). Which fields the surface shows
+//! draw the outline (`outline`) and the inspector (`inspector`), with what
+//! it reads of the window (`WorkflowsInputs`). Which fields the surface shows
 //! the root decides from the draft (`ensure_fields`); what is typed or
 //! pressed it says as a `WorkflowsEvent`, since every edit is a Server ask.
 
@@ -45,10 +45,27 @@ pub(crate) enum WorkflowsEvent {
     },
     /// `+ Add agent`: a new Step at the end.
     Add,
+    /// A chooser in the inspector: its rows open under `trigger`.
+    Picks {
+        picks: Vec<(ferrite_ui::menu::Item, Pick)>,
+        trigger: Trigger,
+        at: Point<Pixels>,
+    },
+    /// A choice made in place: a segment.
+    Pick(Pick),
+    /// A Step's switch: its setting changes.
+    EditStep { step: StepId, change: StepChange },
+    /// A skill from the search, for the Step shown.
+    AddSkill(String),
+    /// A skill's chip closed.
+    RemoveSkill(String),
+    /// `Delete agent`.
+    Delete(StepId),
 }
 
 /// What the editor draws from the window: the Workflow shown, the Step
-/// shown, the draft's problems and each Provider's models.
+/// shown, the draft's problems, what is known installed and the starts'
+/// view.
 pub(crate) struct WorkflowsInputs {
     pub(super) workflow: WorkflowId,
     pub(super) draft: Definition,
@@ -57,8 +74,17 @@ pub(crate) struct WorkflowsInputs {
     /// Its automatic starts' switch, which the start's row says.
     pub(super) switch: Switch,
     pub(super) problems: Vec<Problem>,
-    /// Each Provider's models, as a Step's row names its own.
+    /// What the problems were found against: models as the Providers
+    /// announced them, skills as discovered.
+    pub(super) catalog: Catalog,
+    /// Each Provider's models, as a row names them and a picker offers them.
     pub(super) models: Vec<(Provider, Vec<ferrite_core::ModelInfo>)>,
+    /// The skills the shown Step's Provider has installed, once listed.
+    pub(super) installed: Option<Vec<ferrite_core::SessionCommand>>,
+    /// What the inspector says of them.
+    pub(super) skills_note: String,
+    /// The start's settings, drawn by their own view.
+    pub(super) starts: Entity<super::super::starts::StartsView>,
 }
 
 impl WorkflowsInputs {
@@ -92,6 +118,8 @@ pub(crate) struct WorkflowsView {
     /// The Step chosen; none, the Workflow's first.
     pub(crate) step: Option<StepId>,
     pub(crate) inspected: Inspected,
+    /// The skills search is revealed.
+    pub(super) skills_open: bool,
     /// What holds the keyboard while no field does.
     pub(crate) outline_focus: FocusHandle,
     /// The outline's scroll: its first child is its head, then one per
@@ -112,6 +140,7 @@ impl WorkflowsView {
             selected: None,
             step: None,
             inspected: Inspected::Step,
+            skills_open: false,
             outline_focus: cx.focus_handle(),
             outline_scroll: gpui::ScrollHandle::new(),
             fields: HashMap::new(),
@@ -258,22 +287,34 @@ impl CockpitView {
     /// Project has no Workflow.
     pub(in crate::cockpit) fn workflows_inputs(&self, editor: &WorkflowsView) -> Option<WorkflowsInputs> {
         let workflow = self.chosen_workflow(editor.selected.as_deref())?;
+        let view = self.factory()?;
+        let step = editor.shown_step(&workflow.draft);
+        let provider = step.map(|step| step.agent.provider);
+        let catalog = self.factory_catalog();
         Some(WorkflowsInputs {
             workflow: workflow.id.clone(),
-            step: editor.shown_step(&workflow.draft).map(|step| step.id.clone()),
+            step: step.map(|step| step.id.clone()),
             switch: workflow.automation.switch,
-            problems: workflow.draft.problems(&self.factory_catalog()),
+            problems: workflow.draft.problems(&catalog),
+            catalog,
             draft: workflow.draft.clone(),
             models: Provider::ALL
                 .into_iter()
                 .map(|provider| (provider, self.cockpit.model_catalog(provider)))
                 .collect(),
+            installed: provider
+                .and_then(|provider| view.skills.installed(provider))
+                .map(<[_]>::to_vec),
+            skills_note: provider
+                .map(|provider| view.skills.note(provider))
+                .unwrap_or_default(),
+            starts: view.starts.clone(),
         })
     }
 
     /// A field typed in goes to the draft; one pressed has the focus pump
-    /// hand it the keyboard; a row, a route, a drop, a key or Add agent
-    /// chooses or asks the Server.
+    /// hand it the keyboard; a row or a key chooses what the inspector
+    /// shows; a picker opens its rows; every edit asks the Server.
     fn on_workflows_event(
         &mut self,
         _: Entity<WorkflowsView>,
@@ -308,6 +349,16 @@ impl CockpitView {
                 self.open_picks(picks, trigger, *at, cx);
             }
             WorkflowsEvent::Add => self.add_step(None, cx),
+            WorkflowsEvent::Picks { picks, trigger, at } => {
+                self.open_picks(picks.clone(), trigger, *at, cx)
+            }
+            WorkflowsEvent::Pick(pick) => self.apply_pick(pick.clone(), cx),
+            WorkflowsEvent::EditStep { step, change } => {
+                self.edit_step(step.clone(), change.clone(), cx)
+            }
+            WorkflowsEvent::AddSkill(name) => self.add_skill(name.clone(), cx),
+            WorkflowsEvent::RemoveSkill(name) => self.remove_skill(name, cx),
+            WorkflowsEvent::Delete(step) => self.delete_step(step.clone(), cx),
         }
     }
 }

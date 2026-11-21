@@ -138,7 +138,8 @@ pub(crate) struct FactoryView {
     revealed: std::cell::Cell<Option<(String, usize, usize)>>,
     /// The Board or the Workflows.
     pub(crate) surface: super::workflows::Surface,
-    pub(crate) workflows: super::workflows::Workflows,
+    /// The skills each Workflow Step's Provider has installed.
+    pub(crate) skills: super::workflows::Skills,
     /// The Workflows editor: what is chosen, the outline's focus and
     /// scroll, its fields and the one that holds the keyboard.
     pub(crate) editor: Entity<super::workflows::WorkflowsView>,
@@ -199,7 +200,7 @@ impl CockpitView {
                     columns: gpui::ScrollHandle::new(),
                     revealed: Default::default(),
                     surface: super::workflows::Surface::Board,
-                    workflows: Default::default(),
+                    skills: Default::default(),
                     editor,
                     picks: Vec::new(),
                     direction,

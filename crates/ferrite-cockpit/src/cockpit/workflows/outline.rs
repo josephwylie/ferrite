@@ -259,8 +259,12 @@ impl CockpitView {
                     .min_h_0()
                     .flex()
                     .flex_row()
-                    .child(editor.update(cx, |editor, cx| editor.outline(&inputs, window, cx)))
-                    .child(self.inspector(workflow, window, cx)),
+                    .children(editor.update(cx, |editor, cx| {
+                        [
+                            editor.outline(&inputs, window, cx),
+                            editor.inspector(&inputs, window, cx),
+                        ]
+                    })),
             )
     }
 
@@ -725,21 +729,6 @@ impl WorkflowsView {
                 }),
             )
             .into_any_element()
-    }
-}
-
-impl CockpitView {
-    /// One text field, drawn by the editor.
-    pub(in crate::cockpit) fn text_input(
-        &self,
-        field: &Field,
-        label: &'static str,
-        window: &Window,
-        cx: &mut Context<Self>,
-    ) -> Option<AnyElement> {
-        self.factory()?
-            .editor
-            .update(cx, |editor, cx| editor.input(field, label, window, cx))
     }
 }
 
