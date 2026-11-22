@@ -481,6 +481,12 @@ impl CockpitView {
                 if let Some(manual) = &recovery {
                     manual.borrow().restore_pause();
                 }
+                #[cfg(feature = "browser-smoke")]
+                ferrite_pane::visual::hold_trace::record(serde_json::json!({
+                    "kind": "action-answered",
+                    "error": answer.as_ref().err().map(|error| error.to_string()),
+                    "lands": lands,
+                }));
                 let browser = self.browsers.threads.get_mut(&thread).unwrap();
                 match answer {
                     Ok(_) => {
@@ -1081,7 +1087,13 @@ impl CockpitView {
             }
             let engine = match Visuals::engine(cx) {
                 Availability::Ready(engine) => engine,
-                Availability::Starting => continue,
+                Availability::Starting => {
+                    #[cfg(feature = "browser-smoke")]
+                    ferrite_pane::visual::hold_trace::record(serde_json::json!({
+                        "kind": "engine-starting",
+                    }));
+                    continue;
+                }
                 Availability::Unavailable(why) => {
                     let error = why.to_string();
                     browser.failed.insert(tab.id, tab.document());
@@ -1193,6 +1205,11 @@ impl CockpitView {
                             destination: Some(tab.url.clone()),
                             history: false,
                         });
+                    #[cfg(feature = "browser-smoke")]
+                    ferrite_pane::visual::hold_trace::record(serde_json::json!({
+                        "kind": "realized",
+                        "tab": id.0,
+                    }));
                     browser.pages.insert(
                         id,
                         Page {
@@ -1445,6 +1462,13 @@ impl CockpitView {
         let body = active
             .and_then(|tab| browser.pages.get(&tab.id))
             .map(|page| page.web.clone());
+        #[cfg(feature = "browser-smoke")]
+        ferrite_pane::visual::hold_trace::record(serde_json::json!({
+            "kind": "render",
+            "active": active.map(|tab| tab.id.0),
+            "body": body.is_some(),
+            "new_tab": self.browser_chrome.read(cx).new_tab(thread),
+        }));
         let retry = failure.is_some().then(|| active.map(|tab| tab.document())).flatten();
         let notice = match failure {
             _ if browser.annotation.is_some() || self.browser_review.read(cx).open(thread) => None,
