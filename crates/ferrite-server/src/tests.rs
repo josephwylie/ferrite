@@ -1501,12 +1501,12 @@ fn a_reopened_window_can_answer_questions() {
             .recv_timeout(PATIENCE)
             .unwrap();
         provider.send(decision()).unwrap();
-        let pending = |window: &ferrite_core::cockpit::Cockpit| {
+        let pending = |window: &ferrite_core::cockpit::Cockpit, thread| {
             window
                 .thread(thread)
                 .is_some_and(|open| open.pending().is_some())
         };
-        pump_until(&mut window, pending);
+        pump_until(&mut window, |window| pending(window, thread));
         let first_handle = window.thread(thread).unwrap().pending_decisions()[0]
             .handle
             .clone();
@@ -1519,7 +1519,7 @@ fn a_reopened_window_can_answer_questions() {
                 }
             )
             .unwrap());
-        pump_until(&mut window, |window| !pending(window));
+        pump_until(&mut window, |window| !pending(window, thread));
 
         let question = SessionEvent::DecisionRequested {
             decision: Decision {
@@ -1548,10 +1548,13 @@ fn a_reopened_window_can_answer_questions() {
         };
         if already_pending {
             provider.send(question.clone()).unwrap();
-            pump_until(&mut window, pending);
+            pump_until(&mut window, |window| pending(window, thread));
         }
         drop(window);
+        // The reopened window is a new Cockpit, which names the Thread by
+        // a key of its own.
         let mut reopened = cockpit(&harness);
+        let thread = here(&reopened, thread.thread());
         reopened.draws_transcripts([thread]);
         pump_until(&mut reopened, |window| {
             window
@@ -1566,7 +1569,7 @@ fn a_reopened_window_can_answer_questions() {
         // lands the window numbers the question itself, so wait for the
         // Server's serial rather than read the first one shown.
         pump_until(&mut reopened, |window| {
-            pending(window)
+            pending(window, thread)
                 && window.thread(thread).unwrap().pending_decisions()[0]
                     .handle
                     .serial
@@ -1610,7 +1613,7 @@ fn a_reopened_window_can_answer_questions() {
                 ))
                 .unwrap();
         }
-        pump_until(&mut reopened, |window| !pending(window));
+        pump_until(&mut reopened, |window| !pending(window, thread));
     }
 }
 
