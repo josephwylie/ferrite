@@ -229,6 +229,7 @@ impl<'a> Work<'a> {
             ToolKind::Fetch => tense("Fetching", "Fetched"),
             ToolKind::WebSearch => tense("Searching the web for", "Searched the web for"),
             ToolKind::Agent => tense("Running agent", "Ran agent"),
+            ToolKind::Delegate => tense("Delegating", "Delegated"),
             ToolKind::Findings => tense("Reporting findings", "Reported findings"),
             ToolKind::Mcp(_)
             | ToolKind::Todo
@@ -389,6 +390,14 @@ fn without_cd(command: &str) -> &str {
 /// An agent row's first line (`agents::render_agent`): its task (the
 /// provider's description), or `Agent` with none.
 pub(crate) fn agent_title(tool: &ToolBlock) -> String {
+    // A Delegate's is T3's task title (`tools::policy`'s summary), its
+    // noun Ferrite's (ADR 0047).
+    if tools::policy(&tool.name).kind == ToolKind::Delegate {
+        return match tool.summary.is_empty() {
+            true => "Delegate".into(),
+            false => tool.summary.clone(),
+        };
+    }
     let task = tool.argument();
     if task.is_empty() {
         "Agent".into()
@@ -533,7 +542,7 @@ impl Action {
         Some(match policy.kind {
             ToolKind::Command => Self::Command,
             ToolKind::Edit | ToolKind::Write => Self::Edit,
-            ToolKind::Agent => Self::Agent,
+            ToolKind::Agent | ToolKind::Delegate => Self::Agent,
             ToolKind::Read | ToolKind::List => Self::Read,
             ToolKind::Search => Self::CodeSearch,
             ToolKind::Fetch | ToolKind::WebSearch => Self::WebSearch,

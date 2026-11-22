@@ -1,6 +1,8 @@
 //! Subagents in the transcript that started them: T3's subagent card over
 //! two or more started together, one agent row per call, each row the way
-//! into that agent's own transcript.
+//! into that agent's own transcript. A Delegate's start (`delegate_task`,
+//! ADR 0047) is one of these rows too, as T3 draws a task in a linked
+//! environment, saying the machine it runs `on`.
 //!
 //! A call's row says how its agent stands, not how its call does: a
 //! background agent's call returns at once (`Async agent launched`) while
@@ -26,13 +28,31 @@ pub enum AgentRun {
 
 /// One subagent as its call's row shows it: how it stands, what it is
 /// doing (its latest progress summary, Claude's `task_progress.summary`),
-/// what it answered once its turn ended, and how long it has run.
+/// what it answered once its turn ended, and how long it has run. A
+/// Delegate's also names the machine it runs `on` (T3's `on {environment}`).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AgentFace {
     pub run: AgentRun,
     pub summary: Option<String>,
     pub result: Option<String>,
     pub clock: Option<AgentClock>,
+    pub on: Option<Elsewhere>,
+}
+
+impl AgentFace {
+    /// Whether its row opens it: a subagent always, a Delegate while this
+    /// window reaches its machine (T3's row has no opener without one).
+    pub fn opens(&self) -> bool {
+        self.on.as_ref().is_none_or(|on| on.reached)
+    }
+}
+
+/// The machine a Delegate runs on, by the name it was sent to, and whether
+/// this window reaches it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Elsewhere {
+    pub machine: String,
+    pub reached: bool,
 }
 
 /// How long a subagent has run: since its turn began while it runs (read
@@ -117,10 +137,11 @@ impl AgentFaces {
     }
 }
 
-/// Whether a call starts a subagent, and so draws as [`render_agent`].
+/// Whether a call starts a subagent or a Delegate, and so draws as
+/// [`render_agent`].
 pub(crate) fn is_agent(tool: &ToolBlock) -> bool {
-    ferrite_core::transcript::tools::policy(&tool.name).kind
-        == ferrite_core::transcript::tools::ToolKind::Agent
+    use ferrite_core::transcript::tools::{policy, ToolKind};
+    matches!(policy(&tool.name).kind, ToolKind::Agent | ToolKind::Delegate)
 }
 
 /// What an agent's row says (T3's `SubagentTimelineLink`), before it is
@@ -131,6 +152,8 @@ pub(crate) fn is_agent(tool: &ToolBlock) -> bool {
 pub(crate) struct AgentRow {
     pub standing: Standing,
     pub title: String,
+    /// `on pc`: the machine a Delegate runs on.
+    pub on: Option<String>,
     pub detail: String,
     pub label: Option<&'static str>,
 }
@@ -154,6 +177,7 @@ pub(crate) fn agent_row(tool: &ToolBlock, face: Option<&AgentFace>) -> AgentRow 
     AgentRow {
         standing,
         title: text::agent_title(tool),
+        on: face.and_then(|face| face.on.as_ref()).map(|on| format!("on {}", on.machine)),
         label: detail
             .as_ref()
             .filter(|_| standing != Standing::Done)
@@ -202,7 +226,8 @@ fn unlink(text: &str) -> String {
 }
 
 /// An agent call's row, alone or in its card (T3's `SubagentTimelineLink`):
-/// the agent's avatar with its status dot, its task over what it does
+/// the agent's avatar with its status dot, its task (and a Delegate's `on
+/// pc` beside it) over what it does
 /// (its progress while it runs, else its standing), the standing again at
 /// the right while it is not done, how long it has run, and a `›` that
 /// brightens under the pointer ([`agent_row`] says which words). `open`,
@@ -225,6 +250,7 @@ pub(crate) fn render_agent(
     let AgentRow {
         standing,
         title,
+        on,
         detail,
         label,
     } = agent_row(tool, face);
@@ -244,6 +270,22 @@ pub(crate) fn render_agent(
         .font_weight(theme::W_LABEL)
         .text_color(rgb(INK_STRONG))
         .child(selection.line(block, title, Vec::new()));
+    // T3: the title, then `on pc` muted at the same size, kept whole.
+    let title = div()
+        .flex()
+        .items_baseline()
+        .gap(px(theme::AGENT_ROW_GAP))
+        .min_w_0()
+        .child(title)
+        .children(on.map(|on| {
+            div()
+                .debug_selector(|| "agent-on".into())
+                .flex_shrink_0()
+                .text_size(px(theme::FS_BADGE))
+                .line_height(px(theme::LH_META))
+                .text_color(rgb(INK_SUBTLE))
+                .child(on)
+        }));
     let detail_line = div()
         .debug_selector(|| "agent-detail".into())
         .min_w_0()
@@ -662,6 +704,7 @@ mod tests {
                 summary: Some("Reading nav.rs".into()),
                 result: None,
                 clock: None,
+                on: None,
             },
         );
         faces.insert(
@@ -671,6 +714,7 @@ mod tests {
                 summary: None,
                 result: None,
                 clock: None,
+                on: None,
             },
         );
         faces.insert(
@@ -680,6 +724,7 @@ mod tests {
                 summary: None,
                 result: None,
                 clock: None,
+                on: None,
             },
         );
         faces.apply(&mut blocks);
@@ -722,6 +767,7 @@ mod tests {
             summary: summary.map(Into::into),
             result: result.map(Into::into),
             clock: None,
+            on: None,
         }
     }
 
@@ -763,6 +809,34 @@ mod tests {
             (Stopped, "Reading nav.rs".into(), Some("Stopped"))
         );
         assert_eq!(read(row(AgentRun::Stopped, None, None)), (Stopped, "Stopped".into(), None));
+    }
+
+    /// A Delegate's start is T3's row for a task in a linked environment:
+    /// its task title, `on pc` beside it, and how the Delegate stands.
+    #[test]
+    fn a_delegate_call_reads_as_t3s_remote_task_row() {
+        let mut transcript = Transcript::default();
+        transcript.apply(Input::Event(SessionEvent::ToolStarted {
+            id: "d".into(),
+            name: "mcp__ferrite__delegate_task".into(),
+            input: serde_json::json!({ "task": "Run the login test", "target": { "machineId": "s-pc" } }),
+        }));
+        let call = tool(&transcript.blocks()[0]).clone();
+        assert!(is_agent(&call), "it draws as an agent row");
+        assert_eq!(agent_row(&call, None).on, None, "not before the Delegate answers");
+        let face = AgentFace {
+            on: Some(Elsewhere {
+                machine: "pc".into(),
+                reached: false,
+            }),
+            ..face(AgentRun::Done, None, Some("All green."))
+        };
+        assert!(!face.opens(), "a machine this window does not reach opens nothing");
+        let row = agent_row(&call, Some(&face));
+        assert_eq!(
+            (row.title.as_str(), row.on.as_deref(), row.detail.as_str(), row.label),
+            ("Run the login test", Some("on pc"), "All green.", None)
+        );
     }
 
     /// A call no agent answers for (a foreground call the activity has not

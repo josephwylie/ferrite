@@ -42,6 +42,9 @@ pub(crate) enum RowId {
     Tail,
     /// Over the first row, when earlier history is not shown.
     Boundary,
+    /// The Thread on another machine that delegated this one, over the
+    /// rows (and under the boundary, as T3's header holds it).
+    Parent,
 }
 
 /// What a row is, for the gap table: derived once in `project`.
@@ -106,6 +109,9 @@ pub(crate) enum RowKind {
     /// The line over the first row that says earlier history is not shown
     /// (`RowShape::earlier`): a divider's neighbour, like a compaction.
     Boundary,
+    /// A Delegate's `Delegate of …` divider (`RowShape::parent`), spaced as
+    /// a date divider is.
+    Parent,
     /// A fallback prose or code block.
     Other,
 }
@@ -158,11 +164,11 @@ pub(crate) fn gap_before(previous: Option<RowKind>, kind: RowKind, reading: f32)
     // off what follows it. A wake is a row of it that opens a turn.
     let log = |kind| matches!(kind, Activity | Group | Reasoning | Notice | LiveTail | Wake);
     match (previous, kind) {
-        (Divider | Boundary, Wake) => line,
+        (Divider | Boundary | Parent, Wake) => line,
         (_, Wake) => theme::tx_turn_gap(line),
         (previous, kind) if log(previous) && log(kind) => 0.,
         (_, TurnEnd | Meta) => 0.,
-        (Divider | Boundary, _) => line,
+        (Divider | Boundary | Parent, _) => line,
         (previous, Divider) => gap_before(Some(previous), Prompt, reading),
         (_, Outputs) => theme::tx_half(line),
         (Prompt, Prompt) => pad(theme::TX_ROW_PAD_JOINED),
@@ -207,6 +213,9 @@ pub(crate) struct RowShape {
     /// Earlier history exists that these blocks do not hold: a boundary
     /// row heads the window.
     pub earlier: Option<crate::transcript::Earlier>,
+    /// A Thread on another machine delegated this one: its divider heads
+    /// the rows (`TranscriptPresentation::parent`).
+    pub parent: bool,
 }
 
 /// One renderable transcript unit. Its blocks are owned so a list callback
@@ -646,6 +655,9 @@ fn project(blocks: &[Block], shape: &RowShape, reading: f32) -> Vec<Rc<Transcrip
     if shape.earlier.is_some() {
         rows.push(row(RowId::Boundary, &[], None, RowKind::Boundary));
     }
+    if shape.parent {
+        rows.push(row(RowId::Parent, &[], None, RowKind::Parent));
+    }
     // The running turn's prompt was evicted: its header heads the window.
     if let (Some(key), None) = (shape.working, running) {
         rows.push(header(key));
@@ -975,6 +987,25 @@ mod tests {
         };
         assert_eq!(kinds(&transcript, &earlier)[..2], [Boundary, Prompt]);
         assert_eq!(kinds(&transcript, &shape())[0], Prompt);
+    }
+
+    /// A Delegate's divider heads its rows, under the boundary when there
+    /// is one (T3's header: the history control, then `Subagent of`).
+    #[test]
+    fn a_delegates_divider_heads_its_rows() {
+        use RowKind::*;
+        let mut transcript = Transcript::default();
+        prompt(&mut transcript, "go");
+        let delegated = RowShape {
+            parent: true,
+            ..shape()
+        };
+        assert_eq!(kinds(&transcript, &delegated)[..2], [Parent, Prompt]);
+        let both = RowShape {
+            earlier: Some(crate::transcript::Earlier { copyable: false }),
+            ..delegated
+        };
+        assert_eq!(kinds(&transcript, &both)[..3], [Boundary, Parent, Prompt]);
     }
 
     /// The running turn's shape: its header under its prompt, its live row

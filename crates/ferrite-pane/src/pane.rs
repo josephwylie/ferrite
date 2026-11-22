@@ -19,10 +19,10 @@ mod working;
 mod work_row;
 mod wrap_up;
 pub(crate) use agents::{is_agent, render_agent, render_agent_card, AgentCardCx, AgentRowCx};
-pub use agents::{AgentClock, AgentFace, AgentFaces, AgentRun};
+pub use agents::{AgentClock, AgentFace, AgentFaces, AgentRun, Elsewhere};
 pub use background_work::{
-    background_work_line, inline_button, present as present_background_work, BackgroundTask,
-    WorkKind,
+    background_work_line, inline_action, inline_button, now_line, present as present_background_work,
+    BackgroundTask, NowLine, WorkKind,
 };
 #[cfg(any(test, feature = "test-support"))]
 pub use composer::model_label;
@@ -4354,6 +4354,7 @@ mod tests {
                     cited: Default::default(),
                     note: None,
                     earlier: None,
+                    parent: None,
                     queued: 0,
                 },
                 crate::transcript::TranscriptBody {
