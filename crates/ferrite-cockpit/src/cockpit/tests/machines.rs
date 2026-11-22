@@ -584,8 +584,139 @@ fn switching_machines_transfers_unsaved_panel_state_and_retires_the_previous_wri
     let state = Surfaces::saved_in(&dir, thread).expect("this computer's Panel, saved by the successor");
     assert_eq!(state.active, Some(SurfaceId::Changes));
     assert!(!state.tabs.contains(&SurfaceId::Browser), "live resources end with their owner");
-    let files: serde_json::Value = serde_json::from_slice(&std::fs::read(dir.join("files.json")).unwrap()).unwrap();
-    assert_eq!(files["threads"][thread.get().to_string()]["files"][0]["path"], checkout.join("src/lib.rs").to_str().unwrap());
+    assert_eq!(saved_files(&dir), [(None, thread.get(), vec!["lib.rs".to_string()])]);
+}
+
+/// files.json as `(machine, thread, file names)`, sorted.
+fn saved_files(dir: &std::path::Path) -> Vec<(Option<String>, u64, Vec<String>)> {
+    let files: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(dir.join("files.json")).unwrap()).unwrap();
+    let name = |file: &serde_json::Value| {
+        let path = std::path::Path::new(file["path"].as_str().unwrap());
+        path.file_name().unwrap().to_string_lossy().into_owned()
+    };
+    files["threads"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|set| {
+            let names = set["files"].as_array().unwrap().iter().map(name).collect();
+            (set["machine"].as_str().map(str::to_string), set["thread"].as_u64().unwrap(), names)
+        })
+        .collect::<std::collections::BTreeSet<_>>()
+        .into_iter()
+        .collect()
+}
+
+/// files.json in `dir` holding one file for each of `sets`, as
+/// `(machine, thread, file name)`: what earlier visits left.
+fn seed_saved_files(dir: &std::path::Path, sets: &[(Option<&str>, u64, &str)]) {
+    let threads: Vec<_> = sets
+        .iter()
+        .map(|(machine, thread, file)| {
+            serde_json::json!({
+                "machine": machine,
+                "thread": thread,
+                "files": [{ "path": dir.join(file), "preview": false }],
+                "active": 0,
+                "settings": { "wrap": true, "auto_save": true, "tab_size": 4 },
+                "preview_tabs": true,
+                "show_tree": true,
+            })
+        })
+        .collect();
+    let files = serde_json::json!({ "version": 2, "threads": threads });
+    std::fs::create_dir_all(dir).unwrap();
+    std::fs::write(dir.join("files.json"), serde_json::to_vec(&files).unwrap()).unwrap();
+}
+
+/// `machine_window`, its preferences (files.json among them) in `dir`.
+fn machine_window_saving_to<'a>(
+    cx: &'a mut TestAppContext,
+    core: Cockpit,
+    machines: Entity<Machines>,
+    dir: &std::path::Path,
+) -> (Entity<gpui::component::Root>, &'a mut gpui::VisualTestContext) {
+    let mut prefs = Preferences::ephemeral();
+    prefs.dir = dir.to_path_buf();
+    cx.add_window_view(|window, cx| {
+        let view = cx.new(|cx| {
+            CockpitView::new_with_settings(core, Provider::Claude, prefs, cx).with_machines(machines, cx)
+        });
+        gpui::component::Root::new(
+            cx.new(|cx| crate::cockpit_window::CockpitWindow::new(view, window, cx)),
+            window,
+            cx,
+        )
+    })
+}
+
+/// The verifier's run: this computer's Thread has Files open, and files.json
+/// holds box's sets from an earlier visit. Going to box (which has not
+/// answered yet) and back saves this computer's tabs as this computer's
+/// and leaves box's sets alone.
+#[gpui::test]
+fn going_to_a_machine_and_back_keeps_each_machines_files_tabs(cx: &mut TestAppContext) {
+    let (core, _fake, checkout) = bound_cockpit("machines-files-there", Provider::Claude);
+    let thread = core.known_threads().into_iter().next().unwrap();
+    let dir = scratch("machines-files-there-prefs");
+    seed_saved_files(&dir, &[(Some("me@box"), thread.get(), "box-only-1.rs"), (Some("me@box"), 7, "box-only-7.rs")]);
+    let machines = cx.new(|_| machines("files-there", None));
+    let (root, cx) = machine_window_saving_to(cx, core, machines, &dir);
+    let home = shown(&root, cx);
+    home.update(cx, |view, cx| {
+        view.open_in_files(thread, checkout.join("src/lib.rs"), None, true, cx);
+        view.open_in_files(thread, checkout.join("README.md"), None, true, cx);
+        view.flush_panel_persistence(cx);
+    });
+    let expected = [
+        (None, thread.get(), vec!["lib.rs".to_string(), "README.md".to_string()]),
+        (Some("me@box".to_string()), thread.get(), vec!["box-only-1.rs".to_string()]),
+        (Some("me@box".to_string()), 7, vec!["box-only-7.rs".to_string()]),
+    ];
+    assert_eq!(saved_files(&dir), expected);
+
+    home.update(cx, |_, cx| cx.emit(GoToMachine { index: Some(1), open: None }));
+    tick(cx);
+    let on_box = shown(&root, cx);
+    assert_ne!(on_box.entity_id(), home.entity_id());
+    on_box.update(cx, |view, cx| view.flush_panel_persistence(cx));
+    assert_eq!(saved_files(&dir), expected, "on box");
+
+    on_box.update(cx, |_, cx| cx.emit(GoToMachine { index: Some(0), open: None }));
+    tick(cx);
+    shown(&root, cx).update(cx, |view, cx| view.flush_panel_persistence(cx));
+    assert_eq!(saved_files(&dir), expected, "back home");
+}
+
+/// The other way: on box, which knows its Thread, with Files open there.
+/// Coming home saves box's tabs as box's, not over this computer's set
+/// of the same Thread id, and box's list prunes only box's sets.
+#[gpui::test]
+fn coming_home_from_a_machine_saves_its_files_tabs_as_its_own(cx: &mut TestAppContext) {
+    let (core, _fake, checkout) = bound_cockpit("machines-files-back", Provider::Claude);
+    let thread = core.known_threads().into_iter().next().unwrap();
+    let dir = scratch("machines-files-back-prefs");
+    seed_saved_files(&dir, &[(None, thread.get(), "here-1.rs")]);
+    let machines = cx.new(|_| machines("files-back", Some("me@box")));
+    let (root, cx) = machine_window_saving_to(cx, core, machines, &dir);
+    let on_box = shown(&root, cx);
+    on_box.update(cx, |view, cx| {
+        view.open_in_files(thread, checkout.join("src/lib.rs"), None, true, cx);
+        view.flush_panel_persistence(cx);
+    });
+    let expected = [
+        (None, thread.get(), vec!["here-1.rs".to_string()]),
+        (Some("me@box".to_string()), thread.get(), vec!["lib.rs".to_string()]),
+    ];
+    assert_eq!(saved_files(&dir), expected);
+
+    on_box.update(cx, |_, cx| cx.emit(GoToMachine { index: Some(0), open: None }));
+    tick(cx);
+    let home = shown(&root, cx);
+    assert_ne!(home.entity_id(), on_box.entity_id());
+    home.update(cx, |view, cx| view.flush_panel_persistence(cx));
+    assert_eq!(saved_files(&dir), expected);
 }
 
 /// A machine with no `ferrited` says so, and while it is away its board,
