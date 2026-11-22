@@ -32,7 +32,7 @@ use crate::store::{LoadError, Provider, Store};
 use crate::transcript::Input;
 use crate::workspace::registry::{ProjectId, Registry};
 use crate::workspace::WorkspaceChoice;
-use crate::{Decision, DecisionAnswer, ModelInfo, ThreadId};
+use crate::{Decision, DecisionAnswer, MachineId, ModelInfo, ProjectKey, ThreadId, ThreadKey};
 pub use mirror::ThreadView;
 pub use remote::{Attach, Endpoint, ServerRestart, ServerState};
 pub use status::{ServerStatus, StatusRow};
@@ -46,6 +46,9 @@ mod status;
 
 pub struct Cockpit {
     link: Link,
+    /// The machine `link` reaches, as this run names it: what every key
+    /// this Cockpit hands out carries.
+    machine: MachineId,
     /// The Server said something since the window last asked
     /// (`take_arrived`).
     arrived: bool,
@@ -283,6 +286,7 @@ impl Cockpit {
             .unwrap_or_default();
         Self {
             link,
+            machine: MachineId::mint(),
             shared: shared::Shared::new(dir),
             parked: parked::Parked::default(),
             logs,
@@ -312,6 +316,21 @@ impl Cockpit {
             drawn: None,
             told: None,
         }
+    }
+
+    /// The machine this Cockpit's Threads live on, for this run.
+    pub fn machine_id(&self) -> MachineId {
+        self.machine
+    }
+
+    /// `thread` on this Cockpit's machine.
+    pub fn thread_key(&self, thread: ThreadId) -> ThreadKey {
+        ThreadKey::new(self.machine, thread)
+    }
+
+    /// `project` on this Cockpit's machine.
+    pub fn project_key(&self, project: ProjectId) -> ProjectKey {
+        ProjectKey::new(self.machine, project)
     }
 
     /// Window adapter receives metadata and actions for its exact owned pages.

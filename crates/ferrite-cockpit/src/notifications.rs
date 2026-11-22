@@ -15,11 +15,10 @@ use std::rc::Rc;
 use std::time::{Duration, Instant};
 
 use ferrite_core::notifications::{DecisionNoticeId, NoticeId, Notifications, RequestKind};
-use ferrite_core::ThreadId;
+use ferrite_core::{MachineKey, ThreadId};
 use gpui::prelude::*;
 use gpui::{div, px, rgb, AnyElement, App, Div, SharedString, Stateful, Window};
 
-use crate::machines::MachineKey;
 use ferrite_ui::components;
 use ferrite_ui::pointer::{Pointer, PointerPressed};
 use ferrite_ui::theme::*;

@@ -274,7 +274,7 @@ fn pump_hears(executor: &gpui::BackgroundExecutor) -> ferrite_core::doorbell::He
 /// replaces it in the notification centre. A Thread on another machine is
 /// named by it too, since ids are per Store, whichever machine the window
 /// is on: the tag outlives a move.
-fn system_tag(machine: &crate::machines::MachineKey, thread: ThreadId) -> String {
+fn system_tag(machine: &ferrite_core::MachineKey, thread: ThreadId) -> String {
     match &machine.0 {
         None => format!("ferrite-thread-{thread}"),
         Some(target) => format!("ferrite-thread-{thread}@{target}"),
@@ -8395,7 +8395,7 @@ impl CockpitView {
             Some(machine) => machine,
             None => match machines {
                 Some(machines) => machines.selected_key()?,
-                None => crate::machines::MachineKey(None),
+                None => ferrite_core::MachineKey(None),
             },
         };
         // The directory is this computer's only for a Thread on screen.
