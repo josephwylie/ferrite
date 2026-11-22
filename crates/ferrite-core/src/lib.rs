@@ -35,6 +35,7 @@ pub mod link;
 pub mod login_shell;
 pub mod machine;
 pub mod notifications;
+pub mod pr_watch;
 pub mod progress;
 pub mod prompt_files;
 pub mod file_operations;
