@@ -294,7 +294,7 @@ The headless Ferrite process (`ferrite server`) that owns every Session,
 the Threads' history and the pending Decisions, so agents keep running
 when no window is open. Windows are its clients; several may attach.
 Each has a stable id kept in its Store (`ServerId`), which its `welcome`
-names on every route to it.
+and the API's `identity.get` name on every route to it.
 _Avoid_: daemon, backend (that is a Provider), host.
 
 **Machine**
@@ -305,6 +305,12 @@ time — this computer, `local`, or another — and watches only that one's
 Threads; the others stream status to the nav. A machine runs `ferrited`,
 the Server without a window.
 _Avoid_: host, remote (as a noun), node.
+
+**Peer**
+A saved Machine's Server as this Server asks it (`peers::Peers`): through
+the machine's API, as the Server's own caller, never a Thread's. Known by
+its `ServerId`, so a machine pointed elsewhere is never taken for it.
+_Avoid_: linked environment (T3 Code's word), remote.
 
 **API**
 The Server's automation surface: requests and answers as JSON lines on a
