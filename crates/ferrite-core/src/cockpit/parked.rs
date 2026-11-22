@@ -73,6 +73,9 @@ impl Parked {
             title: row.title.clone(),
             effort: None,
             owner: row.owner.clone(),
+            delegated_from: None,
+            request: None,
+            cap: None,
             summary: None,
         })
     }

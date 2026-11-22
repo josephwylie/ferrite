@@ -145,6 +145,25 @@ pub enum ThreadOwner {
     Factory(crate::workspace::registry::ProjectId),
 }
 
+/// The Thread on another machine whose agent started this one to do a
+/// piece of work (a Delegate): that machine's Server, the label
+/// it knows this machine by, and its Thread by id and title. Written with
+/// the Thread and kept for its whole life; a fork is the operator's own
+/// and carries none.
+#[derive(
+    Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
+)]
+pub struct DelegatedFrom {
+    /// The delegating Thread's Server (`welcome`'s id).
+    #[schemars(with = "String")]
+    pub server: crate::server::ServerId,
+    /// What the delegating machine is called there.
+    pub label: String,
+    /// The delegating Thread, by that Server's id for it.
+    pub thread: ThreadId,
+    pub title: String,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

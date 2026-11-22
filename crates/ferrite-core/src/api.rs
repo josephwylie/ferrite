@@ -110,7 +110,7 @@ impl ApiError {
         }
     }
 
-    fn on(self, thread: ThreadId) -> Self {
+    pub fn on(self, thread: ThreadId) -> Self {
         Self {
             thread: Some(thread),
             ..self
@@ -171,6 +171,16 @@ pub enum Code {
     /// A Coordinator's Thread asked for what only the operator does: it
     /// raises a proposal instead (#224).
     ProposeInstead,
+    /// The Thread is parked, not gone: the refusal names it.
+    ThreadParked,
+    /// A Thread from another machine (`delegated_from`) while this
+    /// machine's Settings › Labs › Linked machines is off.
+    LinkedMachinesOff,
+    /// A capped Thread (`thread.start`'s `mode`) was asked to carry or
+    /// take what would widen how far its agent goes without asking: an
+    /// argument, an `env`, a `launcher`, or an answer that remembers a
+    /// choice. The refusal names it; nothing was started or answered.
+    WidensCap,
 }
 
 impl From<crate::factory::Refusal> for ApiError {
@@ -252,6 +262,9 @@ pub struct ThreadInfo {
     /// The branch of that worktree, when Ferrite made it.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub branch: Option<String>,
+    /// The Thread on another machine that delegated it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub delegated_from: Option<crate::DelegatedFrom>,
 }
 
 pub fn thread_info(engine: &Engine, thread: ThreadId) -> Option<ThreadInfo> {
@@ -282,6 +295,7 @@ pub fn thread_info(engine: &Engine, thread: ThreadId) -> Option<ThreadInfo> {
             .and_then(|path| engine.registry().branch_for(path))
             .map(Into::into),
         owner: view.owner().map(owner),
+        delegated_from: view.delegated_from().cloned(),
     })
 }
 
@@ -365,6 +379,16 @@ pub fn unknown_thread() -> ApiError {
     ApiError::new(Code::UnknownThread, "no open Thread has that id")
 }
 
+/// `thread` is parked, not gone: its history stays, and `thread.revive`
+/// starts it again.
+pub fn thread_parked(thread: ThreadId) -> ApiError {
+    ApiError::new(
+        Code::ThreadParked,
+        format!("Thread {thread} is parked: its history stays (thread.revive starts it again)"),
+    )
+    .on(thread)
+}
+
 /// What a subscription hears.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(tag = "event", rename_all = "snake_case")]
@@ -443,6 +467,9 @@ pub enum Until {
     AnyOf(Vec<Attention>),
     /// Up and ready for a prompt: its Session started, and idle or done.
     Ready,
+    /// Up and at work on the prompt it started with: working, blocked on
+    /// a Decision, or done (`thread.start --ready --prompt`).
+    Taken,
 }
 
 impl Until {
@@ -454,6 +481,7 @@ impl Until {
             Until::Ready => {
                 !seen.starting && matches!(seen.attention, Attention::Idle | Attention::Done)
             }
+            Until::Taken => !seen.starting,
         }
     }
 }
@@ -522,8 +550,8 @@ impl Wait {
         if !self.unseen && self.until.reached(seen) {
             return Some(Settled::Reached);
         }
-        let ready = self.until == Until::Ready;
-        if ready && seen.attention == Attention::Blocked {
+        let ready = matches!(self.until, Until::Ready | Until::Taken);
+        if self.until == Until::Ready && seen.attention == Attention::Blocked {
             return Some(Settled::NotReady);
         }
         if self.deadline.is_some_and(|deadline| now >= deadline) {

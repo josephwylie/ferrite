@@ -247,6 +247,17 @@ struct Header {
     /// every Thread before it, and the operator's own — means theirs.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     owner: Option<crate::ThreadOwner>,
+    /// The Thread on another machine that delegated it. Absent
+    /// — every Thread before it, and one started here — means none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    delegated_from: Option<crate::DelegatedFrom>,
+    /// The key of the `thread.start` that made it, which the same key
+    /// finds again rather than starting another.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    request: Option<String>,
+    /// The most its agent may do without asking. Absent means uncapped.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    cap: Option<crate::runtime_mode::RuntimeMode>,
 }
 
 impl Header {
@@ -261,6 +272,9 @@ impl Header {
             snooze: self.snooze,
             effort: self.effort.clone(),
             owner: self.owner.clone(),
+            delegated_from: self.delegated_from.clone(),
+            request: self.request.clone(),
+            cap: self.cap,
         }
     }
 
@@ -276,6 +290,9 @@ impl Header {
             snooze: facts.snooze,
             effort: facts.effort,
             owner: facts.owner,
+            delegated_from: facts.delegated_from,
+            request: facts.request,
+            cap: facts.cap,
         }
     }
 }
@@ -302,6 +319,12 @@ struct Facts {
     effort: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     owner: Option<crate::ThreadOwner>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    delegated_from: Option<crate::DelegatedFrom>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    request: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    cap: Option<crate::runtime_mode::RuntimeMode>,
 }
 
 impl Facts {
@@ -316,6 +339,9 @@ impl Facts {
             snooze: self.snooze,
             effort: self.effort,
             owner: self.owner,
+            delegated_from: self.delegated_from,
+            request: self.request,
+            cap: self.cap,
             summary: None,
         }
     }
@@ -2728,18 +2754,19 @@ impl Store {
         project: Option<ProjectId>,
         binding: WorkspaceBinding,
     ) -> io::Result<(ThreadId, ThreadWriter)> {
-        self.create_owned(provider, model, project, binding, None)
+        self.create_owned(provider, model, project, binding, Origin::default())
     }
 
-    /// `create_with_model`, for `owner` when it is not the operator's
-    /// (ADR 0037): the owner is written in the header, with the Thread.
+    /// `create_with_model`, for a Thread born with an `origin`: its owner
+    /// when it is not the operator's (ADR 0037), the Thread that delegated
+    /// it and its start's key, written in the header with it.
     pub(crate) fn create_owned(
         &self,
         provider: Provider,
         model: Option<String>,
         project: Option<ProjectId>,
         binding: WorkspaceBinding,
-        owner: Option<crate::ThreadOwner>,
+        origin: Origin,
     ) -> io::Result<(ThreadId, ThreadWriter)> {
         #[cfg(test)]
         if self.fail_create {
@@ -2765,7 +2792,10 @@ impl Store {
             snooze: None,
             // And on its default effort.
             effort: None,
-            owner,
+            owner: origin.owner,
+            delegated_from: origin.delegated_from,
+            request: origin.request,
+            cap: origin.cap,
         };
         let written = line(&header)?;
         file.write_all(written.as_bytes())?;
@@ -2820,11 +2850,15 @@ impl Store {
                 )
             })
             .map_or(0, |at| at + 1);
-        // A fork is the operator's own, whoever's its source was.
+        // A fork is the operator's own, whoever's its source was, and
+        // started here: no other start's key finds it.
         let facts = Facts {
             snooze: None,
             title: None,
             owner: None,
+            delegated_from: None,
+            request: None,
+            cap: None,
             ..snapshot.facts()
         };
         let binding = facts
@@ -2915,6 +2949,21 @@ impl Store {
         }
         ids.sort_unstable();
         Ok(ids)
+    }
+
+    /// The Thread a `thread.start` carrying `request` made, open or
+    /// parked, while the Store holds it. Reads every log's facts: asked
+    /// only by a start that carries a key.
+    pub fn started_by(&self, request: &str) -> io::Result<Option<ThreadId>> {
+        for id in self.thread_ids()? {
+            if self
+                .peek(id)
+                .is_ok_and(|meta| meta.request.as_deref() == Some(request))
+            {
+                return Ok(Some(id));
+            }
+        }
+        Ok(None)
     }
 
     /// Remember that the operator has this Thread open. The tiny sidecar is
@@ -3942,9 +3991,25 @@ pub struct ThreadMeta {
     pub effort: Option<String>,
     /// Whose the Thread is when not the operator's (ADR 0037).
     pub owner: Option<crate::ThreadOwner>,
+    /// The Thread on another machine that delegated it.
+    pub delegated_from: Option<crate::DelegatedFrom>,
+    /// The key of the `thread.start` that made it.
+    pub request: Option<String>,
+    /// The most its agent may do without asking.
+    pub cap: Option<crate::runtime_mode::RuntimeMode>,
     /// The counts a parked row shows, read off the log's tail; `None` for
     /// a log from before schema 13 (see `Store::summary`).
     pub summary: Option<ThreadSummary>,
+}
+
+/// What a new Thread is born with and keeps for its whole life
+/// (`Store::create_owned`).
+#[derive(Debug, Clone, Default)]
+pub(crate) struct Origin {
+    pub owner: Option<crate::ThreadOwner>,
+    pub delegated_from: Option<crate::DelegatedFrom>,
+    pub request: Option<String>,
+    pub cap: Option<crate::runtime_mode::RuntimeMode>,
 }
 
 /// What a revive replays and resumes from (`Store::revive`): the Thread's
@@ -4034,6 +4099,9 @@ pub struct ThreadSnapshot {
     snooze: Option<crate::snooze::Snooze>,
     effort: Option<String>,
     owner: Option<crate::ThreadOwner>,
+    delegated_from: Option<crate::DelegatedFrom>,
+    request: Option<String>,
+    cap: Option<crate::runtime_mode::RuntimeMode>,
     records: Vec<Record>,
 }
 
@@ -4159,6 +4227,9 @@ impl ThreadSnapshot {
             snooze: facts.snooze,
             effort: facts.effort,
             owner: facts.owner,
+            delegated_from: facts.delegated_from,
+            request: facts.request,
+            cap: facts.cap,
             records,
         }
     }
@@ -4174,6 +4245,9 @@ impl ThreadSnapshot {
             snooze: self.snooze,
             effort: self.effort.clone(),
             owner: self.owner.clone(),
+            delegated_from: self.delegated_from.clone(),
+            request: self.request.clone(),
+            cap: self.cap,
         }
     }
 
@@ -4214,6 +4288,17 @@ impl ThreadSnapshot {
     /// Whose the Thread is when not the operator's (ADR 0037).
     pub fn owner(&self) -> Option<&crate::ThreadOwner> {
         self.owner.as_ref()
+    }
+
+    /// The Thread on another machine that delegated it.
+    pub fn delegated_from(&self) -> Option<&crate::DelegatedFrom> {
+        self.delegated_from.as_ref()
+    }
+
+    /// The most its agent may do without asking, when it was started
+    /// capped.
+    pub fn cap(&self) -> Option<crate::runtime_mode::RuntimeMode> {
+        self.cap
     }
 
     pub fn title(&self) -> Option<&str> {
@@ -5167,6 +5252,9 @@ fn parse(id: ThreadId, bytes: &[u8]) -> Result<Parsed, LoadError> {
             snooze: facts.snooze,
             effort: facts.effort,
             owner: facts.owner,
+            delegated_from: facts.delegated_from,
+            request: facts.request,
+            cap: facts.cap,
             records,
         },
         offsets,

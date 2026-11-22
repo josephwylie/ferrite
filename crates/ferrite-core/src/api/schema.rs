@@ -34,6 +34,11 @@
 //!   Project's Coordinator.
 //! - `propose_instead`: a Coordinator's Thread asked for what only the
 //!   operator does; it raises a proposal instead.
+//! - `thread_parked`: that Thread is parked, not gone; the refusal names
+//!   it (`thread.revive` starts it again).
+//! - `linked_machines_off`: a `thread.start` from another machine's
+//!   Thread (`delegated_from`) while this machine's Settings › Labs ›
+//!   Linked machines is off.
 //! - `failed`: anything else, in its own words.
 //! - `server_unavailable`: the CLI's own, no Server answered.
 //!
@@ -50,8 +55,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::drive;
 use crate::protocol::{WireAnswer, WireSound};
+use crate::runtime_mode::RuntimeMode;
 use crate::store::Provider;
-use crate::{Attention, ThreadId};
+use crate::{Attention, DelegatedFrom, ThreadId};
 
 /// One operation as the CLI and `ferrite help` know it.
 pub struct Operation {
@@ -253,6 +259,8 @@ operations! {
         "This Server's identity: its server_id, the same over every route to it, ssh or a paired link.";
     ThreadStop(ThreadParams) => "thread.stop", ["thread"], Operator,
         "Stop everything a Thread runs: Main's turn, its subagents and background commands. Its queued prompts go back to the Composer.";
+    ProviderList(Empty) => "provider.list", [], Anyone,
+        "The providers this machine runs Threads on: their models, efforts and the modes a Thread may be capped at.";
 }
 
 /// Who may call an operation (#224). A call that names no Thread is the
@@ -316,7 +324,9 @@ pub struct ThreadStartParams {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub project: Option<String>,
     /// Answer only once the agent is up and ready for a prompt (idle or
-    /// done); `agent_not_ready` when it is blocked or not up in time.
+    /// done); `agent_not_ready` when it is blocked or not up in time. With
+    /// `prompt`, once it is up and at work on it (working, blocked on a
+    /// Decision, or done); `agent_not_ready` when not in time.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub ready: bool,
     /// With `ready`: how long to give it, from the request; 20 s when
@@ -342,6 +352,29 @@ pub struct ThreadStartParams {
     /// alerts; the API lists it, naming its owner. Kept for its life.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub owner: Option<Owner>,
+    /// The caller's own key for this start: another start with the same
+    /// key answers with the Thread the first one opened, and starts and
+    /// sends nothing; `thread_parked`, naming it, once it is parked.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub request: Option<String>,
+    /// The agent's first prompt, sent once, with the start.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prompt: Option<String>,
+    /// The most the agent may do without asking, kept for the Thread's
+    /// life: every Session, revived ones too, starts at the narrower of
+    /// this and this machine's mode (`provider.list`'s `mode`), never
+    /// broader. Under it the Server alone sets how far the agent goes: a
+    /// start whose `args` set or widen it (`--dangerously-skip-permissions`,
+    /// `--allowedTools`, `--yolo`, `-c sandbox_mode=…`, …), or that carries
+    /// an `env` or a `launcher`, is refused `widens_cap`, naming it; so is
+    /// such a revive, and a `decision.answer` that remembers a choice.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mode: Option<RuntimeMode>,
+    /// The Thread on another machine whose agent starts this one to do a
+    /// piece of work (a Delegate). Kept on it for its life;
+    /// refused `linked_machines_off` while this machine's Labs gate is off.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub delegated_from: Option<DelegatedFrom>,
 }
 
 /// Whose a Thread is when not the operator's (ADR 0037), as the API

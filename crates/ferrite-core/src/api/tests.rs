@@ -240,6 +240,7 @@ fn the_operations_are_the_ones_declared_and_never_renamed() {
             "window.focus",
             "identity.get",
             "thread.stop",
+            "provider.list",
         ]
     );
 }
@@ -622,6 +623,7 @@ fn samples() -> Vec<Request> {
         })),
         request(Method::WindowFocus(Empty {})),
         request(Method::ThreadStop(ThreadParams { thread: thread() })),
+        request(Method::ProviderList(Empty {})),
     ]
 }
 
@@ -644,6 +646,10 @@ fn thread_start() -> ThreadStartParams {
         env: Default::default(),
         launcher: Vec::new(),
         owner: None,
+        request: None,
+        prompt: None,
+        mode: None,
+        delegated_from: None,
     }
 }
 
@@ -764,6 +770,23 @@ fn later_samples() -> Vec<(&'static str, Request)> {
             request(Method::ThreadStart(ThreadStartParams {
                 worktree: false,
                 owner: Some(Owner::Task("t-1".into())),
+                ..thread_start()
+            })),
+        ),
+        (
+            "thread_start_delegated",
+            request(Method::ThreadStart(ThreadStartParams {
+                worktree: false,
+                title: Some("Fix the flaky login test".into()),
+                request: Some("delegate:5f3a9c:12:k-1".into()),
+                prompt: Some("Fix the flaky login test, then say what changed.".into()),
+                mode: Some(crate::runtime_mode::RuntimeMode::AutoAcceptEdits),
+                delegated_from: Some(crate::DelegatedFrom {
+                    server: crate::server::ServerId::new("5f3a9c"),
+                    label: "mac".into(),
+                    thread: ThreadId::new(12),
+                    title: "Release checklist".into(),
+                }),
                 ..thread_start()
             })),
         ),
@@ -891,6 +914,7 @@ fn answers_refusals_and_events_keep_their_shape() {
         worktree: Some(PathBuf::from("/work/.worktrees/app/invoices")),
         branch: Some("hp/billing/invoices".into()),
         owner: None,
+        delegated_from: None,
     };
     let answer = Response::Result {
         id: "1".into(),

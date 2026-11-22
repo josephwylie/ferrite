@@ -319,10 +319,16 @@ impl Spawn {
                 model,
                 effort: own_effort.or_else(default_effort),
                 name,
-                permission_mode: request
-                    .permission_mode
-                    .map(str::to_string)
-                    .or(defaults.claude_permission_mode),
+                permission_mode: {
+                    let mode = request
+                        .permission_mode
+                        .map(str::to_string)
+                        .or(defaults.claude_permission_mode);
+                    match request.cap {
+                        Some(cap) => Some(cap.hold_claude(mode)),
+                        None => mode,
+                    }
+                },
                 prompt_suggestions: defaults.placeholder_suggestions,
                 resume,
                 resume_at: request.resume_at.and_then(|point| point.at.clone()),
@@ -345,18 +351,24 @@ impl Spawn {
                 // Written for Codex's terminal UI (ADR 0030); what they set
                 // gives way only to the Thread's own choice.
                 let launch = crate::providers::codex_launch::from_tui_args(&args);
+                let approval_policy = request
+                    .permission_mode
+                    .map(str::to_string)
+                    .or(launch.approval_policy)
+                    .or(defaults.codex_approval_policy.clone())
+                    .unwrap_or_else(|| "on-request".into());
+                let sandbox = launch.sandbox.or(defaults.codex_sandbox.clone());
+                let (approval_policy, sandbox) = match request.cap {
+                    Some(cap) => cap.hold_codex(approval_policy, sandbox),
+                    None => (approval_policy, sandbox),
+                };
                 SessionConfig::Codex(CodexConfig {
                     program: program.clone(),
                     cwd,
                     model: model.or(launch.model),
                     effort: own_effort.or(launch.effort).or_else(default_effort),
-                    approval_policy: request
-                        .permission_mode
-                        .map(str::to_string)
-                        .or(launch.approval_policy)
-                        .or(defaults.codex_approval_policy.clone())
-                        .or_else(|| Some("on-request".into())),
-                    sandbox: launch.sandbox.or(defaults.codex_sandbox.clone()),
+                    approval_policy: Some(approval_policy),
+                    sandbox,
                     resume,
                     additional_directories,
                     visuals: self.visuals(defaults.visuals),
@@ -492,6 +504,7 @@ mod tests {
             additional_directories: Vec::new(),
             launch: Default::default(),
             owner,
+            cap: None,
         };
         let SessionConfig::Claude(claude) = served.config(request(Provider::Claude, Some(&worker)))
         else {
@@ -532,6 +545,7 @@ mod tests {
             additional_directories: Vec::new(),
             launch: Default::default(),
             owner,
+            cap: None,
         };
         let SessionConfig::Claude(claude) =
             served.config(request(Provider::Claude, Some(&coordinator)))
@@ -574,6 +588,7 @@ mod tests {
             additional_directories: Vec::new(),
             launch: Default::default(),
             owner: None,
+            cap: None,
         };
         let served = Spawn {
             api: Some(PathBuf::from("/store/api.sock")),
@@ -623,6 +638,7 @@ mod tests {
                 launcher: &launcher,
             },
             owner: None,
+            cap: None,
         };
         let SessionConfig::Claude(claude) = Spawn::new(Arc::default(), None).config(request) else {
             panic!("a Claude request makes a Claude config");
@@ -637,6 +653,68 @@ mod tests {
             "Ferrite's own is set last, over the Thread's"
         );
         assert_eq!(claude.launcher, launcher);
+    }
+
+    /// A capped Thread's every Session starts at the narrower of its cap
+    /// and the mode it would otherwise start in, however broad the
+    /// machine's defaults or the mode its last agent ran in; an uncapped
+    /// one is left to them.
+    #[test]
+    fn a_capped_session_starts_within_its_cap() {
+        use crate::runtime_mode::RuntimeMode;
+        let defaults = Arc::new(Mutex::new(SessionDefaults {
+            claude_permission_mode: Some("bypassPermissions".into()),
+            codex_approval_policy: Some("never".into()),
+            codex_sandbox: Some("danger-full-access".into()),
+            ..SessionDefaults::default()
+        }));
+        let spawn = Spawn::new(defaults, None);
+        let request = |provider, permission_mode, cap| SpawnRequest {
+            thread: ThreadId::new(12),
+            provider,
+            model: None,
+            effort: None,
+            resume: None,
+            resume_at: None,
+            permission_mode,
+            name: None,
+            cwd: None,
+            additional_directories: Vec::new(),
+            launch: Default::default(),
+            owner: None,
+            cap,
+        };
+        let claude = |permission_mode, cap| match spawn.config(request(
+            Provider::Claude,
+            permission_mode,
+            cap,
+        )) {
+            SessionConfig::Claude(config) => config.permission_mode,
+            SessionConfig::Codex(_) => unreachable!(),
+        };
+        let codex = |cap| match spawn.config(request(Provider::Codex, None, cap)) {
+            SessionConfig::Codex(config) => (config.approval_policy, config.sandbox),
+            SessionConfig::Claude(_) => unreachable!(),
+        };
+        let approval = Some(RuntimeMode::ApprovalRequired);
+        assert_eq!(claude(None, approval).as_deref(), Some("default"));
+        assert_eq!(
+            claude(Some("acceptEdits"), approval).as_deref(),
+            Some("default"),
+            "a mode widened in an earlier Session"
+        );
+        assert_eq!(
+            claude(Some("plan"), Some(RuntimeMode::FullAccess)).as_deref(),
+            Some("plan")
+        );
+        assert_eq!(claude(None, None).as_deref(), Some("bypassPermissions"));
+        let words = |policy: &str, sandbox: &str| (Some(policy.into()), Some(sandbox.into()));
+        assert_eq!(codex(approval), words("untrusted", "read-only"));
+        assert_eq!(
+            codex(Some(RuntimeMode::Auto)),
+            words("never", "workspace-write")
+        );
+        assert_eq!(codex(None), words("never", "danger-full-access"));
     }
 
     #[derive(Default)]

@@ -107,6 +107,16 @@ stay, as any agent driving others uses them:
 | `machine.list` | the enabled saved machines, `{id, label, target}` by name |
 | `identity.get` | `{server_id}`: the Server's `ServerId` (ADR 0025), the same over every route to it, for a Peer to check (below) |
 
+Added for Delegates, copied from T3 Code's linked environments: a
+Thread's agent starts a Thread on another machine to do one piece of
+work, and that machine's Server follows it. These are what the starting
+Server asks of the other machine's:
+
+| Operation | Does |
+|---|---|
+| `thread.start` | gains `request` (the caller's key, kept in the Thread's header: a start with the same key answers with the Thread the first opened and starts and sends nothing, across a restart too; `thread_parked`, naming it, once it is parked), `prompt` (its first prompt, sent once inside the start, as T3's launch carries `message`), `mode` (T3's runtime modes, `approval_required` < `auto_accept_edits` < `auto` < `full_access`: kept in the header for life: every Session, revived ones too, starts at the narrower of `mode` and this machine's mode, set by the spawner, so a narrower start is never broadened. Under a cap the Server alone sets how far the agent goes: a start or revive whose `args` carry a flag of the provider's table in `runtime_mode` (Claude's `--dangerously-skip-permissions`, `--permission-mode`, `--allowedTools`, `--settings`, `--mcp-config`, …; Codex's `--yolo`, `-s`, `-a`, `-p`, `-c sandbox_mode=…`, …), or any `env` or `launcher`, is refused `widens_cap`, naming it; `decision.answer` on a capped Thread refuses `allow_always` and `choose`, which remember a mode or rule, so only the window widens one. With `prompt`, `ready` answers once the agent is at work on it, blocked on a Decision included) and `delegated_from` (`{server, label, thread, title}`: the starting Thread, kept in the header for life and in every answer about the Thread; a fork drops it, as it drops `owner`; refused `linked_machines_off` while this machine's Settings › Labs › Linked machines is off) |
+| `provider.list` | T3's `orchestrator_capabilities`: each provider with its models (`model`, `label`, `efforts`, `default_effort`), the `modes` a start may cap at, and the `mode` this machine's settings start a Thread at |
+
 `notification.show` gains `sound` (`request`, `done`, `none`) and
 `important`. A Thread's answer gains `focused` and `draft`, which the
 windows tell the Server (`focused`, `composing`, gen-1 commands only a

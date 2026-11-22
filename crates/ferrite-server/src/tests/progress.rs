@@ -89,6 +89,7 @@ fn off_loop() -> (
     let spawner = OffLoop {
         spawn: Spawn {
             launches: Default::default(),
+            told: Default::default(),
             sessions,
             answers: Answers::default(),
             queued: Queued::default(),

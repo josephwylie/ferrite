@@ -319,6 +319,7 @@ fn interrogate_a_workflow_read_blocks_the_pump_on_skills_discovery() {
             installed: Installed::default(),
             sessions,
             launches: Launches::default(),
+            told: Default::default(),
             answers: Answers::default(),
             queued: Queued::default(),
             gate: None,

@@ -15,13 +15,15 @@ use ferrite_core::api::schema::{
     ThreadStartParams,
 };
 use ferrite_core::api::{
-    self, thread_info, thread_result, unknown_thread, ApiError, CallerId, Code, Method, Request,
-    ThreadInfo, Until, Wait,
+    self, thread_info, thread_parked, thread_result, unknown_thread, ApiError, CallerId, Code,
+    Method, Request, ThreadInfo, Until, Wait,
 };
 use ferrite_core::drive::Action;
 use ferrite_core::engine::{Launch, ReadBack};
-use ferrite_core::protocol::{Done, Op, ProjectAction, ServerMessage};
-use ferrite_core::store::LoadError;
+use ferrite_core::protocol::{Done, Op, ProjectAction, ServerMessage, WireAnswer};
+use ferrite_core::runtime_mode::RuntimeMode;
+use ferrite_core::settings::Settings;
+use ferrite_core::store::{LoadError, Provider};
 use ferrite_core::workspace::{self, WorkspaceChoice};
 use ferrite_core::ThreadId;
 
@@ -60,9 +62,14 @@ impl Server {
         let timeout = |ms: Option<u64>| ms.map(Duration::from_millis);
         let result = match method {
             Method::ThreadStart(params) => {
+                // With a prompt, ready is up and at work on it: a first
+                // turn that meets a Decision is an agent that is ready.
                 let ready = params.ready.then(|| {
-                    let within = timeout(params.timeout_ms).unwrap_or(api::READY);
-                    Wait::until(Until::Ready, Some(within), now)
+                    let within = Some(timeout(params.timeout_ms).unwrap_or(api::READY));
+                    match params.prompt {
+                        Some(_) => Wait::after_prompt_until(Until::Taken, within, now),
+                        None => Wait::until(Until::Ready, within, now),
+                    }
                 });
                 match (self.start_thread(params), ready) {
                     (Ok(thread), Some(wait)) => {
@@ -196,6 +203,7 @@ impl Server {
             Method::WorktreeRemove(params) => self.remove_worktree(&params.path),
             Method::MachineList(_) => self.machines(),
             Method::IdentityGet(_) => Ok(json!({ "server_id": self.id })),
+            Method::ProviderList(_) => Ok(self.providers()),
             Method::EventsSubscribe(params) => {
                 self.api
                     .subscribe(&self.engine, caller_id, id, params.threads);
@@ -417,9 +425,32 @@ impl Server {
         Ok(json!({ "thread": thread }))
     }
 
-    /// Open a Thread as a window's `open` does, its CLI given `args`, then
-    /// title it and land the windows on it as asked.
+    /// Open a Thread as a window's `open` does, its CLI given `args` and
+    /// capped at `mode`, then title it, prompt it and land the windows on
+    /// it as asked; or answer with the Thread an earlier start with the
+    /// same `request` key opened, starting and sending nothing.
     fn start_thread(&mut self, params: ThreadStartParams) -> Result<ThreadId, ApiError> {
+        if params.delegated_from.is_some() && !self.takes_delegates()? {
+            return Err(ApiError::new(
+                Code::LinkedMachinesOff,
+                "this machine takes no Thread from another machine's: turn on Settings › \
+                 Labs › Linked machines here",
+            ));
+        }
+        if let Some(request) = &params.request {
+            let started = self
+                .engine
+                .started_by(request)
+                .map_err(|error| ApiError::new(Code::Failed, error.to_string()))?;
+            if let Some(thread) = started {
+                return self.open_thread(thread).map_err(|_| thread_parked(thread));
+            }
+        }
+        let provider = params.provider.unwrap_or(self.default_provider);
+        let env: Vec<(String, String)> = params.env.into_iter().collect();
+        if params.mode.is_some() {
+            refuse_widening(provider, &params.args, &env, &params.launcher)?;
+        }
         let (checkout, project) = match &params.project {
             Some(project) => {
                 let project = self.project(project)?;
@@ -444,22 +475,31 @@ impl Server {
         let launch = Launch {
             launch_provider: params.provider,
             args: params.args,
-            env: params.env.into_iter().collect(),
+            env,
             launcher: params.launcher,
             resume: params.resume,
             project,
             owner,
+            delegated_from: params.delegated_from,
+            request: params.request,
+            cap: params.mode,
         };
         let thread = self
             .engine
-            .open_with(
-                params.provider.unwrap_or(self.default_provider),
-                workspace,
-                launch,
-            )
+            .open_with(provider, workspace, launch)
             .map_err(|error| ApiError::new(Code::Failed, error.to_string()))?;
         if let Some(title) = params.title {
             self.execute(Op::Rename { thread, title })?;
+        }
+        if let Some(text) = params.prompt {
+            let prompt = AgentPromptParams {
+                thread,
+                text,
+                wait: false,
+                timeout_ms: None,
+                until: Vec::new(),
+            };
+            self.prompt(&prompt).map_err(|error| error.on(thread))?;
         }
         if params.focus {
             self.say(ServerMessage::Focus {
@@ -497,12 +537,56 @@ impl Server {
             env: params.env.into_iter().collect(),
             launcher: params.launcher,
             resume: params.resume,
-            project: None,
-            owner: None,
+            ..Launch::default()
         };
+        // A revive runs the Thread's own Provider (`Engine::reopen`).
+        if let Some((provider, _)) = self.engine.cap(thread) {
+            refuse_widening(provider, &launch.args, &launch.env, &launch.launcher)?;
+        }
         self.engine
             .revive_with(thread, launch)
             .map_err(|error| ApiError::new(Code::Failed, error.to_string()))
+    }
+
+    /// Whether this machine takes a Thread from another machine's: its
+    /// Settings › Labs › Linked machines, as its `settings.json` says now.
+    fn takes_delegates(&self) -> Result<bool, ApiError> {
+        Settings::load(&self.settings_dir)
+            .map(|settings| settings.labs.linked_machines)
+            .map_err(|error| ApiError::new(Code::Failed, error.to_string()))
+    }
+
+    /// What this machine runs Threads on, as `provider.list` answers
+    /// (T3 Code's `orchestrator_capabilities`): each provider's models and
+    /// their efforts, the modes a Thread may be capped at, and the mode
+    /// its settings start one at, which no cap broadens.
+    fn providers(&self) -> Value {
+        let defaults = self.defaults.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        let providers: Vec<Value> = Provider::ALL
+            .into_iter()
+            .map(|provider| {
+                let models: Vec<Value> = self
+                    .engine
+                    .model_catalog(provider)
+                    .into_iter()
+                    .map(|model| {
+                        json!({
+                            "model": model.value,
+                            "label": model.display,
+                            "efforts": model.efforts,
+                            "default_effort": model.default_effort,
+                        })
+                    })
+                    .collect();
+                json!({
+                    "provider": provider,
+                    "models": models,
+                    "modes": RuntimeMode::ALL,
+                    "mode": RuntimeMode::of_defaults(provider, &defaults),
+                })
+            })
+            .collect();
+        json!({ "providers": providers, "default_provider": self.default_provider })
     }
 
     /// Herdr's rule: nothing is sent to an agent a Decision blocks, since
@@ -595,6 +679,19 @@ impl Server {
         params: DecisionAnswerParams,
     ) -> Result<Value, ApiError> {
         let thread: ThreadId = params.thread;
+        if self.engine.cap(thread).is_some()
+            && matches!(
+                params.answer,
+                WireAnswer::AllowAlways { .. } | WireAnswer::Choose { .. }
+            )
+        {
+            return Err(ApiError::new(
+                Code::WidensCap,
+                "a capped Thread's Decision is allowed once or refused over the API: an answer \
+                 that remembers a choice would widen what its agent does without asking, and is \
+                 the operator's own, from the window",
+            ));
+        }
         let handle = self
             .engine
             .pending_decisions()
@@ -614,6 +711,21 @@ impl Server {
         })?;
         self.answered.insert((thread, handle), caller);
         thread_result(&self.engine, thread)
+    }
+}
+
+/// Refused `widens_cap`, naming it, when a capped launch on `provider`
+/// carries what would set or widen how far its agent goes: under a cap
+/// the Server alone sets that.
+fn refuse_widening(
+    provider: Provider,
+    args: &[String],
+    env: &[(String, String)],
+    launcher: &[String],
+) -> Result<(), ApiError> {
+    match ferrite_core::runtime_mode::widening(provider, args, env, launcher) {
+        Some(widening) => Err(ApiError::new(Code::WidensCap, widening.to_string())),
+        None => Ok(()),
     }
 }
 

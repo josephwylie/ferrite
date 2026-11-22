@@ -223,7 +223,9 @@ prompt was taken, rather than when the turn ends:
 "$F" agent prompt 14 "Go on." --until working --until blocked --timeout-ms 8000
 ```
 
-`"$F" machine list` names the saved machines `--machine` can ask, and
+`"$F" machine list` names the saved machines `--machine` can ask,
+`"$F" provider list` the providers, models and efforts a Thread here can
+start on, and
 `"$F" notification show "Ready" --sound done` rings a chime with the
 toast (`--important` keeps it up).
 
